@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "DISABLE_INTERLEAVED_THINKING": "true",
+    "DA_NAME": "Penny",
+    "PAI_DIRECTORY": "/path/to/your/project/.claude",
+    "PROJECT_ROOT": "/path/to/your/projects",
+    "VOICE_SERVER_PORT": "8001",
+    "VOICEMODE_TTS_BASE_URLS": "http://127.0.0.1:8001/v1",
+    "VOICEMODE_TTS_VOICE": "your-voice-id-here",
+    "VOICEMODE_STT_BASE_URLS": "http://127.0.0.1:8001/v1",
+    "PERPLEXITY_API_KEY": "your-perplexity-api-key",
+    "OPENAI_API_KEY": "your-openai-api-key-or-not-needed-for-local"
+  },
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read",
+      "Write",
+      "Edit",
+      "MultiEdit",
+      "Glob",
+      "Grep",
+      "LS",
+      "WebFetch(domain:*)",
+      "WebSearch",
+      "NotebookRead",
+      "NotebookEdit",
+      "TodoWrite",
+      "ExitPlanMode",
+      "Task",
+      "mcp__*"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf $HOME)",
+      "Bash(sudo rm -rf /)",
+      "Bash(sudo rm -rf /*)",
+      "Bash(fork bomb)",
+      "Bash(dd if=/dev/zero of=/dev/sda)",
+      "Bash(mkfs.ext4 /dev/sda)",
+      "Bash(> /dev/sda)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [],
+  "hooks": {
+    "SessionStart":[
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pyhton3 ${PAI_DIRECTORY}/.claude/hooks/session-start/load-core-context.py"
+          },
+          {
+            "type": "command",
+            "command": "pyhton3 ${PAI_DIRECTORY}/.claude/hooks/session-start/initialize-pai-session.py"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pyhton3 ${PAI_DIRECTORY}/.claude/hooks/pre-tool-use/agent-start.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pyhton3 ${PAI_DIRECTORY}/.claude/hooks/notification/notification.py"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${PAI_DIRECTORY}/.ven/bin/python3 ${PAI_DIRECTORY}/.claude/hooks/user-prompt-submit/append-message.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pyhton3 ${PAI_DIRECTORY}/.claude/hooks/stop/stop.py"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pyhton3 ${PAI_DIRECTORY}/.claude/hooks/subagent-stop/subagent-stop.py"
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash ${PAI_DIRECTORY}/.claude/statusline-command.sh"
+  },
+  "alwaysThinkingEnabled": true,
+  "mcpServers": {
+    "playwright": {
+      "url": "http://127.0.0.1:8931/mcp",
+      "description": "Browser automation and testing using Playwright for visual debugging and web interaction"
+    },
+    "voice-mode": {
+      "command": "uvx",
+      "args": ["voice-mode"],
+      "env": {
+        "OPENAI_API_KEY": "not-needed-for-local",
+        "VOICEMODE_TTS_BASE_URLS": "http://127.0.0.1:8001/v1",
+        "VOICEMODE_TTS_VOICE": "xkaZRlKS82wu4F9hjA8b",
+        "VOICEMODE_STT_BASE_URLS": "http://127.0.0.1:8001/v1"
+      }
+    }
+  }
+}

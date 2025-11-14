@@ -1,0 +1,31 @@
+[Unit]
+Description=PAI Voice Server
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=pai-voice-server
+Group=pai-voice-server
+WorkingDirectory=/home/pai-voice-server
+Environment=PATH=/home/pai-voice-server/.venv/bin:/home/pai-voice-server/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/pai-voice-server
+EnvironmentFile=-/home/pai-voice-server/.env
+ExecStart=/home/pai-voice-server/.venv/bin/python /home/pai-voice-server/server.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/pai-voice-server/logs
+PrivateTmp=yes
+PrivateDevices=no
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+# PAI Voice Server Dependencies
+# FastAPI web framework and server
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.9
+
+# HTTP client for API calls
+httpx==0.27.2
+
+# Data validation
+pydantic==2.9.2
+
+# Environment variables
+python-dotenv==1.0.1
