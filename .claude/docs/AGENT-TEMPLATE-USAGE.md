@@ -177,3 +177,17 @@ RELATED DOCUMENTS
 - .claude/protocols/AGENT-INTERFACE-CONTRACTS.md - Input/output contracts
 - .claude/templates/JOHARI.md - Output formatting and token budgets
 - .claude/skills/develop-agent/SKILL.md - Structured agent creation workflow
+
+AGENT COLOR REFERENCE
+
+Color scheme for agent cognitive functions (frontmatter property):
+- analyze => red
+- synthesize => orange
+- validate => yellow
+- generate => green
+- research => blue
+- coordinate => purple
+- clarify => cyan
+- evaluate => pink
+
+Note: Colors are organizational aids only and do not affect system operation.
