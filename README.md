@@ -1,16 +1,16 @@
-# Penny - Personal AI Infrastructure
-
-![Penny AI Assistant](img/penny.png)
-
-**Transform unknown unknowns into known knowns through relentless discovery and shared knowledge exchange**
-
----
+# Penny - Personal AI Assistant
 
 ## Acknowledgments
 
 This project is built upon the foundational work and inspiration from **Daniel Miessler's Personal AI Infrastructure (PAI)** project. Without his knowledge, vision, and open sharing of ideas, Penny would likley not exist.
 
 🔗 [danielmiessler/Personal_AI_Infrastructure](https://github.com/danielmiessler/Personal_AI_Infrastructure/)
+
+---
+
+![Penny AI Assistant](img/penny.png)
+
+**Transform unknown unknowns into known knowns through relentless discovery and shared knowledge exchange**
 
 ---
 
