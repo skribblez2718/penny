@@ -4,6 +4,26 @@ This file provides complete, detailed examples of context inheritance protocol e
 
 NOTE: Examples use generic data processing scenarios for illustration. The same structure applies to any workflow domain by replacing scenario-specific details with your domain content.
 
+IMPORTANT: DUAL FILE PATTERN UPDATE
+
+As of the latest protocol update, the system uses per-agent memory files:
+
+FILE STRUCTURE:
+- Workflow metadata: .claude/memory/task-{task-id}-memory.md (centralized state)
+- Agent outputs: .claude/memory/task-{task-id}-{agent-name}-memory.md (per-agent files)
+
+READING CONTEXT:
+- Agents read workflow metadata file for Unknown Registry and Workflow Metadata
+- Agents read predecessor agent output files (explicit list in invocation prompt)
+- Invocation includes: "Read context from: [list of files]"
+
+WRITING OUTPUT:
+- Agents write three-section output to their own file: task-{task-id}-{agent-name}-memory.md
+- Agents propose Unknown Registry updates in Downstream Directives (unknownRegistryUpdates field)
+- Orchestrator merges updates into centralized task-{task-id}-memory.md
+
+The examples below illustrate the protocol logic. File paths should be adapted to the dual-file pattern.
+
 EXAMPLE 1: UNKNOWN RESOLUTION (Step 3)
 
 SCENARIO

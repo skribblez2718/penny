@@ -722,6 +722,121 @@ Reusability:
 
 ---
 
+AGENT FRONTMATTER SCHEMA
+
+REQUIRED FIELDS
+
+name: {agent-name}
+- Format: lowercase-with-dashes
+- Must be unique across all agents
+- Describes cognitive function, not domain/technology
+- Example: requirements-clarifier, architecture-synthesizer
+
+description: {agent-description-with-examples}
+- 1-2 sentence summary of what the agent does
+- Include invocation examples showing when to use this agent
+- Must be workflow-agnostic (no specific skill/project references)
+
+cognitive_function: {function-name}
+- One of: RESEARCHER, ANALYZER, SYNTHESIZER, GENERATOR, VALIDATOR, CLARIFIER, COORDINATOR
+- Aligns with Capability Taxonomy (Principle 3)
+- May be novel function if genuinely new cognitive operation
+
+OPTIONAL FIELDS
+
+dependencies: [{predecessor-agent-1}, {predecessor-agent-2}, ...]
+- List of specific predecessor agents this agent needs context from
+- Used by orchestrator to calculate optimal context file reading
+- If omitted: Falls back to reading last 2 predecessor agents
+- If empty array: Agent reads only workflow metadata (fully self-contained)
+- If special value "all": Agent reads all predecessor outputs (explicit opt-in)
+
+EXAMPLES
+
+Basic agent (no dependencies declared - uses fallback):
+```yaml
+---
+name: requirements-analyzer
+description: Analyzes clarified requirements to identify dependencies, complexity, and risks
+cognitive_function: ANALYZER
+---
+```
+
+Agent with specific dependencies:
+```yaml
+---
+name: architecture-synthesizer
+description: Synthesizes requirements and patterns into comprehensive architectural design
+cognitive_function: SYNTHESIZER
+dependencies: [requirements-clarifier, requirements-analyzer, pattern-researcher]
+---
+```
+
+Self-contained agent (reads only metadata):
+```yaml
+---
+name: requirements-clarifier
+description: Transforms vague requirements into explicit acceptance criteria
+cognitive_function: CLARIFIER
+dependencies: []
+---
+```
+
+DEPENDENCIES FIELD BEHAVIOR
+
+HOW ORCHESTRATOR USES DEPENDENCIES:
+
+When invoking an agent, orchestrator calculates which memory files to read:
+
+1. If dependencies field present and non-empty:
+   - Read specified agent output files
+   - Example: dependencies: [requirements-clarifier, requirements-analyzer]
+   - Reads: task-{id}-requirements-clarifier-memory.md, task-{id}-requirements-analyzer-memory.md
+
+2. If dependencies field absent or not specified:
+   - Fallback: Read last 2 predecessor agents in workflow sequence
+   - Safe default for agents without explicit dependency declarations
+
+3. If dependencies: []:
+   - Read only workflow metadata file (task-{id}-memory.md)
+   - Agent is fully self-contained, needs no predecessor context
+
+4. If dependencies: ["all"]:
+   - Read all predecessor agent outputs
+   - Explicit opt-in to current behavior (use sparingly)
+
+Orchestrator includes explicit file list in invocation prompt:
+```
+Task ID: task-feature-abc
+Step: 3
+Step Name: Architecture Synthesis
+
+Read context from:
+- .claude/memory/task-feature-abc-memory.md (workflow metadata)
+- .claude/memory/task-feature-abc-requirements-clarifier-memory.md
+- .claude/memory/task-feature-abc-requirements-analyzer-memory.md
+
+[Agent-specific instructions...]
+```
+
+WHEN TO DECLARE DEPENDENCIES
+
+Declare explicit dependencies when:
+- Agent needs specific predecessor insights (e.g., architecture-synthesizer needs requirements-clarifier + pattern-researcher)
+- Agent works with non-sequential predecessors (e.g., implementation-validator needs architecture-synthesizer outputs from several steps back)
+- Agent has known coupling to specific other agents
+
+Use fallback (omit dependencies) when:
+- Agent needs general context from immediate predecessors
+- Dependencies will vary across different workflows
+- Agent is new and dependency patterns unclear
+
+Use empty array when:
+- Agent is first in workflow (no predecessors)
+- Agent is fully self-contained and regenerates all needed context
+
+---
+
 RELATED DOCUMENTS
 
 - .claude/docs/PHILOSOPHY.md - Penny's core architectural principles

@@ -11,6 +11,7 @@ TEMPLATE STRUCTURE
 name: {AGENT_NAME}
 description: {AGENT_DESCRIPTION_WITH_INVOCATION_EXAMPLES}
 cognitive_function: {COGNITIVE_FUNCTION}
+dependencies: [{PREDECESSOR_AGENT_1}, {PREDECESSOR_AGENT_2}]  # Optional: specific agents to read context from
 ---
 
 PURPOSE
@@ -29,12 +30,11 @@ CORE MISSION
 
 MANDATORY PROTOCOL
 
-Read and execute these protocols in sequence:
-1. .claude/protocols/CONTEXT-INHERITANCE.md (before agent-specific work)
-2. .claude/protocols/REASONING-STRATEGIES.md (at decision points)
-3. .claude/protocols/AGENT-EXECUTION-PROTOCOL.md (during/after execution)
+Read and execute:
+1. .claude/protocols/agent-protocol-core.md (all agents - context inheritance, output formatting)
+2. .claude/protocols/agent-protocol-extended.md (if code generation agent - TDD + Security)
 
-See .claude/protocols/AGENT-INTERFACE-CONTRACTS.md for input/output contracts.
+Core protocol covers: Task-ID extraction, context inheritance, reasoning strategies, output formatting, and execution steps.
 
 ---
 
@@ -340,9 +340,7 @@ RELATED DOCUMENTS
 - .claude/docs/AGENT-DESIGN-PRINCIPLES.md - Workflow-agnostic design guidance
 - .claude/docs/COGNITIVE-FUNCTION-TAXONOMY.md - Seven cognitive function definitions
 - .claude/docs/AGENT-REGISTRY.md - Catalog of existing agents
-- .claude/protocols/CONTEXT-INHERITANCE.md - Context inheritance protocol
-- .claude/protocols/REASONING-STRATEGIES.md - Systematic reasoning strategies
-- .claude/protocols/AGENT-EXECUTION-PROTOCOL.md - Generic execution steps
-- .claude/protocols/AGENT-INTERFACE-CONTRACTS.md - Input/output contract specifications
-- .claude/templates/JOHARI.md - Output formatting and quadrant guidance
+- .claude/protocols/agent-protocol-core.md - Core execution protocol (all agents)
+- .claude/protocols/agent-protocol-extended.md - Extended protocol (code generation)
+- .claude/templates/JOHARI.md - Python types, anti-patterns, format decision guidance
 - .claude/skills/develop-agent/resources/agent-description-simple.md - Template for simple agents

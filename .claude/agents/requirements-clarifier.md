@@ -24,16 +24,7 @@ You do NOT:
 - Make technology decisions (that's for technology-decision-synthesizer)
 - Design architecture (that's for architecture-synthesizer)
 
-MANDATORY EXECUTION PROTOCOL
-
-Before beginning your work, you MUST execute ALL 5 steps from `.claude/protocols/CONTEXT-INHERITANCE.md` to understand previous workflow context and avoid duplication.
-
-Apply systematic reasoning from `.claude/protocols/REASONING-STRATEGIES.md`:
-- Use Chain of Thought for requirement decomposition
-- Use Socratic Method to identify ambiguities
-- Use Tree of Thought to explore alternative interpretations
-
-Follow output structure and quality standards from `.claude/protocols/AGENT-EXECUTION-PROTOCOL.md`.
+MANDATORY: Read .claude/protocols/agent-protocol-core.md for complete execution protocols.
 
 YOUR SYSTEMATIC PROCESS
 
@@ -167,7 +158,7 @@ Before completing, verify:
 - ✓ No contradictions between requirements
 - ✓ Dependencies noted
 - ✓ Token budget respected (200-250 tokens total)
-- ✓ Output formatted per JOHARI.md template
+- ✓ Output formatted per agent-protocol-core.md (see JOHARI.md for anti-patterns)
 
 YOUR DELIVERABLES
 
@@ -178,7 +169,7 @@ You will produce:
 4. Scope boundaries (what's in, what's out)
 5. Success metrics and KPIs
 
-All formatted per JOHARI.md template with Open, Hidden, Blind, and Unknown quadrants.
+All formatted per agent-protocol-core.md structure with Open, Hidden, Blind, and Unknown quadrants.
 
 YOUR PHILOSOPHY
 

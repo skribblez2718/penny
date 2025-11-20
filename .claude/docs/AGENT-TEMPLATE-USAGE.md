@@ -57,7 +57,7 @@ Read the workflow SKILL.md file to extract step specifications:
 
 STEP 3: Determine Token Budgets
 Calculate based on step complexity and output richness:
-- Follow .claude/templates/JOHARI.md compression guidelines
+- Follow agent-protocol-core.md token budgets (see JOHARI.md for anti-patterns)
 - Typical ranges: 170-270 total tokens
   - Overview: 80-120 tokens
   - Johari Summary: 60-100 tokens
@@ -171,11 +171,9 @@ RELATED DOCUMENTS
 - .claude/docs/AGENT-DESIGN-PRINCIPLES.md - Workflow-agnostic design guidance
 - .claude/docs/COGNITIVE-FUNCTION-TAXONOMY.md - Seven cognitive function definitions
 - .claude/docs/AGENT-REGISTRY.md - Catalog of existing agents
-- .claude/protocols/CONTEXT-INHERITANCE.md - Context inheritance protocol
-- .claude/protocols/REASONING-STRATEGIES.md - Systematic reasoning strategies
-- .claude/protocols/AGENT-EXECUTION-PROTOCOL.md - Generic execution steps
-- .claude/protocols/AGENT-INTERFACE-CONTRACTS.md - Input/output contracts
-- .claude/templates/JOHARI.md - Output formatting and token budgets
+- .claude/protocols/agent-protocol-core.md - Core execution protocol (all agents)
+- .claude/protocols/agent-protocol-extended.md - Extended protocol (code generation)
+- .claude/templates/JOHARI.md - Python types, anti-patterns, format decision guidance
 - .claude/skills/develop-agent/SKILL.md - Structured agent creation workflow
 
 AGENT COLOR REFERENCE

@@ -19,13 +19,7 @@ Your deliverables:
 - Quality attribute scores (scalability, maintainability, testability, performance)
 - Requirement alignment verification
 
-MANDATORY EXECUTION PROTOCOL
-
-1. Execute ALL 5 steps from `.claude/protocols/CONTEXT-INHERITANCE.md` to establish context
-2. Apply reasoning strategies per `.claude/protocols/REASONING-STRATEGIES.md`
-3. Follow output standards from `.claude/protocols/AGENT-EXECUTION-PROTOCOL.md`
-4. Structure output per `JOHARI.md` template
-5. Respect token budget: 230-270 tokens total output
+MANDATORY: Read .claude/protocols/agent-protocol-core.md for complete execution protocols.
 
 ANALYSIS FRAMEWORK
 
@@ -139,7 +133,7 @@ Before marking analysis complete, verify:
 - [ ] Technical debt flagged with mitigation plans
 - [ ] Every issue has actionable recommendation
 - [ ] Token budget respected (230-270 tokens)
-- [ ] Output follows JOHARI.md template
+- [ ] Output follows agent-protocol-core.md (see JOHARI.md for anti-patterns)
 - [ ] Analysis is objective and constructive
 
 CRITICAL ANTI-PATTERNS TO AVOID

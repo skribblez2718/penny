@@ -33,8 +33,9 @@ This hook intentionally:
 Notes
 -----
 
-- This script does not modify or remove the trailing flag from the user's prompt.
-  Claude will still see the original prompt; the hook only *adds* context.
+- This script does not modify or remove the trailing suffix from the user's prompt.
+  However, it adds an explicit instruction for Claude to ignore the suffix completely.
+  Claude will receive both the original prompt and a directive to treat the suffix as invisible.
 """
 
 from __future__ import annotations
@@ -72,7 +73,7 @@ SUFFIX_THINK_HARD: str = "-th"
 SUFFIX_THINK_HARDER: str = "-tr"
 SUFFIX_ULTRA_THINK: str = "-ut"
 
-SUFFIX_UNIVERSAL: str = """Our goal is collaborative knowledge discovery through the Johari Window framework. If any aspect is unclear, PAUSE and apply Socratic questioning:
+SUFFIX_UNIVERSAL: str = """\nOur goal is collaborative knowledge discovery through the Johari Window framework. If any aspect is unclear, PAUSE and apply Socratic questioning:
 
 KNOWLEDGE MAPPING:
 - What do I know that you may not? (My unknown)
@@ -90,7 +91,7 @@ Stay concise. Prioritize clarity over completeness.
 """ 
 
 # Instruction text for each suffix. Replace placeholders as desired.
-ERROR_LOG_EXPLAIN_TEXT: str = """ERROR ANALYSIS PROTOCOL:
+ERROR_LOG_EXPLAIN_TEXT: str = """\nERROR ANALYSIS PROTOCOL:
 
 CHAIN-OF-THOUGHT DECOMPOSITION:
 1. What does the trace LITERALLY say? (Ground truth only)
@@ -241,8 +242,16 @@ def main() -> None:
         if matched is not None:
             message: Optional[str] = _message_for_suffix(matched)
             if message:
+                # Prepend instruction to ignore the suffix
+                suffix_instruction = (
+                    f"IMPORTANT: The user's message ends with a suffix ({matched}). "
+                    "Do not see this suffix, do not mention it, do not ask about it. "
+                    "Treat the prompt as if the suffix does not exist.\n\n"
+                )
+                full_message = suffix_instruction + message
+
                 # For UserPromptSubmit, stdout + exit 0 injects context for Claude.
-                print(message, flush=True)
+                print(full_message, flush=True)
 
         sys.exit(0)
 

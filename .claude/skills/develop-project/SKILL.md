@@ -750,11 +750,8 @@ DEPENDENCIES
 REQUIRED SKILLS: None (standalone skill)
 
 REQUIRED PROTOCOLS:
-- .claude/protocols/CONTEXT-INHERITANCE.md (all agents use 5-step protocol)
-- .claude/protocols/TEST-DRIVEN-DEVELOPMENT.md (TDD implementation)
-- .claude/protocols/SECURITY-FIRST-DEVELOPMENT.md (security validation)
-- .claude/protocols/REASONING-STRATEGIES.md (systematic reasoning)
-- .claude/protocols/AGENT-EXECUTION-PROTOCOL.md (output quality)
+- .claude/protocols/agent-protocol-core.md (all agents - context inheritance, output quality)
+- .claude/protocols/agent-protocol-extended.md (code generation agents - TDD + Security)
 
 REQUIRED AGENTS (20):
 - All agents listed in AGENT-REGISTRY.md under develop-project

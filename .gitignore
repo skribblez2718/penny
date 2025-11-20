@@ -2,6 +2,7 @@
 
 # Ignore settings.json (contains user-specific configurations)
 .claude/settings.json
+.claude/settings.local.json
 
 # Ignore memory directory contents (task-specific memory files)
 .claude/memory/*

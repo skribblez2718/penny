@@ -20,8 +20,8 @@ KEY DIRECTORY LOCATIONS
 CRITICAL SYSTEM ARCHITECTURE
 Skills (`${PAI_DIRECTORY}/.claude/skills/`): Define WHAT happens in each phase (orchestration layer)
 Agents (`${PAI_DIRECTORY}/.claude/agents/`): Define HOW tasks are executed (implementation layer)
-Protocols (`${PAI_DIRECTORY}/.claude/protocols/`): Define operational standards and context management
-Templates (`${PAI_DIRECTORY}/.claude/templates/`): Define structural patterns for workflows
+Protocols (`${PAI_DIRECTORY}/.claude/protocols/`): Agent execution protocols (core + extended for code generation)
+Templates (`${PAI_DIRECTORY}/.claude/templates/`): Reference materials (Python types, anti-patterns, format guidance)
 
 Available Skills:
 - develop-agent: Structured agent creation with cognitive function classification
@@ -138,7 +138,8 @@ Execution Steps:
    - Understand complete workflow structure
    - Identify all phases and gate requirements
 
-3. DEVELOP comprehensive plan using `${PAI_DIRECTORY}/.claude/templates/JOHARI.md`:
+3. DEVELOP comprehensive plan using memory file structure from agent-protocol-core.md:
+   - Reference: `${PAI_DIRECTORY}/.claude/templates/JOHARI.md` for Python types and anti-patterns
    - Place project plan in Phase Overview section
    - Address all Johari quadrants:
      * Open Area: What we both know and agree on
@@ -150,16 +151,23 @@ Execution Steps:
    - ZERO ambiguity tolerated - ensure crystal clear interpretation
 
 4. CREATE `${PAI_DIRECTORY}/.claude/memory/task-{task-id}-memory.md`:
-   - Adhere to JOHARI template structure
-   - Use Markdown formatting for readability
+   - Structure: Workflow Metadata JSON + Unknown Registry JSON (per agent-protocol-core.md)
+   - Python types available in JOHARI.md for validation
+   - Contains ONLY: Workflow Metadata JSON + Unknown Registry JSON
    - FIRST SECTION MUST BE: Workflow Metadata with task-id, workflow type, start date
-   - Document all decisions and context for agent inheritance
+   - Initialize empty Unknown Registry
+   - Agent outputs go to separate per-agent files (not this metadata file)
 
 5. TRIGGER agentic flow using skill definition:
    FOR EACH AGENT INVOCATION:
    a. Read applicable SKILL.md Step section
    b. Extract step metadata: step number, step name, purpose, gate entry, gate exit
-   c. Format prompt per Context Inheritance Protocol:
+   c. Calculate context files for agent to read:
+      - Check if agent declares dependencies in frontmatter
+      - If dependencies declared: List those specific agent output files
+      - If no dependencies: List last 2 predecessor agent output files
+      - Always include workflow metadata file
+   d. Format prompt per Context Inheritance Protocol:
       ```
       Task ID: task-{task-id}
       Step: {step-number}
@@ -167,14 +175,29 @@ Execution Steps:
       Purpose: {what-this-step-accomplishes}
       Gate Entry: {prerequisites}
       Gate Exit: {completion-criteria}
+
+      Read context from:
+      - .claude/memory/task-{task-id}-memory.md (workflow metadata)
+      - .claude/memory/task-{task-id}-{predecessor-agent-1}-memory.md
+      - .claude/memory/task-{task-id}-{predecessor-agent-2}-memory.md
+
       [Agent-specific instructions from SKILL.md]
       ```
-   d. Invoke agent with Task ID and Step Context
-   e. Verify gate exit criteria before proceeding
+   e. Determine required protocol for agent type:
+      - Code generation agents (code-structure-generator, core-implementation-generator,
+        test-generator, implementation-validator, security-validator):
+        → agent-protocol-extended.md (includes TDD + Security protocols)
+      - All other agents:
+        → agent-protocol-core.md (context inheritance + output formatting)
+
+   f. Invoke agent with Task ID, Step Context, explicit file list, and protocol reference
+   g. After agent completes, merge unknownRegistryUpdates from Downstream Directives into centralized registry
+   h. Verify gate exit criteria before proceeding
 
 Context Inheritance Protocol (MANDATORY):
-- Full protocol: `${PAI_DIRECTORY}/.claude/protocols/CONTEXT-INHERITANCE.md`
-- Task-ID specification: `${PAI_DIRECTORY}/.claude/protocols/TASK-ID.md`
+- Extended protocol (code generation): `${PAI_DIRECTORY}/.claude/protocols/agent-protocol-extended.md`
+- Core protocol (all other agents): `${PAI_DIRECTORY}/.claude/protocols/agent-protocol-core.md`
+- Covers: Task-ID extraction, context inheritance, output formatting
 - All agents execute 5-step context inheritance before work:
   1. Task-ID Extraction
   2. Load Workflow Context

@@ -24,17 +24,7 @@ You do NOT:
 - Design solutions or architectures
 - Interact with users for additional information
 
-MANDATORY PROTOCOLS
-
-Before beginning analysis, you MUST:
-1. Execute ALL 5 steps from `.claude/protocols/CONTEXT-INHERITANCE.md` to load task memory and locate previous phase outputs
-2. Apply reasoning strategies from `.claude/protocols/REASONING-STRATEGIES.md`:
-   - Chain of Thought for dependency analysis ("What does REQ-X need to function?")
-   - Tree of Thought for exploring prioritization approaches
-   - Self-Consistency for verifying analysis conclusions
-3. Follow output structure from `.claude/protocols/AGENT-EXECUTION-PROTOCOL.md`
-4. Respect token budget: 210-250 tokens total output
-5. Format output per JOHARI.md template (open/hidden/blind/unknown sections)
+MANDATORY: Read .claude/protocols/agent-protocol-core.md for complete execution protocols.
 
 ANALYSIS WORKFLOW
 
@@ -152,7 +142,7 @@ Before completing, verify:
 - ✓ Critical path identified
 - ✓ Quick wins identified
 - ✓ Token budget respected (210-250 tokens total)
-- ✓ Output formatted per JOHARI.md template
+- ✓ Output formatted per agent-protocol-core.md (see JOHARI.md for anti-patterns)
 
 CRITICAL ANTI-PATTERNS TO AVOID
 

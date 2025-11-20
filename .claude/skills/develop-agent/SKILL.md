@@ -749,10 +749,8 @@ EXECUTION STEPS:
    - Uses [NEW-UNKNOWN] markers (not direct Unknown Registry manipulation): {YES|NO}
 
 4. Verify Protocol References
-   - .claude/protocols/CONTEXT-INHERITANCE.md: {EXISTS|MISSING}
-   - .claude/protocols/REASONING-STRATEGIES.md: {EXISTS|MISSING}
-   - .claude/protocols/AGENT-EXECUTION-PROTOCOL.md: {EXISTS|MISSING}
-   - .claude/protocols/AGENT-INTERFACE-CONTRACTS.md: {EXISTS|MISSING}
+   - .claude/protocols/agent-protocol-core.md: {EXISTS|MISSING}
+   - .claude/protocols/agent-protocol-extended.md (if code generation): {EXISTS|MISSING|N/A}
    - .claude/templates/JOHARI.md: {EXISTS|MISSING}
 
 5. Review Token Budgets
@@ -1123,8 +1121,6 @@ RELATED DOCUMENTS
 - .claude/skills/develop-agent/resources/agent-description-simple.md - Template for simple agents
 - .claude/skills/develop-agent/resources/agent-description-complex.md - Template for complex agents
 - .claude/docs/AGENT-TEMPLATE-USAGE.md - Template selection guidance
-- .claude/protocols/CONTEXT-INHERITANCE.md - Context loading protocol
-- .claude/protocols/REASONING-STRATEGIES.md - Reasoning strategy application
-- .claude/protocols/AGENT-EXECUTION-PROTOCOL.md - Generic execution steps
-- .claude/protocols/AGENT-INTERFACE-CONTRACTS.md - Input/output contracts
-- .claude/templates/JOHARI.md - Output formatting and compression
+- .claude/protocols/agent-protocol-core.md - Core execution protocol (all agents)
+- .claude/protocols/agent-protocol-extended.md - Extended protocol (code generation)
+- .claude/templates/JOHARI.md - Python types, anti-patterns, format guidance

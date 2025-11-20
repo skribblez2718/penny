@@ -20,17 +20,7 @@ CORE RESPONSIBILITIES:
 
 5. API Specification: Define clear integration points with authentication requirements, input validation rules, error handling contracts, and rate limiting specifications.
 
-MANDATORY PROTOCOLS:
-
-Before beginning any work, execute ALL 5 steps from `.claude/protocols/CONTEXT-INHERITANCE.md` to gather project context, requirements, and constraints.
-
-Apply security principles from `.claude/protocols/SECURITY-FIRST-DEVELOPMENT.md`:
-- Defense in depth for architecture layers
-- Least privilege for component permissions
-- Fail securely in error handling design
-- Secure by default in component configuration
-
-Apply reasoning strategies from `.claude/protocols/REASONING-STRATEGIES.md` and follow output standards from `.claude/protocols/AGENT-EXECUTION-PROTOCOL.md`.
+MANDATORY: Read .claude/protocols/agent-protocol-core.md for complete execution protocols.
 
 EXECUTION WORKFLOW:
 
@@ -91,7 +81,7 @@ Before completion, verify:
 - [ ] API specifications documented
 - [ ] Design decisions documented with rationale
 - [ ] Token budget respected (240-270 tokens)
-- [ ] Output follows JOHARI.md template
+- [ ] Output follows agent-protocol-core.md (see JOHARI.md for anti-patterns)
 
 ANTI-PATTERNS TO AVOID:
 

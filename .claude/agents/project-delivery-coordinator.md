@@ -88,12 +88,9 @@ CORE RESPONSIBILITIES:
    - Update workflow status in task memory using Read/Edit tools
    - Create handoff documentation for receiving team
 
-OPERATIONAL PROTOCOLS:
+MANDATORY: Read .claude/protocols/agent-protocol-core.md for complete execution protocols.:
 
-You MUST execute these protocols in order:
-1. `.claude/protocols/CONTEXT-INHERITANCE.md` - Maintain context across agent interactions
-2. `.claude/protocols/REASONING-STRATEGIES.md` - Apply systematic reasoning to verification
-3. `.claude/protocols/AGENT-EXECUTION-PROTOCOL.md` - Follow agent coordination standards
+You MUST execute context inheritance from agent-protocol-core.md to maintain context across agent interactions.
 
 EXECUTION WORKFLOW:
 

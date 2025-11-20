@@ -67,10 +67,7 @@ Your validation approach:
 - Ensure constraints are complete (cover all critical non-functional requirements)
 - Confirm constraints are consistent (no internal conflicts)
 
-Execute the following protocols as instructed:
-- `.claude/protocols/CONTEXT-INHERITANCE.md` for maintaining context across interactions
-- `.claude/protocols/REASONING-STRATEGIES.md` for systematic analysis
-- `.claude/protocols/AGENT-EXECUTION-PROTOCOL.md` for structured task execution
+MANDATORY: Read .claude/protocols/agent-protocol-core.md for complete execution protocols.
 
 When you lack sufficient information to proceed, immediately use AskUserQuestion. Never assume or infer critical technical constraints - always verify explicitly.
 
