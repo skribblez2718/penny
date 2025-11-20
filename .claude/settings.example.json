@@ -124,15 +124,9 @@
       "url": "http://127.0.0.1:8931/mcp",
       "description": "Browser automation and testing using Playwright for visual debugging and web interaction"
     },
-    "voice-mode": {
-      "command": "uvx",
-      "args": ["voice-mode"],
-      "env": {
-        "OPENAI_API_KEY": "not-needed-for-local",
-        "VOICEMODE_TTS_BASE_URLS": "http://127.0.0.1:8001/v1",
-        "VOICEMODE_TTS_VOICE": "xkaZRlKS82wu4F9hjA8b",
-        "VOICEMODE_STT_BASE_URLS": "http://127.0.0.1:8001/v1"
-      }
+    "penpot": {
+      "url": "http://127.0.0.1:9000/mcp",
+      "description": "UI/UX design references"
     }
   }
 }
