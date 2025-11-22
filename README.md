@@ -304,7 +304,7 @@ This is an **active, evolving project**. Enhancements are added as inspiration s
 - [ ] **Verify functionality** of voice-server setup.sh script end-to-end
 - [ ] **Implement "learning" functionality** - Expand Johari Window-based knowledge capture in learnings directory
 - [ ] **Update research-discovery agent** - Agent should use Perplexity in addition to WebSearch and Web Fetch. Add three types of research for various depths
-- [ ] **Improve Context Protocol** - Token usage is mor ethan what I would like. 50K-80K per agent for develop-project. Explore ways to reduce without sacrificing essential details and quality. This number may be lower for simpler tasks 
+- [ ] **Improve Context Protocol** - 50K-80K per agent for develop-project. Explore ways to reduce without sacrificing essential details and quality. This number may be lower for simpler tasks 
 
 ### Future Enhancements
 
