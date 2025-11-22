@@ -192,7 +192,7 @@ Defines complete workflows for various purposes: project development, research, 
 **`protocols/`** - Execution standards
 Universal agent execution protocols covering context inheritance, reasoning strategies, and specialized extensions for different task types.
 
-**`templates/`** - Reference materials
+**`references/`** - Reference materials
 Reusable patterns, format guidance, anti-patterns, and practical examples for context inheritance and agent development.
 
 **`docs/`** - Design documentation
@@ -276,7 +276,7 @@ The same agent works across vastly different domains by receiving task-specific 
 ### 6. Modularity
 - **Skills** define WHAT (orchestration), **Agents** define HOW (implementation)
 - **Protocols** define operational standards (context management, reasoning)
-- **Templates** provide reference materials (no duplication)
+- **References** provide reference materials (no duplication)
 - Single point of change for all system components
 
 ---

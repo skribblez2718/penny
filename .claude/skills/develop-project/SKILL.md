@@ -1,10 +1,10 @@
 ---
 name: develop-project
-version: 1.0.0
-description: Comprehensive project-agnostic development workflow from concept to deployment-ready code. Orchestrates 20 agents across 10 phases implementing TDD and security-first approaches. Works for web apps, CLI tools, mobile apps, PWAs, AI applications through context-driven specialization.
+version: 2.0.0
+description: Comprehensive domain-agnostic development workflow from concept to deployment-ready code. Orchestrates 6 universal cognitive agents across 10 phases implementing TDD and security-first approaches. Works for technical, personal, creative, professional, and recreational projects through cognitive domain adaptation.
 status: production
 complexity: complex
-agents_required: 20
+agents_required: 6
 estimated_turns: 40-60
 ---
 
@@ -12,811 +12,839 @@ DEVELOP-PROJECT SKILL
 
 OVERVIEW
 
-The develop-project skill is a comprehensive, project-agnostic workflow that transforms vague project ideas into deployment-ready, tested, secure, documented code. It orchestrates 20 specialized agents across 10 carefully designed phases, each with explicit entry/exit gates ensuring quality at every step.
+The develop-project skill transforms project ideas into deployment-ready deliverables through systematic cognitive processing. It orchestrates 6 universal cognitive agents across 10 phases with explicit quality gates ensuring excellence at every step.
 
-This skill works for ANY project type:
-- Web Applications (frontend, backend, full-stack)
-- CLI Tools (developer utilities, system tools)
-- Mobile Applications (native, cross-platform)
-- Progressive Web Apps (PWAs)
-- AI Applications (chatbots, RAG systems, ML services)
+This skill works across ALL domains through cognitive adaptation:
+- Technical: Web apps, CLI tools, mobile apps, PWAs, AI applications, APIs
+- Personal: Life decisions, goal planning, habit systems, personal projects
+- Creative: Content creation, art projects, creative workflows, entertainment
+- Professional: Business strategies, operational plans, market analysis
+- Recreational: Event planning, game design, hobby projects
 
-Specialization happens through context injection, not hardcoded logic. The same agents and workflow adapt to different domains by receiving project-type-specific context at invocation.
+Specialization happens through domain context, not agent specialization. The same 6 cognitive agents adapt their processing to the task domain.
 
 KEY FEATURES
 
-- 10-PHASE WORKFLOW: Clear separation of concerns from requirements through deployment
-- 20 SPECIALIZED AGENTS: Each performs one cognitive function excellently
-- GATE-BASED VALIDATION: Quality gates prevent bad decisions from reaching implementation
-- TDD-INTEGRATED: Test-driven development protocol applied throughout
-- SECURITY-FIRST: OWASP Top 10 and secure coding from architecture through code
-- PROJECT-AGNOSTIC: Same workflow for web/CLI/mobile/AI through context adaptation
-- REMEDIATION LOOPS: Failed validations loop back to fix issues, not proceed broken
-- COMPREHENSIVE OUTPUT: Working code + tests + docs + deployment guide
+- 10-PHASE WORKFLOW: Requirements through deployment with clear separation
+- 6 COGNITIVE AGENTS: Research, Analysis, Synthesis, Generation, Validation, Clarification
+- DOMAIN-ADAPTIVE: Same workflow adapts to technical/personal/creative/professional/recreational
+- GATE-BASED VALIDATION: Quality gates prevent low-quality work from progressing
+- SEQUENTIAL EXECUTION: Agents always invoked sequentially, never in parallel
+- TDD-INTEGRATED: Test-driven development for technical projects
+- SECURITY-FIRST: OWASP Top 10 and secure coding throughout technical implementations
+- REMEDIATION LOOPS: Failed gates loop back for fixes before proceeding
+- COMPREHENSIVE OUTPUT: Complete deliverables with validation and documentation
 
-ARCHITECTURE
+COGNITIVE AGENT ARCHITECTURE
 
-WORKFLOW PHASES (10 Phases)
+This skill uses 6 universal cognitive agents that adapt to domain context:
+
+For agent descriptions and capabilities:
+  See .claude/references/agent-registry.md
+
+For context structure and format:
+  See .claude/references/johari.md (Johari Window format)
+  See .claude/references/context-inheritance.md (examples)
+
+For execution protocols:
+  See .claude/protocols/agent-protocol-core.md (all agents)
+  See .claude/protocols/agent-protocol-extended.md (technical code generation)
+
+IMPORTANT: Agents are ALWAYS invoked sequentially, never in parallel.
+
+---
+
+WORKFLOW PHASES
 
 PHASE 0: Requirements Clarification & Analysis
-- Agents: project-requirements-clarifier → requirements-analyzer → requirements-validator
-- Input: Vague project idea from user
-- Output: Validated, prioritized requirements with acceptance criteria
-- Gate: Requirements complete, testable, consistent
 
-PHASE 1: Technology Research
-- Agents: technology-researcher
-- Input: Requirements, project type
-- Output: Technology options researched with sources
-- Gate: 3+ options per category researched
+Cognitive Sequence: CLARIFICATION → ANALYSIS → VALIDATION
 
-PHASE 2: Technology Evaluation & Selection
-- Agents: technology-evaluator → technology-decision-synthesizer
-- Input: Research findings, requirements
-- Output: Technology stack decision with justification
-- Gate: Stack coherent, requirements addressable
+Purpose: Transform vague project idea into validated, testable requirements
 
-PHASE 3: Architecture Research & Design
-- Agents: pattern-researcher → architecture-synthesizer
-- Input: Requirements, technology stack
-- Output: Architectural design with components, data models, APIs
-- Gate: All requirements mapped to components
+TASK CONTEXT:
+  task_domain: [Established from user input - technical/personal/creative/professional/recreational]
+  quality_standards: ["testable", "SMART criteria", "consistent", "prioritized"]
+  artifact_types: ["requirements specification", "acceptance criteria", "dependency graph"]
+  success_criteria: ["all requirements explicit", "acceptance tests defined", "dependencies mapped"]
 
-PHASE 4: Architecture Validation
-- Agents: architecture-analyzer → architecture-validator
-- Input: Architecture design
-- Output: Validated architecture or remediation plan
-- Gate: No CRITICAL/HIGH issues, security validated
-- Remediation: If FAIL → loop to Phase 3
+Agent Invocations:
+
+1. clarification-specialist (CLARIFICATION)
+   Purpose: Transform vague project idea into explicit requirements
+
+   Gate Entry:
+   - User has provided initial project description
+   - Domain classification attempted
+
+   Gate Exit:
+   - All requirements have explicit acceptance criteria
+   - Scope boundaries defined
+   - Constraints documented
+
+   Context References:
+   - None (first step)
+
+2. analysis-agent (ANALYSIS)
+   Purpose: Analyze requirements for dependencies, complexity, risks
+
+   Gate Entry:
+   - Clarified requirements available
+
+   Gate Exit:
+   - Dependency graph created
+   - Complexity assessed (SIMPLE/MEDIUM/COMPLEX)
+   - Risk matrix with mitigation strategies
+   - MoSCoW prioritization complete
+
+   Context References:
+   - .claude/memory/task-{id}-clarification-specialist-memory.md
+
+3. quality-validator (VALIDATION)
+   Purpose: Validate requirements meet quality standards
+
+   Gate Entry:
+   - Requirements and analysis complete
+
+   Gate Exit Decision:
+   - PASS: Requirements testable, consistent, complete → Phase 1
+   - FAIL: Issues found → Loop to clarification-specialist for remediation
+
+   Validation Criteria:
+   - SMART: Specific, Measurable, Achievable, Relevant, Testable
+   - Consistency: No contradictions between requirements
+   - Traceability: Each requirement linked to acceptance criteria
+
+   Context References:
+   - .claude/memory/task-{id}-clarification-specialist-memory.md
+   - .claude/memory/task-{id}-analysis-agent-memory.md
+
+---
+
+PHASE 1: Research
+
+Cognitive Sequence: RESEARCH
+
+Purpose: Discover relevant information, patterns, options, or approaches
+
+TASK CONTEXT:
+  task_domain: [Inherited from Phase 0]
+  quality_standards: ["3+ sources per topic", "authoritative sources", "recent information"]
+  artifact_types: ["research findings", "source catalog", "pattern documentation"]
+  success_criteria: ["sufficient options identified", "sources documented", "gaps noted"]
+
+Domain Adaptation:
+- Technical: Technology/framework/library research via WebSearch/WebFetch
+- Personal: Best practices, expert advice, case studies for life decisions
+- Creative: Genre patterns, audience expectations, creative techniques
+- Professional: Market data, industry standards, competitive analysis
+- Recreational: Activity options, venues, planning resources
+
+Agent Invocations:
+
+1. research-discovery (RESEARCH)
+   Purpose: Discover and evaluate information across domain
+
+   Gate Entry:
+   - Validated requirements from Phase 0
+   - Research scope defined
+
+   Gate Exit:
+   - Minimum 3 options per major decision point
+   - Sources documented with credibility assessment
+   - Knowledge gaps identified
+
+   Context References:
+   - .claude/memory/task-{id}-memory.md (workflow metadata)
+   - .claude/memory/task-{id}-clarification-specialist-memory.md
+   - .claude/memory/task-{id}-analysis-agent-memory.md
+   - .claude/memory/task-{id}-quality-validator-memory.md
+
+---
+
+PHASE 2: Evaluation & Decision Synthesis
+
+Cognitive Sequence: ANALYSIS → SYNTHESIS
+
+Purpose: Evaluate options and synthesize coherent decisions
+
+TASK CONTEXT:
+  task_domain: [Inherited]
+  quality_standards: ["evidence-based decisions", "justified trade-offs", "documented rationale"]
+  artifact_types: ["evaluation matrix", "decision document", "rationale"]
+  success_criteria: ["all major decisions made", "alternatives documented", "trade-offs explicit"]
+
+Agent Invocations:
+
+1. analysis-agent (ANALYSIS)
+   Purpose: Evaluate researched options against requirements
+
+   Gate Entry:
+   - Research findings available
+
+   Gate Exit:
+   - Evaluation matrix complete with scoring
+   - Trade-offs identified for each option
+   - Recommendations formed
+
+   Context References:
+   - Previous phase outputs
+   - .claude/memory/task-{id}-research-discovery-memory.md
+
+2. synthesis-agent (SYNTHESIS)
+   Purpose: Synthesize evaluation into coherent decision framework
+
+   Gate Entry:
+   - Evaluation complete
+
+   Gate Exit:
+   - Primary decisions documented with rationale
+   - Alternatives considered and rejected with reasoning
+   - Decision conflicts resolved
+
+   Domain Examples:
+   - Technical: Technology stack selection
+   - Personal: Life decision framework
+   - Creative: Artistic direction and style
+   - Professional: Strategic approach
+   - Recreational: Activity and venue selection
+
+   Context References:
+   - All previous phase outputs
+   - .claude/memory/task-{id}-analysis-agent-memory.md (evaluation)
+
+---
+
+PHASE 3: Architecture/Framework Design
+
+Cognitive Sequence: RESEARCH → SYNTHESIS
+
+Purpose: Research patterns and synthesize architectural design
+
+TASK CONTEXT:
+  task_domain: [Inherited]
+  quality_standards: (domain-specific - see below)
+  artifact_types: (domain-specific - see below)
+  success_criteria: (domain-specific - see below)
+
+Domain-Specific Standards:
+- Technical: ["security-first", "SOLID principles", "scalable", "testable"]
+  Artifacts: ["architecture design", "component specifications", "API definitions", "data models"]
+
+- Personal: ["value-aligned", "realistic", "measurable", "flexible"]
+  Artifacts: ["life framework", "milestone plan", "support system design"]
+
+- Creative: ["audience-appropriate", "thematically coherent", "engaging"]
+  Artifacts: ["creative framework", "narrative structure", "content outline"]
+
+- Professional: ["market-aligned", "resource-constrained", "scalable", "measurable"]
+  Artifacts: ["strategic framework", "operational plan", "resource allocation"]
+
+- Recreational: ["fun-maximizing", "inclusive", "feasible", "flexible"]
+  Artifacts: ["activity framework", "schedule outline", "contingency plans"]
+
+Agent Invocations:
+
+1. research-discovery (RESEARCH)
+   Purpose: Research architectural/design patterns applicable to domain
+
+   Gate Entry:
+   - Decisions from Phase 2
+
+   Gate Exit:
+   - Relevant patterns documented
+   - Applicability criteria defined
+   - Anti-patterns noted
+
+   Context References:
+   - All previous phase outputs
+
+2. synthesis-agent (SYNTHESIS)
+   Purpose: Synthesize architecture/framework from requirements, patterns, and decisions
+
+   Gate Entry:
+   - Pattern research complete
+
+   Gate Exit:
+   - Complete architecture/framework design
+   - Components/elements clearly defined
+   - Integration points specified
+
+   Protocol References:
+   - .claude/protocols/agent-protocol-extended.md (if technical domain with security requirements)
+
+   Context References:
+   - All previous phase outputs
+   - .claude/memory/task-{id}-research-discovery-memory.md (patterns)
+
+---
+
+PHASE 4: Architecture/Framework Validation
+
+Cognitive Sequence: ANALYSIS → VALIDATION
+
+Purpose: Analyze and validate design meets quality requirements
+
+TASK CONTEXT:
+  task_domain: [Inherited]
+  quality_standards: (domain-specific)
+  artifact_types: ["quality analysis", "validation report", "issue list"]
+  success_criteria: ["no critical issues", "quality gates met", "actionable feedback"]
+
+Agent Invocations:
+
+1. analysis-agent (ANALYSIS)
+   Purpose: Analyze design for quality attributes
+
+   Gate Entry:
+   - Architecture/framework design complete
+
+   Gate Exit:
+   - Quality analysis complete
+   - Issues categorized by severity (CRITICAL/HIGH/MEDIUM/LOW)
+   - Improvement recommendations provided
+
+   Domain-Specific Analysis:
+   - Technical: SOLID principles, coupling/cohesion, security patterns, performance
+   - Personal: Values alignment, feasibility, resource requirements, risk assessment
+   - Creative: Narrative coherence, audience fit, engagement potential, originality
+   - Professional: Market viability, resource efficiency, risk exposure, scalability
+   - Recreational: Fun factor, accessibility, logistics, safety
+
+   Context References:
+   - All previous phase outputs
+
+2. quality-validator (VALIDATION)
+   Purpose: Validate design against requirements and standards
+
+   Gate Entry:
+   - Quality analysis complete
+
+   Gate Exit Decision:
+   - PASS: No CRITICAL issues, acceptable quality → Phase 5
+   - FAIL: CRITICAL issues or major gaps → Loop to Phase 3 for remediation
+
+   Validation Criteria (Domain-Specific):
+   - Technical: Security audit pass (OWASP), architecture patterns appropriate
+   - Personal: Values alignment confirmed, feasibility validated
+   - Creative: Audience appropriateness validated, coherence confirmed
+   - Professional: Market viability confirmed, resource constraints satisfied
+   - Recreational: Safety validated, accessibility confirmed
+
+   Protocol References:
+   - .claude/protocols/agent-protocol-extended.md (if technical with security checks)
+
+   Context References:
+   - All previous phase outputs
+   - .claude/memory/task-{id}-analysis-agent-memory.md (quality analysis)
+
+---
 
 PHASE 5: Implementation Planning
-- Agents: implementation-plan-generator, technical-constraint-clarifier (parallel)
-- Input: Validated architecture
-- Output: Implementation plan with TDD milestones, technical constraints
-- Gate: All tasks defined, TDD milestones scheduled
 
-PHASE 6: Code Structure Generation
-- Agents: code-structure-generator
-- Input: Architecture, implementation plan
-- Output: Complete project scaffold with configs, test infrastructure
-- Gate: Build succeeds, test framework runs
+Cognitive Sequence: CLARIFICATION → GENERATION
 
-PHASE 7: Core Implementation & Testing
-- Agents: core-implementation-generator → test-generator
-- Input: Project scaffold, architecture
-- Output: Implemented features with comprehensive test suite
-- Gate: Features implemented, tests written
+Purpose: Clarify constraints and generate implementation plan
+
+TASK CONTEXT:
+  task_domain: [Inherited]
+  quality_standards: (domain-specific)
+  artifact_types: ["implementation plan", "task breakdown", "timeline", "resource plan"]
+  success_criteria: ["all tasks actionable", "dependencies clear", "milestones defined"]
+
+Agent Invocations:
+
+1. clarification-specialist (CLARIFICATION)
+   Purpose: Clarify technical/operational constraints before planning
+
+   Gate Entry:
+   - Validated architecture/framework from Phase 4
+
+   Gate Exit:
+   - All constraints explicit
+   - Deployment/operational requirements clarified
+   - Integration points defined
+
+   Domain Examples:
+   - Technical: Deployment targets, performance requirements, integration endpoints
+   - Personal: Time constraints, resource availability, support requirements
+   - Creative: Publication channels, format requirements, distribution constraints
+   - Professional: Budget limits, timeline constraints, regulatory requirements
+   - Recreational: Venue availability, participant constraints, budget limits
+
+   Context References:
+   - All previous phase outputs
+
+2. generation-agent (GENERATION)
+   Purpose: Generate comprehensive implementation plan
+
+   Gate Entry:
+   - Constraints clarified
+
+   Gate Exit:
+   - Implementation plan complete with task breakdown
+   - Milestones defined with acceptance criteria
+   - Resource allocation specified
+   - Risk mitigation strategies included
+
+   Domain-Specific Planning:
+   - Technical: TDD milestones, security checkpoints, integration phases
+   - Personal: Habit formation stages, progress markers, review points
+   - Creative: Content production schedule, review cycles, publication timeline
+   - Professional: Strategic phases, KPI checkpoints, pivot criteria
+   - Recreational: Activity phases, setup timeline, contingency activation
+
+   Protocol References:
+   - .claude/protocols/agent-protocol-extended.md (if technical with TDD requirements)
+
+   Context References:
+   - All previous phase outputs
+   - .claude/memory/task-{id}-clarification-specialist-memory.md (constraints)
+
+---
+
+PHASE 6: Foundation Generation
+
+Cognitive Sequence: GENERATION
+
+Purpose: Generate project foundation/structure
+
+TASK CONTEXT:
+  task_domain: [Inherited]
+  quality_standards: (domain-specific)
+  artifact_types: (domain-specific - see below)
+  success_criteria: ["foundation complete", "structure validated", "ready for implementation"]
+
+Domain-Specific Artifacts:
+- Technical: Project scaffold, configuration files, directory structure, build setup, test infrastructure
+- Personal: Framework templates, tracking systems, initial resources, support network setup
+- Creative: Content templates, style guides, initial drafts, production tools setup
+- Professional: Document templates, tracking systems, communication frameworks, reporting structures
+- Recreational: Planning documents, checklists, resource lists, communication channels
+
+Agent Invocations:
+
+1. generation-agent (GENERATION)
+   Purpose: Generate project foundation appropriate to domain
+
+   Gate Entry:
+   - Implementation plan from Phase 5
+
+   Gate Exit:
+   - Foundation/structure complete
+   - All templates and tools in place
+   - Ready for core implementation
+
+   Domain Standards:
+   - Technical: Secure defaults, build passes, tests configured, linting enabled
+   - Personal: Tracking operational, templates usable, resources accessible
+   - Creative: Templates ready, tools configured, style guide applied
+   - Professional: Documents structured, tracking operational, templates validated
+   - Recreational: Checklists complete, communications ready, logistics confirmed
+
+   Protocol References:
+   - .claude/protocols/agent-protocol-extended.md (if technical - TDD + Security)
+
+   Context References:
+   - All previous phase outputs
+
+---
+
+PHASE 7: Core Implementation
+
+Cognitive Sequence: GENERATION (iterative)
+
+Purpose: Implement core features/content/deliverables
+
+TASK CONTEXT:
+  task_domain: [Inherited]
+  quality_standards: (domain-specific)
+  artifact_types: (domain-specific)
+  success_criteria: (domain-specific)
+
+Agent Invocations:
+
+1. generation-agent (GENERATION) - ITERATIVE
+   Purpose: Create core deliverables using domain-appropriate methods
+
+   Gate Entry:
+   - Foundation from Phase 6
+   - Implementation plan from Phase 5
+
+   Gate Exit:
+   - All core features/content/elements implemented
+   - Domain-appropriate quality measures met
+   - Ready for validation
+
+   Domain-Specific Implementation:
+   - Technical: TDD cycle (RED-GREEN-REFACTOR), secure coding, input validation
+     Quality: 80%+ test coverage, no HIGH/CRITICAL security issues
+
+   - Personal: Action implementation, habit establishment, milestone achievement
+     Quality: Measurable progress, documented outcomes, review completed
+
+   - Creative: Content creation, refinement cycles, quality iterations
+     Quality: Audience-appropriate, thematically coherent, engaging
+
+   - Professional: Strategy execution, operational implementation, deliverable creation
+     Quality: KPI tracking, stakeholder alignment, milestone achievement
+
+   - Recreational: Activity preparation, resource acquisition, participant coordination
+     Quality: Logistics confirmed, safety validated, fun maximized
+
+   Protocol References:
+   - .claude/protocols/agent-protocol-extended.md (if technical - TDD + Security protocols)
+
+   Context References:
+   - All previous phase outputs
+
+   Note: Agent handles both primary artifacts and quality measures appropriate to domain
+   (e.g., in technical domain: both code and tests; in creative domain: both content and refinements)
+
+---
 
 PHASE 8: Quality Validation
-- Agents: implementation-validator → security-validator
-- Input: Implementation + tests
-- Output: Validation reports (tests + security)
-- Gate: All tests pass, no HIGH/CRITICAL vulnerabilities
-- Remediation: If FAIL → loop to Phase 7
+
+Cognitive Sequence: VALIDATION (sequential: implementation → domain-specific)
+
+Purpose: Comprehensive quality validation appropriate to domain
+
+TASK CONTEXT:
+  task_domain: [Inherited]
+  quality_standards: (domain-specific)
+  artifact_types: ["validation report", "test results", "quality assessment"]
+  success_criteria: (domain-specific)
+
+Agent Invocations:
+
+1. quality-validator (VALIDATION) - Implementation Quality
+   Purpose: Validate core implementation meets standards
+
+   Gate Entry:
+   - Core implementation from Phase 7
+
+   Gate Exit Decision:
+   - PASS: Quality standards met → Step 2 (domain-specific validation)
+   - FAIL: Issues found → Loop to Phase 7 for remediation
+
+   Domain-Specific Validation:
+   - Technical: Execute tests, verify coverage, check code quality, validate architecture compliance
+     Criteria: All tests pass, 80%+ coverage, no code smells, patterns followed
+
+   - Personal: Review progress, validate milestone achievement, assess goal alignment
+     Criteria: Milestones met, values aligned, sustainable progress
+
+   - Creative: Review content quality, validate audience appropriateness, assess engagement
+     Criteria: Quality standards met, audience fit confirmed, coherent
+
+   - Professional: Review deliverables, validate KPIs, assess stakeholder alignment
+     Criteria: KPIs met, stakeholders satisfied, strategy on track
+
+   - Recreational: Review preparations, validate logistics, assess readiness
+     Criteria: Logistics complete, safety confirmed, participants ready
+
+   Context References:
+   - All previous phase outputs
+
+2. quality-validator (VALIDATION) - Domain-Specific Deep Validation
+   Purpose: Perform domain-specific deep quality checks
+
+   Gate Entry:
+   - Implementation validation passed
+
+   Gate Exit Decision:
+   - PASS: Domain-specific quality confirmed → Phase 9
+   - FAIL: Critical domain issues → Loop to Phase 7 for fixes
+
+   Domain-Specific Deep Validation:
+   - Technical: Security audit (OWASP Top 10), dependency scan, performance validation
+     Criteria: No HIGH/CRITICAL vulnerabilities, acceptable performance
+
+   - Personal: Long-term sustainability check, support system validation, risk assessment
+     Criteria: Sustainable approach, support adequate, risks acceptable
+
+   - Creative: Audience testing, feedback incorporation, polish validation
+     Criteria: Audience response positive, feedback addressed, polished
+
+   - Professional: Market validation, financial review, compliance check
+     Criteria: Market viable, financially sound, compliant
+
+   - Recreational: Safety audit, accessibility review, participant readiness
+     Criteria: Safe, accessible, participants prepared
+
+   Protocol References:
+   - .claude/protocols/agent-protocol-extended.md (if technical - security checklist)
+
+   Context References:
+   - All previous phase outputs
+   - .claude/memory/task-{id}-quality-validator-memory.md (implementation validation)
+
+---
 
 PHASE 9: Documentation & Deployment Readiness
-- Agents: documentation-generator → deployment-readiness-validator → project-delivery-coordinator
-- Input: Validated implementation
-- Output: Complete project package (code + tests + docs + deployment guide)
-- Gate: Deployment checklist satisfied, GO decision
+
+Cognitive Sequence: GENERATION → VALIDATION
+
+Purpose: Create comprehensive documentation and validate deployment readiness
+
+TASK CONTEXT:
+  task_domain: [Inherited]
+  quality_standards: ["complete", "accurate", "accessible", "actionable"]
+  artifact_types: (domain-specific documentation)
+  success_criteria: ["documentation complete", "deployment ready", "handoff prepared"]
+
+Agent Invocations:
+
+1. generation-agent (GENERATION)
+   Purpose: Generate comprehensive documentation
+
+   Gate Entry:
+   - Validated implementation from Phase 8
+
+   Gate Exit:
+   - Complete documentation suite
+   - All required documents created
+   - Deployment/handoff guide ready
+
+   Domain-Specific Documentation:
+   - Technical: README, API docs, architecture docs, deployment guide, runbook
+   - Personal: Progress documentation, resource guide, sustainability plan, review schedule
+   - Creative: Style guide, production notes, distribution plan, future iteration guide
+   - Professional: Strategy document, operational guide, KPI dashboard, stakeholder brief
+   - Recreational: Event guide, participant instructions, logistics document, contingency plans
+
+   Context References:
+   - All previous phase outputs
+
+2. quality-validator (VALIDATION)
+   Purpose: Validate deployment/launch/handoff readiness
+
+   Gate Entry:
+   - Documentation complete
+
+   Gate Exit Decision:
+   - GO: Deployment checklist satisfied → Phase 10 (finalization)
+   - NO-GO: Critical gaps → Remediate (loop to appropriate phase)
+
+   Domain-Specific Readiness Checklist:
+   - Technical: Tests pass, docs complete, configs ready, security clean, deployment tested
+   - Personal: Goals clear, resources ready, support active, sustainability confirmed
+   - Creative: Content polished, distribution ready, audience prepared, launch plan set
+   - Professional: Strategy documented, team aligned, resources allocated, launch ready
+   - Recreational: Logistics complete, participants briefed, safety confirmed, contingencies ready
+
+   Context References:
+   - All previous phase outputs
+   - .claude/memory/task-{id}-generation-agent-memory.md (documentation)
+
+---
+
+PHASE 10: Workflow Completion
+
+Purpose: Finalize deliverables and complete workflow
+
+TASK CONTEXT:
+  No agents invoked - workflow orchestration handles completion
+
+Actions:
+1. Aggregate all phase outputs into final project package
+2. Review Unknown Registry for critical unresolved items
+3. Generate project completion summary
+4. Present complete deliverables to user
+5. Signal workflow completion
+
+Final Deliverable Structure (Domain-Specific):
+- Technical: Working code + comprehensive tests + documentation + deployment guide
+- Personal: Implemented framework + progress documentation + sustainability plan + review system
+- Creative: Finished content + style guide + production notes + distribution plan
+- Professional: Executed strategy + operational docs + KPI tracking + stakeholder reports
+- Recreational: Event ready + participant materials + logistics confirmed + contingency plans
+
+Completion Criteria:
+- All phases completed successfully
+- All gate validations passed
+- Critical unknowns resolved
+- Deliverables complete per domain requirements
+- User acceptance obtained
+
+---
+
+DEPENDENCIES & REQUIREMENTS
+
+REQUIRED SKILLS: None (standalone skill)
+
+REQUIRED PROTOCOLS:
+- .claude/protocols/agent-protocol-core.md (all agents - context inheritance, Johari format)
+- .claude/protocols/agent-protocol-extended.md (technical domain code generation - TDD + Security)
+
+REQUIRED REFERENCES:
+- .claude/references/agent-registry.md (agent descriptions and capabilities)
+- .claude/references/johari.md (context structure, type definitions, format)
+- .claude/references/context-inheritance.md (context-passing examples)
+
+REQUIRED AGENTS (6):
+- clarification-specialist (CLARIFICATION function)
+- research-discovery (RESEARCH function)
+- analysis-agent (ANALYSIS function)
+- synthesis-agent (SYNTHESIS function)
+- generation-agent (GENERATION function)
+- quality-validator (VALIDATION function)
+
+---
 
 STATE MANAGEMENT
 
-WORKFLOW METADATA (JSON in task memory):
-```json
-{
-  "workflowMetadata": {
-    "taskId": "task-{project-name}",
-    "workflowType": "develop-project",
-    "projectType": "web_app|cli_tool|mobile_app|pwa|ai_app",
-    "targetPlatform": "browser|node|desktop|mobile|edge",
-    "startDate": "2025-11-14T10:30:00Z",
-    "currentPhase": 0,
-    "totalPhases": 10,
-    "criticalConstraints": ["budget", "timeline", "technology"],
-    "successCriteria": ["all tests pass", "security audit clean", "docs complete"],
-    "blockingIssues": null
-  },
-  "unknownRegistry": {
-    "unknowns": [
-      {
-        "id": "U1",
-        "phase": 0,
-        "category": "Requirements",
-        "description": "User authentication method unclear",
-        "resolutionPhase": 1,
-        "status": "Unresolved|Resolved",
-        "resolution": null
-      }
-    ]
-  }
-}
-```
-
-UNKNOWN REGISTRY
-
-Tracks unknowns across phases with structured IDs:
-- Agents flag unknowns with `[NEW-UNKNOWN]` markers
-- Orchestrator assigns IDs (U1, U2, U3...)
-- Agents resolve unknowns in designated phases
-- Status lifecycle: Unresolved → In Progress → Resolved/Deferred
-
-PHASE DEFINITIONS
-
-PHASE 0: REQUIREMENTS CLARIFICATION & ANALYSIS
-
-ENTRY GATE:
-- User has provided initial project description
-- Task ID generated (task-{project-name})
-- Task memory file created
-
-PHASE OBJECTIVES:
-- Transform vague idea into explicit requirements
-- Analyze dependencies, complexity, risks
-- Validate requirements quality
-- Establish clear scope boundaries
-
-AGENT ORCHESTRATION:
-
-AGENT 1: project-requirements-clarifier (CLARIFIER)
-Purpose: Transform vague project idea into explicit requirements
-Trigger: Phase 0 start
-Instructions:
-  1. Extract project concept from user input
-  2. Identify ambiguities in description
-  3. Interact with user via AskUserQuestion to clarify scope, features, users, metrics
-  4. Formulate explicit requirements with Given-When-Then acceptance criteria
-  5. Define scope boundaries (in/out of scope)
-Output Format: Append to task memory per JOHARI.md template
-Handoff: Pass requirements to requirements-analyzer
-
-AGENT 2: requirements-analyzer (ANALYZER)
-Purpose: Analyze requirements for dependencies, complexity, risks, priorities
-Trigger: requirements-clarifier completion
-Instructions:
-  1. Parse requirements from previous output
-  2. Build dependency graph
-  3. Assess complexity per requirement (SIMPLE/MEDIUM/COMPLEX)
-  4. Map risks with likelihood×impact
-  5. Apply MoSCoW prioritization
-Output Format: Append to task memory per JOHARI.md template
-Handoff: Pass analysis to requirements-validator
-
-AGENT 3: requirements-validator (VALIDATOR)
-Purpose: Validate requirements quality (SMART criteria, testability, consistency)
-Trigger: requirements-analyzer completion
-Instructions:
-  1. Validate completeness (all have acceptance criteria)
-  2. Validate testability (can write tests from criteria)
-  3. Check consistency (no contradictions)
-  4. Generate validation report
-  5. Make gate decision (PASS or FAIL)
-Output Format: Append to task memory per JOHARI.md template
-Handoff: PASS → Phase 1; FAIL → loop to project-requirements-clarifier
-
-EXIT GATE:
-- All requirements have explicit acceptance criteria
-- All requirements are testable
-- No contradictions identified
-- Scope boundaries clear
-- Dependencies mapped
-- Priorities assigned (MoSCoW)
-- Validation report: PASS
-
----
-
-PHASE 1: TECHNOLOGY RESEARCH
-
-ENTRY GATE:
-- Phase 0 exit gate PASSED
-- Requirements validated and prioritized
-
-PHASE OBJECTIVES:
-- Discover available technology options
-- Gather official documentation
-- Collect community insights
-- Build knowledge base for evaluation
-
-AGENT ORCHESTRATION:
-
-AGENT 4: technology-researcher (RESEARCHER)
-Purpose: Discover and gather technology options via WebSearch/WebFetch
-Trigger: Phase 1 start
-Instructions:
-  1. Identify research categories from requirements and project type
-  2. WebSearch for technology options (frameworks, databases, tools)
-  3. WebFetch official documentation
-  4. Collect community insights (adoption, maturity, activity)
-  5. Document all sources with URLs and timestamps
-Output Format: Append to task memory per JOHARI.md template
-Handoff: Pass research findings to Phase 2
-
-EXIT GATE:
-- All technology categories researched
-- 3-5 options per category identified
-- Official documentation URLs captured
-- Community insights collected
-- Source provenance documented
-
----
-
-PHASE 2: TECHNOLOGY EVALUATION & SELECTION
-
-ENTRY GATE:
-- Phase 1 exit gate PASSED
-- Technology research complete with sources
-
-PHASE OBJECTIVES:
-- Evaluate technology options against requirements
-- Compare options with structured criteria
-- Make informed technology stack decision
-- Document decision rationale
-
-AGENT ORCHESTRATION:
-
-AGENT 5: technology-evaluator (ANALYZER)
-Purpose: Evaluate technologies against requirements with structured criteria
-Trigger: Phase 2 start
-Instructions:
-  1. Define evaluation criteria (requirement fit, maturity, community, performance, learning curve)
-  2. Score each technology (1-5 scale) against criteria
-  3. Calculate weighted totals
-  4. Identify trade-offs (power vs simplicity, performance vs DX)
-  5. Assess risks and deal-breakers per technology
-Output Format: Append to task memory per JOHARI.md template
-Handoff: Pass evaluation to technology-decision-synthesizer
-
-AGENT 6: technology-decision-synthesizer (SYNTHESIZER)
-Purpose: Synthesize evaluation into final technology stack decision
-Trigger: technology-evaluator completion
-Instructions:
-  1. Aggregate evaluation results and requirements
-  2. Resolve conflicts between criteria
-  3. Construct coherent technology stack
-  4. Document decision rationale per technology
-  5. Acknowledge trade-offs and risks
-Output Format: Append to task memory per JOHARI.md template
-Handoff: Pass technology stack to Phase 3
-
-EXIT GATE:
-- Technology stack specified for all categories
-- Each selection has evaluation-based justification
-- Stack is coherent (technologies integrate well)
-- Trade-offs explicitly acknowledged
-- Requirements addressable by chosen stack
-
----
-
-PHASE 3: ARCHITECTURE RESEARCH & DESIGN
-
-ENTRY GATE:
-- Phase 2 exit gate PASSED
-- Technology stack finalized
-
-PHASE OBJECTIVES:
-- Research applicable architectural patterns
-- Design system architecture
-- Define components, data models, APIs
-- Apply security-first principles
-
-AGENT ORCHESTRATION:
-
-AGENT 7: pattern-researcher (RESEARCHER)
-Purpose: Research architectural and design patterns
-Trigger: Phase 3 start
-Instructions:
-  1. Identify pattern categories from project type
-  2. WebSearch for architectural patterns (MVC, layered, microservices)
-  3. Research design patterns (Gang of Four, domain-specific)
-  4. Collect anti-patterns (what to avoid)
-  5. Document patterns with applicability criteria
-Output Format: Append to task memory per JOHARI.md template
-Handoff: Pass pattern catalog to architecture-synthesizer
-
-AGENT 8: architecture-synthesizer (SYNTHESIZER)
-Purpose: Synthesize requirements, patterns, technology into architecture
-Trigger: pattern-researcher completion
-Instructions:
-  1. Select architectural style (layered, MVC, microservices)
-  2. Define components with responsibilities and interfaces
-  3. Design data model (entities, relationships)
-  4. Define integration points (APIs, external services)
-  5. Apply security architecture (auth, authorization, data protection)
-  6. Reference SECURITY-FIRST-DEVELOPMENT.md protocol
-Output Format: Append to task memory per JOHARI.md template
-Handoff: Pass architecture to Phase 4
-
-EXIT GATE:
-- Architectural style selected and justified
-- All requirements mapped to components
-- Component interfaces defined
-- Data model designed
-- APIs specified
-- Security architecture integrated
-
----
-
-PHASE 4: ARCHITECTURE VALIDATION
-
-ENTRY GATE:
-- Phase 3 exit gate PASSED
-- Architecture design complete
-
-PHASE OBJECTIVES:
-- Analyze architecture quality
-- Validate against requirements and security standards
-- Identify issues before implementation
-- Make gate decision (proceed or remediate)
-
-AGENT ORCHESTRATION:
-
-AGENT 9: architecture-analyzer (ANALYZER)
-Purpose: Analyze architecture for quality attributes
-Trigger: Phase 4 start
-Instructions:
-  1. Analyze component structure (SOLID, coupling/cohesion)
-  2. Evaluate quality attributes (scalability, maintainability, testability, performance)
-  3. Validate requirement alignment
-  4. Identify architectural risks and technical debt
-  5. Provide recommendations
-Output Format: Append to task memory per JOHARI.md template
-Handoff: Pass analysis to architecture-validator
-
-AGENT 10: architecture-validator (VALIDATOR)
-Purpose: Validate architecture meets all quality gates
-Trigger: architecture-analyzer completion
-Instructions:
-  1. Validate requirements coverage
-  2. Validate security architecture (SECURITY-FIRST-DEVELOPMENT.md checklist)
-  3. Validate patterns and principles
-  4. Generate validation report with issues by severity
-  5. Make gate decision (PASS or FAIL)
-  6. Reference SECURITY-FIRST-DEVELOPMENT.md protocol
-Output Format: Append to task memory per JOHARI.md template
-Handoff: PASS → Phase 5; FAIL → loop to Phase 3
-
-EXIT GATE:
-- All requirements mapped to components
-- No CRITICAL or 3+ HIGH security issues
-- Security architecture validated
-- Patterns applied correctly
-- Component interfaces clear
-- Validation report: PASS
-
----
-
-PHASE 5: IMPLEMENTATION PLANNING
-
-ENTRY GATE:
-- Phase 4 exit gate PASSED
-- Architecture validated
-
-PHASE OBJECTIVES:
-- Create detailed implementation plan
-- Define TDD milestones
-- Clarify technical constraints
-- Establish testing strategy
-
-AGENT ORCHESTRATION:
-
-AGENT 11: implementation-plan-generator (GENERATOR)
-Purpose: Create implementation plan with TDD milestones
-Trigger: Phase 5 start
-Instructions:
-  1. Break architecture into implementation phases
-  2. Create task breakdown structure (WBS)
-  3. Define TDD milestones (RED-GREEN-REFACTOR per feature)
-  4. Specify testing strategy (unit/integration/E2E)
-  5. Document build/deployment pipeline
-  6. Reference TEST-DRIVEN-DEVELOPMENT.md protocol
-Output Format: Append to task memory per JOHARI.md template
-Handoff: Plan available for Phase 6
-
-AGENT 12: technical-constraint-clarifier (CLARIFIER)
-Purpose: Clarify deployment, performance, integration constraints
-Trigger: Phase 5 start (parallel with implementation-plan-generator)
-Instructions:
-  1. Identify technical ambiguities
-  2. Interact with user via AskUserQuestion (deployment env, performance SLAs, integrations)
-  3. Formulate explicit constraints
-  4. Validate feasibility with selected stack
-Output Format: Append to task memory per JOHARI.md template
-Handoff: Constraints available for Phase 6
-
-EXIT GATE:
-- Implementation plan complete with phases and tasks
-- TDD milestones defined per feature
-- Testing strategy specified
-- Technical constraints clarified
-- Deployment environment specified
-- Performance targets defined
-
----
-
-PHASE 6: CODE STRUCTURE GENERATION
-
-ENTRY GATE:
-- Phase 5 exit gate PASSED
-- Implementation plan and constraints defined
-
-PHASE OBJECTIVES:
-- Generate project scaffold
-- Create secure configuration files
-- Establish test infrastructure
-- Prepare for implementation
-
-AGENT ORCHESTRATION:
-
-AGENT 13: code-structure-generator (GENERATOR)
-Purpose: Create project scaffold with secure configs and test infrastructure
-Trigger: Phase 6 start
-Instructions:
-  1. Create directory structure per architecture
-  2. Generate configuration files with secure defaults
-  3. Create boilerplate code following patterns
-  4. Generate test directory structure
-  5. Document setup instructions
-  6. Reference SECURITY-FIRST-DEVELOPMENT.md and TEST-DRIVEN-DEVELOPMENT.md protocols
-Output Format: Append to task memory per JOHARI.md template
-Handoff: Scaffold ready for Phase 7
-
-EXIT GATE:
-- All directories created
-- Configuration files generated with secure defaults
-- Boilerplate code follows architecture
-- Test infrastructure ready
-- Setup documentation complete
-- Build succeeds
-
----
-
-PHASE 7: CORE IMPLEMENTATION & TESTING
-
-ENTRY GATE:
-- Phase 6 exit gate PASSED
-- Project scaffold complete
-
-PHASE OBJECTIVES:
-- Implement core features using TDD
-- Generate comprehensive test suite
-- Achieve coverage targets
-- Follow secure coding practices
-
-AGENT ORCHESTRATION:
-
-AGENT 14: core-implementation-generator (GENERATOR)
-Purpose: Implement features using TDD RED-GREEN-REFACTOR cycle
-Trigger: Phase 7 start
-Instructions:
-  1. For each feature: RED (write test) → GREEN (implement) → REFACTOR (improve)
-  2. Apply security controls (input validation, auth checks)
-  3. Create integration points per architecture
-  4. Implement error handling and logging
-  5. Follow coding standards
-  6. Reference SECURITY-FIRST-DEVELOPMENT.md and TEST-DRIVEN-DEVELOPMENT.md protocols
-Output Format: Append to task memory per JOHARI.md template
-Handoff: Implementation to test-generator
-
-AGENT 15: test-generator (GENERATOR)
-Purpose: Generate comprehensive test suite
-Trigger: core-implementation-generator completion
-Instructions:
-  1. Review implementation for coverage gaps
-  2. Add unit tests (functions, edge cases, errors)
-  3. Add integration tests (APIs, database, services)
-  4. Add E2E tests (user workflows)
-  5. Achieve 80%+ coverage target
-  6. Reference TEST-DRIVEN-DEVELOPMENT.md protocol
-Output Format: Append to task memory per JOHARI.md template
-Handoff: Tests to Phase 8
-
-EXIT GATE:
-- All planned features implemented
-- Tests written for all features
-- Test suite comprehensive (unit/integration/E2E)
-- Coverage approaching 80%+
-
----
-
-PHASE 8: QUALITY VALIDATION
-
-ENTRY GATE:
-- Phase 7 exit gate PASSED
-- Implementation and tests complete
-
-PHASE OBJECTIVES:
-- Execute tests and verify pass
-- Validate code quality
-- Conduct security audit
-- Make gate decision (deploy-ready or fix)
-
-AGENT ORCHESTRATION:
-
-AGENT 16: implementation-validator (VALIDATOR)
-Purpose: Validate implementation quality and test execution
-Trigger: Phase 8 start
-Instructions:
-  1. Execute test suite via Bash
-  2. Validate architecture compliance
-  3. Check coding standards
-  4. Verify security basics (no hardcoded secrets, input validation)
-  5. Confirm error handling
-  6. Make gate decision (PASS or FAIL)
-  7. Reference SECURITY-FIRST-DEVELOPMENT.md and TEST-DRIVEN-DEVELOPMENT.md protocols
-Output Format: Append to task memory per JOHARI.md template
-Handoff: PASS → security-validator; FAIL → loop to Phase 7
-
-AGENT 17: security-validator (VALIDATOR)
-Purpose: Conduct comprehensive security audit
-Trigger: implementation-validator PASS
-Instructions:
-  1. Audit against OWASP Top 10
-  2. Scan code for vulnerabilities (injection, XSS, etc.)
-  3. Run dependency vulnerability scan (npm audit, pip-audit)
-  4. Review authentication/authorization implementation
-  5. Check configuration security
-  6. Make gate decision (PASS or FAIL)
-  7. Reference SECURITY-FIRST-DEVELOPMENT.md protocol
-Output Format: Append to task memory per JOHARI.md template
-Handoff: PASS → Phase 9; FAIL → loop to Phase 7
-
-EXIT GATE:
-- All tests pass (zero failures)
-- Test coverage meets target (80%+)
-- No CRITICAL or HIGH security vulnerabilities
-- Code follows architecture
-- Coding standards met
-- Validation reports: PASS
-
----
-
-PHASE 9: DOCUMENTATION & DEPLOYMENT READINESS
-
-ENTRY GATE:
-- Phase 8 exit gate PASSED
-- Implementation validated, secure
-
-PHASE OBJECTIVES:
-- Generate complete documentation
-- Verify deployment readiness
-- Aggregate all deliverables
-- Produce final project package
-
-AGENT ORCHESTRATION:
-
-AGENT 18: documentation-generator (GENERATOR)
-Purpose: Generate comprehensive documentation suite
-Trigger: Phase 9 start
-Instructions:
-  1. Generate README (setup, quickstart, features)
-  2. Create API documentation
-  3. Produce architecture diagrams and decisions
-  4. Write usage guides and examples
-  5. Document deployment procedures
-Output Format: Append to task memory per JOHARI.md template
-Handoff: Docs to deployment-readiness-validator
-
-AGENT 19: deployment-readiness-validator (VALIDATOR)
-Purpose: Validate deployment readiness via checklist
-Trigger: documentation-generator completion
-Instructions:
-  1. Validate deployment readiness checklist
-  2. Confirm tests passing, docs complete, configs present
-  3. Verify security addressed, logging implemented
-  4. Make GO/NO-GO decision
-Output Format: Append to task memory per JOHARI.md template
-Handoff: GO → project-delivery-coordinator; NO-GO → remediate
-
-AGENT 20: project-delivery-coordinator (COORDINATOR)
-Purpose: Aggregate deliverables and produce final package
-Trigger: deployment-readiness-validator GO
-Instructions:
-  1. Track all phase completions
-  2. Aggregate deliverables (code, tests, docs, configs, reports)
-  3. Review Unknown Registry (confirm critical unknowns resolved)
-  4. Assemble final project package
-  5. Signal workflow completion
-Output Format: Append to task memory per JOHARI.md template
-Handoff: Final package to user
-
-EXIT GATE:
-- Documentation complete (README, API, architecture, deployment)
-- Deployment checklist satisfied
-- GO decision confirmed
-- All deliverables aggregated
-- Final project package assembled
-
----
-
-CONTEXT INJECTION STRATEGY
-
-Each agent receives project-type context via Step Context at invocation:
-
-```
-Task ID: task-recipe-app
-Step: 7
-Step Name: Core Implementation Generation
-Purpose: Implement features using TDD RED-GREEN-REFACTOR
-Gate Entry: Project scaffold complete, tests pass
-Gate Exit: Features implemented with tests, coverage 80%+
-
-PROJECT CONTEXT:
-  project_type: web_app
-  target_platform: browser
-  technology_stack:
-    frontend: Next.js
-    database: PostgreSQL
-    authentication: NextAuth.js
-    deployment: Vercel
-  requirements_summary: Recipe CRUD, search, favorites, user auth
-  constraints:
-    deployment: Cloud (Vercel free tier)
-    performance: Search results < 500ms
-    security: OWASP Top 10 compliance required
-
-[Agent-specific instructions from SKILL.md]
-```
-
-Agents adapt behavior based on context:
-- Web app → Generate React components, API routes
-- CLI tool → Generate Click commands, argument parsing
-- Mobile app → Generate Flutter widgets, state management
-- AI app → Generate model integration, vector DB operations
-
-Same agents, different specialization through context.
-
----
-
-ERROR HANDLING & REMEDIATION
-
-REMEDIATION LOOPS:
-
-Phase 4 Architecture Validation FAIL:
-- Loop back to Phase 3 (Architecture Research & Design)
-- architecture-synthesizer revises design
-- Re-run Phase 4 validation
-
-Phase 8 Quality Validation FAIL:
-- Loop back to Phase 7 (Core Implementation & Testing)
-- core-implementation-generator fixes issues
-- test-generator adds missing tests
-- Re-run Phase 8 validation
-
-CRITICAL BLOCKERS:
-
-If showstopper issue detected:
-- Halt workflow
-- Document blocker in Unknown Registry
-- Flag in Downstream Directives
-- Require user intervention before proceeding
-
----
-
-USAGE EXAMPLES
-
-SCENARIO 1: Simple Web Application
-
-User input: "Build a recipe management app"
-
-Phase 0: Clarify → 4 requirements (auth, CRUD, search, favorites)
-Phase 1: Research → Next.js, PostgreSQL, NextAuth.js
-Phase 2: Evaluate → Next.js selected (integrated, Vercel-ready)
-Phase 3: Design → 3-tier architecture, 4 components, PostgreSQL schema
-Phase 4: Validate → PASS (security architecture sound)
-Phase 5: Plan → 3 implementation phases, TDD milestones
-Phase 6: Scaffold → Next.js project created, tests configured
-Phase 7: Implement → Recipe CRUD, auth, search implemented with tests
-Phase 8: Validate → All tests pass, security audit clean
-Phase 9: Document → README, API docs, deployment guide created
-Final: Working Next.js app with PostgreSQL, 95% test coverage, deployment-ready
-
-SCENARIO 2: CLI Tool
-
-User input: "Create a developer utility for managing git workflows"
-
-Phase 0: Clarify → Commands (init, branch, merge, release)
-Phase 1: Research → Python Click, GitPython library
-Phase 2: Evaluate → Click selected (CLI-first, plugin architecture)
-Phase 3: Design → Command pattern, plugin system
-Phase 4: Validate → PASS
-Phase 5: Plan → 4 commands, TDD per command
-Phase 6: Scaffold → Python package, Click setup, tests
-Phase 7: Implement → Commands with GitPython integration, tests
-Phase 8: Validate → Tests pass, no vulnerabilities
-Phase 9: Document → README, command help, distribution guide
-Final: Python CLI tool, pip installable, 90% coverage
+WORKFLOW METADATA:
+Location: .claude/memory/task-{id}-memory.md
+Format: See .claude/references/johari.md for WorkflowMetadata schema
+
+Required Fields:
+- task_id: Unique identifier (task-{project-name})
+- workflow_type: "develop-project"
+- task_domain: technical|personal|creative|professional|recreational|hybrid
+- target_platform: (if technical) browser|node|desktop|mobile|edge
+- current_phase: 0-10
+- total_phases: 10
+- quality_standards: Domain-specific standards list
+- artifact_types: Expected output types
+- cognitive_sequence: List of cognitive functions in order
+- critical_constraints: Project-specific limitations
+- success_criteria: Measurable success indicators
+
+UNKNOWN REGISTRY:
+Location: Within workflow metadata file
+Format: See .claude/references/johari.md for Unknown schema
+
+Required Fields per Unknown:
+- id: U{number}
+- phase: Phase where unknown identified
+- category: Unknown category from taxonomy
+- description: What is unknown
+- resolution_phase: Phase where resolved
+- cognitive_agent: Which cognitive function resolves it
+- status: Unresolved|In Progress|Resolved|Deferred
+- resolution: How it was resolved (when resolved)
+
+AGENT OUTPUTS:
+Location: .claude/memory/task-{id}-{agent-name}-memory.md
+Format: Johari Window (see .claude/references/johari.md)
+
+Structure:
+- open: Confirmed knowledge shared by all
+- hidden: Non-obvious insights discovered
+- blind: Limitations and gaps
+- unknown: Areas requiring other cognitive functions
+- domain_insights: Domain-specific discoveries
 
 ---
 
 PERFORMANCE CONSIDERATIONS
 
-Token Budget Estimates:
-- 10 phases × ~500 tokens per phase = ~5000 tokens
-- Well within context limits (200k+ tokens available)
-- Progressive disclosure maintains efficiency
+TOKEN BUDGET:
+- Workflow metadata: ~500 tokens
+- Agent outputs (Johari format): ~300-500 tokens each
+- Total estimated: 8,000-12,000 tokens for complete workflow
+- Significant reduction from 20-agent system (~15,000-20,000 tokens)
 
-Execution Time:
-- Sequential phases: ~40-60 agent invocations
-- User interaction pauses: Phases 0, 5 (clarification)
-- Total time: 2-4 hours for small project, 4-8 hours for complex
+CONTEXT COMPRESSION:
+- Johari Window format compresses agent outputs
+- Reference previous findings without repetition
+- Domain insights extracted separately
+- Unknown Registry tracks gaps systematically
 
-Parallel Opportunities:
-- Phase 5: implementation-plan-generator + technical-constraint-clarifier run concurrently
-
----
-
-DEPENDENCIES
-
-REQUIRED SKILLS: None (standalone skill)
-
-REQUIRED PROTOCOLS:
-- .claude/protocols/agent-protocol-core.md (all agents - context inheritance, output quality)
-- .claude/protocols/agent-protocol-extended.md (code generation agents - TDD + Security)
-
-REQUIRED AGENTS (20):
-- All agents listed in AGENT-REGISTRY.md under develop-project
-
-REQUIRED TEMPLATES:
-- .claude/templates/JOHARI.md (memory format)
+REMEDIATION EFFICIENCY:
+- Gate-based validation prevents cascading errors
+- Targeted loops to specific phases reduce rework
+- Sequential agent execution maintains clarity
 
 ---
 
-TESTING PROTOCOL
+USAGE EXAMPLES
 
-VALIDATION STRATEGY:
+EXAMPLE 1: Technical Project - OAuth2 Authentication System
 
-Unit Test (Per Phase):
-- Verify agent produces expected output format
-- Validate JOHARI sections present
-- Confirm token budgets respected
+Domain: technical
+Target: Node.js API with JWT tokens
 
-Integration Test (Multi-Phase):
-- Run Phases 0-2 (requirements through technology selection)
-- Verify information flows correctly between agents
-- Confirm context inheritance working
+Cognitive Flow:
+- Phase 0: Clarify OAuth2 provider, security requirements, performance targets
+- Phase 1: Research OAuth2 libraries, security best practices, JWT handling
+- Phase 2: Evaluate libraries, synthesize technology stack decision
+- Phase 3: Research security patterns, synthesize secure architecture
+- Phase 4: Analyze architecture for OWASP compliance, validate security
+- Phase 5: Clarify deployment constraints, generate TDD implementation plan
+- Phase 6: Generate project scaffold with secure configs and test infrastructure
+- Phase 7: Implement OAuth2 flow using TDD (tests first, then code)
+- Phase 8: Validate tests pass and security audit clean
+- Phase 9: Generate API docs and deployment guide, validate readiness
+- Phase 10: Deliver working OAuth2 system with tests and docs
 
-End-to-End Test (Full Workflow):
-- Execute complete workflow with real project request
-- Verify final deliverable completeness
-- Validate tests pass, security audit clean
-- Confirm documentation complete
+EXAMPLE 2: Personal Project - Career Transition Planning
 
-Test Cases:
-1. Simple web app (recipe manager)
-2. CLI tool (developer utility)
-3. AI application (RAG chatbot)
+Domain: personal
 
-Success Criteria:
-- All phases complete without errors
-- Gate validations pass
-- Final deliverable includes: code, tests (80%+ coverage), docs, deployment guide
-- Security audit clean (no HIGH/CRITICAL)
+Cognitive Flow:
+- Phase 0: Clarify career goals, constraints, values; analyze current situation
+- Phase 1: Research target roles, industries, skill requirements, market trends
+- Phase 2: Evaluate career paths against values/goals, synthesize optimal path
+- Phase 3: Research transition frameworks, synthesize personalized strategy
+- Phase 4: Analyze strategy for feasibility and risks, validate approach
+- Phase 5: Clarify timeline and resource constraints, generate action plan
+- Phase 6: Create tracking templates, resource lists, support network framework
+- Phase 7: Implement initial actions (skill building, networking, applications)
+- Phase 8: Validate progress against milestones, assess sustainability
+- Phase 9: Document progress, generate sustainability guide, validate readiness
+- Phase 10: Deliver complete career transition plan with tracking system
+
+EXAMPLE 3: Creative Project - Blog Series on AI Ethics
+
+Domain: creative
+Audience: Tech professionals
+
+Cognitive Flow:
+- Phase 0: Clarify audience, topics, tone; analyze existing content landscape
+- Phase 1: Research AI ethics topics, competing content, audience preferences
+- Phase 2: Evaluate topics and angles, synthesize content strategy
+- Phase 3: Research narrative structures, synthesize series framework
+- Phase 4: Analyze framework for coherence and engagement, validate approach
+- Phase 5: Clarify publishing constraints, generate content production plan
+- Phase 6: Create content templates, style guide, production tools
+- Phase 7: Write blog posts following creative framework
+- Phase 8: Validate content quality and audience fit, assess engagement potential
+- Phase 9: Generate publication guide and promotion plan, validate launch readiness
+- Phase 10: Deliver complete blog series with publication materials
 
 ---
 
 MAINTENANCE NOTES
 
-ADDING NEW AGENTS:
-1. Create agent following AGENT-DESIGN-PRINCIPLES.md
-2. Update AGENT-REGISTRY.md
-3. Add agent to appropriate phase in SKILL.md
-4. Update agent count in frontmatter
-5. Test integration with workflow
-
 MODIFYING PHASES:
 1. Update phase definition in this file
-2. Update affected agent invocations
+2. Update cognitive sequence if needed
 3. Update gate criteria if needed
 4. Re-test workflow end-to-end
 
 TROUBLESHOOTING:
 - Gate failures: Check previous phase outputs for completeness
-- Context inheritance issues: Verify task memory format matches JOHARI.md
-- Agent errors: Check agent receives required context from Step Context
-- Unknown resolution: Ensure Unknown Registry properly updated
+- Context inheritance issues: Verify workflow metadata format matches johari.md
+- Agent errors: Check agent receives required context (domain, standards, artifacts)
+- Unknown resolution: Ensure Unknown Registry properly updated with cognitive_agent field
+
+ADDING DOMAIN SUPPORT:
+1. Add domain-specific quality standards per phase
+2. Add domain-specific artifact types per phase
+3. Add domain-specific success criteria per phase
+4. Add example workflow for new domain
+5. Test end-to-end with real project in new domain
 
 ---
 
 REMEMBER
 
-This skill transforms chaos into deployable reality. Every phase builds on the last, every gate ensures quality, every agent performs its cognitive function excellently. The workflow is systematic, the validation is rigorous, the output is comprehensive. Trust the process, follow the gates, and watch ideas become production-ready code.
+This skill transforms ideas into reality through systematic cognitive processing. Every phase builds on the last, every gate ensures quality, every agent performs its cognitive function excellently across ANY domain.
+
+The workflow is systematic, the validation is rigorous, the output is comprehensive.
+
+Trust the process, follow the gates, respect the sequential execution, and watch ideas become deployment-ready deliverables.
+
+6 cognitive agents. 10 phases. Infinite domains. One proven workflow.

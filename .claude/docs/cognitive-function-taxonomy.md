@@ -152,7 +152,7 @@ USAGE GUIDELINES
 Use GENERATOR when:
 - New artifacts must be created (code, plans, specs)
 - Requirements exist and design decisions must be implemented
-- Templates must be instantiated with project-specific content
+- References must be instantiated with project-specific content
 - Architecture or implementation must be specified
 
 Do NOT use GENERATOR for:
@@ -398,9 +398,5 @@ TYPICAL WORKFLOW PATTERN 3: Generation → Validation Loop
 
 RELATED DOCUMENTS
 
-- .claude/docs/AGENT-DESIGN-PRINCIPLES.md - Design principles for agents
-- .claude/docs/AGENT-REGISTRY.md - Catalog of existing agents by cognitive function
-- .claude/skills/develop-agent/resources/agent-description-simple.md - Simple agent template
-- .claude/skills/develop-agent/resources/agent-description-complex.md - Complex agent template
-- .claude/docs/AGENT-TEMPLATE-USAGE.md - Template selection guidance
+- .claude/references/agent-registry.md - Catalog of existing agents by cognitive function
 - .claude/protocols/AGENT-INTERFACE-CONTRACTS.md - Input/output contracts

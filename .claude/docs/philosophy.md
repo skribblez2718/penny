@@ -21,7 +21,7 @@ Agents NEVER contain workflow orchestration
 This separation is ABSOLUTE and INVIOLABLE
 
 PRINCIPLE 3: ZERO REDUNDANCY
-NEVER repeat system definitions, protocols, or templates
+NEVER repeat system definitions, protocols, or references
 Create reference files for shared elements - use them like functions
 Single point of change for ALL system components
 If used twice, it becomes a reference file
@@ -64,7 +64,7 @@ Protocols Directory: ${PAI_DIRECTORY}/.claude/protocols/
 - Shared behaviors across components
 - Referenced by skills and agents
 
-Templates Directory: ${PAI_DIRECTORY}/.claude/templates/
+References Directory: ${PAI_DIRECTORY}/.claude/references/
 - Structural patterns for workflows
 - Reusable formats and frameworks
 - Referenced to avoid duplication
@@ -86,7 +86,7 @@ MUST:
 - Specify clear phase boundaries
 - Include gate entry and exit criteria
 - Reference agents by name without implementation details
-- Use templates for structure consistency
+- Use references for structure consistency
 - Keep phases modular and independent
 
 MUST NOT:
@@ -128,7 +128,7 @@ MUST NOT:
 - Create circular dependencies
 - Violate system boundaries
 
-WHEN CREATING OR MODIFYING TEMPLATES
+WHEN CREATING OR MODIFYING References
 
 MUST:
 - Provide structural patterns only
@@ -139,7 +139,7 @@ MUST:
 
 MUST NOT:
 - Include content specifics
-- Duplicate existing templates
+- Duplicate existing references
 - Create rigid structures
 - Limit extensibility
 

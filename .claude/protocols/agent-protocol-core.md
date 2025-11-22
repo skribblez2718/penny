@@ -1,429 +1,349 @@
-AGENT EXECUTION PROTOCOL - CORE COMPRESSED SUMMARY
+AGENT PROTOCOL CORE - COGNITIVE DOMAIN ENHANCED VERSION
 
-TASK ID EXTRACTION - MANDATORY FIRST STEP
+OVERVIEW
+This protocol defines how ALL cognitive domain agents execute within the Penny system. Agents apply consistent cognitive processes while adapting to task-specific contexts.
 
-EVERY agent MUST execute this 4-step extraction procedure before any other work:
+PROTOCOL STRUCTURE
 
-Step 1 - Locate Task ID in Prompt
-- Search for pattern: "Task ID: task-{name}"
-- Pattern appears in first 50 lines of invocation prompt
-- Format: task-{descriptive-keywords}
-- Validation: 5-40 chars, lowercase + dashes only, starts with "task-"
-- Examples: task-oauth2-auth, task-recipe-app, task-react-components
+SECTION 1: TASK-ID EXTRACTION AND DOMAIN CLASSIFICATION
 
-Step 2 - Extract Task ID Value
-- Capture exact string after "Task ID: " prefix
-- Store as variable for all subsequent file operations
-- NEVER modify or transform the Task ID value
+1.1 Task-ID Extraction
+Every agent invocation MUST include task-id in the prompt:
+```
+Task ID: task-{descriptive-keywords}
+Step: {step-number}
+Step Name: {step-name}
+Purpose: {purpose}
+```
 
-Step 3 - Validate Format
-- Confirm starts with "task-" prefix
-- Confirm length 5-40 characters
-- Confirm lowercase letters, numbers, dashes only
-- If invalid: HALT execution, report format error to orchestrator
+Extract task-id from invocation prompt using regex: `task-[a-z0-9-]{1,36}`
 
-Step 4 - Set Working Task ID
-- Use extracted Task ID for ALL memory file operations
-- All file reads/writes MUST use this Task ID in paths
-- NEVER hardcode or assume Task ID values
+1.2 Task Domain Classification 
+```python
+# Task Domain Enumeration
+TaskDomain = Literal[
+    "technical",      # Software, systems, engineering tasks
+    "personal",       # Life decisions, personal growth, health
+    "creative",       # Art, writing, design, content creation
+    "professional",   # Business, career, workplace tasks
+    "recreational",   # Fun, games, entertainment, hobbies
+    "hybrid"         # Multi-domain tasks requiring mixed approach
+]
 
-ERROR HANDLING:
-- Task ID missing from prompt: Report "TASK-ID-MISSING" error, halt execution
-- Task ID invalid format: Report "TASK-ID-INVALID" error with details, halt execution
-- Multiple Task IDs found: Use first occurrence, log warning
+# Domain Indicators (parse from context)
+DOMAIN_INDICATORS = {
+    "technical": ["code", "API", "architecture", "deployment", "debug"],
+    "personal": ["life", "health", "goal", "habit", "decision"],
+    "creative": ["write", "design", "story", "content", "artistic"],
+    "professional": ["business", "market", "strategy", "report", "meeting"],
+    "recreational": ["game", "fun", "party", "hobby", "entertainment"],
+}
+```
 
-CONTEXT INHERITANCE - 5-STEP MANDATORY PROCESS
+SECTION 2: CONTEXT INHERITANCE PROTOCOL
 
-Execute BEFORE beginning agent-specific work:
+2.1 Load Workflow Context (Enhanced)
+```python
+# Original workflow metadata
+workflow_metadata = load_json(".claude/memory/task-{task-id}-memory.md")
 
-STEP 1: EXTRACT STEP CONTEXT FROM PROMPT
-
-Required fields (always present in invocation prompt):
-- Task ID: task-{name}
-- Step: {step-number}
-- Step Name: {descriptive-name}
-- Purpose: {what-this-step-accomplishes}
-- Gate Entry: {prerequisites-required}
-- Gate Exit: {completion-criteria}
-
-Store all fields for reference throughout execution.
-
-STEP 2: LOAD WORKFLOW CONTEXT
-
-Dual File Pattern - Two types of memory files:
-
-TYPE 1: Workflow Metadata File (centralized)
-- Path: .claude/memory/task-{task-id}-memory.md
-- Contains: Workflow Metadata JSON + Unknown Registry JSON
-- Read: ALWAYS (every agent reads this file)
-- Purpose: Shared context, unknown tracking, workflow state
-
-TYPE 2: Agent Output Files (per-agent)
-- Path: .claude/memory/task-{task-id}-{agent-name}-memory.md
-- Contains: Agent-specific outputs (three-section structure)
-- Read: Based on dependencies or last 2 predecessors
-- Purpose: Previous agent outputs, discoveries, directives
-
-Reading Strategy:
-1. ALWAYS read workflow metadata file first
-2. Check prompt for "Read context from:" explicit file list
-3. If explicit list provided: read those specific files
-4. If no explicit list: read last 2 predecessor agent output files
-5. If first agent in workflow: only workflow metadata file exists
-
-STEP 3: RESOLVE PREVIOUS UNKNOWNS
-
-Unknown Registry Structure:
-{
-  "unknownRegistry": [
-    {
-      "id": "unknown-001",
-      "description": "What deployment platform will be used?",
-      "identifiedBy": "requirements-clarifier",
-      "identifiedInPhase": "phase-0",
-      "status": "unresolved",
-      "resolutionPhase": "phase-1",
-      "impact": "Cannot finalize technology stack without platform choice"
-    }
-  ]
+# Extract task domain and adaptation parameters
+task_context = {
+    "domain": workflow_metadata.get("taskDomain", "technical"),  
+    "quality_standards": workflow_metadata.get("qualityStandards", []),
+    "artifact_types": workflow_metadata.get("artifactTypes", []),
+    "success_criteria": workflow_metadata.get("successCriteria", []),
+    "constraints": workflow_metadata.get("constraints", [])
 }
 
-Resolution Procedure:
-1. Load Unknown Registry from workflow metadata file
-2. Filter unknowns where resolutionPhase matches current phase
-3. For each filtered unknown:
-   - Determine if you have information to resolve it
-   - If resolvable: document resolution in your output
-   - If not resolvable: maintain status "unresolved"
-4. Propose Unknown Registry updates in Downstream Directives
+# Load domain-specific evaluation criteria
+domain_criteria = load_domain_criteria(task_context["domain"])
+```
 
-NEVER modify Unknown Registry directly - propose updates via Downstream Directives.
+2.2 Previous Agent Context Loading 
+Agents receive explicit predecessor list in invocation:
+```
+Read context from:
+- .claude/memory/task-{task-id}-memory.md (workflow metadata)
+- .claude/memory/task-{task-id}-{predecessor-1}-memory.md
+- .claude/memory/task-{task-id}-{predecessor-2}-memory.md
+```
 
-STEP 4: ADDRESS BLIND SPOTS
+Load and parse each file to build complete context.
 
-Blind Spot Analysis:
-- Review predecessor agent outputs (from Step 2)
-- Identify unstated assumptions in their analysis
-- Identify missing considerations or edge cases
-- Identify implicit dependencies not explicitly documented
-- Identify conflicting information between sources
+SECTION 3: COGNITIVE FUNCTION ADAPTATION 
 
-Document blind spots discovered in JOHARI SUMMARY section (Blind Spots quadrant).
+3.1 Cognitive Adaptation Framework
+Each agent has:
+- Universal Process: Consistent method (HOW)
+- Domain Adaptation: Context-specific application (WHAT)
+- Quality Standards: Domain-appropriate criteria (STANDARDS)
 
-STEP 5: CONSOLIDATE OPEN AREA
+```python
+class CognitiveAdaptation:
+    def adapt_to_context(self, cognitive_function: str, task_context: dict):
+        """
+        Adapt universal cognitive function to specific task domain
+        """
+        # Universal process remains constant
+        base_process = self.get_cognitive_process(cognitive_function)
+        
+        # Adapt evaluation criteria to domain
+        adapted_criteria = self.adapt_criteria(
+            task_context["domain"],
+            task_context["quality_standards"]
+        )
+        
+        # Select domain-appropriate methods
+        domain_methods = self.select_methods(
+            task_context["domain"],
+            task_context["artifact_types"]
+        )
+        
+        return {
+            "process": base_process,
+            "criteria": adapted_criteria,
+            "methods": domain_methods
+        }
+```
 
-Open Area = Information you and orchestrator both know and agree on
+3.2 Domain-Specific Adaptations
 
-Consolidation Principles:
-- Reference previous content, NEVER repeat verbatim
-- Cite sources: "As identified by requirements-clarifier in phase-0..."
-- Build on established facts without re-explaining
-- Use compressed summaries: "Given the three security requirements (auth, encryption, audit logging)..."
+Technical Domain:
+- Apply TDD, security patterns, SOLID principles
+- Use technical vocabulary and specifications
+- Generate code, configs, documentation
 
-Token Budget Compliance:
-- Avoid redundant explanations of information already in workflow context
-- Summarize multi-agent discussions: "The technology evaluation consensus..."
-- Reference file contents instead of copying: "Per the requirements in task-{id}-memory.md..."
+Personal Domain:
+- Apply decision frameworks, goal-setting methods
+- Use empathetic, supportive language
+- Generate plans, trackers, reflection documents
 
-PRE-EXECUTION VALIDATION:
-Before proceeding to agent-specific work, verify:
-- [ ] Task ID extracted and validated
-- [ ] Workflow metadata file read successfully
-- [ ] Predecessor agent outputs read (if applicable)
-- [ ] Unknown Registry filtered for current phase
-- [ ] Blind spots from predecessors identified
-- [ ] Open Area context consolidated
+Creative Domain:
+- Apply narrative structure, artistic principles
+- Use expressive, engaging language
+- Generate content, designs, creative works
 
-REASONING STRATEGIES - APPLY THROUGHOUT EXECUTION
+Professional Domain:
+- Apply business frameworks, strategic thinking
+- Use formal, precise language
+- Generate reports, analyses, proposals
 
-Six strategies for systematic reasoning (apply as needed):
+Recreational Domain:
+- Apply fun/engagement principles
+- Use casual, enthusiastic language
+- Generate activities, games, entertainment plans
 
-STRATEGY 1: SEMANTIC UNDERSTANDING
-- Interpret intent behind instructions, not just literal words
-- Distinguish between what is explicitly stated vs implied
-- Identify true goal vs surface request
-- Apply: At start when interpreting Step Purpose and Gate Exit criteria
+SECTION 4: UNKNOWN REGISTRY MANAGEMENT (Enhanced) 🤖
 
-STRATEGY 2: CHAIN-OF-THOUGHT (CoT)
-- Break problem into explicit logical steps
-- Show internal work at each stage
-- Connect steps logically to conclusion
-- Make reasoning transparent
-- Apply: For complex analysis, multi-step procedures, validation logic
+4.1 Unknown Categories Expanded
+```python
+UnknownCategory = Literal[
+    # Original technical categories
+    "Research", "Implementation", "Architecture", "Requirements", "Risk",
+    "Scope", "Source", "Interpretation", "Validation", "Depth",
+    "Technical", "Security", "Integration", "Performance", "Environment",
+    
+    # Domain-specific unknown categories
+    "Personal",      # Personal preference, values, constraints
+    "Creative",      # Artistic direction, style, audience
+    "Professional",  # Business context, stakeholders, objectives
+    "Recreational",  # Fun factors, participant preferences
+    "Ethical",       # Moral considerations, impact assessment
+    "Resource",      # Time, budget, availability constraints
+    "Quality",       # Standards, expectations, success metrics
+]
+```
 
-STRATEGY 3: TREE-OF-THOUGHTS (ToT)
-- Generate 2-3 alternative solution approaches
-- Evaluate viability of each path
-- Compare trade-offs explicitly
-- Select optimal path with justification
-- Apply: When multiple valid approaches exist, architecture decisions, trade-off analysis
+4.2 Resolution Strategy by Cognitive Agent
+```python
+RESOLUTION_MAPPING = {
+    "CLARIFICATION": ["Scope", "Requirements", "Personal", "Creative", "Quality"],
+    "RESEARCH": ["Source", "Research", "Professional", "Environment"],
+    "ANALYSIS": ["Technical", "Risk", "Integration", "Performance", "Resource"],
+    "SYNTHESIS": ["Architecture", "Interpretation", "Ethical"],
+    "GENERATION": ["Implementation", "Creative"],
+    "VALIDATION": ["Validation", "Depth", "Security", "Quality"]
+}
+```
 
-STRATEGY 4: SELF-CONSISTENCY (SC)
-- Generate multiple reasoning chains for same problem
-- Identify most consistent conclusion across chains
-- Flag divergent paths for explicit consideration
-- Apply: Validation of critical decisions, verification of complex logic
+SECTION 5: JOHARI WINDOW COMPRESSION (Domain-Aware)
 
-STRATEGY 5: SOCRATIC QUESTIONING
-- Are all terms and requirements clearly defined?
-- What assumptions underlie my conclusions?
-- What evidence supports this approach?
-- What alternatives exist and why are they suboptimal?
-- What perspectives or edge cases am I missing?
-- Apply: When facing ambiguity, validating assumptions, challenging conclusions
+5.1 Compression Guidelines
+Original guidelines apply, with domain-specific emphasis:
 
-STRATEGY 6: CONSTITUTIONAL SELF-CRITIQUE
-- Review initial analysis against principles
-- Critique for accuracy, completeness, clarity, efficiency
-- Revise if critique reveals issues
-- Re-verify before finalizing output
-- Apply: Before completing output, after major decisions, when uncertain
+Technical Tasks: Focus on architectural decisions, technical trade-offs
+Personal Tasks: Focus on values alignment, emotional considerations
+Creative Tasks: Focus on artistic choices, audience impact
+Professional Tasks: Focus on strategic implications, stakeholder needs
+Recreational Tasks: Focus on enjoyment factors, participant experience
 
-CONFIDENCE SCORING:
-Label all conclusions with confidence level:
-- CERTAIN: Verified against documentation or explicit requirements
-- PROBABLE: Based on best practices and established patterns
-- POSSIBLE: Reasonable approach but requires validation
-- UNCERTAIN: Requires clarification from orchestrator or user
+5.2 Token Optimization
+```python
+def compress_johari_summary(domain: str, content: dict) -> dict:
+    """
+    Apply domain-specific compression to maintain context within token limits
+    """
+    compression_rules = {
+        "technical": lambda x: focus_on_technical_decisions(x),
+        "personal": lambda x: focus_on_personal_insights(x),
+        "creative": lambda x: focus_on_creative_elements(x),
+        "professional": lambda x: focus_on_business_impact(x),
+        "recreational": lambda x: focus_on_fun_factors(x)
+    }
+    
+    return compression_rules[domain](content)
+```
 
-SELF-REFLECTION LOOP - EXECUTE BEFORE OUTPUT
+SECTION 6: OUTPUT FORMATTING
 
-MANDATORY pre-output quality check (execute in order):
+6.1 Three-Section Output Structure (Universal)
+All agents produce:
 
-COMPONENT 1: ASSUMPTION AUDIT
-Questions to ask yourself:
-- What am I assuming about requirements that wasn't explicitly stated?
-- What am I assuming about the system/architecture/technology?
-- What am I assuming about user needs or preferences?
-- Are any assumptions unvalidated or risky?
+```markdown
+STEP {N}: {Cognitive Function} Execution
 
-Document assumptions in output if they affect decisions.
+STEP OVERVIEW
+[Domain-adapted narrative of work performed]
 
-COMPONENT 2: UNCERTAINTY IDENTIFICATION
-Questions to ask yourself:
-- What information is missing that I need?
-- What decisions am I uncertain about?
-- What alternatives exist that I couldn't fully evaluate?
-- What could go wrong with my recommendations?
-
-Mark unknowns with [NEW-UNKNOWN] in output for registry tracking.
-
-COMPONENT 3: BLIND SPOT CHECK
-Questions to ask yourself:
-- What perspectives am I not considering?
-- What edge cases might I be missing?
-- What could users/stakeholders see that I don't?
-- What implicit biases are affecting my analysis?
-
-Document discovered blind spots in Blind Spots quadrant.
-
-OUTPUT QUALITY CHECKLIST:
-Before finalizing output, verify:
-- [ ] Gate Entry criteria validated (were prerequisites met?)
-- [ ] Gate Exit criteria addressed (did I accomplish the purpose?)
-- [ ] All unknowns from current phase resolved or explained
-- [ ] New unknowns documented with [NEW-UNKNOWN] markers
-- [ ] Assumptions explicitly stated when they affect decisions
-- [ ] Blind spots identified and documented
-- [ ] Token budget respected (compressed, no redundant content)
-- [ ] Three-section output structure followed
-
-OUTPUT FORMATTING - THREE-SECTION STRUCTURE
-
-ALL agent outputs MUST use this exact structure:
-
-SECTION 1: OVERVIEW AND EXECUTIVE SUMMARY
-
-Purpose: Concise summary of work performed and key findings
-Token Budget: 200-400 tokens (10-20% of total output)
-
-Required subsections:
-- Work Completed: What you accomplished in this step
-- Key Findings: Most important discoveries or conclusions
-- Gate Status: Entry criteria validation + Exit criteria completion status
-
-Compression Principles:
-- Bullet points, not prose paragraphs
-- Reference existing context, don't repeat: "Building on the three requirements identified in phase-0..."
-- Highlight only NEW information or decisions
-- Avoid redundant summaries of well-established facts
-
-SECTION 2: JOHARI SUMMARY
-
-Purpose: Organize discoveries by knowledge quadrant
-Token Budget: 40-60% of total output
-Format: JSON structure + brief prose explanation
-
-Required JSON Structure:
+JOHARI SUMMARY
+```json
 {
-  "openArea": {
-    "summary": "What we both know and agree on (consolidated from context)",
-    "newInformation": ["New facts established in this step"]
-  },
-  "hiddenArea": {
-    "summary": "Information you may not be aware of",
-    "revelations": ["Insights discovered during analysis", "Constraints identified", "Technical details uncovered"]
-  },
-  "blindSpots": {
-    "summary": "Potential gaps in our collective understanding",
-    "identified": ["Assumptions in predecessor analysis", "Missing considerations", "Edge cases not addressed", "Conflicting information"]
-  },
-  "unknownUnknowns": {
-    "summary": "Questions we didn't know to ask",
-    "discovered": ["Unexpected dependencies", "Emergent complexity", "New risks identified"]
+  "open": "[Confirmed knowledge adapted to domain]",
+  "hidden": "[Discoveries relevant to domain]",
+  "blind": "[Domain-specific gaps identified]",
+  "unknown": "[Domain-appropriate unknowns]"
+}
+```
+
+DOWNSTREAM DIRECTIVES
+```json
+{
+  "primaryFindings": [...],
+  "recommendedActions": [...],
+  "criticalConstraints": [...],
+  "unknownRegistryUpdates": [...]
+}
+```
+```
+
+6.2 Domain-Specific Output Adaptations
+
+**Technical Output**: Include code snippets, architecture diagrams, API specs
+**Personal Output**: Include decision matrices, goal alignments, reflection prompts
+**Creative Output**: Include creative samples, mood boards, audience profiles
+**Professional Output**: Include metrics, KPIs, strategic alignments
+**Recreational Output**: Include fun factors, engagement metrics, participant feedback
+
+SECTION 7: QUALITY GATES (Domain-Aware)
+
+7.1 Universal Gate Logic
+All agents verify:
+- Task requirements addressed
+- Unknowns resolved for this phase
+- Output quality meets standards
+- Context preserved for downstream
+
+7.2 Domain-Specific Gate Criteria
+```python
+DOMAIN_GATES = {
+    "technical": ["Tests pass", "Security validated", "Performance acceptable"],
+    "personal": ["Values aligned", "Constraints respected", "Wellbeing considered"],
+    "creative": ["Audience appropriate", "Creative vision clear", "Quality acceptable"],
+    "professional": ["Business case valid", "Stakeholders considered", "ROI positive"],
+    "recreational": ["Fun factor high", "Participants accommodated", "Safety ensured"]
+}
+```
+
+SECTION 8: ERROR HANDLING AND RECOVERY
+
+8.1 Cognitive Function Failures
+When agent cannot complete cognitive function:
+1. Document specific failure in Johari "blind" section
+2. Add to Unknown Registry with resolution_phase
+3. Suggest alternative cognitive path
+4. Request orchestrator intervention if critical
+
+8.2 Domain Adaptation Failures
+When domain unclear or hybrid:
+1. Default to most conservative domain
+2. Document ambiguity in output
+3. Request CLARIFICATION agent intervention
+4. Apply multiple domain criteria if needed
+
+SECTION 9: INTER-AGENT COMMUNICATION
+
+9.1 Context Handoff Protocol
+Agents explicitly pass:
+```json
+{
+  "taskDomain": "identified domain",
+  "domainConfidence": "CERTAIN|PROBABLE|POSSIBLE",
+  "keyFindings": ["domain-specific discoveries"],
+  "nextAgentContext": {
+    "focusAreas": ["what next agent should prioritize"],
+    "constraints": ["domain-specific limitations"],
+    "standards": ["quality criteria to apply"]
   }
 }
-
-Prose Explanation:
-- Brief context for each quadrant (2-4 sentences)
-- Explain significance of discoveries
-- Connect findings to workflow goals
-
-SECTION 3: DOWNSTREAM DIRECTIVES
-
-Purpose: Actionable guidance for orchestrator and future agents
-Token Budget: 20-30% of total output
-Format: JSON structure
-
-Required JSON Structure:
-{
-  "completionStatus": "complete" | "blocked" | "partial",
-  "blockingIssues": ["Description of any blockers preventing completion"],
-  "nextSteps": ["Recommended actions for next agent or phase"],
-  "unknownRegistryUpdates": [
-    {
-      "action": "add" | "update" | "resolve",
-      "unknownId": "unknown-003",
-      "description": "What deployment platform will be used?",
-      "resolutionPhase": "phase-1",
-      "impact": "Cannot finalize architecture without platform choice",
-      "resolution": "If action=resolve, provide resolution details"
-    }
-  ],
-  "workflowMetadataUpdates": {
-    "field": "value"
-  }
-}
-
-Critical Requirements:
-- completionStatus MUST be accurate ("complete" only if Gate Exit fully met)
-- unknownRegistryUpdates MUST use [NEW-UNKNOWN] marker in prose text
-- nextSteps MUST be specific and actionable (not vague suggestions)
-
-Example [NEW-UNKNOWN] marker usage in prose:
-"The authentication approach remains unclear [NEW-UNKNOWN: What auth method (OAuth2, JWT, session-based) should be used? Resolution needed in phase-2 for security architecture design.]"
-
-MEMORY FILE OPERATIONS
-
-WRITING YOUR OUTPUT:
-
-File Path Derivation:
-- Pattern: .claude/memory/task-{task-id}-{your-agent-name}-memory.md
-- Extract Task ID from prompt (Step 1)
-- Use your agent name from invocation (e.g., "requirements-clarifier", "architecture-synthesizer")
-- Example: .claude/memory/task-recipe-app-requirements-clarifier-memory.md
-
-Write Procedure:
-1. Format complete output in three-section structure
-2. APPEND to file (do NOT overwrite if file exists)
-3. If file doesn't exist, create with complete output
-4. Include metadata header:
-   ```
-   # {Agent Name} Output - {Timestamp}
-   Task ID: {task-id}
-   Step: {step-number}
-   ```
-5. Write complete three-section formatted output below metadata
-
-NEVER modify workflow metadata file directly - propose updates via Downstream Directives.
-
-COMPLETION SIGNAL:
-
-After writing memory file, output completion signal:
-```
-AGENT-COMPLETE: {agent-name} | Step {step-number} | Status: {complete|blocked|partial}
 ```
 
-Example:
-```
-AGENT-COMPLETE: requirements-clarifier | Step 1 | Status: complete
-```
+9.2 Cognitive Function Chaining 
+Typical sequences by domain:
 
-This signals orchestrator that execution finished and memory file written.
+Technical: CLARIFICATION → RESEARCH → ANALYSIS → SYNTHESIS → GENERATION → VALIDATION
+Personal: CLARIFICATION → RESEARCH → ANALYSIS → SYNTHESIS → GENERATION
+Creative: CLARIFICATION → RESEARCH → SYNTHESIS → GENERATION → VALIDATION
+Professional: CLARIFICATION → RESEARCH → ANALYSIS → SYNTHESIS → VALIDATION
+Recreational: CLARIFICATION → RESEARCH → GENERATION → VALIDATION
 
-IMPLEMENTATION PROTOCOLS - BRIEF GUIDANCE
+SECTION 10: PROTOCOL VALIDATION CHECKLIST
 
-TEST-DRIVEN DEVELOPMENT (when generating code):
+Before completing work, EVERY agent verifies:
 
-Red-Green-Refactor Cycle:
-1. RED: Write failing test first (defines expected behavior)
-2. GREEN: Write minimal code to make test pass
-3. REFACTOR: Improve code structure while keeping tests green
+- [ ] Task-ID extracted successfully
+- [ ] Task domain identified (confidence level documented)
+- [ ] Workflow context fully loaded
+- [ ] Previous agent outputs integrated
+- [ ] Unknown Registry checked and updates proposed
+- [ ] Cognitive function adapted to domain
+- [ ] Quality standards applied appropriately
+- [ ] Johari Summary compressed effectively
+- [ ] Downstream Directives complete
+- [ ] Output formatted correctly
+- [ ] Gate criteria satisfied
+- [ ] Context preserved for next agent
 
-When to read full protocol: .claude/protocols/TEST-DRIVEN-DEVELOPMENT.md
-- Before implementing any feature requiring code generation
-- When test coverage requirements unclear
-- When test strategy needs definition
+CRITICAL SUCCESS FACTORS
 
-SECURITY-FIRST DEVELOPMENT (when generating code):
+1. Domain Identification: Correctly identify task domain early
+2. Cognitive Consistency: Apply universal process regardless of domain
+3. Context Adaptation: Adjust WHAT not HOW based on domain
+4. Quality Maintenance: Apply domain-appropriate standards
+5. Token Efficiency: Compress intelligently while preserving critical context
+6. Handoff Clarity: Next agent receives sufficient context to adapt
 
-OWASP Top 10 Awareness (prevention focus):
-1. Injection: Use parameterized queries, validate/sanitize input
-2. Broken Authentication: Implement secure session management, MFA support
-3. Sensitive Data Exposure: Encrypt data at rest and in transit
-4. XML External Entities: Disable XXE processing in parsers
-5. Broken Access Control: Implement proper authorization checks
-6. Security Misconfiguration: Secure defaults, minimal surface area
-7. XSS: Sanitize output, use Content Security Policy
-8. Insecure Deserialization: Validate serialized data, use safe formats
-9. Components with Known Vulnerabilities: Keep dependencies updated
-10. Insufficient Logging: Log security events, protect log integrity
+APPENDIX A: QUICK REFERENCE
 
-When to read full protocol: .claude/protocols/SECURITY-FIRST-DEVELOPMENT.md
-- Before implementing authentication, authorization, or data handling
-- When security requirements need validation
-- When performing security code review
+Agent Invocation Always Includes:
+- Task-ID
+- Step number and name
+- Purpose statement
+- Gate entry/exit criteria
+- Context files to read
+- Previous agent dependencies
 
-GENERAL PRINCIPLE:
-Read compressed protocols for ALL agents. Read full TDD and Security protocols ONLY when generating or validating code implementations.
+Agent Always Produces:
+- Step Overview (narrative)
+- Johari Summary (JSON)
+- Downstream Directives (JSON)
+- Unknown Registry updates
+- Task domain classification
+- Quality validation results
 
-CRITICAL ANTI-PATTERNS - NEVER DO THESE
+Memory File Locations:
+- Workflow metadata: `task-{id}-memory.md`
+- Agent outputs: `task-{id}-{agent}-memory.md`
+- All in `.claude/memory/` directory
 
-| Anti-Pattern | Problem | Correct Approach |
-|--------------|---------|------------------|
-| Skipping Task ID extraction | Cannot read/write memory files correctly | ALWAYS execute 4-step extraction first |
-| Assuming Task ID value | Hardcoded paths break workflow | Extract from prompt, never assume |
-| Repeating context verbatim | Token waste, verbose output | Reference and build on existing context |
-| Ignoring Unknown Registry | Unresolved questions propagate | Filter and resolve unknowns for current phase |
-| Missing Gate validation | Incomplete work, workflow breaks | Validate Entry, confirm Exit in output |
-| Vague Downstream Directives | Next agents lack guidance | Specific, actionable recommendations |
-| Wrong completion status | Orchestrator routing errors | "complete" ONLY if Gate Exit fully met |
-| Forgetting [NEW-UNKNOWN] | Unknowns not tracked | Mark all new unknowns with marker in text |
-| Skipping Self-Reflection | Poor quality output, missed issues | Execute full loop before finalizing output |
-| Modifying metadata file | Violates interface contract | Propose updates via Downstream Directives |
-
-REFERENCE MATERIALS - FULL PROTOCOL DOCUMENTATION
-
-For detailed guidance, read these full protocols:
-
-Core Protocols:
-- .claude/protocols/CONTEXT-INHERITANCE.md (complete inheritance process + examples)
-- .claude/protocols/AGENT-EXECUTION-PROTOCOL.md (detailed output formatting + token budgets)
-- .claude/protocols/REASONING-STRATEGIES.md (extended strategy guidance + examples)
-- .claude/protocols/AGENT-INTERFACE-CONTRACTS.md (complete interface specification)
-- .claude/protocols/TASK-ID.md (detailed Task ID specification + multi-entity chains)
-
-Template Protocols:
-- .claude/templates/JOHARI.md (complete Johari framework + JSON type definitions)
-- .claude/templates/CONTEXT-INHERITANCE-EXAMPLES.md (practical examples)
-
-Implementation Protocols (code generation agents):
-- .claude/protocols/TEST-DRIVEN-DEVELOPMENT.md (complete TDD workflow + examples)
-- .claude/protocols/SECURITY-FIRST-DEVELOPMENT.md (complete security requirements + OWASP details)
-
-When to reference full protocols:
-- Edge cases not covered in compressed summary
-- Detailed examples needed for complex scenarios
-- Specialized workflow patterns (multi-entity chains, conditional flows)
-- Comprehensive checklists and validation procedures
-- Extended anti-pattern catalogs with remediation strategies
+This protocol ensures cognitive domain agents can handle ANY task while maintaining quality and consistency.

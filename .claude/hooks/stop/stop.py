@@ -96,20 +96,94 @@ def extract_da_sections(text: str) -> dict:
 #########################[ end extract_da_sections ]#########################
 
 #########################[ start generate_summary ]##########################
+def clean_list_item(text: str) -> str:
+    """
+    Clean list items and convert to natural sentence fragments
+
+    Args:
+        text: Text that may contain list formatting
+
+    Returns:
+        Cleaned text without list markers
+    """
+    # Remove numbered lists (1., 2., a., b., etc.)
+    text = re.sub(r'^\s*\d+[\.)]\s*', '', text)
+    text = re.sub(r'^\s*[a-z][\.)]\s*', '', text, flags=re.IGNORECASE)
+
+    # Remove all bullet types
+    text = re.sub(r'^[-*•◦▪▫]\s*', '', text)
+
+    # Remove checkbox markers
+    text = re.sub(r'^\[[ xX]\]\s*', '', text)
+
+    # Remove emoji prefixes
+    text = re.sub(r'^[✅❌⚠️🔍📋⚡📊➡️🎯]+\s*', '', text)
+
+    return text.strip()
+
+
+def extract_sentences_from_text(text: str, max_sentences: int = 5) -> list:
+    """
+    Extract clean sentences from text, avoiding list items
+
+    Args:
+        text: Input text
+        max_sentences: Maximum number of sentences to extract
+
+    Returns:
+        List of clean sentence strings
+    """
+    # Clean all list formatting first
+    lines = text.split('\n')
+    cleaned_lines = []
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Clean list markers
+        cleaned = clean_list_item(line)
+        if cleaned:
+            cleaned_lines.append(cleaned)
+
+    # Rejoin and split by sentence boundaries
+    full_text = ' '.join(cleaned_lines)
+
+    # Remove all markdown and emoji
+    full_text = re.sub(r'[#*`_]', '', full_text)
+    full_text = re.sub(r'[\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]+', '', full_text)
+
+    # Split into sentences
+    sentences = re.split(r'(?<=[.!?])\s+', full_text.strip())
+
+    # Filter meaningful sentences
+    result = []
+    for sentence in sentences[:max_sentences * 2]:  # Check more to find good ones
+        sentence = sentence.strip()
+        # Must have at least 3 words and not be fragment
+        if sentence and len(sentence.split()) >= 3 and sentence[0].isupper():
+            result.append(sentence)
+            if len(result) >= max_sentences:
+                break
+
+    return result
+
+
 def generate_summary(text: str) -> Optional[str]:
     """
-    Generate intelligent 2-3 sentence voice summary from assistant response
+    Generate intelligent 2-5 sentence voice summary from assistant response
 
     Strategy:
     1. Check for custom voice marker (🗣️ CUSTOM COMPLETED:)
-    2. Extract DA.md sections and create natural summary
-    3. Fallback to first few sentences
+    2. Extract DA.md sections and create natural summary (NO LISTS)
+    3. Fallback to first few clean sentences
 
     Args:
         text: The full response text from Penny
 
     Returns:
-        2-3 sentence voice-optimized summary, None if text is empty
+        2-5 sentence voice-optimized summary, None if text is empty
     """
     if not text or not text.strip():
         return None
@@ -122,6 +196,8 @@ def generate_summary(text: str) -> Optional[str]:
         if marker in text:
             idx = text.index(marker) + len(marker)
             summary = text[idx:].split('\n')[0].strip()
+            # Clean any list markers from custom summary too
+            summary = clean_list_item(summary)
             return summary
 
     # Priority 2: Extract and combine DA.md sections
@@ -129,62 +205,54 @@ def generate_summary(text: str) -> Optional[str]:
 
     if sections:
         # Build voice summary from key sections
-        parts = []
+        collected_sentences = []
 
         # Start with what was completed
         if 'completed' in sections:
-            completed = sections['completed'].strip()
-            # Remove "Completed" prefix if present
-            completed = re.sub(r'^Completed\s+', '', completed, flags=re.IGNORECASE)
-            parts.append(completed)
+            completed_text = sections['completed'].strip()
+            # Extract sentences (no lists)
+            sentences = extract_sentences_from_text(completed_text, max_sentences=2)
+            collected_sentences.extend(sentences)
         elif 'summary' in sections:
             # Use summary if no completed section
             summary_text = sections['summary'].strip()
-            # Take first sentence only
-            first_sentence = re.split(r'(?<=[.!?])\s+', summary_text)[0]
-            parts.append(first_sentence)
+            sentences = extract_sentences_from_text(summary_text, max_sentences=2)
+            collected_sentences.extend(sentences)
 
-        # Add key result if available (1 sentence max)
-        if 'results' in sections:
-            results = sections['results'].strip()
-            # Extract first concrete result (look for bullet points or sentences)
-            result_lines = [line.strip() for line in results.split('\n') if line.strip()]
-            if result_lines:
-                first_result = result_lines[0]
-                # Clean up markdown and emoji
-                first_result = re.sub(r'^[-*•]\s*', '', first_result)
-                first_result = re.sub(r'^[✅❌⚠️🔍📋⚡]+\s*', '', first_result)
-                # Take first sentence
-                first_sentence = re.split(r'(?<=[.!?])\s+', first_result)[0]
-                if len(first_sentence.split()) <= 20:  # Keep it concise
-                    parts.append(first_sentence)
+        # Add key results if available
+        if 'results' in sections and len(collected_sentences) < 4:
+            results_text = sections['results'].strip()
+            # Extract up to 2 result sentences
+            remaining = 5 - len(collected_sentences)
+            sentences = extract_sentences_from_text(results_text, max_sentences=min(2, remaining))
+            collected_sentences.extend(sentences)
 
-        if parts:
-            summary = '. '.join(parts)
-            # Ensure it ends with period
-            if not summary.endswith('.'):
+        # Cap at 5 sentences total
+        collected_sentences = collected_sentences[:5]
+
+        if collected_sentences:
+            summary = ' '.join(collected_sentences)
+            # Ensure it ends with proper punctuation
+            if not summary.endswith(('.', '!', '?')):
                 summary += '.'
             return summary
 
-    # Priority 3: Extract first 2-3 sentences from raw text
-    # Remove all markdown and emoji
-    cleaned = re.sub(r'[#*`]', '', text)
-    cleaned = re.sub(r'[\U0001F300-\U0001F9FF\u2600-\u26FF\u2700-\u27BF]+', '', cleaned)
+    # Priority 3: Extract first 2-5 sentences from raw text
+    sentences = extract_sentences_from_text(text, max_sentences=5)
 
-    # Split into sentences
-    sentences = re.split(r'(?<=[.!?])\s+', cleaned.strip())
+    if sentences:
+        # Take 2-4 sentences (prefer 3-4)
+        if len(sentences) >= 3:
+            sentences = sentences[:4]
+        elif len(sentences) >= 2:
+            sentences = sentences[:3]
+        else:
+            sentences = sentences[:2]
 
-    # Take first 2-3 non-empty sentences
-    summary_sentences = []
-    for sentence in sentences[:3]:
-        sentence = sentence.strip()
-        if sentence and len(sentence.split()) >= 3:  # Meaningful sentence
-            summary_sentences.append(sentence)
-            if len(summary_sentences) == 2:  # Max 2 sentences for voice
-                break
-
-    if summary_sentences:
-        return ' '.join(summary_sentences)
+        summary = ' '.join(sentences)
+        if not summary.endswith(('.', '!', '?')):
+            summary += '.'
+        return summary
 
     # Fallback: truncate to reasonable length
     words = text.split()[:30]
