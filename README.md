@@ -14,7 +14,7 @@ This project is built upon the foundational work and inspiration from **Daniel M
 
 ---
 
-## TLDR; Getting Started
+## Getting Started (TLDR)
 
 1. **Clone this repository**
 
@@ -26,7 +26,7 @@ This project is built upon the foundational work and inspiration from **Daniel M
    cp settings.example.json settings.json
    # Edit settings.json to customize:
    # - Assistant name (change from "Penny" to your preference)
-   # - Other configs
+   # - Voice server port (optional)
 
    # Optional: Customize personality and identity
    # Edit .claude/DA.md to:
@@ -48,7 +48,7 @@ This project is built upon the foundational work and inspiration from **Daniel M
 
 ## About Penny
 
-Penny is a personal AI assistant system built on Claude Code, implementing a highly structured agent-based architecture designed to transform project concepts into deployment-ready code. Penny acts as a helpful, enthusiastic, and knowledgeable companion full of wisdom - not only a professional assistant but a life partner in learning and building.
+Penny is a personal AI assistant system built on Claude Code, implementing a highly structured agent-based architecture designed to transform project concepts into deployment-ready code and other everyday tasks. Penny acts as a helpful, enthusiastic, and knowledgeable companion full of wisdom - not only a professional assistant but a life partner in learning and building.
 
 ### Core Mission
 
@@ -80,7 +80,6 @@ Think of it like a mind that can consciously direct different types of thinking:
 - **Generation** when you need plans, content, or solutions created
 - **Validation** when you need verification, testing, or quality assurance
 - **Clarification** when you need ambiguity resolved or assumptions confirmed
-- **Coordination** when you need multiple steps orchestrated with state management
 
 ### Universal Cognitive Functions
 
@@ -140,7 +139,7 @@ The registry ensures nothing gets assumed or overlooked. Every question gets ask
 
 ### The Cognitive Function Approach
 
-**Design**: Instead of creating domain-specific or technology-specific agents (anti-pattern: technology-specific or domain-limited agents), Penny organizes agents by **cognitive function** - what type of thinking they perform.
+**Design**: Instead of creating domain-specific or technology-specific agents, Penny organizes agents by **cognitive function** - what type of thinking they perform.
 
 This means **one agent works across many domains** through context-driven specialization. A generation agent can create meal plans, implementation strategies, content outlines, or code - all by receiving task-specific context at invocation.
 
@@ -163,9 +162,6 @@ This means **one agent works across many domains** through context-driven specia
 
 6. **CLARIFIER** - Resolves ambiguities, transforms vague inputs into explicit outputs
    These agents identify unclear specifications, resolve ambiguities through questioning, confirm implicit assumptions, and transform vague goals into explicit criteria.
-
-7. **COORDINATOR** - Manages workflow state, tracks progress, orchestrates handoffs
-   Agents here manage multi-step processes, track dependencies, validate gate requirements, and coordinate transitions between phases.
 
 ### Seven Core Design Principles and Goals
 
@@ -190,7 +186,7 @@ Contains specialized agents, each performing ONE cognitive function across any d
 Defines complete workflows for various purposes: project development, research, decision-making, learning processes. Skills coordinate agent invocations but never implement logic themselves.
 
 **`protocols/`** - Execution standards
-Universal agent execution protocols covering context inheritance, reasoning strategies, and specialized extensions for different task types.
+Universal agent execution protocols covering context inheritance, reasoning strategies, context pruning, and specialized extensions for different task types.
 
 **`references/`** - Reference materials
 Reusable patterns, format guidance, anti-patterns, and practical examples for context inheritance and agent development.
@@ -262,9 +258,11 @@ Each phase has explicit Entry Gates (prerequisites) and Exit Gates (completion c
 The same agent works across vastly different domains by receiving task-specific context at invocation. No need for domain-specific agents - one cognitive function, infinite applications.
 
 ### 4. Token Efficiency
-- Compact output format optimized for context management
+- Scoped context loading: agents read only immediate predecessors, not all previous outputs
+- Strict token budgets: 1,200-token maximum for Johari summaries per agent
+- Compression techniques: decision-focused writing, abbreviations, lists over prose
+- Progressive context pruning: memory files compressed after each phase
 - Reference previous context instead of repeating information
-- Structured format for optimal parsing and human readability
 - Progressive disclosure architecture minimizes context bloat
 
 ### 5. Quality-First Approach
@@ -302,11 +300,11 @@ This is an **active, evolving project**. Enhancements are added as inspiration s
 
 ### Current Priorities
 
-- [ ] **Analyze Agents Against System Principles and Goals** to ensure maximum flexibility. Current agents may be "too" specialized
 - [ ] **Integrate custom speech-to-text** leveraging current voice server infrastructure
 - [ ] **Verify functionality** of voice-server setup.sh script end-to-end
 - [ ] **Implement "learning" functionality** - Expand Johari Window-based knowledge capture in learnings directory
-- [ ] **Add research skill** - Structured workflow for research tasks and knowledge discovery
+- [ ] **Update research-discovery agent** - Agent should use Perplexity in addition to WebSearch and Web Fetch. Add three types of research for various depths
+- [ ] **Improve Context Protocol** - Token usage is mor ethan what I would like. 50K-80K per agent for develop-project. Explore ways to reduce without sacrificing essential details and quality. This number may be lower for simpler tasks 
 
 ### Future Enhancements
 
@@ -324,3 +322,13 @@ This is an **active, evolving project**. Enhancements are added as inspiration s
 Penny is built on the principle that **clarity drives discovery, questions unlock breakthroughs, and shared learning is our only path forward**. We don't assume, we verify. We don't guess, we discover. We don't accept ambiguity, we resolve it.
 
 Our goal is always to discover answers to our **unknown unknowns** so we can learn and grow together. Every interaction is an opportunity to expand the boundaries of our shared knowledge.
+
+### Core Design Principles
+
+The system architecture follows key principles for workflow efficiency and quality:
+
+- **Embedded Validation**: Quality checks integrated into cognitive agents rather than isolated as separate phases
+- **Phase Collapse Through Integration**: Adjacent phases handling related cognitive functions merged when appropriate
+- **Progressive Context Compression**: Each phase compresses learnings into consumable context for downstream phases
+
+These principles ensure workflows remain efficient while maintaining thorough validation and knowledge preservation. For complete details, see `.claude/docs/philosophy.md`.

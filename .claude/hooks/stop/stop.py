@@ -61,40 +61,6 @@ def read_transcript(transcript_path: str) -> Optional[str]:
 
 #########################[ end read_transcript ]#############################
 
-#########################[ start extract_da_sections ]#######################
-def extract_da_sections(text: str) -> dict:
-    """
-    Extract sections from DA.md formatted response
-
-    Args:
-        text: The full response text from Penny
-
-    Returns:
-        Dictionary with extracted sections
-    """
-    sections = {}
-
-    # Define section markers
-    markers = {
-        'summary': r'📋 SUMMARY:\s*(.+?)(?=\n\s*[📋🔍⚡✅📊➡️🎯]|\n\n|$)',
-        'analysis': r'🔍 ANALYSIS:\s*(.+?)(?=\n\s*[📋🔍⚡✅📊➡️🎯]|\n\n|$)',
-        'actions': r'⚡ ACTIONS:\s*(.+?)(?=\n\s*[📋🔍⚡✅📊➡️🎯]|\n\n|$)',
-        'results': r'✅ RESULTS:\s*(.+?)(?=\n\s*[📋🔍⚡✅📊➡️🎯]|\n\n|$)',
-        'status': r'📊 STATUS:\s*(.+?)(?=\n\s*[📋🔍⚡✅📊➡️🎯]|\n\n|$)',
-        'next': r'➡️ NEXT:\s*(.+?)(?=\n\s*[📋🔍⚡✅📊➡️🎯]|\n\n|$)',
-        'completed': r'🎯 COMPLETED:\s*(.+?)(?=\n|$)',
-    }
-
-    for key, pattern in markers.items():
-        match = re.search(pattern, text, re.DOTALL | re.MULTILINE)
-        if match:
-            sections[key] = match.group(1).strip()
-
-    return sections
-
-
-#########################[ end extract_da_sections ]#########################
-
 #########################[ start generate_summary ]##########################
 def clean_list_item(text: str) -> str:
     """
@@ -172,18 +138,17 @@ def extract_sentences_from_text(text: str, max_sentences: int = 5) -> list:
 
 def generate_summary(text: str) -> Optional[str]:
     """
-    Generate intelligent 2-5 sentence voice summary from assistant response
+    Generate intelligent 3-5 sentence voice summary from assistant response
 
     Strategy:
     1. Check for custom voice marker (🗣️ CUSTOM COMPLETED:)
-    2. Extract DA.md sections and create natural summary (NO LISTS)
-    3. Fallback to first few clean sentences
+    2. Extract 3-5 clean sentences from entire response (format-agnostic)
 
     Args:
         text: The full response text from Penny
 
     Returns:
-        2-5 sentence voice-optimized summary, None if text is empty
+        3-5 sentence voice-optimized summary, None if text is empty
     """
     if not text or not text.strip():
         return None
@@ -200,50 +165,14 @@ def generate_summary(text: str) -> Optional[str]:
             summary = clean_list_item(summary)
             return summary
 
-    # Priority 2: Extract and combine DA.md sections
-    sections = extract_da_sections(text)
-
-    if sections:
-        # Build voice summary from key sections
-        collected_sentences = []
-
-        # Start with what was completed
-        if 'completed' in sections:
-            completed_text = sections['completed'].strip()
-            # Extract sentences (no lists)
-            sentences = extract_sentences_from_text(completed_text, max_sentences=2)
-            collected_sentences.extend(sentences)
-        elif 'summary' in sections:
-            # Use summary if no completed section
-            summary_text = sections['summary'].strip()
-            sentences = extract_sentences_from_text(summary_text, max_sentences=2)
-            collected_sentences.extend(sentences)
-
-        # Add key results if available
-        if 'results' in sections and len(collected_sentences) < 4:
-            results_text = sections['results'].strip()
-            # Extract up to 2 result sentences
-            remaining = 5 - len(collected_sentences)
-            sentences = extract_sentences_from_text(results_text, max_sentences=min(2, remaining))
-            collected_sentences.extend(sentences)
-
-        # Cap at 5 sentences total
-        collected_sentences = collected_sentences[:5]
-
-        if collected_sentences:
-            summary = ' '.join(collected_sentences)
-            # Ensure it ends with proper punctuation
-            if not summary.endswith(('.', '!', '?')):
-                summary += '.'
-            return summary
-
-    # Priority 3: Extract first 2-5 sentences from raw text
+    # Priority 2: Extract 3-5 sentences from entire response
+    # This works regardless of response format (DA.md, Plan mode, etc.)
     sentences = extract_sentences_from_text(text, max_sentences=5)
 
     if sentences:
-        # Take 2-4 sentences (prefer 3-4)
+        # Take 3-5 sentences (prefer at least 3)
         if len(sentences) >= 3:
-            sentences = sentences[:4]
+            sentences = sentences[:5]
         elif len(sentences) >= 2:
             sentences = sentences[:3]
         else:

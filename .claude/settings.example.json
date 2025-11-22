@@ -6,11 +6,7 @@
     "PAI_DIRECTORY": "/path/to/your/project/.claude",
     "PROJECT_ROOT": "/path/to/your/projects",
     "VOICE_SERVER_PORT": "8001",
-    "VOICEMODE_TTS_BASE_URLS": "http://127.0.0.1:8001/v1",
-    "VOICEMODE_TTS_VOICE": "your-voice-id-here",
-    "VOICEMODE_STT_BASE_URLS": "http://127.0.0.1:8001/v1",
-    "PERPLEXITY_API_KEY": "your-perplexity-api-key",
-    "OPENAI_API_KEY": "your-openai-api-key-or-not-needed-for-local"
+    "PERPLEXITY_API_KEY": "your-perplexity-api-key"
   },
   "permissions": {
     "allow": [

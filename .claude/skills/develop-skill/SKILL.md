@@ -47,6 +47,16 @@ CORE PRINCIPLES
 7. Modularity: Skills are self-contained, composable units
 8. Agent-Agnostic: Skills remain valid even if agent implementations change
 
+WORKFLOW EFFICIENCY PRINCIPLES
+
+When designing skill workflows, apply these principles from philosophy.md:
+
+- EMBEDDED VALIDATION: Integrate quality checks into cognitive agents rather than creating separate validation phases
+- PHASE COLLAPSE: Merge adjacent phases handling related cognitive functions when appropriate
+- PROGRESSIVE COMPRESSION: Ensure each phase compresses its output for efficient downstream consumption
+
+These principles reduce agent invocations and token overhead while maintaining quality. For complete details, see `.claude/docs/philosophy.md`.
+
 CONTEXT-PASSING REQUIREMENTS
 
 All skills MUST define how context flows between agents:
@@ -58,13 +68,31 @@ Required Context Structure:
 - success_criteria: Measurable success indicators
 - cognitive_sequence: Ordered list of cognitive functions
 
+Scoped Context Loading (CRITICAL):
+- Each agent invocation MUST specify which context files to load
+- Use scope annotations: [ALWAYS REQUIRED], [REQUIRED], [OPTIONAL]
+- Include token budget guidance for context loading (e.g., "Token Budget: 2,500-3,000 tokens")
+- Agents should only read immediate predecessors, not all previous outputs
+- STRICT REQUIREMENT: Agent Johari summary outputs limited to 1,200 tokens maximum
+- Example:
+  ```
+  Context References:
+  - .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
+  - .claude/memory/task-{id}-{predecessor}-memory.md [IMMEDIATE PREDECESSOR - REQUIRED]
+
+  Context Scope: IMMEDIATE_PREDECESSORS
+  Token Budget: 2,500-3,000 tokens (context loading)
+  Johari Output Limit: 1,200 tokens maximum (strictly enforced)
+  ```
+
 For context format details:
   See .claude/references/johari.md (WorkflowMetadata schema)
   See .claude/references/context-inheritance.md (examples)
 
 For execution protocols:
-  See .claude/protocols/agent-protocol-core.md (all agents)
+  See .claude/protocols/agent-protocol-core.md (scoped context loading - Section 2.2)
   See .claude/protocols/agent-protocol-extended.md (technical code generation)
+  See .claude/protocols/context-pruning-protocol.md (progressive context compression)
 
 USAGE DECISION TREE
 

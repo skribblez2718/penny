@@ -1,5 +1,8 @@
 # Penny AI Assistant - Git Ignore Configuration
 
+# Ignore science directory
+science/
+
 # Ignore settings.json (contains user-specific configurations)
 .claude/settings.json
 .claude/settings.local.json

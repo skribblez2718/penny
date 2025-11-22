@@ -182,12 +182,14 @@ Execution Steps:
       Cognitive Function: {RESEARCH|ANALYSIS|SYNTHESIS|GENERATION|VALIDATION|CLARIFICATION}
       Task Domain: {technical|personal|creative|professional|recreational}
       Purpose: {what this cognitive step accomplishes}
-      
-      Read context from:
+
+      Token Budget: 1,200 tokens maximum for Johari summary output
+
+      Read context from (scoped loading - immediate predecessors only):
       - .claude/memory/task-{task-id}-memory.md (workflow metadata)
       - .claude/memory/task-{task-id}-{previous-agent}-memory.md
       - [other relevant predecessor outputs]
-      
+
       Apply your {cognitive-function} capability to this {domain} task.
       Adapt your cognitive process to the domain while maintaining universal quality.
       ```
@@ -198,12 +200,14 @@ Execution Steps:
    
    c. Invoke agent with full context
    d. Merge Unknown Registry updates
-   e. Verify cognitive step completion before proceeding
+   e. Apply progressive context pruning per context-pruning-protocol.md (compress completed phase outputs)
+   f. Verify cognitive step completion before proceeding
 
 Context Inheritance Protocol (MANDATORY):
 - All agents use enhanced protocol with domain awareness
 - Extended protocol: `${PAI_DIRECTORY}/.claude/protocols/agent-protocol-extended.md`
 - Core protocol: `${PAI_DIRECTORY}/.claude/protocols/agent-protocol-core.md`
+- Context pruning: `${PAI_DIRECTORY}/.claude/protocols/context-pruning-protocol.md`
 
 BRANCH 2: PENNY META-WORK
 Trigger: Task involves modifying Penny system architecture files in `${PAI_DIRECTORY}/.claude/*/**`
@@ -333,6 +337,10 @@ CRITICAL SUCCESS FACTORS
    - Execute Knowledge Transfer Checkpoint when uncertain
    - Ask clarifying questions before execution
    - Document assumptions explicitly
+   - Apply workflow efficiency principles from philosophy.md:
+     * Embedded validation in cognitive agents (not separate phases)
+     * Phase collapse when adjacent functions are closely related
+     * Progressive context compression for token efficiency
 
 5. DISCOVERY MINDSET: Convert unknown unknowns to known knowns
    - Challenge assumptions systematically

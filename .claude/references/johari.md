@@ -22,6 +22,54 @@ FORMAT DECISION MATRIX
 
 ---
 
+TOKEN LIMITS AND COMPRESSION STANDARDS
+
+STRICT TOKEN LIMITS PER QUADRANT:
+- open: 200-300 tokens maximum
+- hidden: 200-300 tokens maximum
+- blind: 150-200 tokens maximum
+- unknown: 150-200 tokens maximum
+- domain_insights: 150-200 tokens maximum (optional)
+
+TOTAL JOHARI SUMMARY: 1,200 tokens maximum (strictly enforced)
+
+TARGET: Complete agent memory file should be 300-400 lines (Step Overview + Johari + Downstream Directives)
+
+COMPRESSION TECHNIQUES:
+
+1. Decision-Focused Writing
+   BAD:  "We conducted extensive research into OAuth2 providers including Google, Microsoft, and Auth0. After careful consideration of multiple factors including ease of implementation, documentation quality, community support, and long-term maintenance, we decided that Google's OAuth2 implementation would be the best fit for our needs."
+
+   GOOD: "Selected Google OAuth2 (vs Microsoft, Auth0) for superior docs, active community, simpler integration."
+
+2. Abbreviation Usage
+   Common abbreviations (use freely): API, CRUD, TDD, JWT, REST, OWASP, PWA, CLI, UI, UX, DB
+   Domain abbreviations: Define once, use throughout
+
+   BAD:  "Application Programming Interface endpoints for Create, Read, Update, Delete operations"
+   GOOD: "CRUD API endpoints"
+
+3. List Over Prose
+   BAD:  "The architecture has several key components. First, there's the authentication layer which handles user login and session management. Second, we have the business logic layer that processes requests. Third, there's the data access layer for database operations."
+
+   GOOD: "Architecture: 1) Auth layer (login, sessions), 2) Business logic (request processing), 3) Data access (DB ops)"
+
+4. Reference Over Repetition
+   BAD:  "As mentioned in the requirements phase, we need to support OAuth2 authentication with Google as the provider, using JWT tokens for session management..."
+
+   GOOD: "Implements requirements: OAuth2+Google, JWT sessions (see Phase 0)"
+
+5. Quantify, Don't Elaborate
+   BAD:  "The system is quite complex with numerous interconnected components and significant architectural considerations"
+
+   GOOD: "Complexity: MEDIUM (8 components, 12 integrations, 3 external APIs)"
+
+6. Use Symbols and Shorthand
+   GOOD: "Tests: 15/15 ✓, Coverage: 87%, Security: OWASP compliant ✓"
+   GOOD: "Risks: H (token refresh UX), M (rate limiting), L (docs)"
+
+---
+
 ENHANCED PYTHON TYPE DEFINITIONS FOR COGNITIVE DOMAINS
 
 Use these for type validation when working with memory files:
@@ -116,31 +164,27 @@ DOMAIN-SPECIFIC JOHARI ADAPTATIONS
 
 The Johari Window structure is universal, but content adapts to domain:
 
-### Technical Domain Example
+### Technical Domain Example (COMPRESSED)
 ```json
 {
-  "open": "OAuth2 with Google provider confirmed. Flask/SQLAlchemy stack. Performance targets: <500ms token endpoint.",
-  "hidden": "Chose JWT over opaque tokens for stateless scaling. Implemented refresh token rotation for security.",
-  "blind": "Microservice communication patterns not addressed - may need service mesh considerations.",
-  "unknown": "Kubernetes deployment specifics. Load balancer configuration requirements.",
+  "open": "OAuth2+Google confirmed. Flask/SQLAlchemy stack. Targets: <500ms token endpoint, OWASP compliant. JWT over opaque tokens (stateless scaling).",
+  "hidden": "Refresh token rotation implemented (security). Redis caching for token validation (performance). Layered architecture: Auth→Service→Storage.",
+  "blind": "Microservice communication patterns not addressed. Load balancer config pending. Performance under load not validated.",
+  "unknown": "K8s deployment specifics. Rate limiting algorithm TBD. Token cleanup strategy undefined.",
   "domain_insights": {
-    "architecture": "Event-driven chosen over synchronous for resilience",
-    "security": "Zero-trust principles applied throughout"
+    "architecture": "Event-driven over synchronous for resilience",
+    "security": "Zero-trust throughout. OWASP baseline + JWT best practices"
   }
 }
 ```
 
-### Personal Domain Example
+### Personal Domain Example (COMPRESSED)
 ```json
 {
-  "open": "Career change decision framework established. Values: growth, balance, impact. Timeline: 6 months.",
-  "hidden": "Identified unconscious bias toward tech roles. Financial runway calculated: 8 months buffer.",
-  "blind": "Partner's career plans may affect relocation options. Industry connections underutilized.",
-  "unknown": "Market conditions in 6 months. Skill gaps for target roles.",
-  "domain_insights": {
-    "values_alignment": "Growth weighted 40%, balance 35%, impact 25%",
-    "risk_tolerance": "Moderate - willing to take calculated risks"
-  }
+  "open": "Morning routine structured: 6AM wake, exercise (30min), meditation (15min). Habit tracking via Notion. Goals aligned with values (health, growth, connection).",
+  "hidden": "Exercise flexibility reduces barrier (gym/home/walk options). Social accountability via workout buddy increases adherence 3x.",
+  "blind": "Evening routine undefined. Weekend structure lacking. Stress management reactive not proactive.",
+  "unknown": "Optimal sleep duration for energy (7.5h vs 8h?). Nutrition impact on morning focus unclear. Recovery day frequency TBD."
 }
 ```
 

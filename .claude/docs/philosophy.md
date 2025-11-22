@@ -44,6 +44,72 @@ ALL agents implement these prompting strategies:
 SYSTEM ARCHITECTURE
 ==================
 
+PHASE OPTIMIZATION PRINCIPLES
+
+Workflow efficiency requires balancing thoroughness with execution speed. Apply these principles when designing or optimizing multi-phase workflows:
+
+PRINCIPLE 6: EMBEDDED VALIDATION OVER SEPARATE PHASES
+Validation should be integrated into cognitive agents, not isolated as separate phases
+Quality checking is inherent to proper execution, not an afterthought
+For technical work: TDD provides built-in validation through test passage
+For analysis work: Self-verification questions validate conclusions inline
+For synthesis work: Coherence checks validate integration during construction
+
+WHEN TO EMBED VALIDATION:
+- Agent has clear quality criteria built into its cognitive function
+- Validation adds no new information beyond pass/fail determination
+- Test-driven development ensures validation through test execution
+- Quality checks are deterministic and automatable
+
+WHEN TO SEPARATE VALIDATION:
+- Cross-cutting concerns require holistic system review
+- External criteria must be verified (security standards, compliance)
+- Human judgment is required for quality determination
+- Validation outputs inform downstream decision-making
+
+PRINCIPLE 7: PHASE COLLAPSE THROUGH INTEGRATION
+Adjacent phases handling related cognitive functions should be merged when:
+- Same agent type performs both phases with minor context shift
+- Sequential execution provides no decision gate between phases
+- Combined execution reduces redundant context loading
+- Integration preserves all necessary quality checks
+
+PHASE MERGE CANDIDATES:
+- Research + Analysis when findings directly inform evaluation
+- Analysis + Synthesis when evaluation leads to design without intervention
+- Design + Initial Implementation when architecture guides foundation code
+- Security Audit + Documentation when security findings shape docs
+
+ANTI-PATTERN - PREMATURE PHASE SEPARATION:
+Creating phases based on chronological workflow rather than cognitive function transitions
+Example: Separate "API Design" and "Data Model Design" when both are SYNTHESIS
+Better: Combined "Architecture Design" phase with single synthesis-agent
+
+PRINCIPLE 8: PROGRESSIVE CONTEXT COMPRESSION
+Each phase must compress its learnings into consumable context for downstream phases
+Token efficiency preserves cognitive capacity for actual work vs context loading
+
+COMPRESSION STRATEGIES:
+- Johari Window format with strict token limits (1,200 max per agent)
+- Decision-focused documentation (WHAT was decided, not HOW)
+- Reference previous findings rather than repeating them
+- Abbreviate common domain terms consistently
+- Use lists and structured formats over prose
+
+TARGET METRICS FOR WORKFLOW OPTIMIZATION:
+- Memory files: 300-400 lines maximum (down from 1,000-2,800)
+- Context loading per agent: 2,000-3,000 tokens (50-60% reduction)
+- Johari summaries: 1,200 tokens strict maximum
+- Total agent invocations: Reduce by 30-40% through phase merges
+- Execution time: Reduce by 40-50% through optimizations
+
+WORKFLOW DESIGN CHECKLIST:
+1. Can this phase's validation be embedded in the cognitive agent?
+2. Do adjacent phases share the same cognitive function?
+3. Is there a meaningful decision gate between these phases?
+4. Does separating these phases add value or just overhead?
+5. Can this phase's output be compressed without losing essential information?
+
 DIRECTORY STRUCTURE AND PURPOSE
 
 Skills Directory: ${PAI_DIRECTORY}/.claude/skills/

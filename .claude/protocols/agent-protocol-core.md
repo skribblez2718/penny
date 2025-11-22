@@ -60,16 +60,101 @@ task_context = {
 domain_criteria = load_domain_criteria(task_context["domain"])
 ```
 
-2.2 Previous Agent Context Loading 
-Agents receive explicit predecessor list in invocation:
+2.2 Previous Agent Context Loading (SCOPED)
+
+Agents receive explicit predecessor list in invocation with scope annotation:
 ```
 Read context from:
-- .claude/memory/task-{task-id}-memory.md (workflow metadata)
-- .claude/memory/task-{task-id}-{predecessor-1}-memory.md
-- .claude/memory/task-{task-id}-{predecessor-2}-memory.md
+- .claude/memory/task-{task-id}-memory.md (workflow metadata) [ALWAYS]
+- .claude/memory/task-{task-id}-{predecessor-1}-memory.md [REQUIRED]
+- .claude/memory/task-{task-id}-{predecessor-2}-memory.md [OPTIONAL: specific section]
 ```
 
-Load and parse each file to build complete context.
+Context Scope Levels:
+- ALWAYS: Workflow metadata (every agent reads this)
+- REQUIRED: Immediate predecessors whose outputs are critical
+- OPTIONAL: Referenced for specific information (e.g., constraints, standards)
+
+Token Budget Enforcement:
+- Each agent receives max 3,000-4,000 tokens of context
+- Workflow metadata: ~500 tokens
+- Required predecessor outputs: ~2,500-3,000 tokens
+- Optional references: ~500 tokens (specific sections only)
+
+Scoping Strategy by Cognitive Function:
+```python
+CONTEXT_SCOPE_BY_FUNCTION = {
+    "CLARIFICATION": {
+        "first_invocation": ["workflow_metadata"],
+        "subsequent": ["workflow_metadata", "previous_agent_output"]
+    },
+    "RESEARCH": {
+        "always": ["workflow_metadata"],
+        "required": ["most_recent_CLARIFICATION_or_ANALYSIS"]
+    },
+    "ANALYSIS": {
+        "always": ["workflow_metadata"],
+        "required": ["most_recent_RESEARCH_or_SYNTHESIS_or_GENERATION"],
+        "optional": ["previous_ANALYSIS_for_comparison"]
+    },
+    "SYNTHESIS": {
+        "always": ["workflow_metadata"],
+        "required": ["most_recent_RESEARCH"],
+        "optional": ["most_recent_ANALYSIS_if_evaluation_phase"]
+    },
+    "GENERATION": {
+        "always": ["workflow_metadata"],
+        "required": ["most_recent_SYNTHESIS_architecture_design"],
+        "optional": ["most_recent_CLARIFICATION_constraints", "previous_GENERATION_for_iteration"]
+    },
+    "VALIDATION": {
+        "always": ["workflow_metadata"],
+        "required": ["target_agent_output_being_validated"],
+        "optional": ["quality_standards_from_phase_0"]
+    }
+}
+```
+
+Load outputs from scoped predecessor list only:
+
+```python
+# Load previous agent outputs (SCOPED)
+predecessor_outputs = []
+context_refs = invocation_context.get("context_references", [])
+
+for ref in context_refs:
+    scope_level = ref.get("scope", "REQUIRED")
+    file_path = ref.get("path")
+
+    if scope_level == "ALWAYS" or scope_level == "REQUIRED":
+        # Load full output
+        output = load_markdown(file_path)
+        predecessor_outputs.append(parse_agent_output(output))
+    elif scope_level == "OPTIONAL":
+        # Load specific section only
+        section = ref.get("section", None)
+        output = load_markdown_section(file_path, section)
+        if output:
+            predecessor_outputs.append(output)
+
+# Extract relevant information from scoped context
+previous_findings = extract_findings(predecessor_outputs)
+previous_unknowns = extract_unknowns(predecessor_outputs)
+previous_decisions = extract_decisions(predecessor_outputs)
+```
+
+Context Request Mechanism (If Scope Too Narrow):
+```python
+# If agent needs additional context not in scope
+if critical_context_missing():
+    unknown_registry.add({
+        "id": "U{N}",
+        "type": "CONTEXT_REQUEST",
+        "description": "Need {specific_file} to complete {task}",
+        "priority": "HIGH",
+        "resolution": "Add {file} to context scope and re-invoke"
+    })
+```
 
 SECTION 3: COGNITIVE FUNCTION ADAPTATION 
 
@@ -178,22 +263,133 @@ Creative Tasks: Focus on artistic choices, audience impact
 Professional Tasks: Focus on strategic implications, stakeholder needs
 Recreational Tasks: Focus on enjoyment factors, participant experience
 
-5.2 Token Optimization
+5.2 Token Optimization and Progressive Summarization
+
+JOHARI WINDOW TOKEN LIMITS (STRICT ENFORCEMENT):
+```python
+JOHARI_TOKEN_LIMITS = {
+    "open": 300,      # 200-300 tokens max - core findings only
+    "hidden": 300,    # 200-300 tokens max - key insights only
+    "blind": 200,     # 150-200 tokens max - limitations only
+    "unknown": 200,   # 150-200 tokens max - unknowns for registry
+    "domain_insights": 200  # Optional, 150-200 tokens if included
+}
+
+TOTAL_MAX_PER_AGENT = 1,200 tokens (strict limit)
+```
+
+COMPRESSION TECHNIQUES BY DOMAIN:
 ```python
 def compress_johari_summary(domain: str, content: dict) -> dict:
     """
     Apply domain-specific compression to maintain context within token limits
     """
     compression_rules = {
-        "technical": lambda x: focus_on_technical_decisions(x),
-        "personal": lambda x: focus_on_personal_insights(x),
-        "creative": lambda x: focus_on_creative_elements(x),
-        "professional": lambda x: focus_on_business_impact(x),
-        "recreational": lambda x: focus_on_fun_factors(x)
+        "technical": focus_on_decisions_and_architecture,
+        "personal": focus_on_values_and_milestones,
+        "creative": focus_on_creative_choices_and_impact,
+        "professional": focus_on_strategy_and_metrics,
+        "recreational": focus_on_experience_and_logistics
     }
-    
+
     return compression_rules[domain](content)
+
+def focus_on_decisions_and_architecture(content):
+    """Technical domain compression - emphasize decisions, not narrative"""
+    return {
+        "open": extract_technical_decisions(content),      # What was decided
+        "hidden": extract_implementation_choices(content), # Why decided
+        "blind": extract_technical_gaps(content),          # What's missing
+        "unknown": extract_technical_unknowns(content)     # What needs resolution
+    }
 ```
+
+PROGRESSIVE SUMMARIZATION PROTOCOL:
+
+Phase-Level Compression (After Phase Completes):
+```python
+def compress_phase_outputs(phase_num: int, agent_outputs: List[Dict]) -> Dict:
+    """
+    After phase completes, compress all agent outputs into phase summary.
+    Store in workflow metadata under phaseHistory[N].
+    """
+
+    if phase_num == 0:  # Requirements
+        return {
+            "phaseSummary": "Requirements phase: [1-2 sentence outcome]",
+            "criticalDecisions": ["Decision 1", "Decision 2"],  # Max 5
+            "keyConstraints": ["Constraint 1", "Constraint 2"],  # Max 5
+            "unresolvedUnknowns": ["U1: description"],  # From Unknown Registry
+            "essentialContext": {
+                "requirements": "Core requirements summary (100 tokens max)",
+                "complexity": "SIMPLE|MEDIUM|COMPLEX with justification",
+                "risks": "Top 3 risks only"
+            }
+        }
+
+    elif phase_num == 1:  # Research & Decisions
+        return {
+            "phaseSummary": "Research and decision phase: [1-2 sentence outcome]",
+            "criticalDecisions": ["Library X selected", "Pattern Y chosen"],
+            "researchFindings": "Key findings summary (150 tokens max)",
+            "unresolvedUnknowns": []
+        }
+
+    # ... similar for each phase
+```
+
+Workflow Metadata Enhancement:
+```json
+{
+  "task_id": "task-xxx",
+  "currentPhase": 3,
+  "phaseHistory": [
+    {
+      "phase": 0,
+      "phaseSummary": "Requirements clarified and analyzed",
+      "criticalDecisions": ["OAuth2 with Google", "JWT tokens", "Redis cache"],
+      "keyConstraints": ["<500ms performance", "OWASP compliant"],
+      "unresolvedUnknowns": [],
+      "essentialContext": {
+        "requirements": "5 core features, 2 constraints, MEDIUM complexity",
+        "complexity": "MEDIUM - OAuth2 integration, security focus, 32-40hr timeline",
+        "risks": "Push notification debugging (HIGH), Token refresh UX (MEDIUM)"
+      }
+    },
+    {
+      "phase": 1,
+      "phaseSummary": "Research complete, technology stack decided",
+      "criticalDecisions": ["google-auth-library-python", "PostgreSQL for tokens"],
+      "researchFindings": "3 libraries evaluated, security patterns identified",
+      "unresolvedUnknowns": []
+    }
+  ],
+  "currentContext": {
+    "phase": 2,
+    "focus": "Architecture design",
+    "needsFromPrevious": ["Library choice", "Storage decision", "Security patterns"]
+  }
+}
+```
+
+AGENT OUTPUT COMPRESSION RULES:
+
+Step Overview (Narrative):
+- Max 500 words (~750 tokens)
+- Focus on WHAT was accomplished, not HOW
+- Reference previous findings, don't repeat them
+- Use bullet points over paragraphs where possible
+
+Johari Summary (JSON):
+- Strict token limits per quadrant
+- No repetition of information in workflow metadata
+- Focus on NEW discoveries and insights
+- Use abbreviations where clear (CRUD, API, TDD, etc.)
+
+Downstream Directives:
+- Max 300 tokens
+- List format, not prose
+- Specific actionable items only
 
 SECTION 6: OUTPUT FORMATTING
 
