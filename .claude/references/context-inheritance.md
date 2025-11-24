@@ -1,27 +1,34 @@
-CONTEXT INHERITANCE PROTOCOL EXAMPLES - COGNITIVE DOMAIN VERSION
+# Context Inheritance Protocol Examples
 
-This file provides complete examples of how cognitive domain agents execute across different task domains.
+**Purpose:** Complete examples of how cognitive domain agents execute across different task domains
 
-Examples now show how the same cognitive agents adapt to technical, personal, creative, professional, and recreational tasks.
+**Scope:** Shows how the same cognitive agents adapt to technical, personal, creative, professional, and recreational tasks
 
-IMPORTANT: DUAL FILE PATTERN
+## File Structure
 
-FILE STRUCTURE:
-- Workflow metadata: .claude/memory/task-{task-id}-memory.md (centralized state + domain context)
-- Agent outputs: .claude/memory/task-{task-id}-{agent-name}-memory.md (per-agent files)
+Dual file pattern for workflow state and agent outputs:
 
----
+**Workflow Metadata:**
+- Path: `.claude/memory/task-{task-id}-memory.md`
+- Content: Centralized state + domain context
 
-EXAMPLE 1: TECHNICAL DOMAIN - OAuth2 Implementation
+**Agent Outputs:**
+- Path: `.claude/memory/task-{task-id}-{agent-name}-memory.md`
+- Content: Per-agent files
 
-SCENARIO
-Task: Implement OAuth2 authentication with Google
-Domain: Technical
-Cognitive Sequence: CLARIFICATION → RESEARCH → ANALYSIS → SYNTHESIS → GENERATION → VALIDATION
+## Examples
 
-CLARIFICATION AGENT EXECUTION
+### Example 1: Technical Domain
+
+**Scenario:**
+- Task: Implement OAuth2 authentication with Google
+- Domain: Technical
+- Cognitive Sequence: CLARIFICATION → RESEARCH → ANALYSIS → SYNTHESIS → GENERATION → VALIDATION
+
+#### Clarification Agent
+
+**Workflow Metadata:**
 ```json
-// Workflow Metadata
 {
   "task-id": "task-oauth2-impl",
   "workflow": "cognitive-orchestration",
@@ -42,7 +49,7 @@ CLARIFICATION AGENT EXECUTION
 }
 ```
 
-Agent Output:
+**Agent Output:**
 ```json
 {
   "open": "Technical clarifications obtained: <500ms token endpoint, <1s auth endpoint at p95. JWT tokens with 1hr expiry.",
@@ -56,10 +63,13 @@ Agent Output:
 }
 ```
 
-GENERATION AGENT EXECUTION (CODE REATION)
-Reads: Previous clarification, research, analysis, synthesis
-Applies: agent-protocol-extended.md (TDD + Security)
+#### Generation Agent
 
+**Reads:** Previous clarification, research, analysis, synthesis
+
+**Applies:** agent-protocol-extended.md (TDD + Security)
+
+**Code Example:**
 ```python
 # Generated test first (RED phase)
 def test_oauth2_token_endpoint_performance():
@@ -74,33 +84,32 @@ class OAuth2Handler:
     def __init__(self):
         self.cache = TokenCache()  # Performance optimization
         self.validator = SecurityValidator()  # Security-first
-    
+
     async def handle_token_request(self, request):
         # Input validation (security)
         if not self.validator.validate_request(request):
             return ErrorResponse(400, "Invalid request")
-        
+
         # Rate limiting (security)
         if not await self.check_rate_limit(request.client_id):
             return ErrorResponse(429, "Rate limit exceeded")
-        
+
         # Token generation with caching (performance)
         token = await self.generate_jwt_token(request)
         return TokenResponse(token)
 ```
 
----
+### Example 2: Personal Domain
 
-EXAMPLE 2: PERSONAL DOMAIN - CAREER DECISION
+**Scenario:**
+- Task: Analyze career change from software engineering to product management
+- Domain: Personal
+- Cognitive Sequence: CLARIFICATION → RESEARCH → ANALYSIS → SYNTHESIS → GENERATION
 
-SCENARIO
-Task: Analyze career change from software engineering to product management
-Domain: Personal
-Cognitive Sequence: CLARIFICATION → RESEARCH → ANALYSIS → SYNTHESIS → GENERATION
+#### Clarification Agent
 
-CLARIFICATION AGENT EXECUTION
+**Workflow Metadata:**
 ```json
-// Workflow Metadata
 {
   "task-id": "task-career-change",
   "workflow": "cognitive-orchestration",
@@ -121,7 +130,7 @@ CLARIFICATION AGENT EXECUTION
 }
 ```
 
-Agent Output:
+**Agent Output:**
 ```json
 {
   "open": "Personal values clarified: growth (40%), work-life balance (35%), impact (25%). Timeline: 6-month transition.",
@@ -135,8 +144,11 @@ Agent Output:
 }
 ```
 
-SYNTHESIS AGENT EXECUTION
-Adapts synthesis to personal context:
+#### Synthesis Agent
+
+**Description:** Adapts synthesis to personal context
+
+**Agent Output:**
 ```json
 {
   "open": "Integrated life strategy: Phased transition over 6 months. Maintain current role while building PM skills. Network actively.",
@@ -150,17 +162,18 @@ Adapts synthesis to personal context:
 }
 ```
 
----
+### Example 3: Creative Domain
 
-🤖 EXAMPLE 3: CREATIVE DOMAIN - Blog Series Creation
+**Scenario:**
+- Task: Create AI ethics blog series for tech audience
+- Domain: Creative
+- Cognitive Sequence: CLARIFICATION → RESEARCH → SYNTHESIS → GENERATION → VALIDATION
 
-SCENARIO
-Task: Create AI ethics blog series for tech audience
-Domain: Creative
-Cognitive Sequence: CLARIFICATION → RESEARCH → SYNTHESIS → GENERATION → VALIDATION
+#### Research Agent
 
-RESEARCH AGENT EXECUTION
-Adapts research to creative needs:
+**Description:** Adapts research to creative needs
+
+**Agent Output:**
 ```json
 {
   "open": "Creative research findings: 5 competing blogs analyzed. Gap: practical examples lacking. Audience prefers 5-min reads.",
@@ -174,13 +187,16 @@ Adapts research to creative needs:
 }
 ```
 
-GENERATION AGENT EXECUTION
-Creates creative content (not code):
+#### Generation Agent
+
+**Description:** Creates creative content (not code)
+
+**Content Example:**
 ```markdown
 # Generated Blog Post 1: "When Your AI Makes a Mistake"
 
 ## Hook (Attention-grabbing opening)
-"Your AI just denied a loan to a qualified applicant. The reason? A correlation it found 
+"Your AI just denied a loan to a qualified applicant. The reason? A correlation it found
 between zip codes and default rates. Welcome to the messy reality of AI ethics."
 
 ## Structure (Following creative research)
@@ -193,17 +209,18 @@ between zip codes and default rates. Welcome to the messy reality of AI ethics."
 "What would you do? Comment with your approach to this ethical dilemma."
 ```
 
----
+### Example 4: Professional Domain
 
-EXAMPLE 4: PROFESSIONAL DOMAIN - Market Analysis
+**Scenario:**
+- Task: Analyze competitive landscape for SaaS product launch
+- Domain: Professional
+- Cognitive Sequence: RESEARCH → ANALYSIS → SYNTHESIS → GENERATION → VALIDATION
 
-SCENARIO
-Task: Analyze competitive landscape for SaaS product launch
-Domain: Professional
-Cognitive Sequence: RESEARCH → ANALYSIS → SYNTHESIS → GENERATION → VALIDATION
+#### Analysis Agent
 
-ANALYSIS AGENT EXECUTION
-Applies business analysis framework:
+**Description:** Applies business analysis framework
+
+**Agent Output:**
 ```json
 {
   "open": "Market complexity: MEDIUM. 5 major competitors, 12 minor. TAM: $2.3B. Growth: 23% YoY. Entry barriers: Moderate.",
@@ -217,10 +234,12 @@ Applies business analysis framework:
 }
 ```
 
-GENERATION AGENT EXECUTION
-Produces business artifacts:
+#### Generation Agent
+
+**Description:** Produces business artifacts
+
+**Artifact Example:**
 ```json
-// Generated Go-to-Market Strategy
 {
   "positioning": "Premium efficiency solution for mid-market",
   "pricing": "$75/user/month (penetration pricing)",
@@ -238,17 +257,18 @@ Produces business artifacts:
 }
 ```
 
----
+### Example 5: Recreational Domain
 
-EXAMPLE 5: RECREATIONAL DOMAIN - Game Night Planning
+**Scenario:**
+- Task: Plan murder mystery dinner party for 12 people
+- Domain: Recreational
+- Cognitive Sequence: CLARIFICATION → RESEARCH → SYNTHESIS → GENERATION
 
-SCENARIO
-Task: Plan murder mystery dinner party for 12 people
-Domain: Recreational
-Cognitive Sequence: CLARIFICATION → RESEARCH → SYNTHESIS → GENERATION
+#### Clarification Agent
 
-CLARIFICATION AGENT EXECUTION
-Adapts to fun/entertainment context:
+**Description:** Adapts to fun/entertainment context
+
+**Agent Output:**
 ```json
 {
   "open": "Fun parameters clarified: 1920s theme preferred. Budget: $500. Dietary restrictions: 2 vegan, 1 gluten-free. Date: 3 weeks out.",
@@ -262,8 +282,11 @@ Adapts to fun/entertainment context:
 }
 ```
 
-GENERATION AGENT EXECUTION
-Creates entertainment materials:
+#### Generation Agent
+
+**Description:** Creates entertainment materials
+
+**Materials Example:**
 ```markdown
 # Generated Murder Mystery Package
 
@@ -288,17 +311,18 @@ Creates entertainment materials:
 - Weather: Indoor backup plan ready
 ```
 
----
+### Example 6: Hybrid Domain
 
-EXAMPLE 6: HYBRID DOMAIN - Technical + Personal
+**Scenario:**
+- Task: Build personal finance tracking app for ADHD management
+- Domain: Hybrid (Technical + Personal)
+- Cognitive Sequence: CLARIFICATION → RESEARCH → ANALYSIS → SYNTHESIS → GENERATION → VALIDATION
 
-SCENARIO
-Task: Build personal finance tracking app for ADHD management
-Domain: Hybrid (Technical + Personal)
-Cognitive Sequence: CLARIFICATION → RESEARCH → ANALYSIS → SYNTHESIS → GENERATION → VALIDATION
+#### Clarification Agent
 
-CLARIFICATION AGENT EXECUTION
-Recognizes dual domain:
+**Description:** Recognizes dual domain
+
+**Agent Output:**
 ```json
 {
   "open": "Hybrid task identified. Technical: React Native app. Personal: ADHD-friendly design. Both domains equally weighted.",
@@ -312,8 +336,11 @@ Recognizes dual domain:
 }
 ```
 
-SYNTHESIS AGENT EXECUTION
-Integrates both domains:
+#### Synthesis Agent
+
+**Description:** Integrates both domains
+
+**Agent Output:**
 ```json
 {
   "open": "Unified design: Minimal 3-tap logging. Visual progress rewards. Automated transaction import. ADHD-optimized UX throughout.",
@@ -327,52 +354,60 @@ Integrates both domains:
 }
 ```
 
----
+## Key Observations
 
-KEY OBSERVATIONS ACROSS ALL DOMAINS
+### Observation 1: Same Agents, Different Applications
 
-1. Same Agents, Different Applications
-   - RESEARCH agent finds patterns in code OR life decisions OR creative works
-   - ANALYSIS agent decomposes systems OR personal situations OR market dynamics
-   - SYNTHESIS agent integrates technical specs OR life strategies OR creative visions
-   - GENERATION agent creates code OR plans OR content OR business documents
-   - VALIDATION agent checks code quality OR decision soundness OR content effectiveness
+**Details:**
+- RESEARCH agent finds patterns in code OR life decisions OR creative works
+- ANALYSIS agent decomposes systems OR personal situations OR market dynamics
+- SYNTHESIS agent integrates technical specs OR life strategies OR creative visions
+- GENERATION agent creates code OR plans OR content OR business documents
+- VALIDATION agent checks code quality OR decision soundness OR content effectiveness
 
-2. Domain Context Is Critical
-   - Always passed in workflow metadata
-   - Each agent adapts its cognitive process
-   - Quality standards shift per domain
-   - Output artifacts vary by domain
+### Observation 2: Domain Context Is Critical
 
-3. Cognitive Consistency
-   - Research always discovers and evaluates
-   - Analysis always decomposes and assesses
-   - Synthesis always integrates and resolves
-   - Generation always creates artifacts
-   - Validation always verifies against criteria
+**Details:**
+- Always passed in workflow metadata
+- Each agent adapts its cognitive process
+- Quality standards shift per domain
+- Output artifacts vary by domain
 
-4. Token Efficiency Through Compression
-   - Reference previous findings without repetition
-   - Focus on domain-relevant insights
-   - Compress using Johari structure
-   - Maintain critical context only
+### Observation 3: Cognitive Consistency
 
----
+**Details:**
+- Research always discovers and evaluates
+- Analysis always decomposes and assesses
+- Synthesis always integrates and resolves
+- Generation always creates artifacts
+- Validation always verifies against criteria
 
-USAGE NOTES
+### Observation 4: Token Efficiency Through Compression
 
-Adapting Examples
+**Details:**
+- Reference previous findings without repetition
+- Focus on domain-relevant insights
+- Compress using Johari structure
+- Maintain critical context only
+
+## Usage Notes
+
+### Adapting Examples
+
 Replace task specifics while maintaining:
 - Cognitive agent sequence
-- Domain classification approach  
+- Domain classification approach
 - Context passing structure
 - Johari compression format
 - Output adaptation patterns
 
-Protocol References
-- Core protocol: agent-protocol-core.md (all agents)
-- Extended protocol: agent-protocol-extended.md (code generation)
-- Type definitions: johari.md
-- Agent descriptions: cognitive-agent-descriptions.md
+### Protocol References
+
+- **Core protocol:** agent-protocol-core.md (all agents)
+- **Extended protocol:** agent-protocol-extended.md (code generation)
+- **Type definitions:** johari.md
+- **Agent descriptions:** cognitive-agent-descriptions.md
+
+## Summary
 
 This demonstrates how 6 cognitive agents handle ANY task through domain adaptation.

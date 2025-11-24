@@ -1,16 +1,12 @@
-JOHARI TEMPLATE - COGNITIVE DOMAIN ENHANCED
+# Johari Window Framework - Cognitive Domain Enhanced
 
-This file contains unique supplementary content not covered in agent-protocol-core.md.
+**Purpose:** Python type definitions, format decision guidance, compression techniques, and anti-pattern examples for agent memory outputs
 
-IMPORTANT: For agent execution protocols, agents MUST read:
-- .claude/protocols/agent-protocol-core.md (all agents - includes Task-ID, context inheritance, output formatting)
-- .claude/protocols/agent-protocol-extended.md (code generation agents - includes TDD + Security)
+**Scope:** Supplementary content not covered in agent-protocol-core.md
 
-This template provides Python type definitions, format decision guidance, and anti-pattern examples.
+**Note:** For agent execution protocols, agents MUST read agent-protocol-core.md (all agents) and agent-protocol-extended.md (code generation agents)
 
----
-
-FORMAT DECISION MATRIX
+## Format Decision Matrix
 
 | Component | Format | Rationale |
 |-----------|--------|-----------|
@@ -20,59 +16,82 @@ FORMAT DECISION MATRIX
 | Phase Overviews | Markdown | Narrative compression, token efficiency, human readability |
 | Johari Quadrants | JSON wrapper + Markdown strings | Programmatic extraction + narrative expressiveness, reduced hallucination (21% → 7.5%) |
 
----
+## Token Limits
 
-TOKEN LIMITS AND COMPRESSION STANDARDS
+### Strict Limits
 
-STRICT TOKEN LIMITS PER QUADRANT:
-- open: 200-300 tokens maximum
-- hidden: 200-300 tokens maximum
-- blind: 150-200 tokens maximum
-- unknown: 150-200 tokens maximum
-- domain_insights: 150-200 tokens maximum (optional)
+| Quadrant | Min | Max | Unit |
+|----------|-----|-----|------|
+| open | 200 | 300 | tokens |
+| hidden | 200 | 300 | tokens |
+| blind | 150 | 200 | tokens |
+| unknown | 150 | 200 | tokens |
+| domain_insights (optional) | 150 | 200 | tokens |
 
-TOTAL JOHARI SUMMARY: 1,200 tokens maximum (strictly enforced)
+### Totals
 
-TARGET: Complete agent memory file should be 300-400 lines (Step Overview + Johari + Downstream Directives)
+**Johari Summary:**
+- Maximum: 1200 tokens
+- Unit: tokens
+- Enforcement: strictly enforced
 
-COMPRESSION TECHNIQUES:
+**Complete Memory File:**
+- Target: 300-400 lines
+- Components: Step Overview + Johari + Downstream Directives
 
-1. Decision-Focused Writing
-   BAD:  "We conducted extensive research into OAuth2 providers including Google, Microsoft, and Auth0. After careful consideration of multiple factors including ease of implementation, documentation quality, community support, and long-term maintenance, we decided that Google's OAuth2 implementation would be the best fit for our needs."
+## Compression Techniques
 
-   GOOD: "Selected Google OAuth2 (vs Microsoft, Auth0) for superior docs, active community, simpler integration."
+### Decision-Focused Writing
 
-2. Abbreviation Usage
-   Common abbreviations (use freely): API, CRUD, TDD, JWT, REST, OWASP, PWA, CLI, UI, UX, DB
-   Domain abbreviations: Define once, use throughout
+**Bad Example:**
+> We conducted extensive research into OAuth2 providers including Google, Microsoft, and Auth0. After careful consideration of multiple factors including ease of implementation, documentation quality, community support, and long-term maintenance, we decided that Google's OAuth2 implementation would be the best fit for our needs.
 
-   BAD:  "Application Programming Interface endpoints for Create, Read, Update, Delete operations"
-   GOOD: "CRUD API endpoints"
+**Good Example:**
+> Selected Google OAuth2 (vs Microsoft, Auth0) for superior docs, active community, simpler integration.
 
-3. List Over Prose
-   BAD:  "The architecture has several key components. First, there's the authentication layer which handles user login and session management. Second, we have the business logic layer that processes requests. Third, there's the data access layer for database operations."
+### Abbreviation Usage
 
-   GOOD: "Architecture: 1) Auth layer (login, sessions), 2) Business logic (request processing), 3) Data access (DB ops)"
+**Common Abbreviations:** API, CRUD, TDD, JWT, REST, OWASP, PWA, CLI, UI, UX, DB
 
-4. Reference Over Repetition
-   BAD:  "As mentioned in the requirements phase, we need to support OAuth2 authentication with Google as the provider, using JWT tokens for session management..."
+**Domain Abbreviations:** Define once, use throughout
 
-   GOOD: "Implements requirements: OAuth2+Google, JWT sessions (see Phase 0)"
+**Bad Example:** Application Programming Interface endpoints for Create, Read, Update, Delete operations
 
-5. Quantify, Don't Elaborate
-   BAD:  "The system is quite complex with numerous interconnected components and significant architectural considerations"
+**Good Example:** CRUD API endpoints
 
-   GOOD: "Complexity: MEDIUM (8 components, 12 integrations, 3 external APIs)"
+### List Over Prose
 
-6. Use Symbols and Shorthand
-   GOOD: "Tests: 15/15 ✓, Coverage: 87%, Security: OWASP compliant ✓"
-   GOOD: "Risks: H (token refresh UX), M (rate limiting), L (docs)"
+**Bad Example:**
+> The architecture has several key components. First, there's the authentication layer which handles user login and session management. Second, we have the business logic layer that processes requests. Third, there's the data access layer for database operations.
 
----
+**Good Example:**
+> Architecture: 1) Auth layer (login, sessions), 2) Business logic (request processing), 3) Data access (DB ops)
 
-ENHANCED PYTHON TYPE DEFINITIONS FOR COGNITIVE DOMAINS
+### Reference Over Repetition
 
-Use these for type validation when working with memory files:
+**Bad Example:**
+> As mentioned in the requirements phase, we need to support OAuth2 authentication with Google as the provider, using JWT tokens for session management...
+
+**Good Example:**
+> Implements requirements: OAuth2+Google, JWT sessions (see Phase 0)
+
+### Quantify, Don't Elaborate
+
+**Bad Example:**
+> The system is quite complex with numerous interconnected components and significant architectural considerations
+
+**Good Example:**
+> Complexity: MEDIUM (8 components, 12 integrations, 3 external APIs)
+
+### Use Symbols and Shorthand
+
+**Examples:**
+- Tests: 15/15 ✓, Coverage: 87%, Security: OWASP compliant ✓
+- Risks: H (token refresh UX), M (rate limiting), L (docs)
+
+## Python Type Definitions
+
+Enhanced Python type definitions for cognitive domains using Pydantic:
 
 ```python
 from typing import Literal, Optional, List, Dict, Any
@@ -81,7 +100,7 @@ from pydantic import BaseModel, Field, ConfigDict
 # Task domain enumeration
 TaskDomain = Literal[
     "technical",
-    "personal", 
+    "personal",
     "creative",
     "professional",
     "recreational",
@@ -158,13 +177,12 @@ class CognitiveContext(BaseModel):
     predecessor_outputs: List[str]  # File paths to read
 ```
 
----
+## Domain Adaptations
 
-DOMAIN-SPECIFIC JOHARI ADAPTATIONS
+The Johari Window structure is universal, but content adapts to domain.
 
-The Johari Window structure is universal, but content adapts to domain:
+### Technical Domain (Compressed)
 
-### Technical Domain Example (COMPRESSED)
 ```json
 {
   "open": "OAuth2+Google confirmed. Flask/SQLAlchemy stack. Targets: <500ms token endpoint, OWASP compliant. JWT over opaque tokens (stateless scaling).",
@@ -178,7 +196,8 @@ The Johari Window structure is universal, but content adapts to domain:
 }
 ```
 
-### Personal Domain Example (COMPRESSED)
+### Personal Domain (Compressed)
+
 ```json
 {
   "open": "Morning routine structured: 6AM wake, exercise (30min), meditation (15min). Habit tracking via Notion. Goals aligned with values (health, growth, connection).",
@@ -188,7 +207,8 @@ The Johari Window structure is universal, but content adapts to domain:
 }
 ```
 
-### Creative Domain Example
+### Creative Domain (Compressed)
+
 ```json
 {
   "open": "Blog series on AI ethics planned. Target audience: tech professionals. Tone: thoughtful, accessible.",
@@ -202,7 +222,8 @@ The Johari Window structure is universal, but content adapts to domain:
 }
 ```
 
-### Professional Domain Example
+### Professional Domain (Compressed)
+
 ```json
 {
   "open": "Q3 strategy includes market expansion to APAC. Budget: $2M. Timeline: 90 days to launch.",
@@ -216,7 +237,8 @@ The Johari Window structure is universal, but content adapts to domain:
 }
 ```
 
-### Recreational Domain Example
+### Recreational Domain (Compressed)
+
 ```json
 {
   "open": "Puzzle game concept: physics-based with time manipulation. Platform: mobile. Audience: casual gamers.",
@@ -230,13 +252,39 @@ The Johari Window structure is universal, but content adapts to domain:
 }
 ```
 
----
+## Full Scale Example
 
-COGNITIVE AGENT OUTPUT PATTERNS
+**Description:** Complete Johari Summary at 1,200 token limit for complex research phase investigating authentication systems for multi-tenant SaaS platform
 
-Each cognitive agent produces domain-adapted outputs:
+**Token Count:** ~980 tokens (within 1,200 limit with room for domain_insights if needed)
 
-### RESEARCH Agent Output Pattern
+```json
+{
+  "open": "OAuth2 + OIDC recommended for multi-tenant SaaS auth. Evaluated 7 providers (Auth0, Okta, AWS Cognito, Azure AD, Google, Keycloak, FusionAuth). Auth0 selected: superior multi-tenancy support (Organizations API), comprehensive audit logs, flexible pricing ($0.023/MAU after 7K free), 99.99% SLA. Key features: custom domains, MFA, SSO, user migration APIs, extensible via Rules/Actions. JWT token structure: access (15min), refresh (30d). Token rotation enforced. PKCE flow for mobile/SPA. Backend validates JWT signature + claims (aud, iss, exp, sub). Database: PostgreSQL for user metadata (users, roles, permissions, tenant_memberships tables). Redis for token blacklist + rate limiting. Architecture: Auth0 → API Gateway → Backend Services. Security: OWASP Top 10 compliant, HTTPS only, secure headers (HSTS, CSP), input validation, SQL injection prevention via parameterized queries. Performance targets: <200ms token validation, <500ms login flow, 10K concurrent users. Compliance: GDPR (data portability, deletion), SOC 2 Type II aligned. Costs: ~$230/month @ 10K MAU (Auth0) + $25 Redis + $50 DB = ~$305/mo.",
+
+  "hidden": "Rejected AWS Cognito (poor UX, complex pricing), Azure AD (Microsoft lock-in), Google (limited enterprise features), Okta (2x cost vs Auth0). Keycloak/FusionAuth strong but require self-hosting (ops burden). Auth0 Rules enable custom authorization logic (e.g., enforce MFA for admin roles, block suspicious IPs). Organizations API maps to tenant model cleanly (1 org = 1 tenant). User migration from legacy system via Management API batch import. Database schema design: tenant_id on all tables for row-level isolation. Considered separate DB per tenant (rejected: ops overhead) vs shared schema (selected: cost-effective, simpler). Redis chosen over Memcached for data structure support (sets for token blacklist). Token blacklist strategy: store jti claims of revoked tokens until exp. Rate limiting: sliding window (100 req/15min per user) via Redis sorted sets. API Gateway handles CORS, request logging, JWT validation before reaching services. Refresh token rotation: new refresh issued on each use, old invalidated. Security decision: store refresh tokens hashed (bcrypt) in DB, not plain text. Password requirements: 12+ chars, complexity rules, hibp breach check via API. MFA: TOTP (Google Authenticator) + SMS backup. SSO via SAML for enterprise tenants. Deployment: Auth0 managed service (no self-hosting). Monitoring: Auth0 logs streamed to Datadog for analysis.",
+
+  "blind": "Load testing under production-like conditions not performed (simulated 10K concurrent, not validated). Auth0 failover behavior during outages unclear (reliance on their SLA). Token refresh UX during network interruptions undefined (mobile app retry logic pending). User migration edge cases: duplicate emails across tenants (strategy TBD), partial migration failures (rollback unclear). Database connection pooling config not optimized (default settings used). Redis failover strategy not fully designed (single instance, no cluster). Monitoring alerts for auth failures not configured (thresholds undefined). Session management for long-running operations unclear (token refresh during multi-hour tasks). Cross-origin scenarios beyond standard CORS not explored (embedded iframes). Performance under DB connection exhaustion not tested. Cost model assumes linear MAU growth (discount tiers not negotiated). Compliance audit process not detailed (documentation gap). Backup/restore procedures for user data undefined. GDPR data retention policies not implemented (default storage unlimited). Security incident response plan not documented.",
+
+  "unknown": "Actual token validation latency in production (depends on Auth0 response time + network). Redis memory requirements at scale (depends on token churn rate). Database size growth rate (depends on user activity patterns). Auth0 rate limits in practice (docs say 50 req/sec per tenant, real-world TBD). Optimal JWT payload size vs performance tradeoff (minimal claims vs rich context). Social login provider adoption rate by users (Google/Microsoft/etc). MFA enrollment rate (compliance requirement vs user friction). SSO adoption by enterprise customers (demand unclear). User migration timeline (depends on legacy system API access). Tenant isolation validation testing approach (needs security audit). Token refresh frequency in mobile apps (background refresh strategy). Auth0 Rules execution time impact on login performance. Cost at 100K MAU (Auth0 pricing changes at scale). Need for custom identity provider integration (customer-specific auth systems). Audit log retention requirements (compliance-driven, unclear duration). Geographic data residency requirements (GDPR-related, varies by tenant). Passwordless authentication demand (WebAuthn/passkeys future consideration). Bot detection/prevention strategy (Auth0 Attack Protection capabilities TBD)."
+}
+```
+
+### Compression Techniques Demonstrated
+
+- Dense information packing: "Auth0 selected: superior multi-tenancy support (Organizations API), comprehensive audit logs, flexible pricing ($0.023/MAU after 7K free), 99.99% SLA"
+- Abbreviations: OAuth2, OIDC, MFA, SSO, API, JWT, MAU, SLA, DB, GDPR, SOC, HTTPS, HSTS, CSP, UX, CORS, TOTP, SAML
+- Quantification: "$305/mo", "<200ms", "10K MAU", "15min", "30d", "100 req/15min"
+- Lists over prose: "users, roles, permissions, tenant_memberships tables"
+- Decision rationale compressed: "Rejected AWS Cognito (poor UX, complex pricing)"
+- Symbols: "→" for flow, "~" for approximation, "+" for combining
+- Parenthetical context: "(Auth0 Response time + network)" instead of full sentences
+- Technical shorthand: "jti claims", "bcrypt", "row-level isolation", "sliding window"
+
+## Cognitive Agent Output Patterns
+
+### RESEARCH Agent
+
 ```json
 {
   "open": "[Domain] research findings: [Key discoveries relevant to domain]",
@@ -246,7 +294,8 @@ Each cognitive agent produces domain-adapted outputs:
 }
 ```
 
-### ANALYSIS Agent Output Pattern
+### ANALYSIS Agent
+
 ```json
 {
   "open": "Complexity assessment: [SIMPLE/MEDIUM/COMPLEX]. Key dependencies: [List]. Risks: [Identified]",
@@ -256,7 +305,8 @@ Each cognitive agent produces domain-adapted outputs:
 }
 ```
 
-### SYNTHESIS Agent Output Pattern
+### SYNTHESIS Agent
+
 ```json
 {
   "open": "Integrated design: [Coherent solution combining all inputs]. Framework: [Structured approach]",
@@ -266,7 +316,8 @@ Each cognitive agent produces domain-adapted outputs:
 }
 ```
 
-### GENERATION Agent Output Pattern
+### GENERATION Agent
+
 ```json
 {
   "open": "Generated artifacts: [List of created items]. Quality standards met: [Checklist]",
@@ -276,7 +327,8 @@ Each cognitive agent produces domain-adapted outputs:
 }
 ```
 
-### VALIDATION Agent Output Pattern
+### VALIDATION Agent
+
 ```json
 {
   "open": "Validation results: [PASS/FAIL]. Criteria checked: [List]. Issues found: [Specific problems]",
@@ -286,7 +338,8 @@ Each cognitive agent produces domain-adapted outputs:
 }
 ```
 
-### CLARIFICATION Agent Output Pattern
+### CLARIFICATION Agent
+
 ```json
 {
   "open": "Clarified requirements: [Explicit specifications]. Constraints discovered: [Hidden limitations]",
@@ -296,37 +349,47 @@ Each cognitive agent produces domain-adapted outputs:
 }
 ```
 
----
+## Anti-Patterns
 
-ANTI-PATTERNS TO AVOID
+### Domain Confusion
 
-DOMAIN CONFUSION: Don't mix domains inappropriately
+**Bad:**
 ```json
 {
   "open": "Built REST API for managing personal goals"  // Mixing technical + personal
 }
 ```
-CLEAR DOMAIN SEPARATION: Keep domain context clear
+
+**Good:**
 ```json
 {
   "open": "Technical: Built REST API. Personal context: API manages user's personal goals"
 }
 ```
 
-COGNITIVE FUNCTION CREEP: Don't exceed cognitive boundaries
+**Description:** Don't mix domains inappropriately. Keep domain context clear.
+
+### Cognitive Function Creep
+
+**Bad:**
 ```json
 {
   "open": "RESEARCH agent: Designed architecture based on findings"  // Research shouldn't design
 }
 ```
-MAINTAIN COGNITIVE DISCIPLINE: Each agent stays in its lane
+
+**Good:**
 ```json
 {
   "open": "RESEARCH agent: Found 3 architectural patterns applicable to requirements"
 }
 ```
 
-LOST DOMAIN CONTEXT: Don't forget to pass domain forward
+**Description:** Don't exceed cognitive boundaries. Each agent stays in its lane.
+
+### Lost Domain Context
+
+**Bad:**
 ```json
 {
   "downstream_directives": {
@@ -334,7 +397,8 @@ LOST DOMAIN CONTEXT: Don't forget to pass domain forward
   }
 }
 ```
-PRESERVE DOMAIN CONTEXT: Always pass domain information
+
+**Good:**
 ```json
 {
   "downstream_directives": {
@@ -345,38 +409,52 @@ PRESERVE DOMAIN CONTEXT: Always pass domain information
 }
 ```
 
-VAGUE STATEMENTS: No concrete information
+**Description:** Don't forget to pass domain forward. Always pass domain information.
+
+### Vague Statements
+
+**Bad:**
 ```json
 {
   "hidden": "Made some decisions"
 }
 ```
-SPECIFIC DETAILS: Name what was decided
+
+**Good:**
 ```json
 {
   "hidden": "Chose 5-query decomposition strategy. Prioritized peer-reviewed sources. Focused on ML subfield."
 }
 ```
 
-IGNORING GAPS: Not acknowledging unknowns
+**Description:** No concrete information. Name what was decided.
+
+### Ignoring Gaps
+
+**Bad:**
 ```json
 {
   "unknown": ""  // Empty when work proceeds with unvalidated assumptions
 }
 ```
-EXPLICIT UNKNOWNS: Flag missing information
+
+**Good:**
 ```json
 {
   "unknown": "Geographic scope not specified - assumed global. Target expertise unclear - aimed intermediate."
 }
 ```
 
----
+**Description:** Not acknowledging unknowns. Flag missing information.
 
-REMEMBER: 
+## Summary
+
+### Key Points
+
 - Johari compression maintains context fidelity while reducing tokens
 - Cognitive agents adapt their process to domain while maintaining consistency
 - Domain context must flow through entire workflow for successful adaptation
 
-TOKEN SAVINGS: This enhanced reference maintains ~200 lines vs potential 500+ (60% reduction)
-For complete execution protocols, read agent-protocol-core.md or agent-protocol-extended.md.
+**Token Savings:** This enhanced reference maintains ~200 lines vs potential 500+ (60% reduction)
+
+**Protocol Reference:** For complete execution protocols, read agent-protocol-core.md or agent-protocol-extended.md

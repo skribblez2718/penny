@@ -1,48 +1,61 @@
 ---
 name: [skill-name]
 description: [one-line description]
+tags: [relevant, tags]
 ---
 
-[SKILL NAME]
+# [SKILL NAME]
 
-PURPOSE
+## Purpose
+
 [Clear statement of what this skill accomplishes]
 
-AGENT CONFIGURATION
+## Agent Configuration
 
-PRIMARY AGENT
-Role: [Agent role description]
+### Primary Agent
 
-Capabilities:
+**Role:** [Agent role description]
+
+**Capabilities:**
 - [Capability 1]
 - [Capability 2]
 - [Capability 3]
 
-Instructions:
+**Instructions:**
+
 [Detailed instructions for the agent describing WHAT tasks to perform, not HOW to perform them]
 
-INPUT/OUTPUT
+## Input/Output
 
-EXPECTED INPUT
-- [Input type 1]: [Description]
-- [Input type 2]: [Description]
+### Expected Input
 
-EXPECTED OUTPUT
-- [Output type 1]: [Description]
-- [Output type 2]: [Description]
+- **[Input type 1]:** [Description]
+- **[Input type 2]:** [Description]
 
-USAGE EXAMPLE
-User: [Example request]
-Penny: [Invokes skill and agent]
-Agent: [Performs action]
-Result: [Expected outcome]
+### Expected Output
 
-ERROR HANDLING
-- [Common error 1]: [How to handle]
-- [Common error 2]: [How to handle]
+- **[Output type 1]:** [Description]
+- **[Output type 2]:** [Description]
 
-DEPENDENCIES
+## Usage Example
+
+**User:** [Example request]
+
+**Penny:** [Invokes skill and agent]
+
+**Agent:** [Performs action]
+
+**Result:** [Expected outcome]
+
+## Error Handling
+
+- **[Common error 1]:** [How to handle]
+- **[Common error 2]:** [How to handle]
+
+## Dependencies
+
 - [Any required skills or resources]
 
-NOTES
+## Notes
+
 [Any additional implementation notes]

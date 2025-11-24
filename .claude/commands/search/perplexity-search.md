@@ -1,26 +1,26 @@
----
-description: Search using Perplexity API with source attribution
-argument-hint: [query]
----
+<?xml version="1.0" encoding="UTF-8"?>
+<command>
+  <metadata>
+    <name>perplexity-search</name>
+    <description>Search using Perplexity API with source attribution</description>
+    <argument-hint>[query]</argument-hint>
+  </metadata>
 
-# Perplexity Search Command
+  <documentation>
+    <title>Perplexity Search Command</title>
+    <description>Execute a search using the Perplexity API and return formatted results with source attribution.</description>
 
-Execute a search using the Perplexity API and return formatted results with source attribution.
+    <usage>
+      <example>/perplexity-search [your search query]</example>
+    </usage>
 
-## Usage
+    <requirements>
+      <requirement>PERPLEXITY_API_KEY environment variable must be set with your Perplexity API key</requirement>
+    </requirements>
+  </documentation>
 
-```
-/perplexity-search [your search query]
-```
-
-## Requirements
-
-- `PERPLEXITY_API_KEY` environment variable must be set with your Perplexity API key
-
-## Execution
-
-!`
-#!/bin/bash
+  <execution>
+    <script type="bash"><![CDATA[#!/bin/bash
 
 # Check if API key is set
 if [ -z "$PERPLEXITY_API_KEY" ]; then
@@ -106,4 +106,6 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "=== End of Results ==="
-`
+]]></script>
+  </execution>
+</command>

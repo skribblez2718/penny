@@ -1,48 +1,52 @@
 ---
 name: [skill-name]
-version: 1.0.0
 description: [comprehensive description]
-author: [author]
 tags: [relevant, tags, here]
-status: development
-complexity: complex
-agents_required: [number]
-estimated_turns: [number]
 ---
 
-[SKILL NAME]
+# [SKILL NAME]
 
-OVERVIEW
+## Overview
+
 [Comprehensive description of the skill's purpose and capabilities]
 
-ARCHITECTURE
+## Architecture
 
-WORKFLOW DIAGRAM
+### Workflow Diagram
+
+```
 [ASCII or text-based workflow diagram showing orchestration flow]
+```
 
-AGENT ORCHESTRATION
+## Agent Orchestration
 
-AGENT 1: [NAME]
+### Agent 1: [NAME]
 
-Purpose: [Detailed purpose - WHAT this agent accomplishes in the workflow]
+**Purpose:** [Detailed purpose - WHAT this agent accomplishes in the workflow]
 
-Trigger: [What initiates this agent]
+**Trigger:** [What initiates this agent]
 
-Instructions:
+**Instructions:**
+
 [Detailed agent instructions defining WHAT tasks to perform, not HOW to perform them]
 
-Output Format:
+**Output Format:**
+
 [Expected output structure]
 
-Handoff Protocol:
+**Handoff Protocol:**
+
 [How to pass control to next agent]
 
-AGENT 2: [NAME]
+### Agent 2: [NAME]
+
 [Repeat structure for all agents]
 
-STATE MANAGEMENT
+## State Management
 
-PERSISTENT STATE
+### Persistent State
+
+```json
 {
   "workflow_id": "[unique_id]",
   "current_phase": "[phase_name]",
@@ -50,59 +54,76 @@ PERSISTENT STATE
   "decisions_made": [],
   "agents_completed": []
 }
+```
 
-STATE TRANSITIONS
+### State Transitions
+
 [Define how state changes between agents]
 
-DECISION TREES
+## Decision Trees
 
-DECISION POINT 1: [NAME]
+### Decision Point 1: [NAME]
+
+```
 IF [condition]
-  THEN ’ Agent [X]
+  THEN â†’ Agent [X]
 ELSE IF [condition]
-  THEN ’ Agent [Y]
+  THEN â†’ Agent [Y]
 ELSE
-  THEN ’ Agent [Z]
+  THEN â†’ Agent [Z]
+```
 
-ERROR HANDLING
+## Error Handling
 
-ERROR RECOVERY MATRIX
-Error Type | Detection | Recovery Strategy | Fallback
-[Type 1]   | [Method]  | [Strategy]        | [Action]
-[Type 2]   | [Method]  | [Strategy]        | [Action]
+### Error Recovery Matrix
 
-USAGE EXAMPLES
+| Error Type | Detection | Recovery Strategy | Fallback |
+|-----------|-----------|------------------|----------|
+| [Type 1] | [Method] | [Strategy] | [Action] |
+| [Type 2] | [Method] | [Strategy] | [Action] |
 
-SCENARIO 1: [COMMON USE CASE]
-User: [Request]
-Penny: Initiating complex skill [name]
-Agent 1: [Action]
-Agent 2: [Action]
-[...]
-Result: [Outcome]
+## Usage Examples
 
-SCENARIO 2: [EDGE CASE]
+### Scenario 1: [COMMON USE CASE]
+
+**User:** [Request]
+
+**Penny:** Initiating complex skill [name]
+
+**Agent 1:** [Action]
+
+**Agent 2:** [Action]
+
+**Result:** [Outcome]
+
+### Scenario 2: [EDGE CASE]
+
 [Example with error handling]
 
-PERFORMANCE CONSIDERATIONS
+## Performance Considerations
+
 - Expected execution time: [estimate]
 - Context window usage: [percentage per agent]
 - Optimal agent parallelization opportunities
 
-DEPENDENCIES
+## Dependencies
 
-REQUIRED SKILLS
-- [Skill 1]: [Why needed]
-- [Skill 2]: [Why needed]
+### Required Skills
 
-REQUIRED RESOURCES
-- [Resource 1]: [Purpose]
-- [Resource 2]: [Purpose]
+- **[Skill 1]:** [Why needed]
+- **[Skill 2]:** [Why needed]
 
-TESTING PROTOCOL
-1. [Test case 1]: [Expected behavior]
-2. [Test case 2]: [Expected behavior]
-3. [Edge case test]: [Expected behavior]
+### Required Resources
 
-MAINTENANCE NOTES
+- **[Resource 1]:** [Purpose]
+- **[Resource 2]:** [Purpose]
+
+## Testing Protocol
+
+1. **[Test case 1]:** [Expected behavior]
+2. **[Test case 2]:** [Expected behavior]
+3. **[Edge case test]:** [Expected behavior]
+
+## Maintenance Notes
+
 [Guidelines for updating this skill]

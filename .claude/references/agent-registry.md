@@ -1,97 +1,158 @@
-AGENT REGISTRY
+# Agent Registry
 
-Catalog of existing cognitive agents. Use this registry to discover the 6 universal agents that handle all task workflows through domain-adaptive cognitive processing.
+## Metadata
 
-PURPOSE
+- **Title:** Agent Registry
+- **Purpose:** Catalog of existing cognitive agents - 6 universal agents that handle all task workflows through domain-adaptive cognitive processing
+- **Description:** The PAI system uses 6 cognitive-domain agents that adapt to ANY task context rather than specialized agents for specific workflows. Each agent represents a fundamental cognitive function and adjusts its approach based on the domain (technical, personal, creative, professional, recreational).
 
-The PAI system uses 6 cognitive-domain agents that adapt to ANY task context rather than specialized agents for specific workflows. Each agent represents a fundamental cognitive function and adjusts its approach based on the domain (technical, personal, creative, professional, recreational).
+## Agents
 
----
+### RESEARCH AGENTS
 
-RESEARCH AGENTS
+Agents that discover and gather information from external sources
 
-Agents that discover and gather information from external sources.
+#### research-discovery
 
-- research-discovery: Systematic information discovery and evaluation across any domain. Invoked at the start of complex tasks requiring foundational knowledge gathering, when encountering knowledge gaps, before technical decisions, when evaluating options, or after CLARIFICATION identifies information gaps. Adapts research methodology to context while maintaining consistent source evaluation and pattern identification.
+- **Cognitive Function:** RESEARCH
+- **Description:** Systematic information discovery and evaluation across any domain
+- **Invocation Triggers:**
+  - At the start of complex tasks requiring foundational knowledge gathering
+  - When encountering knowledge gaps
+  - Before technical decisions
+  - When evaluating options
+  - After CLARIFICATION identifies information gaps
+- **Adaptation:** Adapts research methodology to context while maintaining consistent source evaluation and pattern identification
 
----
+### ANALYSIS AGENTS
 
-ANALYSIS AGENTS
+Agents that examine existing information to identify patterns, issues, or insights
 
-Agents that examine existing information to identify patterns, issues, or insights.
+#### analysis-agent
 
-- analysis-agent: Decomposes complex information, evaluates patterns, assesses risks, and analyzes dependencies across any domain. Invoked after research/information gathering is complete but before synthesis or solution generation. Applies universal analytical methods (decomposition, dependency mapping, complexity assessment, risk identification) with domain-adaptive evaluation criteria.
+- **Cognitive Function:** ANALYSIS
+- **Description:** Decomposes complex information, evaluates patterns, assesses risks, and analyzes dependencies across any domain
+- **Invocation Triggers:**
+  - After research/information gathering is complete but before synthesis or solution generation
+- **Methods:**
+  - Decomposition
+  - Dependency mapping
+  - Complexity assessment
+  - Risk identification
+- **Adaptation:** Applies universal analytical methods with domain-adaptive evaluation criteria
 
----
+### SYNTHESIS AGENTS
 
-SYNTHESIS AGENTS
+Agents that combine multiple information sources into coherent understanding
 
-Agents that combine multiple information sources into coherent understanding.
+#### synthesis-agent
 
-- synthesis-agent: Integrates multiple sources of information, requirements, or constraints into unified designs, frameworks, or solutions. Creates system architectures from requirements + patterns + constraints, resolves contradictions between conflicting requirements, builds frameworks that combine disparate concepts, designs solutions satisfying multiple competing constraints. Context-driven integration with consistent synthesis methodology.
+- **Cognitive Function:** SYNTHESIS
+- **Description:** Integrates multiple sources of information, requirements, or constraints into unified designs, frameworks, or solutions
+- **Capabilities:**
+  - Creates system architectures from requirements + patterns + constraints
+  - Resolves contradictions between conflicting requirements
+  - Builds frameworks that combine disparate concepts
+  - Designs solutions satisfying multiple competing constraints
+- **Adaptation:** Context-driven integration with consistent synthesis methodology
 
----
+### GENERATION AGENTS
 
-GENERATION AGENTS
+Agents that create new artifacts, plans, specifications, or implementations
 
-Agents that create new artifacts, plans, specifications, or implementations.
+#### generation-agent
 
-- generation-agent: Creates new artifacts from specifications, requirements, or synthesis outputs. Generates code implementations, documentation, plans, creative content, or any deliverable requiring building something new from defined requirements. Applies TDD principles for code, follows style guides and security patterns, adapts quality standards to domain while maintaining consistent creation processes.
+- **Cognitive Function:** GENERATION
+- **Description:** Creates new artifacts from specifications, requirements, or synthesis outputs
+- **Generates:**
+  - Code implementations
+  - Documentation
+  - Plans
+  - Creative content
+  - Any deliverable requiring building something new from defined requirements
+- **Quality Standards:**
+  - **Code domain:** Applies TDD principles
+  - **All domains:** Follows style guides and security patterns
+  - **All domains:** Adapts quality standards to domain while maintaining consistent creation processes
 
----
+### VALIDATION AGENTS
 
-VALIDATION AGENTS
+Agents that verify correctness, completeness, or compliance
 
-Agents that verify correctness, completeness, or compliance.
+#### quality-validator
 
-- quality-validator: Systematically verifies artifacts, deliverables, or decisions against established criteria, requirements, or quality standards. Used after code is written, configurations created, documentation drafted; when evaluating choices; before finalizing deliverables; as quality gates. Applies domain-appropriate validation frameworks with objective pass/fail determinations and actionable remediation guidance.
+- **Cognitive Function:** VALIDATION
+- **Description:** Systematically verifies artifacts, deliverables, or decisions against established criteria, requirements, or quality standards
+- **Invocation Triggers:**
+  - After code is written
+  - After configurations created
+  - After documentation drafted
+  - When evaluating choices
+  - Before finalizing deliverables
+  - As quality gates
+- **Approach:**
+  - Applies domain-appropriate validation frameworks
+  - Objective pass/fail determinations
+  - Actionable remediation guidance
 
----
+### CLARIFICATION AGENTS
 
-CLARIFICATION AGENTS
+Agents that resolve ambiguities and transform vague inputs into explicit outputs
 
-Agents that resolve ambiguities and transform vague inputs into explicit outputs.
+#### clarification-specialist
 
-- clarification-specialist: Transforms vague, ambiguous, incomplete, or underspecified user inputs into actionable specifications through systematic Socratic questioning. Invoked proactively when user requests lack critical details, have missing specifications, or need success criteria defined. Detects ambiguity, surfaces assumptions, discovers constraints, reveals unknown unknowns, produces precise specifications with clear acceptance criteria.
+- **Cognitive Function:** CLARIFICATION
+- **Description:** Transforms vague, ambiguous, incomplete, or underspecified user inputs into actionable specifications through systematic Socratic questioning
+- **Invocation Triggers:**
+  - Proactively when user requests lack critical details
+  - When requests have missing specifications
+  - When success criteria need to be defined
+- **Capabilities:**
+  - Detects ambiguity
+  - Surfaces assumptions
+  - Discovers constraints
+  - Reveals unknown unknowns
+  - Produces precise specifications with clear acceptance criteria
 
----
+## Cognitive Architecture Principles
 
-COGNITIVE ARCHITECTURE PRINCIPLES
+### Domain Adaptation, Not Domain Specialization
 
-DOMAIN ADAPTATION, NOT DOMAIN SPECIALIZATION:
 - Each agent has ONE cognitive function (research, analysis, synthesis, generation, validation, clarification)
 - Agents receive domain context (technical/personal/creative/professional/recreational) and adapt their approach
 - Same agent handles authentication systems AND life decisions by adapting vocabulary, sources, and criteria
-- This enables handling novel tasks without creating new agents
+- **Benefit:** Enables handling novel tasks without creating new agents
 
-UNIVERSAL PROCESSING WITH CONTEXT-DRIVEN OUTPUTS:
+### Universal Processing with Context-Driven Outputs
+
 - Cognitive processes remain consistent (how to research, analyze, synthesize, etc.)
 - Evaluation criteria, vocabulary, and quality standards adapt to task domain
-- Technical tasks → technical rigor, security standards, performance metrics
-- Personal tasks → lifestyle impacts, value alignment, personal growth
-- Creative tasks → audience engagement, thematic coherence, emotional impact
+- **Technical domain:** Technical rigor, security standards, performance metrics
+- **Personal domain:** Lifestyle impacts, value alignment, personal growth
+- **Creative domain:** Audience engagement, thematic coherence, emotional impact
 
-WORKFLOW ORCHESTRATION:
+### Workflow Orchestration
+
 - Skills orchestrate cognitive agents in sequences appropriate to task complexity
-- Standard sequence: CLARIFICATION → RESEARCH → ANALYSIS → SYNTHESIS → GENERATION → VALIDATION
+- **Standard sequence:** CLARIFICATION → RESEARCH → ANALYSIS → SYNTHESIS → GENERATION → VALIDATION
 - CLARIFICATION invoked proactively when ambiguity detected
 - Each agent receives full context from predecessors via memory files
 
----
+## Usage Guidelines
 
-USAGE GUIDELINES
+### Selecting Agent
 
-SELECTING THE RIGHT AGENT:
+**Question:** What cognitive function do I need?
 
-Ask: "What cognitive function do I need?"
-- Need to gather information? → research-discovery
-- Need to break down complexity? → analysis-agent
-- Need to integrate findings into design? → synthesis-agent
-- Need to create deliverables? → generation-agent
-- Need to verify quality? → quality-validator
-- Need to clarify requirements? → clarification-specialist
+**Mappings:**
+- **Need to gather information?** → research-discovery
+- **Need to break down complexity?** → analysis-agent
+- **Need to integrate findings into design?** → synthesis-agent
+- **Need to create deliverables?** → generation-agent
+- **Need to verify quality?** → quality-validator
+- **Need to clarify requirements?** → clarification-specialist
 
-INVOKING AGENTS:
+### Invoking Agents
 
 1. Identify required cognitive function from task requirements
 2. Provide domain context (technical/personal/creative/professional/recreational)
@@ -99,25 +160,86 @@ INVOKING AGENTS:
 4. Reference memory files from previous workflow steps
 5. Agent adapts its cognitive process to domain while maintaining quality
 
-WHEN TO USE DIRECT EXECUTION VS. AGENTS:
+### When to Use
 
-Use cognitive agents when:
+**Use Cognitive Agents:**
 - Task requires that specific cognitive function
 - Multi-step workflows need that cognitive phase
 - Quality benefits from specialized cognitive processing
 
-Use direct execution when:
+**Use Direct Execution:**
 - Task is trivial and doesn't require specialized cognitive processing
 - Single tool use is sufficient (read a file, run a command)
 - Overhead of agent invocation exceeds value
 
-DO NOT CREATE NEW AGENTS UNLESS:
+### Agent Creation Policy
+
+**DO NOT CREATE NEW AGENTS UNLESS:**
 - A fundamental cognitive function is missing from the 6 existing agents
 - Proposed agent would handle a distinct cognitive domain (beyond research/analysis/synthesis/generation/validation/clarification)
 - Agent would be reusable across 5+ different workflow types with only context changes
 
----
+## Agent Relationships
 
-RELATED DOCUMENTS
+### Standard Cognitive Workflow
 
-- .claude/docs/cognitive-function-taxonomy.md - Cognitive function definitions
+**Sequence:**
+
+1. **clarification-specialist** → Output: Precise specifications, explicit constraints, clear acceptance criteria
+2. **research-discovery** (Input: Clarified specifications) → Output: Discovered information, evaluated sources, identified patterns
+3. **analysis-agent** (Input: Research findings) → Output: Decomposed complexity, mapped dependencies, assessed risks
+4. **synthesis-agent** (Input: Analysis results) → Output: Integrated design, unified framework, resolved contradictions
+5. **generation-agent** (Input: Synthesis outputs) → Output: Created artifacts, implemented solutions, generated deliverables
+6. **quality-validator** (Input: Generated artifacts) → Output: Verified quality, validated compliance, identified issues
+
+### Iterative Refinement
+
+**VALIDATION failures trigger GENERATION refinement or SYNTHESIS redesign:**
+
+- **Minor issues found:** quality-validator returns to generation-agent
+- **Design flaws found:** quality-validator returns to synthesis-agent
+
+### Proactive Clarification
+
+**Any agent can invoke CLARIFICATION when ambiguity detected:**
+
+- **Trigger:** any agent
+- **Invokes:** clarification-specialist
+- **Condition:** Missing specifications, contradictory requirements, unclear constraints
+
+## Domain Adaptation Notes
+
+### Technical Domain
+- **Focus:** Code quality, security patterns, performance metrics, test coverage
+- **Artifacts:** Source code, tests, documentation, configuration files
+- **Standards:** TDD, OWASP, style guides, API contracts
+
+### Personal Domain
+- **Focus:** Value alignment, life balance, personal growth, wellbeing
+- **Artifacts:** Plans, schedules, decision matrices, habit trackers
+- **Standards:** Actionable, realistic, human factors considered
+
+### Creative Domain
+- **Focus:** Audience engagement, narrative coherence, emotional impact, originality
+- **Artifacts:** Content, stories, designs, presentations
+- **Standards:** Voice consistency, clarity, creative brief alignment
+
+### Professional Domain
+- **Focus:** Business value, strategic alignment, stakeholder needs, ROI
+- **Artifacts:** Reports, proposals, analyses, strategies
+- **Standards:** Data-driven, executive summaries, professional tone
+
+### Recreational Domain
+- **Focus:** Fun, engagement, inclusivity, memorable experiences
+- **Artifacts:** Event plans, game designs, entertainment materials
+- **Standards:** Accessible, clear instructions, participant satisfaction
+
+### Hybrid Domain
+- **Focus:** Multiple domains weighted and integrated
+- **Artifacts:** Domain-specific artifacts combined
+- **Standards:** All relevant domain standards applied appropriately
+
+## Related Documents
+
+- **Path:** `.claude/docs/cognitive-function-taxonomy.md`
+- **Description:** Cognitive function definitions

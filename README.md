@@ -300,6 +300,7 @@ This is an **active, evolving project**. Enhancements are added as inspiration s
 
 ### Current Priorities
 
+- [ ] **Make system more adaptable** - Replace references to "Penny" with `${DA_NAME}`
 - [ ] **Integrate custom speech-to-text** leveraging current voice server infrastructure
 - [ ] **Verify functionality** of voice-server setup.sh script end-to-end
 - [ ] **Implement "learning" functionality** - Expand Johari Window-based knowledge capture in learnings directory

@@ -1,565 +1,814 @@
 ---
 name: develop-project
-version: 3.0.0
-description: Comprehensive domain-agnostic development workflow from concept to deployment-ready code. Orchestrates 6 universal cognitive agents across 6 optimized phases implementing TDD and security-first approaches. Works for technical, personal, creative, professional, and recreational projects through cognitive domain adaptation.
-status: production
-complexity: complex
-agents_required: 6
-estimated_turns: 25-40
+description: Comprehensive domain-agnostic development workflow from concept to deployment-ready code. Orchestrates 6 universal cognitive agents across 6 optimized phases implementing TDD and security-first approaches
+tags: project-development, full-lifecycle, tdd, security, domain-agnostic
 ---
 
-DEVELOP-PROJECT SKILL - VERSION 3.0 (OPTIMIZED)
+# develop-project
 
-OVERVIEW
+**Description:** Comprehensive domain-agnostic development workflow from concept to deployment-ready code. Orchestrates 6 universal cognitive agents across 6 optimized phases implementing TDD and security-first approaches. Works for technical, personal, creative, professional, and recreational projects through cognitive domain adaptation.
+
+**Status:** production
+
+**Complexity:** complex
+
+## Overview
 
 The develop-project skill transforms project ideas into deployment-ready deliverables through systematic cognitive processing. It orchestrates 6 universal cognitive agents across 6 optimized phases with embedded quality validation ensuring excellence at every step.
 
+### Domain Adaptation
+
 This skill works across ALL domains through cognitive adaptation:
-- Technical: Web apps, CLI tools, mobile apps, PWAs, AI applications, APIs
-- Personal: Life decisions, goal planning, habit systems, personal projects
-- Creative: Content creation, art projects, creative workflows, entertainment
-- Professional: Business strategies, operational plans, market analysis
-- Recreational: Event planning, game design, hobby projects
 
-Specialization happens through domain context, not agent specialization. The same 6 cognitive agents adapt their processing to the task domain.
+**Domains:**
+- **technical:** Web apps, CLI tools, mobile apps, PWAs, AI applications, APIs
+- **personal:** Life decisions, goal planning, habit systems, personal projects
+- **creative:** Content creation, art projects, creative workflows, entertainment
+- **professional:** Business strategies, operational plans, market analysis
+- **recreational:** Event planning, game design, hobby projects
 
-KEY FEATURES
+**Note:** Specialization happens through domain context, not agent specialization. The same 6 cognitive agents adapt their processing to the task domain.
 
-- 6-PHASE OPTIMIZED WORKFLOW: Streamlined phases with embedded validation for faster execution (40% faster than 10-phase)
-- 6 COGNITIVE AGENTS: Research, Analysis, Synthesis, Generation, Validation, Clarification
-- DOMAIN-ADAPTIVE: Same workflow adapts to technical/personal/creative/professional/recreational
-- EMBEDDED VALIDATION: Quality checks integrated into cognitive agents, not separate phases
-- SCOPED CONTEXT LOADING: Agents load only immediate predecessors (50-60% token reduction)
-- SEQUENTIAL EXECUTION: Agents always invoked sequentially, never in parallel
-- TDD-INTEGRATED: Test-driven development for technical projects (validation built-in)
-- SECURITY-FIRST: OWASP Top 10 and secure coding throughout technical implementations
-- REMEDIATION LOOPS: Failed exit criteria loop back for fixes before proceeding
-- COMPREHENSIVE OUTPUT: Complete deliverables with validation and documentation
+## Key Features
 
-OPTIMIZATION IMPROVEMENTS
+- **6-phase-optimized-workflow:** Streamlined phases with embedded validation for faster execution (40% faster than 10-phase)
+- **6-cognitive-agents:** Research, Analysis, Synthesis, Generation, Validation, Clarification
+- **domain-adaptive:** Same workflow adapts to technical/personal/creative/professional/recreational
+- **embedded-validation:** Quality checks integrated into cognitive agents, not separate phases
+- **scoped-context-loading:** Agents load only immediate predecessors (50-60% token reduction)
+- **sequential-execution:** Agents always invoked sequentially, never in parallel
+- **tdd-integrated:** Test-driven development for technical projects (validation built-in)
+- **security-first:** OWASP Top 10 and secure coding throughout technical implementations
+- **remediation-loops:** Failed exit criteria loop back for fixes before proceeding
+- **comprehensive-output:** Complete deliverables with validation and documentation
+
+## Optimization Improvements
 
 Compared to previous 10-phase workflow:
-- Agent invocations: 14-18 → 10-12 (33% reduction)
-- Execution time: ~45-60 min → ~20-30 min (40-50% faster)
-- Memory file sizes: 1,000-2,800 lines → 300-400 lines (65-70% reduction)
-- Token usage per phase: 6,500-8,000 → 2,000-3,000 (60-70% reduction)
-- Context loading: All previous outputs → Immediate predecessors only
 
-COGNITIVE AGENT ARCHITECTURE
+| Metric | Before | After | Improvement |
+|--------|--------|-------|-------------|
+| Agent invocations | 14-18 | 10-12 | 33% reduction |
+| Execution time | 45-60 min | 20-30 min | 40-50% faster |
+| Memory file sizes | 1,000-2,800 lines | 300-400 lines | 65-70% reduction |
+| Token usage per phase | 6,500-8,000 | 2,000-3,000 | 60-70% reduction |
+| Context loading | All previous outputs | Immediate predecessors only | Scoped |
+
+## Cognitive Agent Architecture
 
 This skill uses 6 universal cognitive agents that adapt to domain context:
 
-For agent descriptions and capabilities:
-  See .claude/references/agent-registry.md
+**References:**
+- **Agent descriptions:** See `.claude/references/agent-registry.md`
+- **Context structure:** See `.claude/references/johari.md` (Johari Window format)
+- **Context inheritance:** See `.claude/references/context-inheritance.md` (examples)
+- **Execution protocols (core):** See `.claude/protocols/agent-protocol-core.md` (all agents - includes scoped context loading)
+- **Execution protocols (extended):** See `.claude/protocols/agent-protocol-extended.md` (technical code generation)
 
-For context structure and format:
-  See .claude/references/johari.md (Johari Window format)
-  See .claude/references/context-inheritance.md (examples)
+**Important:** Agents are ALWAYS invoked sequentially, never in parallel.
 
-For execution protocols:
-  See .claude/protocols/agent-protocol-core.md (all agents - includes scoped context loading)
-  See .claude/protocols/agent-protocol-extended.md (technical code generation)
+## Workflow
 
-IMPORTANT: Agents are ALWAYS invoked sequentially, never in parallel.
+### Phase 0: Requirements Discovery and Analysis
 
----
+**Cognitive Sequence:** CLARIFICATION → ANALYSIS (embedded validation)
 
-WORKFLOW PHASES
+**Purpose:** Transform vague ideas into validated requirements with embedded quality checks
 
-PHASE 0: Requirements Discovery & Analysis
+**Task Context:**
+- **Task Domain:** Established from user input - technical/personal/creative/professional/recreational
+- **Quality Standards:** testable, SMART criteria, consistent, prioritized
+- **Artifact Types:** requirements specification, acceptance criteria, dependency graph
+- **Success Criteria:** requirements explicit, acceptance tests defined, dependencies mapped, quality validated
 
-Cognitive Sequence: CLARIFICATION → ANALYSIS (embedded validation)
+#### Agent Invocations
 
-Purpose: Transform vague ideas into validated requirements with embedded quality checks
+**1. clarification-specialist (CLARIFICATION)**
 
-TASK CONTEXT:
-  task_domain: [Established from user input - technical/personal/creative/professional/recreational]
-  quality_standards: ["testable", "SMART criteria", "consistent", "prioritized"]
-  artifact_types: ["requirements specification", "acceptance criteria", "dependency graph"]
-  success_criteria: ["requirements explicit", "acceptance tests defined", "dependencies mapped", "quality validated"]
+**Purpose:** Transform vague project idea into explicit requirements
 
-Agent Invocations:
+**Gate Entry:**
+- User has provided initial project description
+- Domain classification attempted
 
-1. clarification-specialist (CLARIFICATION)
-   Purpose: Transform vague project idea into explicit requirements
+**Gate Exit:**
+- All requirements have explicit acceptance criteria
+- Scope boundaries defined
+- Constraints documented
 
-   Gate Entry:
-   - User has provided initial project description
-   - Domain classification attempted
+**Context References:**
+- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
 
-   Gate Exit:
-   - All requirements have explicit acceptance criteria
-   - Scope boundaries defined
-   - Constraints documented
+**Context Scope:** WORKFLOW_ONLY
 
-   Context References:
-   - .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
+**Token Budget:** 500-1,000 tokens
 
-   Context Scope: WORKFLOW_ONLY
-   Token Budget: 500-1,000 tokens
+**2. analysis-agent (ANALYSIS)**
 
-2. analysis-agent (ANALYSIS)
-   Purpose: Analyze requirements for dependencies, complexity, risks AND validate quality
+**Purpose:** Analyze requirements for dependencies, complexity, risks AND validate quality
 
-   Gate Entry:
-   - Clarified requirements available
+**Gate Entry:**
+- Clarified requirements available
 
-   Gate Exit Decision:
-   - PASS: Requirements are SMART, consistent, complete → Phase 1
-   - FAIL: Issues found → Loop to clarification-specialist for remediation
+**Gate Exit Decision:**
+- **PASS:** Requirements are SMART, consistent, complete → Phase 1
+- **FAIL:** Issues found → Loop to clarification-specialist for remediation
 
-   Validation Responsibilities (embedded):
-   - SMART compliance check (Specific, Measurable, Achievable, Relevant, Testable)
-   - Consistency verification (no contradictions)
-   - Dependency mapping
-   - Risk assessment with mitigation
-   - MoSCoW prioritization
-   - Traceability confirmation
+**Validation Responsibilities (Embedded):**
+- SMART compliance check (Specific, Measurable, Achievable, Relevant, Testable)
+- Consistency verification (no contradictions)
+- Dependency mapping
+- Risk assessment with mitigation
+- MoSCoW prioritization
+- Traceability confirmation
 
-   Context References:
-   - .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-   - .claude/memory/task-{id}-clarification-specialist-memory.md [IMMEDIATE PREDECESSOR - REQUIRED]
+**Context References:**
+- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
+- `.claude/memory/task-{id}-clarification-specialist-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
 
-   Context Scope: IMMEDIATE_PREDECESSORS
-   Token Budget: 2,500-3,000 tokens
+**Context Scope:** IMMEDIATE_PREDECESSORS
 
-OPTIMIZATION NOTE: Phase 0 reduces from 3 agents (clarification, analysis, validation) to 2 agents by embedding validation into analysis. Analysis agent validates as it analyzes.
+**Token Budget:** 2,500-3,000 tokens
 
----
+**Optimization Note:** Phase 0 reduces from 3 agents (clarification, analysis, validation) to 2 agents by embedding validation into analysis. Analysis agent validates as it analyzes.
 
-PHASE 1: Research & Decision Synthesis
+### Phase 1: Research and Decision Synthesis
 
-Cognitive Sequence: RESEARCH → SYNTHESIS (embedded validation)
+**Cognitive Sequence:** RESEARCH → SYNTHESIS (embedded validation)
 
-Purpose: Discover options and synthesize coherent decisions
+**Purpose:** Discover options and synthesize coherent decisions
 
-TASK CONTEXT:
-  task_domain: [Inherited]
-  quality_standards: ["3+ sources", "authoritative", "evidence-based decisions"]
-  artifact_types: ["research findings", "decision document", "rationale"]
-  success_criteria: ["options identified", "decisions made with rationale", "trade-offs explicit"]
+**Task Context:**
+- **Task Domain:** Inherited
+- **Quality Standards:** 3+ sources, authoritative, evidence-based decisions
+- **Artifact Types:** research findings, decision document, rationale
+- **Success Criteria:** options identified, decisions made with rationale, trade-offs explicit
 
-Domain Adaptation:
-- Technical: Technology/framework/library research, architectural patterns
-- Personal: Best practices, expert advice, case studies
-- Creative: Genre patterns, audience research, creative techniques
-- Professional: Market data, industry standards, competitive analysis
-- Recreational: Activity options, venues, planning resources
+**Domain Adaptation:**
+- **technical:** Technology/framework/library research, architectural patterns
+- **personal:** Best practices, expert advice, case studies
+- **creative:** Genre patterns, audience research, creative techniques
+- **professional:** Market data, industry standards, competitive analysis
+- **recreational:** Activity options, venues, planning resources
 
-Agent Invocations:
+#### Agent Invocations
 
-1. research-discovery (RESEARCH)
-   Purpose: Discover and evaluate information across domain
+**1. research-discovery (RESEARCH)**
 
-   Gate Entry:
-   - Validated requirements from Phase 0
+**Purpose:** Discover and evaluate information across domain
 
-   Gate Exit:
-   - Minimum 3 options per decision point
-   - Sources documented with credibility
-   - Knowledge gaps identified
+**Gate Entry:**
+- Validated requirements from Phase 0
+
+**Gate Exit:**
+- Minimum 3 options per decision point
+- Sources documented with credibility
+- Knowledge gaps identified
+
+**Context Injection (Technical Project Dependency Validation):**
 
-   Context References:
-   - .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-   - .claude/memory/task-{id}-analysis-agent-memory.md [IMMEDIATE PREDECESSOR - REQUIRED]
+*Note: Penny injects this for technical projects*
 
-   Context Scope: IMMEDIATE_PREDECESSORS
-   Token Budget: 2,500-3,000 tokens
+```
+Library Research Must Include Dependency Validation:
 
-2. synthesis-agent (SYNTHESIS)
-   Purpose: Synthesize evaluation into coherent decisions AND validate completeness
+VERSION COMPATIBILITY:
+- Check compatibility with other selected libraries/frameworks
+- Identify known version conflicts (search: "library_name version conflict")
+- Document compatible version ranges (e.g., "requires Python 3.9+, compatible with FastAPI 0.100+")
+- Flag libraries with restrictive dependency constraints
 
-   Gate Entry:
-   - Research findings available
+INSTALLATION TESTING:
+- Verify installation method (uv add, pip install, conda)
+- Document exact installation command: uv add library_name==version
+- Flag any installation issues or system dependencies required
+- Note if library requires compilation (C extensions, Rust, etc.)
 
-   Gate Exit Decision:
-   - PASS: Decisions coherent, alternatives documented → Phase 2
-   - FAIL: Incomplete research → Loop to research-discovery
+DEPENDENCY ANALYSIS:
+- What dependencies does this library pull in? (transitive dependencies)
+- Are there conflicts with project dependencies already selected?
+- Total dependency footprint (number of packages installed)
+- Any security-sensitive dependencies?
 
-   Validation Responsibilities (embedded):
-   - Decision completeness check
-   - Rationale quality verification
-   - Conflict resolution confirmation
-   - Trade-offs explicitly stated
+KNOWN CONFLICTS TO FLAG:
+- Example: py-vapid + cryptography version conflicts
+- Example: TensorFlow + NumPy version pinning
+- Example: Outdated libraries with unmaintained dependencies
 
-   Context References:
-   - .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-   - .claude/memory/task-{id}-research-discovery-memory.md [IMMEDIATE PREDECESSOR - REQUIRED]
-   - .claude/memory/task-{id}-analysis-agent-memory.md [OPTIONAL: requirements for alignment check]
+DOCUMENT IN JOHARI:
+- open: Library selection with versions
+- hidden: Installation method, compatibility checks performed
+- blind: Untested version combinations, potential conflicts not validated
+- unknown: Actual installation success (needs testing), production behavior
+```
 
-   Context Scope: IMMEDIATE_PREDECESSORS
-   Token Budget: 3,000-4,000 tokens
+**Context References:**
+- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
+- `.claude/memory/task-{id}-analysis-agent-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
 
-OPTIMIZATION NOTE: Phase 1 merges old Phases 1 (Research) and 2 (Evaluation & Decision). Synthesis naturally validates research completeness.
+**Context Scope:** IMMEDIATE_PREDECESSORS
 
----
+**Token Budget:** 2,500-3,000 tokens
 
-PHASE 2: Architecture Design & Validation
+**2. synthesis-agent (SYNTHESIS)**
 
-Cognitive Sequence: RESEARCH → SYNTHESIS → ANALYSIS (embedded validation)
+**Purpose:** Synthesize evaluation into coherent decisions AND validate completeness
 
-Purpose: Research patterns, design architecture, and validate quality
+**Gate Entry:**
+- Research findings available
 
-TASK CONTEXT:
-  task_domain: [Inherited]
-  quality_standards: (domain-specific - see below)
-  artifact_types: (domain-specific - see below)
-  success_criteria: ["complete design", "patterns applied", "no critical issues", "quality validated"]
+**Gate Exit Decision:**
+- **PASS:** Decisions coherent, alternatives documented → Phase 2
+- **FAIL:** Incomplete research → Loop to research-discovery
 
-Domain-Specific Standards:
-- Technical: ["security-first", "SOLID principles", "scalable", "testable"]
-  Artifacts: ["architecture design", "component specifications", "API definitions", "data models"]
+**Validation Responsibilities (Embedded):**
+- Decision completeness check
+- Rationale quality verification
+- Conflict resolution confirmation
+- Trade-offs explicitly stated
 
-- Personal: ["value-aligned", "realistic", "measurable", "flexible"]
-  Artifacts: ["life framework", "milestone plan", "support system design"]
+**Context Injection (Technical Project Synthesis Requirements):**
 
-- Creative: ["audience-appropriate", "thematically coherent", "engaging"]
-  Artifacts: ["creative framework", "narrative structure", "content outline"]
+*Note: Penny injects this for technical projects*
 
-- Professional: ["market-aligned", "resource-constrained", "scalable", "measurable"]
-  Artifacts: ["strategic framework", "operational plan", "resource allocation"]
+```
+For Every Library/Technology Selected, Document:
 
-- Recreational: ["fun-maximizing", "inclusive", "feasible", "flexible"]
-  Artifacts: ["activity framework", "schedule outline", "contingency plans"]
+DECISION RATIONALE:
+- Exact version chosen (not "latest" - specify X.Y.Z)
+- Why this library over alternatives (specific reasons)
+- Compatibility verified with: [list other selected libraries]
+- Installation tested: [command used, e.g., "uv add fastapi==0.104.1"]
 
-Agent Invocations:
+DEPENDENCY DOCUMENTATION:
+- Direct dependencies: [what this library needs]
+- Transitive dependencies: [what gets pulled in]
+- Conflicts resolved: [document any conflicts found and how resolved]
+- Version constraints: [e.g., "requires Python >=3.9, <4.0"]
 
-1. research-discovery (RESEARCH)
-   Purpose: Research architectural/design patterns applicable to domain
+FLAG UNRESOLVED ISSUES IN JOHARI:
+- blind: Dependencies not yet installed (theoretical compatibility only)
+- unknown: Production behavior, performance at scale, actual installation success
+- unknown: Edge cases with specific version combinations
 
-   Gate Entry:
-   - Decisions from Phase 1
+VALIDATION CRITERIA:
+- All selected libraries have explicit versions
+- Compatibility matrix complete (Library A version X works with Library B version Y)
+- Installation commands documented for each dependency
+- Known conflicts addressed or flagged as unknowns
+```
 
-   Gate Exit:
-   - Relevant patterns documented
-   - Applicability criteria defined
-   - Anti-patterns noted
+**Context References:**
+- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
+- `.claude/memory/task-{id}-research-discovery-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
+- `.claude/memory/task-{id}-analysis-agent-memory.md` (requirements for alignment check) [OPTIONAL]
 
-   Context References:
-   - .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-   - .claude/memory/task-{id}-synthesis-agent-memory.md [IMMEDIATE PREDECESSOR - REQUIRED]
+**Context Scope:** IMMEDIATE_PREDECESSORS
 
-   Context Scope: IMMEDIATE_PREDECESSORS
-   Token Budget: 2,500-3,000 tokens
+**Token Budget:** 3,000-4,000 tokens
 
-2. synthesis-agent (SYNTHESIS)
-   Purpose: Synthesize architecture/framework from patterns and decisions
+**Optimization Note:** Phase 1 merges old Phases 1 (Research) and 2 (Evaluation and Decision). Synthesis naturally validates research completeness.
 
-   Gate Entry:
-   - Pattern research complete
+### Phase 2: Architecture Design and Validation
 
-   Gate Exit:
-   - Complete architecture/framework design
-   - Components clearly defined
-   - Integration points specified
+**Cognitive Sequence:** RESEARCH → SYNTHESIS → ANALYSIS (embedded validation)
 
-   Protocol References:
-   - .claude/protocols/agent-protocol-extended.md (if technical domain)
+**Purpose:** Research patterns, design architecture, and validate quality
 
-   Context References:
-   - .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-   - .claude/memory/task-{id}-research-discovery-memory.md [IMMEDIATE PREDECESSOR - REQUIRED]
-   - .claude/memory/task-{id}-synthesis-agent-memory.md (Phase 1) [OPTIONAL: decisions context]
+**Task Context:**
+- **Task Domain:** Inherited
+- **Quality Standards:** Domain-specific (see domain_specific_standards)
+- **Artifact Types:** Domain-specific (see domain_specific_standards)
+- **Success Criteria:** complete design, patterns applied, no critical issues, quality validated
 
-   Context Scope: IMMEDIATE_PREDECESSORS
-   Token Budget: 3,000-4,000 tokens
+**Domain-Specific Standards:**
 
-3. analysis-agent (ANALYSIS)
-   Purpose: Analyze design for quality AND perform embedded validation
+**Technical:**
+- **Quality Standards:** security-first, SOLID principles, scalable, testable
+- **Artifacts:** architecture design, component specifications, API definitions, data models
 
-   Gate Entry:
-   - Architecture/framework design complete
+**Personal:**
+- **Quality Standards:** value-aligned, realistic, measurable, flexible
+- **Artifacts:** life framework, milestone plan, support system design
 
-   Gate Exit Decision:
-   - PASS: No CRITICAL issues, acceptable quality → Phase 3
-   - FAIL: CRITICAL issues found → Loop to synthesis-agent (step 2) for redesign
+**Creative:**
+- **Quality Standards:** audience-appropriate, thematically coherent, engaging
+- **Artifacts:** creative framework, narrative structure, content outline
 
-   Validation Responsibilities (embedded):
-   - Domain-specific quality analysis (SOLID, security, values alignment, etc.)
-   - Issue categorization (CRITICAL/HIGH/MEDIUM/LOW)
-   - Architecture pattern compliance
-   - Integration point verification
+**Professional:**
+- **Quality Standards:** market-aligned, resource-constrained, scalable, measurable
+- **Artifacts:** strategic framework, operational plan, resource allocation
 
-   Context References:
-   - .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-   - .claude/memory/task-{id}-synthesis-agent-memory.md [IMMEDIATE PREDECESSOR - REQUIRED]
+**Recreational:**
+- **Quality Standards:** fun-maximizing, inclusive, feasible, flexible
+- **Artifacts:** activity framework, schedule outline, contingency plans
 
-   Context Scope: IMMEDIATE_PREDECESSORS
-   Token Budget: 3,000-3,500 tokens
+#### Agent Invocations
 
-OPTIMIZATION NOTE: Phase 2 merges old Phases 3 (Architecture Design) and 4 (Architecture Validation). Analysis validates while analyzing.
+**1. research-discovery (RESEARCH)**
 
----
+**Purpose:** Research architectural/design patterns applicable to domain
 
-PHASE 3: Implementation Planning & Foundation
+**Gate Entry:**
+- Decisions from Phase 1
 
-Cognitive Sequence: CLARIFICATION → GENERATION (combined plan + foundation)
+**Gate Exit:**
+- Relevant patterns documented
+- Applicability criteria defined
+- Anti-patterns noted
 
-Purpose: Clarify constraints and generate plan + foundation in one phase
+**Context References:**
+- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
+- `.claude/memory/task-{id}-synthesis-agent-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
 
-TASK CONTEXT:
-  task_domain: [Inherited]
-  quality_standards: (domain-specific)
-  artifact_types: ["implementation plan", "task breakdown", "project foundation/scaffold"]
-  success_criteria: ["plan actionable", "foundation complete", "ready for implementation"]
+**Context Scope:** IMMEDIATE_PREDECESSORS
 
-Domain-Specific Artifacts:
-- Technical: Project scaffold, configuration files, build setup, test infrastructure, implementation plan
-- Personal: Framework templates, tracking systems, resources, implementation plan
-- Creative: Content templates, style guides, tools setup, production plan
-- Professional: Document templates, tracking systems, frameworks, execution plan
-- Recreational: Planning documents, checklists, resources, coordination plan
+**Token Budget:** 2,500-3,000 tokens
 
-Agent Invocations:
+**2. synthesis-agent (SYNTHESIS)**
 
-1. clarification-specialist (CLARIFICATION)
-   Purpose: Clarify constraints before planning and foundation generation
+**Purpose:** Synthesize architecture/framework from patterns and decisions
 
-   Gate Entry:
-   - Validated architecture from Phase 2
+**Gate Entry:**
+- Pattern research complete
 
-   Gate Exit:
-   - All constraints explicit
-   - Deployment/operational requirements clarified
-   - Integration points defined
+**Gate Exit:**
+- Complete architecture/framework design
+- Components clearly defined
+- Integration points specified
 
-   Context References:
-   - .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-   - .claude/memory/task-{id}-synthesis-agent-memory.md (Phase 2) [REQUIRED - architecture]
+**Protocol References:**
+- `.claude/protocols/agent-protocol-extended.md` (if technical domain)
 
-   Context Scope: IMMEDIATE_PREDECESSORS
-   Token Budget: 2,500-3,000 tokens
+**Context References:**
+- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
+- `.claude/memory/task-{id}-research-discovery-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
+- `.claude/memory/task-{id}-synthesis-agent-memory.md` (Phase 1) (decisions context) [OPTIONAL]
 
-2. generation-agent (GENERATION)
-   Purpose: Generate implementation plan AND project foundation
+**Context Scope:** IMMEDIATE_PREDECESSORS
 
-   Gate Entry:
-   - Constraints clarified
+**Token Budget:** 3,000-4,000 tokens
 
-   Gate Exit Decision:
-   - PASS: Plan complete, foundation operational → Phase 4
-   - FAIL: Foundation issues → Loop to generation-agent for fixes
+**3. analysis-agent (ANALYSIS)**
 
-   Generation Responsibilities (combined):
-   - Implementation plan with milestones
-   - Project scaffold/structure
-   - Configuration and build setup
-   - Test infrastructure (if technical)
-   - Foundation validation (self-check)
+**Purpose:** Analyze design for quality AND perform embedded validation
 
-   Protocol References:
-   - .claude/protocols/agent-protocol-extended.md (if technical - TDD setup)
+**Gate Entry:**
+- Architecture/framework design complete
 
-   Context References:
-   - .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-   - .claude/memory/task-{id}-clarification-specialist-memory.md [IMMEDIATE PREDECESSOR - REQUIRED]
-   - .claude/memory/task-{id}-synthesis-agent-memory.md (Phase 2) [OPTIONAL: architecture reference]
+**Gate Exit Decision:**
+- **PASS:** No CRITICAL issues, acceptable quality → Phase 3
+- **FAIL:** CRITICAL issues found → Loop to synthesis-agent (step 2) for redesign
 
-   Context Scope: IMMEDIATE_PREDECESSORS
-   Token Budget: 3,000-4,000 tokens
+**Validation Responsibilities (Embedded):**
+- Domain-specific quality analysis (SOLID, security, values alignment, etc.)
+- Issue categorization (CRITICAL/HIGH/MEDIUM/LOW)
+- Architecture pattern compliance
+- Integration point verification
 
-OPTIMIZATION NOTE: Phase 3 merges old Phases 5 (Implementation Planning) and 6 (Foundation Generation). Generation creates both plan and foundation.
+**Context References:**
+- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
+- `.claude/memory/task-{id}-synthesis-agent-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
 
----
+**Context Scope:** IMMEDIATE_PREDECESSORS
 
-PHASE 4: Core Implementation (TDD Cycle)
+**Token Budget:** 3,000-3,500 tokens
 
-Cognitive Sequence: GENERATION (iterative with self-validation)
+**Optimization Note:** Phase 2 merges old Phases 3 (Architecture Design) and 4 (Architecture Validation). Analysis validates while analyzing.
 
-Purpose: Implement core features/content/deliverables
+### Phase 3: Implementation Planning and Foundation
 
-TASK CONTEXT:
-  task_domain: [Inherited]
-  quality_standards: (domain-specific)
-  artifact_types: (domain-specific deliverables)
-  success_criteria: (domain-specific - tests pass, milestones met, etc.)
+**Cognitive Sequence:** CLARIFICATION → GENERATION (combined plan + foundation)
 
-Agent Invocations:
+**Purpose:** Clarify constraints and generate plan + foundation in one phase
 
-1. generation-agent (GENERATION) - ITERATIVE
-   Purpose: Create core deliverables with built-in quality measures
+**Task Context:**
+- **Task Domain:** Inherited
+- **Quality Standards:** Domain-specific
+- **Artifact Types:** implementation plan, task breakdown, project foundation/scaffold
+- **Success Criteria:** plan actionable, foundation complete, ready for implementation
 
-   Gate Entry:
-   - Foundation from Phase 3
-   - Implementation plan from Phase 3
+**Domain-Specific Artifacts:**
+- **technical:** Project scaffold, configuration files, build setup, test infrastructure, implementation plan
+- **personal:** Framework templates, tracking systems, resources, implementation plan
+- **creative:** Content templates, style guides, tools setup, production plan
+- **professional:** Document templates, tracking systems, frameworks, execution plan
+- **recreational:** Planning documents, checklists, resources, coordination plan
 
-   Gate Exit Decision:
-   - PASS: All core features complete, domain quality met → Phase 5
-   - FAIL: Quality issues → Iterate within phase
+#### Agent Invocations
 
-   Self-Validation (embedded in TDD/domain process):
-   - Technical: Tests pass (validation built into RED-GREEN-REFACTOR)
-   - Personal: Milestones met, progress measurable
-   - Creative: Quality iterations complete
-   - Professional: KPIs tracked
-   - Recreational: Logistics confirmed
+**1. clarification-specialist (CLARIFICATION)**
 
-   Domain-Specific Implementation:
-   - Technical: TDD cycle (RED-GREEN-REFACTOR), secure coding, input validation
-     Quality: 80%+ test coverage, no HIGH/CRITICAL security issues
+**Purpose:** Clarify constraints before planning and foundation generation
 
-   - Personal: Action implementation, habit establishment, milestone achievement
-     Quality: Measurable progress, documented outcomes, review completed
+**Gate Entry:**
+- Validated architecture from Phase 2
 
-   - Creative: Content creation, refinement cycles, quality iterations
-     Quality: Audience-appropriate, thematically coherent, engaging
+**Gate Exit:**
+- All constraints explicit
+- Deployment/operational requirements clarified
+- Integration points defined
 
-   - Professional: Strategy execution, operational implementation, deliverable creation
-     Quality: KPI tracking, stakeholder alignment, milestone achievement
+**Context References:**
+- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
+- `.claude/memory/task-{id}-synthesis-agent-memory.md` (Phase 2) (architecture) [REQUIRED]
 
-   - Recreational: Activity preparation, resource acquisition, participant coordination
-     Quality: Logistics confirmed, safety validated, fun maximized
+**Context Scope:** IMMEDIATE_PREDECESSORS
 
-   Protocol References:
-   - .claude/protocols/agent-protocol-extended.md (if technical - TDD + Security)
+**Token Budget:** 2,500-3,000 tokens
 
-   Context References:
-   - .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-   - .claude/memory/task-{id}-generation-agent-memory.md (Phase 3) [IMMEDIATE PREDECESSOR - REQUIRED]
-   - .claude/memory/task-{id}-synthesis-agent-memory.md (Phase 2) [OPTIONAL: architecture reference]
+**2. generation-agent (GENERATION)**
 
-   Context Scope: IMMEDIATE_PREDECESSORS
-   Token Budget: 3,000-4,000 tokens
+**Purpose:** Generate implementation plan AND project foundation
 
-OPTIMIZATION NOTE: Phase 4 is UNCHANGED from old Phase 7. TDD already includes validation (tests passing = validated).
+**Gate Entry:**
+- Constraints clarified
 
----
+**Gate Exit Decision:**
+- **PASS:** Plan complete, foundation operational → Phase 4
+- **FAIL:** Foundation issues → Loop to generation-agent for fixes
 
-PHASE 5: Security Audit & Documentation
+**Generation Responsibilities (Combined):**
+- Implementation plan with milestones
+- Project scaffold/structure
+- Configuration and build setup
+- Test infrastructure (if technical)
+- Foundation validation (self-check)
 
-Cognitive Sequence: VALIDATION → GENERATION
+**Protocol References:**
+- `.claude/protocols/agent-protocol-extended.md` (if technical - TDD setup)
 
-Purpose: Comprehensive validation and documentation in final phase
+**Context Injection (Python Project Foundation Setup):**
 
-TASK CONTEXT:
-  task_domain: [Inherited]
-  quality_standards: (domain-specific security + documentation standards)
-  artifact_types: ["validation report", "comprehensive documentation", "deployment guide"]
-  success_criteria: ["security validated", "documentation complete", "deployment ready"]
+*Note: Penny injects this for Python technical projects*
 
-Agent Invocations:
+```
+Python Project Foundation Requirements (MUST complete in Phase 3):
 
-1. quality-validator (VALIDATION)
-   Purpose: Comprehensive quality and security validation
+CRITICAL: Environment setup happens NOW (Phase 3), NOT later.
 
-   Gate Entry:
-   - Core implementation from Phase 4
+STEP 1: Initialize uv Project
+- Run: uv init project_name
+- Creates: pyproject.toml, .python-version, README.md
+- Verify: pyproject.toml exists with [project] section
 
-   Gate Exit Decision:
-   - PASS: All quality gates met → Step 2 (documentation)
-   - FAIL: Critical issues → Loop to Phase 4 for remediation
+STEP 2: Create Virtual Environment
+- Run: uv venv
+- Creates: .venv/ directory
+- Verify: .venv/bin/python exists
 
-   Validation Scope (combined):
-   - Implementation quality (tests, coverage, architecture compliance)
-   - Domain-specific deep validation (security audit, sustainability, compliance, etc.)
-   - Deployment readiness check
+STEP 3: Add Base Dependencies
+- Add dependencies: uv add package_name==version
+- Example: uv add fastapi==0.104.1 uvicorn==0.24.0
+- Verify: Dependencies listed in pyproject.toml
 
-   Domain-Specific Validation:
-   - Technical: Execute tests, verify coverage, security audit (OWASP Top 10), dependency scan, performance validation
-     Criteria: All tests pass, 80%+ coverage, no HIGH/CRITICAL vulnerabilities
+STEP 4: Create Project Structure
+- Create: src/project_name/ directory
+- Create: src/project_name/__init__.py
+- Create: tests/ directory
+- Create: tests/__init__.py
+- Verify: All imports will use absolute paths (from project_name.module import Class)
 
-   - Personal: Progress review, milestone validation, sustainability check, support system validation
-     Criteria: Milestones met, values aligned, sustainable approach, support adequate
+STEP 5: Test Environment
+- Run: uv sync (install all dependencies)
+- Run: uv run python -c "import project_name; print('OK')"
+- Verify: No import errors
 
-   - Creative: Content quality review, audience testing, feedback incorporation, polish validation
-     Criteria: Quality standards met, audience fit confirmed, feedback addressed
+GATE EXIT REQUIREMENTS:
+- ✅ pyproject.toml exists and valid
+- ✅ .venv/ directory exists
+- ✅ Dependencies install: uv sync succeeds
+- ✅ Project structure created (src/project_name/)
+- ✅ NO requirements.txt file (forbidden)
+- ✅ Environment validated (test import works)
 
-   - Professional: Deliverables review, KPI validation, market validation, financial review, compliance check
-     Criteria: KPIs met, stakeholders satisfied, market viable, financially sound
+If any fail, loop back to fix before Phase 4.
+```
 
-   - Recreational: Preparations review, logistics validation, safety audit, accessibility review
-     Criteria: Logistics complete, safety confirmed, accessible, participants ready
+**Context References:**
+- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
+- `.claude/memory/task-{id}-clarification-specialist-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
+- `.claude/memory/task-{id}-synthesis-agent-memory.md` (Phase 2) (architecture reference) [OPTIONAL]
 
-   Protocol References:
-   - .claude/protocols/agent-protocol-extended.md (if technical - security checklist)
+**Context Scope:** IMMEDIATE_PREDECESSORS
 
-   Context References:
-   - .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-   - .claude/memory/task-{id}-generation-agent-memory.md (Phase 4) [IMMEDIATE PREDECESSOR - REQUIRED]
+**Token Budget:** 3,000-4,000 tokens
 
-   Context Scope: IMMEDIATE_PREDECESSORS
-   Token Budget: 3,000-3,500 tokens
+**Optimization Note:** Phase 3 merges old Phases 5 (Implementation Planning) and 6 (Foundation Generation). Generation creates both plan and foundation.
 
-2. generation-agent (GENERATION)
-   Purpose: Generate comprehensive documentation
+### Phase 4: Core Implementation (TDD Cycle)
 
-   Gate Entry:
-   - Validation passed
+**Cognitive Sequence:** GENERATION (iterative with self-validation)
 
-   Gate Exit Decision:
-   - GO: Documentation complete, all checklists satisfied → Phase 6 (completion)
-   - NO-GO: Critical gaps → Remediate (loop to appropriate phase)
+**Purpose:** Implement core features/content/deliverables
 
-   Documentation Scope:
-   - Domain-specific documentation suite
-   - Deployment/handoff guide
-   - Sustainability/maintenance plan
+**Task Context:**
+- **Task Domain:** Inherited
+- **Quality Standards:** Domain-specific
+- **Artifact Types:** Domain-specific deliverables
+- **Success Criteria:** Domain-specific - tests pass, milestones met, etc.
 
-   Domain-Specific Documentation:
-   - Technical: README, API docs, architecture docs, deployment guide, runbook
-   - Personal: Progress documentation, resource guide, sustainability plan, review schedule
-   - Creative: Style guide, production notes, distribution plan, future iteration guide
-   - Professional: Strategy document, operational guide, KPI dashboard, stakeholder brief
-   - Recreational: Event guide, participant instructions, logistics document, contingency plans
+#### Agent Invocations
 
-   Context References:
-   - .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-   - .claude/memory/task-{id}-generation-agent-memory.md (Phase 4) [REQUIRED - implementation]
-   - .claude/memory/task-{id}-quality-validator-memory.md [IMMEDIATE PREDECESSOR - REQUIRED]
+**1. generation-agent (GENERATION) - ITERATIVE MODE**
 
-   Context Scope: IMMEDIATE_PREDECESSORS
-   Token Budget: 3,000-3,500 tokens
+**Purpose:** Create core deliverables with built-in quality measures
 
-OPTIMIZATION NOTE: Phase 5 merges old Phases 8 (Quality Validation) and 9 (Documentation). Single comprehensive validation before docs.
+**Gate Entry:**
+- Foundation from Phase 3
+- Implementation plan from Phase 3
 
----
+**Gate Exit Decision:**
+- **PASS:** System works end-to-end (see criteria below) → Phase 5
+- **FAIL:** Quality issues or system not functional → Iterate within phase
 
-PHASE 6: Workflow Completion
+**End-to-End Validation Criteria (Python Projects):**
+- ✅ Dependencies install: uv sync succeeds without errors
+- ✅ Imports resolve: No ModuleNotFoundError when running code
+- ✅ Tests pass: uv run pytest executes successfully
+- ✅ Application starts: uv run python -m project_name runs without errors
+- ✅ No relative imports: Code uses absolute imports only
 
-Purpose: Finalize deliverables and complete workflow
+**Generic Criteria (All Domains):**
+- Core features implemented and functional
+- Domain-specific quality standards met
+- Self-validation passed (TDD for technical, milestones for personal, etc.)
 
-TASK CONTEXT:
-  No agents invoked - workflow orchestration handles completion
+**Self-Validation (Embedded):**
+- **technical:** Tests pass (validation built into RED-GREEN-REFACTOR)
+- **personal:** Milestones met, progress measurable
+- **creative:** Quality iterations complete
+- **professional:** KPIs tracked
+- **recreational:** Logistics confirmed
 
-Actions:
-1. Aggregate all phase outputs into final project package
-2. Review Unknown Registry for critical unresolved items
-3. Generate project completion summary
-4. Present complete deliverables to user
-5. Signal workflow completion
+**Domain-Specific Implementation:**
 
-Final Deliverable Structure (Domain-Specific):
-- Technical: Working code + comprehensive tests + documentation + deployment guide
-- Personal: Implemented framework + progress documentation + sustainability plan + review system
-- Creative: Finished content + style guide + production notes + distribution plan
-- Professional: Executed strategy + operational docs + KPI tracking + stakeholder reports
-- Recreational: Event ready + participant materials + logistics confirmed + contingency plans
+**Technical:**
+- **Process:** TDD cycle (RED-GREEN-REFACTOR), secure coding, input validation
+- **Quality:** 80%+ test coverage, no HIGH/CRITICAL security issues
 
-Completion Criteria:
+**Personal:**
+- **Process:** Action implementation, habit establishment, milestone achievement
+- **Quality:** Measurable progress, documented outcomes, review completed
+
+**Creative:**
+- **Process:** Content creation, refinement cycles, quality iterations
+- **Quality:** Audience-appropriate, thematically coherent, engaging
+
+**Professional:**
+- **Process:** Strategy execution, operational implementation, deliverable creation
+- **Quality:** KPI tracking, stakeholder alignment, milestone achievement
+
+**Recreational:**
+- **Process:** Activity preparation, resource acquisition, participant coordination
+- **Quality:** Logistics confirmed, safety validated, fun maximized
+
+**Protocol References:**
+- `.claude/protocols/agent-protocol-extended.md` (if technical - TDD + Security)
+
+**Context Injection (Python Project Implementation):**
+
+*Note: Penny injects this for Python technical projects*
+
+```
+Python Project Mandatory Requirements (from agent-protocol-extended.md Section 4.3):
+
+IMPORT PATHS:
+- ✅ ALWAYS use absolute imports: from project_name.module import Class
+- ❌ NEVER use relative imports: from module import Class
+- ❌ NEVER use relative imports: from .module import Class
+
+Example:
+# ❌ WRONG:
+from database import Base
+from models import User
+
+# ✅ CORRECT:
+from backend.database import Base
+from backend.models import User
+
+PACKAGE MANAGEMENT:
+- ✅ ALWAYS use uv package manager: uv add, uv run, uv sync
+- ❌ NEVER use pip directly: pip install
+- ✅ Create pyproject.toml (NOT requirements.txt)
+- ✅ Use uv venv for virtual environment
+
+PROJECT STRUCTURE:
+- Root must contain: pyproject.toml, .venv/, src/project_name/
+- All code in src/project_name/ directory
+- All imports reference project name: from project_name.module import Class
+
+COMMANDS:
+- Install deps: uv sync
+- Add dependency: uv add package_name
+- Run tests: uv run pytest
+- Run app: uv run python -m project_name
+
+See agent-protocol-extended.md Lines 308-430 for complete requirements.
+```
+
+**Context References:**
+- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
+- `.claude/memory/task-{id}-generation-agent-memory.md` (Phase 3) [IMMEDIATE_PREDECESSOR_REQUIRED]
+- `.claude/memory/task-{id}-synthesis-agent-memory.md` (Phase 2) (architecture reference) [OPTIONAL]
+
+**Context Scope:** IMMEDIATE_PREDECESSORS
+
+**Token Budget:** 3,000-4,000 tokens
+
+**Optimization Note:** Phase 4 is UNCHANGED from old Phase 7. TDD already includes validation (tests passing = validated).
+
+### Phase 5: Security Audit and Documentation
+
+**Cognitive Sequence:** VALIDATION → GENERATION
+
+**Purpose:** Comprehensive validation and documentation in final phase
+
+**Task Context:**
+- **Task Domain:** Inherited
+- **Quality Standards:** Domain-specific security + documentation standards
+- **Artifact Types:** validation report, comprehensive documentation, deployment guide
+- **Success Criteria:** security validated, documentation complete, deployment ready
+
+#### Agent Invocations
+
+**1. quality-validator (VALIDATION)**
+
+**Purpose:** Comprehensive quality and security validation
+
+**Gate Entry:**
+- Core implementation from Phase 4
+
+**Gate Exit Decision:**
+- **PASS:** All quality gates met → Step 2 (documentation)
+- **FAIL:** Critical issues → Loop to Phase 4 for remediation
+
+**Validation Scope (Combined):**
+- Implementation quality (tests, coverage, architecture compliance)
+- Domain-specific deep validation (security audit, sustainability, compliance, etc.)
+- Deployment readiness check
+
+**Domain-Specific Validation:**
+
+**Technical:**
+- **Validation:** Execute tests, verify coverage, security audit (OWASP Top 10), dependency scan, performance validation
+- **Criteria:** All tests pass, 80%+ coverage, no HIGH/CRITICAL vulnerabilities
+
+**Personal:**
+- **Validation:** Progress review, milestone validation, sustainability check, support system validation
+- **Criteria:** Milestones met, values aligned, sustainable approach, support adequate
+
+**Creative:**
+- **Validation:** Content quality review, audience testing, feedback incorporation, polish validation
+- **Criteria:** Quality standards met, audience fit confirmed, feedback addressed
+
+**Professional:**
+- **Validation:** Deliverables review, KPI validation, market validation, financial review, compliance check
+- **Criteria:** KPIs met, stakeholders satisfied, market viable, financially sound
+
+**Recreational:**
+- **Validation:** Preparations review, logistics validation, safety audit, accessibility review
+- **Criteria:** Logistics complete, safety confirmed, accessible, participants ready
+
+**Protocol References:**
+- `.claude/protocols/agent-protocol-extended.md` (if technical - security checklist)
+
+**Context Injection (Python Project Validation):**
+
+*Note: Penny injects this for Python technical projects*
+
+```
+Python Project Validation Checklist:
+
+IMPORT VALIDATION:
+- [ ] All imports are absolute (grep for: ^from [a-z_]+ import)
+- [ ] No relative imports exist (grep for: ^from \. import or from \.module)
+- [ ] Project name used in all imports (from project_name.* pattern)
+
+PACKAGE MANAGEMENT VALIDATION:
+- [ ] pyproject.toml exists with [project] section
+- [ ] .venv/ directory exists (virtual environment setup)
+- [ ] NO requirements.txt file exists (pip-based - forbidden)
+- [ ] Dependencies install cleanly: run `uv sync --dry-run`
+- [ ] No dependency version conflicts in uv output
+
+INSTALLATION VALIDATION:
+- [ ] Virtual environment activates: .venv/bin/python exists
+- [ ] Tests run successfully: `uv run pytest` command works
+- [ ] Application starts: `uv run python -m project_name` works
+- [ ] All imports resolve (no ModuleNotFoundError)
+
+RUNTIME VALIDATION:
+- [ ] Tests execute: uv run pytest (all tests pass)
+- [ ] Coverage adequate: 80%+ test coverage
+- [ ] Security scan: no HIGH/CRITICAL vulnerabilities
+- [ ] Application functional end-to-end
+
+FAILURE CRITERIA (must loop back to Phase 4 if any found):
+- Relative imports detected
+- requirements.txt exists
+- uv sync fails
+- Imports don't resolve
+- Tests fail or cannot run
+- Application doesn't start
+
+CRITICAL: Validation must execute commands in actual working environment.
+- Run actual: uv sync (not theoretical check)
+- Run actual: uv run pytest (not just verify tests exist)
+- Run actual: uv run python -m project_name (test application starts)
+- Validation is NOT hypothetical - it must prove system works.
+```
+
+**Context References:**
+- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
+- `.claude/memory/task-{id}-generation-agent-memory.md` (Phase 4) [IMMEDIATE_PREDECESSOR_REQUIRED]
+
+**Context Scope:** IMMEDIATE_PREDECESSORS
+
+**Token Budget:** 3,000-3,500 tokens
+
+**2. generation-agent (GENERATION)**
+
+**Purpose:** Generate comprehensive documentation
+
+**Gate Entry:**
+- Validation passed
+
+**Gate Exit Decision:**
+- **GO:** Documentation complete, all checklists satisfied → Phase 6 (completion)
+- **NO GO:** Critical gaps → Remediate (loop to appropriate phase)
+
+**Documentation Scope:**
+- Domain-specific documentation suite
+- Deployment/handoff guide
+- Sustainability/maintenance plan
+
+**Domain-Specific Documentation:**
+- **technical:** README, API docs, architecture docs, deployment guide, runbook
+- **personal:** Progress documentation, resource guide, sustainability plan, review schedule
+- **creative:** Style guide, production notes, distribution plan, future iteration guide
+- **professional:** Strategy document, operational guide, KPI dashboard, stakeholder brief
+- **recreational:** Event guide, participant instructions, logistics document, contingency plans
+
+**Context References:**
+- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
+- `.claude/memory/task-{id}-generation-agent-memory.md` (Phase 4) (implementation) [REQUIRED]
+- `.claude/memory/task-{id}-quality-validator-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
+
+**Context Scope:** IMMEDIATE_PREDECESSORS
+
+**Token Budget:** 3,000-3,500 tokens
+
+**Optimization Note:** Phase 5 merges old Phases 8 (Quality Validation) and 9 (Documentation). Single comprehensive validation before docs.
+
+### Phase 6: Workflow Completion
+
+**Purpose:** Finalize deliverables and complete workflow
+
+**Task Context:** No agents invoked - workflow orchestration handles completion
+
+**Actions:**
+- Aggregate all phase outputs into final project package
+- Review Unknown Registry for critical unresolved items
+- Generate project completion summary
+- Present complete deliverables to user
+- Signal workflow completion
+
+**Final Deliverable Structure:**
+- **technical:** Working code + comprehensive tests + documentation + deployment guide
+- **personal:** Implemented framework + progress documentation + sustainability plan + review system
+- **creative:** Finished content + style guide + production notes + distribution plan
+- **professional:** Executed strategy + operational docs + KPI tracking + stakeholder reports
+- **recreational:** Event ready + participant materials + logistics confirmed + contingency plans
+
+**Completion Criteria:**
 - All phases completed successfully
 - All gate validations passed
 - Critical unknowns resolved
 - Deliverables complete per domain requirements
 - User acceptance obtained
 
-OPTIMIZATION NOTE: Phase 6 is UNCHANGED from old Phase 10. No agent invocations.
+**Optimization Note:** Phase 6 is UNCHANGED from old Phase 10. No agent invocations.
 
----
+## Dependencies
 
-DEPENDENCIES & REQUIREMENTS
+### Required Skills
 
-REQUIRED SKILLS: None (standalone skill)
+None (standalone skill)
 
-REQUIRED PROTOCOLS:
-- .claude/protocols/agent-protocol-core.md (all agents - scoped context loading, token limits)
-- .claude/protocols/agent-protocol-extended.md (technical domain code generation - TDD + Security)
+### Required Protocols
 
-REQUIRED REFERENCES:
-- .claude/references/agent-registry.md (agent descriptions and capabilities)
-- .claude/references/johari.md (context structure, type definitions, format, compression)
-- .claude/references/context-inheritance.md (context-passing examples)
+- `.claude/protocols/agent-protocol-core.md` (all agents - scoped context loading, token limits)
+- `.claude/protocols/agent-protocol-extended.md` (technical domain code generation - TDD + Security)
 
-REQUIRED AGENTS (6):
+### Required References
+
+- `.claude/references/agent-registry.md` (agent descriptions and capabilities)
+- `.claude/references/johari.md` (context structure, type definitions, format, compression)
+- `.claude/references/context-inheritance.md` (context-passing examples)
+
+### Required Agents (Count: 6)
+
 - clarification-specialist (CLARIFICATION function)
 - research-discovery (RESEARCH function)
 - analysis-agent (ANALYSIS function)
@@ -567,15 +816,15 @@ REQUIRED AGENTS (6):
 - generation-agent (GENERATION function)
 - quality-validator (VALIDATION function)
 
----
+## State Management
 
-STATE MANAGEMENT
+### Workflow Metadata
 
-WORKFLOW METADATA:
-Location: .claude/memory/task-{id}-memory.md
-Format: See .claude/references/johari.md for WorkflowMetadata schema
+**Location:** `.claude/memory/task-{id}-memory.md`
 
-Required Fields:
+**Format:** See `.claude/references/johari.md` for WorkflowMetadata schema
+
+**Required Fields:**
 - task_id: Unique identifier (task-{project-name})
 - workflow_type: "develop-project"
 - task_domain: technical|personal|creative|professional|recreational|hybrid
@@ -588,11 +837,13 @@ Required Fields:
 - critical_constraints: Project-specific limitations
 - success_criteria: Measurable success indicators
 
-UNKNOWN REGISTRY:
-Location: Within workflow metadata file
-Format: See .claude/references/johari.md for Unknown schema
+### Unknown Registry
 
-Required Fields per Unknown:
+**Location:** Within workflow metadata file
+
+**Format:** See `.claude/references/johari.md` for Unknown schema
+
+**Required Fields Per Unknown:**
 - id: U{number}
 - phase: Phase where unknown identified
 - category: Unknown category from taxonomy
@@ -602,79 +853,80 @@ Required Fields per Unknown:
 - status: Unresolved|In Progress|Resolved|Deferred
 - resolution: How it was resolved (when resolved)
 
-AGENT OUTPUTS:
-Location: .claude/memory/task-{id}-{agent-name}-memory.md
-Format: Johari Window (see .claude/references/johari.md)
+### Agent Outputs
 
-Structure:
+**Location:** `.claude/memory/task-{id}-{agent-name}-memory.md`
+
+**Format:** Johari Window (see `.claude/references/johari.md`)
+
+**Structure:**
 - open: Confirmed knowledge shared by all
 - hidden: Non-obvious insights discovered
 - blind: Limitations and gaps
 - unknown: Areas requiring other cognitive functions
 - domain_insights: Domain-specific discoveries
 
-TOKEN BUDGET (per agent output):
-- Johari Summary: 1,200 tokens maximum (strictly enforced)
-- Step Overview: 500 words maximum (~750 tokens)
-- Downstream Directives: 300 tokens maximum
-- TOTAL per agent: 2,500-3,000 tokens target, 300-400 lines
+### Token Budget
 
----
+- **Johari summary:** 1,200 tokens maximum (strictly enforced)
+- **Step overview:** 500 words maximum (~750 tokens)
+- **Downstream directives:** 300 tokens maximum
+- **Total per agent:** 2,500-3,000 tokens target, 300-400 lines
 
-PERFORMANCE CONSIDERATIONS
+## Performance Considerations
 
-TOKEN BUDGET:
-- Workflow metadata: ~500 tokens
-- Agent outputs (Johari format, compressed): ~300-400 lines each (1,200 token Johari max)
-- Total estimated: 3,000-5,000 tokens for complete workflow
+### Token Budget
 
-CONTEXT COMPRESSION:
+- **Workflow metadata:** ~500 tokens
+- **Agent outputs:** ~300-400 lines each (1,200 token Johari max)
+- **Total estimated:** 3,000-5,000 tokens for complete workflow
+
+### Context Compression
+
 - Scoped context loading: Agents read immediate predecessors only (not all previous outputs)
 - Johari Window format with strict token limits
 - Reference previous findings without repetition
 - Domain insights extracted separately
 - Unknown Registry tracks gaps systematically
 
-REMEDIATION EFFICIENCY:
+### Remediation Efficiency
+
 - Embedded validation prevents cascading errors
 - Targeted loops to specific agents reduce rework
 - Sequential agent execution maintains clarity
 - Exit criteria clearly defined
 
----
+## Usage Examples
 
-USAGE EXAMPLES
+### Example 1: Technical Project - OAuth2 Authentication System
 
-EXAMPLE 1: Technical Project - OAuth2 Authentication System
+**Domain:** technical
 
-Domain: technical
-Target: Node.js API with JWT tokens
+**Target:** Node.js API with JWT tokens
 
-Cognitive Flow:
-- Phase 0: Clarify OAuth2 provider, security requirements → Analyze dependencies, validate SMART requirements (2 agents)
-- Phase 1: Research OAuth2 libraries → Synthesize technology stack decision (2 agents)
-- Phase 2: Research security patterns → Synthesize secure architecture → Analyze quality (3 agents)
-- Phase 3: Clarify deployment constraints → Generate TDD plan + project scaffold (2 agents)
-- Phase 4: Implement OAuth2 flow using TDD (tests first, then code) (1 agent, iterative)
-- Phase 5: Validate tests pass + security audit → Generate API docs and deployment guide (2 agents)
-- Phase 6: Deliver working OAuth2 system with tests and docs
+**Cognitive Flow:**
+- **Phase 0:** Clarify OAuth2 provider, security requirements → Analyze dependencies, validate SMART requirements (2 agents)
+- **Phase 1:** Research OAuth2 libraries → Synthesize technology stack decision (2 agents)
+- **Phase 2:** Research security patterns → Synthesize secure architecture → Analyze quality (3 agents)
+- **Phase 3:** Clarify deployment constraints → Generate TDD plan + project scaffold (2 agents)
+- **Phase 4:** Implement OAuth2 flow using TDD (tests first, then code) (1 agent, iterative)
+- **Phase 5:** Validate tests pass + security audit → Generate API docs and deployment guide (2 agents)
+- **Phase 6:** Deliver working OAuth2 system with tests and docs
 
-EXAMPLE 2: Personal Project - Career Transition Planning
+### Example 2: Personal Project - Career Transition Planning
 
-Domain: personal
+**Domain:** personal
 
-Cognitive Flow:
-- Phase 0: Clarify career goals, values, constraints → Analyze current situation, validate completeness (2 agents)
-- Phase 1: Research target roles, market trends → Synthesize optimal career path (2 agents)
-- Phase 2: Research transition frameworks → Synthesize personalized strategy → Analyze feasibility (3 agents)
-- Phase 3: Clarify timeline/resources → Generate action plan + tracking templates (2 agents)
-- Phase 4: Implement initial actions (skill building, networking, applications) (1 agent)
-- Phase 5: Validate progress against milestones → Generate sustainability guide (2 agents)
-- Phase 6: Deliver complete career transition plan with tracking system
+**Cognitive Flow:**
+- **Phase 0:** Clarify career goals, values, constraints → Analyze current situation, validate completeness (2 agents)
+- **Phase 1:** Research target roles, market trends → Synthesize optimal career path (2 agents)
+- **Phase 2:** Research transition frameworks → Synthesize personalized strategy → Analyze feasibility (3 agents)
+- **Phase 3:** Clarify timeline/resources → Generate action plan + tracking templates (2 agents)
+- **Phase 4:** Implement initial actions (skill building, networking, applications) (1 agent)
+- **Phase 5:** Validate progress against milestones → Generate sustainability guide (2 agents)
+- **Phase 6:** Deliver complete career transition plan with tracking system
 
----
-
-REMEMBER
+## Remember
 
 This skill transforms ideas into reality through systematic cognitive processing. Every phase builds on the last, embedded validation ensures quality, every agent performs its cognitive function excellently across ANY domain.
 
