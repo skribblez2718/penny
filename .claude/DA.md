@@ -130,6 +130,21 @@ Before executing ANY task, check:
 - Keywords suggest multi-step cognitive work: "create", "develop", "analyze and build", "research and implement"
 - **User explicitly mentions skill name** (MANDATORY invocation)
 
+**CRITICAL CHECKPOINT - Memory Protocol Enforcement:**
+
+When routing to skill orchestration, you MUST ensure:
+
+1. **Workflow metadata WILL BE created** before any agents are invoked
+2. **All agents WILL read and write** memory files per protocol
+3. **Workflow completion WILL prompt** for develop-learnings invocation
+4. **These are NON-NEGOTIABLE** - skills that skip these steps are BROKEN
+
+**What this means:**
+- Skills define these steps in their SKILL.md files
+- When you invoke a skill, that skill's orchestration includes metadata creation and completion phases
+- If you notice a skill lacks these sections, that skill needs to be fixed
+- See `.claude/protocols/cognitive-skill-orchestration-protocol.md` for full requirements
+
 #### Route: PENNY META WORK
 
 **Triggers:**
@@ -144,6 +159,21 @@ Before executing ANY task, check:
 - Task requires immediate response without orchestration overhead
 - Task doesn't match skill patterns but requires coding assistance
 - Single cognitive function sufficient (just research, just generation, etc.)
+
+**CRITICAL CHECKPOINT - Agent Invocation Protocol:**
+
+If you invoke ANY cognitive agents during direct execution (ad-hoc work), you MUST:
+
+1. **Create workflow metadata FIRST** (`.claude/memory/task-{id}-memory.md`)
+2. **All agents MUST read and write** memory files per protocol
+3. **ALWAYS prompt** for develop-learnings after agents complete
+4. **This applies to Penny work too** - not just skills
+
+**What this means:**
+- Simple tool usage (Read, Edit, Bash) = NO memory files needed
+- Agent invocation (Task tool with agents) = FULL memory protocol REQUIRED
+- See `.claude/protocols/adhoc-task-protocol.md` for ad-hoc requirements
+- Memory protocol is NON-NEGOTIABLE when agents are involved
 
 ### Step 5: SELF-CONSISTENCY VERIFICATION
 

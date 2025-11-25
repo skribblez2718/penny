@@ -16,13 +16,14 @@ science/
 # Ignore reports directory contents (generated reports)
 .claude/reports/*
 
-# Ignore learnings directory contents
-.claude/learnings/*
+# Ignore learnings directory contents (including all subdirectories)
+.claude/learnings/**/*
 
 # Keep directory structure by not ignoring .gitkeep files
 !.claude/memory/.gitkeep
 !.claude/plans/.gitkeep
 !.claude/reports/.gitkeep
+!.claude/learnings/**/.gitkeep
 
 # Node.js dependencies (if applicable)
 node_modules/

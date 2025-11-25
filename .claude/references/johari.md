@@ -16,6 +16,20 @@
 | Phase Overviews | Markdown | Narrative compression, token efficiency, human readability |
 | Johari Quadrants | JSON wrapper + Markdown strings | Programmatic extraction + narrative expressiveness, reduced hallucination (21% → 7.5%) |
 
+## Format Requirements (CRITICAL)
+
+**✅ CORRECT Format:**
+- Markdown document structure
+- JSON in code blocks (```json ... ```)
+- Markdown headings (## Section Name)
+
+**❌ INCORRECT Format (DO NOT USE):**
+- XML wrapper tags (`<agent_output>`, `<metadata>`, `<johari_summary>`, etc.)
+- XML attributes (`max_tokens="750"`)
+- Nested XML structure
+
+**Why:** XML format is not specified in the protocol and breaks automated parsing. Always use Markdown + JSON code blocks as shown in the Format Decision Matrix above.
+
 ## Token Limits
 
 ### Strict Limits

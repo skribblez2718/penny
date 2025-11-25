@@ -1,129 +1,242 @@
 ---
 name: [skill-name]
-description: [comprehensive description]
-tags: [relevant, tags, here]
+description: [Comprehensive description of what this skill accomplishes]
+tags: [tag1, tag2, tag3]
 ---
 
-# [SKILL NAME]
+# [skill-name]
+
+**Description:** [Comprehensive description]
+
+**Status:** draft
+
+**Complexity:** complex
 
 ## Overview
 
-[Comprehensive description of the skill's purpose and capabilities]
+[Describe the skill's purpose, when to use it, and what it accomplishes. Complex skills involve multiple phases with distinct cognitive functions and gate criteria between phases.]
 
-## Architecture
+## Key Features
 
-### Workflow Diagram
+- [Feature 1 - Major capability]
+- [Feature 2 - Major capability]
+- [Feature 3 - Major capability]
+
+## Usage
+
+**When to use:**
+- [Use case 1]
+- [Use case 2]
+- [Use case 3]
+
+**Task Domain:** [technical | personal | creative | professional | recreational | hybrid]
+
+## Workflow Overview
 
 ```
-[ASCII or text-based workflow diagram showing orchestration flow]
+Phase 0: [PHASE NAME]
+  ├─ Agent: [agent-name] ([COGNITIVE_FUNCTION])
+  └─ Gate: [Exit criteria]
+      ↓
+Phase 1: [PHASE NAME]
+  ├─ Agent: [agent-name] ([COGNITIVE_FUNCTION])
+  └─ Gate: [Exit criteria]
+      ↓
+Phase 2: [PHASE NAME]
+  ├─ Agent: [agent-name] ([COGNITIVE_FUNCTION])
+  ├─ Agent: [agent-name] ([COGNITIVE_FUNCTION])
+  └─ Gate: [Exit criteria]
+      ↓
+[Continue for all phases...]
 ```
 
-## Agent Orchestration
+---
 
-### Agent 1: [NAME]
+## AGENT ORCHESTRATION
 
-**Purpose:** [Detailed purpose - WHAT this agent accomplishes in the workflow]
+### PHASE 0: [PHASE NAME]
 
-**Trigger:** [What initiates this agent]
+**Agent:** [agent-name] ([COGNITIVE_FUNCTION])
+
+**Purpose:** [What this phase accomplishes in the overall workflow]
+
+**Trigger:** [When this skill is invoked / what initiates this phase]
 
 **Instructions:**
+1. [Step 1 - What the agent should do]
+2. [Step 2 - Specific tasks to perform]
+3. [Step 3 - Analysis/generation/validation requirements]
+4. [Step 4 - Domain-specific guidance if needed]
+5. [Step 5 - Output requirements]
 
-[Detailed agent instructions defining WHAT tasks to perform, not HOW to perform them]
+**Context Loading:** WORKFLOW_ONLY (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor:** None (first agent)
+
+**Additional Resources:**
+- `.claude/[path]/[resource].md` [REQUIRED | OPTIONAL]
+
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-[agent-name]-memory.md`
+- Format: Johari Window (open, hidden, blind, unknown)
+- Token Limit: 1200 tokens for Johari section
 
 **Output Format:**
+```markdown
+# [Output Title]
 
-[Expected output structure]
-
-**Handoff Protocol:**
-
-[How to pass control to next agent]
-
-### Agent 2: [NAME]
-
-[Repeat structure for all agents]
-
-## State Management
-
-### Persistent State
-
-```json
-{
-  "workflow_id": "[unique_id]",
-  "current_phase": "[phase_name]",
-  "collected_data": {},
-  "decisions_made": [],
-  "agents_completed": []
-}
+## [Section 1]
+[Expected content structure]
 ```
 
-### State Transitions
+**Gate Exit Criteria:**
+- [Criterion 1 - Must be met to proceed]
+- [Criterion 2 - Quality standard required]
+- [Criterion 3 - Blocking issues identified]
 
-[Define how state changes between agents]
+---
 
-## Decision Trees
+### PHASE 1: [PHASE NAME]
 
-### Decision Point 1: [NAME]
+**Agent:** [agent-name] ([COGNITIVE_FUNCTION])
 
+**Purpose:** [What this phase accomplishes]
+
+**Trigger:** Phase 0 gate passed
+
+**Instructions:**
+1. [Phase-specific instructions]
+2. [What to research/analyze/synthesize]
+3. [How to use predecessor context]
+4. [What decisions to make]
+5. [Output requirements]
+
+**Context Loading:** IMMEDIATE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor:** [previous-agent-name]
+
+**Additional Resources:**
+- `.claude/[path]/[resource].md` [REQUIRED | OPTIONAL]
+
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+- `.claude/protocols/agent-protocol-extended.md` [IF technical code generation]
+
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-[agent-name]-memory.md`
+- Format: Johari Window (open, hidden, blind, unknown)
+- Token Limit: 1200 tokens for Johari section
+
+**Output Format:**
+```markdown
+# [Output Title]
+
+## [Section 1]
+[Expected content structure]
 ```
-IF [condition]
-  THEN → Agent [X]
-ELSE IF [condition]
-  THEN → Agent [Y]
-ELSE
-  THEN → Agent [Z]
+
+**Gate Exit Criteria:**
+- [Criterion 1]
+- [Criterion 2]
+- [Criterion 3]
+
+---
+
+### PHASE 2: [PHASE NAME]
+
+**Agent:** [agent-name] ([COGNITIVE_FUNCTION])
+
+**Purpose:** [What this phase accomplishes]
+
+**Trigger:** Phase 1 gate passed
+
+**Instructions:**
+1. [Phase-specific instructions]
+2. [Synthesis/integration requirements]
+3. [How to combine multiple predecessor outputs]
+4. [What to generate/validate]
+5. [Output requirements]
+
+**Context Loading:** MULTIPLE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessors:** [agent-1], [agent-2], [agent-3]
+
+**Additional Resources:**
+- `.claude/[path]/[resource].md` [REQUIRED | OPTIONAL]
+
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+- `.claude/protocols/agent-protocol-extended.md` [IF technical code generation]
+
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-[agent-name]-memory.md`
+- Format: Johari Window (open, hidden, blind, unknown)
+- Token Limit: 1200 tokens for Johari section
+
+**Output Format:**
+```markdown
+# [Output Title]
+
+## [Section 1]
+[Expected content structure]
 ```
+
+**Gate Exit Criteria:**
+- [Criterion 1]
+- [Criterion 2]
+- [Criterion 3]
+
+---
+
+[Continue with additional phases...]
+
+---
+
+## Quality Standards
+
+**Domain-Specific Standards:**
+- [Standard 1 - For technical domain]
+- [Standard 2 - For personal domain]
+- [Standard 3 - General standards]
+
+**Success Metrics:**
+- [Metric 1 - Measurable outcome]
+- [Metric 2 - Quality indicator]
+- [Metric 3 - Completion criteria]
 
 ## Error Handling
 
-### Error Recovery Matrix
+**Common Issues:**
+- **[Issue 1]:** [How to detect and handle]
+- **[Issue 2]:** [How to detect and handle]
+- **[Issue 3]:** [How to detect and handle]
 
-| Error Type | Detection | Recovery Strategy | Fallback |
-|-----------|-----------|------------------|----------|
-| [Type 1] | [Method] | [Strategy] | [Action] |
-| [Type 2] | [Method] | [Strategy] | [Action] |
+**Recovery Strategies:**
+- If Phase X fails → [Fallback action]
+- If Agent Y blocks → [Resolution path]
+- If validation fails → [Remediation loop]
 
-## Usage Examples
+## Related Documentation
 
-### Scenario 1: [COMMON USE CASE]
+- `.claude/references/[relevant-reference].md` - [What it provides]
+- `.claude/protocols/[relevant-protocol].md` - [What it defines]
+- `.claude/skills/[related-skill]/SKILL.md` - [How it relates]
 
-**User:** [Request]
+## Notes
 
-**Penny:** Initiating complex skill [name]
+[Any additional implementation notes, edge cases, or special considerations for complex workflows]
 
-**Agent 1:** [Action]
+## Validation Checklist
 
-**Agent 2:** [Action]
+Before considering skill complete, verify:
 
-**Result:** [Outcome]
-
-### Scenario 2: [EDGE CASE]
-
-[Example with error handling]
-
-## Performance Considerations
-
-- Expected execution time: [estimate]
-- Context window usage: [percentage per agent]
-- Optimal agent parallelization opportunities
-
-## Dependencies
-
-### Required Skills
-
-- **[Skill 1]:** [Why needed]
-- **[Skill 2]:** [Why needed]
-
-### Required Resources
-
-- **[Resource 1]:** [Purpose]
-- **[Resource 2]:** [Purpose]
-
-## Testing Protocol
-
-1. **[Test case 1]:** [Expected behavior]
-2. **[Test case 2]:** [Expected behavior]
-3. **[Edge case test]:** [Expected behavior]
-
-## Maintenance Notes
-
-[Guidelines for updating this skill]
+- [ ] Defines cognitive sequences (which agents, what order)
+- [ ] All sequences are sequential (no parallel agent calls)
+- [ ] Includes domain classification approach
+- [ ] Specifies context loading pattern for each agent
+- [ ] References documentation instead of duplicating
+- [ ] Zero implementation details (100% orchestration)
+- [ ] Gate criteria defined for each phase
+- [ ] Memory output specified for each agent
+- [ ] Follows zero redundancy principle
+- [ ] Protocol references included for each agent

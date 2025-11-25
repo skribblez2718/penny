@@ -38,6 +38,18 @@ This schema defines the structure for all learning entries across cognitive func
   - Enables targeted lookup in domain-snippets
   - Use existing tag vocabulary when possible
 
+- **integration_status:** Tracks whether learning was integrated into skills/protocols (added during Phase 2.5)
+  - Values: `standalone`, `integrated`, `pending_integration`
+  - Default: `standalone`
+  - Set to `integrated` after Phase 5.5 applies integration
+  - Example: `integration_status: "integrated"`
+
+- **integrated_into:** List of files and locations where this learning was integrated (added during Phase 5.5)
+  - Format: `["{file-path}:{section}:{subsection}", ...]`
+  - Only present if integration_status = "integrated"
+  - Allows tracing learning to skill rules
+  - Example: `integrated_into: [".claude/skills/develop-project/SKILL.md:Phase2:Step3b"]`
+
 ### Body Fields
 
 **Required:**
@@ -83,7 +95,7 @@ This schema defines the structure for all learning entries across cognitive func
 
 **Use when:** Captured a repeatable decision pattern or approach
 
-**Example:**
+**Example (without integration):**
 ```markdown
 ### R-H-007: Prefer primary sources for security guidance
 
@@ -94,6 +106,22 @@ This schema defines the structure for all learning entries across cognitive func
 - Principle: Always prioritize primary sources (official docs, standards bodies) over blogs when making security decisions.
 - Rationale: Secondary sources often omit edge cases or are outdated; primary docs define normative behavior.
 - Failure mode: Increased risk of insecure defaults or misconfiguration if relying on outdated advice.
+```
+
+**Example (with integration metadata):**
+```markdown
+### G-H-001: Use absolute imports only in Python projects
+
+- Source tasks: [task-mcp-1764008090]
+- Origin unknowns: []
+- Domain tags: [python, imports]
+- Integration status: integrated
+- Integrated into: [".claude/skills/develop-mcp-server/SKILL.md:Phase4:Step3"]
+- Situation: When generating Python code for any project structure.
+- Principle: Always use absolute imports starting from the package root (from src.module), never relative imports.
+- Rationale: Eliminates import path ambiguity, prevents ImportError in various execution contexts, enables proper pytest execution.
+- Example: Use `from src.config import Config` not `from .config import Config`
+- Failure mode: ImportError when running scripts directly, pytest collection failures, import errors in different contexts.
 ```
 
 ### Anti-Pattern

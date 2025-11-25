@@ -90,13 +90,48 @@ All skills MUST define how context flows between agents:
 
 **Example:**
 ```
-Context References:
-- .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-- .claude/memory/task-{id}-{predecessor}-memory.md [IMMEDIATE PREDECESSOR - REQUIRED]
+Context Loading: IMMEDIATE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+Predecessor: {predecessor-agent-name}
 
-Context Scope: IMMEDIATE_PREDECESSORS
-Token Budget: 2,500-3,000 tokens (context loading)
-Johari Output Limit: 1,200 tokens maximum (strictly enforced)
+Protocol References:
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+- `.claude/protocols/agent-protocol-extended.md` [IF code generation]
+
+Memory Output:
+- Write to: `.claude/memory/task-{id}-{agent-name}-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "IMMEDIATE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 ```
 
 ### References
@@ -106,6 +141,44 @@ Johari Output Limit: 1,200 tokens maximum (strictly enforced)
 - **Execution protocols (core):** See `.claude/protocols/agent-protocol-core.md` (scoped context loading - Section 2.2)
 - **Execution protocols (extended):** See `.claude/protocols/agent-protocol-extended.md` (technical code generation)
 - **Context pruning:** See `.claude/protocols/context-pruning-protocol.md` (progressive context compression)
+
+## Workflow Protocol (When Using This Skill)
+
+**CRITICAL:** When Penny invokes the develop-skill skill, full workflow protocol MUST be followed.
+
+### Workflow Initialization (MANDATORY)
+
+Before any skill development work begins:
+
+1. **Generate task-id:** `task-skill-{skill-name}`
+2. **Create workflow metadata:** `.claude/memory/task-{task-id}-memory.md`
+3. **Include in metadata:**
+   - Task domain: technical (skill creation is a technical task)
+   - Quality standards: Orchestration-only, sequential agents, reference over duplication
+   - Artifact types: Skill markdown file with agent orchestration sections
+   - Success criteria: Skill is immediately functional, passes validation checklist
+
+**Reference:** See `.claude/protocols/cognitive-skill-orchestration-protocol.md` Step 4
+
+### Workflow Completion (MANDATORY)
+
+After skill creation or update completes:
+
+1. **Present complete skill file** to user
+2. **Review Unknown Registry** for any unresolved design decisions
+3. **Validate skill** against orchestration-only checklist
+4. **ALWAYS prompt for develop-learnings invocation:**
+
+   ```
+   Would you like to capture learnings from this workflow using the develop-learnings skill?
+
+   This will extract insights and patterns from the develop-skill workflow to improve future skill creation.
+   Task ID: task-{task-id}
+   ```
+
+5. **Finalize workflow:** Mark as COMPLETED in metadata
+
+**FAILURE CONDITION:** Skipping workflow initialization or completion breaks memory protocol and learning loop.
 
 ## Usage Decision Tree
 
@@ -285,11 +358,16 @@ Before considering skill complete, verify:
 - All sequences are sequential (no parallel agent calls)
 - Includes domain classification approach
 - Specifies context requirements (standards, artifacts, criteria)
+- **EVERY agent specifies context loading pattern** (WORKFLOW_ONLY / IMMEDIATE_PREDECESSORS / MULTIPLE_PREDECESSORS)
+- **EVERY agent includes "Context Verification (MANDATORY)" subsection** with verification requirements
+- **Skill defines how orchestrator verifies agents read required context** (pre-invocation, during, post-completion)
+- **Memory Output format specifies Four-Section structure** (Context Loaded + Step Overview + Johari + Downstream)
 - References documentation instead of duplicating
 - Zero implementation details (100% orchestration)
 - Gate criteria defined (if multi-phase)
 - Context-passing approach clear
 - Follows zero redundancy principle
+- **Pattern compliance verification specified** for each agent
 
 ## Related Documentation
 

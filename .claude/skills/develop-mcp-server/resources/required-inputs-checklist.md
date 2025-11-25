@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document defines the 6 required inputs that MUST be validated before MCP server generation can proceed. These inputs are blocking requirements enforced by the validation gate.
+This document defines the 7 required inputs that MUST be validated before MCP server generation can proceed. These inputs are blocking requirements enforced by the validation gate.
 
 ## Blocking Requirements
 
@@ -260,11 +260,83 @@ ASK (non-blocking, can default to "Claude Desktop" if user doesn't respond): "Wh
 
 ---
 
+### 7. Testing Configuration
+
+**Status:** REQUIRED (Blocking)
+
+**Definition:** Whether to generate comprehensive tests, skip tests, or skip tests with documentation for API-dependent services
+
+**Validation Criteria:**
+Must specify ONE of:
+- **yes** - Generate full test suite with >80% coverage
+- **no** - Skip test generation entirely (no tests/)
+- **skip-requires-api-key** - Skip tests with clear documentation explaining that live API credentials are required
+
+**Used For:**
+- Determining whether Phase 5 (Test Suite) executes
+- Documenting testing limitations in README
+- Setting user expectations about validation approach
+
+**Examples:**
+- ✅ Valid: "yes", "no", "skip-requires-api-key", "include tests", "skip tests - requires API key"
+- ❌ Invalid: "maybe", "later", "some tests", "" (empty)
+
+**Default Behavior:**
+- If NOT specified AND external API is used: Default to "skip-requires-api-key"
+- If NOT specified AND no external API: Default to "yes"
+
+**Testing Scenarios:**
+
+**Scenario 1: Full Testing (testing_configuration = "yes")**
+- Generate complete test suite (conftest.py, fixtures/, unit/, integration/)
+- Create realistic mock fixtures based on API documentation
+- Ensure >80% code coverage with pytest
+- All tests run in uv virtual environment: `uv run pytest`
+- Include tests for all tools, services, utilities, and integration flows
+
+**Scenario 2: No Tests (testing_configuration = "no")**
+- Skip Phase 5 entirely
+- Do not generate tests/ directory
+- Do not configure pytest
+- Minimal mention in README (no extensive testing section)
+
+**Scenario 3: Skip with Documentation (testing_configuration = "skip-requires-api-key")**
+- Skip Phase 5 test generation
+- Add prominent section in README explaining:
+  - Why tests are not included (requires live API with valid credentials)
+  - How users can validate functionality (manual testing with their API instance)
+  - What to test when setting up the MCP server
+- Provide testing checklist for manual validation
+
+**If Missing:**
+ASK (non-blocking, can infer from context): "Should I generate tests? Options: yes (full test suite), no (skip tests), skip-requires-api-key (skip with documentation for API-dependent service)"
+
+**When to Choose Each Option:**
+
+**Choose "yes" when:**
+- Service is file-based or uses local resources
+- API can be easily mocked with realistic fixtures
+- You have comprehensive API documentation
+- You want maximum quality assurance
+
+**Choose "no" when:**
+- Rapid prototyping
+- Internal tool with manual testing
+- Tests will be added later by team
+
+**Choose "skip-requires-api-key" when:**
+- Service requires live API credentials to function
+- API cannot be reasonably mocked (complex OAuth flows, real-time data)
+- Testing would require users to set up test API instances
+- Manual validation is more practical than automated tests
+
+---
+
 ## Validation Process
 
 ### Step 1: Extract Inputs from User Request
 
-Parse user request to identify each of the 6 required inputs.
+Parse user request to identify each of the 7 required inputs.
 
 ### Step 2: Validate Each Input
 
@@ -280,7 +352,8 @@ Check each input against validation criteria above.
 - Data sources unclear or missing
 
 **Non-Blocking Clarifications (Ask Once):**
-- MCP client not specified (can default)
+- MCP client not specified (can default to Claude Desktop)
+- Testing configuration not specified (can infer: "yes" for file-based, "skip-requires-api-key" for API-based)
 - Minor auth details missing but type is clear
 - Feature descriptions could be clearer but are implementable
 
@@ -295,11 +368,13 @@ Check each input against validation criteria above.
 **If only non-blocking clarifications needed (max 3):**
 - Ask ALL clarifying questions in ONE message
 - Wait for user response
-- Proceed after clarifications received
+- Apply intelligent defaults if user doesn't respond:
+  - MCP client → "Claude Desktop"
+  - Testing → "skip-requires-api-key" if API-based, "yes" if file-based
 
 **If all inputs validated:**
 - Set validation_gate.ready_to_proceed = true
-- Pass validated_inputs to analysis-agent
+- Pass validated_inputs (including testing_configuration) to analysis-agent
 - Proceed to architecture analysis
 
 ## Validation Gate Error Message Templates
@@ -369,7 +444,7 @@ Please answer these so I can proceed with generation.
 ### Example 1: All Inputs Valid (Proceed)
 
 **User Input:**
-"Create MCP server called 'github_search' using GitHub REST API at https://docs.github.com/en/rest. Features: search_repos, get_repo_details. Auth is token in Authorization header as 'Bearer {token}'. Data source is GitHub API. Target is Claude Desktop."
+"Create MCP server called 'github_search' using GitHub REST API at https://docs.github.com/en/rest. Features: search_repos, get_repo_details. Auth is token in Authorization header as 'Bearer {token}'. Data source is GitHub API. Target is Claude Desktop. Skip tests since it requires API key."
 
 **Validation Result:**
 - ✅ Service name: "github_search" (valid Python module name)
@@ -378,6 +453,7 @@ Please answer these so I can proceed with generation.
 - ✅ Auth: Bearer token with header details
 - ✅ Data sources: GitHub API (matches API docs)
 - ✅ MCP client: Claude Desktop
+- ✅ Testing: "skip-requires-api-key" (explicitly stated)
 
 **Action:** validation_gate.ready_to_proceed = true → Proceed to analysis-agent
 
@@ -393,6 +469,7 @@ Please answer these so I can proceed with generation.
 - ⚠️ Auth: "Bearer token" (sufficient but could use details)
 - ✅ Data sources: Slack API (but no docs)
 - ✅ MCP client: Cursor
+- ⚠️ Testing: Not specified (would default to "skip-requires-api-key" if other inputs valid)
 
 **Action:** BLOCK with API documentation error message
 
@@ -408,6 +485,7 @@ Please answer these so I can proceed with generation.
 - ✅ Auth: None (valid for file-based)
 - ⚠️ Data sources: "files" (what format? where?)
 - ✅ MCP client: Claude Desktop
+- ⚠️ Testing: Not specified (would default to "yes" for file-based if other inputs valid)
 
 **Action:** BLOCK with features/data sources clarification request
 

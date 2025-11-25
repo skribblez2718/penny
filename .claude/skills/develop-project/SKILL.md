@@ -96,12 +96,47 @@ This skill uses 6 universal cognitive agents that adapt to domain context:
 - Scope boundaries defined
 - Constraints documented
 
-**Context References:**
-- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
+**Context Loading:** WORKFLOW_ONLY (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor:** None (first agent)
 
-**Context Scope:** WORKFLOW_ONLY
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
 
-**Token Budget:** 500-1,000 tokens
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-clarification-specialist-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "WORKFLOW_ONLY",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **2. analysis-agent (ANALYSIS)**
 
@@ -122,13 +157,47 @@ This skill uses 6 universal cognitive agents that adapt to domain context:
 - MoSCoW prioritization
 - Traceability confirmation
 
-**Context References:**
-- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
-- `.claude/memory/task-{id}-clarification-specialist-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
+**Context Loading:** IMMEDIATE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor:** clarification-specialist
 
-**Context Scope:** IMMEDIATE_PREDECESSORS
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
 
-**Token Budget:** 2,500-3,000 tokens
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-analysis-agent-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "IMMEDIATE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **Optimization Note:** Phase 0 reduces from 3 agents (clarification, analysis, validation) to 2 agents by embedding validation into analysis. Analysis agent validates as it analyzes.
 
@@ -202,13 +271,47 @@ DOCUMENT IN JOHARI:
 - unknown: Actual installation success (needs testing), production behavior
 ```
 
-**Context References:**
-- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
-- `.claude/memory/task-{id}-analysis-agent-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
+**Context Loading:** IMMEDIATE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor:** analysis-agent
 
-**Context Scope:** IMMEDIATE_PREDECESSORS
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
 
-**Token Budget:** 2,500-3,000 tokens
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-research-discovery-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "IMMEDIATE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **2. synthesis-agent (SYNTHESIS)**
 
@@ -258,14 +361,49 @@ VALIDATION CRITERIA:
 - Known conflicts addressed or flagged as unknowns
 ```
 
-**Context References:**
-- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
-- `.claude/memory/task-{id}-research-discovery-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
-- `.claude/memory/task-{id}-analysis-agent-memory.md` (requirements for alignment check) [OPTIONAL]
+**Context Loading:** MULTIPLE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor (required):** research-discovery
+**Optional References:**
+- analysis-agent (requirements for alignment check)
 
-**Context Scope:** IMMEDIATE_PREDECESSORS
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
 
-**Token Budget:** 3,000-4,000 tokens
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-synthesis-agent-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "MULTIPLE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **Optimization Note:** Phase 1 merges old Phases 1 (Research) and 2 (Evaluation and Decision). Synthesis naturally validates research completeness.
 
@@ -317,13 +455,47 @@ VALIDATION CRITERIA:
 - Applicability criteria defined
 - Anti-patterns noted
 
-**Context References:**
-- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
-- `.claude/memory/task-{id}-synthesis-agent-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
+**Context Loading:** IMMEDIATE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor:** synthesis-agent
 
-**Context Scope:** IMMEDIATE_PREDECESSORS
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
 
-**Token Budget:** 2,500-3,000 tokens
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-research-discovery-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "IMMEDIATE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **2. synthesis-agent (SYNTHESIS)**
 
@@ -340,14 +512,50 @@ VALIDATION CRITERIA:
 **Protocol References:**
 - `.claude/protocols/agent-protocol-extended.md` (if technical domain)
 
-**Context References:**
-- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
-- `.claude/memory/task-{id}-research-discovery-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
-- `.claude/memory/task-{id}-synthesis-agent-memory.md` (Phase 1) (decisions context) [OPTIONAL]
+**Context Loading:** MULTIPLE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor (required):** research-discovery
+**Optional References:**
+- synthesis-agent (Phase 1 decisions context)
 
-**Context Scope:** IMMEDIATE_PREDECESSORS
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+- `.claude/protocols/agent-protocol-extended.md` [IF technical domain]
 
-**Token Budget:** 3,000-4,000 tokens
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-synthesis-agent-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "MULTIPLE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **3. analysis-agent (ANALYSIS)**
 
@@ -366,13 +574,47 @@ VALIDATION CRITERIA:
 - Architecture pattern compliance
 - Integration point verification
 
-**Context References:**
-- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
-- `.claude/memory/task-{id}-synthesis-agent-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
+**Context Loading:** IMMEDIATE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor:** synthesis-agent
 
-**Context Scope:** IMMEDIATE_PREDECESSORS
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
 
-**Token Budget:** 3,000-3,500 tokens
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-analysis-agent-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "IMMEDIATE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **Optimization Note:** Phase 2 merges old Phases 3 (Architecture Design) and 4 (Architecture Validation). Analysis validates while analyzing.
 
@@ -409,13 +651,47 @@ VALIDATION CRITERIA:
 - Deployment/operational requirements clarified
 - Integration points defined
 
-**Context References:**
-- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
-- `.claude/memory/task-{id}-synthesis-agent-memory.md` (Phase 2) (architecture) [REQUIRED]
+**Context Loading:** IMMEDIATE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor:** synthesis-agent
 
-**Context Scope:** IMMEDIATE_PREDECESSORS
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
 
-**Token Budget:** 2,500-3,000 tokens
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-clarification-specialist-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "IMMEDIATE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **2. generation-agent (GENERATION)**
 
@@ -485,14 +761,50 @@ GATE EXIT REQUIREMENTS:
 If any fail, loop back to fix before Phase 4.
 ```
 
-**Context References:**
-- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
-- `.claude/memory/task-{id}-clarification-specialist-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
-- `.claude/memory/task-{id}-synthesis-agent-memory.md` (Phase 2) (architecture reference) [OPTIONAL]
+**Context Loading:** MULTIPLE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor (required):** clarification-specialist
+**Optional References:**
+- synthesis-agent (Phase 2 architecture reference)
 
-**Context Scope:** IMMEDIATE_PREDECESSORS
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+- `.claude/protocols/agent-protocol-extended.md` [IF technical - TDD setup]
 
-**Token Budget:** 3,000-4,000 tokens
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-generation-agent-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "MULTIPLE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **Optimization Note:** Phase 3 merges old Phases 5 (Implementation Planning) and 6 (Foundation Generation). Generation creates both plan and foundation.
 
@@ -607,14 +919,50 @@ COMMANDS:
 See agent-protocol-extended.md Lines 308-430 for complete requirements.
 ```
 
-**Context References:**
-- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
-- `.claude/memory/task-{id}-generation-agent-memory.md` (Phase 3) [IMMEDIATE_PREDECESSOR_REQUIRED]
-- `.claude/memory/task-{id}-synthesis-agent-memory.md` (Phase 2) (architecture reference) [OPTIONAL]
+**Context Loading:** MULTIPLE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor (required):** generation-agent
+**Optional References:**
+- synthesis-agent (Phase 2 architecture reference)
 
-**Context Scope:** IMMEDIATE_PREDECESSORS
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+- `.claude/protocols/agent-protocol-extended.md` [IF technical - TDD + Security]
 
-**Token Budget:** 3,000-4,000 tokens
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-generation-agent-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "MULTIPLE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **Optimization Note:** Phase 4 is UNCHANGED from old Phase 7. TDD already includes validation (tests passing = validated).
 
@@ -719,13 +1067,48 @@ CRITICAL: Validation must execute commands in actual working environment.
 - Validation is NOT hypothetical - it must prove system works.
 ```
 
-**Context References:**
-- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
-- `.claude/memory/task-{id}-generation-agent-memory.md` (Phase 4) [IMMEDIATE_PREDECESSOR_REQUIRED]
+**Context Loading:** IMMEDIATE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor:** generation-agent
 
-**Context Scope:** IMMEDIATE_PREDECESSORS
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+- `.claude/protocols/agent-protocol-extended.md` [IF technical - security checklist]
 
-**Token Budget:** 3,000-3,500 tokens
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-quality-validator-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "IMMEDIATE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **2. generation-agent (GENERATION)**
 
@@ -750,14 +1133,49 @@ CRITICAL: Validation must execute commands in actual working environment.
 - **professional:** Strategy document, operational guide, KPI dashboard, stakeholder brief
 - **recreational:** Event guide, participant instructions, logistics document, contingency plans
 
-**Context References:**
-- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS_REQUIRED]
-- `.claude/memory/task-{id}-generation-agent-memory.md` (Phase 4) (implementation) [REQUIRED]
-- `.claude/memory/task-{id}-quality-validator-memory.md` [IMMEDIATE_PREDECESSOR_REQUIRED]
+**Context Loading:** MULTIPLE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor (required):** quality-validator
+**Optional References:**
+- generation-agent (Phase 4 implementation)
 
-**Context Scope:** IMMEDIATE_PREDECESSORS
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
 
-**Token Budget:** 3,000-3,500 tokens
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-generation-agent-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "MULTIPLE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **Optimization Note:** Phase 5 merges old Phases 8 (Quality Validation) and 9 (Documentation). Single comprehensive validation before docs.
 
@@ -772,6 +1190,7 @@ CRITICAL: Validation must execute commands in actual working environment.
 - Review Unknown Registry for critical unresolved items
 - Generate project completion summary
 - Present complete deliverables to user
+- **ALWAYS prompt for develop-learnings invocation** (see below)
 - Signal workflow completion
 
 **Final Deliverable Structure:**
@@ -788,7 +1207,23 @@ CRITICAL: Validation must execute commands in actual working environment.
 - Deliverables complete per domain requirements
 - User acceptance obtained
 
-**Optimization Note:** Phase 6 is UNCHANGED from old Phase 10. No agent invocations.
+**MANDATORY Learning Capture Prompt:**
+
+After presenting deliverables, ALWAYS use this prompt:
+
+```
+Would you like to capture learnings from this workflow using the develop-learnings skill?
+
+This will extract insights and patterns from the develop-project workflow to improve future project development.
+Task ID: task-{task-id}
+```
+
+- If user accepts: Invoke develop-learnings skill with task-id
+- If user declines: Log decision and complete workflow
+
+**FAILURE CONDITION:** Skipping the learning prompt breaks the continuous improvement loop and is a SYSTEM-LEVEL FAILURE.
+
+**Optimization Note:** Phase 6 is UPDATED to include mandatory learning capture prompt. No agent invocations.
 
 ## Dependencies
 

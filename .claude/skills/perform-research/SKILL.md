@@ -19,6 +19,105 @@ The perform-research skill orchestrates production-grade research workflows with
 
 **Cognitive Pattern:** CLARIFICATION → RESEARCH → VALIDATION → SYNTHESIS (with remediation loop)
 
+## WORKFLOW INITIALIZATION
+
+**CRITICAL:** This section MUST be completed BEFORE any agent is invoked.
+
+### Step 1: Generate task-id
+
+**Format:** `task-research-{topic-keywords}`
+
+**Examples:**
+- `task-research-quantum-computing`
+- `task-research-market-analysis`
+- `task-research-health-trends`
+
+**Validation:** Must be valid filename (lowercase, alphanumeric, dashes only)
+
+### Step 2: Create workflow metadata file
+
+**WHO:** Penny (orchestrator) creates this - NOT agents
+
+**WHEN:** Immediately, before invoking Agent 1
+
+**File Location:** `.claude/memory/task-{task-id}-memory.md`
+
+**Template:**
+```markdown
+# WORKFLOW METADATA
+## Task ID: task-{task-id}
+## Workflow: perform-research
+## Task Domain: {technical|personal|creative|professional|recreational|hybrid}
+## Start Date: YYYY-MM-DD
+
+---
+
+## CRITICAL CONSTRAINTS
+- Research depth: {quick|standard|deep} (inferred or specified)
+- Source requirements: Multiple independent sources required
+- Citation accuracy: All claims must be citation-backed
+- Quality gates: Cross-source validation mandatory
+
+## QUALITY STANDARDS
+- Multi-source verification (minimum 3 sources for standard/deep)
+- Citation accuracy and attribution
+- Contradiction resolution documented
+- Confidence scoring for key findings
+- Depth-appropriate formatting
+
+## ARTIFACT TYPES
+- Research specification (from clarification)
+- Source catalog with metadata
+- Findings with citations
+- Synthesis report (depth-appropriate format)
+- Quality validation results
+
+## SUCCESS CRITERIA
+- Research question fully addressed
+- All subtopics covered
+- Sources properly cataloged and cited
+- Contradictions identified and resolved
+- Output format matches depth level
+
+## UNKNOWN REGISTRY
+### Active Unknowns
+[Initially empty - agents will populate as unknowns discovered]
+
+### Resolved Unknowns
+[Initially empty - moves from Active when resolved]
+
+---
+
+## PHASE HISTORY
+[Initially empty - Penny updates after each agent completes]
+
+---
+
+## CURRENT CONTEXT
+### Current Phase
+- **Phase Number**: 1
+- **Phase Name**: Research Clarification (optional)
+- **Agent**: clarification-specialist OR research-discovery
+- **Status**: PENDING
+
+### Phase Focus
+- Define research scope and depth
+- Establish success criteria
+
+### Needs from Previous Phases
+- None (first phase)
+```
+
+### Step 3: Verify workflow metadata exists
+
+**Verification Checklist:**
+1. File exists at `.claude/memory/task-{task-id}-memory.md`
+2. All required sections present (constraints, standards, artifacts, success criteria)
+3. Task domain classified
+4. Research depth specified or marked for inference
+
+**FAILURE CONDITION:** If this file does NOT exist, agents WILL FAIL when they try to read it. Do NOT proceed to Agent Orchestration without completing this step.
+
 ## AGENT ORCHESTRATION
 
 ### AGENT 1: CLARIFICATION-SPECIALIST
@@ -26,6 +125,48 @@ The perform-research skill orchestrates production-grade research workflows with
 **Purpose:** Transform ambiguous research queries into explicit scope definitions with depth indicators and success criteria
 
 **Trigger:** User query lacks clarity on research scope, depth, or specific requirements
+
+**Context Loading:** WORKFLOW_ONLY (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor:** None (first agent)
+
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-clarification-specialist-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "WORKFLOW_ONLY",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **Instructions:**
 - Extract research question from user query
@@ -74,13 +215,47 @@ Pass research_question, scope_boundaries, depth_indicator to research-discovery
 - target_query_count: Depth-specific query targets (see resources/depth-parameters.md)
 - quality_standards: Research-specific standards (see resources/validation-rubric.md)
 
-**Context References:**
-- .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-- .claude/memory/task-{id}-clarification-specialist-memory.md [IMMEDIATE PREDECESSOR - OPTIONAL]
+**Context Loading:** WORKFLOW_ONLY (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor:** None (may optionally reference clarification if present)
 
-**Context Scope:** IMMEDIATE_PREDECESSORS
-**Token Budget:** 2,500-3,000 tokens (context loading)
-**Johari Output Limit:** 1,200 tokens maximum
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-research-discovery-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "WORKFLOW_ONLY",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **Output Format:**
 See `.claude/references/johari.md` for Johari Window format
@@ -116,13 +291,47 @@ Pass findings_by_subtopic, source_catalog, conflicting_claims to quality-validat
 - pass_threshold: Minimum quality score (0.75)
 - critical_failure_types: Errors causing immediate failure
 
-**Context References:**
-- .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-- .claude/memory/task-{id}-research-discovery-memory.md [IMMEDIATE PREDECESSOR - REQUIRED]
+**Context Loading:** IMMEDIATE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor:** research-discovery
 
-**Context Scope:** IMMEDIATE_PREDECESSORS
-**Token Budget:** 2,500-3,000 tokens (context loading)
-**Johari Output Limit:** 1,200 tokens maximum
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-quality-validator-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "IMMEDIATE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **Output Format:**
 See `.claude/references/johari.md` for Johari Window format
@@ -160,14 +369,49 @@ Key outputs:
 - citation_style: Numbered inline with full bibliography
 - artifact_types: [research_report, citation_list, executive_summary]
 
-**Context References:**
-- .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-- .claude/memory/task-{id}-research-discovery-memory.md [REQUIRED]
-- .claude/memory/task-{id}-quality-validator-memory.md [IMMEDIATE PREDECESSOR - REQUIRED]
+**Context Loading:** MULTIPLE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor (required):** quality-validator
+**Optional References:**
+- research-discovery (research findings)
 
-**Context Scope:** IMMEDIATE_PREDECESSORS + RESEARCH_FINDINGS
-**Token Budget:** 3,000-3,500 tokens (context loading)
-**Johari Output Limit:** 1,200 tokens maximum
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-synthesis-agent-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "MULTIPLE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **Output Format:**
 See `.claude/references/johari.md` for Johari Window format
@@ -201,13 +445,47 @@ Key outputs:
 - format_requirements: Specific formatting constraints
 - artifact_types: Expected output types
 
-**Context References:**
-- .claude/memory/task-{id}-memory.md (workflow metadata) [ALWAYS REQUIRED]
-- .claude/memory/task-{id}-synthesis-agent-memory.md [IMMEDIATE PREDECESSOR - REQUIRED]
+**Context Loading:** IMMEDIATE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor:** synthesis-agent
 
-**Context Scope:** IMMEDIATE_PREDECESSORS
-**Token Budget:** 2,000-2,500 tokens (context loading)
-**Johari Output Limit:** 1,200 tokens maximum
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-generation-agent-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "IMMEDIATE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **Output Format:**
 Formatted deliverable in requested format
@@ -410,6 +688,60 @@ All agents invoked sequentially (never parallel) to maintain context coherence a
 - Johari output limits strictly enforced (1,200 tokens max)
 - Immediate predecessor context loading only
 - Embedded validation reduces separate validation phase overhead
+
+## WORKFLOW COMPLETION
+
+**CRITICAL:** This phase is MANDATORY after all agents complete. This is NOT optional.
+
+**Purpose:** Finalize research deliverables and prompt for learning capture
+
+**Trigger:** After synthesis-agent (or generation-agent if included) completes successfully
+
+**WHO DOES THIS:** Penny (orchestrator) - NOT agents
+
+### Actions
+
+1. **Aggregate all deliverables:**
+   - Compile complete research package from all agent outputs
+   - Verify research report is complete with citations
+   - Ensure source catalog is attached
+   - Check quality validation results included
+   - Present complete research deliverable to user
+
+2. **Review Unknown Registry:**
+   - Check `.claude/memory/task-{task-id}-memory.md` for unresolved unknowns
+   - Document any information gaps or limitations discovered
+   - Flag areas where additional research may be needed
+   - Note source quality issues if any
+
+3. **Present completion summary:**
+   - Highlight key findings and insights
+   - Note research depth level used (quick/standard/deep)
+   - Mention number of sources consulted and quality level
+   - Include confidence ratings for major claims
+   - List any contradictions resolved
+   - Provide next steps if applicable
+
+4. **ALWAYS prompt for develop-learnings invocation:**
+
+   Use this exact prompt:
+
+   ```
+   Would you like to capture learnings from this workflow using the develop-learnings skill?
+
+   This will extract insights and patterns from the perform-research workflow to improve future research executions.
+   Task ID: task-{task-id}
+   ```
+
+   - If user accepts: Invoke develop-learnings skill with task-id
+   - If user declines: Log decision and complete workflow
+
+5. **Finalize workflow:**
+   - Mark workflow status as COMPLETED in metadata file
+   - Archive workflow metadata (keep for potential learning capture later)
+   - Clear working context
+
+**FAILURE CONDITION:** If learning prompt is skipped, the continuous improvement loop is broken. This is a SYSTEM-LEVEL FAILURE.
 
 ## DEPENDENCIES
 

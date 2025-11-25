@@ -53,14 +53,51 @@ The develop-learnings skill embodies "reflection-driven growth" - systematically
      - `risk_if_ignored` (optional)
 6. Group candidate records by cognitive function
 
-**Context References:**
-- `.claude/memory/task-{id}-memory.md` (workflow metadata) [ALWAYS REQUIRED]
-- `.claude/memory/task-{id}-*-memory.md` (all agent outputs) [REQUIRED]
+**Context Loading:** MULTIPLE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessors:** All prior agents in task workflow
+
+**Additional Resources:**
 - `.claude/skills/develop-learnings/resources/candidate-extraction-guidelines.md` [REQUIRED]
 - `.claude/skills/develop-learnings/resources/learnings-schema.md` [REQUIRED]
 
-**Context Scope:** FULL_TASK
-**Token Budget:** 3,000-4,000 tokens (context loading)
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+
+**Memory Output:**
+- Write to: `.claude/memory/task-{id}-analysis-agent-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "MULTIPLE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **Output Format:**
 ```markdown
@@ -133,16 +170,53 @@ The develop-learnings skill embodies "reflection-driven growth" - systematically
    - Target file (heuristics.md, anti-patterns.md, checklists.md, domain-snippets/*.md)
    - Action (ADD new entry, EXTEND existing entry, SKIP if redundant)
 
-**Context References (per agent):**
-- `.claude/memory/learnings-{task-id}-discovery.md` [IMMEDIATE PREDECESSOR - REQUIRED]
+**Context Loading (per agent):** IMMEDIATE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessor:** analysis-agent (Phase 1 discovery)
+
+**Additional Resources (per agent):**
 - `.claude/learnings/{function}/heuristics.md` (INDEX section only) [REQUIRED]
 - `.claude/learnings/{function}/anti-patterns.md` (INDEX section only) [REQUIRED]
 - `.claude/learnings/{function}/checklists.md` (INDEX section only) [REQUIRED]
 - `.claude/skills/develop-learnings/resources/learnings-schema.md` [REQUIRED]
 
-**Context Scope:** IMMEDIATE_PREDECESSORS + FUNCTION_LEARNINGS_INDEX
-**Token Budget:** 2,000-2,500 tokens (context loading per agent)
-**Johari Output Limit:** 1,200 tokens maximum (strictly enforced)
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+
+**Memory Output (per agent):**
+- Write to: `.claude/memory/learnings-{task-id}-{function}-proposals.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "IMMEDIATE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **Invocation Sequence (MUST be sequential, not parallel):**
 1. clarification-specialist (CLARIFICATION) → output to `.claude/memory/learnings-{task-id}-clarification-proposals.md`
@@ -182,7 +256,202 @@ The develop-learnings skill embodies "reflection-driven growth" - systematically
 
 **Handoff Protocol:**
 - Each agent saves its proposals to memory
-- After all 6 agents complete, pass all proposal files to Phase 3
+- After all 6 agents complete, pass all proposal files to Phase 2.5
+
+---
+
+### PHASE 2.5: INTEGRATION ANALYSIS
+
+**Agent:** synthesis-agent (SYNTHESIS function)
+
+**Purpose:** Evaluate proposed learnings to determine which should be integrated directly into skills/protocols as permanent rules vs. remaining as standalone learning references
+
+**Trigger:** Phase 2 complete (all 6 agents have submitted proposals)
+
+**Instructions:**
+1. Load all 6 proposal files from Phase 2
+2. For EACH proposed learning entry, evaluate integration potential using these criteria:
+   - **Universal Applicability:** Does this apply to ALL or MOST tasks this agent performs? (>70% of cases)
+   - **Blocking Impact:** Would ignoring this cause systematic failures or quality degradation?
+   - **Concise Rule:** Can this be expressed as a single sentence rule in a skill/protocol?
+   - **Core Workflow:** Is this fundamental to the agent's cognitive function execution?
+3. For learnings meeting integration criteria (all 4 YES):
+   - Designate as INTEGRATE
+   - Identify target file (skill or protocol)
+   - Draft specific rule addition with location (phase, section, instruction number)
+   - Format: "In [file] [section], add: [rule text]"
+4. For learnings NOT meeting criteria:
+   - Designate as STANDALONE
+   - Note which criteria failed (provides rationale)
+   - These remain as learnings only (not integrated into skills)
+5. For learnings marked INTEGRATE:
+   - Specify proposed modification to skill/protocol
+   - Identify exact insertion point
+   - Explain how this strengthens the skill
+   - Note: Actual file modifications happen AFTER learnings are committed (Phase 5.5)
+
+**Integration Decision Checklist:**
+
+```
+For each learning entry:
+
+UNIVERSAL APPLICABILITY (>70% of agent's tasks)?
+├─ YES → Continue evaluation
+└─ NO → STANDALONE (too domain-specific)
+
+BLOCKING IMPACT (causes failures if ignored)?
+├─ YES → Continue evaluation
+└─ NO → STANDALONE (nice-to-have, not critical)
+
+CONCISE RULE (expressible in 1-2 sentences)?
+├─ YES → Continue evaluation
+└─ NO → STANDALONE (too complex for skill rule)
+
+CORE WORKFLOW (fundamental to function execution)?
+├─ YES → INTEGRATE
+└─ NO → STANDALONE (peripheral guidance)
+```
+
+**Context Loading:** MULTIPLE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessors:** All 6 agents from Phase 2 (clarification, research, analysis, synthesis, generation, validation proposals)
+
+**Additional Resources:**
+- `.claude/skills/develop-learnings/resources/learnings-schema.md` [REQUIRED]
+- `.claude/skills/develop-learnings/resources/integration-criteria.md` [REQUIRED]
+
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+
+**Memory Output:**
+- Write to: `.claude/memory/learnings-{task-id}-integration-analysis.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "MULTIPLE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
+
+**Output Format:**
+```markdown
+# Integration Analysis Report
+
+## Summary
+- Total learnings evaluated: {count}
+- Recommended for integration: {count}
+- Remaining as standalone: {count}
+
+## Integration Recommendations by Function
+
+### clarification
+
+#### C-H-008: {Title}
+- **Decision:** INTEGRATE
+- **Integration Criteria Met:**
+  - Universal Applicability: YES - applies to {X}% of clarification tasks
+  - Blocking Impact: YES - {specific failure mode}
+  - Concise Rule: YES - "{one-sentence rule}"
+  - Core Workflow: YES - {justification}
+- **Target File:** `.claude/skills/develop-project/SKILL.md`
+- **Target Location:** Phase 1 (Clarification), Instructions, Step 4
+- **Proposed Rule Addition:**
+  ```
+  4a. {Concise rule derived from learning principle}
+  ```
+- **Rationale:** {Why this strengthens the skill}
+- **Learning Metadata Update:**
+  - Add field: `integration_status: "integrated"`
+  - Add field: `integrated_into: [".claude/skills/develop-project/SKILL.md:Phase1:Step4"]`
+
+#### C-A-012: {Title}
+- **Decision:** STANDALONE
+- **Integration Criteria Not Met:**
+  - Universal Applicability: NO - applies to only ~40% of cases (domain-specific to {domain})
+  - Blocking Impact: YES
+  - Concise Rule: YES
+  - Core Workflow: NO - peripheral guidance, not fundamental
+- **Rationale:** Valuable as reference but too domain-specific for universal skill rule
+- **Learning Metadata Update:**
+  - Add field: `integration_status: "standalone"`
+
+[Repeat for all learnings across all functions...]
+
+### research
+[Same format...]
+
+### analysis
+[Same format...]
+
+### synthesis
+[Same format...]
+
+### generation
+[Same format...]
+
+### validation
+[Same format...]
+
+## Integration Summary by Target File
+
+### `.claude/skills/develop-project/SKILL.md`
+- Total integration points: {count}
+- Phases affected: {list}
+- Proposed additions: {brief list}
+
+### `.claude/protocols/agent-protocol-core.md`
+- Total integration points: {count}
+- Sections affected: {list}
+- Proposed additions: {brief list}
+
+[Continue for all affected files...]
+
+## Metadata Schema Update Required
+
+Add to learnings-schema.md:
+
+**New Optional Fields:**
+- **integration_status:** One of: `standalone`, `integrated`, `pending_integration`
+- **integrated_into:** List of files and locations where this learning was integrated
+  - Format: `["file-path:section:subsection", ...]`
+  - Example: `[".claude/skills/develop-project/SKILL.md:Phase1:Step4"]`
+
+## Next Steps
+
+1. Proceed to Phase 3 (Consolidation) with integration decisions attached to each learning
+2. After Phase 5 (Commit learnings files), proceed to Phase 5.5 (Post-Integration Cleanup)
+3. Phase 5.5 will apply approved integrations to skill/protocol files
+```
+
+**Handoff Protocol:**
+- Save output to `.claude/memory/learnings-{task-id}-integration-analysis.md`
+- Attach integration decisions to consolidated proposals
+- Pass control to Phase 3 (Consolidation) with integration metadata
 
 ---
 
@@ -192,10 +461,10 @@ The develop-learnings skill embodies "reflection-driven growth" - systematically
 
 **Purpose:** Merge overlapping entries across all function proposals, ensure consistent IDs/tags/pattern types, and produce final diff per learnings file
 
-**Trigger:** Phase 2 completes (all 6 agents have submitted proposals)
+**Trigger:** Phase 2.5 completes (integration analysis finished)
 
 **Instructions:**
-1. Load all 6 proposal files from Phase 2
+1. Load all 6 proposal files from Phase 2 and integration analysis from Phase 2.5
 2. Within each function's proposals:
    - Identify overlapping or duplicate entries
    - Merge where appropriate (keeping best wording)
@@ -207,13 +476,50 @@ The develop-learnings skill embodies "reflection-driven growth" - systematically
    - Suggest corrections if needed
 4. Produce consolidated proposal set with clear file destinations
 
-**Context References:**
-- `.claude/memory/learnings-{task-id}-*-proposals.md` (all 6 files) [IMMEDIATE PREDECESSORS - REQUIRED]
+**Context Loading:** MULTIPLE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessors:** All 6 agents from Phase 2 (clarification, research, analysis, synthesis, generation, validation proposals)
+
+**Additional Resources:**
 - `.claude/skills/develop-learnings/resources/learnings-schema.md` [REQUIRED]
 
-**Context Scope:** IMMEDIATE_PREDECESSORS (6 files)
-**Token Budget:** 3,000-3,500 tokens (context loading)
-**Johari Output Limit:** 1,200 tokens maximum
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+
+**Memory Output:**
+- Write to: `.claude/memory/learnings-{task-id}-synthesis-agent-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "MULTIPLE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **Output Format:**
 ```markdown
@@ -270,14 +576,50 @@ The develop-learnings skill embodies "reflection-driven growth" - systematically
    - If any FAIL → single remediation loop (return to relevant agent with feedback)
 5. Token budget check: Ensure INDEX sections will remain under 300 tokens after additions
 
-**Context References:**
-- `.claude/memory/learnings-{task-id}-consolidated.md` [IMMEDIATE PREDECESSOR - REQUIRED]
-- `.claude/skills/develop-learnings/resources/learnings-update-rubric.md` [REQUIRED]
-- `.claude/memory/task-{id}-memory.md` (for accuracy verification) [REQUIRED]
+**Context Loading:** MULTIPLE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessors:** synthesis-agent (Phase 3), plus task metadata for accuracy verification
 
-**Context Scope:** IMMEDIATE_PREDECESSORS + TASK_METADATA
-**Token Budget:** 2,500-3,000 tokens (context loading)
-**Johari Output Limit:** 1,200 tokens maximum
+**Additional Resources:**
+- `.claude/skills/develop-learnings/resources/learnings-update-rubric.md` [REQUIRED]
+
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+
+**Memory Output:**
+- Write to: `.claude/memory/learnings-{task-id}-quality-validator-memory.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "MULTIPLE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
 
 **Output Format:**
 ```markdown
@@ -336,9 +678,13 @@ The develop-learnings skill embodies "reflection-driven growth" - systematically
 3. Track all file modifications
 4. Report completion with summary
 
-**Context References:**
-- `.claude/memory/learnings-{task-id}-consolidated.md` [REQUIRED]
-- `.claude/memory/learnings-{task-id}-validation.md` [REQUIRED]
+**Context Loading:** MULTIPLE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessors:** synthesis-agent (Phase 3), quality-validator (Phase 4)
+
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+
+**Note:** Phase 5 is executed by Penny directly (orchestrator), not by a cognitive agent. No memory file output required for this phase.
 
 **Output Format:**
 ```markdown
@@ -362,7 +708,257 @@ The develop-learnings skill embodies "reflection-driven growth" - systematically
 
 **Handoff Protocol:**
 - Report completion to user
-- Clean up temporary memory files (optional)
+- Pass control to Phase 5.5 (Post-Integration Cleanup)
+
+---
+
+### PHASE 5.5: POST-INTEGRATION CLEANUP
+
+**Agent:** analysis-agent (ANALYSIS function)
+
+**Purpose:** After learnings are committed, apply approved skill/protocol integrations and evaluate which learnings should be archived or removed based on redundancy
+
+**Trigger:** Phase 5 completes successfully (learnings committed to files)
+
+**Instructions:**
+
+**Part A: Apply Skill/Protocol Integrations**
+
+1. Load integration analysis from Phase 2.5
+2. For each learning marked INTEGRATE with approved status:
+   - Read target skill/protocol file
+   - Locate specified insertion point
+   - Apply proposed rule addition
+   - Verify integration doesn't conflict with existing rules
+   - Update learning entry with integration_status and integrated_into fields
+3. Create summary of all files modified with integration points
+
+**Part B: Learning Retention Evaluation**
+
+4. For EACH committed learning entry (now in learnings files):
+   - Load learning content + integration status
+   - Apply retention decision criteria (see below)
+   - Classify as: KEEP | ARCHIVE | REMOVE
+5. Generate retention recommendations with specific rationale
+
+**Retention Decision Criteria:**
+
+```
+For each committed learning:
+
+Was this learning INTEGRATED into a skill/protocol?
+├─ NO → KEEP (primary reference, not redundant)
+└─ YES → Continue evaluation
+
+Does the learning provide WHY/CONTEXT beyond the skill rule's WHAT?
+├─ YES → KEEP (adds valuable rationale/examples/failure-modes)
+└─ NO → Continue evaluation
+
+Does the learning include:
+  - Detailed rationale explaining why the rule matters?
+  - Concrete examples showing pattern in action?
+  - Failure modes describing consequences?
+  - Domain-specific nuances not in skill?
+├─ YES to any → KEEP (provides context beyond rule)
+└─ NO to all → Continue evaluation
+
+Is the learning's principle identical to the integrated rule with no additional value?
+├─ YES → REMOVE (truly redundant, no value beyond skill)
+└─ NO → ARCHIVE (marginal value, preserve for history)
+```
+
+**IMPORTANT:** Default bias is KEEP. Only REMOVE if learning is truly redundant (provides zero value beyond what's now in the skill). Most integrated learnings should KEEP because they provide the WHY and CONTEXT that skills cannot include due to token constraints.
+
+**Context Loading:** MULTIPLE_PREDECESSORS (see `.claude/protocols/context-loading-patterns.md`)
+**Predecessors:** Penny (Phase 5 commit), synthesis-agent (Phase 2.5 integration analysis)
+
+**Additional Resources:**
+- `.claude/skills/develop-learnings/resources/retention-criteria.md` [REQUIRED]
+- `.claude/learnings/{function}/{file}.md` (newly committed entries) [REQUIRED]
+
+**Protocol References:**
+- `.claude/protocols/agent-protocol-core.md` [ALWAYS]
+
+**Memory Output:**
+- Write to: `.claude/memory/learnings-{task-id}-post-integration.md`
+- **Format: Markdown with JSON Johari Window** (NOT XML)
+- See `.claude/references/johari.md` for format specification
+- Token Limit: 1200 tokens for Johari section
+
+**CRITICAL OUTPUT FORMAT:**
+Your memory file MUST be Markdown format with JSON code blocks.
+DO NOT use XML wrapper tags like `<agent_output>` or `<metadata>`.
+
+Required structure:
+```
+## Context Loaded
+```json
+{
+  "workflow_metadata_loaded": true,
+  "context_loading_pattern_used": "MULTIPLE_PREDECESSORS",
+  "total_context_tokens": 1200,
+  "verification_status": "PASSED"
+}
+```
+
+## Johari Summary
+```json
+{
+  "open": "What I know that coordinator knows...",
+  "hidden": "What I discovered...",
+  "blind": "What I need but don't have...",
+  "unknown": "What neither of us knows yet..."
+}
+```
+```
+
+**Output Format:**
+See `.claude/references/johari.md` for complete Johari Window format
+
+**Output Format:**
+```markdown
+# Post-Integration Cleanup Report
+
+## Part A: Skill/Protocol Integrations Applied
+
+### Summary
+- Total integration points: {count}
+- Files modified: {count}
+- Integration success rate: {count successful / count attempted}
+
+### Integrations Applied
+
+#### `.claude/skills/develop-project/SKILL.md`
+
+**Integration 1: C-H-008 → Phase 1, Step 4a**
+- **Learning:** C-H-008 - {Title}
+- **Rule Added:** "{Concise rule text}"
+- **Location:** Phase 1 (Clarification), Instructions, Step 4a
+- **Status:** SUCCESS
+- **Learning Updated:** integration_status = "integrated", integrated_into added
+
+**Integration 2: R-H-015 → Phase 2, Step 3b**
+[Same format...]
+
+[Continue for all integrations in this file...]
+
+#### `.claude/protocols/agent-protocol-core.md`
+[Same format for protocol integrations...]
+
+### Integration Failures (if any)
+- {Learning ID}: {Reason for failure} → MANUAL REVIEW REQUIRED
+
+## Part B: Learning Retention Evaluation
+
+### Summary
+- Total learnings evaluated: {count}
+- Recommended to KEEP: {count} ({percentage}%)
+- Recommended to ARCHIVE: {count} ({percentage}%)
+- Recommended to REMOVE: {count} ({percentage}%)
+
+### Retention Decisions by Function
+
+#### clarification/heuristics.md
+
+**C-H-008: {Title}**
+- **Integration Status:** integrated → `.claude/skills/develop-project/SKILL.md:Phase1:Step4a`
+- **Retention Decision:** KEEP
+- **Rationale:**
+  - Learning provides detailed rationale: "{excerpt from rationale field}"
+  - Learning includes concrete example: "{excerpt from example field}"
+  - Learning explains failure mode: "{excerpt from failure_mode field}"
+  - Skill rule provides WHAT, learning provides WHY/CONTEXT - complementary, not redundant
+- **Value Beyond Skill Rule:** Agents benefit from understanding the reasoning and consequences, not just the rule itself
+
+**C-H-009: {Title}**
+- **Integration Status:** standalone
+- **Retention Decision:** KEEP
+- **Rationale:**
+  - Not integrated into any skill (primary reference)
+  - Provides actionable guidance for future tasks
+- **Value:** Essential reference for clarification agents
+
+**C-A-012: {Title}**
+- **Integration Status:** integrated → `.claude/skills/develop-project/SKILL.md:Phase1:Step5`
+- **Retention Decision:** REMOVE
+- **Rationale:**
+  - Principle: "{principle}" is identical to integrated rule
+  - No additional rationale beyond "this is the rule"
+  - No example provided
+  - No failure mode details
+  - Truly redundant - provides zero value beyond skill rule
+- **Action:** Remove from learnings file, update INDEX
+
+[Continue for all learnings in all files...]
+
+### Retention Summary by Decision
+
+#### KEEP (Recommended: {count} learnings)
+- C-H-008, C-H-009, R-H-015, R-H-020, A-H-011, S-H-007, G-A-004, V-H-009
+- Rationale: Provide context, examples, rationale beyond integrated rules OR are standalone references
+
+#### ARCHIVE (Recommended: {count} learnings)
+- R-D-025, A-D-018
+- Rationale: Marginal value, highly domain-specific but integrated. Preserve for historical reference but move to archive.
+
+#### REMOVE (Recommended: {count} learnings)
+- C-A-012
+- Rationale: Truly redundant with integrated skill rules, no additional value
+
+## Cleanup Actions Required
+
+### Files to Modify
+1. `.claude/learnings/clarification/anti-patterns.md`
+   - Remove entry: C-A-012
+   - Update INDEX: remove C-A-012 reference
+
+[Continue for all files with REMOVE decisions...]
+
+### Archive Operations
+[If any learnings marked ARCHIVE]
+1. Create archive directory: `.claude/learnings/archive/`
+2. Move entries: R-D-025, A-D-018 to archive with date stamp
+
+## Metadata Updates Applied
+
+For all integrated learnings (KEEP decision):
+- Updated `integration_status: "integrated"`
+- Added `integrated_into: ["{file}:{section}:{subsection}"]`
+- Preserved all original fields (rationale, example, failure_mode)
+
+## Verification
+
+### Integration Verification Checklist
+- [ ] All approved integrations applied to target files
+- [ ] No integration conflicts with existing rules
+- [ ] All integrated learnings have updated metadata
+- [ ] Modified skill/protocol files maintain formatting
+
+### Retention Verification Checklist
+- [ ] Every committed learning has retention decision
+- [ ] REMOVE decisions have strong justification (truly redundant)
+- [ ] KEEP decisions for integrated learnings explain added value
+- [ ] Default bias toward KEEP maintained (most learnings retained)
+
+## Summary
+
+### Overall Impact
+- **Skills Enhanced:** {count} skills/protocols improved with {count} new rules
+- **Learnings Retained:** {count} learnings provide ongoing value as references
+- **Redundancy Eliminated:** {count} truly redundant learnings removed
+- **Knowledge Density:** System now has both actionable rules (skills) AND contextual wisdom (learnings)
+
+### Philosophy Maintained
+- Skills provide WHAT to do (concise rules for execution)
+- Learnings provide WHY and CONTEXT (rationale, examples, consequences)
+- Both are complementary, not duplicative
+- Agents benefit from having both rule (immediate action) and learning (deeper understanding)
+```
+
+**Handoff Protocol:**
+- Save output to `.claude/memory/learnings-{task-id}-post-integration.md`
+- Apply approved REMOVE actions to learnings files
+- Report completion with summary of integrations and cleanup
 - Workflow ends
 
 ---
@@ -374,14 +970,19 @@ The develop-learnings skill embodies "reflection-driven growth" - systematically
 ```json
 {
   "workflow_id": "learnings-{task-id}",
-  "current_phase": "discovery|authoring|consolidation|validation|commit",
+  "current_phase": "discovery|authoring|integration-analysis|consolidation|validation|commit|post-integration",
   "task_id": "{source-task-id}",
   "discovery_complete": false,
   "authoring_agents_completed": [],
+  "integration_analysis_complete": false,
+  "integration_decisions": {},
   "consolidation_complete": false,
   "validation_status": "pending|pass|fail",
   "remediation_count": 0,
-  "files_to_modify": []
+  "files_to_modify": [],
+  "commit_complete": false,
+  "integrations_to_apply": [],
+  "post_integration_complete": false
 }
 ```
 
@@ -389,12 +990,14 @@ The develop-learnings skill embodies "reflection-driven growth" - systematically
 
 - **User invoke** → Phase 1 (Discovery)
 - **Phase 1 complete** → Phase 2 (Authoring - sequential agent invocations)
-- **Phase 2 complete (all 6 agents)** → Phase 3 (Consolidation)
+- **Phase 2 complete (all 6 agents)** → Phase 2.5 (Integration Analysis)
+- **Phase 2.5 complete** → Phase 3 (Consolidation)
 - **Phase 3 complete** → Phase 4 (Validation)
 - **Phase 4 PASS** → Phase 5 (Commit)
 - **Phase 4 FAIL (remediation_count < 1)** → Phase 2 (targeted re-authoring)
 - **Phase 4 FAIL (remediation_count >= 1)** → Report failure, halt
-- **Phase 5 complete** → End workflow
+- **Phase 5 complete** → Phase 5.5 (Post-Integration Cleanup)
+- **Phase 5.5 complete** → End workflow
 
 ---
 
@@ -472,6 +1075,73 @@ ELSE IF any entries FAIL AND remediation_count >= 1
 ELSE IF token budgets EXCEED
   THEN → Request INDEX compression
   THEN → Return to Phase 3 for re-consolidation
+```
+
+### DECISION POINT 4: Integration Decision
+
+**Context:** Phase 2.5 - Determining if a learning should be integrated into skills/protocols
+
+**Logic:**
+```
+FOR each proposed learning entry:
+
+IF Universal Applicability < 70% of agent's tasks
+  THEN → STANDALONE (too domain-specific for universal skill rule)
+
+ELSE IF Blocking Impact = NO (nice-to-have, not critical)
+  THEN → STANDALONE (not essential enough for skill integration)
+
+ELSE IF Concise Rule = NO (requires >2 sentences or complex explanation)
+  THEN → STANDALONE (too complex for skill rule, better as learning reference)
+
+ELSE IF Core Workflow = NO (peripheral guidance, not fundamental to function)
+  THEN → STANDALONE (helpful but not core to agent's cognitive function)
+
+ELSE IF all criteria = YES (Universal + Blocking + Concise + Core)
+  THEN → INTEGRATE
+    AND identify target skill/protocol
+    AND draft specific rule addition
+    AND specify insertion point
+    AND explain strengthening rationale
+
+ELSE
+  THEN → Flag for manual review (edge case)
+```
+
+### DECISION POINT 5: Retention Decision
+
+**Context:** Phase 5.5 - Determining if committed learning should be KEPT, ARCHIVED, or REMOVED
+
+**Logic:**
+```
+FOR each committed learning:
+
+IF learning was NOT integrated (integration_status = "standalone")
+  THEN → KEEP (automatic, no further evaluation needed)
+
+ELSE IF learning provides detailed rationale beyond skill rule
+  THEN → KEEP (adds WHY context)
+
+ELSE IF learning includes concrete examples or code samples
+  THEN → KEEP (illustrative value)
+
+ELSE IF learning documents failure modes or consequences
+  THEN → KEEP (troubleshooting value)
+
+ELSE IF learning includes domain-specific nuances or decision trees
+  THEN → KEEP (contextual guidance)
+
+ELSE IF learning has historical/metadata value (source tasks, unknowns)
+  THEN → KEEP (preserves discovery context)
+
+ELSE IF learning is highly domain-specific with marginal value
+  THEN → ARCHIVE (historical reference only)
+
+ELSE IF learning principle identical to skill rule with NO additional value
+  THEN → REMOVE (truly redundant)
+
+ELSE (uncertain)
+  THEN → KEEP (default bias toward retention)
 ```
 
 ---
@@ -603,17 +1273,106 @@ Phase 3: Consolidation (synthesis-agent)
 Result: Workflow ended gracefully - task was too simple/specific to yield reusable learnings
 ```
 
+### SCENARIO 4: Standard Workflow with Integration
+
+**Context:** User completed "api-security-review" task and wants to capture learnings with skill integration
+
+**Interaction:**
+```
+User: "Use develop-learnings to capture learnings from api-security-review task"
+
+Penny: Initiating develop-learnings skill for task: api-security-review
+
+Phase 1: Discovery (analysis-agent)
+- Loaded task memory for api-security-review
+- Identified 8 Unknowns, 7 resolved, 1 still open
+- Generated 12 candidate learning records across 3 functions
+  - research: 5 candidates
+  - analysis: 4 candidates
+  - validation: 3 candidates
+
+Phase 2: Per-function Authoring (6 agents)
+- research-discovery: Proposed 3 entries (2 heuristics, 1 anti-pattern)
+- analysis-agent: Proposed 3 entries (2 heuristics, 1 checklist)
+- validation-agent: Proposed 2 entries (1 heuristic, 1 checklist)
+- Other agents: No proposals (no candidates)
+
+Phase 2.5: Integration Analysis (synthesis-agent)
+- Evaluated 8 proposed learnings for integration potential
+- Integration recommendations:
+  - R-H-025 (Cross-verify security sources): INTEGRATE → develop-project Phase 2, Step 3
+    - Universal: YES (95% of research tasks)
+    - Blocking: YES (prevents security misconfigurations)
+    - Concise: YES ("Cross-verify security requirements from ≥2 authoritative sources")
+    - Core: YES (fundamental to research function)
+  - A-H-031 (Threat modeling before design): INTEGRATE → develop-project Phase 3, Step 2
+  - V-H-018 (Security-specific validation): INTEGRATE → develop-project Phase 6, Step 4
+  - R-A-008 (Outdated blog reliance): STANDALONE (valuable but covered by R-H-025 integration)
+  - A-C-015 (Security analysis checklist): STANDALONE (too domain-specific, applies to ~40% of tasks)
+  - V-C-009 (Security validation checklist): STANDALONE (too complex for single rule)
+  - Remaining 2: STANDALONE
+- Summary: 3 learnings marked for integration, 5 remain as standalone references
+
+Phase 3: Consolidation (synthesis-agent)
+- Merged integration decisions into consolidated proposals
+- All 8 entries retain learning status
+- 3 entries flagged for skill integration after commit
+- Final count: 8 entries to add
+
+Phase 4: Validation (quality-validator)
+- All 8 entries: PASS
+- Token budget check: WITHIN_BUDGET
+- Integration decisions reviewed: APPROVED
+- Overall: PASS
+
+Phase 5: Commit (Penny)
+- Modified 5 files across 3 cognitive functions
+- Added 8 new learning entries (all with integration_status field)
+- Updated INDEX sections
+- Integration metadata attached to 3 entries
+
+Phase 5.5: Post-Integration Cleanup (analysis-agent)
+
+Part A: Apply Integrations
+- Applied 3 skill integrations:
+  1. develop-project/SKILL.md Phase 2, Step 3b: Added R-H-025 rule
+  2. develop-project/SKILL.md Phase 3, Step 2a: Added A-H-031 rule
+  3. develop-project/SKILL.md Phase 6, Step 4c: Added V-H-018 rule
+- Updated 3 learning entries: integration_status = "integrated", integrated_into added
+- All integrations: SUCCESS
+
+Part B: Retention Evaluation
+- Evaluated 8 committed learnings:
+  - KEEP: 7 learnings
+    - R-H-025 (integrated): KEEP - provides detailed rationale + example + failure mode beyond skill rule
+    - A-H-031 (integrated): KEEP - includes threat modeling examples and specific failure scenarios
+    - V-H-018 (integrated): KEEP - detailed security validation techniques beyond simple rule
+    - R-A-008 (standalone): KEEP - primary reference, not integrated
+    - A-C-015 (standalone): KEEP - domain-specific checklist, valuable reference
+    - V-C-009 (standalone): KEEP - complex validation checklist
+    - Remaining 1 standalone: KEEP
+  - REMOVE: 0 learnings (none truly redundant)
+- Cleanup: No files to modify, all learnings provide value beyond integrated rules
+
+Result: Successfully captured 8 reusable learnings + integrated 3 critical patterns into develop-project skill
+- Skills now have concise rules (WHAT to do)
+- Learnings provide context (WHY it matters, examples, failure modes)
+- System improved with both immediate guidance and deeper understanding
+```
+
 ---
 
 ## PERFORMANCE CONSIDERATIONS
 
-- **Expected execution time:** 5-15 minutes depending on task complexity
+- **Expected execution time:** 5-20 minutes depending on task complexity
 - **Context window usage:**
   - Phase 1: ~15-20% (full task context)
   - Phase 2: ~10-15% per agent (6 sequential invocations)
-  - Phase 3: ~15-20% (all proposals)
+  - Phase 2.5: ~15-20% (integration analysis across all proposals)
+  - Phase 3: ~15-20% (consolidation with integration metadata)
   - Phase 4: ~15-20% (validation)
   - Phase 5: ~5% (file writes)
+  - Phase 5.5: ~10-15% (apply integrations + retention evaluation)
 - **Token efficiency:**
   - Agents see INDEX sections only (not full learnings files) - saves ~2,000-5,000 tokens per agent
   - Progressive disclosure pattern maintained

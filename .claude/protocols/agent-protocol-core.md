@@ -22,6 +22,116 @@ Purpose: {purpose}
 **Extraction:**
 - Extract task-id from invocation prompt using regex: `task-[a-z0-9-]{1,36}`
 
+## CRITICAL: Memory File Protocol (MANDATORY)
+
+**THIS IS NON-NEGOTIABLE. EVERY AGENT MUST FOLLOW THIS PROTOCOL.**
+
+### Memory File Requirements
+
+ALL cognitive agents MUST:
+
+1. **READ workflow metadata FIRST:**
+   - Location: `.claude/memory/task-{id}-memory.md`
+   - Contains: task domain, quality standards, artifact types, success criteria, constraints
+   - Status: ALWAYS_REQUIRED before any work begins
+
+2. **READ predecessor context (scoped):**
+   - Load immediate predecessor outputs only (not all previous agents)
+   - Pattern: `.claude/memory/task-{id}-{predecessor-name}-memory.md`
+   - See `.claude/protocols/context-loading-patterns.md` for standard patterns
+
+3. **WRITE output AFTER completion:**
+   - Location: `.claude/memory/task-{id}-{agent-name}-memory.md`
+   - Format: Three sections (Step Overview + Johari Summary + Downstream Directives)
+   - Token Limit: 1200 tokens MAXIMUM for Johari section
+
+### Failure Conditions
+
+An agent has FAILED if:
+- Memory file not created after completion
+- Memory file missing Johari Window structure
+- Johari section exceeds 1200 token limit
+- Workflow metadata not read before starting
+- Predecessor context not loaded when required
+
+### Verification
+
+#### BEFORE Agent Starts (Pre-Invocation Verification)
+
+**MANDATORY:** Orchestrator MUST verify before invoking agent:
+
+1. **Verify workflow metadata EXISTS:**
+   - Check `.claude/memory/task-{id}-memory.md` file exists
+   - FAIL IMMEDIATELY if missing - agent cannot work without workflow context
+
+2. **Verify predecessor files EXIST (if required):**
+   - If pattern = IMMEDIATE_PREDECESSORS: Check predecessor file exists
+   - If pattern = MULTIPLE_PREDECESSORS: Check all required predecessor files exist
+   - If pattern = WORKFLOW_ONLY: Skip this check (no predecessors needed)
+   - FAIL IMMEDIATELY if required predecessor files missing
+
+3. **Verify agent prompt includes explicit read instructions:**
+   - Agent prompt MUST list all files to read with full paths
+   - Agent prompt MUST specify context loading pattern to use
+   - Agent prompt MUST instruct agent to output "Context Loaded" section first
+
+**FAILURE CONDITION:** If any pre-invocation check fails, DO NOT invoke agent. Fix the issue first.
+
+#### DURING Agent Execution (Context Acknowledgment Verification)
+
+**MANDATORY:** Orchestrator MUST verify agent acknowledged context:
+
+1. **Verify agent outputs "Context Loaded" section FIRST:**
+   - Agent's first output section MUST be "Context Loaded" verification
+   - Section MUST list all files actually read with paths
+   - Section MUST specify context loading pattern used
+   - Section MUST include token budget consumed for context loading
+
+2. **Verify agent read required files:**
+   - Check agent listed workflow metadata in "Context Loaded" section
+   - Check agent listed correct predecessors per pattern specification
+   - Check agent did NOT read extra files beyond pattern requirements
+
+3. **Verify pattern compliance:**
+   - WORKFLOW_ONLY: Agent read ONLY workflow metadata (no predecessors)
+   - IMMEDIATE_PREDECESSORS: Agent read workflow metadata + 1 predecessor
+   - MULTIPLE_PREDECESSORS: Agent read workflow metadata + required predecessors
+
+**FAILURE CONDITION:** If agent starts work without "Context Loaded" section, STOP immediately and FAIL LOUDLY. Agent violated protocol.
+
+#### AFTER Agent Completes (Output Verification)
+
+After EVERY agent completes:
+
+1. **Verify context was loaded (from "Context Loaded" section):**
+   - Confirm "Context Loaded" section present at start of output
+   - Confirm all required files were read per pattern
+   - Confirm token budget not exceeded for context loading
+
+2. **Verify memory file created:**
+   - Check `.claude/memory/task-{id}-{agent-name}-memory.md` EXISTS
+
+3. **Verify Johari format present:**
+   - Check Johari format present (open, hidden, blind, unknown quadrants)
+
+4. **Confirm token limits respected:**
+   - Johari section ≤ 1200 tokens
+
+5. **Validate downstream directives included:**
+   - Downstream directives section present with required elements
+
+**Orchestrator Responsibility:**
+- Penny MUST verify context files exist BEFORE invoking agent
+- Penny MUST verify agent read required context DURING execution
+- Penny MUST verify memory files created AFTER completion
+- Penny MUST fail loudly if ANY verification fails
+
+**Agent Responsibility:**
+- Agents MUST output "Context Loaded" section FIRST before any work
+- Agents MUST read all required context files per pattern specification
+- Agents MUST write memory files in correct format without exception
+- Agents MUST STOP and report error if required context files missing
+
 ### Task Domain Classification
 
 **Domains:**
@@ -63,10 +173,19 @@ Agents receive explicit predecessor list in invocation with scope annotation
 - **[OPTIONAL] Scope:** `.claude/memory/task-{task-id}-{predecessor-2}-memory.md` - Referenced for specific information (e.g., constraints, standards)
 
 **Token Budget:**
-- **Max total:** 3000-4000 tokens of context
+- **Max total:** 3000-4000 tokens of context (HARD LIMIT: 4000)
 - **Workflow metadata:** ~500 tokens
 - **Required predecessors:** ~2500-3000 tokens
 - **Optional references:** ~500 tokens (specific sections only)
+
+**Verification Requirements:**
+- Agents MUST report actual token usage in "Context Loaded" section
+- Orchestrator MUST verify total_context_tokens ≤ 4000
+- **FAIL if budget exceeded** (agent loaded too much context)
+- **WARNING if usage < 50% of expected** (agent may have skipped required files)
+  - Example: Pattern = IMMEDIATE_PREDECESSORS expects ~1700 tokens minimum
+  - If agent reports only 200 tokens, likely skipped predecessor file
+- Orchestrator MUST investigate low usage before accepting agent output
 
 **Scoping Strategy:**
 
@@ -359,9 +478,58 @@ After each phase completes, Penny (workflow orchestrator) MUST:
 
 ## Output Formatting
 
-### Three-Section Output Structure (Universal)
+### Four-Section Output Structure (Universal)
+
+**CRITICAL:** All agents MUST produce output in this exact order. Section 0 is MANDATORY and MUST come FIRST.
 
 All agents produce:
+
+#### Section 0: CONTEXT LOADED (Verification Format - MANDATORY)
+
+**Purpose:** Prove agent read required context files per protocol
+
+**Required Fields (JSON format):**
+```json
+{
+  "workflow_metadata_loaded": true,
+  "workflow_file_path": ".claude/memory/task-{id}-memory.md",
+  "workflow_tokens_consumed": 500,
+
+  "context_loading_pattern_used": "WORKFLOW_ONLY | IMMEDIATE_PREDECESSORS | MULTIPLE_PREDECESSORS",
+
+  "predecessors_loaded": [
+    {
+      "agent_name": "clarification-specialist",
+      "file_path": ".claude/memory/task-{id}-clarification-specialist-memory.md",
+      "tokens_consumed": 1200,
+      "required": true
+    }
+  ],
+
+  "total_context_tokens": 1700,
+  "token_budget_status": "WITHIN_BUDGET (1700/3000)",
+
+  "protocols_referenced": [
+    ".claude/protocols/agent-protocol-core.md",
+    ".claude/protocols/context-loading-patterns.md"
+  ],
+
+  "verification_timestamp": "YYYY-MM-DD HH:MM:SS",
+  "verification_status": "PASSED"
+}
+```
+
+**Validation Rules:**
+- `workflow_metadata_loaded` MUST be true (agent cannot work without workflow context)
+- `context_loading_pattern_used` MUST match pattern specified in invocation prompt
+- `predecessors_loaded` MUST match pattern requirements:
+  - WORKFLOW_ONLY: Array must be empty `[]`
+  - IMMEDIATE_PREDECESSORS: Array must have exactly 1 required predecessor
+  - MULTIPLE_PREDECESSORS: Array must have 1+ required predecessors
+- `total_context_tokens` MUST be ≤ 4000 (hard limit)
+- `token_budget_status` MUST indicate WITHIN_BUDGET or APPROACHING_LIMIT
+
+**FAILURE CONDITION:** If agent outputs ANYTHING before this section, verification FAILS. Section 0 must be FIRST.
 
 #### Section 1: STEP OVERVIEW
 - **Title:** STEP {N}: {Cognitive Function} Execution
@@ -378,6 +546,37 @@ All agents produce:
 - **recommendedActions:** Actions for next steps
 - **criticalConstraints:** Constraints to observe
 - **unknownRegistryUpdates:** Updates to unknown registry
+
+### Output Format Anti-Patterns (DO NOT USE)
+
+**❌ WRONG: XML Wrapper Format**
+
+```xml
+<agent_output>
+  <metadata>...</metadata>
+  <johari_summary>...</johari_summary>
+</agent_output>
+```
+
+This format violates the protocol specification. Do not use XML tags.
+
+**✅ CORRECT: Markdown + JSON Format**
+
+```markdown
+# Agent Output
+
+## Context Loaded
+```json
+{...}
+```
+
+## Johari Summary
+```json
+{...}
+```
+```
+
+Use Markdown headings and JSON code blocks, not XML tags.
 
 ### Domain-Specific Output Adaptations
 
