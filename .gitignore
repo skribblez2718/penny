@@ -1,0 +1,69 @@
+# CAII - Git Ignore Configuration
+
+# Ignore settings.json (contains user-specific configurations)
+.claude/settings.json
+.claude/settings.local.json
+
+# Ignore memory directory contents (task-specific memory files)
+.claude/memory/*
+
+# Ignore plans directory contents (working plans and drafts)
+.claude/plans/*
+
+# Ignore research directory contents (research outputs)
+.claude/research/*
+
+# Ignore learnings directory contents (including all subdirectories)
+.claude/learnings/**/*
+
+# Ignore usage tracking data
+.claude/usage/*
+
+# Ignore orchestration state directories (contain conversation/session data)
+.claude/orchestration/**/state/*
+
+# Ignore episode history data
+.claude/orchestration/skill_protocols/episodes/*
+
+# Keep directory structure by not ignoring .gitkeep files
+!.claude/memory/.gitkeep
+!.claude/plans/.gitkeep
+!.claude/research/.gitkeep
+!.claude/learnings/**/.gitkeep
+!.claude/usage/.gitkeep
+!.claude/orchestration/**/state/.gitkeep
+!.claude/orchestration/skill_protocols/episodes/.gitkeep
+
+# Node.js dependencies (if applicable)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Python virtual environments (if applicable)
+venv/
+env/
+.venv/
+*.pyc
+__pycache__/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Temporary files
+*.tmp
+*.temp
+.cache/

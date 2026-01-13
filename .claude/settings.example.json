@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "DISABLE_INTERLEAVED_THINKING": "true",
+    "DA_NAME": "",
+    "CAII_DIRECTORY": "/path/to/your/project",
+    "PROJECT_ROOT": "/path/to/your/projects",
+    "VOICE_SERVER_PORT": "voice-server-port",
+    "OPENAI_BASE_URL": "openai-ai-api-compatible-endpoint",
+    "OPENAI_API_KEY": "your-openai-api-key",
+    "OPENAI_SUMMARIZATION_MODEL": "your-summarizer-model-id",
+    "OPENAI_PROMPT_IMPROVER_MODEL": "prompt-improver-for-automation"
+  },
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "WebSearch",
+      "NotebookEdit",
+      "TodoWrite",
+      "ExitPlanMode",
+      "Task",
+      "Skill",
+      "SlashCommand",
+      "mcp__*"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~)",
+      "Bash(rm -rf $HOME)",
+      "Bash(sudo rm -rf /)",
+      "Bash(sudo rm -rf /*)",
+      "Bash(fork bomb)",
+      "Bash(dd if=/dev/zero of=/dev/sda)",
+      "Bash(mkfs.ext4 /dev/sda)",
+      "Bash(> /dev/sda)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [],
+  "hooks": {
+    "SessionStart":[
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CAII_DIRECTORY}/.claude/hooks/session-start/load-core-context.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CAII_DIRECTORY}/.claude/hooks/session-start/initialize-pai-session.py"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CAII_DIRECTORY}/.claude/hooks/pre-tool-use/agent-start.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CAII_DIRECTORY}/.claude/hooks/post-tool-use/exit-plan-mode.py"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CAII_DIRECTORY}/.claude/hooks/permission-request/notification.py"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CAII_DIRECTORY}/.claude/hooks/user-prompt-submit/submit.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CAII_DIRECTORY}/.claude/hooks/stop/stop.py"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CAII_DIRECTORY}/.claude/hooks/subagent-stop/subagent-stop.py"
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash ${CAII_DIRECTORY}/.claude/statusline-command.sh"
+  },
+  "alwaysThinkingEnabled": true
+}
