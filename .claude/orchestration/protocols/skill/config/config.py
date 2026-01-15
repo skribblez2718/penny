@@ -129,6 +129,13 @@ COMPOSITE_SKILLS: Dict[str, Dict[str, Any]] = {
         "composition_depth": 0,
         "phases": "DEVELOP_COMMAND_PHASES",
     },
+    "perform-research": {
+        "description": "Production-grade research with adaptive depth and quality validation",
+        "semantic_trigger": "deep research, comprehensive investigation, multi-source research, literature review, research with validation, academic research, thorough research",
+        "not_for": "quick lookups, simple searches, single-source queries, \"what is X\" questions",
+        "composition_depth": 0,
+        "phases": "PERFORM_RESEARCH_PHASES",
+    },
 }
 
 
@@ -370,6 +377,91 @@ DEVELOP_COMMAND_PHASES: Dict[str, Dict[str, Any]] = {
 
 
 # =============================================================================
+# PHASE DEFINITIONS - perform-research
+# =============================================================================
+
+PERFORM_RESEARCH_PHASES: Dict[str, Dict[str, Any]] = {
+    "0": {
+        "name": "REQUIREMENTS_CLARIFICATION",
+        "title": "Requirements Clarification",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-clarification",
+        "content": "phase_0_requirements_clarification.md",
+        "next": "1",
+        "description": "Clarify research scope, depth, and source priorities using Johari Window",
+    },
+    "1": {
+        "name": "PARALLEL_RESEARCH",
+        "title": "Parallel Research Execution",
+        "type": PhaseType.PARALLEL,
+        "uses_atomic_skill": None,  # Branches define their own agents
+        "content": "phase_1_parallel_research.md",
+        "next": "1.5",
+        "description": "Execute three parallel research branches (native, Perplexity, Tavily)",
+        "parallel_branches": {
+            "1A": {
+                "name": "Native WebSearch",
+                "uses_atomic_skill": "orchestrate-research",
+                "fail_on_error": False,  # Resilient: continue if this branch fails
+            },
+            "1B": {
+                "name": "Perplexity Search",
+                "uses_atomic_skill": "orchestrate-research",
+                "fail_on_error": False,  # Resilient: continue if API key missing
+            },
+            "1C": {
+                "name": "Tavily Search",
+                "uses_atomic_skill": "orchestrate-research",
+                "fail_on_error": False,  # Resilient: continue if API key missing
+            },
+        },
+    },
+    "1.5": {
+        "name": "RESULT_SYNTHESIS",
+        "title": "Result Synthesis",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-synthesis",
+        "content": "phase_1_5_result_synthesis.md",
+        "next": "2",
+        "description": "Merge and deduplicate findings from parallel research branches",
+    },
+    "2": {
+        "name": "COMPLETENESS_VALIDATION",
+        "title": "Completeness Validation",
+        "type": PhaseType.REMEDIATION,
+        "uses_atomic_skill": "orchestrate-validation",
+        "content": "phase_2_completeness_validation.md",
+        "remediation_target": "1",  # Re-execute Phase 1 if validation fails
+        "max_remediation": 2,  # Maximum 2 remediation loops
+        "next": "3",
+        "description": "Validate research quality with remediation loop if gaps found",
+    },
+    "3": {
+        "name": "SYNTHESIS",
+        "title": "Synthesis",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-synthesis",
+        "content": "phase_3_synthesis.md",
+        "next": "4",
+        "description": "Integrate validated findings into coherent narrative",
+    },
+    "4": {
+        "name": "REPORT_GENERATION",
+        "title": "Report Generation",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-generation",
+        "content": "phase_4_report_generation.md",
+        "next": None,  # Final phase
+        "description": "Generate final research report to .claude/research/",
+        "configuration": {
+            "output_directory": ".claude/research/",
+            "output_format": "markdown",
+        },
+    },
+}
+
+
+# =============================================================================
 # SKILL PHASE REGISTRY
 # =============================================================================
 # Maps skill names to their phase configurations
@@ -378,6 +470,7 @@ SKILL_PHASES: Dict[str, Dict[str, Dict[str, Any]]] = {
     "develop-skill": DEVELOP_SKILL_PHASES,
     "develop-learnings": DEVELOP_LEARNINGS_PHASES,
     "develop-command": DEVELOP_COMMAND_PHASES,
+    "perform-research": PERFORM_RESEARCH_PHASES,
 }
 
 

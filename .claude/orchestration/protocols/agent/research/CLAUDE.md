@@ -69,3 +69,11 @@ Contains:
 - `Read` - Read local files and documentation
 - `Grep` - Search code patterns
 - `Glob` - Find files by pattern
+
+## Critical Invariants
+
+1. Research tool fallback MUST degrade gracefully
+   - When primary tool (Perplexity, Tavily) unavailable, use WebSearch
+   - Never fail entire workflow due to single tool unavailability
+   - Maintain source quality standards during fallback
+   - See R-H-003 in `.claude/learnings/research/heuristics.md`

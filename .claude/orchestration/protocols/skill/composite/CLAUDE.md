@@ -179,9 +179,10 @@ Phase content files reference resources using the full path:
 
 | Skill | Semantic Trigger | NOT for | Phases |
 |-------|------------------|---------|--------|
-| develop-skill | create/modify skills, update workflows, new skill | system mods, direct code, architecture | 9 |
-| develop-learnings | capture learnings, document insights, preserve knowledge | mid-workflow, skill creation, active execution | 7 |
 | develop-command | create/modify slash commands, utility commands | workflow skills, multi-phase operations | 3 |
+| develop-learnings | capture learnings, document insights, preserve knowledge | mid-workflow, skill creation, active execution | 7 |
+| develop-skill | create/modify skills, update workflows, new skill | system mods, direct code, architecture | 9 |
+| perform-research | deep research, comprehensive investigation | quick lookups, single-source | 6 |
 
 ## Call Chain: Skill Entry → Phases → Completion
 

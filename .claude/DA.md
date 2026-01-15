@@ -195,9 +195,10 @@ Route to skills based on semantic triggers. When confidence is not HIGH, HALT an
 
 | Skill | Semantic Trigger | NOT for |
 |-------|------------------|---------|
-| develop-skill | create skill, modify skill, update workflow, new skill | system modifications, direct code execution, architecture changes |
-| develop-learnings | capture learnings, document insights, preserve knowledge, post-workflow capture | mid-workflow tasks, skill creation, active execution |
 | develop-command | create command, slash command, modify command, utility command | workflow skills, multi-phase operations, cognitive workflows |
+| develop-learnings | capture learnings, document insights, preserve knowledge, post-workflow capture | mid-workflow tasks, skill creation, active execution |
+| develop-skill | create skill, modify skill, update workflow, new skill | system modifications, direct code execution, architecture changes |
+| perform-research | deep research, comprehensive investigation, multi-source research | quick lookups, simple searches, single-source queries |
 
 #### Atomic Skills
 

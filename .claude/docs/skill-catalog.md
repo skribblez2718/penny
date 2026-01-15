@@ -19,9 +19,27 @@ Composite skills orchestrate multiple cognitive agents through defined phase seq
 
 | Skill | Semantic Trigger | NOT for | Location |
 |-------|------------------|---------|----------|
-| develop-skill | create/modify skills, update workflows, new skill | system mods, direct code, architecture changes | `.claude/skills/develop-skill/` |
-| develop-learnings | capture learnings, document insights, preserve knowledge | mid-workflow tasks, skill creation, active execution | `.claude/skills/develop-learnings/` |
 | develop-command | create/modify slash commands, utility commands | workflow skills, multi-phase operations | `.claude/skills/develop-command/` |
+| develop-learnings | capture learnings, document insights, preserve knowledge | mid-workflow tasks, skill creation, active execution | `.claude/skills/develop-learnings/` |
+| develop-skill | create/modify skills, update workflows, new skill | system mods, direct code, architecture changes | `.claude/skills/develop-skill/` |
+| perform-research | deep research, comprehensive investigation, multi-source research | quick lookups, simple searches, single-source queries | `.claude/skills/perform-research/` |
+
+### develop-command
+
+**Purpose:** Create and manage Claude Code slash commands for utility operations.
+
+**Type:** composite
+
+**When to Use:**
+- Creating new slash commands for utility operations
+- Modifying existing command implementations
+- Managing command catalog and routing
+
+**Location:** `.claude/skills/develop-command/`
+
+**Orchestration:** `.claude/orchestration/protocols/skill/composite/develop_command/`
+
+---
 
 ### develop-learnings
 
@@ -32,6 +50,24 @@ Composite skills orchestrate multiple cognitive agents through defined phase seq
 ### develop-skill
 
 **Purpose:** Meta-skill for creating and updating workflow skills using 6 universal cognitive agents. Supports composite-to-composite skill composition.
+
+---
+
+### perform-research
+
+**Purpose:** Production-grade research with adaptive depth and quality validation
+
+**Type:** composite
+
+**When to Use:**
+- Deep research requiring multiple sources
+- Comprehensive investigation with validation
+- Academic or literature review tasks
+- Research requiring quality thresholds
+
+**Location:** `.claude/skills/perform-research/`
+
+**Orchestration:** `.claude/orchestration/protocols/skill/composite/perform_research/`
 
 ---
 

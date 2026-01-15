@@ -96,7 +96,9 @@ class Step8KnowledgeTransfer(BaseStep):
         else:
             print(f"Max iterations ({max_iter}) reached - cannot loop back")
 
-        print(f"**PROCEED (validated):** `python {set_route_script} --state {self.state.state_file_path} --route {route}`")
+        # Output exact command - DO NOT modify or add arguments
+        # set_route.py only accepts: --state, --route, --reason (optional)
+        print(f"**PROCEED (validated):** `python {set_route_script} --state {self.state.state_file_path} --route {route} --reason \"Routing validated through Steps 5-7\"`")
 
 
 # Allow running as script
