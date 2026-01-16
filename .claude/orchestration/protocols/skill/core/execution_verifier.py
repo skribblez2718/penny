@@ -140,19 +140,45 @@ class ExecutionVerifier:
     def get_memory_file_path(self, agent_name: str, branch_id: Optional[str] = None) -> Path:
         """
         Get the expected memory file path for an agent.
+        Checks multiple naming patterns for flexibility.
 
         Args:
             agent_name: Name of the agent
             branch_id: Optional branch identifier for parallel phases
 
         Returns:
-            Path to the expected memory file
+            Path to the expected memory file (existing file if found, else primary pattern)
         """
+        # Build list of candidate filenames in priority order
+        candidates = []
+
         if branch_id:
-            filename = f"{self.task_id}-{branch_id}-{agent_name}-memory.md"
-        else:
-            filename = f"{self.task_id}-{agent_name}-memory.md"
-        return self.memory_dir / filename
+            # Branch-prefixed pattern
+            candidates.append(f"{self.task_id}-{branch_id}-{agent_name}-memory.md")
+
+        # Standard pattern
+        candidates.append(f"{self.task_id}-{agent_name}-memory.md")
+
+        # Orchestrate-prefixed pattern (for atomic skill naming)
+        candidates.append(f"{self.task_id}-orchestrate-{agent_name}-memory.md")
+
+        # Check each candidate for existence
+        for filename in candidates:
+            filepath = self.memory_dir / filename
+            if filepath.exists():
+                return filepath
+
+        # Fallback to glob pattern matching for flexible naming
+        pattern = f"{self.task_id}-*{agent_name}*-memory.md"
+        matches = list(self.memory_dir.glob(pattern))
+        if matches:
+            # Return most recently modified match
+            return sorted(matches, key=lambda f: f.stat().st_mtime, reverse=True)[0]
+
+        # Return primary expected path for error messaging
+        if branch_id:
+            return self.memory_dir / f"{self.task_id}-{branch_id}-{agent_name}-memory.md"
+        return self.memory_dir / f"{self.task_id}-{agent_name}-memory.md"
 
     def verify_phase_execution(
         self,

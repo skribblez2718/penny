@@ -77,3 +77,7 @@ REFACTOR: Clean up while keeping tests passing
 - `Edit` - Modify existing files
 - `Read` - Understand existing code patterns
 - `Bash` - Run tests, build commands
+
+## Critical Rules
+
+**Composite Skill Registration (6-Point Model):** All composite skills require registration in 6 files: (1) config.py SKILL_PHASES dict, (2) config.py COMPOSITE_SKILLS entry, (3) config.py SKILL_PHASES mapping, (4) DA.md routing table, (5) docs/skill-catalog.md, (6) composite/CLAUDE.md table. Missing config.py registration causes skill to fail on load (entry.py crashes).

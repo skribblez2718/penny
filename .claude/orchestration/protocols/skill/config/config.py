@@ -108,6 +108,13 @@ ATOMIC_SKILLS: Dict[str, Dict[str, Any]] = {
 # Composite skills orchestrate multiple phases with atomic skills
 
 COMPOSITE_SKILLS: Dict[str, Dict[str, Any]] = {
+    "develop-architecture": {
+        "description": "Transform requirements into comprehensive architecture artifacts",
+        "semantic_trigger": "design architecture, architect system, HLD, LLD, database schema, ADRs, C4 diagrams, system architecture",
+        "not_for": "UI/UX design, code implementation, infrastructure deployment, performance tuning",
+        "composition_depth": 0,
+        "phases": "DEVELOP_ARCHITECTURE_PHASES",
+    },
     "develop-skill": {
         "description": "Meta-skill for creating and modifying workflow skills",
         "semantic_trigger": "create skill, modify skill, update workflow, new skill",
@@ -135,6 +142,27 @@ COMPOSITE_SKILLS: Dict[str, Dict[str, Any]] = {
         "not_for": "quick lookups, simple searches, single-source queries, \"what is X\" questions",
         "composition_depth": 0,
         "phases": "PERFORM_RESEARCH_PHASES",
+    },
+    "develop-requirements": {
+        "description": "Platform-agnostic requirements engineering workflow with single-stakeholder default",
+        "semantic_trigger": "requirements gathering, requirements elicitation, user story writing, acceptance criteria definition, requirements specification, requirements validation, what do I need to build",
+        "not_for": "implementation details, technology selection, code development, testing execution",
+        "composition_depth": 0,
+        "phases": "DEVELOP_REQUIREMENTS_PHASES",
+    },
+    "develop-backend": {
+        "description": "Production-grade backend development with technology-agnostic patterns",
+        "semantic_trigger": "backend development, API design, database architecture, authentication, microservices, server-side development, backend API, RESTful services, GraphQL API, backend security",
+        "not_for": "frontend development, UI/UX design, infrastructure deployment, DevOps, mobile app development",
+        "composition_depth": 0,
+        "phases": "DEVELOP_BACKEND_PHASES",
+    },
+    "perform-qa-analysis": {
+        "description": "Platform-agnostic QA orchestration for multi-platform applications",
+        "semantic_trigger": "QA orchestration, test orchestration, quality gates, production readiness, testing pyramid",
+        "not_for": "test execution, report generation, test data management",
+        "composition_depth": 0,
+        "phases": "PERFORM_QA_ANALYSIS_PHASES",
     },
 }
 
@@ -339,6 +367,87 @@ DEVELOP_LEARNINGS_PHASES: Dict[str, Dict[str, Any]] = {
 
 
 # =============================================================================
+# PHASE DEFINITIONS - develop-architecture
+# =============================================================================
+
+DEVELOP_ARCHITECTURE_PHASES: Dict[str, Dict[str, Any]] = {
+    "0": {
+        "name": "REQUIREMENTS_CLARIFICATION",
+        "title": "Requirements Clarification",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-clarification",
+        "content": "phase_0_requirements_clarification.md",
+        "next": "1",
+        "description": "Extract architecture context: app type, scale, complexity, cloud strategy (default: on-premise)",
+        "configuration": {
+            "team_defaults": {
+                "team_size": "two-person",
+                "cloud_strategy": "on-premise",
+                "pattern_priority": "modular",
+            },
+        },
+    },
+    "1": {
+        "name": "PATTERN_SELECTION",
+        "title": "Pattern Selection",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-analysis",
+        "content": "phase_1_pattern_selection.md",
+        "next": "2",
+        "description": "Select optimal architecture pattern using decision framework (team size × scale × complexity)",
+    },
+    "2": {
+        "name": "ARCHITECTURE_DESIGN",
+        "title": "Architecture Design",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-generation",
+        "content": "phase_2_architecture_design.md",
+        "next": "3",
+        "description": "Generate HLD, LLD, database schema, API specifications",
+    },
+    "3": {
+        "name": "SECURITY_ARCHITECTURE",
+        "title": "Security Architecture",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-generation",
+        "content": "phase_3_security_architecture.md",
+        "next": "4",
+        "description": "Design OWASP-aligned security architecture (simplified for small teams)",
+    },
+    "4": {
+        "name": "INFRASTRUCTURE_ARCHITECTURE",
+        "title": "Infrastructure Architecture",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-generation",
+        "content": "phase_4_infrastructure_architecture.md",
+        "next": "5",
+        "description": "Generate IaC templates (on-premise default: Docker Compose, local deployment)",
+    },
+    "5": {
+        "name": "PLATFORM_EXTENSIONS",
+        "title": "Platform Extensions",
+        "type": PhaseType.OPTIONAL,
+        "uses_atomic_skill": "orchestrate-generation",
+        "content": "phase_5_platform_extensions.md",
+        "trigger": "phase_0_identifies_platform_specific_requirements",
+        "next": "6",
+        "description": "Platform-specific considerations (web, mobile, desktop, API-only)",
+    },
+    "6": {
+        "name": "VALIDATION_DOCUMENTATION",
+        "title": "Validation & Documentation",
+        "type": PhaseType.REMEDIATION,
+        "uses_atomic_skill": "orchestrate-validation",
+        "content": "phase_6_validation_documentation.md",
+        "remediation_target": "2",
+        "max_remediation": 2,
+        "next": None,
+        "description": "Validate artifacts, generate C4 diagrams, create ADRs",
+    },
+}
+
+
+# =============================================================================
 # PHASE DEFINITIONS - develop-command
 # =============================================================================
 
@@ -462,15 +571,231 @@ PERFORM_RESEARCH_PHASES: Dict[str, Dict[str, Any]] = {
 
 
 # =============================================================================
+# PHASE DEFINITIONS - develop-requirements
+# =============================================================================
+
+DEVELOP_REQUIREMENTS_PHASES: Dict[str, Dict[str, Any]] = {
+    "0": {
+        "name": "CLARIFICATION",
+        "title": "Requirements Clarification",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-clarification",
+        "content": "phase_0_clarification.md",
+        "next": "1",
+        "description": "Clarify project context and detect stakeholder mode (single/multi)",
+    },
+    "1": {
+        "name": "ELICITATION",
+        "title": "Requirements Elicitation",
+        "type": PhaseType.ITERATIVE,
+        "uses_atomic_skill": "orchestrate-research",
+        "content": "phase_1_elicitation.md",
+        "next": "2",
+        "description": "Gather requirements using multiple elicitation techniques",
+        "configuration": {
+            "iteration_agents": ["research"],
+        },
+    },
+    "2": {
+        "name": "SPECIFICATION",
+        "title": "Requirements Specification",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-synthesis",
+        "content": "phase_2_specification.md",
+        "next": "3",
+        "description": "Transform raw requirements into structured user stories and SMART NFRs",
+    },
+    "3": {
+        "name": "TRACEABILITY",
+        "title": "Traceability Matrix Creation",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-generation",
+        "content": "phase_3_traceability.md",
+        "next": "4",
+        "description": "Create RTM linking requirements to stories and acceptance criteria",
+    },
+    "4": {
+        "name": "VALIDATION",
+        "title": "Requirements Validation",
+        "type": PhaseType.REMEDIATION,
+        "uses_atomic_skill": "orchestrate-validation",
+        "content": "phase_4_validation.md",
+        "next": "5",
+        "description": "Validate requirements with stakeholder, loop back to elicitation if gaps found",
+        "configuration": {
+            "remediation_target": "1",
+            "max_remediation": 2,
+        },
+    },
+    "5": {
+        "name": "CHANGE_MANAGEMENT_SETUP",
+        "title": "Change Management Setup",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-generation",
+        "content": "phase_5_change_management_setup.md",
+        "next": None,
+        "description": "Establish change management process for requirements evolution",
+    },
+}
+
+
+# =============================================================================
+# PHASE DEFINITIONS - develop-backend
+# =============================================================================
+
+DEVELOP_BACKEND_PHASES: Dict[str, Dict[str, Any]] = {
+    "0": {
+        "name": "REQUIREMENTS_CLARIFICATION",
+        "title": "Requirements Clarification",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-clarification",
+        "script": None,
+        "content": "phase_0_requirements_clarification.md",
+        "next": "1",
+        "description": "Clarify backend requirements via Johari discovery - tech stack, clients, scalability, security",
+    },
+    "1": {
+        "name": "API_DESIGN",
+        "title": "API Design",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-synthesis",
+        "script": None,
+        "content": "phase_1_api_design.md",
+        "next": "2",
+        "description": "Design API contracts (REST/GraphQL), versioning, rate limiting, pagination",
+    },
+    "2": {
+        "name": "DATABASE_ARCHITECTURE",
+        "title": "Database Architecture",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-synthesis",
+        "script": None,
+        "content": "phase_2_database_architecture.md",
+        "next": "3",
+        "description": "Schema design, indexing strategy, migration approach, data integrity",
+    },
+    "3": {
+        "name": "AUTH_SECURITY",
+        "title": "Authentication & Security",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-generation",
+        "script": None,
+        "content": "phase_3_auth_security.md",
+        "next": "4",
+        "description": "Implement JWT/OAuth patterns, input validation, OWASP alignment",
+    },
+    "4": {
+        "name": "ARCHITECTURE_SCALABILITY",
+        "title": "Architecture & Scalability",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-synthesis",
+        "script": None,
+        "content": "phase_4_architecture_scalability.md",
+        "next": "5",
+        "description": "Define scaling strategy, caching, circuit breakers, service boundaries",
+    },
+    "5": {
+        "name": "TESTING_QUALITY",
+        "title": "Testing & Quality",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-generation",
+        "script": None,
+        "content": "phase_5_testing_quality.md",
+        "next": "6",
+        "description": "Implement test pyramid (unit, integration, E2E), achieve 70%+ coverage",
+    },
+    "6": {
+        "name": "MONITORING_OBSERVABILITY",
+        "title": "Monitoring & Observability",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-generation",
+        "script": None,
+        "content": "phase_6_monitoring_observability.md",
+        "next": "7",
+        "description": "Add structured logging, metrics, distributed tracing, health checks, alerting",
+    },
+    "7": {
+        "name": "VALIDATION",
+        "title": "Final Validation",
+        "type": PhaseType.REMEDIATION,
+        "uses_atomic_skill": "orchestrate-validation",
+        "script": None,
+        "content": "phase_7_validation.md",
+        "next": None,
+        "description": "Validate all components, run security scan, verify all gates",
+        "remediation_target": "3",
+        "max_remediation": 2,
+    },
+}
+
+
+# =============================================================================
+# PHASE DEFINITIONS - perform-qa-analysis
+# =============================================================================
+
+PERFORM_QA_ANALYSIS_PHASES: Dict[str, Dict[str, Any]] = {
+    "0": {
+        "name": "CLARIFICATION",
+        "title": "Requirements Clarification",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-clarification",
+        "content": "phase_0_clarification.md",
+        "next": "1",
+        "description": "Clarify QA scope, platform, quality thresholds, and mode",
+    },
+    "1": {
+        "name": "UNIT_ORCHESTRATION",
+        "title": "Unit Test Orchestration",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-generation",
+        "content": "phase_1_unit_orchestration.md",
+        "next": "2",
+        "description": "Orchestrate unit test execution (configurable allocation)",
+    },
+    "2": {
+        "name": "INTEGRATION_ORCHESTRATION",
+        "title": "Integration Test Orchestration",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-generation",
+        "content": "phase_2_integration_orchestration.md",
+        "next": "3",
+        "description": "Orchestrate integration test execution",
+    },
+    "3": {
+        "name": "E2E_ORCHESTRATION",
+        "title": "E2E Test Orchestration",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-generation",
+        "content": "phase_3_e2e_orchestration.md",
+        "next": "4",
+        "description": "Orchestrate E2E test execution with Playwright MCP for web",
+    },
+    "4": {
+        "name": "QUALITY_SYNTHESIS",
+        "title": "Quality Synthesis & Validation",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-validation",
+        "content": "phase_4_quality_synthesis.md",
+        "next": None,
+        "description": "Aggregate results, validate quality, generate report",
+    },
+}
+
+
+# =============================================================================
 # SKILL PHASE REGISTRY
 # =============================================================================
 # Maps skill names to their phase configurations
 
 SKILL_PHASES: Dict[str, Dict[str, Dict[str, Any]]] = {
+    "develop-architecture": DEVELOP_ARCHITECTURE_PHASES,
+    "develop-backend": DEVELOP_BACKEND_PHASES,
     "develop-skill": DEVELOP_SKILL_PHASES,
     "develop-learnings": DEVELOP_LEARNINGS_PHASES,
     "develop-command": DEVELOP_COMMAND_PHASES,
     "perform-research": PERFORM_RESEARCH_PHASES,
+    "develop-requirements": DEVELOP_REQUIREMENTS_PHASES,
+    "perform-qa-analysis": PERFORM_QA_ANALYSIS_PHASES,
 }
 
 

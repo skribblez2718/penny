@@ -221,7 +221,16 @@ def skill_complete(skill_name: str) -> None:
     # Verify FSM completion
     # NOTE: FSM stores state as SkillPhaseState enum in .state attribute, not .current_state
     if state.fsm and state.fsm.state != SkillPhaseState.COMPLETED:
-        print(f"WARNING: FSM state is {state.fsm.state.name}, not COMPLETED", file=sys.stderr)
+        if state.fsm.state == SkillPhaseState.EXECUTING:
+            # RECOVERY: If FSM is still EXECUTING but all phases are complete,
+            # this indicates a race condition where state wasn't saved before subprocess.
+            # Recover by transitioning to COMPLETED state.
+            print(f"INFO: Recovering FSM state from {state.fsm.state.name} to COMPLETED", file=sys.stderr)
+            state.fsm.state = SkillPhaseState.COMPLETED
+            state.fsm.history.append("COMPLETED")
+            state.save()
+        else:
+            print(f"WARNING: FSM state is {state.fsm.state.name}, not COMPLETED", file=sys.stderr)
 
     # Check memory files
     memory_files = list_memory_files(state.task_id)

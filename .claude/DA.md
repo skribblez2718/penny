@@ -195,9 +195,14 @@ Route to skills based on semantic triggers. When confidence is not HIGH, HALT an
 
 | Skill | Semantic Trigger | NOT for |
 |-------|------------------|---------|
+| develop-architecture | design architecture, architect system, HLD/LLD, database schema, ADRs, C4 diagrams | UI/UX design, code implementation, infrastructure deployment |
+| develop-backend | backend development, API design, database architecture, authentication, microservices | frontend development, UI/UX design, infrastructure deployment |
 | develop-command | create command, slash command, modify command, utility command | workflow skills, multi-phase operations, cognitive workflows |
 | develop-learnings | capture learnings, document insights, preserve knowledge, post-workflow capture | mid-workflow tasks, skill creation, active execution |
+| develop-requirements | requirements gathering, elicitation, user stories, acceptance criteria, validation | implementation, technology selection, code development |
 | develop-skill | create skill, modify skill, update workflow, new skill | system modifications, direct code execution, architecture changes |
+| develop-ui-ux | design system, UI/UX design, design tokens, component library, accessibility audit | code implementation, visual mockups, architecture design, requirements gathering |
+| perform-qa-analysis | QA orchestration, test orchestration, quality gates, production readiness, testing pyramid | test execution, report generation, test data management |
 | perform-research | deep research, comprehensive investigation, multi-source research | quick lookups, simple searches, single-source queries |
 
 #### Atomic Skills

@@ -79,7 +79,7 @@ def invoke_phase_goal_memory(
     phase_transition_id = f"phase-{completed_phase_id}-to-{next_phase_id}"
 
     # Phase-specific expected output file
-    expected_file = f".claude/memory/{state.task_id}-memory-{phase_transition_id}-memory.md"
+    expected_file = f".claude/memory/{state.task_id}-{phase_transition_id}-memory.md"
 
     # Minimal output - just the essential directive
     print(f"\nPhase transition: {completed_phase_id} → {next_phase_id}")
@@ -435,10 +435,10 @@ def advance_phase(skill_name: str, session_id: str) -> None:
 
         # Use phase-specific file path for this transition
         if transition_id:
-            goal_memory_filename = f"{state.task_id}-memory-{transition_id}-memory.md"
+            goal_memory_filename = f"{state.task_id}-{transition_id}-memory.md"
         else:
             # Fallback for legacy state files without transition_id
-            goal_memory_filename = f"{state.task_id}-memory-memory.md"
+            goal_memory_filename = f"{state.task_id}-memory.md"
 
         goal_memory_file = Path(".claude/memory") / goal_memory_filename
 
@@ -561,6 +561,12 @@ def advance_phase(skill_name: str, session_id: str) -> None:
         print(f"ERROR: Transition failed: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # CRITICAL FIX: Save state IMMEDIATELY after FSM transition and BEFORE spawning
+    # any subprocess. This prevents race condition where subprocess loads stale state.
+    # Bug reference: FSM transitions to COMPLETED in memory, but complete.py loads
+    # from disk before state.save() was called, seeing EXECUTING instead of COMPLETED.
+    state.save()
+
     # Check if transition resulted in completion
     if actual_next == "COMPLETED":
         # AUTO-CALL complete.py
@@ -578,7 +584,7 @@ def advance_phase(skill_name: str, session_id: str) -> None:
         else:
             print(f"WARNING: complete.py not found at {complete_script}", file=sys.stderr)
 
-        state.save()
+        # Note: state.save() already called before COMPLETED check (line 568)
         return
 
     # Get next phase config
@@ -613,8 +619,7 @@ def advance_phase(skill_name: str, session_id: str) -> None:
     print_agent_directive(next_config)
     print(f"After agent completes: `python3 .claude/orchestration/protocols/skill/core/advance_phase.py {skill_name} {session_id}`")
 
-    # Save state
-    state.save()
+    # Note: state.save() already called after FSM transition (line 568)
 
 
 def complete_branch(skill_name: str, session_id: str, phase_id: str, branch_id: str) -> None:

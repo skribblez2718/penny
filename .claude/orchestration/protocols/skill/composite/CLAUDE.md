@@ -179,9 +179,14 @@ Phase content files reference resources using the full path:
 
 | Skill | Semantic Trigger | NOT for | Phases |
 |-------|------------------|---------|--------|
+| develop-architecture | design architecture, HLD/LLD, database schema, ADRs | UI/UX, code implementation | 7 |
+| develop-backend | backend development, API design, database, auth, architecture | frontend, UI/UX, infrastructure | 8 |
 | develop-command | create/modify slash commands, utility commands | workflow skills, multi-phase operations | 3 |
 | develop-learnings | capture learnings, document insights, preserve knowledge | mid-workflow, skill creation, active execution | 7 |
+| develop-requirements | requirements gathering, user stories, validation | implementation, code | 6 |
 | develop-skill | create/modify skills, update workflows, new skill | system mods, direct code, architecture | 9 |
+| develop-ui-ux | design system, UI/UX design, design tokens, component library, accessibility audit | code implementation, visual mockups, architecture design | 7 |
+| perform-qa-analysis | QA orchestration, test orchestration | test execution, report generation | 5 |
 | perform-research | deep research, comprehensive investigation | quick lookups, single-source | 6 |
 
 ## Call Chain: Skill Entry → Phases → Completion

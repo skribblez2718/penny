@@ -76,3 +76,11 @@ If `NO-GO`:
 2. Generation-agent fixes issues
 3. Validation-agent re-verifies
 4. Max 2 remediation loops before escalation to user
+
+## Critical Rules
+
+**Config.py Registration is Critical Blocker:** Config.py SKILL_PHASES registration is the CRITICAL BLOCKER. Validate FIRST before other checks. If missing, skill cannot execute at all (entry.py crashes, FSM cannot initialize).
+
+**Skill Validation 4-Point Checklist:** Validate composite skills using 4 points: (1) config.py SKILL_PHASES registration [BLOCKING], (2) atomic skill naming uses orchestrate-X not X agent [MAJOR], (3) agent template structure correctness [MODERATE], (4) composition_depth accuracy [MODERATE].
+
+**Atomic Skill Naming Rule:** Always use atomic skill names (orchestrate-clarification, orchestrate-analysis) not agent names (clarification agent, analysis agent) in phase content and SKILL.md files. Agent names cause routing failures.

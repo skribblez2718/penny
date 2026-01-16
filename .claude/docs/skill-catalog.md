@@ -22,7 +22,48 @@ Composite skills orchestrate multiple cognitive agents through defined phase seq
 | develop-command | create/modify slash commands, utility commands | workflow skills, multi-phase operations | `.claude/skills/develop-command/` |
 | develop-learnings | capture learnings, document insights, preserve knowledge | mid-workflow tasks, skill creation, active execution | `.claude/skills/develop-learnings/` |
 | develop-skill | create/modify skills, update workflows, new skill | system mods, direct code, architecture changes | `.claude/skills/develop-skill/` |
+| develop-ui-ux | design system, UI/UX design, design tokens, component library, accessibility audit | code implementation, visual mockups, architecture design, requirements gathering | `.claude/skills/develop-ui-ux/` |
+| perform-qa-analysis | QA orchestration, test orchestration, quality gates, production readiness, testing pyramid | test execution, report generation, test data management | `.claude/skills/perform-qa-analysis/` |
 | perform-research | deep research, comprehensive investigation, multi-source research | quick lookups, simple searches, single-source queries | `.claude/skills/perform-research/` |
+
+### develop-architecture
+
+**Purpose:** Transform requirements into comprehensive architecture artifacts (HLD, LLD, database schema, API specs, security architecture, IaC templates, ADRs, C4 diagrams)
+
+**Type:** composite
+
+**When to Use:**
+- Design system architecture for new applications
+- Create HLD/LLD documents
+- Generate database schemas with normalization
+- Design OWASP-aligned security architecture
+- Create infrastructure templates (on-premise default)
+- Generate ADRs and C4 diagrams
+
+**Location:** `.claude/skills/develop-architecture/`
+
+**Orchestration:** `.claude/orchestration/protocols/skill/composite/develop_architecture/`
+
+---
+
+### develop-backend
+
+**Purpose:** Production-grade backend development with technology-agnostic patterns
+
+**Type:** composite
+
+**When to Use:**
+- Building REST/GraphQL APIs with authentication
+- Designing database schemas with migrations
+- Implementing JWT/OAuth authentication patterns
+- Setting up microservices architecture
+- Configuring testing, monitoring, and observability
+
+**Location:** `.claude/skills/develop-backend/`
+
+**Orchestration:** `.claude/orchestration/protocols/skill/composite/develop_backend/`
+
+---
 
 ### develop-command
 
@@ -47,7 +88,69 @@ Composite skills orchestrate multiple cognitive agents through defined phase seq
 
 ---
 
+### perform-qa-analysis
+
+**Purpose:** Platform-agnostic QA orchestration for multi-platform applications
+
+**Type:** composite
+
+**When to Use:**
+- Orchestrating QA execution across testing pyramid (unit, integration, E2E)
+- Running production readiness quality gates
+- Validating test coverage and quality thresholds
+- Coordinating platform-specific test strategies (web, mobile, desktop, backend)
+- Generating comprehensive QA reports with actionable insights
+
+**Location:** `.claude/skills/perform-qa-analysis/`
+
+**Orchestration:** `.claude/orchestration/protocols/skill/composite/perform_qa_analysis/`
+
+---
+
+### develop-requirements
+
+**Purpose:** Platform-agnostic requirements engineering workflow with single-stakeholder default
+
+**Type:** composite
+
+**When to Use:**
+- Gathering requirements from stakeholders
+- Writing user stories and acceptance criteria
+- Creating requirements traceability matrix
+- Validating requirements before development
+
+**Location:** `.claude/skills/develop-requirements/`
+
+**Orchestration:** `.claude/orchestration/protocols/skill/composite/develop_requirements/`
+
+---
+
 ### develop-skill
+
+**Purpose:** Meta-skill for creating and updating workflow skills using 6 universal cognitive agents. Supports composite-to-composite skill composition.
+
+---
+
+### develop-ui-ux
+
+**Purpose:** Platform-agnostic UI/UX design system generation
+
+**Type:** composite
+
+**When to Use:**
+- Design system creation with platform-agnostic token architecture
+- UI/UX design patterns and component library specifications
+- Design tokens implementation (three-tier taxonomy)
+- Component library design using atomic design principles
+- Accessibility compliance (WCAG audit and documentation)
+
+**Location:** `.claude/skills/develop-ui-ux/`
+
+**Orchestration:** `.claude/orchestration/protocols/skill/composite/develop_ui_ux/`
+
+---
+
+### perform-research
 
 **Purpose:** Meta-skill for creating and updating workflow skills using 6 universal cognitive agents. Supports composite-to-composite skill composition.
 

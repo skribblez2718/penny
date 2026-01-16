@@ -130,6 +130,6 @@ def skill_entry(
 
         # Print advance directive for after agent completes
         print(f"\n## After Agent Completes")
-        print(f"Run: `python3 .claude/orchestration/protocols/skill/advance_phase.py {skill_name} {state.session_id}`")
+        print(f"Run: `python3 .claude/orchestration/protocols/skill/core/advance_phase.py {skill_name} {state.session_id}`")
 
     return state

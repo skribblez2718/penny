@@ -1,6 +1,6 @@
 {
-  "last_updated": "2026-01-14T16:50:05.943561",
-  "episode_count": 3,
+  "last_updated": "2026-01-16T16:05:45.423384",
+  "episode_count": 12,
   "episodes": [
     {
       "episode_id": "d9ff97bacb0b",
@@ -49,6 +49,177 @@
         "task",
         "skill",
         "research"
+      ],
+      "agent_sequence": [],
+      "outcome": "success",
+      "context_type": "technical",
+      "unknowns_resolved": [],
+      "key_decisions": [],
+      "lessons_learned": ""
+    },
+    {
+      "episode_id": "65c0f323b0d0",
+      "task_id": "task-backend-skill-research",
+      "timestamp": "2026-01-15T09:26:33.390025",
+      "skill_name": "perform-research",
+      "task_description": "Task task-backend-skill-research",
+      "task_keywords": [
+        "task",
+        "backend",
+        "skill",
+        "research"
+      ],
+      "agent_sequence": [],
+      "outcome": "success",
+      "context_type": "technical",
+      "unknowns_resolved": [],
+      "key_decisions": [],
+      "lessons_learned": ""
+    },
+    {
+      "episode_id": "532dbe37743e",
+      "task_id": "task-qa-analysis-skill-plan",
+      "timestamp": "2026-01-15T11:48:01.442359",
+      "skill_name": "perform-research",
+      "task_description": "Task task-qa-analysis-skill-plan",
+      "task_keywords": [
+        "task",
+        "analysis",
+        "skill",
+        "plan"
+      ],
+      "agent_sequence": [],
+      "outcome": "success",
+      "context_type": "technical",
+      "unknowns_resolved": [],
+      "key_decisions": [],
+      "lessons_learned": ""
+    },
+    {
+      "episode_id": "04d8833ad708",
+      "task_id": "task-skill-develop-requirements",
+      "timestamp": "2026-01-15T14:51:53.749080",
+      "skill_name": "develop-skill",
+      "task_description": "Task task-skill-develop-requirements",
+      "task_keywords": [
+        "task",
+        "skill",
+        "develop",
+        "requirements"
+      ],
+      "agent_sequence": [],
+      "outcome": "success",
+      "context_type": "technical",
+      "unknowns_resolved": [],
+      "key_decisions": [],
+      "lessons_learned": ""
+    },
+    {
+      "episode_id": "084a0d672ef2",
+      "task_id": "task-skill-develop-architecture",
+      "timestamp": "2026-01-15T16:27:26.623339",
+      "skill_name": "develop-skill",
+      "task_description": "Task task-skill-develop-architecture",
+      "task_keywords": [
+        "task",
+        "skill",
+        "develop",
+        "architecture"
+      ],
+      "agent_sequence": [],
+      "outcome": "success",
+      "context_type": "technical",
+      "unknowns_resolved": [],
+      "key_decisions": [],
+      "lessons_learned": ""
+    },
+    {
+      "episode_id": "c67150baf22e",
+      "task_id": "task-research-develop-ui-ux-design-systems",
+      "timestamp": "2026-01-16T08:36:34.861265",
+      "skill_name": "perform-research",
+      "task_description": "Task task-research-develop-ui-ux-design-systems",
+      "task_keywords": [
+        "task",
+        "research",
+        "develop",
+        "design",
+        "systems"
+      ],
+      "agent_sequence": [],
+      "outcome": "success",
+      "context_type": "technical",
+      "unknowns_resolved": [],
+      "key_decisions": [],
+      "lessons_learned": ""
+    },
+    {
+      "episode_id": "939d3150622b",
+      "task_id": "task-skill-develop-ui-ux",
+      "timestamp": "2026-01-16T09:27:06.331113",
+      "skill_name": "develop-skill",
+      "task_description": "Task task-skill-develop-ui-ux",
+      "task_keywords": [
+        "task",
+        "skill",
+        "develop"
+      ],
+      "agent_sequence": [],
+      "outcome": "success",
+      "context_type": "technical",
+      "unknowns_resolved": [],
+      "key_decisions": [],
+      "lessons_learned": ""
+    },
+    {
+      "episode_id": "e7165447d19f",
+      "task_id": "learnings-task-skill-develop-ui-ux",
+      "timestamp": "2026-01-16T11:11:23.771087",
+      "skill_name": "develop-learnings",
+      "task_description": "Task learnings-task-skill-develop-ui-ux",
+      "task_keywords": [
+        "task",
+        "learnings",
+        "skill",
+        "develop"
+      ],
+      "agent_sequence": [],
+      "outcome": "success",
+      "context_type": "technical",
+      "unknowns_resolved": [],
+      "key_decisions": [],
+      "lessons_learned": ""
+    },
+    {
+      "episode_id": "950c12808c13",
+      "task_id": "task-skill-develop-backend",
+      "timestamp": "2026-01-16T14:48:54.025349",
+      "skill_name": "develop-skill",
+      "task_description": "Task task-skill-develop-backend",
+      "task_keywords": [
+        "task",
+        "skill",
+        "develop",
+        "backend"
+      ],
+      "agent_sequence": [],
+      "outcome": "success",
+      "context_type": "technical",
+      "unknowns_resolved": [],
+      "key_decisions": [],
+      "lessons_learned": ""
+    },
+    {
+      "episode_id": "829512ef9543",
+      "task_id": "task-skill-perform-qa-analysis",
+      "timestamp": "2026-01-16T16:05:45.423128",
+      "skill_name": "develop-skill",
+      "task_description": "Task task-skill-perform-qa-analysis",
+      "task_keywords": [
+        "task",
+        "skill",
+        "perform",
+        "analysis"
       ],
       "agent_sequence": [],
       "outcome": "success",
