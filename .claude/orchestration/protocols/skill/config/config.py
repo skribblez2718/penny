@@ -22,6 +22,12 @@ _ORCHESTRATION_ROOT = _SKILL_PROTOCOLS_ROOT.parent
 if str(_SKILL_PROTOCOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(_SKILL_PROTOCOLS_ROOT))
 
+# Import shared directive core (use sys.path.insert - NEVER relative imports)
+_DIRECTIVES_PATH = Path(__file__).resolve().parent.parent.parent.parent
+if str(_DIRECTIVES_PATH) not in sys.path:
+    sys.path.insert(0, str(_DIRECTIVES_PATH))
+from directives.base import _format_directive_core
+
 # Directory paths (using skill protocol root's __init__.py constants)
 COMPOSITE_DIR = _SKILL_PROTOCOLS_ROOT / "composite"
 ATOMIC_DIR = _SKILL_PROTOCOLS_ROOT / "atomic"
@@ -891,8 +897,8 @@ def format_skill_directive(
     """
     Format a mandatory execution directive for skill phases.
 
-    This matches the format used in protocols/reasoning/config/config.py:format_mandatory_directive
-    to ensure Claude treats skill phase execution as non-negotiable.
+    This uses the centralized _format_directive_core() to ensure consistent
+    directive formatting across all protocols.
 
     Args:
         command: The command to execute (without backticks)
@@ -906,11 +912,11 @@ def format_skill_directive(
     phases = get_skill_phases(skill_name)
     total_phases = len(phases) if phases else 9
 
-    directive = f"""
-**MANDATORY - EXECUTE IMMEDIATELY BEFORE ANY OTHER ACTION:**
-`{command}`
-
-⚠️ This is Phase {phase_id} of {total_phases} in the {skill_name} workflow.
-{context}DO NOT proceed with any other action until this command is executed.
-"""
-    return directive.strip()
+    return _format_directive_core(
+        command,
+        context,
+        warnings=[
+            f"This is Phase {phase_id} of {total_phases} in the {skill_name} workflow.",
+            "DO NOT proceed with any other action until this command is executed.",
+        ]
+    )

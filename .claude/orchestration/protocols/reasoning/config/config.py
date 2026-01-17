@@ -14,6 +14,12 @@ import sys
 from pathlib import Path
 from typing import Final
 
+# Import shared directive core (use sys.path.insert - NEVER relative imports)
+_ORCHESTRATION_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+if str(_ORCHESTRATION_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ORCHESTRATION_ROOT))
+from directives.base import _format_directive_core
+
 # Path setup - navigate to reasoning protocol root
 _CONFIG_DIR = Path(__file__).resolve().parent
 _REASONING_ROOT = _CONFIG_DIR.parent
@@ -90,7 +96,7 @@ def ensure_directories() -> None:
 
 def format_mandatory_directive(command: str, context: str = "") -> str:
     """
-    Format a mandatory execution directive.
+    Format a mandatory reasoning directive.
 
     This wording is designed to be unambiguous about the requirement
     to execute before any other action. The strong language ensures
@@ -103,12 +109,12 @@ def format_mandatory_directive(command: str, context: str = "") -> str:
     Returns:
         Formatted directive string with mandatory enforcement language
     """
-    directive = f"""
-**MANDATORY - EXECUTE IMMEDIATELY BEFORE ANY OTHER ACTION:**
-`{command}`
-
-⚠️ CRITICAL: Execute this command NOW. Do NOT respond with text first.
-⚠️ The reasoning protocol MUST complete before ANY task work begins.
-⚠️ FAILURE to execute this directive breaks the system's reliability guarantee.
-{context}"""
-    return directive.strip()
+    return _format_directive_core(
+        command,
+        context,
+        warnings=[
+            "CRITICAL: Execute this command NOW. Do NOT respond with text first.",
+            "The reasoning protocol MUST complete before ANY task work begins.",
+            "FAILURE to execute this directive breaks the system's reliability guarantee.",
+        ]
+    )

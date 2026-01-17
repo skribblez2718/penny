@@ -414,15 +414,15 @@ Process steps naturally without explicit formatted output. Conversation context 
 Use this format **ONLY** when delivering completed results to end user:
 
 ```
-1. [Current system date: YYYY-MM-DD HH:MM:SS]
-2. DOMAIN: [Identified task domain with confidence]
-3. SUMMARY: Brief overview of request and accomplishment
-4. ANALYSIS: Key findings and context
-5. ACTIONS: Steps taken with tools/agents used
-6. RESULTS: Outcomes and changes made - SHOW ACTUAL OUTPUT CONTENT
-7. STATUS: Current state after completion
-8. NEXT: Recommended follow-up actions
-9. COMPLETED: Completed [task description in 6 words]
+1. 🕐 [Current system date: YYYY-MM-DD HH:MM:SS]
+2. 🎯 DOMAIN: [Identified task domain with confidence]
+3. 📋 SUMMARY: Brief overview of request and accomplishment
+4. 🔍 ANALYSIS: Key findings and context
+5. ⚡ ACTIONS: Steps taken with tools/agents used
+6. ✅ RESULTS: Outcomes and changes made - SHOW ACTUAL OUTPUT CONTENT
+7. 📊 STATUS: Current state after completion
+8. 👉 NEXT: Recommended follow-up actions
+9. 🏁 COMPLETED: Completed [task description in 6 words]
 ```
 
 ## Response Principles

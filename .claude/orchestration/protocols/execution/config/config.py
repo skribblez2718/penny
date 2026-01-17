@@ -28,6 +28,13 @@ _EXECUTION_PROTOCOLS_ROOT = _CONFIG_DIR.parent
 if str(_EXECUTION_PROTOCOLS_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXECUTION_PROTOCOLS_ROOT))
 
+# Import shared directive core (use sys.path.insert - NEVER relative imports)
+# Path: config.py → config/ → execution/ → protocols/ → orchestration/
+_ORCHESTRATION_ROOT = _EXECUTION_PROTOCOLS_ROOT.parent.parent
+if str(_ORCHESTRATION_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ORCHESTRATION_ROOT))
+from directives.base import _format_directive_core
+
 
 # =============================================================================
 # Paths
@@ -243,17 +250,14 @@ def format_mandatory_directive(
     Returns:
         Formatted directive string with mandatory enforcement language
     """
-    total_steps = ""
-    if protocol_type:
-        total = PROTOCOL_TOTAL_STEPS.get(protocol_type, 0)
-        if total:
-            total_steps = f" ({total} steps) "
+    total = PROTOCOL_TOTAL_STEPS.get(protocol_type, 0) if protocol_type else 0
+    step_info = f" ({total} steps) " if total else ""
 
-    directive = f"""
-**MANDATORY - EXECUTE IMMEDIATELY BEFORE ANY OTHER ACTION:**
-`{command}`
+    # Build context with DO NOT proceed suffix
+    full_context = f"{context}DO NOT proceed with any other action until this command is executed."
 
-⚠️ The Execution Protocol{total_steps}MUST complete ALL steps before task work concludes.
-{context}DO NOT proceed with any other action until this command is executed.
-"""
-    return directive.strip()
+    return _format_directive_core(
+        command,
+        full_context,
+        warnings=[f"The Execution Protocol{step_info}MUST complete ALL steps before task work concludes."]
+    )

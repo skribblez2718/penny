@@ -14,6 +14,12 @@ From Phase 0:
 - Target platforms
 - Design system scope
 
+From Phase 1:
+- **Application-specific research (MUST REVIEW)**
+  - Reference `.claude/plans/{task-name}/ui-research/ui_research_index.md`
+  - Use captured designs as visual quality benchmarks
+  - Justify component styling decisions against research findings
+
 From Phase 3 (CRITICAL):
 - Component tokens (button, input, card, etc.)
 - Semantic tokens (interactive, text, surface)

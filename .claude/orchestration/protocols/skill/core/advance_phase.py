@@ -37,6 +37,12 @@ _PROTOCOLS_DIR = _ORCHESTRATION_ROOT
 if str(_PROTOCOLS_DIR) not in sys.path:
     sys.path.insert(0, str(_PROTOCOLS_DIR))
 
+# Import shared directive core for consistent formatting
+_DIRECTIVES_PATH = _ORCHESTRATION_ROOT.parent
+if str(_DIRECTIVES_PATH) not in sys.path:
+    sys.path.insert(0, str(_DIRECTIVES_PATH))
+from directives.base import _format_directive_core
+
 from skill.core.state import SkillExecutionState
 from skill.config.config import (
     get_phase_config,
@@ -120,9 +126,8 @@ def format_mandatory_agent_directive(agent_name: str, phase_name: str = "") -> s
     """
     Format a mandatory agent invocation directive.
 
-    ENFORCEMENT: This wording mirrors protocols/reasoning/config.py's
-    format_mandatory_directive() to ensure Claude treats agent invocations
-    as non-negotiable requirements, not optional suggestions.
+    This uses the centralized _format_directive_core() to ensure consistent
+    directive formatting across all protocols.
 
     Args:
         agent_name: The agent to invoke via Task tool
@@ -131,22 +136,27 @@ def format_mandatory_agent_directive(agent_name: str, phase_name: str = "") -> s
     Returns:
         Formatted directive string with mandatory enforcement language
     """
-    context = f" for phase: {phase_name}" if phase_name else ""
-    directive = f"""
-## MANDATORY: Invoke Agent{context}
+    # Build section header
+    phase_context = f" for phase: {phase_name}" if phase_name else ""
+    section_header = f"## MANDATORY: Invoke Agent{phase_context}\n\n"
 
-**MANDATORY - EXECUTE IMMEDIATELY BEFORE ANY OTHER ACTION:**
+    # Task tool is invoked via tool call, not shell command
+    # Format as instruction rather than executable command
+    command = f"Task tool with subagent_type: {agent_name}"
 
-Use `Task` tool with:
-- `subagent_type`: `{agent_name}`
+    context = "The agent will create a memory file upon completion. Only then can the workflow advance."
 
-⚠️ This agent invocation is REQUIRED for workflow completion.
-DO NOT proceed with any other action until this agent is invoked.
-DO NOT perform the agent's work directly - you MUST spawn the agent via Task tool.
+    directive_body = _format_directive_core(
+        command,
+        context,
+        warnings=[
+            "This agent invocation is REQUIRED for workflow completion.",
+            "DO NOT proceed with any other action until this agent is invoked.",
+            "DO NOT perform the agent's work directly - you MUST spawn the agent via Task tool.",
+        ]
+    )
 
-The agent will create a memory file upon completion. Only then can the workflow advance.
-"""
-    return directive.strip()
+    return section_header + directive_body
 
 
 def print_agent_directive(phase_config: Dict[str, Any]) -> None:

@@ -8,11 +8,18 @@ This module provides centralized configuration for all cognitive agents,
 including their step sequences, colors, and model preferences.
 """
 
+import sys
 from pathlib import Path
 from typing import Final
 
 # Base directories - navigate up from config/ to agent/
 AGENT_PROTOCOLS_ROOT: Final[Path] = Path(__file__).parent.parent
+
+# Import shared directive core (use sys.path.insert - NEVER relative imports)
+_ORCHESTRATION_ROOT = AGENT_PROTOCOLS_ROOT.parent.parent
+if str(_ORCHESTRATION_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ORCHESTRATION_ROOT))
+from directives.base import _format_directive_core
 
 # Agent registry with metadata
 AGENT_REGISTRY: Final[dict[str, dict]] = {
@@ -250,6 +257,9 @@ def format_agent_directive(command: str, agent_name: str, step_num: int) -> str:
     """
     Format a mandatory execution directive for agent steps.
 
+    This uses the centralized _format_directive_core() to ensure consistent
+    directive formatting across all protocols.
+
     Args:
         command: The command to execute
         agent_name: Name of the agent
@@ -262,11 +272,13 @@ def format_agent_directive(command: str, agent_name: str, step_num: int) -> str:
     total_steps = len(config["steps"]) if config else 0
     cognitive_function = config.get("cognitive_function", "UNKNOWN") if config else "UNKNOWN"
 
-    directive = f"""
-**AGENT EXECUTION - STEP {step_num + 1} of {total_steps}:**
-`{command}`
+    context = f"Agent: {agent_name} ({cognitive_function})"
 
-Agent: {agent_name} ({cognitive_function})
-Execute this step before proceeding to the next.
-"""
-    return directive.strip()
+    return _format_directive_core(
+        command,
+        context,
+        warnings=[
+            f"AGENT EXECUTION - Step {step_num + 1} of {total_steps}.",
+            "Execute this step before proceeding to the next.",
+        ]
+    )

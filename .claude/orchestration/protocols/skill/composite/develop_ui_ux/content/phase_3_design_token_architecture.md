@@ -20,6 +20,9 @@ From Phase 1:
 - Three-tier token taxonomy research
 - Industry design system examples
 - Token format standards
+- **Application-specific template research (`.claude/plans/{task-name}/ui-research/`)**
+  - Color palette inspiration from captured designs
+  - Typography patterns from exemplary templates
 
 From Phase 2:
 - Platform-specific constraints
