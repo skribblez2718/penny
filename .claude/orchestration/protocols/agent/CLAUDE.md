@@ -244,6 +244,8 @@ When agents are invoked via the Task tool, the DA **MUST** structure the prompt 
 
 ### Memory File Format (Section-based with Johari Summary)
 
+⚠️ MANDATORY FORMAT - Phase advancement blocks without valid format
+
 ```markdown
 # {Agent} Agent Output: {Task Description}
 
@@ -262,6 +264,8 @@ When agents are invoked via the Task tool, the DA **MUST** structure the prompt 
 ---
 **{AGENT_NAME}_COMPLETE**
 ```
+
+All 4 sections MUST be present. advance_phase.py verifies format.
 
 ### Context Budget Limits (from config/config.py)
 

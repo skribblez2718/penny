@@ -202,6 +202,7 @@ Route to skills based on semantic triggers. When confidence is not HIGH, HALT an
 | develop-requirements | requirements gathering, elicitation, user stories, acceptance criteria, validation | implementation, technology selection, code development |
 | develop-skill | create skill, modify skill, update workflow, new skill | system modifications, direct code execution, architecture changes |
 | develop-ui-ux | design system, UI/UX design, design tokens, component library, accessibility audit | code implementation, visual mockups, architecture design, requirements gathering |
+| develop-web-app | full-stack web app, Flask Lit Tailwind, FastAPI PostgreSQL, web application development | mobile apps, desktop apps, CLI tools, static sites, API-only services |
 | perform-qa-analysis | QA orchestration, test orchestration, quality gates, production readiness, testing pyramid | test execution, report generation, test data management |
 | perform-research | deep research, comprehensive investigation, multi-source research | quick lookups, simple searches, single-source queries |
 

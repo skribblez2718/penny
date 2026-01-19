@@ -186,6 +186,7 @@ Phase content files reference resources using the full path:
 | develop-requirements | requirements gathering, user stories, validation | implementation, code | 6 |
 | develop-skill | create/modify skills, update workflows, new skill | system mods, direct code, architecture | 9 |
 | develop-ui-ux | design system, UI/UX design, design tokens, component library, accessibility audit | code implementation, visual mockups, architecture design | 7 |
+| develop-web-app | full-stack web app, Flask Lit Tailwind, FastAPI PostgreSQL | mobile apps, desktop apps, CLI tools, static sites | 8 |
 | perform-qa-analysis | QA orchestration, test orchestration | test execution, report generation | 5 |
 | perform-research | deep research, comprehensive investigation | quick lookups, single-source | 6 |
 
@@ -318,6 +319,15 @@ Each phase has these fields:
 7. Memory files track agent outputs, not phase outputs
    └→ .claude/memory/{task_id}-{agent}-memory.md
    └→ Phase outputs are in state.phase_outputs
+
+8. Register composite skills in ALL 6 locations:
+   └→ config.py: COMPOSITE_SKILLS entry
+   └→ config.py: {SKILL}_PHASES definition
+   └→ config.py: SKILL_PHASES mapping
+   └→ DA.md: skill routing table entry
+   └→ skill-catalog.md: documentation entry
+   └→ composite/CLAUDE.md: table entry (this file)
+   └→ Missing any location causes skill_entry() to fail
 ```
 
 ## Metacognitive Hook Bypass

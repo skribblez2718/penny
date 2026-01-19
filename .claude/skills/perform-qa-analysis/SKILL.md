@@ -92,7 +92,7 @@ This skill orchestrates comprehensive quality assurance across the testing pyram
 | Gate | Name | Criteria | Blocks |
 |------|------|----------|--------|
 | G1 | Requirements | Platform identified, mode set, thresholds defined | Phase 0→1 |
-| G2 | Unit Tests | ≥80% coverage, 100% pass rate | Phase 1→2 |
+| G2 | Unit Tests | TDD verified (tests precede implementation), ≥80% coverage, 100% pass rate | Phase 1→2 |
 | G3a | Integration Tests | 100% pass rate | Phase 2→3 |
 | G3b | E2E Tests | 100% pass rate | Phase 3→4 |
 | G4 | Quality Score | ≥0.75 overall quality score | Completion |
@@ -174,6 +174,7 @@ unit_pass_rate: 1.0      # 100% pass
 integration_pass_rate: 1.0  # 100% pass
 e2e_pass_rate: 1.0       # 100% pass
 overall_quality: 0.75    # 75% quality score
+tdd_enforcement: true    # Verify tests exist before implementation
 ```
 
 ## Output

@@ -238,8 +238,11 @@ def improve_prompt(prompt: str) -> Optional[str]:
 
         # Process streaming response - accumulate content from delta chunks
         # Reasoning models stream reasoning tokens first, then content
-        # We only care about the 'content' field in delta objects
+        # We accumulate BOTH content and reasoning_content, preferring content
+        # Some models (like gpt-oss) may output ONLY reasoning_content
+        debug_mode = os.environ.get("OPENAI_PROMPT_IMPROVE_DEBUG", "").lower() in ("1", "true", "yes")
         accumulated_content = ""
+        accumulated_reasoning = ""
         chunk_count = 0
 
         for line in response:
@@ -253,9 +256,12 @@ def improve_prompt(prompt: str) -> Optional[str]:
             if not line_text or line_text.startswith(':'):
                 continue
 
-            # Handle SSE data prefix
+            # Handle SSE data prefix OR raw NDJSON (no prefix)
             if line_text.startswith('data: '):
                 line_text = line_text[6:]
+            elif not line_text.startswith('{'):
+                # Not SSE data line and not raw JSON - skip
+                continue
 
             # Check for stream end
             if line_text == '[DONE]':
@@ -265,24 +271,84 @@ def improve_prompt(prompt: str) -> Optional[str]:
             try:
                 chunk = json.loads(line_text)
                 chunk_count += 1
+
+                # Debug logging for first 3 chunks
+                if debug_mode and chunk_count <= 3:
+                    print(f"[prompt-improve] DEBUG chunk {chunk_count}: {line_text[:200]}", file=sys.stderr)
+
                 choices = chunk.get('choices', [])
                 if choices:
-                    delta = choices[0].get('delta', {})
-                    content = delta.get('content', '')
+                    choice = choices[0]
+                    delta = choice.get('delta', {})
+                    message = choice.get('message', {})  # Non-streaming format
+
+                    # Check all possible content locations
+                    content = (
+                        delta.get('content') or
+                        message.get('content') or
+                        choice.get('text')  # Legacy completions format
+                    )
+                    reasoning = (
+                        delta.get('reasoning_content') or
+                        message.get('reasoning_content')
+                    )
+
+                    # Accumulate BOTH types (no longer skipping reasoning)
+                    if reasoning:
+                        accumulated_reasoning += reasoning
                     if content:
                         accumulated_content += content
+
             except json.JSONDecodeError:
+                if debug_mode:
+                    print(f"[prompt-improve] DEBUG: JSON decode failed for: {line_text[:100]}", file=sys.stderr)
                 continue  # Skip malformed chunks
+
+        # Determine final content: prefer content, fallback to reasoning
+        final_content = accumulated_content.strip() if accumulated_content.strip() else accumulated_reasoning.strip()
 
         # Return accumulated content
         print(f"[prompt-improve] Processed {chunk_count} chunks", file=sys.stderr)
-        if accumulated_content:
-            improved = accumulated_content.strip()
-            print(f"[prompt-improve] SUCCESS: Improved prompt length: {len(improved)} chars", file=sys.stderr)
-            return improved
-        else:
-            print("[prompt-improve] ERROR: No content received from stream", file=sys.stderr)
-            return None
+        print(f"[prompt-improve] Content length: {len(accumulated_content)}, Reasoning length: {len(accumulated_reasoning)}", file=sys.stderr)
+
+        if final_content:
+            print(f"[prompt-improve] SUCCESS: Improved prompt length: {len(final_content)} chars", file=sys.stderr)
+            return final_content
+
+        # Phase 2: Non-streaming fallback if streaming returned empty
+        print("[prompt-improve] Streaming returned empty, trying non-streaming fallback...", file=sys.stderr)
+
+        # Retry with stream=false
+        request_payload["stream"] = False
+        try:
+            fallback_data = json.dumps(request_payload).encode('utf-8')
+            fallback_req = urllib.request.Request(url, method='POST')
+            fallback_req.add_header('Content-Type', 'application/json')
+            if api_key:
+                fallback_req.add_header('Authorization', f'Bearer {api_key}')
+
+            fallback_response = urllib.request.urlopen(fallback_req, data=fallback_data, timeout=180, context=ssl_context)
+            if fallback_response.status == 200:
+                fallback_body = fallback_response.read().decode('utf-8')
+                fallback_json = json.loads(fallback_body)
+
+                if debug_mode:
+                    print(f"[prompt-improve] DEBUG non-streaming response: {fallback_body[:500]}", file=sys.stderr)
+
+                choices = fallback_json.get('choices', [])
+                if choices:
+                    message = choices[0].get('message', {})
+                    content = message.get('content') or message.get('reasoning_content')
+                    if content:
+                        content = content.strip()
+                        print(f"[prompt-improve] SUCCESS (non-streaming fallback): {len(content)} chars", file=sys.stderr)
+                        return content
+
+            print("[prompt-improve] ERROR: Non-streaming fallback also returned no content", file=sys.stderr)
+        except Exception as fallback_err:
+            print(f"[prompt-improve] ERROR: Non-streaming fallback failed: {fallback_err}", file=sys.stderr)
+
+        return None
 
     except urllib.error.HTTPError as e:
         error_body = ""

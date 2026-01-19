@@ -17,6 +17,14 @@ Production-grade backend development with technology-agnostic patterns covering 
 
 This skill guides the development of robust backend systems using proven patterns and best practices. It adapts to any technology stack (Node.js, Python, Go, Java, etc.) while maintaining consistent quality standards including OWASP security alignment, comprehensive testing, and production observability.
 
+## Core Principles
+
+1. **Absolute Imports Only** - All Python code MUST use absolute imports. Relative imports are forbidden to ensure code portability and clear dependency chains.
+
+2. **Directory Documentation** - Every code directory MUST include a CLAUDE.md file documenting the directory's purpose, key files, and usage patterns.
+
+3. **Compliance Alignment** - Security implementations MUST map to applicable compliance controls (OWASP mandatory; SOC II/PCI/HIPAA/GDPR if data classification requires).
+
 ## Phases
 
 The skill executes 8 phases with structured agent invocation:
@@ -121,6 +129,9 @@ The skill executes 8 phases with structured agent invocation:
 | `test_coverage_target` | `70` | Minimum test coverage percentage |
 | `api_style` | `rest` | API paradigm (rest, graphql, grpc) |
 | `deployment_target` | `docker` | Deployment method (docker, serverless, vm) |
+| `import_style` | `absolute` | REQUIRED - relative imports forbidden |
+| `documentation_standard` | `claude_md` | CLAUDE.md in every code directory |
+| `compliance_frameworks` | `['owasp']` | Security frameworks to verify |
 
 ## Agent Invocation Format
 

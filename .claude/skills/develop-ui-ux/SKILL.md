@@ -63,6 +63,8 @@ Do NOT invoke this skill for:
 3. **Accessibility-first** - WCAG compliance integrated from Phase 0, not retrofitted
 4. **Token-driven components** - All component specs reference design tokens, not hardcoded values
 5. **Validation with remediation** - Loops to Phase 4 (not Phase 3) to preserve validated token architecture
+6. **Absolute Imports Only** - All generated code MUST use absolute imports. Relative imports are forbidden to ensure code portability and clear dependency chains.
+7. **CLAUDE.md Documentation** - Every code directory MUST include a CLAUDE.md file documenting the directory's purpose, key files, and usage patterns.
 
 ## Workflow Protocol
 
@@ -146,6 +148,8 @@ This triggers Python-enforced phase orchestration. DO NOT manually read files or
 - Apply atomic design methodology
 - Reference design tokens in all component specs
 - **Gate:** Atomic design coverage complete (atoms + molecules + organisms)
+- [ ] All generated code uses absolute imports only
+- [ ] CLAUDE.md file created in each component directory
 
 #### Phase 5: Accessibility Compliance (LINEAR)
 - Generate WCAG compliance checklist (Level AA or AAA)
@@ -306,6 +310,13 @@ See `resources/validation-checklist.md` for complete validation criteria.
 - Ant Design System
 - Style Dictionary (token management)
 - Design Systems Handbook
+
+## Configuration Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `import_style` | `absolute` | REQUIRED - relative imports forbidden |
+| `documentation_standard` | `claude_md` | CLAUDE.md in every code directory |
 
 ## Agent Invocation Format
 

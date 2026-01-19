@@ -90,6 +90,11 @@ ATOMIC_SKILLS: Dict[str, Dict[str, Any]] = {
         "description": "Create artifacts using TDD methodology",
         "semantic_trigger": "artifact creation, TDD implementation",
         "not_for": "read-only or research tasks",
+        "tdd_enforcement": True,
+        "tdd_config": {
+            "test_patterns": ["test_*.py", "*_test.py", "*.test.ts", "*.spec.ts"],
+            "enforce_test_first": True,
+        },
     },
     "orchestrate-validation": {
         "agent": "validation",
@@ -169,6 +174,13 @@ COMPOSITE_SKILLS: Dict[str, Dict[str, Any]] = {
         "not_for": "test execution, report generation, test data management",
         "composition_depth": 0,
         "phases": "PERFORM_QA_ANALYSIS_PHASES",
+    },
+    "develop-web-app": {
+        "description": "Full-stack web application development with Flask+Lit+Tailwind frontend, FastAPI backend, PostgreSQL database",
+        "semantic_trigger": "full-stack web app, Flask Lit Tailwind, FastAPI PostgreSQL, web application development, full stack application",
+        "not_for": "mobile apps, desktop apps, CLI tools, static sites, API-only services",
+        "composition_depth": 1,
+        "phases": "DEVELOP_WEB_APP_PHASES",
     },
 }
 
@@ -789,6 +801,96 @@ PERFORM_QA_ANALYSIS_PHASES: Dict[str, Dict[str, Any]] = {
 
 
 # =============================================================================
+# PHASE DEFINITIONS - develop-web-app
+# =============================================================================
+
+DEVELOP_WEB_APP_PHASES: Dict[str, Dict[str, Any]] = {
+    "0": {
+        "name": "STACK_CLARIFICATION",
+        "title": "Stack Clarification",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-clarification",
+        "script": None,
+        "content": "phase_0_stack_clarification.md",
+        "next": "1",
+        "description": "Confirm stack configuration, auth architecture, and project constraints",
+    },
+    "1": {
+        "name": "REQUIREMENTS",
+        "title": "Requirements",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-synthesis",
+        "script": None,
+        "content": "phase_1_requirements.md",
+        "next": "2",
+        "description": "Follow develop-requirements workflow pattern to generate user stories, NFRs, RTM",
+    },
+    "2": {
+        "name": "ARCHITECTURE",
+        "title": "Architecture",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-synthesis",
+        "script": None,
+        "content": "phase_2_architecture.md",
+        "next": "3",
+        "description": "Follow develop-architecture workflow pattern to generate HLD, LLD, API specs, DB schema",
+    },
+    "3": {
+        "name": "UI_UX_DESIGN",
+        "title": "UI/UX Design",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-synthesis",
+        "script": None,
+        "content": "phase_3_ui_ux_design.md",
+        "next": "4",
+        "description": "Follow develop-ui-ux workflow pattern to generate design system with Tailwind",
+    },
+    "4": {
+        "name": "FRONTEND_DEVELOPMENT",
+        "title": "Frontend Development",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-generation",
+        "script": None,
+        "content": "phase_4_frontend_development.md",
+        "next": "5",
+        "description": "Generate Flask application with Lit components and Tailwind styling",
+    },
+    "5": {
+        "name": "BACKEND_DEVELOPMENT",
+        "title": "Backend Development",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-generation",
+        "script": None,
+        "content": "phase_5_backend_development.md",
+        "next": "6",
+        "description": "Follow develop-backend workflow pattern to generate FastAPI backend with PostgreSQL",
+    },
+    "6": {
+        "name": "INTEGRATION",
+        "title": "Integration",
+        "type": PhaseType.LINEAR,
+        "uses_atomic_skill": "orchestrate-synthesis",
+        "script": None,
+        "content": "phase_6_integration.md",
+        "next": "7",
+        "description": "Integrate frontend and backend, verify end-to-end flows",
+    },
+    "7": {
+        "name": "QA_VALIDATION",
+        "title": "QA Validation",
+        "type": PhaseType.REMEDIATION,
+        "uses_atomic_skill": "orchestrate-validation",
+        "script": None,
+        "content": "phase_7_qa_validation.md",
+        "next": None,
+        "description": "Follow perform-qa-analysis workflow pattern for comprehensive testing",
+        "remediation_target": "4",
+        "max_remediation": 2,
+    },
+}
+
+
+# =============================================================================
 # SKILL PHASE REGISTRY
 # =============================================================================
 # Maps skill names to their phase configurations
@@ -802,6 +904,7 @@ SKILL_PHASES: Dict[str, Dict[str, Dict[str, Any]]] = {
     "perform-research": PERFORM_RESEARCH_PHASES,
     "develop-requirements": DEVELOP_REQUIREMENTS_PHASES,
     "perform-qa-analysis": PERFORM_QA_ANALYSIS_PHASES,
+    "develop-web-app": DEVELOP_WEB_APP_PHASES,
 }
 
 

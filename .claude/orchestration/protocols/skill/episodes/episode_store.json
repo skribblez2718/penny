@@ -1,6 +1,6 @@
 {
-  "last_updated": "2026-01-16T16:05:45.423384",
-  "episode_count": 12,
+  "last_updated": "2026-01-18T15:43:44.634421",
+  "episode_count": 16,
   "episodes": [
     {
       "episode_id": "d9ff97bacb0b",
@@ -220,6 +220,85 @@
         "skill",
         "perform",
         "analysis"
+      ],
+      "agent_sequence": [],
+      "outcome": "success",
+      "context_type": "technical",
+      "unknowns_resolved": [],
+      "key_decisions": [],
+      "lessons_learned": ""
+    },
+    {
+      "episode_id": "6903f1d6ac94",
+      "task_id": "task-skill-update-develop-backend",
+      "timestamp": "2026-01-18T11:59:47.082224",
+      "skill_name": "develop-skill",
+      "task_description": "Task task-skill-update-develop-backend",
+      "task_keywords": [
+        "task",
+        "skill",
+        "update",
+        "develop",
+        "backend"
+      ],
+      "agent_sequence": [],
+      "outcome": "success",
+      "context_type": "technical",
+      "unknowns_resolved": [],
+      "key_decisions": [],
+      "lessons_learned": ""
+    },
+    {
+      "episode_id": "a4d03ede5f37",
+      "task_id": "task-skill-update-develop-architecture",
+      "timestamp": "2026-01-18T12:33:50.718727",
+      "skill_name": "develop-skill",
+      "task_description": "Task task-skill-update-develop-architecture",
+      "task_keywords": [
+        "task",
+        "skill",
+        "update",
+        "develop",
+        "architecture"
+      ],
+      "agent_sequence": [],
+      "outcome": "success",
+      "context_type": "technical",
+      "unknowns_resolved": [],
+      "key_decisions": [],
+      "lessons_learned": ""
+    },
+    {
+      "episode_id": "6a819f95b521",
+      "task_id": "task-skill-update-perform-qa-analysis",
+      "timestamp": "2026-01-18T13:42:05.926752",
+      "skill_name": "develop-skill",
+      "task_description": "Task task-skill-update-perform-qa-analysis",
+      "task_keywords": [
+        "task",
+        "skill",
+        "update",
+        "perform",
+        "analysis"
+      ],
+      "agent_sequence": [],
+      "outcome": "success",
+      "context_type": "technical",
+      "unknowns_resolved": [],
+      "key_decisions": [],
+      "lessons_learned": ""
+    },
+    {
+      "episode_id": "ede88ccba572",
+      "task_id": "learnings-task-skill-develop-web-app",
+      "timestamp": "2026-01-18T15:43:44.634198",
+      "skill_name": "develop-learnings",
+      "task_description": "Task learnings-task-skill-develop-web-app",
+      "task_keywords": [
+        "task",
+        "learnings",
+        "skill",
+        "develop"
       ],
       "agent_sequence": [],
       "outcome": "success",

@@ -356,6 +356,87 @@ app.use(helmet({
 - `X-Frame-Options: DENY`: Prevent clickjacking
 - `Content-Security-Policy`: XSS protection
 
+## Compliance Framework Mapping
+
+Security implementations MUST map to applicable compliance controls:
+
+### Mandatory: OWASP Top 10
+
+| OWASP Category | Control Mapping | Verification |
+|----------------|-----------------|--------------|
+| A01: Broken Access Control | Authorization middleware | Unit tests for role/ownership |
+| A02: Cryptographic Failures | TLS 1.3, bcrypt, JWT secrets | Config audit |
+| A03: Injection | Parameterized queries, ORM | Static analysis |
+| A04: Insecure Design | Threat modeling, secure defaults | Design review |
+| A05: Security Misconfiguration | Helmet, no defaults | Config checklist |
+| A06: Vulnerable Components | Dependency audit | CI/CD scan |
+| A07: Authentication Failures | MFA option, rate limiting | Penetration test |
+| A08: Data Integrity | Signed releases, checksums | CI/CD verification |
+| A09: Logging Failures | Centralized logging, alerts | Log audit |
+| A10: SSRF | URL validation, domain whitelist | Security scan |
+
+### Conditional: Extended Compliance (if data classification requires)
+
+| Framework | Triggers | Key Requirements |
+|-----------|----------|------------------|
+| **SOC II** | SaaS, B2B | Access logs, change management, incident response |
+| **PCI DSS** | Payment data | Card data isolation, encryption, access controls |
+| **HIPAA** | Health data | PHI encryption, audit trails, BAAs |
+| **GDPR** | EU user data | Consent, data portability, right to erasure |
+
+## Code Standards Verification
+
+### Absolute Import Gate
+
+**MANDATORY:** All generated Python code MUST use absolute imports.
+
+```python
+# ✅ CORRECT - Absolute imports
+from app.auth.jwt import create_access_token
+from app.models.user import User
+from app.core.security import verify_password
+
+# ❌ FORBIDDEN - Relative imports
+from .jwt import create_access_token
+from ..models.user import User
+from ...core.security import verify_password
+```
+
+**Verification:** Before Phase 4, audit all Python files for relative import patterns.
+
+### CLAUDE.md Documentation Gate
+
+**MANDATORY:** Every code directory MUST include CLAUDE.md documenting:
+
+```markdown
+# {Directory Name}
+
+## Purpose
+Brief description of what this directory contains.
+
+## Key Files
+- `file1.py` - Description
+- `file2.py` - Description
+
+## Dependencies
+- Internal: List internal dependencies
+- External: List external packages
+
+## Usage
+```python
+# Example usage code
+```
+```
+
+**Directories requiring CLAUDE.md:**
+- `app/` (root application)
+- `app/api/` (API routes)
+- `app/models/` (database models)
+- `app/services/` (business logic)
+- `app/auth/` (authentication)
+- `app/core/` (core utilities)
+- `tests/` (test suites)
+
 ## Implementation Checklist
 
 - [ ] **Authentication Implemented:** JWT or OAuth 2.0 working
@@ -368,6 +449,9 @@ app.use(helmet({
 - [ ] **Rate Limiting:** Login endpoints rate-limited
 - [ ] **Dependency Audit:** No critical vulnerabilities
 - [ ] **OWASP Top 10 Addressed:** All 10 categories mitigated
+- [ ] **Absolute Imports:** All Python code uses absolute imports only
+- [ ] **CLAUDE.md Files:** Every code directory has CLAUDE.md
+- [ ] **Compliance Mapping:** Security controls mapped to frameworks
 
 ## Gate Criteria
 

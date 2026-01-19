@@ -23,6 +23,7 @@ Composite skills orchestrate multiple cognitive agents through defined phase seq
 | develop-learnings | capture learnings, document insights, preserve knowledge | mid-workflow tasks, skill creation, active execution | `.claude/skills/develop-learnings/` |
 | develop-skill | create/modify skills, update workflows, new skill | system mods, direct code, architecture changes | `.claude/skills/develop-skill/` |
 | develop-ui-ux | design system, UI/UX design, design tokens, component library, accessibility audit | code implementation, visual mockups, architecture design, requirements gathering | `.claude/skills/develop-ui-ux/` |
+| develop-web-app | full-stack web app, Flask Lit Tailwind, FastAPI PostgreSQL, web application development | mobile apps, desktop apps, CLI tools, static sites, API-only services | `.claude/skills/develop-web-app/` |
 | perform-qa-analysis | QA orchestration, test orchestration, quality gates, production readiness, testing pyramid | test execution, report generation, test data management | `.claude/skills/perform-qa-analysis/` |
 | perform-research | deep research, comprehensive investigation, multi-source research | quick lookups, simple searches, single-source queries | `.claude/skills/perform-research/` |
 
@@ -147,6 +148,33 @@ Composite skills orchestrate multiple cognitive agents through defined phase seq
 **Location:** `.claude/skills/develop-ui-ux/`
 
 **Orchestration:** `.claude/orchestration/protocols/skill/composite/develop_ui_ux/`
+
+---
+
+### develop-web-app
+
+**Purpose:** Full-stack web application development with Flask+Lit+Tailwind frontend, FastAPI backend, PostgreSQL database
+
+**Type:** composite (composition_depth: 1)
+
+**Uses Composites:** develop-requirements, develop-architecture, develop-ui-ux, develop-backend, perform-qa-analysis
+
+**When to Use:**
+- Building full-stack web applications with modern tooling
+- Projects requiring Flask frontend with Lit web components
+- Applications using Tailwind CSS for styling
+- FastAPI backend with PostgreSQL database
+- Email + OTP authentication requirements
+- Applications needing session cookie + JWT security
+
+**Stack:**
+- **Frontend:** Flask (serving), Lit (components), Tailwind (styling)
+- **Backend:** FastAPI, PostgreSQL
+- **Auth:** Email + OTP (8 digits), session cookies (frontend), JWT (backend)
+
+**Location:** `.claude/skills/develop-web-app/`
+
+**Orchestration:** `.claude/orchestration/protocols/skill/composite/develop_web_app/`
 
 ---
 
