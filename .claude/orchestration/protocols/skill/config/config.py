@@ -51,6 +51,144 @@ class SkillType(Enum):
 
 
 # =============================================================================
+# SKILL NAME KEYWORD MAPPING
+# =============================================================================
+# Maps common keywords/phrases to skill names for name-based matching.
+# When a user phrase matches or nearly matches a skill name, that skill
+# should be considered with HIGH confidence regardless of semantic_trigger.
+
+SKILL_NAME_KEYWORDS: Dict[str, str] = {
+    # Composite skills - basic name forms
+    "research": "perform-research",
+    "perform research": "perform-research",
+    "do research": "perform-research",
+    "investigate": "perform-research",
+    "conduct research": "perform-research",
+    "research this": "perform-research",
+    "research that": "perform-research",
+
+    "architecture": "develop-architecture",
+    "architect": "develop-architecture",
+    "system design": "develop-architecture",
+    "design architecture": "develop-architecture",
+
+    "backend": "develop-backend",
+    "develop backend": "develop-backend",
+    "create backend": "develop-backend",
+    "build backend": "develop-backend",
+    "api development": "develop-backend",
+
+    "command": "develop-command",
+    "slash command": "develop-command",
+    "new command": "develop-command",
+    "add command": "develop-command",
+    "create command": "develop-command",
+
+    "learnings": "develop-learnings",
+    "learning": "develop-learnings",
+    "document learnings": "develop-learnings",
+    "save learnings": "develop-learnings",
+    "capture learnings": "develop-learnings",
+    "what did we learn": "develop-learnings",
+
+    "requirements": "develop-requirements",
+    "gather requirements": "develop-requirements",
+    "define requirements": "develop-requirements",
+    "write requirements": "develop-requirements",
+    "user stories": "develop-requirements",
+
+    "skill": "develop-skill",
+    "new skill": "develop-skill",
+    "build skill": "develop-skill",
+    "develop skill": "develop-skill",
+    "create skill": "develop-skill",
+    "make a skill": "develop-skill",
+
+    "ui": "develop-ui-ux",
+    "ux": "develop-ui-ux",
+    "ui/ux": "develop-ui-ux",
+    "user interface": "develop-ui-ux",
+    "user experience": "develop-ui-ux",
+    "design ui": "develop-ui-ux",
+    "design ux": "develop-ui-ux",
+    "design system": "develop-ui-ux",
+
+    "web app": "develop-web-app",
+    "webapp": "develop-web-app",
+    "web application": "develop-web-app",
+    "build web app": "develop-web-app",
+    "create web app": "develop-web-app",
+    "develop web app": "develop-web-app",
+
+    "qa": "perform-qa-analysis",
+    "quality assurance": "perform-qa-analysis",
+    "qa analysis": "perform-qa-analysis",
+    "perform qa": "perform-qa-analysis",
+    "test analysis": "perform-qa-analysis",
+    "testing strategy": "perform-qa-analysis",
+
+    # Atomic skills - basic name forms
+    "clarify": "orchestrate-clarification",
+    "clarification": "orchestrate-clarification",
+    "need clarification": "orchestrate-clarification",
+
+    "analyze": "orchestrate-analysis",
+    "analysis": "orchestrate-analysis",
+
+    "synthesize": "orchestrate-synthesis",
+    "synthesis": "orchestrate-synthesis",
+
+    "generate": "orchestrate-generation",
+    "generation": "orchestrate-generation",
+
+    "validate": "orchestrate-validation",
+    "validation": "orchestrate-validation",
+
+    "memory": "orchestrate-memory",
+    "track progress": "orchestrate-memory",
+}
+
+
+def get_skill_by_keyword(keyword: str) -> Optional[str]:
+    """
+    Return skill name if keyword matches a skill name keyword.
+
+    Args:
+        keyword: The user phrase to check
+
+    Returns:
+        Skill name if matched, None otherwise
+    """
+    normalized = keyword.lower().strip()
+    return SKILL_NAME_KEYWORDS.get(normalized)
+
+
+def find_skill_name_match(query: str) -> Optional[str]:
+    """
+    Check if a user query contains any skill name keywords.
+
+    Searches the query for any keywords in SKILL_NAME_KEYWORDS and returns
+    the first matching skill name found.
+
+    Args:
+        query: The user's query text
+
+    Returns:
+        Skill name if a keyword is found, None otherwise
+    """
+    normalized_query = query.lower().strip()
+
+    # Check exact matches first (longer phrases take priority)
+    sorted_keywords = sorted(SKILL_NAME_KEYWORDS.keys(), key=len, reverse=True)
+
+    for keyword in sorted_keywords:
+        if keyword in normalized_query:
+            return SKILL_NAME_KEYWORDS[keyword]
+
+    return None
+
+
+# =============================================================================
 # ATOMIC SKILL REGISTRY
 # =============================================================================
 # Atomic skills are thin wrappers that invoke protocols/agent
@@ -60,35 +198,35 @@ ATOMIC_SKILLS: Dict[str, Dict[str, Any]] = {
         "agent": "clarification",
         "cognitive_function": "CLARIFICATION",
         "description": "Transform vague inputs into actionable specifications",
-        "semantic_trigger": "ambiguity resolution, requirements refinement",
+        "semantic_trigger": "clarify, clarification, need clarification, unclear, ambiguous, ambiguity resolution, requirements refinement",
         "not_for": "well-defined tasks with clear specifications",
     },
     "orchestrate-analysis": {
         "agent": "analysis",
         "cognitive_function": "ANALYSIS",
         "description": "Decompose complexity, assess risks, map dependencies",
-        "semantic_trigger": "complexity decomposition, risk assessment",
+        "semantic_trigger": "analyze, analysis, break down, assess, evaluate, complexity decomposition, risk assessment",
         "not_for": "simple tasks without dependencies",
     },
     "orchestrate-research": {
         "agent": "research",
         "cognitive_function": "RESEARCH",
         "description": "Investigate options, gather domain knowledge",
-        "semantic_trigger": "knowledge gaps, options exploration",
+        "semantic_trigger": "research options, explore options, find information, look up, knowledge gaps, options exploration",
         "not_for": "tasks with complete information",
     },
     "orchestrate-synthesis": {
         "agent": "synthesis",
         "cognitive_function": "SYNTHESIS",
         "description": "Integrate findings into coherent designs",
-        "semantic_trigger": "integration of findings, design creation",
+        "semantic_trigger": "synthesize, synthesis, combine findings, integrate, merge, integration of findings, design creation",
         "not_for": "single-source tasks without integration",
     },
     "orchestrate-generation": {
         "agent": "generation",
         "cognitive_function": "GENERATION",
         "description": "Create artifacts using TDD methodology",
-        "semantic_trigger": "artifact creation, TDD implementation",
+        "semantic_trigger": "generate, create, build, implement, write code, artifact creation, TDD implementation",
         "not_for": "read-only or research tasks",
         "tdd_enforcement": True,
         "tdd_config": {
@@ -100,14 +238,14 @@ ATOMIC_SKILLS: Dict[str, Dict[str, Any]] = {
         "agent": "validation",
         "cognitive_function": "VALIDATION",
         "description": "Verify artifacts against quality criteria",
-        "semantic_trigger": "quality verification, acceptance testing",
+        "semantic_trigger": "validate, validation, verify, check, test, quality verification, acceptance testing",
         "not_for": "tasks without deliverables to verify",
     },
     "orchestrate-memory": {
         "agent": "memory",
         "cognitive_function": "METACOGNITION",
         "description": "Metacognitive assessment of workflow state and progress",
-        "semantic_trigger": "progress tracking, impasse detection",
+        "semantic_trigger": "memory, track progress, check progress, status, progress tracking, impasse detection",
         "not_for": "simple linear workflows",
     },
 }
@@ -121,63 +259,63 @@ ATOMIC_SKILLS: Dict[str, Dict[str, Any]] = {
 COMPOSITE_SKILLS: Dict[str, Dict[str, Any]] = {
     "develop-architecture": {
         "description": "Transform requirements into comprehensive architecture artifacts",
-        "semantic_trigger": "design architecture, architect system, HLD, LLD, database schema, ADRs, C4 diagrams, system architecture",
+        "semantic_trigger": "architecture, architect, system design, design the architecture, create architecture, design architecture, architect system, HLD, LLD, database schema, ADRs, C4 diagrams, system architecture",
         "not_for": "UI/UX design, code implementation, infrastructure deployment, performance tuning",
         "composition_depth": 0,
         "phases": "DEVELOP_ARCHITECTURE_PHASES",
     },
     "develop-skill": {
         "description": "Meta-skill for creating and modifying workflow skills",
-        "semantic_trigger": "create skill, modify skill, update workflow, new skill",
+        "semantic_trigger": "skill, new skill, build skill, develop skill, make a skill, create skill, modify skill, update workflow",
         "not_for": "system modifications, direct code execution, architecture changes",
         "composition_depth": 0,
         "phases": "DEVELOP_SKILL_PHASES",  # Reference to phase config below
     },
     "develop-learnings": {
         "description": "Transform workflow experiences into structured learnings",
-        "semantic_trigger": "capture learnings, document insights, preserve knowledge",
+        "semantic_trigger": "learnings, learning, document learnings, save learnings, what did we learn, capture learnings, document insights, preserve knowledge",
         "not_for": "mid-workflow tasks, skill creation, active execution",
         "composition_depth": 0,
         "phases": "DEVELOP_LEARNINGS_PHASES",
     },
     "develop-command": {
         "description": "Create and manage Claude Code slash commands",
-        "semantic_trigger": "create command, slash command, modify command, utility command",
+        "semantic_trigger": "command, new command, add command, create command, slash command, modify command, utility command",
         "not_for": "workflow skills, multi-phase operations, cognitive workflows",
         "composition_depth": 0,
         "phases": "DEVELOP_COMMAND_PHASES",
     },
     "perform-research": {
         "description": "Production-grade research with adaptive depth and quality validation",
-        "semantic_trigger": "deep research, comprehensive investigation, multi-source research, literature review, research with validation, academic research, thorough research",
+        "semantic_trigger": "research, perform research, do research, conduct research, investigate, research this, research that, deep research, comprehensive investigation, multi-source research, literature review, research with validation, academic research, thorough research",
         "not_for": "quick lookups, simple searches, single-source queries, \"what is X\" questions",
         "composition_depth": 0,
         "phases": "PERFORM_RESEARCH_PHASES",
     },
     "develop-requirements": {
         "description": "Platform-agnostic requirements engineering workflow with single-stakeholder default",
-        "semantic_trigger": "requirements gathering, requirements elicitation, user story writing, acceptance criteria definition, requirements specification, requirements validation, what do I need to build",
+        "semantic_trigger": "requirements, gather requirements, define requirements, write requirements, requirements gathering, requirements elicitation, user story writing, acceptance criteria definition, requirements specification, requirements validation, what do I need to build",
         "not_for": "implementation details, technology selection, code development, testing execution",
         "composition_depth": 0,
         "phases": "DEVELOP_REQUIREMENTS_PHASES",
     },
     "develop-backend": {
         "description": "Production-grade backend development with technology-agnostic patterns",
-        "semantic_trigger": "backend development, API design, database architecture, authentication, microservices, server-side development, backend API, RESTful services, GraphQL API, backend security",
+        "semantic_trigger": "backend, develop backend, create backend, build backend, api development, backend development, API design, database architecture, authentication, microservices, server-side development, backend API, RESTful services, GraphQL API, backend security",
         "not_for": "frontend development, UI/UX design, infrastructure deployment, DevOps, mobile app development",
         "composition_depth": 0,
         "phases": "DEVELOP_BACKEND_PHASES",
     },
     "perform-qa-analysis": {
         "description": "Platform-agnostic QA orchestration for multi-platform applications",
-        "semantic_trigger": "QA orchestration, test orchestration, quality gates, production readiness, testing pyramid",
+        "semantic_trigger": "qa, quality assurance, qa analysis, perform qa, test analysis, testing strategy, QA orchestration, test orchestration, quality gates, production readiness, testing pyramid",
         "not_for": "test execution, report generation, test data management",
         "composition_depth": 0,
         "phases": "PERFORM_QA_ANALYSIS_PHASES",
     },
     "develop-web-app": {
         "description": "Full-stack web application development with Flask+Lit+Tailwind frontend, FastAPI backend, PostgreSQL database",
-        "semantic_trigger": "full-stack web app, Flask Lit Tailwind, FastAPI PostgreSQL, web application development, full stack application",
+        "semantic_trigger": "web app, webapp, web application, build web app, create web app, develop web app, full-stack web app, Flask Lit Tailwind, FastAPI PostgreSQL, web application development, full stack application",
         "not_for": "mobile apps, desktop apps, CLI tools, static sites, API-only services",
         "composition_depth": 1,
         "phases": "DEVELOP_WEB_APP_PHASES",

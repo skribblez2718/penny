@@ -38,6 +38,30 @@ This skill orchestrates comprehensive quality assurance across the testing pyram
 4. **Incremental Execution**: Each layer validates before proceeding
 5. **Comprehensive Reporting**: Aggregated metrics with quality score calculation
 
+## Python Test Environment Requirements
+
+**Reference:** `${CAII_DIRECTORY}/.claude/orchestration/shared/skills/code-generation/python-setup.md`
+
+ALL test execution MUST use the project's virtual environment.
+
+| Test Layer | Command |
+|------------|---------|
+| Unit tests | `uv run pytest tests/unit/` |
+| Integration tests | `uv run pytest tests/integration/` |
+| Coverage report | `uv run pytest --cov=src --cov-report=html` |
+
+**Pre-Execution Check:**
+Before running any tests, verify venv is active:
+```bash
+# Must return path containing .venv
+which python
+```
+
+**NEVER:**
+- Run `pytest` directly (use `uv run pytest`)
+- Install test dependencies globally
+- Skip venv activation verification
+
 ## MANDATORY Execution Command
 
 ```bash

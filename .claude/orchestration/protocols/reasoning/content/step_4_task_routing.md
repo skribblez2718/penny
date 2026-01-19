@@ -2,6 +2,32 @@
 
 Make the critical routing decision based on semantic understanding.
 
+## CRITICAL PRE-CHECK - Skill Name Match (CHECK FIRST)
+
+**BEFORE any other evaluation:**
+
+### 0. Skill Name Match Check (FIRST)
+
+1. Extract key terms from user query
+2. Check if any term matches or nearly matches a skill name:
+   - "research", "perform research", "do research", "investigate" → perform-research
+   - "architecture", "architect", "system design" → develop-architecture
+   - "backend", "develop backend", "api development" → develop-backend
+   - "skill", "new skill", "create skill" → develop-skill
+   - "requirements", "gather requirements" → develop-requirements
+   - "web app", "webapp" → develop-web-app
+   - "qa", "quality assurance" → perform-qa-analysis
+   - etc. (see DA.md SKILL-FIRST POLICY for complete list)
+
+3. **If match found:**
+   - Route to COGNITIVE SKILL ORCHESTRATION
+   - Set matched skill as target
+   - DO NOT proceed to complexity assessment
+
+**This check executes BEFORE complexity assessment.**
+
+---
+
 ## CRITICAL PRE-CHECK - Skill Invocation Enforcement
 
 Before proceeding, verify:
@@ -29,6 +55,10 @@ Before proceeding, verify:
 - DIRECT tool usage is **BLOCKED** for complex work
 - You MUST choose COGNITIVE SKILL ORCHESTRATION or DYNAMIC SKILL SEQUENCING
 - This is NON-NEGOTIABLE
+
+**IF Step 3b detected NAME_MATCH: yes:**
+- That skill MUST be used - name matching takes PRIORITY
+- Route to COGNITIVE SKILL ORCHESTRATION with the matched skill
 
 **Validation Question:** "Should I invoke a skill for this task instead of executing directly?"
 

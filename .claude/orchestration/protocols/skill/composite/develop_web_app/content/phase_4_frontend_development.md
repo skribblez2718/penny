@@ -19,15 +19,19 @@ Follow test-driven development:
 
 ### 1. Flask Application Structure
 
+**Python Environment Reference:** `${CAII_DIRECTORY}/.claude/orchestration/shared/skills/code-generation/python-setup.md`
+
 Generate Flask app:
 
 ```
 frontend/
+├── .venv/                 # MANDATORY - uv venv (gitignored)
 ├── app.py                 # Flask application entry
 ├── __init__.py
 ├── CLAUDE.md              # Directory documentation
 ├── config.py              # Configuration management
-├── requirements.txt       # Python dependencies
+├── pyproject.toml         # MANDATORY - Project config and dependencies
+├── uv.lock                # AUTO-GENERATED - Locked dependencies
 ├── static/
 │   ├── js/
 │   │   └── components/    # Lit web components
@@ -153,7 +157,7 @@ Generate CLAUDE.md files documenting:
 - Tailwind configuration and compiled CSS
 - Test suite with 70%+ coverage
 - CLAUDE.md documentation files
-- requirements.txt with dependencies
+- pyproject.toml with dependencies (managed via `uv add`)
 - Setup/deployment instructions
 
 ## Agent Invocation

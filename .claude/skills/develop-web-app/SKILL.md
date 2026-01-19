@@ -45,6 +45,28 @@ Do NOT use for:
 
 4. **OWASP Compliance** - Security implementations MUST align with OWASP Top 10 controls including input validation, authentication, authorization, and secure session management.
 
+## Python Environment Requirements (MANDATORY)
+
+**Reference:** `${CAII_DIRECTORY}/.claude/orchestration/shared/skills/code-generation/python-setup.md`
+
+CRITICAL: ALL Python operations MUST use project-specific virtual environments.
+
+| Requirement | Command |
+|-------------|---------|
+| Create venv | `uv venv` |
+| Add dependency | `uv add <package>` |
+| Add dev dependency | `uv add --dev pytest black ruff mypy` |
+| Run tests | `uv run pytest` |
+| Run code | `uv run python -m <module>` |
+
+**PROHIBITED:**
+- `pip install` for project dependencies
+- Global package installation
+- Running Python without `uv run`
+- `requirements.txt` files (use `pyproject.toml`)
+
+**Rationale:** Global installations cause system instability, dependency conflicts, and bloat.
+
 ## MANDATORY Execution
 
 ```bash

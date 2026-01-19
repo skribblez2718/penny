@@ -25,6 +25,28 @@ This skill guides the development of robust backend systems using proven pattern
 
 3. **Compliance Alignment** - Security implementations MUST map to applicable compliance controls (OWASP mandatory; SOC II/PCI/HIPAA/GDPR if data classification requires).
 
+## Python Environment Requirements (MANDATORY)
+
+**Reference:** `${CAII_DIRECTORY}/.claude/orchestration/shared/skills/code-generation/python-setup.md`
+
+CRITICAL: ALL Python operations MUST use project-specific virtual environments.
+
+| Requirement | Command |
+|-------------|---------|
+| Create venv | `uv venv` |
+| Add dependency | `uv add <package>` |
+| Add dev dependency | `uv add --dev pytest black ruff mypy` |
+| Run tests | `uv run pytest` |
+| Run code | `uv run python -m <module>` |
+
+**PROHIBITED:**
+- `pip install` for project dependencies
+- Global package installation
+- Running Python without `uv run`
+- `requirements.txt` files (use `pyproject.toml`)
+
+**Rationale:** Global installations cause system instability, dependency conflicts, and bloat.
+
 ## Phases
 
 The skill executes 8 phases with structured agent invocation:

@@ -175,11 +175,32 @@ Before completing this phase, verify:
 
 ---
 
+## Semantic Trigger Validation (MANDATORY)
+
+Before completing Phase 5, verify the semantic_trigger field:
+
+1. **Name variants included:** Does semantic_trigger include the skill name with/without hyphens?
+   - Example: "my-skill" should have "my-skill", "my skill"
+
+2. **Action verbs included:** Does semantic_trigger include "create/build/develop {skill-name}"?
+   - Example: "create my-skill", "build my-skill", "develop my-skill"
+
+3. **Domain keywords included:** Does semantic_trigger include domain-specific terms from the description?
+   - Example: If description mentions "dashboard", triggers should include "dashboard"
+
+4. **Minimum count:** Does semantic_trigger have at least 7 comma-separated phrases?
+   - Count the phrases: must be >= 7
+
+**If ANY check fails, update the semantic_trigger before proceeding.**
+
+---
+
 ## Gate Exit Criteria
 
 ### CREATE Mode - All Required
 - [ ] DA.md Skill Routing Table updated with table row
 - [ ] DA.md entry includes semantic_trigger and not_for fields
+- [ ] **Semantic trigger has 7+ phrases including skill name variants**
 - [ ] skill-catalog.md updated with entry
 - [ ] composite/CLAUDE.md table updated (if composite)
 - [ ] config.py registration code presented for manual insertion (includes semantic_trigger and not_for)
@@ -190,6 +211,7 @@ Before completing this phase, verify:
 - [ ] All documentation in update_scope has been modified
 - [ ] Changes are consistent across all updated files
 - [ ] No orphaned references created
+- [ ] **Any semantic_trigger updates include skill name variants**
 
 ---
 

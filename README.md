@@ -237,6 +237,12 @@ OPENAI_API_KEY="your-key"
 OPENAI_PROMPT_IMPROVER_MODEL="model-name"
 ```
 
+**Important: Character Limit for Improved Prompts**
+
+When configuring your prompt improver model, enforce a strict character limit of **less than 10,000 characters** for improved prompts. Claude Code truncates messages at 10K characters by default, which can cause the reasoning directive to not be injected, bypassing the reasoning protocol entirely.
+
+**Recommended limit: 8,000 characters** - This provides ample room for context while leaving buffer space if the model occasionally exceeds the target.
+
 ### Bypass Mode (-b flag)
 
 The `-b` flag skips the 9-step reasoning protocol entirely, allowing Claude to handle the prompt directly. Useful for:

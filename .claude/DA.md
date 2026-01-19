@@ -77,12 +77,110 @@ When exiting plan mode via ExitPlanMode:
 
 ---
 
+# SKILL-FIRST POLICY (MANDATORY)
+
+This policy ensures skills are properly invoked rather than bypassed for direct tool usage.
+
+## When a Skill MUST Be Invoked
+
+**When ANY of these conditions are met, a skill MUST be invoked:**
+
+1. **User phrase matches skill name:** "perform research" → perform-research
+2. **User explicitly requests skill:** "use develop-skill" → develop-skill
+3. **Semantic triggers match:** Query matches skill's semantic_trigger
+4. **Skill name keyword detected:** Query contains keyword mapped to a skill
+
+## Skill Name Matching Rule (MANDATORY)
+
+**BEFORE evaluating semantic triggers, check:**
+
+1. Does the user phrase CONTAIN a skill name or near-variant?
+   - "perform research" contains "research" → check perform-research skill
+   - "create a skill" contains "skill" → check develop-skill skill
+   - "backend development" contains "backend" → check develop-backend skill
+
+2. If user phrase matches or nearly matches a skill name:
+   - Set CONFIDENCE: HIGH
+   - That skill MUST be selected unless explicitly excluded by NOT_FOR criteria
+
+**This rule takes PRIORITY over semantic trigger evaluation.**
+
+## NEVER Bypass Skill Architecture For
+
+- Tasks matching composite skill patterns
+- Multi-phase cognitive work
+- Research, analysis, synthesis, or generation tasks
+- Any task where user phrase matches a skill name
+
+## Context Preservation Principle
+
+Skills manage agent context automatically. Direct tool usage pollutes main thread context. **ALWAYS prefer skills.**
+
+---
+
 # Critical Paths and Locations
+
+## Environment Variable Resolution
+
+These paths are configured in `settings.json` and available as environment variables. **Always resolve them at runtime** rather than using relative paths or the current working directory.
+
+| Variable | Purpose | How to Resolve |
+|----------|---------|----------------|
+| `${PROJECT_ROOT}` | Where ALL new projects are created | `echo $PROJECT_ROOT` or use in paths directly |
+| `${CAII_DIRECTORY}` | System architecture root - NEVER create projects here | `echo $CAII_DIRECTORY` |
+
+**To verify current values:**
+```bash
+echo "PROJECT_ROOT=$PROJECT_ROOT"
+echo "CAII_DIRECTORY=$CAII_DIRECTORY"
+```
+
+## CRITICAL PROHIBITION
+
+**NEVER create new projects inside `${CAII_DIRECTORY}`.**
+
+The CAII_DIRECTORY contains:
+- `.claude/` - Skills, agents, protocols, orchestration system
+- System configuration and hooks
+- This is the system architecture directory, NOT a project workspace
+
+## Project Creation Rules
+
+| Action | Correct | Wrong |
+|--------|---------|-------|
+| Create new project | `mkdir -p ${PROJECT_ROOT}/my-project` | `mkdir -p my-project` (if cwd is CAII_DIRECTORY) |
+| Create new app | Use `${PROJECT_ROOT}` explicitly | Use relative paths from CAII_DIRECTORY |
+| Clone repository | `cd ${PROJECT_ROOT} && git clone ...` | Clone into current directory if it's CAII |
+
+## Pre-Creation Verification (MANDATORY)
+
+Before creating ANY new project directory:
+
+1. **Resolve the target path:** `echo ${PROJECT_ROOT}/project-name`
+2. **Verify it's NOT inside CAII_DIRECTORY:** The resolved path must NOT contain the CAII_DIRECTORY path
+3. **Use absolute paths:** Always use `${PROJECT_ROOT}/project-name`, never relative paths when cwd might be CAII_DIRECTORY
+
+## Examples
+
+### CORRECT
+```bash
+# Always use the environment variable
+mkdir -p ${PROJECT_ROOT}/my-new-project
+cd ${PROJECT_ROOT}/my-new-project
+```
+
+### WRONG
+```bash
+# NEVER create projects with relative paths when cwd is CAII_DIRECTORY
+mkdir -p my-new-project  # If cwd is CAII_DIRECTORY, this is WRONG
+```
+
+## System Paths Reference
 
 | Path | Location |
 |------|----------|
-| **Project Root** | `${PROJECT_ROOT}` - Where ALL current projects exist and where ALL new projects are created unless explicitly stated otherwise |
-| **PAI Directory** | `${CAII_DIRECTORY}` - System architecture root |
+| **Project Root** | `${PROJECT_ROOT}` - Where ALL new projects are created |
+| **CAII Directory** | `${CAII_DIRECTORY}` - System architecture root (NEVER create projects here) |
 | **Skills Path** | `${CAII_DIRECTORY}/.claude/skills/` |
 | **Agents Path** | `${CAII_DIRECTORY}/.claude/agents/` |
 | **Protocols Path** | `${CAII_DIRECTORY}/.claude/orchestration/protocols/agent/` |
@@ -195,16 +293,16 @@ Route to skills based on semantic triggers. When confidence is not HIGH, HALT an
 
 | Skill | Semantic Trigger | NOT for |
 |-------|------------------|---------|
-| develop-architecture | design architecture, architect system, HLD/LLD, database schema, ADRs, C4 diagrams | UI/UX design, code implementation, infrastructure deployment |
-| develop-backend | backend development, API design, database architecture, authentication, microservices | frontend development, UI/UX design, infrastructure deployment |
-| develop-command | create command, slash command, modify command, utility command | workflow skills, multi-phase operations, cognitive workflows |
-| develop-learnings | capture learnings, document insights, preserve knowledge, post-workflow capture | mid-workflow tasks, skill creation, active execution |
-| develop-requirements | requirements gathering, elicitation, user stories, acceptance criteria, validation | implementation, technology selection, code development |
-| develop-skill | create skill, modify skill, update workflow, new skill | system modifications, direct code execution, architecture changes |
-| develop-ui-ux | design system, UI/UX design, design tokens, component library, accessibility audit | code implementation, visual mockups, architecture design, requirements gathering |
-| develop-web-app | full-stack web app, Flask Lit Tailwind, FastAPI PostgreSQL, web application development | mobile apps, desktop apps, CLI tools, static sites, API-only services |
-| perform-qa-analysis | QA orchestration, test orchestration, quality gates, production readiness, testing pyramid | test execution, report generation, test data management |
-| perform-research | deep research, comprehensive investigation, multi-source research | quick lookups, simple searches, single-source queries |
+| develop-architecture | architecture, architect, system design, design architecture, HLD/LLD, database schema, ADRs, C4 diagrams | UI/UX design, code implementation, infrastructure deployment |
+| develop-backend | backend, develop backend, create backend, build backend, api development, API design, database architecture, authentication, microservices | frontend development, UI/UX design, infrastructure deployment |
+| develop-command | command, new command, add command, create command, slash command, modify command, utility command | workflow skills, multi-phase operations, cognitive workflows |
+| develop-learnings | learnings, learning, document learnings, save learnings, what did we learn, capture learnings, document insights, preserve knowledge | mid-workflow tasks, skill creation, active execution |
+| develop-requirements | requirements, gather requirements, define requirements, write requirements, requirements gathering, elicitation, user stories, acceptance criteria | implementation, technology selection, code development |
+| develop-skill | skill, new skill, build skill, develop skill, make a skill, create skill, modify skill, update workflow | system modifications, direct code execution, architecture changes |
+| develop-ui-ux | ui, ux, ui/ux, user interface, user experience, design ui, design ux, design system, design tokens, component library, accessibility audit | code implementation, visual mockups, architecture design, requirements gathering |
+| develop-web-app | web app, webapp, web application, build web app, create web app, develop web app, full-stack web app, Flask Lit Tailwind, FastAPI PostgreSQL | mobile apps, desktop apps, CLI tools, static sites, API-only services |
+| perform-qa-analysis | qa, quality assurance, qa analysis, perform qa, test analysis, testing strategy, QA orchestration, test orchestration, quality gates, production readiness | test execution, report generation, test data management |
+| perform-research | research, perform research, do research, conduct research, investigate, deep research, comprehensive investigation, multi-source research | quick lookups, simple searches, single-source queries, "what is X" questions |
 
 #### Atomic Skills
 
@@ -212,13 +310,13 @@ Atomic skills provide single-agent cognitive functions for dynamic sequencing. L
 
 | Skill | Cognitive Function | Semantic Trigger | NOT for |
 |-------|-------------------|------------------|---------|
-| orchestrate-clarification | CLARIFICATION | ambiguity resolution, requirements refinement | well-defined tasks with clear specifications |
-| orchestrate-research | RESEARCH | knowledge gaps, options exploration | tasks with complete information |
-| orchestrate-analysis | ANALYSIS | complexity decomposition, risk assessment | simple tasks without dependencies |
-| orchestrate-synthesis | SYNTHESIS | integration of findings, design creation | single-source tasks without integration |
-| orchestrate-generation | GENERATION | artifact creation, TDD implementation | read-only or research tasks |
-| orchestrate-validation | VALIDATION | quality verification, acceptance testing | tasks without deliverables to verify |
-| orchestrate-memory | METACOGNITION | progress tracking, impasse detection | simple linear workflows |
+| orchestrate-clarification | CLARIFICATION | clarify, clarification, need clarification, unclear, ambiguous, ambiguity resolution, requirements refinement | well-defined tasks with clear specifications |
+| orchestrate-research | RESEARCH | research options, explore options, find information, look up, knowledge gaps, options exploration | tasks with complete information |
+| orchestrate-analysis | ANALYSIS | analyze, analysis, break down, assess, evaluate, complexity decomposition, risk assessment | simple tasks without dependencies |
+| orchestrate-synthesis | SYNTHESIS | synthesize, synthesis, combine findings, integrate, merge, integration of findings, design creation | single-source tasks without integration |
+| orchestrate-generation | GENERATION | generate, create, build, implement, write code, artifact creation, TDD implementation | read-only or research tasks |
+| orchestrate-validation | VALIDATION | validate, validation, verify, check, test, quality verification, acceptance testing | tasks without deliverables to verify |
+| orchestrate-memory | METACOGNITION | memory, track progress, check progress, status, progress tracking, impasse detection | simple linear workflows |
 
 ## Path 2: Dynamic Skill Sequencing
 

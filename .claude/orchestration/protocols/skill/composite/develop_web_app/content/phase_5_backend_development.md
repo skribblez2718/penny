@@ -26,14 +26,18 @@ Follow the develop-backend skill phases:
 
 ### 1. FastAPI Application Structure
 
+**Python Environment Reference:** `${CAII_DIRECTORY}/.claude/orchestration/shared/skills/code-generation/python-setup.md`
+
 Generate backend using develop-backend pattern:
 
 ```
 backend/
+├── .venv/                 # MANDATORY - uv venv (gitignored)
 ├── main.py                # FastAPI app entry
 ├── __init__.py
 ├── CLAUDE.md
-├── requirements.txt
+├── pyproject.toml         # MANDATORY - Project config and dependencies
+├── uv.lock                # AUTO-GENERATED - Locked dependencies
 ├── api/
 │   ├── __init__.py
 │   ├── CLAUDE.md

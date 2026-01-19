@@ -76,6 +76,37 @@ uses_composites: [{list}]
 
 ---
 
+### Semantic Trigger Generation (MANDATORY)
+
+When generating the skill registration code, automatically create semantic_trigger by:
+
+1. **Include skill name variants:**
+   - Exact name: "my-skill"
+   - Space form: "my skill"
+   - Action forms: "build my-skill", "create my-skill", "develop my-skill"
+
+2. **Extract keywords from description:**
+   - If description contains "authentication" → include "auth", "authentication", "login"
+   - If description contains "API" → include "api", "API design", "api development"
+
+3. **Add common action verbs:**
+   - For generation skills: "create", "build", "generate", "make"
+   - For analysis skills: "analyze", "assess", "evaluate", "break down"
+   - For research skills: "research", "investigate", "explore", "find"
+
+**Example - Generating triggers for "develop-dashboard":**
+
+Description: "Create interactive data visualization dashboards"
+
+Generated semantic_trigger:
+```
+"dashboard, develop dashboard, create dashboard, build dashboard, data visualization, interactive dashboard, visualization dashboard"
+```
+
+**Validation:** semantic_trigger field MUST have 7-12 comma-separated phrases including skill name variants.
+
+---
+
 ### 2. Python Orchestration Files (Orchestration Side)
 
 **Location:** `${CAII_DIRECTORY}/.claude/orchestration/protocols/skill/composite/{skill_name}/`

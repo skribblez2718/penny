@@ -95,7 +95,30 @@ Evaluate the user's query against the **Skill Routing Table** in your DA.md cont
 
 ---
 
-## Semantic Evaluation Instructions
+## Skill Name Matching Rule (MANDATORY - CHECK FIRST)
+
+**BEFORE evaluating semantic triggers, check if user phrase matches or nearly matches a skill name:**
+
+1. Does the query CONTAIN any of these skill name keywords?
+   - "research", "perform research", "do research", "investigate" → perform-research
+   - "architecture", "architect", "system design" → develop-architecture
+   - "backend", "develop backend", "api development" → develop-backend
+   - "command", "slash command", "new command" → develop-command
+   - "learnings", "document learnings", "what did we learn" → develop-learnings
+   - "requirements", "gather requirements", "user stories" → develop-requirements
+   - "skill", "new skill", "create skill", "build skill" → develop-skill
+   - "ui", "ux", "design system", "user interface" → develop-ui-ux
+   - "web app", "webapp", "web application" → develop-web-app
+   - "qa", "quality assurance", "testing strategy" → perform-qa-analysis
+
+2. **If ANY keyword match is found:**
+   - Set CONFIDENCE: HIGH
+   - That skill MUST be selected unless explicitly excluded by NOT_FOR criteria
+   - This rule takes PRIORITY over semantic trigger evaluation
+
+---
+
+## Semantic Evaluation Instructions (if no name match)
 
 1. **Reference DA.md Skill Routing Table** - Compare query intent against semantic_trigger and not_for columns
 2. **Evaluate semantically** - Does the query's INTENT match a skill's semantic trigger?
@@ -112,7 +135,8 @@ SKILL_DETECTED: [yes|no]
 SKILL_NAME: [skill-name or null]
 SKILL_TYPE: [composite|atomic|null]
 CONFIDENCE: [high|medium|low]
-REASONING: [Brief semantic justification referencing semantic_trigger match]
+NAME_MATCH: [yes|no] (whether skill was detected via name matching)
+REASONING: [Brief justification - if NAME_MATCH=yes, cite the keyword; if no, cite semantic_trigger match]
 ```
 """
 
