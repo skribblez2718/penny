@@ -274,3 +274,115 @@ class SkillExecutionState:
                 f"Task ID: {self.task_id}\n"
                 f"Status: {self.status}\n"
             )
+
+    # --- Clarification State Management ---
+
+    def is_clarification_pending(self) -> bool:
+        """
+        Check if workflow is blocked waiting for user clarification.
+
+        Returns:
+            True if clarification is pending, False otherwise
+        """
+        return self.metadata.get("clarification_pending", False)
+
+    def get_clarification_context(self) -> Optional[Dict[str, Any]]:
+        """
+        Get context for re-invoking agent after clarification.
+
+        Returns:
+            Dict with clarification context including:
+            - agent: The agent to re-invoke
+            - phase: The phase that requested clarification
+            - questions: The questions that were asked
+            - round: Which clarification round this is
+            - answers: Previous answers (if any)
+            Or None if no clarification is pending
+        """
+        if not self.is_clarification_pending():
+            return None
+
+        round_num = self.metadata.get("clarification_round", 1)
+
+        return {
+            "agent": self.metadata.get("clarification_agent"),
+            "phase": self.metadata.get("clarification_phase"),
+            "questions": self.metadata.get("clarification_questions", []),
+            "round": round_num,
+            "memory_file": self.metadata.get("clarification_memory_file"),
+            "requested_at": self.metadata.get("clarification_requested_at"),
+            # Include all previous answers
+            "previous_answers": self._get_all_clarification_answers(),
+        }
+
+    def _get_all_clarification_answers(self) -> Dict[str, Any]:
+        """Get all clarification answers from all rounds."""
+        answers = {}
+        for key, value in self.metadata.items():
+            if key.startswith("clarification_answers_round_"):
+                answers[key] = value
+        return answers
+
+    def set_clarification_answers(
+        self,
+        answers: Dict[str, Any],
+        round_num: Optional[int] = None,
+    ) -> None:
+        """
+        Store user's answers to clarification questions.
+
+        Args:
+            answers: Dict mapping question IDs to answers
+            round_num: Which clarification round (defaults to current round)
+        """
+        if round_num is None:
+            round_num = self.metadata.get("clarification_round", 1)
+
+        answers_key = f"clarification_answers_round_{round_num}"
+        self.metadata[answers_key] = answers
+        self.metadata["clarification_answered_at"] = datetime.now(timezone.utc).isoformat()
+        self.updated_at = datetime.now(timezone.utc).isoformat()
+
+    def clear_clarification(self) -> None:
+        """
+        Clear clarification pending state after completion.
+
+        This clears the pending flag but preserves the history
+        (questions, answers, rounds) for reference.
+        """
+        self.metadata["clarification_pending"] = False
+        self.metadata["clarification_cleared_at"] = datetime.now(timezone.utc).isoformat()
+        self.updated_at = datetime.now(timezone.utc).isoformat()
+
+    def get_clarification_history(self) -> List[Dict[str, Any]]:
+        """
+        Get the full history of clarification rounds.
+
+        Returns:
+            List of dicts, each containing questions and answers for a round
+        """
+        history = []
+        round_num = 1
+        while True:
+            questions_key = f"clarification_questions_round_{round_num}"
+            answers_key = f"clarification_answers_round_{round_num}"
+
+            # Check if this round exists (either in dedicated keys or main key for first round)
+            if round_num == 1:
+                questions = self.metadata.get("clarification_questions")
+            else:
+                questions = self.metadata.get(questions_key)
+
+            answers = self.metadata.get(answers_key)
+
+            if questions is None and answers is None:
+                break
+
+            history.append({
+                "round": round_num,
+                "questions": questions or [],
+                "answers": answers or {},
+            })
+            round_num += 1
+
+        return history

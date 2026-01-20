@@ -306,6 +306,38 @@ Depending on context, generate:
 - Stop and wait for user input (you have no direct user channel)
 - Skip questions because you can't ask them (document them instead)
 
+## Section 4: Available for ANY Blocking Ambiguity
+
+**Section 4 is NOT just for clarification agents.** ALL agents can and SHOULD use Section 4 when:
+
+- You encounter ambiguity that prevents confident completion
+- Multiple valid approaches exist and user preference is unknown
+- Critical assumptions need validation before proceeding
+- Missing information blocks task completion
+
+**How It Works:**
+1. Document questions in your memory file Section 4
+2. Set `clarification_required: true`
+3. The orchestrator will HALT, present questions via `AskUserQuestion`, and resume with answers
+
+**Format Reference:** See `clarification.md` User Interaction Protocol section for complete Section 4 JSON structure and field definitions.
+
+**Example Usage:**
+```json
+{
+  "clarification_required": true,
+  "questions": [
+    {
+      "id": "ANALYSIS-SCOPE-1",
+      "priority": "P0",
+      "question": "Should the analysis include performance profiling or focus only on functional correctness?",
+      "context": "This affects whether we need to set up benchmarking infrastructure"
+    }
+  ],
+  "blocking": true
+}
+```
+
 # Related Research Terms
 
 - Systems decomposition

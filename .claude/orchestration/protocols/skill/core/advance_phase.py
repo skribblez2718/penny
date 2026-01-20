@@ -55,6 +55,12 @@ from skill.core.execution_verifier import (
     PhaseNotVerifiedError,
     GoalMemoryNotCompletedError,
 )
+from skill.clarification_handler import (
+    check_clarification_needed,
+    extract_questions_from_memory,
+    format_questions_for_ask_user,
+    build_ask_user_invocation,
+)
 
 from datetime import datetime
 
@@ -64,6 +70,130 @@ from datetime import datetime
 SKILLS_BYPASSING_GOAL_MEMORY = frozenset([
     # Currently no skills bypass memory
 ])
+
+
+# --- Clarification Handling at Phase Level ---
+
+# Exit code indicating clarification is needed
+EXIT_CODE_CLARIFICATION_NEEDED = 2
+
+
+def check_and_handle_clarification(
+    state: SkillExecutionState,
+    memory_file_path: Path,
+) -> bool:
+    """
+    Check if the agent's memory file indicates clarification is needed.
+
+    If clarification_required: true is found in Section 4, this function:
+    1. Stores clarification state in the skill's metadata
+    2. Prints an AskUserQuestion directive for the main thread
+    3. Returns True to signal that execution should block
+
+    Args:
+        state: Current skill execution state
+        memory_file_path: Path to the agent's memory file
+
+    Returns:
+        True if clarification is needed and workflow should block,
+        False otherwise (continue normal phase advancement)
+    """
+    if not memory_file_path.exists():
+        return False
+
+    if not check_clarification_needed(str(memory_file_path)):
+        return False
+
+    # Extract questions from the memory file
+    questions = extract_questions_from_memory(str(memory_file_path))
+
+    if not questions:
+        return False
+
+    # Store clarification state in metadata
+    current_phase = state.fsm.get_current_phase() if state.fsm else None
+    current_config = get_phase_config(state.skill_name, current_phase) if current_phase else None
+    agent_name = None
+    if current_config:
+        atomic_skill = current_config.get("uses_atomic_skill")
+        if atomic_skill:
+            agent_name = get_atomic_skill_agent(atomic_skill)
+
+    # Track clarification round (for iterative questioning)
+    clarification_round = state.metadata.get("clarification_round", 0) + 1
+
+    state.metadata["clarification_pending"] = True
+    state.metadata["clarification_agent"] = agent_name
+    state.metadata["clarification_phase"] = current_phase
+    state.metadata["clarification_questions"] = questions
+    state.metadata["clarification_round"] = clarification_round
+    state.metadata["clarification_memory_file"] = str(memory_file_path)
+    state.metadata["clarification_requested_at"] = datetime.now().isoformat()
+
+    # Save state before printing directive
+    state.save()
+
+    # Format questions for AskUserQuestion tool
+    formatted_questions = format_questions_for_ask_user(questions)
+
+    # Print the directive for the main thread
+    print(build_ask_user_invocation(formatted_questions))
+    print()
+    print(f"After user answers, re-run: `python3 .claude/orchestration/protocols/skill/core/advance_phase.py {state.skill_name} {state.session_id} --resume-with-answers`")
+
+    return True
+
+
+def resume_with_answers(
+    state: SkillExecutionState,
+    answers_data: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Resume workflow after user has provided answers to clarification questions.
+
+    This function:
+    1. Stores the user's answers in state metadata
+    2. Clears the clarification_pending flag
+    3. Re-invokes the agent with the answers in context
+
+    Args:
+        state: Current skill execution state
+        answers_data: Optional dict with user answers (if None, answers are
+                      expected to be in context from AskUserQuestion response)
+    """
+    if not state.metadata.get("clarification_pending"):
+        print("WARNING: resume_with_answers called but no clarification was pending")
+        return
+
+    # Store answers in metadata
+    clarification_round = state.metadata.get("clarification_round", 1)
+    answers_key = f"clarification_answers_round_{clarification_round}"
+    state.metadata[answers_key] = answers_data or {"note": "Answers provided via AskUserQuestion in conversation context"}
+    state.metadata["clarification_answered_at"] = datetime.now().isoformat()
+
+    # Clear pending flag (but keep history)
+    state.metadata["clarification_pending"] = False
+
+    # Get agent to re-invoke
+    agent_name = state.metadata.get("clarification_agent")
+    phase_id = state.metadata.get("clarification_phase")
+
+    if not agent_name:
+        print("ERROR: No agent recorded for clarification re-invocation")
+        sys.exit(1)
+
+    state.save()
+
+    # Print directive to re-invoke the agent
+    phase_config = get_phase_config(state.skill_name, phase_id) if phase_id else None
+    phase_name = phase_config.get("title", phase_id) if phase_config else phase_id
+
+    print(f"\n## Clarification Answered - Re-invoke Agent")
+    print(f"\nUser has answered clarification questions (round {clarification_round}).")
+    print(f"Re-invoke the agent to continue with the clarified context.")
+    print()
+    print(format_mandatory_agent_directive(agent_name, phase_name))
+    print(f"After agent completes: `python3 .claude/orchestration/protocols/skill/core/advance_phase.py {state.skill_name} {state.session_id}`")
 
 
 # --- GoalMemory Integration at Phase Level ---
@@ -503,6 +633,13 @@ def advance_phase(skill_name: str, session_id: str) -> None:
                             print(f"Invoke {agent_name} via Task tool to complete the phase.")
                             sys.exit(1)
 
+                        # CLARIFICATION CHECK: After verifying memory file exists,
+                        # check if it indicates clarification is needed
+                        memory_file = Path(".claude/memory") / f"{state.task_id}-{agent_name}-memory.md"
+                        if check_and_handle_clarification(state, memory_file):
+                            # Clarification needed - directive already printed, exit with special code
+                            sys.exit(EXIT_CODE_CLARIFICATION_NEEDED)
+
     # Get current phase info
     current_phase_id = state.fsm.get_current_phase()
     if not current_phase_id:
@@ -694,6 +831,11 @@ def main():
 
     ENFORCEMENT: No --force flag exists by design. All phases must complete
     their full execution chain before advancement is allowed.
+
+    Exit Codes:
+        0 - Success (workflow advanced)
+        1 - Error (fix error and retry)
+        2 - Clarification needed (use AskUserQuestion, then --resume-with-answers)
     """
     parser = argparse.ArgumentParser(
         description="Advance a composite skill to its next phase"
@@ -711,6 +853,11 @@ def main():
         metavar="PHASE",
         help="Mark all branches in a phase as completed"
     )
+    parser.add_argument(
+        "--resume-with-answers",
+        action="store_true",
+        help="Resume workflow after user has answered clarification questions"
+    )
 
     args = parser.parse_args()
 
@@ -725,6 +872,15 @@ def main():
 
     if args.complete_all_branches:
         complete_all_branches(args.skill_name, args.session_id, args.complete_all_branches)
+        return
+
+    # Handle clarification resumption
+    if args.resume_with_answers:
+        state = SkillExecutionState.load(args.skill_name, args.session_id)
+        if not state:
+            print(f"ERROR: State not found for {args.skill_name} session {args.session_id}", file=sys.stderr)
+            sys.exit(1)
+        resume_with_answers(state)
         return
 
     advance_phase(args.skill_name, args.session_id)

@@ -188,27 +188,94 @@ Label all clarifications with explicit confidence levels:
 6. **BUILD ON CONTEXT:** Reference previous agent findings efficiently. Don't repeat known information—focus on new discoveries
 7. **PROACTIVE UNKNOWN DETECTION:** Don't just answer the obvious questions. Actively seek what hasn't been considered yet
 
-# User Interaction Protocol
+# User Interaction Protocol (NON-NEGOTIABLE)
 
-**IMPORTANT:** As a subagent, you CANNOT use the `AskUserQuestion` tool directly. Claude Code restricts this tool from subagents.
+**CRITICAL:** As a subagent, you CANNOT use the `AskUserQuestion` tool directly. Claude Code restricts this tool from subagents.
 
-**When clarification from the user is needed:**
+**Section 4 is your ONLY mechanism for user interaction.**
 
-1. **Document questions clearly** in your memory file in the `user_questions` section
-2. **Set `clarification_required: true`** in your output metadata
-3. **Return your output** - the main orchestrator will handle user interaction
-4. **Wait for re-invocation** - you will be called again with user answers in context
+## How Section 4 Enforcement Works
 
-**The main orchestrator will:**
-- Detect `clarification_required: true` in your output
-- Present your questions to the user via `AskUserQuestion`
-- Provide answers back to the workflow
-- Resume processing with clarified context
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│ Agent completes │ --> │ advance_phase.py │ --> │ Checks Section 4│
+│ writes memory   │     │ verifies memory  │     │ for questions   │
+└─────────────────┘     └──────────────────┘     └────────┬────────┘
+                                                          │
+                         ┌────────────────────────────────┴────────────────────────────────┐
+                         │                                                                  │
+                         ▼                                                                  ▼
+          ┌──────────────────────────┐                             ┌──────────────────────────┐
+          │ clarification_required:  │                             │ clarification_required:  │
+          │ false (or absent)        │                             │ true                     │
+          │                          │                             │                          │
+          │ --> Continue to next     │                             │ --> HALT workflow        │
+          │     phase                │                             │ --> Print AskUserQuestion│
+          └──────────────────────────┘                             │     directive            │
+                                                                   │ --> Exit code 2          │
+                                                                   │ --> Wait for answers     │
+                                                                   │ --> Re-invoke agent      │
+                                                                   └──────────────────────────┘
+```
 
-**DO NOT:**
-- Attempt to use `AskUserQuestion` (it will fail silently)
-- Stop and wait for user input (you have no direct user channel)
-- Skip questions because you can't ask them (document them instead)
+## Section 4 JSON Structure (COMPLETE)
+
+```json
+{
+  "clarification_required": true,
+  "round": 1,
+  "questions": [
+    {
+      "id": "Q1",
+      "priority": "P0",
+      "question": "Clear, specific question ending with ?",
+      "context": "Why this question matters for the task",
+      "options": [
+        {"label": "Option A", "description": "What this option means"},
+        {"label": "Option B", "description": "What this option means"}
+      ],
+      "default": "Option A",
+      "multi_select": false
+    }
+  ],
+  "blocking": true,
+  "reason": "Brief explanation of why clarification is needed"
+}
+```
+
+## Field Definitions
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `clarification_required` | **YES** | Must be `true` to trigger blocking |
+| `round` | No | Clarification iteration (1, 2, 3...) |
+| `questions` | **YES** | Array of question objects |
+| `questions[].id` | **YES** | Unique identifier (e.g., "Q1", "REQ-SCOPE") |
+| `questions[].priority` | **YES** | P0 (blocking), P1 (important), P2 (nice-to-have) |
+| `questions[].question` | **YES** | The actual question text |
+| `questions[].context` | No | Why this question matters |
+| `questions[].options` | No | Predefined choices (max 4) |
+| `questions[].default` | No | Suggested default answer |
+| `questions[].multi_select` | No | Allow multiple selections |
+| `blocking` | No | If true, workflow cannot proceed without answers |
+| `reason` | No | High-level explanation |
+
+## DO NOT (STRICTLY FORBIDDEN)
+
+- ❌ Attempt to use `AskUserQuestion` tool (will fail silently)
+- ❌ Print questions as markdown and expect a response
+- ❌ Stop and wait for user input (you have no direct channel)
+- ❌ Skip questions because you can't ask them
+- ❌ Assume answers to unresolved questions
+- ❌ Proceed with execution when ambiguity exists
+
+## ALWAYS DO
+
+- ✅ Document ALL questions in Section 4 with proper JSON structure
+- ✅ Set `clarification_required: true` when you need user input
+- ✅ Return your complete memory file - orchestrator handles the rest
+- ✅ Trust the orchestrator to present questions and get answers
+- ✅ On re-invocation, check context for previous answers
 
 # Output Format
 

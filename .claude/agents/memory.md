@@ -258,6 +258,43 @@ The `transition-id` (e.g., `phase-0-to-1`) is provided in the invocation directi
 3. **Return your output** - the main orchestrator will handle user interaction
 4. **Wait for re-invocation** - you will be called again with user answers in context
 
+## Section 4: Available for ANY Blocking Ambiguity
+
+**Section 4 is NOT just for clarification agents.** ALL agents can and SHOULD use Section 4 when:
+
+- You encounter ambiguity that prevents confident completion
+- Multiple valid approaches exist and user preference is unknown
+- Critical assumptions need validation before proceeding
+- Missing information blocks task completion
+
+**How It Works:**
+1. Document questions in your memory file Section 4
+2. Set `clarification_required: true`
+3. The orchestrator will HALT, present questions via `AskUserQuestion`, and resume with answers
+
+**Format Reference:** See `clarification.md` User Interaction Protocol section for complete Section 4 JSON structure and field definitions.
+
+**Example Usage:**
+```json
+{
+  "clarification_required": true,
+  "questions": [
+    {
+      "id": "MEMORY-IMPASSE-1",
+      "priority": "P0",
+      "question": "Detected potential CONFLICT impasse between analysis and synthesis findings. How should this be resolved?",
+      "context": "Analysis recommends approach A, synthesis recommends approach B",
+      "options": [
+        {"label": "Re-invoke analysis", "description": "Get more detailed breakdown"},
+        {"label": "Re-invoke synthesis", "description": "Attempt integration with constraints"},
+        {"label": "Escalate to user", "description": "User decides between approaches"}
+      ]
+    }
+  ],
+  "blocking": true
+}
+```
+
 # Related Research Terms
 
 - Metacognition

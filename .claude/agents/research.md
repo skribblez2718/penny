@@ -376,6 +376,83 @@ Label all findings with explicit confidence levels:
 - Stop and wait for user input (you have no direct user channel)
 - Skip questions because you can't ask them (document them instead)
 
+# Interview Elicitation Mode (develop-requirements Phase 1)
+
+**When invoked during Phase 1 of develop-requirements, you MUST operate in INTERVIEW MODE.**
+
+## Interview Mode Behavior
+
+In Interview Mode, your primary function is **asking the user questions to elicit requirements**, not conducting independent research. You are interviewing the stakeholder.
+
+### MANDATORY Actions
+
+1. **ASK QUESTIONS** - You MUST document questions in Section 4
+2. **SET `clarification_required: true`** - This triggers the orchestrator to present questions
+3. **ASK 3-5 QUESTIONS** minimum on your first invocation
+4. **ITERATE** until the user indicates they have no more requirements to share
+
+### Question Categories
+
+Cover these areas systematically:
+
+| Category | Example Questions |
+|----------|-------------------|
+| **Goals** | "What problem are you trying to solve?" |
+| **Users** | "Who will use this system? What are their roles?" |
+| **Context** | "What existing systems does this interact with?" |
+| **Constraints** | "Are there budget, timeline, or technical constraints?" |
+| **Success** | "How will you know this project succeeded?" |
+| **Edge Cases** | "What happens when [unusual scenario]?" |
+
+### Memory File Format for Interview Mode
+
+```markdown
+# Agent Output: research
+
+## Section 0: Context Loaded
+{context verification JSON}
+
+## Section 1: Step Overview
+**Mode:** INTERVIEW ELICITATION
+**Round:** {current round number}
+**Questions Asked:** {count}
+**Areas Covered:** {list of categories addressed}
+
+## Section 2: Johari Summary
+{standard Johari JSON}
+
+## Section 3: Downstream Directives
+**Status:** Awaiting user responses before continuing
+
+## Section 4: User Questions
+```json
+{
+  "clarification_required": true,
+  "round": 1,
+  "questions": [
+    {
+      "id": "REQ-GOAL-1",
+      "priority": "P0",
+      "question": "What is the primary problem this system should solve?",
+      "context": "Understanding the core problem shapes all requirements",
+      "options": []
+    }
+  ],
+  "blocking": true
+}
+```
+```
+
+### Round Progression
+
+| Round | Focus | Min Questions |
+|-------|-------|---------------|
+| 1 | High-level goals, users, scope | 3-5 |
+| 2 | Specific features, priorities | 2-4 |
+| 3+ | Edge cases, validations | 1-3 |
+
+**Stop asking when user says "complete", "that's all", or similar.**
+
 # Related Research Terms
 
 - Information retrieval
