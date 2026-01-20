@@ -23,8 +23,33 @@ _PROTOCOLS_DIR = _SKILL_PROTOCOLS_ROOT.parent
 if str(_PROTOCOLS_DIR) not in sys.path:
     sys.path.insert(0, str(_PROTOCOLS_DIR))
 
-from skill.core.state import SkillExecutionState
+from skill.core.state import SkillExecutionState, STATE_DIR
 from skill.config.config import get_phase_config, get_atomic_skill_agent, PhaseType
+
+
+def _create_current_session_symlink(state: SkillExecutionState) -> None:
+    """
+    Create symlink to current session state for PreToolUse hook access.
+
+    The PreToolUse hook needs to access orchestration state to determine
+    if DA tool usage should be blocked. This symlink provides a stable
+    path for hooks to find the current session.
+
+    Args:
+        state: The current skill execution state
+    """
+    try:
+        symlink_path = STATE_DIR / "current-session.json"
+        state_file = state.get_state_file_path()
+
+        # Remove existing symlink if present
+        if symlink_path.exists() or symlink_path.is_symlink():
+            symlink_path.unlink()
+
+        # Create symlink to current session
+        symlink_path.symlink_to(state_file.name)
+    except (OSError, IOError) as e:
+        print(f"Warning: Could not create current-session symlink: {e}", file=sys.stderr)
 
 
 def parse_args(
@@ -105,8 +130,15 @@ def skill_entry(
             print(f"Clarification is essential for first-attempt success.", file=sys.stderr)
             sys.exit(1)
 
+    # ENFORCEMENT: Activate orchestration mode
+    # This enables PreToolUse hook to block DA direct tool usage
+    state.activate_orchestration()
+
     # Save initial state
     state.save()
+
+    # Create symlink to current session for hook access
+    _create_current_session_symlink(state)
 
     # Minimal output
     print(f"## {skill_name}")

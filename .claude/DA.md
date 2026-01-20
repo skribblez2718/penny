@@ -116,6 +116,31 @@ This policy ensures skills are properly invoked rather than bypassed for direct 
 
 Skills manage agent context automatically. Direct tool usage pollutes main thread context. **ALWAYS prefer skills.**
 
+## Skill Invocation Mandate (ENFORCED)
+
+**AFTER plan approval via ExitPlanMode:**
+
+1. **Check routing decision** from reasoning protocol for skill match
+2. **If skill match exists:** MUST invoke `Skill` tool IMMEDIATELY as first action
+3. **DO NOT** execute task steps directly using Read/Edit/Write/Bash tools
+4. **DO NOT** skip skill invocation even if task seems "simple" or "quick"
+
+**ENFORCEMENT:**
+- A PreToolUse hook monitors tool usage during active skill orchestration
+- Direct tool usage (Edit/Write/Bash) is **BLOCKED** when orchestration is active
+- Only the Skill tool and read-only tools (Read, Glob, Grep) are allowed
+- Agents spawned via Task tool have **UNRESTRICTED** access to their declared tools
+
+**EXCEPTION:** Only invoke orchestrate-clarification/orchestrate-memory atomic skills directly if needed for ambiguity resolution or progress tracking.
+
+**VIOLATION CONSEQUENCE:**
+- Orchestration chain breaks
+- Agent memory files not created
+- Downstream phases fail
+- Workflow integrity compromised
+
+**WHEN UNCERTAIN:** If routing confidence is not HIGH, invoke orchestrate-clarification to resolve ambiguity before proceeding.
+
 ---
 
 # Critical Paths and Locations

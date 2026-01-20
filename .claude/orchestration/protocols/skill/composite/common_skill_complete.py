@@ -31,7 +31,7 @@ if str(_PROTOCOLS_DIR) not in sys.path:
     sys.path.insert(0, str(_PROTOCOLS_DIR))
 
 # Fully-qualified imports from skill package
-from skill.core.state import SkillExecutionState
+from skill.core.state import SkillExecutionState, STATE_DIR
 from skill.core.fsm import SkillPhaseState
 from skill.memory_verifier import list_memory_files, verify_format
 from skill.episode_store_helper import store_skill_episode, create_episode_from_skill_state
@@ -41,6 +41,21 @@ from skill.learning_trigger import (
     build_learnings_directive,
 )
 from skill.episodic_memory import load_all_episodes
+
+
+def _remove_current_session_symlink() -> None:
+    """
+    Remove the current-session symlink after skill completion.
+
+    This cleans up the symlink created by common_skill_entry.py
+    to prevent stale orchestration state from affecting future operations.
+    """
+    try:
+        symlink_path = STATE_DIR / "current-session.json"
+        if symlink_path.exists() or symlink_path.is_symlink():
+            symlink_path.unlink()
+    except (OSError, IOError) as e:
+        print(f"Warning: Could not remove current-session symlink: {e}", file=sys.stderr)
 
 # Skills that bypass mandatory learnings capture
 # for performance optimization or to prevent recursion
@@ -242,11 +257,18 @@ def skill_complete(skill_name: str) -> None:
     now = datetime.now(start_time.tzinfo) if start_time.tzinfo else datetime.now()
     duration = now - start_time
 
+    # ENFORCEMENT: Deactivate orchestration mode
+    # This allows DA to use tools directly again
+    state.deactivate_orchestration()
+
     # Update state
     state.metadata["completed_at"] = datetime.now().isoformat()
     state.metadata["duration_seconds"] = duration.total_seconds()
     state.metadata["status"] = "complete"
     state.save()
+
+    # Remove current-session symlink
+    _remove_current_session_symlink()
 
     # Store episode in episodic memory
     episode_id, episode = _store_completion_episode(state, skill_name)

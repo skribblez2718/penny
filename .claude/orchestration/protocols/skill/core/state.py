@@ -95,10 +95,35 @@ class SkillExecutionState:
         self.status = "initialized"
         self.halt_reason: Optional[str] = None
 
+        # Orchestration enforcement fields
+        self.orchestration_active: bool = False
+        self.expected_skill: str = skill_name
+        self.current_phase: str = "0"
+        self.allowed_tools: List[str] = ["Task", "Skill", "Read", "Glob", "Grep", "TodoWrite", "AskUserQuestion"]
+
     def get_state_file_path(self) -> Path:
         """Get path to state file."""
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         return STATE_DIR / f"{self.skill_name}-{self.session_id}.json"
+
+    def activate_orchestration(self) -> None:
+        """
+        Mark orchestration as active for enforcement.
+
+        When active, the PreToolUse hook will block direct tool usage
+        (Edit/Write/Bash) from the DA main thread, forcing skill invocation.
+        """
+        self.orchestration_active = True
+        self.updated_at = datetime.now(timezone.utc).isoformat()
+
+    def deactivate_orchestration(self) -> None:
+        """
+        Mark orchestration as complete.
+
+        This allows the DA to use tools directly again.
+        """
+        self.orchestration_active = False
+        self.updated_at = datetime.now(timezone.utc).isoformat()
 
     def start_phase(self, phase_id: str) -> None:
         """Record phase start."""
@@ -106,6 +131,7 @@ class SkillExecutionState:
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
         self.status = "executing"
+        self.current_phase = phase_id
         self.updated_at = datetime.now(timezone.utc).isoformat()
 
     def complete_phase(self, phase_id: str, output: Dict[str, Any] = None) -> None:
@@ -197,6 +223,11 @@ class SkillExecutionState:
             "memory_files": self.memory_files,
             "configuration": self.configuration,
             "metadata": self.metadata,
+            # Orchestration enforcement fields
+            "orchestration_active": self.orchestration_active,
+            "expected_skill": self.expected_skill,
+            "current_phase": self.current_phase,
+            "allowed_tools": self.allowed_tools,
         }
 
     @classmethod
@@ -225,6 +256,12 @@ class SkillExecutionState:
         state.memory_files = data.get("memory_files", [])
         state.configuration = data.get("configuration", {})
         state.metadata = data.get("metadata", {})
+
+        # Orchestration enforcement fields
+        state.orchestration_active = data.get("orchestration_active", False)
+        state.expected_skill = data.get("expected_skill", data["skill_name"])
+        state.current_phase = data.get("current_phase", "0")
+        state.allowed_tools = data.get("allowed_tools", ["Task", "Skill", "Read", "Glob", "Grep", "TodoWrite", "AskUserQuestion"])
 
         return state
 
