@@ -6,7 +6,7 @@ This hook executes the Mandatory Reasoning Protocol for EVERY prompt.
 
 Supported prompt flags (can appear in any order at end of prompt):
     -i    Improve prompt via external model before processing
-    -b    Bypass reasoning protocol (direct execution mode)
+    -b    Bypass reasoning protocol (bypass mode)
 
 Examples:
     "fix the bug -b"           → Bypass reasoning, execute directly

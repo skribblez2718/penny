@@ -13,7 +13,7 @@ Phases:
 - Phase 2: Design Synthesis (orchestrate-synthesis)
 - Phase 3: Skill Generation (orchestrate-generation)
 - Phase 4: Skill Validation (orchestrate-validation)
-- Phase 5: DA.md Registration (direct execution)
+- Phase 5: DA.md Registration (orchestrate-generation)
 """
 
 SKILL_NAME = "develop-skill"

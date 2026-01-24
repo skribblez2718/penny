@@ -193,7 +193,7 @@ Agents that resolve ambiguities and transform vague inputs into explicit outputs
 - Multi-step workflows need that cognitive phase
 - Quality benefits from specialized cognitive processing
 
-**Use Direct Execution:**
+**Use Bypass Mode (-b flag):**
 - Task is trivial and doesn't require specialized cognitive processing
 - Single tool use is sufficient (read a file, run a command)
 - Overhead of agent invocation exceeds value

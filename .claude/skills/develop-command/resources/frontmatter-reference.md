@@ -188,7 +188,7 @@ mode: plan
 
 **Available Modes:**
 - `plan` - Planning mode
-- `execute` - Direct execution
+- `execute` - Immediate execution
 
 ## Complete Example
 

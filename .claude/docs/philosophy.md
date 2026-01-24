@@ -96,12 +96,12 @@ COMPRESSION STRATEGIES:
 - Abbreviate common domain terms consistently
 - Use lists and structured formats over prose
 
-PRINCIPLE 9: AGENT ENFORCEMENT OVER DIRECT TOOL USAGE
+PRINCIPLE 9: AGENT ENFORCEMENT OVER BYPASS MODE
 Default to cognitive agent invocation for non-trivial tasks
-Direct tool usage ONLY when ALL triviality criteria explicitly met
+Bypass mode (via -b flag) ONLY when ALL triviality criteria explicitly met
 
 ROUTING GATE VALIDATION:
-The routing gate validates task triviality using 5 criteria before allowing direct execution:
+The routing gate validates task triviality using 5 criteria before allowing bypass mode:
 1. Single file modification (not multi-file changes)
 2. Five lines or fewer affected (not substantial rewrites)
 3. Mechanical operation (copy/paste/replace, not creative decisions)
@@ -110,8 +110,8 @@ The routing gate validates task triviality using 5 criteria before allowing dire
 
 FAIL-SECURE DESIGN:
 When ANY criterion fails OR uncertainty exists, default to agent invocation
-Ambiguity always routes to cognitive processing, never direct tools
-Direct execution is the EXCEPTION requiring explicit justification
+Ambiguity always routes to cognitive processing, never bypass mode
+Bypass mode is the EXCEPTION requiring explicit justification
 Agent involvement is the DEFAULT providing reasoning, context, quality
 
 RATIONALE:

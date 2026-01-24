@@ -11,7 +11,7 @@ understanding of task requirements and skill patterns from DA.md.
 Key Principles:
 1. Routing is based on semantic understanding of user intent
 2. The orchestrator evaluates query against "When to Use" patterns from DA.md
-3. Direct execution is only for genuinely trivial tasks
+3. Bypass mode (via -b flag) is available for genuinely trivial tasks
 4. When in doubt, route to skill orchestration (fail-secure)
 """
 

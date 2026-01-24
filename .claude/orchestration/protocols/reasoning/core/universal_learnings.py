@@ -14,7 +14,7 @@ principle as outlined in DA.md.
 
 Integration points:
 1. Reasoning protocol completion (complete.py)
-2. Direct execution completion
+2. Bypass mode completion
 3. Skill/agent completions (existing learning_trigger.py)
 """
 

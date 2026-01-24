@@ -6,22 +6,19 @@ Explore multiple solution approaches before committing.
 
 Generate and evaluate alternative approaches:
 
-1. **Generate Alternative Approaches (2-3 paths)**
+1. **Generate Alternative Approaches (2 paths)**
 
-   **Path A: Direct Execution**
-   - Execute the task directly using available tools
-   - Minimal orchestration overhead
-   - Best for simple, well-defined tasks
-
-   **Path B: Skill-Based Orchestration**
-   - Invoke a composite or atomic skill
-   - Structured multi-phase workflow
+   **Path A: Skill Orchestration**
+   - Invoke a composite skill for multi-phase cognitive workflow
+   - Structured phases: clarification → research → analysis → synthesis → generation → validation
    - Best for complex, multi-step tasks matching skill patterns
+   - Best for system modifications (skills, agents, protocols)
 
-   **Path C: Hybrid Approach**
-   - Combination of direct execution and skill invocation
-   - Custom workflow for unique requirements
-   - Best for tasks that partially match existing patterns
+   **Path B: Dynamic Skill Sequencing**
+   - Orchestrator determines and invokes sequence of orchestrate-* atomic skills
+   - Flexible cognitive flow for novel tasks
+   - Best for tasks requiring multiple cognitive functions but not matching a composite skill
+   - Best for tasks needing ad-hoc agent coordination
 
 2. **Evaluate Viability**
    - Assess each path against the specific requirements

@@ -77,42 +77,6 @@ def create_episode_from_skill_state(
     )
 
 
-def create_episode_from_direct_execution(
-    task_description: str,
-    outcome: str = "success",
-    tools_used: Optional[List[str]] = None,
-) -> Episode:
-    """
-    Create an episode from direct (non-skill) execution.
-
-    Used for trivial tasks that bypass skill orchestration.
-
-    Args:
-        task_description: Description of what the task was
-        outcome: Task outcome ("success", "partial", "failure")
-        tools_used: List of tools that were used (optional)
-
-    Returns:
-        Episode object ready to be saved
-    """
-    task_id = f"direct-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
-    return Episode(
-        episode_id=generate_episode_id(task_id, "trivial-task"),
-        task_id=task_id,
-        timestamp=datetime.now().isoformat(),
-        skill_name="trivial-task",
-        task_description=task_description,
-        task_keywords=extract_keywords(task_description),
-        agent_sequence=tools_used or [],
-        outcome=outcome,
-        context_type="trivial",
-        unknowns_resolved=[],
-        key_decisions=[],
-        lessons_learned="",
-    )
-
-
 def create_episode_from_dynamic_sequencing(
     task_id: str,
     task_description: str,
@@ -185,32 +149,6 @@ def store_skill_episode(
         unknowns_resolved=kwargs.get("unknowns_resolved"),
         key_decisions=kwargs.get("key_decisions"),
         lessons_learned=kwargs.get("lessons_learned", ""),
-    )
-
-    save_episode(episode)
-    return episode.episode_id
-
-
-def store_direct_episode(
-    task_description: str,
-    outcome: str = "success",
-    tools_used: Optional[List[str]] = None,
-) -> str:
-    """
-    Convenience function to store a direct execution episode.
-
-    Args:
-        task_description: Description of what the task was
-        outcome: Task outcome
-        tools_used: List of tools used
-
-    Returns:
-        Episode ID of the stored episode
-    """
-    episode = create_episode_from_direct_execution(
-        task_description=task_description,
-        outcome=outcome,
-        tools_used=tools_used,
     )
 
     save_episode(episode)

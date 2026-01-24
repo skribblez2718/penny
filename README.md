@@ -198,12 +198,12 @@ CAII supports prompt flags that modify how queries are processed. Flags can appe
 | Flag | Purpose |
 |------|---------|
 | `-i` | Improve prompt via external model before processing |
-| `-b` | Bypass reasoning protocol (direct execution mode) |
+| `-b` | Bypass reasoning protocol (bypass mode) |
 
 ### Examples
 
 ```
-"fix the bug -b"         → Bypass reasoning, execute directly
+"fix the bug -b"         → Bypass reasoning, use bypass mode
 "add feature -i"         → Improve prompt, then run reasoning
 "refactor code -i -b"    → Improve prompt, then bypass reasoning
 "refactor code -b -i"    → Same as above (order doesn't matter)

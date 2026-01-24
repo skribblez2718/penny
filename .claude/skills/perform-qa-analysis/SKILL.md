@@ -26,7 +26,7 @@ This skill orchestrates comprehensive quality assurance across the testing pyram
 
 **NOT for:**
 - Writing new test files (use `develop-backend` or `develop-ui-ux`)
-- Debugging failing tests (use `analysis` or direct execution)
+- Debugging failing tests (use `analysis` or bypass mode)
 - Performance/load testing (requires specialized skill)
 - Single-layer test execution (run tests directly)
 

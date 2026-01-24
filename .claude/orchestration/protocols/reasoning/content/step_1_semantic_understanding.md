@@ -18,7 +18,7 @@ Execute the following analysis on the user's query:
 
 3. **Determine Appropriate Approach**
    - What tool, method, or approach offers the best first-attempt success?
-   - Consider available skills, agents, and direct execution options
+   - Consider available skills and agents
    - Match complexity of approach to complexity of task
 
 4. **Contextual Awareness**

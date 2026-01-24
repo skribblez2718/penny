@@ -33,7 +33,7 @@ Add to the `COMPOSITE_SKILLS` dictionary in config.py.
 | `{skill-name}` | Hyphenated skill name | `my-new-skill` |
 | `{description}` | One-line description | `Process and validate user requests` |
 | `{semantic_trigger}` | Comma-separated trigger phrases (5-10 words) | `process requests, validate input, handle submissions` |
-| `{not_for}` | Comma-separated exclusions | `simple queries, read-only tasks, direct execution` |
+| `{not_for}` | Comma-separated exclusions | `simple queries, read-only tasks, trivial tasks` |
 | `{depth}` | 0 (atomics only) or 1 (uses composites) | `0` |
 | `{SKILL_NAME_UPPER}` | Uppercase underscored name | `MY_NEW_SKILL` |
 
@@ -43,7 +43,7 @@ Add to the `COMPOSITE_SKILLS` dictionary in config.py.
 "my-new-skill": {
     "description": "Process and validate user requests",
     "semantic_trigger": "process requests, validate input, handle submissions",
-    "not_for": "simple queries, read-only tasks, direct execution",
+    "not_for": "simple queries, read-only tasks, trivial tasks",
     "composition_depth": 0,
     "phases": "MY_NEW_SKILL_PHASES",
 },
@@ -189,7 +189,7 @@ Full example for a 4-phase skill:
 "my-new-skill": {
     "description": "Process and validate user requests",
     "semantic_trigger": "process requests, validate input, handle submissions",
-    "not_for": "simple queries, read-only tasks, direct execution",
+    "not_for": "simple queries, read-only tasks, trivial tasks",
     "composition_depth": 0,
     "phases": "MY_NEW_SKILL_PHASES",
 },

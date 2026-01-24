@@ -255,8 +255,8 @@ Does task match a composite skill pattern?
 └── NO → Does task require multiple cognitive functions?
          ├── YES → Use Dynamic Skill Sequencing with atomic skills
          └── NO → Does task pass triviality criteria?
-                  ├── YES → Use Direct Execution
-                  └── NO → Use single atomic skill or escalate
+                  ├── YES → Use bypass mode (-b flag) or single atomic skill
+                  └── NO → Use Dynamic Skill Sequencing with appropriate atomic skills
 ```
 
 ### Quick Reference

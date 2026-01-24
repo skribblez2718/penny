@@ -189,7 +189,7 @@ Before considering skill complete:
 | Mixing atomic and composite in same phase | One skill type per phase |
 | Circular skill references | Build acyclic dependency graph |
 | Using PhaseType.AUTO | All phases must use agents (AUTO is deprecated) |
-| Direct execution (uses_atomic_skill: None) | Always specify appropriate orchestrate-* agent |
+| Unspecified atomic skill (uses_atomic_skill: None) | Always specify appropriate orchestrate-* agent |
 
 ## Cognitive Sequence Patterns
 

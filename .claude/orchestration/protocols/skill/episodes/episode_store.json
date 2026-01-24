@@ -1,6 +1,6 @@
 {
-  "last_updated": "2026-01-18T15:43:44.634421",
-  "episode_count": 16,
+  "last_updated": "2026-01-23T09:45:25.334153",
+  "episode_count": 17,
   "episodes": [
     {
       "episode_id": "d9ff97bacb0b",
@@ -299,6 +299,23 @@
         "learnings",
         "skill",
         "develop"
+      ],
+      "agent_sequence": [],
+      "outcome": "success",
+      "context_type": "technical",
+      "unknowns_resolved": [],
+      "key_decisions": [],
+      "lessons_learned": ""
+    },
+    {
+      "episode_id": "2fdcb6366f6b",
+      "task_id": "learnings-20260123-085901",
+      "timestamp": "2026-01-23T09:45:25.333783",
+      "skill_name": "develop-learnings",
+      "task_description": "Task learnings-20260123-085901",
+      "task_keywords": [
+        "task",
+        "learnings"
       ],
       "agent_sequence": [],
       "outcome": "success",
