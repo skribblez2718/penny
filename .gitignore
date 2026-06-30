@@ -1,0 +1,238 @@
+# ===========================================
+# Penny Project .gitignore
+# ===========================================
+
+# Penny rule: NEVER write temporary files into the project tree.
+# Runtime artifacts (downloads, dumps, caches, scratch state) belong in
+# /tmp/ or user-configured locations outside the project.
+
+# Skill extension checkpoint dir (runtime resume state)
+.pi/skill-checkpoints/
+**/.pi/skill-checkpoints/
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+
+# ===========================================
+# Node.js / TypeScript
+# ===========================================
+
+node_modules/
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ===========================================
+# Python
+# ===========================================
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Compiled extensions
+*.so
+
+# Distribution / packaging (root-anchored to protect .pi/lib/)
+/build/
+/develop-eggs/
+/dist/
+/downloads/
+/eggs/
+/.eggs/
+/lib/
+/lib64/
+/parts/
+/sdist/
+/var/
+/wheels/
+/share/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.whl
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+coverage.xml
+*.cover
+.hypothesis/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre
+.pyre/
+.pyre_version/
+
+# Pytype
+.pytype/
+
+# Cython debug
+cython_debug/
+
+# ===========================================
+# Penny / MemPalace
+# ===========================================
+
+# Memory palace storage (user data)
+.mempalace/
+
+# Entities file (generated)
+entities.json
+
+# Local working directories (design artifacts, research, plans)
+/ideas/
+/plans/
+/research/
+
+# ===========================================
+# IDE & Editors
+# ===========================================
+
+.vscode/
+*.code-workspace
+*.code-workspace.json
+
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Vim
+*.swp
+*.swo
+*.swn
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list/
+tramp
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# ===========================================
+# OS Generated
+# ===========================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+.directory
+
+# ===========================================
+# Session & Cache Files
+# ===========================================
+
+*.session
+*.session.json
+
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+
+# ===========================================
+# Temporary Files
+# ===========================================
+
+tmp/
+temp/
+.tmp/
+
+*.bak
+*.backup
+*.orig
+
+# ===========================================
+# Test & Debug
+# ===========================================
+
+test-results/
+test-output/
+.jest-*
+
+htmlcov/
+
+.debug/
+
+# ===========================================
+# Misc
+# ===========================================
+
+*.zip
+*.tar.gz
+*.tar
+*.gz
+*.rar
+*.7z
+
+*.com
+*.class
+*.dll
+*.exe
+*.o
+
+*.db
+*.sqlite
+*.sqlite3
+
+*.log.*
+
+# Secrets (never commit these)
+*.pem
+*.key
+*.cert
+secrets/
+.secrets/

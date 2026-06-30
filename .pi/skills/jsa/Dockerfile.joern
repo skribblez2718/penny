@@ -1,0 +1,22 @@
+FROM eclipse-temurin:21-jdk AS base
+
+# Install dependencies
+RUN apt-get update -qq && apt-get install -y -qq curl unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Download and extract Joern CLI
+ARG JOERN_VERSION=v4.0.557
+WORKDIR /opt
+RUN curl -sL "https://github.com/joernio/joern/releases/download/${JOERN_VERSION}/joern-cli.zip" \
+    -o /tmp/joern-cli.zip \
+    && unzip -qo /tmp/joern-cli.zip -d /opt/ \
+    && rm /tmp/joern-cli.zip \
+    && mv /opt/joern-cli /opt/joern
+
+ENV PATH="/opt/joern:${PATH}"
+
+# Smoke test
+RUN joern --version 2>/dev/null; joern-parse --version 2>/dev/null; joern-flow --version 2>/dev/null; echo "Joern installed"
+
+ENTRYPOINT ["joern"]
+CMD ["--help"]

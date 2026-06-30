@@ -1,0 +1,61 @@
+{
+  "name": "penny",
+  "version": "0.1.0",
+  "description": "Penny - Personal AI assistant with MemPalace memory system",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    ".pi/extensions/caido",
+    ".pi/extensions/compaction",
+    ".pi/extensions/cve-lookup",
+    ".pi/extensions/environment",
+    ".pi/extensions/javascript",
+    ".pi/extensions/jsluice",
+    ".pi/extensions/memory",
+    ".pi/extensions/observability",
+    ".pi/extensions/pdf2markdown",
+    ".pi/extensions/playwright",
+    ".pi/extensions/questionnaire",
+    ".pi/extensions/resume",
+    ".pi/extensions/semgrep",
+    ".pi/extensions/skill",
+    ".pi/extensions/statusline",
+    ".pi/extensions/subagent",
+    ".pi/extensions/youtube"
+  ],
+  "scripts": {
+    "lint": "eslint . --ext .ts,.js",
+    "lint:fix": "eslint . --ext .ts,.js --fix",
+    "format": "prettier --write \"**/*.{ts,js,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
+    "py:lint": "source .venv/bin/activate && flake8 . --config .flake8",
+    "py:format": "source .venv/bin/activate && black . --config pyproject.toml",
+    "py:format:check": "source .venv/bin/activate && black . --check --config pyproject.toml",
+    "py:typecheck": "source .venv/bin/activate && mypy . --config-file pyproject.toml",
+    "py:install": "uv venv .venv && uv sync --extra dev",
+    "test": "bun run test:unit",
+    "test:unit": "for dir in .pi/extensions/*/; do (cd \"$dir\" && bun run test:unit); done",
+    "test:integration": "for dir in .pi/extensions/*/; do (cd \"$dir\" && bun run test:integration); done",
+    "test:python": "source .venv/bin/activate && pytest .pi/extensions/memory/tests/integration/test_bridge.py -v",
+    "test:all": "bun run lint && bun run format:check && bun run py:lint && bun run py:format:check && bun run test:unit && bun run test:integration && bun run test:python"
+  },
+  "devDependencies": {
+    "@sinclair/typebox": "^0.34.0",
+    "@types/node": "^25.6.0",
+    "@types/ws": "^8.18.1",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^10.0.0",
+    "js-beautify": "^1.15.4",
+    "prettier": "^3.0.0",
+    "synchrony": "^0.10.2",
+    "typescript-eslint": "^8.58.1",
+    "vitest": "^2.1.0",
+    "webcrack": "^2.16.0",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

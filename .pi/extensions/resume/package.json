@@ -1,0 +1,15 @@
+{
+  "name": "@penny/resume-extension",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "description": "Resume tools for Penny — export canonical markdown resume to .docx, query STAR accomplishments pool, update canonical resume",
+  "type": "module",
+  "scripts": {
+    "test:unit": "vitest run --config tests/vitest.config.ts"
+  },
+  "devDependencies": {
+    "@sinclair/typebox": "^0.34.49",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
+  }
+}

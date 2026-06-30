@@ -1,0 +1,27 @@
+[project.scripts]
+penny-observability = "observability.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "penny-observability"
+version = "0.1.0"
+description = "FastAPI + SQLite backend for Penny observability ingestion and querying"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "aiosqlite>=0.20,<1",
+    "python-dotenv>=1.0,<2",
+    "pydantic>=2.0,<3",
+    "apscheduler>=3.11,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+    "pytest-asyncio>=0.23",
+]

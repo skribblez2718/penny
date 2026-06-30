@@ -1,0 +1,20 @@
+{
+  "name": "pi-compaction-extension",
+  "version": "0.1.0",
+  "description": "Pi extension for Penny custom conversation compaction — replaces default prose summary with a structured checkpoint",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "format": "prettier --write \"**/*.{ts,js,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
+    "test": "bunx vitest run --config tests/vitest.config.ts",
+    "test:unit": "bunx vitest run --config tests/vitest.config.ts",
+    "test:integration": "bunx vitest run --config tests/vitest.integration.config.ts",
+    "test:all": "bun run lint && bun run format:check && bun run test:unit",
+    "test:watch": "bunx vitest --config tests/vitest.config.ts"
+  },
+  "dependencies": {
+    "zod": "^3.24.0"
+  }
+}

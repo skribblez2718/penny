@@ -1,0 +1,9 @@
+node_modules/
+.venv/
+.mempalace/
+**/node_modules/
+**/dist/
+**/coverage/
+*.min.js
+*.min.ts
+package-lock.json

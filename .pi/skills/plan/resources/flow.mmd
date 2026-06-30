@@ -1,0 +1,25 @@
+stateDiagram-v2
+    [*] --> intake
+
+    intake --> exploring : start\n[has_goal]
+    intake --> error : fail_intake\n[no_goal]
+
+    exploring --> planning : explore_done\n[explore_complete]
+    exploring --> exploring : explore_more\n[need_more]
+
+    planning --> critiquing : plan_done\n[plan_complete]
+    planning --> error : fail_plan\n[subagent_failed]
+
+    critiquing --> taskifying : critique_pass\n[critique_approved]
+    critiquing --> revising : critique_fail\n[has_issues]
+    critiquing --> error : fail_critique\n[subagent_failed]
+
+    revising --> exploring : revise_explore\n[needs_more_context]
+    revising --> planning : revise_plan\n[can_fix_plan]
+
+    taskifying --> complete : taskify_done\n[output_valid]
+    taskifying --> error : fail_taskify\n[invalid_output]
+
+    complete --> [*]
+
+    error --> [*]

@@ -1,0 +1,128 @@
+graph TD
+    A["Phase 1: INTAKE<br/>parse goal + URL + scope"] --> B["Phase 2: ACQUIRE<br/>local: playwright download JS + HTML<br/>+ jsluice urls + runtime probes"]
+    B --> C["Phase 3: CVE_RESEARCH<br/>local: Wappalyzer + source maps + OSV.dev + VL<br/>→ agent echo (parallel) IF PoCs needed"]
+    C --> D["Phase 4: SAST_SCAN<br/>tool: semgrep on JS + HTML<br/>+ jsluice secrets/urls"]
+    D --> E["Phase 5: NORMALIZE<br/>local: dedup_components + dedup_vulns"]
+    E --> F["Phase 6: DEDUP_WITHIN_SOURCE<br/>local: scanner fingerprint dedup"]
+    F --> G["Phase 7: CORRELATE_EVIDENCE<br/>local: typed edges + agent candidates"]
+    G --> H["Phase 8: AGENT_REVIEW<br/>local: bounded evidence packets<br/>verdicts → SAST_VALIDATE"]
+    H --> I["Phase 9: SAST_VALIDATE<br/>agent annie: confirmed / fp / needs_deeper"]
+    I --> S["Phase 10: STRUCTURE<br/>local: build typed analysis store<br/>PageCard + ModuleCard"]
+    S --> SL["Phase 11: SLICE<br/>local: per-class FlowCard generation<br/>+ Joern data flow (graceful degradation)"]
+    SL --> J["Phase 12: INVESTIGATE<br/>agent annie: F3 hybrid per-wave<br/>Python verifier → LLM verifier → general sweep"]
+    J --> PY["Python Verifier (F0)<br/>deterministic exploitability<br/>+ confidence scoring"]
+    PY --> LLM{LLM needed?<br/>medium/low confidence}
+    LLM -->|No| ST
+    LLM -->|Yes| LLMV["LLM Verifier (F3)<br/>qwen3.6:27b-coder<br/>verification + deep_analysis"]
+    LLMV --> ST
+    ST["Phase 13: STOP<br/>user gate: inspect F3 results<br/>before COLLECT"]
+    ST --> K["Phase 14: COLLECT<br/>local: gather findings from MemPalace"]
+    K --> L["Phase 15: MERGE<br/>agent synthia: dedup + merge<br/>cross-chunk stitching"]
+    L --> M["Phase 16: VERIFY<br/>agent vera: browser PoC testing"]
+    M --> N["Phase 17: REPORT<br/>agent skribble: bug bounty reports"]
+    N --> O["Phase 18: REFLECT<br/>agent carren → jsa-learnings"]
+    O --> P["Phase 19: COMPLETED"]
+
+    %% ── CVE_RESEARCH sub-elements ──
+    C -.->|tech detection| C1["3911 tech fingerprints<br/>→ pkg:npm/jquery@1.9.0"]
+    C -.->|CVE lookup| C2["OSV.dev + Vulnerability-Lookup<br/>no date filter, all CVEs returned"]
+    C -.->|VEX status| C3["affected, loaded, potentially_reachable,<br/>exploitable, not_affected, etc."]
+    C -.->|PoC dispatch<br/>(conditional)| C4["Echo agents in parallel<br/>GitHub, ExploitDB, mechanics<br/>only if PoC plan non-empty"]
+    C -.->|artifacts| C5["cves/cves.json + cves.md +<br/>CVE-XXXX-XXXX/description.md<br/>+ mempalace_stubs.json"]
+    C -.->|asset classification| C6["asset_classify.py<br/>single_component / multi_component_bundle<br/>first_party / inline / cdn_bundle"]
+    C -.->|CVE signatures| C7["cve_signatures.py<br/>vulnerable_symbols / conditions<br/>non_vulnerable_patterns"]
+
+    %% ── SAST_SCAN sub-elements ──
+    D -.->|JS scanning| D1["semgrep on assets/js/*.js<br/>14 local rule sets + 10 registry"]
+    D -.->|HTML scanning| D2["semgrep on assets/html/*.html<br/>html/security/audit/* + generic-html-templates/*<br/>19 HTML-specific rules"]
+    D -.->|secrets| D3["jsluice_secrets<br/>API keys, tokens, credentials"]
+    D -.->|endpoints| D4["jsluice_urls<br/>URLs, paths, query params"]
+
+    %% ── NORMALIZE (Phase 1 of 3 DEDUP split) ──
+    E -.->|dedup_components| E1["dedup_components.py<br/>purl as canonical ID<br/>certain/probable/possible"]
+    E -.->|dedup_vulnerabilities| E2["dedup_vulnerabilities.py<br/>CVE alias canonicalization<br/>CVE > GHSA > OSV"]
+
+    %% ── DEDUP_WITHIN_SOURCE (Phase 2 of 3 DEDUP split) ──
+    F -.->|scanner_dedup| F1["scanner_dedup.py<br/>merge_scanner_findings<br/>SARIF fingerprints + similarity"]
+
+    %% ── CORRELATE_EVIDENCE (Phase 3 of 3 DEDUP split) ──
+    G -.->|correlate_evidence| G1["correlate_evidence.py<br/>typed edges NOT merge<br/>hard gates + scored signals + file classification"]
+    G -.->|agent candidates| G2["select_agent_candidates<br/>ambiguous range 0.45-0.85<br/>→ agent review queue"]
+
+    %% ── AGENT_REVIEW (local) ──
+    H -.->|evidence packets| H1["EvidencePacket<br/>edge + component + vuln + SAST<br/>structured, no raw code"]
+    H -.->|verdicts| H2["verdict + confidence_override<br/>exploitable / not_exploitable / needs_deeper<br/>→ SAST_VALIDATE"]
+
+    %% ── SAST_VALIDATE (agent annie) ──
+    I -.->|classification| I1["annie classifies each finding<br/>confirmed / false_positive / needs_deeper"]
+    I -.->|confidence| I2["confidence_override applied<br/>based on annie's analysis"]
+
+    %% ── STRUCTURE ──
+    S -.->|file manifest + AST| S1["structure_analysis.py<br/>build_file_manifest + build_ast_index"]
+    S -.->|dangerous patterns| S2["tree-sitter queries<br/>innerHTML, eval, document.write, Object.assign<br/>location.*, postMessage, setTimeout"]
+    S -.->|ModuleCard| S3["One per JS/HTML file<br/>classification, AST summary,<br/>dangerous patterns, fingerprint detections"]
+    S -.->|PageCard| S4["One per crawled page<br/>DOM inventory + script refs +<br/>Caido HTTP history"]
+
+    %% ── SLICE ──
+    SL -.->|heuristic inference| SL1["vuln_class inference<br/>from SAST rule_ids"]
+    SL -.->|dangerous pattern → candidate| SL2["FlowCard candidates<br/>from ModuleCard patterns"]
+    SL -.->|Joern data flow| SL3["Joern CPG integration<br/>graceful degradation if unavailable"]
+    SL -.->|lane assignment| SL4["code_static / page_dom / network_behavior<br/>via lane_router.py"]
+
+    %% ── INVESTIGATE (F3 hybrid) ──
+    J -.->|per-wave dispatch| J1["annie receives WAVE_SIZE=10 findings<br/>+ reference catalogs + high-confidence summary"]
+    J -.->|general sweep| J2["3 JS files + 2 HTML pages per wave<br/>form endpoints, CSRF tokens, CSP,<br/>server-side probing (SQLi, SSRF, etc.)"]
+    J -.->|web architecture| J3["discovered pages manifest<br/>forms, API calls, external scripts<br/>from ACQUIRE inline_index.json"]
+
+    %% ── Python Verifier (F0) ──
+    PY -.->|exploitability check| PY1["VulnerabilityAnalyzer.assess_exploitability<br/>exploitable + difficulty"]
+    PY -.->|confidence scoring| PY2["Baseline 0.5 + Python verdict<br/>+ SAST (+0.15) + Joern (+0.2)<br/>+ runtime (+0.1) - sanitizers - hops"]
+    PY -.->|confidence levels| PY3["confirmed ≥0.85<br/>high ≥0.65 / medium ≥0.45<br/>low ≥0.25 / candidate <0.25"]
+    PY -.->|LLM packet| PY4["verification 4-6K tokens<br/>deep_analysis 10-15K tokens<br/>correlation 4-8K tokens"]
+
+    %% ── LLM Verifier (F3) ──
+    LLMV -.->|Ollama client| LLMV1["qwen3.6:27b-coder<br/>Q8_0 KV cache, 262K context<br/>think=false to save tokens"]
+    LLMV -.->|verdict parsing| LLMV2["VERDICT: CONFIRM / REFUTE / NEEDS_DEEPER<br/>+ CONFIDENCE + REASONING"]
+    LLMV -.->|confidence delta| LLMV3["+0.20 LLM agrees with Python<br/>-0.30 LLM contradicts Python<br/>0.00 LLM uncertain"]
+    LLMV -.->|priority queue| LLMV4["Sort by confidence ascending<br/>lowest-confidence first<br/>max_verifications budget"]
+
+    %% ── ACQUIRE sub-elements ──
+    B -.->|runtime probes| B1["runtime_probe.py<br/>Playwright evaluate<br/>$.fn.jquery, React.version"]
+    B -.->|HTML classification| B2["_classify_html()<br/>pages_with_forms, pages_with_api_calls<br/>→ inline_index.json"]
+
+    %% ── Styling ──
+    classDef dedupGroup fill:#ede9fe,stroke:#8b5cf6,stroke-width:2px
+    classDef agentPhase fill:#fce4ec,stroke:#e91e63,stroke-width:2px
+    classDef cardPhase fill:#d1fae5,stroke:#10b981,stroke-width:2px
+    classDef f3Hybrid fill:#fed7aa,stroke:#ea580c,stroke-width:2px
+    classDef llmPhase fill:#fef9c3,stroke:#ca8a04,stroke-width:2px
+    classDef userGate fill:#fce7f3,stroke:#ec4899,stroke-width:2px
+    classDef evidence fill:#dbeafe,stroke:#3b82f6
+    classDef toolPhase fill:#e0f2fe,stroke:#0284c7,stroke-width:2px
+
+    class E,F,G dedupGroup
+    class I,J,L,M,N,O agentPhase
+    class S,SL,K cardPhase
+    class PY,LLMV f3Hybrid
+    class LLMV1,LLMV2,LLMV3,LLMV4 llmPhase
+    class ST userGate
+    class D toolPhase
+    class C1,C2,C3,C4,C5,C6,C7,D1,D2,D3,D4,E1,E2,F1,G1,G2,H1,H2,I1,I2 evidence
+    class S1,S2,S3,S4,SL1,SL2,SL3,SL4,J1,J2,J3,PY1,PY2,PY3,PY4,B1,B2 evidence
+
+    %% ── Notes ──
+    %% Phases are strictly sequential — no parallelism.
+    %% CVE_RESEARCH conditionally dispatches echo agents for PoC research;
+    %% if no PoCs needed, it's local-only and advances directly to SAST_SCAN.
+    %% SAST_SCAN targets both JS and HTML files (19 HTML-specific rules).
+    %% AGENT_REVIEW is local (not agent annie) — it builds bounded evidence
+    %% packets and produces verdicts for SAST_VALIDATE.
+    %% SAST_VALIDATE dispatches annie to classify findings as confirmed,
+    %% false_positive, or needs_deeper.
+    %% INVESTIGATE is the F3 hybrid: Python verifier runs first, then LLM
+    %% verifier for medium/low-confidence findings. Each wave includes a
+    %% general sweep of 3 JS + 2 HTML files for novel pattern discovery.
+    %% STOP is a full phase (13), not a sub-phase — user inspects F3 results
+    %% before the pipeline proceeds to COLLECT → MERGE → VERIFY → REPORT.
+    %% MERGE is agent synthia (not local dedup.py) — cross-chunk stitching
+    %% and deduplication of findings from multiple waves.

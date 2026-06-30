@@ -1,0 +1,18 @@
+stateDiagram-v2
+    [*] --> Intake
+    Intake --> Planning : has_goal
+    Intake --> Researching : quick_mode
+    Planning --> CritiquingPlan : deep_mode
+    Planning --> Researching : standard_mode
+    CritiquingPlan --> Researching : critique_approved
+    CritiquingPlan --> RevisingPlan : has_issues
+    RevisingPlan --> Planning
+    Researching --> Validating : deep_mode
+    Researching --> Synthesizing : standard_mode
+    Validating --> Synthesizing : validation_complete
+    Synthesizing --> CritiquingReport : deep_mode
+    Synthesizing --> Complete : not_deep
+    CritiquingReport --> Complete : report_approved
+    CritiquingReport --> RevisingReport : report_has_issues
+    RevisingReport --> Synthesizing
+    Complete --> [*]

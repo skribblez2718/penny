@@ -1,0 +1,18 @@
+{
+  "name": "@penny/pdf2markdown-extension",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "description": "PDF-to-Markdown conversion tool for Penny — convert PDF files to markdown via a custom tool or slash command",
+  "type": "module",
+  "scripts": {
+    "test:unit": "vitest run --config tests/vitest.config.ts"
+  },
+  "dependencies": {
+    "@opendocsg/pdf2md": "^0.2.7",
+    "@sinclair/typebox": "^0.34.49"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
+  }
+}

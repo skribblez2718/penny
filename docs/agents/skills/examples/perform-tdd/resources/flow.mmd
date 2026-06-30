@@ -1,0 +1,13 @@
+stateDiagram-v2
+    [*] --> Red
+    
+    Red --> Green : test_written
+    Green --> Red : still_failing\n[can_retry]
+    Green --> Refactor : all_pass\n[tests_pass]
+    Refactor --> Red : needs_more\n[needs_more_tests]
+    Refactor --> Document : refactored\n[refactor_done]
+    Document --> [*]
+    
+    Red --> Error : error_execution
+    Green --> Error : error_execution
+    Refactor --> Error : error_execution

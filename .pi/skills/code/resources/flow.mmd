@@ -1,0 +1,8 @@
+stateDiagram-v2
+    [*] --> Intake
+    Intake --> Working : start
+    Working --> Reviewing : work_complete
+    Reviewing --> Complete : review_approved
+    Complete --> [*]
+    Working --> Error : error_occurred
+    Reviewing --> Error : error_occurred

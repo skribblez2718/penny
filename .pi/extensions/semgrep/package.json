@@ -1,0 +1,13 @@
+{
+  "name": "pi-extension-semgrep",
+  "version": "1.0.0",
+  "description": "Semgrep SAST scanner extension for Pi — JavaScript security analysis",
+  "main": "index.ts",
+  "type": "module",
+  "scripts": {
+    "test:unit": "vitest run --config tests/vitest.config.ts"
+  },
+  "devDependencies": {
+    "@sinclair/typebox": "^0.34.49"
+  }
+}

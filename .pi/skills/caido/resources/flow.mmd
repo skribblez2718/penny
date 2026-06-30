@@ -1,0 +1,33 @@
+stateDiagram-v2
+    [*] --> intake
+
+    intake --> exploring : start\n[has_goal]
+    intake --> error : fail_intake\n[no_goal]
+
+    exploring --> designing : explore_done\n[explore_complete]
+    exploring --> error : fail_explore\n[subagent_failed]
+
+    designing --> scaffolding : design_done\n[design_complete]
+    designing --> error : fail_design\n[subagent_failed]
+
+    scaffolding --> implementing : scaffold_done\n[scaffold_complete]
+    scaffolding --> error : fail_scaffold\n[subagent_failed]
+
+    implementing --> testing : implement_done\n[implement_complete]
+    implementing --> error : fail_implement\n[subagent_failed]
+
+    testing --> building : test_done\n[test_complete]
+    testing --> error : fail_test\n[subagent_failed]
+
+    building --> complete : build_done\n[build_complete]
+    building --> error : fail_build\n[subagent_failed]
+
+    complete --> [*]
+    error --> [*]
+
+    exploring --> unknown : explore_unknown\n[confidence_is_uncertain]
+    designing --> unknown : design_unknown\n[confidence_is_uncertain]
+    unknown --> awaiting_clarification : escalate
+    awaiting_clarification --> exploring : resume\n[has_clarification]
+    unknown --> error : abandon
+    awaiting_clarification --> error : abandon_clarification

@@ -1,0 +1,36 @@
+stateDiagram-v2
+    [*] --> classify
+
+    classify --> generate : classify_done
+
+    state generate {
+        [*] --> first_entry
+        first_entry --> questions : needs_clarification
+        questions --> awaiting_responses
+        awaiting_responses --> synthesis : user_responded
+        synthesis --> [*]
+    }
+
+    generate --> validate : prd_generated
+
+    state validate {
+        [*] --> run_validation
+        run_validation --> check_issues
+        check_issues --> [*] : valid
+        check_issues --> revision : has_issues
+    }
+
+    validate --> complete : validation_pass
+    complete --> [*]
+
+    validate --> generate : revise  (revision loop)
+
+    generate --> unknown : generate_unknown
+    unknown --> awaiting_clarification : escalate
+    awaiting_clarification --> generate : resume_generate
+
+    classify --> error : fail_classify
+    generate --> error : fail_generate
+    validate --> error : fail_validate
+    unknown --> error : abandon
+    awaiting_clarification --> error : abandon_clarification

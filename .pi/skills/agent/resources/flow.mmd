@@ -1,0 +1,39 @@
+stateDiagram-v2
+    [*] --> intake
+
+    intake --> exploring : start\n[has_goal]
+    intake --> error : fail_intake\n[no_goal]
+
+    exploring --> designing : explore_done\n[explore_complete]
+    exploring --> error : fail_explore\n[subagent_failed]
+
+    designing --> critiquing : design_done\n[design_complete]
+    designing --> error : fail_design\n[subagent_failed]
+
+    critiquing --> scaffolding : critique_pass\n[critique_approved]
+    critiquing --> revising : critique_fail\n[has_issues]
+
+    revising --> exploring : revise_explore\n[needs_more_context]
+    revising --> designing : revise_design\n[can_fix_design]
+
+    scaffolding --> verifying : scaffold_done\n[generation_complete]
+    scaffolding --> error : fail_scaffold\n[subagent_failed]
+
+    verifying --> complete : verify_pass\n[verification_complete]
+    verifying --> scaffolding : verify_fail\n[verification_failed]
+    verifying --> error : fail_verify\n[subagent_failed]
+
+    complete --> [*]
+    error --> [*]
+
+    exploring --> unknown : explore_unknown\n[confidence_is_uncertain]
+    designing --> unknown : design_unknown\n[confidence_is_uncertain]
+    critiquing --> unknown : critique_unknown\n[confidence_is_uncertain]
+    scaffolding --> unknown : scaffold_unknown\n[confidence_is_uncertain]
+    unknown --> awaiting_clarification : escalate
+    awaiting_clarification --> exploring : resume_explore\n[has_clarification]
+    awaiting_clarification --> designing : resume_design\n[has_clarification]
+    awaiting_clarification --> critiquing : resume_critique\n[has_clarification]
+    awaiting_clarification --> scaffolding : resume_scaffold\n[has_clarification]
+    unknown --> error : abandon
+    awaiting_clarification --> error : abandon_clarification

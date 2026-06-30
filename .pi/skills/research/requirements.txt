@@ -1,0 +1,1 @@
+python-statemachine>=2.0

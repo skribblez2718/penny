@@ -1,0 +1,15 @@
+{
+  "name": "@penny/caido-extension",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "@caido/sdk-client": "^0.3.1",
+    "graphql-tag": "^2.12.6"
+  },
+  "description": "Caido SDK tools for Penny — search, replay, edit, intercept, findings, scopes, fuzz",
+  "scripts": {
+    "test:unit": "vitest run --config tests/vitest.config.ts",
+    "test:integration": "vitest run --config tests/vitest.integration.config.ts"
+  },
+  "type": "module"
+}
