@@ -51,9 +51,41 @@ _config = MempalaceConfig()
 _kg = KnowledgeGraph()
 
 
+def _fix_blob_seq_ids(palace_path: str):
+    """Fix ChromaDB BLOB seq_ids → INTEGER before creating PersistentClient.
+
+    ChromaDB's Rust compactor expects INTEGER seq_id columns, but older
+    versions stored them as 8-byte big-endian BLOBs. Without this fix,
+    PersistentClient() crashes with:
+      "mismatched types; Rust type u64 (as SQL type INTEGER) is not
+       compatible with SQL type BLOB"
+    """
+    import sqlite3
+    db_path = os.path.join(palace_path, "chroma.sqlite3")
+    if not os.path.isfile(db_path):
+        return
+    try:
+        with sqlite3.connect(db_path) as conn:
+            for table in ("embeddings", "max_seq_id"):
+                try:
+                    rows = conn.execute(
+                        f"SELECT rowid, seq_id FROM {table} WHERE typeof(seq_id) = 'blob'"
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    continue
+                if not rows:
+                    continue
+                updates = [(int.from_bytes(blob, byteorder="big"), rowid) for rowid, blob in rows]
+                conn.executemany(f"UPDATE {table} SET seq_id = ? WHERE rowid = ?", updates)
+                conn.commit()
+    except Exception:
+        pass
+
+
 def _get_collection(create: bool = False):
     """Get ChromaDB collection."""
     try:
+        _fix_blob_seq_ids(_config.palace_path)
         client = chromadb.PersistentClient(path=_config.palace_path)
         # Always use 'mempalace_drawers' to match searcher.py
         collection_name = "mempalace_drawers"
