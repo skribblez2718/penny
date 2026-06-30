@@ -15,6 +15,7 @@ A precise reasoning engine built on [Pi](https://github.com/mariozechner/pi-codi
 - [Weekly Digest](#weekly-digest)
 - [Progress Heartbeats](#progress-heartbeats)
 - [Confidence & Vocabulary](#confidence--vocabulary)
+- [AGENTS.md Indexing](#agentsmd-indexing)
 - [Security](#security)
 - [Protocols](#protocols)
 - [Observability](#observability)
@@ -97,29 +98,17 @@ Long-running agents are monitored with staleness-based progress tracking instead
 
 ## Confidence & Vocabulary
 
-Penny uses a standardized communication system defined in SYSTEM.md:
+Penny uses a **global canonical vocabulary** defined in SYSTEM.md — a set of precisely-defined terms that cannot be substituted. "Constraints" always means hard immutable limits, never "limitations" or "restrictions." This eliminates ambiguity across the entire system: agents, skills, documentation, and human communication all use the same language.
 
-**Confidence levels** — every non-trivial claim must declare its confidence:
+**Domain-specific vocabularies** extend this for specialized contexts — coding standards define their own terms, security docs define threat categories, and skill prompts define workflow-specific concepts. The global vocabulary provides the foundation; domain vocabularies build on it without conflicting.
 
-| Level | Meaning | Action |
-|-------|---------|--------|
-| **CERTAIN** | Verified against documentation or tested code | State directly |
-| **PROBABLE** | Based on best practices and experience | State as probable; cite basis |
-| **POSSIBLE** | Reasonable but untested | State as possible; recommend verification |
-| **UNCERTAIN** | Requires validation or clarification | Must say "I cannot verify X because..." |
+Confidence levels (CERTAIN → PROBABLE → POSSIBLE → UNCERTAIN) are declared on every non-trivial claim, and an instruction hierarchy (Truth > Clarity > User intent > Thoroughness) resolves rule conflicts.
 
-**Canonical vocabulary** — consistent terms that cannot be substituted:
+## AGENTS.md Indexing
 
-| Term | Meaning |
-|------|---------|
-| **constraints** | Hard, immutable limits |
-| **variables** | Adjustable levers |
-| **assumptions** | Believed true, unverified |
-| **unknowns** | Things not yet determined |
-| **tradeoffs** | Tensions between competing approaches |
-| **verification** | Proof of success |
+Documentation is organized as a **tree of indexes** — `AGENTS.md` files are lookup tables that reference other `AGENTS.md` files or leaf documents. They never contain content, only paths and one-line descriptions. This prevents greedy loading: an agent needing "how to write a skill prompt" reads one specific file, not the entire documentation tree.
 
-**Instruction hierarchy** — when rules conflict, higher wins: Truth > Clarity > User intent > Thoroughness.
+Pi auto-discovers the root `AGENTS.md` by walking up from the working directory. Nested `AGENTS.md` files are loaded on-demand via Penny's `read` tool — never pre-loaded. Trigger-gated protocol docs (`docs/penny/`) load only when their activation condition is met, conserving context window on every turn.
 
 ## Security
 
