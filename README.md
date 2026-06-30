@@ -198,3 +198,20 @@ Then copy `.env.example` to `.env` and fill in your values:
 ```bash
 cp .env.example .env
 ```
+
+### TLS / Certificate Trust
+
+If a model endpoint uses a custom or internal CA, you may need to set Node.js TLS variables **before** starting Pi (they must be set at process launch — `.env` is too late):
+
+```bash
+# Trust system CA certificates (custom/internal CAs)
+NODE_USE_SYSTEM_CA=1 pi
+
+# Trust an additional custom CA certificate
+NODE_EXTRA_CA_CERTS=/path/to/custom-ca.pem pi
+
+# Bypass certificate validation entirely (development only, not recommended)
+NODE_TLS_REJECT_UNAUTHORIZED=0 pi
+```
+
+To make these permanent, export them in your shell profile (`~/.bashrc` or `~/.zshrc`).
