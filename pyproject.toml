@@ -5,6 +5,7 @@ description = "Penny - Personal AI assistant with MemPalace memory system"
 requires-python = ">=3.12"
 dependencies = [
     "mempalace>=3.0.0",
+    "chromadb>=1.5.9",
     "semgrep>=1.160.0",           # SAST scanner — used by jsa skill
     "python-statemachine>=2.0",   # FSM library — used by all skill orchestrators
     "tree-sitter>=0.21.0",        # AST parser — used by jsa splitter

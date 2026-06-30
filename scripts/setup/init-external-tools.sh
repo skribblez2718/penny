@@ -275,6 +275,7 @@ else
     info "Installing feroxbuster via apt (.deb from GitHub releases)..."
     FEROX_DEB_ZIP="feroxbuster_amd64.deb.zip"
     TMP_DIR="$(mktemp -d)"
+    ORIG_DIR="$(pwd)"
     FEROX_OK=true
     {
         cd "$TMP_DIR"
@@ -289,6 +290,7 @@ else
             FEROX_OK=false
         fi
     }
+    cd "$ORIG_DIR"
     rm -rf "$TMP_DIR"
     if [ "$FEROX_OK" = true ] && have_cmd feroxbuster; then
         ok "feroxbuster installed"
