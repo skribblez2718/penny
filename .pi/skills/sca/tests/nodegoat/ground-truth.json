@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "app": "NodeGoat",
+  "source_repo": "https://github.com/OWASP/NodeGoat",
+  "verification_status": "UNVERIFIED_EMPTY_TEMPLATE",
+  "_comment": [
+    "This is an INTENTIONALLY EMPTY, honest ground-truth template. It contains",
+    "NO vulnerability entries. Real file:line locations must be populated by a",
+    "human who has actually cloned and inspected the real OWASP NodeGoat repo.",
+    "Fabricating plausible-sounding NodeGoat vulnerability locations from",
+    "training-data memory (without an explicit verification step against the",
+    "real repository) would violate this codebase's 'never fabricate confidence'",
+    "discipline -- the same rule the runtime report generator follows. An empty",
+    "template honestly scores every discovered finding as a false positive,",
+    "which is the correct outcome of 'we have not verified any ground truth",
+    "yet', rather than an invented set of locations. See README.md in this",
+    "directory for how to populate it and how each entry must be verified."
+  ],
+  "_entry_schema_example": {
+    "app_path": "<repo-relative path to the vulnerable app root, e.g. 'app'>",
+    "vuln_class": "<e.g. 'command-injection', 'nosql-injection', 'ssrf'>",
+    "file": "<repo-relative source file, e.g. 'app/routes/contributions.js'>",
+    "line": "<1-based line number of the vulnerable sink, e.g. 32>",
+    "severity": "<critical|high|medium|low|unknown>",
+    "cvss_4_0_vector": "<CVSS 4.0 vector string, or null when not assigned>",
+    "_verified_by": "<how this entry was verified: who inspected which commit, e.g. 'inspected NodeGoat @ <sha> on 2026-07-02'>"
+  },
+  "entries": []
+}

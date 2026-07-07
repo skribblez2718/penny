@@ -1,0 +1,27 @@
+# .semgrepignore — default scan-TARGET exclusions for the semgrep extension.
+#
+# This controls what semgrep SCANS by default when a caller does not override
+# the target selection. It does NOT affect the vendored rules in rules/vendor/
+# or the custom rules in rules/custom/ — those are rule CONFIGS, not scan
+# targets, and are always loaded explicitly via --config.
+#
+# Callers can still point semgrep_scan at any path explicitly; these globs only
+# prune noise (dependencies, build artifacts, minified bundles, test specs)
+# from directory scans.
+
+# Dependencies
+node_modules/
+
+# Build / output artifacts
+dist/
+build/
+.next/
+
+# Minified bundles (not meaningful to audit; huge and noisy)
+**/*.min.js
+
+# Test / spec files (not production attack surface)
+**/*.test.js
+**/*.spec.js
+**/*.test.ts
+**/*.spec.ts

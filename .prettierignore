@@ -1,0 +1,16 @@
+node_modules/
+.venv/
+.mempalace/
+**/node_modules/
+**/dist/
+**/coverage/
+*.min.js
+*.min.ts
+package-lock.json
+
+# Non-production sources — deliberately-vulnerable examples and research
+# artifacts, not runtime code (mirrors the eslint ignore list). Prettier cannot
+# even parse the semgrep rule fixtures (they contain intentional syntax errors).
+.pi/extensions/semgrep/rules/
+research/
+**/tests/fixtures/

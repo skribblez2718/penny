@@ -1,0 +1,55 @@
+{
+  "_comment": "Curated recall regression set. Each case is a query a future session might realistically ask, targeting a drawer that is known to exist and known to matter. ADD A CASE whenever recall fails you in real use: you knew Penny stored it, she couldn't find it. Never delete a case because it fails — that is the eval working.",
+  "cases": [
+    {
+      "id": "state-mgmt-library-decision",
+      "query": "which state machine library did we decide to use for per-skill state management",
+      "expect": { "id_prefix": "drawer_penny_decisions_6131dd3de4bbc03e" }
+    },
+    {
+      "id": "plan-skill-hybrid-architecture",
+      "query": "plan mode hybrid architecture decision extension vs skill responsibilities",
+      "expect": { "id_prefix": "drawer_penny_decisions_e12a59339f0c5685" }
+    },
+    {
+      "id": "mempalace-preloading-strategy",
+      "query": "mempalace pre-loading goal-directed search strategy instead of room-directed",
+      "expect": { "id_prefix": "drawer_penny_decisions_c3977d48c45fca4d" }
+    },
+    {
+      "id": "plan-extension-removal",
+      "query": "why was the plan extension removed",
+      "expect": { "id_prefix": "drawer_penny_decisions_90c4c58702f963a3" }
+    },
+    {
+      "id": "progress-heartbeats",
+      "query": "progress heartbeats staleness window ProgressEmitter for long running agents",
+      "expect": { "id_prefix": "drawer_wing_penny_decisions_2c29fce6f908" }
+    },
+    {
+      "id": "research-file-location-rule",
+      "query": "where do research files go project conventions rule",
+      "expect": { "id_prefix": "drawer_wing_penny_conventions_dad1a7d230" }
+    },
+    {
+      "id": "intigriti-extension-pattern",
+      "query": "Intigriti extension created mirroring the hackerone extension pattern TDD",
+      "expect": { "id_prefix": "drawer_wing_penny_decisions_0c5d8a43e76d" }
+    },
+    {
+      "id": "shared-bugbounty-module",
+      "query": "shared bug bounty module extracted types config tool wrapper base",
+      "expect": { "id_prefix": "drawer_wing_penny_decisions_361735e30eb2" }
+    },
+    {
+      "id": "search-extension-ollama",
+      "query": "web_search web_fetch tools Ollama web search API extension",
+      "expect": { "id_prefix": "drawer_penny_architecture_c513463aea866b" }
+    },
+    {
+      "id": "openwebui-migration-standard",
+      "query": "Open WebUI models to Pi migration standard framework",
+      "expect": { "id_prefix": "drawer_penny_decisions_9aebb9bbf6e25272" }
+    }
+  ]
+}

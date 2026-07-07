@@ -1,0 +1,5 @@
+# Real-provisioning-time TOFU hash-lock state (scripts/provisioning.py).
+# Never commit a tool-lock.json produced by a dev's manual/live verification
+# run — its design intent is real-provisioning-time state only. Tests always
+# pass an explicit lockfile_path override under tmp_path.
+tool-lock.json

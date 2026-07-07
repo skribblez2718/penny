@@ -1,0 +1,40 @@
+stateDiagram-v2
+    [*] --> intake
+
+    intake --> exploring : start_explore\n[has_goal]
+    intake --> error : abort\n[exception]
+
+    exploring --> designing : explore_done
+    designing --> critiquing : design_done
+
+    critiquing --> scaffolding : critique_pass\n[verdict==APPROVE]
+    critiquing --> exploring : critique_retry_explore\n[verdict!=APPROVE, iter+1<max, explore_rounds<1]
+    critiquing --> designing : critique_retry_design\n[verdict!=APPROVE, iter+1<max, explore_rounds>=1]
+    critiquing --> complete : critique_exhausted\n[verdict!=APPROVE, iter+1>=max, met=False]
+
+    scaffolding --> verifying : scaffold_done
+
+    verifying --> complete : verify_pass\n[all checks pass]
+    verifying --> scaffolding : verify_retry\n[checks fail, verify_iter+1<max]
+    verifying --> complete : verify_exhausted\n[checks fail, verify_iter+1>=max, met=False]
+
+    exploring --> unknown : to_unknown\n[UNCERTAIN or needs_clarification]
+    designing --> unknown : to_unknown\n[UNCERTAIN or needs_clarification]
+    critiquing --> unknown : to_unknown\n[UNCERTAIN / needs_clarification / stall]
+    scaffolding --> unknown : to_unknown\n[UNCERTAIN or needs_clarification]
+    verifying --> unknown : to_unknown\n[UNCERTAIN / needs_clarification / stall]
+
+    unknown --> awaiting_clarification : escalate
+    awaiting_clarification --> exploring : clarify\n[user_response]
+
+    intake --> error : abort
+    exploring --> error : abort
+    designing --> error : abort
+    critiquing --> error : abort
+    scaffolding --> error : abort
+    verifying --> error : abort
+    unknown --> error : abort
+    awaiting_clarification --> error : abort
+
+    complete --> [*]
+    error --> [*]

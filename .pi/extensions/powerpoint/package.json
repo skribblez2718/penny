@@ -1,0 +1,15 @@
+{
+  "name": "@penny/powerpoint-extension",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "description": "PowerPoint tools for Penny — generate modern, well-designed .pptx presentations from structured slides or markdown with themed styling",
+  "type": "module",
+  "scripts": {
+    "test:unit": "vitest run --config tests/vitest.config.ts"
+  },
+  "devDependencies": {
+    "@sinclair/typebox": "^0.34.49",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
+  }
+}

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Penny observability retention cleanup
+Documentation=https://github.com/skribblez2718/penny
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1800
+
+[Install]
+WantedBy=timers.target

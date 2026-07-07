@@ -1,0 +1,1 @@
+{"name":"pi-extension-jsluice","version":"1.0.0","description":"jsluice URL and secret extraction extension","main":"index.ts","type":"module","scripts":{"test:unit":"vitest run --config tests/vitest.config.ts"},"devDependencies":{"@sinclair/typebox":"^0.34.49"}}

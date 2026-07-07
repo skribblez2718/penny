@@ -1,0 +1,13 @@
+{
+  "name": "pi-extension-trufflehog",
+  "version": "1.0.0",
+  "description": "TruffleHog verified-secret scanner extension for Pi (invoke-only, AGPL tool)",
+  "main": "index.ts",
+  "type": "module",
+  "scripts": {
+    "test:unit": "vitest run --config tests/vitest.config.ts"
+  },
+  "devDependencies": {
+    "@sinclair/typebox": "^0.34.49"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "pi-subagent-extension",
+  "version": "0.1.0",
+  "description": "Pi extension for delegating tasks to specialized subagents",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "format": "prettier --write \"**/*.{ts,js,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
+    "test": "bunx vitest run --config tests/vitest.config.ts",
+    "test:unit": "bunx vitest run --config tests/vitest.config.ts",
+    "test:integration": "bunx vitest run --config tests/vitest.integration.config.ts",
+    "test:e2e": "bunx vitest run --config tests/vitest.e2e.config.ts",
+    "test:all": "bun run lint && bun run format:check && bun run test:unit && bun run test:integration",
+    "test:watch": "bunx vitest --config tests/vitest.config.ts"
+  },
+  "dependencies": {}
+}

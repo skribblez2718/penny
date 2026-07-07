@@ -1,0 +1,90 @@
+rules:
+  - id: authz-idor
+    # ORIGINAL RULE — authored for the sca (Software Composition / security
+    # audit) Penny skill. This is NOT vendored from semgrep-rules or any other
+    # upstream source. Tier-2 heuristic taint rule.
+    message: >-
+      Possible IDOR (Insecure Direct Object Reference): a database record is
+      fetched or mutated using a request-derived identifier (e.g. req.params.id,
+      req.query.userId, req.body.id) with no visible authorization/ownership
+      scoping in the same call. An attacker can substitute another user's
+      identifier to read or modify records they do not own. Scope the query to
+      the authenticated principal (e.g. `where: { id, ownerId: req.user.id }`)
+      or perform an explicit ownership/authorization check before the operation.
+    mode: taint
+    languages:
+      - javascript
+      - typescript
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory:
+        - audit
+      confidence: LOW
+      likelihood: MEDIUM
+      impact: HIGH
+      cwe:
+        - "CWE-639: Authorization Bypass Through User-Controlled Key"
+      owasp:
+        - "A01:2021 - Broken Access Control"
+      technology:
+        - javascript
+        - typescript
+        - express
+      author: sca skill (original, not vendored)
+      tier: 2
+      references:
+        - https://owasp.org/Top10/A01_2021-Broken_Access_Control/
+        - https://cheatsheetseries.owasp.org/cheatsheets/Insecure_Direct_Object_Reference_Prevention_Cheat_Sheet.html
+      # LIMITATION: this is a single-file heuristic. Ownership/authorization
+      # checks performed in a helper function that semgrep cannot see in a
+      # single-file scan will produce false positives. taint-mode with an
+      # ownership-scoped-sink exclusion is used to reduce noise, but
+      # interprocedural authorization is out of scope for a Tier-2 rule.
+      # PROVENANCE LIMITATION: the sanitizer requires the ownership-check VALUE
+      # to be a direct trusted-source expression (req.user.*, req.session.*,
+      # res.locals.*). An ownership value read into a local variable first
+      # (e.g. `const uid = req.user.id; ... ownerId: uid`) is NOT recognized as
+      # sanitized and may produce a false positive — the conservative,
+      # safe-direction failure for a security rule.
+    pattern-sources:
+      - pattern: req.params.$X
+      - pattern: req.query.$X
+      - pattern: req.body.$X
+    pattern-sanitizers:
+      # A request-derived identifier used inside a query object that is ALSO
+      # scoped to an ownership key (ownerId / userId / user / owner) is
+      # considered authorized ONLY IF the ownership-check VALUE comes from a
+      # TRUSTED source: the authenticated principal (req.user.*), the session
+      # (req.session.*), or response locals (res.locals.*). Matching on the key
+      # NAME alone is unsafe — a mass-assignment IDOR can supply the
+      # "ownership" value straight from the request
+      # (e.g. `{ ownerId: req.body.ownerId }`), which offers zero protection
+      # because the attacker controls both the id AND the ownership check.
+      - patterns:
+          - pattern-either:
+              - pattern: "{..., ownerId: $V}"
+              - pattern: "{..., userId: $V}"
+              - pattern: "{..., user: $V}"
+              - pattern: "{..., owner: $V}"
+          - metavariable-pattern:
+              metavariable: $V
+              patterns:
+                - pattern-either:
+                    - pattern: req.user
+                    - pattern: req.user.$K
+                    - pattern: req.session
+                    - pattern: req.session.$K
+                    - pattern: res.locals
+                    - pattern: res.locals.$K
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $MODEL.findById(...)
+          - pattern: $MODEL.findByPk(...)
+          - pattern: $MODEL.findOne(...)
+          - pattern: $MODEL.update(...)
+          - pattern: $MODEL.destroy(...)
+          - pattern: $MODEL.delete(...)
+          - pattern: $MODEL.deleteOne(...)
+          - pattern: $MODEL.findByIdAndUpdate(...)
+          - pattern: $MODEL.findByIdAndDelete(...)

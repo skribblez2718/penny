@@ -1,0 +1,42 @@
+{
+  "_comment": "Fable-authored grading rubrics for Penny's core work-product classes. A judge (open model) applies one rubric to a work product and returns PASS/FAIL. The value of these rubrics is that the accompanying calibration_corpus.jsonl fixes what Fable's PASS/FAIL means for each — so a judge can be calibrated to reproduce Fable's standard rather than inventing its own. Rubrics are process-shaped: they name what to CHECK, not 'be thorough'. Authored 2026-07-07 (Fable's last day) as the ground-truth teacher standard. Extend deliberately; never loosen a pass_bar without a git diff to answer for.",
+  "rubrics": {
+    "plan_quality": {
+      "question": "Is this an execution-grade plan a competent engineer could run without re-planning?",
+      "check": [
+        "Every step names a concrete action on a concrete target (not 'improve X' / 'handle errors').",
+        "Each step has a verifiable success criterion (a test, an observable state, a check to run).",
+        "Ordering/dependencies are correct: no step depends on a later one.",
+        "Risks, unknowns, and reversibility are surfaced where they exist.",
+        "No fabricated file paths, APIs, flags, or function names — every reference must be real.",
+        "Scope matches the goal: not padded with irrelevant steps, not missing a load-bearing one."
+      ],
+      "pass_bar": "PASS iff a competent engineer could execute it end-to-end without re-planning AND no check is grossly violated. A single fabricated API/path, a missing load-bearing step, or an unexecutable 'improve X' step is an automatic FAIL even if the rest reads well.",
+      "fail_traps": "Fluent, well-structured plans that fabricate a plausible-sounding API or omit the one hard step. Judge on executability, not prose quality."
+    },
+    "finding_validity": {
+      "question": "Is this code-review / security finding REAL, correctly reasoned, and actionable?",
+      "check": [
+        "The described failure scenario can actually occur given the code (trace it — does the trigger path exist?).",
+        "The root cause is correctly identified, not a plausible-sounding misread.",
+        "Severity matches the actual impact (not inflated, not understated).",
+        "It is specific: exact location and a concrete trigger, not a vague 'this could be unsafe'.",
+        "It is not a false positive the surrounding code already prevents."
+      ],
+      "pass_bar": "PASS iff the failure scenario genuinely occurs AND the root cause is right. Default to FAIL when the trigger path cannot be constructed from the given code, or when a guard elsewhere already prevents it. Confident, well-written findings whose scenario cannot actually be triggered are FAIL.",
+      "fail_traps": "The plausible-but-wrong finding: correct-sounding vocabulary, real-looking line reference, but the scenario is impossible or already guarded. This is exactly what a weak judge waves through."
+    },
+    "synthesis_completeness": {
+      "question": "Does this synthesis preserve every load-bearing fact from the source without fabricating or dropping any?",
+      "check": [
+        "Every concrete fact in the source (numbers, names, dates, decisions) survives into the synthesis.",
+        "No fact is invented that the source does not support.",
+        "No fact is silently altered (a changed number/date/name is worse than an omission).",
+        "The framing does not misrepresent the source's emphasis or certainty.",
+        "It is genuinely condensed, not a verbatim copy."
+      ],
+      "pass_bar": "PASS iff all load-bearing facts survive unaltered AND nothing is fabricated. A single invented or silently-changed fact is an automatic FAIL. An omission of a load-bearing fact is a FAIL; dropping genuinely minor color is acceptable.",
+      "fail_traps": "Fluent syntheses that read as faithful but changed one number or invented a plausible detail. Grade fact-preservation, not readability."
+    }
+  }
+}

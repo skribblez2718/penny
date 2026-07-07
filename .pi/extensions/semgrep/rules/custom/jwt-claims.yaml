@@ -1,0 +1,81 @@
+rules:
+  - id: jwt-claims
+    # ORIGINAL RULE — authored for the sca (Software Composition / security
+    # audit) Penny skill. This is NOT vendored from semgrep-rules or any other
+    # upstream source. Tier-2 rule.
+    #
+    # COMPLEMENTARY to the vendored `jwt-none-alg` rule:
+    #   - jwt-none-alg fires when an algorithm allowlist is PRESENT and contains
+    #     the literal 'none' (e.g. `{ algorithms: ['none'] }`).
+    #   - jwt-claims fires when required claim validation is not enforced:
+    #     either the `algorithms` allowlist is ABSENT, OR BOTH `audience` and
+    #     `issuer` are absent (an algorithms-only check still accepts tokens
+    #     minted for a different audience/issuer).
+    # SCOPE (option b, matching the rule's documented intent): jwt-claims fires
+    # when `algorithms` is missing OR (`audience` AND `issuer`) are both missing.
+    # A call is treated as safe only when it has `algorithms` AND at least one of
+    # `audience` / `issuer`. The two rules can legitimately BOTH fire on a call
+    # that is both none-alg AND missing claims; the boundary fixture keeps them
+    # distinct by giving the none-alg example a full audience/issuer set so only
+    # jwt-none-alg fires there.
+    message: >-
+      JWT verify call does not enforce required claim validation. The call is
+      missing an `algorithms` allowlist, or is missing both `audience` and
+      `issuer`, so tokens signed with an unexpected algorithm or intended for a
+      different audience/issuer may be accepted. Always pass an explicit
+      `algorithms` allowlist plus `audience`, `issuer`, and expiration checks,
+      e.g. `jwt.verify(token, key, { algorithms: ['HS256'], audience, issuer })`.
+    languages:
+      - javascript
+      - typescript
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory:
+        - audit
+      confidence: MEDIUM
+      likelihood: MEDIUM
+      impact: HIGH
+      cwe:
+        - "CWE-347: Improper Verification of Cryptographic Signature"
+      owasp:
+        - "A02:2021 - Cryptographic Failures"
+        - "A07:2021 - Identification and Authentication Failures"
+      technology:
+        - jwt
+        - jsonwebtoken
+        - jose
+      author: sca skill (original, not vendored)
+      tier: 2
+      complementary-to: jwt-none-alg (vendored)
+      references:
+        - https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html
+        - https://semgrep.dev/blog/2020/hardcoded-secrets-unverified-tokens-and-other-common-jwt-mistakes/
+    patterns:
+      - pattern-either:
+          # ── jsonwebtoken branch ── jwt.verify(token, key[, options][, cb])
+          - patterns:
+              - pattern-either:
+                  - pattern: $JWT.verify($T, $S)
+                  - pattern: $JWT.verify($T, $S, {...})
+                  - pattern: $JWT.verify($T, $S, {...}, $CB)
+              # SAFE calls (excluded): an `algorithms` allowlist is present AND
+              # at least one of `audience` / `issuer` is also enforced. Two
+              # pattern-nots union to exclude (algorithms AND audience) OR
+              # (algorithms AND issuer) = algorithms AND (audience OR issuer).
+              # Everything else (algorithms missing, or both audience AND issuer
+              # missing) is NOT excluded and therefore fires.
+              - pattern-not: "$JWT.verify($T, $S, {..., algorithms: [...], audience: $A}, ...)"
+              - pattern-not: "$JWT.verify($T, $S, {..., algorithms: [...], issuer: $I}, ...)"
+              # Restrict $JWT to jwt-ish receivers so unrelated .verify() calls
+              # (e.g. crypto.verify()) are not flagged.
+              - metavariable-regex:
+                  metavariable: $JWT
+                  regex: (?i)(jwt|jsonwebtoken)
+          # ── jose branch ── jwtVerify(token, key[, options])
+          - patterns:
+              - pattern-either:
+                  - pattern: jwtVerify($T, $S)
+                  - pattern: jwtVerify($T, $S, {...})
+              - pattern-not: "jwtVerify($T, $S, {..., algorithms: [...], audience: $A}, ...)"
+              - pattern-not: "jwtVerify($T, $S, {..., algorithms: [...], issuer: $I}, ...)"

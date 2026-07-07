@@ -1,0 +1,22 @@
+# .gitleaks.toml — bundled config for the gitleaks Pi extension.
+#
+# Authored for the sca skill's tool-extension layer (Phase 4a). Extends the
+# gitleaks default ruleset so we inherit upstream's maintained detectors while
+# keeping our own allowlist tuning. See:
+#   https://github.com/gitleaks/gitleaks#configuration
+#
+# `useDefault = true` pulls in gitleaks' built-in rules at scan time (they are
+# not vendored here — the binary supplies them).
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "sca extension global allowlist"
+# Ignore common test/fixture and vendored paths to cut false positives.
+paths = [
+  '''(^|/)node_modules/''',
+  '''(^|/)vendor/''',
+  '''(^|/).*test.*fixtures?/''',
+  '''\.lock$''',
+]

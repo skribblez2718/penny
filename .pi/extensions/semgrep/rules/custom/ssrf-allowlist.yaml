@@ -1,0 +1,70 @@
+rules:
+  - id: ssrf-allowlist
+    # ORIGINAL RULE — authored for the sca (Software Composition / security
+    # audit) Penny skill. This is NOT vendored from semgrep-rules or any other
+    # upstream source. Tier-2 heuristic taint rule.
+    message: >-
+      Possible SSRF (Server-Side Request Forgery): a server-side HTTP request is
+      issued to a URL/host derived from user input with no visible allowlist /
+      domain-check guard. An attacker can point the request at internal services
+      (169.254.169.254, localhost, private ranges) or arbitrary hosts. Validate
+      the target against an explicit allowlist of permitted hosts/domains before
+      making the request (e.g. `const url = assertAllowedUrl(req.query.url)`).
+    mode: taint
+    languages:
+      - javascript
+      - typescript
+    severity: WARNING
+    metadata:
+      category: security
+      subcategory:
+        - audit
+      confidence: LOW
+      likelihood: MEDIUM
+      impact: HIGH
+      cwe:
+        - "CWE-918: Server-Side Request Forgery (SSRF)"
+      owasp:
+        - "A10:2021 - Server-Side Request Forgery (SSRF)"
+      technology:
+        - javascript
+        - typescript
+        - nodejs
+      author: sca skill (original, not vendored)
+      tier: 2
+      references:
+        - https://owasp.org/Top10/A10_2021-Server-Side_Request_Forgery_%28SSRF%29/
+        - https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html
+      # LIMITATION: this is a single-file heuristic. If the allowlist / domain
+      # check happens inside a helper function that semgrep cannot see during a
+      # single-file scan, this rule will produce a FALSE NEGATIVE. It recognizes
+      # allowlisting only when the user input flows through a validation/allowlist
+      # call whose name signals the check (allow/validate/sanitize/whitelist/etc).
+    pattern-sources:
+      - pattern: req.query.$X
+      - pattern: req.body.$X
+      - pattern: req.params.$X
+      - pattern: req.headers.$X
+    pattern-sanitizers:
+      # User input routed through a validation/allowlist guard (a call whose
+      # name signals allowlisting) is treated as checked.
+      - patterns:
+          - pattern: $FN(...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: (?i)(allow|validat|sanitiz|whitelist|checkurl|isallowed|assertallowed|safeurl)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: fetch($URL, ...)
+          - pattern: axios($URL, ...)
+          - pattern: axios.get($URL, ...)
+          - pattern: axios.post($URL, ...)
+          - pattern: axios.request(...)
+          - pattern: http.get($URL, ...)
+          - pattern: http.request($URL, ...)
+          - pattern: https.get($URL, ...)
+          - pattern: https.request($URL, ...)
+          - pattern: got($URL, ...)
+          - pattern: request($URL, ...)
+          - pattern: superagent.get($URL, ...)
+          - pattern: needle.get($URL, ...)

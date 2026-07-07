@@ -1,0 +1,13 @@
+{
+  "name": "pi-extension-trivy",
+  "version": "1.0.0",
+  "description": "Trivy vulnerability/misconfig/secret scanner extension for Pi",
+  "main": "index.ts",
+  "type": "module",
+  "scripts": {
+    "test:unit": "vitest run --config tests/vitest.config.ts"
+  },
+  "devDependencies": {
+    "@sinclair/typebox": "^0.34.49"
+  }
+}

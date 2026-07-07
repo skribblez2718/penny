@@ -1,0 +1,39 @@
+[project.scripts]
+penny-observability = "observability.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/observability"]
+exclude = ["src/observability/tests", "**/tests/**"]
+
+[project]
+name = "penny-observability"
+version = "0.1.0"
+description = "FastAPI + SQLite backend for Penny observability ingestion and querying"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "aiosqlite>=0.20,<1",
+    "python-dotenv>=1.0,<2",
+    "pydantic>=2.0,<3",
+    "apscheduler>=3.11,<4",
+    # The schema uses an FTS5 virtual table (entries_search). Some CPython
+    # builds (e.g. uv-managed cpython-*-gnu) ship SQLite without FTS5, which
+    # breaks the server/tests when NOT run under Docker. pysqlite3-binary is a
+    # statically-linked modern SQLite (with FTS5) that observability swaps in
+    # transparently at import when the stdlib build lacks FTS5 (see
+    # observability/__init__.py). Linux-only wheel; other platforms fall back
+    # to the stdlib (which typically already has FTS5).
+    "pysqlite3-binary>=0.5; sys_platform == 'linux'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+    "pytest-asyncio>=0.23",
+]

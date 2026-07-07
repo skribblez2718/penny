@@ -1,0 +1,15 @@
+# jsa skill runtime dependencies
+#
+# These are the Python packages required to run the jsa skill's analysis tools.
+# The FSM now lives in the shared orchestration engine (apps/orchestration), so
+# python-statemachine is no longer a skill dependency. External CLI tools
+# (semgrep, jsluice, playwright, tree-sitter-cli) are installed separately.
+
+# AST-based JS parsing (tree-sitter helpers in splitter.py, used by
+# structure_analysis).
+# tree-sitter-javascript must match the tree-sitter major version (0.21.x).
+# The splitter lazy-imports these and falls back to token-based chunking
+# if they are missing, so installation is recommended but not strictly
+# required for the orchestrator to function.
+tree-sitter>=0.21.0
+tree-sitter-javascript>=0.21.0

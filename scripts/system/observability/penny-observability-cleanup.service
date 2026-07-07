@@ -1,0 +1,11 @@
+[Unit]
+Description=Penny Observability — Daily retention cleanup
+Documentation=https://github.com/skribblez2718/penny
+
+[Service]
+Type=oneshot
+WorkingDirectory={{PROJECT_ROOT}}
+ExecStart={{PROJECT_ROOT}}/.venv/bin/python {{PROJECT_ROOT}}/scripts/system/observability/cleanup_db.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=penny-observability-cleanup

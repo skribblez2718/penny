@@ -1,0 +1,19 @@
+# sca skill runtime + test dependencies
+#
+# The FSM now lives in the shared orchestration engine (apps/orchestration), so
+# python-statemachine is no longer a skill dependency. External CLI scanners
+# (semgrep/osv-scanner/gitleaks) are installed separately and are NOT listed here.
+
+# CVSS 4.0 scoring (findings normalizer). Real, independently-checkable CVSS
+# calculator so the severity mapping is library-verified, never hand-rolled.
+cvss>=3.6
+
+# YAML parsing. Sanity-checks P9-authored augmentation-rule content before it is
+# written for the re-entrant targeted scan.
+PyYAML>=6.0
+
+# Test tooling (the domain-tool test suite: baseline_scan, normalize, dedup,
+# cvss, sandbox, targeted_scan, tool_manifest, …)
+pytest>=7.0
+pytest-timeout>=2.1
+pytest-cov>=4.0

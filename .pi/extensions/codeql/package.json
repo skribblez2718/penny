@@ -1,0 +1,13 @@
+{
+  "name": "pi-extension-codeql",
+  "version": "1.0.0",
+  "description": "GitHub CodeQL static analysis extension for Pi (opt-in only)",
+  "main": "index.ts",
+  "type": "module",
+  "scripts": {
+    "test:unit": "vitest run --config tests/vitest.config.ts"
+  },
+  "devDependencies": {
+    "@sinclair/typebox": "^0.34.49"
+  }
+}

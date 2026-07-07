@@ -1,0 +1,21 @@
+# codeql-config.yml — bundled config for the codeql Pi extension.
+#
+# Authored for the sca skill's tool-extension layer (Phase 4a). Our own tuned
+# config, not vendored. Passed to `codeql database create --codescanning-config`.
+# See: https://docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning
+#
+# CONFIDENCE NOTE: not verified against a live codeql binary (not installed in
+# this dev env). Query-suite names are PROBABLE.
+
+name: "sca codeql config"
+
+# Use the maintained security query suites (supplied by the codeql binary /
+# packs — not vendored here).
+queries:
+  - uses: security-extended
+
+paths-ignore:
+  - node_modules
+  - dist
+  - build
+  - "**/*.min.js"

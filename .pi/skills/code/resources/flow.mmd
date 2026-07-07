@@ -1,0 +1,91 @@
+%% ============================================================================
+%% code skill — FLOW (the actual CodeMachine graph)
+%% ============================================================================
+%% The code skill runs on the shared orchestration engine: one BasePlaybook
+%% subclass (orchestration.playbooks.code:CodePlaybook) whose CodeMachine FSM has
+%% custom-named states. States dispatch the cognitive-primitive agents
+%% (echo/annie/carren/piper/skribble) as invoke_agent directives; MemPalace is the
+%% blackboard; only typed per-state SUMMARYs return to the engine. Two HITL gates
+%% (criteria_gate, plan_gate) pause for the user. unknown/awaiting_clarification is
+%% the escalation subsystem; complete/error are terminal.
+%%
+%% READING NOTE (translation-critical):
+%%   * Multiple guarded arrows from ONE state are MUTUALLY EXCLUSIVE (XOR) —
+%%     exactly one fires. They are NOT parallel/forks.
+%%   * Every loop is BOUNDED: implementing↔verifying↔learning by max_iterations.
+%%     No unbounded cycles — budget-spent completes with met=False (never fakes).
+%%   * The PRD dependency is enforced at start(): an IDEAL_STATE with
+%%     success_criteria must resolve from constraints (ideal_state or prd_room),
+%%     else start() raises and the run terminates before intake advances.
+%% ============================================================================
+stateDiagram-v2
+    [*] --> intake
+
+    %% Engine start() has already resolved IDEAL_STATE (constraints.ideal_state or
+    %% constraints.prd_room) and run server-framework detection. intake advances.
+    intake --> exploring : start_explore
+
+    %% OBSERVE — echo: impacted files, patterns, test conventions, integration points
+    exploring --> analyzing : explore_done
+    exploring --> unknown : to_unknown\n[confidence_is_uncertain]
+
+    %% ANALYZE — annie: security surface, integration risks, edge cases
+    analyzing --> checking_criteria : analyze_done
+    analyzing --> unknown : to_unknown\n[confidence_is_uncertain]
+
+    %% CRITERIA — carren judges the IDEAL_STATE success_criteria themselves:
+    %% measurable? achievable? precise? non-overlapping?
+    checking_criteria --> planning : criteria_ok\n[gap == false]
+    checking_criteria --> criteria_gate : criteria_gap\n[gap == true]
+    checking_criteria --> unknown : to_unknown\n[confidence_is_uncertain]
+
+    %% GATE 1 (human) — refine / accept / skip underspecified criteria
+    criteria_gate --> checking_criteria : criteria_refined\n[user: refine]
+    criteria_gate --> planning : criteria_accepted\n[user: accept | skip]
+
+    %% PLAN — piper: build order, dependency chains, per-tier test strategy
+    planning --> plan_gate : plan_done
+    planning --> unknown : to_unknown\n[confidence_is_uncertain]
+
+    %% GATE 2 (human) — approve plan before ANY code is written
+    plan_gate --> implementing : plan_approved\n[user: approve]
+    plan_gate --> planning : plan_refine\n[user: refine]
+    plan_gate --> error : plan_denied\n[user: deny]
+
+    %% ACT (RED -> GREEN -> REFACTOR) — skribble writes code TDD-first
+    implementing --> verifying : implement_done
+    implementing --> unknown : to_unknown\n[confidence_is_uncertain]
+
+    %% VERIFY — skribble runs every configured tier (lint/type/unit/integration/e2e).
+    %% A normal verify hands off to learning; a FINAL verify (set after a no-gap
+    %% learning) either completes or loops back to learning on regressions.
+    verifying --> learning : verify_done\n[normal verify]
+    verifying --> complete : final_verify_pass\n[final verify && passed]
+    verifying --> learning : final_verify_fail\n[final verify && !passed]
+    verifying --> unknown : to_unknown\n[confidence_is_uncertain]
+
+    %% LEARN — carren compares output to IDEAL STATE and judges the gap.
+    learning --> implementing : learn_retry\n[gap && iteration < max]
+    learning --> verifying : learn_final_verify\n[gap == false -> one last battery]
+    learning --> complete : learn_exhausted\n[gap && budget spent -> met=False]
+    learning --> unknown : to_unknown\n[stall / repeated-strategy]
+
+    complete --> [*]
+    error --> [*]
+
+    %% ── UNKNOWN escalation (UNCERTAIN confidence at any working state) ──
+    unknown --> awaiting_clarification : escalate
+    awaiting_clarification --> exploring : clarify\n[has_clarification]
+
+    %% ── Error paths (every non-terminal state may abort to error) ──
+    intake --> error : abort
+    exploring --> error : abort
+    analyzing --> error : abort
+    checking_criteria --> error : abort
+    criteria_gate --> error : abort
+    planning --> error : abort
+    implementing --> error : abort
+    verifying --> error : abort
+    learning --> error : abort
+    unknown --> error : abort
+    awaiting_clarification --> error : abort

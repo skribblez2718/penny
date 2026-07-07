@@ -1,0 +1,105 @@
+%% sca — Secure Code Analysis playbook FSM (ScaPlaybook / SCAMachine)
+%% Source of truth: apps/orchestration/src/orchestration/playbooks/sca.py
+%% Engine-backed BasePlaybook subclass; state lives in the durable SQLite
+%% checkpointer keyed by run_id (no /tmp state, no --state argv).
+%%
+%% 13 work phases mapped to lowercase states:
+%%   charter(P0) census(P1) baseline_scan(P2,TOOL) context(P3) architecture(P4)
+%%   requirements(P5) threat_model(P6) targeted_scan(P7,TOOL) triage(P8)
+%%   deep_dive(P9) verification(P10) fix_verification(P11) report(P12)
+%% TOOL states (baseline_scan, targeted_scan) run deterministically, no agent.
+%% Six human gates: charter/context/threat/triage (AFTER), verification (BEFORE),
+%% report (AT). A gate cleared once stays cleared (augment re-entry skips triage
+%% gate). Bounded augment loop deep_dive -> targeted_scan (cap=3).
+%% Any agent phase can escalate (needs_clarification / UNCERTAIN) via
+%% unknown -> awaiting_clarification -> back to the escalating phase.
+stateDiagram-v2
+    [*] --> charter: start_charter
+
+    charter: charter — P0 (echo)
+    charter_gate: charter_gate — GATE AFTER
+    census: census — P1 (echo)
+    baseline_scan: baseline_scan — P2 (TOOL)
+    context: context — P3 (synthia)
+    context_gate: context_gate — GATE AFTER
+    architecture: architecture — P4 (synthia)
+    requirements: requirements — P5 (synthia)
+    threat_model: threat_model — P6 (tabitha)
+    threat_gate: threat_gate — GATE AFTER
+    targeted_scan: targeted_scan — P7 (TOOL)
+    triage: triage — P8 (annie)
+    triage_gate: triage_gate — GATE AFTER
+    deep_dive: deep_dive — P9 (annie)
+    verification_gate: verification_gate — GATE BEFORE
+    verification: verification — P10 (vera)
+    fix_verification: fix_verification — P11 (vera)
+    report_gate: report_gate — GATE AT
+    report: report — P12 (skribble)
+    unknown: unknown — escalation trap
+    awaiting_clarification: awaiting_clarification — HITL
+
+    charter --> charter_gate: charter_gate_ev [gate not cleared]
+    charter --> census: charter_skip [gate cleared]
+    charter_gate --> census: charter_ok [approve]
+    charter_gate --> charter: charter_revise [revise]
+
+    census --> baseline_scan: census_done
+    baseline_scan --> context: baseline_done
+
+    context --> context_gate: context_gate_ev [gate not cleared]
+    context --> architecture: context_skip [gate cleared]
+    context_gate --> architecture: context_ok [approve]
+    context_gate --> context: context_revise [revise]
+
+    architecture --> requirements: architecture_done
+    requirements --> threat_model: requirements_done
+
+    threat_model --> threat_gate: threat_gate_ev [gate not cleared]
+    threat_model --> targeted_scan: threat_skip [gate cleared]
+    threat_gate --> targeted_scan: threat_ok [approve]
+    threat_gate --> threat_model: threat_revise [revise]
+
+    targeted_scan --> triage: targeted_done
+
+    triage --> triage_gate: triage_gate_ev [gate not cleared]
+    triage --> deep_dive: triage_skip [gate cleared / augment re-entry]
+    triage_gate --> deep_dive: triage_ok [approve]
+    triage_gate --> triage: triage_revise [revise]
+
+    deep_dive --> targeted_scan: dd_augment [augment & iterations < cap=3]
+    deep_dive --> verification_gate: dd_verify [no augment or cap reached]
+
+    verification_gate --> verification: vgate_ok [approve]
+    verification --> fix_verification: verification_done
+    fix_verification --> report_gate: fix_done
+    report_gate --> report: rgate_ok [approve]
+    report --> complete: report_done
+
+    complete --> [*]
+
+    %% Escalation: any agent phase -> unknown -> HITL -> back to escalating phase
+    charter --> unknown: to_unknown
+    census --> unknown: to_unknown
+    context --> unknown: to_unknown
+    architecture --> unknown: to_unknown
+    requirements --> unknown: to_unknown
+    threat_model --> unknown: to_unknown
+    triage --> unknown: to_unknown
+    deep_dive --> unknown: to_unknown
+    verification --> unknown: to_unknown
+    fix_verification --> unknown: to_unknown
+    report --> unknown: to_unknown
+    unknown --> awaiting_clarification: escalate
+    awaiting_clarification --> charter: clarify [resume_target]
+    awaiting_clarification --> census: clarify [resume_target]
+    awaiting_clarification --> context: clarify [resume_target / fallback]
+    awaiting_clarification --> architecture: clarify [resume_target]
+    awaiting_clarification --> requirements: clarify [resume_target]
+    awaiting_clarification --> threat_model: clarify [resume_target]
+    awaiting_clarification --> triage: clarify [resume_target]
+    awaiting_clarification --> deep_dive: clarify [resume_target]
+    awaiting_clarification --> verification: clarify [resume_target]
+    awaiting_clarification --> fix_verification: clarify [resume_target]
+    awaiting_clarification --> report: clarify [resume_target]
+
+    %% abort: every non-final state -> error (terminal); omitted here for clarity

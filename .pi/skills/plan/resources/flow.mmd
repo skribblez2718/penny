@@ -1,0 +1,39 @@
+stateDiagram-v2
+    [*] --> intake
+
+    intake --> exploring : start_explore
+
+    exploring --> planning : explore_done
+
+    planning --> verify_gate : plan_to_verify\n[needs_verification]
+    planning --> critiquing : plan_to_critique\n[not needs_verification]
+
+    verify_gate --> critiquing : verify_confirm\n[user confirms]
+    verify_gate --> planning : verify_revise\n[user revises]
+
+    critiquing --> taskifying : critique_pass\n[verdict APPROVE]
+    critiquing --> exploring : critique_retry_explore\n[NEEDS_REVISION, budget left, explore_rounds<2]
+    critiquing --> planning : critique_retry_plan\n[NEEDS_REVISION, budget left, explore_rounds>=2]
+    critiquing --> taskifying : critique_exhausted\n[iteration cap; met=False]
+    critiquing --> complete : critique_blocked\n[verdict BLOCKED; halt, met=False]
+
+    taskifying --> complete : taskify_done
+
+    exploring --> unknown : to_unknown
+    planning --> unknown : to_unknown
+    critiquing --> unknown : to_unknown
+    taskifying --> unknown : to_unknown
+    unknown --> awaiting_clarification : escalate
+    awaiting_clarification --> exploring : clarify
+
+    intake --> error : abort
+    exploring --> error : abort
+    planning --> error : abort
+    verify_gate --> error : abort
+    critiquing --> error : abort
+    taskifying --> error : abort
+    unknown --> error : abort
+    awaiting_clarification --> error : abort
+
+    complete --> [*]
+    error --> [*]

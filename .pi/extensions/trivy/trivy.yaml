@@ -1,0 +1,30 @@
+# trivy.yaml — bundled config for the trivy Pi extension.
+#
+# Authored for the sca skill's tool-extension layer (Phase 4a). Our own tuned
+# config, not a vendored upstream default. See:
+#   https://trivy.dev/latest/docs/references/configuration/config-file/
+#
+# NOTE: `secret.config` below is resolved relative to trivy's working directory
+# and is kept only as a fallback. The extension (index.ts) now passes the secret
+# ruleset EXPLICITLY as an absolute `--secret-config <abs path>` CLI argument
+# (Phase 6b, Carren's Phase 4a nit), which takes precedence and resolves
+# deterministically regardless of the runtime cwd. (REAL-VERIFIED against trivy
+# 0.72.0, Batch F.2: --secret-config points at the corrected trivy-secret.yaml
+# and trivy exits rc=0 with a clean JSON scan.)
+
+scan:
+  scanners:
+    - vuln
+    - misconfig
+    - secret
+
+severity:
+  - CRITICAL
+  - HIGH
+  - MEDIUM
+
+secret:
+  config: trivy-secret.yaml
+
+# Do not fail the process purely on findings; the extension normalizes results.
+exit-code: 0

@@ -1,0 +1,82 @@
+{
+  "expected_failures": {
+    "flywheel.archiver_backlog": "TTL-expired drawers still hot (penny/skills/jobz-plan-1779285569799:80, penny/skills/jobz-plan-1779305942285:78, penny/skills/hackerone-plan-1778269517755:51, penny/skills/jobz-plan-1779361403903:47)",
+    "flywheel.obs_run_ingest": "2/2 local runs never reached observability: smoke1, smoke2",
+    "flywheel.outcome_capture": "1/1 terminal runs wrote no outcome drawer: smoke2",
+    "flywheel.session_brief": ".pi/SESSION_BRIEF.md missing while sessions are active \u2014 recall is not being injected"
+  },
+  "metrics": {
+    "compat.dead_tests": {
+      "direction": "down_good",
+      "tolerance": 2.0,
+      "unit": "count",
+      "value": 0.0
+    },
+    "flywheel.amendment_rot": {
+      "direction": "down_good",
+      "tolerance": 0.5,
+      "unit": "count",
+      "value": 4.0
+    },
+    "flywheel.autodiary_skips_7d": {
+      "direction": "down_good",
+      "tolerance": 3.8,
+      "unit": "count",
+      "value": 17.0
+    },
+    "flywheel.diary_delivery": {
+      "direction": "down_good",
+      "tolerance": 1.0,
+      "unit": "days",
+      "value": 0.31540662153935184
+    },
+    "flywheel.watcher_cron_alive": {
+      "direction": "down_good",
+      "tolerance": 1.0,
+      "unit": "days",
+      "value": 0.07499487855324075
+    },
+    "judgment.best_judge_agreement": {
+      "direction": "up_good",
+      "tolerance": 0.05,
+      "unit": "fraction",
+      "value": 0.9333
+    },
+    "judgment.best_judge_false_pass_rate": {
+      "direction": "down_good",
+      "tolerance": 0.05,
+      "unit": "fraction",
+      "value": 0.125
+    },
+    "judgment.results_fresh_days": {
+      "direction": "down_good",
+      "tolerance": 30.0,
+      "unit": "days",
+      "value": 0.0
+    },
+    "prompt_efficacy.frame_gain_overall": {
+      "direction": "up_good",
+      "tolerance": 0.05,
+      "unit": "fraction",
+      "value": 0.0512
+    },
+    "prompt_efficacy.frame_regressed_families": {
+      "direction": "down_good",
+      "tolerance": 2.0,
+      "unit": "count",
+      "value": 0.0
+    },
+    "prompt_efficacy.results_fresh_days": {
+      "direction": "down_good",
+      "tolerance": 14.0,
+      "unit": "days",
+      "value": 0.0
+    },
+    "retrieval.golden_recall_hit5": {
+      "direction": "up_good",
+      "tolerance": 0.05,
+      "unit": "fraction",
+      "value": 0.7
+    }
+  }
+}

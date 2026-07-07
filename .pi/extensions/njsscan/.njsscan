@@ -1,0 +1,33 @@
+# .njsscan — bundled config for the njsscan Pi extension.
+#
+# AUTHORED BY THIS EXTENSION for the sca skill's tool-extension layer (Phase 4a).
+# This is our own small, tuned default — it is NOT njsscan's upstream default
+# config file and contains none of njsscan's (LGPL-3.0) source code.
+#
+# njsscan reads a `.njsscan` file (YAML) from the scan root. Format reference:
+#   https://github.com/ajinabraham/njsscan#configure-njsscan
+#
+# We keep all built-in rules enabled and only exclude common noise paths.
+
+nodejs-extensions:
+  - .js
+  - .jsx
+  - .ts
+  - .tsx
+
+template-extensions:
+  - .new
+  - .html
+  - .ejs
+  - .hbs
+
+ignore-filenames:
+  - .min.js
+
+ignore-paths:
+  - node_modules
+  - dist
+  - build
+
+# Do not silence any severity by default; the extension normalizes results.
+severity-filter: []

@@ -1,0 +1,121 @@
+sca (secure code analysis) skill — Third-Party Tool NOTICE
+==========================================================
+
+This skill INVOKES external security tools; it does not (with the exceptions
+noted) vendor their source. This NOTICE records each provisioned tool, its
+pinned version, its license tier, and its declared SPDX license, plus the
+policies that govern how the tools are trusted and used.
+
+The canonical machine-readable source of truth is
+`.pi/skills/sca/scripts/tool_manifest.py`. This human-readable NOTICE is kept
+in sync with it (a test asserts every manifest tool name appears here).
+
+All SPDX identifiers below are DECLARED with PROBABLE confidence. They are NOT
+asserted as CERTAIN in code: the authoritative source is each project's own
+upstream LICENSE file, which MUST be re-checked at real provisioning time.
+
+
+1. Provisioned tools
+--------------------
+
+Tier legend:   required = missing one blocks the pipeline;
+               optional = missing one degrades coverage, never blocks.
+License tier:  permissive_embed      = source may be embedded freely;
+               copyleft_invoke_only  = INVOKE as a separate process only,
+                                       NEVER embed/commit the tool's source;
+               not_applicable        = neither provisioned nor vendored by this
+                                       skill (supplied by a pre-existing
+                                       extension), so embedding is a non-question.
+
+  Tool                     Version   Tier      License tier          SPDX (PROBABLE)
+  -----------------------  --------  --------  --------------------  --------------------------------
+  semgrep                  (ext)     required  not_applicable        LGPL-2.1-only
+  osv-scanner              v2.4.0    required  permissive_embed      Apache-2.0
+  gitleaks                 v8.30.1   required  permissive_embed      MIT
+  trivy                    v0.72.0   optional  permissive_embed      Apache-2.0
+  trufflehog               v3.95.7   optional  copyleft_invoke_only  AGPL-3.0-only   (RE-VERIFY)
+  njsscan                  v0.4.3    optional  copyleft_invoke_only  LGPL-3.0-only   (RE-VERIFY)
+  retire.js                v5.4.3    optional  permissive_embed      Apache-2.0
+  eslint-plugin-security   v4.0.1    optional  copyleft_invoke_only  MIT (+ MPL-2.0, see note)
+  codeql                   v2.25.6   optional  permissive_embed      LicenseRef-GitHub-CodeQL-Terms
+
+semgrep is already provisioned by the existing `.pi/extensions/semgrep`
+extension (source = existing-extension); it has no separate pinned download
+version in this skill. Because sca never provisions or vendors it, its license
+tier is `not_applicable` rather than `permissive_embed`: semgrep is LGPL-2.1-only
+and calling it "freely embeddable" would be factually wrong; embedding simply
+never happens here.
+
+eslint-plugin-security is a combined entry covering two npm packages:
+eslint-plugin-security (MIT) and eslint-plugin-no-unsanitized (MPL-2.0, a
+file-level weak copyleft). Both are consumed as INVOKED npm dependencies of
+eslint, not as vendored source. The combined entry is classified
+`copyleft_invoke_only` (MPL-2.0 weak copyleft, treated conservatively as
+invoke-only pending legal review) and carries real source_signatures so
+`license_guard.build_guard` can flag the plugin's source if it is ever vendored.
+The tool TIER is unchanged (still optional).
+
+
+2. Copyleft re-verification caveat (trufflehog, njsscan)
+--------------------------------------------------------
+
+trufflehog and njsscan are the two copyleft binaries in the invoke-only tier
+(the combined eslint entry is also copyleft_invoke_only for its MPL-2.0 member;
+see section 1). Prior research surfaced a real contradiction about trufflehog's
+license, so BOTH tools carry a mandatory caveat (Carren N3):
+
+  The declared SPDX values above (trufflehog = AGPL-3.0-only, njsscan =
+  LGPL-3.0-only) are PROBABLE and MUST be re-verified against the actual
+  upstream LICENSE file at real provisioning time before either tool is
+  shipped or relied upon.
+
+Policy: these tools are INVOKED as separate binaries only. Their SOURCE is
+never embedded or committed into this repository. `license_guard.build_guard`
+enforces this at build time by scanning for vendored copyleft source
+signatures and failing the build if any are found.
+
+
+3. npm audit — permanently EXCLUDED
+-----------------------------------
+
+npm's built-in `audit` command is deliberately and permanently NOT provisioned
+by this skill. Its advisory coverage is subsumed by osv-scanner's package/
+ecosystem scanning, so running both would be redundant. There is no manifest
+entry for it and no code path in this skill ever shells out to it.
+
+
+4. CodeQL — opt-in, off by default
+----------------------------------
+
+CodeQL is OPTIONAL and disabled by default (enabled_by_default = False); it runs
+only when a human explicitly opts in.
+
+License notice: the GitHub CodeQL CLI is free for analysing OPEN-SOURCE code and
+for academic research. STATIC (non-live) analysis of PRIVATE repositories
+requires a GitHub Advanced Security / Enterprise entitlement. This skill uses
+CodeQL for static analysis only; operators are responsible for holding the
+appropriate entitlement before enabling it against private code.
+
+
+5. Trust-On-First-Use (TOFU) hash-lock policy
+---------------------------------------------
+
+Tool binaries are pinned by SHA256 in a checked-in lockfile,
+`.pi/skills/sca/tool-lock.json`. The policy (implemented in
+`scripts/provisioning.py`) is:
+
+  * A first-ever install of a tool is NEVER silently trusted. Its hash is
+    recorded into the lockfile ONLY when a human/operator explicitly confirms
+    the install (confirmed = True) — mirroring a person who just watched the
+    real download/verify happen.
+
+  * The recorded hash is computed from the actual bytes on disk at that moment.
+    No "known good" hash is ever fabricated, guessed, or hardcoded.
+
+  * On every subsequent run, the freshly computed hash MUST match the locked
+    value exactly. Any mismatch is a BLOCKING failure (never a warning),
+    because it indicates possible tampering or binary substitution.
+
+  * The lockfile stores metadata only — tool name, version, SHA256, timestamp,
+    and source path. It never contains binary bytes. No tool binaries are
+    committed to this repository.

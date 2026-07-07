@@ -1,0 +1,84 @@
+%% jsa FSM — edge-for-edge port of JSAMachine in
+%% apps/orchestration/src/orchestration/playbooks/jsa.py
+%% State IDs are the verbatim FSM state names. Edge labels are the verbatim
+%% FSM event names; [guards] annotate the routing conditions.
+stateDiagram-v2
+    direction TB
+
+    [*] --> intake
+
+    state "intake — HUMAN GATE (schema questionnaire)" as intake
+    state "acquire — TOOL (local)" as acquire
+    state "cve_research — TOOL (local)" as cve_research
+    state "sast_scan — TOOL (local)" as sast_scan
+    state "normalize — TOOL (local)" as normalize
+    state "dedup_within_source — TOOL (local)" as dedup_within_source
+    state "correlate_evidence — TOOL (local)" as correlate_evidence
+    state "agent_review — TOOL (local heuristic, despite the name)" as agent_review
+    state "sast_validate — TOOL (local heuristic)" as sast_validate
+    state "structure — TOOL (local)" as structure
+    state "slice — TOOL (local, seeds wave plan)" as slice
+    state "investigate — AGENT annie (bounded wave loop)" as investigate
+    state "collect — TOOL (local)" as collect
+    state "merge — AGENT synthia" as merge
+    state "verify — AGENT vera (browser PoC, evidence oracle)" as verify
+    state "report — AGENT skribble" as report
+    state "reflect — AGENT carren" as reflect
+    state "unknown — escalation" as unknown
+    state "awaiting_clarification — HITL" as awaiting_clarification
+    state "complete" as complete
+    state "error" as error
+
+    %% Deterministic linear pipeline (one event each)
+    intake --> acquire : go_acquire [intake valid]
+    acquire --> cve_research : acquire_done
+    cve_research --> sast_scan : cve_done
+    sast_scan --> normalize : sast_done
+    normalize --> dedup_within_source : normalize_done
+    dedup_within_source --> correlate_evidence : dedup_done
+    correlate_evidence --> agent_review : correlate_done
+    agent_review --> sast_validate : review_done
+    sast_validate --> structure : validate_done
+    structure --> slice : structure_done
+    slice --> investigate : slice_done
+
+    %% INVESTIGATE bounded wave loop
+    investigate --> investigate : investigate_wave [wave < total_waves]
+    investigate --> collect : investigate_done [waves complete]
+
+    %% Agent tail
+    collect --> merge : collect_done
+    merge --> verify : merge_done
+    verify --> report : verify_done
+    report --> reflect : report_done
+    reflect --> complete : reflect_done [met=True]
+
+    %% Escalation seam — agent states only (UNCERTAIN / needs_clarification)
+    investigate --> unknown : to_unknown
+    merge --> unknown : to_unknown
+    verify --> unknown : to_unknown
+    report --> unknown : to_unknown
+    reflect --> unknown : to_unknown
+    unknown --> awaiting_clarification : escalate
+    awaiting_clarification --> investigate : clarify [fixed resume target]
+
+    complete --> [*]
+    error --> [*]
+
+    note right of error
+        abort → error exists from EVERY non-final state
+        (edges omitted for readability): intake, acquire,
+        cve_research, sast_scan, normalize,
+        dedup_within_source, correlate_evidence,
+        agent_review, sast_validate, structure, slice,
+        investigate, collect, merge, verify, report,
+        reflect, unknown, awaiting_clarification.
+    end note
+
+    note right of investigate
+        TOOL_STATES run inline via run_tool_state (no agent).
+        GATE_STATES = {intake} resume via route_user.
+        ESCALATABLE_STATES = {investigate, merge, verify,
+        report, reflect}. Each agent runs the model declared
+        in its own .pi/agents/<name>.md (no per-state override).
+    end note

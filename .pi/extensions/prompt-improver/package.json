@@ -1,0 +1,10 @@
+{
+  "name": "pi-extension-prompt-improver",
+  "version": "1.0.0",
+  "description": "Prompt Improver extension for Pi — rewrites raw user prompts into better-structured Invocation Context via the input event",
+  "main": "index.ts",
+  "type": "module",
+  "scripts": {
+    "test:unit": "vitest run --config tests/vitest.config.ts"
+  }
+}

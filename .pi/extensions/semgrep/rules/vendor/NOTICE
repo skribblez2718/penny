@@ -1,0 +1,67 @@
+NOTICE — Vendored Semgrep Rules
+================================
+
+The security rules and their accompanying test/example fixtures in this
+`vendor/` directory are copied VERBATIM from the upstream Semgrep community
+rules repository. They were NOT authored by the sca skill maintainers. Do not
+edit their content — any customization belongs in `../custom/` instead, so the
+pinned-commit provenance below stays verifiable.
+
+Upstream repository
+-------------------
+  https://github.com/semgrep/semgrep-rules
+
+Pinned revision (independently checkable)
+-----------------------------------------
+  Commit SHA : 63b847ed18cb75582f49d29f8a44a349facd7a1d
+  Branch     : develop (real HEAD at fetch time)
+  Commit date: 2026-07-01T09:30:56Z
+  Commit msg : "Fix false positive for unquoted-attribute-var (#3680)"
+
+To verify:
+  git clone https://github.com/semgrep/semgrep-rules
+  git -C semgrep-rules cat-file -t 63b847ed18cb75582f49d29f8a44a349facd7a1d
+  # then diff the javascript/<lib>/ subtrees against this vendor/ directory.
+
+Fetch method
+------------
+  Real `curl` calls to the GitHub REST API:
+    - api.github.com/repos/semgrep/semgrep-rules/git/trees/<sha>?recursive=1
+      (to enumerate the git tree at the pinned SHA)
+    - raw.githubusercontent.com/semgrep/semgrep-rules/<sha>/<path>
+      (to fetch each file's raw content)
+  NOT browser-scraped, NOT fabricated. File blob paths were fetched from the
+  GitHub git-tree listing (no 404 / error-page content).
+
+Post-review correction (honest disclosure)
+------------------------------------------
+  The initial vendoring pass was NOT gap-free: one real upstream file,
+  `vm2/security/audit/vm2-context-injection.yaml`, was missed on the first
+  copy — its paired `.js` fixture had been vendored but the rule definition
+  itself was left orphaned. This was caught in review, the file was re-fetched
+  from the same pinned commit (verified against the git-tree listing, not
+  fabricated), and added. The count below reflects the corrected total.
+  Earlier wording claiming the vendor set was fully verified against the
+  git-tree with zero gaps was inaccurate and has been removed.
+
+Vendored library directories (9)
+--------------------------------
+  jose, jsonwebtoken, jwt-simple, passport-jwt, sequelize,
+  serialize-javascript, shelljs, node-crypto, vm2
+
+  (The upstream `javascript/` top-level wrapper was dropped; these libraries
+  live directly under `vendor/` because the whole extension is already
+  JS/TS-focused. Each library preserves its upstream sub-structure, e.g.
+  `<library>/security/...` and `<library>/security/audit/...`.)
+
+File count
+----------
+  49 files (a mix of `.yaml` rule definitions and `.js` / `.jsx` / `.ts`
+  test/example fixtures), verified against the GitHub git-tree listing.
+  (Was 48 before the post-review correction noted above added the missing
+  `vm2/security/audit/vm2-context-injection.yaml` rule definition.)
+
+License
+-------
+  All vendored content is distributed under the Semgrep Rules License v1.0.
+  See the sibling `LICENSE` file and https://semgrep.dev/legal/rules-license

@@ -1,0 +1,14 @@
+# osv-scanner.toml — bundled config for the osv-scanner Pi extension.
+#
+# Authored for the sca skill's tool-extension layer (Phase 4a). This is our own
+# tuned config, not a vendored upstream default. See:
+#   https://google.github.io/osv-scanner/configuration/
+#
+# By default we do not ignore any vulnerabilities. Add [[IgnoredVulns]] blocks
+# below to suppress specific advisories with a justification + review date.
+
+# Example (commented out — enable per-project as needed):
+# [[IgnoredVulns]]
+# id = "GO-2023-1234"
+# ignoreUntil = "2026-12-31"
+# reason = "No fixed version available; mitigated by X. Re-review before expiry."

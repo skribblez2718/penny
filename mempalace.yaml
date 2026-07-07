@@ -1,0 +1,14 @@
+wing: penny
+rooms:
+  - name: architecture
+  - name: decisions
+  - name: sessions
+  - name: general
+file_patterns:
+  - "**/*.ts"
+  - "**/*.js"
+  - "**/*.md"
+exclude:
+  - "node_modules/**"
+  - ".venv/**"
+  - "**/*.test.ts"
