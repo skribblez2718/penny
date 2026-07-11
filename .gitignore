@@ -262,3 +262,17 @@ secrets/
 .pi/skills/rez/resources/accomplishments/*
 !.pi/skills/rez/resources/accomplishments/README.md
 .pi/skills/rez/output/
+
+# ===========================================
+# Pi agent credentials & config (defensive)
+# ===========================================
+# OAuth tokens (auth.json) and machine-specific settings (settings.json) live in
+# ~/.pi/agent/ OUTSIDE the repo. These rules ensure that if a copy ever lands
+# in-tree it is never committed. auth.json is always a credential, so ignore it
+# broadly; settings.json is scoped to the pi-agent context to avoid clobbering
+# unrelated tools' settings.json (e.g. editors).
+auth.json
+**/auth.json
+.pi/settings.json
+.pi/agent/settings.json
+**/agent/settings.json
