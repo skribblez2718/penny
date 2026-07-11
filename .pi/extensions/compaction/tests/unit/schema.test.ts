@@ -6,6 +6,8 @@ import {
   EngineRunRefSchema,
   FileContextSchema,
   ArtifactMetadataSchema,
+  SkillInvocationRefSchema,
+  SCHEMA_VERSION,
 } from "../../schema.js";
 
 // ============================================================
@@ -46,6 +48,66 @@ describe("PennyCompactArtifactSchema", () => {
   it("accepts a valid minimal artifact", () => {
     const result = PennyCompactArtifactSchema.safeParse(validArtifact);
     expect(result.success).toBe(true);
+  });
+
+  // ============================================================
+  // 2.1.0 additive schema evolution
+  // ============================================================
+
+  it("exports SCHEMA_VERSION as 2.1.0", () => {
+    expect(SCHEMA_VERSION).toBe("2.1.0");
+  });
+
+  it("accepts a 2.1.0-versioned artifact", () => {
+    const v21 = { ...validArtifact, schema_version: "2.1.0" };
+    expect(PennyCompactArtifactSchema.safeParse(v21).success).toBe(true);
+  });
+
+  it("still validates a legacy 2.0.0-shaped fixture (no new optional fields)", () => {
+    // Backward-compat guarantee: every 2.1.0 addition is optional, so an
+    // artifact minted by the 2.0.0 code path still parses clean.
+    const legacy = { ...validArtifact, schema_version: "2.0.0" };
+    expect("current_work" in legacy).toBe(false);
+    expect("next_steps" in legacy).toBe(false);
+    const result = PennyCompactArtifactSchema.safeParse(legacy);
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts optional current_work and next_steps (2.1.0)", () => {
+    const withWork = {
+      ...validArtifact,
+      schema_version: "2.1.0",
+      current_work: "Rewriting extractSessionState's fallback scan",
+      next_steps: ["Wire merged messages into pending detection", "Populate boundary_shift"],
+    };
+    expect(PennyCompactArtifactSchema.safeParse(withWork).success).toBe(true);
+  });
+
+  it("accepts optional metadata.compaction_reason and metadata.custom_instructions (C8 sink)", () => {
+    const withSink = {
+      ...validArtifact,
+      schema_version: "2.1.0",
+      metadata: {
+        eviction_log: [],
+        compaction_reason: "manual",
+        custom_instructions: "Focus on the goal-recency fix",
+        pi_boundary: {
+          first_kept_entry_id: "abc-123",
+          tokens_before: 15000,
+          boundary_shift: { previous: "e0", current: "e1", compaction_seq: 1 },
+        },
+      },
+    };
+    const result = PennyCompactArtifactSchema.safeParse(withSink);
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an invalid metadata.compaction_reason enum value", () => {
+    const bad = {
+      ...validArtifact,
+      metadata: { eviction_log: [], compaction_reason: "garbage" },
+    };
+    expect(PennyCompactArtifactSchema.safeParse(bad).success).toBe(false);
   });
 
   it("rejects missing required fields", () => {
@@ -201,6 +263,25 @@ describe("EngineRunRefSchema", () => {
     const withoutEngineRuns: any = { ...validArtifact };
     delete withoutEngineRuns.engine_runs;
     expect(PennyCompactArtifactSchema.safeParse(withoutEngineRuns).success).toBe(false);
+  });
+});
+
+describe("SkillInvocationRefSchema", () => {
+  const validSkill = {
+    skill_name: "code",
+    session_id: "code-1751700000000",
+    goal: "Fix the goal-recency regression",
+    completed: true,
+  };
+
+  it("accepts a skill ref without the optional superseded flag (2.0.0-shaped)", () => {
+    expect(SkillInvocationRefSchema.safeParse(validSkill).success).toBe(true);
+  });
+
+  it("accepts a superseded completed skill (2.1.0)", () => {
+    expect(SkillInvocationRefSchema.safeParse({ ...validSkill, superseded: true }).success).toBe(
+      true
+    );
   });
 });
 

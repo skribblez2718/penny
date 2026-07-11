@@ -64,7 +64,7 @@ For each high-value finding you can meaningfully comment on, record in mempalace
 Emit a compact inline summary at the end:
 
 ```
-SUMMARY:{"phase":"P11_FIX_VERIFICATION","findings_reviewed":<count>,"appear_remediated":<count>,"appear_open":<count>,"indeterminate":<count>,"rescan_performed":false,"notes":"<one line>"}
+SUMMARY:{"findings_reviewed":<count>,"appear_remediated":<count>,"appear_open":<count>,"indeterminate":<count>,"rescan_performed":false,"notes":"<one line>","clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>","needs_clarification":false}
 ```
 
 `"rescan_performed":false` is the honest, expected value in v1 — this phase does

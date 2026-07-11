@@ -81,7 +81,7 @@ Contract rules (**enforced by the orchestrator** — read carefully):
 Emit a compact inline summary at the end:
 
 ```
-SUMMARY:{"phase":"P12_REPORT","report_md_returned":true,"total_findings":<count>,"references_real_data":true,"notes":"<one line>"}
+SUMMARY:{"report_md_returned":true,"total_findings":<count>,"references_real_data":true,"notes":"<one line>","mempalace_drawer":"<id>"}
 ```
 
 This phase does **not** loop and does **not** add a separate different-model

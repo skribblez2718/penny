@@ -31,7 +31,10 @@ from datetime import datetime, timedelta, timezone
 
 OSV_API_BASE = "https://api.osv.dev"
 VULN_LOOKUP_BASE = "https://vulnerability.circl.lu/api/"
-USER_AGENT = "jsa-cve-lookup/1.0 (+https://github.com/skribblez/penny; jsa@penny)"
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 DEFAULT_TIMEOUT = 10  # seconds per request
 # Default months back for CVE lookup. Set to a very large number (1200 = 100 years)
 # to effectively disable the date filter. Old CVEs on old libraries are the most

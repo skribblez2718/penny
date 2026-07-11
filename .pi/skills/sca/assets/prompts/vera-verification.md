@@ -121,7 +121,7 @@ around). Include the `run_pocs` contract at the top level of your result. Emit a
 compact inline summary at the end:
 
 ```
-SUMMARY:{"phase":"P10_VERIFICATION","pocs_requested":<count>,"findings_covered":<count>,"non_destructive_all":true,"single_shot":true,"notes":"<one line>"}
+SUMMARY:{"pocs_requested":<count>,"findings_covered":<count>,"non_destructive_all":true,"single_shot":true,"notes":"<one line>","confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>","run_pocs":[]}
 ```
 
 Be precise and conservative: only executable, genuinely non-destructive,

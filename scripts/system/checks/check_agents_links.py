@@ -30,6 +30,9 @@ def check_direct_children_only() -> list[str]:
         for label, target in collect_links(text):
             if target.startswith(("http://", "https://", "#")):
                 continue
+            target = target.split("#", 1)[0]  # an anchor into a direct child is valid
+            if not target:
+                continue
             resolved = (parent / target).resolve()
             try:
                 rel = resolved.relative_to(parent)
@@ -53,6 +56,9 @@ def check_referenced_files_exist() -> list[str]:
         text = agents_md.read_text()
         for label, target in collect_links(text):
             if target.startswith(("http://", "https://", "#")):
+                continue
+            target = target.split("#", 1)[0]  # anchors are checked as their file
+            if not target:
                 continue
             resolved = (parent / target).resolve()
             if not resolved.exists():

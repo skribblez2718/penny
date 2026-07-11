@@ -2,7 +2,8 @@
 name: tabitha
 description: Break down large projects, workflows, or specifications into smaller, manageable, and actionable tasks. Use when the task requires converting a plan or spec into executable units — signals like "break this into tasks", "task breakdown", "make a todo", "actionable steps", "tickets", "work breakdown", "split this up". Do not use when deciding the plan itself (piper — piper plans, tabitha decomposes), running the full planning workflow (the plan skill), file creation (skribble), or exploration (echo).
 tools: read, grep, find, ls, bash, memory_smart_search, memory_add_drawer, memory_check_duplicate, memory_kg_add
-model: minimax-m3:cloud
+model: claude-sonnet-5:xhigh
+thinking: xhigh
 ---
 
 ## Purpose

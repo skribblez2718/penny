@@ -2,7 +2,8 @@
 name: piper
 description: Systematically decide in advance what needs to be done, when, where, how, and by whom while organizing resources and anticipating challenges. Use when the task requires sequencing work or mapping dependencies without a full skill workflow — signals like "sequence this", "what order", "roadmap", "dependency order", "how should we approach", "phase this out". Do not use when the user wants a full structured plan deliverable (the plan skill), breaking a plan into executable tasks (tabitha), exploring (echo), critique (carren), or verification (vera).
 tools: read, grep, find, ls, bash, web_search, web_fetch, memory_smart_search, memory_add_drawer, memory_check_duplicate, memory_kg_add
-model: glm-5.2:cloud
+model: claude-opus-4-8:xhigh
+thinking: xhigh
 ---
 
 ## Purpose

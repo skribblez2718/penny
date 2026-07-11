@@ -109,7 +109,7 @@ APPROVE / NEEDS_REVISION / BLOCKED
 Your **very last line** MUST be exactly:
 
 ```
-SUMMARY:{"verdict":"APPROVE|NEEDS_REVISION|BLOCKED","issues":["<issue title 1>","<issue title 2>"],"mempalace_drawer":"<drawer_id>","needs_clarification":false,"clarifying_questions":[]}
+SUMMARY:{"verdict":"APPROVE|NEEDS_REVISION|BLOCKED","issues":["<issue title 1>","<issue title 2>"],"mempalace_drawer":"<drawer_id>","needs_clarification":false,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN"}
 ```
 
 **Rules:**
@@ -124,11 +124,11 @@ SUMMARY:{"verdict":"APPROVE|NEEDS_REVISION|BLOCKED","issues":["<issue title 1>",
 
 **Examples:**
 ```
-SUMMARY:{"verdict":"NEEDS_REVISION","issues":["Sub-query 2 overlaps with sub-query 1","Missing cost-benefit analysis sub-query","One source is T3-only for a strong claim"],"mempalace_drawer":"research-s1-carren-plan","needs_clarification":false,"clarifying_questions":[]}
+SUMMARY:{"verdict":"NEEDS_REVISION","issues":["Sub-query 2 overlaps with sub-query 1","Missing cost-benefit analysis sub-query","One source is T3-only for a strong claim"],"mempalace_drawer":"research-s1-carren-plan","needs_clarification":false,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN"}
 ```
 
 ```
-SUMMARY:{"verdict":"APPROVE","issues":[],"mempalace_drawer":"research-s1-carren-report","needs_clarification":false,"clarifying_questions":[]}
+SUMMARY:{"verdict":"APPROVE","issues":[],"mempalace_drawer":"research-s1-carren-report","needs_clarification":false,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN"}
 ```
 
 ***WARNING: If you omit this SUMMARY line, the workflow will stall and fail. The SUMMARY line is parsed programmatically.***

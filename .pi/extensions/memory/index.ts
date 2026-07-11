@@ -103,7 +103,7 @@ async function callBridge(
           { tool, duration: "30s" },
           Object.assign(
             new Error(`Bridge timed out after ${BRIDGE_TIMEOUT_MS}ms (tool: ${tool})`),
-            { code: "BRIDGE_TIMEOUT" }
+            { code: "BRIDGE_TIMEOUT" as const }
           )
         );
         reject(new Error(`Bridge timed out after ${BRIDGE_TIMEOUT_MS}ms (tool: ${tool})`));
@@ -125,7 +125,7 @@ async function callBridge(
           "Bridge exited with non-zero code",
           { tool, exitCode: code },
           Object.assign(new Error(`Bridge exited with code ${code}: ${stderr}`), {
-            code: "BRIDGE_EXIT_CODE",
+            code: "BRIDGE_EXIT_CODE" as const,
           })
         );
         reject(new Error(`Bridge exited with code ${code}: ${stderr}`));
@@ -137,7 +137,7 @@ async function callBridge(
         logger.warn(
           "Bridge response parse error",
           { tool, exitCode: code, stderr: stderr.slice(0, 300) },
-          Object.assign(new Error(`Failed to parse: ${stdout}`), { code: "BRIDGE_PARSE_ERROR" })
+          Object.assign(new Error(`Failed to parse: ${stdout}`), { code: "BRIDGE_PARSE_ERROR" as const })
         );
         reject(new Error(`Failed to parse: ${stdout}`));
       }
@@ -149,7 +149,7 @@ async function callBridge(
         logger.error(
           "Bridge spawn failed",
           { tool },
-          Object.assign(err, { code: "BRIDGE_SPAWN_ERROR" })
+          Object.assign(err, { code: "BRIDGE_SPAWN_ERROR" as const })
         );
         reject(err);
       }
@@ -415,7 +415,7 @@ const toolAddDrawer = createTool(
   ],
   {
     wing: Type.String({
-      description: "Wing name (e.g., 'penny', 'wing_user', 'wing_decisions')",
+      description: "Wing name. Use 'penny' (Penny's main wing) with a room like 'decisions'/'user'/'architecture'; dedicated skill wings are 'wing_<skill>' (e.g. 'wing_jsa'). Prefer 'penny' + a room over creating new top-level wings.",
     }),
     room: Type.String({ description: "Room name (e.g., 'decisions', 'architecture', 'sessions')" }),
     content: Type.String({
@@ -470,12 +470,12 @@ const toolKgAdd = createTool(
   "Add a relationship fact to the knowledge graph",
   [
     "After learning new facts, call memory_kg_add to store the relationship.",
-    "Use standard predicates: works_on, uses, prefers, decided, owns.",
+    "Use canonical predicates (see docs/agents/memory/kg-patterns.md): completed, decided, produced, works_on, uses, prefers, plus lifecycle predicates like verified_by/fixes.",
   ],
   {
     subject: Type.String({ description: "Entity doing/being something (e.g., 'User', 'Penny')" }),
     predicate: Type.String({
-      description: "Relationship: works_on, uses, prefers, decided, owns, assigned_to",
+      description: "Canonical predicate (see kg-patterns.md): e.g. completed, decided, produced, works_on, uses, prefers, verified_by, fixes",
     }),
     object: Type.String({ description: "Related entity (e.g., 'MemPalace', 'auth-migration')" }),
     valid_from: Type.Optional(Type.String({ description: "When this became true (YYYY-MM-DD)" })),

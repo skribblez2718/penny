@@ -1,6 +1,6 @@
 # Memory Extension for Penny
 
-Intelligent memory retrieval for the Pi coding agent. Provides 20 tools for AI memory management.
+Intelligent memory retrieval for the Pi coding agent. Provides 23 tools for AI memory management.
 
 ## Tools
 
@@ -185,7 +185,7 @@ For the LLM using these tools:
                       ▼
 ┌─────────────────────────────────────────────────────────┐
 │            Memory Extension (index.ts)                   │
-│    20 tools registered with Pi's tool system            │
+│    23 tools registered with Pi's tool system            │
 └─────────────────────┬───────────────────────────────────┘
                       │
                       ▼ spawn Python process

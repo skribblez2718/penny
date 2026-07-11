@@ -263,8 +263,8 @@ def test_admin_endpoints(client):
     stats = r.json()
     assert "db_size_mb" in stats
     assert "active_connections" in stats
-    assert stats["retention_raw_days"] == Config.RETENTION_RAW_DAYS
-    assert stats["retention_compaction_days"] == Config.RETENTION_COMPACTION_DAYS
+    assert stats["db_size_max_gb"] == Config.DB_SIZE_MAX_GB
+    assert stats["db_size_floor_gb"] == Config.DB_SIZE_FLOOR_GB
 
 
 def test_websocket_log_event(client, tmp_path):

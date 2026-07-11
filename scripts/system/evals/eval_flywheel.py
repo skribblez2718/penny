@@ -277,12 +277,12 @@ def check_session_brief() -> EvalResult:
     latest_session = _latest_session_start()
     if latest_session is None or days_since(latest_session) > SESSION_RECENT_DAYS:
         raise EvalSkip(f"no sessions in the last {SESSION_RECENT_DAYS}d")
-    brief = REPO_ROOT / ".pi" / "SESSION_BRIEF.md"
+    brief = REPO_ROOT / ".penny" / "SESSION_BRIEF.md"
     if not brief.is_file():
         return EvalResult(
             name="flywheel.session_brief",
             status=FAIL,
-            detail=".pi/SESSION_BRIEF.md missing while sessions are active — "
+            detail=".penny/SESSION_BRIEF.md missing while sessions are active — "
             "recall is not being injected",
         )
     age = days_since(brief.stat().st_mtime)
@@ -337,6 +337,76 @@ def check_obs_run_ingest() -> EvalResult:
     )
 
 
+def check_outcomes_written_7d() -> EvalResult:
+    """The ledger must be RECEIVING outcomes while Penny is in use.
+
+    The engine terminal-state writer rarely fires in practice; the ledger now
+    flows from `make rate` (human) and auto_capture (judge). If sessions are
+    active but ZERO outcomes landed in 7d, every source seam is dead again —
+    the exact silent-death this suite exists to catch. Counts at the destination
+    store; does not gate on volume (more is not better), only on liveness.
+    """
+    latest_session = _latest_session_start()
+    if latest_session is None or days_since(latest_session) > SESSION_RECENT_DAYS:
+        raise EvalSkip(f"no sessions in the last {SESSION_RECENT_DAYS}d — nothing to capture")
+    recent = load_outcomes(window_days=7)
+    if not recent:
+        return EvalResult(
+            name="flywheel.outcomes_written_7d",
+            status=FAIL,
+            detail="sessions are active but 0 outcomes written in 7d — the capture "
+            "source is dead (run `make auto-capture` / `make rate`, check the cron)",
+        )
+    by_source: Dict[str, int] = {}
+    for o in recent:
+        by_source[str(o.get("source") or "engine")] = (
+            by_source.get(str(o.get("source") or "engine"), 0) + 1
+        )
+    breakdown = ", ".join(f"{k}:{v}" for k, v in sorted(by_source.items()))
+    return EvalResult(
+        name="flywheel.outcomes_written_7d",
+        status=PASS,
+        detail=f"{len(recent)} outcome(s) in 7d ({breakdown}) — ledger is flowing",
+    )
+
+
+def check_human_ratings_7d() -> EvalResult:
+    """Context: how many outcomes carry a human verdict (source=human_rating) in
+    7d. Informational — humans rate at their own pace; this never gates."""
+    recent = load_outcomes(window_days=7)
+    human = sum(1 for o in recent if str(o.get("source")) == "human_rating")
+    return EvalResult(
+        name="flywheel.human_ratings_7d",
+        status=PASS,
+        value=float(human),
+        unit="count",
+        informational=True,
+        detail=f"{human} human-rated outcome(s) in 7d (the highest-signal label; "
+        "`make rate` to add more)",
+    )
+
+
+def check_amendments_applied_30d() -> EvalResult:
+    """Context: amendments APPLIED (not merely created) in 30d. `amendments_created`
+    is an anti-metric; an applied amendment is the only one that changed anything.
+    Informational — the loop may legitimately propose nothing."""
+    applied = 0
+    for drawer in load_room("system_amendments", include_content=True):
+        content = drawer.get("content") or ""
+        if ("status: APPLIED" in content or '"status": "APPLIED"' in content) and (
+            (days_since(drawer.get("filed_at")) or 999) <= 30
+        ):
+            applied += 1
+    return EvalResult(
+        name="flywheel.amendments_applied_30d",
+        status=PASS,
+        value=float(applied),
+        unit="count",
+        informational=True,
+        detail=f"{applied} amendment(s) applied in 30d",
+    )
+
+
 def check_watcher_cron_alive() -> EvalResult:
     """The ambient watcher cron must actually be executing (log heartbeat)."""
     rows = query_db(obs_db_path(), "SELECT MAX(timestamp) AS latest FROM watcher_logs")
@@ -369,6 +439,9 @@ CHECKS: List[Tuple[str, Callable[[], EvalResult]]] = [
     ("flywheel.active_rooms_have_ttl", check_active_rooms_have_ttl),
     ("flywheel.compression_yield", check_compression_yield),
     ("flywheel.amendment_rot", check_amendment_rot),
+    ("flywheel.outcomes_written_7d", check_outcomes_written_7d),
+    ("flywheel.human_ratings_7d", check_human_ratings_7d),
+    ("flywheel.amendments_applied_30d", check_amendments_applied_30d),
     ("flywheel.session_brief", check_session_brief),
     ("flywheel.obs_run_ingest", check_obs_run_ingest),
     ("flywheel.watcher_cron_alive", check_watcher_cron_alive),

@@ -289,3 +289,16 @@ def test_recovery_re_presents_pending_clarification(cp, monkeypatch):
     assert len(directives) == 1 and directives[0]["action"] == "escalate_to_user"
     assert directives[0]["previous_state"] == "generating"
     assert "Who are the users?" in directives[0]["unknown_reason"]
+
+
+def test_detect_domain_lit_substring_no_false_positive():
+    """'lit' must NOT be a bare keyword — 'quality' contains the substring 'lit'."""
+    assert detect_domain("improve code quality") == "generic"
+    assert detect_domain("audit reliability and stability") == "generic"
+
+
+def test_detect_domain_recognizes_lit_and_tailwind():
+    """Precise Lit tokens and Tailwind are recognized as web-app."""
+    assert detect_domain("build a litelement design system") == "web-app"
+    assert detect_domain("refactor the lit-html templates") == "web-app"
+    assert detect_domain("style the panel with tailwind") == "web-app"

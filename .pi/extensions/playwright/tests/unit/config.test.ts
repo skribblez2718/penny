@@ -203,6 +203,7 @@ describe("Config", () => {
       enableNetwork: true,
       enableStorage: false,
       allowUnsafe: false,
+      ignoreHTTPSErrors: false,
     };
 
     it("always enables core", () => {

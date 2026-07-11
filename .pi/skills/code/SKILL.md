@@ -174,7 +174,7 @@ Before any code is written (implement state):
 - `resources/security-checklist.md` — Mandatory pre-code security review
 - `resources/server-startup-tests.md` — **Mandatory** server-startup integration-test checklist for any project that ships a server (FastAPI, Flask, Express, etc.). The verify phase will fail if these tests are missing.
 - `resources/ai-application.md` — **Auto-injected** when AI framework imports detected (transformers, openai, langchain, etc.). Covers generation parameters, streaming patterns, system prompt design, model loading, hardware detection, context windows.
-- `resources/web-ui.md` — **Auto-injected** when web UI framework detected (Streamlit, React, etc.). Covers CSS selector hygiene, theme system interaction, state synchronization, UI patterns, framework-specific gotchas.
+- `resources/web-ui.md` — **Auto-injected** when web UI framework detected (Lit, React, etc.). Covers CSS selector hygiene, theme system interaction, state synchronization, UI patterns, framework-specific gotchas.
 - `resources/resilience.md` — **Always injected**. Language-agnostic defensive patterns: error-boundary state, garbage collection, loading UX, idempotency, graceful degradation.
 
 ## Server-Project Verification (Mandatory)

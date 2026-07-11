@@ -23,10 +23,19 @@ Your task includes the session ID, sub-query, and mempalace room. Use them.
 ### Search Requirements
 
 - You MUST use BOTH `web_search` and `web_fetch` for every sub-query
-- These are the ONLY search tools available — use them thoroughly and creatively
-- Cross-reference claims across both tools
+- `web_search`, `web_fetch`, and `youtube_transcript` are the ONLY search tools available — use them thoroughly and creatively
+- Cross-reference claims across tools
 - Minimum tool invocations: quick=3, standard=5, deep=7
 - If a source looks promising, fetch it with `web_fetch` to verify content
+
+### YouTube Coverage (Mandatory Check, Conditional Pull)
+
+Video content (official product walkthroughs, conference talks, vendor deep-dives, expert interviews) is a legitimate first-class source — do not skip it by default.
+
+- For EVERY sub-query, run at least one YouTube-targeted `web_search` (e.g. `site:youtube.com <sub-query>`, or `<sub-query> conference talk`, or `<sub-query> official walkthrough`) as part of your minimum tool-invocation budget.
+- If that search surfaces a relevant, credible video (official channel, conference/org channel, recognized expert, well-established practitioner), call `youtube_transcript` on it and mine the transcript for citable claims exactly as you would a written source — quote or paraphrase the specific segment, and cite the video title, channel, and URL (include an approximate timestamp/topic marker if the transcript tool returns timing).
+- If no relevant video exists, do not fabricate coverage — explicitly note "No relevant video content found for this sub-query" in your Critical Analysis section. This documents that the check ran, not that it was skipped.
+- Never treat a YouTube search as satisfying the `web_search`/`web_fetch` requirement above — it is additive, not a substitute.
 
 ### Credibility Framework
 
@@ -35,9 +44,11 @@ For EVERY source you cite, assess and tag with a credibility tier:
 | Tier | Name                   | Examples                                          | Treatment       |
 | ---- | ---------------------- | ------------------------------------------------- | --------------- |
 | ✓T1  | Primary/Authoritative  | Official docs, RFCs, arXiv papers, official specs | Highest weight  |
-| ○T2  | Expert/Established     | ACM Queue, Martin Fowler, official project blogs  | High weight     |
-| ◇T3  | Community/Practitioner | High-vote SO, dev.to, Medium articles, tutorials  | Moderate weight |
-| ?T4  | Unverified/Commercial  | Product pages, SEO content, unknown blogs         | Low weight      |
+| ○T2  | Expert/Established     | ACM Queue, Martin Fowler, official project blogs, official vendor/product YouTube channels, recorded conference talks (re:Invent, DEF CON, USENIX, etc.) | High weight     |
+| ◇T3  | Community/Practitioner | High-vote SO, dev.to, Medium articles, tutorials, established practitioner YouTube channels | Moderate weight |
+| ?T4  | Unverified/Commercial  | Product pages, SEO content, unknown blogs, unverified/low-authority YouTube channels | Low weight      |
+
+Video transcripts are graded by the SAME rubric as written sources — tier the channel/publisher, not the medium. An official vendor channel is T2; a random tutorial channel with no established authority is T3/T4.
 
 **Confidence Levels for Claims:**
 
@@ -81,6 +92,10 @@ Mode: {mode}
 
 {Evaluate evidence: credibility distribution, conflicts of interest, limitations, assumptions}
 
+## Video Source Check
+
+{Confirm the YouTube-targeted search ran for this sub-query. Either cite the video source(s) used above, or state "No relevant video content found for this sub-query."}
+
 ## Information Gain
 
 {What did we learn from this sub-query that we didn't know before?}
@@ -102,6 +117,7 @@ Mode: {mode}
 - Conflicting evidence is documented
 - Synthesis articulates information gain
 - All major claims cross-referenced across web_search and web_fetch
+- A YouTube-targeted search was run for every sub-query (result documented either way)
 
 ## Mandatory: Structured Output
 

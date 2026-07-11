@@ -68,7 +68,7 @@ room, then emit the structured summary the orchestrator reads. The
 `security_requirements` list is machine-readable and consumed downstream by id:
 
 ```
-SUMMARY:{"phase":"P5_REQUIREMENTS","security_requirements":[{"sr_id":"SR-001","asvs":"V8.2","text":"Enforce authorization on every admin API route","basis":"P4:admin-API↔user-db flow; P3:actor=admin"}],"count":<n>,"unknowns":["<one line>"],"needs_clarification":<true|false>}
+SUMMARY:{"security_requirements":[{"sr_id":"SR-001","asvs":"V8.2","text":"Enforce authorization on every admin API route","basis":"P4:admin-API↔user-db flow; P3:actor=admin"}],"count":<n>,"unknowns":["<one line>"],"needs_clarification":<true|false>,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>"}
 ```
 
 Every requirement gets a stable `SR-###`, a correctly-formatted `V<chapter>.<section>`

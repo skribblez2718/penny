@@ -256,7 +256,6 @@ _AI_DEPS: dict[str, list[str]] = {
 }
 
 _WEB_UI_DEPS: dict[str, list[str]] = {
-    "streamlit": ["streamlit"],
     "react": ["react"],
     "vue": ["vue"],
     "svelte": ["svelte"],
@@ -364,6 +363,20 @@ def _detect_web_ui_framework(project_root: str) -> dict:  # noqa: C901
                     "frameworks": ["nextjs"],
                     "evidence": f"next in {config_file}",
                 }
+            # Lit is matched precisely (not a bare 'lit' substring, which would
+            # collide with names like eslint / @lit-labs internals unrelated to UI).
+            if '"lit"' in content or "lit-element" in content or "lit-html" in content:
+                return {
+                    "is_web_ui": True,
+                    "frameworks": ["lit"],
+                    "evidence": f"lit in {config_file}",
+                }
+            if "tailwindcss" in content:
+                return {
+                    "is_web_ui": True,
+                    "frameworks": ["tailwind"],
+                    "evidence": f"tailwindcss in {config_file}",
+                }
 
     # Check python manifests for UI frameworks
     for manifest_name in ("pyproject.toml", "requirements.txt"):
@@ -385,20 +398,30 @@ def _detect_web_ui_framework(project_root: str) -> dict:  # noqa: C901
                 "evidence": f"UI frameworks in {manifest_name}: {', '.join(found)}",
             }
 
-    # Scan source for Streamlit import (common Python UI)
-    for py_file in root.rglob("*.py"):
-        if "__pycache__" in str(py_file):
-            continue
-        try:
-            content = py_file.read_text(encoding="utf-8").lower()
-        except OSError:
-            continue
-        if "import streamlit" in content:
-            return {
-                "is_web_ui": True,
-                "frameworks": ["streamlit"],
-                "evidence": f"streamlit import in {py_file.name}",
-            }
+    # Scan JS/TS source for Lit imports (when no dependency manifest lists it).
+    # Tokens are matched precisely to avoid a bare 'lit' substring collision.
+    _lit_import_tokens = (
+        'from "lit"',
+        "from 'lit'",
+        'from "lit/',
+        "from 'lit/",
+        "lit-element",
+        "lit-html",
+    )
+    for pattern in ("**/*.ts", "**/*.js", "**/*.mjs", "**/*.tsx", "**/*.jsx"):
+        for src in root.glob(pattern):
+            if "node_modules" in str(src) or "__pycache__" in str(src):
+                continue
+            try:
+                content = src.read_text(encoding="utf-8").lower()
+            except OSError:
+                continue
+            if any(tok in content for tok in _lit_import_tokens):
+                return {
+                    "is_web_ui": True,
+                    "frameworks": ["lit"],
+                    "evidence": f"lit import in {src.name}",
+                }
 
     return {"is_web_ui": False}
 

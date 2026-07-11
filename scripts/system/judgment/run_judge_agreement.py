@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Judge-agreement runner — measures how well an open model reproduces Fable's verdicts.
+"""Judge-agreement runner — measures how well an open model reproduces Oracle's verdicts.
 
-Fable's judgment is frozen in ``calibration_corpus.jsonl`` (Fable-authored PASS/FAIL
+Oracle's judgment is frozen in ``calibration_corpus.jsonl`` (Oracle-authored PASS/FAIL
 verdicts on real Penny work products) against ``rubrics.json``. This runner replays
 each corpus record through a candidate JUDGE model (headless pi, the grader prompt
 in ``judge_prompt.md`` + the class rubric + the work product), parses the judge's
-VERDICT, and scores its agreement with Fable — per model, per class.
+VERDICT, and scores its agreement with Oracle — per model, per class.
 
-The metric that matters most is **false_pass_rate**: the fraction of records Fable
+The metric that matters most is **false_pass_rate**: the fraction of records Oracle
 FAILED that the judge PASSED. A judge that waves through bad work is the thing that
 makes autonomy unsafe; false_fail_rate (too strict) is merely annoying.
 
@@ -18,9 +18,9 @@ makes autonomy unsafe; false_fail_rate (too strict) is merely annoying.
 Results land in ``.penny/evals/judgment/latest.json`` where the cheap
 ``eval_judgment.py`` section ratchets them. Pick the judge with the highest
 agreement and lowest false_pass_rate; wire THAT model into the VERIFY primitive so
-a weak orchestrator's "is it done?" is backed by a Fable-calibrated verifier.
+a weak orchestrator's "is it done?" is backed by a Oracle-calibrated verifier.
 
-Why today: the corpus can only be authored while Fable is here. The judge that
+Why today: the corpus can only be authored while Oracle is here. The judge that
 reproduces it can be chosen (and re-checked for drift) any day after.
 """
 
@@ -81,6 +81,41 @@ def load_corpus() -> List[Dict[str, Any]]:
 
 def load_rubrics() -> Dict[str, Any]:
     return json.loads(RUBRICS_PATH.read_text(encoding="utf-8")).get("rubrics", {})
+
+
+def append_corpus_record(
+    artifact: str,
+    verdict: str,
+    reasoning: str,
+    record_id: str,
+    cls: str = "task_success",
+    source: str = "human_override",
+    path: Path = CORPUS_PATH,
+) -> bool:
+    """Append one ground-truth record to the calibration corpus (JSONL).
+
+    Used by `make rate --review`: a human override of the auto-capture judge is
+    exactly a case the verifier got wrong, so it becomes a calibration record —
+    the judge recalibrates on its own mistakes. Idempotent by record_id.
+    """
+    if verdict not in ("PASS", "FAIL"):
+        raise ValueError(f"verdict must be PASS/FAIL, got {verdict!r}")
+    for existing in load_corpus():
+        if existing.get("id") == record_id:
+            return False  # already recorded
+    record = {
+        "id": record_id,
+        "class": cls,
+        "artifact": artifact.strip()[:4000],
+        "oracle_verdict": verdict,
+        "oracle_score": 4 if verdict == "PASS" else 1,
+        "oracle_reasoning": reasoning.strip() or f"human {source} verdict",
+        "failure_mode": reasoning.strip() if verdict == "FAIL" else "",
+        "source": source,
+    }
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    return True
 
 
 def build_judge_prompt(record: Dict[str, Any], rubric: Dict[str, Any]) -> str:
@@ -145,7 +180,7 @@ def judge_record(
         "class": record["class"],
         "model": model,
         "family": family_of(model),
-        "fable_verdict": record["fable_verdict"],
+        "oracle_verdict": record["oracle_verdict"],
         "judge_verdict": None,
         "agree": None,
         "error": None,
@@ -189,7 +224,7 @@ def judge_record(
         cell["error"] = "unparseable verdict"
         return cell
     cell["judge_verdict"] = verdict
-    cell["agree"] = verdict == record["fable_verdict"]
+    cell["agree"] = verdict == record["oracle_verdict"]
     return cell
 
 
@@ -204,10 +239,10 @@ def score_model(cells: List[Dict[str, Any]]) -> Dict[str, Any]:
     if n == 0:
         return {"n": 0, "errors": errors, "agreement": None}
     agree = sum(1 for c in scored if c["agree"])
-    fable_fail = [c for c in scored if c["fable_verdict"] == "FAIL"]
-    fable_pass = [c for c in scored if c["fable_verdict"] == "PASS"]
-    false_pass = sum(1 for c in fable_fail if c["judge_verdict"] == "PASS")
-    false_fail = sum(1 for c in fable_pass if c["judge_verdict"] == "FAIL")
+    oracle_fail = [c for c in scored if c["oracle_verdict"] == "FAIL"]
+    oracle_pass = [c for c in scored if c["oracle_verdict"] == "PASS"]
+    false_pass = sum(1 for c in oracle_fail if c["judge_verdict"] == "PASS")
+    false_fail = sum(1 for c in oracle_pass if c["judge_verdict"] == "FAIL")
     per_class: Dict[str, Dict[str, int]] = {}
     for c in scored:
         pc = per_class.setdefault(c["class"], {"agree": 0, "n": 0})
@@ -217,8 +252,8 @@ def score_model(cells: List[Dict[str, Any]]) -> Dict[str, Any]:
         "n": n,
         "errors": errors,
         "agreement": agree / n,
-        "false_pass_rate": (false_pass / len(fable_fail)) if fable_fail else None,
-        "false_fail_rate": (false_fail / len(fable_pass)) if fable_pass else None,
+        "false_pass_rate": (false_pass / len(oracle_fail)) if oracle_fail else None,
+        "false_fail_rate": (false_fail / len(oracle_pass)) if oracle_pass else None,
         "kappa": cohen_kappa(scored),
         "per_class": {k: v["agree"] / v["n"] for k, v in sorted(per_class.items())},
     }
@@ -229,9 +264,9 @@ def cohen_kappa(scored: List[Dict[str, Any]]) -> Optional[float]:
     if n == 0:
         return None
     po = sum(1 for c in scored if c["agree"]) / n
-    fable_pass = sum(1 for c in scored if c["fable_verdict"] == "PASS") / n
+    oracle_pass = sum(1 for c in scored if c["oracle_verdict"] == "PASS") / n
     judge_pass = sum(1 for c in scored if c["judge_verdict"] == "PASS") / n
-    pe = fable_pass * judge_pass + (1 - fable_pass) * (1 - judge_pass)
+    pe = oracle_pass * judge_pass + (1 - oracle_pass) * (1 - judge_pass)
     if pe >= 1.0:
         return 1.0 if po >= 1.0 else 0.0
     return round((po - pe) / (1 - pe), 4)
@@ -299,7 +334,7 @@ def run_panel(
             mark = "ERR " if cell["error"] else ("=" if cell["agree"] else "x")
             print(
                 f"[{done}/{len(jobs)}] {mark} {cell['family']:<9} {cell['class']:<22} "
-                f"{cell['id']} (fable={cell['fable_verdict']} judge={cell['judge_verdict']})"
+                f"{cell['id']} (oracle={cell['oracle_verdict']} judge={cell['judge_verdict']})"
             )
     return cells
 

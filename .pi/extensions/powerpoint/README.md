@@ -19,7 +19,7 @@ Render slides into a themed `.pptx`.
 | `accent_color`    | no       | Hex accent override, e.g. `B45309` (`#` optional).                              |
 | `footer_text`     | no       | Muted footer text bottom-left of content slides.                                |
 | `slide_numbers`   | no       | Bottom-right numbers (default true; skipped on title/section/closing).          |
-| `output_path`     | no       | Destination; defaults to `<project>/output/powerpoint/<slug>_<timestamp>.pptx`. |
+| `output_path`     | no       | Destination; when omitted, writes to the OS temp dir (`…/penny/powerpoint/<slug>_<timestamp>.pptx`), never the project tree. |
 
 **Example (structured)**
 
@@ -93,7 +93,7 @@ Python packages in the project venv (`.venv`): `python-pptx`, `markdown-it-py`, 
 | `PI_VENV_PYTHON`          | Explicit python interpreter override.                                              |
 | `PENNY_DOCGEN_TIMEOUT_MS` | Generator timeout (default 90000).                                                 |
 
-Default output directory: `<project>/output/powerpoint/`.
+Default output directory (when `output_path` is omitted): the OS temp dir, `…/penny/powerpoint/`.
 
 ## Testing
 

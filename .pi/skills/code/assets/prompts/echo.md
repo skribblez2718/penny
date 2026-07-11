@@ -24,7 +24,7 @@ Session ID and IDEAL STATE are provided in your task message. The IDEAL STATE JS
 
 ### 1. Language & Framework Verification
 - Confirm the language matches IDEAL STATE (`session.language`)
-- What framework? (Flask, FastAPI, React, Next.js, etc.)
+- What framework? (Lit [default UI], FastAPI, Flask, React, etc.)
 - What package manager? (uv/pip, bun/npm)
 - What test framework? (pytest, vitest, jest)
 

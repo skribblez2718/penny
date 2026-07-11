@@ -102,7 +102,7 @@ Write your plan to mempalace with this structure:
 Your **very last line** MUST be exactly:
 
 ```
-SUMMARY:{"plan_steps":["sub-query 1","sub-query 2","..."],"plan_complete":true}
+SUMMARY:{"plan_steps":["sub-query 1","sub-query 2","..."],"plan_complete":true,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>","needs_clarification":false,"sub_queries":["<sub-query>"]}
 ```
 
 **Rules:**
@@ -114,6 +114,6 @@ SUMMARY:{"plan_steps":["sub-query 1","sub-query 2","..."],"plan_complete":true}
 
 **Example:**
 ```
-SUMMARY:{"plan_steps":["What is the RED-GREEN-REFACTOR cycle and why is it important?","What are common TDD anti-patterns and how to avoid them?","What tools and frameworks support TDD workflows in 2025?"],"plan_complete":true}
+SUMMARY:{"plan_steps":["What is the RED-GREEN-REFACTOR cycle and why is it important?","What are common TDD anti-patterns and how to avoid them?","What tools and frameworks support TDD workflows in 2025?"],"plan_complete":true,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>","needs_clarification":false,"sub_queries":["<sub-query>"]}
 ```
 ```

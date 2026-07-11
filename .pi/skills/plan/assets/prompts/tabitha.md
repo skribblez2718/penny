@@ -95,7 +95,7 @@ Your final message MUST end with a STRUCTURED SUMMARY using **inline JSON format
 The SUMMARY must be a single line of valid JSON, prefixed with `SUMMARY:`:
 
 ```
-SUMMARY:{"title":"<plan title>","step_count":<number>,"complete":true,"mempalace_drawer":"<drawer_id from memory_add_drawer>","needs_clarification":false,"clarifying_questions":[]}
+SUMMARY:{"title":"<plan title>","step_count":<number>,"complete":true,"mempalace_drawer":"<drawer_id from memory_add_drawer>","needs_clarification":false,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN"}
 ```
 
 **Rules:**

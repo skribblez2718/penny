@@ -23,7 +23,7 @@ import { resolve, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { createLogger } from "../../lib/logger/logger.js";
 import { loadConfig } from "./config.js";
-import type { PlaywrightConfig, BrowserState, SnapshotNode } from "./types.js";
+import type { PlaywrightConfig, ProxyConfig, BrowserState, SnapshotNode } from "./types.js";
 
 const logger = createLogger("playwright:browser");
 
@@ -33,6 +33,25 @@ const logger = createLogger("playwright:browser");
 
 export class BrowserManager {
   private static instance: BrowserManager | null = null;
+
+  // Runtime proxy override, set by the playwright_set_proxy tool. Takes precedence
+  // over config.proxy. `undefined` = no override (use config default). `null` = force
+  // direct (no proxy). A ProxyConfig = route through that proxy. Static so it survives
+  // cleanup() (which nulls the instance) and applies to the next relaunch.
+  private static proxyOverride: ProxyConfig | null | undefined = undefined;
+
+  /** Set (or clear) the runtime proxy override. Pass null to force direct. */
+  static setProxyOverride(proxy: ProxyConfig | null): void {
+    BrowserManager.proxyOverride = proxy;
+  }
+
+  /** The proxy that will actually be used at launch: runtime override wins over config. */
+  static getEffectiveProxy(config: PlaywrightConfig): ProxyConfig | undefined {
+    if (BrowserManager.proxyOverride !== undefined) {
+      return BrowserManager.proxyOverride ?? undefined; // null → direct
+    }
+    return config.proxy;
+  }
 
   private browser: Browser | null = null;
   private context: BrowserContext | null = null;
@@ -101,27 +120,28 @@ export class BrowserManager {
         launchOpts.executablePath = this.config.browserPath;
       }
 
-      // Proxy support: route all browser traffic through the configured proxy
-      // (e.g., Caido upstream proxy for HTTP history capture). Per Playwright
-      // docs, the proxy is set at launch and applies to all contexts.
-      if (this.config.proxy) {
+      // Proxy support: route all browser traffic through the effective proxy
+      // (runtime override from playwright_set_proxy wins over config.proxy). Per
+      // Playwright docs, the proxy is set at launch and applies to all contexts.
+      const effectiveProxy = BrowserManager.getEffectiveProxy(this.config);
+      if (effectiveProxy) {
         const proxyOpts: Record<string, unknown> = {
-          server: this.config.proxy.server,
+          server: effectiveProxy.server,
         };
-        if (this.config.proxy.username) {
-          proxyOpts.username = this.config.proxy.username;
+        if (effectiveProxy.username) {
+          proxyOpts.username = effectiveProxy.username;
         }
-        if (this.config.proxy.password) {
-          proxyOpts.password = this.config.proxy.password;
+        if (effectiveProxy.password) {
+          proxyOpts.password = effectiveProxy.password;
         }
-        if (this.config.proxy.bypass) {
-          proxyOpts.bypass = this.config.proxy.bypass;
+        if (effectiveProxy.bypass) {
+          proxyOpts.bypass = effectiveProxy.bypass;
         }
         launchOpts.proxy = proxyOpts;
         logger.info("Browser will route traffic through proxy", {
-          server: this.config.proxy.server,
-          hasAuth: !!this.config.proxy.username,
-          bypass: this.config.proxy.bypass || "(none)",
+          server: effectiveProxy.server,
+          hasAuth: !!effectiveProxy.username,
+          bypass: effectiveProxy.bypass || "(none)",
         });
       }
 
@@ -506,7 +526,7 @@ export class BrowserManager {
     path?: string;
   }): Promise<{
     filePath: string;
-    mimeType: string;
+    mimeType: "image/png" | "image/jpeg";
     width: number;
     height: number;
     fileSizeBytes: number;

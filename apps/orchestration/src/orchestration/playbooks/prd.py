@@ -61,7 +61,6 @@ WEB_APP_KEYWORDS = [
     "next",
     "next.js",
     "nuxt",
-    "streamlit",
     "frontend",
     "backend",
     "api",
@@ -87,6 +86,9 @@ WEB_APP_KEYWORDS = [
     "rest",
     "websocket",
     "svelte",
+    "lit-html",
+    "lit-element",
+    "litelement",
 ]
 
 

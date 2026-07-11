@@ -1,15 +1,23 @@
-"""Background job scheduler for observability retention cleanup.
+"""Background scheduler for size-based observability DB rotation.
 
-Uses APScheduler's BackgroundScheduler for non-blocking daily cleanup jobs.
-The scheduler is started during FastAPI lifespan startup and shut down cleanly
-on application exit.
+Replaces the old age-based cron cleanup. The scheduler runs a size-based
+rotation:
+
+  * once on startup (so an already-oversized DB is bounded immediately), and
+  * on a periodic asyncio ``IntervalTrigger`` (a size check, not a fixed 03:00
+    cron).
+
+Rotation runs are awaited by APScheduler (``run_rotation_job`` is a coroutine
+function registered directly), so a failure surfaces via ``EVENT_JOB_ERROR`` and
+is also recorded as an ERROR row in the logs table — never silently swallowed.
 """
 
 import asyncio
-from typing import Any
+import os
 
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED, JobExecutionEvent
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 
 from observability.config import Config
 from observability.db import Database
@@ -17,6 +25,14 @@ from observability import logger as _logger
 
 # Singleton scheduler instance
 _scheduler: AsyncIOScheduler | None = None
+
+# How often the periodic size check runs (seconds). Overridable for operators;
+# defaults to hourly. This is an interval, never a fixed wall-clock time.
+_ROTATION_INTERVAL_SECONDS = int(
+    os.getenv("PI_OBSERVABILITY_ROTATION_INTERVAL_SECONDS", "3600")
+)
+
+_GIB = 1024**3
 
 
 def get_scheduler() -> AsyncIOScheduler | None:
@@ -30,160 +46,121 @@ def _on_job_executed(event: JobExecutionEvent) -> None:
         return
     _logger.info(
         "observability.scheduler",
-        f"Scheduled cleanup job '{event.job_id}' executed successfully",
+        f"Scheduled rotation job '{event.job_id}' executed successfully",
     )
 
 
 def _on_job_error(event: JobExecutionEvent) -> None:
-    """Log failed job execution."""
+    """Log failed job execution (fired on EVENT_JOB_ERROR)."""
     exc = event.exception
     traceback_str = event.traceback if hasattr(event, "traceback") else ""
     err = Exception(str(exc))
-    err.code = "OBSERVERV_SCHEDULER_FAIL"
+    err.code = "OBSERV_SCHEDULER_ROTATION_FAIL"
     _logger.error(
         "observability.scheduler",
-        f"Scheduled cleanup job '{event.job_id}' FAILED: {exc}",
+        f"Scheduled rotation job '{event.job_id}' FAILED: {exc}",
         error=err,
         extra={"traceback": traceback_str},
     )
 
 
-async def run_cleanup_job(db: Database) -> dict[str, Any]:
-    """Execute the retention cleanup job and log results."""
-    stats_before = await db.get_stats()
-    _logger.info(
-        "observability.scheduler",
-        f"Running scheduled cleanup (db_size_mb={stats_before['db_size_mb']})",
-        extra={"db_size_mb_before": stats_before["db_size_mb"]},
-    )
-    await db.insert_log(
-        "INFO", "scheduler", "cleanup_start",
-        data={"db_size_mb": stats_before["db_size_mb"]},
-    )
+async def run_rotation_job(db: Database) -> dict:
+    """Execute one size-based rotation and log the result.
 
-    result = await db.cleanup(
-        raw_retention_days=Config.RETENTION_RAW_DAYS,
-        compaction_retention_days=Config.RETENTION_COMPACTION_DAYS,
-    )
-    deleted_logs = await db.cleanup_logs(Config.RETENTION_LOG_DAYS)
-    result["deleted_logs"] = deleted_logs
-    deleted_watcher_logs = await db.cleanup_watcher_logs(Config.RETENTION_WATCHER_LOG_DAYS)
-    result["deleted_watcher_logs"] = deleted_watcher_logs
-    orch = await db.cleanup_orchestration(Config.RETENTION_RAW_DAYS)
-    result.update(orch)
-
-    stats_after = await db.get_stats()
-    _logger.info(
-        "observability.scheduler",
-        (
-            f"Cleanup complete: deleted_raw_entries={result['deleted_raw_entries']} "
-            f"deleted_compactions={result['deleted_compactions']} "
-            f"deleted_logs={deleted_logs} "
-            f"db_size_mb_before={stats_before['db_size_mb']} "
-            f"db_size_mb_after={stats_after['db_size_mb']}"
-        ),
-        extra={
-            "deleted_raw_entries": result["deleted_raw_entries"],
-            "deleted_compactions": result["deleted_compactions"],
-            "deleted_logs": deleted_logs,
-            "db_size_mb_before": stats_before["db_size_mb"],
-            "db_size_mb_after": stats_after["db_size_mb"],
-        },
-    )
-    await db.insert_log(
-        "INFO", "scheduler", "cleanup_complete",
-        data={
-            "deleted_raw_entries": result["deleted_raw_entries"],
-            "deleted_compactions": result["deleted_compactions"],
-            "deleted_logs": deleted_logs,
-            "db_size_mb_before": stats_before["db_size_mb"],
-            "db_size_mb_after": stats_after["db_size_mb"],
-        },
-    )
-    return result
-
-
-async def check_startup_emergency_cleanup(db: Database) -> dict[str, Any] | None:
-    """Run immediate cleanup if the DB exceeds the emergency size threshold.
-
-    Returns the cleanup result dict if cleanup was triggered, None otherwise.
+    On failure the error is recorded as an ERROR log row and then re-raised so
+    the failure also surfaces via APScheduler's EVENT_JOB_ERROR. Nothing is
+    swallowed.
     """
-    stats = await db.get_stats()
-    db_size_gb = stats["db_size_mb"] / 1024
-    if db_size_gb <= Config.DB_SIZE_MAX_GB:
-        return None
+    cap_bytes = int(Config.DB_SIZE_MAX_GB * _GIB)
+    floor_bytes = int(Config.DB_SIZE_FLOOR_GB * _GIB)
 
-    _logger.warn(
-        "observability.scheduler",
-        (
-            f"EMERGENCY CLEANUP TRIGGERED: db_size_gb={db_size_gb:.2f} "
-            f"exceeds threshold={Config.DB_SIZE_MAX_GB} GB"
-        ),
-        extra={"db_size_gb": db_size_gb, "threshold_gb": Config.DB_SIZE_MAX_GB},
-    )
+    try:
+        result = await db.rotate(cap_bytes, floor_bytes)
+    except Exception as exc:
+        err = Exception(str(exc))
+        err.code = "OBSERV_ROTATION_FAIL"
+        _logger.error(
+            "observability.scheduler",
+            f"Size rotation FAILED: {exc}",
+            error=err,
+        )
+        # Surface the failure as an ERROR log row too (best-effort).
+        try:
+            await db.insert_log(
+                "ERROR",
+                "scheduler",
+                "rotation_failed",
+                data={"error": str(exc)},
+            )
+        except Exception:
+            pass
+        raise
 
-    # Emergency: shorten retention to 7 days for raw, 30 days for compactions, 3 days for logs
-    result = await db.cleanup(
-        raw_retention_days=min(Config.RETENTION_RAW_DAYS, 7),
-        compaction_retention_days=min(Config.RETENTION_COMPACTION_DAYS, 30),
-    )
-    deleted_logs = await db.cleanup_logs(min(Config.RETENTION_LOG_DAYS, 3))
-    result["deleted_logs"] = deleted_logs
-
-    stats_after = await db.get_stats()
-    _logger.info(
-        "observability.scheduler",
-        (
-            f"Emergency cleanup complete: "
-            f"deleted_raw_entries={result['deleted_raw_entries']} "
-            f"deleted_compactions={result['deleted_compactions']} "
-            f"deleted_logs={deleted_logs} "
-            f"db_size_mb={stats_after['db_size_mb']}"
-        ),
-        extra={
-            "deleted_raw_entries": result["deleted_raw_entries"],
-            "deleted_compactions": result["deleted_compactions"],
-            "deleted_logs": deleted_logs,
-            "db_size_mb": stats_after["db_size_mb"],
-        },
-    )
-    await db.insert_log(
-        "WARN", "scheduler", "emergency_cleanup",
-        data={
-            "db_size_gb": db_size_gb,
-            "threshold_gb": Config.DB_SIZE_MAX_GB,
-            "deleted_raw_entries": result["deleted_raw_entries"],
-            "deleted_compactions": result["deleted_compactions"],
-            "deleted_logs": deleted_logs,
-            "db_size_mb_after": stats_after["db_size_mb"],
-        },
-    )
+    if result.get("triggered"):
+        _logger.info(
+            "observability.scheduler",
+            (
+                "Size rotation ran: "
+                f"deleted_total={result.get('deleted_total')} "
+                f"file_bytes {result.get('file_bytes_before')} -> {result.get('file_bytes_after')} "
+                f"live_bytes {result.get('live_bytes_before')} -> {result.get('live_bytes_after')}"
+            ),
+            extra={
+                "deleted_total": result.get("deleted_total"),
+                "file_bytes_after": result.get("file_bytes_after"),
+                "live_bytes_after": result.get("live_bytes_after"),
+            },
+        )
+        await db.insert_log(
+            "INFO",
+            "scheduler",
+            "rotation_complete",
+            data={
+                "deleted_total": result.get("deleted_total"),
+                "deleted": result.get("deleted"),
+                "file_bytes_after": result.get("file_bytes_after"),
+                "live_bytes_after": result.get("live_bytes_after"),
+            },
+        )
     return result
+
+
+async def _startup_rotation(db: Database) -> None:
+    """Run the startup rotation, isolating its failure from server startup.
+
+    ``run_rotation_job`` already logs + re-raises on failure; here we catch so a
+    fire-and-forget startup task never produces an unretrieved-exception warning.
+    """
+    try:
+        await run_rotation_job(db)
+    except Exception as exc:
+        err = Exception(str(exc))
+        err.code = "OBSERV_STARTUP_ROTATION_FAIL"
+        _logger.error(
+            "observability.scheduler",
+            f"Startup rotation failed: {exc}",
+            error=err,
+        )
 
 
 def start_scheduler(db: Database) -> None:
-    """Start the background scheduler with daily cleanup at 03:00 UTC.
-
-    Also triggers an emergency startup cleanup if the DB exceeds size limits.
-    """
+    """Start the scheduler: a rotation on startup plus a periodic interval check."""
     global _scheduler
 
     if _scheduler is not None:
         return
 
     _scheduler = AsyncIOScheduler(timezone="UTC")
-
-    # Log job results and errors
     _scheduler.add_listener(_on_job_executed, EVENT_JOB_EXECUTED)
     _scheduler.add_listener(_on_job_error, EVENT_JOB_ERROR)
 
-    # Schedule daily cleanup at 03:00 UTC
+    # Periodic size check on a fixed interval (NOT a 03:00 cron). run_rotation_job
+    # is a coroutine function, so AsyncIOScheduler awaits it and EVENT_JOB_ERROR
+    # fires on failure.
     _scheduler.add_job(
-        _async_cleanup_wrapper,
-        trigger="cron",
-        hour=3,
-        minute=0,
-        id="daily_cleanup",
+        run_rotation_job,
+        trigger=IntervalTrigger(seconds=_ROTATION_INTERVAL_SECONDS),
+        id="size_rotation",
         replace_existing=True,
         kwargs={"db": db},
     )
@@ -191,56 +168,33 @@ def start_scheduler(db: Database) -> None:
     _scheduler.start()
     _logger.info(
         "observability.scheduler",
-        "Scheduler started: daily cleanup at 03:00 UTC",
+        f"Scheduler started: size rotation every {_ROTATION_INTERVAL_SECONDS}s "
+        f"(cap={Config.DB_SIZE_MAX_GB}GB, floor={Config.DB_SIZE_FLOOR_GB}GB)",
     )
 
-    # Run startup emergency cleanup (fire-and-forget)
-    asyncio.create_task(_startup_cleanup_wrapper(db))
+    # Run a rotation immediately on startup (fire-and-forget on the running loop).
+    asyncio.create_task(_startup_rotation(db))
 
 
 def stop_scheduler() -> None:
-    """Stop the background scheduler cleanly."""
+    """Stop the scheduler cleanly.
+
+    The singleton is always cleared, even if ``shutdown`` raises (e.g. the
+    scheduler was never fully started) — otherwise a half-built instance would
+    leak and block the next ``start_scheduler``.
+    """
     global _scheduler
     if _scheduler is not None:
-        _scheduler.shutdown(wait=False)
-        _scheduler = None
-        _logger.info("observability.scheduler", "Scheduler stopped")
-
-
-def _async_cleanup_wrapper(db: Database) -> None:
-    """APScheduler-compatible wrapper that schedules a coroutine on the event loop."""
-    # APScheduler's AsyncIOScheduler runs jobs in the event loop thread,
-    # but we still need to ensure the coroutine is properly awaited.
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(run_cleanup_job(db))
-    except RuntimeError:
-        # No event loop — should not happen with AsyncIOScheduler
-        err = RuntimeError("No event loop running")
-        err.code = "OBSERVERV_SCHEDULER_FAIL"
-        _logger.error(
-            "observability.scheduler",
-            "Failed to schedule cleanup: no event loop",
-            error=err,
-        )
-
-
-async def _startup_cleanup_wrapper(db: Database) -> None:
-    """Async wrapper for startup emergency cleanup."""
-    try:
-        await check_startup_emergency_cleanup(db)
-    except Exception as exc:
-        err = Exception(str(exc))
-        err.code = "OBSERVERV_STARTUP_CLEANUP_FAIL"
-        _logger.error(
-            "observability.scheduler",
-            f"Startup emergency cleanup failed: {exc}",
-            error=err,
-        )
         try:
-            await db.insert_log(
-                "ERROR", "scheduler", "startup_cleanup_fail",
-                data={"error": str(exc)},
+            _scheduler.shutdown(wait=False)
+        except Exception as exc:
+            err = Exception(str(exc))
+            err.code = "OBSERV_SCHEDULER_SHUTDOWN_FAIL"
+            _logger.warn(
+                "observability.scheduler",
+                f"Scheduler shutdown raised (clearing anyway): {exc}",
+                error=err,
             )
-        except Exception:
-            pass
+        finally:
+            _scheduler = None
+            _logger.info("observability.scheduler", "Scheduler stopped")

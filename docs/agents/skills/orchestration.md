@@ -3,7 +3,7 @@
 
 ## What
 
-An engine-backed skill's `orchestrate.py` is a **thin (~5-line) delegate** to the shared `orchestration` package — but the skill's real state machine is a concrete **`BasePlaybook` subclass** in `apps/orchestration/src/orchestration/playbooks/<skill>.py`. That subclass owns *what* (its own domain-named states, per-state SUMMARY contracts, routing); the engine owns *how* (protocol, validation, checkpointing, recovery, observability). The `code` skill is the pilot on this path; skills that have not migrated (`research`, `plan`, `prd`, `agent`, `jsa`, `sca`, `rez`) still run their own `orchestrate.py` FSM unchanged.
+An engine-backed skill's `orchestrate.py` is a **thin (~5-line) delegate** to the shared `orchestration` package — but the skill's real state machine is a concrete **`BasePlaybook` subclass** in `apps/orchestration/src/orchestration/playbooks/<skill>.py`. That subclass owns *what* (its own domain-named states, per-state SUMMARY contracts, routing); the engine owns *how* (protocol, validation, checkpointing, recovery, observability). Every workflow skill runs this way — `code`, `plan`, `prd`, `agent`, `research`, `sca`, `jsa`, `rez`, and `learn` are all registered playbooks in `playbooks/__init__.py`; there are no legacy per-skill FSMs left.
 
 ## Why
 
@@ -70,7 +70,7 @@ A concrete `BasePlaybook` subclass provides: `NAME`, `machine_cls` (its `python-
 | File | Purpose |
 |------|---------|
 | `apps/orchestration/src/orchestration/engine.py` | `BasePlaybook` engine |
-| `apps/orchestration/src/orchestration/playbooks/code.py` | The `code` skill's playbook (the pilot subclass) |
+| `apps/orchestration/src/orchestration/playbooks/code.py` | The `code` skill's playbook (reference subclass) |
 | `apps/orchestration/src/orchestration/checkpointer.py` | Durable state (replaces `/tmp` + `_force_state`) |
 | `docs/agents/orchestration/overview.md` | The orchestration package |
 | `docs/agents/skills/skill-standard.md` | Full skill standard |

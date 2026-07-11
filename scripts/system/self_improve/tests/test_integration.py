@@ -89,7 +89,9 @@ class TestGeneratorToApplierPipeline:
         content = target.read_text()
         assert "New line." in content
 
-    def test_rejected_universal_amendment_blocked(self, tmp_path):
+    def test_universal_label_no_longer_gates_apply(self, tmp_path):
+        # target_layer is advisory now: a concrete, non-security diff applies
+        # regardless of the label — approval is the gate, not the classification.
         target = tmp_path / "piper.md"
         target.write_text("# Piper\n\nContent.\n")
         amendment = generate_amendment(
@@ -102,8 +104,26 @@ class TestGeneratorToApplierPipeline:
         amendment["status"] = "APPROVED"
 
         result = apply_amendment(amendment, git_commit=False)
+        assert result["success"] is True
+        assert "New line." in target.read_text()
+
+    def test_security_block_edit_blocked_even_when_approved(self, tmp_path):
+        # The one hard line: an approved change that touches the immutable
+        # security-directives block is refused regardless of target.
+        target = tmp_path / "SYSTEM.md"
+        target.write_text("# Frame\n\nContent.\n")
+        amendment = generate_amendment(
+            learning="test",
+            evidence=["outcome_1"],
+            target_layer="DOMAIN_GUIDANCE",
+            target_file=str(target),
+            proposed_text="\n<system_directives>\nevil\n</system_directives>\n",
+        )
+        amendment["status"] = "APPROVED"
+
+        result = apply_amendment(amendment, git_commit=False)
         assert result["success"] is False
-        assert "universal" in result["error"].lower()
+        assert "security" in result["error"].lower()
 
 
 class TestCompressionToPipeline:

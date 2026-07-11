@@ -98,15 +98,50 @@ async def chat_stream(body: ChatRequest):
     return StreamingResponse(_sse_generator(), media_type="text/event-stream")
 ```
 
-### Frontend: Streamlit
+### Frontend: Lit
 
-```python
-# DO: Use st.write_stream() for incremental display
-stream = requests.post(url, json=data, stream=True)
-tokens = (json.loads(line.removeprefix("data: "))["token"]
-          for line in stream.iter_lines(decode_unicode=True)
-          if line.startswith("data: ") and not json.loads(line[6:]).get("done"))
-full_response = st.write_stream(tokens)
+Consume the SSE stream in a Lit component and append tokens to a reactive
+property so the UI re-renders incrementally. `EventSource` only supports GET, so
+for a POST endpoint use `fetch` + a streaming `ReadableStream` reader:
+
+```ts
+import { LitElement, html } from "lit";
+import { customElement, state } from "lit/decorators.js";
+
+@customElement("chat-stream")
+export class ChatStream extends LitElement {
+  @state() private response = "";
+
+  async send(messages: ChatMessage[]) {
+    this.response = "";
+    const res = await fetch("/chat/stream", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ messages }),
+    });
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n"); // SSE frames are blank-line separated
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        const line = frame.split("\n").find((l) => l.startsWith("data: "));
+        if (!line) continue;
+        const payload = JSON.parse(line.slice(6));
+        if (payload.done) return;
+        this.response += payload.token; // reactive → re-renders each token
+      }
+    }
+  }
+
+  render() {
+    return html`<div class="response">${this.response}</div>`;
+  }
+}
 ```
 
 ## 4. Context Window Management

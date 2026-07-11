@@ -16,7 +16,7 @@ describe("observability extension structured logging", () => {
   });
 
   it("emits structured ERROR log for WebSocket error with OBSERVABILITY_WS_ERROR code", () => {
-    const err = Object.assign(new Error("Connection refused"), { code: "OBSERVABILITY_WS_ERROR" });
+    const err = Object.assign(new Error("Connection refused"), { code: "OBSERVABILITY_WS_ERROR" as const });
     logger.error("WebSocket error", {}, err);
     expect(buffer).toHaveLength(1);
     expect(buffer[0].error?.code).toBe("OBSERVABILITY_WS_ERROR");
@@ -25,7 +25,7 @@ describe("observability extension structured logging", () => {
 
   it("emits structured WARN log for queue overflow with OBSERVABILITY_QUEUE_OVERFLOW code", () => {
     const err = Object.assign(new Error("Queue overflow"), {
-      code: "OBSERVABILITY_QUEUE_OVERFLOW",
+      code: "OBSERVABILITY_QUEUE_OVERFLOW" as const,
     });
     logger.warn("Message queue overflow, dropping oldest", { queueSize: 1000 }, err);
     expect(buffer).toHaveLength(1);

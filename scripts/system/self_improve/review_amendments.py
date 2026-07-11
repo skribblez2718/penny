@@ -53,6 +53,7 @@ from memory_bridge import (  # noqa: E402
     tool_delete_drawer,
     tool_list_drawers,
 )
+from amendment_applier import _concrete_diff_error  # noqa: E402
 
 ROOM = "system_amendments"
 WING = "penny"
@@ -148,12 +149,19 @@ def _stamp(record: Dict[str, Any], status: str, date_field: str) -> Dict[str, An
     return record
 
 
+# Statuses that still need a human step: PENDING (review it) or APPROVED (apply
+# it). These stay visible so approve-now-apply-later doesn't lose track of a
+# proposal. Resolved statuses (APPLIED/REJECTED) drop off and age out via the
+# tiered archiver.
+_ACTIONABLE = ("PENDING", "APPROVED")
+
+
 def cmd_list(show_all: bool) -> int:
     rows = _load_all()
     if not show_all:
-        rows = [(d, r) for d, r in rows if r.get("status") == "PENDING"]
+        rows = [(d, r) for d, r in rows if r.get("status") in _ACTIONABLE]
     if not rows:
-        print("no amendments" + ("" if show_all else " pending"))
+        print("no amendments" + ("" if show_all else " to act on"))
         return 0
     for _, r in sorted(rows, key=lambda x: str(x[1].get("proposed_date", ""))):
         changes = r.get("changes", [])
@@ -167,9 +175,31 @@ def cmd_list(show_all: bool) -> int:
     return 0
 
 
+def _indent(text: str, prefix: str = "      ") -> str:
+    return "\n".join(prefix + line for line in text.splitlines())
+
+
 def cmd_show(amendment_id: str) -> int:
     _, record = _find(amendment_id)
     print(json.dumps(record, indent=2))
+    changes = record.get("changes", [])
+    if changes:
+        # A readable render of the EXACT edit approval authorizes Penny to apply
+        # — informed approval is the whole safety basis for auto-apply.
+        print("\n--- Proposed diff (what approval authorizes Penny to apply) ---")
+        print(f"target: {record.get('target_file', '?')}")
+        for i, c in enumerate(changes, 1):
+            action = (c.get("action") or "ADD").upper()
+            print(f"\n[{i}] {action}")
+            old = c.get("old_text", "") or ""
+            new = c.get("new_text", "") or ""
+            if old:
+                print("  - remove:\n" + _indent(old))
+            if new:
+                print("  + add:\n" + _indent(new))
+            err = _concrete_diff_error(c)
+            if err:
+                print(f"  ⚠ NOT APPLIABLE: {err}")
     return 0
 
 
@@ -179,6 +209,18 @@ def cmd_approve(amendment_id: str) -> int:
         raise SystemExit(
             f"only PENDING amendments can be approved (status: {record.get('status')})"
         )
+    # Approval authorizes auto-apply of the EXACT diff, so it must approve a
+    # CONCRETE change. An empty/vague diff can't be applied and would dangle at
+    # APPROVED forever (the legacy CODE_CHANGE amendments' failure mode).
+    changes = record.get("changes", [])
+    if not changes:
+        raise SystemExit(f"cannot approve {amendment_id}: it has no changes")
+    diff_errors = [e for c in changes if (e := _concrete_diff_error(c))]
+    if diff_errors:
+        raise SystemExit(
+            f"cannot approve {amendment_id}: no concrete diff to apply "
+            f"({'; '.join(diff_errors)}). Author verbatim old_text/new_text, or reject it."
+        )
     _rewrite(drawer_id, record, _stamp(record, "APPROVED", "reviewed_date"))
     print(f"{amendment_id} -> APPROVED (apply with: review_amendments.py apply {amendment_id})")
     return 0
@@ -186,9 +228,13 @@ def cmd_approve(amendment_id: str) -> int:
 
 def cmd_reject(amendment_id: str) -> int:
     drawer_id, record = _find(amendment_id)
-    if record.get("status") != "PENDING":
+    # A human may reject a proposal they are still reviewing (PENDING) OR one they
+    # previously approved but changed their mind on / can no longer apply
+    # (APPROVED). Without the APPROVED path an approved-but-unappliable amendment
+    # has no terminal exit and re-surfaces in the session brief forever.
+    if record.get("status") not in ("PENDING", "APPROVED"):
         raise SystemExit(
-            f"only PENDING amendments can be rejected (status: {record.get('status')})"
+            f"only PENDING or APPROVED amendments can be rejected (status: {record.get('status')})"
         )
     _rewrite(drawer_id, record, _stamp(record, "REJECTED", "reviewed_date"))
     print(f"{amendment_id} -> REJECTED")
@@ -221,7 +267,9 @@ def cmd_apply(amendment_id: str, git_commit: bool) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    p_list = sub.add_parser("list", help="list amendments (pending by default)")
+    p_list = sub.add_parser(
+        "list", help="list amendments needing action — pending or approved (--all for every status)"
+    )
     p_list.add_argument("--all", action="store_true", dest="show_all")
     for name in ("show", "approve", "reject"):
         sub.add_parser(name).add_argument("amendment_id")

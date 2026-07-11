@@ -6,10 +6,12 @@ contract, the two planned gates, the Ralph-Wiggum retry loop, and the PRD hard
 dependency — with NO --state and NO /tmp.
 """
 
+import json
+
 import pytest
 
 from orchestration.checkpointer import STATUS_AWAITING_USER, Checkpointer
-from orchestration.playbooks.code import CodePlaybook
+from orchestration.playbooks.code import CodePlaybook, _latest_ideal_state, _try_ideal_state
 
 SID, RID = "sess-code", "run-code"
 
@@ -305,3 +307,187 @@ def test_recovery_re_presents_plan_gate(cp):
     directives = recover_pending(cp, session_id=SID, playbook="code")
     assert len(directives) == 1 and directives[0]["action"] == "escalate_to_user"
     assert directives[0]["previous_state"] == "plan_gate"
+
+
+# ---------------------------------------------------------------------------
+# Chunked IDEAL_STATE reassembly (prd_room chain-fallback)
+#
+# The memory bridge splits content > 4000 chars into NON-overlapping 2000-char
+# sibling chunks sharing a drawer_key, ordered by chunk_index. A chunked
+# IDEAL_STATE is invalid JSON per-chunk, so the loader must reassemble it.
+# ---------------------------------------------------------------------------
+
+_BRIDGE_CHUNK_SIZE = 2000  # mirrors scripts/system/bridge/memory_bridge.py::_CHUNK_SIZE
+
+
+def _bridge_chunk(text: str, size: int = _BRIDGE_CHUNK_SIZE) -> list:
+    """Clean, non-overlapping split identical to the memory bridge's _chunk_text."""
+    return [text[i : i + size] for i in range(0, len(text), size)]
+
+
+def _drawer_docs(ideal: dict, drawer_key: str, filed_at: str):
+    """Return (documents, metadatas) exactly as MemPalace stores a chunked drawer."""
+    chunks = _bridge_chunk(json.dumps(ideal))
+    metas = [
+        {
+            "drawer_key": drawer_key,
+            "chunk_index": i,
+            "filed_at": filed_at,
+            "room": "skills/prd-x",
+            "wing": "penny",
+        }
+        for i in range(len(chunks))
+    ]
+    return list(chunks), metas
+
+
+def test_latest_ideal_state_reassembles_chunked_drawer():
+    ideal = {
+        "goal": "g",
+        # long enough to force a multi-chunk split (> 4000 chars)
+        "success_criteria": ["a" * 1500, "b" * 1500, "c" * 1500],
+        "build_order": ["step 1"],
+    }
+    docs, metas = _drawer_docs(ideal, "drawer_penny_skills/prd-x_hash", "2026-07-09T00:00:00")
+    assert len(docs) >= 2  # genuinely chunked
+    # sanity: a lone chunk is NOT valid JSON, so per-chunk parsing (the old bug) fails
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(docs[0])
+    got = _latest_ideal_state(docs, metas)
+    assert got is not None
+    assert got["success_criteria"] == ideal["success_criteria"]
+    assert got["build_order"] == ["step 1"]
+
+
+def test_latest_ideal_state_reassembles_out_of_order_chunks():
+    ideal = {"success_criteria": ["x" * 1500, "y" * 1500], "goal": "g"}
+    docs, metas = _drawer_docs(ideal, "k", "2026-07-09T00:00:00")
+    assert len(docs) >= 2
+    # reverse the on-the-wire order; chunk_index metadata must still order them
+    docs_rev = list(reversed(docs))
+    metas_rev = list(reversed(metas))
+    got = _latest_ideal_state(docs_rev, metas_rev)
+    assert got is not None and got["success_criteria"] == ideal["success_criteria"]
+
+
+def test_latest_ideal_state_prefers_newest_filed_at():
+    v1 = {"version": "v1", "success_criteria": ["old" * 700]}
+    v2 = {"version": "v2", "success_criteria": ["new" * 700]}
+    d1, m1 = _drawer_docs(v1, "key-v1", "2026-07-09T10:00:00")
+    d2, m2 = _drawer_docs(v2, "key-v2", "2026-07-09T15:00:00")  # newer
+    got = _latest_ideal_state(d1 + d2, m1 + m2)
+    assert got is not None and got["version"] == "v2"
+
+
+def test_latest_ideal_state_unchunked_single_drawer():
+    ideal = {"success_criteria": ["small"], "goal": "y"}
+    text = json.dumps(ideal)
+    assert len(text) < 4000  # single, unchunked drawer
+    got = _latest_ideal_state([text], [{"drawer_key": "k", "chunk_index": 0}])
+    assert got == ideal
+
+
+def test_latest_ideal_state_none_for_non_ideal_documents():
+    docs = ["# PRD narrative section 1 ...", json.dumps({"requirements": ["FR-1"]})]
+    metas = [{"drawer_key": "n", "chunk_index": 0}, {"drawer_key": "r", "chunk_index": 0}]
+    assert _latest_ideal_state(docs, metas) is None
+
+
+def test_latest_ideal_state_handles_missing_metadata():
+    ideal = {"success_criteria": ["z"], "goal": "q"}
+    text = json.dumps(ideal)
+    assert _latest_ideal_state([text], [{}]) == ideal  # no drawer_key -> solo group
+    assert _latest_ideal_state([text], []) == ideal  # metadatas absent entirely
+
+
+def test_latest_ideal_state_empty_inputs():
+    assert _latest_ideal_state([], []) is None
+    assert _latest_ideal_state(None, None) is None
+
+
+# ---------------------------------------------------------------------------
+# Header/preface tolerance: the prd skill stores each artifact drawer with a
+# title line ("<sid> IDEAL_STATE\n\n{json}") and, for revised artifacts, a
+# prose CHANGE-LOG preface before the JSON. The whole drawer is therefore NOT
+# valid JSON, so a strict json.loads (the old behaviour) failed to resolve a
+# perfectly valid IDEAL_STATE. _try_ideal_state must tolerate the wrapper.
+# ---------------------------------------------------------------------------
+
+_IDEAL = {
+    "goal": "ship the thing",
+    "success_criteria": ["c1 is measurable", "c2 is testable"],
+    "build_order": ["step 1"],
+}
+
+
+def _wrap(ideal: dict, header: str) -> str:
+    """Reproduce how the prd skill stores an artifact drawer: a title/preface
+    line, a blank line, then the JSON body."""
+    return f"{header}\n\n{json.dumps(ideal)}"
+
+
+def test_try_ideal_state_pure_json_fast_path():
+    # Backwards compatibility: a pure-JSON drawer still resolves unchanged.
+    assert _try_ideal_state(json.dumps(_IDEAL)) == _IDEAL
+
+
+def test_try_ideal_state_title_wrapped():
+    text = _wrap(_IDEAL, "plan-abc123 IDEAL_STATE")
+    assert _try_ideal_state(text) == _IDEAL
+
+
+def test_try_ideal_state_change_log_preface_wrapped():
+    header = (
+        "plan-abc123 IDEAL_STATE\n\nCHANGE LOG PREFACE (read this before the JSON "
+        "below): the deliverables array now enumerates all fifteen paths; every "
+        "other field carries forward unchanged."
+    )
+    text = _wrap(_IDEAL, header)
+    assert _try_ideal_state(text) == _IDEAL
+
+
+def test_try_ideal_state_preface_with_braces_is_tolerated():
+    # A brace in the prose that does not open valid JSON must be stepped over.
+    header = "plan-x IDEAL_STATE\n\nUse the {placeholder} token; see notes {here}."
+    text = _wrap(_IDEAL, header)
+    assert _try_ideal_state(text) == _IDEAL
+
+
+def test_try_ideal_state_rejects_wrapped_requirement_catalog():
+    # A Requirement Catalog is a JSON ARRAY of REQ dicts (no success_criteria).
+    catalog = [{"id": "REQ-001", "priority": "P0", "acceptance_criteria": ["x"]}]
+    text = f"plan-x Requirement Catalog\n\n{json.dumps(catalog)}"
+    assert _try_ideal_state(text) is None
+
+
+def test_try_ideal_state_rejects_wrapped_verification_matrix():
+    # A Verification Matrix is a JSON MAP keyed by REQ id (no success_criteria).
+    matrix = {"REQ-001": {"unit_tests": ["t"]}}
+    text = f"plan-x Verification Matrix\n\n{json.dumps(matrix)}"
+    assert _try_ideal_state(text) is None
+
+
+def test_try_ideal_state_rejects_pure_prose():
+    assert _try_ideal_state("# PRD Narrative\n\nThis is prose with no JSON body.") is None
+
+
+def test_latest_ideal_state_resolves_title_wrapped_chunked_drawer():
+    # End-to-end: a wrapped IDEAL_STATE large enough to be chunked by the bridge
+    # must reassemble AND tolerate the title/preface wrapper.
+    big = {
+        "goal": "g",
+        "success_criteria": ["a" * 1500, "b" * 1500, "c" * 1500],
+        "build_order": ["step 1"],
+    }
+    header = "plan-abc IDEAL_STATE\n\nCHANGE LOG PREFACE: revised."
+    wrapped = _wrap(big, header)
+    chunks = _bridge_chunk(wrapped)
+    assert len(chunks) >= 2  # genuinely chunked
+    metas = [
+        {"drawer_key": "dk", "chunk_index": i, "filed_at": "2026-07-10T00:00:00"}
+        for i in range(len(chunks))
+    ]
+    got = _latest_ideal_state(list(chunks), metas)
+    assert got is not None
+    assert got["success_criteria"] == big["success_criteria"]
+    assert got["build_order"] == ["step 1"]

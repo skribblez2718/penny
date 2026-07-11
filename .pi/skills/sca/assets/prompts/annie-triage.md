@@ -129,7 +129,7 @@ the mitigating control (for `false_positive`), and any `T-###` threat it
 corroborates. Emit a compact inline summary at the end:
 
 ```
-SUMMARY:{"phase":"P8_TRIAGE","triaged":<count>,"confirmed":<count>,"needs_deep_dive":<count>,"false_positive":<count>,"by_severity":{"critical":<n>,"high":<n>,"medium":<n>,"low":<n>},"evidence_basis":{"observed":<n>,"inferred":<n>,"assumed":<n>,"unknown":<n>},"secrets_redacted":<count>,"coverage_gaps":["<one line each>"]}
+SUMMARY:{"triaged":<count>,"confirmed":<count>,"needs_deep_dive":<count>,"false_positive":<count>,"by_severity":{"critical":<n>,"high":<n>,"medium":<n>,"low":<n>},"evidence_basis":{"observed":<n>,"inferred":<n>,"assumed":<n>,"unknown":<n>},"secrets_redacted":<count>,"coverage_gaps":["<one line each>"],"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>","needs_clarification":false}
 ```
 
 Be disciplined: severity and confidence kept independent, every finding tagged

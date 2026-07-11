@@ -56,3 +56,45 @@ def test_get_recent_mismatches_parses_header_plus_json(monkeypatch):
     assert len(out) == 1
     assert out[0]["domain"] == "coding"
     assert out[0]["action_taken"] == "broke it"
+
+
+def _amend_hit(aid, status, day):
+    body = {
+        "amendment_id": aid,
+        "status": status,
+        "target_file": ".pi/skills/plan/assets/prompts/piper.md",
+        "risk": "low",
+        "proposed_date": f"2026-07-0{day}",
+    }
+    return {"text": f"amendment_id: {aid}\n" + json.dumps(body)}
+
+
+def test_get_pending_amendments_surfaces_pending_and_approved(monkeypatch):
+    # APPROVED stays surfaced (awaiting apply) so approve-now-apply-later isn't
+    # lost; resolved (APPLIED/REJECTED) are excluded.
+    def fake_search(_params):
+        return {
+            "results": [
+                _amend_hit("a_pending", "PENDING", 1),
+                _amend_hit("a_approved", "APPROVED", 2),
+                _amend_hit("a_applied", "APPLIED", 3),
+                _amend_hit("a_rejected", "REJECTED", 4),
+            ]
+        }
+
+    monkeypatch.setattr(ssc, "tool_smart_search", fake_search)
+    ids = {a["amendment_id"] for a in ssc.get_pending_amendments(limit=10)}
+    assert ids == {"a_pending", "a_approved"}
+
+
+def test_brief_labels_amendment_next_action():
+    brief = ssc.format_signal_presentation(
+        {"critical": [], "info": []},
+        amendments=[
+            {"amendment_id": "a1", "status": "PENDING", "target_file": "x/p.md", "risk": "low"},
+            {"amendment_id": "a2", "status": "APPROVED", "target_file": "y/q.md", "risk": "low"},
+        ],
+        digest=None,
+    )
+    assert "a1** [review]" in brief  # pending → review
+    assert "a2** [apply]" in brief   # approved → apply

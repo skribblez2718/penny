@@ -27,8 +27,15 @@
  * (POST /compactions); the prose + refs is what enters model context.
  */
 
-import { PennyCompactArtifactSchema, type PennyCompactArtifact } from "./schema.js";
-import type { MempalaceRoomRef, KGEntityRef, DecisionRef, EvictionRecord } from "./schema.js";
+import { PennyCompactArtifactSchema, SCHEMA_VERSION, type PennyCompactArtifact } from "./schema.js";
+import type {
+  MempalaceRoomRef,
+  KGEntityRef,
+  DecisionRef,
+  EvictionRecord,
+  CompactionReason,
+  BoundaryShiftRecord,
+} from "./schema.js";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { detectPendingState } from "./pending.js";
 import {
@@ -37,6 +44,7 @@ import {
   queryMempalaceSkillRoomsForSession,
   queryKGEntitiesForSession,
   queryOutcomeLedgerDecisions,
+  llmMergeGoal,
 } from "./bridge.js";
 import type { SessionMessage } from "./pi-messages.js";
 import { asRecord, asString } from "./pi-messages.js";
@@ -98,8 +106,10 @@ function getEnvVar(key: string): string | undefined {
 // ============================================================
 
 const CONFIG = {
-  schemaVersion: "2.0.0",
+  schemaVersion: SCHEMA_VERSION,
   maxArtifactTokens: 6000,
+  /** Consecutive byte-identical Goal count at which the canary logs. */
+  goalStagnationThreshold: 3,
 };
 
 // ============================================================
@@ -197,31 +207,104 @@ function extractResultData(resultMsg: SessionMessage): {
 interface ExtractedState {
   goal: string;
   constraints: string[];
+  /** True when a COMPLETED skill's goal was displaced by a fresher user pivot. */
+  superseded: boolean;
+}
+
+/** The minimum length for a user message to count as a substantive goal signal. */
+const SUBSTANTIVE_MIN_LEN = 10;
+
+/**
+ * Find the chronologically LATEST substantive user message.
+ *
+ * `messages` is chronological, so we scan from the end (newest-first) and
+ * return the first user-role message with real text. There is NO keyword or
+ * phrase denylist: the only gate is a length floor (trivial acks like "ok"
+ * are not intent). Removing the denylist is the core of the goal-recency
+ * fix — the latest substantive intent wins, whatever words it uses.
+ */
+function newestSubstantiveUserMessage(
+  messages: SessionMessage[]
+): { text: string; index: number } | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== "user") continue;
+    const content = extractTextContent(msg);
+    if (content && content.trim().length > SUBSTANTIVE_MIN_LEN) {
+      return { text: content.trim(), index: i };
+    }
+  }
+  return null;
 }
 
 /**
- * Extract the session goal and explicit constraints.
+ * Index of the most recent `skill` tool call — matches detectDominantSkill's
+ * selection (newest wins). Used to decide whether a user message is "later"
+ * than the dominant skill (supersession).
+ */
+function latestSkillCallIndex(messages: SessionMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (block.type === "toolCall" && block.name === "skill" && block.arguments) {
+        const sn = typeof block.arguments.skill_name === "string" ? block.arguments.skill_name : "";
+        const g = typeof block.arguments.goal === "string" ? block.arguments.goal : "";
+        if (sn && g) return i;
+      }
+    }
+  }
+  return -1;
+}
+
+/**
+ * Extract the session goal and explicit constraints, honoring the canonical
+ * goal-selection precedence:
  *
- * Goal priority: dominant skill call → engine run context → first
- * substantive user message → system message.
+ *   1. INCOMPLETE active skill goal
+ *   2. engine-run goal
+ *   3. newest substantive user message in the merged window
+ *   4. previousSummary carry-forward (never overrides a fresh user pivot)
+ *   5. system message
+ *   6. default (caller supplies)
  *
- * Constraints come ONLY from explicit sources (the skill call's
- * constraints object). Keyword-scraping user messages for "must"/"prefer"
- * produced noise inside a hard token budget and was removed.
+ * Supersession: a COMPLETED skill does NOT set Goal when a substantive user
+ * message follows it — that later pivot wins and `superseded` is returned so
+ * the caller can flag `dominant_skill.superseded`. A completed skill with no
+ * later user pivot still supplies the goal (best summary of the session).
+ *
+ * Constraints come ONLY from explicit sources (the skill call's constraints
+ * object). Keyword-scraping free text for "must"/"prefer" produced noise
+ * inside a hard token budget and was removed.
  */
 export function extractSessionState(
   messages: SessionMessage[],
   dominantSkill?: SkillInvocation | null,
-  engineRunGoal?: string
+  engineRunGoal?: string,
+  previousSummaryGoal?: string
 ): ExtractedState {
   let goal = "";
+  let superseded = false;
   const constraints: string[] = [];
 
+  const newestUser = newestSubstantiveUserMessage(messages);
+
+  // Precedence #1 / supersession: the dominant skill.
   if (dominantSkill?.goal) {
-    goal = dominantSkill.goal.slice(0, 500);
-  }
-  if (!goal && engineRunGoal) {
-    goal = engineRunGoal.slice(0, 500);
+    if (!dominantSkill.completed) {
+      // Incomplete active skill wins outright.
+      goal = dominantSkill.goal.slice(0, 500);
+    } else {
+      // Completed skill: a substantive user message AFTER the skill call is a
+      // genuine pivot and supersedes the (done) skill goal.
+      const skillIdx = latestSkillCallIndex(messages);
+      if (newestUser && newestUser.index > skillIdx) {
+        goal = newestUser.text.slice(0, 500);
+        superseded = true;
+      } else {
+        goal = dominantSkill.goal.slice(0, 500);
+      }
+    }
   }
 
   if (dominantSkill?.constraints) {
@@ -234,27 +317,24 @@ export function extractSessionState(
     }
   }
 
-  if (!goal) {
-    for (const msg of messages) {
-      if (msg.role !== "user") continue;
-      const content = extractTextContent(msg);
-      if (!content) continue;
-      // Skip reactionary follow-ups; look for the first substantive request
-      const lower = content.toLowerCase();
-      const isReactionary =
-        lower.includes("wildly confusing") ||
-        lower.includes("fix this") ||
-        lower.includes("this is wrong") ||
-        lower.includes("figure out") ||
-        lower.includes("something wrong");
-      if (!isReactionary && content.length > 10) {
-        goal = content.slice(0, 500);
-        break;
-      }
-    }
+  // Precedence #2: engine-run goal.
+  if (!goal && engineRunGoal) {
+    goal = engineRunGoal.slice(0, 500);
   }
 
-  // Last resort: system message
+  // Precedence #3: newest substantive user message.
+  if (!goal && newestUser) {
+    goal = newestUser.text.slice(0, 500);
+  }
+
+  // Precedence #4: carry forward the prior Goal. This only fires when the
+  // current window yielded no fresher substantive signal, so a fresh user
+  // pivot (handled above) always wins over carry-forward.
+  if (!goal && previousSummaryGoal) {
+    goal = previousSummaryGoal.slice(0, 500);
+  }
+
+  // Precedence #5: system message.
   if (!goal) {
     for (const msg of messages) {
       const content = extractTextContent(msg);
@@ -265,7 +345,7 @@ export function extractSessionState(
     }
   }
 
-  return { goal, constraints };
+  return { goal, constraints, superseded };
 }
 
 function extractTextContent(msg: SessionMessage): string | null {
@@ -277,6 +357,157 @@ function extractTextContent(msg: SessionMessage): string | null {
       .join(" ");
   }
   return null;
+}
+
+// ============================================================
+// previousSummary Goal Carry-Forward (Fix A) + Stagnation Canary
+// ============================================================
+
+/** Placeholder / non-goal strings that must never be carried forward. */
+const NON_GOAL_TEXT = /^\(not set\)$|goal not yet extracted/i;
+
+/**
+ * Parse the `## Goal` section out of a prior prose summary (Fix A).
+ *
+ * Tolerant of heading depth and of summaries this extension did NOT author
+ * (Pi's own default format, or a hand-edited brief): it looks for any
+ * `#..###### Goal` heading and collects the following non-heading lines up to
+ * the next heading / rule / blank gap. Returns null when there is no parseable
+ * goal or the text is a known placeholder — the caller then falls through to
+ * the next precedence tier rather than carrying junk forward.
+ */
+export function parseGoalFromSummary(summary: string | undefined): string | null {
+  if (!summary) return null;
+  const lines = summary.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^#{1,6}\s+Goal\s*$/i.test(lines[i].trim())) continue;
+    const collected: string[] = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      const t = lines[j].trim();
+      if (t === "") {
+        if (collected.length > 0) break;
+        continue;
+      }
+      if (/^#{1,6}\s/.test(t) || t === "---") break;
+      collected.push(t);
+    }
+    const text = collected.join(" ").trim();
+    if (!text || NON_GOAL_TEXT.test(text)) return null;
+    return text.slice(0, 500);
+  }
+  return null;
+}
+
+/** Hidden marker carrying the goal-stagnation streak across compactions. */
+const GOAL_STREAK_MARKER = /<!--\s*penny-goal-streak:(\d+)\s*-->/;
+
+/** Read the streak count embedded by a prior compaction (0 when absent). */
+export function parseGoalStreak(summary: string | undefined): number {
+  if (!summary) return 0;
+  const m = summary.match(GOAL_STREAK_MARKER);
+  if (!m) return 0;
+  const n = parseInt(m[1], 10);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+/**
+ * Compute the running count of consecutive byte-identical goals. A change of
+ * goal resets the streak to 1; an unchanged goal increments the prior streak.
+ */
+export function computeGoalStreak(
+  currentGoal: string,
+  previousGoal: string | null,
+  previousStreak: number
+): number {
+  if (currentGoal && previousGoal && currentGoal === previousGoal) {
+    return Math.max(1, previousStreak) + 1;
+  }
+  return 1;
+}
+
+/**
+ * Observability regression canary: is the goal byte-identical across enough
+ * consecutive compactions to look stuck? This is LOG-ONLY — it never alters
+ * goal selection, because a long single-task session legitimately keeps the
+ * same goal.
+ */
+export function goalStagnationCanary(
+  streak: number,
+  threshold: number = CONFIG.goalStagnationThreshold
+): boolean {
+  return streak >= threshold;
+}
+
+/** Append the streak marker as an invisible HTML comment (renders to nothing). */
+function appendGoalStreakMarker(summary: string, streak: number): string {
+  if (streak <= 0) return summary;
+  return `${summary}\n<!-- penny-goal-streak:${streak} -->`;
+}
+
+// ============================================================
+// Work Context Derivation (## Current Work / ## Next Steps)
+// ============================================================
+
+interface WorkContextInput {
+  dominantSkill?: SkillInvocation | null;
+  engineRuns: PennyCompactArtifact["engine_runs"];
+  pending: PennyCompactArtifact["pending"];
+  goal: string;
+  customInstructions?: string;
+}
+
+/**
+ * Derive a short "what is happening right now" line and the concrete next
+ * steps, from live signal only. Returns undefined fields when no signal
+ * exists so the renderer omits the sections entirely (no filler).
+ *
+ * `customInstructions` (the C8 sink) is threaded in as the first, highest
+ * priority next step — it is the user's explicit focus hint for THIS
+ * compaction.
+ */
+export function deriveWorkContext(input: WorkContextInput): {
+  current_work?: string;
+  next_steps?: string[];
+} {
+  let current_work: string | undefined;
+
+  if (input.dominantSkill && !input.dominantSkill.completed) {
+    current_work =
+      `Running skill "${input.dominantSkill.skill_name}" — ${input.dominantSkill.goal}`.slice(
+        0,
+        1000
+      );
+  } else if (input.engineRuns.length > 0) {
+    const r = input.engineRuns[0];
+    current_work =
+      `${r.playbook} run ${r.run_id} is ${r.status} in state ${r.current_state_id}`.slice(0, 1000);
+  } else if (input.pending) {
+    current_work = `Handling ${input.pending.state}: ${input.pending.question_summary}`.slice(
+      0,
+      1000
+    );
+  }
+
+  const next_steps: string[] = [];
+  const focus = input.customInstructions?.trim();
+  if (focus) {
+    next_steps.push(`Focus (from /compact): ${focus}`.slice(0, 300));
+  }
+  for (const r of input.engineRuns) {
+    if (r.status === "awaiting_user" && r.clarification_text) {
+      next_steps.push(`Answer run ${r.run_id}: ${r.clarification_text}`.slice(0, 300));
+    }
+  }
+  if (input.pending?.question_summary) {
+    next_steps.push(
+      `Resolve ${input.pending.state}: ${input.pending.question_summary}`.slice(0, 300)
+    );
+  }
+
+  return {
+    ...(current_work ? { current_work } : {}),
+    ...(next_steps.length > 0 ? { next_steps: next_steps.slice(0, 10) } : {}),
+  };
 }
 
 // ============================================================
@@ -656,11 +887,20 @@ export function createProseSummary(artifact: PennyCompactArtifact): string {
   // Dominant skill
   if (artifact.dominant_skill) {
     const ds = artifact.dominant_skill;
+    const status = ds.completed ? "complete" : "incomplete";
+    const supersededTag = ds.superseded ? ", superseded by a newer request" : "";
     lines.push(`## Active Skill`);
-    lines.push(`- **${ds.skill_name}** (${ds.completed ? "complete" : "incomplete"})`);
+    lines.push(`- **${ds.skill_name}** (${status}${supersededTag})`);
     if (ds.goal && ds.goal !== artifact.goal) {
-      lines.push(`- Goal: ${ds.goal}`);
+      lines.push(`- Skill goal: ${ds.goal}`);
     }
+    lines.push("");
+  }
+
+  // Current work — rendered only when derivable (no filler).
+  if (artifact.current_work) {
+    lines.push(`## Current Work`);
+    lines.push(artifact.current_work);
     lines.push("");
   }
 
@@ -685,6 +925,15 @@ export function createProseSummary(artifact: PennyCompactArtifact): string {
     lines.push(`- State: **${artifact.pending.state}**`);
     if (artifact.pending.question_summary) {
       lines.push(`- Reason: ${artifact.pending.question_summary}`);
+    }
+    lines.push("");
+  }
+
+  // Next steps — rendered only when derivable (no filler).
+  if (artifact.next_steps && artifact.next_steps.length > 0) {
+    lines.push(`## Next Steps`);
+    for (const step of artifact.next_steps.slice(0, 10)) {
+      lines.push(`- ${step}`);
     }
     lines.push("");
   }
@@ -762,6 +1011,7 @@ export function createProseSummary(artifact: PennyCompactArtifact): string {
 interface BuildArtifactInput {
   sessionId: string;
   compactionSeq: number;
+  /** Chronological, already-merged [messagesToSummarize, ...turnPrefixMessages]. */
   messages: SessionMessage[];
   preparation: {
     firstKeptEntryId: string;
@@ -769,6 +1019,14 @@ interface BuildArtifactInput {
     fileOps: { read: Set<string>; written: Set<string>; edited: Set<string> };
     previousSummary?: string;
   };
+  /** What triggered this compaction (Pi event.reason). Sink + Next Steps, no code fork. */
+  reason?: CompactionReason;
+  /** The user's focus hint (Pi event.customInstructions). Sink + Next Steps + Fix B. */
+  customInstructions?: string;
+  /** previous/current firstKeptEntryId shift, computed from branchEntries. */
+  boundaryShift?: BoundaryShiftRecord;
+  /** The compaction event's abort signal, forwarded to Fix B. */
+  signal?: AbortSignal;
 }
 
 async function buildArtifact(
@@ -846,7 +1104,56 @@ async function buildArtifact(
     }),
   ]);
 
-  const extracted = extractSessionState(input.messages, dominant, engineRuns[0]?.goal);
+  // Fix A: carry the prior Goal forward when the current window yields no
+  // fresher substantive signal. Parsed defensively from the prior summary
+  // (may be Pi's own format or hand-edited) — null when unparseable.
+  const previousSummaryGoal = parseGoalFromSummary(input.preparation.previousSummary);
+
+  const extracted = extractSessionState(
+    input.messages,
+    dominant,
+    engineRuns[0]?.goal,
+    previousSummaryGoal ?? undefined
+  );
+
+  let goal = extracted.goal || "Active session - goal not yet extracted";
+
+  // Fix B (P1, config-gated, OFF by default): an LLM-assisted merge of the
+  // previous summary with the deterministic candidate goal. Returns null when
+  // disabled/misconfigured or on any timeout/abort/error, so Fix A always
+  // remains the authoritative fallback — the summary is never abandoned.
+  if (input.preparation.previousSummary) {
+    try {
+      const merged = await llmMergeGoal({
+        previousSummary: input.preparation.previousSummary,
+        candidateGoal: goal,
+        customInstructions: input.customInstructions,
+        signal: input.signal,
+      });
+      if (merged) goal = merged;
+    } catch (err) {
+      logger.warn("Fix B merge threw; using Fix A goal", { error: String(err) });
+    }
+  }
+
+  // Goal-stagnation canary (P2, observational only — never alters the goal).
+  const previousStreak = parseGoalStreak(input.preparation.previousSummary);
+  const goalStreak = computeGoalStreak(goal, previousSummaryGoal, previousStreak);
+  if (goalStagnationCanary(goalStreak)) {
+    logger.warn("Goal unchanged across consecutive compactions (stagnation canary)", {
+      goal: goal.slice(0, 120),
+      streak: goalStreak,
+      session_id: input.sessionId,
+    });
+  }
+
+  const work = deriveWorkContext({
+    dominantSkill: dominant,
+    engineRuns,
+    pending,
+    goal,
+    customInstructions: input.customInstructions,
+  });
 
   let artifact: PennyCompactArtifact = {
     schema_version: CONFIG.schemaVersion,
@@ -854,10 +1161,12 @@ async function buildArtifact(
     compaction_seq: seq,
     compaction_timestamp: now,
 
-    goal: extracted.goal || "Active session - goal not yet extracted",
+    goal,
     constraints: extracted.constraints,
     preferences: [],
     pending,
+    ...(work.current_work ? { current_work: work.current_work } : {}),
+    ...(work.next_steps ? { next_steps: work.next_steps } : {}),
 
     dominant_skill: dominant
       ? {
@@ -865,6 +1174,8 @@ async function buildArtifact(
           session_id: dominant.session_id || "unknown",
           goal: dominant.goal,
           completed: dominant.completed,
+          // Only flag supersession for a completed skill displaced by a pivot.
+          ...(extracted.superseded ? { superseded: true } : {}),
         }
       : undefined,
 
@@ -888,7 +1199,13 @@ async function buildArtifact(
       pi_boundary: {
         first_kept_entry_id: input.preparation.firstKeptEntryId,
         tokens_before: input.preparation.tokensBefore,
+        // Populated on every compaction after a session's first (seq >= 1).
+        ...(input.boundaryShift ? { boundary_shift: input.boundaryShift } : {}),
       },
+      // C8 named sink: additive, optional, threaded without a reason code fork.
+      ...(input.reason ? { compaction_reason: input.reason } : {}),
+      ...(input.customInstructions ? { custom_instructions: input.customInstructions } : {}),
+      goal_streak: goalStreak,
     },
   };
 
@@ -1012,24 +1329,81 @@ function failLoudly(
   logger.error(message, context, error as Error & { code?: string });
 }
 
-/** The `preparation` payload Pi hands to the session_before_compact hook. */
+/**
+ * The `preparation` payload Pi hands to the session_before_compact hook.
+ * Mirrors the installed pi-coding-agent CompactionPreparation shape; every
+ * field this hook reads is captured here (the SDK types the boundary loosely).
+ */
 interface CompactionPreparation {
   firstKeptEntryId: string;
   tokensBefore: number;
   fileOps: { read: Set<string>; written: Set<string>; edited: Set<string> };
   previousSummary?: string;
+  /** Messages that will be summarized and discarded (older window). */
   messagesToSummarize?: SessionMessage[];
+  /** Messages that become the turn-prefix summary when a turn is split (newer). */
+  turnPrefixMessages?: SessionMessage[];
+  /** True when the cut point falls mid-turn. */
+  isSplitTurn?: boolean;
 }
 
-/** A branch entry in the session log (only the fields this hook reads). */
+/**
+ * A branch entry in the session log (only the fields this hook reads). Prior
+ * compaction entries carry `firstKeptEntryId`, which is the source for
+ * boundary_shift.previous.
+ */
 interface CompactionEntry {
   type?: string;
   sessionId?: string;
+  firstKeptEntryId?: string;
 }
 
 interface SessionBeforeCompactEvent {
   preparation: CompactionPreparation;
   branchEntries: CompactionEntry[];
+  /** What triggered the compaction: manual /compact, threshold, or overflow. */
+  reason?: CompactionReason;
+  /** The user's focus hint (e.g. `/compact <focus>`). */
+  customInstructions?: string;
+  /** True when the aborted turn is retried after this compaction. */
+  willRetry?: boolean;
+  /** Abort signal for the compaction; forwarded to Fix B. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Merge the two message windows into one chronological array:
+ * [older messagesToSummarize, ...newer turnPrefixMessages]. Every
+ * message-derived extraction path (goal, dominant-skill, pending, tool-call,
+ * tool-error-recovery) reads this merged view so a split-turn window whose
+ * discarded messages live only in turnPrefixMessages is not dropped.
+ */
+function mergeCompactionMessages(preparation: CompactionPreparation): SessionMessage[] {
+  return [...(preparation.messagesToSummarize || []), ...(preparation.turnPrefixMessages || [])];
+}
+
+/**
+ * Compute the boundary shift from the previous compaction to this one, sourced
+ * from branchEntries. Returns undefined on a session's first compaction (no
+ * prior compaction entry exists).
+ */
+function computeBoundaryShift(
+  branchEntries: CompactionEntry[],
+  currentFirstKeptEntryId: string,
+  compactionSeq: number
+): BoundaryShiftRecord | undefined {
+  if (compactionSeq < 1) return undefined;
+  // The most recent prior compaction entry (branchEntries is chronological).
+  let prev: string | undefined;
+  for (let i = branchEntries.length - 1; i >= 0; i--) {
+    const e = branchEntries[i];
+    if (e.type === "compaction" && e.firstKeptEntryId) {
+      prev = e.firstKeptEntryId;
+      break;
+    }
+  }
+  if (!prev) return undefined;
+  return { previous: prev, current: currentFirstKeptEntryId, compaction_seq: compactionSeq };
 }
 
 export default function compactionExtension(pi: ExtensionAPI) {
@@ -1049,16 +1423,30 @@ export default function compactionExtension(pi: ExtensionAPI) {
     // Compute compaction sequence by counting prior compactions in branch
     const compactionSeq = branchEntries.filter((e) => e.type === "compaction").length;
 
+    // Merge both message windows so split-turn context is never dropped.
+    const messages = mergeCompactionMessages(preparation);
+
+    // boundary_shift is populated on every compaction after the first.
+    const boundaryShift = computeBoundaryShift(
+      branchEntries,
+      preparation.firstKeptEntryId,
+      compactionSeq
+    );
+
     const build = await buildArtifact({
       sessionId,
       compactionSeq,
-      messages: preparation.messagesToSummarize || [],
+      messages,
       preparation: {
         firstKeptEntryId: preparation.firstKeptEntryId,
         tokensBefore: preparation.tokensBefore,
         fileOps: preparation.fileOps,
         previousSummary: preparation.previousSummary,
       },
+      reason: event.reason,
+      customInstructions: event.customInstructions,
+      boundaryShift,
+      signal: event.signal,
     });
     let artifact = build.artifact;
     const protectedSessionIds = build.protectedSessionIds;
@@ -1118,6 +1506,11 @@ export default function compactionExtension(pi: ExtensionAPI) {
         );
       }
     );
+
+    // Carry the goal-stagnation streak forward as an invisible marker so the
+    // next compaction can compute "N consecutive identical goals" without
+    // reading the observability archive. Renders to nothing in the TUI.
+    proseSummary = appendGoalStreakMarker(proseSummary, artifact.metadata.goal_streak ?? 0);
 
     return {
       compaction: {

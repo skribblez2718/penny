@@ -160,5 +160,8 @@ async def test_admin_stats_endpoint():
     assert "session_count" in data
     assert "entry_count" in data
     assert "log_count" in data
-    assert "retention_raw_days" in data
-    assert "retention_log_days" in data
+    # Size-based rotation replaces age retention: /admin/stats exposes the cap.
+    # (Non-hermetic suite: db_size_mb + db_size_max_gb are present regardless of
+    # which server build is live.)
+    assert "db_size_mb" in data
+    assert "db_size_max_gb" in data

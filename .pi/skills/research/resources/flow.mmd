@@ -9,12 +9,16 @@
 %% READING NOTES:
 %%   * Multiple guarded arrows from ONE state are MUTUALLY EXCLUSIVE (XOR).
 %%   * [quick]/[standard]/[deep] on an edge = a mode guard.
-%%   * Both critique loops are BOUNDED by ctx.max_iterations; on exhaustion the
-%%     run proceeds honestly with a recorded warning (never force-approves).
+%%   * Both critique loops AND the validation loop are BOUNDED by ctx.max_iterations;
+%%     on exhaustion the run proceeds honestly with a recorded warning (never
+%%     force-approves / never ships unverified claims as verified).
 %%   * researching is a SINGLE echo agent researching ALL sub-queries (no fan-out).
+%%   * validating (vera) is an independent, evidence-based citation-grounding gate
+%%     that runs in ALL modes before report_writing (distinct from carren's
+%%     subjective report critique); a FAIL loops back to synthesizing to re-ground.
 %%   * to_unknown fires when progress_check returns a reason (needs_clarification,
-%%     *_complete=false, or a stalled critique); it is available only from the
-%%     ESCALATABLE_STATES (report_writing does NOT escalate).
+%%     *_complete=false, a stalled critique, or a stalled validation); it is
+%%     available only from the ESCALATABLE_STATES (report_writing does NOT escalate).
 %% ============================================================================
 stateDiagram-v2
     [*] --> intake
@@ -35,14 +39,21 @@ stateDiagram-v2
     %% researching (echo, single agent, ALL sub-queries)
     researching --> synthesizing : research_done
 
-    %% synthesizing (synthia) — deep adds a report critique gate
-    synthesizing --> critiquing_report : synth_to_critique\n[deep]
-    synthesizing --> report_writing : synth_to_report\n[quick || standard]
+    %% synthesizing (synthia) — deep adds a report critique gate; all modes then
+    %% pass through the validation gate (phase guard routes a re-synthesis back
+    %% to vera rather than re-running the critique)
+    synthesizing --> critiquing_report : synth_to_critique\n[deep && phase != validation]
+    synthesizing --> validating : synth_to_validate\n[quick || standard || phase == validation]
 
-    %% critiquing_report (carren, deep only) — bounded revise loop
-    critiquing_report --> report_writing : report_critique_pass\n[verdict == APPROVE]
+    %% critiquing_report (carren, deep only) — bounded revise loop → validation gate
+    critiquing_report --> validating : report_critique_pass\n[verdict == APPROVE]
     critiquing_report --> synthesizing : report_critique_revise\n[verdict != APPROVE && iter+1 < max_iterations]
-    critiquing_report --> report_writing : report_critique_exhausted\n[budget spent; warning recorded]
+    critiquing_report --> validating : report_critique_exhausted\n[budget spent; warning recorded]
+
+    %% validating (vera, ALL modes) — independent citation-grounding; bounded loop
+    validating --> report_writing : validate_pass\n[verdict == PASS]
+    validating --> synthesizing : validate_revise\n[verdict != PASS && iter+1 < max_iterations]
+    validating --> report_writing : validate_exhausted\n[budget spent; warning recorded]
 
     %% report_writing (skribble) — write report.md / sources.md / README.md
     report_writing --> complete : report_done
@@ -56,6 +67,7 @@ stateDiagram-v2
     researching --> unknown : to_unknown
     synthesizing --> unknown : to_unknown
     critiquing_report --> unknown : to_unknown
+    validating --> unknown : to_unknown
     unknown --> awaiting_clarification : escalate
     awaiting_clarification --> planning : clarify\n[user_response carried into task]
 
@@ -66,6 +78,7 @@ stateDiagram-v2
     researching --> error : abort
     synthesizing --> error : abort
     critiquing_report --> error : abort
+    validating --> error : abort
     report_writing --> error : abort
     unknown --> error : abort
     awaiting_clarification --> error : abort

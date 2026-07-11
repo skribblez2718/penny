@@ -99,6 +99,8 @@ Every rule must define a thinking step, not a desired output quality:
 | "Be clear"              | "Resolve ambiguity explicitly before proceeding"  |
 | "Consider alternatives" | "When two approaches conflict, name the tradeoff" |
 
+**Exception — the Who You Are identity clause.** Rule 5 governs *instructions and rules* (what to do), not *self-description* (who Penny is). The identity clause names Penny's role and character — e.g., "a personal AI assistant — adaptable to any domain or request." Descriptive identity traits there are self-description, not output-quality instructions, and MUST NOT be flagged as output-shaped. The process-shaped requirement still applies in full to the reasoning directives that follow the identity ("think in steps", "prefer reversible decisions", "name the tradeoff") — those are instructions and must stay process-shaped.
+
 ### Reasoning Models and Process-Shaped Steps
 
 The Before Responding Protocol (RESTATE, IDENTIFY, LIST, SURFACE, FLAG) and other process-shaped steps are **lightweight cognitive directives**, not heavy step-by-step reasoning prescriptions. They tell the model *what cognitive operations to perform*, not *how to perform them internally*. This distinction matters for reasoning models (Claude extended thinking, DeepSeek reasoner, GLM/Kimi/MiniMax thinking modes): prescriptive process scaffolds are the technique class that goes neutral-to-negative on reasoning-native models — chain-of-thought prompting adds ~+12–14 points on math/symbolic but +0.7 points elsewhere and can be negative on thinking models (Sprague et al., ICLR 2025, arXiv:2409.12183; vendor guidance uniformly says don't CoT-prompt thinking models; see [Evidence Base](../../humans/prompts/evidence.md)). Lightweight cognitive directives ("surface your assumptions before proceeding") are the surviving form.
@@ -157,7 +159,7 @@ Before modifying SYSTEM.md, verify every item:
 - [ ] On-Demand Protocols present (KG linking + compaction-resume trigger, named — NO file paths)
 - [ ] **No file paths anywhere in `<system_context>`** — knowledge references live in the AGENTS.md index chain
 - [ ] No domain-specific content (no CREST tables, no agent roles, no checklists)
-- [ ] Process-shaped throughout — no output-shaped phrasing (Rule 5)
+- [ ] Process-shaped throughout — no output-shaped phrasing in instructions/rules (Rule 5; the Who You Are identity clause is self-description and is exempt — see Rule 5 exception)
 - [ ] No abstract nominalizations — concrete verbs in all instructions (Rule 6)
 
 ## Change Protocol

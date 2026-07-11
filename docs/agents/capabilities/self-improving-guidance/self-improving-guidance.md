@@ -2,7 +2,7 @@
 
 ## What
 
-When outcome patterns reveal systemic gaps, the compression loop proposes targeted amendments to SYSTEM.md or skill prompts. Amendments go through classification → generation → Carren review → user approval before any file is modified.
+When outcome patterns reveal systemic gaps, the compression loop proposes targeted amendments (skill prompts, config, or preferences). Amendments go through classification → generation → Carren review → **human approval** before any file is modified. Once a human approves an amendment's concrete diff, the applier applies it to **any** target file (Domain Guidance, config, docs, code, or SYSTEM.md) — reviewing-and-approving the exact diff IS the human-in-the-loop. The one exception: the immutable security-directives block is never machine-editable (see Rules).
 
 ## Why
 
@@ -10,9 +10,10 @@ Static prompts drift from reality as usage patterns emerge. The amendment pipeli
 
 ## Rules
 
-1. **Penny never writes SYSTEM.md directly.** All changes go through amendment → review → apply.
-2. **Every amendment must cite evidence.** Drawer IDs or outcome ledger entries.
-3. **Review gate cannot be bypassed.** Even in auto mode, user must acknowledge.
+1. **Human approval is authorization.** All changes go through amendment → review → apply; once a human approves the concrete diff, the applier applies it verbatim to any target (skill prompts, config, docs, code, or SYSTEM.md). The immutable security-directives block (`<system_directives>` / `<system_boundary>`, and the SECURITY DIRECTIVES / SECURITY REINFORCEMENT sentinels) is the one exception — never machine-editable, even with approval.
+2. **Concrete diffs only.** Approve and apply both require a verbatim `old_text`/`new_text`; an empty diff is refused. Apply is drift-safe — if `old_text` no longer matches, the change fails closed rather than splicing blindly.
+3. **Every amendment must cite evidence.** Drawer IDs or outcome ledger entries.
+4. **Review gate cannot be bypassed.** Applier rejects status != APPROVED.
 4. **Net size delta ≤ 0 per cycle.** Add N tokens → remove ≥ N tokens.
 5. **Rollback always available.** Previous versions stored in `penny/system_versions`.
 
@@ -41,11 +42,14 @@ Outcome MISMATCHes → compression_loop → target_classifier → amendment_gene
 | DOMAIN_GUIDANCE | `.pi/skills/*/assets/prompts/*.md` | Domain-specific terms |
 | MEMPALACE_PREF | Mempalace preference rooms | "prefer", "always", "never" |
 | CONFIG | `.env`, config files | "timeout", "limit", "threshold" |
-| REJECTED_UNIVERSAL | (blocked) | Universal keywords → must not modify SYSTEM.md |
+| REJECTED_UNIVERSAL | Not auto-generated | Universal keywords → the auto-loop never *proposes* security-frame edits (a human may still author one, which then applies except the immutable security block) |
 
 ## Constraints
 
-- **No SYSTEM.md writes.** Universal keywords → REJECTED_UNIVERSAL.
+- **Approval-gated, target-agnostic apply.** An APPROVED amendment applies to any file. Permission is approval + a concrete diff + the security-block guard — not the target layer.
+- **Immutable security block is human-only.** Changes touching `<system_directives>`/`<system_boundary>` (or the SECURITY sentinels) are refused even when approved.
+- **Concrete diffs only.** Empty `old_text`/`new_text` is refused at approve and apply; apply is verbatim and drift-safe.
+- **Auto-loop stays conservative.** Universal-frame learnings still classify as REJECTED_UNIVERSAL — the compression loop won't auto-*generate* SYSTEM.md/code edits; those are human-authored.
 - **Evidence required.** Amendment generator validates non-empty evidence.
 - **Mandatory review.** Applier rejects status != APPROVED.
 - **Git history.** Every file change gets its own commit.

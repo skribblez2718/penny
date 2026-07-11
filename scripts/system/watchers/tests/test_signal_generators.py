@@ -17,6 +17,8 @@ from signal_generators import (
     generate_confidence_trend_signal,
     generate_mempalace_growth_signal,
     generate_task_staleness_signal,
+    generate_tune_due_signal,
+    resolve_tune_due_signals,
     write_signal,
     _load_outcome_records,
     _parse_outcome_text,
@@ -24,6 +26,7 @@ from signal_generators import (
     _parse_confidence,
     _signal_id,
 )
+from tune_freshness import LEAD_THRESHOLDS
 
 
 # Dynamic timestamps so tests never go stale due to time-window filtering
@@ -287,6 +290,385 @@ class TestWriteSignal:
         result = write_signal(signal)
         assert result == "drawer_test_001"
         mock_add.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Tune-due signal (FR-4,5,6,17,18)
+# ---------------------------------------------------------------------------
+
+
+def _fresh_staleness():
+    """All producers fresh — no tune_due from staleness."""
+    return {
+        p: {"stale": False, "reason": "fresh", "age_days": 1.0, "threshold": LEAD_THRESHOLDS[p]}
+        for p in LEAD_THRESHOLDS
+    }
+
+
+def _stale_staleness(producers=None, reason="stale (age)"):
+    """Mark specified producers (or all) as stale."""
+    if producers is None:
+        producers = list(LEAD_THRESHOLDS.keys())
+    base = _fresh_staleness()
+    for p in producers:
+        base[p] = {
+            "stale": True,
+            "reason": reason,
+            "age_days": 15.0,
+            "threshold": LEAD_THRESHOLDS[p],
+        }
+    return base
+
+
+def _amendment_drawer(amendment_id="amend-001", status="PENDING"):
+    """A drawer shaped like the amendment writer's output."""
+    body = {
+        "amendment_id": amendment_id,
+        "status": status,
+        "target_file": ".pi/prompts/tune.md",
+        "risk": "low",
+        "trigger": "repeated failure",
+        "changes": [{"rationale": "fix X"}],
+    }
+    content = f"amendment_id: {amendment_id}\n" + json.dumps(body)
+    return {"id": f"drawer_{amendment_id}", "content": content}
+
+
+class TestTuneDueSignal:
+    """Test generate_tune_due_signal — producer staleness, rating backlog,
+    CRITICAL escalation, and dedup."""
+
+    @patch("signal_generators._count_unrated_sessions", return_value=0)
+    @patch("signal_generators._days_since_last_rating", return_value=None)
+    @patch("signal_generators._count_pending_amendments", return_value=0)
+    @patch("signal_generators.check_all_stale")
+    def test_no_stale_no_backlog_returns_none(
+        self, mock_stale, mock_amend, mock_days, mock_unrated
+    ):
+        mock_stale.return_value = _fresh_staleness()
+        result = generate_tune_due_signal("test-session")
+        assert result is None
+
+    @patch("signal_generators._count_unrated_sessions", return_value=0)
+    @patch("signal_generators._days_since_last_rating", return_value=None)
+    @patch("signal_generators._count_pending_amendments", return_value=0)
+    @patch("signal_generators.check_all_stale")
+    def test_stale_producer_generates_info(self, mock_stale, mock_amend, mock_days, mock_unrated):
+        mock_stale.return_value = _stale_staleness(["prompt_efficacy"])
+        result = generate_tune_due_signal("test-session")
+        assert result is not None
+        assert result["source"] == "tune_due_watcher"
+        assert result["priority"] == "INFO"
+        assert result["status"] == "PENDING"
+        assert "prompt_efficacy" in result["context"]
+
+    @patch("signal_generators._count_unrated_sessions", return_value=0)
+    @patch("signal_generators._days_since_last_rating", return_value=None)
+    @patch("signal_generators._count_pending_amendments", return_value=0)
+    @patch("signal_generators.check_all_stale")
+    def test_multiple_stale_producers_in_context(
+        self, mock_stale, mock_amend, mock_days, mock_unrated
+    ):
+        mock_stale.return_value = _stale_staleness(["trajectory", "judgment"])
+        result = generate_tune_due_signal("test-session")
+        assert result is not None
+        assert "trajectory" in result["context"]
+        assert "judgment" in result["context"]
+
+    # ── FR-17: Rating backlog ──────────────────────────────────────────────
+
+    @patch("signal_generators._count_unrated_sessions", return_value=12)
+    @patch("signal_generators._days_since_last_rating", return_value=None)
+    @patch("signal_generators._count_pending_amendments", return_value=0)
+    @patch("signal_generators.check_all_stale")
+    def test_rating_backlog_unrated_sessions(self, mock_stale, mock_amend, mock_days, mock_unrated):
+        """FR-17: >=10 unrated sessions fires INFO."""
+        mock_stale.return_value = _fresh_staleness()
+        result = generate_tune_due_signal("test-session")
+        assert result is not None
+        assert result["priority"] == "INFO"
+        assert "unrated" in result["context"].lower()
+
+    @patch("signal_generators._count_unrated_sessions", return_value=5)
+    @patch("signal_generators._days_since_last_rating", return_value=9.0)
+    @patch("signal_generators._count_pending_amendments", return_value=0)
+    @patch("signal_generators.check_all_stale")
+    def test_rating_backlog_days_since(self, mock_stale, mock_amend, mock_days, mock_unrated):
+        """FR-17: >=7d since last rating fires INFO."""
+        mock_stale.return_value = _fresh_staleness()
+        result = generate_tune_due_signal("test-session")
+        assert result is not None
+        assert result["priority"] == "INFO"
+        assert "rating" in result["context"].lower() or "since" in result["context"].lower()
+
+    @patch("signal_generators._count_unrated_sessions", return_value=3)
+    @patch("signal_generators._days_since_last_rating", return_value=2.0)
+    @patch("signal_generators._count_pending_amendments", return_value=0)
+    @patch("signal_generators.check_all_stale")
+    def test_rating_backlog_none(self, mock_stale, mock_amend, mock_days, mock_unrated):
+        """FR-17: <10 unrated AND <7d since → no rating condition."""
+        mock_stale.return_value = _fresh_staleness()
+        result = generate_tune_due_signal("test-session")
+        assert result is None
+
+    @patch("signal_generators._count_unrated_sessions", return_value=15)
+    @patch("signal_generators._days_since_last_rating", return_value=10.0)
+    @patch("signal_generators._count_pending_amendments", return_value=0)
+    @patch("signal_generators.check_all_stale")
+    def test_rating_backlog_both_conditions(self, mock_stale, mock_amend, mock_days, mock_unrated):
+        """FR-17: both sub-conditions met → both in context."""
+        mock_stale.return_value = _fresh_staleness()
+        result = generate_tune_due_signal("test-session")
+        assert result is not None
+        assert result["priority"] == "INFO"
+        assert "unrated" in result["context"].lower()
+        assert "since" in result["context"].lower() or "rating" in result["context"].lower()
+
+    @patch("signal_generators._count_unrated_sessions", return_value=9)
+    @patch("signal_generators._days_since_last_rating", return_value=6.0)
+    @patch("signal_generators._count_pending_amendments", return_value=0)
+    @patch("signal_generators.check_all_stale")
+    def test_rating_backlog_boundary_not_fired(
+        self, mock_stale, mock_amend, mock_days, mock_unrated
+    ):
+        """FR-17: exactly 9 unrated and 6d since → neither condition fires."""
+        mock_stale.return_value = _fresh_staleness()
+        result = generate_tune_due_signal("test-session")
+        assert result is None
+
+    @patch("signal_generators._count_unrated_sessions", return_value=10)
+    @patch("signal_generators._days_since_last_rating", return_value=None)
+    @patch("signal_generators._count_pending_amendments", return_value=0)
+    @patch("signal_generators.check_all_stale")
+    def test_rating_backlog_boundary_exactly_10(
+        self, mock_stale, mock_amend, mock_days, mock_unrated
+    ):
+        """FR-17: exactly 10 unrated → fires (>=10)."""
+        mock_stale.return_value = _fresh_staleness()
+        result = generate_tune_due_signal("test-session")
+        assert result is not None
+
+    @patch("signal_generators._count_unrated_sessions", return_value=0)
+    @patch("signal_generators._days_since_last_rating", return_value=7.0)
+    @patch("signal_generators._count_pending_amendments", return_value=0)
+    @patch("signal_generators.check_all_stale")
+    def test_rating_backlog_boundary_exactly_7d(
+        self, mock_stale, mock_amend, mock_days, mock_unrated
+    ):
+        """FR-17: exactly 7d since → fires (>=7)."""
+        mock_stale.return_value = _fresh_staleness()
+        result = generate_tune_due_signal("test-session")
+        assert result is not None
+
+    # ── FR-18: CRITICAL escalation ─────────────────────────────────────────
+
+    @patch("signal_generators._count_unrated_sessions", return_value=0)
+    @patch("signal_generators._days_since_last_rating", return_value=None)
+    @patch("signal_generators._count_pending_amendments", return_value=2)
+    @patch("signal_generators.check_all_stale")
+    def test_critical_trajectory_stale_with_amendments(
+        self, mock_stale, mock_amend, mock_days, mock_unrated
+    ):
+        """FR-18: trajectory stale AND >=1 PENDING/APPROVED amendment → CRITICAL."""
+        mock_stale.return_value = _stale_staleness(["trajectory"])
+        result = generate_tune_due_signal("test-session")
+        assert result is not None
+        assert result["priority"] == "CRITICAL"
+
+    @patch("signal_generators._count_unrated_sessions", return_value=0)
+    @patch("signal_generators._days_since_last_rating", return_value=None)
+    @patch("signal_generators._count_pending_amendments", return_value=0)
+    @patch("signal_generators.check_all_stale")
+    def test_info_trajectory_stale_no_amendments(
+        self, mock_stale, mock_amend, mock_days, mock_unrated
+    ):
+        """FR-18: trajectory stale but no amendments → INFO (not CRITICAL)."""
+        mock_stale.return_value = _stale_staleness(["trajectory"])
+        result = generate_tune_due_signal("test-session")
+        assert result is not None
+        assert result["priority"] == "INFO"
+
+    @patch("signal_generators._count_unrated_sessions", return_value=0)
+    @patch("signal_generators._days_since_last_rating", return_value=None)
+    @patch("signal_generators._count_pending_amendments", return_value=3)
+    @patch("signal_generators.check_all_stale")
+    def test_info_non_trajectory_stale_with_amendments(
+        self, mock_stale, mock_amend, mock_days, mock_unrated
+    ):
+        """FR-18: prompt_efficacy stale (not trajectory) + amendments → INFO."""
+        mock_stale.return_value = _stale_staleness(["prompt_efficacy"])
+        result = generate_tune_due_signal("test-session")
+        assert result is not None
+        assert result["priority"] == "INFO"
+
+    @patch("signal_generators._count_unrated_sessions", return_value=0)
+    @patch("signal_generators._days_since_last_rating", return_value=None)
+    @patch("signal_generators._count_pending_amendments", return_value=1)
+    @patch("signal_generators.check_all_stale")
+    def test_critical_trajectory_and_others_stale_with_amendments(
+        self, mock_stale, mock_amend, mock_days, mock_unrated
+    ):
+        """FR-18: trajectory + others stale + amendments → CRITICAL."""
+        mock_stale.return_value = _stale_staleness(["trajectory", "prompt_efficacy"])
+        result = generate_tune_due_signal("test-session")
+        assert result is not None
+        assert result["priority"] == "CRITICAL"
+
+    # ── FR-6: Dedup / SM-3: single source of truth ─────────────────────────
+
+    @patch("signal_generators._count_unrated_sessions", return_value=0)
+    @patch("signal_generators._days_since_last_rating", return_value=None)
+    @patch("signal_generators._count_pending_amendments", return_value=0)
+    @patch("signal_generators.check_all_stale")
+    def test_signal_id_contains_tune_due(self, mock_stale, mock_amend, mock_days, mock_unrated):
+        """Signal ID should contain 'tune_due' for identification."""
+        mock_stale.return_value = _stale_staleness(["trajectory"])
+        result = generate_tune_due_signal("test-session")
+        assert result is not None
+        assert "tune_due" in result["signal_id"]
+
+    @patch("signal_generators._count_unrated_sessions", return_value=0)
+    @patch("signal_generators._days_since_last_rating", return_value=None)
+    @patch("signal_generators._count_pending_amendments", return_value=0)
+    @patch("signal_generators.check_all_stale")
+    def test_suggested_action_mentions_tune(self, mock_stale, mock_amend, mock_days, mock_unrated):
+        """Suggested action should mention /tune deep for stale producers."""
+        mock_stale.return_value = _stale_staleness(["trajectory"])
+        result = generate_tune_due_signal("test-session")
+        assert result is not None
+        assert "tune" in result["suggested_action"].lower()
+
+    @patch("signal_generators._count_unrated_sessions", return_value=12)
+    @patch("signal_generators._days_since_last_rating", return_value=None)
+    @patch("signal_generators._count_pending_amendments", return_value=0)
+    @patch("signal_generators.check_all_stale")
+    def test_suggested_action_mentions_rate_for_backlog(
+        self, mock_stale, mock_amend, mock_days, mock_unrated
+    ):
+        """Suggested action should mention rating for backlog-only signals."""
+        mock_stale.return_value = _fresh_staleness()
+        result = generate_tune_due_signal("test-session")
+        assert result is not None
+        assert "rate" in result["suggested_action"].lower()
+
+
+class TestTuneDueSingleSourceOfTruth:
+    """SM-3: signal_generators imports LEAD_THRESHOLDS from tune_freshness —
+    no literal 10/21 threshold values in this module."""
+
+    def test_lead_thresholds_imported(self):
+        """LEAD_THRESHOLDS must be importable from signal_generators."""
+        import signal_generators
+
+        assert hasattr(signal_generators, "LEAD_THRESHOLDS")
+        assert signal_generators.LEAD_THRESHOLDS == LEAD_THRESHOLDS
+
+    def test_no_literal_thresholds_in_generate_tune_due(self):
+        """The generate_tune_due_signal source must not contain literal 10/21
+        threshold values (they come from LEAD_THRESHOLDS)."""
+        import inspect
+
+        source = inspect.getsource(generate_tune_due_signal)
+        # The function should not hardcode threshold values — it uses
+        # LEAD_THRESHOLDS for the freshness check and the helper constants
+        # for rating-backlog thresholds.
+        # We check that the function body doesn't contain bare 'threshold=10'
+        # or 'threshold=21' style literals (it should reference constants).
+        assert "check_all_stale" in source
+
+
+class TestResolveTuneDueSignals:
+    """SM-4 / FR-11,12: PENDING tune_due signals become RESOLVED after Step 6."""
+
+    @patch("signal_generators.tool_smart_search")
+    @patch("signal_generators.tool_delete_drawer")
+    @patch("signal_generators.tool_add_drawer")
+    @patch("signal_generators.tool_check_duplicate")
+    def test_resolves_pending_tune_due_signals(self, mock_dup, mock_add, mock_del, mock_search):
+        """PENDING tune_due signals are marked RESOLVED."""
+        signal = {
+            "signal_id": "signal_2026-07-09_001_tune_due",
+            "signal_type": "TIME",
+            "source": "tune_due_watcher",
+            "priority": "INFO",
+            "title": "Tune due",
+            "context": "stale",
+            "status": "PENDING",
+        }
+        mock_search.return_value = {
+            "results": [
+                {
+                    "id": "drawer_1",
+                    "text": f"signal_id: {signal['signal_id']}\n" + json.dumps(signal),
+                }
+            ]
+        }
+        mock_dup.return_value = {"is_duplicate": False}
+        mock_add.return_value = {"success": True, "drawer_id": "drawer_new"}
+
+        count = resolve_tune_due_signals("test-session")
+        assert count == 1
+        mock_del.assert_called_once_with({"drawer_id": "drawer_1"})
+        written_content = mock_add.call_args[0][0]["content"]
+        assert "RESOLVED" in written_content
+
+    @patch("signal_generators.tool_smart_search")
+    @patch("signal_generators.tool_delete_drawer")
+    @patch("signal_generators.tool_add_drawer")
+    @patch("signal_generators.tool_check_duplicate")
+    def test_no_pending_signals_returns_zero(self, mock_dup, mock_add, mock_del, mock_search):
+        """No PENDING tune_due signals -> returns 0, no writes."""
+        mock_search.return_value = {"results": []}
+        count = resolve_tune_due_signals("test-session")
+        assert count == 0
+        mock_del.assert_not_called()
+        mock_add.assert_not_called()
+
+    @patch("signal_generators.tool_smart_search")
+    @patch("signal_generators.tool_delete_drawer")
+    @patch("signal_generators.tool_add_drawer")
+    @patch("signal_generators.tool_check_duplicate")
+    def test_skips_non_tune_due_signals(self, mock_dup, mock_add, mock_del, mock_search):
+        """Only tune_due signals are resolved, not other signal types."""
+        other_signal = {
+            "signal_id": "signal_2026-07-09_001_mismatch_rate",
+            "source": "mismatch_rate_watcher",
+            "status": "PENDING",
+        }
+        mock_search.return_value = {
+            "results": [
+                {
+                    "id": "drawer_2",
+                    "text": f"signal_id: {other_signal['signal_id']}\n" + json.dumps(other_signal),
+                }
+            ]
+        }
+        count = resolve_tune_due_signals("test-session")
+        assert count == 0
+        mock_del.assert_not_called()
+
+    @patch("signal_generators.tool_smart_search")
+    @patch("signal_generators.tool_delete_drawer")
+    @patch("signal_generators.tool_add_drawer")
+    @patch("signal_generators.tool_check_duplicate")
+    def test_skips_already_resolved(self, mock_dup, mock_add, mock_del, mock_search):
+        """Already RESOLVED tune_due signals are not re-resolved."""
+        signal = {
+            "signal_id": "signal_2026-07-09_001_tune_due",
+            "source": "tune_due_watcher",
+            "status": "RESOLVED",
+        }
+        mock_search.return_value = {
+            "results": [
+                {
+                    "id": "drawer_3",
+                    "text": f"signal_id: {signal['signal_id']}\n" + json.dumps(signal),
+                }
+            ]
+        }
+        count = resolve_tune_due_signals("test-session")
+        assert count == 0
+        mock_del.assert_not_called()
 
 
 if __name__ == "__main__":

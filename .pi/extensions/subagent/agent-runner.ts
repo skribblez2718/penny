@@ -70,6 +70,53 @@ function resolveDefaultProvider(): string | undefined {
   return undefined;
 }
 
+// Map a model id to the provider that DECLARES it, by reading the model catalog
+// (models.json). This is what makes a MIXED Claude+Ollama fleet work: an agent
+// pinned to an Ollama-provider model (e.g. `glm-5.2:cloud`) must be dispatched
+// with `--provider ollama`, NOT the global `defaultProvider` (which is
+// `anthropic` for Penny herself). Without this, `pi --model glm-5.2:cloud`
+// resolves against the default provider (anthropic) and 404s
+// (`not_found_error`), taking down every agent-backed skill.
+//
+// Candidates mirror resolveDefaultProvider's search order (project .pi first,
+// then the global agent config). The first declaration of an id wins.
+let _modelProviderMapCache: Map<string, string> | undefined;
+function loadModelProviderMap(): Map<string, string> {
+  if (_modelProviderMapCache) return _modelProviderMapCache;
+  const map = new Map<string, string>();
+  const candidates = [
+    process.env.PI_DIRECTORY ? path.join(process.env.PI_DIRECTORY, "models.json") : null,
+    path.join(os.homedir(), ".pi", "agent", "models.json"),
+  ].filter((p): p is string => Boolean(p));
+  for (const modelsPath of candidates) {
+    try {
+      const raw = fs.readFileSync(modelsPath, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        providers?: Record<string, { models?: Array<{ id?: string }> }>;
+      };
+      for (const [providerName, providerCfg] of Object.entries(parsed.providers ?? {})) {
+        for (const m of providerCfg.models ?? []) {
+          if (m.id && !map.has(m.id)) map.set(m.id, providerName);
+        }
+      }
+    } catch {
+      // missing/malformed catalog at this candidate — skip it
+    }
+  }
+  _modelProviderMapCache = map;
+  return map;
+}
+
+/**
+ * Resolve the provider that serves `modelId`, or undefined when the model is not
+ * declared in any catalog (in which case the caller falls back to the global
+ * default provider). Exported for unit testing.
+ */
+export function resolveProviderForModel(modelId: string | undefined): string | undefined {
+  if (!modelId) return undefined;
+  return loadModelProviderMap().get(modelId);
+}
+
 // ============================================================
 // Constants
 // ============================================================
@@ -351,13 +398,18 @@ export async function runSingleAgent(
   ];
   const model = modelOverride || agent.model;
   if (model) args.push("--model", model);
-  // Pass --provider so custom-provider models (e.g. a LiteLLM proxy defined in
-  // ~/.pi/agent/models.json) resolve correctly. Without it, `pi --model <id>`
-  // does cross-provider id resolution and can pick a provider with no API key,
-  // crashing the agent subprocess at startup (exit 1, only a `session` event).
-  // Precedence: agent frontmatter `provider:` → Pi's configured defaultProvider.
-  const provider = agent.provider || resolveDefaultProvider();
+  // Pass --provider so custom-provider models (e.g. Ollama :cloud models or a
+  // LiteLLM proxy defined in ~/.pi/agent/models.json) resolve correctly. Without
+  // it, `pi --model <id>` does cross-provider id resolution and can pick a
+  // provider that does not serve the model (crash / 404 not_found at startup).
+  // Precedence: agent frontmatter `provider:` → the provider that DECLARES this
+  // model in models.json (so an Ollama-model agent gets --provider ollama even
+  // when the global defaultProvider is anthropic) → Pi's configured default.
+  const provider = agent.provider || resolveProviderForModel(model) || resolveDefaultProvider();
   if (provider) args.push("--provider", provider);
+  // Per-agent thinking/effort level (frontmatter `thinking:`), e.g. xhigh. The
+  // spawned pi subprocess accepts `--thinking <off|minimal|low|medium|high|xhigh>`.
+  if (agent.thinking) args.push("--thinking", agent.thinking);
   // Pass all declared agent tools via --tools so Pi exposes them to the agent.
   // Pi's --tools flag is an allowlist — when passed, ONLY listed tools are
   // available. Without this, builtins and extensions would both be available,
@@ -555,7 +607,7 @@ export async function runSingleAgent(
         logger.error(
           "Agent spawn failed",
           { agent: agentName, error: err.message },
-          Object.assign(err, { code: "AGENT_SPAWN_ERROR" })
+          Object.assign(err, { code: "AGENT_SPAWN_ERROR" as const })
         );
         resolveOnce(1);
       });
@@ -580,7 +632,7 @@ export async function runSingleAgent(
       logger.warn(
         "Agent completed without message_end",
         { agent: agentName, events: eventCount, lastType: lastEventType, exitCode },
-        Object.assign(new Error("Completed without message_end"), { code: "AGENT_INCOMPLETE" })
+        Object.assign(new Error("Completed without message_end"), { code: "AGENT_INCOMPLETE" as const })
       );
       // Agent process exited cleanly (exitCode 0) but never emitted message_end.
       // This happens when Pi's SSE stream is killed mid-generation (e.g., 5-min

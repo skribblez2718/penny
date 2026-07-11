@@ -35,7 +35,16 @@ def _step(cp, agent, result):
     return <Name>Playbook(cp).step(session_id=SID, run_id=RID, agent=agent, result=result)
 ```
 
-See `apps/orchestration/tests/test_code_playbook.py` for the reference: gate pause/resume, the Ralph-Wiggum retry loop, budget exhaustion, contract-violation re-issue, and `recover_pending` re-presenting a pending gate.
+See `apps/orchestration/tests/test_code_playbook.py` for the reference: gate pause/resume, the Ralph-Wiggum retry loop, budget exhaustion, contract-violation re-issue, and `recover_pending` re-presenting a pending gate. `test_learn_playbook.py` adds the per-unit self-loop and verify⇄fix patterns.
+
+## Harness Facts (each cost a debugging round when guessed wrong)
+
+- **Run with the project venv.** `../../.venv/bin/python -m pytest tests/ -v` from `apps/orchestration/` — the `orchestration` package is installed in the venv; the system python raises `ModuleNotFoundError`.
+- **Gate/clarification resume agent is `"user"`** — `_step(cp, "user", {"user_response": "approve"})`. Not `__user__`.
+- **Parallel fan-in agent is `"__parallel__"`** with a batch list: `[{"branch_id": ..., "agent": ..., "exitCode": 0, "summary": {...}}, ...]` — all branches fed in ONE step.
+- **`Checkpointer.load(run_id)` returns a `CheckpointRecord`** — assert on attributes (`rec.status`, `rec.current_state_id`), not subscripts.
+- **`start()` precondition failures surface as an `error` directive**, not an exception — assert `d["action"] == "error"` and inspect `d["errors"]`; `pytest.raises` will not fire.
+- **`is_stalled(window=2)` needs two RECORDED iterations with identical gaps** before it trips — a stall-escalation test needs three failing rounds (fail→fix, fail→fix, fail→escalate), and `progress_check` runs before `route_after`'s exhaustion branch, so stall wins over exhaustion on the same step.
 
 ## Constraints
 

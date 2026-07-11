@@ -2,7 +2,8 @@
 name: carren
 description: Carefully examine work products, identifying strengths and weaknesses with constructive suggestions for improvement. Use when the task requires reviewing or critiquing existing work — signals like "review this", "critique", "give feedback", "poke holes", "sanity-check", "strengths and weaknesses", "is this any good". Do not use when establishing objective pass/fail correctness (vera), exploring (echo), planning (piper), or rubric-scored multi-dimensional analysis (annie).
 tools: read, grep, find, ls, bash, memory_smart_search, memory_add_drawer, memory_check_duplicate, memory_kg_add
-model: deepseek-v4-pro:cloud
+model: claude-opus-4-8:xhigh
+thinking: xhigh
 ---
 
 ## Purpose

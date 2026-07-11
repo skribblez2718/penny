@@ -6,9 +6,19 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { execSync } from "child_process";
-import * as fs from "fs";
-import * as path from "path";
+import { execSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Resolve paths relative to THIS file, not process.cwd(), so the suite passes
+// regardless of the directory vitest is launched from (the per-extension test
+// runner cd's into the extension dir; a root run does not). This file lives at
+// .pi/extensions/subagent/tests/e2e/, so the extension root is two levels up
+// and the project root is five.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const SUBAGENT_DIR = path.resolve(HERE, "../..");
+const PROJECT_ROOT = path.resolve(SUBAGENT_DIR, "../../..");
 
 describe("Subagent E2E — Extension Discovery", () => {
   it("should have pi available on PATH", () => {
@@ -17,14 +27,13 @@ describe("Subagent E2E — Extension Discovery", () => {
   });
 
   it("should have the subagent extension directory structure", () => {
-    const extDir = path.join(process.cwd(), ".pi/extensions/subagent");
-    expect(fs.existsSync(path.join(extDir, "index.ts"))).toBe(true);
-    expect(fs.existsSync(path.join(extDir, "package.json"))).toBe(true);
-    expect(fs.existsSync(path.join(extDir, "tsconfig.json"))).toBe(true);
+    expect(fs.existsSync(path.join(SUBAGENT_DIR, "index.ts"))).toBe(true);
+    expect(fs.existsSync(path.join(SUBAGENT_DIR, "package.json"))).toBe(true);
+    expect(fs.existsSync(path.join(SUBAGENT_DIR, "tsconfig.json"))).toBe(true);
   });
 
   it("should have agent definitions in .pi/agents/", () => {
-    const agentsDir = path.join(process.cwd(), ".pi/agents");
+    const agentsDir = path.join(PROJECT_ROOT, ".pi/agents");
     const agents = fs.readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
     expect(agents.length).toBeGreaterThan(0);
     expect(agents.map((f) => path.basename(f, ".md"))).toContain("echo");

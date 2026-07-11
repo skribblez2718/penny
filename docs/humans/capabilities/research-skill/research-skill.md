@@ -57,9 +57,11 @@ Sources are assessed using a 4-tier system:
 | Tier | Name                   | Examples                                      |
 | ---- | ---------------------- | --------------------------------------------- |
 | T1   | Primary/Authoritative  | Official docs, RFCs, arXiv papers, specs      |
-| T2   | Expert/Established     | ACM Queue, official blogs, recognized experts |
-| T3   | Community/Practitioner | High-vote SO, dev.to, tutorials               |
-| T4   | Unverified/Commercial  | Product pages, SEO content, unknown blogs     |
+| T2   | Expert/Established     | ACM Queue, official blogs, recognized experts, official vendor YouTube channels, conference talks |
+| T3   | Community/Practitioner | High-vote SO, dev.to, tutorials, established practitioner YouTube channels |
+| T4   | Unverified/Commercial  | Product pages, SEO content, unknown blogs, unverified YouTube channels |
+
+Video content is treated as a first-class source: for every sub-query, the research agent runs a YouTube-targeted search and pulls the transcript of any relevant, credible video (tiered the same way as written sources).
 
 **Confidence markers:**
 

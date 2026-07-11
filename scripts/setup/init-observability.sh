@@ -133,25 +133,10 @@ fi
 DATA_DIR="${PI_OBSERVABILITY_DATA_DIR:-$HOME/.local/share/penny/observability}"
 mkdir -p "$DATA_DIR"
 
-# Install systemd timer for daily database cleanup
-if command -v systemctl > /dev/null 2>&1 && systemctl --user > /dev/null 2>&1; then
-    echo -e "${YELLOW}Installing systemd cleanup timer...${NC}"
-    SYSTEMD_SRC="$PROJECT_ROOT/scripts/system/observability"
-    USER_SYSTEMD="$HOME/.config/systemd/user"
-    mkdir -p "$USER_SYSTEMD"
-
-    for unit in penny-observability-cleanup.service penny-observability-cleanup.timer; do
-        sed -e "s|{{PROJECT_ROOT}}|$PROJECT_ROOT|g" \
-            "$SYSTEMD_SRC/$unit" > "$USER_SYSTEMD/$unit"
-    done
-
-    systemctl --user daemon-reload
-    systemctl --user enable penny-observability-cleanup.timer
-    systemctl --user start penny-observability-cleanup.timer
-    echo -e "${GREEN}✓ Cleanup timer installed (runs daily)${NC}"
-else
-    echo -e "${YELLOW}systemd not available — skipping cleanup timer${NC}"
-fi
+# NOTE: no systemd/cron cleanup timer is installed. The observability server
+# bounds its own DB in-process via size-based rotation (startup + periodic
+# interval); see apps/observability/src/observability/scheduler.py. For manual,
+# out-of-band maintenance run scripts/system/observability/cleanup_db.py.
 
 echo ""
 echo -e "${GREEN}=== Observability Setup Complete (Python) ===${NC}"

@@ -85,14 +85,15 @@ describe("slugify", () => {
 });
 
 describe("output paths", () => {
-  it("builds a default path under output/word with a timestamp and uniquifier", () => {
-    const p = defaultOutputPath("/proj", "My Report", new Date(2026, 6, 5, 9, 30, 15, 42));
-    expect(p).toMatch(/^\/proj\/output\/word\/my-report_20260705_093015_042[a-z0-9]*\.docx$/);
+  it("builds a default temp path (…/penny/word/) with a timestamp and uniquifier, never the project tree", () => {
+    const p = defaultOutputPath("My Report", new Date(2026, 6, 5, 9, 30, 15, 42));
+    expect(p).toMatch(/[\\/]penny[\\/]word[\\/]my-report_20260705_093015_042[a-z0-9]*\.docx$/);
+    expect(p.startsWith(os.tmpdir())).toBe(true);
   });
 
   it("produces distinct default paths for same-second calls", () => {
     const now = new Date(2026, 6, 5, 9, 30, 15, 42);
-    expect(defaultOutputPath("/proj", "t", now)).not.toBe(defaultOutputPath("/proj", "t", now));
+    expect(defaultOutputPath("t", now)).not.toBe(defaultOutputPath("t", now));
   });
 
   it("resolves relative explicit paths against the project root", () => {
@@ -125,7 +126,7 @@ describe("buildSpec", () => {
     const spec = buildSpec({ markdown: "# Hello", title: "Hello" }, "/proj");
     expect(spec.markdown).toBe("# Hello");
     expect(String(spec.output_path)).toMatch(
-      /output\/word\/hello_\d{8}_\d{6}_\d{3}[a-z0-9]*\.docx$/
+      /[\\/]penny[\\/]word[\\/]hello_\d{8}_\d{6}_\d{3}[a-z0-9]*\.docx$/
     );
     expect(spec.project_root).toBe("/proj");
   });

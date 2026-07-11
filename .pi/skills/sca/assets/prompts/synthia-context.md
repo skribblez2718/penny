@@ -66,7 +66,7 @@ Write the full context reconstruction as mempalace entries in the P3 room, then
 emit a compact inline summary:
 
 ```
-SUMMARY:{"phase":"P3_CONTEXT","actors":[{"name":"<actor>","trust":"<level>"}],"data_classes":["<class>"],"pii_processed":<true|false>,"pii_evidence":"<one line>","external_integrations":["<name>"],"assumptions":["<one line>"],"unknowns":["<one line>"],"needs_clarification":<true|false>}
+SUMMARY:{"actors":[{"name":"<actor>","trust":"<level>"}],"data_classes":["<class>"],"pii_processed":<true|false>,"pii_evidence":"<one line>","external_integrations":["<name>"],"assumptions":["<one line>"],"unknowns":["<one line>"],"needs_clarification":<true|false>,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>"}
 ```
 
 Make the context evidence-anchored, get the PII decision right, and hand P4 and

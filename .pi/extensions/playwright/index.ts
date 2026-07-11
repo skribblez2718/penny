@@ -74,10 +74,6 @@ export default function playwrightExtension(pi: ExtensionAPI) {
       },
     });
 
-    if (ctx.hasUI) {
-      ctx.ui?.notify?.("Playwright browser tools loaded", "info");
-    }
-
     // --------------------------------------
     // Register tools based on capability gates
     // --------------------------------------

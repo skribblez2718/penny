@@ -9,6 +9,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -42,12 +43,9 @@ export function slugify(input: string, fallback = "document"): string {
   return slug || fallback;
 }
 
-/** Default output path: <projectRoot>/output/word/<slug>_<YYYYMMDD_HHMMSS>.docx */
-export function defaultOutputPath(
-  projectRoot: string,
-  title: string | undefined,
-  now: Date = new Date()
-): string {
+/** Default output path when the caller gives none: a per-run temp file under the
+ *  OS temp dir (…/penny/word/) — never the project tree. */
+export function defaultOutputPath(title: string | undefined, now: Date = new Date()): string {
   const stamp = [
     now.getFullYear(),
     String(now.getMonth() + 1).padStart(2, "0"),
@@ -64,7 +62,7 @@ export function defaultOutputPath(
     .toString(36)
     .slice(2, 6)}`;
   const name = `${slugify(title || "document")}_${stamp}_${time}_${uniq}.docx`;
-  return path.join(projectRoot, "output", "word", name);
+  return path.join(os.tmpdir(), "penny", "word", name);
 }
 
 /** Resolve the final output path from an optional explicit param. */
@@ -74,7 +72,7 @@ export function resolveOutputPath(
   projectRoot: string
 ): string {
   if (!outputPath) {
-    return defaultOutputPath(projectRoot, title);
+    return defaultOutputPath(title);
   }
   const resolved = path.isAbsolute(outputPath) ? outputPath : path.join(projectRoot, outputPath);
   return resolved.toLowerCase().endsWith(".docx") ? resolved : `${resolved}.docx`;
@@ -274,7 +272,7 @@ const wordGenerateParams = Type.Object({
   output_path: Type.Optional(
     Type.String({
       description:
-        "Destination .docx path. Defaults to <project>/output/word/<slug>_<timestamp>.docx. " +
+        "Destination .docx path. When omitted, writes to a temp file under the OS temp dir (…/penny/word/) — not the project tree. " +
         "Relative paths resolve against the project root.",
     })
   ),
@@ -354,7 +352,7 @@ export default function wordExtension(pi: ExtensionAPI): void {
       "Supports CommonMark plus tables and strikethrough; a leading H1 becomes the document " +
       "title automatically. Five built-in themes (executive/modern/minimal/editorial/tech) " +
       "control fonts and accent colors; optional cover page, table of contents, headers/footers, " +
-      "and page numbers. Output defaults to <project>/output/word/.",
+      "and page numbers. When output_path is omitted, output is written to the OS temp dir (…/penny/word/).",
     promptSnippet:
       "word_generate: render markdown into a professionally styled Word (.docx) document",
     parameters: wordGenerateParams,

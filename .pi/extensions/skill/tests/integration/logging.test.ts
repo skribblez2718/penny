@@ -11,7 +11,7 @@ describe("skill integration logging", () => {
 
   it("sends text format log to observability REST endpoint when PI_LOG_FORMAT=text", async () => {
     process.env.PI_LOG_FORMAT = "text";
-    const fetchSpy = vi.fn(() => Promise.resolve({ ok: true } as Response));
+    const fetchSpy = vi.fn((_url: string, _options?: RequestInit) => Promise.resolve({ ok: true } as Response));
     vi.stubGlobal("fetch", fetchSpy);
 
     const logger = createLogger("skill");

@@ -3,12 +3,13 @@
 Memory Bridge - Python bridge for MemPalace tools
 Called by the TypeScript extension to interact with MemPalace
 
-All 20 MemPalace MCP tools are available:
-- Palace (read): status, list_wings, list_rooms, get_taxonomy, search, smart_search, check_duplicate, get_aaak_spec
-- Palace (write): add_drawer, delete_drawer
+All 23 MemPalace tools are available:
+- Palace (read): status, list_wings, list_rooms, get_taxonomy, search, smart_search, check_duplicate, get_aaak_spec, list_drawers
+- Palace (write): add_drawer, delete_drawer, delete_drawers_by_room
 - Knowledge Graph: kg_query, kg_add, kg_invalidate, kg_timeline, kg_stats
 - Navigation: traverse, find_tunnels, graph_stats
 - Agent Diary: diary_write, diary_read
+- Signals: acknowledge_signal
 
 Configuration:
     MEMPALACE_PATH: Override default palace path (default: ~/.mempalace/palace)
@@ -53,6 +54,17 @@ except ImportError as e:
 # Initialize config and knowledge graph
 _config = MempalaceConfig()
 _kg = KnowledgeGraph()
+
+# Chunk reassembly (read-side inverse of _chunk_text) — regroup sibling chunks
+# into whole logical drawers so readers never see fragments. Sibling-module
+# import: works when run as a script (its dir is sys.path[0]) and when imported
+# by a consumer that put the bridge dir on sys.path; the fallback guarantees it
+# either way.
+try:
+    from chunk_reassembly import reassemble_rows
+except ImportError:  # pragma: no cover - import-context robustness
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from chunk_reassembly import reassemble_rows
 
 
 def _fix_blob_seq_ids(palace_path: str):
@@ -540,19 +552,31 @@ def tool_list_drawers(params: dict) -> dict:
     where = _wing_room_where(wing, room)
 
     try:
+        # Fetch ALL matching rows, then reassemble sibling chunks into whole
+        # logical drawers BEFORE applying offset/limit. This is deliberate:
+        # chunk siblings are not guaranteed contiguous in a get(), so a
+        # row-level limit/offset (the old behavior) could split a chunked drawer
+        # across a page boundary and hand callers a partial fragment. Collapsing
+        # over the full filtered set makes offset/limit operate on LOGICAL
+        # drawers and guarantees each drawer's content is complete. The store is
+        # bounded (callers already page at 10000), so fetching the filtered set
+        # is no heavier than the previous single 10000-row page.
         include = ["metadatas", "documents"] if include_content else ["metadatas"]
-        kwargs: dict = {"include": include, "limit": limit, "offset": offset}
+        kwargs: dict = {"include": include}
         if where:
             kwargs["where"] = where
         results = col.get(**kwargs)
 
-        metas = results.get("metadatas") or []
-        docs = results.get("documents") or []
+        logical = reassemble_rows(
+            results.get("ids") or [],
+            results.get("documents") or [],
+            results.get("metadatas") or [],
+        )
         drawers = []
-        for i, doc_id in enumerate(results["ids"]):
-            meta = metas[i] if i < len(metas) and metas[i] else {}
+        for d in logical[offset : offset + limit]:
+            meta = d.get("metadata") or {}
             drawer = {
-                "id": doc_id,
+                "id": d["id"],
                 "wing": meta.get("wing", ""),
                 "room": meta.get("room", ""),
                 "source_file": meta.get("source_file", ""),
@@ -563,7 +587,7 @@ def tool_list_drawers(params: dict) -> dict:
                 "expires_at": meta.get("expires_at", ""),
             }
             if include_content:
-                drawer["content"] = docs[i] if i < len(docs) else ""
+                drawer["content"] = d.get("content", "")
             drawers.append(drawer)
 
         return {"success": True, "drawers": drawers, "count": len(drawers)}

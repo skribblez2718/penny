@@ -41,16 +41,12 @@ When working on pi topics, read the docs and examples, and follow `.md` cross-re
 
 ## Index
 
-- [Agents](docs/agents/agents/AGENTS.md): Agent architecture, lifecycle, and invocation patterns
-- [Architecture](docs/agents/architecture/AGENTS.md): Canonical implementations, Pi alignment, coding standards
-- [Capabilities](docs/agents/capabilities/AGENTS.md): Penny features — skills, extensions, tooling, and workflows
-- [Coding](docs/agents/coding/AGENTS.md): Python and TypeScript best practices, security anti-patterns
-- [Documentation](docs/agents/documentation/AGENTS.md): AGENTS.md indexing rules and standards
-- [Extensions](docs/agents/extensions/AGENTS.md): Extension creation procedure and conventions
-- [Memory](docs/agents/memory/AGENTS.md): MemPalace tools and knowledge graph patterns
-- [Orchestration](docs/agents/orchestration/AGENTS.md): Shared FSM execution engine — BasePlaybook subclasses, checkpointer, self-recovery
-- [Prompts](docs/agents/prompts/AGENTS.md): Prompt architecture standards
-- [Skills](docs/agents/skills/AGENTS.md): Skill authoring standards and examples
-- [Penny Protocols](docs/penny/AGENTS.md): trigger-gated procedural docs — clarification, compaction-resume, routing/delegation, tool-usage (SYSTEM.md names the trigger; paths resolve here)
+The documentation is a tree of indexes. This root points only to the two
+next-level sub-indexes; each `AGENTS.md` links only to the level below it until
+you reach the leaf index that lists the source docs. Drill down — do not expect
+every topic to be enumerated here.
 
-`.pi/` resources (agents, extensions, skills, prompts, types, settings) are loaded automatically by Pi and are not duplicated in this index.
+- [Agent Documentation](docs/agents/AGENTS.md): everything Penny and her agents follow when performing tasks — agent architecture, capabilities, coding standards, documentation rules, extensions, memory, observability, orchestration, prompts, skills, and state management.
+- [Penny Protocols](docs/penny/AGENTS.md): trigger-gated procedural docs — clarification, compaction-resume, routing/delegation, tool-usage (SYSTEM.md names the trigger; paths resolve here).
+
+`.pi/` resources (agents, extensions, skills, prompts, types, settings) are loaded automatically by Pi and are not duplicated in this index. `docs/humans/` is a separate, human-facing tree (WHAT/WHY) and is intentionally NOT part of this agent-facing index chain.

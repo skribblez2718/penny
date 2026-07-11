@@ -44,6 +44,33 @@ The default discipline protects context window. The exception protects correctne
 
 Each `AGENTS.md` points only to the next level down; the leaf `AGENTS.md` (the one sitting in the directory where the source docs live) is the single source of truth for those paths. This is deliberate and load-bearing: **embedding knowledge paths in SYSTEM.md is the primary cause of Cognitive-Frame bloat** — every path added there is paid on every turn and multiplied into every subagent. Keep them in the index chain, where they cost nothing until the moment they're needed.
 
+## Docs reflect current state — no deprecation ledgers
+
+Documentation describes the system as it is **now**, not its history. Do not keep
+deprecation ledgers, "removed in vX" notes, or migration-tracking tables in the
+docs tree — they add permanent context-noise, drift out of sync, and duplicate
+what version control already records. When something is removed or replaced,
+**update or delete its docs in the same change** so docs, code, and other files
+stay in sync. Point-in-time planning/research under `research/` is a historical
+archive and is exempt: it records what was decided at a moment in time and may
+reference things later removed.
+
+## docs/humans/ carries no AGENTS.md
+
+`docs/humans/` is written for **people to read and navigate directly** — not for
+Penny's on-demand index walk. It therefore has **no `AGENTS.md` index files** and
+is **not linked from the `docs/agents/` index chain or the root `AGENTS.md`**.
+Human navigation relies on prose and `index.md` files, not the agent-facing
+lookup tables.
+
+The two trees stay deliberately parallel: `docs/agents/` is **HOW** Penny and her
+agents work (agent-facing, index-walked), `docs/humans/` is **WHAT/WHY** for a
+human audience. When a change touches a concept documented in both, update both
+so they do not drift.
+
+This is machine-enforced by `scripts/system/checks/check_agents_links.py`, which
+fails if any `AGENTS.md` appears anywhere under `docs/humans/`.
+
 ## Pi Auto-Discovery Behavior
 
 Pi loads AGENTS.md by walking UP from the current working directory to the filesystem root, not DOWN into subdirectories. This means:

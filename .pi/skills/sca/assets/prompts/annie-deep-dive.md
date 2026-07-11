@@ -135,7 +135,7 @@ class, component, missing invariant, exploit precondition, CWE/OWASP mapping,
 summary at the end:
 
 ```
-SUMMARY:{"phase":"P9_DEEP_DIVE","deep_dived":<count>,"tool_blind_findings":{"idor":<n>,"authz":<n>,"business_logic":<n>,"race_condition":<n>},"new_confirmed":<count>,"augment_requested":<true|false>,"new_rules":<count>,"evidence_basis":{"observed":<n>,"inferred":<n>,"assumed":<n>,"unknown":<n>}}
+SUMMARY:{"deep_dived":<count>,"tool_blind_findings":{"idor":<n>,"authz":<n>,"business_logic":<n>,"race_condition":<n>},"new_confirmed":<count>,"augment_requested":<true|false>,"new_rules":<count>,"evidence_basis":{"observed":<n>,"inferred":<n>,"assumed":<n>,"unknown":<n>},"augment":false,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>","needs_clarification":false}
 ```
 
 Be exhaustive on the tool-blind classes semgrep cannot see, disciplined about

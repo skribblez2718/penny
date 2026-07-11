@@ -51,6 +51,7 @@ quick-reference.md for the authoring standard it must stay consistent with.
 """
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -142,6 +143,24 @@ def register_playbook(Name: str, module_name: str) -> bool:
 
     PLAYBOOKS_INIT.write_text(text, encoding="utf-8")
     return True
+
+
+def register_skill_rooms(name: str) -> None:
+    """Register a new skill's MemPalace footprint in the retention manifest so its
+    scratch auto-decays from day one. Scaffolded skills use the penny-wing
+    convention (``skills/<name>-<session_id>``), already covered by the archiver's
+    ``penny/skills/`` base rule. A skill that instead needs a DEDICATED wing must
+    edit its manifest entry to ``convention: dedicated-wing`` (see the manifest
+    _comment for the shape). Idempotent; best-effort."""
+    manifest = PROJECT_ROOT / "scripts" / "system" / "tiered_memory" / "skill_rooms.json"
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    skills = data.setdefault("skills", {})
+    if name not in skills:
+        skills[name] = {"convention": "penny-wing"}
+        manifest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 # ============================================================
@@ -773,6 +792,7 @@ summary.
         self.test_path.write_text(self._build_test_playbook_source(), encoding="utf-8")
 
         register_playbook(self.Name, self.module_name)
+        register_skill_rooms(self.name)
 
         return skill_dir
 

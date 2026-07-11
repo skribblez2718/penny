@@ -53,7 +53,15 @@ from eval_lib import (  # noqa: E402
 BASELINE_PATH = eval_lib.EVALS_DIR / "baseline.json"
 HISTORY_PATH = eval_lib.REPO_ROOT / ".penny" / "evals" / "history.jsonl"
 
-SECTION_ORDER = ("compat", "flywheel", "quality", "retrieval", "prompt_efficacy", "judgment")
+SECTION_ORDER = (
+    "compat",
+    "flywheel",
+    "quality",
+    "retrieval",
+    "prompt_efficacy",
+    "judgment",
+    "trajectory",
+)
 
 STATUS_ICON = {PASS: "✅", FAIL: "❌", SKIP: "⏭️ ", ERROR: "💥"}
 

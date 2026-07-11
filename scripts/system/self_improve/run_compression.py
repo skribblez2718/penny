@@ -79,7 +79,7 @@ def _try_parse_json(text: str) -> Optional[Dict[str, Any]]:
 def _parse_timestamp(text: str) -> Optional[datetime]:
     """Extract the first ISO-8601 timestamp from text, if any."""
     match = re.search(
-        r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})?)",
+        r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)",
         text,
     )
     if not match:
@@ -90,9 +90,15 @@ def _parse_timestamp(text: str) -> Optional[datetime]:
         ts = ts[:-1] + "+00:00"
 
     try:
-        return datetime.fromisoformat(ts)
+        parsed = datetime.fromisoformat(ts)
     except ValueError:
         return None
+
+    # A timestamp without an explicit offset is treated as UTC so it can be
+    # compared against the offset-aware cutoff without raising TypeError.
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def _parse_outcome_record(text: str) -> Dict[str, Any]:

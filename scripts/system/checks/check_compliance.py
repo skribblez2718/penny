@@ -37,8 +37,6 @@ SKILL_REQUIRED_FILES = [
     "resources/flow.mmd",
 ]
 
-# Placeholder skills — not yet built onto the engine; skip structural validation.
-PLACEHOLDER_SKILLS = {"rez"}
 
 
 def run(cmd: list[str], cwd: str = ".", extra_env=None) -> tuple[bool, str]:
@@ -122,9 +120,6 @@ def check_skills() -> bool:
         if not skill_path.is_dir():
             continue
         if skill_path.name.startswith("."):
-            continue
-        if skill_path.name in PLACEHOLDER_SKILLS:
-            print(f"   ⏭️  {skill_path.name}: placeholder skill — skipping structural check")
             continue
 
         missing = []

@@ -33,23 +33,28 @@ One machine serves all three modes. The mode is detected at intake
 | `researching` | echo | Single agent researches ALL sub-queries |
 | `synthesizing` | synthia | Synthesize findings into one report |
 | `critiquing_report` | carren | Critique the report (deep only) |
+| `validating` | vera | Independent citation-grounding gate (all modes) |
 | `report_writing` | skribble | Write report.md, sources.md, README.md |
 | `unknown` / `awaiting_clarification` | — | HITL escalation staging / pause |
 | `complete` / `error` | — | Terminal states |
 
 Note: `researching` is a single echo agent instructed to research every
-sub-query (not a per-sub-query fan-out). Vera is not invoked — the legacy
-`validating` state was removed before the port.
+sub-query (not a per-sub-query fan-out). `validating` (vera) is an independent,
+evidence-based citation-grounding gate that runs in every mode before the report
+is written — it verifies each material claim in the synthesis is supported by a
+cited source (distinct from carren's subjective critique). A FAIL loops back to
+`synthesizing` to re-ground (bounded; honest exhaustion still ships; a stall
+escalates).
 
 ## Mode flow
 
 - **Quick:** `intake → researching (echo) → synthesizing (synthia) →
-  report_writing (skribble) → complete`. Planning is skipped.
+  validating (vera) → report_writing (skribble) → complete`. Planning is skipped.
 - **Standard:** `intake → planning (piper) → researching → synthesizing →
-  report_writing → complete`.
+  validating (vera) → report_writing → complete`.
 - **Deep:** `intake → planning → critiquing_plan (carren) → researching →
-  synthesizing → critiquing_report (carren) → report_writing → complete`, with
-  two bounded critique loops.
+  synthesizing → critiquing_report (carren) → validating (vera) → report_writing
+  → complete`, with two bounded critique loops plus the validation gate.
 
 `max_sub_queries` defaults to 1 (quick) / 3 (standard) / 4 (deep) and is
 enforced at dispatch.
@@ -63,10 +68,14 @@ Both deep-mode critique loops are bounded by `ctx.max_iterations`:
   `researching` with a recorded warning and the unresolved issues surfaced —
   never a forced approval.
 - **Report critique:** `critiquing_report → synthesizing → critiquing_report`
-  under the same rule; on exhaustion it proceeds to `report_writing`.
+  under the same rule; on exhaustion it proceeds to `validating`.
+- **Validation:** `validating → synthesizing → validating` while vera's verdict
+  is not PASS and budget remains; on exhaustion it proceeds to `report_writing`
+  with the unverified claims surfaced in the result — never shipped as verified.
 
-A critique that keeps raising the same issues across revisions is treated as
-stalled and escalates to the user instead of burning the remaining budget.
+A critique or validation pass that keeps raising the same issues across revisions
+is treated as stalled and escalates to the user instead of burning the remaining
+budget.
 
 ## Escalation
 

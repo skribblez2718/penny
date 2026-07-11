@@ -10,7 +10,7 @@ describe("observability integration logging", () => {
   });
 
   it("sends log via REST fallback for WebSocket error", async () => {
-    const fetchSpy = vi.fn(() => Promise.resolve({ ok: true } as Response));
+    const fetchSpy = vi.fn((_url: string, _options?: RequestInit) => Promise.resolve({ ok: true } as Response));
     vi.stubGlobal("fetch", fetchSpy);
 
     const logger = createLogger("observability");

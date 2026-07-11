@@ -6,7 +6,7 @@ Once processed, do not re-execute in this session.
 
 ## 1. Detection
 
-The compaction summary is prose markdown (`## Goal`, `## In-Flight Orchestration Runs`, `## Pending`, ...) ending in:
+The compaction summary is prose markdown (`## Goal`, `## Active Skill`, `## Current Work`, `## In-Flight Orchestration Runs`, `## Pending`, `## Next Steps`, ...) ending in:
 
 ```
 [RESUME-REFS v2]
@@ -23,7 +23,11 @@ Every line is a real, dereferenceable address. Placeholder IDs are never rendere
 
 ## 2. Reorient from the Prose
 
-Read the brief top to bottom: the goal, the active skill, any in-flight orchestration runs, pending questions to the user, constraints, key decisions, unresolved errors, and touched files. This is enough to continue most work without any retrieval.
+Read the brief top to bottom: the goal, the active skill, current work, any in-flight orchestration runs, pending questions to the user, next steps, constraints, key decisions, unresolved errors, and touched files. This is enough to continue most work without any retrieval.
+
+- **`## Goal` is the LATEST substantive intent, not the first-seen one.** The extractor scans newest-first with no keyword denylist, merges the split-turn window, and carries the prior goal forward only when the current window has nothing fresher. Trust it as the current objective.
+- **`## Active Skill` may be flagged `superseded by a newer request`.** That means a completed skill's goal was displaced by a later ad-hoc user message; the skill is shown for provenance, but `## Goal` (the newer request) is what you act on.
+- **`## Current Work` / `## Next Steps`** (when present) summarize what was in flight and the concrete next actions. A `Focus (from /compact): …` next step echoes the user's `/compact <focus>` hint — treat it as the priority.
 
 ## 3. Resume In-Flight Runs
 

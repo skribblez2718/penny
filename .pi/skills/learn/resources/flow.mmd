@@ -1,0 +1,47 @@
+stateDiagram-v2
+    [*] --> intake
+    intake --> ingesting : start_ingest
+    ingesting --> designing : ingest_done (parallel echo ×3 fan-in)
+    designing --> charter_gate : design_done
+    charter_gate --> authoring : approve
+    charter_gate --> designing : refine
+    charter_gate --> error : deny
+    authoring --> authoring : author_next (per lesson)
+    authoring --> assessing : author_done
+    assessing --> assessing : assess_next (per lesson)
+    assessing --> synthesizing : assess_done
+    synthesizing --> verifying : synth_done
+    verifying --> critiquing : verify_clean
+    verifying --> fixing : verify_fix (budget)
+    verifying --> complete : verify_exhausted (met=False)
+    fixing --> verifying : fix_done (always re-verify, whole corpus)
+    critiquing --> complete : critique_pass (APPROVE)
+    critiquing --> fixing : critique_fix (budget)
+    critiquing --> complete : critique_exhausted (met=False)
+
+    ingesting --> unknown : UNCERTAIN / needs_clarification
+    designing --> unknown
+    authoring --> unknown
+    assessing --> unknown
+    synthesizing --> unknown
+    verifying --> unknown : stalled violations
+    fixing --> unknown
+    critiquing --> unknown
+    unknown --> awaiting_clarification : escalate
+    awaiting_clarification --> designing : clarify (lesson progress preserved)
+
+    intake --> error : abort
+    ingesting --> error : abort
+    designing --> error : abort
+    charter_gate --> error : abort
+    authoring --> error : abort
+    assessing --> error : abort
+    synthesizing --> error : abort
+    verifying --> error : abort
+    fixing --> error : abort
+    critiquing --> error : abort
+    unknown --> error : abort
+    awaiting_clarification --> error : abort
+
+    complete --> [*]
+    error --> [*]

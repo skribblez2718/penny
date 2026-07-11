@@ -13,7 +13,7 @@ describe("agent-runner structured logging", () => {
   });
 
   it("emits structured ERROR log for agent spawn failure with AGENT_SPAWN_ERROR code", () => {
-    const err = Object.assign(new Error("ENOENT"), { code: "AGENT_SPAWN_ERROR" });
+    const err = Object.assign(new Error("ENOENT"), { code: "AGENT_SPAWN_ERROR" as const });
     logger.error("Agent spawn failed", { agent: "echo" }, err);
     expect(buffer).toHaveLength(1);
     expect(buffer[0].error?.code).toBe("AGENT_SPAWN_ERROR");
@@ -21,7 +21,7 @@ describe("agent-runner structured logging", () => {
   });
 
   it("emits structured WARN log for missing message_end with AGENT_INCOMPLETE code", () => {
-    const err = Object.assign(new Error("No message_end"), { code: "AGENT_INCOMPLETE" });
+    const err = Object.assign(new Error("No message_end"), { code: "AGENT_INCOMPLETE" as const });
     logger.warn(
       "Agent completed without message_end",
       { agent: "piper", events: 5, exitCode: 0 },

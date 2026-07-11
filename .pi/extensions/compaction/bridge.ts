@@ -101,11 +101,140 @@ export async function callBridge(
   });
 }
 
+// ============================================================
+// Fix B: config-gated, LLM-assisted previousSummary Goal merge
+//
+// SECURITY / RESILIENCE CONTRACT:
+//   - OFF by default. Enabled only via PI_COMPACTION_FIXB_ENABLED and only
+//     when a full LLM endpoint config is present; otherwise it returns null
+//     and the deterministic Fix A path stays authoritative. It is never the
+//     default/mandatory path and never skips-without-fallback.
+//   - Secrets reuse the existing env plumbing (PI_COMPACTION_LLM_API_KEY);
+//     no new secret storage is introduced.
+//   - The call is a structured JSON `fetch` — untrusted summary/message text
+//     travels as a request-body value, never interpolated into a shell or a
+//     command string. No new subprocess/injection surface.
+//   - AbortSignal-wired: the caller's signal is linked to an internal
+//     controller with a soft timeout; both are cleaned up in `finally` so no
+//     promise or listener dangles on timeout or cancellation.
+// ============================================================
+
+export interface LlmMergeGoalOptions {
+  /** The prior compaction's prose summary (source of continuity). */
+  previousSummary: string;
+  /** The deterministically-derived (Fix A) goal for this compaction. */
+  candidateGoal: string;
+  /** The user's focus hint for this compaction (from event.customInstructions). */
+  customInstructions?: string;
+  /** The compaction event's abort signal, linked so cancellation cascades. */
+  signal?: AbortSignal;
+  /** Soft budget before the internal controller aborts (default 12s). */
+  timeoutMs?: number;
+}
+
+interface LlmMergeConfig {
+  url: string;
+  apiKey: string;
+  model: string;
+}
+
+export type MergeCaller = (
+  cfg: LlmMergeConfig,
+  opts: LlmMergeGoalOptions,
+  signal: AbortSignal
+) => Promise<string | null>;
+
+const MERGE_SYSTEM_PROMPT =
+  "You reconcile a session's GOAL across a context compaction. You are given " +
+  "the previous summary and a candidate goal derived from the newest messages. " +
+  "Output ONLY the single best one-line goal (<=400 chars). The LATEST user " +
+  "intent is authoritative: never revert to an older goal when the candidate " +
+  "reflects a newer request. Honor the focus hint if present. No preamble.";
+
+function readFixBConfig(): LlmMergeConfig | null {
+  const enabled = (process.env.PI_COMPACTION_FIXB_ENABLED || "").toLowerCase();
+  if (enabled !== "1" && enabled !== "true") return null;
+  const url = process.env.PI_COMPACTION_LLM_URL || "";
+  const apiKey = process.env.PI_COMPACTION_LLM_API_KEY || "";
+  const model = process.env.PI_COMPACTION_LLM_MODEL || "";
+  // Missing model/endpoint/key → graceful fallback (treated as "not enabled").
+  if (!url || !apiKey || !model) return null;
+  return { url, apiKey, model };
+}
+
 /**
- * Indirection point so unit tests can substitute the bridge caller without
- * spawning Python. Production code always goes through `_internals.call`.
+ * Default merge caller: one OpenAI-compatible chat completion. Untrusted text
+ * is a JSON value, not a shell argument. Any non-2xx / malformed body yields
+ * null so the caller falls back to Fix A.
  */
-export const _internals = { call: callBridge };
+const defaultMergeCaller: MergeCaller = async (cfg, opts, signal) => {
+  const userContent =
+    `PREVIOUS SUMMARY:\n${opts.previousSummary.slice(0, 4000)}\n\n` +
+    `CANDIDATE GOAL (newest intent):\n${opts.candidateGoal.slice(0, 800)}` +
+    (opts.customInstructions ? `\n\nFOCUS HINT:\n${opts.customInstructions.slice(0, 800)}` : "");
+
+  const resp = await fetch(cfg.url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${cfg.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: cfg.model,
+      messages: [
+        { role: "system", content: MERGE_SYSTEM_PROMPT },
+        { role: "user", content: userContent },
+      ],
+      max_tokens: 200,
+      temperature: 0,
+    }),
+    signal,
+  });
+  if (!resp.ok) return null;
+  const data: unknown = await resp.json();
+  const firstChoice = asRecord(asArray(asRecord(data).choices)[0]);
+  const text = asString(asRecord(firstChoice.message).content);
+  return text.trim() ? text.trim().slice(0, 500) : null;
+};
+
+/**
+ * Indirection point so unit tests can substitute the bridge caller and the
+ * Fix B merge caller without spawning Python or hitting the network.
+ * Production code always goes through `_internals.call` / `_internals.mergeCaller`.
+ */
+export const _internals: { call: typeof callBridge; mergeCaller: MergeCaller } = {
+  call: callBridge,
+  mergeCaller: defaultMergeCaller,
+};
+
+/**
+ * Fix B entry point. Returns a merged goal string, or null to signal the
+ * caller must fall back to the deterministic Fix A goal. Returns null when
+ * Fix B is disabled/misconfigured, when the signal is already aborted, and
+ * on any timeout / abort / error / malformed response.
+ */
+export async function llmMergeGoal(opts: LlmMergeGoalOptions): Promise<string | null> {
+  const cfg = readFixBConfig();
+  if (!cfg) return null;
+  if (opts.signal?.aborted) return null;
+
+  const timeoutMs = opts.timeoutMs ?? 12_000;
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  if (opts.signal) opts.signal.addEventListener("abort", onAbort, { once: true });
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const merged = await _internals.mergeCaller(cfg, opts, controller.signal);
+    return merged && merged.trim() ? merged.trim().slice(0, 500) : null;
+  } catch {
+    // Timeout, abort, network error, or malformed response → Fix A fallback.
+    return null;
+  } finally {
+    clearTimeout(timer);
+    if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
+  }
+}
 
 // ============================================================
 // Engine Checkpointer (source of truth for run state)

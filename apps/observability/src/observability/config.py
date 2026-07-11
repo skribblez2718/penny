@@ -45,14 +45,12 @@ class Config:
     # WebSocket
     WS_PATH: str = "/ws"
 
-    # Cleanup
-    RETENTION_RAW_DAYS: int = int(os.getenv("PI_OBSERVABILITY_RETENTION_RAW_DAYS", "14"))
-    RETENTION_COMPACTION_DAYS: int = int(
-        os.getenv("PI_OBSERVABILITY_RETENTION_COMPACTION_DAYS", "90")
-    )
-    RETENTION_LOG_DAYS: int = int(os.getenv("PI_OBSERVABILITY_RETENTION_LOG_DAYS", "14"))
-    RETENTION_WATCHER_LOG_DAYS: int = int(os.getenv("PI_OBSERVABILITY_RETENTION_WATCHER_LOG_DAYS", "14"))
-    DB_SIZE_MAX_GB: float = float(os.getenv("PI_OBSERVABILITY_DB_SIZE_MAX_GB", "5"))
+    # Size-based rotation (replaces age+cron cleanup). The observability DB's
+    # disk use is bounded in-process: when the on-disk file reaches the cap, the
+    # oldest rows are evicted across ALL tables until the live bytes fall back to
+    # the floor. No VACUUM, no cron, no systemd.
+    DB_SIZE_MAX_GB: float = float(os.getenv("PI_OBSERVABILITY_DB_SIZE_MAX_GB", "5.0"))
+    DB_SIZE_FLOOR_GB: float = float(os.getenv("PI_OBSERVABILITY_DB_SIZE_FLOOR_GB", "1.0"))
 
     @classmethod
     def ensure_directories(cls) -> None:

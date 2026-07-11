@@ -41,7 +41,7 @@ def test_parse_verdict_takes_last_not_first():
     assert rj.parse_verdict("verdict: fail? no.\nFinal VERDICT: PASS") == "PASS"
 
 
-# ── Corpus + rubric well-formedness (the Fable asset) ────────────────────────
+# ── Corpus + rubric well-formedness (the Oracle asset) ────────────────────────
 
 
 def test_corpus_is_well_formed_and_covered_by_rubrics():
@@ -52,22 +52,22 @@ def test_corpus_is_well_formed_and_covered_by_rubrics():
     for rec in corpus:
         assert rec["id"] not in seen, f"duplicate id {rec['id']}"
         seen.add(rec["id"])
-        assert rec["fable_verdict"] in ("PASS", "FAIL")
-        assert 0 <= rec["fable_score"] <= 4
+        assert rec["oracle_verdict"] in ("PASS", "FAIL")
+        assert 0 <= rec["oracle_score"] <= 4
         assert rec["artifact"].strip()
-        assert rec["fable_reasoning"].strip()
+        assert rec["oracle_reasoning"].strip()
         assert rec["class"] in rubrics, f"{rec['class']} has no rubric"
-        if rec["fable_verdict"] == "FAIL":
+        if rec["oracle_verdict"] == "FAIL":
             assert rec["failure_mode"].strip(), f"{rec['id']} FAIL needs a failure_mode"
 
 
 def test_corpus_has_both_verdicts_and_hard_cases():
     corpus = rj.load_corpus()
-    verdicts = {r["fable_verdict"] for r in corpus}
+    verdicts = {r["oracle_verdict"] for r in corpus}
     assert verdicts == {"PASS", "FAIL"}, "corpus must contain both verdicts"
     # hard cases = borderline FAILs (score 2): the plausible-but-wrong ones a weak
     # judge waves through. Their presence is what makes the metric meaningful.
-    assert any(r["fable_verdict"] == "FAIL" and r["fable_score"] == 2 for r in corpus)
+    assert any(r["oracle_verdict"] == "FAIL" and r["oracle_score"] == 2 for r in corpus)
 
 
 def test_rubrics_have_required_fields():
@@ -89,15 +89,15 @@ def test_build_judge_prompt_includes_rubric_and_artifact():
 # ── Scoring math ─────────────────────────────────────────────────────────────
 
 
-def _cell(id, cls, fable, judge, error=None):
+def _cell(id, cls, oracle, judge, error=None):
     return {
         "id": id,
         "class": cls,
         "model": "m",
         "family": "glm",
-        "fable_verdict": fable,
+        "oracle_verdict": oracle,
         "judge_verdict": judge,
-        "agree": (judge == fable) if judge is not None else None,
+        "agree": (judge == oracle) if judge is not None else None,
         "error": error,
     }
 
@@ -112,8 +112,8 @@ def test_score_model_agreement_false_pass_and_false_fail():
     s = rj.score_model(cells)
     assert s["n"] == 4
     assert s["agreement"] == pytest.approx(0.5)
-    assert s["false_pass_rate"] == pytest.approx(0.5)  # 1 of 2 Fable-FAIL
-    assert s["false_fail_rate"] == pytest.approx(0.5)  # 1 of 2 Fable-PASS
+    assert s["false_pass_rate"] == pytest.approx(0.5)  # 1 of 2 Oracle-FAIL
+    assert s["false_fail_rate"] == pytest.approx(0.5)  # 1 of 2 Oracle-PASS
     assert set(s["per_class"]) == {"plan_quality", "finding_validity"}
 
 
@@ -142,7 +142,7 @@ def test_cohen_kappa_perfect_and_chance():
         _cell("b", "c", "FAIL", "FAIL"),
     ]
     assert rj.cohen_kappa(perfect) == 1.0
-    # judge always says PASS while fable is split → agreement 0.5, kappa 0
+    # judge always says PASS while oracle is split → agreement 0.5, kappa 0
     chance = [
         _cell("a", "c", "PASS", "PASS"),
         _cell("b", "c", "FAIL", "PASS"),
@@ -166,7 +166,7 @@ def test_best_judge_picks_highest_agreement_then_lowest_false_pass():
 
 
 def test_best_judge_prefers_fail_coverage_over_inflated_agreement():
-    # 'a' has perfect agreement but scored no Fable-FAIL records (only easy PASS
+    # 'a' has perfect agreement but scored no Oracle-FAIL records (only easy PASS
     # cases); 'b' has lower agreement but real FAIL coverage. Pick b, so the
     # safety gate is computable and agreement isn't inflated by skipped hard cases.
     per_model = {

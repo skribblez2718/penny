@@ -12,6 +12,7 @@ metadata:
       - echo
       - carren
       - synthia
+      - vera
       - skribble
 ---
 
@@ -68,20 +69,26 @@ skill({
 
 | Mode     | Max Sub-Queries | Agents Used                                       |
 | -------- | --------------- | ------------------------------------------------- |
-| Quick    | 1               | Echo, Synthia, Skribble                           |
-| Standard | 3               | Piper, Echo, Synthia, Skribble                    |
-| Deep     | 4               | Piper, Carren, Echo, Synthia, Skribble            |
+| Quick    | 1               | Echo, Synthia, Vera, Skribble                     |
+| Standard | 3               | Piper, Echo, Synthia, Vera, Skribble              |
+| Deep     | 4               | Piper, Carren, Echo, Synthia, Vera, Skribble      |
 
 ## Agent Flow
 
-`researching` is a single Echo agent that researches all sub-queries. Vera is
-not invoked (the legacy `validating` state was removed before the engine port).
+`researching` is a single Echo agent that researches all sub-queries. `validating`
+(Vera) is an **independent, evidence-based citation-grounding gate** that runs in
+every mode as the final check before the report is written: it verifies each
+material claim in the synthesis is supported by a cited source (distinct from
+Carren's *subjective* critique). A FAIL loops back to synthesizing to re-ground
+(bounded; honest exhaustion still ships the report with the unverified claims
+surfaced; a stall escalates to the user). This keeps the generator from being its
+own only verifier.
 
-**Quick:** intake → researching (Echo) → synthesizing (Synthia) → report_writing (Skribble) → complete
+**Quick:** intake → researching (Echo) → synthesizing (Synthia) → validating (Vera) → report_writing (Skribble) → complete
 
-**Standard:** intake → planning (Piper) → researching (Echo) → synthesizing (Synthia) → report_writing (Skribble) → complete
+**Standard:** intake → planning (Piper) → researching (Echo) → synthesizing (Synthia) → validating (Vera) → report_writing (Skribble) → complete
 
-**Deep:** intake → planning (Piper) → critiquing_plan (Carren) → researching (Echo) → synthesizing (Synthia) → critiquing_report (Carren) → report_writing (Skribble) → complete, with two bounded critique loops
+**Deep:** intake → planning (Piper) → critiquing_plan (Carren) → researching (Echo) → synthesizing (Synthia) → critiquing_report (Carren) → validating (Vera) → report_writing (Skribble) → complete, with two bounded critique loops plus the validation gate
 
 ## Post-Completion
 

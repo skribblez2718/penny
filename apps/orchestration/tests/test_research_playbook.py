@@ -91,6 +91,9 @@ def test_quick_happy_path_to_complete(cp):
     d = _step(cp, "echo", {"explore_complete": True, "confidence": "PROBABLE"})
     assert d["agent"] == "synthia" and d["state_id"] == "synthesizing"
     d = _step(cp, "synthia", {"synthesis_complete": True, "theme_count": 2})
+    # independent verification gate (vera) runs in every mode before the report
+    assert d["agent"] == "vera" and d["state_id"] == "validating"
+    d = _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})
     assert d["agent"] == "skribble" and d["state_id"] == "report_writing"
     # the output directory is a real ABSOLUTE path (legacy passed a literal '~')
     expected_dir = str(
@@ -119,7 +122,11 @@ def test_standard_happy_path_to_complete(cp):
     assert "Research sub-query 2: q2" in d["task_summary"]
     assert f"{SID}-echo-1 Research Findings" in d["task_summary"]
     assert _step(cp, "echo", {"explore_complete": True})["state_id"] == "synthesizing"
-    assert _step(cp, "synthia", {"synthesis_complete": True})["state_id"] == "report_writing"
+    assert _step(cp, "synthia", {"synthesis_complete": True})["state_id"] == "validating"
+    assert (
+        _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})["state_id"]
+        == "report_writing"
+    )
     d = _step(cp, "skribble", SKRIBBLE_OK)
     assert d["action"] == "complete" and d["result"]["met"] is True
     assert d["result"]["sub_queries"] == ["q1", "q2"]
@@ -169,10 +176,11 @@ def test_plan_critique_exhaustion_proceeds_honestly_with_warning(cp):
     _step(cp, "piper", {"plan_steps": ["q1"], "plan_complete": True})
     d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["issue c"]})  # exhausted
     assert d["action"] == "invoke_agent" and d["agent"] == "echo" and d["state_id"] == "researching"
-    # finish the deep run: research -> synth -> report critique -> report
+    # finish the deep run: research -> synth -> report critique -> validate -> report
     _step(cp, "echo", {"explore_complete": True})
     _step(cp, "synthia", {"synthesis_complete": True})
     _step(cp, "carren", {"verdict": "APPROVE", "issues": []})
+    _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})
     d = _step(cp, "skribble", SKRIBBLE_OK)
     assert d["action"] == "complete"
     assert d["result"]["met"] is True  # a report WAS written
@@ -264,6 +272,8 @@ def test_report_critique_exhaustion_completes_honestly(cp):
     _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["r2"]})  # iter 1
     _step(cp, "synthia", {"synthesis_complete": True})
     d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["r3"]})  # exhausted
+    assert d["agent"] == "vera" and d["state_id"] == "validating"
+    d = _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})
     assert d["agent"] == "skribble" and d["state_id"] == "report_writing"
     d = _step(cp, "skribble", SKRIBBLE_OK)
     assert d["action"] == "complete"
@@ -282,6 +292,82 @@ def test_stalled_report_critique_escalates(cp):
     d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["thin evidence"]})
     assert d["action"] == "escalate_to_user"
     assert "no measurable progress" in d["unknown_reason"]
+
+
+# ---------------------------------------------------------------------------
+# validation gate (vera): independent citation-grounding pass — runs in ALL
+# modes as the final gate before report_writing; a FAIL loops back to
+# synthesizing (bounded), honest exhaustion still ships, stall escalates.
+# ---------------------------------------------------------------------------
+
+
+def _standard_to_validating(cp):
+    _start(cp)
+    _step(cp, "piper", {"plan_steps": ["q1", "q2"], "plan_complete": True})
+    _step(cp, "echo", {"explore_complete": True})
+    return _step(cp, "synthia", {"synthesis_complete": True})
+
+
+def test_synthesis_routes_to_validation_gate(cp):
+    d = _standard_to_validating(cp)
+    assert d["agent"] == "vera" and d["state_id"] == "validating"
+
+
+def test_validation_pass_proceeds_to_report(cp):
+    _standard_to_validating(cp)
+    d = _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})
+    assert d["agent"] == "skribble" and d["state_id"] == "report_writing"
+
+
+def test_validation_failure_loops_back_to_synthesizing(cp):
+    _standard_to_validating(cp)
+    d = _step(cp, "vera", {"verdict": "FAIL", "unsupported_claims": ["claim 3 has no source"]})
+    assert d["agent"] == "synthia" and d["state_id"] == "synthesizing"
+    assert "VALIDATION revision" in d["task_summary"]
+    assert "claim 3 has no source" in d["task_summary"]
+    # re-synthesis routes straight back to vera (not through critique in standard)
+    d = _step(cp, "synthia", {"synthesis_complete": True})
+    assert d["agent"] == "vera" and d["state_id"] == "validating"
+    d = _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})
+    assert d["state_id"] == "report_writing"
+
+
+def test_validation_exhaustion_completes_honestly(cp):
+    # A verifier that keeps failing with CHANGING claims walks the budget then
+    # ships the report with the unverified claims surfaced — never spins, never
+    # silently marks unverified claims as verified.
+    _standard_to_validating(cp)
+    _step(cp, "vera", {"verdict": "FAIL", "unsupported_claims": ["c1"]})  # iter 0
+    _step(cp, "synthia", {"synthesis_complete": True})
+    _step(cp, "vera", {"verdict": "FAIL", "unsupported_claims": ["c2"]})  # iter 1
+    _step(cp, "synthia", {"synthesis_complete": True})
+    d = _step(cp, "vera", {"verdict": "FAIL", "unsupported_claims": ["c3"]})  # exhausted
+    assert d["agent"] == "skribble" and d["state_id"] == "report_writing"
+    d = _step(cp, "skribble", SKRIBBLE_OK)
+    assert d["action"] == "complete"
+    assert d["result"]["met"] is True  # a report WAS written
+    assert d["result"]["validation_exhausted"] is True
+    assert d["result"]["unresolved_issues"] == ["c3"]
+    assert any("validation budget exhausted" in w for w in d["result"]["warnings"])
+
+
+def test_stalled_validation_escalates(cp):
+    _standard_to_validating(cp)
+    _step(cp, "vera", {"verdict": "FAIL", "unsupported_claims": ["same claim"]})
+    _step(cp, "synthia", {"synthesis_complete": True})
+    _step(cp, "vera", {"verdict": "FAIL", "unsupported_claims": ["same claim"]})
+    _step(cp, "synthia", {"synthesis_complete": True})
+    d = _step(cp, "vera", {"verdict": "FAIL", "unsupported_claims": ["same claim"]})
+    assert d["action"] == "escalate_to_user"
+    assert "no measurable progress" in d["unknown_reason"]
+
+
+def test_deep_reaches_validation_after_report_critique_approve(cp):
+    _deep_to_report_critique(cp)
+    d = _step(cp, "carren", {"verdict": "APPROVE", "issues": []})
+    assert d["agent"] == "vera" and d["state_id"] == "validating"
+    d = _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})
+    assert d["agent"] == "skribble" and d["state_id"] == "report_writing"
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +438,7 @@ def test_failed_report_write_completes_with_met_false(cp):
     _start(cp, goal=QUICK_GOAL)
     _step(cp, "echo", {"explore_complete": True})
     _step(cp, "synthia", {"synthesis_complete": True})
+    _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})
     d = _step(cp, "skribble", {"write_complete": False, "files_written": []})
     assert d["action"] == "complete" and d["result"]["met"] is False
 

@@ -1,13 +1,31 @@
 /**
  * Penny Compact Artifact — Zod Schemas (Canonical Runtime Source)
  *
- * v2.0.0: the artifact is a resumability checkpoint — a prose brief plus
+ * v2.1.0: the artifact is a resumability checkpoint — a prose brief plus
  * pointers into durable stores (engine checkpointer, mempalace, KG,
  * outcome ledger). These schemas are the single source of truth for
  * TypeScript types AND runtime validators.
+ *
+ * 2.1.0 is an ADDITIVE bump over 2.0.0: every new field is optional, so a
+ * 2.0.0-shaped artifact still validates unchanged. New in 2.1.0:
+ *   - `dominant_skill.superseded` — a completed skill whose goal was
+ *     displaced by a fresher user pivot (listed under Active Skill, but it
+ *     no longer sets Goal).
+ *   - `current_work` / `next_steps` — rendered as prose sections when
+ *     derivable from live signal.
+ *   - `metadata.compaction_reason` / `metadata.custom_instructions` — the
+ *     named observability sink for the triggering reason and focus hint.
+ *   - `metadata.goal_streak` — consecutive byte-identical Goal count, for
+ *     the goal-stagnation regression canary (observational only).
  */
 
 import { z } from "zod";
+
+/** The current artifact schema version. Single source of truth. */
+export const SCHEMA_VERSION = "2.1.0" as const;
+
+/** The reason Pi triggered this compaction (mirrors Pi's event.reason). */
+export const CompactionReasonEnum = z.enum(["manual", "threshold", "overflow"]);
 
 // ============================================================
 // Enums
@@ -74,6 +92,10 @@ export const SkillInvocationRefSchema = z.object({
   goal: z.string().min(1).max(500),
   completed: z.boolean(),
   result_summary: z.string().max(500).optional(),
+  // 2.1.0: set when a COMPLETED skill's goal was displaced by a fresher
+  // user pivot. The skill stays listed under Active Skill, but Goal is
+  // sourced from the later user message instead.
+  superseded: z.boolean().optional(),
 });
 
 export const MempalaceRoomRefSchema = z.object({
@@ -133,6 +155,13 @@ export const PiBoundaryDebugSchema = z.object({
 export const ArtifactMetadataSchema = z.object({
   eviction_log: z.array(EvictionRecordSchema).max(10),
   pi_boundary: PiBoundaryDebugSchema.optional(),
+  // 2.1.0 named observability sink: what triggered the compaction and the
+  // focus hint the user passed (e.g. `/compact <focus>`). Additive/optional.
+  compaction_reason: CompactionReasonEnum.optional(),
+  custom_instructions: z.string().max(2000).optional(),
+  // 2.1.0: consecutive compactions with a byte-identical Goal, for the
+  // goal-stagnation regression canary. Observational; never gates behavior.
+  goal_streak: z.number().int().nonnegative().optional(),
 });
 
 // ============================================================
@@ -151,6 +180,10 @@ export const PennyCompactArtifactSchema = z.object({
   constraints: z.array(z.string().min(1).max(200)).max(20),
   preferences: z.array(z.string().min(1)).max(10),
   pending: PendingStateSchema.nullable(),
+
+  // WORK CONTEXT (new 2.1.0 — rendered as prose when derivable, else omitted)
+  current_work: z.string().min(1).max(1000).optional(),
+  next_steps: z.array(z.string().min(1).max(300)).max(10).optional(),
 
   // DECISIONS & OUTCOMES
   decisions: z.array(DecisionRefSchema).max(20),
@@ -193,3 +226,4 @@ export type FileContext = z.infer<typeof FileContextSchema>;
 export type ArtifactMetadata = z.infer<typeof ArtifactMetadataSchema>;
 export type EvictionRecord = z.infer<typeof EvictionRecordSchema>;
 export type BoundaryShiftRecord = z.infer<typeof BoundaryShiftRecordSchema>;
+export type CompactionReason = z.infer<typeof CompactionReasonEnum>;

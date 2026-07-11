@@ -20,6 +20,8 @@ Consistent structure enables Pi's auto-discovery, the skill tool's mode detectio
    ```
 4. **`assets/prompts/*.md` are Domain Guidance.** One per agent role used by the skill. Injected via `<skill_context>`.
 5. **Tests are mandatory.** The playbook is tested in `apps/orchestration/tests/` (see `testing.md`).
+6. **The mempalace footprint is registered.** Every skill has an entry in `scripts/system/tiered_memory/skill_rooms.json` (`{"convention": "penny-wing"}` for `skills/<name>-<session_id>` rooms, or a dedicated-wing entry) so its scratch decays. `check_skill_structure.py` enforces this.
+7. **Design precedes structure.** The states, gates, and knowledge split are derived per `design-methodology.md` — this standard specifies the container, not the design.
 
 ## Directory Structure
 
@@ -37,7 +39,8 @@ apps/orchestration/tests/test_<name>_playbook.py           # playbook tests
 │       ├── echo.md             # Domain guidance per agent
 │       └── ...
 └── resources/
-    └── reference.md            # Skill-specific reference
+    ├── reference.md            # Skill-specific reference (checker-required)
+    └── flow.mmd                # State diagram mirroring machine_cls (checker-required)
 ```
 
 ## SKILL.md Frontmatter
@@ -77,6 +80,7 @@ Run state (current node, iteration count, per-state summaries) lives in the engi
 
 | File | Purpose |
 |------|---------|
+| `docs/agents/skills/design-methodology.md` | How to design the workflow this standard packages |
 | `docs/agents/skills/skill-md-format.md` | SKILL.md format specification |
 | `docs/agents/skills/skill-md-template.md` | Copy-paste template |
 | `docs/agents/skills/testing.md` | Playbook test requirements |

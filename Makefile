@@ -1,4 +1,4 @@
-.PHONY: setup venv install-py install-js init sca-tools clean test test-integration lint format evals evals-update-baseline docker-build docker-up docker-down
+.PHONY: setup venv install-py install-js init sca-tools clean test test-integration lint format evals evals-update-baseline rate auto-capture trust trajectory review tune tune-deep docker-build docker-up docker-down
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 
@@ -53,7 +53,7 @@ test:
 	@echo ""
 	@bash -c 'set -uo pipefail; source .venv/bin/activate; \
 	  export PYTEST_TIMEOUT=$(PYTEST_TIMEOUT); rc=0; \
-	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests apps/orchestration/tests apps/observability/tests apps/observability/src/observability/tests; do \
+	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests apps/orchestration/tests apps/observability/tests apps/observability/src/observability/tests .pi/extensions/memory/tests; do \
 	    [ -d "$$d" ] || continue; \
 	    echo "==================== pytest $$d ===================="; \
 	    python -m pytest "$$d" -p no:cacheprovider -m "$(PYTEST_MARKERS)" --tb=short -q || rc=1; \
@@ -66,7 +66,7 @@ test:
 test-integration:
 	@bash -c 'set -uo pipefail; source .venv/bin/activate; \
 	  export PYTEST_TIMEOUT=$(PYTEST_TIMEOUT); rc=0; \
-	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests; do \
+	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests .pi/extensions/memory/tests; do \
 	    [ -d "$$d" ] || continue; \
 	    echo "==================== pytest $$d ===================="; \
 	    python -m pytest "$$d" -p no:cacheprovider --tb=short -q || rc=1; \
@@ -82,6 +82,26 @@ evals:
 evals-update-baseline:
 	@.venv/bin/python scripts/system/evals/run_evals.py --update-baseline
 
+# Human quick-rating of recent work → high-signal outcomes into the ledger.
+# This is the source that actually feeds the self-improvement flywheel (the
+# engine terminal-state writer almost never fires in practice). `make rate`
+# rates interactively; `make rate ARGS=--json` reports the pending count.
+rate:
+	@.venv/bin/python scripts/system/outcome_ledger/rate_recent.py $(ARGS)
+
+# Judge-backed auto-capture: run the calibrated judge (MiniMax, = vera) over
+# recent unrated tasks and record outcomes automatically. Also runs in the
+# ambient cron (capped, best-effort). `make auto-capture ARGS=--dry-run` to
+# preview. Complements `make rate` (they share dedup, so no double-recording).
+auto-capture:
+	@.venv/bin/python scripts/system/outcome_ledger/auto_capture.py $(ARGS)
+
+# Trust dashboard: per-domain earned trust from the outcome ledger and how the
+# act-vs-ask gate would decide. `make trust ARGS=--check` probes sample actions.
+# Thin ledger → everything asks (the safe start); trust is earned from outcomes.
+trust:
+	@.venv/bin/python scripts/system/autonomy/dashboard.py $(ARGS)
+
 # Prompt-efficacy matrix runner: the EXPENSIVE half of the prompt_efficacy eval
 # section. Replays golden_prompt_tasks.json frame-on vs frame-off per model
 # family via headless pi and writes .penny/evals/prompt_efficacy/latest.json,
@@ -89,12 +109,51 @@ evals-update-baseline:
 evals-prompt-efficacy:
 	@.venv/bin/python scripts/system/evals/run_prompt_efficacy.py
 
-# Judge-agreement runner: scores how well each open model reproduces Fable's
+# Judge-agreement runner: scores how well each open model reproduces Oracle's
 # verdicts on the calibration corpus, and writes .penny/evals/judgment/latest.json
 # which `make evals` ratchets (the judgment section). Run to pick/re-check the
-# Fable-calibrated verifier. See scripts/system/judgment/.
+# Oracle-calibrated verifier. See scripts/system/judgment/.
 judge-agreement:
 	@.venv/bin/python scripts/system/judgment/run_judge_agreement.py
+
+# Behavioral-regression ratchet: replay the Oracle-authored fixtures through the
+# current system, judge each against its pass bar, and write
+# .penny/evals/trajectory/latest.json which `make evals` ratchets (the
+# trajectory section). Run weekly / before adopting an amendment. Anti-drift.
+trajectory:
+	@.venv/bin/python scripts/system/trajectory/run_trajectory.py $(ARGS)
+
+# Amendment review gate: list/show/approve/reject/apply proposed amendments.
+# `make review` lists pending; `make review ARGS="show <id>"` / "approve <id>" /
+# "reject <id>" / "apply <id>". apply git-commits the prompt edit and is gated by
+# the trajectory ratchet. This is the human approval gate of the flywheel.
+review:
+	@.venv/bin/python scripts/system/self_improve/review_amendments.py $(ARGS)
+
+# One-command improvement cycle ("tune Penny"). Runs the flywheel end-to-end in
+# dependency order: rate recent work (human) → generate amendments from ALL
+# outcomes → surface the pending amendments to review → run the eval ratchet →
+# show the trust dashboard. Steps 1 & 3 are the human gates; 2/4/5 are automated.
+# Apply stays a deliberate follow-up (`make review ARGS="apply <id>"`), never
+# auto-run — so tune never commits on its own.
+tune:
+	@echo "── tune 1/5: rate recent work ─────────────────────────────────"
+	@.venv/bin/python scripts/system/outcome_ledger/rate_recent.py $(ARGS)
+	@echo "── tune 2/5: generate amendments from outcomes ────────────────"
+	@.venv/bin/python scripts/system/self_improve/run_compression.py
+	@echo "── tune 3/5: pending amendments to review ─────────────────────"
+	@.venv/bin/python scripts/system/self_improve/review_amendments.py list
+	@echo "   review with: make review ARGS=\"approve <id>\" then \"apply <id>\""
+	@echo "── tune 4/5: eval ratchet ─────────────────────────────────────"
+	@.venv/bin/python scripts/system/evals/run_evals.py
+	@echo "── tune 5/5: trust dashboard ──────────────────────────────────"
+	@.venv/bin/python scripts/system/autonomy/dashboard.py
+
+# Deep tune: refresh only stale/invalidated eval producers non-interactively.
+# Not in cron — run manually when tune_due signals fire. Uses default models;
+# no --models/--driver-model/--judge-model flags. Sequential, best-effort.
+tune-deep:
+	@.venv/bin/python scripts/system/evals/tune_freshness.py
 
 lint:
 	bun run lint
@@ -117,6 +176,7 @@ docker-up:
 		-v $(HOME)/.local/share/penny/observability:/data \
 		-v $(PWD)/.env:/app/.env:ro \
 		-e PI_OBSERVABILITY_DATA_DIR=/data \
+		--restart unless-stopped \
 		penny-observability
 
 docker-down:

@@ -111,6 +111,51 @@ def _reason(ctx: "RunContext", delta: str) -> str:
     return "goal not met" if delta == "MISMATCH" else "partial completion"
 
 
+# Verifier-gap text → a categorical failure_mode. These values MIRROR
+# capture.FAILURE_MODES (the vocabulary the compression loop clusters on); a test
+# asserts the subset relationship so the two can't drift. Only VERIFY GAPS —
+# genuine work-quality descriptions from vera — are classified this way. A hard
+# orchestration error (bad contract, retries exhausted, step cap) is a PROCESS
+# failure, not a work-quality category, so it stays "other" and
+# compression_loop._grouping_key falls back to its already-repeatable error
+# string for clustering.
+_FAILURE_MODE_KEYWORDS = (
+    (
+        "missing_constraint",
+        ("missing", "constraint", "requirement", "did not address", "not addressed",
+         "omitted", "ignored", "left out"),
+    ),
+    (
+        "unverified_claim",
+        ("unverified", "no evidence", "unsupported", "not grounded", "no citation",
+         "unsubstantiated", "fabricat"),
+    ),
+    (
+        "wrong_result",
+        ("wrong", "incorrect", "does not work", "doesn't work", "broken", "fails",
+         "failing", "bug"),
+    ),
+    ("incomplete", ("incomplete", "partial", "unfinished", "not implemented", "stub", "todo")),
+)
+
+
+def _failure_mode(ctx: "RunContext", delta: str) -> str:
+    """Categorical failure key for the compression loop (mirrors
+    capture.FAILURE_MODES). Empty for a MATCH."""
+    if delta != "MISMATCH":
+        return ""
+    gaps = list(getattr(ctx, "verify_gaps", []) or [])
+    if gaps:
+        text = " ".join(str(g) for g in gaps).lower()
+        for mode, keywords in _FAILURE_MODE_KEYWORDS:
+            if any(k in text for k in keywords):
+                return mode
+        return "incomplete"  # verifier found gaps but nothing more specific matched
+    # No verify gaps → a hard orchestration error; leave categorical clustering
+    # to the (repeatable) error string via compression_loop._grouping_key.
+    return "other"
+
+
 def build_outcome_content(ctx: "RunContext", now: Optional[datetime] = None) -> str:
     """Render the drawer content (header line + JSON body). Pure; unit-tested."""
     now = now or datetime.now(timezone.utc)
@@ -149,8 +194,11 @@ def build_outcome_content(ctx: "RunContext", now: Optional[datetime] = None) -> 
         ),
         "delta_score": delta,
         "outcome": delta,  # dup for readers that key on `outcome` directly
-        # `reason` is the field compression_loop groups on to detect patterns.
+        # `reason` is the human-readable detail; `failure_mode` is the
+        # CATEGORICAL key compression_loop._grouping_key clusters on (empty for a
+        # MATCH). Derived from the verifier gaps for engine terminals.
         "reason": _reason(ctx, delta),
+        "failure_mode": _failure_mode(ctx, delta),
         "confidence_at_action": confidence,
         "iteration": getattr(ctx, "iteration", 0),
         "verify_verdict": getattr(ctx, "verify_verdict", ""),

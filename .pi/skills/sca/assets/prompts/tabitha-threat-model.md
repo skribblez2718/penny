@@ -145,7 +145,7 @@ Write each threat as a mempalace entry in the P6 room. Emit a compact inline
 summary at the end:
 
 ```
-SUMMARY:{"phase":"P6_THREAT_MODEL","threats":<count>,"stride":true,"linddun":<true|false>,"linddun_reason":"<one line>","cwe_mapped":<count>,"owasp_api_mapped":<count>,"ungrounded":<count>,"known_gaps":["no SR-### ledger yet"]}
+SUMMARY:{"threats":<count>,"stride":true,"linddun":<true|false>,"linddun_reason":"<one line>","cwe_mapped":<count>,"owasp_api_mapped":<count>,"ungrounded":<count>,"known_gaps":["no SR-### ledger yet"],"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>","needs_clarification":false}
 ```
 
 Be exhaustive but disciplined: every `T-###` grounded in real architecture,

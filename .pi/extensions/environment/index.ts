@@ -27,7 +27,7 @@ const SYSTEM_PATH = ".pi/SYSTEM.md";
 // Injected as trusted system content just before the boundary marker so
 // recalled memory (diary, pending signals/amendments, recent MISMATCHes, digest)
 // actually reaches the model — the notify/TUI path never did.
-const SESSION_BRIEF_PATH = ".pi/SESSION_BRIEF.md";
+const SESSION_BRIEF_PATH = ".penny/SESSION_BRIEF.md";
 
 // System boundary marker — appended at the end of the system prompt
 // to create a clear delineation between system instructions and user input.

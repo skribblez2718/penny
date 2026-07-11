@@ -10,7 +10,7 @@ describe("memory integration logging", () => {
   });
 
   it("emits JSON structured log to observability REST endpoint for bridge timeout", async () => {
-    const fetchSpy = vi.fn(() => Promise.resolve({ ok: true } as Response));
+    const fetchSpy = vi.fn((_url: string, _options?: RequestInit) => Promise.resolve({ ok: true } as Response));
     vi.stubGlobal("fetch", fetchSpy);
 
     const logger = createLogger("memory");

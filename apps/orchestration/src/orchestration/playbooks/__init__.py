@@ -9,10 +9,12 @@ from ..engine import BasePlaybook
 from .agent import AgentPlaybook
 from .code import CodePlaybook
 from .jsa import JSAPlaybook
+from .learn import LearnPlaybook
 from .plan import PlanPlaybook
 from .prd import PrdPlaybook
 from .reference_cycle import ReferenceCycle, ReferenceCycleMachine
 from .research import ResearchPlaybook
+from .rez import RezPlaybook
 from .sca import ScaPlaybook
 
 PLAYBOOKS: dict[str, type[BasePlaybook]] = {
@@ -23,6 +25,8 @@ PLAYBOOKS: dict[str, type[BasePlaybook]] = {
     ResearchPlaybook.NAME: ResearchPlaybook,  # domain skill
     ScaPlaybook.NAME: ScaPlaybook,  # domain skill (secure code analysis)
     JSAPlaybook.NAME: JSAPlaybook,  # domain skill (JS security analysis)
+    RezPlaybook.NAME: RezPlaybook,  # domain skill (resume tailoring)
+    LearnPlaybook.NAME: LearnPlaybook,  # domain skill (study-material generation)
     ReferenceCycle.NAME: ReferenceCycle,  # engine smoke-test fixture only
 }
 
@@ -41,6 +45,8 @@ __all__ = [
     "ResearchPlaybook",
     "ScaPlaybook",
     "JSAPlaybook",
+    "LearnPlaybook",
+    "RezPlaybook",
     "ReferenceCycle",
     "ReferenceCycleMachine",
 ]

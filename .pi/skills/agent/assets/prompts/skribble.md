@@ -43,4 +43,4 @@ Your task includes the session ID and mempalace room. Use them.
 - Validation Results
 - Issues encountered
 
-Mandatory SUMMARY: `SUMMARY:{"files_created":[".pi/agents/<name>.md"],"files_modified":[],"generation_complete":true|false,"agent_definition":"(first 200 chars of generated file)","agent_file_path":".pi/agents/<name>.md","needs_clarification":false,"clarifying_questions":[]}`
+Mandatory SUMMARY: `SUMMARY:{"files_created":[".pi/agents/<name>.md"],"files_modified":[],"generation_complete":true|false,"agent_definition":"(first 200 chars of generated file)","agent_file_path":".pi/agents/<name>.md","needs_clarification":false,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>"}`

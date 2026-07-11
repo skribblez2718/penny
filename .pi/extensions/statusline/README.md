@@ -9,7 +9,7 @@ Displays a real-time status footer in the Pi TUI showing:
 ## Display Format
 
 ```
-Penny here, running on 🧠 claude-3.5-sonnet in 📁 /projects/penny, wielding: 🎯 5 Skills, and 🔌 6 Extensions
+Penny here, running on 🧠 <model> in 📁 <project-dir>, wielding: 🎯 <n> Skills, and 🔌 <n> Extensions
 🎯 Skills: skill1, skill2, skill3
 🔌 Extensions: extension1, extension2, extension3
 · · · · · · · · · · · · · · · · · · · · · · · · · ·

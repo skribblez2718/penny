@@ -50,10 +50,7 @@ Your mode is signaled in the task summary. The mode determines what you produce.
 4. Generate 2-4 goal-specific questions not in the bank but critical for this PRD
 5. Do NOT produce PRD artifacts — only questions
 
-**SUMMARY format:**
-```
-SUMMARY:{"requirement_count":0,"narrative_sections":0,"verification_matrix_complete":false,"ideal_state_valid":false,"confidence":"PROBABLE","complete":true,"needs_clarification":true,"clarifying_questions":["Question 1?","Question 2?","..."]}
-```
+**Output:** Emit the single `SUMMARY:` line exactly per the OUTPUT FORMAT directive appended to your task (it enumerates the exact keys). In this mode set `needs_clarification: true`, populate `clarifying_questions`, `complete: true`, `confidence` to your level, and leave the count/matrix/ideal_state fields at their `0`/`false` defaults.
 
 ### Mode 2: SYNTHESIS
 
@@ -149,10 +146,7 @@ Must match the canonical schema from `scripts/validate_ideal_state.py`:
 - `deliverables` must list concrete files
 - `build_order` must reflect the implementation sequence from PRD Section 11
 
-**SUMMARY format (synthesis):**
-```
-SUMMARY:{"requirement_count":15,"narrative_sections":12,"verification_matrix_complete":true,"ideal_state_valid":true,"confidence":"PROBABLE","complete":true,"needs_clarification":false,"clarifying_questions":[]}
-```
+**Output:** Emit the single `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task. In this mode set `needs_clarification: false`, `clarifying_questions: []`, `complete: true`, and set `requirement_count`, `narrative_sections`, `verification_matrix_complete`, `ideal_state_valid` to reflect the artifacts you actually wrote.
 
 ### Mode 3: REVISION
 
@@ -164,10 +158,7 @@ SUMMARY:{"requirement_count":15,"narrative_sections":12,"verification_matrix_com
 3. Re-emit ALL 4 artifacts (even ones not directly mentioned in issues — they may have cross-references that need updating)
 4. In your SUMMARY, confirm all issues are resolved
 
-**SUMMARY format (revision):**
-```
-SUMMARY:{"requirement_count":<N>,"narrative_sections":12,"verification_matrix_complete":true,"ideal_state_valid":true,"confidence":"PROBABLE","complete":true,"needs_clarification":false,"clarifying_questions":[],"resolved_issues":["issue 1","issue 2"]}
-```
+**Output:** Emit the single `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task, and include a `resolved_issues` array confirming each fixed issue. Set the count/matrix/ideal_state fields to reflect the revised artifacts.
 
 ## Quality Standards
 

@@ -559,19 +559,12 @@ async def get_compaction(
 async def trigger_cleanup(
     _token: str | None = Depends(require_auth),
 ) -> dict[str, Any]:
-    """Manually trigger retention cleanup."""
+    """Manually trigger a size-based rotation (same routine the scheduler runs)."""
     if db is None:
         raise HTTPException(status_code=503, detail="Database not connected")
-    result = await db.cleanup(
-        raw_retention_days=Config.RETENTION_RAW_DAYS,
-        compaction_retention_days=Config.RETENTION_COMPACTION_DAYS,
-    )
-    deleted_logs = await db.cleanup_logs(Config.RETENTION_LOG_DAYS)
-    result["deleted_logs"] = deleted_logs
-    deleted_watcher_logs = await db.cleanup_watcher_logs(Config.RETENTION_WATCHER_LOG_DAYS)
-    result["deleted_watcher_logs"] = deleted_watcher_logs
-    orch = await db.cleanup_orchestration(Config.RETENTION_RAW_DAYS)
-    result.update(orch)
+    cap_bytes = int(Config.DB_SIZE_MAX_GB * (1024**3))
+    floor_bytes = int(Config.DB_SIZE_FLOOR_GB * (1024**3))
+    result = await db.rotate(cap_bytes, floor_bytes)
     return {"status": "ok", **result}
 
 
@@ -586,11 +579,8 @@ async def admin_stats(
     return {
         **stats,
         "active_connections": len(active_connections),
-        "retention_raw_days": Config.RETENTION_RAW_DAYS,
-        "retention_compaction_days": Config.RETENTION_COMPACTION_DAYS,
-        "retention_log_days": Config.RETENTION_LOG_DAYS,
-        "retention_watcher_log_days": Config.RETENTION_WATCHER_LOG_DAYS,
         "db_size_max_gb": Config.DB_SIZE_MAX_GB,
+        "db_size_floor_gb": Config.DB_SIZE_FLOOR_GB,
     }
 
 

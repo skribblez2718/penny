@@ -509,7 +509,6 @@ SCA_REPORT = PrimitiveSpec(
     _c(
         {},
         {
-            "report_md": str,
             "report_md_returned": bool,
             "total_findings": int,
             "references_real_data": bool,

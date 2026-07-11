@@ -486,7 +486,7 @@ async function callPython(args: string[], cwd: string, timeoutMs: number): Promi
         "Python timeout",
         { step: args[0], timeout: `${timeoutMs}ms` },
         Object.assign(new Error(`Python timed out after ${timeoutMs}ms`), {
-          code: "PYTHON_TIMEOUT",
+          code: "PYTHON_TIMEOUT" as const,
         })
       );
       resolve({
@@ -507,7 +507,7 @@ async function callPython(args: string[], cwd: string, timeoutMs: number): Promi
         logger.warn(
           "Python response parse error",
           { step: args[0], exitCode: code, stderr: stderr.slice(0, 300) },
-          Object.assign(new Error(`Python parse error`), { code: "PYTHON_PARSE_ERROR" })
+          Object.assign(new Error(`Python parse error`), { code: "PYTHON_PARSE_ERROR" as const })
         );
         resolve({
           action: "error",
@@ -526,7 +526,7 @@ async function callPython(args: string[], cwd: string, timeoutMs: number): Promi
       logger.error(
         "Python spawn failed",
         { step: args[0] },
-        Object.assign(err, { code: "PYTHON_SPAWN_ERROR" })
+        Object.assign(err, { code: "PYTHON_SPAWN_ERROR" as const })
       );
       resolve({
         action: "error",
@@ -1281,7 +1281,7 @@ async function executeSkill(
       "Skill execution failed",
       { error: errorMessage(err) },
       Object.assign(new Error(errorMessage(err) || "Unknown error"), {
-        code: "SKILL_EXECUTION_FAILED",
+        code: "SKILL_EXECUTION_FAILED" as const,
         stack: errorStack(err),
       })
     );

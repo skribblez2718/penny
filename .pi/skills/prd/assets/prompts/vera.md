@@ -93,15 +93,7 @@ Check consistency between artifacts:
 
 ## Output Format
 
-Your final message MUST end with a STRUCTURED SUMMARY:
-
-```
-SUMMARY:{"valid":true,"ideal_state_valid":true,"issues":[],"confidence":"CERTAIN","complete":true,"needs_clarification":false,"clarifying_questions":[]}
-```
-
-```
-SUMMARY:{"valid":false,"ideal_state_valid":false,"issues":["Section 7 NFRs missing performance thresholds","REQ-005 lacks acceptance criteria","Verification matrix missing REQ-008"],"confidence":"PROBABLE","complete":true,"needs_clarification":false,"clarifying_questions":[]}
-```
+Your final message MUST end with the single `SUMMARY:` line specified by the OUTPUT FORMAT directive appended to your task (it enumerates the exact keys). Set `valid: false` if ANY issue is found (a single issue → `false`), list every issue in `issues`, and set `ideal_state_valid` per the schema check.
 
 **Fields:**
 - `valid` (boolean, required): `true` only if ALL validations pass with no issues. A single issue → `false`.

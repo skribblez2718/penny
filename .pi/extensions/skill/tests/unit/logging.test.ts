@@ -10,7 +10,7 @@ describe("skill extension structured logging", () => {
   });
 
   it("emits structured ERROR log for Python timeout with PYTHON_TIMEOUT code", () => {
-    const err = Object.assign(new Error("Timed out"), { code: "PYTHON_TIMEOUT" });
+    const err = Object.assign(new Error("Timed out"), { code: "PYTHON_TIMEOUT" as const });
     logger.error("Python timeout", { step: "start", timeout: "10000ms" }, err);
     expect(buffer).toHaveLength(1);
     expect(buffer[0].error?.code).toBe("PYTHON_TIMEOUT");
@@ -18,7 +18,7 @@ describe("skill extension structured logging", () => {
   });
 
   it("emits structured WARN log for Python parse error with PYTHON_PARSE_ERROR code", () => {
-    const err = Object.assign(new Error("Invalid JSON"), { code: "PYTHON_PARSE_ERROR" });
+    const err = Object.assign(new Error("Invalid JSON"), { code: "PYTHON_PARSE_ERROR" as const });
     logger.warn("Python response parse error", { step: "start", exitCode: 1, stderr: "" }, err);
     expect(buffer).toHaveLength(1);
     expect(buffer[0].error?.code).toBe("PYTHON_PARSE_ERROR");

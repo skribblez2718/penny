@@ -28,7 +28,7 @@ Render markdown into a themed `.docx`.
 | `include_page_numbers`        | no       | Footer page numbers (default true).                                                                    |
 | `header_text` / `footer_text` | no       | Small muted page header (right) / footer (left) text.                                                  |
 | `table_style`                 | no       | `banded` (default) / `minimal` / `grid` / `none`.                                                      |
-| `output_path`                 | no       | Destination; defaults to `<project>/output/word/<slug>_<timestamp>.docx`.                              |
+| `output_path`                 | no       | Destination; when omitted, writes to the OS temp dir (`…/penny/word/<slug>_<timestamp>.docx`), never the project tree.                              |
 
 **Example**
 
@@ -72,7 +72,7 @@ Python packages in the project venv (`.venv`): `python-docx`, `markdown-it-py`, 
 | `PI_VENV_PYTHON`          | Explicit python interpreter override.                                              |
 | `PENNY_DOCGEN_TIMEOUT_MS` | Generator timeout (default 90000).                                                 |
 
-Default output directory: `<project>/output/word/`.
+Default output directory (when `output_path` is omitted): the OS temp dir, `…/penny/word/`.
 
 ## Testing
 

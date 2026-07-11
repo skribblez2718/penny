@@ -32,7 +32,7 @@ The strong form of "one universal prompt that adds points on any model" is **not
 
 1. **The universal layer raises the floor and cuts variance.** Completeness, explicitness, non-contradiction, position, and structural hygiene are the cross-model survivors. They mostly prevent losses; they are not where double-digit gains live.
 2. **Points come from per-model work**: per-model variants of the swappable layers (Role Definition, Domain Guidance) optimized against the golden task set, plus invocation-parameter tuning. See `plans/per-model-optimization/`.
-3. **Task-specification quality is the best-evidenced universal lever** — which is what the Prompt Improver targets (Invocation Context enhancement).
+3. **Task-specification quality is the best-evidenced universal lever** — which is what the Enhance extension targets (Invocation Context enhancement).
 4. **Every claim gets measured here.** Single-to-double-digit gains claimed for any universal technique should be presumed to be (a) measured on pre-2024 base models, (b) cherry-picked from the best variant, or (c) per-question variance masquerading as signal — until shown otherwise on our own task set across ≥3 model families.
 
 ## Status of Penny's design principles

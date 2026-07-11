@@ -162,6 +162,36 @@ CREATE INDEX IF NOT EXISTS idx_orch_events_session ON orchestration_events(sessi
 """
 
 
+# Size-based rotation: the tables that are drained oldest-first, paired with the
+# column that orders them by age. These identifiers are internal constants (never
+# user input), so composing them into the DELETE statements below is injection-safe.
+# orchestration_events has no created_at column, so it orders by its ISO `timestamp`.
+_ROTATION_TABLES: tuple[tuple[str, str], ...] = (
+    ("entries", "created_at"),
+    ("compactions", "created_at"),
+    ("logs", "created_at"),
+    ("watcher_logs", "created_at"),
+    ("orchestration_events", "timestamp"),
+    ("orchestration_runs", "created_at"),
+)
+
+# Precomputed "delete the N oldest rows" statement per table (identifiers are the
+# fixed constants above; the row count is bound as a parameter).
+_ROTATION_DELETE_SQL: dict[str, str] = {
+    table: (
+        f"DELETE FROM {table} WHERE rowid IN "
+        f"(SELECT rowid FROM {table} ORDER BY {order_col} ASC LIMIT ?)"
+    )
+    for table, order_col in _ROTATION_TABLES
+}
+
+# Default rows deleted per table per iteration during a drain.
+_ROTATION_BATCH = 500
+# Hard bound on drain iterations — guarantees termination even for a floor that
+# can never be reached (see rotate_to_floor).
+_MAX_ROTATE_ITERATIONS = 100_000
+
+
 class Database:
     """Async SQLite wrapper with connection pooling and session counters."""
 
@@ -1122,6 +1152,116 @@ class Database:
         # still possible via a separate maintenance endpoint if needed.
         return {"deleted_raw_entries": deleted_raw, "deleted_compactions": deleted_comp}
 
+    # ------------------------------------------------------------------
+    # Size measurement + size-based rotation (no VACUUM, no cron)
+    # ------------------------------------------------------------------
+
+    async def _page_metrics(self) -> tuple[int, int, int]:
+        """Return (page_count, freelist_count, page_size) via PRAGMAs."""
+        pc_row = await self._fetchone("PRAGMA page_count")
+        fl_row = await self._fetchone("PRAGMA freelist_count")
+        ps_row = await self._fetchone("PRAGMA page_size")
+        page_count = int(pc_row[0]) if pc_row and pc_row[0] is not None else 0
+        freelist = int(fl_row[0]) if fl_row and fl_row[0] is not None else 0
+        page_size = int(ps_row[0]) if ps_row and ps_row[0] is not None else 0
+        return page_count, freelist, page_size
+
+    async def live_bytes(self) -> int:
+        """Bytes actually in use: (page_count - freelist_count) * page_size."""
+        page_count, freelist, page_size = await self._page_metrics()
+        return (page_count - freelist) * page_size
+
+    async def file_bytes(self) -> int:
+        """On-disk file size in pages: page_count * page_size."""
+        page_count, _freelist, page_size = await self._page_metrics()
+        return page_count * page_size
+
+    async def rotate_to_floor(
+        self,
+        floor_bytes: int,
+        batch_size: int = _ROTATION_BATCH,
+    ) -> dict[str, Any]:
+        """Delete oldest-by-created_at rows across ALL rotation tables, in batches,
+        until live_bytes <= floor_bytes. No VACUUM — freed pages return to the
+        SQLite freelist for reuse. Terminates via a bounded iteration guard: if a
+        full pass deletes nothing (floor unreachable), the drain stops.
+
+        Returns {"deleted": {table: count}, "deleted_total": int, "iterations": int}.
+        """
+        if self._db is None:
+            raise RuntimeError("Database not connected")
+        if batch_size < 1:
+            batch_size = 1
+
+        deleted: dict[str, int] = {table: 0 for table, _ in _ROTATION_TABLES}
+        iterations = 0
+        while iterations < _MAX_ROTATE_ITERATIONS:
+            if await self.live_bytes() <= floor_bytes:
+                break
+            progressed = 0
+            for table, _order_col in _ROTATION_TABLES:
+                cursor = await self._execute(_ROTATION_DELETE_SQL[table], (batch_size,))
+                row_count = cursor.rowcount
+                await cursor.close()
+                if row_count and row_count > 0:
+                    deleted[table] += row_count
+                    progressed += row_count
+            await self._db.commit()
+            iterations += 1
+            if progressed == 0:
+                # Nothing left to delete — the floor cannot be reached. Stop.
+                break
+        else:
+            err = RuntimeError("rotate_to_floor exceeded the iteration guard")
+            err.code = "OBSERV_ROTATE_GUARD"
+            _logger.warn(
+                "observability.db",
+                "size rotation hit the iteration guard; stopping drain",
+                error=err,
+            )
+
+        return {
+            "deleted": deleted,
+            "deleted_total": sum(deleted.values()),
+            "iterations": iterations,
+        }
+
+    async def rotate(
+        self,
+        cap_bytes: int,
+        floor_bytes: int,
+        batch_size: int = _ROTATION_BATCH,
+    ) -> dict[str, Any]:
+        """Size-based rotation entry point. If the on-disk file has reached the cap,
+        drain the oldest rows across all tables until live bytes fall to the floor.
+        Below the cap this is a no-op. Never issues VACUUM.
+        """
+        file_before = await self.file_bytes()
+        live_before = await self.live_bytes()
+        if file_before < cap_bytes:
+            return {
+                "triggered": False,
+                "file_bytes_before": file_before,
+                "file_bytes_after": file_before,
+                "live_bytes_before": live_before,
+                "live_bytes_after": live_before,
+                "deleted": {table: 0 for table, _ in _ROTATION_TABLES},
+                "deleted_total": 0,
+                "iterations": 0,
+            }
+
+        drained = await self.rotate_to_floor(floor_bytes, batch_size=batch_size)
+        file_after = await self.file_bytes()
+        live_after = await self.live_bytes()
+        return {
+            "triggered": True,
+            "file_bytes_before": file_before,
+            "file_bytes_after": file_after,
+            "live_bytes_before": live_before,
+            "live_bytes_after": live_after,
+            **drained,
+        }
+
     async def get_stats(self) -> dict[str, Any]:
         """Return DB health statistics."""
         sessions_row = await self._fetchone("SELECT COUNT(*) FROM sessions")
@@ -1142,11 +1282,16 @@ class Database:
             "SELECT MIN(created_at) FROM watcher_logs"
         )
         db_size = self.db_path.stat().st_size if self.db_path.exists() else 0
+        page_count, freelist, page_size = await self._page_metrics()
+        live_bytes = (page_count - freelist) * page_size
+        file_bytes = page_count * page_size
 
         return {
             "db_path": str(self.db_path),
             "db_size_bytes": db_size,
             "db_size_mb": round(db_size / (1024 * 1024), 2),
+            "live_bytes": live_bytes,
+            "file_bytes": file_bytes,
             "session_count": sessions_row[0] if sessions_row else 0,
             "entry_count": entries_row[0] if entries_row else 0,
             "compaction_count": compactions_row[0] if compactions_row else 0,

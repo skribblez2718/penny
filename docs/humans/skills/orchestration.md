@@ -39,7 +39,7 @@ Every workflow skill delegates to the shared **orchestration engine** (`apps/orc
 - **Durable resume.** State lives in a durable checkpointer keyed by a `run_id`, not in a `/tmp` file. An interrupted run **auto-resumes** on the next invocation — there is no manual resume step.
 - **Shared capabilities.** Every skill gets the same budgets, self-recovery, parallel fan-out, planned approval gates, and correlated observability without re-implementing them.
 
-Every workflow skill runs on the engine — `code`, `plan`, `prd`, `research`, `agent`, `sca`, and `jsa`. The only exception is `rez`, a placeholder skill awaiting a dedicated build; it does not use the engine yet.
+Every workflow skill runs on the engine — `code`, `plan`, `prd`, `research`, `agent`, `sca`, `jsa`, `rez`, and `learn` — with no exceptions.
 
 Every action directive is a JSON object emitted on stdout. Common directives include:
 

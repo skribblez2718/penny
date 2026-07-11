@@ -5,7 +5,9 @@ Replays the curated golden task set (golden_prompt_tasks.json) through headless
 pi, per model family, in matched arms:
 
   on          .pi/SYSTEM.md passed via --system-prompt (the Cognitive Frame)
-  off         no --system-prompt (pi's built-in default prompt)
+  off         a near-empty (single-whitespace) prompt via --system-prompt — the
+              raw-model baseline, NOT Pi's built-in default (a 0-byte prompt
+              would revert Pi to that default)
   ablate:<s>  frame with one <system_context> section removed (--ablate only)
 
 Every arm runs from a hermetic temp cwd OUTSIDE the repo with extensions,
@@ -54,10 +56,49 @@ from eval_prompt_efficacy import (  # noqa: E402
     RESULTS_DIR,
     degradation_margin,
     family_rates,
-    grade_text,
+)
+from prompt_efficacy_judge import (  # noqa: E402
+    grade_cell,
+    is_judge_check,
+    make_judge_fn,
 )
 
+
+def task_has_judge(task: Dict[str, Any]) -> bool:
+    """True iff any of the task's checks is a judge (semantic) check."""
+    return any(is_judge_check(c) for c in task.get("checks", []) or [])
+
+
+def rubric_approved(check: Dict[str, Any]) -> bool:
+    """A judge rubric is approved only with BOTH markers set (decision #4)."""
+    return bool(check.get("approved_by")) and bool(check.get("approved_at"))
+
+
+def unapproved_judge_tasks(tasks: List[Dict[str, Any]]) -> List[str]:
+    """Task ids carrying a judge check whose rubric lacks approval markers."""
+    out: List[str] = []
+    for t in tasks:
+        if any(is_judge_check(c) and not rubric_approved(c) for c in t.get("checks", []) or []):
+            out.append(str(t.get("id", "?")))
+    return out
+
+
+def grading_scheme(tasks: List[Dict[str, Any]], experimental: bool) -> str:
+    """Artifact marker so the ratchet never diffs keyword vs judge pass rates."""
+    if not any(task_has_judge(t) for t in tasks):
+        return "keyword"
+    return "hybrid-judge-v1-experimental" if experimental else "hybrid-judge-v1"
+
 FRAME_PATH = REPO_ROOT / ".pi" / "SYSTEM.md"
+
+# Frame-OFF baseline: a near-empty, whitespace-only system prompt — the truly
+# "bare model" arm (no instructions at all). It MUST be non-empty: Pi treats a
+# 0-byte --system-prompt as "no override" and reverts to its built-in default —
+# which, on Anthropic OAuth from a hermetic context, is rejected with a
+# third-party-usage 400. A single space is the minimal content that overrides
+# the default while adding zero guidance, so the delta isolates the Cognitive
+# Frame's contribution to the raw model (not to Pi's own default coding prompt).
+BARE_PROMPT = " "  # single space — intentional; keep non-empty (see note above)
 OLLAMA_PROBE_URL = "http://127.0.0.1:11434/api/version"
 PROVIDER_KEY_ENV = {
     "anthropic": "ANTHROPIC_API_KEY",
@@ -88,11 +129,17 @@ def pi_agent_dir() -> Path:
 
 
 def contaminating_global_prompts() -> List[Path]:
-    """Global prompt files that would break the frame-on/off contrast if present."""
+    """Global prompt files that would break the frame-on/off contrast if present.
+
+    Both arms now pass an explicit --system-prompt (SYSTEM.md for on, a neutral
+    bare prompt for off), so a global ~/.pi/agent/SYSTEM.md can no longer
+    silently become the "off" frame. Only a global APPEND_SYSTEM.md still
+    contaminates: it is appended to EVERY arm regardless of --system-prompt.
+    """
     agent_dir = pi_agent_dir()
     return [
         agent_dir / name
-        for name in ("SYSTEM.md", "APPEND_SYSTEM.md")
+        for name in ("APPEND_SYSTEM.md",)
         if (agent_dir / name).exists()
     ]
 
@@ -164,6 +211,7 @@ def run_cell(
     workdir: Path,
     thinking: str,
     timeout_s: int,
+    judge_fn: Optional[Any] = None,
 ) -> Dict[str, Any]:
     cmd = [
         "pi",
@@ -250,7 +298,17 @@ def run_cell(
     )
     cell["text_sha256"] = hashlib.sha256(text.encode("utf-8")).hexdigest()
     cell["text_head"] = text[:200]
-    passed, per_check = grade_text(task.get("checks", []), text)
+    try:
+        passed, per_check = grade_cell(task.get("checks", []), text, judge_fn)
+    except ValueError as exc:  # judge check present but no judge_fn wired (misconfig)
+        cell["error"] = f"grading misconfiguration: {exc}"
+        return cell
+    if passed is None:
+        # A judge check could not be scored (failed twice) -> EXCLUDE the cell.
+        # Never counted PASS; never downgraded to keyword grading within the run.
+        cell["error"] = "judge excluded: " + str(per_check.get("_judge_error", ""))[:160]
+        cell["checks"] = per_check
+        return cell
     cell["passed"] = passed
     cell["checks"] = per_check
     return cell
@@ -282,26 +340,51 @@ def parse_assistant_stream(stdout: str, cell: Dict[str, Any]) -> Optional[Dict[s
 # ── Provider probing ────────────────────────────────────────────────────────
 
 
+def _auth_json_has_provider(provider: str) -> bool:
+    """True when Pi's ``auth.json`` holds a stored credential for ``provider``.
+
+    This is the subscription / OAuth path (entry shape ``{type, refresh,
+    access, expires}``) as well as any stored API key — whatever Pi itself
+    resolves at call time.
+    """
+    auth_path = pi_agent_dir() / "auth.json"
+    try:
+        auth = json.loads(auth_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(auth, dict) and provider in auth
+
+
 def probe_provider(provider: str) -> Optional[str]:
-    """Return a skip reason when the provider can't serve runs, else None."""
+    """Return a skip reason when the provider can't serve runs, else None.
+
+    Credential precedence mirrors how Penny actually authenticates: a stored
+    subscription/OAuth credential in Pi's ``auth.json`` is the PRIMARY check,
+    and an ``*_API_KEY`` environment variable is the BACKUP. Penny runs on a
+    subscription by default and usually sets no API-key env var, so the
+    subscription path is checked first. The probe only decides attempt-vs-skip;
+    Pi itself selects which stored credential to use at call time.
+    """
     if provider == "ollama":
         try:
             with urlopen(OLLAMA_PROBE_URL, timeout=3):
                 return None
         except Exception as exc:  # noqa: BLE001 — any failure means unreachable
             return f"ollama daemon unreachable at 127.0.0.1:11434 ({type(exc).__name__})"
+
+    # Primary: subscription / stored credential in Pi's auth.json.
+    if _auth_json_has_provider(provider):
+        return None
+
+    # Backup: an API-key environment variable.
     key_env = PROVIDER_KEY_ENV.get(provider)
-    if key_env and not os.environ.get(key_env):
-        # pi also resolves credentials from ~/.pi/agent/auth.json; only skip if
-        # neither the env var nor a stored credential for this provider exists.
-        auth_path = pi_agent_dir() / "auth.json"
-        try:
-            auth = json.loads(auth_path.read_text(encoding="utf-8"))
-            if isinstance(auth, dict) and provider in auth:
-                return None
-        except (OSError, json.JSONDecodeError):
-            pass
-        return f"{key_env} not set (and no {provider} entry in auth.json)"
+    if key_env and os.environ.get(key_env):
+        return None
+
+    # Neither present. Only providers with a known key env are reported as
+    # skipped; unknown providers are assumed runnable (unchanged behavior).
+    if key_env:
+        return f"no stored {provider} credential in auth.json and {key_env} not set"
     return None
 
 
@@ -365,6 +448,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--models", default="", help="comma list of provider/model specs")
     parser.add_argument("--tasks", default="", help="comma list of task ids to run")
+    parser.add_argument(
+        "--tasks-file",
+        default="",
+        help="alternate task file to screen candidate items (defaults to the golden set); "
+        "pair with --models since a candidate file need not carry default_models",
+    )
     parser.add_argument("--trials", type=int, default=1)
     parser.add_argument("--thinking", default="low", help="thinking level pinned across arms")
     parser.add_argument("--workers", type=int, default=4)
@@ -376,6 +465,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dry-run", action="store_true", help="print the matrix and exit")
     parser.add_argument("--no-signal", action="store_true", help="skip writing degradation signals")
+    parser.add_argument(
+        "--experimental",
+        action="store_true",
+        help="allow judge-graded tasks whose rubrics lack approval markers; marks the run "
+        "non-gating (grading_scheme=hybrid-judge-v1-experimental) so it never feeds the baseline",
+    )
+    parser.add_argument(
+        "--judge-repeats", type=int, default=1,
+        help="judge self-consistency: majority-of-N judge calls per judge-graded cell (default 1)",
+    )
+    parser.add_argument(
+        "--max-judge-calls", type=int, default=0,
+        help="cap on total judge calls per run (0 = unlimited); cells past the cap are excluded",
+    )
     return parser
 
 
@@ -407,12 +510,14 @@ def resolve_models(specs: List[str]) -> Tuple[List[Tuple[str, str]], List[str]]:
 def build_arms(
     frame_text: str, models: List[Tuple[str, str]], staging: Path, ablate: bool
 ) -> List[Tuple[str, Optional[Path], Tuple[Tuple[str, str], ...]]]:
-    """Arms: (name, system-prompt file or None, models). Ablations run model[0]."""
+    """Arms: (name, system-prompt file, models). Ablations run model[0]."""
     frame_on = staging / "SYSTEM.frame-on.md"
     frame_on.write_text(frame_text, encoding="utf-8")
+    frame_off = staging / "SYSTEM.frame-off.md"
+    frame_off.write_text(BARE_PROMPT, encoding="utf-8")
     arms: List[Tuple[str, Optional[Path], Tuple[Tuple[str, str], ...]]] = [
         ("on", frame_on, tuple(models)),
-        ("off", None, tuple(models)),
+        ("off", frame_off, tuple(models)),
     ]
     if ablate:
         sections = frame_sections(frame_text)
@@ -431,6 +536,7 @@ def run_matrix(
     thinking: str,
     timeout_s: int,
     workers: int,
+    judge_fn: Optional[Any] = None,
 ) -> List[Dict[str, Any]]:
     cells: List[Dict[str, Any]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
@@ -446,6 +552,7 @@ def run_matrix(
                 workdir,
                 thinking,
                 timeout_s,
+                judge_fn,
             )
             for task, provider, model, arm, trial, prompt_path in matrix
         ]
@@ -476,11 +583,13 @@ def write_artifact(
     skipped: List[str],
     tasks: List[Dict[str, Any]],
     cells: List[Dict[str, Any]],
+    grading_scheme_name: str = "keyword",
 ) -> Dict[str, Any]:
     stamp = datetime.now(timezone.utc)
     artifact = {
         "ts": stamp.isoformat(),
-        "runner_version": 1,
+        "runner_version": 2,
+        "grading_scheme": grading_scheme_name,
         "pi_version": pi_version(),
         "thinking": args.thinking,
         "trials": args.trials,
@@ -536,11 +645,12 @@ def preflight(args: argparse.Namespace, golden: Dict[str, Any]) -> Tuple[Optiona
     if not FRAME_PATH.exists():
         print(f"frame not found: {FRAME_PATH}")
         return None, 2
-    # Frame-off = pi's built-in default prompt. A GLOBAL ~/.pi/agent/SYSTEM.md
-    # would silently become the "off" frame (discovery falls back to it, cwd- and
-    # --no-context-files-independent), and a global APPEND_SYSTEM.md would
-    # contaminate EVERY arm. Neither exists today, but if one appears the whole
-    # matrix is measuring the wrong thing with no error — so refuse to run.
+    # Both arms pass an explicit --system-prompt (SYSTEM.md for on, a neutral
+    # bare prompt for off), so a global ~/.pi/agent/SYSTEM.md can no longer
+    # silently become the "off" frame. A global APPEND_SYSTEM.md, however, is
+    # appended to EVERY arm regardless — contaminating the contrast. It does not
+    # exist today, but if one appears the matrix would measure the wrong thing
+    # with no error, so refuse to run.
     contaminants = contaminating_global_prompts()
     if contaminants:
         print(
@@ -555,7 +665,8 @@ def preflight(args: argparse.Namespace, golden: Dict[str, Any]) -> Tuple[Optiona
 def main() -> int:
     args = build_parser().parse_args()
 
-    golden = json.loads(GOLDEN_PATH.read_text(encoding="utf-8"))
+    golden_path = Path(args.tasks_file).expanduser() if args.tasks_file else GOLDEN_PATH
+    golden = json.loads(golden_path.read_text(encoding="utf-8"))
     frame_text, code = preflight(args, golden)
     if frame_text is None:
         return code
@@ -592,11 +703,35 @@ def main() -> int:
         )
         if args.dry_run:
             return 0
-        cells = run_matrix(matrix, workdir, args.thinking, args.timeout, args.workers)
+        judge_present = any(task_has_judge(t) for t in tasks)
+        if judge_present and not args.experimental:
+            unapproved = unapproved_judge_tasks(tasks)
+            if unapproved:
+                print(
+                    "REFUSING: judge-graded task(s) lack approval markers "
+                    "(approved_by/approved_at): " + ", ".join(unapproved)
+                    + "\nApprove the rubrics, or use --experimental for a NON-GATING run."
+                )
+                return 2
+        judge_fn = (
+            make_judge_fn(
+                cwd=str(workdir),
+                repeats=max(1, args.judge_repeats),
+                max_calls=max(0, args.max_judge_calls),
+            )
+            if judge_present
+            else None
+        )
+        cells = run_matrix(
+            matrix, workdir, args.thinking, args.timeout, args.workers, judge_fn
+        )
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 
-    artifact = write_artifact(frame_text, args, models, skipped, tasks, cells)
+    artifact = write_artifact(
+        frame_text, args, models, skipped, tasks, cells,
+        grading_scheme(tasks, args.experimental),
+    )
     rates = artifact["summary"]["per_family"]
     print_summary(rates, cells, args.ablate)
 

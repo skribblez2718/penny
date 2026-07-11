@@ -117,6 +117,9 @@ class TestOrchestrationCleanup:
         client.post("/orchestration/runs", json=_run_payload(status="complete"))
         client.post("/orchestration/events", json={"events": [_event(1, "run_start")]})
         resp = client.post("/admin/cleanup").json()
-        # Fresh rows are not old enough to purge, but the keys must be present.
-        assert "deleted_orchestration_runs" in resp
-        assert "deleted_orchestration_events" in resp
+        # /admin/cleanup now runs size-based rotation across ALL tables
+        # (orchestration included, not exempt). Under cap it's a no-op, but the
+        # per-table rotation keys must be present.
+        assert resp["status"] == "ok"
+        assert "orchestration_runs" in resp["deleted"]
+        assert "orchestration_events" in resp["deleted"]

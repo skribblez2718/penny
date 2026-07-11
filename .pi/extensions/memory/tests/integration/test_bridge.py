@@ -12,9 +12,13 @@ Run with: pytest tests/test_bridge.py -v
 
 import json
 import subprocess
-import sys
 import pytest
 from pathlib import Path
+
+# This whole module is a live-palace integration suite (subprocess calls into the
+# bridge, ~70s), so mark it: the fast `make test` (-m "not integration") skips it,
+# while `make test-integration` and `bun run test:python` still run it.
+pytestmark = pytest.mark.integration
 
 # Configuration
 BRIDGE_PATH = Path(__file__).parent.parent.parent.parent.parent.parent / "scripts" / "system" / "bridge" / "memory_bridge.py"
@@ -25,7 +29,7 @@ def call_bridge(tool: str, params: dict = None) -> dict:
     """Call the Python bridge directly and return the result."""
     if params is None:
         params = {}
-    
+
     request = json.dumps({"tool": tool, "params": params})
     proc = subprocess.run(
         [str(VENV_PYTHON), str(BRIDGE_PATH)],
@@ -34,22 +38,21 @@ def call_bridge(tool: str, params: dict = None) -> dict:
         text=True,
         timeout=30,
     )
-    
+
     if proc.returncode != 0:
         raise RuntimeError(f"Bridge failed with code {proc.returncode}: {proc.stderr}")
-    
+
     return json.loads(proc.stdout)
 
 
 class TestBridgeRouting:
     """Test that the bridge routes to correct mempalace functions."""
-    
+
     def test_unknown_tool_returns_error(self):
         """Unknown tool should return error response."""
         result = call_bridge("nonexistent_tool", {})
         assert "error" in result
 
-    
     def test_status_tool(self):
         """Status tool should return palace info."""
         result = call_bridge("status", {})
@@ -57,19 +60,19 @@ class TestBridgeRouting:
         assert "total_drawers" in result
         assert "wings" in result
         assert "palace_path" in result
-    
+
     def test_list_wings_tool(self):
         """List wings should return available wings."""
         result = call_bridge("list_wings", {})
         assert result.get("success") is True
         assert "wings" in result
-    
+
     def test_list_rooms_tool(self):
         """List rooms should return rooms."""
         result = call_bridge("list_rooms", {})
         assert result.get("success") is True
         assert "rooms" in result
-    
+
     def test_get_taxonomy_tool(self):
         """Get taxonomy should return hierarchy."""
         result = call_bridge("get_taxonomy", {})
@@ -79,19 +82,19 @@ class TestBridgeRouting:
 
 class TestSearchTools:
     """Test search-related tools."""
-    
+
     def test_search_requires_query(self):
         """Search without query should return error."""
         result = call_bridge("search", {})
         assert "error" in result
         assert "error" in result
-    
+
     def test_search_with_query(self):
         """Search with query should return results."""
         result = call_bridge("search", {"query": "test", "limit": 5})
         assert result.get("success") is True
         assert "results" in result
-    
+
     def test_search_with_filters(self):
         """Search with wing/room filters works."""
         result = call_bridge("search", {
@@ -100,7 +103,7 @@ class TestSearchTools:
             "limit": 2
         })
         assert result.get("success") is True
-    
+
     def test_check_duplicate(self):
         """Check duplicate should return similarity assessment."""
         result = call_bridge("check_duplicate", {
@@ -112,7 +115,7 @@ class TestSearchTools:
 
 class TestWriteTools:
     """Test write operations."""
-    
+
     @pytest.fixture(autouse=True)
     def cleanup(self):
         """Track created drawers for cleanup."""
@@ -124,12 +127,12 @@ class TestWriteTools:
                 call_bridge("delete_drawer", {"drawer_id": drawer_id})
             except Exception:
                 pass
-    
+
     def test_add_drawer_requires_params(self):
         """Add drawer without required params should fail."""
         result = call_bridge("add_drawer", {})
         assert "error" in result
-    
+
     def test_add_drawer_success(self):
         """Add drawer with all params should succeed."""
         result = call_bridge("add_drawer", {
@@ -142,7 +145,7 @@ class TestWriteTools:
         assert "drawer_id" in result
         if result.get("drawer_id"):
             self.drawer_ids.append(result["drawer_id"])
-    
+
     def test_delete_nonexistent_drawer(self):
         """Delete nonexistent drawer should fail gracefully."""
         result = call_bridge("delete_drawer", {
@@ -244,10 +247,34 @@ class TestWriteTools:
         orphans = [d for d in listed.get("drawers", []) if d["id"].startswith(drawer_key)]
         assert not orphans, f"orphaned chunks survive delete: {[d['id'] for d in orphans]}"
 
+    def test_list_drawers_reassembles_chunked_drawer(self):
+        """A chunked drawer must surface as ONE logical drawer carrying its FULL
+        content in list_drawers — not N fragment rows. Regression for the
+        whole-document read gap that broke the prd->code IDEAL_STATE handoff."""
+        marker = f"list-reassemble-probe {__import__('time').time()}"
+        body = f"{marker}\n" + ("reassembly content line\n" * 400)  # > 4000 chars -> chunks
+        added = call_bridge("add_drawer", {
+            "wing": "penny", "room": "test_pytest",
+            "content": body, "added_by": "pytest",
+        })
+        assert added.get("success") is True
+        assert added.get("chunks", 1) > 1, "probe content did not chunk"
+        drawer_id = added["drawer_id"]
+        try:
+            listed = call_bridge("list_drawers", {
+                "wing": "penny", "room": "test_pytest", "limit": 1000,
+                "include_content": True,
+            })
+            mine = [d for d in listed.get("drawers", []) if d["id"] == drawer_id]
+            assert len(mine) == 1, f"expected ONE logical drawer, got {len(mine)}"
+            assert mine[0]["content"] == body, "content was not fully reassembled"
+        finally:
+            call_bridge("delete_drawer", {"drawer_id": drawer_id})
+
 
 class TestKnowledgeGraphTools:
     """Test knowledge graph operations."""
-    
+
     @pytest.fixture(autouse=True)
     def cleanup(self):
         """Track created facts for cleanup."""
@@ -263,12 +290,12 @@ class TestKnowledgeGraphTools:
                 })
             except Exception:
                 pass
-    
+
     def test_kg_query_requires_entity(self):
         """KG query without entity should fail."""
         result = call_bridge("kg_query", {})
         assert "error" in result
-    
+
     def test_kg_add_success(self):
         """KG add with valid params should succeed."""
         result = call_bridge("kg_add", {
@@ -279,10 +306,10 @@ class TestKnowledgeGraphTools:
         assert result.get("success") is True
         self.facts.append({
             "subject": "TestEntity",
-            "predicate": "uses", 
+            "predicate": "uses",
             "object": "TestTool"
         })
-    
+
     def test_kg_query_entity(self):
         """KG query for entity should return facts."""
         # First add a fact
@@ -296,20 +323,20 @@ class TestKnowledgeGraphTools:
             "predicate": "works_on",
             "object": "TestProject"
         })
-        
+
         # Then query
         result = call_bridge("kg_query", {
             "entity": "TestQueryEntity"
         })
         assert result.get("success") is True
         assert "facts" in result
-    
+
     def test_kg_timeline(self):
         """KG timeline should return chronological facts."""
         result = call_bridge("kg_timeline", {})
         assert result.get("success") is True
         assert "timeline" in result or result.get("facts") is not None
-    
+
     def test_kg_stats(self):
         """KG stats should return graph statistics."""
         result = call_bridge("kg_stats", {})
@@ -319,19 +346,18 @@ class TestKnowledgeGraphTools:
 
 class TestNavigationTools:
     """Test navigation tools."""
-    
+
     def test_traverse_without_room(self):
         """Traverse without start_room should fail with error."""
         result = call_bridge("traverse", {})
         # Should return error when start_room is missing
         assert "error" in result
 
-    
     def test_find_tunnels(self):
         """Find tunnels should work without params."""
         result = call_bridge("find_tunnels", {})
         assert result.get("success") is True
-    
+
     def test_graph_stats(self):
         """Graph stats should return connectivity info."""
         result = call_bridge("graph_stats", {})
@@ -340,12 +366,12 @@ class TestNavigationTools:
 
 class TestDiaryTools:
     """Test agent diary operations."""
-    
+
     def test_diary_write_requires_params(self):
         """Diary write without required params should fail."""
         result = call_bridge("diary_write", {})
         assert "error" in result
-    
+
     def test_diary_write_success(self):
         """Diary write with valid params should succeed.
 
@@ -376,12 +402,12 @@ class TestDiaryTools:
         entry_id = first.get("entry_id")
         if entry_id:
             call_bridge("delete_drawer", {"drawer_id": entry_id})
-    
+
     def test_diary_read_requires_agent(self):
         """Diary read without agent_name should fail."""
         result = call_bridge("diary_read", {})
         assert "error" in result
-    
+
     def test_diary_read_success(self):
         """Diary read should return entries."""
         result = call_bridge("diary_read", {
@@ -394,7 +420,7 @@ class TestDiaryTools:
 
 class TestAAAKSpec:
     """Test AAAK specification retrieval."""
-    
+
     def test_get_aaak_spec(self):
         """Get AAAK spec should return format documentation."""
         result = call_bridge("get_aaak_spec", {})
@@ -516,7 +542,7 @@ class TestDeleteDrawersByRoom:
 
 class TestErrorHandling:
     """Test error handling scenarios."""
-    
+
     def test_malformed_json_returns_error(self):
         """Malformed input should return error, not crash."""
         proc = subprocess.run(
@@ -528,7 +554,7 @@ class TestErrorHandling:
         )
         # Should exit with error code
         assert proc.returncode != 0 or "error" in proc.stdout.lower()
-    
+
     def test_empty_input_returns_error(self):
         """Empty input should return error."""
         proc = subprocess.run(
@@ -540,7 +566,7 @@ class TestErrorHandling:
         )
         # Should exit with error code
         assert proc.returncode != 0 or "error" in proc.stdout.lower()
-    
+
     def test_missing_tool_returns_error(self):
         """Missing tool parameter should return error."""
         result = call_bridge("search", {"limit": 5})  # No query

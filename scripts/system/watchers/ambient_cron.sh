@@ -29,6 +29,15 @@ cd "$PROJECT_ROOT"
 "$VENV_BIN" "$SCRIPT" cron_session_$(date +%Y%m%d_%H%M%S)
 SIGNAL_EXIT=$?
 
+# Judge-backed auto-capture: run the calibrated judge over recent unrated tasks
+# and record outcomes, so the ledger fills from real work without waiting on a
+# human. Capped and best-effort — never fails cron. Runs BEFORE the archiver and
+# evals so the freshly captured outcomes are visible to the quality section.
+AUTOCAP="${PROJECT_ROOT}/scripts/system/outcome_ledger/auto_capture.py"
+if [[ -f "$AUTOCAP" ]]; then
+    "$VENV_BIN" "$AUTOCAP" --max 10 || true  # never block cron on judging
+fi
+
 # Run tiered memory archiver (T2→T4 TTL sweeps)
 ARCHIVER="${PROJECT_ROOT}/scripts/system/tiered_memory/archiver.py"
 if [[ -f "$ARCHIVER" ]]; then

@@ -10,11 +10,6 @@
 .pi/skill-checkpoints/
 **/.pi/skill-checkpoints/
 
-# Session-memory brief — regenerated each session start, injected into the
-# system prompt by the environment extension. Pure runtime state.
-.pi/SESSION_BRIEF.md
-**/.pi/SESSION_BRIEF.md
-
 # Environment & Secrets
 .env
 .env.*
@@ -100,6 +95,9 @@ coverage.xml
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+# Ruff (self-ignores via .ruff_cache/.gitignore, but be explicit)
+.ruff_cache/
 
 # Pyre
 .pyre/
@@ -252,5 +250,15 @@ secrets/
 # Generated documents (word/powerpoint extensions)
 /output/
 
-# Private accomplishments/resume skill — kept local, never published
-.pi/skills/rez/
+# Harness alignment audit reports (/audit) — local run artifacts, never committed
+/audits/
+
+# rez resume skill — committed for portability, but personal data stays LOCAL.
+# The FSM reads resources/{resume,accomplishments}/ read-only, so those
+# directories are committed (via their README placeholders) while the personal
+# resume/accomplishment files inside them are never committed.
+.pi/skills/rez/resources/resume/*
+!.pi/skills/rez/resources/resume/README.md
+.pi/skills/rez/resources/accomplishments/*
+!.pi/skills/rez/resources/accomplishments/README.md
+.pi/skills/rez/output/

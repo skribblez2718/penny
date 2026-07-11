@@ -1,3 +1,4 @@
+import json
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -66,6 +67,35 @@ class TestClassifyDrawer:
         assert tier == "T2"
         assert ttl == 30
 
+    def test_jsa_wing_session_scratch_is_t2_30d(self):
+        # The 77%-accretion fix: dedicated-wing per-session scratch now decays.
+        for room in ("plan-1782417115437-findings", "plan-1782321357342-cve-validate-CVE-2025-4690"):
+            d = DrawerMeta("d1", "wing_jsa", room, "2026-04-01T00:00:00Z")
+            tier, ttl = classify_drawer(d)
+            assert tier == "T2", room
+            assert ttl == 30, room
+
+    def test_jsa_e2e_scratch_is_t2_30d(self):
+        d = DrawerMeta("d1", "wing_jsa", "jsa-gj-2026-06-09-e2e-01-sast-validated", "2026-04-01T00:00:00Z")
+        tier, ttl = classify_drawer(d)
+        assert tier == "T2"
+        assert ttl == 30
+
+    def test_jsa_curated_rooms_are_permanent(self):
+        # Curated cross-session knowledge survives the scratch sweep (exact T3
+        # match wins over the wing prefix).
+        for room in ("jsa-learnings", "bug_bounty_methodology", "vulnerability_research"):
+            d = DrawerMeta("d1", "wing_jsa", room, "2020-01-01T00:00:00Z")
+            tier, ttl = classify_drawer(d)
+            assert tier == "T3", room
+            assert ttl == -1, room
+
+    def test_sca_wing_scratch_decays_but_learnings_kept(self):
+        scratch = DrawerMeta("d1", "wing_sca", "charter-abc", "2026-04-01T00:00:00Z")
+        assert classify_drawer(scratch) == ("T2", 30)
+        learnings = DrawerMeta("d2", "wing_sca", "sca-learnings", "2020-01-01T00:00:00Z")
+        assert classify_drawer(learnings) == ("T3", -1)
+
 
 class TestShouldArchive:
     def test_signal_older_than_7_days(self):
@@ -103,6 +133,71 @@ class TestShouldArchive:
         d = DrawerMeta("d1", "penny", "outcomes", ts)
         should, _ = should_archive(d, now=now)
         assert should is True
+
+
+class TestAmendmentArchival:
+    """Status-aware archival for penny/system_amendments (fixes the keep-forever
+    accumulation of resolved amendments)."""
+
+    NOW = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+    def _days_ago(self, n):
+        return (self.NOW - timedelta(days=n)).isoformat()
+
+    def _amendment(self, did, status, applied_date="", reviewed_date="", filed="2026-01-01T00:00:00Z"):
+        body = {"amendment_id": did, "status": status}
+        if applied_date:
+            body["applied_date"] = applied_date
+        if reviewed_date:
+            body["reviewed_date"] = reviewed_date
+        content = f"amendment_id: {did}\n" + json.dumps(body, indent=2)
+        return DrawerMeta(did, "penny", "system_amendments", filed, content=content)
+
+    def test_pending_kept_even_when_ancient(self):
+        d = self._amendment("a1", "PENDING", filed=self._days_ago(400))
+        should, reason = should_archive(d, self.NOW)
+        assert should is False and "PENDING" in reason
+
+    def test_approved_kept(self):
+        d = self._amendment("a1", "APPROVED", reviewed_date=self._days_ago(400))
+        assert should_archive(d, self.NOW)[0] is False
+
+    def test_applied_within_efficacy_window_kept(self):
+        d = self._amendment("a1", "APPLIED", applied_date=self._days_ago(30))
+        should, reason = should_archive(d, self.NOW)
+        assert should is False and "efficacy window" in reason
+
+    def test_applied_past_efficacy_window_archived(self):
+        d = self._amendment("a1", "APPLIED", applied_date=self._days_ago(90))
+        should, reason = should_archive(d, self.NOW)
+        assert should is True and "efficacy window" in reason
+
+    def test_applied_undated_kept(self):
+        d = self._amendment("a1", "APPLIED")  # no applied_date
+        assert should_archive(d, self.NOW)[0] is False
+
+    def test_rejected_within_grace_kept(self):
+        d = self._amendment("a1", "REJECTED", reviewed_date=self._days_ago(5))
+        assert should_archive(d, self.NOW)[0] is False
+
+    def test_rejected_past_grace_archived(self):
+        d = self._amendment("a1", "REJECTED", reviewed_date=self._days_ago(30))
+        should, reason = should_archive(d, self.NOW)
+        assert should is True and "grace" in reason
+
+    def test_unparseable_amendment_kept(self):
+        d = DrawerMeta("a1", "penny", "system_amendments", "2026-01-01T00:00:00Z", content="not json")
+        assert should_archive(d, self.NOW)[0] is False
+
+    def test_sweep_routes_amendments_past_the_keep_forever_shortcircuit(self):
+        # The whole point: an APPLIED-past-window amendment must be archived even
+        # though the room classifies as permanent (T4/-1) — the old default that
+        # let resolved amendments accumulate forever.
+        old_applied = self._amendment("a1", "APPLIED", applied_date=self._days_ago(90))
+        pending = self._amendment("a2", "PENDING")
+        sweep = sweep_for_archival([old_applied, pending], self.NOW)
+        assert {d.drawer_id for d in sweep["archive"]} == {"a1"}
+        assert "a2" in {d.drawer_id for d in sweep["keep"]}
 
 
 class TestSweepForArchival:

@@ -1,5 +1,5 @@
 {
-  "_comment": "Fable-authored grading rubrics for Penny's core work-product classes. A judge (open model) applies one rubric to a work product and returns PASS/FAIL. The value of these rubrics is that the accompanying calibration_corpus.jsonl fixes what Fable's PASS/FAIL means for each — so a judge can be calibrated to reproduce Fable's standard rather than inventing its own. Rubrics are process-shaped: they name what to CHECK, not 'be thorough'. Authored 2026-07-07 (Fable's last day) as the ground-truth teacher standard. Extend deliberately; never loosen a pass_bar without a git diff to answer for.",
+  "_comment": "Oracle-authored grading rubrics for Penny's core work-product classes. A judge (open model) applies one rubric to a work product and returns PASS/FAIL. The value of these rubrics is that the accompanying calibration_corpus.jsonl fixes what Oracle's PASS/FAIL means for each — so a judge can be calibrated to reproduce Oracle's standard rather than inventing its own. Rubrics are process-shaped: they name what to CHECK, not 'be thorough'. Authored 2026-07-07 (Oracle's last day) as the ground-truth teacher standard. Extend deliberately; never loosen a pass_bar without a git diff to answer for.",
   "rubrics": {
     "plan_quality": {
       "question": "Is this an execution-grade plan a competent engineer could run without re-planning?",
@@ -25,6 +25,18 @@
       ],
       "pass_bar": "PASS iff the failure scenario genuinely occurs AND the root cause is right. Default to FAIL when the trigger path cannot be constructed from the given code, or when a guard elsewhere already prevents it. Confident, well-written findings whose scenario cannot actually be triggered are FAIL.",
       "fail_traps": "The plausible-but-wrong finding: correct-sounding vocabulary, real-looking line reference, but the scenario is impossible or already guarded. This is exactly what a weak judge waves through."
+    },
+    "task_success": {
+      "question": "Did the assistant's response accomplish the user's stated goal?",
+      "check": [
+        "The response substantively achieved the goal with a usable result.",
+        "If the goal was a question, it was actually answered correctly.",
+        "It did not fail, refuse wrongly, or leave the goal unmet.",
+        "It is judged on the OUTCOME, not effort, length, or tone."
+      ],
+      "pass_bar": "PASS iff the response substantively achieved the goal. FAIL if it failed, refused wrongly, produced a wrong/unusable/incomplete result, or only partially achieved the goal.",
+      "fail_traps": "Fluent, confident responses that did not actually accomplish the goal. This class holds the human-corrected verdicts from `make rate --review` — the cases the auto-capture judge got wrong — so the verifier recalibrates on exactly its own mistakes.",
+      "_note": "Mirrors auto_capture.JUDGE_SYSTEM. Records here carry oracle_verdict = the trusted (Oracle or human-override) verdict; source distinguishes them."
     },
     "synthesis_completeness": {
       "question": "Does this synthesis preserve every load-bearing fact from the source without fabricating or dropping any?",

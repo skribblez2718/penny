@@ -94,7 +94,9 @@ task performance across models — is measured, not assumed. Two parts:
 - **`run_prompt_efficacy.py`** (expensive, manual/weekly:
   `make evals-prompt-efficacy`) replays `golden_prompt_tasks.json` through
   headless pi in matched arms — frame-on (`--system-prompt .pi/SYSTEM.md`) vs
-  frame-off (pi's default prompt) vs per-section ablations (`--ablate`) — per
+  frame-off (a near-empty single-whitespace prompt — the raw model with no
+  instructions, deliberately NOT pi's own default) vs per-section
+  ablations (`--ablate`) — per
   model family, from a hermetic cwd with tools/extensions/skills/context files
   disabled so the frame text is the only variable. Results land in
   `.penny/evals/prompt_efficacy/latest.json`. Frame-on losing to frame-off
@@ -115,6 +117,20 @@ instead of frame value. Statistical honesty: with n tasks, one flipped task
 moves a family's rate by 1/n, so the degradation margin is `max(5pp, 2/n)` and
 per-family deltas below `MIN_FAMILY_TASKS` never gate. Growing the task set is
 how the margin tightens.
+
+**Hybrid grading (judge grader).** Most tasks grade with deterministic checks
+(`contains_*`, `regex*`, `json_fields`). Semantic tasks — where keyword matching is
+phrasing-brittle — use a rubric-based **LLM judge** (`type: "judge"`, fixed model
+`claude-haiku-4-5`) that scores substance against an inline rubric (`pass_bar` /
+`required_facts` / `fail_traps`) and emits `VERDICT: PASS/FAIL` (last verdict wins).
+A judge check may only gate a default run after its rubric **and** a frozen
+calibration key are human-approved (`approved_by`/`approved_at`);
+`run_judge_calibration.py` validates the judge against that key (agreement ≥ 0.80,
+false-pass ≤ 0.20, Claude slice included) before it counts. The artifact records
+`grading_scheme` + `runner_version` so keyword- and judge-graded pass rates are
+never diffed; a judge-call failure retries once then EXCLUDES the cell (never a
+silent PASS, never a keyword fallback). Use `--experimental` for a non-gating
+iteration lane and `--judge-repeats`/`--max-judge-calls` to tune cost/noise.
 
 Known limits (deliberate v1 scope): tasks are single-turn and tool-less, so
 the eval measures the frame's effect on reasoning/answer quality, not on

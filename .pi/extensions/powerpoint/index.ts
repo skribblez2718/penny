@@ -9,6 +9,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -52,12 +53,9 @@ export function slugify(input: string, fallback = "presentation"): string {
   return slug || fallback;
 }
 
-/** Default output path: <projectRoot>/output/powerpoint/<slug>_<YYYYMMDD_HHMMSS>.pptx */
-export function defaultOutputPath(
-  projectRoot: string,
-  title: string | undefined,
-  now: Date = new Date()
-): string {
+/** Default output path when the caller gives none: a per-run temp file under the
+ *  OS temp dir (…/penny/powerpoint/) — never the project tree. */
+export function defaultOutputPath(title: string | undefined, now: Date = new Date()): string {
   const stamp = [
     now.getFullYear(),
     String(now.getMonth() + 1).padStart(2, "0"),
@@ -74,7 +72,7 @@ export function defaultOutputPath(
     .toString(36)
     .slice(2, 6)}`;
   const name = `${slugify(title || "presentation")}_${stamp}_${time}_${uniq}.pptx`;
-  return path.join(projectRoot, "output", "powerpoint", name);
+  return path.join(os.tmpdir(), "penny", "powerpoint", name);
 }
 
 /** Resolve the final output path from an optional explicit param. */
@@ -84,7 +82,7 @@ export function resolveOutputPath(
   projectRoot: string
 ): string {
   if (!outputPath) {
-    return defaultOutputPath(projectRoot, title);
+    return defaultOutputPath(title);
   }
   const resolved = path.isAbsolute(outputPath) ? outputPath : path.join(projectRoot, outputPath);
   return resolved.toLowerCase().endsWith(".pptx") ? resolved : `${resolved}.pptx`;
@@ -283,7 +281,7 @@ const powerpointGenerateParams = Type.Object({
   output_path: Type.Optional(
     Type.String({
       description:
-        "Destination .pptx path. Defaults to <project>/output/powerpoint/<slug>_<timestamp>.pptx. " +
+        "Destination .pptx path. When omitted, writes to a temp file under the OS temp dir (…/penny/powerpoint/) — not the project tree. " +
         "Relative paths resolve against the project root.",
     })
   ),
@@ -347,8 +345,8 @@ export default function powerpointExtension(pi: ExtensionAPI): void {
       "quote, image (auto-fit with caption), and closing. Alternatively pass 'markdown' for " +
       "convenience (see the parameter description for the exact slide-splitting rules). Five " +
       "built-in themes (executive/modern/minimal/editorial/tech) control fonts and accent " +
-      "colors; speaker notes, footer text, and slide numbers are supported. Output defaults to " +
-      "<project>/output/powerpoint/.",
+      "colors; speaker notes, footer text, and slide numbers are supported. When output_path is " +
+      "omitted, output is written to the OS temp dir (…/penny/powerpoint/).",
     promptSnippet:
       "powerpoint_generate: render structured slides or markdown into a professionally styled PowerPoint (.pptx)",
     parameters: powerpointGenerateParams,

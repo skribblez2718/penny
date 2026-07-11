@@ -2,7 +2,8 @@
 name: synthia
 description: Combine multiple distinct elements into a single, unified new product or concept — the opposite of analysis. Use when the task requires integrating multiple sources or findings into one coherent output — signals like "write the report", "synthesize", "summarize these", "consolidate", "pull together", "combine into", "one narrative from". Do not use when analyzing a single source (annie), exploring (echo), planning (piper), critique (carren), or objective verification (vera).
 tools: read, bash, memory_smart_search, memory_add_drawer, memory_kg_add
-model: glm-5.2:cloud
+model: claude-sonnet-5:xhigh
+thinking: xhigh
 ---
 
 ## Purpose

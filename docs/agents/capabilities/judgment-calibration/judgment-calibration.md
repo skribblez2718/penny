@@ -4,25 +4,25 @@ Operational reference for the judgment-calibration harness (`scripts/system/judg
 
 ## What It Is
 
-When Penny's orchestration loop drops from Fable to a mix of open models (GLM/DeepSeek/Kimi/MiniMax), the system loses Fable's implicit judgment — deciding whether an output is good enough, whether a finding is real, whether work is actually done (`ctx.met`, set by each playbook's `done_predicate`). The judgment-calibration harness **externalizes that judgment** so quality no longer depends on the driver model being smart.
+When Penny's orchestration loop drops from Oracle to a mix of open models (GLM/DeepSeek/Kimi/MiniMax), the system loses Oracle's implicit judgment — deciding whether an output is good enough, whether a finding is real, whether work is actually done (`ctx.met`, set by each playbook's `done_predicate`). The judgment-calibration harness **externalizes that judgment** so quality no longer depends on the driver model being smart.
 
 Three artifacts:
 
 | Artifact | What it is |
 |----------|-----------|
-| `rubrics.json` | Fable-authored grading rubrics per work-product class (`plan_quality`, `finding_validity`, `synthesis_completeness`) — process-shaped `check` lists + a `pass_bar` |
-| `calibration_corpus.jsonl` | Fable's PASS/FAIL verdicts (with score, reasoning, failure_mode) on real Penny work products — **the ground truth; authored 2026-07-07, extend only, never loosen** |
+| `rubrics.json` | Oracle-authored grading rubrics per work-product class (`plan_quality`, `finding_validity`, `synthesis_completeness`) — process-shaped `check` lists + a `pass_bar` |
+| `calibration_corpus.jsonl` | Oracle's PASS/FAIL verdicts (with score, reasoning, failure_mode) on real Penny work products — **the ground truth; authored 2026-07-07, extend only, never loosen** |
 | `judge_prompt.md` | The frame-independent grader system prompt a candidate judge runs under |
 
 ## The Harness
 
-`run_judge_agreement.py` (`make judge-agreement`) replays every corpus record through each candidate judge model (headless pi: grader prompt + class rubric + work product), parses `VERDICT: PASS|FAIL`, and scores agreement with Fable. Metrics per model:
+`run_judge_agreement.py` (`make judge-agreement`) replays every corpus record through each candidate judge model (headless pi: grader prompt + class rubric + work product), parses `VERDICT: PASS|FAIL`, and scores agreement with Oracle. Metrics per model:
 
 | Metric | Meaning |
 |--------|---------|
-| `agreement` | Fraction of records where judge verdict = Fable verdict |
-| **`false_pass_rate`** | Of Fable-FAIL records, fraction the judge PASSED — **the autonomy-safety metric** (a judge that waves through bad work is what makes unattended autonomy unsafe) |
-| `false_fail_rate` | Of Fable-PASS records, fraction the judge FAILED (too strict — annoying, not dangerous) |
+| `agreement` | Fraction of records where judge verdict = Oracle verdict |
+| **`false_pass_rate`** | Of Oracle-FAIL records, fraction the judge PASSED — **the autonomy-safety metric** (a judge that waves through bad work is what makes unattended autonomy unsafe) |
+| `false_fail_rate` | Of Oracle-PASS records, fraction the judge FAILED (too strict — annoying, not dangerous) |
 | `kappa` | Cohen's kappa (agreement beyond chance) |
 | `per_class` | Agreement broken down by work-product class |
 
@@ -41,7 +41,7 @@ Results → `.penny/evals/judgment/latest.json`. Pick the judge with highest agr
 ## How To Use It
 
 1. `make judge-agreement` → read the leaderboard.
-2. Wire the winning model into the VERIFY primitive (`apps/orchestration/src/orchestration/primitives/verify.py`, agent `vera`) as its judge — this makes a weak orchestrator's "is it done?" backed by a Fable-calibrated verifier. (Runtime wiring is planned in `plans/`; the harness + eval ship now.)
+2. Wire the winning model into the VERIFY primitive (`apps/orchestration/src/orchestration/primitives/verify.py`, agent `vera`) as its judge — this makes a weak orchestrator's "is it done?" backed by a Oracle-calibrated verifier. (Runtime wiring is planned in `plans/`; the harness + eval ship now.)
 3. Re-run when a model updates or when you extend the corpus; the eval catches drift.
 
 ## Curation Rules

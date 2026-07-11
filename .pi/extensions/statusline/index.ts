@@ -20,8 +20,9 @@ const ANSI_RE = /\x1b\[[0-9;]*m/g;
 function visibleWidth(str: string): number {
   return str.replace(ANSI_RE, "").length;
 }
-import { readdir, stat } from "fs/promises";
+import { readdir, stat, readFile } from "fs/promises";
 import { join } from "path";
+import { homedir } from "os";
 
 // ============================================================================
 // CONFIGURATION
@@ -42,6 +43,36 @@ const ICONS = {
   robot: "🤖",
   prompt: "📝",
 };
+
+// ============================================================================
+// THINKING / EFFORT LEVEL
+// ============================================================================
+
+/**
+ * Read the configured reasoning/effort level (Pi's ``defaultThinkingLevel``).
+ * Project settings override the global agent settings; falls back to "off"
+ * when unset. This only seeds the initial display — the live value is kept
+ * current at runtime via the ``thinking_level_select`` event.
+ */
+async function readConfiguredEffort(): Promise<string> {
+  const candidates = [
+    join(process.cwd(), ".pi/settings.json"),
+    join(homedir(), ".pi/agent/settings.json"),
+  ];
+  for (const path of candidates) {
+    try {
+      const parsed = JSON.parse(await readFile(path, "utf-8")) as {
+        defaultThinkingLevel?: string;
+      };
+      if (typeof parsed?.defaultThinkingLevel === "string" && parsed.defaultThinkingLevel) {
+        return parsed.defaultThinkingLevel;
+      }
+    } catch {
+      // missing / unreadable / invalid JSON — try the next candidate
+    }
+  }
+  return "off";
+}
 
 // ============================================================================
 // SKILLS & EXTENSIONS DISCOVERY
@@ -219,7 +250,7 @@ function formatLine1(
   extensionsCount: number,
   promptsCount: number
 ): string {
-  return `${COLORS.purple}${DA_NAME}${COLORS.reset} here, running on ${COLORS.orange}${ICONS.brain} ${modelName}${COLORS.reset} in ${COLORS.cyan}${ICONS.folder} ${dirName}${COLORS.reset}, wielding: ${COLORS.white}${ICONS.target} ${skillsCount}${COLORS.reset} ${COLORS.darkBlue}Skills${COLORS.reset}, ${COLORS.white}${ICONS.plug} ${extensionsCount}${COLORS.reset} ${COLORS.darkBlue}Extensions${COLORS.reset}, and ${COLORS.white}${ICONS.prompt} ${promptsCount}${COLORS.reset} ${COLORS.darkBlue}Prompts${COLORS.reset}`;
+  return `${COLORS.purple}${DA_NAME}${COLORS.reset} here, running on ${COLORS.orange}${ICONS.robot} ${modelName}${COLORS.reset} in ${COLORS.cyan}${ICONS.folder} ${dirName}${COLORS.reset}, wielding: ${COLORS.white}${ICONS.target} ${skillsCount}${COLORS.reset} ${COLORS.darkBlue}Skills${COLORS.reset}, ${COLORS.white}${ICONS.plug} ${extensionsCount}${COLORS.reset} ${COLORS.darkBlue}Extensions${COLORS.reset}, and ${COLORS.white}${ICONS.prompt} ${promptsCount}${COLORS.reset} ${COLORS.darkBlue}Prompts${COLORS.reset}`;
 }
 
 function formatItemList(items: string[], icon: string, label: string, width: number): string[] {
@@ -271,6 +302,12 @@ interface ContextUsage {
   tokens?: number;
 }
 
+/** Fired when the reasoning/effort level changes (user cycles thinking level). */
+interface ThinkingLevelSelectEvent {
+  level: string;
+  previousLevel?: string;
+}
+
 /** The live TUI handle passed to a footer factory. */
 interface TuiHandle {
   requestRender(): void;
@@ -314,6 +351,13 @@ export default function (pi: ExtensionAPI) {
   let cachedExtensions: string[] = [];
   let cachedPrompts: string[] = [];
 
+  // Current reasoning/effort level (thinkingLevel). Seeded from settings at
+  // session start, then kept live via the `thinking_level_select` event.
+  let currentEffort = "off";
+  // Live TUI handle captured by the footer factory, so an out-of-band effort
+  // change can request a re-render.
+  let tuiRef: TuiHandle | null = null;
+
   // Get current working directory name
   const cwd = process.cwd();
   const dirName = cwd.split("/").pop() || cwd;
@@ -326,6 +370,16 @@ export default function (pi: ExtensionAPI) {
     cachedAgents = await getAgents();
     cachedExtensions = await getExtensions();
     cachedPrompts = await getPrompts();
+    currentEffort = await readConfiguredEffort();
+    tuiRef?.requestRender();
+  });
+
+  // Keep the effort readout live when the user cycles the thinking level.
+  pi.on("thinking_level_select", (event: ThinkingLevelSelectEvent) => {
+    if (event?.level) {
+      currentEffort = event.level;
+      tuiRef?.requestRender();
+    }
   });
 
   // Custom footer with context bar and item lists
@@ -335,6 +389,8 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setFooter((tui: TuiHandle, theme: Theme, footerData: FooterData): FooterRenderer => {
       // Subscribe to branch changes to trigger re-render when new messages arrive
       const unsub = footerData.onBranchChange(() => tui.requestRender());
+      // Capture the live TUI handle so effort-level changes can request a render.
+      tuiRef = tui;
 
       return {
         dispose: unsub,
@@ -386,9 +442,12 @@ export default function (pi: ExtensionAPI) {
           const barWidth = Math.min(12, Math.max(4, width - 40));
           const barStr = renderContextBar(contextPct, barWidth);
           const pctColor = getPctColor(contextPct);
-          lines.push(
-            `${COLORS.blue}${ICONS.chart} Context${COLORS.reset}${COLORS.gray}:${COLORS.reset} ${barStr} ${pctColor}${contextPct}%${COLORS.reset} ${COLORS.gray}(${contextUsedK}K/${contextMaxK}K)${COLORS.reset}`
-          );
+          const contextLeft = `${COLORS.blue}${ICONS.chart} Context${COLORS.reset}${COLORS.gray}:${COLORS.reset} ${barStr} ${pctColor}${contextPct}%${COLORS.reset} ${COLORS.gray}(${contextUsedK}K/${contextMaxK}K)${COLORS.reset}`;
+          // Right-justified effort readout on the same line: 🧠 Effort: <level>
+          const effortStr = `${COLORS.orange}${ICONS.brain} Effort:${COLORS.reset} ${COLORS.white}${currentEffort}${COLORS.reset}`;
+          const gap = width - visibleWidth(contextLeft) - visibleWidth(effortStr);
+          // Drop the effort readout on very narrow terminals rather than wrap.
+          lines.push(gap > 0 ? contextLeft + " ".repeat(gap) + effortStr : contextLeft);
 
           // Truncate all lines to terminal width to prevent crash
           return lines.map((l) => truncateToWidth(theme.fg("text", l), width));

@@ -10,12 +10,12 @@ describe("subagent integration logging", () => {
   });
 
   it("emits JSON to observability REST endpoint for agent spawn error with sessionId", async () => {
-    const fetchSpy = vi.fn(() => Promise.resolve({ ok: true } as Response));
+    const fetchSpy = vi.fn((_url: string, _options?: RequestInit) => Promise.resolve({ ok: true } as Response));
     vi.stubGlobal("fetch", fetchSpy);
 
     const logger = createLogger("agent-runner");
     setSessionId("agent-int-005");
-    const err = Object.assign(new Error("ENOENT"), { code: "AGENT_SPAWN_ERROR" });
+    const err = Object.assign(new Error("ENOENT"), { code: "AGENT_SPAWN_ERROR" as const });
     logger.error("Spawn failed", { agent: "echo" }, err);
 
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));

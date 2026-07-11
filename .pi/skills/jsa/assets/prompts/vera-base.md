@@ -124,5 +124,5 @@ memory_add_drawer(wing="wing_jsa", room="{session_id}-verified", content={
 End your response with a single-line JSON SUMMARY prefixed with `SUMMARY:` (no space before the brace). Required: `verdict` (PASS|FAIL — the overall verification outcome), `gaps` (list of findings that could not be confirmed), `confidence` (CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN), and `evidence` (list — the CAPTURED browser-PoC transcripts you actually ran; one entry per verified finding). `evidence` may be empty ONLY for a genuinely clean target with nothing to verify — never fabricate a PoC to fill it. Optional: `verified_count`, `refuted_count`, `out_of_scope_count` (ints), `mempalace_drawer`, `needs_clarification` + `clarifying_questions`.
 
 ```
-SUMMARY:{"verdict":"PASS","gaps":[],"confidence":"PROBABLE","evidence":["DOM-XSS on /search?q=: injected <img src=x onerror=alert(1)> — alert fired (screenshot drawer <id>)"],"verified_count":1,"refuted_count":0,"out_of_scope_count":0,"mempalace_drawer":"<id>"}
+SUMMARY:{"verdict":"PASS","gaps":[],"confidence":"PROBABLE","evidence":["DOM-XSS on /search?q=: injected <img src=x onerror=alert(1)> — alert fired (screenshot drawer <id>)"],"verified_count":1,"refuted_count":0,"out_of_scope_count":0,"mempalace_drawer":"<id>","clarifying_questions":[],"needs_clarification":false}
 ```

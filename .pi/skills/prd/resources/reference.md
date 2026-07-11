@@ -142,10 +142,10 @@ Keyword scan in goal text against `WEB_APP_KEYWORDS`, run in `initial_transition
 
 ```
 react, vue, angular, django, flask, fastapi, next, next.js, nuxt,
-streamlit, frontend, backend, api, web, website, spa, ssr, express,
+frontend, backend, api, web, website, spa, ssr, express,
 node, node.js, postgres, mysql, supabase, firebase, tailwind,
 bootstrap, css, html, javascript, typescript, htmx, graphql,
-rest, websocket, svelte
+rest, websocket, svelte, lit-html, lit-element, litelement
 ```
 
 Match → `web-app`. No match → `generic`.

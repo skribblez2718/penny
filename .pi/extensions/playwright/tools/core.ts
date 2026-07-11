@@ -47,8 +47,8 @@ export function registerCoreTools(pi: ExtensionAPI, _config: PlaywrightConfig) {
 
       const nodeCount = countNodes(tree);
       const truncated = nodeCount > 500;
-      if (truncated) {
-        tree = truncateTree(tree, 500);
+      if (truncated && tree) {
+        tree = truncateTree(tree, 500) ?? tree;
       }
 
       return {

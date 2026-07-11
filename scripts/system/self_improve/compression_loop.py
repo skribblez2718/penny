@@ -15,33 +15,63 @@ from typing import List, Dict, Any, Optional
 from target_classifier import classify_target, TargetLayer
 from amendment_generator import generate_amendment
 
-# Minimum occurrences of a reason to trigger a pattern
+# Minimum occurrences of a grouping key to trigger a pattern
 _PATTERN_THRESHOLD = 2
+
+# Human-readable phrase per categorical failure mode — used for the amendment's
+# guidance heading and target classification (which run on natural language, not
+# the enum token). Unknown keys (reason-based, from older records) pass through
+# unchanged. Mirrors capture.FAILURE_MODES.
+_FAILURE_MODE_PHRASE = {
+    "misread_request": "misread what the user actually asked for",
+    "incomplete": "left part of the stated goal unmet",
+    "wrong_result": "produced an incorrect result",
+    "unverified_claim": "asserted something without grounding or evidence",
+    "missing_constraint": "ignored a stated constraint or requirement",
+    "wrong_intermediate": "relied on a wrong intermediate inference",
+    "scope_creep": "did more or different work than was asked",
+    "refused_wrongly": "declined a valid, in-scope request",
+}
+
+
+def _grouping_key(outcome: Dict[str, Any]) -> str:
+    """The key the compression loop clusters on.
+
+    Prefer the categorical ``failure_mode`` — free-text ``reason`` rarely
+    repeats verbatim (judge/human WHY sentences almost never match), so
+    reason-only clustering never fires; the enum recurs reliably. "other" and
+    empty are NOT clustering keys (they'd over-group unrelated failures), so
+    they fall back to the normalized reason — which preserves the old behavior
+    for records written before failure_mode existed.
+    """
+    fm = str(outcome.get("failure_mode", "")).strip().lower()
+    if fm and fm != "other":
+        return fm
+    return str(outcome.get("reason", "")).strip().lower()
+
+
+def _describe(pattern: str) -> str:
+    """Natural-language rendering of a grouping key for classification/guidance.
+    A failure-mode enum becomes its phrase; a reason string passes through."""
+    return _FAILURE_MODE_PHRASE.get(pattern, pattern)
 
 
 def identify_patterns(outcomes: List[Dict[str, Any]]) -> List[str]:
     """Extract recurring patterns from outcome records.
 
-    Groups by normalized reason text across MISMATCH and PARTIAL outcomes.
-    Returns pattern descriptions for items meeting threshold.
+    Groups MISMATCH/PARTIAL outcomes by their grouping key (categorical
+    failure_mode, else normalized reason) and returns the keys meeting the
+    recurrence threshold.
     """
-    # Filter to suboptimal outcomes only
     relevant = [o for o in outcomes if o.get("outcome") in ("MISMATCH", "PARTIAL")]
     if not relevant:
         return []
 
-    # Normalize reasons (lowercase, strip)
-    reasons = [str(o.get("reason", "")).strip().lower() for o in relevant]
-    reasons = [r for r in reasons if r]
+    keys = [_grouping_key(o) for o in relevant]
+    keys = [k for k in keys if k]
 
-    # Count occurrences
-    counts = Counter(reasons)
-
-    # Filter to recurring patterns
-    patterns = [reason for reason, count in counts.items() if count >= _PATTERN_THRESHOLD]
-
-    # Return human-readable pattern descriptions (capitalize first letter)
-    return [p.capitalize() if p else "" for p in patterns if p]
+    counts = Counter(keys)
+    return [key for key, count in counts.items() if count >= _PATTERN_THRESHOLD]
 
 
 def _deduplicate(
@@ -121,29 +151,34 @@ def run_compression_loop(
 
     amendments = []
     for pattern in patterns:
-        # Collect evidence for this pattern
-        evidence = [
-            f"{o.get('decision_id', 'unknown')} ({o.get('outcome')}): {o.get('reason', '')}"
+        # The records that share this grouping key (exact match on the key, not a
+        # substring-in-reason scan — the key may be a categorical failure_mode
+        # that never appears literally in the free-text reason).
+        matched = [
+            o
             for o in outcomes
-            if o.get("outcome") in ("MISMATCH", "PARTIAL")
-            and pattern.lower() in str(o.get("reason", "")).lower()
+            if o.get("outcome") in ("MISMATCH", "PARTIAL") and _grouping_key(o) == pattern
         ]
 
-        # Infer domain from outcomes
-        domains = [
-            o.get("domain", "")
-            for o in outcomes
-            if pattern.lower() in str(o.get("reason", "")).lower()
+        # Evidence keeps the human-readable reasons so the amendment cites the
+        # concrete instances behind the categorical pattern.
+        evidence = [
+            f"{o.get('decision_id', 'unknown')} ({o.get('outcome')}): {o.get('reason', '')}"
+            for o in matched
         ]
+
         # Fallback must be a value the outcome writer actually emits
         # ("other", not "general") — otherwise the efficacy eval filters this
         # amendment against a permanently empty outcome pool and its impact
         # is never measured.
-        domain = Counter(d.lower() for d in domains if d).most_common(1)
+        domain = Counter(str(o.get("domain", "")).lower() for o in matched if o.get("domain"))
+        domain = domain.most_common(1)
         domain = domain[0][0] if domain else "other"
 
-        # Classify target
-        target = classify_target(pattern, evidence)
+        # Classification and guidance run on natural language — a failure-mode
+        # enum is rendered to its phrase; a reason string passes through.
+        learning = _describe(pattern)
+        target = classify_target(learning, evidence)
 
         # Determine target file
         if target == TargetLayer.DOMAIN_GUIDANCE:
@@ -157,11 +192,11 @@ def run_compression_loop(
 
         # Generate amendment with real, applicable guidance text
         amendment = generate_amendment(
-            learning=pattern,
+            learning=learning,
             evidence=evidence[:5],  # cap evidence list
             target_layer=target.value,
             target_file=target_file,
-            proposed_text=build_guidance_text(pattern, evidence, len(evidence)),
+            proposed_text=build_guidance_text(learning, evidence, len(matched)),
             domain=domain,
         )
         amendments.append(amendment)

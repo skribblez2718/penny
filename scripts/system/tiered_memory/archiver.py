@@ -1,5 +1,6 @@
 """Tiered Memory Archival — age-based TTL enforcement for T2→T4 transition."""
 
+import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,6 +24,19 @@ TIER_CONFIG: Dict[str, Tuple[str, int]] = {
 DEFAULT_ARCHIVE_TIER = "T4"
 DEFAULT_ARCHIVE_TTL_DAYS = -1
 
+# Amendments are status-aware, not age-only: penny/system_amendments would
+# otherwise fall through to the keep-forever default and accumulate every
+# resolved proposal permanently. PENDING/APPROVED are awaiting the human and are
+# always kept. APPLIED is kept through its efficacy window so
+# quality.amendment_efficacy can still measure it — 60 days covers the 30d-after
+# window plus the 30d TTL of the outcomes that window is measured against, after
+# which those outcomes are gone and the amendment is no longer measurable.
+# REJECTED gets a short grace period, then ages out. Resolved amendments go to
+# cold JSONL (never deletion), and the review list already hides them.
+AMENDMENTS_ROOM = "penny/system_amendments"
+_APPLIED_EFFICACY_KEEP_DAYS = 60
+_REJECTED_GRACE_DAYS = 14
+
 # Longest-prefix room patterns for session-scoped scratch that should decay
 # even though the exact room name is unique per run. Checked after the exact
 # TIER_CONFIG lookup. (wing/room-prefix -> (tier, ttl_days))
@@ -34,6 +48,49 @@ TIER_PREFIX_CONFIG: List[Tuple[str, Tuple[str, int]]] = [
     ("penny/compactions", ("T2", 90)),
     ("penny/session_distill", ("T2", 30)),
 ]
+
+
+def _load_skill_room_rules() -> Tuple[Dict[str, Tuple[str, int]], List[Tuple[str, Tuple[str, int]]]]:
+    """Load per-skill scratch retention from skill_rooms.json (the single source
+    of truth; scaffold-skill.py appends to it, the compliance check verifies it).
+
+    Returns (exact_keeps, prefix_rules) to merge into the tier config: each
+    dedicated-wing skill contributes exact T3 keeps for its curated rooms and
+    T2 decay prefixes for its transient scratch. Penny-wing skills need nothing
+    here — the ``penny/skills/`` base prefix above already covers them.
+
+    Fail-safe: any load/parse error returns empty rules. The base rules above
+    still apply (so penny-wing skills always decay); only dedicated-wing
+    coverage is lost, which ``check_skill_structure.py`` catches loudly.
+    """
+    manifest = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skill_rooms.json")
+    exact: Dict[str, Tuple[str, int]] = {}
+    prefixes: List[Tuple[str, Tuple[str, int]]] = []
+    try:
+        with open(manifest, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return exact, prefixes
+    for cfg in (data.get("skills") or {}).values():
+        if not isinstance(cfg, dict) or cfg.get("convention") != "dedicated-wing":
+            continue
+        wing = cfg.get("wing")
+        if not wing:
+            continue
+        ttl = int(cfg.get("ttl_days", 30))
+        for room in cfg.get("curated_rooms", []):
+            exact[f"{wing}/{room}"] = ("T3", -1)
+        for pfx in cfg.get("scratch_prefixes", [""]):
+            prefixes.append((f"{wing}/{pfx}", ("T2", ttl)))
+    return exact, prefixes
+
+
+# Merge the per-skill rules from the manifest into the tier config at import.
+# Exact keeps win over prefixes in classify_drawer, so a curated room is never
+# swept by its own wing's scratch prefix.
+_SKILL_EXACT, _SKILL_PREFIXES = _load_skill_room_rules()
+TIER_CONFIG.update(_SKILL_EXACT)
+TIER_PREFIX_CONFIG.extend(_SKILL_PREFIXES)
 
 
 @dataclass
@@ -111,11 +168,59 @@ def effective_ttl_days(drawer: DrawerMeta, base_ttl: int) -> int:
     return base_ttl * multiplier
 
 
+def _parse_amendment(content: str) -> Optional[dict]:
+    """Parse an amendment drawer's JSON body (``amendment_id:`` header + JSON,
+    per run_compression.store_amendment). None if unparseable."""
+    if not content:
+        return None
+    parts = content.split("\n", 1)
+    raw = parts[1] if len(parts) > 1 and parts[0].startswith("amendment_id:") else content
+    try:
+        rec = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
+def _amendment_archive_decision(
+    drawer: DrawerMeta, now: Optional[datetime] = None
+) -> Tuple[bool, str]:
+    """Status-aware archival for penny/system_amendments (see AMENDMENTS_ROOM).
+
+    Keep PENDING/APPROVED (awaiting the human) and any unparseable/undated
+    record. Archive APPLIED past its efficacy window and REJECTED past its grace.
+    """
+    rec = _parse_amendment(drawer.content)
+    status = str((rec or {}).get("status", "")).upper()
+    if status in ("PENDING", "APPROVED"):
+        return False, f"amendment: {status} (kept — awaiting action)"
+    if not rec or not status:
+        return False, "amendment: unparsed/statusless (kept)"
+    if status == "APPLIED":
+        days = age_days(str(rec.get("applied_date", "")), now)
+        if days is None:
+            return False, "amendment: APPLIED undated (kept)"
+        if days > _APPLIED_EFFICACY_KEEP_DAYS:
+            return True, f"amendment: APPLIED {days:.0f}d > {_APPLIED_EFFICACY_KEEP_DAYS}d efficacy window"
+        return False, f"amendment: APPLIED {days:.0f}d <= {_APPLIED_EFFICACY_KEEP_DAYS}d (efficacy window)"
+    if status == "REJECTED":
+        days = age_days(str(rec.get("reviewed_date", "")), now)
+        if days is None:
+            return False, "amendment: REJECTED undated (kept)"
+        if days > _REJECTED_GRACE_DAYS:
+            return True, f"amendment: REJECTED {days:.0f}d > {_REJECTED_GRACE_DAYS}d grace"
+        return False, f"amendment: REJECTED {days:.0f}d <= {_REJECTED_GRACE_DAYS}d grace"
+    return False, f"amendment: unknown status {status!r} (kept)"
+
+
 def should_archive(drawer: DrawerMeta, now: Optional[datetime] = None) -> Tuple[bool, str]:
     """Return (should_archive, reason) for a drawer.
 
-    Permanent tiers (ttl < 0) never archive. Undated drawers are kept.
+    The amendments room is status-aware; otherwise permanent tiers (ttl < 0)
+    never archive and undated drawers are kept.
     """
+    if f"{drawer.wing}/{drawer.room}" == AMENDMENTS_ROOM:
+        return _amendment_archive_decision(drawer, now)
     tier, base_ttl = classify_drawer(drawer)
     if base_ttl < 0:
         return False, f"{tier}: permanent"
@@ -143,6 +248,12 @@ def sweep_for_archival(
         "unknown": [],
     }
     for drawer in drawer_list:
+        # Amendments are status-aware, not age-only, so they bypass the
+        # base_ttl<0 keep-forever short-circuit and consult should_archive.
+        if f"{drawer.wing}/{drawer.room}" == AMENDMENTS_ROOM:
+            should, _ = should_archive(drawer, now)
+            (result["archive"] if should else result["keep"]).append(drawer)
+            continue
         tier, base_ttl = classify_drawer(drawer)
         if tier == "T3" or base_ttl < 0:
             result["keep"].append(drawer)

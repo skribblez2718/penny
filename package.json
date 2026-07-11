@@ -18,10 +18,10 @@
     ".pi/extensions/njsscan",
     ".pi/extensions/observability",
     ".pi/extensions/osv-scanner",
+    ".pi/extensions/enhance",
     ".pi/extensions/pdf2markdown",
     ".pi/extensions/playwright",
     ".pi/extensions/powerpoint",
-    ".pi/extensions/prompt-improver",
     ".pi/extensions/questionnaire",
     ".pi/extensions/retire-js",
     ".pi/extensions/search",
@@ -47,7 +47,7 @@
     "test": "bun run test:unit",
     "test:unit": "for dir in .pi/extensions/*/; do (cd \"$dir\" && bun run test:unit); done",
     "test:integration": "for dir in .pi/extensions/*/; do (cd \"$dir\" && bun run test:integration); done",
-    "test:python": "source .venv/bin/activate && pytest .pi/extensions/memory/tests/integration/test_bridge.py -v",
+    "test:python": "source .venv/bin/activate && pytest .pi/extensions/memory/tests/unit/test_smart_retriever.py .pi/extensions/memory/tests/integration/test_bridge.py -v",
     "test:all": "bun run lint && bun run format:check && bun run py:lint && bun run py:format:check && bun run test:unit && bun run test:integration && bun run test:python"
   },
   "devDependencies": {

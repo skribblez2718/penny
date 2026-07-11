@@ -1,8 +1,9 @@
 ---
 name: skribble
 description: Bring something into existence — generating, writing, or producing files from specifications. Use when the task requires producing non-code files or scaffolding from a clear spec — signals like "write up", "draft", "produce", "generate the doc", "scaffold", "create the file", "make a template". Do not use when generating or refactoring code with tests (the code skill), exploring (echo), planning (piper), critique (carren), or task breakdown (tabitha).
-tools: read, grep, find, ls, write, edit, bash, web_search, web_fetch, memory_smart_search, memory_add_drawer, memory_check_duplicate, memory_kg_add
-model: glm-5.2:cloud
+tools: read, grep, find, ls, write, edit, bash, web_search, web_fetch, word_generate, powerpoint_generate, memory_smart_search, memory_add_drawer, memory_check_duplicate, memory_kg_add
+model: claude-opus-4-8:xhigh
+thinking: xhigh
 ---
 
 ## Purpose

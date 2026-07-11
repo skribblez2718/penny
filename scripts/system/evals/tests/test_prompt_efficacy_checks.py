@@ -115,8 +115,17 @@ def test_golden_tasks_load_and_are_well_formed():
         assert task["prompt"].strip()
         assert task["checks"], f"task {task['id']} has no graders"
         for check in task["checks"]:
-            # raises ValueError on unknown types
-            pe.check_text(check, "probe text")
+            if check.get("type") == "judge":
+                # hybrid judge check: validate rubric completeness + approval markers
+                assert check.get("question") and check.get("pass_bar"), (
+                    f"judge task {task['id']} has an incomplete rubric"
+                )
+                assert check.get("approved_by") and check.get("approved_at"), (
+                    f"judge task {task['id']} rubric is not approved (decision #4)"
+                )
+            else:
+                # deterministic check: raises ValueError on unknown types
+                pe.check_text(check, "probe text")
 
 
 # ── family_rates (artifact math) ────────────────────────────────────────────

@@ -67,9 +67,27 @@ function createMockEvent(overrides: any = {}) {
       { type: "session", sessionId: "sess-abc", id: "e1" },
       ...(overrides.extraEntries || []),
     ],
-    customInstructions: undefined,
+    reason: overrides.reason ?? "threshold",
+    customInstructions: overrides.customInstructions,
+    willRetry: overrides.willRetry ?? false,
     signal: new AbortController().signal,
     ...overrides,
+  };
+}
+
+function skillCall(goal: string, id: string, skill = "plan") {
+  return {
+    role: "assistant",
+    content: [{ type: "toolCall", id, name: "skill", arguments: { skill_name: skill, goal } }],
+  };
+}
+
+function skillResult(sessionId: string, toolCallId: string, success = true) {
+  return {
+    role: "toolResult",
+    toolName: "skill",
+    toolCallId,
+    content: JSON.stringify({ success, session_id: sessionId }),
   };
 }
 
@@ -96,7 +114,7 @@ describe("compactionExtension", () => {
     expect(result.compaction.firstKeptEntryId).toBe("fkid-1");
     expect(result.compaction.tokensBefore).toBe(15000);
     expect(result.compaction.details).toBeDefined();
-    expect(result.compaction.details.schema_version).toBe("2.0.0");
+    expect(result.compaction.details.schema_version).toBe("2.1.0");
     expect(result.compaction.details.files.read).toContain("/tmp/read.md");
     expect(result.compaction.details.files.modified).toContain("/tmp/written.md");
     expect(result.compaction.details.files.modified).toContain("/tmp/edited.md");
@@ -145,6 +163,107 @@ describe("compactionExtension", () => {
     const result = await pi.emit("session_before_compact", event);
 
     expect(result.compaction.details.compaction_seq).toBe(2);
+  });
+
+  it("captures event.reason and customInstructions into the named metadata sink", async () => {
+    engineRunsMock.mockResolvedValueOnce([]);
+    const pi = createMockPi() as any;
+    compactionExtension(pi);
+
+    const event = createMockEvent({
+      reason: "manual",
+      customInstructions: "Focus on the goal-recency fix",
+    });
+    const result = await pi.emit("session_before_compact", event);
+
+    expect(result.compaction.details.metadata.compaction_reason).toBe("manual");
+    expect(result.compaction.details.metadata.custom_instructions).toBe(
+      "Focus on the goal-recency fix"
+    );
+    // customInstructions surfaces as a focus hint under Next Steps.
+    expect(result.compaction.summary).toContain("## Next Steps");
+    expect(result.compaction.summary).toContain(
+      "Focus (from /compact): Focus on the goal-recency fix"
+    );
+  });
+
+  it("populates metadata.pi_boundary.boundary_shift on compactions after the first", async () => {
+    engineRunsMock.mockResolvedValueOnce([]);
+    const pi = createMockPi() as any;
+    compactionExtension(pi);
+
+    const event = createMockEvent({
+      extraEntries: [{ type: "compaction", id: "c1", firstKeptEntryId: "prev-fk" }],
+    });
+    const result = await pi.emit("session_before_compact", event);
+
+    const shift = result.compaction.details.metadata.pi_boundary.boundary_shift;
+    expect(shift).toBeDefined();
+    expect(shift.previous).toBe("prev-fk");
+    expect(shift.current).toBe("fkid-1");
+    expect(shift.compaction_seq).toBe(1);
+  });
+
+  it("omits boundary_shift on a session's first compaction", async () => {
+    engineRunsMock.mockResolvedValueOnce([]);
+    const pi = createMockPi() as any;
+    compactionExtension(pi);
+
+    const result = await pi.emit("session_before_compact", createMockEvent());
+    expect(result.compaction.details.metadata.pi_boundary.boundary_shift).toBeUndefined();
+  });
+
+  it("supersedes a completed skill goal with a later ad-hoc user message", async () => {
+    engineRunsMock.mockResolvedValueOnce([]);
+    const pi = createMockPi() as any;
+    compactionExtension(pi);
+
+    const event = createMockEvent({
+      preparation: {
+        firstKeptEntryId: "fkid-1",
+        tokensBefore: 15000,
+        fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+        messagesToSummarize: [
+          skillCall("Design a scoring system", "tc-1"),
+          skillResult("plan-1", "tc-1", true),
+          { role: "user", content: "Now build the goal-recency compaction fix end to end" },
+        ],
+      },
+    });
+    const result = await pi.emit("session_before_compact", event);
+
+    expect(result.compaction.details.goal).toBe(
+      "Now build the goal-recency compaction fix end to end"
+    );
+    expect(result.compaction.details.dominant_skill.superseded).toBe(true);
+    // The skill stays listed under Active Skill even though it no longer sets Goal.
+    expect(result.compaction.summary).toContain("## Active Skill");
+    expect(result.compaction.summary).toContain("superseded by a newer request");
+  });
+
+  it("derives a non-default goal from a split-turn window (turnPrefixMessages only)", async () => {
+    engineRunsMock.mockResolvedValueOnce([]);
+    const pi = createMockPi() as any;
+    compactionExtension(pi);
+
+    const event = createMockEvent({
+      preparation: {
+        firstKeptEntryId: "fkid-1",
+        tokensBefore: 15000,
+        fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+        messagesToSummarize: [],
+        turnPrefixMessages: [
+          { role: "user", content: "Refactor the eviction algorithm for recency weighting" },
+        ],
+        isSplitTurn: true,
+      },
+    });
+    const result = await pi.emit("session_before_compact", event);
+
+    expect(result.compaction.details.goal).toBe(
+      "Refactor the eviction algorithm for recency weighting"
+    );
+    expect(result.compaction.details.goal).not.toContain("goal not yet extracted");
   });
 
   it("degrades instead of abandoning when the summary overflows the budget", async () => {

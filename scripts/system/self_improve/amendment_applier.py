@@ -1,24 +1,119 @@
-"""Apply approved amendments to Domain Guidance files.
+"""Apply approved amendments to their target file + git commit.
 
-Handles file modification, git commit, and safety validation.
-Only operates on Domain Guidance and Config targets — never SYSTEM.md.
+An amendment is auto-applied once a human has APPROVED its concrete diff — the
+review-and-approve step IS the human-in-the-loop, so applying the exact approved
+change to any file (Domain Guidance prompts, config, docs, code, or the rest of
+SYSTEM.md) adds no safety, only toil. Guardrails that keep approval meaningful:
+
+  * R1 concrete diffs only — an empty old_text/new_text is refused (nothing
+    concrete was approved, nothing verbatim can be applied);
+  * R2 verbatim + drift-safe — old_text must still match the file or the change
+    fails closed (never a blind splice);
+  * R3 immutable security block is human-only — any change that touches a
+    `<system_directives>` / `<system_boundary>` region (or the SECURITY
+    DIRECTIVES / SECURITY REINFORCEMENT sentinels) is refused even with approval,
+    so the self-improvement loop can never edit its own security frame;
+  * R4 the trajectory ratchet still gates apply; every apply is git-committed.
 """
 
 import subprocess
 import os
-from typing import Dict, Any
+import sys
+from pathlib import Path
+from typing import Dict, Any, Optional
 
 
-def _is_domain_guidance(target_file: str) -> bool:
-    """True only for Domain Guidance prompts (.pi/skills/*/assets/prompts/*).
+def _trajectory_ok() -> "tuple[bool, str]":
+    """Pre-apply behavioral-regression gate. Fail-open if the guard is
+    unavailable (never block an apply because the ratchet isn't set up)."""
+    try:
+        traj = str(Path(__file__).resolve().parents[1] / "trajectory")
+        if traj not in sys.path:
+            sys.path.insert(0, traj)
+        from guard import check_no_regression  # type: ignore[import-not-found]
 
-    The one place amendments are allowed to write. Everything else — SYSTEM.md,
-    AGENTS.md, .pi/agents/* personas — is the human-authored identity tier.
-    """
-    if not target_file:
-        return False
-    norm = os.path.normpath(target_file).replace(os.sep, "/")
-    return ".pi/skills/" in ("/" + norm) and "/assets/prompts/" in norm
+        return check_no_regression()
+    except Exception:  # noqa: BLE001
+        return True, "trajectory guard unavailable (skipped)"
+
+
+# The immutable security frame. These blocks (and the bare sentinels) stay
+# human-only even for an APPROVED amendment — the loop must never be able to
+# reword, remove, or edit inside its own security directives.
+_SECURITY_SENTINELS = (
+    "<system_directives>",
+    "</system_directives>",
+    "<system_boundary>",
+    "</system_boundary>",
+    "SECURITY DIRECTIVES (IMMUTABLE",
+    "SECURITY REINFORCEMENT",
+)
+
+_PROTECTED_TAG_PAIRS = (
+    ("<system_directives>", "</system_directives>"),
+    ("<system_boundary>", "</system_boundary>"),
+)
+
+
+def _protected_spans(content: str) -> "list[tuple[int, int]]":
+    """Character spans of the immutable security blocks in ``content`` (open tag
+    through close tag, inclusive). An unclosed open tag protects to end-of-file
+    so a truncated block cannot be edited through the gap."""
+    spans: list[tuple[int, int]] = []
+    for open_tag, close_tag in _PROTECTED_TAG_PAIRS:
+        start = 0
+        while True:
+            i = content.find(open_tag, start)
+            if i == -1:
+                break
+            j = content.find(close_tag, i + len(open_tag))
+            end = (j + len(close_tag)) if j != -1 else len(content)
+            spans.append((i, end))
+            start = end
+    return spans
+
+
+def _touches_security_block(content: str, change: Dict[str, str]) -> bool:
+    """True if a change would add, remove, reword, or edit INSIDE the immutable
+    security-directives block — refused even for an APPROVED amendment."""
+    old_text = change.get("old_text", "") or ""
+    new_text = change.get("new_text", "") or ""
+    # 1) The payload must not introduce / remove / reword a security sentinel.
+    for sentinel in _SECURITY_SENTINELS:
+        if sentinel in old_text or sentinel in new_text:
+            return True
+    # 2) A MODIFY/REMOVE whose matched region sits inside a protected span.
+    if old_text:
+        spans = _protected_spans(content)
+        idx = content.find(old_text)
+        while idx != -1:
+            end = idx + len(old_text)
+            if any(idx < s_end and end > s_start for s_start, s_end in spans):
+                return True
+            idx = content.find(old_text, idx + 1)
+    return False
+
+
+def _concrete_diff_error(change: Dict[str, str]) -> Optional[str]:
+    """None if the change carries a concrete, appliable diff; else the reason it
+    does not. An empty diff means nothing concrete was approved."""
+    action = (change.get("action") or "ADD").upper()
+    old_text = change.get("old_text", "") or ""
+    new_text = change.get("new_text", "") or ""
+    if action == "ADD":
+        if not new_text:
+            return "ADD change has empty new_text — nothing to add"
+    elif action == "MODIFY":
+        if not old_text:
+            return "MODIFY change has empty old_text — no anchor to replace"
+        if not new_text:
+            return "MODIFY change has empty new_text — no replacement text"
+    elif action == "REMOVE":
+        if not old_text:
+            return "REMOVE change has empty old_text — no text to remove"
+    else:
+        return f"unknown action {action!r}"
+    return None
 
 
 def _repo_root(target_file: str) -> str:
@@ -123,28 +218,9 @@ def apply_amendment(  # noqa: C901 (linear validate-then-apply guard chain)
             "committed": False,
         }
 
-    if amendment.get("target_layer") == "REJECTED_UNIVERSAL":
-        return {
-            "success": False,
-            "error": "Cannot apply amendment to REJECTED_UNIVERSAL target. SYSTEM.md changes must be authored by humans.",
-            "committed": False,
-        }
-
     target_file = amendment.get("target_file", "")
-
-    # Mechanically enforce the identity/procedural boundary: amendments may only
-    # edit Domain Guidance prompts (.pi/skills/*/assets/prompts/*). SYSTEM.md,
-    # AGENTS.md and agent personas are the identity tier — human-authored only.
-    if not _is_domain_guidance(target_file):
-        return {
-            "success": False,
-            "error": (
-                f"Refused: {target_file} is outside Domain Guidance "
-                "(.pi/skills/*/assets/prompts/). Identity-tier files are human-only."
-            ),
-            "committed": False,
-        }
-
+    if not target_file:
+        return {"success": False, "error": "amendment has no target_file", "committed": False}
     if not os.path.exists(target_file):
         return {
             "success": False,
@@ -152,10 +228,53 @@ def apply_amendment(  # noqa: C901 (linear validate-then-apply guard chain)
             "committed": False,
         }
 
-    # Apply changes
+    changes = amendment.get("changes", [])
+    if not changes:
+        return {"success": False, "error": "amendment has no changes to apply", "committed": False}
+
+    # R1 — concrete diffs only. Approval authorizes applying the EXACT approved
+    # text; an empty old_text/new_text means nothing concrete was approved and
+    # nothing verbatim can be applied (this is what wedged the legacy
+    # CODE_CHANGE amendments at APPROVED forever).
+    for change in changes:
+        err = _concrete_diff_error(change)
+        if err:
+            return {
+                "success": False,
+                "error": f"Refused: {err} — approval requires a concrete diff",
+                "committed": False,
+            }
+
+    # R3 — the immutable security-directives block is human-only, even for an
+    # APPROVED amendment. Approval lets Penny edit any file (Domain Guidance,
+    # config, docs, code, or the rest of SYSTEM.md), but she must never be able
+    # to edit her own security frame.
+    try:
+        current = Path(target_file).read_text(encoding="utf-8")
+    except OSError as exc:
+        return {"success": False, "error": f"could not read target: {exc}", "committed": False}
+    for change in changes:
+        if _touches_security_block(current, change):
+            return {
+                "success": False,
+                "error": (
+                    "Refused: change touches the immutable security-directives block "
+                    "(<system_directives>/<system_boundary>) — human-only, even with approval"
+                ),
+                "committed": False,
+            }
+
+    # R4 — behavioral-regression gate: don't layer a new change on top of an
+    # unacknowledged drift below Oracle-era quality (see scripts/system/trajectory/).
+    traj_ok, traj_msg = _trajectory_ok()
+    if not traj_ok:
+        return {"success": False, "error": f"Refused: {traj_msg}", "committed": False}
+
+    # Apply changes — verbatim; _write_file_change fails closed when old_text no
+    # longer matches (the file drifted since the diff was approved).
     applied = 0
     failed = 0
-    for change in amendment.get("changes", []):
+    for change in changes:
         if _write_file_change(target_file, change):
             applied += 1
         else:
@@ -164,7 +283,10 @@ def apply_amendment(  # noqa: C901 (linear validate-then-apply guard chain)
     if failed > 0:
         return {
             "success": False,
-            "error": f"{failed} of {applied + failed} changes failed to apply",
+            "error": (
+                f"{failed} of {applied + failed} changes failed to apply "
+                "(old_text no longer matches the file?)"
+            ),
             "committed": False,
         }
 

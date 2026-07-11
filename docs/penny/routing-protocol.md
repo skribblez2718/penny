@@ -12,9 +12,9 @@ shared `orchestration` engine: each is a `BasePlaybook` subclass with its own
 domain-named states and a per-state SUMMARY contract. State lives in a durable
 checkpointer keyed by `run_id` (no `--state`, no `/tmp`), and interrupted runs
 **auto-resume** on the next invocation (no manual resume). Every workflow skill
-runs on the engine (`code`, `plan`, `prd`, `research`, `agent`, `sca`, `jsa`); the
-only exception is `rez`, a placeholder skill awaiting a dedicated build (no
-`engine` field). All skills are visible/model-selectable; there is no hidden shelf.
+runs on the engine (`code`, `plan`, `prd`, `research`, `agent`, `sca`, `jsa`,
+`rez`, `learn`), with no exceptions. All skills are visible/model-selectable;
+there is no hidden shelf.
 The engine internals do not change how you choose — you still route to a skill by
 name via `skill({ skill_name, goal })`.
 

@@ -32,12 +32,114 @@ from . import code_detection
 # ---------------------------------------------------------------------------
 
 
-def load_ideal_state(constraints: dict, project_root: str) -> dict | None:  # noqa: C901
+def _find_embedded_ideal_state(text: str) -> dict | None:
+    """Scan ``text`` for the first embedded JSON object that is an IDEAL_STATE.
+
+    Used when a drawer wraps its JSON body in a human-readable title line
+    and/or a prose CHANGE-LOG preface, so the drawer as a whole is not valid
+    JSON. Walks each ``{`` position, attempts a ``raw_decode`` there, and
+    returns the first decoded object exposing a truthy top-level
+    ``success_criteria``. Advances past each successfully decoded object so
+    unrelated JSON (e.g. a Requirement Catalog array of REQ dicts) is skipped
+    rather than re-parsed; braces inside prose that do not open valid JSON
+    fail fast and are stepped over one character at a time.
+    """
+    decoder = json.JSONDecoder()
+    idx = text.find("{")
+    while idx != -1:
+        try:
+            obj, end = decoder.raw_decode(text, idx)
+        except json.JSONDecodeError:
+            idx = text.find("{", idx + 1)
+            continue
+        if isinstance(obj, dict) and obj.get("success_criteria"):
+            return obj
+        # Decoded a non-IDEAL_STATE object; resume scanning after it.
+        idx = text.find("{", max(end, idx + 1))
+    return None
+
+
+def _try_ideal_state(text: str) -> dict | None:
+    """Return the IDEAL_STATE dict embedded in ``text`` (a dict with a truthy
+    ``success_criteria``), or None.
+
+    Tolerant by design. The prd skill stores each artifact drawer with a
+    human-readable title line, and revised artifacts additionally carry a
+    prose CHANGE-LOG preface *before* the JSON body. A strict ``json.loads``
+    of the whole drawer therefore fails on exactly the drawers that DO hold a
+    valid IDEAL_STATE. We first try a strict parse (pure-JSON drawers, the
+    common case, behaviour unchanged), then fall back to scanning for the
+    first embedded IDEAL_STATE object. Non-IDEAL_STATE artifacts (Requirement
+    Catalog arrays, Verification Matrix maps, prose narratives) never expose a
+    top-level ``success_criteria`` and are correctly rejected either way.
+    """
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        parsed = None
+    if isinstance(parsed, dict) and parsed.get("success_criteria"):
+        return parsed
+    if parsed is not None:
+        # The drawer is a single JSON document that is not an IDEAL_STATE
+        # (e.g. a Verification Matrix map or a Requirement Catalog array).
+        # There is no title/preface to strip, so nothing more to find.
+        return None
+    return _find_embedded_ideal_state(text)
+
+
+def _latest_ideal_state(documents: list, metadatas: list) -> dict | None:
+    """Find the newest IDEAL_STATE among MemPalace drawer documents.
+
+    The memory bridge splits content over its chunk threshold into NON-overlapping
+    sibling chunks that share a ``drawer_key`` and are ordered by ``chunk_index``
+    (scripts/system/bridge/memory_bridge.py::_chunk_text is a clean
+    ``content[i:i+size]`` split). A chunked IDEAL_STATE is therefore invalid JSON
+    per-chunk; concatenating a drawer's chunks in ``chunk_index`` order exactly
+    restores the original. This groups documents by ``drawer_key``, reassembles
+    each group, and returns the IDEAL_STATE with the latest ``filed_at`` so a
+    revised PRD wins over an earlier one. Unchunked drawers form a single-element
+    group; documents lacking a ``drawer_key`` are treated as their own solo group
+    so pre-metadata drawers still parse.
+    """
+    documents = documents or []
+    metadatas = metadatas or []
+    groups: dict[str, dict[str, Any]] = {}
+    for i, doc in enumerate(documents):
+        if not doc:
+            continue
+        meta = (metadatas[i] if i < len(metadatas) else None) or {}
+        key = meta.get("drawer_key") or f"__solo_{i}"
+        try:
+            idx = int(meta.get("chunk_index", 0))
+        except (TypeError, ValueError):
+            idx = 0
+        group = groups.setdefault(key, {"chunks": [], "filed_at": ""})
+        group["chunks"].append((idx, doc))
+        filed_at = str(meta.get("filed_at", ""))
+        if filed_at > group["filed_at"]:
+            group["filed_at"] = filed_at
+
+    best: tuple[str, dict] | None = None  # (filed_at, ideal_state)
+    for group in groups.values():
+        group["chunks"].sort(key=lambda pair: pair[0])
+        reassembled = "".join(text for _, text in group["chunks"])
+        parsed = _try_ideal_state(reassembled)
+        if parsed is None:
+            continue
+        if best is None or group["filed_at"] > best[0]:
+            best = (group["filed_at"], parsed)
+    return best[1] if best else None
+
+
+def load_ideal_state(constraints: dict, project_root: str) -> dict | None:
     """Resolve the IDEAL_STATE the code skill depends on.
 
     Direct: ``constraints["ideal_state"]`` (with success_criteria). Chain fallback:
-    ``constraints["prd_room"]`` ("skills/prd-…") → look the drawer up in MemPalace.
-    Returns the ideal_state dict, or None when the PRD dependency is unmet.
+    ``constraints["prd_room"]`` ("skills/prd-…") → look the drawer(s) up in MemPalace,
+    reassembling chunked drawers (see ``_latest_ideal_state``). Returns the
+    ideal_state dict, or None when the PRD dependency is unmet.
     """
     constraints = constraints or {}
     ideal = constraints.get("ideal_state")
@@ -56,18 +158,21 @@ def load_ideal_state(constraints: dict, project_root: str) -> dict | None:  # no
             except Exception:
                 drawers = None
             if drawers is not None:
-                results = drawers.get(
-                    where={"$and": [{"room": prd_room}, {"wing": "penny"}]}, limit=50
+                # limit is high headroom: a chunked IDEAL_STATE must retrieve ALL
+                # of its sibling chunks or reassembly is incomplete. PRD rooms are
+                # bounded (a handful of artifacts x a few chunks each).
+                results = (
+                    drawers.get(
+                        where={"$and": [{"room": prd_room}, {"wing": "penny"}]}, limit=1000
+                    )
+                    or {}
                 )
-                for doc_text in (results or {}).get("documents", []) or []:
-                    if not doc_text:
-                        continue
-                    try:
-                        parsed = json.loads(doc_text)
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                    if isinstance(parsed, dict) and parsed.get("success_criteria"):
-                        return parsed
+                found = _latest_ideal_state(
+                    results.get("documents") or [],
+                    results.get("metadatas") or [],
+                )
+                if found is not None:
+                    return found
         except Exception as exc:  # pragma: no cover - best effort
             print(f"MemPalace IDEAL_STATE lookup failed: {exc}", file=sys.stderr)
     return None
@@ -354,7 +459,7 @@ def _server_implement_block(ideal: dict) -> str:
         f"This project ships a {framework} server. The orchestrator's verify phase will fail if the test suite does not contain tests that actually start the server. You MUST add the following test categories to the test plan and write them as part of this iteration:\n"
         f"\n1. SERVER-STARTUP INTEGRATION TEST: A real uvicorn/Flask/Node server boots in a background thread (or subprocess) with HEAVY DEPS MOCKED (model downloads, databases, third-party APIs). The test makes real HTTP requests against the live server and asserts the expected status codes / response bodies for representative endpoints (e.g. /health, /, one business endpoint). This catches issues that unit tests with mocks cannot: misconfigured middleware, CORS, startup hooks, lifespan events, port conflicts.\n"
         f"\n2. ENTRY-POINT SCRIPT TEST (CRITICAL — this is a recurring bug class):\n"
-        f"   - For each entry point listed below, run the script as a SUBPROCESS from inside its own directory and verify the import chain works. Many runners (Streamlit, uvicorn --reload wrappers, CLI tools) change cwd to the script's directory before importing, so `from sibling_pkg import ...` silently breaks unless the script itself puts the project root on sys.path.\n"
+        f"   - For each entry point listed below, run the script as a SUBPROCESS from inside its own directory and verify the import chain works. Many runners (uvicorn --reload wrappers, CLI tools, and bundler dev servers) change cwd to the script's directory before importing, so `from sibling_pkg import ...` silently breaks unless the script itself puts the project root on sys.path.\n"
         f"   - Add a test that does exactly this: subprocess.run([sys.executable, '-c', '<driver code that imports the entry point and exercises its imports>'], cwd=os.path.dirname(entry_point), check=True). If the script needs PYTHONPATH set, the test should set it; but ideally the production script itself handles sys.path.\n"
         f"   - Entry points to cover:\n{entry_list}\n"
         f"\n3. CORS / ORIGIN PREFLIGHT TEST (if the server has CORS): make an OPTIONS request from a representative browser origin and assert the access-control-allow-origin header is present and correct.\n"
@@ -643,6 +748,10 @@ class CodePlaybook(BasePlaybook):
             "learning",  # stall / repeated-strategy escalation (Recs 1 & 2)
         }
     )
+    # Graduated autonomy: before writing/changing code (the action), ask
+    # act-vs-ask (reversibility of the goal + earned coding-domain trust) and
+    # escalate to the human when untrusted. Dormant unless PENNY_AUTONOMY_GATE.
+    AUTONOMY_STATES = frozenset({"implementing"})
 
     # -- lifecycle ---------------------------------------------------------
     def initial_transition(self, ctx: RunContext) -> str:

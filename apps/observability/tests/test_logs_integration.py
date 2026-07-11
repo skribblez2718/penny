@@ -99,12 +99,13 @@ class TestLogsEndpoints:
         assert by_comp["scheduler"] == 1
 
     def test_admin_cleanup_includes_logs(self, client: TestClient) -> None:
-        """POST /admin/cleanup returns deleted_logs count."""
+        """POST /admin/cleanup runs size rotation and reports the logs table."""
         response = client.post("/admin/cleanup")
         assert response.status_code == 200
         data = response.json()
-        assert "deleted_logs" in data
-        assert isinstance(data["deleted_logs"], int)
+        assert data["status"] == "ok"
+        assert "logs" in data["deleted"]
+        assert isinstance(data["deleted"]["logs"], int)
 
     def test_admin_stats_includes_log_fields(self, client: TestClient) -> None:
         """GET /admin/stats includes log_count and oldest_log_unix."""
@@ -116,8 +117,9 @@ class TestLogsEndpoints:
         assert "log_count" in data
         assert "oldest_log_unix" in data
         assert data["log_count"] >= 1
-        assert "retention_log_days" in data
-        assert data["retention_log_days"] == 14
+        # Age retention retired in favour of size rotation.
+        assert "db_size_max_gb" in data
+        assert "db_size_floor_gb" in data
 
     def test_safe_insert_log(self, client: TestClient) -> None:
         """_safe_insert_log should not raise even with bad data."""
@@ -214,12 +216,13 @@ class TestWatcherLogsEndpoints:
         assert by_source["confidence_trend_watcher"] == 1
 
     def test_admin_cleanup_includes_watcher_logs(self, client: TestClient) -> None:
-        """POST /admin/cleanup returns deleted_watcher_logs count."""
+        """POST /admin/cleanup runs size rotation and reports the watcher_logs table."""
         response = client.post("/admin/cleanup")
         assert response.status_code == 200
         data = response.json()
-        assert "deleted_watcher_logs" in data
-        assert isinstance(data["deleted_watcher_logs"], int)
+        assert data["status"] == "ok"
+        assert "watcher_logs" in data["deleted"]
+        assert isinstance(data["deleted"]["watcher_logs"], int)
 
     def test_admin_stats_includes_watcher_log_fields(self, client: TestClient) -> None:
         """GET /admin/stats includes watcher_log_count and oldest_watcher_log_unix."""
@@ -231,4 +234,4 @@ class TestWatcherLogsEndpoints:
         assert "watcher_log_count" in data
         assert "oldest_watcher_log_unix" in data
         assert data["watcher_log_count"] >= 1
-        assert "retention_watcher_log_days" in data
+        assert "db_size_floor_gb" in data

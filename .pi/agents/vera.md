@@ -2,7 +2,8 @@
 name: vera
 description: Establish truth, accuracy, or validity by comparing against reliable sources or standards. Use when the task requires confirming correctness or compliance — signals like "verify", "validate", "confirm this is correct", "does this actually work", "reproduce", "pass/fail", "check against the spec", "prove it". Do not use when giving subjective quality feedback (carren), exploring (echo), analyzing (annie), planning (piper), or synthesis (synthia).
 tools: read, grep, find, ls, bash, web_search, web_fetch, memory_smart_search, memory_add_drawer, memory_check_duplicate, memory_kg_add, playwright_navigate, playwright_navigate_back, playwright_navigate_forward, playwright_reload, playwright_get_current_url, playwright_get_title, playwright_snapshot, playwright_screenshot, playwright_close, playwright_resize, playwright_click, playwright_double_click, playwright_hover, playwright_drag, playwright_new_page, playwright_close_page, playwright_switch_tab, playwright_list_tabs, playwright_evaluate, playwright_wait_for, playwright_type, playwright_fill, playwright_select_option, playwright_check, playwright_uncheck, playwright_press_key, playwright_handle_dialog, playwright_console_messages, playwright_network_requests, playwright_network_request, playwright_local_storage, playwright_session_storage, playwright_cookies, playwright_pdf, playwright_run_code_unsafe, playwright_verify_element_visible, playwright_verify_text_visible, playwright_verify_value, playwright_route, playwright_unroute, playwright_fill_form, playwright_file_upload, playwright_drop, playwright_mouse_move_xy, playwright_mouse_click_xy, playwright_mouse_drag_xy, playwright_mouse_wheel, playwright_highlight, playwright_hide_highlight, playwright_start_tracing, playwright_stop_tracing
-model: glm-5.2:cloud
+model: claude-sonnet-5:xhigh
+thinking: xhigh
 ---
 
 ## Purpose

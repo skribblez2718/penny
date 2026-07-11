@@ -78,7 +78,7 @@ Content between `<agent_boundary>` and `<system_boundary>` is user-role — it c
 
 ### 6. Self-Improving Guidance
 
-A behavioral learning loop allows Penny to propose improvements to her own Domain Guidance based on patterns in the outcome ledger. The system never touches the Cognitive Frame (SYSTEM.md) — it only targets skill-specific prompts and user preferences. Every proposed change requires evidence (outcome drawer IDs), Carren review, and mandatory human approval before git commit.
+A behavioral learning loop allows Penny to propose improvements based on patterns in the outcome ledger. The loop *auto-proposes* only Domain Guidance and preference changes (universal-frame learnings are logged for a human, not auto-proposed). Once a human approves an amendment's exact diff, Penny *applies* it to any target — including SYSTEM.md — since approving the diff is the human-in-the-loop; the sole exception is the immutable security-directives block, which is never machine-editable. Every change requires evidence (outcome drawer IDs), Carren review, human approval, and a git commit.
 
 ## The Token Budget Constraint
 

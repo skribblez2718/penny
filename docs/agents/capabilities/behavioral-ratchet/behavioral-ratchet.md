@@ -1,0 +1,46 @@
+# Behavioral-Regression Ratchet
+
+Operational reference for `scripts/system/trajectory/`. Human rationale: [Behavioral Ratchet (Human)](../../../humans/capabilities/behavioral-ratchet/behavioral-ratchet.md).
+
+## What It Is
+
+The eval ratchet catches *metric* regression; this catches *behavioral* regression — the system silently producing worse outputs than Oracle did as the driver weakens and domain guidance keeps getting amended. Each fixture (`fixtures.json`, **Oracle-authored** — reference output + `pass_bar` + `load_bearing_facts`) is replayed through the current system and scored by the calibrated judge against the pass bar (quality, not byte-identity).
+
+## Two-Part Design (mirrors prompt-efficacy)
+
+| Part | Role |
+|------|------|
+| `run_trajectory.py` (`make trajectory`) | EXPENSIVE: replays fixtures through headless pi (production frame + driver) → judges each → writes `.penny/evals/trajectory/latest.json`. Run weekly / before adopting an amendment. |
+| `eval_trajectory.py` (section `trajectory`) | CHEAP: reads the artifact in every `make evals` — never a model call. |
+| `guard.py` | Pre-apply gate the amendment applier calls (`amendment_applier._trajectory_ok`). |
+
+## Metrics (RATCHETED, not Oracle-absolute)
+
+The fixtures encode Oracle-era behavior; the current driver is weaker, so some fixtures fail on day one — a **known gap, not drift**. So both metrics ratchet against the current driver's baseline (tighten-only) rather than demanding Oracle-equality:
+
+- `trajectory.pass_rate` (up_good) — fraction passing. FAIL status only below the **catastrophic floor (0.4)**; ordinary drift is caught by the tighten-only baseline (a decrease past tolerance).
+- `trajectory.regressed_fixtures` (down_good) — count failing. PASS status always; the baseline captures the current count and the ratchet alarms on a **rise** (new drift).
+- `trajectory.results_fresh_days`, `trajectory.fixture_count` — liveness/context.
+
+Current baseline (2026-07-07, GLM driver): **6/7 pass**; the one gap is `plan-idle-expiry` (GLM's plan drops the boundary test + latency risk Oracle's reference had).
+
+## Pre-Apply Guard
+
+`check_no_regression(latest, baseline)` blocks an amendment apply when the latest run shows **more** failing fixtures than the eval baseline accepts (new cross-domain drift) or a catastrophic pass rate — while **allowing** the known Oracle-vs-driver gap. Fail-open when there's no trajectory evidence yet (absence ≠ regression).
+
+## Curation Rules
+
+- **Never delete a failing fixture** to go green — a failing fixture is the eval doing its job; fix the system or accept it with a git diff (then re-baseline).
+- **Add a fixture** whenever you catch Penny getting worse at something in real use — it becomes a permanent guard.
+- The judge scores against the `pass_bar` + `load_bearing_facts`, NOT the reference wording — open models phrase differently; gate on quality.
+
+## Route fidelity (live)
+
+Each fixture carries an `expected_route` (the correct delegation call: `direct` | `skill:<name>` | `agent:<name>`). The runner captures the current system's routing decision for each task under the production frame (`capture_route` → `parse_route`) and compares. `trajectory.route_fidelity` (in `eval_trajectory`) reports the fraction routed correctly.
+
+- **Informational, not a gate** — per the plan, route divergence is a supporting signal unless it correlates with output failure. It surfaces over-delegation (routing a simple ask to a heavy skill) and under-delegation drift.
+- The current fixtures are single-turn direct-answer tasks (all `expected_route: direct`), so route fidelity here guards against the system starting to over-delegate. Richer route-fidelity (fixtures that *should* route to a skill) benefits from engine-driven replay — the natural next fixture additions.
+
+## Wiring status
+
+Fully wired and tested: the runner (replay + judge + route capture), the `trajectory` eval section (pass_rate, regressed_fixtures, route_fidelity, freshness, count), and the amendment-applier pre-apply guard. Both live end-to-end runs confirmed against the GLM driver + MiniMax judge.

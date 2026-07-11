@@ -52,7 +52,7 @@ Record the confirmed census plus your enrichments as a mempalace entry in the
 P1 room, then emit a compact inline summary:
 
 ```
-SUMMARY:{"phase":"P1_CENSUS","census_confirmed":<true|false>,"entry_points":["<path>"],"frameworks":["<name>"],"key_dependencies":["<name>"],"coverage_gaps":["<one line each>"],"needs_clarification":<true|false>}
+SUMMARY:{"census_confirmed":<true|false>,"entry_points":["<path>"],"frameworks":["<name>"],"key_dependencies":["<name>"],"coverage_gaps":["<one line each>"],"needs_clarification":<true|false>,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>"}
 ```
 
 Confirm the deterministic inventory, add the entry points and stack it cannot

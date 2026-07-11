@@ -21,7 +21,7 @@ describe("memory extension structured logging", () => {
 
   it("emits structured ERROR log for bridge timeout with BRIDGE_TIMEOUT code", () => {
     const err = Object.assign(new Error("Bridge timed out after 30000ms"), {
-      code: "BRIDGE_TIMEOUT",
+      code: "BRIDGE_TIMEOUT" as const,
     });
     logger.error("Bridge timeout", { tool: "status", duration: "30s" }, err);
     expect(buffer).toHaveLength(1);
@@ -32,7 +32,7 @@ describe("memory extension structured logging", () => {
   });
 
   it("emits structured WARN log for bridge parse error with BRIDGE_PARSE_ERROR code", () => {
-    const err = Object.assign(new Error("Failed to parse"), { code: "BRIDGE_PARSE_ERROR" });
+    const err = Object.assign(new Error("Failed to parse"), { code: "BRIDGE_PARSE_ERROR" as const });
     logger.warn("Bridge response parse error", { tool: "status", exitCode: 1, stderr: "" }, err);
     expect(buffer).toHaveLength(1);
     expect(buffer[0].level).toBe(2); // WARN

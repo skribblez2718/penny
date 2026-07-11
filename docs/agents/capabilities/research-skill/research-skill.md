@@ -14,6 +14,7 @@ Agents need to ground claims in evidence. The research skill separates evidence 
 2. **Penny is a router.** Agents communicate via mempalace (`skills/research-<session_id>`); Penny only sees per-state SUMMARY contracts.
 3. **Mode is auto-detected but can be overridden.** Use `constraints.mode` only when the default detection is wrong.
 4. **Credibility tiers are mandatory.** Echo classifies every source as T1–T4; Synthia uses those tiers when assigning confidence.
+4a. **Video sources are in scope, not optional extras.** Echo holds the `youtube_transcript` tool and runs a YouTube-targeted `web_search` for every sub-query; relevant videos (official channels, conference talks, established practitioners) get their transcript pulled and tiered like any written source. A miss is documented explicitly ("No relevant video content found"), not silently skipped.
 5. **Deep mode adds critique gates.** Plan critique and report critique catch gaps and overclaiming.
 6. **The skill returns a report, not decisions.** Do not execute recommendations without user approval.
 
@@ -96,7 +97,7 @@ In deep mode `critiquing_plan` and `critiquing_report` are bounded revise loops:
 | `unknown` / `awaiting_clarification` | — | Escalation seam (see below) |
 | `error` | — | Terminal failure |
 
-`researching` is a single Echo agent instructed to research every sub-query; there is no per-sub-query fan-out and no separate validation state (Vera is not invoked — that state was removed from the workflow).
+`researching` is a single Echo agent instructed to research every sub-query; there is no per-sub-query fan-out and no separate validation state (Vera is not invoked — that state was removed from the workflow). Echo's toolset for this state is `web_search`, `web_fetch`, and `youtube_transcript` (per `.pi/agents/echo.md`); the domain prompt (`assets/prompts/echo.md`) requires a YouTube-targeted search per sub-query and a transcript pull on relevant hits.
 
 ### Escalation and resilience
 
@@ -113,9 +114,11 @@ Summary validation is the engine's job (`contracts.py` `validate_summary_contrac
 | Tier | Name | Examples |
 |------|------|----------|
 | T1 | Primary / Authoritative | Official docs, RFCs, arXiv papers, specs |
-| T2 | Expert / Established | ACM Queue, official blogs, recognized experts |
-| T3 | Community / Practitioner | High-vote Stack Overflow, dev.to, tutorials |
-| T4 | Unverified / Commercial | Product pages, SEO content, unknown blogs |
+| T2 | Expert / Established | ACM Queue, official blogs, recognized experts, official vendor YouTube channels, recorded conference talks |
+| T3 | Community / Practitioner | High-vote Stack Overflow, dev.to, tutorials, established practitioner YouTube channels |
+| T4 | Unverified / Commercial | Product pages, SEO content, unknown blogs, unverified/low-authority YouTube channels |
+
+Video transcripts are tiered by publisher/channel authority, exactly like written sources — the medium (video vs. text) does not change the tier.
 
 Confidence markers used in the report:
 

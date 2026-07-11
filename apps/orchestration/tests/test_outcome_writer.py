@@ -85,6 +85,68 @@ class TestBuildContent:
         ]
         assert len(identify_patterns(outcomes)) >= 1
 
+    def test_failure_mode_empty_on_match(self):
+        assert self._body(met=True, iteration=1)["failure_mode"] == ""
+
+    def test_failure_mode_classifies_verify_gaps(self):
+        # A verifier gap describing a work-quality problem gets a categorical key.
+        assert (
+            self._body(met=False, verify_gaps=["did not address the stated requirement"])[
+                "failure_mode"
+            ]
+            == "missing_constraint"
+        )
+        assert (
+            self._body(met=False, verify_gaps=["the claim is unsupported by any evidence"])[
+                "failure_mode"
+            ]
+            == "unverified_claim"
+        )
+
+    def test_failure_mode_defaults_incomplete_for_unspecific_gaps(self):
+        # Verifier found gaps but nothing keyword-matched → still didn't meet the
+        # bar, so "incomplete" (not "other") — it clusters with other verify fails.
+        assert self._body(met=False, verify_gaps=["something felt off"])["failure_mode"] == "incomplete"
+
+    def test_failure_mode_other_for_hard_error_without_gaps(self):
+        # A process/orchestration error is NOT a work-quality category; it stays
+        # "other" so grouping falls back to the (repeatable) error string.
+        assert (
+            self._body(met=False, errors=["step failed after 3 retries"])["failure_mode"] == "other"
+        )
+
+    def test_failure_mode_clusters_across_different_reasons(self):
+        # The engine-side analogue of the keystone fix: two verify failures with
+        # DIFFERENT free-text gaps but the same category must now cluster.
+        import sys as _sys
+        from pathlib import Path as _Path
+
+        si = _Path(__file__).resolve().parents[3] / "scripts" / "system" / "self_improve"
+        _sys.path.insert(0, str(si))
+        from compression_loop import identify_patterns  # type: ignore
+
+        outcomes = [
+            self._body(met=False, verify_gaps=["omitted the required null check"]),
+            self._body(met=False, verify_gaps=["ignored the constraint about timezones"]),
+        ]
+        # different reasons, same failure_mode → one clustered pattern
+        assert identify_patterns(outcomes) == ["missing_constraint"]
+
+    def test_failure_mode_values_stay_in_capture_vocab(self):
+        # Drift guard: everything this writer can emit must be a real
+        # capture.FAILURE_MODES value (the compression loop's vocabulary).
+        import sys as _sys
+        from pathlib import Path as _Path
+
+        ol = _Path(__file__).resolve().parents[3] / "scripts" / "system" / "outcome_ledger"
+        _sys.path.insert(0, str(ol))
+        from capture import FAILURE_MODES  # type: ignore
+
+        from orchestration.outcome_writer import _FAILURE_MODE_KEYWORDS
+
+        emitted = {mode for mode, _ in _FAILURE_MODE_KEYWORDS} | {"incomplete", "other"}
+        assert emitted <= set(FAILURE_MODES)
+
 
 class TestRecordOutcomeSafety:
     def test_no_write_under_pytest(self):

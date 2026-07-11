@@ -1,0 +1,10 @@
+{
+  "name": "pi-extension-enhance",
+  "version": "1.0.0",
+  "description": "Enhance extension for Pi — on-demand prompt enhancement via a trailing `-i` suffix, rewriting raw prompts into world-class goal-oriented prompts before the model sees them",
+  "main": "index.ts",
+  "type": "module",
+  "scripts": {
+    "test:unit": "vitest run --config tests/vitest.config.ts"
+  }
+}

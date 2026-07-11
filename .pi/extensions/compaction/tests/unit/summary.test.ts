@@ -155,4 +155,44 @@ describe("createProseSummary", () => {
     expect(summary).not.toContain("No explicit constraints recorded");
     expect(summary).not.toContain("## Constraints");
   });
+
+  it("renders ## Current Work and ## Next Steps when present", () => {
+    const summary = createProseSummary(
+      baseArtifact({
+        current_work: "Rewriting extractSessionState's newest-first fallback",
+        next_steps: ["Wire merged messages into pending detection", "Populate boundary_shift"],
+      })
+    );
+    expect(summary).toContain("## Current Work");
+    expect(summary).toContain("Rewriting extractSessionState's newest-first fallback");
+    expect(summary).toContain("## Next Steps");
+    expect(summary).toContain("- Wire merged messages into pending detection");
+    expect(summary).toContain("- Populate boundary_shift");
+  });
+
+  it("omits Current Work / Next Steps entirely when there is no signal", () => {
+    const summary = createProseSummary(baseArtifact());
+    expect(summary).not.toContain("## Current Work");
+    expect(summary).not.toContain("## Next Steps");
+  });
+
+  it("flags a superseded completed skill under Active Skill without changing Goal", () => {
+    const summary = createProseSummary(
+      baseArtifact({
+        goal: "Build the goal-recency fix",
+        dominant_skill: {
+          skill_name: "plan",
+          session_id: "plan-1",
+          goal: "Design a scoring system",
+          completed: true,
+          superseded: true,
+        },
+      })
+    );
+    expect(summary.indexOf("## Goal")).toBe(0);
+    expect(summary).toContain("Build the goal-recency fix");
+    expect(summary).toContain("## Active Skill");
+    expect(summary).toContain("superseded by a newer request");
+    expect(summary).toContain("Skill goal: Design a scoring system");
+  });
 });

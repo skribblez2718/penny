@@ -63,7 +63,7 @@ Focus areas for agent definition verification:
 
 Produce a validation report. Each criterion gets a PASS/FAIL verdict with specific evidence. The orchestrator expects:
 
-Mandatory SUMMARY: `SUMMARY:{"yaml_valid":true|false,"schema_valid":true|false,"diff_applied":true|false,"verification_complete":true|false,"evidence":["<what you actually checked and the result>"],"needs_clarification":false,"clarifying_questions":[]}`
+Mandatory SUMMARY: `SUMMARY:{"yaml_valid":true|false,"schema_valid":true|false,"diff_applied":true|false,"verification_complete":true|false,"evidence":["<what you actually checked and the result>"],"needs_clarification":false,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>"}`
 
 Where:
 

@@ -12,9 +12,9 @@ Without a learning mechanism, these patterns persist indefinitely. The prompt ar
 
 > The most valuable learning lives in the domain layer, not the universal layer.
 
-If Penny learns that "this user prefers concise vacation plans," that doesn't require a new Before Responding step in SYSTEM.md. It requires a preference captured in the plan skill's Domain Guidance or in mempalace. The system was deliberately designed to target only Domain Guidance and user preferences — never the Cognitive Frame.
+If Penny learns that "this user prefers concise vacation plans," that doesn't require a new step in SYSTEM.md. It requires a preference captured in the plan skill's Domain Guidance or in mempalace. So the **auto-generator** deliberately targets Domain Guidance and preferences — a universal-frame learning is classified `REJECTED_UNIVERSAL` and logged for a human rather than auto-proposed.
 
-A proposal to modify SYSTEM.md is classified as `REJECTED_UNIVERSAL` and logged for human review only. It never proceeds automatically.
+That is about what the loop *proposes*. What it *applies* is broader: once a human approves an amendment's exact diff, the applier applies it to **any** target — including SYSTEM.md — because reviewing-and-approving the diff IS the human-in-the-loop. The single hard exception: the immutable security-directives block (`<system_directives>` / `<system_boundary>`) is never machine-editable, even with approval.
 
 ## How It Works
 
@@ -59,17 +59,17 @@ The system classifies every proposed change by its target:
 | **DOMAIN_GUIDANCE** | Skill prompts (`.pi/skills/*/assets/prompts/*.md`) | Piper learns to check `pyproject.toml` for package manager |
 | **MEMPALACE_PREF** | User preferences (`penny/preferences` room) | User prefers concise summaries (≤3 bullet points) |
 | **CONFIG** | `.env` or config files | Timeout increased for large codebases |
-| **REJECTED_UNIVERSAL** | Logged only — no automated change | Proposal to modify SYSTEM.md's Before Responding steps |
+| **REJECTED_UNIVERSAL** | Not auto-generated (logged for a human) | Universal-frame learning the loop won't propose on its own |
 
-The classifier (`target_classifier.py`) determines the target based on the scope of the proposed change. Universal changes are automatically rejected. Domain-specific changes proceed to Carren review.
+The classifier (`target_classifier.py`) determines the target based on the scope of the proposed change. Universal-frame learnings are not auto-*generated*; domain-specific changes proceed to Carren review. Note this governs *generation* — a human-approved amendment (however authored) *applies* to any target except the immutable security block.
 
 ## Safety Guarantees
 
 Six layers of safety prevent harmful or premature changes:
 
-### 1. No SYSTEM.md Changes
+### 1. The immutable security block is never machine-editable
 
-The target classifier rejects any proposal that touches the Cognitive Frame. This is a hard rule, not a guideline. Universal reasoning rules must be stable — changing "RESTATE the goal" to something else would affect every interaction across every domain. The blast radius is too large for automated proposal.
+An approved amendment can now edit any target — including SYSTEM.md — because a human reviewed and approved the exact diff. The one hard line the applier will not cross, even with approval, is the immutable security-directives block (`<system_directives>` / `<system_boundary>`): the loop must never be able to reword or remove its own security frame. Separately, the auto-*generator* still won't *propose* universal-frame edits on its own (they classify as `REJECTED_UNIVERSAL`) — the blast radius of an unreviewed universal change is too large for automated proposal, but an approved one is a deliberate human act.
 
 ### 2. Evidence Required
 
@@ -148,13 +148,13 @@ Every change is reversible:
 
 Self-Improving Guidance was designed as part of the AI gap response (gap #2: "no stake in outcomes" and gap #6: "cannot be held accountable"). It depends on the Outcome Ledger (gap #2) and the Ambient Watchers (gap #3), both of which were built as part of the same April 2026 architecture sprint.
 
-The system is intentionally constrained to Domain Guidance. The Cognitive Frame (SYSTEM.md) is off-limits. This reflects the architecture's design philosophy: the universal layer is stable; the domain layer evolves. The learning system respects this boundary.
+The auto-*generator* is intentionally focused on Domain Guidance: the universal layer is stable, the domain layer evolves, so the loop proposes domain edits and logs universal-frame learnings for a human. But a human-approved amendment *applies* to any target — including SYSTEM.md — with one immovable exception: the security-directives block is never machine-editable.
 
 ## What the System Has Learned (So Far)
 
 The self-improving guidance system has been designed and partially implemented. Key design decisions from the April 2026 session include:
 
-- **Target scope:** Domain Guidance only — universal changes are classified as REJECTED_UNIVERSAL
+- **Target scope:** auto-*generation* focuses on Domain Guidance (universal-frame learnings → REJECTED_UNIVERSAL); an approved amendment *applies* to any target except the immutable security block
 - **Evidence threshold:** ≥2 outcome drawer citations required
 - **Review gate:** Carren critique agent reviews every proposal before user sees it
 - **Deduplication:** Same pattern won't be proposed twice

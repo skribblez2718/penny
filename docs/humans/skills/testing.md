@@ -2,37 +2,34 @@
 
 ## What Testing Standards Exist
 
-Every skill is required to have three kinds of tests: unit tests, integration tests, and end-to-end tests. Together they cover the skill from its smallest pieces to its full multi-agent pipeline.
+Every skill's state machine — its `BasePlaybook` subclass — is tested step by step in the engine package (`apps/orchestration/tests/test_<name>_playbook.py`). The tests drive the playbook exactly the way production does: each step constructs a fresh playbook instance pointed at the same temporary checkpointer, feeds it a pre-built agent SUMMARY, and asserts the directive that comes back.
 
-| Test Type | What It Covers | Why It Matters |
-| --------- | -------------- | -------------- |
-| **Unit** | Individual functions, state transitions, guards, and SUMMARY parsing. | Catches bugs in the logic that drives the state machine. |
-| **Integration** | How modules fit together: serialization, state restoration, and the advance flow. | Catches mismatches between parts that work in isolation. |
-| **End-to-End (E2E)** | The full pipeline from `start` through one or more `step` calls to `complete`. | Catches problems that only appear when the whole workflow runs. |
+| What Gets Covered | Why It Matters |
+| ----------------- | -------------- |
+| The happy path from `start` to `complete`. | Proves the skill can finish its intended job. |
+| Every gate branch (approve / refine / deny). | Human decision points must route correctly in all three directions. |
+| Retry loops and their budgets, including exhaustion. | An exhausted budget must end in an honest "not met" report, never a fabricated success. |
+| Stall detection and escalation. | A loop making no progress must ask the human instead of burning its budget. |
+| Malformed or uncertain agent results. | Bad data must re-issue or escalate, never advance the workflow. |
+| Crash-resume. | A killed run must pick up where it left off. |
 
-## Why Each Layer Matters
+## Why This Shape
 
-Unit tests are the microscope. They verify that each state transition happens when it should, that guards return the right boolean, and that the orchestrator parses agent SUMMARYs correctly. A state machine with dozens of transitions is too easy to break with a small change; unit tests catch that immediately.
-
-Integration tests are the assembly check. They make sure the orchestrator can save its state to disk and load it back losslessly. They verify that the `step` command correctly consumes a result and produces the next directive. These tests sit between unit and E2E, catching problems that involve multiple modules but do not need a live agent.
-
-E2E tests are the dress rehearsal. They feed pre-built agent SUMMARYs into the orchestrator and run the entire workflow from start to finish. No live agent subprocess is needed, but every state and transition is exercised. E2E tests prove that the skill can complete its intended job.
-
-## What a Well-Tested Skill Looks Like
-
-A well-tested skill has a `tests/` directory containing `test_unit.py`, `test_integration.py`, and `test_e2e.py`. The tests run with a single command:
-
-```bash
-python3 -m pytest tests/ -v
-```
+A playbook is a state machine coordinating several agents. The only way to trust it is to walk every branch — including the unhappy ones. The tests deliberately mirror production reality: production runs one subprocess per step, so tests build a fresh playbook instance per step and let the durable checkpointer carry the state between them. If the tests pass, the persistence contract has been exercised for free.
 
 Importantly, the tests do not spin up real agent processes. Agent results are mocked by providing pre-built SUMMARY JSON to the `step` handler. This keeps the tests fast, deterministic, and independent of model availability.
 
-The test suite also exercises failure paths. A skill that only tests the happy path is not well tested. Good coverage includes malformed SUMMARYs, state restore failures, and transitions into error states.
+There is one thing the tests deliberately do *not* cover per skill: state serialization round-trips. Persistence belongs to the engine's checkpointer and is covered once by the engine's own tests — skills inherit it rather than re-proving it.
 
-## Why E2E Is Mandatory
+## What a Well-Tested Skill Looks Like
 
-E2E tests are not a nice-to-have. Because skills coordinate multiple agents and state transitions, the only way to be confident the whole workflow behaves as designed is to run it end to end. Stubs and placeholders in the E2E suite mean the skill has not actually been exercised as a complete system.
+One test file per skill in `apps/orchestration/tests/`, runnable with a single command from `apps/orchestration/` (using the project's virtual environment, where the engine package is installed):
+
+```bash
+.venv/bin/python -m pytest tests/ -v
+```
+
+A skill that only tests the happy path is not well tested. Full-branch coverage — every gate route, every loop edge, every terminal outcome — is the standard, and the whole engine suite is re-run after any change to catch cross-skill regressions.
 
 ## Learn More
 

@@ -1,5 +1,6 @@
 # Skills Feature Index
 
+- [design-methodology.md](design-methodology.md): How to design a skill — extract phases from a proven workflow, failure-mode-justified ordering, gate placement, knowledge layering
 - [flow-diagrams.md](flow-diagrams.md): Mermaid state diagrams in resources/flow.mmd — requirements and examples
 - [loops.md](loops.md): Agentic loop taxonomy (7 classes), termination controls, failure modes, verifier design, task-to-loop mapping, and 5 loop-quality gaps to close
 - [mempalace-integration.md](mempalace-integration.md): Context retrieval before workflow, learning storage after

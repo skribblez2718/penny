@@ -89,8 +89,14 @@ Each skill invocation creates a mempalace room `skills/plan-{session_id}`:
 
 ## Testing
 
+The suite is written for **Vitest** (`vi.mocked`, module mocks). Do **not** run
+`bun test` — bun's mock API differs and produces false failures. Use the
+package.json scripts (which invoke `bunx vitest run --config ...`):
+
 ```bash
 cd .pi/extensions/skill
 bun install
-bun test
+bun run test              # unit    → tests/vitest.config.ts
+bun run test:integration  # integration
+bun run test:e2e          # e2e (must run from the project root — uses process.cwd())
 ```

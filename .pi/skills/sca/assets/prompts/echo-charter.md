@@ -56,7 +56,7 @@ fields, each flagged gap with its reason, and any recommended `out_of_scope`
 additions. Then emit a compact inline summary:
 
 ```
-SUMMARY:{"phase":"P0_CHARTER","charter_confirmed":<true|false>,"lockfiles_ok":<true|false>,"workspace_count":<n>,"scope_gaps":["<one line each>"],"recommended_out_of_scope":["<path>"],"needs_clarification":<true|false>}
+SUMMARY:{"charter_confirmed":<true|false>,"lockfiles_ok":<true|false>,"workspace_count":<n>,"scope_gaps":["<one line each>"],"recommended_out_of_scope":["<path>"],"needs_clarification":<true|false>,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>","out_of_scope":["<path>"]}
 ```
 
 Confirm what the draft got right, flag what it could not see, and leave the

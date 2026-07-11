@@ -122,17 +122,6 @@ describe("extractSessionState", () => {
     expect(state.goal).toBe("Migrate research skill onto engine");
   });
 
-  it("skips reactionary user messages when falling back to message text", () => {
-    const state = extractSessionState(
-      [
-        { role: "user", content: "fix this immediately" },
-        { role: "user", content: "Implement the compaction redesign end to end" },
-      ],
-      null
-    );
-    expect(state.goal).toBe("Implement the compaction redesign end to end");
-  });
-
   it("does NOT keyword-scrape constraints from user messages", () => {
     // Regression: "must"/"use "/"prefer" substring scraping produced junk
     const state = extractSessionState(
@@ -151,6 +140,91 @@ describe("extractSessionState", () => {
       constraints: { language: "python", user_response: "yes" },
     });
     expect(state.constraints).toEqual(["language: python"]); // resume-plumbing key skipped
+  });
+
+  // ----------------------------------------------------------
+  // Newest-first fallback (no keyword denylist) — reworked from the old
+  // "skips reactionary user messages" test. Goal must track the LATEST
+  // substantive user intent, not the first-seen one.
+  // ----------------------------------------------------------
+
+  it("returns the chronologically LATEST substantive user message (newest-first, no denylist)", () => {
+    const state = extractSessionState(
+      [
+        { role: "user", content: "Implement the compaction redesign end to end" },
+        { role: "user", content: "actually, focus on fixing the goal-recency bug instead" },
+      ],
+      null
+    );
+    // Old denylist code first-seen-scanned and returned message 0. The
+    // newest-first scan returns the real latest intent (message 1) — even
+    // though it contains words the old denylist would have skipped.
+    expect(state.goal).toBe("actually, focus on fixing the goal-recency bug instead");
+    expect(state.superseded).toBe(false);
+  });
+
+  it("ignores trivial short messages and keeps the latest SUBSTANTIVE one", () => {
+    const state = extractSessionState(
+      [
+        { role: "user", content: "Design a full observability pipeline for compaction" },
+        { role: "user", content: "ok" },
+        { role: "user", content: "go" },
+      ],
+      null
+    );
+    expect(state.goal).toBe("Design a full observability pipeline for compaction");
+  });
+
+  it("prefers an INCOMPLETE active skill over any user message (precedence #1)", () => {
+    const state = extractSessionState(
+      [{ role: "user", content: "some later ad-hoc chatter that is fairly substantive" }],
+      { skill_name: "code", session_id: "code-1", goal: "Ship the feature", completed: false }
+    );
+    expect(state.goal).toBe("Ship the feature");
+    expect(state.superseded).toBe(false);
+  });
+
+  // ----------------------------------------------------------
+  // Completed-then-ad-hoc-follow-up (supersession)
+  // ----------------------------------------------------------
+
+  it("supersedes a COMPLETED skill goal with a later substantive user message", () => {
+    const messages = [
+      skillCall("Design a scoring system", { id: "tc-1" }),
+      skillResult("plan-1", true, "tc-1"),
+      { role: "user", content: "Now build the compaction goal-recency fix end to end" },
+    ];
+    const dominant = detectDominantSkill(messages);
+    const state = extractSessionState(messages, dominant);
+    expect(state.goal).toBe("Now build the compaction goal-recency fix end to end");
+    expect(state.superseded).toBe(true);
+  });
+
+  it("does NOT supersede a completed skill when no later user pivot exists", () => {
+    const messages = [
+      { role: "user", content: "Please design a scoring system for the outcome ledger" },
+      skillCall("Design a scoring system", { id: "tc-1" }),
+      skillResult("plan-1", true, "tc-1"),
+    ];
+    const dominant = detectDominantSkill(messages);
+    const state = extractSessionState(messages, dominant);
+    // The completed skill's goal is still the best summary of the session.
+    expect(state.goal).toBe("Design a scoring system");
+    expect(state.superseded).toBe(false);
+  });
+
+  it("carries forward previousSummary's goal only when nothing fresher exists", () => {
+    const carried = extractSessionState([], null, undefined, "Migrate research skill onto engine");
+    expect(carried.goal).toBe("Migrate research skill onto engine");
+
+    // A fresh user pivot always beats carry-forward.
+    const pivoted = extractSessionState(
+      [{ role: "user", content: "Switch focus to the boundary_shift population work" }],
+      null,
+      undefined,
+      "Migrate research skill onto engine"
+    );
+    expect(pivoted.goal).toBe("Switch focus to the boundary_shift population work");
   });
 });
 

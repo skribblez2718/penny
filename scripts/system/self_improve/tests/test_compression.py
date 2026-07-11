@@ -117,6 +117,37 @@ class TestIdentifyPatterns:
         patterns = identify_patterns(outcomes)
         assert patterns == []
 
+    def test_clusters_on_failure_mode_across_different_reasons(self):
+        # THE KEYSTONE FIX: judge/human free-text reasons rarely repeat verbatim,
+        # so reason-only clustering never fires. The categorical failure_mode
+        # does recur — so a pattern is detected DESPITE the reasons differing.
+        outcomes = [
+            {
+                "decision_id": "d1",
+                "outcome": "MISMATCH",
+                "domain": "coding",
+                "reason": "assumed uv but the project uses pip",
+                "failure_mode": "missing_constraint",
+            },
+            {
+                "decision_id": "d2",
+                "outcome": "MISMATCH",
+                "domain": "coding",
+                "reason": "ignored the pinned python version in the task",
+                "failure_mode": "missing_constraint",
+            },
+        ]
+        assert identify_patterns(outcomes) == ["missing_constraint"]
+
+    def test_other_failure_mode_falls_back_to_reason(self):
+        # "other" is the catch-all and must NOT cluster unrelated failures:
+        # with different reasons it falls back to reason and finds no pattern.
+        outcomes = [
+            {"decision_id": "d1", "outcome": "MISMATCH", "reason": "weird A", "failure_mode": "other"},
+            {"decision_id": "d2", "outcome": "MISMATCH", "reason": "weird B", "failure_mode": "other"},
+        ]
+        assert identify_patterns(outcomes) == []
+
 
 class TestRunCompressionLoop:
     """End-to-end loop with mocked dependencies."""

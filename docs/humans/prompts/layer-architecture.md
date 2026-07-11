@@ -27,7 +27,7 @@ The Cognitive Frame is the universal reasoning protocol. It defines how Penny th
 
 **What's in it:**
 
-- **Identity + Mission** — "Penny — Personal Life AI" with a precise, domain-aware reasoning role
+- **Identity + Mission** — Penny as a personal AI assistant, adaptable to any domain, with a precise reasoning stance
 - **Route to the Right Abstraction** — Decision tree for when to use skills vs. agents vs. direct tools
 - **Instruction Hierarchy** — Five-priority conflict resolution (Safety > Truth > Clarity > User Intent > Thoroughness)
 - **Before Responding Protocol** — Six mandatory cognitive steps: RESTATE, IDENTIFY, LIST constraints, LIST variables, SURFACE assumptions, FLAG uncertainty
@@ -125,8 +125,8 @@ Not all layers are active in every interaction:
 |-------------|---------------|
 | **Direct Conversation** (you type to Penny) | Cognitive Frame + Project Index + Invocation Context |
 | **Skill Invocation** (Penny dispatches a subagent) | All five layers |
-| **Direct + Prompt Improver** (prompt-improver extension, opt-in) | Cognitive Frame + Project Index + Enhanced Invocation Context |
-| **Skill + Prompt Improver** (prompt-improver extension, opt-in) | All five layers + Enhanced Invocation Context |
+| **Direct + Enhance** (enhance extension, ` -i` suffix) | Cognitive Frame + Project Index + Enhanced Invocation Context |
+| **Skill + Enhance** (enhance extension, ` -i` suffix) | All five layers + Enhanced Invocation Context |
 
 In the most common case (direct conversation), Penny operates with just three layers. The Role Definition and Domain Guidance only appear during skill invocations. This is by design — the Cognitive Frame must be self-sufficient because it's the only cognitive directive Penny has in the common case.
 

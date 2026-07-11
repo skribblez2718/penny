@@ -38,4 +38,4 @@ Produce structured findings. The exact format is determined by your focus area. 
 - Structure (relationships, dependencies)
 - Unknowns (what remains unclear)
 
-Mandatory SUMMARY: `SUMMARY:{"findings_count":<n>,"files_count":<n>,"unknowns_count":<n>,"explore_complete":true|false,"needs_clarification":false,"clarifying_questions":[]}`
+Mandatory SUMMARY: `SUMMARY:{"findings_count":<n>,"files_count":<n>,"unknowns_count":<n>,"explore_complete":true|false,"needs_clarification":false,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>"}`

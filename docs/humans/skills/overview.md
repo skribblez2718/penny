@@ -34,8 +34,9 @@ A typical skill lives in `.pi/skills/<name>/` and contains:
 | `README.md` | Detailed documentation for humans and maintainers. |
 | `scripts/orchestrate.py` | A ~5-line delegate to the engine (`from orchestration.cli import main`). The playbook itself lives in `apps/orchestration/`. |
 | `assets/prompts/` | Domain Guidance prompts for each agent role the skill uses. |
-| `resources/` | Reference material specific to the skill's domain. |
-| `tests/` | Unit, integration, and E2E tests for the skill. |
+| `resources/` | Reference material specific to the skill's domain, plus `reference.md` (the skill's technical reference) and `flow.mmd` (its state diagram). |
+
+The skill's tests live with its state machine in the engine package (`apps/orchestration/tests/test_<name>_playbook.py`), not in the skill directory — the playbook is what gets tested.
 
 This layout is standard across all skills. Consistency lets Pi discover skills automatically and lets agents know where to look for guidance.
 

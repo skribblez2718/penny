@@ -34,7 +34,7 @@ The separation is not decorative. It solves three real problems:
 
 Complex tasks — design a feature, refactor a module, run research — have phases. Without an explicit state machine these workflows collapse into nested conditionals that are hard to inspect and harder to resume.
 
-Penny skills declare states, transitions, guards, and callbacks as a state machine. This makes the current phase always visible, lets failures route to recovery states, and makes long skills resumable. Every workflow skill delegates that machinery to a shared **orchestration engine** — each skill is a `BasePlaybook` subclass with a durable, `run_id`-keyed checkpointer that auto-resumes an interrupted run. The lone exception is `rez`, a placeholder skill awaiting a dedicated build.
+Penny skills declare states, transitions, guards, and callbacks as a state machine. This makes the current phase always visible, lets failures route to recovery states, and makes long skills resumable. Every workflow skill delegates that machinery to a shared **orchestration engine** — each skill is a `BasePlaybook` subclass with a durable, `run_id`-keyed checkpointer that auto-resumes an interrupted run, with no exceptions.
 
 ### Mempalace memory
 

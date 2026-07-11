@@ -64,7 +64,7 @@ Write the full architecture model as mempalace entries in the P4 room, then emit
 a compact inline summary:
 
 ```
-SUMMARY:{"phase":"P4_ARCHITECTURE","components":["<name>"],"data_flows":[{"from":"<c>","to":"<c>","data":"<class>"}],"trust_boundaries":["<one line>"],"entry_points":["<one line>"],"assumptions":["<one line>"],"unknowns":["<one line>"],"needs_clarification":<true|false>}
+SUMMARY:{"components":["<name>"],"data_flows":[{"from":"<c>","to":"<c>","data":"<class>"}],"trust_boundaries":["<one line>"],"entry_points":["<one line>"],"assumptions":["<one line>"],"unknowns":["<one line>"],"needs_clarification":<true|false>,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>"}
 ```
 
 If critical ambiguity about a component or flow cannot be resolved from

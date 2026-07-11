@@ -46,7 +46,7 @@ from memory_bridge import tool_smart_search, tool_diary_read  # noqa: E402
 # extension reads this at before_agent_start and splices it into the system
 # prompt, so recalled memory finally reaches the model's context (the old
 # ctx.ui.notify path rendered to the TUI status line and never did).
-SESSION_BRIEF_PATH = _PROJECT_ROOT / ".pi" / "SESSION_BRIEF.md"
+SESSION_BRIEF_PATH = _PROJECT_ROOT / ".penny" / "SESSION_BRIEF.md"
 _BRIEF_DIARY_CHARS = 240
 
 
@@ -137,22 +137,25 @@ def _parse_signal_text(text: str) -> dict[str, Any] | None:
 
 
 def get_pending_amendments(limit: int = 5, session_id: str = "") -> list[dict]:
-    """Retrieve pending amendments from mempalace for user review.
+    """Retrieve amendments that still need a human step, for the session brief.
 
-    Returns list of PENDING amendments sorted by proposed_date desc.
+    Returns PENDING (awaiting review) AND APPROVED (awaiting apply) amendments,
+    sorted by proposed_date desc. APPROVED stays surfaced so an approve-now,
+    apply-later flow doesn't silently lose the proposal; resolved amendments
+    (APPLIED/REJECTED) are excluded and age out via the tiered archiver.
     """
     debug(
         "session_start_checker",
-        "Fetching pending amendments",
+        "Fetching amendments needing action",
         session_id=session_id,
         data={"limit": limit},
     )
     search = tool_smart_search(
         {
-            "query": "PENDING amendment",
+            "query": "amendment pending approved awaiting review apply",
             "wing": "penny",
             "room": "system_amendments",
-            "limit": limit * 2,
+            "limit": limit * 3,
             "include_full": True,
         }
     )
@@ -168,7 +171,7 @@ def get_pending_amendments(limit: int = 5, session_id: str = "") -> list[dict]:
                 amend = json.loads(json_blob)
             else:
                 amend = json.loads(text)
-            if amend.get("status") == "PENDING":
+            if amend.get("status") in ("PENDING", "APPROVED"):
                 amendments.append(amend)
         except (json.JSONDecodeError, AttributeError):
             continue
@@ -260,11 +263,14 @@ def format_signal_presentation(  # noqa: C901 (pre-existing; section-by-section 
 
     # Amendments section
     if amendments:
-        lines.append("\n## 📝 Pending Amendments")
-        lines.append("The following self-improvement proposals await your review:")
+        lines.append("\n## 📝 Amendments Awaiting Action")
+        lines.append("Self-improvement proposals that need a step from you (review, or apply):")
         for a in amendments:
+            # PENDING → still to review; APPROVED → reviewed, awaiting apply.
+            action = "apply" if a.get("status") == "APPROVED" else "review"
             lines.append(
-                f"\n- **{a['amendment_id']}** → `{a['target_file'].split('/')[-1]}` (Risk: {a.get('risk', '?')})"
+                f"\n- **{a['amendment_id']}** [{action}] → "
+                f"`{a['target_file'].split('/')[-1]}` (Risk: {a.get('risk', '?')})"
             )
             lines.append(f"  Trigger: {a.get('trigger', 'N/A')}")
             if a.get("changes"):
@@ -345,12 +351,42 @@ def get_recent_mismatches(limit: int = 3, session_id: str = "") -> list[dict]:
     return out
 
 
+def count_pending_ratings(session_id: str = "") -> int:
+    """How many recent sessions have no outcome yet (for the rating nudge).
+
+    Best-effort: any failure returns 0 so the brief still renders.
+    """
+    try:
+        ledger_dir = str(_PROJECT_ROOT / "scripts" / "system" / "outcome_ledger")
+        if ledger_dir not in sys.path:
+            sys.path.insert(0, ledger_dir)
+        import rate_recent  # type: ignore[import-not-found]
+        from capture import existing_decision_ids  # type: ignore[import-not-found]
+
+        con = rate_recent.open_obs()
+        if con is None:
+            return 0
+        try:
+            existing = existing_decision_ids()
+        except Exception:  # noqa: BLE001
+            existing = set()
+        return len(
+            rate_recent.pending_sessions(rate_recent.recent_session_goals(con, 25), existing)
+        )
+    except Exception as exc:  # noqa: BLE001 — never break the brief
+        exception(
+            "session_start_checker", "pending-ratings count failed", exc, session_id=session_id
+        )
+        return 0
+
+
 def build_session_brief(
     pending: dict[str, list[dict]],
     amendments: list[dict],
     digest: dict[str, Any] | None,
     diary: list[dict],
     mismatches: list[dict],
+    ratings_pending: int = 0,
 ) -> str:
     """Compose the trusted session-memory brief injected into the system prompt."""
     lines = [
@@ -361,6 +397,13 @@ def build_session_brief(
     body = format_signal_presentation(pending, amendments, digest).strip()
     if body and "No pending signals" not in body:
         lines.append(body)
+
+    if ratings_pending > 0:
+        lines.append(f"\n## 🗳️ {ratings_pending} recent session(s) await your outcome rating")
+        lines.append(
+            "- Run `make rate` to record MATCH/MISMATCH — this is the signal the "
+            "self-improvement flywheel learns from."
+        )
 
     if diary:
         lines.append("\n## 📓 Recent diary")
@@ -445,8 +488,14 @@ def main() -> None:  # noqa: C901 (linear entry point with defensive try/excepts
     try:
         diary_entries = get_recent_diary(limit=3, session_id=session_id)
         mismatches = get_recent_mismatches(limit=3, session_id=session_id)
+        ratings_pending = count_pending_ratings(session_id=session_id)
         brief = build_session_brief(
-            pending_signals, pending_amendments, weekly_digest, diary_entries, mismatches
+            pending_signals,
+            pending_amendments,
+            weekly_digest,
+            diary_entries,
+            mismatches,
+            ratings_pending,
         )
         brief_written = write_session_brief(brief)
     except Exception as exc:

@@ -384,7 +384,7 @@ function connect(force = false): void {
         logger.error(
           "WebSocket error",
           { error: error instanceof Error ? error.message : String(error) },
-          Object.assign(new Error(String(error)), { code: "OBSERVABILITY_WS_ERROR" })
+          Object.assign(new Error(String(error)), { code: "OBSERVABILITY_WS_ERROR" as const })
         );
       } else {
         logger.debug("WebSocket connection attempt failed, will retry", {
@@ -471,7 +471,7 @@ function queueMessage(message: ObservabilityMessage): void {
     logger.warn(
       "Message queue overflow, dropping oldest",
       { queueSize: config.bufferSize },
-      Object.assign(new Error("Queue overflow"), { code: "OBSERVABILITY_QUEUE_OVERFLOW" })
+      Object.assign(new Error("Queue overflow"), { code: "OBSERVABILITY_QUEUE_OVERFLOW" as const })
     );
     messageQueue.shift();
   }
@@ -515,7 +515,7 @@ function getModelInfo(ctx: EventContext): { provider: string; model: string } | 
         "Model provider is null despite model being present — session will have partial model info",
         { modelId, modelProviderType: typeof model.provider },
         Object.assign(new Error("Null model provider"), {
-          code: "OBSERVABILITY_NULL_MODEL_PROVIDER",
+          code: "OBSERVABILITY_NULL_MODEL_PROVIDER" as const,
         })
       );
     }
@@ -613,7 +613,7 @@ export default async function (pi: ExtensionAPI) {
           "Observability server did not become ready",
           {},
           Object.assign(new Error("Server not ready"), {
-            code: "OBSERVABILITY_SERVER_SPAWN_FAILED",
+            code: "OBSERVABILITY_SERVER_SPAWN_FAILED" as const,
           })
         );
       }
@@ -1063,7 +1063,7 @@ function startServer(): boolean {
       "Server entry not found",
       { path: scriptEntry },
       Object.assign(new Error("Server entry not found"), {
-        code: "OBSERVABILITY_SERVER_SPAWN_FAILED",
+        code: "OBSERVABILITY_SERVER_SPAWN_FAILED" as const,
       })
     );
     return false;
@@ -1087,7 +1087,7 @@ function startServer(): boolean {
       "Observability server pre-spawn validation failed",
       { python: pythonPath, stderr: stderr.slice(0, 500) },
       Object.assign(new Error(`Pre-spawn validation failed: ${stderr.slice(0, 200)}`), {
-        code: "OBSERVABILITY_SERVER_SPAWN_FAILED",
+        code: "OBSERVABILITY_SERVER_SPAWN_FAILED" as const,
       })
     );
     return false;
@@ -1152,7 +1152,7 @@ function startServer(): boolean {
         `Observability server crashed ${maxRestarts} times — giving up`,
         {},
         Object.assign(new Error("Max auto-restarts reached"), {
-          code: "OBSERVABILITY_SERVER_SPAWN_FAILED",
+          code: "OBSERVABILITY_SERVER_SPAWN_FAILED" as const,
         })
       );
       return;
@@ -1173,7 +1173,7 @@ function startServer(): boolean {
     logger.error(
       "Observability server spawn failed",
       { error: err.message, restartAttempt: _restartAttempt },
-      Object.assign(err, { code: "OBSERVABILITY_SERVER_SPAWN_FAILED" })
+      Object.assign(err, { code: "OBSERVABILITY_SERVER_SPAWN_FAILED" as const })
     );
     _serverProc = null;
   });
@@ -1222,7 +1222,7 @@ function _findPython(projectRoot: string): string {
         `Python at ${c} found on disk but cannot import observability module`,
         { python: c },
         Object.assign(new Error(`Python env validation failed for ${c}`), {
-          code: "OBSERVABILITY_PYTHON_VALIDATION_FAILED",
+          code: "OBSERVABILITY_PYTHON_VALIDATION_FAILED" as const,
         })
       );
       // Continue to next candidate
@@ -1234,7 +1234,7 @@ function _findPython(projectRoot: string): string {
     "No Python environment found that can import observability. Install with: uv sync --extra dev (or make setup)",
     {},
     Object.assign(new Error("No valid Python environment for observability"), {
-      code: "OBSERVABILITY_SERVER_SPAWN_FAILED",
+      code: "OBSERVABILITY_SERVER_SPAWN_FAILED" as const,
     })
   );
   return "python3";

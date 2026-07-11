@@ -33,8 +33,16 @@ Deliberate behavior fixes vs. the legacy runtime:
 
 Researching is a SINGLE echo agent instructed to research ALL sub-queries (the
 legacy fanned out one echo per sub-query, but the branch count is dynamic, which
-does not fit the engine's fixed ``ParallelSpec``). Vera is NOT invoked — the
-validating state was removed from the legacy FSM before this port.
+does not fit the engine's fixed ``ParallelSpec``).
+
+A ``validating`` state (vera) is the final gate before ``report_writing`` in ALL
+three modes: an independent, evidence-based citation-grounding pass that verifies
+every material claim in the synthesis is supported by a cited source in the
+findings — distinct from carren's *subjective* report critique. A FAIL loops back
+to ``synthesizing`` to re-ground (bounded by ``ctx.max_iterations``, with the same
+honest-exhaustion + stall-escalation contract as the critique loops); a PASS
+proceeds to the report. This restores the independent verifier the legacy FSM
+dropped — the generator is never its own only verifier.
 
 Domain guidance stays in ``.pi/skills/research/assets/prompts/<agent>.md``; the
 mempalace room ``skills/research-{session_id}`` and the drawer conventions
@@ -128,6 +136,7 @@ class ResearchMachine(StateMachine):
     researching = State()  # echo — single agent, all sub-queries
     synthesizing = State()  # synthia
     critiquing_report = State()  # carren — deep only
+    validating = State()  # vera — evidence-based citation-grounding gate (all modes)
     report_writing = State()  # skribble
     unknown = State()
     awaiting_clarification = State()
@@ -143,10 +152,13 @@ class ResearchMachine(StateMachine):
     plan_critique_exhausted = critiquing_plan.to(researching)  # budget spent; warning
     research_done = researching.to(synthesizing)
     synth_to_critique = synthesizing.to(critiquing_report)  # deep
-    synth_to_report = synthesizing.to(report_writing)
-    report_critique_pass = critiquing_report.to(report_writing)
+    synth_to_validate = synthesizing.to(validating)  # standard/quick + deep post-critique
+    report_critique_pass = critiquing_report.to(validating)
     report_critique_revise = critiquing_report.to(synthesizing)  # bounded revise loop
-    report_critique_exhausted = critiquing_report.to(report_writing)  # budget spent
+    report_critique_exhausted = critiquing_report.to(validating)  # budget spent
+    validate_pass = validating.to(report_writing)
+    validate_revise = validating.to(synthesizing)  # bounded re-grounding loop
+    validate_exhausted = validating.to(report_writing)  # budget spent
     report_done = report_writing.to(complete)
 
     to_unknown = (
@@ -155,6 +167,7 @@ class ResearchMachine(StateMachine):
         | researching.to(unknown)
         | synthesizing.to(unknown)
         | critiquing_report.to(unknown)
+        | validating.to(unknown)
     )
     escalate = unknown.to(awaiting_clarification)
     clarify = awaiting_clarification.to(planning)
@@ -165,6 +178,7 @@ class ResearchMachine(StateMachine):
         | researching.to(error)
         | synthesizing.to(error)
         | critiquing_report.to(error)
+        | validating.to(error)
         | report_writing.to(error)
         | unknown.to(error)
         | awaiting_clarification.to(error)
@@ -228,7 +242,7 @@ RESEARCH_EXPLORE = PrimitiveSpec(
             "clarifying_questions": list,
         },
     ),
-    "Research the sub-queries with web_search + web_fetch; write tiered, cited findings to mempalace.",
+    "Research the sub-queries with web_search + web_fetch, including a YouTube-targeted search and youtube_transcript pull for relevant video sources; write tiered, cited findings to mempalace.",
 )
 RESEARCH_SYNTHESIZE = PrimitiveSpec(
     "RESEARCH_SYNTHESIZE",
@@ -246,6 +260,20 @@ RESEARCH_SYNTHESIZE = PrimitiveSpec(
         },
     ),
     "Synthesize all research findings into a single thematic, cited report in mempalace.",
+)
+RESEARCH_VALIDATE = PrimitiveSpec(
+    "RESEARCH_VALIDATE",
+    "vera",
+    _c(
+        {"verdict": str, "unsupported_claims": list},
+        {
+            "mempalace_drawer": str,
+            "confidence": str,
+            "needs_clarification": bool,
+            "clarifying_questions": list,
+        },
+    ),
+    "Verify every material claim in the synthesis is grounded in a cited source. Verdict PASS or FAIL with the unsupported claims listed.",
 )
 RESEARCH_REPORT = PrimitiveSpec(
     "RESEARCH_REPORT",
@@ -345,6 +373,42 @@ def _build_synthesizing(pb: "ResearchPlaybook", ctx: RunContext, research: dict)
             f"Read the critique from mempalace room: {room}. Address EVERY issue and note how "
             f"you resolved it."
         )
+    # validation_revision and report_revision are separate keys, each popped when
+    # its loop closes, so at most one is set on any given synthesis entry.
+    val_revision = research.get("validation_revision", 0)
+    if val_revision:
+        vissues = research.get("validation_issues", [])
+        task += (
+            f"\n\nThis is a VALIDATION revision (cycle {val_revision}). The verifier (vera) flagged "
+            f"these claims as unsupported by the cited sources: "
+            f"{'; '.join(str(i) for i in vissues) or 'see the validation drawer'}. "
+            f"Read the validation report from mempalace room: {room}. Re-ground or REMOVE every "
+            f"flagged claim — cite a supporting source or drop the claim. Do not introduce new "
+            f"unsupported claims."
+        )
+    return task
+
+
+def _build_validating(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> str:
+    room = _room(ctx)
+    task = (
+        f"Verify the synthesized research report for: {pb._cap(ctx.goal)}\n\n"
+        f"Read the synthesis ('{ctx.session_id} Synthesis') and the cited research findings "
+        f"('{ctx.session_id}-echo-<n> Research Findings') from mempalace room: {room}\n\n"
+        f"For every material claim in the synthesis, confirm it is grounded in a source cited in "
+        f"the findings that actually supports it. Flag unsupported, overclaimed, fabricated, or "
+        f"mis-cited claims. Verdict PASS only if all material claims are source-grounded; "
+        f"otherwise FAIL and list each unsupported claim."
+    )
+    revision = research.get("validation_revision", 0)
+    if revision:
+        issues = research.get("validation_issues", [])
+        task += (
+            f"\n\nThis is re-validation cycle {revision + 1} — the synthesis was revised to "
+            f"re-ground prior flagged claims: "
+            f"{'; '.join(str(i) for i in issues) or 'see prior verdict'}. "
+            f"Re-check those claims specifically, then the report as a whole."
+        )
     return task
 
 
@@ -381,6 +445,7 @@ _TASK_BUILDERS = {
     "researching": _build_researching,
     "synthesizing": _build_synthesizing,
     "critiquing_report": _build_critiquing_report,
+    "validating": _build_validating,
     "report_writing": _build_report_writing,
 }
 
@@ -399,10 +464,18 @@ class ResearchPlaybook(BasePlaybook):
         "researching": RESEARCH_EXPLORE,
         "synthesizing": RESEARCH_SYNTHESIZE,
         "critiquing_report": RESEARCH_CRITIQUE_REPORT,
+        "validating": RESEARCH_VALIDATE,
         "report_writing": RESEARCH_REPORT,
     }
     ESCALATABLE_STATES = frozenset(
-        {"planning", "critiquing_plan", "researching", "synthesizing", "critiquing_report"}
+        {
+            "planning",
+            "critiquing_plan",
+            "researching",
+            "synthesizing",
+            "critiquing_report",
+            "validating",
+        }
     )
 
     # -- lifecycle ---------------------------------------------------------
@@ -456,6 +529,12 @@ class ResearchPlaybook(BasePlaybook):
                     "the same critique issues have persisted across revisions with no measurable "
                     "progress — escalating rather than force-approving"
                 )
+        if state == "validating" and summary.get("verdict") != "PASS":
+            if self.is_stalled(ctx, summary.get("unsupported_claims", [])):
+                return (
+                    "the same validation issues have persisted across revisions with no measurable "
+                    "progress — escalating rather than shipping unverified claims"
+                )
         return None
 
     # -- bounded-loop bookkeeping -------------------------------------------
@@ -473,6 +552,16 @@ class ResearchPlaybook(BasePlaybook):
     def _end_report_loop(ctx: RunContext, research: dict) -> None:
         research["report_revisions"] = ctx.iteration
         research.pop("report_revision", None)
+        # The report-critique loop is over; the next synthesis (if any) belongs to
+        # the validation gate, not another critique pass.
+        research["phase"] = "validation"
+        ctx.iteration = 0
+        ctx.iteration_history = []
+
+    @staticmethod
+    def _end_validation_loop(ctx: RunContext, research: dict) -> None:
+        research["validation_revisions"] = ctx.iteration
+        research.pop("validation_revision", None)
         ctx.iteration = 0
         ctx.iteration_history = []
 
@@ -522,10 +611,13 @@ class ResearchPlaybook(BasePlaybook):
             research["synthesis_complete"] = True  # synthesis_complete gated in progress_check
             research["report_word_count"] = summary.get("report_word_count", 0)
             research["synthesis_drawer"] = summary.get("mempalace_drawer", "")
-            if mode == "deep":
+            # Deep mode runs carren's subjective report critique BEFORE the
+            # validation gate; once that loop closes (phase="validation") a
+            # validation-driven re-synthesis routes straight back to vera.
+            if mode == "deep" and research.get("phase") != "validation":
                 self.sm.send("synth_to_critique")
             else:
-                self.sm.send("synth_to_report")
+                self.sm.send("synth_to_validate")
         elif state == "critiquing_report":
             verdict = summary.get("verdict", "NEEDS_REVISION")
             issues = summary.get("issues", [])
@@ -550,6 +642,31 @@ class ResearchPlaybook(BasePlaybook):
                 )
                 self._end_report_loop(ctx, research)
                 self.sm.send("report_critique_exhausted")
+        elif state == "validating":
+            verdict = summary.get("verdict", "FAIL")
+            issues = summary.get("unsupported_claims", [])
+            research["validation_verdict"] = verdict
+            research["validation_issues"] = issues
+            if verdict == "PASS":
+                self._end_validation_loop(ctx, research)
+                self.sm.send("validate_pass")
+            elif ctx.iteration + 1 < ctx.max_iterations:
+                self.record_iteration(ctx, gaps=issues)
+                ctx.iteration += 1
+                research["validation_revision"] = ctx.iteration
+                self.sm.send("validate_revise")
+            else:
+                # HONEST exhaustion: research must still deliver a report. Proceed
+                # with a recorded warning and the unverified claims surfaced in
+                # result — never silently ship them as verified.
+                research["validation_exhausted"] = True
+                research.setdefault("warnings", []).append(
+                    f"validation budget exhausted after {ctx.max_iterations} review cycles; "
+                    f"writing the report with unverified claims: "
+                    f"{'; '.join(str(i) for i in issues) or '(none listed)'}"
+                )
+                self._end_validation_loop(ctx, research)
+                self.sm.send("validate_exhausted")
         elif state == "report_writing":
             research["report_written"] = bool(summary.get("write_complete"))
             research["report_files"] = summary.get("files_written", [])
@@ -577,6 +694,21 @@ class ResearchPlaybook(BasePlaybook):
         if state == "awaiting_clarification":
             self.ctx.iteration = 0
             self.ctx.iteration_history = []
+            # clarify re-enters planning and re-runs the pipeline from scratch, so
+            # phase / revision / exhaustion markers from the interrupted run must
+            # not leak into the fresh pass (a stale phase="validation" would make
+            # deep synthesis skip its report critique).
+            research = self.ctx.extras.get("research", {})
+            for _k in (
+                "phase",
+                "plan_revision",
+                "report_revision",
+                "validation_revision",
+                "plan_critique_exhausted",
+                "report_critique_exhausted",
+                "validation_exhausted",
+            ):
+                research.pop(_k, None)
         return super()._resume(state, result)
 
     # -- prompts + result --------------------------------------------------
@@ -599,9 +731,15 @@ class ResearchPlaybook(BasePlaybook):
             unresolved.extend(research.get("plan_critique_issues", []))
         if research.get("report_critique_exhausted"):
             unresolved.extend(research.get("report_critique_issues", []))
+        if research.get("validation_exhausted"):
+            unresolved.extend(research.get("validation_issues", []))
         return {
             "met": ctx.met,
-            "iterations": research.get("plan_revisions", 0) + research.get("report_revisions", 0),
+            "iterations": (
+                research.get("plan_revisions", 0)
+                + research.get("report_revisions", 0)
+                + research.get("validation_revisions", 0)
+            ),
             "query": ctx.goal,
             "mode": research.get("mode", ""),
             "sub_queries": research.get("sub_queries", []),
@@ -612,5 +750,6 @@ class ResearchPlaybook(BasePlaybook):
             "warnings": research.get("warnings", []),
             "plan_critique_exhausted": research.get("plan_critique_exhausted", False),
             "report_critique_exhausted": research.get("report_critique_exhausted", False),
+            "validation_exhausted": research.get("validation_exhausted", False),
             "unresolved_issues": unresolved,
         }

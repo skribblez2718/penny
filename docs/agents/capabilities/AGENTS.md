@@ -2,15 +2,18 @@
 
 - [Agent Skill](agent-skill/AGENTS.md): Generate validated Penny agent definitions from a goal using a 7-state FSM
 - [Ambient Watchers](ambient-watchers/AGENTS.md): Signal generation, session-start checks, proactive awareness
+- [Behavioral Ratchet](behavioral-ratchet/AGENTS.md): Oracle-authored trajectory fixtures replayed + judged; anti-drift gate on amendments
 - [Error Logging](error-logging/AGENTS.md): Structured error codes from logger.ts; human-readable cross-reference
+- [Graduated Autonomy](graduated-autonomy/AGENTS.md): Reversibility + per-domain earned trust → act-vs-ask gate; the "almost autonomous" mechanism
 - [JSA Skill](jsa-skill/AGENTS.md): Multi-agent JavaScript security analysis pipeline with SAST, structure/slice lanes, and browser PoC verification
-- [Judgment Calibration](judgment-calibration/AGENTS.md): Fable-calibrated verifier — rubrics + corpus + judge-agreement harness so a weak orchestrator's quality bar survives Fable
+- [Judgment Calibration](judgment-calibration/AGENTS.md): Oracle-calibrated verifier — rubrics + corpus + judge-agreement harness so a weak orchestrator's quality bar survives Oracle
 - [Observability Server](observability-server/AGENTS.md): FastAPI + SQLite backend for log ingestion, session history queries, and watcher signal diagnostics
+- [Outcome Capture](outcome-capture/AGENTS.md): Source-agnostic outcome writer + `make rate` human quick-rating; the source that actually feeds the flywheel
 - [Outcome Ledger](outcome-ledger/AGENTS.md): When to record decisions, how the feedback flow works, delta score conventions
 - [Plan Skill](plan-skill/AGENTS.md): Structured planning workflow that explores, plans, critiques, and taskifies goals into execution-grade steps
 - [PRD Skill](prd-skill/AGENTS.md): Generate layered PRDs (narrative + atomic requirements + verification matrix + IDEAL_STATE) from a goal
 - [Progress Heartbeats](progress-heartbeats/AGENTS.md): Staleness-based progress monitoring replacing naive kill-timer for long-running agents
-- [Prompt Improver](prompt-improver/AGENTS.md): Input-event rewrite of raw prompts into structured Invocation Context (Circumstances 3/4)
+- [Enhance](enhance/AGENTS.md): On-demand `-i`-suffix rewrite of raw prompts into world-class goal-oriented Invocation Context (Circumstances 3/4)
 - [Research Skill](research-skill/AGENTS.md): Structured research workflow with Quick/Standard/Deep modes, parallel evidence gathering, and synthesis
 - [Skill Tool](skill-tool/AGENTS.md): Four invocation modes (single/parallel/chain/resume) mirroring subagent tool architecture
 - [Tiered Memory](tiered-memory/AGENTS.md): 5-tier architecture (T0–T4), injection protocols, token budgets, distillation pipeline

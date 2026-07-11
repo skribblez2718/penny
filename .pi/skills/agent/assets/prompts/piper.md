@@ -37,4 +37,4 @@ Agent design checklist:
 
 Produce a structured design specification including all 10 checklist items.
 
-Mandatory SUMMARY: `SUMMARY:{"design_steps":[{"field":"name","value":"..."},...],"design_complete":true|false,"needs_clarification":false,"clarifying_questions":[]}`
+Mandatory SUMMARY: `SUMMARY:{"design_steps":[{"field":"name","value":"..."},...],"design_complete":true|false,"needs_clarification":false,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>"}`

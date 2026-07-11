@@ -40,7 +40,7 @@ Verdict options: APPROVE, NEEDS_REVISION, BLOCKED.
 - Unknowns
 - Recommendations
 
-Mandatory SUMMARY: `SUMMARY:{"verdict":"APPROVE|NEEDS_REVISION|BLOCKED","issues":["..."],"mempalace_drawer":"id","needs_clarification":false,"clarifying_questions":[]}`
+Mandatory SUMMARY: `SUMMARY:{"verdict":"APPROVE|NEEDS_REVISION|BLOCKED","issues":["..."],"mempalace_drawer":"id","needs_clarification":false,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN"}`
 
 The agent SUMMARY format follows the canonical standard shared across all skills.
 

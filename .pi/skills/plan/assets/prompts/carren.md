@@ -95,19 +95,19 @@ The SUMMARY must be a single line of valid JSON, prefixed with `SUMMARY:`:
 For approval:
 
 ```
-SUMMARY:{"verdict":"APPROVE","issues":[],"mempalace_drawer":"<drawer_id from memory_add_drawer>","needs_clarification":false,"clarifying_questions":[]}
+SUMMARY:{"verdict":"APPROVE","issues":[],"mempalace_drawer":"<drawer_id from memory_add_drawer>","needs_clarification":false,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN"}
 ```
 
 For revision needed:
 
 ```
-SUMMARY:{"verdict":"NEEDS_REVISION","issues":["<critical issue title>","<another issue title>"],"mempalace_drawer":"<drawer_id from memory_add_drawer>"}
+SUMMARY:{"verdict":"NEEDS_REVISION","issues":["<critical issue title>","<another issue title>"],"mempalace_drawer":"<drawer_id from memory_add_drawer>","confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN"}
 ```
 
 For blocked:
 
 ```
-SUMMARY:{"verdict":"BLOCKED","issues":["<blocking issue>"],"mempalace_drawer":"<drawer_id from memory_add_drawer>"}
+SUMMARY:{"verdict":"BLOCKED","issues":["<blocking issue>"],"mempalace_drawer":"<drawer_id from memory_add_drawer>","confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN"}
 ```
 
 **Rules:**

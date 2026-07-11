@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import extension, {
@@ -72,14 +73,15 @@ describe("slugify", () => {
 });
 
 describe("output paths", () => {
-  it("builds a default path under output/powerpoint with a timestamp and uniquifier", () => {
-    const p = defaultOutputPath("/proj", "My Deck", new Date(2026, 6, 5, 9, 30, 15, 42));
-    expect(p).toMatch(/^\/proj\/output\/powerpoint\/my-deck_20260705_093015_042[a-z0-9]*\.pptx$/);
+  it("builds a default temp path (…/penny/powerpoint/) with a timestamp and uniquifier, never the project tree", () => {
+    const p = defaultOutputPath("My Deck", new Date(2026, 6, 5, 9, 30, 15, 42));
+    expect(p).toMatch(/[\\/]penny[\\/]powerpoint[\\/]my-deck_20260705_093015_042[a-z0-9]*\.pptx$/);
+    expect(p.startsWith(os.tmpdir())).toBe(true);
   });
 
   it("produces distinct default paths for same-second calls", () => {
     const now = new Date(2026, 6, 5, 9, 30, 15, 42);
-    expect(defaultOutputPath("/proj", "t", now)).not.toBe(defaultOutputPath("/proj", "t", now));
+    expect(defaultOutputPath("t", now)).not.toBe(defaultOutputPath("t", now));
   });
 
   it("appends .pptx to explicit paths when missing", () => {
@@ -107,7 +109,7 @@ describe("buildSpec", () => {
     );
     expect(Array.isArray(spec.slides)).toBe(true);
     expect(String(spec.output_path)).toMatch(
-      /output\/powerpoint\/deck_\d{8}_\d{6}_\d{3}[a-z0-9]*\.pptx$/
+      /[\\/]penny[\\/]powerpoint[\\/]deck_\d{8}_\d{6}_\d{3}[a-z0-9]*\.pptx$/
     );
     expect(spec.project_root).toBe("/proj");
   });

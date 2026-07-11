@@ -18,16 +18,16 @@ real-world bugs:
 - The server binds to the wrong host/port, or a different process is
   already on the port.
 - The lifespan event is misspelled and silently no-ops.
-- The entry-point script (e.g. `frontend/app.py` run by Streamlit, or a
-  CLI wrapper) changes cwd to its own directory and then fails to import
-  a sibling module because `sys.path` does not contain the project root.
+- The entry-point script (e.g. a Python frontend runner or a CLI wrapper)
+  changes cwd to its own directory and then fails to import a sibling
+  module because `sys.path` does not contain the project root.
 
-The last item is the most common and the most embarrassing. **The
-simple_chatbot capstone project shipped with this exact bug**: the
-frontend script could not import the backend module when run by Streamlit
-because Streamlit's cwd is the script's directory, not the project root.
-A test that ran the entry point as a subprocess from its own directory
-would have caught it on the first verify pass.
+The last item is the most common and the most embarrassing. It is a
+recurring bug class: a Python entry-point script fails to import a sibling
+backend module because the runner sets the working directory to the
+script's own directory, not the project root. A test that runs the entry
+point as a subprocess from its own directory would catch it on the first
+verify pass.
 
 ## The mandatory four-category test suite
 
@@ -138,9 +138,9 @@ def test_real_server_health(real_backend_server):
 
 ### Category 2 — Entry-point script from its own directory
 
-This is the bug class that the simple_chatbot capstone missed. For every
-entry point (anything the user actually runs — `streamlit run X.py`,
-`uvicorn X:app`, `python X.py`), add a test that:
+This is a recurring bug class. For every entry point (anything the user
+actually runs — `uvicorn X:app`, `python X.py`, a bundler dev server,
+etc.), add a test that:
 
 1. Changes the cwd to the entry point's directory.
 2. Runs the entry point as a subprocess (or imports it in a subprocess
@@ -150,7 +150,7 @@ entry point (anything the user actually runs — `streamlit run X.py`,
 
 ```python
 def test_frontend_app_works_from_frontend_dir():
-    """streamlit run frontend/app.py changes cwd to frontend/ — so the
+    """Running frontend/app.py from the frontend/ dir changes cwd — so the
     import chain must work from there."""
     original_cwd = os.getcwd()
     try:
@@ -199,13 +199,13 @@ def test_cors_preflight(real_backend_server):
     resp = requests.options(
         f"{real_backend_server}/chat",
         headers={
-            "Origin": "http://localhost:8501",
+            "Origin": "http://localhost:5173",
             "Access-Control-Request-Method": "POST",
             "Access-Control-Request-Headers": "content-type",
         },
         timeout=5,
     )
-    assert resp.headers.get("access-control-allow-origin") == "http://localhost:8501"
+    assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
 ```
 
 ### Category 4 — End-to-end happy path

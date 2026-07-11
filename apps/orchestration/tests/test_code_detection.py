@@ -411,3 +411,67 @@ def test_build_multi_server_block_empty_when_not_multi(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
     ctx.extras["code"]["multi_server_info"] = {"is_multi_server": False}
     assert code_detection.build_multi_server_block(ctx) == ""
+
+
+# ---------------------------------------------------------------------------
+# _detect_web_ui_framework (Lit default, Tailwind signal, no Streamlit)
+# ---------------------------------------------------------------------------
+
+
+def test_detect_web_ui_lit_in_package_json(tmp_path: Path) -> None:
+    """The `lit` package in package.json is detected as a web UI."""
+    pkg = {"name": "ui", "dependencies": {"lit": "^3.2.0"}}
+    (tmp_path / "package.json").write_text(json.dumps(pkg), encoding="utf-8")
+
+    info = code_detection._detect_web_ui_framework(str(tmp_path))
+    assert info["is_web_ui"] is True
+    assert info["frameworks"] == ["lit"]
+
+
+def test_detect_web_ui_lit_by_source_import(tmp_path: Path) -> None:
+    """A `lit` import in TS source is enough even without a manifest entry."""
+    _write(
+        tmp_path / "src" / "my-card.ts",
+        """
+        import { LitElement, html } from "lit";
+        import { customElement } from "lit/decorators.js";
+        """,
+    )
+
+    info = code_detection._detect_web_ui_framework(str(tmp_path))
+    assert info["is_web_ui"] is True
+    assert info["frameworks"] == ["lit"]
+
+
+def test_detect_web_ui_tailwind_in_package_json(tmp_path: Path) -> None:
+    """tailwindcss in package.json marks the project as a web UI."""
+    pkg = {"name": "site", "devDependencies": {"tailwindcss": "^4.0.0"}}
+    (tmp_path / "package.json").write_text(json.dumps(pkg), encoding="utf-8")
+
+    info = code_detection._detect_web_ui_framework(str(tmp_path))
+    assert info["is_web_ui"] is True
+    assert info["frameworks"] == ["tailwind"]
+
+
+def test_detect_web_ui_streamlit_no_longer_detected(tmp_path: Path) -> None:
+    """Streamlit is no longer a recognized web UI signal."""
+    _write(
+        tmp_path / "pyproject.toml",
+        """
+        [project]
+        dependencies = ["streamlit>=1.0"]
+        """,
+    )
+    _write(tmp_path / "app.py", "import streamlit as st\nst.write('hi')\n")
+
+    info = code_detection._detect_web_ui_framework(str(tmp_path))
+    assert info["is_web_ui"] is False
+
+
+def test_detect_web_ui_lit_not_falsely_triggered(tmp_path: Path) -> None:
+    """A non-Lit JS project (eslint, etc.) is not misdetected as Lit."""
+    pkg = {"name": "tool", "devDependencies": {"eslint": "^9.0.0"}}
+    (tmp_path / "package.json").write_text(json.dumps(pkg), encoding="utf-8")
+
+    info = code_detection._detect_web_ui_framework(str(tmp_path))
+    assert info["is_web_ui"] is False

@@ -3,7 +3,7 @@
 
 ## What
 
-`orchestration` is an installable Python package (`apps/orchestration/`) that provides the shared runtime an engine-backed skill's state machine rides on. Each such skill is a `BasePlaybook` subclass with its own domain-named states and per-state SUMMARY contracts; its `orchestrate.py` is a ~5-line delegate. The package owns the FSM protocol, a durable checkpointer, self-recovery, and best-effort observability emission — replacing the per-skill `orchestrate.py` FSM plumbing and the `--state`/`/tmp` state model. Every workflow skill runs on the engine — `code`, `plan`, `prd`, `research`, `agent`, `sca`, and `jsa` — each a `BasePlaybook` subclass with a ~5-line delegate `orchestrate.py`. The only exception is `rez`, a placeholder skill awaiting a dedicated build (`metadata.penny.engine` unset). There are no standalone operation-primitive skills and no user-facing reference-cycle skill.
+`orchestration` is an installable Python package (`apps/orchestration/`) that provides the shared runtime an engine-backed skill's state machine rides on. Each such skill is a `BasePlaybook` subclass with its own domain-named states and per-state SUMMARY contracts; its `orchestrate.py` is a ~5-line delegate. The package owns the FSM protocol, a durable checkpointer, self-recovery, and best-effort observability emission — replacing the per-skill `orchestrate.py` FSM plumbing and the `--state`/`/tmp` state model. Every workflow skill runs on the engine — `code`, `plan`, `prd`, `research`, `agent`, `sca`, `jsa`, `rez`, and `learn` — each a `BasePlaybook` subclass with a ~5-line delegate `orchestrate.py`, with no exceptions. There are no standalone operation-primitive skills and no user-facing reference-cycle skill.
 
 ## Why
 
@@ -57,5 +57,4 @@ A domain skill subclasses `BasePlaybook` directly (no shared "standard cycle" ba
 |------|---------|
 | `apps/orchestration/` | The package |
 | `docs/agents/skills/orchestration.md` | The orchestrator protocol (skill-facing) |
-| `docs/agents/orchestration/DEPRECATIONS.md` | Migration deprecation ledger |
 | `docs/agents/capabilities/observability-server/observability-server.md` | Correlated timeline schema |

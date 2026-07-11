@@ -31,8 +31,16 @@ from memory_bridge import (  # noqa: E402
     tool_smart_search,
     tool_add_drawer,
     tool_check_duplicate,
+    tool_delete_drawer,
     tool_list_drawers,
 )
+
+# SM-3: Import LEAD_THRESHOLDS and check_all_stale from the single source of
+# truth in tune_freshness.py — no literal 10/21 threshold values here.
+_EVALS_DIR = _PROJECT_ROOT / "scripts" / "system" / "evals"
+if str(_EVALS_DIR) not in sys.path:
+    sys.path.insert(0, str(_EVALS_DIR))
+from tune_freshness import check_all_stale, LEAD_THRESHOLDS  # noqa: E402, F401
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -267,8 +275,6 @@ def acknowledge_signal(signal_id: str, session_id: str) -> bool:
     signal["status"] = "ACKNOWLEDGED"
     signal["session_id"] = session_id
 
-    from memory_bridge import tool_delete_drawer
-
     tool_delete_drawer({"drawer_id": drawer_id})
 
     new_id = write_signal(signal)
@@ -502,6 +508,233 @@ def generate_task_staleness_signal(
 
 
 # ---------------------------------------------------------------------------
+# Tune-due watcher (FR-4,5,6,17,18)
+# ---------------------------------------------------------------------------
+
+#: Rating-backlog thresholds (FR-17). These are NOT producer lead thresholds —
+#: they are watcher-specific rating-nudge thresholds and live here, not in
+#: tune_freshness.py (which is about *producer* staleness only).
+_RATING_UNRATED_THRESHOLD = 10
+_RATING_DAYS_SINCE_THRESHOLD = 7
+
+
+def _count_unrated_sessions() -> int:
+    """Count recent sessions without an outcome rating (FR-17).
+
+    Best-effort: any failure returns 0 so the watcher never crashes.
+    Non-networked: reads the local observability SQLite, not a remote API.
+    """
+    try:
+        ledger_dir = str(_PROJECT_ROOT / "scripts" / "system" / "outcome_ledger")
+        if ledger_dir not in sys.path:
+            sys.path.insert(0, ledger_dir)
+        import rate_recent  # type: ignore[import-not-found]
+        from capture import existing_decision_ids  # type: ignore[import-not-found]
+
+        con = rate_recent.open_obs()
+        if con is None:
+            return 0
+        try:
+            existing = existing_decision_ids()
+        except Exception:  # noqa: BLE001
+            existing = set()
+        return len(
+            rate_recent.pending_sessions(rate_recent.recent_session_goals(con, 25), existing)
+        )
+    except Exception:  # noqa: BLE001 — never break the watcher
+        return 0
+
+
+def _days_since_last_rating() -> Optional[float]:
+    """Days since the most recent outcome record was filed (FR-17).
+
+    Non-networked: reads the full outcome ledger via tool_list_drawers (local
+    ChromaDB), same path as the other watchers.
+    """
+    records = _load_outcome_records()
+    if not records:
+        return None
+    whens = [r["_when"] for r in records if r.get("_when") is not None]
+    if not whens:
+        return None
+    latest = max(whens)
+    return (_now() - latest).total_seconds() / 86400.0
+
+
+def _count_pending_amendments() -> int:
+    """Count PENDING or APPROVED amendments (FR-18).
+
+    Non-networked: reads the local mempalace (ChromaDB).
+    """
+    try:
+        result = tool_list_drawers(
+            {
+                "wing": "penny",
+                "room": "system_amendments",
+                "limit": 100,
+                "include_content": True,
+            }
+        )
+        if not result.get("success"):
+            return 0
+        count = 0
+        for drawer in result.get("drawers", []):
+            text = drawer.get("content", "")
+            lines = text.splitlines()
+            try:
+                if lines and lines[0].startswith("amendment_id:"):
+                    amend = json.loads("\n".join(lines[1:]))
+                else:
+                    amend = json.loads(text)
+                if isinstance(amend, dict) and amend.get("status") in ("PENDING", "APPROVED"):
+                    count += 1
+            except (json.JSONDecodeError, ValueError):
+                continue
+        return count
+    except Exception:  # noqa: BLE001 — never break the watcher
+        return 0
+
+
+def generate_tune_due_signal(session_id: str) -> Optional[dict]:
+    """Check for tune-due conditions and generate a signal if needed.
+
+    Conditions (all non-networked — file reads + local stores only):
+
+    * **Producer staleness** (FR-4,5): any of trajectory / prompt_efficacy /
+      judgment is stale or invalidated (per ``check_all_stale`` using
+      ``LEAD_THRESHOLDS``). → INFO.
+    * **Rating backlog** (FR-17): ``>= 10`` unrated sessions OR ``>= 7d``
+      since the last outcome rating. → INFO. Deduped by the daily signal_id
+      so it does not duplicate the session-brief rating nudge.
+    * **CRITICAL escalation** (FR-18): iff trajectory is stale AND ``>= 1``
+      PENDING/APPROVED amendment exists. Otherwise INFO.
+
+    Returns a signal dict (PENDING) or ``None`` when no condition is met.
+    Dedup (FR-6) is handled by ``write_signal`` via ``tool_check_duplicate``.
+    """
+    # SM-3: check_all_stale + LEAD_THRESHOLDS imported from tune_freshness.py
+    staleness = check_all_stale()
+    stale_list = [p for p, info in staleness.items() if info["stale"]]
+
+    # FR-17: Rating backlog
+    rating_conditions: list[str] = []
+    unrated_count = _count_unrated_sessions()
+    if unrated_count >= _RATING_UNRATED_THRESHOLD:
+        rating_conditions.append(f">={unrated_count} unrated sessions")
+
+    days_since = _days_since_last_rating()
+    if days_since is not None and days_since >= _RATING_DAYS_SINCE_THRESHOLD:
+        rating_conditions.append(f">={days_since:.0f}d since last rating")
+
+    has_stale = len(stale_list) > 0
+    has_rating_backlog = len(rating_conditions) > 0
+
+    if not has_stale and not has_rating_backlog:
+        return None
+
+    # Build context parts
+    conditions: list[str] = []
+    for p in stale_list:
+        info = staleness[p]
+        age_str = f"{info['age_days']:.1f}d" if info["age_days"] is not None else "?"
+        conditions.append(f"{p}: {info['reason']} (age: {age_str})")
+    conditions.extend(rating_conditions)
+
+    # FR-18: CRITICAL escalation — trajectory stale AND >=1 PENDING/APPROVED amendment
+    amendments_count = _count_pending_amendments()
+    trajectory_stale = "trajectory" in stale_list
+    priority = "CRITICAL" if (trajectory_stale and amendments_count > 0) else "INFO"
+
+    # Title and suggested action
+    if priority == "CRITICAL":
+        title = "Tune overdue: trajectory stale with pending amendments"
+        suggested_action = (
+            "Run `/tune deep` to refresh stale producers, then review and apply "
+            "pending amendments."
+        )
+    elif has_stale:
+        title = f"Tune due: {', '.join(stale_list)} stale"
+        suggested_action = "Run `/tune deep` to refresh stale producers."
+    else:
+        title = "Tune due: rating backlog"
+        suggested_action = (
+            "Rate recent sessions with `make rate` to feed the self-improvement flywheel."
+        )
+
+    return {
+        "signal_id": _signal_id("tune_due", 1),
+        "signal_type": "TIME",
+        "source": "tune_due_watcher",
+        "priority": priority,
+        "title": title,
+        "context": "; ".join(conditions),
+        "suggested_action": suggested_action,
+        "timestamp": _iso(_now()),
+        "expires": _default_expiry(),
+        "status": "PENDING",
+    }
+
+
+def resolve_tune_due_signals(session_id: str = "") -> int:
+    """Mark all PENDING tune_due signals as RESOLVED (FR-11,12 / SM-4).
+
+    Called after ``/tune deep`` Step 6 completes — once producers have been
+    refreshed, the tune_due reminder is no longer actionable.  Searches for
+    PENDING signals from ``tune_due_watcher``, updates each to RESOLVED, and
+    returns the count resolved.
+
+    Non-networked: reads/writes the local mempalace (ChromaDB) only.
+    """
+    search = tool_smart_search(
+        {
+            "query": "tune_due PENDING signal",
+            "wing": "penny",
+            "room": "signals",
+            "limit": 20,
+            "include_full": True,
+        }
+    )
+    results = search.get("results", [])
+    resolved = 0
+
+    for r in results:
+        text = r.get("text", "")
+        lines = text.splitlines()
+        try:
+            parsed = json.loads("\n".join(lines[1:])) if len(lines) > 1 else json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+        # Only resolve PENDING signals from tune_due_watcher
+        if parsed.get("source") != "tune_due_watcher" or parsed.get("status") != "PENDING":
+            continue
+
+        drawer_id = r.get("id")
+        parsed["status"] = "RESOLVED"
+        parsed["resolved_at"] = _iso(_now())
+        parsed["resolved_by"] = session_id or "tune_deep"
+
+        # Delete old drawer and write updated signal
+        tool_delete_drawer({"drawer_id": drawer_id})
+        write_signal(parsed, session_id=session_id)
+        resolved += 1
+        info(
+            "tune_due_watcher",
+            f"Resolved tune_due signal {parsed.get('signal_id')}",
+            session_id=session_id,
+        )
+
+    if resolved:
+        info(
+            "tune_due_watcher",
+            f"Resolved {resolved} tune_due signal(s) after /tune deep",
+            session_id=session_id,
+            data={"resolved_count": resolved},
+        )
+    return resolved
+
+
+# ---------------------------------------------------------------------------
 # Stub watchers (Phase 2 — FILE-based, post-MVP)
 # ---------------------------------------------------------------------------
 
@@ -545,6 +778,7 @@ def run_all_metric_watchers(session_id: str) -> list[str]:
         generate_confidence_trend_signal,
         generate_mempalace_growth_signal,
         generate_task_staleness_signal,
+        generate_tune_due_signal,
     ]
     for fn in funcs:
         watcher_name = fn.__name__
