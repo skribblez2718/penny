@@ -1,6 +1,6 @@
 ---
 name: learn
-description: "Transform raw learning material (lecture transcripts, slides, notebooks, textbook chapters) into a complete, verified study companion — per-lesson study guides with three-phase pedagogy, practice answers, practice exams with answer keys, and course-wide final prep. Use when the user has source learning material and wants study materials built from it — signals like 'make study guides from this', 'turn these lectures into study material', 'build a study companion', 'create practice exams for this course', 'help me learn this material', 'make this course study-able'. Do not use when researching an unfamiliar topic from scratch (the research skill), producing a single one-off document (skribble), analyzing existing material without producing courseware (annie), or fixing code (the code skill)."
+description: Turn raw learning material (lectures, slides, notebooks, textbook chapters) into a complete study companion — per-lesson study guides, practice questions with answers, practice exams, and course-wide final prep. Use when the user has source material and wants study materials built from it. Do not use when researching an unfamiliar topic from scratch (the research skill), producing a single one-off document (skribble), analyzing material without producing courseware (annie), or fixing code (the code skill).
 license: MIT
 metadata:
   penny:

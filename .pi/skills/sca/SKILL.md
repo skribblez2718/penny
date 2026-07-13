@@ -1,6 +1,6 @@
 ---
 name: sca
-description: "Multi-phase secure code analysis of cloned source repositories — charter, census, threat modeling, targeted scanning, triage, deep dive, verification, and reporting. Use when the task requires a deep, gated security review of a local source tree — signals like 'security review this repo', 'audit the codebase', 'threat model', 'secure code review', 'analyze this source for vulns'. Do not use when analyzing JavaScript pulled from live URLs (the jsa skill), performing network scanning, or targeting non-source artifacts."
+description: Deep, gated security review of a local source tree — threat modeling, targeted scanning, triage, and verified findings. Use when the task requires auditing a cloned repository or source directory for vulnerabilities. Do not use when analyzing JavaScript pulled from live URLs (the jsa skill), performing network scanning, or targeting non-source artifacts.
 license: MIT
 metadata:
   version: "2.0.0"

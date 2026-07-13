@@ -1,6 +1,6 @@
 ---
 name: jsa
-description: "Production-grade JavaScript security analysis for bug bounty hunting — download JS, build typed analysis stores, per-class slicing, per-lane agent dispatch, and browser PoC verification across 22 vulnerability classes. Use when the task requires analyzing JavaScript from live URLs for vulnerabilities — signals like 'analyze this JS', 'download the JS', 'find bugs in their frontend', 'JS security review', 'bug bounty on this site', 'client-side vulns'. Do not use when reviewing a local source tree (the sca skill), network-level scanning, subdomain discovery, or non-JavaScript targets."
+description: Analyze JavaScript pulled from live URLs for client-side vulnerabilities — bug-bounty-grade review with browser-verified proof-of-concept. Use when the task requires downloading and reviewing a site's JavaScript for security bugs. Do not use when reviewing a local source tree (the sca skill), network-level or subdomain scanning, or non-JavaScript targets.
 license: MIT
 metadata:
   version: "3.0.0"

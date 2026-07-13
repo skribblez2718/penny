@@ -1,6 +1,6 @@
 ---
 name: code
-description: "Generate, refactor, or fix code using the Ralph Wiggum Loop (RED → GREEN → REFACTOR → VERIFY → LEARN) — a TDD-first workflow with mandatory security and coding-standard compliance. Use when the task requires writing, refactoring, or fixing code — signals like 'implement', 'write the code', 'fix this bug', 'refactor', 'add a feature', 'make the tests pass'. Requires PRD + IDEAL_STATE from the prd skill (hard dependency). Do not use when the change is already fully specified and trivial (just do it), for pure planning/architecture work (the plan skill), or for non-code deliverables (skribble or synthia)."
+description: Write, refactor, or fix code — test-first, with security and coding-standard compliance built in. Use when the task requires implementing a feature, fixing a bug, or refactoring. Requires a PRD + IDEAL_STATE from the prd skill (hard dependency). Do not use when the change is fully specified and trivial (just do it), for pure planning or architecture work (the plan skill), or for non-code deliverables (skribble or synthia).
 license: MIT
 metadata:
   penny:

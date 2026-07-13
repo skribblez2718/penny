@@ -1,6 +1,6 @@
 ---
 name: research
-description: "Structured research workflow with Quick/Standard/Deep modes. Use when the task requires investigating an unfamiliar topic or gathering authoritative external evidence — signals like 'research', 'investigate', 'find best practices', 'what are the options for', 'look into X', 'compare approaches', 'deep dive on'. Do not use when analyzing material you already have (annie), for simple lookups, for quick internal context discovery (echo), or when sufficient information already exists."
+description: Structured research workflow with Quick, Standard, and Deep modes. Use when the task requires investigating an unfamiliar topic or gathering authoritative external evidence — finding best practices, comparing approaches, or a deep dive. Do not use when analyzing material you already have (annie), for simple lookups, for quick internal context discovery (echo), or when sufficient information already exists.
 license: MIT
 metadata:
   version: "2.0.0"

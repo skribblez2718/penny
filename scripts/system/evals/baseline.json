@@ -54,11 +54,11 @@
       "unit": "days",
       "value": 0.0
     },
-    "prompt_efficacy.frame_gain_overall": {
+    "prompt_efficacy.frame_on_pass_rate": {
       "direction": "up_good",
-      "tolerance": 0.05,
+      "tolerance": 0.1,
       "unit": "fraction",
-      "value": 0.0512
+      "value": 0.75
     },
     "prompt_efficacy.frame_regressed_families": {
       "direction": "down_good",

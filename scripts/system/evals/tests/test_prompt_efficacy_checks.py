@@ -195,20 +195,44 @@ def test_results_fresh_days(monkeypatch):
     assert result.value == pytest.approx(3.0, abs=0.1)
 
 
-def test_frame_gain_overall_pass_and_floor_fail(monkeypatch):
+def test_frame_gain_overall_is_informational_and_never_gates(monkeypatch):
+    # A positive gain is reported but does not gate.
     good = [_cell("t1", "glm", "on", True), _cell("t1", "glm", "off", False)]
     monkeypatch.setattr(pe, "load_latest", lambda: _artifact(cells=good))
-    assert pe.check_frame_gain_overall().status == PASS
+    r = pe.check_frame_gain_overall()
+    assert r.status == PASS and r.informational is True
+    assert r.direction == ""  # no direction ⇒ not a ratchet metric
+    assert r.value == pytest.approx(1.0)
 
-    bad = [
-        c
-        for i in range(10)
-        for c in (_cell(f"t{i}", "glm", "on", False), _cell(f"t{i}", "glm", "off", True))
+    # Even a frame that adds nothing (gain → 0, the Bitter-Lesson case) or one
+    # that looks net-negative must NOT gate here — harm is guarded elsewhere.
+    for on, off, expect in ((True, True, 0.0), (False, True, -1.0)):
+        cells = [
+            c
+            for i in range(10)
+            for c in (_cell(f"t{i}", "glm", "on", on), _cell(f"t{i}", "glm", "off", off))
+        ]
+        monkeypatch.setattr(pe, "load_latest", lambda cells=cells: _artifact(cells=cells))
+        result = pe.check_frame_gain_overall()
+        assert result.status == PASS and result.informational is True
+        assert result.value == pytest.approx(expect)
+
+
+def test_frame_on_pass_rate_is_absolute_and_ratcheted(monkeypatch):
+    # Two claude tasks: one ON passes, one ON fails ⇒ absolute on-rate = 0.5,
+    # independent of the OFF arm (this is a capability metric, not a delta).
+    cells = [
+        _cell("t1", "claude", "on", True),
+        _cell("t1", "claude", "off", False),
+        _cell("t2", "claude", "on", False),
+        _cell("t2", "claude", "off", True),
     ]
-    monkeypatch.setattr(pe, "load_latest", lambda: _artifact(cells=bad))
-    result = pe.check_frame_gain_overall()
-    assert result.status == FAIL
-    assert result.value == pytest.approx(-1.0)
+    monkeypatch.setattr(pe, "load_latest", lambda: _artifact(cells=cells))
+    r = pe.check_frame_on_pass_rate()
+    assert r.status == PASS
+    assert r.informational is False
+    assert r.direction == pe.UP_GOOD  # up_good ⇒ ratcheted; regresses if it falls
+    assert r.value == pytest.approx(0.5)
 
 
 def test_frame_regressed_families_respects_min_sample_and_margin(monkeypatch):
@@ -234,6 +258,7 @@ def test_checks_skip_when_no_artifact(tmp_path, monkeypatch):
     by_name = {r.name: r for r in results}
     assert by_name["prompt_efficacy.results_fresh_days"].status == SKIP
     assert by_name["prompt_efficacy.frame_gain_overall"].status == SKIP
+    assert by_name["prompt_efficacy.frame_on_pass_rate"].status == SKIP
     # task_count reads the golden file, not the artifact — stays alive
     assert by_name["prompt_efficacy.task_count"].status == PASS
     assert by_name["prompt_efficacy.task_count"].informational

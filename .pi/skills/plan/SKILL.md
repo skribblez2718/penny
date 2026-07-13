@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Structured planning workflow that breaks complex goals into actionable steps. Use when planning, sequencing steps, creating a roadmap, mapping dependencies, or decomposing a goal. Do not use when the task is a simple single-step task, a quick fix, or when the user explicitly says "just do it."
+description: Structured planning workflow that breaks complex goals into actionable steps. Use when planning, sequencing steps, creating a roadmap, mapping dependencies, or decomposing a goal into a reviewable plan deliverable. Do not use for a simple single-step task or quick fix, when the user says "just do it," when lightweight sequencing without a deliverable suffices (piper), or when breaking an existing plan into executable tasks (tabitha).
 license: MIT
 metadata:
   version: "2.0.0"

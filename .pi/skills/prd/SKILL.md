@@ -1,6 +1,6 @@
 ---
 name: prd
-description: "Generate world-class PRDs from free-form product/project briefs — layered output of narrative prose (12 sections), an atomic requirement catalog (REQ-NNN with priority + acceptance criteria), a verification/traceability matrix, and structured IDEAL_STATE JSON, written to mempalace room `skills/prd-{session_id}/` for downstream consumption. Use when the task requires a formal specification before building — signals like 'write a PRD', 'requirements', 'spec this out', 'acceptance criteria', 'define what we are building', 'product spec'. Chains naturally into the code skill (code requires prd output as a hard dependency). Do not use when generating code (the code skill), fixing bugs (the code skill), or writing simple specifications that do not need layered output."
+description: Produce a formal product or project specification from a free-form brief — narrative sections, an atomic requirement catalog with acceptance criteria, a traceability matrix, and a structured IDEAL_STATE the code skill consumes. Use when a change needs a spec before building. Do not use when generating or fixing code (the code skill) or writing a simple spec that needs no formal catalog.
 license: MIT
 metadata:
   version: "2.0.0"
