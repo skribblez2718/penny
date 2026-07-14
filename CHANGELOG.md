@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **imagegen skill (v1)** — local image generation over the self-hosted ComfyUI
+  HTTP API (`127.0.0.1:8188`) as a `BasePlaybook` FSM (framing → composing →
+  generating → critiquing → [adjusting → generating]\* → presenting). Routes each
+  request across 4 shipped presets (`blog-flux-steampunk`, `learning-qwen`,
+  `hero-flux`, `general-flux`) via a deterministic `route_preset` heuristic,
+  fails fast in a readiness check (unreachable ComfyUI / missing required
+  checkpoint → actionable error; missing optional steampunk LoRA → WARN + base
+  FLUX fallback), composes wordless prompts (raw-override passthrough, 4000-char
+  cap), generates candidates **one at a time** with a provenance `manifest.json`
+  (byte-identical-graph reproduction), runs a vera+carren parallel critique
+  (NEEDS_REVISION if either flags), iterates a bounded revise loop
+  (`max_iterations` default 2, regenerating only the failed candidates) with
+  honest exhaustion (`met=False` + itemized unresolved issues, never a fabricated
+  APPROVE), and emits a dual-format (human + machine) result. New
+  `ImagegenPlaybook` registered additively in `playbooks/__init__.py`; skill dir
+  at `.pi/skills/imagegen/` ships a hardened stdlib-only `comfy_http` client
+  (loopback SSRF allow-list + redirect refusal, `/view` path-traversal guards,
+  dict-built `/prompt` payloads) and a provenance-aware `comfy-generate.py` CLI.
+  Full pytest suite (`test_imagegen_playbook.py`, `test_comfy_http.py`,
+  `test_comfy_generate.py`) runs with zero live-service dependency; a live smoke
+  test stays opt-in behind `PENNY_IMAGEGEN_LIVE=1`.
+
 ### Fixed
 
 - **Compaction goal-recency regression.** The custom compaction extension

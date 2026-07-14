@@ -84,7 +84,7 @@ exclude = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = [".pi/extensions/*/tests", "scripts/system/*/tests", "scripts/system/tests", ".pi/skills/jsa/tests", "apps/orchestration/tests"]
+testpaths = [".pi/extensions/*/tests", "scripts/system/*/tests", "scripts/system/tests", ".pi/skills/jsa/tests", ".pi/skills/imagegen/tests", "apps/orchestration/tests"]
 python_files = ["*.test.py", "test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"

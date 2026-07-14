@@ -1,0 +1,11 @@
+{
+  "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_image_fp8_e4m3fn.safetensors", "weight_dtype": "default"}},
+  "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors", "type": "qwen_image", "device": "default"}},
+  "3": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
+  "4": {"class_type": "CLIPTextEncode", "inputs": {"text": "Light polarization visualized as a hyper-realistic 3D render: a horizontal beam of light passes through an upright polarizing filter of fine parallel vertical slats and emerges as a single clean glowing sinusoidal wave, dramatic research-laboratory setting, cinematic science illustration, subsurface scattering, ray-traced reflections, volumetric god rays, fine microdetail, deep blue and violet tones with warm golden highlights, sharp focus, shallow depth of field, octane render, physically based rendering, Ultra HD, 4K", "clip": ["2", 0]}},
+  "5": {"class_type": "CLIPTextEncode", "inputs": {"text": "text, words, letters, numbers, labels, captions, typography, watermark, signature, blurry, low detail, flat, cartoon", "clip": ["2", 0]}},
+  "6": {"class_type": "EmptySD3LatentImage", "inputs": {"width": 1664, "height": 928, "batch_size": 1}},
+  "7": {"class_type": "KSampler", "inputs": {"seed": 42, "steps": 30, "cfg": 4.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["1", 0], "positive": ["4", 0], "negative": ["5", 0], "latent_image": ["6", 0]}},
+  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+  "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "learning/qwen", "images": ["8", 0]}}
+}

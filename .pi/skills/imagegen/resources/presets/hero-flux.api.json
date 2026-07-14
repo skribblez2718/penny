@@ -1,0 +1,10 @@
+{
+  "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "flux1-dev-fp8.safetensors"}},
+  "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "a striking minimal conceptual hero illustration of a glowing abstract data construct, clean premium composition, elegant and atmospheric, cinematic volumetric lighting, soft bokeh, shallow depth of field, ultra-detailed, deep blue and violet tones with warm golden highlights, dark background, no text, no words, no letters", "clip": ["1", 1]}},
+  "4": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["1", 1]}},
+  "5": {"class_type": "FluxGuidance", "inputs": {"guidance": 3.5, "conditioning": ["3", 0]}},
+  "6": {"class_type": "EmptyLatentImage", "inputs": {"width": 1664, "height": 928, "batch_size": 1}},
+  "7": {"class_type": "KSampler", "inputs": {"seed": 42, "steps": 30, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0, "model": ["1", 0], "positive": ["5", 0], "negative": ["4", 0], "latent_image": ["6", 0]}},
+  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["1", 2]}},
+  "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "hero/flux", "images": ["8", 0]}}
+}

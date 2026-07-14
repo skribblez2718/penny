@@ -5,6 +5,7 @@
   "skills": {
     "agent": { "convention": "penny-wing" },
     "code": { "convention": "penny-wing" },
+    "imagegen": { "convention": "penny-wing" },
     "learn": { "convention": "penny-wing" },
     "plan": { "convention": "penny-wing" },
     "prd": { "convention": "penny-wing" },

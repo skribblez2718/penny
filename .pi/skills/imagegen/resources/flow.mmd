@@ -1,0 +1,82 @@
+%% ============================================================================
+%% imagegen skill — FLOW (the actual ImagegenMachine graph)
+%% ============================================================================
+%% The imagegen skill runs on the shared orchestration engine: one BasePlaybook
+%% subclass (orchestration.playbooks.imagegen:ImagegenPlaybook) whose
+%% ImagegenMachine FSM has custom-named states. Agent states dispatch the
+%% skill-specific personas (annie/synthia/vera/carren) as invoke_agent directives;
+%% TOOL states run deterministic in-process I/O against the local ComfyUI HTTP API
+%% (127.0.0.1:8188); MemPalace holds run metadata + file paths (never image bytes);
+%% only typed per-state SUMMARYs return to the engine. unknown/awaiting_clarification
+%% is the escalation subsystem; complete/error are terminal.
+%%
+%% READING NOTE (translation-critical):
+%%   * Multiple guarded arrows from ONE state are MUTUALLY EXCLUSIVE (XOR) —
+%%     exactly one fires. They are NOT parallel/forks.
+%%   * critiquing is the ONLY fan-out: vera ‖ carren run in PARALLEL and fan in to
+%%     a single aggregated verdict (NEEDS_REVISION if EITHER critic flags).
+%%   * The critiquing↔adjusting↔generating revise loop is BOUNDED by
+%%     max_iterations (default 2). Budget-spent presents the best vera-valid
+%%     candidate with met=False + itemized unresolved issues — never a faked APPROVE.
+%%   * Deterministic setup runs in initial_transition() BEFORE any agent: pure
+%%     route_preset(), candidate-count clamp, a fail-fast readiness probe (raises an
+%%     actionable error if ComfyUI is unreachable or a required checkpoint is
+%%     missing — a missing optional LoRA only WARNs), and a safe output dir. So a
+%%     dead service aborts before framing, never as a silent hang.
+%% ============================================================================
+stateDiagram-v2
+    [*] --> intake
+
+    %% Engine start() -> initial_transition() has already run deterministic routing,
+    %% the candidate clamp, the readiness probe, and output-dir creation. intake
+    %% advances to the first agent.
+    intake --> framing : start_frame
+
+    %% FRAME — annie: confirm routed preset + clamped count, write a one-line brief.
+    framing --> composing : frame_done
+    framing --> unknown : to_unknown\n[needs_clarification]
+
+    %% COMPOSE — synthia: positive (subject + preset scaffold) + wordless negative;
+    %% raw-override passthrough; capped at MAX_PROMPT_CHARS before generating.
+    composing --> generating : compose_done
+    composing --> unknown : to_unknown\n[needs_clarification]
+
+    %% GENERATE (TOOL) — submit each candidate ONE AT A TIME, poll /history, fetch
+    %% via /view, write manifest.json. On a revise loop only the FAILED indices
+    %% regenerate (good candidates kept). Zero candidates -> abort to error.
+    generating --> critiquing : generate_done
+
+    %% CRITIQUE (PARALLEL vera ‖ carren) — two independent critics fan in.
+    %%   vera   = technical validity (valid render, dimensions, no baked-in text)
+    %%   carren = aesthetic + brief fidelity
+    %% NEEDS_REVISION if EITHER flags.
+    critiquing --> presenting : critique_pass\n[both APPROVE]
+    critiquing --> adjusting : critique_revise\n[either flags && iteration+1 < max]
+    critiquing --> presenting : critique_exhausted\n[either flags && budget spent -> met=False]
+    critiquing --> unknown : to_unknown\n[needs_clarification]
+
+    %% ADJUST — synthia: propose prompt tweaks for the failed candidates, then
+    %% regenerate ONLY those (regenerate_only set).
+    adjusting --> generating : adjust_done
+    adjusting --> unknown : to_unknown\n[needs_clarification]
+
+    %% PRESENT (TOOL) — pick the best vera-valid candidate, emit dual-format result.
+    presenting --> complete : present_done
+
+    complete --> [*]
+    error --> [*]
+
+    %% ── UNKNOWN escalation (needs_clarification / UNCERTAIN at an agent state) ──
+    unknown --> awaiting_clarification : escalate
+    awaiting_clarification --> framing : clarify\n[has_clarification]
+
+    %% ── Error paths (every non-terminal state may abort to error) ──
+    intake --> error : abort
+    framing --> error : abort
+    composing --> error : abort
+    generating --> error : abort
+    critiquing --> error : abort
+    adjusting --> error : abort
+    presenting --> error : abort
+    unknown --> error : abort
+    awaiting_clarification --> error : abort
