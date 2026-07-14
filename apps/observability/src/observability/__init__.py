@@ -6,8 +6,8 @@
 # The schema uses an FTS5 virtual table (``entries_search``). Some CPython
 # builds ship SQLite compiled WITHOUT the FTS5 module — notably the
 # uv-managed ``cpython-*-gnu`` standalone build used by Penny's local .venv —
-# which makes the server and its tests fail on ``connect()`` when NOT run under
-# Docker. When the stdlib build lacks FTS5, transparently swap in ``pysqlite3``
+# which makes the server and its tests fail on ``connect()``. When the stdlib
+# build lacks FTS5, transparently swap in ``pysqlite3``
 # (a statically-linked modern SQLite that includes FTS5) using the same
 # mechanism chromadb uses. This is a no-op when the stdlib already has FTS5 or
 # when pysqlite3 is unavailable.

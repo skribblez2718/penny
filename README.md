@@ -145,7 +145,7 @@ A FastAPI + SQLite backend that ingests real-time events and structured logs fro
 - **Watcher logs** — ambient watcher execution logs, kept logically separate for diagnostics
 - **Query API** — REST endpoints for querying logs, session history, and watcher logs
 
-Prefers Docker; falls back to Python if Docker is unavailable. A systemd timer handles daily database cleanup on Linux.
+Runs as a plain Python process (`python -m observability`), auto-started by the Pi observability extension when Pi launches. The server bounds its own database size in-process (size-based rotation) — no Docker, no systemd timer required.
 
 ## Development
 
@@ -171,7 +171,6 @@ Both agent and human docs cover the same topics — agents, architecture, capabi
 - **Pi** — the agent runtime ([github.com/mariozechner/pi-coding-agent](https://github.com/mariozechner/pi-coding-agent))
 - **Bun** — JavaScript runtime and package manager (>=1.0)
 - **uv** — Python package manager ([docs.astral.sh/uv](https://docs.astral.sh/uv))
-- **Docker** (recommended) — for the observability backend. Falls back to Python if unavailable.
 
 ## Setup
 
@@ -188,7 +187,7 @@ This runs:
 3. `bun install` — all TypeScript workspace dependencies (extensions, tools)
 4. `scripts/setup/setup.sh` — runs all `init-*.sh` scripts:
    - **MemPalace initialization** — palace directory, wing config, memory bridge test
-   - **Observability backend** — Docker build or Python fallback, systemd cleanup timer
+   - **Observability backend** — Python server (auto-started by the Pi extension), in-process DB size rotation
    - **External tools** — semgrep, jsluice, and other CLI tools
    - **Cron jobs** — ambient watchers (twice daily), self-improvement compression (daily), weekly digest (Mondays)
 

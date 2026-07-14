@@ -1,10 +1,10 @@
-.PHONY: setup venv install-py install-js init sca-tools clean test test-integration lint format evals evals-update-baseline rate auto-capture trust trajectory review tune tune-deep docker-build docker-up docker-down
+.PHONY: setup venv install-py install-js init sca-tools clean test test-integration lint format evals evals-update-baseline rate auto-capture trust trajectory review tune tune-deep
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 
 setup: venv install-py install-js init
 	@echo ""
-	@echo "Setup complete. Copy .env.example to .env and fill in your values."
+	@echo "Setup complete. Ensure .env exists and holds your values (cp .env.example .env if needed)."
 	@echo "Then start Pi in the project directory."
 
 venv:
@@ -164,24 +164,6 @@ lint:
 format:
 	bun run format
 	source .venv/bin/activate && black . --config pyproject.toml
-
-# ── Docker ─────────────────────────────────────────────────────────────────
-
-docker-build:
-	docker build -t penny-observability -f apps/observability/Dockerfile .
-
-docker-up:
-	docker run -d --name penny-observability \
-		-p 8765:8765 \
-		-v $(HOME)/.local/share/penny/observability:/data \
-		-v $(PWD)/.env:/app/.env:ro \
-		-e PI_OBSERVABILITY_DATA_DIR=/data \
-		--restart unless-stopped \
-		penny-observability
-
-docker-down:
-	docker stop penny-observability 2>/dev/null || true
-	docker rm penny-observability 2>/dev/null || true
 
 # ── Cleanup ─────────────────────────────────────────────────────────────────
 

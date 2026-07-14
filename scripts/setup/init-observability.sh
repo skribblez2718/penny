@@ -1,6 +1,10 @@
 #!/bin/bash
-# Initialize Penny Observability Backend
-# Prefers Docker. Falls back to Python if Docker is not available.
+# Initialize the Penny Observability Backend (Python).
+#
+# The observability server runs as a plain Python process (`python -m observability`),
+# auto-started by the Pi observability extension when Pi launches. This script prepares the
+# environment: it syncs dependencies, verifies the imports, and ensures the data directory
+# exists. (There is no Docker deployment — observability is Python-only.)
 
 set -e
 
@@ -13,10 +17,9 @@ OBS_DIR="$PROJECT_ROOT/apps/observability"
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
-BLUE='\033[1;34m'
 NC='\033[0m'
 
-echo -e "${GREEN}=== Penny Observability Backend Setup ===${NC}"
+echo -e "${GREEN}=== Penny Observability Backend Setup (Python) ===${NC}"
 echo ""
 
 # Check that the observability backend exists
@@ -24,73 +27,6 @@ if [ ! -d "$OBS_DIR" ]; then
     echo -e "${RED}Error: observability backend not found at $OBS_DIR${NC}"
     exit 1
 fi
-
-# ── Docker path (preferred) ──────────────────────────────────────────────
-
-if command -v docker > /dev/null 2>&1 && docker info > /dev/null 2>&1; then
-    echo -e "${BLUE}Docker detected — using containerized observability backend.${NC}"
-    echo ""
-
-    # Build the image
-    echo -e "${YELLOW}Building observability Docker image...${NC}"
-    cd "$PROJECT_ROOT"
-    if docker build -t penny-observability -f apps/observability/Dockerfile .; then
-        echo -e "${GREEN}✓ Docker image built${NC}"
-    else
-        echo -e "${RED}✗ Docker build failed${NC}"
-        exit 1
-    fi
-
-    # Create data directory for volume mount
-    DATA_DIR="${PI_OBSERVABILITY_DATA_DIR:-$HOME/.local/share/penny/observability}"
-    mkdir -p "$DATA_DIR"
-
-    # Stop and remove any existing container
-    docker stop penny-observability 2>/dev/null || true
-    docker rm penny-observability 2>/dev/null || true
-
-    # Start the container
-    echo -e "${YELLOW}Starting observability container...${NC}"
-    if docker run -d --name penny-observability \
-        -p 8765:8765 \
-        -v "$DATA_DIR:/data" \
-        -v "$PROJECT_ROOT/.env:/app/.env:ro" \
-        -e PI_OBSERVABILITY_DATA_DIR=/data \
-        --restart unless-stopped \
-        penny-observability; then
-        echo -e "${GREEN}✓ Container started${NC}"
-    else
-        echo -e "${RED}✗ Container failed to start${NC}"
-        exit 1
-    fi
-
-    # Wait for health check
-    echo -e "${YELLOW}Waiting for health check...${NC}"
-    for i in $(seq 1 10); do
-        if curl -s http://localhost:8765/health > /dev/null 2>&1; then
-            echo -e "${GREEN}✓ Observability backend is healthy${NC}"
-            break
-        fi
-        sleep 1
-    done
-
-    echo ""
-    echo -e "${GREEN}=== Observability Setup Complete (Docker) ===${NC}"
-    echo ""
-    echo "Container: penny-observability"
-    echo "Data directory: $DATA_DIR"
-    echo ""
-    echo "Manage with:"
-    echo "  make docker-down   — stop container"
-    echo "  make docker-up     — restart container"
-    echo "  docker logs penny-observability  — view logs"
-    exit 0
-fi
-
-# ── Python fallback ─────────────────────────────────────────────────────
-
-echo -e "${YELLOW}Docker not available — using Python backend.${NC}"
-echo ""
 
 if ! command -v uv > /dev/null 2>&1; then
     echo -e "${RED}Error: 'uv' command not found${NC}"
@@ -109,7 +45,7 @@ cd "$PROJECT_ROOT" && uv sync --extra dev
 
 echo -e "${YELLOW}Verifying dependencies...${NC}"
 DEPS_OK=true
-for pkg in fastapi uvicorn aiosqlite python-dotenv pydantic apscheduler; do
+for pkg in fastapi uvicorn aiosqlite dotenv pydantic apscheduler; do
     if python -c "import $pkg" 2>/dev/null; then
         echo -e "${GREEN}  ✓ $pkg${NC}"
     else
@@ -133,16 +69,15 @@ fi
 DATA_DIR="${PI_OBSERVABILITY_DATA_DIR:-$HOME/.local/share/penny/observability}"
 mkdir -p "$DATA_DIR"
 
-# NOTE: no systemd/cron cleanup timer is installed. The observability server
-# bounds its own DB in-process via size-based rotation (startup + periodic
-# interval); see apps/observability/src/observability/scheduler.py. For manual,
-# out-of-band maintenance run scripts/system/observability/cleanup_db.py.
+# NOTE: no systemd/cron cleanup timer is installed. The observability server bounds its own
+# DB in-process via size-based rotation (startup + periodic interval); see
+# apps/observability/src/observability/scheduler.py. For manual, out-of-band maintenance run
+# scripts/system/observability/cleanup_db.py.
 
 echo ""
 echo -e "${GREEN}=== Observability Setup Complete (Python) ===${NC}"
 echo ""
 echo "Data directory: $DATA_DIR"
-echo "To start the server:"
+echo "The Pi observability extension auto-starts the server when Pi launches."
+echo "To run it manually:"
 echo "  cd $PROJECT_ROOT && python -m observability"
-echo ""
-echo "The Pi observability extension will auto-start the server when Pi launches."

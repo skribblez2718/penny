@@ -1,7 +1,7 @@
 """Deployment/infra assertions for size-based rotation (C15, C16, C17).
 
 These are repo-file checks, expressed as binary test assertions:
-  * C15 — `make docker-up` includes `--restart unless-stopped`.
+  * C15 — observability is Python-only; the Docker implementation is removed.
   * C16 — init-observability.sh installs no cleanup timer/service, and the
           systemd unit files are deleted.
   * C17 — .env.example documents the cap + floor and drops the retention-day vars.
@@ -67,11 +67,20 @@ def test_c14_no_new_schema_migration():
     assert SCHEMA_VERSION == 5
 
 
-def test_c15_docker_up_has_restart_policy():
-    """C15: the docker-up target adds --restart unless-stopped."""
+def test_c15_observability_is_python_only_no_docker():
+    """C15: observability runs via Python (`python -m observability`); the Docker
+    implementation (Dockerfile, compose, and Makefile docker-* targets) is removed."""
+    obs = PENNY_ROOT / "apps" / "observability"
+    assert not (obs / "Dockerfile").exists()
+    assert not (obs / "docker-compose.yml").exists()
+
     makefile = (PENNY_ROOT / "Makefile").read_text()
-    body = makefile.split("docker-up:", 1)[1].split("docker-down:", 1)[0]
-    assert "--restart unless-stopped" in body
+    for target in ("docker-build:", "docker-up:", "docker-down:"):
+        assert target not in makefile
+
+    init_script = (PENNY_ROOT / "scripts" / "setup" / "init-observability.sh").read_text()
+    assert "docker run" not in init_script
+    assert "-m observability" in init_script
 
 
 def test_c16_systemd_unit_files_are_deleted():

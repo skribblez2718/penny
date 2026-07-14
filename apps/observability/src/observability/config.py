@@ -7,23 +7,20 @@ from dotenv import load_dotenv
 
 from observability import logger as _logger
 
-# Resolve Penny project root (this file is at apps/observability/src/observability/)
-# In Docker, the .env is mounted at /app/.env or config comes from environment variables.
+# Resolve the Penny project root (this file is at apps/observability/src/observability/) and
+# load its .env if present; otherwise configuration comes from environment variables.
 try:
     _PENNY_ROOT = Path(__file__).resolve().parents[4]
     _ENV_PATH = _PENNY_ROOT / ".env"
     if _ENV_PATH.exists():
         load_dotenv(_ENV_PATH)
 except IndexError:
-    # Not running from the Penny source tree (fewer than 4 parent dirs) — expected
-    # under Docker. Try /app/.env, then fall back to environment variables only.
+    # Not running from the Penny source tree (fewer than 4 parent dirs) — fall back to
+    # reading configuration from environment variables only.
     _logger.debug(
         "observability.config",
-        "Source-tree root not resolvable (IndexError); using Docker/.env-var fallback",
+        "Source-tree root not resolvable (IndexError); using environment-variable fallback",
     )
-    _docker_env = Path("/app/.env")
-    if _docker_env.exists():
-        load_dotenv(_docker_env)
 
 
 class Config:

@@ -23,7 +23,7 @@ dependencies = [
     "apscheduler>=3.11,<4",
     # The schema uses an FTS5 virtual table (entries_search). Some CPython
     # builds (e.g. uv-managed cpython-*-gnu) ship SQLite without FTS5, which
-    # breaks the server/tests when NOT run under Docker. pysqlite3-binary is a
+    # breaks the server/tests. pysqlite3-binary is a
     # statically-linked modern SQLite (with FTS5) that observability swaps in
     # transparently at import when the stdlib build lacks FTS5 (see
     # observability/__init__.py). Linux-only wheel; other platforms fall back
