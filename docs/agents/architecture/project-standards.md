@@ -22,6 +22,14 @@ Without canonical standards, every skill and extension invents its own patterns.
 | TypeScript | Per-extension `tsconfig.json` with `noEmit: true` | Shared root tsconfig |
 | Package manager | `bun` | `npm`, `package-lock.json` |
 
+### The Bitter-Lesson Gate — before adding scaffolding
+
+Before adding any hard-coded table, keyword list, numeric threshold, fixed taxonomy, or mandated process step, ask: **will this get more or less valuable as the model improves?** If *less* — can the model do it by reading the artifact instead? If yes, do not hard-code it: give the model the artifact and verify the output with evidence.
+
+Hard-coded world-knowledge (framework/dep tables, auth enums, domain keyword routers) and process-baking (mandated methodologies, fixed step sequences) are **KNOWLEDGE-CONSTRAINT** debt — they help now but age into liabilities and need perpetual hand-maintenance. Prefer **capability-adaptive scaffolding**: model judgment as the default, the heuristic kept only as a tier-gated fallback. This is the *add-side* complement to the [Bitter-Lesson Doctrine](bitter-lesson.md)'s capability-invariants (the *remove-side*).
+
+Legitimate exceptions that pass the gate: safety/security controls, machine interfaces (a schema a program consumes), and fallbacks explicitly gated by model tier.
+
 ### Pi Alignment
 
 All extensions follow Pi's reference implementations. Deviations require documented rationale, risk analysis, and AGENTS.md entry.
@@ -49,6 +57,7 @@ Before claiming any feature complete, verify all 10 checks:
 - **E2E tests are mandatory.** Not optional. Stubs are not acceptable.
 - **False completion claims → outcome ledger MISMATCH entry.**
 - **Rollback on any check failure.** Fix, re-run all checks, claim only when all pass.
+- **No new KNOWLEDGE-CONSTRAINT debt.** New tables, thresholds, keyword routers, or mandated process steps must pass the Bitter-Lesson Gate (see `bitter-lesson.md`).
 
 ## Verification
 
@@ -56,6 +65,7 @@ Before claiming any feature complete, verify all 10 checks:
 - [ ] No deprecated APIs in owned code
 - [ ] No custom alternatives to canonical implementations
 - [ ] Pi deviations documented with rationale
+- [ ] New heuristics/tables/thresholds pass the Bitter-Lesson Gate (or are justified as safety / interface / tier-gated fallback)
 
 ## Files
 

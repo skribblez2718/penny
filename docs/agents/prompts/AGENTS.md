@@ -5,4 +5,4 @@
 - [cognitive-frame-standards.md](cognitive-frame-standards.md): Cognitive Frame (SYSTEM.md) — contents, writing rules, compliance, change protocol
 - [invocation-context-standards.md](invocation-context-standards.md): Task messages, skill context injection, Project Index, compliance
 - [layer-reference.md](layer-reference.md): Definitive reference — named layers, responsibilities, interaction circumstances, cross-layer rules
-- [role-and-domain-standards.md](role-and-domain-standards.md): Agent definitions, skill prompts, CREST methodology, Alignment pattern
+- [role-and-domain-standards.md](role-and-domain-standards.md): Agent definitions, skill prompts, CREST methodology, Working Discipline pattern

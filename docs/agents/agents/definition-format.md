@@ -2,7 +2,7 @@
 
 ## What
 
-Every agent definition (`.pi/agents/<name>.md`) follows a canonical structure: YAML frontmatter, Purpose, Mempalace Protocol, Alignment, Role-Specific Rules, Output Format, and `<agent_boundary>`.
+Every agent definition (`.pi/agents/<name>.md`) follows a canonical structure: YAML frontmatter, Purpose, Working Discipline, Non-Negotiables, Output, and `<agent_boundary>`.
 
 ## Why
 
@@ -12,12 +12,11 @@ Consistent agent structure enables the subagent extension to parse frontmatter f
 
 1. **YAML frontmatter with `tools:` field.** Single source of truth for tool access. Pi parses this and passes to `--tools`.
 2. **Canonical description pattern.** `description` must follow: `[One sentence defining the agent]. Use when [trigger conditions + 5–8 signal phrases the user actually says]. Do not use when [other agents' domains — name who to use instead].` The signal phrases (e.g., "analyze", "look into", "poke holes") are load-bearing: they are what the orchestrator matches against for proactive routing. Prefer situation/trigger framing over abstract capability nouns.
-3. **Purpose section.** One sentence defining what this agent IS and DOES.
-3. **Mempalace-First Protocol.** Read before acting, write after completing.
-4. **Alignment with System Rules.** Bridges Cognitive Frame to this agent's role.
-5. **Role-Specific Rules.** Only rules Cognitive Frame doesn't cover.
-6. **Output Format.** What this agent produces and how.
-7. **`<agent_boundary>` at end.** Security marker required.
+3. **Purpose section.** The agent's cognitive domain: what it IS and DOES, what it does NOT do, plus the domain-agnostic clause (criteria come from Domain Guidance — never embedded).
+4. **Working Discipline.** Compact wire-format block: mempalace-first, one role honesty rule, the confidence vocabulary, `needs_clarification` escalation. Nothing else — frame disciplines are not restated per agent.
+5. **Non-Negotiables.** Only durable rules Cognitive Frame doesn't cover, phrased as outcomes and constraints (consequence boundaries, evidence contracts, honesty contracts) — never how-to-work procedure.
+6. **Output.** Generic shape only; exact schema comes from Domain Guidance.
+7. **`<agent_boundary>` at end.** Security marker required, byte-preserved across edits.
 
 ## Required Sections
 
@@ -30,32 +29,27 @@ model: model-name
 ---
 
 ## Purpose
-One-sentence role definition.
+Cognitive domain + what this agent does NOT do. Criteria, rubrics, and schemas come from Domain Guidance — never embedded here.
 
-## Mempalace-First Protocol
-1. Read: search for prior context
-2. Work: perform task
-3. Write: store results
-4. Link: add KG facts
+## Working Discipline
+- **Mempalace-first**: read from mempalace; write full output to mempalace; return only the minimal SUMMARY.
+- **[Role honesty rule]**: the one evidence/honesty contract this role lives by.
+- **Confidence is a wire format**: CERTAIN / PROBABLE / POSSIBLE / UNCERTAIN; CERTAIN requires direct evidence.
+- **Escalate, don't guess**: signal `needs_clarification` in the SUMMARY when inputs are missing.
 
-## Alignment with System Rules
-- **Surfacing**: How this agent surfaces context
-- **Assumptions**: How this agent handles assumptions
-- **Confidence**: When this agent declares confidence
-- **Verification**: What this agent verifies before delivering
+## Non-Negotiables
+1. **RULE-NAME** — outcome or constraint only this agent needs.
 
-## Role-Specific Rules
-- Rule only this agent needs
-
-## Output Format
-Structure of this agent's output.
+## Output
+Generic shape; exact schema per Domain Guidance.
 
 <agent_boundary>
 ```
 
 ## Constraints
 
-- **No Cognitive Frame repeats.** Reference, don't restate.
+- **No Cognitive Frame repeats.** Reference, don't restate. The retired "Alignment with System Rules" restatement pattern must not be reintroduced.
+- **Outcomes and constraints, never procedure.** A rule states what must hold ("every write leaves a complete, valid file"), not how to work ("use edit for X, write for Y"). How-to-work text is a loan against the next model release.
 - **No domain-specific content.** Checklists and CREST tables belong in Domain Guidance.
 - **No contradictions with Cognitive Frame.** "Do NOT ask" conflicts with Priority 2 (Clarity).
 - **Concrete verbs, not nominalized actions.** Write "Identify gaps," not "responsible for the identification of gaps." See [Design Principles §10](../../humans/prompts/design-principles.md).
@@ -64,7 +58,7 @@ Structure of this agent's output.
 
 ## Canonical Vocabulary
 
-Agent-specific terms. The system-wide vocabulary (constraints, variables, assumptions, unknowns, tradeoffs, verification) is defined in `.pi/SYSTEM.md`.
+Agent-specific terms. Rows marked in the SUMMARY JSON are **engine-parsed wire formats** — treat them as an API; never rename them in a prompt edit. (The frame no longer carries a system-wide vocabulary table; term consistency is review-enforced — see [Cognitive Frame Standards Rule 3](../prompts/cognitive-frame-standards.md).)
 
 | Term | Definition | Code Binding | Do NOT substitute |
 |------|-----------|-------------|-------------------|
@@ -81,11 +75,12 @@ Agent-specific terms. The system-wide vocabulary (constraints, variables, assump
 
 - [ ] YAML frontmatter with `tools:` field
 - [ ] All four memory tools in tools list
-- [ ] Alignment section bridges Cognitive Frame to role
-- [ ] `<agent_boundary>` present at end
+- [ ] Working Discipline present with exact wire formats (confidence vocab, `needs_clarification`, SUMMARY)
+- [ ] Non-Negotiables are outcomes/constraints only — no how-to-work procedure
+- [ ] `<agent_boundary>` present at end, byte-identical across edits
 - [ ] No domain-specific content
-- [ ] No Cognitive Frame contradictions
-- [ ] Output-to-project-tree rule present in Role-Specific Rules
+- [ ] No Cognitive Frame contradictions or restatements
+- [ ] Consequence boundaries (READ-ONLY, NO-EXECUTION, scope rules) preserved or strengthened — never trimmed
 
 ## Files
 

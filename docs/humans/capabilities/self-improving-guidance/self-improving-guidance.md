@@ -8,7 +8,7 @@ A behavioral learning system that allows Penny to **propose improvements to her 
 
 > The most valuable learning lives in the domain layer, not the universal layer.
 
-A plan skill that learns "this user prefers concise summaries" doesn't need a new Before Responding step in SYSTEM.md. It needs that preference captured in the skill prompt or mempalace.
+A plan skill that learns "this user prefers concise summaries" doesn't need a new rule in SYSTEM.md. It needs that preference captured in the skill prompt or mempalace.
 
 ## How It Works
 

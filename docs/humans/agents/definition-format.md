@@ -31,11 +31,10 @@ After the frontmatter, the body explains the agent in plain language. The standa
 
 | Section | What It Covers |
 | --------- | -------------- |
-| **Purpose** | One sentence defining what this agent is and does. |
-| **Mempalace-First Protocol** | How the agent searches for prior context, works, stores results, and links knowledge-graph facts. |
-| **Alignment with System Rules** | How this agent applies the universal cognitive frame — surfacing assumptions, declaring confidence, verifying before delivering. |
-| **Role-Specific Rules** | Rules that only this agent needs, such as read-only constraints or the prohibition on writing to the project tree. |
-| **Output Format** | What the agent produces and how it is structured, including the SUMMARY it returns. |
+| **Purpose** | The agent's cognitive domain — what it is, what it does, what it does *not* do, and the standing rule that domain criteria come from the skill's guidance, never baked in. |
+| **Working Discipline** | A compact block of "wire formats": read/write through mempalace, one role-specific honesty rule, the confidence vocabulary the engine parses, and the `needs_clarification` escape hatch. |
+| **Non-Negotiables** | The durable rules only this agent needs — consequence boundaries (read-only, no-execution), evidence contracts, honesty contracts — stated as outcomes, never as step-by-step procedure. |
+| **Output** | The generic shape of what the agent produces; the exact schema comes from the skill's Domain Guidance. |
 | **`<agent_boundary>`** | A security marker at the very end that separates agent system instructions from invocation context. |
 
 ## What Each Section Does
@@ -44,11 +43,11 @@ After the frontmatter, the body explains the agent in plain language. The standa
 
 **Mempalace-First Protocol** is the agent's workflow for memory hygiene. Before acting, it searches for relevant prior work. After acting, it stores outcomes and links them into the knowledge graph so future agents can find them.
 
-**Alignment with System Rules** bridges the universal Cognitive Frame to the agent's role. It says, in effect, "Given that Penny must declare confidence and verify before delivering, here is how this agent does those things."
+**Working Discipline** carries only what the orchestration engine actually consumes — the confidence vocabulary (CERTAIN/PROBABLE/POSSIBLE/UNCERTAIN), the `needs_clarification` signal, and the mempalace read/write cycle — plus one honesty rule specific to the role (for the verifier: "passes carry evidence too"; for the explorer: "found and not-found are both findings"). An earlier design restated the universal frame's disciplines inside every agent ("surface assumptions, declare confidence, verify before delivering"); that section was retired because it repeated per-agent what the always-on frame already says — tokens spent restating what a capable model already carries.
 
-**Role-Specific Rules** are the agent's special constraints. For example, Carren is read-only and never rewrites; Skribble must write generated files to `/tmp/` or mempalace unless the task explicitly names a project path. These rules belong in the agent definition because they are tied to the role, not to any particular skill.
+**Non-Negotiables** are the agent's special constraints. For example, Carren is read-only and never rewrites; Skribble must write generated files to `/tmp/` or mempalace unless the task explicitly names a project path. These rules belong in the agent definition because they are tied to the role, not to any particular skill — and they are written as *outcomes that must hold*, not instructions on how to work. Consequence boundaries (read-only, no-execution, scope limits) are permanent; anything that merely compensates for a current model's weakness is treated as temporary and is re-measured when models improve.
 
-**Output Format** sets expectations. Agents typically write full output to mempalace and return a small structured SUMMARY that tells Penny whether the task succeeded, what confidence level applies, and where to find details.
+**Output** sets expectations. Agents typically write full output to mempalace and return a small structured SUMMARY that tells Penny whether the task succeeded, what confidence level applies, and where to find details.
 
 ## Why Domain-Specific Details Stay Out
 

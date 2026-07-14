@@ -26,7 +26,7 @@ Before any code is delivered, it must pass six universal checks. These rules are
 | **No dead code** | Remove commented-out blocks, unused imports, and unreachable branches. | Dead code confuses readers, inflates diffs, and can accidentally be reactivated. |
 | **No magic numbers** | Every constant must be named and documented. | Bare numbers have no meaning. Named constants explain intent and make changes safer. |
 
-These rules are the floor, not the ceiling. Language-specific guides — such as the [Python](python.md) and [TypeScript](typescript.md) references — add idioms on top of them.
+These rules are the floor, not the ceiling. Language-specific guides — such as the [Python](python.md) and [TypeScript](typescript.md) references — add idioms on top of them. Cross-cutting standards apply on top regardless of language: [accessibility](accessibility.md) (WCAG 2.2 AA for every interface Penny renders) and the [security overview](security-overview.md).
 
 ## Severity Levels
 

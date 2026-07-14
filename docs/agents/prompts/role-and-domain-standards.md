@@ -36,30 +36,26 @@ Both layers build on the Cognitive Frame. They never repeat, contradict, or repl
 Every agent definition MUST include these sections in this order:
 
 1. **YAML Frontmatter** — `name`, `description`, `tools`, `model` (the `tools:` field is the single source of truth for tool declarations — Pi parses it and passes it to `--tools`; no separate tools table is needed)
-2. **Purpose** — One-sentence role definition (what this agent IS and DOES)
-3. **Mempalace-First Protocol** OR equivalent read/write cycle
-4. **Alignment with System Rules** — Bridges Cognitive Frame rules to this agent's role
-5. **Role-Specific Rules** — ONLY rules that Cognitive Frame doesn't cover
-6. **Output Format** — What this agent produces and how
-7. **`<agent_boundary>`** — Security marker (required)
+2. **Purpose** — The agent's cognitive domain: what it IS and DOES, what it does NOT do, and the domain-agnostic clause ("criteria … come from your Domain Guidance — you never embed them")
+3. **Working Discipline** — The compact wire-format block (see pattern below)
+4. **Non-Negotiables** — ONLY the durable, role-specific rules the Cognitive Frame doesn't cover, phrased as outcomes and constraints
+5. **Output** — Generic shape only; exact schema comes from Domain Guidance
+6. **`<agent_boundary>`** — Security marker (required, byte-preserved)
 
-### Alignment with System Rules Pattern
+### Working Discipline Pattern
 
-Every agent MUST include an Alignment section that connects Cognitive Frame rules to the agent's specific role. Format:
+Every agent MUST include a Working Discipline section. It replaced the older five-bullet "Alignment with System Rules" pattern, which restated frame disciplines per agent — measured ceremony (~25% of each agent body) that repeats what the frame and a capable model already carry. Working Discipline keeps only what the *engine consumes* (wire formats) plus at most one role-specific honesty rule:
 
 ```markdown
-## Alignment with System Rules
+## Working Discipline
 
-You operate under the system's Instruction Hierarchy, Confidence Levels, Ambiguity Gate, and Delivery Checklist. Apply them within your agent role:
-
-- **Surfacing**: [How this agent surfaces context and unknowns in its role]
-- **Assumptions**: [How this agent handles assumptions in its role]
-- **Confidence**: [When this agent declares confidence]
-- **Verification**: [What this agent verifies before delivering]
-- **User Intent**: [How this agent respects user-provided context and when to ask vs. proceed]
+- **Mempalace-first**: read context from mempalace; write the full output to mempalace; return only the minimal SUMMARY specified by Domain Guidance.
+- **[Role's honesty rule]**: e.g. "Found and not-found are both findings" (echo), "Passes carry evidence too" (vera).
+- **Confidence is a wire format**: CERTAIN / PROBABLE / POSSIBLE / UNCERTAIN where certainty varies. CERTAIN requires direct evidence.
+- **Escalate, don't guess**: when missing inputs prevent valid work, signal `needs_clarification` in your SUMMARY.
 ```
 
-This is NOT repeating Cognitive Frame — it's connecting it to the specific role.
+The wire formats (confidence vocabulary, `needs_clarification`, the SUMMARY contract) are **plumbing, not prose** — the orchestration engine parses them (`contracts.py`), so they are stated once, exactly, and never renamed in a prompt edit. Everything else the old Alignment section carried (surfacing, assumptions, verification restatements) is the frame's job; do not reintroduce it.
 
 ### What NOT to Include
 
@@ -70,12 +66,14 @@ This is NOT repeating Cognitive Frame — it's connecting it to the specific rol
 
 ### What IS Role-Specific
 
-Rules that Cognitive Frame doesn't cover are appropriate for Role Definition:
+Rules that Cognitive Frame doesn't cover are appropriate for Role Definition — phrased as **outcomes and constraints, never how-to-work procedure** (the Bitter-Lesson rule; see [Cognitive Frame Standards Rule 7](cognitive-frame-standards.md)):
 
-- **Operational constraints**: "READ-ONLY" for Echo, "NO REWRITING" for Carren
-- **Domain scope**: "DOMAIN-AGNOSTIC: Works for code, life, research, etc."
-- **Process requirements**: "ATOMIC: Each task must be independently completable"
-- **Output format requirements**: "VALID JSON: Output must be parseable JSON"
+- **Consequence boundaries**: "READ-ONLY" for Echo, "NO REWRITING" for Carren, "NO-EXECUTION"/"SCOPE-BOUNDED" for Skribble — these are capability-invariant and are kept or strengthened, never trimmed
+- **Evidence contracts**: "EVIDENCE-ANCHORED", vera's evidence-tier hierarchy (execute > apply-the-rule > judge, with the tier reported)
+- **Honesty contracts**: "NULL-AWARE" ('could not assess' ≠ 'assessed as poor'), honest UNVERIFIABLE verdicts
+- **Structural requirements**: "ATOMIC: each task independently completable and verifiable"
+
+Not role-specific (delete on sight): edit-tool usage instructions, efficiency micro-management, reasoning recipes, restatements of frame disciplines. If a rule tells the agent *how to work* rather than *what must hold*, it is a loan against the next model release.
 
 ### Base Memory Tool Set (Mandatory for All Agents)
 
@@ -122,7 +120,7 @@ Role Definition (.pi/agents/carren.md)
     ↓
     Permanent agent identity: "Evaluate work products"
     Permanent constraints: READ-ONLY, EVIDENCE-BASED
-    Permanent alignment: Confidence levels, surfacing rules
+    Permanent wire formats: confidence vocabulary, needs_clarification, SUMMARY
 
 Domain Guidance (.pi/skills/plan/assets/prompts/carren.md)
     ↓
@@ -204,7 +202,7 @@ The task message IS the Domain Guidance for this invocation. The agent's Role De
 
 ### Cross-Layer Safety
 
-- **Role Definition never contradicts Cognitive Frame** — even in new contexts, the agent follows SYSTEM.md's Before Responding, Instruction Hierarchy, Confidence Levels, and Self-Verification.
+- **Role Definition never contradicts Cognitive Frame** — even in new contexts, the agent follows SYSTEM.md's Instruction Hierarchy, What Done Requires, certainty discipline, and Ask vs. Act.
 - **Domain Guidance never contradicts Role Definition** — a READ-ONLY agent never gets Domain Guidance that says "edit files."
 - **Domain Guidance never contradicts Cognitive Frame** — Domain Guidance adds specificity ("in this domain, good code has 80% test coverage") not generality ("always verify before acting" — that's universal).
 - **Task message never overrides system rules** — the agent_boundary enforces this.
@@ -240,7 +238,7 @@ Agent definitions are the **Role Definition layer**. They must NOT contain conte
 | ------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | Agent identity ("You are an Explore agent")             | ✅                               | ❌                                                                                                                  |
 | Role-specific constraints ("READ-ONLY", "NO REWRITING") | ✅                               | ❌                                                                                                                  |
-| Alignment with System Rules (bridging)                  | ✅                               | ❌                                                                                                                  |
+| Working Discipline (wire formats + honesty rule)        | ✅                               | ❌                                                                                                                  |
 | Tool access and operational rules                       | ✅                               | ❌                                                                                                                  |
 | Generic output format shape                             | ✅ ("Produce a structured plan") | ✅ (specific field names)                                                                                           |
 | Mempalace room/session instructions                     | ❌                               | ✅ (which room, what headers)                                                                                       |

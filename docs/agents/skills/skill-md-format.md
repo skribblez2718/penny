@@ -11,7 +11,7 @@ Pi auto-discovers skills by scanning `.pi/skills/*/SKILL.md`. The frontmatter pr
 ## Rules
 
 1. **YAML frontmatter required.** `name`, `description`, `metadata.penny` fields.
-2. **Canonical description pattern.** `description` must follow: `[One sentence defining the skill]. Use when [trigger conditions + 5–8 signal phrases the user actually says]. Do not use when [anti-use-cases — name the skill/agent to use instead].` The signal phrases are load-bearing: the orchestrator matches them for proactive routing (see SYSTEM.md → Route to the Right Abstraction). `check_skill_structure.py` enforces the presence of `Use when` and `Do not use when`.
+2. **Canonical description pattern.** `description` must follow: `[One sentence defining the skill]. Use when [trigger conditions + 5–8 signal phrases the user actually says]. Do not use when [anti-use-cases — name the skill/agent to use instead].` The signal phrases are load-bearing: they are the capability surface the orchestrator reasons over for proactive routing (see SYSTEM.md → Reach for Skills and Agents First — routing is capability reasoning, not keyword lookup; the phrases make the capability legible, they are not a match table). `check_skill_structure.py` enforces the presence of `Use when` and `Do not use when`.
 3. **`metadata.penny.engine: orchestration`** — the routing key that marks the skill as running on the shared orchestration engine. This is the current marker. (The legacy `metadata.penny.state_machine: true` boolean is REMOVED — do not add it.)
 4. **`metadata.penny.mempalace`** — `true` if agents communicate via mempalace.
 5. **`metadata.penny.subagents`** — list of agent names this skill uses.

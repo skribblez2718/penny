@@ -30,7 +30,7 @@ Generated code is the highest-risk surface for security vulnerabilities. Agents 
 ## Constraints
 
 - **These rules apply to ALL generated code.** No exceptions for "quick scripts" or "prototypes."
-- **Agents must verify compliance before returning SUMMARY.** The Delivery Checklist in Cognitive Frame enforces this.
+- **Agents must verify compliance before returning SUMMARY.** The frame's What Done Requires contract enforces this — a compliance claim without evidence is an unverified claim.
 
 ## Verification
 

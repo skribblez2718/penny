@@ -57,7 +57,7 @@ Earlier versions numbered layers (L1, L2a, L2b, etc.), conflating scope with inj
 
 Every rule in the Cognitive Frame is a thinking step, not a desired output quality. Instead of "be accurate" (output-shaped), we write "never fabricate facts, sources, or results" (process-shaped). Output-shaped prompts let the model fill the process gap with probability. Process-shaped prompts constrain the path, not just the destination.
 
-This principle applies to all **cognitive layers** (Cognitive Frame, Role Definition, Domain Guidance). The Invocation Context — the goal/task message — is inherently output-shaped by design: it defines *what to achieve*, not *how to think*. The overall system is a **process-shaped wrapper around an output-shaped goal**: the goal (output-shaped) enters the FSM (process-shaped iteration loop), which dispatches agents with cognitive steps (process-shaped), producing output structured by the Output Contract (also process-shaped — it defines *how to structure*, not *what quality to aim for*). The destination is output-shaped; the path is process-shaped. See [Design Principles §1](design-principles.md#1-process-shaped-not-output-shaped) for the full scope.
+This principle applies to all **cognitive layers** (Cognitive Frame, Role Definition, Domain Guidance). The Invocation Context — the goal/task message — is inherently output-shaped by design: it defines *what to achieve*, not *how to think*. The overall system is a **process-shaped wrapper around an output-shaped goal**: the goal (output-shaped) enters the FSM (process-shaped iteration loop), which dispatches agents with process-shaped directives, producing output structured by the frame's Deliver rule (also process-shaped — it defines *how to structure*, not *what quality to aim for*). The destination is output-shaped; the path is process-shaped. One boundary: process-shaped means *single executable directives*, never mandated multi-step scripts — always-on procedure is the prompt content that ages worst as models improve. See [Design Principles §1](design-principles.md#1-process-shaped-not-output-shaped) and [§11](design-principles.md#11-goals-constraints-capabilities--never-procedure-the-bitter-lesson-rule).
 
 ### 3. Domain-Agnostic Agents
 
@@ -91,7 +91,7 @@ The Cognitive Frame is injected into every Penny turn and every subagent, so it 
 | Domain Guidance | ≤1,000 tokens | Domain guidance, not repetition |
 | Total system prompt | ≤3,000 tokens | ~1.5% of a 200K window for instructions |
 
-All counts are measured with **tiktoken** (`cl100k_base`) — the one canonical token counter — never a word-count heuristic. The 1,500-token cap is a forcing-function, not a model limit: there is no hard adherence cliff at a small token count. It keeps the always-on frame lean by pushing conditionally-needed content into `docs/penny/` for on-demand `read` (the extraction pattern). The Cognitive Frame is currently ~1,436 tokens, within budget.
+All counts are measured with **tiktoken** (`cl100k_base`) — the one canonical token counter — never a word-count heuristic. The 1,500-token cap is a forcing-function, not a model limit: there is no hard adherence cliff at a small token count. It keeps the always-on frame lean by pushing conditionally-needed content into `docs/penny/` for on-demand `read` (the extraction pattern). The current count is reported by `check_token_budget.py` (CI-gated against the 1,500 cap); the number is not duplicated here because it changes with every frame edit.
 
 ## What This Architecture Replaced
 

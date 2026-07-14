@@ -27,15 +27,18 @@ The Cognitive Frame is the universal reasoning protocol. It defines how Penny th
 
 **What's in it:**
 
-- **Identity + Mission** — Penny as a personal AI assistant, adaptable to any domain, with a precise reasoning stance
-- **Route to the Right Abstraction** — Decision tree for when to use skills vs. agents vs. direct tools
-- **Instruction Hierarchy** — Five-priority conflict resolution (Safety > Truth > Clarity > User Intent > Thoroughness)
-- **Before Responding Protocol** — Six mandatory cognitive steps: RESTATE, IDENTIFY, LIST constraints, LIST variables, SURFACE assumptions, FLAG uncertainty
-- **Reasoning Style** — Four directives: think in steps, prefer reversible decisions, name tradeoffs, resolve ambiguity
-- **Self-Verification Checkpoint** — Unconditional quality gate (cannot be skipped by any priority override)
-- **Confidence Levels** — CERTAIN / PROBABLE / POSSIBLE / UNCERTAIN with required actions
-- **Canonical Vocabulary** — Six terms (constraints, variables, assumptions, unknowns, tradeoffs, verification) with exact definitions — all layers must use these consistently
-- **Output Contract** — Four-item structure every response must follow
+- **Who You Are** — Penny as a personal AI assistant, adaptable to any domain; reversible over irreversible, name tradeoffs, truth over agreement
+- **The Operating Bet** — How the system improves as models improve: leverage computation over baked-in heuristics, ratchet on capabilities not implementations, gate every new rule on whether it gains or loses value as models improve, prefer turning a knob over adding procedure
+- **What Done Requires** — The outcome contract: success criteria stated before work, evidence-backed completion, honest exhaustion (never dress a partial result as a pass), strategy changes on retry, prior work first, independent checks for high-stakes work
+- **Instruction Hierarchy** — Conflict resolution (Truth > Clarity > User Intent > Thoroughness)
+- **Signal Your Certainty** — Keep "verified" distinct from "likely" and "need to check"
+- **Ask vs. Act** — When to clarify before acting; when to escalate mid-work rather than spin or silently downgrade the goal
+- **Reach for Skills and Agents First** — The delegation decision, made by reasoning over capability descriptions, not keyword-matching
+- **Tools & Boundaries** — Core tools plus the always-on "no output files in the project tree" rule
+- **Deliver** — Lead with the answer; a response must add information or progress
+- **On-Demand Protocols** — Named triggers (clarification, compaction resume, KG linking) whose full text loads only when needed
+
+What's deliberately *not* in it: step-by-step reasoning scripts, vocabulary tables, domain checklists, and file paths. The frame states goals, constraints, and capabilities — never procedure. Multi-step protocols (like the clarification protocol) live in on-demand docs and load only when their trigger fires, because always-on procedure text is the class of prompt content that ages worst as models improve.
 
 **Why it's separate:** The Cognitive Frame is universal. It applies whether Penny is planning a vacation, auditing code, or researching a topic. By keeping it in one file, we ensure consistent reasoning across all domains. Changes here affect everything — hence the strict change protocol.
 
@@ -62,11 +65,10 @@ Role Definition defines an agent's identity, capabilities, and constraints. It a
 **What's in it:**
 
 - YAML frontmatter with `tools:` field (single source of truth for tool access)
-- Purpose — one-sentence role definition
-- Mempalace-First Protocol — read before acting, write after completing
-- Alignment with System Rules — bridges Cognitive Frame to this specific role
-- Role-Specific Rules — only rules the Cognitive Frame doesn't cover
-- Output Format — generic shape (specific fields come from Domain Guidance)
+- Purpose — the agent's cognitive domain, including what it does NOT do
+- Working Discipline — the engine-consumed wire formats (mempalace cycle, confidence vocabulary, `needs_clarification`) plus one role honesty rule
+- Non-Negotiables — only durable, role-specific outcomes/constraints the Cognitive Frame doesn't cover
+- Output — generic shape (specific fields come from Domain Guidance)
 
 **Why it's separate:** Agents are reusable across domains. Echo explores whether the domain is code, travel, or research. Domain-specific checklists belong in Domain Guidance, not baked into the agent. This separation means we have 4 agent files, not 4 × N domains.
 
@@ -134,7 +136,7 @@ In the most common case (direct conversation), Penny operates with just three la
 
 Six absolute rules govern how layers interact:
 
-1. **No layer repeats content from another layer** — Each responsibility belongs to exactly one layer. If Cognitive Frame says "SURFACE your assumptions," Role Definition doesn't repeat it — it specifies _how_ (e.g., "list assumptions in your Open Questions section").
+1. **No layer repeats content from another layer** — Each responsibility belongs to exactly one layer. If the Cognitive Frame requires evidence-backed completion, Role Definition doesn't repeat it — it carries the role's specific contract (e.g., the verifier's "a PASS without captured evidence is invalid").
 
 2. **No layer contradicts another layer** — If Cognitive Frame says "unresolved ambiguity = ask," Domain Guidance cannot say "do NOT ask." The Instruction Hierarchy resolves any conflict.
 
@@ -146,20 +148,14 @@ Six absolute rules govern how layers interact:
 
 6. **Project Index is navigation, not instruction** — AGENTS.md files point to documentation. They do not contain rules, standards, or explanations.
 
-## The Canonical Vocabulary
+## Vocabulary Consistency
 
-Six terms with exact, cross-layer definitions. Inconsistent vocabulary creates ambiguity — if Cognitive Frame says "constraints" and Domain Guidance says "limitations," the model may treat them as different concepts.
+Consistent terms across layers still matter — if one layer says "constraints" and another says "limitations," the model may treat them as different concepts. Two kinds of vocabulary are handled differently:
 
-| Term | Definition | Do NOT substitute with |
-|------|-----------|----------------------|
-| **constraints** | Hard, immutable limits | limitations, restrictions, boundaries |
-| **variables** | Adjustable levers | options, parameters, choices |
-| **assumptions** | Believed true, unverified | guesses, expectations, defaults |
-| **unknowns** | Things not yet determined | gaps, questions, uncertainties |
-| **tradeoffs** | Tensions between competing approaches | compromises, costs, sacrifices |
-| **verification** | Proof of success | validation, testing, checking |
+- **Wire formats** (engine-parsed): the confidence scale (CERTAIN / PROBABLE / POSSIBLE / UNCERTAIN), `needs_clarification`, `clarifying_questions`, and the SUMMARY structure. These are contracts consumed by the orchestration engine (`contracts.py`). They live in the agent definitions' Working Discipline sections and are never renamed in a prompt edit.
+- **Editorial vocabulary** (author-enforced): constraints = hard limits, assumptions = believed-true-unverified, tradeoffs = tensions between approaches, verification = proof of success. An earlier frame carried these as an inline six-term table; the table was trimmed from the always-on frame (its token cost was not demonstrably earning adherence) and the discipline now lives in the authoring standards (`docs/agents/prompts/`), enforced at review time by the Carren+Vera pipeline.
 
-All layers must use these terms consistently. The vocabulary table lives in the Cognitive Frame (SYSTEM.md) so every agent and every domain shares the same definitions.
+The principle survives the mechanism: use one term per concept across every layer; where the term is machine-parsed, treat it as an API.
 
 ## Why Named Layers, Not Numbers
 

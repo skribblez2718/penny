@@ -22,15 +22,16 @@ No ambiguity — each responsibility belongs to exactly one layer.
 
 | Responsibility                              | Layer              | Example                                                        |
 | ------------------------------------------- | ------------------ | -------------------------------------------------------------- |
-| Reasoning protocol (how to think)           | Cognitive Frame    | "RESTATE the goal", "think in steps"                           |
-| Instruction hierarchy (conflict resolution) | Cognitive Frame    | "Safety overrides everything"                                  |
-| Confidence level requirements               | Cognitive Frame    | "CERTAIN/PROBABLE/POSSIBLE/UNCERTAIN"                          |
-| Canonical vocabulary                        | Cognitive Frame    | "'constraints' means hard limits, not suggestions"             |
-| Output contract (every response)            | Cognitive Frame    | "Lead with the critical insight"                               |
+| Reasoning stance + outcome contract         | Cognitive Frame    | "Evidence-backed completion", "strategy changes on retry"      |
+| The operating bet (how the system improves) | Cognitive Frame    | "Ratchet on capabilities, never on implementations"            |
+| Instruction hierarchy (conflict resolution) | Cognitive Frame    | "Truth — never fabricate; accuracy over helpfulness"           |
+| Certainty discipline                        | Cognitive Frame    | "Keep 'I verified this' distinct from 'this is likely'"        |
+| Confidence wire format (engine-consumed)    | Role Definition    | "CERTAIN/PROBABLE/POSSIBLE/UNCERTAIN" in the SUMMARY           |
+| Deliver discipline (every response)         | Cognitive Frame    | "Lead with the answer; the response must add information"      |
 | Agent identity and purpose                  | Role Definition    | "You are an Explore agent"                                     |
 | Tool access (which tools this role can use) | Role Definition    | `tools: read, grep, find, ls`                                  |
 | Operational constraints per role            | Role Definition    | "EVIDENCE-BASED: every claim must cite a source"              |
-| Bridging Cognitive Frame to this role       | Role Definition    | "Surfacing: flag what you couldn't find"                       |
+| Working Discipline (wire formats + honesty) | Role Definition    | "Found and not-found are both findings"; `needs_clarification` |
 | Domain-specific checklists (CREST)          | Domain Guidance    | Code Constraints, Planning Resources                           |
 | Session-specific instructions               | Domain Guidance    | "Session ID provided in task"                                  |
 | Skill-specific process requirements         | Domain Guidance    | "Use CREST framework for this domain"                          |
@@ -46,11 +47,11 @@ No ambiguity — each responsibility belongs to exactly one layer.
 
 Some concerns are expressed in multiple layers but with different scopes:
 
-| Concern          | Cognitive Frame (universal)  | Role Definition (per-role)                | Domain Guidance (per-domain)                                                     |
-| ---------------- | ---------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------- |
-| **Uncertainty**  | "FLAG your uncertainty"      | "Declare confidence on findings"          | CREST evaluation criteria define what "good" vs "uncertain" means in this domain |
-| **Assumptions**  | "SURFACE your assumptions"   | "List assumptions in your Open Questions" | CREST constraints define what counts as an assumption vs a hard limit            |
-| **Verification** | "All constraints addressed?" | "Verify all sources are cited"            | CREST evaluation defines what verification looks like                            |
+| Concern          | Cognitive Frame (universal)                          | Role Definition (per-role)                               | Domain Guidance (per-domain)                                                     |
+| ---------------- | ---------------------------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| **Uncertainty**  | "Keep 'verified' distinct from 'likely'"              | Confidence wire format (CERTAIN…UNCERTAIN) in the SUMMARY | CREST evaluation criteria define what "good" vs "uncertain" means in this domain |
+| **Assumptions**  | "Surface constraints and success criteria before work" | Role honesty rule ("unknowns surfaced, never skipped")     | CREST constraints define what counts as an assumption vs a hard limit            |
+| **Verification** | "A done claim carries evidence"                       | Evidence contract ("every claim cites a source"; vera's evidence tiers) | CREST evaluation defines what verification looks like                            |
 
 The universal rule is in Cognitive Frame. The role-specific application is in Role Definition. The domain-specific criteria are in Domain Guidance. **Each layer adds specificity, never repeats.**
 
@@ -203,7 +204,7 @@ Each layer has immutable properties that define how it's authored, validated, an
 | **Author**        | Architecture owner                                        | Agent designer                                                              | Skill designer                                                              | Documentation maintainers                                       | Pi runtime + orchestrator (or user)                             |
 | **When active**   | Always                                                    | Skill invocations                                                           | Skill invocations                                                           | Always                                                          | Always                                                          |
 | **Standards doc** | [Cognitive Frame Standards](cognitive-frame-standards.md) | [Role Definition & Domain Guidance Standards](role-and-domain-standards.md) | [Role Definition & Domain Guidance Standards](role-and-domain-standards.md) | [AGENTS.md Standard](../../documentation/agents-md-standard.md) | [Invocation Context Standards](invocation-context-standards.md) |
-| **Token budget**  | ≤800                                                      | ≤1,200                                                                      | ≤1,000                                                                      | Minimal (indexes only)                                          | ≤100 (task_summary)                                             |
+| **Token budget**  | ≤1,500                                                      | ≤1,200                                                                      | ≤1,000                                                                      | Minimal (indexes only)                                          | ≤100 (task_summary)                                             |
 | **Content rule**  | Process-shaped, declarative                               | Role-specific only, no Cognitive Frame repeats                              | Domain-specific only, no Cognitive Frame or Role Definition repeats         | Indexes only, no content                                        | Goal-stated, no Cognitive Frame or Role Definition repeats      |
 
 ## Cross-Layer Rules
@@ -212,9 +213,9 @@ These rules govern how layers interact. They are absolute.
 
 ### 1. No Layer Repeats Content from Another Layer
 
-Each responsibility belongs to exactly one layer. If Cognitive Frame says "SURFACE your assumptions," Role Definition should not say "make sure to surface your assumptions." Instead, Role Definition says **how** this applies to the role: "List assumptions in your Open Questions section."
+Each responsibility belongs to exactly one layer. If Cognitive Frame requires evidence-backed completion, Role Definition should not say "make sure to verify before delivering." Instead, Role Definition carries the role's **contract**: "a PASS without captured evidence is invalid" (vera), "every claim cites file:line or URL" (echo).
 
-**Exception:** The Alignment section in Role Definition explicitly _bridges_ Cognitive Frame to the role. This is not repetition — it's application. "You operate under Before Responding" is bridging, not restating.
+**Note:** The older "Alignment with System Rules" bridging section was retired as measured ceremony — it restated frame disciplines per agent. Its replacement, **Working Discipline**, carries only engine-consumed wire formats (confidence vocabulary, `needs_clarification`, the SUMMARY protocol) plus one role honesty rule. Wire formats are plumbing, not repetition.
 
 ### 2. No Layer Contradicts Another Layer
 

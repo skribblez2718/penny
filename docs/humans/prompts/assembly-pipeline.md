@@ -82,21 +82,21 @@ Here's what the fully assembled prompt looks like for a skill invocation:
 │                                             │
 │ <system_context>                            │ ← Cognitive Frame (authored)
 │   Who You Are (identity + reasoning)        │
-│   Canonical Vocabulary                      │
+│   The Operating Bet                         │
+│   What Done Requires                        │
 │   Instruction Hierarchy                     │
-│   Confidence Levels                         │
-│   Ambiguity Gate                            │
-│   Route to the Right Abstraction            │
-│   Available Tools + Guidelines + Pi Docs    │
-│   Delivery Checklist + Output Contract      │
-│   Knowledge Graph Integration               │
+│   Signal Your Certainty                     │
+│   Ask vs. Act                               │
+│   Reach for Skills and Agents First         │
+│   Tools & Boundaries                        │
+│   Deliver + On-Demand Protocols             │
 │ </system_context>                           │
 ├─────────────────────────────────────────────┤
 │ --append-system-prompt (temp file) ──────── │
 │                                             │
 │ Agent body (.pi/agents/echo.md)             │ ← Role Definition
-│   Purpose, Mempalace-First Protocol,        │
-│   Alignment, Rules, Output Format           │
+│   Purpose, Working Discipline,              │
+│   Non-Negotiables, Output                   │
 │                                             │
 │ <skill_context>                             │ ← Domain Guidance
 │   Mission (for this skill context)          │

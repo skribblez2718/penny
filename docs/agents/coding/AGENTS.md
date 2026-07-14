@@ -4,6 +4,7 @@
 - [multi-gpu-standard.md](multi-gpu-standard.md): Multi-GPU coding standards and patterns
 - [python.md](python.md): Python style, patterns, idioms, and testing
 - [typescript.md](typescript.md): TypeScript strict mode, types, validation, and patterns
+- [accessibility.md](accessibility.md): **WCAG 2.2 AA standard for all generated UI** — semantic HTML, keyboard operability, focus, contrast (both themes), ARIA rules, reduced motion, target size, and the axe + keyboard + screen-reader verification checklist
 - [library-docs.md](library-docs.md): **Look third-party/library docs up live** — the governing convention for external docs (canonical base URL + version check + runtime fetch instead of static link lists)
 - [fastapi/AGENTS.md](fastapi/AGENTS.md): FastAPI documentation **lookup** — canonical base + section→path map; fetch current pages at runtime
 - [lit/AGENTS.md](lit/AGENTS.md): Lit documentation **lookup** — canonical base + section→path map, styling & security cross-refs; fetch live (**default UI framework**)

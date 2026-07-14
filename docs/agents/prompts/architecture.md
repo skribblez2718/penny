@@ -170,30 +170,29 @@ When layers conflict, the Instruction Hierarchy in Cognitive Frame resolves:
 
 ### Cognitive Frame (SYSTEM.md)
 
+The canonical section-by-section checklist lives in [Cognitive Frame Standards](cognitive-frame-standards.md#compliance-checklist) — that is the single source of truth. The structural invariants:
+
 - [ ] ≤1,500 tokens for `system_context` (tiktoken `cl100k_base`, via `check_token_budget.py`)
 - [ ] All rules are declarative (imperative verbs), not narrative
-- [ ] Who You Are section present (identity + reasoning merged)
-- [ ] Canonical Vocabulary present
-- [ ] Instruction Hierarchy defined with explicit priorities
-- [ ] Confidence Levels enforcement rule present
-- [ ] Ambiguity Gate activation condition + protocol reference present
-- [ ] Route to the Right Abstraction present and mandatory
-- [ ] Delivery Checklist present and unconditional
-- [ ] Output Contract defined
+- [ ] All sections state goals, constraints, capabilities, or wire formats — no procedure scripts (Rule 7, the Bitter-Lesson rule)
+- [ ] What Done Requires present: evidence-backed completion, honest exhaustion, strategy change on retry
+- [ ] The Operating Bet present: ratchet on capabilities, add-side gate, knobs over procedure
+- [ ] Ask vs. Act present: clarification condition + mid-work escalation, protocol named by trigger
 - [ ] No domain-specific content (no CREST tables, no agent roles, no checklists)
-- [ ] Process-shaped throughout — no output-shaped phrasing (the Output Contract is process-shaped: it defines *how to structure output*, not *what quality to aim for*)
+- [ ] No file paths in `<system_context>`; security directives block untouched
+- [ ] Change shipped through the prompt-efficacy gate (`frame_on_pass_rate` no-regress, `frame_regressed_families` empty)
 
 ### Role Definition (Agent Definitions)
 
 - [ ] YAML frontmatter `tools:` field declares all tools (single source of truth — Pi parses and passes to `--tools`)
-- [ ] No repeated Cognitive Frame rules (reference, don't restate)
+- [ ] No repeated Cognitive Frame rules (the old "Alignment with System Rules" restatement pattern is retired — do not reintroduce it)
 - [ ] No contradictions with Cognitive Frame
-- [ ] Purpose section defines role (what this agent IS and DOES)
-- [ ] Mempalace-First Protocol present (or equivalent read/write cycle)
-- [ ] Alignment with System Rules section present
-- [ ] Role-specific Non-Negotiable Rules (only rules Cognitive Frame doesn't cover)
-- [ ] Output Format section present
-- [ ] `<agent_boundary>` security marker present
+- [ ] Purpose defines the cognitive domain, what the agent does NOT do, and the domain-agnostic clause (criteria come from Domain Guidance)
+- [ ] Working Discipline present: mempalace-first + role honesty rule + confidence wire format + `needs_clarification` escalation (see [Role & Domain Standards](role-and-domain-standards.md#working-discipline-pattern))
+- [ ] Non-Negotiables are outcomes/constraints only — consequence boundaries, evidence contracts, honesty contracts; no how-to-work procedure
+- [ ] Wire formats (confidence vocab, `needs_clarification`, SUMMARY shape) exactly match the engine contract — never renamed in a prompt edit
+- [ ] Output section states the generic shape only; exact schema from Domain Guidance
+- [ ] `<agent_boundary>` security marker present and byte-preserved
 - [ ] All rules are declarative (imperative verbs), not narrative
 - [ ] Process-shaped cognitive instructions — no output-shaped phrasing (output format specification is output-shaped by design; see note under Domain Guidance)
 - [ ] No abstract nominalizations — concrete verbs in all instructions

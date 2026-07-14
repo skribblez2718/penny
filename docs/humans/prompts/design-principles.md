@@ -6,7 +6,7 @@ The core concepts and rationale behind Penny's prompt architecture. These princi
 
 ## 1. Process-Shaped, Not Output-Shaped
 
-**Status: [HYPOTHESIS]** — consistent with the robust finding that specific, complete instructions beat vague aspirations, but "process-shaped beats output-shaped" as a general rule has no direct published test. The Before Responding protocol specifically is **[DEBUNKED-ADJACENT]**: prescriptive step scaffolds are the technique class that goes neutral-to-negative on reasoning-native models (Sprague et al. 2024; vendor guidance against CoT-prompting thinking models), which is why the steps are kept lightweight and the degradation gate (`prompt_efficacy.frame_regressed_families`) watches them per family.
+**Status: [HYPOTHESIS]** — consistent with the robust finding that specific, complete instructions beat vague aspirations, but "process-shaped beats output-shaped" as a general rule has no direct published test. The Before Responding protocol specifically is **[DEBUNKED-ADJACENT]**: prescriptive step scaffolds are the technique class that goes neutral-to-negative on reasoning-native models (Sprague et al. 2024; vendor guidance against CoT-prompting thinking models) — which is why the six-step sequence was moved out of the always-on frame into the on-demand clarification protocol (see below), and why the degradation gate (`prompt_efficacy.frame_regressed_families`) watches the frame per family.
 
 ### The Concept
 
@@ -28,18 +28,9 @@ Process-shaped prompts constrain the path, not just the destination. "Verify bef
 
 This principle was codified in the Cognitive Frame standards on April 14, 2026: "Every section in the Cognitive Frame must define a thinking step, not a desired output quality."
 
-### The Before Responding Protocol
+### From Always-On Protocol to On-Demand Protocol
 
-The most concrete example is the six-step protocol Penny executes before every response:
-
-1. **RESTATE** the goal — prevents misalignment
-2. **IDENTIFY** the category — frames the problem
-3. **LIST** the constraints — defines the solution space
-4. **LIST** the variables — identifies levers
-5. **SURFACE** assumptions — makes implicit explicit
-6. **FLAG** uncertainty — surfaces hidden risks
-
-These aren't suggestions. They're mandatory cognitive steps that end with an action gate: "If unresolved unknowns remain, ask targeted questions before proceeding."
+The six-step RESTATE / IDENTIFY / LIST / LIST / SURFACE / FLAG sequence was originally an always-on "Before Responding Protocol" — mandatory cognitive steps before every response. It no longer lives in the frame. Prescriptive step scaffolds are exactly the prompt content that goes neutral-to-negative on reasoning-native models (the [DEBUNKED-ADJACENT] tag above), and always-on procedure is the class of scaffolding that ages worst as models improve (Principle 11). The sequence survives as the **on-demand clarification protocol** (`docs/penny/clarification-protocol.md`): the frame's Ask vs. Act section states only the *activation condition* (genuinely under-specified, irreversible, high-stakes, or not sure enough to proceed safely), and the full protocol loads only when that trigger fires. The frame keeps single executable directives ("surface constraints and success criteria before work"); the multi-step script became a tool reached for on demand.
 
 ### Scope: Which Layers This Principle Applies To
 
@@ -54,9 +45,9 @@ This principle applies to all **cognitive layers** — layers that define *how t
 
 The Invocation Context is the one layer where output-shaped language is correct and expected. "Review session plan-001's explore findings" is a goal, not a process. If someone tried to make it process-shaped ("First read the findings, then identify gaps, then list issues"), they would duplicate the Cognitive Frame's reasoning protocol and the Domain Guidance's domain-specific steps — a cross-layer violation of Principle 5 (No Repetition Across Layers).
 
-### The Output Contract Is Process-Shaped
+### The Deliver Rule Is Process-Shaped
 
-The Output Contract ("Lead with the most critical insight, separate WHAT from WHY from HOW, close with what could go wrong") is itself **process-shaped**, not output-shaped. It tells the model *how to structure the output* (an executable step), not *what the output should be* (a quality aspiration). "Lead with the most critical insight" is an actionable directive. "Make the output insightful" would be output-shaped. This distinction is important: even the rules governing output structure are process-shaped.
+The frame's Deliver rule ("Lead with the answer or critical insight; close with risks and watch-points; a response must add information or progress") is itself **process-shaped**, not output-shaped. It tells the model *how to structure the output* (an executable step), not *what the output should be* (a quality aspiration). "Lead with the answer" is an actionable directive. "Make the output insightful" would be output-shaped. This distinction is important: even the rules governing output structure are process-shaped.
 
 ### The Process-Shaped Wrapper Pattern
 
@@ -69,11 +60,11 @@ Output-shaped goal (Invocation Context)
 Process-shaped loop (FSM orchestration)
     explore → plan → critique → revise → complete
         ↓
-Process-shaped cognitive steps (Cognitive Frame + Domain Guidance)
-    RESTATE → IDENTIFY → LIST → SURFACE → FLAG
+Process-shaped directives (Cognitive Frame + Domain Guidance)
+    criteria before work → evidence-backed completion → honest exhaustion
         ↓
-Process-shaped output contract
-    Lead with insight → Separate WHAT/WHY/HOW → Close with risks
+Process-shaped deliver rule
+    Lead with the answer → Close with risks → Add information or progress
 ```
 
 The goal is the only output-shaped element, and it sits in the Invocation Context layer — which is correctly identified as the "what to do now" layer. Everything that processes the goal — the iteration loop, the cognitive steps, the output structure — is process-shaped. This is not a contradiction; it's a separation of concerns: the destination is output-shaped, the path is process-shaped.
@@ -182,28 +173,20 @@ Each layer adds specificity without repeating the universal rule.
 
 This principle was stress-tested during the April 17, 2026 remediation session. The planner and taskifier agent definitions had copied Domain Guidance output format fields into their Role Definition Output Format sections. The fix: replace specific fields ("Goal, Non-Goals, Assumptions...") with a generic shape ("Produce a structured plan. The exact format is determined by your Domain Guidance.").
 
-## 6. Canonical Vocabulary
+## 6. Vocabulary Consistency (Wire Formats + Editorial Discipline)
 
-**Status: [HYPOTHESIS]** — related to the robust finding that models are surprisingly sensitive to surface variation (FormatSpread: up to 76-point swings from semantically equivalent formatting), but the specific claim that synonym drift across layers degrades performance is untested. Ablation target.
+**Status: [HYPOTHESIS]** — related to the robust finding that models are surprisingly sensitive to surface variation (FormatSpread: up to 76-point swings from semantically equivalent formatting), but the specific claim that synonym drift across layers degrades performance is untested.
 
 ### The Concept
 
-Six terms are defined once in the Cognitive Frame (SYSTEM.md) and used consistently across all layers:
+One term per concept, across every layer — enforced through two different mechanisms:
 
-| Term | Definition |
-|------|-----------|
-| **constraints** | Hard, immutable limits |
-| **variables** | Adjustable levers |
-| **assumptions** | Believed true, unverified |
-| **unknowns** | Things not yet determined |
-| **tradeoffs** | Tensions between competing approaches |
-| **verification** | Proof of success |
+- **Wire formats** (machine-parsed): CERTAIN / PROBABLE / POSSIBLE / UNCERTAIN, `needs_clarification`, `clarifying_questions`, the SUMMARY structure. These are contracts the orchestration engine parses; they live in the agents' Working Discipline sections and are treated as an API — never renamed in a prompt edit.
+- **Editorial vocabulary** (review-enforced): constraints = hard limits, assumptions = believed-true-unverified, tradeoffs = tensions, verification = proof of success. Authors keep these consistent; the Carren+Vera review pipeline flags drift.
 
-### Why
+### Why the frame no longer carries the table
 
-Inconsistent terminology creates ambiguity. If Cognitive Frame says "constraints" and Domain Guidance uses "limitations," the model may treat them as different concepts — asking "are there constraints?" and "are there limitations?" separately, producing redundant or conflicting answers.
-
-The vocabulary table was deemed critical enough to justify exceeding the 800-token Cognitive Frame budget by ~130 tokens. It's a documented, intentional deviation.
+An earlier frame carried a six-term inline vocabulary table, accepted as an intentional budget deviation. It was trimmed in the Bitter-Lesson frame passes: an always-on table is a standing token cost whose adherence value was never demonstrated by ablation, and a capable model does not need definitions of ordinary words — it needs the terms *used consistently*, which is an authoring discipline, not frame content. The principle (consistency) outlived the mechanism (the inline table) — exactly the "ratchet on capabilities, never implementations" pattern.
 
 ## 7. Declarative Rules, Not Narrative
 
@@ -220,7 +203,7 @@ Rules in the Cognitive Frame are declarative (imperative verbs), not narrative (
 
 Declarative rules are instructions. Narrative is aspiration. The model follows instructions more reliably than aspirations. This is related to process-shaped vs. output-shaped: declarative rules define executable steps; narrative describes desired outcomes.
 
-## 8. "Route to the Right Abstraction"
+## 8. Reach for Skills and Agents First ("Route to the Right Abstraction")
 
 ### The Concept
 
@@ -230,6 +213,8 @@ Penny follows a decision tree for task routing:
 2. Is this a **single-domain task**? → Use a subagent (isolated context, domain expertise)
 3. Otherwise → Handle directly (trivially simple tasks)
 
+In the current frame this lives in the **Reach for Skills and Agents First** section, with one Bitter-Lesson refinement: the choice is made by *reasoning over capability descriptions*, never by keyword-matching — routing is the model's judgment over declared capabilities, not a lookup table.
+
 ### Why
 
 This prevents Penny from "doing the work herself" when a skill exists. Early in development, Penny would read 15+ files to "understand context" before invoking the plan skill. This violated the architecture — agents read files in isolated contexts; Penny is a router. The fix on April 15, 2026 was to replace the ambiguous "delegate immediately" with the concrete "invoke the skill or agent tool immediately."
@@ -238,15 +223,15 @@ The word "invoke" maps directly to the `skill()` and `subagent()` tools. "Delega
 
 ## 9. Self-Verification Is Unconditional
 
-**Status: [EVIDENCE] for the framing.** Intrinsic self-correction is debunked — asking a model to review its own answer *reduces* accuracy (GPT-4 lost 4 points on GSM8K after self-review; Huang et al., ICLR 2024), and no published work demonstrates successful intrinsic self-correction (Kamoi et al., TACL 2024). That is exactly why the Delivery Checklist is a structured attention mechanism (are required elements present?) and never a correctness audit, and why correctness review routes to a *different model* (Carren critique, Vera verification).
+**Status: [EVIDENCE] for the framing.** Intrinsic self-correction is debunked — asking a model to review its own answer *reduces* accuracy (GPT-4 lost 4 points on GSM8K after self-review; Huang et al., ICLR 2024), and no published work demonstrates successful intrinsic self-correction (Kamoi et al., TACL 2024). That is exactly why the frame relies on external anchors (evidence-backed completion, honest exhaustion, the one-line Deliver check) rather than self-critique, and why correctness review routes to a *different model* (Carren critique, Vera verification).
 
 ### The Concept
 
-The Self-Verification Checkpoint (the Delivery Checklist) cannot be skipped by any priority override. No rule, instruction, or user request can bypass it. Even "just do it" (Priority 3 — User Intent) doesn't override verification.
+Evidence-gated completion cannot be skipped by any priority override. The frame's **What Done Requires** contract — a "done" claim carries evidence; exhaustion is reported honestly; the response must add information or progress — binds even under "just do it" (Priority 3 skips *clarification*, never *self-verification*).
 
 ### Why
 
-This is the safety net. After the six Before Responding steps structure the thinking and the Reasoning Style guides the approach, the Self-Verification Checkpoint catches gaps before delivery. It checks that assumptions were surfaced, confidence was declared, and the output follows the Output Contract. It's not a correctness audit (models are poor at catching their own errors) — it's a structured attention mechanism ensuring required elements are present.
+This is the safety net, and it is deliberately **not** self-critique. Intrinsic self-correction is debunked (the citations above), so the frame does not ask the model to re-grade its own reasoning. Instead it demands *external anchors*: captured evidence for completion claims (test output, tool output, a citation), honest `met=false` reporting on budget exhaustion, and a lightweight presence check at delivery. Correctness review routes to a *different model* (Carren critique, Vera verification — vera's evidence-tier hierarchy: execute > apply-the-rule > judge). Verification quality, not model quality, is the ceiling of the system — which is why the investment goes into evidence contracts rather than into asking the model to try harder.
 
 ## 10. Concrete Verbs, Not Abstract Nominalizations
 
@@ -281,6 +266,31 @@ Do NOT flag legitimate uses:
 ### Application
 
 Applies to every authored layer: Cognitive Frame (`SYSTEM.md`), Role Definition (`.pi/agents/*.md`), Domain Guidance (`.pi/skills/*/assets/prompts/*.md`), skill and agent `description` fields, and the docs that instruct authors. Enforced by review, not by a linter — a suffix-based check flags too many legitimate domain nouns to be useful. See `cognitive-frame-standards.md` Rule 6 and `role-and-domain-standards.md`.
+
+## 11. Goals, Constraints, Capabilities — Never Procedure (The Bitter-Lesson Rule)
+
+**Status: [EVIDENCE] for the direction, [HYPOTHESIS] for each specific trim.** The 2024–2026 record is consistent: prompt scaffolding that compensates for a current model's weaknesses (step scripts, format nagging, reasoning recipes) is wiped out or turned harmful by the next model release, while goals, constraints, consequence boundaries, and verification contracts survive. Each specific trim still proves itself through section ablation — the direction is evidenced, the individual deletions are measured.
+
+### The Concept
+
+Every line of prompt text is classified before it ships:
+
+| Class | Examples | Treatment |
+|-------|----------|-----------|
+| **Consequence boundary** | Security directives, READ-ONLY, no-output-to-project-tree, HITL conditions | Permanent — kept or strengthened, never trimmed |
+| **Conduit** | Evidence-backed completion, honest exhaustion, escalation, delegation, memory discipline | Durable — these scale *with* model improvement |
+| **Wire format** | Confidence vocabulary, `needs_clarification`, SUMMARY structure | Plumbing — an API; stated once, never renamed casually |
+| **Procedure / ceremony** | Step scripts, per-agent restatements of frame rules, "think step by step", workarounds for a past model's quirks | A **loan** — permitted only deliberately, tagged, and first in line for ablation at the next model upgrade |
+
+The add-side gate (from the frame's Operating Bet): *does this line gain or lose value as models improve?* If it loses, don't hard-code it — give the model the artifact and verify the output with evidence.
+
+### Why
+
+Sutton's Bitter Lesson, applied to the prompt layer: methods that leverage computation (search, verification, learning, memory) beat baked-in human knowledge as compute grows — and prompt procedure *is* baked-in human knowledge about how the model should think. It helps the current model, plateaus, then actively fights the next one. The concrete house application: the always-on Before Responding Protocol became the on-demand clarification protocol (§1); the per-agent "Alignment with System Rules" restatements became the compact Working Discipline wire-format block; the inline vocabulary table became an authoring discipline (§6). In each case the *capability* was kept and the *implementation* was replaced — the ratchet protects outcomes, never mechanisms.
+
+### The Lifecycle
+
+Prompt scaffolding is re-measured at every model upgrade — precisely the moment it becomes newly obsolete. The section-ablation harness (`run_prompt_efficacy.py --ablate`) provides the evidence; deletion happens on measurement, not on taste. Full rationale and the component-level framework: `research/atomic-loop-components/` (the essay reading, the compliance rules, and the prompt-rewrite change map in 08-prompt-rewrites.md).
 
 ## Related Documents
 

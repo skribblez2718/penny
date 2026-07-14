@@ -25,6 +25,7 @@ For web application projects, **build UIs as custom [Lit](https://lit.dev) web c
 - **CSS default:** Tailwind CSS (v4 — CSS-first `@import "tailwindcss"` + `@theme`, no `tailwind.config.js`). See [tailwind/AGENTS.md](tailwind/AGENTS.md).
 - **Lit + Tailwind integration (required pattern):** Lit renders into shadow DOM, which a global Tailwind stylesheet cannot pierce. Compile Tailwind and adopt it into each component's shadow root — import the built CSS with Vite's `?inline`, wrap it in `unsafeCSS()`, and apply it via `static styles` or an `adoptStyles()` mixin. Theme tokens on `:root`/`:host` (Tailwind `@theme`) cross the boundary as CSS custom properties. Only ever pass **trusted, compiled** CSS to `unsafeCSS()`. Details and code in `.pi/skills/code/resources/web-ui.md`.
 - **Exceptions** are allowed when a project already standardizes on another framework (React, Vue, etc.) or a hard constraint rules Lit/Tailwind out — state the reason explicitly in the plan.
+- **Accessibility is mandatory (WCAG 2.2 AA).** Every user-facing surface must meet Level AA at build time — semantic HTML, keyboard operability, visible focus, contrast in **both** themes, and no meaning by color alone. This is a delivery gate, not a later audit. See [accessibility.md](accessibility.md) for the full standard + verification checklist (axe + keyboard + screen-reader).
 
 ## Severity
 

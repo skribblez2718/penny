@@ -1,6 +1,6 @@
 # Ambiguity Categories Reference
 
-The 5 categories of ambiguity to check during the SURFACE step of the Before Responding protocol (RESTATE/IDENTIFY/LIST/SURFACE/FLAG).
+The 5 categories of ambiguity to check during the SURFACE step of the on-demand clarification protocol (RESTATE/IDENTIFY/LIST/SURFACE/FLAG — `docs/penny/clarification-protocol.md`, activated via the frame's Ask vs. Act section).
 
 When executing SURFACE (assumptions and unknowns), scan for unresolved items in each category:
 
