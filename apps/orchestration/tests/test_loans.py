@@ -66,6 +66,102 @@ def test_schema_restatement_ablated(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# #28: tier-gate the SUMMARY-restatement crutch behind a capability flag
+# ---------------------------------------------------------------------------
+
+
+def test_summary_restatement_kept_for_default_tier(monkeypatch):
+    monkeypatch.delenv("PENNY_ABLATE_SUMMARY_SCHEMA_RESTATEMENT", raising=False)
+    monkeypatch.delenv("PI_MODEL_TIER", raising=False)
+    assert "SUMMARY:" in BasePlaybook._summary_contract_directive(SPEC)
+
+
+def test_summary_restatement_skipped_for_strong_tier(monkeypatch):
+    monkeypatch.delenv("PENNY_ABLATE_SUMMARY_SCHEMA_RESTATEMENT", raising=False)
+    monkeypatch.setenv("PI_MODEL_TIER", "strong")
+    assert BasePlaybook._summary_contract_directive(SPEC) == ""
+
+
+def test_summary_restatement_kept_for_cheap_tier(monkeypatch):
+    monkeypatch.delenv("PENNY_ABLATE_SUMMARY_SCHEMA_RESTATEMENT", raising=False)
+    monkeypatch.setenv("PI_MODEL_TIER", "cheap")
+    assert "SUMMARY:" in BasePlaybook._summary_contract_directive(SPEC)
+
+
+# ---------------------------------------------------------------------------
+# #33: HITL gate-answer intent classifier (keyword fast-path + gated model)
+# ---------------------------------------------------------------------------
+
+
+def _mstream(text):
+    import json as _j
+
+    msg = {
+        "type": "message_end",
+        "message": {
+            "role": "assistant", "stopReason": "stop",
+            "content": [{"type": "text", "text": text}],
+        },
+    }
+    return _j.dumps({"type": "agent_start"}) + "\n" + _j.dumps(msg)
+
+
+def _mrunner(stdout):
+    import types as _t
+
+    def run(cmd, **kwargs):
+        return _t.SimpleNamespace(stdout=stdout, stderr="", returncode=0)
+
+    return run
+
+
+def test_gate_intent_keyword_fast_path(monkeypatch):
+    monkeypatch.delenv("PI_GATE_INTENT_MODEL", raising=False)
+    ci = BasePlaybook.classify_gate_intent
+    assert ci("approve") == "approve"
+    assert ci("CONFIRM") == "approve"
+    assert ci("deny") == "deny"
+    assert ci("stop") == "deny"
+    assert ci("") == "refine"
+    # free text with the gate OFF -> safe default refine (never a silent approve/deny)
+    assert ci("yep, ship it") == "refine"
+
+
+def test_gate_intent_model_reads_free_text_when_gated(monkeypatch):
+    import json as _j
+
+    monkeypatch.setenv("PI_GATE_INTENT_MODEL", "anthropic/haiku")
+    approve = _j.dumps({"answer": "approve", "evidence": ["ship it"], "confidence": "CERTAIN"})
+    assert BasePlaybook.classify_gate_intent(
+        "yep, ship it", runner=_mrunner(_mstream(approve))
+    ) == "approve"
+    deny = _j.dumps({"answer": "deny", "confidence": "PROBABLE"})
+    assert BasePlaybook.classify_gate_intent(
+        "nah, kill it", runner=_mrunner(_mstream(deny))
+    ) == "deny"
+
+
+def test_gate_intent_low_confidence_approve_is_safe_refine(monkeypatch):
+    import json as _j
+
+    monkeypatch.setenv("PI_GATE_INTENT_MODEL", "anthropic/haiku")
+    weak = _j.dumps({"answer": "approve", "confidence": "POSSIBLE"})
+    # an UNCERTAIN approval must NOT proceed the seam -> refine (re-ask)
+    assert BasePlaybook.classify_gate_intent(
+        "maybe? i guess", runner=_mrunner(_mstream(weak))
+    ) == "refine"
+
+
+def test_gate_intent_model_failure_is_safe_refine(monkeypatch):
+    monkeypatch.setenv("PI_GATE_INTENT_MODEL", "anthropic/haiku")
+
+    def boom(cmd, **kwargs):
+        raise OSError("spawn failed")
+
+    assert BasePlaybook.classify_gate_intent("some free text", runner=boom) == "refine"
+
+
+# ---------------------------------------------------------------------------
 # Wiring: task_digest_cap
 # ---------------------------------------------------------------------------
 

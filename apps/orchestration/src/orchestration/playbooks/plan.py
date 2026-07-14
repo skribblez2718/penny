@@ -541,7 +541,7 @@ class PlanPlaybook(BasePlaybook):
             else str(response)
         ) or ""
         value = str(value).strip().lower()
-        if value in ("confirm", "approve", "proceed", "yes"):
+        if self.classify_gate_intent(value) == "approve":
             self.sm.send("verify_confirm")
         else:
             ctx.clarification_text = value

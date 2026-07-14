@@ -123,8 +123,6 @@ PHASE_DESC = {
     "P12_REPORT": "Assemble the final secure-code-analysis report",
 }
 
-_APPROVE_WORDS = frozenset({"approve", "approved", "confirm", "proceed", "yes", "accept"})
-
 
 # ---------------------------------------------------------------------------
 # The FSM
@@ -940,7 +938,9 @@ class ScaPlaybook(BasePlaybook):
         return str(response).strip()
 
     def _user_approved(self, response: Any) -> bool:
-        return self._user_answer(response).lower() in _APPROVE_WORDS
+        # #33: model-classify the free-text answer (keyword fast-path preserved); a
+        # non-approve intent is fail-safe (the gate is NOT cleared).
+        return self.classify_gate_intent(self._user_answer(response)) == "approve"
 
     def _ensure_census(self, ctx: RunContext, meta: dict) -> None:
         if not (isinstance(meta.get("census"), dict) and meta.get("census")):
@@ -970,7 +970,7 @@ class ScaPlaybook(BasePlaybook):
         return None
 
     # -- prompts + result --------------------------------------------------
-    def _task_summary(self, state: str, spec: PrimitiveSpec, ctx: RunContext) -> str:
+    def _task_summary(self, state: str, spec: PrimitiveSpec, ctx: RunContext) -> str:  # noqa: C901
         d = self._domain(ctx)
         meta = self._meta(ctx)
         phase = STATE_TO_PHASE.get(state, state)

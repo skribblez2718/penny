@@ -46,7 +46,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .checkpointer import (
     STATUS_AWAITING_USER,
@@ -87,6 +87,49 @@ def _autonomy_ask_reason(action_text: str) -> Optional[str]:
 
 TERMINAL_STATES: frozenset[str] = frozenset({"complete", "error"})
 _DEFAULT_STEP_CAP = 50
+
+
+# ── #33: shared HITL gate-answer intent classifier ───────────────────────────
+# Gate parsing keyword-matched the user's answer to approve/deny/refine; free text
+# ("yep, ship it", "kill it") fell outside the sets and silently became a refine on
+# the SAFETY seam. classify_gate_intent keeps the exact keyword fast-path (option
+# clicks route unchanged) and, when PI_GATE_INTENT_MODEL is set, has a model read
+# genuinely free-text answers. Approval requires model confidence; any ambiguity or
+# failure yields "refine" (re-ask), so the seam never silently approves or denies.
+_GATE_INTENT_MODEL_ENV = "PI_GATE_INTENT_MODEL"
+_GATE_APPROVE = frozenset({
+    "approve", "approved", "confirm", "confirmed", "proceed", "yes", "y",
+    "accept", "accepted", "ok", "okay", "skip",
+})
+_GATE_DENY = frozenset({
+    "deny", "denied", "no", "n", "abort", "cancel", "discard", "stop",
+    "reject", "rejected",
+})
+
+
+def _load_detect():
+    """Lazy-import the shared detect() primitive (scripts/system/lib, #8), or None."""
+    try:
+        for parent in Path(__file__).resolve().parents:
+            lib = parent / "scripts" / "system" / "lib"
+            if lib.is_dir():
+                if str(lib) not in sys.path:
+                    sys.path.insert(0, str(lib))
+                from detect import detect as _detect  # type: ignore[import-not-found]
+                return _detect
+    except Exception:
+        return None
+    return None
+
+
+def _needs_summary_restatement() -> bool:
+    """#28: the SUMMARY-restatement directive is a crutch for weaker models that drop a
+    mid-prompt output contract. A capability-tier deployment declares its models don't
+    need it via ``PI_MODEL_TIER=strong`` — strong models stop paying for it; any other
+    value (the default) keeps the restatement, the safe fallback."""
+    return os.environ.get("PI_MODEL_TIER", "").strip().lower() != "strong"
+
+
 # Budget boundary on fan width (code caps, the model spends): a dynamic fan-out
 # may not exceed this many branches unless the caller raises
 # ``constraints["max_fan_width"]``.
@@ -225,6 +268,48 @@ class BasePlaybook:
         """Route a user's answer to a planned gate by firing the FSM event.
         Required if ``GATE_STATES`` is non-empty."""
         raise NotImplementedError
+
+    @staticmethod
+    def classify_gate_intent(answer: Any, *, runner: Optional[Callable] = None) -> str:  # noqa: C901
+        """Map a HITL gate answer to 'approve' | 'deny' | 'refine' (#33).
+
+        Exact keyword answers (the option values a click produces) route instantly and
+        unchanged. A genuinely free-text answer is classified by a model when
+        PI_GATE_INTENT_MODEL is set; approval requires model confidence and any
+        ambiguity/failure yields 'refine' (re-ask), so the safety seam never silently
+        approves or denies. Never raises.
+        """
+        text = " ".join(str(answer or "").lower().split())
+        if not text:
+            return "refine"
+        if text in _GATE_APPROVE:
+            return "approve"
+        if text in _GATE_DENY:
+            return "deny"
+        spec = os.environ.get(_GATE_INTENT_MODEL_ENV, "").strip()
+        if not spec:
+            return "refine"
+        detect = _load_detect()
+        if detect is None:
+            return "refine"
+        try:
+            result = detect(
+                text,
+                "Does this answer APPROVE the proposed action, DENY/stop it, or ask to "
+                "REFINE/change it?",
+                model_spec=spec, labels=("approve", "deny", "refine"), runner=runner,
+            )
+        except Exception:  # noqa: BLE001 - gate parsing must never raise
+            return "refine"
+        if not result.get("ok"):
+            return "refine"
+        intent = str(result.get("answer", "")).strip().lower()
+        confidence = str(result.get("confidence", "")).strip().upper()
+        if intent == "approve" and confidence in ("CERTAIN", "PROBABLE"):
+            return "approve"
+        if intent == "deny":
+            return "deny"
+        return "refine"
 
     # -- loop-quality guards (opt-in; called by a playbook's route_after /
     #    progress_check to implement anti-paralysis + stall detection) --------
@@ -634,6 +719,8 @@ class BasePlaybook:
         shape, and recency.
         """
         if not loan_enabled("summary_schema_restatement"):
+            return ""
+        if not _needs_summary_restatement():  # #28: strong tier doesn't need the crutch
             return ""
         contract = getattr(spec, "summary_contract", None) or {}
         required = contract.get("required", {}) or {}

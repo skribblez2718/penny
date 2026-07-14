@@ -979,17 +979,18 @@ class CodePlaybook(BasePlaybook):
         ) or ""
         value = str(value).strip().lower()
         code = ctx.extras.setdefault("code", {})
+        intent = self.classify_gate_intent(value)
         if state == "plan_gate":
-            if value in ("approve", "confirm"):
+            if intent == "approve":
                 self.sm.send("plan_approved")
-            elif value in ("deny", "discard", "stop"):
+            elif intent == "deny":
                 ctx.errors.append("plan denied by user")
                 self.sm.send("plan_denied")
             else:
                 ctx.clarification_text = value
                 self.sm.send("plan_refine")
         else:  # criteria_gate
-            if value in ("accept", "approve", "skip"):
+            if intent == "approve":
                 code["criteria_validated"] = True
                 self.sm.send("criteria_accepted")
             else:

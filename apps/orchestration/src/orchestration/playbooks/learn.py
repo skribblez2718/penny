@@ -701,12 +701,12 @@ class LearnPlaybook(BasePlaybook):
             else str(response)
         ) or ""
         value = str(value).strip().lower()
-        if value in ("approve", "yes", "proceed", "confirm"):
+        intent = self.classify_gate_intent(value)
+        if intent == "approve":
             self.sm.send("gate_approve")
-        elif value in ("deny", "no", "abort", "cancel"):
+        elif intent == "deny":
             self.sm.send("gate_deny")
         else:
-            ctx.clarification_text = value if value not in ("refine",) else ctx.clarification_text
             if value != "refine" and value:
                 ctx.clarification_text = value
             self.sm.send("gate_refine")
