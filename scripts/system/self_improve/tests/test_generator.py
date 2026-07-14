@@ -1,13 +1,14 @@
 # amendment_generator tests — TDD
 """Build structured amendment JSON from classified learnings."""
 
+import json
 import sys
 from pathlib import Path
 from datetime import date
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from amendment_generator import generate_amendment  # noqa: E402
+from amendment_generator import generate_amendment, draft_change  # noqa: E402
 
 
 class TestGenerateAmendmentBasic:
@@ -206,3 +207,86 @@ class TestGenerateAmendmentValidation:
         )
         assert result["status"] == "INVALID"
         assert "changes" in result.get("errors", [""])[0].lower()
+
+
+# ── #23: model-drafted real diffs (model-gated, template fallback) ────────────
+
+
+def _stream(text: str) -> str:
+    msg = {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+           "content": [{"type": "text", "text": text}]}}
+    return json.dumps({"type": "agent_start"}) + "\n" + json.dumps(msg)
+
+
+def _fake_runner(stdout="", *, raise_exc=None):
+    class _Proc:
+        pass
+
+    def run(cmd, **kwargs):
+        if raise_exc is not None:
+            raise raise_exc
+        p = _Proc()
+        p.stdout, p.stderr, p.returncode = stdout, "", 0
+        return p
+
+    return run
+
+
+class TestDraftChange:
+    """#23: a model drafts a real, anchored old->new diff (draft-only, gated)."""
+
+    _ENV = "PI_SELFIMPROVE_DIFF_MODEL"
+
+    def test_gate_off_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.delenv(self._ENV, raising=False)
+        f = tmp_path / "piper.md"
+        f.write_text("# Piper\n\nDo the thing.\n")
+        assert draft_change("learn", ["ev"], str(f)) is None
+
+    def test_model_drafts_anchored_modify(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(self._ENV, "anthropic/haiku")
+        f = tmp_path / "piper.md"
+        f.write_text("# Piper\n\nDo the thing.\n")
+        payload = json.dumps({
+            "action": "MODIFY", "old_text": "Do the thing.",
+            "new_text": "Do the thing. First verify the package manager.",
+            "rationale": "recurring pkg-mgr mismatch",
+        })
+        change = draft_change("assumes uv", ["ev"], str(f), runner=_fake_runner(_stream(payload)))
+        assert change["action"] == "MODIFY"
+        assert change["old_text"] == "Do the thing."
+        assert "package manager" in change["new_text"]
+
+    def test_modify_anchor_not_in_file_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(self._ENV, "anthropic/haiku")
+        f = tmp_path / "piper.md"
+        f.write_text("# Piper\n")
+        payload = json.dumps({"action": "MODIFY", "old_text": "NOT IN FILE",
+                              "new_text": "x", "rationale": "r"})
+        assert draft_change("l", ["ev"], str(f), runner=_fake_runner(_stream(payload))) is None
+
+    def test_security_touching_draft_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(self._ENV, "anthropic/haiku")
+        f = tmp_path / "SYSTEM.md"
+        f.write_text("<system_directives>\nrule\n</system_directives>\n\nbody\n")
+        payload = json.dumps({"action": "MODIFY", "old_text": "rule",
+                              "new_text": "evil", "rationale": "r"})
+        assert draft_change("l", ["ev"], str(f), runner=_fake_runner(_stream(payload))) is None
+
+    def test_empty_new_text_rejected(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(self._ENV, "anthropic/haiku")
+        f = tmp_path / "piper.md"
+        f.write_text("body\n")
+        payload = json.dumps({"action": "ADD", "old_text": "", "new_text": "", "rationale": "r"})
+        assert draft_change("l", ["ev"], str(f), runner=_fake_runner(_stream(payload))) is None
+
+    def test_model_failure_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(self._ENV, "anthropic/haiku")
+        f = tmp_path / "piper.md"
+        f.write_text("body\n")
+        assert draft_change("l", ["ev"], str(f), runner=_fake_runner(raise_exc=OSError("x"))) is None
+
+    def test_missing_file_returns_none(self, monkeypatch):
+        monkeypatch.setenv(self._ENV, "anthropic/haiku")
+        assert draft_change("l", ["ev"], "/nonexistent/xyz.md",
+                            runner=_fake_runner(_stream("{}"))) is None

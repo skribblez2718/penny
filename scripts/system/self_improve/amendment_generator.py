@@ -4,9 +4,29 @@ Builds amendment records for storage in mempalace (penny/system_amendments).
 Handles ID generation, risk scoring, action inference, and validation.
 """
 
+import json
+import os
+import re
 from datetime import date, datetime
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from uuid import uuid4
+
+from target_classifier import _pi_json_call  # shared headless-pi caller (unify in #8)
+from amendment_applier import _touches_security_block  # the security authority
+
+_DIFF_MODEL_ENV = "PI_SELFIMPROVE_DIFF_MODEL"
+_DIFF_SYSTEM = (
+    "You draft a SINGLE concrete edit to a system prompt/config file that would fix "
+    "a recurring failure. Reply with EXACTLY one JSON object and nothing else:\n"
+    '{"action": "MODIFY" or "ADD", "old_text": "<verbatim slice of the file to '
+    'replace; empty for ADD>", "new_text": "<replacement / appended text>", '
+    '"rationale": "<one sentence>"}.\n'
+    "Rules: for MODIFY, old_text MUST be an EXACT substring copied verbatim from the "
+    "file. Prefer a minimal, surgical MODIFY that inserts brief, actionable guidance "
+    "near the relevant section; use ADD only when there is no anchor. NEVER touch a "
+    "<system_directives> or <system_boundary> block. Keep new_text focused (a few lines)."
+)
 
 
 class AmendmentAction:
@@ -138,3 +158,66 @@ def generate_amendment(
         # measured (mismatch rate in this domain before vs after apply).
         record["domain"] = domain
     return record
+
+
+def draft_change(  # noqa: C901 - linear draft -> parse -> validate -> security guard
+    learning: str, evidence, target_file: str, *, runner=None
+) -> Optional[Dict[str, str]]:
+    """(#23) Model-draft a real, anchored old->new diff for ``target_file``.
+
+    Replaces the boilerplate template block with a concrete, verbatim-anchored
+    edit the model authors from the actual file content. Returns a validated
+    change dict, or None (=> caller falls back to the template guidance) when: the
+    diff model is not enabled (PI_SELFIMPROVE_DIFF_MODEL unset), the target is not
+    a readable file, the model fails, or the draft is invalid/unsafe.
+
+    DRAFT-ONLY: the amendment stays PENDING and is written only after human
+    approval through the #22-hardened apply gate — which independently re-checks
+    the verbatim anchor and refuses any touch of the immutable security frame.
+    """
+    spec = os.environ.get(_DIFF_MODEL_ENV, "").strip()
+    if not spec:
+        return None
+    try:
+        content = Path(target_file).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    ev = "\n".join(f"- {e}" for e in (evidence or [])[:5])
+    prompt = (
+        f"RECURRING FAILURE:\n{(learning or '').strip()[:400]}\n\n"
+        + (f"EVIDENCE:\n{ev}\n\n" if ev else "")
+        + f'FILE ({target_file}):\n"""\n{content[:8000]}\n"""\n\n'
+        + 'Return one JSON object with action/old_text/new_text/rationale.'
+    )
+    try:
+        text = _pi_json_call(prompt, spec=spec, system=_DIFF_SYSTEM, runner=runner)
+    except Exception:  # noqa: BLE001 - drafting must never break the loop
+        return None
+    if not text:
+        return None
+    match = re.search(r"\{.*\}", text, re.S)
+    if not match:
+        return None
+    try:
+        obj = json.loads(match.group(0))
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    action = str(obj.get("action", "")).strip().upper()
+    old_text = str(obj.get("old_text", "") or "")
+    new_text = str(obj.get("new_text", "") or "")
+    if action not in ("ADD", "MODIFY") or not new_text:
+        return None
+    if action == "MODIFY" and (not old_text or old_text not in content):
+        return None  # the anchor must be present verbatim in the file
+    change = {
+        "action": action,
+        "old_text": old_text,
+        "new_text": new_text,
+        "rationale": str(obj.get("rationale", "") or learning),
+    }
+    # Security authority: never even PROPOSE a diff that touches the immutable frame.
+    if _touches_security_block(content, change):
+        return None
+    return change

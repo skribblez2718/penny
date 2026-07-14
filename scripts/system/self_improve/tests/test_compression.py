@@ -298,3 +298,22 @@ class TestSemanticClustering:
         result = run_compression_loop(self._FAILS, runner=_fake_runner(_cluster_stream(payload)))
         assert len(result) == 1
         assert "amendment_id" in result[0]
+
+
+def test_run_loop_prefers_drafted_diff(monkeypatch):
+    # #23: when draft_change returns a real diff, run_compression_loop uses it
+    # instead of the template guidance block.
+    import compression_loop as cl
+    monkeypatch.setattr(
+        cl, "draft_change",
+        lambda learning, evidence, target_file, runner=None: {
+            "action": "MODIFY", "old_text": "X", "new_text": "Y", "rationale": "r"},
+    )
+    outcomes = [
+        {"decision_id": "d1", "outcome": "MISMATCH", "domain": "coding", "reason": "same issue here"},
+        {"decision_id": "d2", "outcome": "MISMATCH", "domain": "coding", "reason": "same issue here"},
+    ]
+    result = run_compression_loop(outcomes)  # clustering gate off -> exact-string
+    assert len(result) == 1
+    assert result[0]["changes"][0]["new_text"] == "Y"
+    assert result[0]["changes"][0]["action"] == "MODIFY"

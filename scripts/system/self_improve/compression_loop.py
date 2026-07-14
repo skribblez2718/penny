@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from target_classifier import classify_target, TargetLayer
-from amendment_generator import generate_amendment
+from amendment_generator import generate_amendment, draft_change
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -332,15 +332,27 @@ def run_compression_loop(
         else:
             target_file = "REJECTED_UNIVERSAL"
 
-        # Generate amendment with real, applicable guidance text
-        amendment = generate_amendment(
-            learning=learning,
-            evidence=evidence[:5],  # cap evidence list
-            target_layer=target.value,
-            target_file=target_file,
-            proposed_text=build_guidance_text(learning, evidence, len(matched)),
-            domain=domain,
-        )
+        # #23: prefer a model-drafted real old->new diff; fall back to the
+        # template guidance block when the diff model is off or can't draft one.
+        drafted = draft_change(learning, evidence, target_file, runner=runner)
+        if drafted:
+            amendment = generate_amendment(
+                learning=learning,
+                evidence=evidence[:5],
+                target_layer=target.value,
+                target_file=target_file,
+                changes=[drafted],
+                domain=domain,
+            )
+        else:
+            amendment = generate_amendment(
+                learning=learning,
+                evidence=evidence[:5],
+                target_layer=target.value,
+                target_file=target_file,
+                proposed_text=build_guidance_text(learning, evidence, len(matched)),
+                domain=domain,
+            )
         amendments.append(amendment)
 
     return _deduplicate(amendments, previous_amendments)
