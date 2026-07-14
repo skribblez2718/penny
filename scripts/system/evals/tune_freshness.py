@@ -75,6 +75,29 @@ PRODUCER_COMMANDS: Dict[str, str] = {
 #: Minimum gap (days) between lead threshold and ratchet tolerance (SM-1).
 MIN_GAP_DAYS = 3
 
+# ---------------------------------------------------------------------------
+# Non-frame ablation artifacts (Bitter-Lesson #3 / #4)
+# ---------------------------------------------------------------------------
+#
+# Unlike the ratchet producers above, an ablation is a *decision aid* (e.g. does
+# model-inferred detection beat code_detection.py's hand-coded tables?), not a
+# ratcheted metric. It goes stale when the SCAFFOLD it measures changes. Kept
+# deliberately OUT of LEAD_THRESHOLDS / PRODUCER_DIRS so the ratchet machinery
+# (SM-1) stays about ratcheted metrics only.
+
+#: Relative paths from project root to each ablation artifact directory.
+ABLATION_DIRS: Dict[str, str] = {
+    "code_detection": ".penny/ablation/code_detection",
+}
+
+#: Re-run command per ablation (surfaced, not auto-run — it makes model calls).
+ABLATION_COMMANDS: Dict[str, str] = {
+    "code_detection": "scripts/system/ablation/run_code_detection_ablation.py",
+}
+
+#: A very old ablation is stale even if the scaffold is unchanged.
+ABLATION_STALE_DAYS = 30
+
 
 # ---------------------------------------------------------------------------
 # Freshness check
@@ -233,6 +256,110 @@ def _model_roster_changed(
 
 
 # ---------------------------------------------------------------------------
+# Non-frame ablation freshness (Bitter-Lesson #3 / #4)
+# ---------------------------------------------------------------------------
+#
+# Generalizes FR-19's frame-SHA idea: each artifact self-declares ``invalidators``
+# (a list of ``{path, sha256}``); the check re-hashes each current file and
+# invalidates on any mismatch or missing file. The artifact declares *what*
+# invalidates it, so the checker stays generic (no per-scaffold path hard-coded).
+
+
+def _hash_file(path: Path) -> Optional[str]:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _check_declared_invalidation(
+    artifact_data: Dict[str, Any], project_root: Path
+) -> Optional[str]:
+    """Re-hash an artifact's self-declared ``invalidators`` (``[{path, sha256}]``);
+    return a reason if any current file changed or went missing, else ``None``."""
+    invalidators = artifact_data.get("invalidators")
+    if not isinstance(invalidators, list):
+        return None
+    for inv in invalidators:
+        if not isinstance(inv, dict):
+            continue
+        rel = str(inv.get("path", "")).strip()
+        recorded = inv.get("sha256")
+        if not rel or not recorded:
+            continue
+        current = _hash_file(project_root / rel)
+        if current is None:
+            return f"invalidated ({rel} missing)"
+        if current != recorded:
+            return f"invalidated (scaffold changed: {rel})"
+    return None
+
+
+def _check_ablation(artifact_dir: Path, project_root: Path, now: datetime) -> Dict[str, Any]:
+    threshold = ABLATION_STALE_DAYS
+    latest = artifact_dir / "latest.json"
+    if not latest.exists():
+        return {"stale": True, "reason": "missing", "age_days": None, "threshold": threshold}
+    try:
+        data = json.loads(latest.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"stale": True, "reason": "unreadable", "age_days": None, "threshold": threshold}
+    when = parse_when(data.get("ts"))
+    if when is None:
+        return {"stale": True, "reason": "no ts", "age_days": None, "threshold": threshold}
+    age_days = max(0.0, (now - when).total_seconds() / 86400.0)
+    invalidation = _check_declared_invalidation(data, project_root)
+    if invalidation:
+        return {
+            "stale": True,
+            "reason": invalidation,
+            "age_days": round(age_days, 2),
+            "threshold": threshold,
+        }
+    if age_days >= threshold:
+        return {
+            "stale": True,
+            "reason": "stale (age)",
+            "age_days": round(age_days, 2),
+            "threshold": threshold,
+        }
+    return {
+        "stale": False,
+        "reason": "fresh",
+        "age_days": round(age_days, 2),
+        "threshold": threshold,
+    }
+
+
+def check_ablations_stale(
+    project_root: Optional[Path] = None,
+    now: Optional[datetime] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Freshness of non-frame ablation artifacts (self-declared invalidators +
+    age). Same result shape as ``check_all_stale``. Separate from the ratchet
+    producers because an ablation is a decision aid, not a ratcheted metric."""
+    root = Path(project_root) if project_root else REPO_ROOT
+    now = now or datetime.now(timezone.utc)
+    return {name: _check_ablation(root / rel, root, now) for name, rel in ABLATION_DIRS.items()}
+
+
+def _print_ablation_freshness() -> None:
+    """Report ablation freshness for ``make tune-deep``. Does NOT auto-run — an
+    ablation re-run makes model calls, so surface the command instead."""
+    ablations = check_ablations_stale()
+    if not ablations:
+        return
+    print()
+    print("Ablation freshness (Bitter-Lesson decision aids; re-run is a model call, not auto):")
+    for name, info in ablations.items():
+        age = f"{info['age_days']:.1f}d" if info["age_days"] is not None else "?"
+        state = "STALE" if info["stale"] else "fresh"
+        print(f"  {state:>5}  {name}: {info['reason']} (age {age})")
+        if info["stale"]:
+            print(f"         -> .venv/bin/python {ABLATION_COMMANDS.get(name, '?')}")
+
+
+# ---------------------------------------------------------------------------
 # Convenience
 # ---------------------------------------------------------------------------
 
@@ -305,6 +432,8 @@ def main() -> int:
             print(f"       FAIL {producer} timed out (600s)")
         except (OSError, ValueError) as exc:
             print(f"       FAIL {producer}: {type(exc).__name__}: {exc}")
+
+    _print_ablation_freshness()
 
     print()
     print("tune-deep complete.")

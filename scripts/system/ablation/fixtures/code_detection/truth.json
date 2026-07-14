@@ -1,0 +1,5 @@
+{
+  "fastapi_service": {"is_server": true, "language": "python", "framework": "fastapi"},
+  "hono_api": {"is_server": true, "language": "typescript", "framework": "hono"},
+  "click_cli": {"is_server": false}
+}

@@ -1,0 +1,7 @@
+[project]
+name = "click-cli"
+version = "0.1.0"
+dependencies = ["click>=8.1"]
+
+[project.scripts]
+mytool = "click_cli.cli:main"

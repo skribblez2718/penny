@@ -55,6 +55,7 @@ HISTORY_PATH = eval_lib.REPO_ROOT / ".penny" / "evals" / "history.jsonl"
 
 SECTION_ORDER = (
     "compat",
+    "invariants",
     "flywheel",
     "quality",
     "retrieval",

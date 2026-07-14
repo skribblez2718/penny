@@ -16,7 +16,7 @@ one of these, it's probably a proxy.
 | N3 | **Work survives interruption** | Do runs finish; does state survive kill/compaction? | `quality.run_completion_30d`, engine resume tests (`apps/orchestration/tests`), `flywheel.obs_run_ingest` |
 | N4 | **Confidence means something** | Does CERTAIN predict success better than UNCERTAIN? | `quality.calibration_gap_90d`, `quality.confidence_populated_30d` |
 | N5 | **The loop stays alive** | Is every pipeline stage still *receiving* data? | all `flywheel.*` liveness checks, all `compat.*` contract checks |
-| N6 | **The frame pays rent** | Does the Cognitive Frame measurably help, per model family? | `prompt_efficacy.frame_gain_overall`, `prompt_efficacy.frame_regressed_families`, `prompt_efficacy.results_fresh_days` |
+| N6 | **The frame pays rent** | Does the shipped prompt hold task performance (and not actively hurt), per model family? | `prompt_efficacy.frame_on_pass_rate` (capability guard), `prompt_efficacy.frame_regressed_families` (harm guard), `prompt_efficacy.results_fresh_days`; `frame_gain_overall` is informational |
 
 N5 exists because every historic failure here was a **silent seam death**: the
 auto-diary 401'd 3,079 times, the archiver no-opped for months, compression ran
@@ -68,6 +68,7 @@ Run history accumulates in `.penny/evals/history.jsonl` for trend analysis.
 | Section | File | Needs live stores | Character |
 |---------|------|-------------------|-----------|
 | compat | `eval_compat.py` | no | writer/consumer contracts, dead tests — belongs in `make test` |
+| invariants | `eval_invariants.py` | no | leverage-spine capability invariants — grounded VERIFY, independent verify, HITL gates, checkpoint/resume; regress red if weakened |
 | flywheel | `eval_flywheel.py` | yes | per-seam delivery liveness |
 | quality | `eval_quality.py` | yes | mismatch, repeats, calibration, completion |
 | retrieval | `eval_retrieval.py` | yes | golden-set recall hit@5 |
@@ -76,6 +77,21 @@ Run history accumulates in `.penny/evals/history.jsonl` for trend analysis.
 Quality checks SKIP below minimum sample sizes — a rate over three records is
 noise, and ratcheting noise trains the baseline on luck. A wall of SKIPs is
 itself a finding: it means the outcome ledger is starved.
+
+### Capability invariants (the leverage spine)
+
+`eval_invariants.py` makes the Bitter-Lesson doctrine self-enforcing
+(`docs/agents/architecture/bitter-lesson.md`). It asserts the protected
+capabilities — evidence-grounded VERIFY, independent verification (generator ≠
+judge), HITL gates on high-stakes skills, durable checkpoint/resume — at the
+contract/config level, in-process, no model calls. Per the doctrine's rule
+*ratchet on capabilities, not implementations*, each check asserts a capability
+(evidence is required; a human gate exists) rather than a code shape, so the
+checks don't ossify. Gating checks carry no baseline metric: they pass silently
+and **REGRESS loudly** if the capability is weakened. Behavioural invariants
+(honest exhaustion) and Aspirational ones (model-scaling self-improvement,
+pending checklist #23) are `informational` — tracked in the scorecard, never
+gating on a proxy.
 
 ## Curating the golden recall set
 
@@ -105,8 +121,12 @@ task performance across models — is measured, not assumed. Two parts:
 - **`eval_prompt_efficacy.py`** (cheap, every `make evals` and cron run) reads
   that artifact only — never a model call. `results_fresh_days` ratchets
   harness liveness (a harness nobody runs is reassurance, not measurement);
-  `frame_gain_overall` has an absolute floor at −2pp; `frame_regressed_families`
-  gates at zero.
+  `frame_on_pass_rate` ratchets the absolute frame-on (production-config) pass
+  rate — the capability that must not regress; `frame_regressed_families` gates
+  at zero (the frame must never actively hurt). `frame_gain_overall` (frame-on
+  minus frame-off) is **informational only**: the value-add of task scaffolding
+  is allowed to trend to 0 as models improve — ratchet on the capability, not on
+  the scaffolding's headroom.
 
 Golden-task curation mirrors the recall set: cases are seeded from real Penny
 workload shapes and added whenever the frame fails you in real use or before

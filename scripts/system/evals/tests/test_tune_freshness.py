@@ -18,8 +18,11 @@ from tune_freshness import (
     LEAD_THRESHOLDS,
     RATCHET_TOLERANCES,
     PRODUCER_DIRS,
+    ABLATION_DIRS,
     check_all_stale,
+    check_ablations_stale,
     stale_producers,
+    _check_declared_invalidation,
     _model_roster_hash,
     _model_roster_changed,
 )
@@ -387,6 +390,101 @@ class TestStaleProducersList:
         assert "trajectory" not in result
         assert "prompt_efficacy" in result
         assert "judgment" in result
+
+
+# ---------------------------------------------------------------------------
+# Item #4: non-frame ablation invalidation (self-declared invalidators)
+# ---------------------------------------------------------------------------
+
+
+class TestAblationFreshness:
+    """An ablation goes stale when its declared scaffold file changes/vanishes."""
+
+    def _make_ablation(self, tmp_path, ts, invalidators=None):
+        d = tmp_path / ABLATION_DIRS["code_detection"]
+        d.mkdir(parents=True, exist_ok=True)
+        data = {"ts": _iso(ts)}
+        if invalidators is not None:
+            data["invalidators"] = invalidators
+        (d / "latest.json").write_text(json.dumps(data), encoding="utf-8")
+
+    def _scaffold(self, tmp_path, rel="apps/x/code_detection.py", body="A"):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+        return p, hashlib.sha256(body.encode()).hexdigest()
+
+    def test_missing_ablation_is_stale(self, tmp_path):
+        res = check_ablations_stale(project_root=tmp_path, now=_now())
+        assert res["code_detection"]["stale"] is True
+        assert res["code_detection"]["reason"] == "missing"
+
+    def test_fresh_when_scaffold_unchanged(self, tmp_path):
+        now = _now()
+        rel = "apps/x/code_detection.py"
+        _, sha = self._scaffold(tmp_path, rel)
+        self._make_ablation(
+            tmp_path, now - timedelta(days=1), invalidators=[{"path": rel, "sha256": sha}]
+        )
+        res = check_ablations_stale(project_root=tmp_path, now=now)
+        assert res["code_detection"]["stale"] is False
+        assert res["code_detection"]["reason"] == "fresh"
+
+    def test_invalidated_when_scaffold_changes(self, tmp_path):
+        now = _now()
+        rel = "apps/x/code_detection.py"
+        p, sha = self._scaffold(tmp_path, rel, body="A")
+        self._make_ablation(
+            tmp_path, now - timedelta(days=1), invalidators=[{"path": rel, "sha256": sha}]
+        )
+        p.write_text("B (edited scaffold)", encoding="utf-8")  # the toggle
+        res = check_ablations_stale(project_root=tmp_path, now=now)
+        assert res["code_detection"]["stale"] is True
+        assert "scaffold changed" in res["code_detection"]["reason"]
+
+    def test_invalidated_when_scaffold_missing(self, tmp_path):
+        now = _now()
+        rel = "apps/x/code_detection.py"
+        self._make_ablation(
+            tmp_path, now - timedelta(days=1), invalidators=[{"path": rel, "sha256": "0" * 64}]
+        )
+        res = check_ablations_stale(project_root=tmp_path, now=now)
+        assert res["code_detection"]["stale"] is True
+        assert "missing" in res["code_detection"]["reason"]
+
+    def test_stale_by_age_even_if_unchanged(self, tmp_path):
+        now = _now()
+        rel = "apps/x/code_detection.py"
+        _, sha = self._scaffold(tmp_path, rel)
+        self._make_ablation(
+            tmp_path, now - timedelta(days=40), invalidators=[{"path": rel, "sha256": sha}]
+        )
+        res = check_ablations_stale(project_root=tmp_path, now=now)
+        assert res["code_detection"]["stale"] is True
+        assert res["code_detection"]["reason"] == "stale (age)"
+
+    def test_no_invalidators_is_age_only(self, tmp_path):
+        assert _check_declared_invalidation({"ts": "x"}, tmp_path) is None
+
+    def test_ratchet_producers_untouched(self, tmp_path):
+        # the ablation must not perturb the 3 ratchet producers
+        assert "code_detection" not in LEAD_THRESHOLDS
+        keys = set(check_all_stale(project_root=tmp_path, now=_now()).keys())
+        assert keys == set(LEAD_THRESHOLDS.keys())
+
+    def test_roundtrip_agreement_with_runner_fingerprint(self, tmp_path):
+        # the runner-side fingerprint and the checker-side re-hash must agree
+        import sys as _sys
+
+        _sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ablation"))
+        import ablate_lib as al
+
+        rel = "apps/x/code_detection.py"
+        p, _ = self._scaffold(tmp_path, rel, body="hello world")
+        invalidators = al.fingerprint_files([p], tmp_path)
+        assert _check_declared_invalidation({"invalidators": invalidators}, tmp_path) is None
+        p.write_text("changed", encoding="utf-8")
+        assert _check_declared_invalidation({"invalidators": invalidators}, tmp_path) is not None
 
 
 if __name__ == "__main__":
