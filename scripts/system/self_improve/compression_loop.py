@@ -12,7 +12,7 @@ Returns a list of amendment dicts ready for mempalace storage.
 import json
 import os
 import re
-import subprocess
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -88,10 +88,6 @@ def identify_patterns(outcomes: List[Dict[str, Any]]) -> List[str]:
 # ROOT CAUSE (meaning) — unlocking the reason text and the #19 open-vocab tags.
 # Unset (default) or ANY failure -> the exact-string path below (never raises).
 _CLUSTER_MODEL_ENV = "PI_SELFIMPROVE_CLUSTER_MODEL"
-_CLUSTER_HERMETIC = [
-    "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates",
-    "--no-themes", "--no-context-files", "--no-tools",
-]
 _CLUSTER_SYSTEM = (
     "You group software-assistant FAILURE records by ROOT CAUSE (semantic meaning), "
     "not by exact wording: two records share a cluster iff fixing the same underlying "
@@ -106,47 +102,13 @@ def _tag(text: str, cap: int = 40) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(text).strip().lower()).strip("_")[:cap]
 
 
-def _call_pi_json(prompt, *, spec, system, runner=None, timeout_s=60):  # noqa: C901
-    """One headless-pi JSON call; last assistant text or None on any failure."""
-    if "/" in spec and not spec.startswith("/") and not spec.endswith("/"):
-        provider, model_id = spec.split("/", 1)
-    else:
-        provider, model_id = "", spec
-    cmd = ["pi", "--mode", "json", "-p", *_CLUSTER_HERMETIC]
-    if provider:
-        cmd += ["--provider", provider]
-    cmd += ["--model", model_id, "--thinking", "low", "--system-prompt", system, prompt]
-    env = dict(os.environ)
-    env["PI_SKIP_VERSION_CHECK"] = "1"
-    run = runner or subprocess.run
-    try:
-        proc = run(cmd, cwd=str(REPO_ROOT), env=env, stdin=subprocess.DEVNULL,
-                   capture_output=True, text=True, timeout=timeout_s)
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    if getattr(proc, "returncode", 0) not in (0, None):
-        return None
-    last = None
-    for line in (getattr(proc, "stdout", "") or "").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if event.get("type") != "message_end":
-            continue
-        message = event.get("message", event)
-        if message.get("role") != "assistant":
-            continue
-        if message.get("stopReason") == "error":
-            return None
-        last = "".join(
-            b.get("text", "") for b in message.get("content", [])
-            if isinstance(b, dict) and b.get("type") == "text"
-        )
-    return last
+def _load_pi_json_call():
+    """Lazy-import the shared headless-pi caller (scripts/system/lib, #8)."""
+    lib = str(REPO_ROOT / "scripts" / "system" / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    from detect import pi_json_call  # type: ignore[import-not-found]
+    return pi_json_call
 
 
 def _cluster_via_model(relevant, spec, *, runner=None):
@@ -159,7 +121,8 @@ def _cluster_via_model(relevant, spec, *, runner=None):
         lines.append(f"[{i}] {reason}" + (f"  (tag: {fm})" if fm else ""))
     prompt = ("FAILURE RECORDS:\n" + "\n".join(lines)
               + '\n\nReturn {"clusters":[...]} grouping them by root cause.')
-    text = _call_pi_json(prompt, spec=spec, system=_CLUSTER_SYSTEM, runner=runner)
+    text = _load_pi_json_call()(prompt, model_spec=spec, system=_CLUSTER_SYSTEM,
+                                runner=runner, timeout_s=60, cwd=str(REPO_ROOT))
     if not text:
         return None
     match = re.search(r"\{.*\}", text, re.S)

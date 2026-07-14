@@ -7,13 +7,23 @@ Handles ID generation, risk scoring, action inference, and validation.
 import json
 import os
 import re
+import sys
 from datetime import date, datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from uuid import uuid4
 
-from target_classifier import _pi_json_call  # shared headless-pi caller (unify in #8)
 from amendment_applier import _touches_security_block  # the security authority
+
+
+def _load_pi_json_call():
+    """Lazy-import the shared headless-pi caller (scripts/system/lib, #8)."""
+    lib = str(Path(__file__).resolve().parents[1] / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    from detect import pi_json_call  # type: ignore[import-not-found]
+    return pi_json_call
+
 
 _DIFF_MODEL_ENV = "PI_SELFIMPROVE_DIFF_MODEL"
 _DIFF_SYSTEM = (
@@ -190,7 +200,8 @@ def draft_change(  # noqa: C901 - linear draft -> parse -> validate -> security 
         + 'Return one JSON object with action/old_text/new_text/rationale.'
     )
     try:
-        text = _pi_json_call(prompt, spec=spec, system=_DIFF_SYSTEM, runner=runner)
+        text = _load_pi_json_call()(prompt, model_spec=spec, system=_DIFF_SYSTEM,
+                                    runner=runner)
     except Exception:  # noqa: BLE001 - drafting must never break the loop
         return None
     if not text:

@@ -15,7 +15,7 @@ REJECTED_UNIVERSAL when a learning might touch an immutable rule.
 import json
 import os
 import re
-import subprocess
+import sys
 from enum import Enum
 from pathlib import Path
 from typing import List, Optional
@@ -23,10 +23,6 @@ from typing import List, Optional
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 _TARGET_MODEL_ENV = "PI_SELFIMPROVE_TARGET_MODEL"
-_TARGET_HERMETIC = [
-    "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates",
-    "--no-themes", "--no-context-files", "--no-tools",
-]
 _TARGET_SYSTEM = (
     "You route a proposed self-improvement LEARNING for a coding-agent system to "
     "the correct layer. Reply with EXACTLY one JSON object and nothing else: "
@@ -203,47 +199,13 @@ def _classify_by_keywords(
     return TargetLayer.DOMAIN_GUIDANCE
 
 
-def _pi_json_call(prompt, *, spec, system, runner=None, timeout_s=45):  # noqa: C901
-    """One headless-pi JSON call; last assistant text or None on any failure."""
-    if "/" in spec and not spec.startswith("/") and not spec.endswith("/"):
-        provider, model_id = spec.split("/", 1)
-    else:
-        provider, model_id = "", spec
-    cmd = ["pi", "--mode", "json", "-p", *_TARGET_HERMETIC]
-    if provider:
-        cmd += ["--provider", provider]
-    cmd += ["--model", model_id, "--thinking", "low", "--system-prompt", system, prompt]
-    env = dict(os.environ)
-    env["PI_SKIP_VERSION_CHECK"] = "1"
-    run = runner or subprocess.run
-    try:
-        proc = run(cmd, cwd=str(REPO_ROOT), env=env, stdin=subprocess.DEVNULL,
-                   capture_output=True, text=True, timeout=timeout_s)
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-    if getattr(proc, "returncode", 0) not in (0, None):
-        return None
-    last = None
-    for line in (getattr(proc, "stdout", "") or "").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if event.get("type") != "message_end":
-            continue
-        message = event.get("message", event)
-        if message.get("role") != "assistant":
-            continue
-        if message.get("stopReason") == "error":
-            return None
-        last = "".join(
-            b.get("text", "") for b in message.get("content", [])
-            if isinstance(b, dict) and b.get("type") == "text"
-        )
-    return last
+def _load_pi_json_call():
+    """Lazy-import the shared headless-pi caller (scripts/system/lib, #8)."""
+    lib = str(REPO_ROOT / "scripts" / "system" / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    from detect import pi_json_call  # type: ignore[import-not-found]
+    return pi_json_call
 
 
 def _classify_via_model(learning_description, evidence, spec, *, runner=None):
@@ -253,7 +215,8 @@ def _classify_via_model(learning_description, evidence, spec, *, runner=None):
     if ev:
         prompt += f"\n\nEVIDENCE:\n{ev}"
     prompt += '\n\nReturn one JSON object: {"layer": "<LAYER>"}.'
-    text = _pi_json_call(prompt, spec=spec, system=_TARGET_SYSTEM, runner=runner)
+    text = _load_pi_json_call()(prompt, model_spec=spec, system=_TARGET_SYSTEM,
+                                runner=runner, cwd=str(REPO_ROOT))
     if not text:
         return None
     match = re.search(r"\{[^{}]*\}", text)
