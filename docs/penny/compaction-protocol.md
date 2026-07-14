@@ -25,7 +25,8 @@ Every line is a real, dereferenceable address. Placeholder IDs are never rendere
 
 Read the brief top to bottom: the goal, the active skill, current work, any in-flight orchestration runs, pending questions to the user, next steps, constraints, key decisions, unresolved errors, and touched files. This is enough to continue most work without any retrieval.
 
-- **`## Goal` is the LATEST substantive intent, not the first-seen one.** The extractor scans newest-first with no keyword denylist, merges the split-turn window, and carries the prior goal forward only when the current window has nothing fresher. Trust it as the current objective.
+- **`## Goal` is the LATEST substantive intent, not the first-seen one.** The brief is written by a model reading the compacted conversation (with a deterministic fallback when no model is reachable), constrained so a stale run or skill goal never overrides a fresh user pivot. Trust it as the current objective.
+- **Grounded state is scoped to this session.** In-flight runs, decisions, and rooms in the prose belong to THIS conversation's work; a run from a different, older session appears only under an `other pending runs (other sessions — verify before resuming)` label in the refs — never treat it as your current goal without checking.
 - **`## Active Skill` may be flagged `superseded by a newer request`.** That means a completed skill's goal was displaced by a later ad-hoc user message; the skill is shown for provenance, but `## Goal` (the newer request) is what you act on.
 - **`## Current Work` / `## Next Steps`** (when present) summarize what was in flight and the concrete next actions. A `Focus (from /compact): …` next step echoes the user's `/compact <focus>` hint — treat it as the priority.
 

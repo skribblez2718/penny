@@ -7,6 +7,7 @@
 - [Graduated Autonomy](graduated-autonomy/AGENTS.md): Reversibility + per-domain earned trust → act-vs-ask gate; the "almost autonomous" mechanism
 - [JSA Skill](jsa-skill/AGENTS.md): Multi-agent JavaScript security analysis pipeline with SAST, structure/slice lanes, and browser PoC verification
 - [Judgment Calibration](judgment-calibration/AGENTS.md): Oracle-calibrated verifier — rubrics + corpus + judge-agreement harness so a weak orchestrator's quality bar survives Oracle
+- [Learn Skill](learn-skill/AGENTS.md): Turn raw learning material into a study companion — per-lesson guides, practice exams, and final prep — with an evidence-gated recomputation oracle and a charter HITL gate
 - [Observability Server](observability-server/AGENTS.md): FastAPI + SQLite backend for log ingestion, session history queries, and watcher signal diagnostics
 - [Outcome Capture](outcome-capture/AGENTS.md): Source-agnostic outcome writer + `make rate` human quick-rating; the source that actually feeds the flywheel
 - [Outcome Ledger](outcome-ledger/AGENTS.md): When to record decisions, how the feedback flow works, delta score conventions
@@ -15,6 +16,8 @@
 - [Progress Heartbeats](progress-heartbeats/AGENTS.md): Staleness-based progress monitoring replacing naive kill-timer for long-running agents
 - [Enhance](enhance/AGENTS.md): On-demand `-i`-suffix rewrite of raw prompts into world-class goal-oriented Invocation Context (Circumstances 3/4)
 - [Research Skill](research-skill/AGENTS.md): Structured research workflow with Quick/Standard/Deep modes, parallel evidence gathering, and synthesis
+- [Rez Skill](rez-skill/AGENTS.md): Tailor a base resume to a job description — gap analysis, fresh NIST NICE alignment, STAR/ATS rewriting, .docx export — with evidence-gated anti-fabrication validation
+- [SCA Skill](sca-skill/AGENTS.md): Deep, gated security audit of a local source tree — threat modeling, triage, and executed non-destructive PoC verification — with six HITL checkpoints
 - [Skill Tool](skill-tool/AGENTS.md): Four invocation modes (single/parallel/chain/resume) mirroring subagent tool architecture
 - [Tiered Memory](tiered-memory/AGENTS.md): 5-tier architecture (T0–T4), injection protocols, token budgets, distillation pipeline
 - [Unknown State](unknown-state/AGENTS.md): FSM handling when agent cannot proceed; UNKNOWN_STATE protocol

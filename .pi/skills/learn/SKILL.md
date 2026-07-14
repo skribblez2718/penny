@@ -56,6 +56,9 @@ skill({
   constraints: {
     source_dir: "/path/to/raw/material",          // REQUIRED
     output_dir: "/path/to/output",                 // optional; default <source_dir>/../study_materials
+    ingest_branches: { content: "...", math: "..." }, // optional: supply the ingest topology
+    //   directly (branch_id -> focus). Omit for the tagged-LOAN 3-focus default
+    //   (content/conventions/assessment). max_fan_width caps the branches.
     spec_docs: ["/path/teaching_approach.md"],    // optional; existing teaching docs to reuse
     audience: "adult learner, rusty on prerequisites" // optional audience notes
   }
@@ -69,13 +72,15 @@ skill({
 The `LearnMachine` FSM (`orchestration.playbooks.learn`) drives:
 
 ```
-intake → ingesting (parallel echo ×3: content / conventions / assessment)
+intake → ingesting (parallel echo fan: caller ingest_branches, else the tagged-LOAN
+           default content / conventions / assessment)
        → designing (annie: curriculum + conventions canon + analogy registry)
        → charter_gate (HITL: approve / refine / deny)
        → authoring   (skribble: guide + answers, loops once per lesson)
        → assessing   (skribble: exam + key, loops once per lesson)
        → synthesizing (synthia: course-wide final prep)
-       → verifying   (vera: mechanical checks + math recomputation)
+       → verifying   (vera: mechanical checks + math recomputation; EVIDENCE-GATED —
+           the recomputation transcripts are a required, non-empty SUMMARY field)
              clean → critiquing            violations → fixing → verifying
        → critiquing  (carren: learner-experience judgment)
              APPROVE → complete            NEEDS_REVISION → fixing → verifying

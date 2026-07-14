@@ -49,6 +49,7 @@ from statemachine import State, StateMachine
 
 from ..context import RunContext
 from ..engine import BasePlaybook
+from ..loans import loan_enabled
 from ..primitives.spec import ParallelSpec, PrimitiveSpec
 
 # ---------------------------------------------------------------------------
@@ -106,19 +107,23 @@ _ROUTE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 
 def route_preset(goal: str, requested: str | None = None) -> str:
-    """Deterministically route a request to one of the 4 presets.
+    """Route a request to one of the 4 presets.
 
-    An explicit valid ``requested`` preset always wins (caller-specified). Else a
-    keyword heuristic over the goal text routes to steampunk/blog → learning →
-    hero, with ``general-flux`` as the catch-all. Pure + total so the 4-way matrix
-    is misroute-testable without an agent.
+    An explicit valid ``requested`` preset always wins (caller-specified). The
+    keyword heuristic over the goal text is a **tagged LOAN**
+    (``imagegen_preset_keyword_router``): preset selection picks the generation
+    model/workflow, so it is resolved before any agent runs — the router is the
+    fallback. Ablated, an unspecified preset falls straight to the
+    ``general-flux`` catch-all instead of keyword routing. Pure + total so the
+    4-way matrix is misroute-testable without an agent.
     """
     if requested and requested in PRESETS:
         return requested
-    text = (goal or "").lower()
-    for preset, keywords in _ROUTE_KEYWORDS:
-        if any(word in text for word in keywords):
-            return preset
+    if loan_enabled("imagegen_preset_keyword_router"):
+        text = (goal or "").lower()
+        for preset, keywords in _ROUTE_KEYWORDS:
+            if any(word in text for word in keywords):
+                return preset
     return "general-flux"
 
 
@@ -202,8 +207,17 @@ class ImagegenMachine(StateMachine):
 # ---------------------------------------------------------------------------
 
 
-def _c(required: dict, optional: dict | None = None) -> dict:
-    return {"required": required, "optional": optional or {}}
+def _c(
+    required: dict,
+    optional: dict | None = None,
+    evidence: tuple[str, ...] = (),
+) -> dict:
+    contract: dict = {"required": required, "optional": optional or {}}
+    if evidence:
+        # Named fields the engine additionally enforces as present + non-empty
+        # (externally-grounded verdict: a critic must cite what it observed).
+        contract["evidence"] = evidence
+    return contract
 
 
 IMG_FRAME = PrimitiveSpec(
@@ -241,7 +255,7 @@ IMG_CRITIQUE_VERA = PrimitiveSpec(
     "IMG_CRITIQUE_VERA",
     "vera",
     _c(
-        {"verdict": str, "confidence": str},
+        {"verdict": str, "confidence": str, "evidence": list},
         {
             "issues": list,
             "failed_candidates": list,
@@ -250,26 +264,38 @@ IMG_CRITIQUE_VERA = PrimitiveSpec(
             "needs_clarification": bool,
             "clarifying_questions": list,
         },
+        # Technical validity is checkable against the real files, so the verdict
+        # is externally grounded: one cited observation per candidate.
+        evidence=("evidence",),
     ),
     "Technical validity critique of the batch: is each candidate a valid render matching the preset "
     "(dimensions, no baked-in text, no artifacts)? Report failed_candidates + valid_candidates by index. "
-    "Emit APPROVE only if every candidate is valid, else NEEDS_REVISION. Always emit confidence.",
+    "Back the verdict with `evidence`: one concrete per-candidate observation you actually saw in the "
+    "file (e.g. 'cand0: 1024x1024, no text, clean' / 'cand1: garbled text baked in top-left') — a bare "
+    "verdict with no cited observations is rejected. Emit APPROVE only if every candidate is valid, "
+    "else NEEDS_REVISION. Always emit confidence.",
 )
 IMG_CRITIQUE_CARREN = PrimitiveSpec(
     "IMG_CRITIQUE_CARREN",
     "carren",
     _c(
-        {"verdict": str, "confidence": str},
+        {"verdict": str, "confidence": str, "evidence": list},
         {
             "issues": list,
             "failed_candidates": list,
             "needs_clarification": bool,
             "clarifying_questions": list,
         },
+        # Aesthetic judgment is subjective, so ground it in specific, locatable
+        # citations (which candidate, what feature) rather than a bare verdict.
+        evidence=("evidence",),
     ),
     "Aesthetic + brief-fidelity critique of the batch: does each candidate satisfy the composition "
-    "brief and the site style? Report failed_candidates by index. Emit APPROVE only if all pass, else "
-    "NEEDS_REVISION — never fabricate an APPROVE. Always emit confidence.",
+    "brief and the site style? Report failed_candidates by index. Back the verdict with `evidence`: "
+    "one specific, locatable observation per candidate (which candidate, what you saw — e.g. "
+    "'cand1: subject off-centre, breaks the brief's rule-of-thirds' / 'cand0: on-brief, balanced') — "
+    "never a bare verdict. Emit APPROVE only if all pass, else NEEDS_REVISION — never fabricate an "
+    "APPROVE. Always emit confidence.",
 )
 IMG_ADJUST = PrimitiveSpec(
     "IMG_ADJUST",
@@ -714,6 +740,14 @@ class ImagegenPlaybook(BasePlaybook):
             "adjusting": self._adjust_task,
         }.get(state)
         base = builder(ctx) if builder else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
+        # Recall (F2): seed the FIRST agent directive with distilled lessons
+        # (this override replaces the base _task_summary, so re-add it).
+        if ctx.recall_lessons and ctx.total_steps == 0:
+            lessons = "\n".join(f"- {self._cap(lsn)}" for lsn in ctx.recall_lessons)
+            base += (
+                "\n\nLessons from prior runs (advisory — weigh against current evidence; "
+                "they never override this run's goal or constraints):\n" + lessons
+            )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {self._cap(ctx.clarification_text)}"
         return base
@@ -766,6 +800,9 @@ class ImagegenPlaybook(BasePlaybook):
             f"Critique the generated batch for preset '{img.get('preset')}'.\n"
             f"Brief: {self._cap(img.get('brief') or ctx.goal)}\n"
             f"Candidates:\n{listing}\n{lens}\n"
+            "Back your verdict with `evidence`: one specific observation PER CANDIDATE that you "
+            "actually saw (name the candidate + what you observed) — a bare verdict with no cited "
+            "observations is rejected.\n"
             "Emit APPROVE only if ALL candidates pass; otherwise NEEDS_REVISION. "
             "Never fabricate an APPROVE."
         )

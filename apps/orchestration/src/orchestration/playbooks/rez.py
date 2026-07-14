@@ -37,8 +37,11 @@ from ..engine import BasePlaybook
 from ..primitives.spec import PrimitiveSpec
 
 
-def _c(required: dict, optional: dict | None = None) -> dict:
-    return {"required": required, "optional": optional or {}}
+def _c(required: dict, optional: dict | None = None, evidence: list | None = None) -> dict:
+    contract: dict = {"required": required, "optional": optional or {}}
+    if evidence:
+        contract["evidence"] = evidence
+    return contract
 
 
 NO_JD_ERROR = (
@@ -46,8 +49,7 @@ NO_JD_ERROR = (
     "job description text."
 )
 NO_RESUME_ERROR = (
-    "ERROR: No base resume found in resources/resume/. Add the base resume "
-    "before running rez."
+    "ERROR: No base resume found in resources/resume/. Add the base resume " "before running rez."
 )
 EXPORT_ERROR = (
     "ERROR: word extension (word_generate tool) unavailable or export failed — "
@@ -168,7 +170,9 @@ REZ_VALIDATE = PrimitiveSpec(
     "REZ_VALIDATE",
     "vera",
     _c(
-        {"valid": bool, "fabrication_free": bool},
+        # Evidence-gated (Rec 4): the verdict must carry the captured per-bullet
+        # traceability + STAR/ATS/NICE checks — not a bare assertion.
+        {"valid": bool, "fabrication_free": bool, "evidence": list},
         {
             "issues": list,
             "star_compliant": bool,
@@ -178,10 +182,11 @@ REZ_VALIDATE = PrimitiveSpec(
             "clarifying_questions": list,
             "confidence": str,
         },
+        evidence=["evidence"],
     ),
     "Validate the tailored resume: trace EVERY bullet to the source materials "
     "(anti-fabrication), STAR structure, ATS safety, NICE alignment markers. "
-    "Emit valid + fabrication_free + issues.",
+    "Emit valid + fabrication_free + issues + the evidence you captured.",
 )
 REZ_EXPORT = PrimitiveSpec(
     "REZ_EXPORT",
@@ -385,9 +390,7 @@ class RezPlaybook(BasePlaybook):
             qs = [str(q) for q in (summary.get("clarifying_questions") or [])]
             detail = f": {'; '.join(qs)}" if qs else ""
             return f"{state} agent requested clarification{detail}"
-        if state == "validating" and not (
-            summary.get("valid") and summary.get("fabrication_free")
-        ):
+        if state == "validating" and not (summary.get("valid") and summary.get("fabrication_free")):
             if self.is_stalled(ctx, summary.get("issues", [])):
                 return (
                     "the same resume validation issues have persisted across revisions "
@@ -467,6 +470,14 @@ class RezPlaybook(BasePlaybook):
             if builder
             else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
         )
+        # Recall (F2): seed the FIRST agent directive with distilled lessons
+        # (this override replaces the base _task_summary, so re-add it).
+        if ctx.recall_lessons and ctx.total_steps == 0:
+            lessons = "\n".join(f"- {self._cap(lsn)}" for lsn in ctx.recall_lessons)
+            base += (
+                "\n\nLessons from prior runs (advisory — weigh against current evidence; "
+                "they never override this run's goal or constraints):\n" + lessons
+            )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {ctx.clarification_text}"
         return base

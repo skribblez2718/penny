@@ -2,7 +2,7 @@
 
 - [design-methodology.md](design-methodology.md): How to design a skill — extract phases from a proven workflow, failure-mode-justified ordering, gate placement, knowledge layering
 - [flow-diagrams.md](flow-diagrams.md): Mermaid state diagrams in resources/flow.mmd — requirements and examples
-- [loops.md](loops.md): Agentic loop taxonomy (7 classes), termination controls, failure modes, verifier design, task-to-loop mapping, and 5 loop-quality gaps to close
+- [loops.md](loops.md): Agentic loop taxonomy (7 classes as arrangements of the atomic components), termination controls, failure modes, verifier design, task-to-loop mapping, and 5 loop-quality gaps to close
 - [mempalace-integration.md](mempalace-integration.md): Context retrieval before workflow, learning storage after
 - [orchestration.md](orchestration.md): Engine-backed skill protocol — thin delegate + BasePlaybook subclass, per-state contracts, directives, self-recovery
 - [overview.md](overview.md): Skill architecture, directory structure, and how Penny skills extend AgentSkills.io

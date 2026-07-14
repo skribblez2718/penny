@@ -57,6 +57,10 @@ Loops are not alternatives — they **nest**. A production system layers seven c
 └────────────────────────────────────────────────────────────────────┘
 ```
 
+### These Classes Are Arrangements of Smaller Parts
+
+The seven classes are not the ground floor. Beneath them is a smaller set of **atomic components** — reusable building blocks (an event log, a budget counter, a verifier, a safety gate, parallel-execution machinery, memory) that snap together into loops. The seven classes are just the common *arrangements* of those parts. The reason this matters: it lets Penny build a loop for any task by assembling parts rather than reaching for a one-size-fits-all loop — and it keeps the loops from ageing badly as models improve, because the one component that ever *thinks* is isolated behind a single interface, so a better model upgrades every loop for free. See [Atomic Loop Components](../architecture/atomic-loop-components.md) for the full picture and the [Bitter-Lesson Doctrine](../architecture/bitter-lesson.md) for why it's built this way.
+
 ### Key Finding: Verifier Loops Are Load-Bearing
 
 The single strongest finding from the research: removing Voyager's verification critic caused a **−73% performance drop** — the most impactful feedback component in the system. Verifiers are not optional polish; they are the mechanism that makes loops converge.
@@ -116,6 +120,8 @@ Full research pack with annotated bibliography, verification stats, and caveats:
 
 ## Related Documents
 
+- [Atomic Loop Components](../architecture/atomic-loop-components.md) — the building blocks these loop classes are assembled from, and why the design ages well
+- [Bitter-Lesson Doctrine](../architecture/bitter-lesson.md) — the philosophy behind protecting capabilities and pruning scaffolding
 - [Skill Orchestration](orchestration.md) — How skills run on the engine
 - [Skill Standard](skill-standard.md) — Complete skill specification
 - [Loops (Agent Reference)](../../agents/skills/loops.md) — Operational reference for playbook authors

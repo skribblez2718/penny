@@ -21,6 +21,10 @@ census, augment-rule writing, PoC processing, report artifacts) lives in
 > integration-lane coverage contract (why the default lane is fully mocked and
 > why real-semgrep / real-Docker tests are opt-in).
 
+## Compliance notes (Bitter-Lesson / atomic-loops)
+
+sca is already evidence-grounded on the leverage spine: `SCA_VERIFICATION` requires `run_pocs` and triage/deep-dive carry `evidence_basis` (Rec 4). This revamp adds **Recall** — distilled lessons from prior runs seed the first agent directive. `augment_cap` (`constraints.augment_cap`, default 3) is a tunable Budget, not a frozen threshold. **Dual-verify (Rec 5)** is implemented: set `constraints.dual_verify: true` (and optionally `reverify_model` for an independent judge) so a first PoC batch is followed by a SECOND independent verifier (`reverification`) that produces its own non-destructive batch; both feed the report and agreement is recorded (`dual_verify_agreed`). Off by default.
+
 ## Pipeline
 
 Strictly-sequential 13-phase FSM, `charter → report → complete`, with one

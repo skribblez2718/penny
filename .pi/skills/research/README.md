@@ -20,17 +20,19 @@ is a ~5-line delegate to `orchestration.cli`; it holds no FSM logic.
 - **Escalation and gates are engine seams.** Progress checks force a single HITL
   escalation; bounded critique loops handle revision.
 
-One machine serves all three modes. The mode is detected at intake
-(`detect_mode`) or forced by `constraints.mode`, and selects which edges fire.
+One machine serves all three modes. The mode is **caller- or model-declared**
+(`constraints.mode`, else piper declares it in its plan SUMMARY — the keyword
+`detect_mode` router was deleted), and selects which edges fire. Only an explicit
+caller `quick` skips planning.
 
 ## States
 
 | State | Agent | Role |
 |-------|-------|------|
-| `intake` | — | Detect mode, validate goal, seed `max_sub_queries` |
+| `intake` | — | Validate goal, seed `max_sub_queries` budget, route (caller-quick → researching, else planning) |
 | `planning` | piper | Decompose query into sub-queries (standard/deep) |
 | `critiquing_plan` | carren | Critique the plan (deep only) |
-| `researching` | echo | Single agent researches ALL sub-queries |
+| `researching` | echo × N | Dynamic fan: one read-only branch per sub-query (single-agent on the quick fast-path) |
 | `synthesizing` | synthia | Synthesize findings into one report |
 | `critiquing_report` | carren | Critique the report (deep only) |
 | `validating` | vera | Independent citation-grounding gate (all modes) |
@@ -38,8 +40,11 @@ One machine serves all three modes. The mode is detected at intake
 | `unknown` / `awaiting_clarification` | — | HITL escalation staging / pause |
 | `complete` / `error` | — | Terminal states |
 
-Note: `researching` is a single echo agent instructed to research every
-sub-query (not a per-sub-query fan-out). `validating` (vera) is an independent,
+Note: `researching` is a **dynamic fan** — `route_after('planning')` emits one
+read-only echo branch per sub-query into `ctx.extras['dynamic_branches']`
+(bounded by `max_fan_width`); the explicit-quick fast-path stays single-agent.
+Critique and validation are **evidence-gated** (Rec 4): a verdict without captured
+evidence is rejected. `validating` (vera) is an independent,
 evidence-based citation-grounding gate that runs in every mode before the report
 is written — it verifies each material claim in the synthesis is supported by a
 cited source (distinct from carren's subjective critique). A FAIL loops back to

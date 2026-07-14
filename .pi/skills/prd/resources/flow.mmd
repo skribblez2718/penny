@@ -7,7 +7,11 @@
 %% READING NOTES:
 %%   * Guarded arrows out of one state are MUTUALLY EXCLUSIVE (exactly one fires).
 %%   * generating = synthia (three modes: clarification / synthesis / revision).
-%%   * validating = vera (independent evaluator; anti-gaming).
+%%     Domain is model-owned: caller constraints.domain wins, else synthia
+%%     declares the best-fit pack (from resources/) in its SUMMARY. No keyword
+%%     detection.
+%%   * validating = vera (independent evaluator; anti-gaming). EVIDENCE-GATED:
+%%     the contract rejects a PASS that carries no captured evidence (Rec 4).
 %%   * revise loop is bounded by ctx.max_iterations (default 5).
 %%   * Escalatable states (generating, validating) route through to_unknown when
 %%     progress_check returns a reason (needs_clarification, or a stalled loop).
@@ -18,6 +22,7 @@ stateDiagram-v2
     intake --> generating : start_generate
 
     %% GENERATE (synthia). First pass runs in CLARIFICATION mode.
+    %% Domain: caller constraint or model-declared (from available resource packs).
     %% A clarify pass that yields 0 requirements self-loops into SYNTHESIS.
     generating --> generating : synthesize\n[clarify pass, requirement_count == 0]
     generating --> validating : generate_done
@@ -25,7 +30,7 @@ stateDiagram-v2
 
     %% VALIDATE (vera). Pass completes; issues within budget loop back;
     %% budget exhaustion completes HONESTLY (met=False); a stalled loop escalates.
-    validating --> complete : validate_pass\n[valid && ideal_state_valid]
+    validating --> complete : validate_pass\n[valid && ideal_state_valid; evidence-gated]
     validating --> generating : revise\n[issues && iter+1 < max_iterations]
     validating --> complete : validate_exhausted\n[budget spent; met=False]
     validating --> unknown : to_unknown\n[stalled: same issues persist]

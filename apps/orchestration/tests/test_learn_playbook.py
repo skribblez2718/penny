@@ -13,7 +13,8 @@ escalation, and start() contract enforcement (source_dir required).
 import pytest
 
 from orchestration.checkpointer import STATUS_AWAITING_USER, Checkpointer
-from orchestration.playbooks.learn import LearnPlaybook
+from orchestration.context import RunContext
+from orchestration.playbooks.learn import LEARN_DESIGN, LearnPlaybook
 
 SID, RID = "sess-learn", "run-learn"
 
@@ -37,13 +38,24 @@ _ASSESS_OK = lambda i: {  # noqa: E731
     "files_written": [f"lesson{i}/exam/practice_exam.md"],
 }
 _SYNTH_OK = {"synthesis_complete": True, "files_written": ["final_prep/comprehensive_review.md"]}
-_VERIFY_PASS = {"verified": True, "violations": [], "math_checked": True}
-_APPROVE = {"verdict": "APPROVE", "issues": []}
+# vera + carren are evidence-gated (Rec 4): every verdict carries captured evidence.
+_VERIFY_PASS = {
+    "verified": True,
+    "violations": [],
+    "math_checked": True,
+    "evidence": ["recomputed 14/14 answers: all match", "conformance checks: 0 violations"],
+}
+_APPROVE = {"verdict": "APPROVE", "issues": [], "evidence": ["reviewed all 5 lessons vs pedagogy"]}
 _FIX_OK = {"fixes_complete": True, "fixed_count": 3}
 
 
 def _verify_fail(*violations):
-    return {"verified": False, "violations": list(violations), "math_checked": True}
+    return {
+        "verified": False,
+        "violations": list(violations),
+        "math_checked": True,
+        "evidence": ["recomputation transcript"],
+    }
 
 
 @pytest.fixture
@@ -64,6 +76,19 @@ def _step(cp, agent, result):
     return LearnPlaybook(cp).step(session_id=SID, run_id=RID, agent=agent, result=result)
 
 
+# Scoping emits the SAME 3 foci the legacy topology used, so _ingest_batch
+# (content/conventions/assessment) matches the model-emitted branches.
+SCOPE_SUMMARY = {
+    "scope_complete": True,
+    "ingest_branches": {
+        "content": "the lessons and topics",
+        "conventions": "the notation and conventions",
+        "assessment": "the exam style",
+    },
+    "confidence": "CERTAIN",
+}
+
+
 def _ingest_batch(complete=True):
     return [
         {"branch_id": b, "agent": "echo", "exitCode": 0, "summary": {"explore_complete": complete}}
@@ -71,8 +96,14 @@ def _ingest_batch(complete=True):
     ]
 
 
-def _to_gate(cp):
+def _to_ingesting(cp):
+    """start -> scoping -> (echo emits topology) -> ingesting fan-out."""
     _start(cp)
+    return _step(cp, "echo", SCOPE_SUMMARY)
+
+
+def _to_gate(cp):
+    _to_ingesting(cp)
     _step(cp, "__parallel__", _ingest_batch())
     return _step(cp, "annie", _DESIGN_OK)
 
@@ -110,9 +141,85 @@ def test_start_requires_goal(cp):
     assert any("goal" in str(e) for e in d["errors"])
 
 
-def test_start_dispatches_parallel_ingest(cp):
+# ---------------------------------------------------------------------------
+# ingest topology: caller override + tagged-LOAN default + ablation fail-loud
+# ---------------------------------------------------------------------------
+
+
+def test_caller_ingest_topology_overrides_default(cp):
+    d = _start(
+        cp,
+        constraints={
+            **_CONSTRAINTS,
+            "ingest_branches": {"math": "the proofs", "code": "the notebooks"},
+        },
+    )
+    assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "ingesting"
+    assert {t["branch_id"] for t in d["tasks"]} == {"math", "code"}
+    assert all(t["agent"] == "echo" for t in d["tasks"])
+
+
+def test_start_dispatches_scoping(cp):
     d = _start(cp)
+    assert d["action"] == "invoke_agent" and d["agent"] == "echo" and d["state_id"] == "scoping"
+
+
+def test_scoping_emits_the_ingest_fan_topology(cp):
+    _start(cp)
+    d = _step(cp, "echo", SCOPE_SUMMARY)
+    assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "ingesting"
+    assert {t["branch_id"] for t in d["tasks"]} == {"content", "conventions", "assessment"}
+    assert all(t["agent"] == "echo" for t in d["tasks"])
+
+
+def test_scoping_empty_topology_falls_back_to_default_when_loan_enabled(cp, monkeypatch):
+    monkeypatch.delenv("PENNY_ABLATE_LEARN_DEFAULT_INGEST_TOPOLOGY", raising=False)
+    _start(cp)
+    d = _step(cp, "echo", {"scope_complete": True, "ingest_branches": {}, "confidence": "CERTAIN"})
     assert d["action"] == "invoke_agents_parallel"
+    assert {t["branch_id"] for t in d["tasks"]} == {"content", "conventions", "assessment"}
+
+
+def test_scoping_empty_topology_escalates_when_loan_ablated(cp, monkeypatch):
+    monkeypatch.setenv("PENNY_ABLATE_LEARN_DEFAULT_INGEST_TOPOLOGY", "1")
+    _start(cp)
+    d = _step(cp, "echo", {"scope_complete": True, "ingest_branches": {}, "confidence": "CERTAIN"})
+    assert d["action"] == "escalate_to_user"
+    assert "no valid ingest topology" in d["unknown_reason"]
+
+
+# ---------------------------------------------------------------------------
+# evidence-gated verification + critique (Rec 4) + recall
+# ---------------------------------------------------------------------------
+
+
+def test_verify_rejects_empty_evidence(cp):
+    _to_verifying(cp)
+    d = _step(cp, "vera", {"verified": True, "violations": [], "evidence": []})
+    assert d["action"] == "invoke_agent" and d["state_id"] == "verifying"
+    d2 = _step(cp, "vera", _VERIFY_PASS)
+    assert d2["state_id"] == "critiquing"
+
+
+def test_verify_evidence_lands_on_context(cp):
+    _to_verifying(cp)
+    _step(cp, "vera", _VERIFY_PASS)
+    assert cp.load(RID).context.verify_evidence
+
+
+def test_recall_lessons_render_in_first_directive(cp):
+    pb = LearnPlaybook(cp)
+    ctx = RunContext(session_id=SID, run_id=RID, playbook="learn", goal="build a study companion")
+    ctx.recall_lessons = ["recompute every quantitative answer; never eyeball"]
+    txt = pb._task_summary("designing", LEARN_DESIGN, ctx)
+    assert "Lessons from prior runs" in txt
+    assert "recompute every quantitative answer" in txt
+
+
+def test_scoping_then_ingest_fan(cp):
+    # start -> scoping (echo), then the model-emitted topology drives the fan.
+    d = _to_ingesting(cp)
+    assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "ingesting"
     assert {t["branch_id"] for t in d["tasks"]} == {"content", "conventions", "assessment"}
 
 
@@ -234,7 +341,15 @@ def test_verify_stall_escalates(cp):
 def test_critique_needs_revision_routes_to_fixing(cp):
     _to_verifying(cp)
     _step(cp, "vera", _VERIFY_PASS)
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["lesson 2: analogy drift"]})
+    d = _step(
+        cp,
+        "carren",
+        {
+            "verdict": "NEEDS_REVISION",
+            "issues": ["lesson 2: analogy drift"],
+            "evidence": ["reviewed lessons"],
+        },
+    )
     assert d["state_id"] == "fixing"
     assert "analogy drift" in d["task_summary"]
     # fixes re-verify before any completion
@@ -246,10 +361,22 @@ def test_critique_exhaustion_completes_honestly(cp):
     _to_verifying(cp)
     _step(cp, "vera", _VERIFY_PASS)
     for i in range(2):
-        _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": [f"issue {i}"]})
+        _step(
+            cp,
+            "carren",
+            {
+                "verdict": "NEEDS_REVISION",
+                "issues": [f"issue {i}"],
+                "evidence": ["reviewed lessons"],
+            },
+        )
         _step(cp, "skribble", _FIX_OK)
         _step(cp, "vera", _VERIFY_PASS)
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["issue final"]})
+    d = _step(
+        cp,
+        "carren",
+        {"verdict": "NEEDS_REVISION", "issues": ["issue final"], "evidence": ["reviewed lessons"]},
+    )
     assert d["action"] == "complete"
     assert d["result"]["met"] is False
     assert d["result"]["exhausted"] is True

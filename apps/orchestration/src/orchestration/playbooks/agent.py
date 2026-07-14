@@ -147,15 +147,21 @@ AGENT_CRITIQUE = PrimitiveSpec(
     "AGENT_CRITIQUE",
     "carren",
     _c(
-        {"verdict": str, "issues": list},
+        {"verdict": str, "issues": list, "evidence": list},
         {
             "mempalace_drawer": str,
             "needs_clarification": bool,
             "clarifying_questions": list,
             "confidence": str,
         },
+        # A critique verdict must be checkable: cite the specific place in the
+        # design that backs each issue (or, for APPROVE, what you verified).
+        evidence=("evidence",),
     ),
-    "Validate the design against the agent standard. Verdict APPROVE, NEEDS_REVISION or BLOCKED.",
+    "Validate the design against the agent standard. Verdict APPROVE, NEEDS_REVISION or BLOCKED. "
+    "Back the verdict with `evidence`: for each issue cite the specific part of the design that "
+    "violates the standard (section / field / line), or for an APPROVE cite what you checked — a bare "
+    "verdict with no cited observations is rejected.",
 )
 AGENT_SCAFFOLD = PrimitiveSpec(
     "AGENT_SCAFFOLD",
@@ -285,7 +291,11 @@ def _build_critique(pb: "AgentPlaybook", ctx: RunContext, spec: PrimitiveSpec) -
             f"prior issues. Block ONLY on violations of the agent standard; note minor "
             f"concerns but APPROVE with notes rather than blocking. "
         )
-    task += f"Write critique to mempalace with header: {ctx.session_id} Critique."
+    task += (
+        f"Write critique to mempalace with header: {ctx.session_id} Critique. "
+        f"Back your verdict with `evidence` — cite the specific part of the design behind each "
+        f"issue (section/field), or what you verified for an APPROVE; a bare verdict is rejected."
+    )
     return task
 
 
@@ -487,6 +497,14 @@ class AgentPlaybook(BasePlaybook):
             if builder
             else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
         )
+        # Recall (F2): seed the FIRST agent directive with distilled lessons
+        # (this override replaces the base _task_summary, so re-add it).
+        if ctx.recall_lessons and ctx.total_steps == 0:
+            lessons = "\n".join(f"- {self._cap(lsn)}" for lsn in ctx.recall_lessons)
+            base += (
+                "\n\nLessons from prior runs (advisory — weigh against current evidence; "
+                "they never override this run's goal or constraints):\n" + lessons
+            )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {ctx.clarification_text}"
         return base

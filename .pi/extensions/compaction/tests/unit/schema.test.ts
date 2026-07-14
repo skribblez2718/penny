@@ -54,8 +54,21 @@ describe("PennyCompactArtifactSchema", () => {
   // 2.1.0 additive schema evolution
   // ============================================================
 
-  it("exports SCHEMA_VERSION as 2.1.0", () => {
-    expect(SCHEMA_VERSION).toBe("2.1.0");
+  it("exports SCHEMA_VERSION as 2.3.0", () => {
+    expect(SCHEMA_VERSION).toBe("2.3.0");
+  });
+
+  it("accepts 2.3.0 additive fields (model-prose provenance + scoping)", () => {
+    const v23 = {
+      ...validArtifact,
+      schema_version: "2.3.0",
+      summary_source: "model",
+      summary_model: "anthropic/claude-x",
+      scoped_session_ids: ["plan-1", "code-2"],
+      other_session_runs: [],
+      prose_summary: "## Goal\nDo the thing",
+    };
+    expect(PennyCompactArtifactSchema.safeParse(v23).success).toBe(true);
   });
 
   it("accepts a 2.1.0-versioned artifact", () => {

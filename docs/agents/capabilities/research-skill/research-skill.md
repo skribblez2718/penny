@@ -44,25 +44,35 @@ The research skill runs on the shared orchestration engine at `apps/orchestratio
 
 Run state lives in the engine's durable SQLite checkpointer keyed by `run_id`. There is no `--state` argv and no `/tmp` session file. A run interrupted mid-step is recovered automatically by the engine (`recover_pending`), which re-issues the interrupted step.
 
-### Mode detection
+### Mode selection (model-owned)
 
-| Mode | Triggers |
-|------|----------|
-| **Quick** | Short single-question queries, or phrases like "what is", "define", "overview", "quickly", "briefly", "summary", "tldr" |
-| **Deep** | Phrases like "deep research", "comprehensive", "thorough", "in-depth", "detailed analysis", "exhaustive" |
-| **Standard** | Everything else |
+The keyword `detect_mode` router was deleted (Bitter-Lesson gate). Mode is a
+rigor/budget preset: a caller `constraints["mode"]` wins; otherwise the run
+transits planning and **piper declares the mode** (`quick`/`standard`/`deep`) in
+its plan SUMMARY (an unknown declaration falls back to `standard`). Only an
+explicit caller `quick` takes the single-agent researching fast-path.
+
+**Research is a dynamic fan** (arrangement 4): `route_after("planning")` turns the
+plan's sub-queries into `ctx.extras["dynamic_branches"]["researching"]` — one
+read-only `echo` branch per sub-query — bounded by `constraints["max_fan_width"]`
+(default 8). The per-mode `MAX_SUB_QUERIES_BY_MODE` table is replaced by one
+`max_sub_queries` budget (default 4, clamped to the fan width). **Critique and
+validation are evidence-gated** (Rec 4): `_CRITIQUE_C` and `RESEARCH_VALIDATE`
+require a non-empty `evidence` field, which flows to `ctx.verify_evidence` and
+the outcome ledger.
 
 ### State phases
 
-#### Quick mode
+#### Quick mode (explicit caller constraint)
 
 ```
-intake → researching → synthesizing → report_writing → complete
+intake → researching → synthesizing → validating → report_writing → complete
 ```
 
-Agents: `echo` → `synthia` → `skribble`
+Agents: `echo` → `synthia` → `vera` → `skribble`
 
-Quick mode skips planning; `intake` routes straight to `researching`.
+Explicit-quick skips planning; `intake` routes straight to a single-agent
+`researching`.
 
 #### Standard mode
 

@@ -7,6 +7,13 @@ Local image generation over the self-hosted ComfyUI HTTP API, as a
   generating]\* → presenting, across 4 presets (blog steampunk, learning concept,
   hero abstract, general), with a vera+carren parallel critique, a bounded revise
   loop, and a provenance manifest for exact reproduction.
+- **Preset selection:** `constraints.preset` always wins (caller-specified). The
+  keyword heuristic (`route_preset`) that infers a preset from the goal text is a
+  **tagged LOAN** (`imagegen_preset_keyword_router`) — preset selection picks the
+  generation model, so it resolves before any agent runs; ablated
+  (`PENNY_ABLATE_IMAGEGEN_PRESET_KEYWORD_ROUTER=1`), an unspecified preset falls
+  to `general-flux`. Candidate count + revise budget are tunable Budgets
+  (`constraints.count` / `max_iterations`). Recall lessons seed the first directive.
 - **Where:** the FSM lives in
   `apps/orchestration/src/orchestration/playbooks/imagegen.py` (registered in
   `playbooks/__init__.py`); the HTTP client + CLI live in `scripts/`.

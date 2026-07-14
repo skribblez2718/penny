@@ -207,6 +207,35 @@ def test_wave_loop_redispatches_annie_until_waves_exhausted(cp):
     assert d2["action"] == "invoke_agent" and d2["agent"] == "synthia" and d2["state_id"] == "merge"
 
 
+def test_wave_size_is_a_tunable_budget(cp):
+    # WAVE_SIZE is no longer a frozen constant: constraints.wave_size sets the
+    # batch, so needs_llm=12 at wave_size=5 seeds ceil(12/5)=3 waves.
+    class BigWave(FakeJSA):
+        needs_llm_count = 12
+
+    BigWave(cp).start(
+        session_id=SID,
+        run_id=RID,
+        goal="analyze https://example.com",
+        constraints={"intake": _VALID_INTAKE, "wave_size": 5},
+    )
+    d = _step(cp, "annie", {"wave_complete": True, "confidence": "PROBABLE"}, cls=BigWave)
+    assert "Wave 2/3" in d["task_summary"]
+    assert cp.load(RID).context.extras["jsa"]["investigate"]["wave_size"] == 5
+
+
+def test_recall_lessons_render_in_first_directive(cp):
+    from orchestration.playbooks.jsa import JSA_INVESTIGATE
+
+    pb = JSAPlaybook(cp)
+    ctx = RunContext(session_id=SID, run_id=RID, playbook="jsa", goal="analyze https://example.com")
+    ctx.recall_lessons = ["verify DOM XSS with a live browser PoC, never by pattern alone"]
+    ctx.extras["jsa"] = {"investigate": {"wave": 0, "total_waves": 1}}
+    txt = pb._task_summary("investigate", JSA_INVESTIGATE, ctx)
+    assert "Lessons from prior runs" in txt
+    assert "live browser PoC" in txt
+
+
 # ---------------------------------------------------------------------------
 # After the wave loop the pipeline flows straight into collect -> merge (no gate)
 # ---------------------------------------------------------------------------
@@ -249,9 +278,14 @@ def test_full_happy_path_to_complete(cp):
     )
     assert d_report["agent"] == "skribble" and d_report["state_id"] == "report"
     d_reflect = _step(
-        cp, "skribble",
-        {"report_complete": True, "confidence": "CERTAIN", "reports_written": 3,
-         "application_context": ["DOM XSS runs as the victim in their authed session on app.js"]},
+        cp,
+        "skribble",
+        {
+            "report_complete": True,
+            "confidence": "CERTAIN",
+            "reports_written": 3,
+            "application_context": ["DOM XSS runs as the victim in their authed session on app.js"],
+        },
     )
     assert d_reflect["agent"] == "carren" and d_reflect["state_id"] == "reflect"
     d = _step(cp, "carren", {"reflect_complete": True})
@@ -261,13 +295,84 @@ def test_full_happy_path_to_complete(cp):
     assert d["result"]["counts"]["verified"] == 3
 
 
+def _to_verify_with_dual(cp, **extra):
+    FakeJSA(cp).start(
+        session_id=SID,
+        run_id=RID,
+        goal="analyze https://example.com",
+        constraints={"intake": _VALID_INTAKE, "dual_verify": True, **extra},
+    )
+    _step(cp, "annie", {"wave_complete": True, "confidence": "PROBABLE"})  # investigate -> merge
+    return _step(
+        cp, "synthia", {"merge_complete": True, "merged_count": 2, "confidence": "PROBABLE"}
+    )
+
+
+_VPASS = {
+    "verdict": "PASS",
+    "gaps": [],
+    "confidence": "CERTAIN",
+    "evidence": ["poc transcript"],
+    "verified_count": 2,
+}
+
+
+def test_dual_verify_runs_a_second_independent_verifier_on_a_different_model(cp):
+    d0 = _to_verify_with_dual(cp, reverify_model="anthropic/other")
+    assert d0["agent"] == "vera" and d0["state_id"] == "verify"
+    # A PASS routes to a SECOND independent verifier (reverify), not report.
+    d1 = _step(cp, "vera", _VPASS)
+    assert d1["agent"] == "vera" and d1["state_id"] == "reverify"
+    assert d1["model"] == "anthropic/other"  # independent judge
+    assert "INDEPENDENT re-verification" in d1["task_summary"]
+    # Second pass confirms -> report; agreement recorded.
+    d2 = _step(cp, "vera", {**_VPASS, "evidence": ["independent poc transcript"]})
+    assert d2["agent"] == "skribble" and d2["state_id"] == "report"
+    assert cp.load(RID).context.extras["jsa"]["dual_verify_agreed"] is True
+
+
+def test_dual_verify_disagreement_is_recorded_honestly(cp):
+    _to_verify_with_dual(cp)
+    _step(cp, "vera", _VPASS)  # first PASS -> reverify
+    # Second verifier could NOT reproduce -> FAIL; disagreement recorded.
+    d = _step(
+        cp,
+        "vera",
+        {
+            "verdict": "FAIL",
+            "gaps": ["could not reproduce finding #2"],
+            "confidence": "CERTAIN",
+            "evidence": ["attempted PoC, no trigger"],
+        },
+    )
+    assert d["agent"] == "skribble" and d["state_id"] == "report"
+    jsa = cp.load(RID).context.extras["jsa"]
+    assert jsa["dual_verify_agreed"] is False
+    assert jsa["reverify"]["could_not_reproduce"] == ["could not reproduce finding #2"]
+
+
+def test_dual_verify_off_by_default_goes_straight_to_report(cp):
+    # No dual_verify constraint: a PASS routes directly to report (no reverify).
+    _to_merge(cp)
+    _step(cp, "synthia", {"merge_complete": True, "merged_count": 2, "confidence": "PROBABLE"})
+    d = _step(cp, "vera", _VPASS)
+    assert d["agent"] == "skribble" and d["state_id"] == "report"
+    assert "reverify" not in cp.load(RID).context.extras["jsa"]
+
+
 def test_report_requires_application_context_narrative(cp):
     _through_merge(cp)
     _step(cp, "synthia", {"merge_complete": True, "confidence": "PROBABLE"})
     d_report = _step(
-        cp, "vera",
-        {"verdict": "PASS", "gaps": [], "confidence": "CERTAIN",
-         "evidence": ["poc transcript"], "verified_count": 1},
+        cp,
+        "vera",
+        {
+            "verdict": "PASS",
+            "gaps": [],
+            "confidence": "CERTAIN",
+            "evidence": ["poc transcript"],
+            "verified_count": 1,
+        },
     )
     assert d_report["agent"] == "skribble" and d_report["state_id"] == "report"
     # The report task demands a within-the-application exploitability + impact narrative.
@@ -284,9 +389,14 @@ def test_report_requires_application_context_narrative(cp):
     )
     # With the narrative present, it advances to reflect.
     d_ok = _step(
-        cp, "skribble",
-        {"report_complete": True, "confidence": "CERTAIN", "reports_written": 1,
-         "application_context": ["stored XSS in comments runs for every viewer of the thread"]},
+        cp,
+        "skribble",
+        {
+            "report_complete": True,
+            "confidence": "CERTAIN",
+            "reports_written": 1,
+            "application_context": ["stored XSS in comments runs for every viewer of the thread"],
+        },
     )
     assert d_ok["agent"] == "carren" and d_ok["state_id"] == "reflect"
 
@@ -297,23 +407,40 @@ def test_reflect_persists_learned_rules_for_sast_gaps(cp):
     _through_merge(cp)
     _step(cp, "synthia", {"merge_complete": True, "confidence": "PROBABLE"})
     _step(
-        cp, "vera",
-        {"verdict": "PASS", "gaps": [], "confidence": "CERTAIN",
-         "evidence": ["poc transcript"], "verified_count": 1},
+        cp,
+        "vera",
+        {
+            "verdict": "PASS",
+            "gaps": [],
+            "confidence": "CERTAIN",
+            "evidence": ["poc transcript"],
+            "verified_count": 1,
+        },
     )
     _step(
-        cp, "skribble",
-        {"report_complete": True, "confidence": "CERTAIN", "reports_written": 1,
-         "application_context": ["DOM XSS runs in the victim's authed session"]},
+        cp,
+        "skribble",
+        {
+            "report_complete": True,
+            "confidence": "CERTAIN",
+            "reports_written": 1,
+            "application_context": ["DOM XSS runs in the victim's authed session"],
+        },
     )
     d = _step(
-        cp, "carren",
-        {"reflect_complete": True,
-         "new_rules": [
-             {"filename": "dom_xss-createcontextualfragment.yaml",
-              "yaml_content": "rules:\n  - id: jsa-learned-x\n    pattern: $R.createContextualFragment($X)\n",
-              "vuln_class": "dom_xss", "rationale": "confirmed miss in app.js"},
-         ]},
+        cp,
+        "carren",
+        {
+            "reflect_complete": True,
+            "new_rules": [
+                {
+                    "filename": "dom_xss-createcontextualfragment.yaml",
+                    "yaml_content": "rules:\n  - id: jsa-learned-x\n    pattern: $R.createContextualFragment($X)\n",
+                    "vuln_class": "dom_xss",
+                    "rationale": "confirmed miss in app.js",
+                },
+            ],
+        },
     )
     assert d["action"] == "complete"
     assert d["result"]["met"] is True
@@ -325,14 +452,25 @@ def test_reflect_no_rules_when_scanner_missed_nothing(cp):
     _through_merge(cp)
     _step(cp, "synthia", {"merge_complete": True, "confidence": "PROBABLE"})
     _step(
-        cp, "vera",
-        {"verdict": "PASS", "gaps": [], "confidence": "CERTAIN",
-         "evidence": ["poc"], "verified_count": 1},
+        cp,
+        "vera",
+        {
+            "verdict": "PASS",
+            "gaps": [],
+            "confidence": "CERTAIN",
+            "evidence": ["poc"],
+            "verified_count": 1,
+        },
     )
     _step(
-        cp, "skribble",
-        {"report_complete": True, "confidence": "CERTAIN", "reports_written": 1,
-         "application_context": ["x"]},
+        cp,
+        "skribble",
+        {
+            "report_complete": True,
+            "confidence": "CERTAIN",
+            "reports_written": 1,
+            "application_context": ["x"],
+        },
     )
     d = _step(cp, "carren", {"reflect_complete": True})
     assert d["action"] == "complete"
@@ -435,20 +573,32 @@ def test_result_payload_surfaces_mempalace_stubs(cp):
     # Run the full de-gated pipeline to completion, then inspect the payload.
     _to_merge(cp, cls=Stubbed)
     _step(
-        cp, "synthia",
+        cp,
+        "synthia",
         {"merge_complete": True, "confidence": "PROBABLE", "merged_count": 4},
         cls=Stubbed,
     )
     _step(
-        cp, "vera",
-        {"verdict": "PASS", "gaps": [], "confidence": "CERTAIN",
-         "evidence": ["executed browser-PoC transcript"], "verified_count": 1},
+        cp,
+        "vera",
+        {
+            "verdict": "PASS",
+            "gaps": [],
+            "confidence": "CERTAIN",
+            "evidence": ["executed browser-PoC transcript"],
+            "verified_count": 1,
+        },
         cls=Stubbed,
     )
     _step(
-        cp, "skribble",
-        {"report_complete": True, "confidence": "CERTAIN", "reports_written": 1,
-         "application_context": ["IDOR on /api/orders exposes other users' PII"]},
+        cp,
+        "skribble",
+        {
+            "report_complete": True,
+            "confidence": "CERTAIN",
+            "reports_written": 1,
+            "application_context": ["IDOR on /api/orders exposes other users' PII"],
+        },
         cls=Stubbed,
     )
     d = _step(cp, "carren", {"reflect_complete": True}, cls=Stubbed)

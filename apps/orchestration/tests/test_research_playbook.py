@@ -1,11 +1,11 @@
 """Integration tests for the migrated research skill (ResearchPlaybook) on the engine.
 
-Exercises the three modes (quick/standard/deep keyword detection + constraint
-override), the single-echo researching state, BOTH bounded critique loops with
-honest exhaustion (the legacy loops were unbounded), stall escalation,
-needs-clarification / UNCERTAIN escalation with a working clarify resume (the
-legacy resume was severed), the absolute report directory (legacy passed an
-unexpanded tilde), and the run_id/checkpointer contract (fresh instance per step).
+Exercises the three modes (caller-constraint or model-declared — the keyword
+detector was deleted), the DYNAMIC research fan (one echo branch per sub-query,
+arrangement 4) with the single-agent quick fast-path, evidence-gated critique +
+validation, BOTH bounded critique loops with honest exhaustion, stall escalation,
+needs-clarification / UNCERTAIN escalation with a working clarify resume, the
+absolute report directory, and the run_id/checkpointer contract.
 """
 
 from pathlib import Path
@@ -13,7 +13,8 @@ from pathlib import Path
 import pytest
 
 from orchestration.checkpointer import STATUS_AWAITING_USER, Checkpointer
-from orchestration.playbooks.research import ResearchPlaybook, detect_mode
+from orchestration.context import RunContext
+from orchestration.playbooks.research import RESEARCH_PLAN, ResearchPlaybook
 
 SID, RID = "sess-research", "run-research"
 
@@ -41,8 +42,35 @@ def _step(cp, agent, result):
     return ResearchPlaybook(cp).step(session_id=SID, run_id=RID, agent=agent, result=result)
 
 
+def _plan(steps, **extra):
+    return {"plan_steps": list(steps), "plan_complete": True, **extra}
+
+
+def _fan_batch(n, **branch_summary):
+    """A __parallel__ fan-in batch of n echo branches (sq1..sqN)."""
+    base = {"explore_complete": True}
+    base.update(branch_summary)
+    return [
+        {"branch_id": f"sq{i}", "agent": "echo", "exitCode": 0, "summary": dict(base)}
+        for i in range(1, n + 1)
+    ]
+
+
+def _research_fan(cp, n, **branch_summary):
+    """Research n sub-queries via the dynamic echo fan (standard/deep modes)."""
+    return _step(cp, "__parallel__", _fan_batch(n, **branch_summary))
+
+
+def _critique(verdict, issues):
+    return {"verdict": verdict, "issues": issues, "evidence": ["reviewed the artifact"]}
+
+
+def _validate(verdict, claims):
+    return {"verdict": verdict, "unsupported_claims": claims, "evidence": ["claim-source checks"]}
+
+
 # ---------------------------------------------------------------------------
-# start + mode detection
+# start + mode (caller-constraint or model-declared; no keyword detection)
 # ---------------------------------------------------------------------------
 
 
@@ -51,51 +79,62 @@ def test_start_requires_goal(cp):
     assert d["action"] == "error"
 
 
-def test_mode_keyword_detection():
-    assert detect_mode(QUICK_GOAL) == "quick"
-    assert detect_mode("deep research on rust async runtimes") == "deep"
-    assert detect_mode(STANDARD_GOAL) == "standard"
-
-
-def test_quick_mode_skips_planning(cp):
-    d = _start(cp, goal=QUICK_GOAL)
+def test_explicit_quick_constraint_skips_planning(cp):
+    d = _start(cp, goal=QUICK_GOAL, constraints={"mode": "quick"})
     assert d["action"] == "invoke_agent" and d["agent"] == "echo"
     assert d["state_id"] == "researching"
     assert "Quick research:" in d["task_summary"]
     assert f"skills/research-{SID}" in d["task_summary"]
-    assert "orchestrator_state" not in d
 
 
-def test_standard_mode_starts_at_planning(cp):
-    d = _start(cp)
+def test_default_start_is_planning_for_model_to_declare_mode(cp):
+    # No caller mode: the run ALWAYS transits planning; piper declares the mode.
+    d = _start(cp, goal=QUICK_GOAL)
     assert d["action"] == "invoke_agent" and d["agent"] == "piper"
     assert d["state_id"] == "planning"
-    assert "Research planning: decompose" in d["task_summary"]
-    assert f"skills/research-{SID}" in d["task_summary"]
 
 
-def test_mode_constraint_overrides_detection(cp):
-    # a standard-looking goal forced deep routes planning -> critiquing_plan
+def test_model_declared_deep_routes_to_plan_critique(cp):
+    _start(cp)  # no caller mode
+    d = _step(cp, "piper", _plan(["q1", "q2"], mode="deep"))
+    assert d["agent"] == "carren" and d["state_id"] == "critiquing_plan"
+
+
+def test_model_declared_standard_fans_out_research(cp):
+    _start(cp)
+    d = _step(cp, "piper", _plan(["q1", "q2"], mode="standard"))
+    assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "researching"
+    assert {t["branch_id"] for t in d["tasks"]} == {"sq1", "sq2"}
+    assert all(t["agent"] == "echo" for t in d["tasks"])
+
+
+def test_unknown_declared_mode_falls_back_to_standard(cp):
+    _start(cp)
+    d = _step(cp, "piper", _plan(["q1"], mode="banana"))
+    # standard -> fans out research (not the deep critique path)
+    assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "researching"
+    assert cp.load(RID).context.extras["research"]["mode"] == "standard"
+
+
+def test_caller_mode_constraint_wins(cp):
     _start(cp, constraints={"mode": "deep"})
-    d = _step(cp, "piper", {"plan_steps": ["q1", "q2"], "plan_complete": True})
+    d = _step(cp, "piper", _plan(["q1", "q2"], mode="quick"))  # model tries to differ
     assert d["agent"] == "carren" and d["state_id"] == "critiquing_plan"
 
 
 # ---------------------------------------------------------------------------
-# quick happy path (no planning, no critiques)
+# quick happy path (explicit constraint; single-agent fast path; no critiques)
 # ---------------------------------------------------------------------------
 
 
 def test_quick_happy_path_to_complete(cp):
-    _start(cp, goal=QUICK_GOAL)
+    _start(cp, goal=QUICK_GOAL, constraints={"mode": "quick"})
     d = _step(cp, "echo", {"explore_complete": True, "confidence": "PROBABLE"})
     assert d["agent"] == "synthia" and d["state_id"] == "synthesizing"
     d = _step(cp, "synthia", {"synthesis_complete": True, "theme_count": 2})
-    # independent verification gate (vera) runs in every mode before the report
     assert d["agent"] == "vera" and d["state_id"] == "validating"
-    d = _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})
+    d = _step(cp, "vera", _validate("PASS", []))
     assert d["agent"] == "skribble" and d["state_id"] == "report_writing"
-    # the output directory is a real ABSOLUTE path (legacy passed a literal '~')
     expected_dir = str(
         Path("~/projects/penny/research").expanduser() / "what-is-retrieval-augmented-generation"
     )
@@ -109,36 +148,40 @@ def test_quick_happy_path_to_complete(cp):
 
 
 # ---------------------------------------------------------------------------
-# standard happy path (planning, single-echo research, no critiques)
+# standard happy path (planning, research FAN, no critiques)
 # ---------------------------------------------------------------------------
 
 
 def test_standard_happy_path_to_complete(cp):
     _start(cp)
-    d = _step(cp, "piper", {"plan_steps": ["q1", "q2"], "plan_complete": True})
-    # single echo agent researches ALL sub-queries (no parallel fan-out)
-    assert d["action"] == "invoke_agent" and d["agent"] == "echo"
-    assert "Research sub-query 1: q1" in d["task_summary"]
-    assert "Research sub-query 2: q2" in d["task_summary"]
-    assert f"{SID}-echo-1 Research Findings" in d["task_summary"]
-    assert _step(cp, "echo", {"explore_complete": True})["state_id"] == "synthesizing"
+    d = _step(cp, "piper", _plan(["q1", "q2"]))
+    assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "researching"
+    # each branch researches its OWN sub-query, writing a branch-tagged drawer
+    joined = " ".join(t["task_summary"] for t in d["tasks"])
+    assert "Sub-query: q1" in joined and "Sub-query: q2" in joined
+    assert f"{SID}-echo-1 Research Findings" in joined
+    assert _research_fan(cp, 2)["state_id"] == "synthesizing"
     assert _step(cp, "synthia", {"synthesis_complete": True})["state_id"] == "validating"
-    assert (
-        _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})["state_id"]
-        == "report_writing"
-    )
+    assert _step(cp, "vera", _validate("PASS", []))["state_id"] == "report_writing"
     d = _step(cp, "skribble", SKRIBBLE_OK)
     assert d["action"] == "complete" and d["result"]["met"] is True
     assert d["result"]["sub_queries"] == ["q1", "q2"]
     assert d["result"]["warnings"] == [] and d["result"]["unresolved_issues"] == []
 
 
-def test_sub_queries_capped_at_mode_budget(cp):
-    # standard mode caps at 3 — a 5-step plan dispatches only the first 3
+def test_sub_queries_capped_at_budget(cp):
+    # default budget is 4 — a 6-step plan dispatches only the first 4 branches,
+    # with a visible truncation warning (no magic per-mode table).
     _start(cp)
-    d = _step(cp, "piper", {"plan_steps": ["q1", "q2", "q3", "q4", "q5"], "plan_complete": True})
-    assert "Research sub-query 3: q3" in d["task_summary"]
-    assert "q4" not in d["task_summary"]
+    d = _step(cp, "piper", _plan(["q1", "q2", "q3", "q4", "q5", "q6"]))
+    assert {t["branch_id"] for t in d["tasks"]} == {"sq1", "sq2", "sq3", "sq4"}
+    assert cp.load(RID).context.extras["research"]["sub_queries"] == ["q1", "q2", "q3", "q4"]
+
+
+def test_max_sub_queries_constraint_is_the_budget(cp):
+    _start(cp, constraints={"max_sub_queries": 2})
+    d = _step(cp, "piper", _plan(["q1", "q2", "q3", "q4"]))
+    assert {t["branch_id"] for t in d["tasks"]} == {"sq1", "sq2"}
 
 
 # ---------------------------------------------------------------------------
@@ -148,55 +191,50 @@ def test_sub_queries_capped_at_mode_budget(cp):
 
 def _deep_to_plan_critique(cp):
     _start(cp, constraints={"mode": "deep"})
-    return _step(cp, "piper", {"plan_steps": ["q1", "q2", "q3"], "plan_complete": True})
+    return _step(cp, "piper", _plan(["q1", "q2", "q3"]))
 
 
 def test_plan_critique_approve_proceeds_to_research(cp):
     _deep_to_plan_critique(cp)
-    d = _step(cp, "carren", {"verdict": "APPROVE", "issues": []})
-    assert d["agent"] == "echo" and d["state_id"] == "researching"
+    d = _step(cp, "carren", _critique("APPROVE", []))
+    assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "researching"
 
 
 def test_plan_critique_revision_loops_back_to_planning(cp):
     _deep_to_plan_critique(cp)
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["missing cost angle"]})
+    d = _step(cp, "carren", _critique("NEEDS_REVISION", ["missing cost angle"]))
     assert d["agent"] == "piper" and d["state_id"] == "planning"
     assert "REVISION cycle 1" in d["task_summary"]
     assert "missing cost angle" in d["task_summary"]
 
 
 def test_plan_critique_exhaustion_proceeds_honestly_with_warning(cp):
-    # A perpetually-rejecting critique with CHANGING issues walks the budget
-    # (max_iterations default 3) then proceeds to research — never spins forever
-    # (the legacy loop was unbounded) and never fabricates an APPROVE.
     _deep_to_plan_critique(cp)
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["issue a"]})  # iter 0
-    _step(cp, "piper", {"plan_steps": ["q1"], "plan_complete": True})
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["issue b"]})  # iter 1
-    _step(cp, "piper", {"plan_steps": ["q1"], "plan_complete": True})
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["issue c"]})  # exhausted
-    assert d["action"] == "invoke_agent" and d["agent"] == "echo" and d["state_id"] == "researching"
-    # finish the deep run: research -> synth -> report critique -> validate -> report
-    _step(cp, "echo", {"explore_complete": True})
+    _step(cp, "carren", _critique("NEEDS_REVISION", ["issue a"]))  # iter 0
+    _step(cp, "piper", _plan(["q1"]))
+    _step(cp, "carren", _critique("NEEDS_REVISION", ["issue b"]))  # iter 1
+    _step(cp, "piper", _plan(["q1"]))
+    d = _step(cp, "carren", _critique("NEEDS_REVISION", ["issue c"]))  # exhausted
+    assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "researching"
+    _research_fan(cp, 1)
     _step(cp, "synthia", {"synthesis_complete": True})
-    _step(cp, "carren", {"verdict": "APPROVE", "issues": []})
-    _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})
+    _step(cp, "carren", _critique("APPROVE", []))
+    _step(cp, "vera", _validate("PASS", []))
     d = _step(cp, "skribble", SKRIBBLE_OK)
     assert d["action"] == "complete"
-    assert d["result"]["met"] is True  # a report WAS written
+    assert d["result"]["met"] is True
     assert d["result"]["plan_critique_exhausted"] is True
     assert d["result"]["unresolved_issues"] == ["issue c"]
     assert any("plan critique budget exhausted" in w for w in d["result"]["warnings"])
-    assert d["result"]["iterations"] == 2
 
 
 def test_stalled_plan_critique_escalates_instead_of_spinning(cp):
     _deep_to_plan_critique(cp)
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["same problem"]})  # iter 0
-    _step(cp, "piper", {"plan_steps": ["q1"], "plan_complete": True})
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["same problem"]})  # iter 1
-    _step(cp, "piper", {"plan_steps": ["q1"], "plan_complete": True})
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["same problem"]})  # stall
+    _step(cp, "carren", _critique("NEEDS_REVISION", ["same problem"]))  # iter 0
+    _step(cp, "piper", _plan(["q1"]))
+    _step(cp, "carren", _critique("NEEDS_REVISION", ["same problem"]))  # iter 1
+    _step(cp, "piper", _plan(["q1"]))
+    d = _step(cp, "carren", _critique("NEEDS_REVISION", ["same problem"]))  # stall
     assert d["action"] == "escalate_to_user"
     assert "no measurable progress" in d["unknown_reason"]
     rec = cp.load(RID)
@@ -205,29 +243,22 @@ def test_stalled_plan_critique_escalates_instead_of_spinning(cp):
 
 
 def test_clarify_resume_resets_stale_loop_counters(cp):
-    # DEFECT 1: the escalation path never closes the active critique loop, so
-    # ctx.iteration is left mid-loop (2 here). After clarify re-enters planning
-    # and re-runs the deep pipeline, the FRESH plan-critique loop must start at
-    # iteration 0 — a single NEEDS_REVISION must REVISE (loop back to planning),
-    # NOT immediately fire plan_critique_exhausted on the first visit.
     _deep_to_plan_critique(cp)
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["same problem"]})  # iter 0
-    _step(cp, "piper", {"plan_steps": ["q1"], "plan_complete": True})
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["same problem"]})  # iter 1
-    _step(cp, "piper", {"plan_steps": ["q1"], "plan_complete": True})
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["same problem"]})  # stall
+    _step(cp, "carren", _critique("NEEDS_REVISION", ["same problem"]))
+    _step(cp, "piper", _plan(["q1"]))
+    _step(cp, "carren", _critique("NEEDS_REVISION", ["same problem"]))
+    _step(cp, "piper", _plan(["q1"]))
+    d = _step(cp, "carren", _critique("NEEDS_REVISION", ["same problem"]))  # stall
     assert d["action"] == "escalate_to_user"
 
-    # user clarifies -> resume re-enters planning with counters reset to zero
     d = _step(cp, "user", {"answer": "narrow to us-east"})
     assert d["action"] == "invoke_agent" and d["state_id"] == "planning"
     rec = cp.load(RID)
     assert rec.context.iteration == 0
     assert rec.context.iteration_history == []
 
-    # fresh plan-critique loop: first NEEDS_REVISION revises, does NOT exhaust
-    _step(cp, "piper", {"plan_steps": ["q1", "q2", "q3"], "plan_complete": True})
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["fresh gap"]})
+    _step(cp, "piper", _plan(["q1", "q2", "q3"]))
+    d = _step(cp, "carren", _critique("NEEDS_REVISION", ["fresh gap"]))
     assert d["agent"] == "piper" and d["state_id"] == "planning"
     assert "REVISION cycle 1" in d["task_summary"]
 
@@ -239,8 +270,8 @@ def test_clarify_resume_resets_stale_loop_counters(cp):
 
 def _deep_to_report_critique(cp):
     _deep_to_plan_critique(cp)
-    _step(cp, "carren", {"verdict": "APPROVE", "issues": []})
-    _step(cp, "echo", {"explore_complete": True})
+    _step(cp, "carren", _critique("APPROVE", []))
+    _research_fan(cp, 3)
     return _step(cp, "synthia", {"synthesis_complete": True})
 
 
@@ -251,33 +282,31 @@ def test_deep_synthesis_routes_to_report_critique(cp):
 
 def test_report_critique_revision_loops_back_to_synthesizing(cp):
     _deep_to_report_critique(cp)
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["overclaims in theme 2"]})
+    d = _step(cp, "carren", _critique("NEEDS_REVISION", ["overclaims in theme 2"]))
     assert d["agent"] == "synthia" and d["state_id"] == "synthesizing"
     assert "REVISION cycle 1" in d["task_summary"]
     assert "overclaims in theme 2" in d["task_summary"]
 
 
 def test_report_critique_empty_issues_still_revises(cp):
-    # Fix vs. legacy: NEEDS_REVISION with an empty issues list dead-ended the
-    # legacy FSM into error; now any non-APPROVE verdict revises (bounded).
     _deep_to_report_critique(cp)
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": []})
+    d = _step(cp, "carren", _critique("NEEDS_REVISION", []))
     assert d["agent"] == "synthia" and d["state_id"] == "synthesizing"
 
 
 def test_report_critique_exhaustion_completes_honestly(cp):
     _deep_to_report_critique(cp)
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["r1"]})  # iter 0
+    _step(cp, "carren", _critique("NEEDS_REVISION", ["r1"]))
     _step(cp, "synthia", {"synthesis_complete": True})
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["r2"]})  # iter 1
+    _step(cp, "carren", _critique("NEEDS_REVISION", ["r2"]))
     _step(cp, "synthia", {"synthesis_complete": True})
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["r3"]})  # exhausted
+    d = _step(cp, "carren", _critique("NEEDS_REVISION", ["r3"]))  # exhausted
     assert d["agent"] == "vera" and d["state_id"] == "validating"
-    d = _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})
+    d = _step(cp, "vera", _validate("PASS", []))
     assert d["agent"] == "skribble" and d["state_id"] == "report_writing"
     d = _step(cp, "skribble", SKRIBBLE_OK)
     assert d["action"] == "complete"
-    assert d["result"]["met"] is True  # a report WAS written
+    assert d["result"]["met"] is True
     assert d["result"]["report_critique_exhausted"] is True
     assert d["result"]["unresolved_issues"] == ["r3"]
     assert any("report critique budget exhausted" in w for w in d["result"]["warnings"])
@@ -285,26 +314,24 @@ def test_report_critique_exhaustion_completes_honestly(cp):
 
 def test_stalled_report_critique_escalates(cp):
     _deep_to_report_critique(cp)
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["thin evidence"]})
+    _step(cp, "carren", _critique("NEEDS_REVISION", ["thin evidence"]))
     _step(cp, "synthia", {"synthesis_complete": True})
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["thin evidence"]})
+    _step(cp, "carren", _critique("NEEDS_REVISION", ["thin evidence"]))
     _step(cp, "synthia", {"synthesis_complete": True})
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["thin evidence"]})
+    d = _step(cp, "carren", _critique("NEEDS_REVISION", ["thin evidence"]))
     assert d["action"] == "escalate_to_user"
     assert "no measurable progress" in d["unknown_reason"]
 
 
 # ---------------------------------------------------------------------------
-# validation gate (vera): independent citation-grounding pass — runs in ALL
-# modes as the final gate before report_writing; a FAIL loops back to
-# synthesizing (bounded), honest exhaustion still ships, stall escalates.
+# validation gate (vera): evidence-gated citation-grounding in ALL modes
 # ---------------------------------------------------------------------------
 
 
 def _standard_to_validating(cp):
     _start(cp)
-    _step(cp, "piper", {"plan_steps": ["q1", "q2"], "plan_complete": True})
-    _step(cp, "echo", {"explore_complete": True})
+    _step(cp, "piper", _plan(["q1", "q2"]))
+    _research_fan(cp, 2)
     return _step(cp, "synthia", {"synthesis_complete": True})
 
 
@@ -315,37 +342,48 @@ def test_synthesis_routes_to_validation_gate(cp):
 
 def test_validation_pass_proceeds_to_report(cp):
     _standard_to_validating(cp)
-    d = _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})
+    d = _step(cp, "vera", _validate("PASS", []))
     assert d["agent"] == "skribble" and d["state_id"] == "report_writing"
+
+
+def test_validation_rejects_empty_evidence(cp):
+    _standard_to_validating(cp)
+    # PASS with empty evidence violates the contract -> bounded retry.
+    d = _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": [], "evidence": []})
+    assert d["action"] == "invoke_agent" and d["state_id"] == "validating"
+    d2 = _step(cp, "vera", _validate("PASS", []))
+    assert d2["state_id"] == "report_writing"
+
+
+def test_validation_evidence_lands_on_context(cp):
+    _standard_to_validating(cp)
+    _step(cp, "vera", _validate("FAIL", ["claim 3 unsupported"]))
+    assert cp.load(RID).context.verify_evidence
 
 
 def test_validation_failure_loops_back_to_synthesizing(cp):
     _standard_to_validating(cp)
-    d = _step(cp, "vera", {"verdict": "FAIL", "unsupported_claims": ["claim 3 has no source"]})
+    d = _step(cp, "vera", _validate("FAIL", ["claim 3 has no source"]))
     assert d["agent"] == "synthia" and d["state_id"] == "synthesizing"
     assert "VALIDATION revision" in d["task_summary"]
     assert "claim 3 has no source" in d["task_summary"]
-    # re-synthesis routes straight back to vera (not through critique in standard)
     d = _step(cp, "synthia", {"synthesis_complete": True})
     assert d["agent"] == "vera" and d["state_id"] == "validating"
-    d = _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})
+    d = _step(cp, "vera", _validate("PASS", []))
     assert d["state_id"] == "report_writing"
 
 
 def test_validation_exhaustion_completes_honestly(cp):
-    # A verifier that keeps failing with CHANGING claims walks the budget then
-    # ships the report with the unverified claims surfaced — never spins, never
-    # silently marks unverified claims as verified.
     _standard_to_validating(cp)
-    _step(cp, "vera", {"verdict": "FAIL", "unsupported_claims": ["c1"]})  # iter 0
+    _step(cp, "vera", _validate("FAIL", ["c1"]))
     _step(cp, "synthia", {"synthesis_complete": True})
-    _step(cp, "vera", {"verdict": "FAIL", "unsupported_claims": ["c2"]})  # iter 1
+    _step(cp, "vera", _validate("FAIL", ["c2"]))
     _step(cp, "synthia", {"synthesis_complete": True})
-    d = _step(cp, "vera", {"verdict": "FAIL", "unsupported_claims": ["c3"]})  # exhausted
+    d = _step(cp, "vera", _validate("FAIL", ["c3"]))  # exhausted
     assert d["agent"] == "skribble" and d["state_id"] == "report_writing"
     d = _step(cp, "skribble", SKRIBBLE_OK)
     assert d["action"] == "complete"
-    assert d["result"]["met"] is True  # a report WAS written
+    assert d["result"]["met"] is True
     assert d["result"]["validation_exhausted"] is True
     assert d["result"]["unresolved_issues"] == ["c3"]
     assert any("validation budget exhausted" in w for w in d["result"]["warnings"])
@@ -353,20 +391,20 @@ def test_validation_exhaustion_completes_honestly(cp):
 
 def test_stalled_validation_escalates(cp):
     _standard_to_validating(cp)
-    _step(cp, "vera", {"verdict": "FAIL", "unsupported_claims": ["same claim"]})
+    _step(cp, "vera", _validate("FAIL", ["same claim"]))
     _step(cp, "synthia", {"synthesis_complete": True})
-    _step(cp, "vera", {"verdict": "FAIL", "unsupported_claims": ["same claim"]})
+    _step(cp, "vera", _validate("FAIL", ["same claim"]))
     _step(cp, "synthia", {"synthesis_complete": True})
-    d = _step(cp, "vera", {"verdict": "FAIL", "unsupported_claims": ["same claim"]})
+    d = _step(cp, "vera", _validate("FAIL", ["same claim"]))
     assert d["action"] == "escalate_to_user"
     assert "no measurable progress" in d["unknown_reason"]
 
 
 def test_deep_reaches_validation_after_report_critique_approve(cp):
     _deep_to_report_critique(cp)
-    d = _step(cp, "carren", {"verdict": "APPROVE", "issues": []})
+    d = _step(cp, "carren", _critique("APPROVE", []))
     assert d["agent"] == "vera" and d["state_id"] == "validating"
-    d = _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})
+    d = _step(cp, "vera", _validate("PASS", []))
     assert d["agent"] == "skribble" and d["state_id"] == "report_writing"
 
 
@@ -377,27 +415,30 @@ def test_deep_reaches_validation_after_report_critique_approve(cp):
 
 def _standard_to_researching(cp):
     _start(cp)
-    _step(cp, "piper", {"plan_steps": ["q1", "q2"], "plan_complete": True})
+    _step(cp, "piper", _plan(["q1", "q2"]))
 
 
-def test_needs_clarification_escalates(cp):
+def test_research_branch_clarification_escalates(cp):
+    # A branch that needs clarification and honestly reports UNCERTAIN drives the
+    # engine's weakest-confidence escalation (fan-in aggregation).
     _standard_to_researching(cp)
-    d = _step(
-        cp,
-        "echo",
-        {
-            "explore_complete": True,
-            "needs_clarification": True,
-            "clarifying_questions": ["which cloud region?"],
-        },
-    )
+    batch = _fan_batch(2)
+    batch[0]["summary"] = {
+        "explore_complete": False,
+        "needs_clarification": True,
+        "clarifying_questions": ["which cloud region?"],
+        "confidence": "UNCERTAIN",
+    }
+    d = _step(cp, "__parallel__", batch)
     assert d["action"] == "escalate_to_user"
-    assert "which cloud region?" in d["unknown_reason"]
+    assert d["previous_state"] == "researching"
 
 
 def test_clarify_resumes_at_planning_with_clarification(cp):
     _standard_to_researching(cp)
-    _step(cp, "echo", {"explore_complete": True, "needs_clarification": True})
+    batch = _fan_batch(2)
+    batch[0]["summary"] = {"explore_complete": False, "confidence": "UNCERTAIN"}
+    _step(cp, "__parallel__", batch)
     d = _step(cp, "user", {"answer": "us-east deployments only"})
     assert d["action"] == "invoke_agent" and d["agent"] == "piper"
     assert d["state_id"] == "planning"
@@ -406,7 +447,7 @@ def test_clarify_resumes_at_planning_with_clarification(cp):
 
 def test_uncertain_confidence_escalates(cp):
     _standard_to_researching(cp)
-    _step(cp, "echo", {"explore_complete": True})
+    _research_fan(cp, 2)
     d = _step(cp, "synthia", {"synthesis_complete": True, "confidence": "UNCERTAIN"})
     assert d["action"] == "escalate_to_user"
     assert d["previous_state"] == "synthesizing"
@@ -414,7 +455,7 @@ def test_uncertain_confidence_escalates(cp):
 
 def test_incomplete_synthesis_escalates_instead_of_stalling(cp):
     _standard_to_researching(cp)
-    _step(cp, "echo", {"explore_complete": True})
+    _research_fan(cp, 2)
     d = _step(cp, "synthia", {"synthesis_complete": False})
     assert d["action"] == "escalate_to_user"
     assert "synthesis_complete=false" in d["unknown_reason"]
@@ -428,24 +469,21 @@ def test_incomplete_plan_escalates(cp):
 
 
 # ---------------------------------------------------------------------------
-# honest failure + SUMMARY contract enforcement
+# honest failure + SUMMARY contract + recall
 # ---------------------------------------------------------------------------
 
 
 def test_failed_report_write_completes_with_met_false(cp):
-    # write_complete=false completes HONESTLY with met=False (the legacy FSM
-    # stalled into a generic error) — never a fabricated success.
-    _start(cp, goal=QUICK_GOAL)
+    _start(cp, goal=QUICK_GOAL, constraints={"mode": "quick"})
     _step(cp, "echo", {"explore_complete": True})
     _step(cp, "synthia", {"synthesis_complete": True})
-    _step(cp, "vera", {"verdict": "PASS", "unsupported_claims": []})
+    _step(cp, "vera", _validate("PASS", []))
     d = _step(cp, "skribble", {"write_complete": False, "files_written": []})
     assert d["action"] == "complete" and d["result"]["met"] is False
 
 
 def test_malformed_summary_reissues_step(cp):
-    # missing required explore_complete -> bounded retry re-issues researching
-    _start(cp, goal=QUICK_GOAL)
+    _start(cp, goal=QUICK_GOAL, constraints={"mode": "quick"})
     d = _step(cp, "echo", {"findings_count": 3})
     assert d["action"] == "invoke_agent" and d["state_id"] == "researching"
 
@@ -454,6 +492,15 @@ def test_wrong_agent_for_state_errors(cp):
     _start(cp)
     d = _step(cp, "synthia", {"synthesis_complete": True})
     assert d["action"] == "error"
+
+
+def test_recall_lessons_render_in_first_directive(cp):
+    pb = ResearchPlaybook(cp)
+    ctx = RunContext(session_id=SID, run_id=RID, playbook="research", goal=STANDARD_GOAL)
+    ctx.recall_lessons = ["prefer primary sources; cite them"]
+    txt = pb._task_summary("planning", RESEARCH_PLAN, ctx)
+    assert "Lessons from prior runs" in txt
+    assert "prefer primary sources" in txt
 
 
 # ---------------------------------------------------------------------------
@@ -465,6 +512,8 @@ def test_recovery_re_presents_pending_clarification(cp):
     from orchestration.recovery import recover_pending
 
     _standard_to_researching(cp)
-    _step(cp, "echo", {"explore_complete": True, "needs_clarification": True})
+    batch = _fan_batch(2)
+    batch[0]["summary"] = {"explore_complete": False, "confidence": "UNCERTAIN"}
+    _step(cp, "__parallel__", batch)
     directives = recover_pending(cp, session_id=SID, playbook="research")
     assert len(directives) == 1 and directives[0]["action"] == "escalate_to_user"

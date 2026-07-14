@@ -29,6 +29,7 @@ _KEYS: tuple[str, ...] = (
     "plan_steps",
     "verify_verdict",
     "verify_gaps",
+    "verify_evidence",
     "iteration",
     "max_iterations",
     "stakes",
@@ -42,6 +43,7 @@ _KEYS: tuple[str, ...] = (
     "step_retries",
     "total_steps",
     "iteration_history",
+    "recall_lessons",
     # terminal:
     "met",
     "complete",
@@ -69,6 +71,10 @@ class RunContext:
     plan_steps: list[Any] = field(default_factory=list)
     verify_verdict: str = ""
     verify_gaps: list[Any] = field(default_factory=list)
+    # Capped digest of the most recent non-empty SUMMARY `evidence` field the
+    # engine saw (single or parallel step). Written by the engine, read by the
+    # outcome ledger — "Ledger records outcome+evidence" (atomic-loop checklist).
+    verify_evidence: list[Any] = field(default_factory=list)
     iteration: int = 0
     max_iterations: int = 3
     stakes: str = ""
@@ -89,6 +95,11 @@ class RunContext:
     # strategy_repeated / is_stalled read it. Entries are small digests, not
     # payloads (gaps summary, the declared strategy_change, confidence).
     iteration_history: list[dict[str, Any]] = field(default_factory=list)
+
+    # Recall (atom F2): distilled lessons retrieved at start() and injected into
+    # the FIRST agent directive as advisory context. Never read by routing —
+    # a past lesson must not hard-gate a new run (loops.md Rec 3).
+    recall_lessons: list[str] = field(default_factory=list)
 
     # terminal
     met: bool = False

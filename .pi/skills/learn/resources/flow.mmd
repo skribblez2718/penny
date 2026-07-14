@@ -1,7 +1,9 @@
 stateDiagram-v2
     [*] --> intake
-    intake --> ingesting : start_ingest
-    ingesting --> designing : ingest_done (parallel echo ×3 fan-in)
+    intake --> scoping : start_scope (echo: emit ingest topology; Recall seeds the first directive)
+    intake --> ingesting : start_ingest [constraints.ingest_branches]
+    scoping --> ingesting : scope_done (model-emitted topology → dynamic fan;\n3-focus default = tagged LOAN fallback when scoping emits nothing)
+    ingesting --> designing : ingest_done (parallel echo fan-in, bounded by max_fan_width)
     designing --> charter_gate : design_done
     charter_gate --> authoring : approve
     charter_gate --> designing : refine
@@ -11,7 +13,7 @@ stateDiagram-v2
     assessing --> assessing : assess_next (per lesson)
     assessing --> synthesizing : assess_done
     synthesizing --> verifying : synth_done
-    verifying --> critiquing : verify_clean
+    verifying --> critiquing : verify_clean (EVIDENCE-GATED: recomputation transcripts required)
     verifying --> fixing : verify_fix (budget)
     verifying --> complete : verify_exhausted (met=False)
     fixing --> verifying : fix_done (always re-verify, whole corpus)
@@ -19,6 +21,7 @@ stateDiagram-v2
     critiquing --> fixing : critique_fix (budget)
     critiquing --> complete : critique_exhausted (met=False)
 
+    scoping --> unknown : UNCERTAIN / needs_clarification / no-valid-topology (loan ablated)
     ingesting --> unknown : UNCERTAIN / needs_clarification
     designing --> unknown
     authoring --> unknown
@@ -31,6 +34,7 @@ stateDiagram-v2
     awaiting_clarification --> designing : clarify (lesson progress preserved)
 
     intake --> error : abort
+    scoping --> error : abort
     ingesting --> error : abort
     designing --> error : abort
     charter_gate --> error : abort

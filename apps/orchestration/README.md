@@ -62,7 +62,9 @@ and is never delegated to.)
 
 | Module | Role |
 |---|---|
-| `engine.py` (`BasePlaybook`) | FSM engine: start/step/status, summary gatekeeper, escalate, planned gates, parallel fan-out, resume, checkpoint, emit, budgets, retry |
+| `engine.py` (`BasePlaybook`) | FSM engine: start/step/status, summary gatekeeper, escalate, planned gates, parallel fan-out (static or runtime-emitted), resume, checkpoint, emit, budgets + honest-exhaustion backstop, retry, default-on loop guards, model-owned routing helper |
+| `loans.py` | LOAN registry + Ablate hooks: every piece of "current model is weak" scaffolding is tagged (rationale, dates) and toggleable via `PENNY_ABLATE_<LOAN_ID>=1` for scaffold-ON/OFF ablation runs |
+| `recall.py` | Recall (atom F2): best-effort run-start retrieval of distilled lessons from MemPalace `penny/system_amendments`, seeded into the FIRST agent directive as advisory context |
 | `primitives/` (`PrimitiveSpec` / `ParallelSpec`) | Reusable operation descriptors — name, default agent, per-state SUMMARY contract, task hint; a playbook binds them to its own states (and fan-out branches) via `PRIMITIVE_BY_STATE` / `PARALLEL_BY_STATE` |
 | `playbooks/` | One `BasePlaybook` subclass per domain skill (e.g. `code.py`) — each defines its own states, `PRIMITIVE_BY_STATE`, `route_after`, `done_predicate` — plus `reference_cycle.py` (`ReferenceCycle`, the engine test fixture) and the registry |
 | `checkpointer.py` | Durable SQLite persistence by `run_id` (replaces `--state`/`_force_state`) |
@@ -87,6 +89,20 @@ and wires the seams it needs:
   escalation path.
 - **Domain `extras`** — a subclass stashes its own run state in `RunContext.extras`
   (round-trips through the checkpointer without touching the schema).
+- **Dynamic fan topology** — the `parallel_spec(state, ctx)` seam reads runtime-emitted
+  branches from `ctx.extras["dynamic_branches"][state]` (a model's PLAN output in
+  JSON-safe form, see `parallel_spec_from_dict`) before falling back to
+  `PARALLEL_BY_STATE`; both are bounded by `constraints["max_fan_width"]` (default 8).
+- **Default-on loop guards** — the base `progress_check` escalates a retry whose
+  declared `strategy_change` repeats the prior one, or a `gaps` set that hasn't moved
+  in two iterations (the engine auto-records iteration digests). Opt-out:
+  `LOOP_GUARDS = False`. Backstop: routing past `max_iterations` forces honest
+  exhaustion (`complete`, `met=False`, `exhausted` reason) — never a fake pass.
+- **Model-owned routing** — `route_after` may delegate an edge choice to the model via
+  `fire_model_route(summary)`: the chosen event fires iff it is a declared, currently
+  allowed, non-reserved transition; otherwise the code-owned fallback routes.
+- **Safe completion default** — the base `done_predicate` returns `False`; success is
+  only ever claimed by a playbook's own grounded predicate.
 
 ## Environment
 
@@ -96,6 +112,8 @@ and wires the seams it needs:
 | `PI_OBSERVABILITY_URL` | observability base URL | `http://localhost:8765` |
 | `PI_OBSERVABILITY_API_KEY` | Bearer token (reused) | empty ⇒ auth off |
 | `PENNY_ORCH_MAX_STEP_RETRIES` | transient step-retry budget | 2 |
+| `PENNY_RECALL` | `0` disables run-start lesson recall | on |
+| `PENNY_ABLATE_<LOAN_ID>` | `1` ablates a tagged loan (see `loans.list_loans()`) | off |
 
 ## Tests & CI guards
 

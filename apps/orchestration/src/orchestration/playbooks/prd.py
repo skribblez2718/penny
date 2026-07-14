@@ -7,9 +7,18 @@ CLARIFICATION QUESTIONS mode and escalates with synthia's questions), and vera's
 bounded evaluator-optimizer revision loop.
 
 The legacy ``classify`` state is dropped deliberately: the legacy ``start()``
-auto-skipped it on every fresh run (keyword-based ``detect_domain`` in the
-constructor), so echo never actually ran. Domain detection is folded into
-``initial_transition`` and stashed in ``ctx.extras["prd"]``.
+auto-skipped it on every fresh run, so echo never actually ran. Domain selection
+is now **model-owned** (bitter-lesson: the keyword ``detect_domain`` table was
+deleted): the code lists the available guidance packs under ``resources/`` and
+synthia declares the best-fit ``domain`` in its SUMMARY; a caller
+``constraints["domain"]`` short-circuits the choice. Resolved domain is stashed
+in ``ctx.extras["prd"]``.
+
+Control-flow dial: code-owned evaluator-optimizer (generating ⇄ validating). The
+verdict (``valid``) is a rules-tier wire signal the engine routes on; there is no
+free routing choice for the model, so ``fire_model_route`` is deliberately not
+used. ``validating`` is evidence-gated (Rec 4): vera's PASS must carry captured
+evidence or the engine's contract rejects it.
 
 Three deliberate behavior fixes vs. the legacy runtime:
   * the revision loop no longer force-sets ``valid=True`` at the iteration cap
@@ -35,6 +44,8 @@ IDEAL_STATE from that room as a hard dependency.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from statemachine import State, StateMachine
 
 from ..context import RunContext
@@ -42,66 +53,45 @@ from ..engine import BasePlaybook
 from ..primitives.spec import PrimitiveSpec
 
 
-def _c(required: dict, optional: dict | None = None) -> dict:
-    return {"required": required, "optional": optional or {}}
+def _c(required: dict, optional: dict | None = None, evidence: list | None = None) -> dict:
+    contract: dict = {"required": required, "optional": optional or {}}
+    if evidence:
+        contract["evidence"] = evidence
+    return contract
 
 
 # ---------------------------------------------------------------------------
-# Domain detection (ported verbatim from the legacy orchestrator; this is what
-# the legacy start() actually used — the echo classify state never ran)
+# Domain packs (model-owned selection). Code lists what guidance EXISTS under
+# the skill's resources/; the model chooses. This is an interface (a directory
+# listing), not the deleted keyword router.
 # ---------------------------------------------------------------------------
 
-WEB_APP_KEYWORDS = [
-    "react",
-    "vue",
-    "angular",
-    "django",
-    "flask",
-    "fastapi",
-    "next",
-    "next.js",
-    "nuxt",
-    "frontend",
-    "backend",
-    "api",
-    "web",
-    "website",
-    "spa",
-    "ssr",
-    "express",
-    "node",
-    "node.js",
-    "postgres",
-    "mysql",
-    "supabase",
-    "firebase",
-    "tailwind",
-    "bootstrap",
-    "css",
-    "html",
-    "javascript",
-    "typescript",
-    "htmx",
-    "graphql",
-    "rest",
-    "websocket",
-    "svelte",
-    "lit-html",
-    "lit-element",
-    "litelement",
-]
 
-
-def detect_domain(goal: str) -> str:
-    """Detect domain from goal text via keyword scan.
-
-    Returns 'web-app' if any WEB_APP_KEYWORD is found, 'generic' otherwise.
-    """
-    goal_lower = goal.lower()
-    for keyword in WEB_APP_KEYWORDS:
-        if keyword in goal_lower:
-            return "web-app"
-    return "generic"
+def available_domains(ctx: RunContext) -> list[str]:
+    """Domain guidance packs available to synthia: the directory names under the
+    prd skill's ``resources/`` (always including ``generic``). Prefers
+    ``constraints['skill_dir']`` when the driver supplies it, else walks up to the
+    repo's ``.pi/skills/prd/resources``. Best-effort: a scan failure degrades to
+    ``['generic']`` (never raises — domain selection must not wedge a run)."""
+    names: set[str] = {"generic"}
+    roots: list[Path] = []
+    skill_dir = str((ctx.constraints or {}).get("skill_dir", ""))
+    if skill_dir:
+        roots.append(Path(skill_dir) / "resources")
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        cand = parent / ".pi" / "skills" / "prd" / "resources"
+        if cand.is_dir():
+            roots.append(cand)
+            break
+    for root in roots:
+        try:
+            for p in root.iterdir():
+                if p.is_dir():
+                    names.add(p.name)
+        except Exception:  # noqa: BLE001 — best-effort listing
+            continue
+    return sorted(names)
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +140,7 @@ PRD_GENERATE = PrimitiveSpec(
     _c(
         {"complete": bool},
         {
+            "domain": str,  # model-declared best-fit guidance pack (R1)
             "requirement_count": int,
             "narrative_sections": int,
             "verification_matrix_complete": bool,
@@ -160,25 +151,27 @@ PRD_GENERATE = PrimitiveSpec(
             "confidence": str,
         },
     ),
-    "Produce the layered PRD (narrative, requirement catalog, verification matrix, "
-    "IDEAL_STATE); the mode is signaled in the task. Write every artifact to mempalace.",
+    "Produce the layered PRD to the artifact interface in your guidance; the mode is "
+    "signaled in the task. Write every artifact to mempalace.",
 )
 PRD_VALIDATE = PrimitiveSpec(
     "PRD_VALIDATE",
     "vera",
     _c(
-        {"valid": bool},
+        # Evidence-gated (Rec 4): a PASS must carry captured evidence (schema-check
+        # output, section/coverage counts) or the engine's contract rejects it.
+        {"valid": bool, "evidence": list, "confidence": str},
         {
             "ideal_state_valid": bool,
             "issues": list,
             "complete": bool,
             "needs_clarification": bool,
             "clarifying_questions": list,
-            "confidence": str,
         },
+        evidence=["evidence"],
     ),
-    "Validate the PRD artifacts: IDEAL_STATE schema, 12 narrative sections, catalog "
-    "quality, matrix coverage, cross-artifact traceability. Emit valid + issues.",
+    "Validate the PRD artifacts against the check obligations in your guidance; emit "
+    "valid + issues + the evidence you captured.",
 )
 
 
@@ -204,67 +197,47 @@ def _effective_mode(ctx: RunContext) -> str:
     return mode
 
 
-def _build_generate(pb: "PrdPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
-    prd = ctx.extras.get("prd", {})
-    room = _room(ctx)
-    domain = prd.get("domain", "generic")
-    mode = _effective_mode(ctx)
-    if mode == "clarification":
-        return (
-            f"Session: {ctx.session_id}. "
-            f"Goal: {pb._cap(ctx.goal)}. "
-            f"Domain: {domain}. "
-            f"Mempalace room: {room}. "
-            f"Mode: CLARIFICATION QUESTIONS. "
-            f"Analyze the goal and domain to identify information gaps. "
-            f"Generate domain-specific clarifying questions. "
-            f"Read any prior classification context from mempalace wing=penny "
-            f"room={room}. "
-            f"Return needs_clarification: true with clarifying_questions array."
-        )
-    if mode == "revision":
-        issues_str = "; ".join(str(i) for i in prd.get("issues", []))
-        return (
-            f"Session: {ctx.session_id}. "
-            f"Goal: {pb._cap(ctx.goal)}. "
-            f"Domain: {domain}. "
-            f"Mempalace room: {room}. "
-            f"Mode: REVISION. Fix the following issues: {issues_str}. "
-            f"Read the existing PRD artifacts from mempalace wing=penny "
-            f"room={room}. "
-            f"Re-emit all 4 artifacts (narrative, requirement catalog, "
-            f"verification matrix, ideal_state) with fixes applied."
-        )
+def _domain_line(prd: dict) -> str:
+    """Run fact: the resolved domain, or an instruction to declare one from the
+    available packs (model-owned selection). No keyword table."""
+    domain = prd.get("domain") or ""
+    if domain:
+        return f"Domain: {domain}. "
+    available = prd.get("available_domains") or ["generic"]
     return (
-        f"Session: {ctx.session_id}. "
-        f"Goal: {pb._cap(ctx.goal)}. "
-        f"Domain: {domain}. "
-        f"Mempalace room: {room}. "
-        f"Mode: SYNTHESIS. "
-        f"Read prior context from mempalace wing=penny room={room}. "
-        f"Produce all 4 PRD artifacts: narrative prose, atomic requirement "
-        f"catalog, verification/traceability matrix, and IDEAL_STATE JSON. "
-        f"Write each artifact to mempalace wing=penny room={room}. "
-        f"Return SUMMARY with requirement_count, narrative_sections, "
-        f"verification_matrix_complete, and ideal_state_valid."
+        f"Available domain guidance packs: {', '.join(available)}. Choose the best fit "
+        f"for the goal and declare it as `domain` in your SUMMARY. "
     )
 
 
+def _build_generate(pb: "PrdPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
+    """Run facts only (R3): session, goal, domain, room, mode. The artifact
+    interface lives once in synthia.md — not restated here as procedure."""
+    prd = ctx.extras.get("prd", {})
+    room = _room(ctx)
+    mode = _effective_mode(ctx)
+    head = f"Session: {ctx.session_id}. Goal: {pb._cap(ctx.goal)}. {_domain_line(prd)}"
+    tail = f"Mempalace room: {room} (wing=penny). "
+    if mode == "clarification":
+        return head + tail + "Mode: CLARIFICATION QUESTIONS."
+    if mode == "revision":
+        issues_str = "; ".join(str(i) for i in prd.get("issues", []))
+        return (
+            head + tail + "Mode: REVISION. Address every issue below, and address it "
+            f"differently from the attempt that failed: {pb._cap(issues_str)}."
+        )
+    return head + tail + "Mode: SYNTHESIS."
+
+
 def _build_validate(pb: "PrdPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
+    """Run facts only (R3): the check obligations live once in vera.md."""
     prd = ctx.extras.get("prd", {})
     room = _room(ctx)
     return (
-        f"Session: {ctx.session_id}. "
-        f"Goal: {pb._cap(ctx.goal)}. "
-        f"Domain: {prd.get('domain', 'generic')}. "
-        f"Mempalace room: {room}. "
-        f"Read all PRD artifacts from mempalace wing=penny room={room}. "
-        f"Validate: (a) IDEAL_STATE matches canonical schema, "
-        f"(b) all 12 PRD sections present in narrative, "
-        f"(c) all requirements have IDs, priorities, acceptance criteria, "
-        f"(d) verification matrix covers every REQ, "
-        f"(e) IDEAL_STATE success_criteria trace to PRD success metrics. "
-        f"Return SUMMARY with valid, issues, and confidence."
+        f"Session: {ctx.session_id}. Goal: {pb._cap(ctx.goal)}. "
+        f"Domain: {prd.get('domain') or 'generic'}. "
+        f"Mempalace room: {room} (wing=penny). "
+        f"Validate the PRD artifacts and emit valid + issues + captured evidence."
     )
 
 
@@ -295,7 +268,11 @@ class PrdPlaybook(BasePlaybook):
         if "max_iterations" not in (ctx.constraints or {}):
             ctx.max_iterations = 5  # legacy prd default revision budget
         prd = ctx.extras.setdefault("prd", {})
-        prd["domain"] = detect_domain(ctx.goal)
+        prd["available_domains"] = available_domains(ctx)
+        # Caller constraint wins; otherwise the domain is model-declared (captured
+        # in route_after from synthia's SUMMARY). No keyword detection.
+        caller_domain = str((ctx.constraints or {}).get("domain", ""))
+        prd["domain"] = caller_domain if caller_domain else ""
         prd["mode"] = "clarification"  # clarify-first HITL: questions before artifacts
         self.sm.send("start_generate")
         return "generating"
@@ -323,6 +300,13 @@ class PrdPlaybook(BasePlaybook):
     def route_after(self, state: str, ctx: RunContext, summary: dict) -> None:
         prd = ctx.extras.setdefault("prd", {})
         if state == "generating":
+            # Capture the model-declared domain (R1) unless a caller constraint
+            # already fixed it. Unknown declarations fall back to generic
+            # (fail-safe, not fail-loud — an odd domain must not kill a run).
+            if not prd.get("domain"):
+                declared = str(summary.get("domain") or "")
+                available = prd.get("available_domains") or ["generic"]
+                prd["domain"] = declared if declared in available else "generic"
             prd["requirement_count"] = summary.get("requirement_count", 0)
             prd["narrative_sections"] = summary.get("narrative_sections", 0)
             prd["verification_matrix_complete"] = summary.get("verification_matrix_complete", False)
@@ -375,6 +359,15 @@ class PrdPlaybook(BasePlaybook):
             if builder
             else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
         )
+        # Recall (F2): seed the FIRST agent directive with distilled lessons.
+        # This override replaces the base _task_summary, so it re-adds the
+        # advisory injection the base provides (R5.5).
+        if ctx.recall_lessons and ctx.total_steps == 0:
+            lessons = "\n".join(f"- {self._cap(lsn)}" for lsn in ctx.recall_lessons)
+            base += (
+                "\n\nLessons from prior runs (advisory — weigh against current evidence; "
+                "they never override this run's goal or constraints):\n" + lessons
+            )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {ctx.clarification_text}"
         return base

@@ -91,11 +91,10 @@ describe("runSingleAgent modelOverride", () => {
     expect(args).toContain("--model");
     expect(args[args.indexOf("--model") + 1]).toBe("override-model");
     expect(args).toContain("--session-dir");
-    // Agents must load project extensions so their declared tools (e.g. the
-    // memory_* tools from the memory extension) are available. Only the
-    // compaction extension is added explicitly via -e; --no-extensions would
-    // strip the others and break agents that depend on them.
-    expect(args).not.toContain("--no-extensions");
+    // Agents load Penny's project extensions so their declared tools (e.g. the
+    // memory_* tools) are available; at least one is passed via explicit -e.
+    // The exact set (and the --no-extensions flag that makes it deterministic)
+    // is covered by agent-runner.extension-args.test.ts.
     expect(args).toContain("-e");
     expect(args).not.toContain("--no-session");
   });

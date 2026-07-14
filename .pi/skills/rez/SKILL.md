@@ -66,7 +66,7 @@ yields no usable JD content aborts the run with
 | `analyzing` | annie | Ingest JD (fetch/read/inline), load `resources/resume/` + `resources/accomplishments/` read-only, gap analysis: matches / misses / transferables |
 | `aligning` | echo | **Fresh NIST NICE lookup every run** — current components version from the NICE Current Versions page + TKS verbiage for the 1–3 JD-relevant work roles. Never cached data |
 | `tailoring` | synthia | XYZ achievement bullets (see `reference.md` → Bullet Craft), ATS keywords, NICE canonical verbiage, zero fabrication; full resume markdown → mempalace |
-| `validating` | vera | Anti-fabrication trace of every bullet against sources + XYZ-bullet-craft/ATS/NICE compliance; bounded revise loop (default budget 3) |
+| `validating` | vera | Anti-fabrication trace of every bullet against sources + XYZ-bullet-craft/ATS/NICE compliance; bounded revise loop (default budget 3). **Evidence-gated** (Rec 4): the verdict must carry captured per-bullet traceability + compliance checks, or the engine rejects it. |
 | `exporting` | skribble | Render validated markdown → `.docx` in `/tmp/resumes/` via the word extension's `word_generate` tool; verify on disk |
 
 Hard guarantees enforced by the playbook

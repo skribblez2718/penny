@@ -9,9 +9,27 @@ run_id/checkpointer contract (fresh instance per step).
 import pytest
 
 from orchestration.checkpointer import STATUS_AWAITING_USER, Checkpointer
-from orchestration.playbooks.plan import PlanPlaybook
+from orchestration.context import RunContext
+from orchestration.playbooks.plan import PLAN_SCOPE, PlanPlaybook
 
 SID, RID = "sess-plan", "run-plan"
+
+# Scoping emits the SAME 3 foci the legacy topology used, so the shared
+# _explore_batch (entrypoints/tests/config) matches the model-emitted branches.
+SCOPE_SUMMARY = {
+    "scope_complete": True,
+    "explore_branches": {
+        "entrypoints": "entry points and call graph",
+        "tests": "tests and build pipeline",
+        "config": "configurations and dependencies",
+    },
+    "confidence": "CERTAIN",
+}
+
+
+def _critique(verdict, issues):
+    """carren is evidence-gated: every verdict carries captured evidence."""
+    return {"verdict": verdict, "issues": issues, "evidence": ["read the plan", "checked steps"]}
 
 
 @pytest.fixture
@@ -27,6 +45,12 @@ def _start(cp, goal="add pagination to the API", constraints=None):
 
 def _step(cp, agent, result):
     return PlanPlaybook(cp).step(session_id=SID, run_id=RID, agent=agent, result=result)
+
+
+def _to_exploring(cp, constraints=None):
+    """start -> scoping -> (piper emits topology) -> exploring fan-out."""
+    _start(cp, constraints=constraints)
+    return _step(cp, "piper", SCOPE_SUMMARY)
 
 
 def _explore_batch(complete=True):
@@ -63,19 +87,67 @@ def test_start_requires_goal(cp):
     assert d["action"] == "error"
 
 
-def test_start_fans_out_three_explore_branches(cp):
+def test_start_dispatches_scoping(cp):
     d = _start(cp)
+    assert d["action"] == "invoke_agent" and d["agent"] == "piper" and d["state_id"] == "scoping"
+
+
+def test_scoping_emits_the_runtime_fan_topology(cp):
+    _start(cp)
+    d = _step(cp, "piper", SCOPE_SUMMARY)
     assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "exploring"
     assert {t["branch_id"] for t in d["tasks"]} == {"entrypoints", "tests", "config"}
     assert all(t["agent"] == "echo" for t in d["tasks"])
-    # each branch carries its own focus + the shared mempalace room
     joined = " ".join(t["task_summary"] for t in d["tasks"])
     assert "entry points and call graph" in joined
     assert "skills/plan-" + SID in joined
+    # topology survived the checkpoint (rebuilt from extras every process)
+    assert cp.load(RID).context.extras["dynamic_branches"]["exploring"].keys() >= {
+        "entrypoints",
+        "tests",
+        "config",
+    }
+
+
+def test_caller_topology_skips_scoping(cp):
+    d = _start(
+        cp, constraints={"explore_branches": {"schema": "the db schema", "auth": "the auth layer"}}
+    )
+    assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "exploring"
+    assert {t["branch_id"] for t in d["tasks"]} == {"schema", "auth"}
+
+
+def test_scoping_width_cap_errors(cp):
+    _start(cp)
+    wide = {f"b{i}": f"focus {i}" for i in range(9)}  # default max_fan_width is 8
+    d = _step(
+        cp, "piper", {"scope_complete": True, "explore_branches": wide, "confidence": "CERTAIN"}
+    )
+    assert d["action"] == "error" and "max_fan_width" in d["errors"][0]
+
+
+def test_invalid_topology_falls_back_to_default_when_loan_enabled(cp, monkeypatch):
+    monkeypatch.delenv("PENNY_ABLATE_PLAN_DEFAULT_EXPLORE_TOPOLOGY", raising=False)
+    _start(cp)
+    d = _step(
+        cp, "piper", {"scope_complete": True, "explore_branches": {}, "confidence": "CERTAIN"}
+    )
+    assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "exploring"
+    assert {t["branch_id"] for t in d["tasks"]} == {"entrypoints", "tests", "config"}
+
+
+def test_invalid_topology_escalates_when_loan_ablated(cp, monkeypatch):
+    monkeypatch.setenv("PENNY_ABLATE_PLAN_DEFAULT_EXPLORE_TOPOLOGY", "1")
+    _start(cp)
+    d = _step(
+        cp, "piper", {"scope_complete": True, "explore_branches": {}, "confidence": "CERTAIN"}
+    )
+    assert d["action"] == "escalate_to_user"
+    assert "no valid exploration topology" in d["unknown_reason"]
 
 
 def test_explore_fan_in_routes_to_planning(cp):
-    _start(cp)
+    _to_exploring(cp)
     d = _fan_in(cp)
     assert d["action"] == "invoke_agent" and d["agent"] == "piper" and d["state_id"] == "planning"
 
@@ -85,7 +157,7 @@ def test_explore_branch_clarification_escalates(cp):
     # must pause the whole run for the user rather than being silently dropped
     # (exploring is escalatable; the weakest-branch confidence aggregates to
     # UNCERTAIN and drives the engine's escalation path).
-    _start(cp)
+    _to_exploring(cp)
     d = _step(cp, "__parallel__", _explore_batch_with_clarification())
     assert d["action"] == "escalate_to_user"
     assert d["previous_state"] == "exploring"
@@ -94,12 +166,13 @@ def test_explore_branch_clarification_escalates(cp):
     assert rec.current_state_id == "awaiting_clarification"
 
 
-def test_explore_clarification_resumes_at_exploring(cp):
-    # After the user answers the branch's clarification, the run re-explores.
-    _start(cp)
+def test_explore_clarification_resumes_at_scoping(cp):
+    # After the user answers, the run re-scopes (cheaper/safer than resuming
+    # downstream with a stale topology).
+    _to_exploring(cp)
     _step(cp, "__parallel__", _explore_batch_with_clarification())
     d = _step(cp, "user", {"answer": "target the monolith"})
-    assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "exploring"
+    assert d["action"] == "invoke_agent" and d["agent"] == "piper" and d["state_id"] == "scoping"
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +181,7 @@ def test_explore_clarification_resumes_at_exploring(cp):
 
 
 def _advance_to_planning(cp, constraints=None):
-    _start(cp, constraints=constraints)
+    _to_exploring(cp, constraints=constraints)
     _fan_in(cp)
 
 
@@ -124,7 +197,12 @@ def test_relaxed_mode_skips_verify_gate(cp):
 def test_full_happy_path_to_complete(cp):
     _advance_to_planning(cp)
     _step(cp, "piper", {"plan_complete": True, "plan_steps": [{"step": 1}], "stakes": "low"})
-    assert _step(cp, "carren", {"verdict": "APPROVE", "issues": []})["state_id"] == "taskifying"
+    assert (
+        _step(cp, "carren", {"verdict": "APPROVE", "issues": [], "evidence": ["read the plan"]})[
+            "state_id"
+        ]
+        == "taskifying"
+    )
     d = _step(cp, "tabitha", {"title": "Pagination Plan", "step_count": 4, "complete": True})
     assert d["action"] == "complete"
     assert d["result"]["met"] is True and d["result"]["critique_passed"] is True
@@ -171,7 +249,15 @@ def _to_critiquing(cp):
 def test_critique_revision_loops_back_to_exploring(cp):
     _to_critiquing(cp)
     # first rejection with fresh issues -> re-explore (more context)
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["missing rollback step"]})
+    d = _step(
+        cp,
+        "carren",
+        {
+            "verdict": "NEEDS_REVISION",
+            "issues": ["missing rollback step"],
+            "evidence": ["read the plan"],
+        },
+    )
     assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "exploring"
 
 
@@ -180,15 +266,27 @@ def test_exhaustion_completes_honestly_not_forced_approve(cp):
     # completes with met=False + unresolved issues — never a fabricated APPROVE.
     _to_critiquing(cp)
     # iter 0 -> re-explore
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["issue a"]})
+    _step(
+        cp,
+        "carren",
+        {"verdict": "NEEDS_REVISION", "issues": ["issue a"], "evidence": ["read the plan"]},
+    )
     _fan_in(cp)
     _step(cp, "piper", {"plan_complete": True, "plan_steps": [{"step": 1}]})
     # iter 1 -> re-explore
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["issue b"]})
+    _step(
+        cp,
+        "carren",
+        {"verdict": "NEEDS_REVISION", "issues": ["issue b"], "evidence": ["read the plan"]},
+    )
     _fan_in(cp)
     _step(cp, "piper", {"plan_complete": True, "plan_steps": [{"step": 1}]})
     # iter 2 -> budget spent (max_iterations default 3) -> taskify honestly
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["issue c"]})
+    d = _step(
+        cp,
+        "carren",
+        {"verdict": "NEEDS_REVISION", "issues": ["issue c"], "evidence": ["read the plan"]},
+    )
     assert d["action"] == "invoke_agent" and d["agent"] == "tabitha"
     d2 = _step(cp, "tabitha", {"title": "Best-effort plan", "step_count": 2, "complete": True})
     assert d2["action"] == "complete"
@@ -202,7 +300,15 @@ def test_blocked_critique_halts_honestly_not_taskified(cp):
     # run halts honestly at complete with met=False and the blocking issues
     # surfaced — never routed through tabitha.
     _to_critiquing(cp)
-    d = _step(cp, "carren", {"verdict": "BLOCKED", "issues": ["drops the prod database"]})
+    d = _step(
+        cp,
+        "carren",
+        {
+            "verdict": "BLOCKED",
+            "issues": ["drops the prod database"],
+            "evidence": ["read the plan"],
+        },
+    )
     assert d["action"] == "complete"
     assert d["result"]["met"] is False
     assert d["result"]["blocked"] is True
@@ -216,14 +322,24 @@ def test_blocked_critique_halts_honestly_not_taskified(cp):
 def test_stalled_critique_escalates_instead_of_spinning(cp):
     # Same issue every round -> stall detector escalates rather than force-approve.
     _to_critiquing(cp)
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["same problem"]})  # iter 0
+    _step(
+        cp,
+        "carren",
+        {"verdict": "NEEDS_REVISION", "issues": ["same problem"], "evidence": ["read the plan"]},
+    )  # iter 0
     _fan_in(cp)
     _step(cp, "piper", {"plan_complete": True, "plan_steps": [{"step": 1}]})
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["same problem"]})  # iter 1
+    _step(
+        cp,
+        "carren",
+        {"verdict": "NEEDS_REVISION", "issues": ["same problem"], "evidence": ["read the plan"]},
+    )  # iter 1
     _fan_in(cp)
     _step(cp, "piper", {"plan_complete": True, "plan_steps": [{"step": 1}]})
     d = _step(
-        cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["same problem"]}
+        cp,
+        "carren",
+        {"verdict": "NEEDS_REVISION", "issues": ["same problem"], "evidence": ["read the plan"]},
     )  # iter 2 stall
     assert d["action"] == "escalate_to_user"
     assert "no measurable progress" in d["unknown_reason"]
@@ -250,7 +366,7 @@ def test_planner_needs_clarification_escalates(cp):
     assert "monolith or microservices?" in d["unknown_reason"]
 
 
-def test_clarify_resumes_at_exploring(cp):
+def test_clarify_resumes_at_scoping(cp):
     _advance_to_planning(cp)
     _step(
         cp,
@@ -258,7 +374,36 @@ def test_clarify_resumes_at_exploring(cp):
         {"plan_complete": True, "plan_steps": [{"step": 1}], "needs_clarification": True},
     )
     d = _step(cp, "user", {"answer": "target the monolith"})
-    assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "exploring"
+    assert d["action"] == "invoke_agent" and d["agent"] == "piper" and d["state_id"] == "scoping"
+
+
+# ---------------------------------------------------------------------------
+# evidence-gated critique (Rec 4) + recall injection (R4.6)
+# ---------------------------------------------------------------------------
+
+
+def test_critique_rejects_empty_evidence(cp):
+    _to_critiquing(cp)
+    # APPROVE with empty evidence violates the contract -> bounded retry.
+    d = _step(cp, "carren", {"verdict": "APPROVE", "issues": [], "evidence": []})
+    assert d["action"] == "invoke_agent" and d["state_id"] == "critiquing"
+    d2 = _step(cp, "carren", _critique("APPROVE", []))
+    assert d2["state_id"] == "taskifying"
+
+
+def test_critique_evidence_lands_on_context(cp):
+    _to_critiquing(cp)
+    _step(cp, "carren", _critique("NEEDS_REVISION", ["missing rollback"]))
+    assert cp.load(RID).context.verify_evidence  # captured for the outcome ledger
+
+
+def test_recall_lessons_render_in_first_directive(cp):
+    pb = PlanPlaybook(cp)
+    ctx = RunContext(session_id=SID, run_id=RID, playbook="plan", goal="add pagination")
+    ctx.recall_lessons = ["prefer reversible steps; name rollback"]
+    txt = pb._task_summary("scoping", PLAN_SCOPE, ctx)
+    assert "Lessons from prior runs" in txt
+    assert "prefer reversible steps" in txt
 
 
 # ---------------------------------------------------------------------------

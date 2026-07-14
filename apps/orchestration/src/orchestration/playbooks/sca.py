@@ -85,6 +85,7 @@ STATE_TO_PHASE = {
     "triage": "P8_TRIAGE",
     "deep_dive": "P9_DEEP_DIVE",
     "verification": "P10_VERIFICATION",
+    "reverification": "P10B_REVERIFICATION",
     "fix_verification": "P11_FIX_VERIFICATION",
     "report": "P12_REPORT",
 }
@@ -102,6 +103,7 @@ _PROMPT_BY_STATE = {
     "triage": "annie-triage",
     "deep_dive": "annie-deep-dive",
     "verification": "vera-verification",
+    "reverification": "vera-verification",
     "fix_verification": "vera-fix-verification",
     "report": "skribble-report",
 }
@@ -116,6 +118,7 @@ PHASE_DESC = {
     "P8_TRIAGE": "Triage findings: dedup, prioritize, filter false positives",
     "P9_DEEP_DIVE": "Deep-dive suspicious findings; surface new targets",
     "P10_VERIFICATION": "Verify exploitability of confirmed findings",
+    "P10B_REVERIFICATION": "Independently RE-verify exploitability (dual-verify)",
     "P11_FIX_VERIFICATION": "Verify proposed fixes close the findings",
     "P12_REPORT": "Assemble the final secure-code-analysis report",
 }
@@ -150,6 +153,7 @@ class SCAMachine(StateMachine):
     deep_dive = State()
     verification_gate = State()  # GATE_BEFORE vera
     verification = State()
+    reverification = State()  # vera#2 (different model) — optional dual-verify (Rec 5)
     fix_verification = State()
     report_gate = State()  # GATE_AT skribble
     report = State()
@@ -194,6 +198,8 @@ class SCAMachine(StateMachine):
 
     vgate_ok = verification_gate.to(verification)
     verification_done = verification.to(fix_verification)
+    verification_reverify = verification.to(reverification)  # dual_verify on
+    reverification_done = reverification.to(fix_verification)
     fix_done = fix_verification.to(report_gate)
     rgate_ok = report_gate.to(report)
     report_done = report.to(complete)
@@ -248,6 +254,7 @@ class SCAMachine(StateMachine):
         | deep_dive.to(error)
         | verification_gate.to(error)
         | verification.to(error)
+        | reverification.to(error)
         | fix_verification.to(error)
         | report_gate.to(error)
         | report.to(error)
@@ -539,6 +546,7 @@ class ScaPlaybook(BasePlaybook):
         "triage": SCA_TRIAGE,
         "deep_dive": SCA_DEEP_DIVE,
         "verification": SCA_VERIFICATION,
+        "reverification": SCA_VERIFICATION,  # optional second independent verifier (Rec 5)
         "fix_verification": SCA_FIX_VERIFICATION,
         "report": SCA_REPORT,
     }
@@ -756,7 +764,26 @@ class ScaPlaybook(BasePlaybook):
             # BEFORE-gate cleared + vera identity verified by the engine: execute
             # the single-shot PoC batch ONCE, then advance (NO loop, NO re-dispatch).
             self._run_pocs(ctx, summary)
-            self.sm.send("verification_done")
+            # Dual-verify (Rec 5, opt-in): a SECOND independent verifier produces
+            # and executes its OWN PoC batch, so a single verifier's miss or
+            # fabrication does not go unchallenged. Both results feed the report.
+            if bool((ctx.constraints or {}).get("dual_verify")):
+                self.sm.send("verification_reverify")
+            else:
+                self.sm.send("verification_done")
+        elif state == "reverification":
+            meta = self._meta(ctx)
+            # Snapshot the first pass BEFORE the second run (the domain helper
+            # writes meta["verification"]).
+            first = dict(meta.get("verification", {}) or {})
+            second = self._run_pocs(ctx, summary)
+            meta["reverification"] = second
+            # Coarse, honest agreement signal (defense-in-depth, not a solved
+            # problem): do both independent passes execute a comparable batch?
+            fn = len((first or {}).get("executed", []) or [])
+            sn = len((second or {}).get("executed", []) or [])
+            meta["dual_verify_agreed"] = fn == sn
+            self.sm.send("reverification_done")
         elif state == "fix_verification":
             self.sm.send("fix_done")
         elif state == "report":
@@ -931,6 +958,17 @@ class ScaPlaybook(BasePlaybook):
         counts[gate_key] = counts.get(gate_key, 0) + 1
         ctx.clarification_text = note  # surfaced to the re-run task_summary
 
+    def model_for_state(self, state: str, ctx: RunContext) -> str | None:
+        """Dual-verify independence (Rec 5): the second verifier (`reverification`)
+        runs on a DIFFERENT model when the caller supplies
+        ``constraints["reverify_model"]`` — an independent judge so correlated
+        single-model errors don't slip an exploit (or a false clean) through.
+        Unset → the agent's default model (reduced independence; documented)."""
+        if state == "reverification":
+            model = str((ctx.constraints or {}).get("reverify_model", "")).strip()
+            return model or None
+        return None
+
     # -- prompts + result --------------------------------------------------
     def _task_summary(self, state: str, spec: PrimitiveSpec, ctx: RunContext) -> str:
         d = self._domain(ctx)
@@ -968,6 +1006,22 @@ class ScaPlaybook(BasePlaybook):
             # rebuild only if this is a side-effect-free re-issue with none present.
             report_summary = meta.get("report") or self._build_report(ctx)
             task = d.enrich_report_task(meta, task, report_summary)
+        elif state == "reverification":
+            task = (
+                task + "\n\nDUAL-VERIFY (independent second pass): another verifier already "
+                f"produced a PoC batch in room {ctx.session_id}-p10_verification. "
+                "Re-verify those findings FROM SCRATCH — produce your OWN non-destructive "
+                "run_pocs batch; do NOT trust the first verifier's conclusions. A finding "
+                "only ONE pass confirms exploitable is not reliably verified."
+            )
+        # Recall (F2): seed the FIRST agent directive with distilled lessons
+        # (this override replaces the base _task_summary, so re-add it).
+        if ctx.recall_lessons and ctx.total_steps == 0:
+            lessons = "\n".join(f"- {self._cap(lsn)}" for lsn in ctx.recall_lessons)
+            task += (
+                "\n\nLessons from prior runs (advisory — weigh against current evidence; "
+                "they never override this run's goal or constraints):\n" + lessons
+            )
         if ctx.clarification_text:
             task += f"\n\nUser clarification: {self._cap(ctx.clarification_text)}"
         return task
@@ -988,6 +1042,15 @@ class ScaPlaybook(BasePlaybook):
             },
             "augment_capped": bool(meta.get("augment_capped", False)),
             "augment_iterations": self._augment_iterations(meta),
+            # Dual-verify (Rec 5): present only when the second independent pass ran.
+            **(
+                {
+                    "dual_verify": True,
+                    "dual_verify_agreed": bool(meta.get("dual_verify_agreed")),
+                }
+                if "reverification" in meta
+                else {}
+            ),
             "requires_approval": True,
             "report_md_present": bool(meta.get("report_md_present")),
             "cleared_gates": list(meta.get("cleared_gates", [])),

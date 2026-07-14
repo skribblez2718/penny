@@ -17,7 +17,7 @@ vi.mock("../../bridge.js", () => ({
   queryEngineRuns: (...args: any[]) => engineRunsMock(...args),
   queryMempalaceSkillRooms: vi.fn(async () => []),
   queryMempalaceSkillRoomsForSession: vi.fn(async () => []),
-  queryKGEntitiesForSession: vi.fn(async () => []),
+  queryKGEntitiesForScope: vi.fn(async () => []),
   queryOutcomeLedgerDecisions: vi.fn(async () => []),
   queryDiaryEscalation: vi.fn(async () => []),
 }));
@@ -114,7 +114,7 @@ describe("compactionExtension", () => {
     expect(result.compaction.firstKeptEntryId).toBe("fkid-1");
     expect(result.compaction.tokensBefore).toBe(15000);
     expect(result.compaction.details).toBeDefined();
-    expect(result.compaction.details.schema_version).toBe("2.1.0");
+    expect(result.compaction.details.schema_version).toBe("2.3.0");
     expect(result.compaction.details.files.read).toContain("/tmp/read.md");
     expect(result.compaction.details.files.modified).toContain("/tmp/written.md");
     expect(result.compaction.details.files.modified).toContain("/tmp/edited.md");
@@ -122,7 +122,9 @@ describe("compactionExtension", () => {
     expect(result.compaction.details.constraints).toEqual([]);
   });
 
-  it("surfaces engine checkpointer runs in prose and RESUME-REFS", async () => {
+  it("surfaces a SCOPED engine run in prose and RESUME-REFS", async () => {
+    // The run's session is bound to THIS conversation by a skill call/result in
+    // the window, so it is scoped (not a stale cross-session run).
     engineRunsMock.mockResolvedValueOnce([
       {
         run_id: "code-a1b2c3",
@@ -138,15 +140,65 @@ describe("compactionExtension", () => {
     const pi = createMockPi() as any;
     compactionExtension(pi);
 
-    const result = await pi.emit("session_before_compact", createMockEvent());
+    const event = createMockEvent({
+      preparation: {
+        firstKeptEntryId: "fkid-1",
+        tokensBefore: 15000,
+        fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+        messagesToSummarize: [
+          skillCall("Migrate research skill onto engine", "tc-1", "code"),
+          skillResult("code-1751700000000", "tc-1"),
+        ],
+      },
+    });
+    const result = await pi.emit("session_before_compact", event);
 
     expect(result.compaction.summary).toContain("## In-Flight Orchestration Runs");
     expect(result.compaction.summary).toContain("[RESUME-REFS v2]");
     expect(result.compaction.summary).toContain(
       'resume=skill(skill_name="code", resumeFrom="code-1751700000000")'
     );
-    // Engine run goal becomes the session goal when no skill call exists
+    expect(result.compaction.details.engine_runs).toHaveLength(1);
     expect(result.compaction.details.goal).toBe("Migrate research skill onto engine");
+  });
+
+  it("excludes a STALE cross-session run from prose, surfacing it only in refs", async () => {
+    // A pending run whose session is NOT referenced by this conversation (no
+    // skill call/result, no prior refs) is the reported staleness symptom.
+    engineRunsMock.mockResolvedValueOnce([
+      {
+        run_id: "old-x",
+        session_id: "plan-9999999999999",
+        playbook: "plan",
+        current_state_id: "critiquing",
+        status: "awaiting_user",
+        goal: "An OLD goal from a previous session",
+        updated_at: "2026-07-01T00:00:00.000Z",
+      },
+    ]);
+    const pi = createMockPi() as any;
+    compactionExtension(pi);
+
+    const event = createMockEvent({
+      preparation: {
+        firstKeptEntryId: "fkid-1",
+        tokensBefore: 15000,
+        fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+        messagesToSummarize: [
+          { role: "user", content: "Please help me refactor the token estimator module" },
+        ],
+      },
+    });
+    const result = await pi.emit("session_before_compact", event);
+
+    // Goal tracks the fresh user intent, NOT the stale run.
+    expect(result.compaction.details.goal).toBe(
+      "Please help me refactor the token estimator module"
+    );
+    expect(result.compaction.details.engine_runs).toHaveLength(0);
+    expect(result.compaction.details.other_session_runs).toHaveLength(1);
+    // Prose never mentions the stale goal.
+    expect(result.compaction.summary).not.toContain("An OLD goal from a previous session");
   });
 
   it("increments compaction_seq for second compaction", async () => {

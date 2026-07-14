@@ -12,7 +12,7 @@ vi.mock("../../bridge.js", () => ({
   queryEngineRuns: vi.fn(async () => []),
   queryMempalaceSkillRooms: vi.fn(async () => []),
   queryMempalaceSkillRoomsForSession: vi.fn(async () => []),
-  queryKGEntitiesForSession: vi.fn(async () => []),
+  queryKGEntitiesForScope: vi.fn(async () => []),
   queryOutcomeLedgerDecisions: vi.fn(async () => []),
   queryDiaryEscalation: vi.fn(async () => []),
 }));

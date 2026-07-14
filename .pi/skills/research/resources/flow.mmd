@@ -2,9 +2,11 @@
 %% research skill — FSM (edge-for-edge with ResearchPlaybook / ResearchMachine)
 %% apps/orchestration/src/orchestration/playbooks/research.py
 %% ============================================================================
-%% One machine serves all three modes (quick / standard / deep); the mode is
-%% detected at intake (detect_mode) or forced by constraints.mode and selects
-%% the edges. State lives in the durable SQLite checkpointer keyed by run_id.
+%% One machine serves all three modes (quick / standard / deep). The mode is
+%% caller-declared (constraints.mode) or MODEL-declared by piper in its plan
+%% SUMMARY (the keyword detect_mode router was deleted); only an explicit caller
+%% quick takes the single-agent fast-path. State lives in the durable SQLite
+%% checkpointer keyed by run_id.
 %%
 %% READING NOTES:
 %%   * Multiple guarded arrows from ONE state are MUTUALLY EXCLUSIVE (XOR).
@@ -12,10 +14,14 @@
 %%   * Both critique loops AND the validation loop are BOUNDED by ctx.max_iterations;
 %%     on exhaustion the run proceeds honestly with a recorded warning (never
 %%     force-approves / never ships unverified claims as verified).
-%%   * researching is a SINGLE echo agent researching ALL sub-queries (no fan-out).
-%%   * validating (vera) is an independent, evidence-based citation-grounding gate
-%%     that runs in ALL modes before report_writing (distinct from carren's
-%%     subjective report critique); a FAIL loops back to synthesizing to re-ground.
+%%   * researching is a DYNAMIC FAN (arrangement 4): route_after('planning') emits
+%%     one read-only echo branch per sub-query into ctx.extras['dynamic_branches'],
+%%     bounded by constraints.max_fan_width (default 8); the explicit-quick
+%%     fast-path stays a single echo agent via the primitive fallback.
+%%   * critiquing_* (carren) and validating (vera) are EVIDENCE-GATED (Rec 4): the
+%%     contract rejects a verdict with no captured evidence.
+%%   * validating (vera) is an independent citation-grounding gate that runs in ALL
+%%     modes before report_writing; a FAIL loops back to synthesizing to re-ground.
 %%   * to_unknown fires when progress_check returns a reason (needs_clarification,
 %%     *_complete=false, a stalled critique, or a stalled validation); it is
 %%     available only from the ESCALATABLE_STATES (report_writing does NOT escalate).
@@ -23,9 +29,9 @@
 stateDiagram-v2
     [*] --> intake
 
-    %% intake: initial_transition picks mode; empty goal raises (abort → error)
-    intake --> planning : start_plan\n[standard || deep]
-    intake --> researching : start_research\n[quick]
+    %% intake: caller mode or planning-for-model-to-declare; empty goal aborts.
+    intake --> planning : start_plan\n[default: mode caller- or model-declared]
+    intake --> researching : start_research\n[explicit constraints.mode == quick]
 
     %% planning (piper) — decompose into sub-queries; deep adds a critique gate
     planning --> critiquing_plan : plan_to_critique\n[deep]
@@ -36,7 +42,8 @@ stateDiagram-v2
     critiquing_plan --> planning : plan_critique_revise\n[verdict != APPROVE && iter+1 < max_iterations]
     critiquing_plan --> researching : plan_critique_exhausted\n[budget spent; warning recorded]
 
-    %% researching (echo, single agent, ALL sub-queries)
+    %% researching (echo DYNAMIC FAN: one branch per sub-query; single-agent on
+    %% the explicit-quick fast-path). Fan-in aggregates by weakest confidence.
     researching --> synthesizing : research_done
 
     %% synthesizing (synthia) — deep adds a report critique gate; all modes then

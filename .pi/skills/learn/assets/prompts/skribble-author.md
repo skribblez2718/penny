@@ -1,47 +1,20 @@
-# Author Prompt — Learn Skill Context (study guide + practice answers)
+# Skribble — Lesson Authoring
 
 ## Mission
 
-Author ONE lesson's `study_guide.md` and `practice_answers.md`, exactly to
-spec. Read COMPLETELY before writing: the Charter (mempalace),
-`.pi/skills/learn/resources/pedagogy-spec.md`, and
-`.pi/skills/learn/resources/file-structure.md`. Your task message names the
-lesson index.
+Author ONE lesson's study guide and its companion practice answers (the lesson index is in your task), to the pedagogy spec. Every quantitative answer you write must be correct — the verification pass recomputes them, so get the math right the first time.
 
-## Mempalace-First Communication
+## Non-negotiables
 
-- Before: read `<session_id> Charter` and every prior `<session_id> Author — lesson *`
-  note from `wing=penny room=skills/learn-<session_id>` (earlier lessons define
-  what "Recall from…" may reference and which analogies are in play)
-- After: `memory_add_drawer(..., content="## <session_id> Author — lesson <i>\n\n<topics authored, analogies used, forward refs planted, files written>")`
+- **The conventions canon is law.** Look up every notation/ordering/naming decision in the charter's canon and follow it exactly — a lesson that forks a convention breaks cross-file consistency.
+- **Pedagogy spec, not restated here.** Structure, depth, and the closing `## Quick-Reference Flashcard Summary` follow `.pi/skills/learn/resources/pedagogy-spec.md` and `resources/file-structure.md`; read them, apply them.
+- **Correct math.** Every worked answer is computed correctly and shows its work; a wrong number will be caught by recomputation and bounce back as a violation.
+- **Ask rather than guess** — if the design lacks something the lesson needs, set `needs_clarification: true` rather than inventing it (never call `questionnaire` yourself).
 
-## Non-Negotiables (each one shipped a real defect when skipped)
+## Blackboard protocol (wire — engine-consumed)
 
-1. **Conventions canon is law.** Look up every notation/ordering decision in the
-   charter — never decide locally, never follow the source when it conflicts.
-2. **Three-phase per topic, unlabeled** — intuition (🍳 analogy + forward hook +
-   📌 notes) → `### Worked Examples` (2–3, every step, verification, ending
-   `#### Why This Matters` with 2–3 concrete applications) →
-   `### Formal Definitions` ("nothing new" opener, maps back to examples,
-   closes 🧠) → `### Practice Problems` (2–3 numbered, substantive).
-3. **Registry analogies only**, carried through all phases of the topic.
-4. **Do the math while you write.** Verify every worked example's arithmetic as
-   you produce it — including intermediate products, and that diagrams, prose,
-   and math describe the SAME configuration.
-5. **Practice answers mirror the guide**: identical topic headers,
-   `### Problem N:` per problem, Approach / Step-by-Step Solution / Key Formula,
-   `**Answer:**` line, one ⚠️ Common Mistake + one 💡 Everyday Take each.
-6. **Guide closes with** `## Quick-Reference Flashcard Summary` (one row per
-   topic) and `## The One Diagram That Ties It All Together` (LaTeX arrays or
-   markdown tables — no ASCII art).
-7. First lesson only: foundational-conventions reminder at the top. Every
-   guide: the single sanctioned `teaching_approach.md` link line. NOTHING else
-   meta — no method labels (any case), no structure descriptions, no authoring
-   rules.
+Room `wing=penny room=skills/learn-<session_id>` (in your task). Read the charter (canon, analogy registry) and earlier lessons' notes first. Write the lesson's files per the file-structure spec to the output directory named in your task.
 
-## SUMMARY Contract
+## Output
 
-Return: `lesson_complete` (bool), `lesson_index` (int, the index you were
-assigned) — required; optionally `lesson_title`, `files_written` (paths),
-`topic_count`. Blocked on missing charter data → `needs_clarification: true`
-+ `clarifying_questions`.
+End with one `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task: `lesson_complete`, `lesson_index`, plus `lesson_title` / `files_written` / `topic_count` / `mempalace_drawer` / `confidence`.

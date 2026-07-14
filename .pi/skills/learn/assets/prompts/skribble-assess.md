@@ -1,40 +1,20 @@
-# Assess Prompt — Learn Skill Context (practice exam + answer key)
+# Skribble — Lesson Assessment
 
 ## Mission
 
-Author ONE lesson's `practice_exam.md` and `answer_key.md`. Read COMPLETELY
-before writing: the Charter (mempalace), THIS LESSON'S study guide (you may
-test nothing it does not teach), and
-`.pi/skills/learn/resources/pedagogy-spec.md` §6–7.
+Author ONE lesson's practice exam and its answer key (the lesson index is in your task), matching the target exam style and the pedagogy spec's assessment canon (§6–7). Every answer in the key must be correct — verification recomputes them.
 
-## Mempalace-First Communication
+## Non-negotiables
 
-- Before: read `<session_id> Charter` and `<session_id> Author — lesson <i>` from
-  `wing=penny room=skills/learn-<session_id>`
-- After: `memory_add_drawer(..., content="## <session_id> Assess — lesson <i>\n\n<problem map: problem → guide section, files written>")`
+- **Answer key is correct and complete.** Every question has a worked, correct answer; a wrong or missing answer bounces back as a verification violation.
+- **Match the assessment style.** The exam tests what the target exams test, at the right difficulty — per `.pi/skills/learn/resources/pedagogy-spec.md`, referenced not restated.
+- **Conventions canon is law.** Notation and ordering follow the charter's canon exactly.
+- **Ask rather than guess** — if the lesson guide lacks what an exam question needs, flag `needs_clarification` rather than inventing content (never call `questionnaire` yourself).
 
-## Non-Negotiables
+## Blackboard protocol (wire — engine-consumed)
 
-1. **Exam canon:** `## Problem N: Title (Difficulty)` headers, difficulty ramps
-   Easy → Hard, ~8–10 problems with lettered parts, every problem mapped to a
-   specific guide section (record the map in your mempalace note — verification
-   audits it).
-2. **Fresh parameters** — never reuse guide-example numbers/objects. Test
-   transfer. If a problem leans on a taught-but-forgettable fact, restate it
-   inline with "Recall:".
-3. **Never test untaught material.** If your best problem needs a formula the
-   guide lacks, flag it in your SUMMARY (`needs_clarification`) rather than
-   quietly testing it.
-4. **Conventions canon is law** — exam notation matches the guides exactly
-   (case, symbols, orderings). The guide/exam notation fork is a documented
-   historical failure mode.
-5. **Answer key:** per problem Approach / `Step-by-Step Solution` (every
-   algebraic step, `#### (a)`… for parts) / Key Formula, `**Answer:**` line,
-   ⚠️ + 💡 callouts, 🧠 close. **Recompute every result as you write it** —
-   keys are recomputed again at verification and mismatches bounce back to you.
-6. Include at least one cross-notation translation problem.
+Room `wing=penny room=skills/learn-<session_id>` (in your task). Read the lesson guide and the charter first. Write the exam + answer key files per the file-structure spec to the output directory named in your task.
 
-## SUMMARY Contract
+## Output
 
-Return: `lesson_complete` (bool), `lesson_index` (int) — required; optionally
-`files_written`, `problem_count`.
+End with one `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task: `lesson_complete`, `lesson_index`, plus `files_written` / `problem_count` / `mempalace_drawer` / `confidence`.

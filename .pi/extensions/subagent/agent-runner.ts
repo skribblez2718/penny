@@ -302,6 +302,194 @@ export async function writePromptToTempFile(
 }
 
 // ============================================================
+// Agent base system prompt (SYSTEM.md) resolution
+// ============================================================
+//
+// Anthropic OAuth (subscription) tokens are billed against plan limits only
+// when the request resembles first-party Claude Code. Pi's DEFAULT system
+// prompt ("...operating inside pi, a coding agent harness") is classified as a
+// third-party app and rejected with a 400 invalid_request "...draw from your
+// extra usage, not your plan limits" error in multi-turn tool loops. Penny's
+// .pi/SYSTEM.md is not. Agents used to receive SYSTEM.md only when their spawn
+// cwd happened to be a trusted project (pi's auto-discovery of SYSTEM.md is
+// gated by isProjectTrusted(), keyed on cwd); any agent whose cwd was not the
+// trusted project root silently fell back to the default prompt and failed.
+// We now resolve SYSTEM.md deterministically from the project .pi directory
+// and pass it explicitly via --system-prompt, independent of the agent cwd.
+
+function formatFrameDate(date: Date): string {
+  const months = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+  return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+}
+
+/** Substitute ${VAR} placeholders from process.env (+ CURRENT_DATE), mirroring
+ * the environment extension so agents never see raw ${...} tokens. */
+function substituteFrameEnvVars(content: string): string {
+  const currentDate = formatFrameDate(new Date());
+  return content.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, name: string) => {
+    if (name === "CURRENT_DATE") return currentDate;
+    return process.env[name] ?? "";
+  });
+}
+
+/** Resolve the project SYSTEM.md path from env, independent of the agent cwd. */
+function resolveSystemPromptPath(defaultCwd: string): string | null {
+  const candidates = [
+    process.env.PI_DIRECTORY ? path.join(process.env.PI_DIRECTORY, "SYSTEM.md") : null,
+    process.env.PROJECT_ROOT ? path.join(process.env.PROJECT_ROOT, ".pi", "SYSTEM.md") : null,
+    path.join(defaultCwd, ".pi", "SYSTEM.md"),
+  ].filter((p): p is string => Boolean(p));
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {
+      // try next candidate
+    }
+  }
+  return null;
+}
+
+/**
+ * Build the per-agent base system prompt from SYSTEM.md with two invoke-time
+ * transforms:
+ *  - `${VAR}` env substitution (mirrors the environment extension)
+ *  - the persona name "Penny" -> the agent's display name (e.g. "Echo")
+ *  - strips the Penny-only "# On-Demand Protocols" section (keeps the
+ *    </system_context> tag balanced)
+ *
+ * Returns null when SYSTEM.md cannot be found/read, in which case the caller
+ * omits --system-prompt and preserves prior behavior (pi default prompt).
+ */
+export function buildAgentBaseSystemPrompt(agentName: string, defaultCwd: string): string | null {
+  const sysPath = resolveSystemPromptPath(defaultCwd);
+  if (!sysPath) {
+    logger.warn("SYSTEM.md not found; agent will use pi default prompt", { agent: agentName });
+    return null;
+  }
+  let content: string;
+  try {
+    content = fs.readFileSync(sysPath, "utf-8");
+  } catch (err) {
+    logger.warn("Failed to read SYSTEM.md for agent base prompt", {
+      agent: agentName,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+  content = substituteFrameEnvVars(content);
+  // Personalize: "Penny" -> capitalized agent name (e.g. echo -> Echo).
+  const displayName = agentName.charAt(0).toUpperCase() + agentName.slice(1);
+  content = content.replace(/\bPenny\b/g, displayName);
+  // Strip the "# On-Demand Protocols" section (Penny-orchestrator-only guidance),
+  // preserving the closing </system_context> tag.
+  content = content.replace(/\n#\s*On-Demand Protocols[\s\S]*?(?=\n<\/system_context>|$)/, "");
+  return content;
+}
+
+// ============================================================
+// Agent extension set resolution
+// ============================================================
+//
+// Agents need Penny's project extensions (memory, observability, search, ...)
+// so their allowlisted tools (memory_smart_search, web_search, ...) actually
+// exist. Pi auto-discovers project extensions from the process cwd, but only
+// when the project is trusted (isProjectTrusted(), keyed on cwd). An agent
+// spawned with a cwd OUTSIDE the trusted Penny project — e.g. an sca/jsa target
+// directory passed as project_root — therefore loaded NO project extensions and
+// its memory_* tools silently did not exist.
+//
+// We instead force-load every extension under <PI_DIRECTORY>/extensions via
+// explicit -e (which bypasses both cwd-discovery and trust gating) and pass
+// --no-extensions to disable cwd-based discovery. The agent's extension set is
+// then deterministic and identical to a trusted penny-root run regardless of
+// its working dir, while its cwd stays on the target so file tools operate
+// there. The agent's --tools allowlist still governs which of these
+// extensions' tools are actually exposed.
+
+/** Resolve Penny's extensions directory from env, independent of the agent cwd. */
+function resolveExtensionsDir(defaultCwd: string): string | null {
+  const candidates = [
+    process.env.PI_DIRECTORY ? path.join(process.env.PI_DIRECTORY, "extensions") : null,
+    process.env.PROJECT_ROOT ? path.join(process.env.PROJECT_ROOT, ".pi", "extensions") : null,
+    path.join(defaultCwd, ".pi", "extensions"),
+  ].filter((p): p is string => Boolean(p));
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) return candidate;
+    } catch {
+      // try next candidate
+    }
+  }
+  return null;
+}
+
+/**
+ * Build the `--no-extensions -e <path> ...` args that force-load Penny's whole
+ * extension set for an agent subprocess, independent of the agent's cwd/trust.
+ *
+ * Enumerates `<extensionsDir>/*\/index.ts` (subdir extensions) and top-level
+ * `<extensionsDir>/*.ts` (single-file extensions). Falls back to loading only
+ * the compaction extension with cwd-based discovery LEFT ON (prior behavior)
+ * when the extensions directory cannot be resolved/enumerated — so a
+ * misconfigured env never leaves an agent with zero extensions on a trusted
+ * penny-root run. Exported for unit testing.
+ */
+export function resolveAgentExtensionArgs(defaultCwd: string): string[] {
+  const extDir = resolveExtensionsDir(defaultCwd);
+  const compactionFallback = (): string[] => [
+    "-e",
+    extDir
+      ? path.join(extDir, "compaction", "index.ts")
+      : path.resolve(defaultCwd, ".pi/extensions/compaction/index.ts"),
+  ];
+  if (!extDir) return compactionFallback();
+
+  const entries: string[] = [];
+  try {
+    for (const name of fs.readdirSync(extDir).sort()) {
+      const dirIndex = path.join(extDir, name, "index.ts");
+      const singleFile = path.join(extDir, name);
+      try {
+        if (fs.existsSync(dirIndex)) {
+          entries.push(dirIndex);
+        } else if (name.endsWith(".ts") && fs.statSync(singleFile).isFile()) {
+          entries.push(singleFile);
+        }
+      } catch {
+        // skip unreadable entry
+      }
+    }
+  } catch (err) {
+    logger.warn("Failed to enumerate agent extensions; loading compaction only", {
+      dir: extDir,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return compactionFallback();
+  }
+
+  if (entries.length === 0) return compactionFallback();
+
+  // --no-extensions disables cwd-based (trust-gated) discovery; the explicit -e
+  // paths still load, so the agent gets exactly this deterministic set.
+  const args = ["--no-extensions"];
+  for (const entry of entries) args.push("-e", entry);
+  return args;
+}
+
+// ============================================================
 // Concurrency-limited mapping
 // ============================================================
 
@@ -380,10 +568,11 @@ export async function runSingleAgent(
 
   let tmpPromptDir: string | null = null;
   let tmpPromptPath: string | null = null;
+  let tmpBaseDir: string | null = null;
+  let tmpBasePath: string | null = null;
   let tmpSessionDir: string | null = null;
 
   tmpSessionDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-session-"));
-  const compactionPath = path.resolve(defaultCwd, ".pi/extensions/compaction/index.ts");
   const args: string[] = [
     "--mode",
     "json",
@@ -393,8 +582,9 @@ export async function runSingleAgent(
     "--no-themes",
     "--no-skills",
     "--no-prompt-templates",
-    "-e",
-    compactionPath,
+    // Force-load Penny's full extension set independent of the agent cwd/trust
+    // so memory/observability/tool-providing extensions are always available.
+    ...resolveAgentExtensionArgs(defaultCwd),
   ];
   const model = modelOverride || agent.model;
   if (model) args.push("--model", model);
@@ -448,6 +638,18 @@ export async function runSingleAgent(
   };
 
   try {
+    // Base system prompt = project SYSTEM.md (transformed per-agent), passed
+    // explicitly so every agent inherits Penny's frame regardless of spawn
+    // cwd/trust. This also prevents the Anthropic OAuth 400 "extra usage"
+    // rejection that pi's DEFAULT prompt triggers in multi-turn tool loops.
+    const baseSystemPrompt = buildAgentBaseSystemPrompt(agent.name, defaultCwd);
+    if (baseSystemPrompt && baseSystemPrompt.trim()) {
+      const baseTmp = await writePromptToTempFile(`${agent.name}-base`, baseSystemPrompt);
+      tmpBaseDir = baseTmp.dir;
+      tmpBasePath = baseTmp.filePath;
+      args.push("--system-prompt", tmpBasePath);
+    }
+
     // Combine agent body with optional skill context
     let combinedPrompt = agent.systemPrompt;
     if (skillContextContent && skillContextContent.trim()) {
@@ -632,7 +834,9 @@ export async function runSingleAgent(
       logger.warn(
         "Agent completed without message_end",
         { agent: agentName, events: eventCount, lastType: lastEventType, exitCode },
-        Object.assign(new Error("Completed without message_end"), { code: "AGENT_INCOMPLETE" as const })
+        Object.assign(new Error("Completed without message_end"), {
+          code: "AGENT_INCOMPLETE" as const,
+        })
       );
       // Agent process exited cleanly (exitCode 0) but never emitted message_end.
       // This happens when Pi's SSE stream is killed mid-generation (e.g., 5-min
@@ -676,6 +880,18 @@ export async function runSingleAgent(
     if (tmpPromptDir)
       try {
         fs.rmdirSync(tmpPromptDir);
+      } catch {
+        /* ignore */
+      }
+    if (tmpBasePath)
+      try {
+        fs.unlinkSync(tmpBasePath);
+      } catch {
+        /* ignore */
+      }
+    if (tmpBaseDir)
+      try {
+        fs.rmdirSync(tmpBaseDir);
       } catch {
         /* ignore */
       }

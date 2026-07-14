@@ -24,7 +24,12 @@ For each candidate in the batch:
   honest and specific. **Never fabricate an APPROVE** to force completion; the
   engine will honestly present the best valid candidate with `met=False` when the
   budget is exhausted.
+- **Ground the verdict in `evidence` (required, non-empty).** Aesthetic judgment
+  is subjective, so cite specific, locatable observations — which candidate, what
+  you saw (e.g. `"cand1: subject off-centre, breaks the brief's rule-of-thirds"`,
+  `"cand0: on-brief, balanced palette"`). A bare verdict with no cited
+  observations is rejected by the engine.
 
 ## SUMMARY
 
-`SUMMARY:{"verdict": "APPROVE|NEEDS_REVISION", "confidence": "CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN", "issues": ["..."], "failed_candidates": [<idx>]}`
+`SUMMARY:{"verdict": "APPROVE|NEEDS_REVISION", "confidence": "CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN", "evidence": ["cand0: on-brief, balanced", "..."], "issues": ["..."], "failed_candidates": [<idx>]}`

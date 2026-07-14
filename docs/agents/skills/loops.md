@@ -14,6 +14,26 @@ This shape is a **methodology** documented in SYSTEM.md, not a base class. Each 
 
 **Key principle:** universality at the shape level, specialization at the instance level. Do not create a `StandardCyclePlaybook` base class — each skill subclasses `BasePlaybook` directly with custom-named states.
 
+## The Parts Beneath the Loop Classes (Atomic Components)
+
+The seven loop classes below are not primitive — they are **arrangements of a smaller set of atomic components**. Before designing a loop, read [Atomic Loop Components](../architecture/atomic-loop-components.md): 18 atoms in 7 families, with the one structural law that keeps every loop [Bitter-Lesson](../architecture/bitter-lesson.md)-compliant:
+
+> **Intelligence is confined to exactly two atoms (`Decide`, `Critique`). Every other atom is deterministic, model-agnostic Python.** The procedure for solving a task is never coded — it is `Decide`'s runtime output.
+
+The loop classes map directly onto the atoms and the six canonical *arrangements* of them:
+
+| Loop class (below) | Atom(s) that implement it | Arrangement |
+|---|---|---|
+| L1 Inner tool-use | `Decide` + `Act` + `Toolspace` (in the pi runtime) | agent loop |
+| L2 Verifier gate | `Verify` (D1, the objective function) + `Critique` (B2) | evaluator-optimizer |
+| L3 Retry/repair | `Budget` (D2) + strategy-changing `Decide` | evaluator-optimizer |
+| L4 HITL gate | `Gate` (D3) + `Escalate` (D4) | any + consequence boundary |
+| L5 Orchestration FSM | `Thread`/`Checkpoint`/`Fan` + the engine | orchestrator-workers |
+| L6 Reflection/memory | `Ledger`/`Recall`/`Distill` (F1–F3) | learning conduit |
+| L7 Background/scheduled | scheduled `Checkpoint` resume | background tick |
+
+The practical consequence for playbook authors: you are not choosing an architecture, you are **arranging atoms**, and you move between arrangements by re-wiring, not re-building. The [add-side gate](../architecture/atomic-loop-components.md#the-add-side-gate) and [LOAN lifecycle](../architecture/atomic-loop-components.md#the-loan-lifecycle-how-loops-stay-compliant-over-time) govern what you may bake into a loop and when to delete it.
+
 ## The Seven Loop Classes
 
 Loops are not alternatives — they **nest**. A production system layers them:
@@ -101,7 +121,7 @@ Loops are not alternatives — they **nest**. A production system layers them:
 **In Penny:** MemPalace (the blackboard), the LEARN operation, and the daily self-improvement compression loop.
 
 **Design rules:**
-- **Retrieve past-run reflections at run start.** Playbooks should query MemPalace for reflections/patterns tagged to this skill + task shape and inject them into the first agent's context. This turns L6 from write-only into a closed loop.
+- **Retrieve past-run reflections at run start.** The engine does this for every playbook: `start()` seeds distilled lessons from MemPalace into the first agent's context via `recall_lessons` (advisory, opt-out via `PENNY_RECALL=0`). This turns L6 from write-only into a closed loop.
 - **Guard against confirmation bias and mode collapse.** Retrieve as advisory context; don't let a past lesson hard-gate a new run.
 - **The evaluator must be adapted per domain.** Reflexion used environment success for AlfWorld, self-generated unit tests for coding, exact-match for QA — the loop is not fully task-agnostic.
 
@@ -189,32 +209,34 @@ Match the loop stack to the task's verifiability and step-predictability:
 
 **Principle:** Tasks with crisp external oracles (code: tests; security: PoC execution) can lean hard on tight verifier-gated retry loops. Fuzzy-oracle tasks (research quality, writing) must lean on HITL gates and structured criteria because the verifier is weak.
 
-## Loop-Quality Gaps to Close
+## Loop-Quality Recommendations (status)
 
-Five concrete recommendations from the research, ordered by leverage:
+Five concrete recommendations from the research, ordered by leverage. As of 2026-07-14, Recs 1–4 are implemented in the engine (`apps/orchestration/`); Rec 5 remains open.
 
-### Rec 1 — Enforce a strategy delta between retries (anti-paralysis)
+### Rec 1 — Enforce a strategy delta between retries (anti-paralysis) — CLOSED (default-on)
 
-`max_iterations` caps how many retries, but nothing requires each retry to be different. In the LEARN→ACT retry edge, require the LEARN SUMMARY to carry an explicit `strategy_change` field and reject a retry whose planned change is absent or ~identical to the prior iteration's.
+`max_iterations` caps how many retries, but nothing required each retry to be different. Now the base `progress_check` is **default-on**: a retry SUMMARY that explicitly declares a `strategy_change` ~identical to the prior recorded iteration's escalates instead of looping. The engine auto-records per-iteration digests (deduped against playbook `record_iteration` calls) so the guard is fed even for playbooks that never opt in. Opt-out: `LOOP_GUARDS = False`; playbooks with their own `progress_check` override are unaffected.
 
-### Rec 2 — Add a stall / progress-assessment gate (meta-cognition)
+### Rec 2 — Add a stall / progress-assessment gate (meta-cognition) — CLOSED (default-on)
 
-Add an engine-level stall detector that compares successive iterations' verifier evidence (same failing tests, same confidence, no new artifacts N iterations running) and, on stall, routes to escalation (L4) rather than burning the remaining budget.
+The same default-on base `progress_check` compares successive recorded iterations' `gaps`: identical non-empty gaps across the window mean no measurable progress, and the run escalates to the human (L4) rather than burning the remaining budget. Backing it up, the engine's iteration-budget backstop forces **honest exhaustion** (complete, `met=False`, `exhausted` reason in the result) on any playbook that routes past its `max_iterations` — never a fake pass, never a silent spin to `STEP_CAP`.
 
-### Rec 3 — Retrieve past-run reflections at run start (close the L6 loop)
+### Rec 3 — Retrieve past-run reflections at run start (close the L6 loop) — CLOSED
 
-At `initial_transition`, have the playbook query MemPalace for reflections/patterns tagged to this skill + task shape and inject them into the first agent's context. Retrieve as advisory context; don't let a past lesson hard-gate a new run.
+The engine's `start()` calls `recall_lessons` (atom F2, `orchestration/recall.py`): a best-effort MemPalace query over `penny/system_amendments` seeds up to 3 distilled lessons into the **first** agent directive as explicitly advisory context. No routing reads them — a past lesson never hard-gates a new run. Opt-out: `PENNY_RECALL=0` or `constraints={"recall": false}`.
 
-### Rec 4 — Require externally-grounded evidence in VERIFY contracts
+### Rec 4 — Require externally-grounded evidence in VERIFY contracts — CLOSED
 
-Make each skill's VERIFY `summary_contract` demand an evidence artifact, not an assertion. Have the contract validator fail-loud if the evidence field is a bare claim. This is the single highest-quality lever for loop correctness across every skill.
+A state contract may declare `evidence` fields; the validator fails loud when they are empty (a PASS on a bare claim is a contract violation). The engine additionally captures any non-empty SUMMARY `evidence` into `ctx.verify_evidence`, and the outcome ledger records it — outcome+evidence, not outcome alone.
 
-### Rec 5 — Harden verifiers against gaming (highest-incentive: security skills)
+### Rec 5 — Harden verifiers against gaming (highest-incentive: security skills) — OPEN
 
 Keep cross-model VERIFY discipline. For high-stakes gates, add a second independent verifier and require agreement. Prefer evidence the actor cannot fabricate (executed output over asserted output). Treat as defense-in-depth, not a solved problem.
 
 ## Related Documents
 
+- [Atomic Loop Components](../architecture/atomic-loop-components.md) — the parts beneath these loop classes: the 18-atom catalog, assembly invariants, control-flow dial, and pre-ship checklist
+- [Bitter-Lesson Doctrine](../architecture/bitter-lesson.md) — the ratchet these loops must comply with (protect capabilities, prune constraints)
 - [Resilience](resilience.md) — Error handling and recovery on the engine
 - [Orchestration](orchestration.md) — Engine-backed skill protocol
 - [Skill Standard](skill-standard.md) — Complete skill reference specification

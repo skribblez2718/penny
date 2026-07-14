@@ -22,7 +22,7 @@ _DESIGN_OK = {
     "design_steps": [{"field": "name", "value": "climate-researcher"}],
     "design_complete": True,
 }
-_APPROVE = {"verdict": "APPROVE", "issues": []}
+_APPROVE = {"verdict": "APPROVE", "issues": [], "evidence": ["all standard checks pass"]}
 _SCAFFOLD_OK = {
     "generation_complete": True,
     "files_created": [".pi/agents/climate-researcher.md"],
@@ -57,6 +57,19 @@ def _start(cp, goal="Build climate research agent", constraints=None):
     return AgentPlaybook(cp).start(
         session_id=SID, run_id=RID, goal=goal, constraints=constraints or {}
     )
+
+
+def test_recall_lessons_render_in_first_directive(cp):
+    from orchestration.context import RunContext
+    from orchestration.primitives.spec import PrimitiveSpec
+
+    pb = AgentPlaybook(cp)
+    ctx = RunContext(session_id=SID, run_id=RID, playbook="agent", goal="build an agent")
+    ctx.recall_lessons = ["description is the routing surface; keep use/don't-use signals sharp"]
+    spec = PrimitiveSpec("X", "echo", {"required": {}, "optional": {}}, "explore")
+    txt = pb._task_summary("_no_builder_state_", spec, ctx)
+    assert "Lessons from prior runs" in txt
+    assert "routing surface" in txt
 
 
 def _step(cp, agent, result):
@@ -159,16 +172,32 @@ def test_agent_name_comes_from_skribble_not_goal_first_word(cp):
 
 def test_critique_rejection_first_retries_explore(cp):
     _to_critiquing(cp)
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["missing agent_boundary"]})
+    d = _step(
+        cp,
+        "carren",
+        {
+            "verdict": "NEEDS_REVISION",
+            "issues": ["missing agent_boundary"],
+            "evidence": ["cited in design spec"],
+        },
+    )
     assert d["action"] == "invoke_agent" and d["agent"] == "echo" and d["state_id"] == "exploring"
     assert "missing agent_boundary" in d["task_summary"]
 
 
 def test_second_critique_rejection_retries_design(cp):
     _to_critiquing(cp)
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["issue a"]})  # iter 0 -> explore
+    _step(
+        cp,
+        "carren",
+        {"verdict": "NEEDS_REVISION", "issues": ["issue a"], "evidence": ["cited in design spec"]},
+    )  # iter 0 -> explore
     _redesign_to_critiquing(cp)
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["issue b"]})  # iter 1
+    d = _step(
+        cp,
+        "carren",
+        {"verdict": "NEEDS_REVISION", "issues": ["issue b"], "evidence": ["cited in design spec"]},
+    )  # iter 1
     assert d["action"] == "invoke_agent" and d["agent"] == "piper" and d["state_id"] == "designing"
     assert "issue b" in d["task_summary"]
 
@@ -177,12 +206,24 @@ def test_critique_exhaustion_completes_honestly_not_forced_approve(cp):
     # A perpetually-rejecting critique with CHANGING issues walks the budget and
     # completes with met=False + unresolved issues — never a fabricated APPROVE.
     _to_critiquing(cp)
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["issue a"]})  # iter 0
+    _step(
+        cp,
+        "carren",
+        {"verdict": "NEEDS_REVISION", "issues": ["issue a"], "evidence": ["cited in design spec"]},
+    )  # iter 0
     _redesign_to_critiquing(cp)
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["issue b"]})  # iter 1
+    _step(
+        cp,
+        "carren",
+        {"verdict": "NEEDS_REVISION", "issues": ["issue b"], "evidence": ["cited in design spec"]},
+    )  # iter 1
     _step(cp, "piper", _DESIGN_OK)
     # iter 2 -> budget spent (max_iterations default 3) -> honest completion
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["issue c"]})
+    d = _step(
+        cp,
+        "carren",
+        {"verdict": "NEEDS_REVISION", "issues": ["issue c"], "evidence": ["cited in design spec"]},
+    )
     assert d["action"] == "complete"
     assert d["result"]["met"] is False
     assert d["result"]["exhausted"] is True
@@ -196,14 +237,46 @@ def test_critique_exhaustion_completes_honestly_not_forced_approve(cp):
     }
 
 
+def test_critique_without_evidence_is_contract_violation(cp):
+    # Externally-grounded critique: a verdict with no cited observations is a
+    # contract violation and re-issues the critique step (mirrors VERIFY).
+    _to_critiquing(cp)
+    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["x"], "evidence": []})
+    assert d["action"] == "invoke_agent" and d["state_id"] == "critiquing"
+
+
 def test_stalled_critique_escalates_instead_of_spinning(cp):
     # Same issue every round -> stall detector escalates rather than force-approve.
     _to_critiquing(cp)
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["same problem"]})  # iter 0
+    _step(
+        cp,
+        "carren",
+        {
+            "verdict": "NEEDS_REVISION",
+            "issues": ["same problem"],
+            "evidence": ["cited in design spec"],
+        },
+    )  # iter 0
     _redesign_to_critiquing(cp)
-    _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["same problem"]})  # iter 1
+    _step(
+        cp,
+        "carren",
+        {
+            "verdict": "NEEDS_REVISION",
+            "issues": ["same problem"],
+            "evidence": ["cited in design spec"],
+        },
+    )  # iter 1
     _step(cp, "piper", _DESIGN_OK)
-    d = _step(cp, "carren", {"verdict": "NEEDS_REVISION", "issues": ["same problem"]})  # stall
+    d = _step(
+        cp,
+        "carren",
+        {
+            "verdict": "NEEDS_REVISION",
+            "issues": ["same problem"],
+            "evidence": ["cited in design spec"],
+        },
+    )  # stall
     assert d["action"] == "escalate_to_user"
     assert "no measurable progress" in d["unknown_reason"]
 

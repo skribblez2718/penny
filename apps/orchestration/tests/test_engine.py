@@ -85,12 +85,14 @@ def test_every_agent_spec_emits_schema_directive():
             specs.extend(pspec.branches.values())
         for spec in specs:
             directive = BasePlaybook._summary_contract_directive(spec)
-            assert directive, f"{pb_cls.__name__}/{spec.name}: no schema directive (empty contract?)"
+            assert (
+                directive
+            ), f"{pb_cls.__name__}/{spec.name}: no schema directive (empty contract?)"
             assert "OUTPUT FORMAT" in directive and "SUMMARY:{" in directive
             for key in spec.summary_contract.get("required", {}):
-                assert f'"{key}"' in directive, (
-                    f"{pb_cls.__name__}/{spec.name}: required '{key}' missing from rendered schema"
-                )
+                assert (
+                    f'"{key}"' in directive
+                ), f"{pb_cls.__name__}/{spec.name}: required '{key}' missing from rendered schema"
             checked += 1
     assert checked > 0, "no agent specs discovered"
 
@@ -211,27 +213,48 @@ def test_evidence_ref_skips_observe(cp):
 
 
 def test_verify_fail_retries_then_exhausts(cp):
+    """Retries whose gaps CHANGE (progress is being made) run the budget down to
+    the playbook's exhaustion routing — the stall guard must not fire."""
     _start(cp)
     _step(cp, "echo", S_OBSERVE)
     _step(cp, "annie", S_FRAME)
     _step(cp, "piper", S_PLAN)
     # iteration 0: act -> verify FAIL -> back to acting (iteration 1)
     _step(cp, "skribble", S_ACT)
-    d = _step(cp, "vera", S_VERIFY_FAIL)
+    d = _step(cp, "vera", {"verdict": "FAIL", "gaps": ["gap 0"], "confidence": "PROBABLE"})
     assert d["state_id"] == "acting"
     assert cp.load(RID).context.iteration == 1
-    # iteration 1: act -> verify FAIL -> acting (iteration 2)
+    # iteration 1: act -> verify FAIL (different gap) -> acting (iteration 2)
     _step(cp, "skribble", S_ACT)
-    d = _step(cp, "vera", S_VERIFY_FAIL)
+    d = _step(cp, "vera", {"verdict": "FAIL", "gaps": ["gap 1"], "confidence": "PROBABLE"})
     assert d["state_id"] == "acting"
     assert cp.load(RID).context.iteration == 2
-    # iteration 2: act -> verify FAIL -> exhausted -> learning (met False)
+    # iteration 2: act -> verify FAIL (different gap) -> exhausted -> learning
     _step(cp, "skribble", S_ACT)
-    d = _step(cp, "vera", S_VERIFY_FAIL)
+    d = _step(cp, "vera", {"verdict": "FAIL", "gaps": ["gap 2"], "confidence": "PROBABLE"})
     assert d["state_id"] == "learning"
     d = _step(cp, "carren", S_LEARN)
     assert d["action"] == "complete"
     assert d["result"]["met"] is False  # honest: never faked success
+
+
+def test_identical_verify_gaps_stall_and_escalate(cp):
+    """Default-on stall guard (loops.md Rec 2): three verify FAILs with the SAME
+    gaps mean no measurable progress — the engine escalates to the human instead
+    of burning the remaining retry budget."""
+    _start(cp)
+    _step(cp, "echo", S_OBSERVE)
+    _step(cp, "annie", S_FRAME)
+    _step(cp, "piper", S_PLAN)
+    _step(cp, "skribble", S_ACT)
+    assert _step(cp, "vera", S_VERIFY_FAIL)["state_id"] == "acting"
+    _step(cp, "skribble", S_ACT)
+    assert _step(cp, "vera", S_VERIFY_FAIL)["state_id"] == "acting"
+    _step(cp, "skribble", S_ACT)
+    d = _step(cp, "vera", S_VERIFY_FAIL)
+    assert d["action"] == "escalate_to_user"
+    assert "stall guard" in d["unknown_reason"]
+    assert cp.load(RID).status == STATUS_AWAITING_USER
 
 
 def test_verify_fail_then_pass(cp):

@@ -44,12 +44,19 @@ stateDiagram-v2
 
     %% INVESTIGATE bounded wave loop
     investigate --> investigate : investigate_wave [wave < total_waves]
+    %% total_waves = ceil(needs_llm / wave_size); wave_size is a tunable Budget
+    %% (constraints.wave_size, default 10) — no frozen constant. Recall lessons
+    %% seed the first agent directive.
     investigate --> collect : investigate_done [waves complete]
 
     %% Agent tail
     collect --> merge : collect_done
     merge --> verify : merge_done
-    verify --> report : verify_done
+    verify --> report : verify_done [dual_verify off]
+    verify --> reverify : verify_reverify [dual_verify on + PASS]
+    reverify --> report : reverify_done
+    %% reverify = a SECOND independent vera (constraints.reverify_model for a
+    %% different judge); the report reflects only findings both passes confirm.
     report --> reflect : report_done
     reflect --> complete : reflect_done [met=True]
 

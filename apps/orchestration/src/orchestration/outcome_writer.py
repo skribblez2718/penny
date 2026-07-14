@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
+from .loans import loan_enabled
+
 if TYPE_CHECKING:  # pragma: no cover
     from .context import RunContext
 
@@ -122,18 +124,41 @@ def _reason(ctx: "RunContext", delta: str) -> str:
 _FAILURE_MODE_KEYWORDS = (
     (
         "missing_constraint",
-        ("missing", "constraint", "requirement", "did not address", "not addressed",
-         "omitted", "ignored", "left out"),
+        (
+            "missing",
+            "constraint",
+            "requirement",
+            "did not address",
+            "not addressed",
+            "omitted",
+            "ignored",
+            "left out",
+        ),
     ),
     (
         "unverified_claim",
-        ("unverified", "no evidence", "unsupported", "not grounded", "no citation",
-         "unsubstantiated", "fabricat"),
+        (
+            "unverified",
+            "no evidence",
+            "unsupported",
+            "not grounded",
+            "no citation",
+            "unsubstantiated",
+            "fabricat",
+        ),
     ),
     (
         "wrong_result",
-        ("wrong", "incorrect", "does not work", "doesn't work", "broken", "fails",
-         "failing", "bug"),
+        (
+            "wrong",
+            "incorrect",
+            "does not work",
+            "doesn't work",
+            "broken",
+            "fails",
+            "failing",
+            "bug",
+        ),
     ),
     ("incomplete", ("incomplete", "partial", "unfinished", "not implemented", "stub", "todo")),
 )
@@ -141,11 +166,18 @@ _FAILURE_MODE_KEYWORDS = (
 
 def _failure_mode(ctx: "RunContext", delta: str) -> str:
     """Categorical failure key for the compression loop (mirrors
-    capture.FAILURE_MODES). Empty for a MATCH."""
+    capture.FAILURE_MODES). Empty for a MATCH.
+
+    The keyword classifier is a tagged LOAN (``failure_mode_keywords`` in
+    ``loans.py``): a hand-built substitute for model judgment over the gap
+    text. Ablated, gap-ful mismatches fall back to the uncategorized bucket the
+    compression loop already clusters by its repeatable reason string."""
     if delta != "MISMATCH":
         return ""
     gaps = list(getattr(ctx, "verify_gaps", []) or [])
     if gaps:
+        if not loan_enabled("failure_mode_keywords"):
+            return "incomplete"  # scaffold-OFF: no keyword knowledge applied
         text = " ".join(str(g) for g in gaps).lower()
         for mode, keywords in _FAILURE_MODE_KEYWORDS:
             if any(k in text for k in keywords):
@@ -203,6 +235,11 @@ def build_outcome_content(ctx: "RunContext", now: Optional[datetime] = None) -> 
         "iteration": getattr(ctx, "iteration", 0),
         "verify_verdict": getattr(ctx, "verify_verdict", ""),
         "verify_gaps": [_one_line(g, 160) for g in verify_gaps[:5]],
+        # Ledger records outcome+evidence (atomic-loop checklist): the capped
+        # digest of the most recent SUMMARY evidence the engine captured.
+        "verify_evidence": [
+            _one_line(e, 200) for e in list(getattr(ctx, "verify_evidence", []) or [])[:3]
+        ],
         "errors": [_one_line(e, 200) for e in errors[:5]],
         "timestamp": ts,
     }

@@ -8,7 +8,7 @@ full conformance + math audit.
 
 ## Flow
 
-See `resources/flow.mmd`. In prose: three parallel ingest passes (content /
+See `resources/flow.mmd`. **Bitter-Lesson / atomic-loops compliance:** the ingest fan topology is caller-supplied (`constraints.ingest_branches`) or a tagged LOAN default (`learn_default_ingest_topology`, ablated + no caller topology → fail-loud start); the verify **and** critique gates are evidence-gated (Rec 4) — `LEARN_VERIFY` requires the recomputation transcripts and `LEARN_CRITIQUE` requires what carren examined, or the engine rejects the verdict; Recall lessons seed the first agent directive. In prose: parallel ingest passes (default content /
 conventions / assessment) feed a curriculum design that locks every convention
 and analogy BEFORE authoring; a human gate approves the charter; guides,
 answers, exams, and final prep are authored lesson by lesson; then a

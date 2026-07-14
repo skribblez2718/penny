@@ -60,22 +60,18 @@ skill({
 
 | Constraint        | Type   | Default        | Description                                                        |
 | ----------------- | ------ | -------------- | ------------------------------------------------------------------ |
-| `mode`            | string | `"auto"`       | `"quick"`, `"standard"`, `"deep"`, or `"auto"` (detect from query) |
+| `mode`            | string | (unset)        | `"quick"`, `"standard"`, `"deep"`. Omit to let piper declare the mode from the query — mode is model-owned, not keyword-detected. Only an explicit `"quick"` skips planning. |
 | `report_format`   | string | `"default"`    | `"default"`, `"brief"`, `"academic"`, `"executive"`                |
-| `max_sub_queries` | int    | mode-dependent | Override max parallel sub-queries                                  |
-| `purpose`         | string | `"general"`    | `"general"` or `"questionnaire"` (not yet implemented)             |
+| `max_sub_queries` | int    | `4`            | The one sub-query budget (replaces the per-mode table). Clamped to `max_fan_width`. |
+| `max_fan_width`   | int    | `8`            | Cap on parallel research branches.                                 |
 
 ### Modes
 
-| Mode     | Max Sub-Queries | Agents Used                                       |
-| -------- | --------------- | ------------------------------------------------- |
-| Quick    | 1               | Echo, Synthia, Vera, Skribble                     |
-| Standard | 3               | Piper, Echo, Synthia, Vera, Skribble              |
-| Deep     | 4               | Piper, Carren, Echo, Synthia, Vera, Skribble      |
+Mode is a rigor/budget preset chosen by the caller (`constraints.mode`) or declared by piper in its plan SUMMARY. `quick` = a single narrow question (no critique passes); `standard` = a handful of sub-queries + the validation gate; `deep` = adversarial critique of the plan and the report. There is no per-mode sub-query table — `max_sub_queries` is one budget the model spends within.
 
 ## Agent Flow
 
-`researching` is a single Echo agent that researches all sub-queries. `validating`
+`researching` is a **dynamic fan** (arrangement 4): one read-only Echo branch per sub-query (bounded by `max_fan_width`); the explicit-quick fast-path stays a single Echo agent. Critique (Carren) and validation (Vera) are **evidence-gated** (Rec 4) — a verdict without captured evidence is rejected by the engine. `validating`
 (Vera) is an **independent, evidence-based citation-grounding gate** that runs in
 every mode as the final check before the report is written: it verifies each
 material claim in the synthesis is supported by a cited source (distinct from

@@ -1,8 +1,11 @@
 """ResearchPlaybook — the research skill on the shared engine.
 
 A faithful behavioral port of the legacy 1184-line ``.pi/skills/research``
-orchestrator onto ``BasePlaybook``: three modes (quick / standard / deep) picked
-at intake by the legacy keyword heuristics, custom-named states
+orchestrator onto ``BasePlaybook``: three modes (quick / standard / deep) that are
+caller- or model-declared (the keyword ``detect_mode`` router was deleted per the
+Bitter-Lesson gate — a caller ``constraints["mode"]`` wins, else piper declares the
+mode in its plan SUMMARY; explicit ``mode=="quick"`` takes the researching
+fast-path, everything else transits planning), custom-named states
 (planning→[deep: critiquing_plan⇄planning]→researching→synthesizing→
 [deep: critiquing_report⇄synthesizing]→report_writing), per-state SUMMARY
 contracts matching the assets/prompts SUMMARY blocks, and needs-clarification /
@@ -31,9 +34,15 @@ Deliberate behavior fixes vs. the legacy runtime:
   * ``write_complete=false`` completes honestly with ``met=False`` instead of
     stalling into a generic error.
 
-Researching is a SINGLE echo agent instructed to research ALL sub-queries (the
-legacy fanned out one echo per sub-query, but the branch count is dynamic, which
-does not fit the engine's fixed ``ParallelSpec``).
+Researching is a **dynamic fan** (arrangement 4): ``route_after("planning")`` turns
+the plan's sub-queries into ``ctx.extras["dynamic_branches"]["researching"]`` — one
+read-only echo branch per sub-query — and the engine dispatches them in parallel,
+bounded by ``constraints["max_fan_width"]`` (default 8). The explicit-quick
+fast-path (no planning ran) stays a single echo agent via ``PRIMITIVE_BY_STATE``;
+the engine's ``parallel_spec`` precedence (dynamic > class > primitive) makes the
+state shape-polymorphic with zero machine changes. The per-mode sub-query table
+is replaced by one ``max_sub_queries`` budget (default 4, clamped to the fan
+width) — code caps, the model spends.
 
 A ``validating`` state (vera) is the final gate before ``report_writing`` in ALL
 three modes: an independent, evidence-based citation-grounding pass that verifies
@@ -62,50 +71,54 @@ from ..engine import BasePlaybook
 from ..primitives.spec import PrimitiveSpec
 
 
-def _c(required: dict, optional: dict | None = None) -> dict:
-    return {"required": required, "optional": optional or {}}
+def _c(required: dict, optional: dict | None = None, evidence: list | None = None) -> dict:
+    contract: dict = {"required": required, "optional": optional or {}}
+    if evidence:
+        contract["evidence"] = evidence
+    return contract
 
 
 # ---------------------------------------------------------------------------
-# Mode detection + topic sanitization (ported verbatim from the legacy
-# ResearchOrchestrator; only max_sub_queries survives from MODE_DEFAULTS — the
-# min_* keys were never read by any code)
+# Modes (a wire vocabulary) + the dynamic research-fan topology. The keyword
+# ``detect_mode`` router and the per-mode ``MAX_SUB_QUERIES_BY_MODE`` table were
+# deleted (Bitter-Lesson gate): mode is caller/model-declared, and the sub-query
+# count is one budget the model spends within.
 # ---------------------------------------------------------------------------
 
 MODES = ("quick", "standard", "deep")
-MAX_SUB_QUERIES_BY_MODE = {"quick": 1, "standard": 3, "deep": 4}
+DEFAULT_MAX_SUB_QUERIES = 4
+
+# JSON-safe echo branch contract (type NAMES) for the runtime research fan —
+# mirrors RESEARCH_EXPLORE so a dynamic branch validates identically.
+_RESEARCH_EXPLORE_C_JSON = {
+    "required": {"explore_complete": "bool"},
+    "optional": {
+        "findings_count": "int",
+        "sources_count": "int",
+        "confidence": "str",
+        "mempalace_drawer": "str",
+        "needs_clarification": "bool",
+        "clarifying_questions": "list",
+    },
+}
 
 
-def detect_mode(query: str) -> str:
-    query_lower = query.lower()
-    deep_keywords = [
-        "deep research",
-        "comprehensive",
-        "thorough",
-        "in-depth",
-        "detailed analysis",
-        "exhaustive",
-        "extensive research",
-    ]
-    if any(kw in query_lower for kw in deep_keywords):
-        return "deep"
-    quick_keywords = [
-        "quick",
-        "briefly",
-        "summary",
-        "tldr",
-        "what is",
-        "define",
-        "explain briefly",
-        "overview",
-    ]
-    if any(kw in query_lower for kw in quick_keywords):
-        return "quick"
-    word_count = len(re.findall(r"\w+", query))
-    question_count = query.count("?")
-    if word_count <= 10 and question_count == 1:
-        return "quick"
-    return "standard"
+def _research_branches(sub_queries: list) -> dict | None:
+    """One read-only echo branch per sub-query (arrangement 4). Returns ``None``
+    when there are no usable sub-queries (the quick fast-path stays single-agent
+    via PRIMITIVE_BY_STATE)."""
+    branches: dict = {}
+    for i, sq in enumerate(sub_queries, 1):
+        text = str(sq).strip()
+        if not text:
+            continue
+        branches[f"sq{i}"] = {
+            "agent": "echo",
+            "name": f"RESEARCH_EXPLORE_SQ{i}",
+            "task_hint": text,
+            "summary_contract": _RESEARCH_EXPLORE_C_JSON,
+        }
+    return branches or None
 
 
 def _sanitize_topic(query: str) -> str:
@@ -197,6 +210,7 @@ RESEARCH_PLAN = PrimitiveSpec(
     _c(
         {"plan_steps": list, "plan_complete": bool},
         {
+            "mode": str,  # model-declared rigor/budget preset (R1) when no caller sets it
             "sub_queries": list,
             "confidence": str,
             "mempalace_drawer": str,
@@ -204,17 +218,20 @@ RESEARCH_PLAN = PrimitiveSpec(
             "clarifying_questions": list,
         },
     ),
-    "Decompose the research query into focused, independently researchable sub-queries.",
+    "Decompose the research query into focused, independently researchable sub-queries; "
+    "declare the mode (quick/standard/deep) unless the caller fixed it.",
 )
 
 _CRITIQUE_C = _c(
-    {"verdict": str, "issues": list},
+    # Evidence-gated (Rec 4): the verdict must carry what carren examined.
+    {"verdict": str, "issues": list, "evidence": list},
     {
         "mempalace_drawer": str,
         "confidence": str,
         "needs_clarification": bool,
         "clarifying_questions": list,
     },
+    evidence=["evidence"],
 )
 RESEARCH_CRITIQUE_PLAN = PrimitiveSpec(
     "RESEARCH_CRITIQUE_PLAN",
@@ -265,13 +282,16 @@ RESEARCH_VALIDATE = PrimitiveSpec(
     "RESEARCH_VALIDATE",
     "vera",
     _c(
-        {"verdict": str, "unsupported_claims": list},
+        # Evidence-gated citation-grounding (Rec 4): the verdict must carry the
+        # captured claim->source checks (quotes, fetched spot-checks).
+        {"verdict": str, "unsupported_claims": list, "evidence": list},
         {
             "mempalace_drawer": str,
             "confidence": str,
             "needs_clarification": bool,
             "clarifying_questions": list,
         },
+        evidence=["evidence"],
     ),
     "Verify every material claim in the synthesis is grounded in a cited source. Verdict PASS or FAIL with the unsupported claims listed.",
 )
@@ -483,24 +503,36 @@ class ResearchPlaybook(BasePlaybook):
         if not (ctx.goal or "").strip():
             raise RuntimeError("research skill requires a non-empty goal (the research query)")
         research = ctx.extras.setdefault("research", {})
-        mode = str(ctx.constraints.get("mode", "auto"))
-        if mode not in MODES:
-            mode = detect_mode(ctx.goal)
-        research["mode"] = mode
+        # Mode: caller constraint wins; otherwise piper declares it in the plan
+        # SUMMARY (captured in route_after). No keyword detection.
+        caller_mode = str(ctx.constraints.get("mode", ""))
+        research["mode"] = caller_mode if caller_mode in MODES else ""
+        # One sub-query budget (replaces the per-mode table), clamped to the fan
+        # width since sub-queries become fan branches. Code caps; model spends.
         try:
-            max_sub_queries = int(ctx.constraints.get("max_sub_queries", 0))
+            max_sub_queries = int(ctx.constraints.get("max_sub_queries", DEFAULT_MAX_SUB_QUERIES))
         except (TypeError, ValueError):
-            max_sub_queries = 0
-        research["max_sub_queries"] = max_sub_queries or MAX_SUB_QUERIES_BY_MODE[mode]
+            max_sub_queries = DEFAULT_MAX_SUB_QUERIES
+        try:
+            fan_width = int(ctx.constraints.get("max_fan_width", 8))
+        except (TypeError, ValueError):
+            fan_width = 8
+        research["max_sub_queries"] = max(
+            1, min(max_sub_queries or DEFAULT_MAX_SUB_QUERIES, fan_width)
+        )
         research["report_format"] = str(ctx.constraints.get("report_format", "default"))
-        if mode == "quick":
+        # Only an EXPLICIT caller quick mode takes the single-agent fast-path; a
+        # model-declared quick still transits planning (it decomposes there).
+        if caller_mode == "quick":
             self.sm.send("start_research")
             return "researching"
         self.sm.send("start_plan")
         return "planning"
 
     # -- progress / escalation gate (needs_clarification + honest stalls) ---
-    def progress_check(self, state: str, ctx: RunContext, summary: dict) -> str | None:
+    def progress_check(  # noqa: C901
+        self, state: str, ctx: RunContext, summary: dict
+    ) -> str | None:
         if summary.get("needs_clarification"):
             questions = summary.get("clarifying_questions") or []
             detail = f": {'; '.join(str(q) for q in questions)}" if questions else ""
@@ -510,11 +542,20 @@ class ResearchPlaybook(BasePlaybook):
                 "planning reported plan_complete=false — the query could not be decomposed; "
                 "clarify the research scope"
             )
-        if state == "researching" and not summary.get("explore_complete"):
-            return (
-                "researching reported explore_complete=false — the sub-queries could not be "
-                "researched; clarify the research scope"
-            )
+        if state == "researching":
+            # Fan-in aggregates per-branch summaries under "branches"; the
+            # single-agent fast path reports explore_complete directly.
+            if "branches" in summary:
+                complete = all(
+                    b.get("explore_complete") for b in (summary.get("branches") or {}).values()
+                )
+            else:
+                complete = bool(summary.get("explore_complete"))
+            if not complete:
+                return (
+                    "researching reported explore_complete=false — the sub-queries could not be "
+                    "researched; clarify the research scope"
+                )
         if state == "synthesizing" and not summary.get("synthesis_complete"):
             return (
                 "synthesizing reported synthesis_complete=false — the findings could not be "
@@ -570,10 +611,29 @@ class ResearchPlaybook(BasePlaybook):
         research = ctx.extras.setdefault("research", {})
         mode = research.get("mode", "standard")
         if state == "planning":
+            # Capture the model-declared mode (R1) unless a caller constraint
+            # already fixed it; an unknown declaration falls back to standard.
+            if not research.get("mode"):
+                declared = str(summary.get("mode") or "")
+                research["mode"] = declared if declared in MODES else "standard"
+                mode = research["mode"]
             steps = summary.get("plan_steps") or summary.get("sub_queries") or []
             cap = int(research.get("max_sub_queries", 0)) or len(steps)
+            over = len(steps) > cap
             research["sub_queries"] = list(steps)[:cap]  # budget enforced at dispatch
+            if over:
+                research.setdefault("warnings", []).append(
+                    f"plan proposed {len(steps)} sub-queries; capped to max_sub_queries={cap}"
+                )
             ctx.plan_steps = research["sub_queries"]
+            # Fan-out research (arrangement 4): one echo branch per sub-query.
+            # None -> the researching state falls back to the single-agent primitive.
+            branches = _research_branches(research["sub_queries"])
+            dyn = ctx.extras.setdefault("dynamic_branches", {})
+            if branches:
+                dyn["researching"] = branches
+            else:
+                dyn.pop("researching", None)
             if mode == "deep":
                 self.sm.send("plan_to_critique")
             else:
@@ -604,8 +664,21 @@ class ResearchPlaybook(BasePlaybook):
                 self._end_plan_loop(ctx, research)
                 self.sm.send("plan_critique_exhausted")
         elif state == "researching":
-            research["research_complete"] = True  # explore_complete gated in progress_check
-            research["research_drawer"] = summary.get("mempalace_drawer", "")
+            # Handle BOTH shapes: the aggregated fan-in ({branches, confidence})
+            # and the single-agent fast-path SUMMARY (explore_complete gated in
+            # progress_check for both).
+            if "branches" in summary:
+                bmap = summary.get("branches") or {}
+                research["research_complete"] = all(
+                    b.get("explore_complete") for b in bmap.values()
+                )
+                research["research_drawers"] = [
+                    b.get("mempalace_drawer", "") for b in bmap.values()
+                ]
+                research["research_branch_count"] = len(bmap)
+            else:
+                research["research_complete"] = True
+                research["research_drawer"] = summary.get("mempalace_drawer", "")
             self.sm.send("research_done")
         elif state == "synthesizing":
             research["synthesis_complete"] = True  # synthesis_complete gated in progress_check
@@ -714,12 +787,33 @@ class ResearchPlaybook(BasePlaybook):
     # -- prompts + result --------------------------------------------------
     def _task_summary(self, state: str, spec: PrimitiveSpec, ctx: RunContext) -> str:
         research = ctx.extras.get("research", {})
-        builder = _TASK_BUILDERS.get(state)
-        base = (
-            builder(self, ctx, research)
-            if builder
-            else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
-        )
+        # A dynamic research FAN branch (name RESEARCH_EXPLORE_SQ<n>) researches
+        # its OWN sub-query (spec.task_hint) and writes a branch-tagged drawer;
+        # the single-agent fast path uses the "research ALL" builder.
+        if state == "researching" and getattr(spec, "name", "").startswith("RESEARCH_EXPLORE_SQ"):
+            room = _room(ctx)
+            n = spec.name.rsplit("SQ", 1)[-1] or "1"
+            base = (
+                f"Research this sub-query for: {self._cap(ctx.goal)}\n\n"
+                f"Sub-query: {spec.task_hint}\n\n"
+                f"Write findings to mempalace room: {room} with header: "
+                f"{ctx.session_id}-echo-{n} Research Findings."
+            )
+        else:
+            builder = _TASK_BUILDERS.get(state)
+            base = (
+                builder(self, ctx, research)
+                if builder
+                else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
+            )
+        # Recall (F2): seed the FIRST agent directive with distilled lessons
+        # (this override replaces the base _task_summary, so re-add it).
+        if ctx.recall_lessons and ctx.total_steps == 0:
+            lessons = "\n".join(f"- {self._cap(lsn)}" for lsn in ctx.recall_lessons)
+            base += (
+                "\n\nLessons from prior runs (advisory — weigh against current evidence; "
+                "they never override this run's goal or constraints):\n" + lessons
+            )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {ctx.clarification_text}"
         return base

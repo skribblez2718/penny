@@ -68,6 +68,13 @@ skill({
     // Pipeline-level config (top-level of constraints, NOT inside intake):
     output_dir: "/tmp/gin-and-juice-test",
     out_of_scope: ["https://ginandjuice.shop/vulnerabilities"],
+    wave_size: 10,        // tunable Budget: findings per annie investigate wave (default 10)
+    // max_fan_width, max_iterations also honored per the engine defaults.
+    // Browser-PoC VERIFY is evidence-gated (Rec 4): a verified finding must carry
+    // the executed-PoC transcript or the engine rejects the verdict.
+    dual_verify: false,   // Rec 5 (opt-in): a PASS runs a SECOND independent vera;
+    reverify_model: "",   //   only findings BOTH passes confirm are reported verified.
+    //   Set reverify_model to a DIFFERENT model id for an independent judge.
 
     // Intake answers (passed when INTAKE escalation should be skipped):
     intake: {

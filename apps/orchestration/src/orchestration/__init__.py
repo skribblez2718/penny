@@ -36,6 +36,7 @@ from .contracts import (  # noqa: E402
 )
 from .context import RunContext  # noqa: E402
 from .engine import BasePlaybook  # noqa: E402
+from .loans import LOANS, Loan, list_loans, loan_enabled  # noqa: E402
 from .obs_client import ObsClient  # noqa: E402
 from .playbooks import PLAYBOOKS, ReferenceCycle, get_playbook  # noqa: E402
 from .primitives import (
@@ -48,7 +49,12 @@ from .primitives import (
     VERIFY,
     PrimitiveSpec,
 )  # noqa: E402
-from .primitives.spec import ParallelSpec  # noqa: E402
+from .primitives.spec import (  # noqa: E402
+    ParallelSpec,
+    contract_from_json,
+    parallel_spec_from_dict,
+)
+from .recall import recall_lessons  # noqa: E402
 from .recovery import recover_pending  # noqa: E402
 
 __all__ = [
@@ -69,6 +75,14 @@ __all__ = [
     "BasePlaybook",
     "ReferenceCycle",
     "ParallelSpec",
+    "contract_from_json",
+    "parallel_spec_from_dict",
+    # loans (Ablate hooks) + recall (F2)
+    "Loan",
+    "LOANS",
+    "loan_enabled",
+    "list_loans",
+    "recall_lessons",
     "PLAYBOOKS",
     "get_playbook",
     "recover_pending",

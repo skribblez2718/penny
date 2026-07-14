@@ -25,7 +25,12 @@ For each candidate in the batch, assess **technical validity**:
 - **Never fabricate an APPROVE.** An honest `NEEDS_REVISION` with itemized issues
   is always correct over a faked pass — even when the revise budget is nearly
   spent.
+- **Ground the verdict in `evidence` (required, non-empty).** Give ONE concrete
+  per-candidate observation you actually saw in the file — dimensions, presence
+  of baked-in text, artifacts (e.g. `"cand0: 1024x1024, no text, clean"`,
+  `"cand1: garbled text baked top-left"`). A bare verdict with no cited
+  observations is rejected by the engine.
 
 ## SUMMARY
 
-`SUMMARY:{"verdict": "APPROVE|NEEDS_REVISION", "confidence": "CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN", "issues": ["..."], "failed_candidates": [<idx>], "valid_candidates": [<idx>], "best_candidate": <idx>}`
+`SUMMARY:{"verdict": "APPROVE|NEEDS_REVISION", "confidence": "CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN", "evidence": ["cand0: 1024x1024, no text, clean", "..."], "issues": ["..."], "failed_candidates": [<idx>], "valid_candidates": [<idx>], "best_candidate": <idx>}`

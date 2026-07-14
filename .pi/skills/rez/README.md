@@ -30,7 +30,7 @@ Python-orchestrated skill on the shared engine
 | analyzing | annie | JD ingest + gap analysis |
 | aligning | echo | fresh NIST NICE lookup (every run) |
 | tailoring | synthia | XYZ/ATS/NICE tailoring |
-| validating | vera | anti-fabrication trace + compliance (bounded revise loop) |
+| validating | vera | anti-fabrication trace + compliance (bounded revise loop) — **evidence-gated** (Rec 4): `REZ_VALIDATE` requires a non-empty `evidence` field (captured per-bullet source traceability + STAR/ATS/NICE checks), so a resume is never marked valid on a bare assertion; the evidence rides to the outcome ledger. The fresh-NICE lookup (`aligning`, live retrieval every run) and Recall lesson-seeding on the first directive are engine-standard leverage. |
 | exporting | skribble | .docx render to /tmp/resumes/ via the word extension's `word_generate` tool |
 
 Agents communicate via the mempalace room `skills/rez-{session_id}`.

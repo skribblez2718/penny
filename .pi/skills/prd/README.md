@@ -30,7 +30,7 @@ intake ──start_generate──▶ generating ──generate_done──▶ val
 
 | State                    | Agent     | Description                                                              |
 | ------------------------ | --------- | ----------------------------------------------------------------------- |
-| `intake`                 | —         | Initial. Detects domain, sets clarify-first mode, seeds revision budget |
+| `intake`                 | —         | Initial. Lists available domain packs, sets clarify-first mode, seeds revision budget |
 | `generating`             | `synthia` | Produces the four artifacts (modes: clarification / synthesis / revision) |
 | `validating`             | `vera`    | IDEAL_STATE schema + PRD quality + traceability check                   |
 | `unknown`                | —         | Escalation staging (entered via `to_unknown`)                           |
@@ -38,7 +38,9 @@ intake ──start_generate──▶ generating ──generate_done──▶ val
 | `complete`               | —         | Terminal success                                                        |
 | `error`                  | —         | Terminal failure (via `abort`)                                          |
 
-Domain detection is folded into `intake`; the legacy `classify`/echo state is gone (the legacy runtime always auto-skipped it).
+Domain selection is **model-owned**: `intake` lists the guidance packs under `resources/`, and synthia declares the best-fit `domain` in its SUMMARY (a caller `constraints.domain` short-circuits the choice). The legacy keyword `detect_domain` table is deleted; the `classify`/echo state was already gone.
+
+- **Evidence-gated validation** (Rec 4): vera's `PRD_VALIDATE` contract requires a non-empty `evidence` field — captured check output (IDEAL_STATE schema result, section/coverage counts). The engine rejects an empty-evidence PASS, so a PRD is never marked valid on a bare assertion; the evidence rides to the outcome ledger.
 
 ### Key flows
 

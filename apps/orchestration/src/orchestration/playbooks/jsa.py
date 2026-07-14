@@ -64,7 +64,21 @@ from ..primitives.spec import PrimitiveSpec
 # Constants (ported verbatim)
 # ---------------------------------------------------------------------------
 
-WAVE_SIZE = 10  # findings per annie wave
+_DEFAULT_WAVE_SIZE = 10  # default findings per annie wave (a tunable Budget, not a
+#                          frozen threshold): constraints["wave_size"] overrides.
+
+
+def _wave_size(ctx: "RunContext") -> int:
+    """Findings per annie wave — a tunable Budget (code caps the batch, the model
+    spends the waves). ``constraints["wave_size"]`` overrides the default; clamped
+    to >= 1. The frozen ``WAVE_SIZE = 10`` constant is gone (Bitter-Lesson gate)."""
+    try:
+        n = int((ctx.constraints or {}).get("wave_size", _DEFAULT_WAVE_SIZE))
+    except (TypeError, ValueError):
+        n = _DEFAULT_WAVE_SIZE
+    return max(1, n)
+
+
 WING = "wing_jsa"
 
 # Per-state domain-guidance prompt file (skill-relative). jsa's worker prompts are
@@ -73,6 +87,7 @@ _PROMPT_BY_STATE = {
     "investigate": "annie-base",
     "merge": "synthia-base",
     "verify": "vera-base",
+    "reverify": "vera-base",
     "report": "skribble-base",
     "reflect": "carren-base",
 }
@@ -227,6 +242,7 @@ class JSAMachine(StateMachine):
     collect = State()  # local no-op tool state
     merge = State()  # synthia
     verify = State()  # vera, browser PoC (evidence oracle)
+    reverify = State()  # vera#2 (different model) — optional dual-verify agreement (Rec 5)
     report = State()  # skribble
     reflect = State()  # carren
     # engine control states ------------------------------------------------
@@ -255,6 +271,8 @@ class JSAMachine(StateMachine):
     collect_done = collect.to(merge)
     merge_done = merge.to(verify)
     verify_done = verify.to(report)
+    verify_reverify = verify.to(reverify)  # dual_verify on + first pass PASS
+    reverify_done = reverify.to(report)
     report_done = report.to(reflect)
     reflect_done = reflect.to(complete)
 
@@ -263,6 +281,7 @@ class JSAMachine(StateMachine):
         investigate.to(unknown)
         | merge.to(unknown)
         | verify.to(unknown)
+        | reverify.to(unknown)
         | report.to(unknown)
         | reflect.to(unknown)
     )
@@ -287,6 +306,7 @@ class JSAMachine(StateMachine):
         | collect.to(error)
         | merge.to(error)
         | verify.to(error)
+        | reverify.to(error)
         | report.to(error)
         | reflect.to(error)
         | unknown.to(error)
@@ -431,11 +451,14 @@ class JSAPlaybook(BasePlaybook):
         "investigate": JSA_INVESTIGATE,
         "merge": JSA_MERGE,
         "verify": JSA_VERIFY,
+        "reverify": JSA_VERIFY,  # optional second independent verifier (Rec 5)
         "report": JSA_REPORT,
         "reflect": JSA_REFLECT,
     }
     GATE_STATES = frozenset({"intake"})
-    ESCALATABLE_STATES = frozenset({"investigate", "merge", "verify", "report", "reflect"})
+    ESCALATABLE_STATES = frozenset(
+        {"investigate", "merge", "verify", "reverify", "report", "reflect"}
+    )
 
     # -- lifecycle ---------------------------------------------------------
     def initial_transition(self, ctx: RunContext) -> str:
@@ -557,13 +580,16 @@ class JSAPlaybook(BasePlaybook):
     def _seed_wave_plan(self, ctx: RunContext) -> None:
         """Compute the INVESTIGATE wave plan from the F0 verification counts. Runs
         after slice (deterministic). ``total_waves = max(1, ceil(needs_llm /
-        WAVE_SIZE))`` — annie always runs at least one wave (the general sweep)."""
+        wave_size))`` — annie always runs at least one wave (the general sweep).
+        ``wave_size`` is a tunable Budget (``constraints["wave_size"]``)."""
         jsa = ctx.extras.setdefault("jsa", {})
         inv = jsa.setdefault("investigate", {})
         needs_llm = int(inv.get("needs_llm", jsa.get("needs_llm", 0)) or 0)
-        total = max(1, -(-needs_llm // WAVE_SIZE)) if needs_llm > 0 else 1
+        wave_size = _wave_size(ctx)
+        total = max(1, -(-needs_llm // wave_size)) if needs_llm > 0 else 1
         inv.setdefault("wave", 0)
         inv["needs_llm"] = needs_llm
+        inv["wave_size"] = wave_size  # effective budget, recorded for the pass
         inv["total_waves"] = int(inv.get("total_waves") or total)
         inv.setdefault("unverified", 0)
 
@@ -609,7 +635,25 @@ class JSAPlaybook(BasePlaybook):
                 "refuted_count": int(summary.get("refuted_count", 0) or 0),
                 "out_of_scope_count": int(summary.get("out_of_scope_count", 0) or 0),
             }
-            self.sm.send("verify_done")
+            # Dual-verify (Rec 5, opt-in): a PASS runs a SECOND independent
+            # verifier and reports as verified only what both confirm.
+            if bool((ctx.constraints or {}).get("dual_verify")) and verdict == "PASS":
+                self.sm.send("verify_reverify")
+            else:
+                self.sm.send("verify_done")
+        elif state == "reverify":
+            verdict = str(summary.get("verdict", ""))
+            first = jsa.get("verify", {}).get("verdict", "")
+            agreed = verdict == "PASS" and first == "PASS"
+            jsa["reverify"] = {
+                "verdict": verdict,
+                "verified_count": int(summary.get("verified_count", 0) or 0),
+                "could_not_reproduce": summary.get("gaps", []),
+            }
+            jsa["dual_verify_agreed"] = agreed
+            # The engine records agreement; the report reads the (independently
+            # re-checked) verified room, so disagreements are surfaced honestly.
+            self.sm.send("reverify_done")
         elif state == "report":
             jsa["report"] = {
                 "complete": bool(summary.get("report_complete", False)),
@@ -715,10 +759,19 @@ class JSAPlaybook(BasePlaybook):
             "investigate": self._investigate_task,
             "merge": self._merge_task,
             "verify": self._verify_task,
+            "reverify": self._reverify_task,
             "report": self._report_task,
             "reflect": self._reflect_task,
         }.get(state)
         base = builder(ctx) if builder else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
+        # Recall (F2): seed the FIRST agent directive with distilled lessons
+        # (this override replaces the base _task_summary, so re-add it).
+        if ctx.recall_lessons and ctx.total_steps == 0:
+            lessons = "\n".join(f"- {self._cap(lsn)}" for lsn in ctx.recall_lessons)
+            base += (
+                "\n\nLessons from prior runs (advisory — weigh against current evidence; "
+                "they never override this run's goal or constraints):\n" + lessons
+            )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {self._cap(ctx.clarification_text)}"
         return base
@@ -733,7 +786,8 @@ class JSAPlaybook(BasePlaybook):
             f"Investigate the JavaScript security target. Wave {wave}/{total}.\n"
             f"Session: {ctx.session_id}. Target: {jsa.get('target_url', '')}. "
             f"Output dir: {jsa.get('output_dir', '')}.\n"
-            f"For THIS wave's findings (up to {WAVE_SIZE}): read the relevant source from "
+            f"For THIS wave's findings (up to {int(inv.get('wave_size', _DEFAULT_WAVE_SIZE))}): "
+            f"read the relevant source from "
             f"assets/js/, run semgrep on the file if useful, and use the browser to test "
             f"exploitability. Then do a GENERAL SWEEP of a few JS files and HTML pages for "
             f"novel patterns SAST may have missed (logic flaws, auth issues, multi-step chains).\n"
@@ -775,6 +829,36 @@ class JSAPlaybook(BasePlaybook):
             f"`verification_status: out_of_scope` and skip the PoC.\n{scope_bullets}\n"
             f"Target: {jsa.get('target_url', '')}. Session: {ctx.session_id}."
         )
+
+    def _reverify_task(self, ctx: RunContext) -> str:
+        """Second, INDEPENDENT verification pass (dual-verify, Rec 5): a different
+        verifier (ideally a different model via ``model_for_state``) reproduces the
+        first pass's verified findings from scratch and flags any it cannot
+        confirm. Only findings BOTH passes confirm should be reported as
+        verified."""
+        jsa = ctx.extras.get("jsa", {})
+        rooms = _rooms(ctx.session_id)
+        return (
+            f"INDEPENDENT re-verification (dual-verify). Another verifier already marked findings "
+            f"in wing={WING} room={rooms['verified']}. WITHOUT trusting their verdict, reproduce "
+            f"the browser-based PoC for each finding they marked verified: confirm it independently "
+            f"or flag that you could not reproduce it. Attach your own executed-PoC transcript as "
+            f"EVIDENCE for every finding you confirm; list any you could NOT reproduce in `gaps`. "
+            f"Enforce the same out-of-scope constraints. A finding only ONE pass confirms is NOT "
+            f"reliably verified. Post your independent results to wing={WING} "
+            f"room={rooms['verified']}. Target: {jsa.get('target_url', '')}. Session: {ctx.session_id}."
+        )
+
+    def model_for_state(self, state: str, ctx: RunContext) -> str | None:
+        """Dual-verify independence: the second verifier (`reverify`) runs on a
+        DIFFERENT model when the caller supplies ``constraints["reverify_model"]``
+        — the point of Rec 5 is an independent judge, so correlated single-model
+        errors don't slip a false PASS through. Unset → the agent's default model
+        (still catches non-determinism, but note the reduced independence)."""
+        if state == "reverify":
+            model = str((ctx.constraints or {}).get("reverify_model", "")).strip()
+            return model or None
+        return None
 
     def _report_task(self, ctx: RunContext) -> str:
         jsa = ctx.extras.get("jsa", {})
@@ -859,6 +943,16 @@ class JSAPlaybook(BasePlaybook):
             "wing": WING,
             "rooms": _rooms(ctx.session_id),
             "verify_verdict": jsa.get("verify", {}).get("verdict", ""),
+            # Dual-verify (Rec 5): present only when the second independent pass ran.
+            **(
+                {
+                    "dual_verify": True,
+                    "dual_verify_agreed": bool(jsa.get("dual_verify_agreed")),
+                    "reverify_verdict": jsa.get("reverify", {}).get("verdict", ""),
+                }
+                if "reverify" in jsa
+                else {}
+            ),
             "counts": {
                 "merged": jsa.get("merge", {}).get("merged_count", 0),
                 "verified": jsa.get("verify", {}).get("verified_count", 0),

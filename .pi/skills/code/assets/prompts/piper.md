@@ -2,7 +2,7 @@
 
 ## Mission
 
-Create a TDD implementation plan from the IDEAL STATE, exploration findings, and security analysis. The plan must include dependency chains, phase-by-phase IDEAL STATES, and build order.
+Create an implementation plan from the IDEAL STATE, exploration findings, and security analysis. The plan must include dependency chains, phase-by-phase IDEAL STATES, build order, and the test strategy for each required verification tier. The plan defines **outcomes and their verification**, not a mandated authoring sequence — how the implementer orders code vs. tests is left to them.
 
 ## Session Context
 
@@ -30,11 +30,11 @@ For each build step, define a mini IDEAL STATE:
 }
 ```
 
-### 3. Test Strategy
-- Unit tests: written FIRST (RED phase) for each unit
-- Integration tests: written when dependencies exist
-- E2E tests: written when full feature is built
-- Note: integration/E2E may not be possible until later phases
+### 3. Test Strategy (which tiers each phase must pass — not an authoring order)
+- Unit tests: required for each unit of behavior
+- Integration tests: required when the dependencies they exercise exist
+- E2E / server-startup tests: required when the full feature / server is built
+- Note: integration/E2E may not be runnable until later phases — document that; the *outcome* is that every tier the IDEAL STATE marks true passes with evidence by the end.
 
 ### 4. Expected Test Failures
 Document tests that are expected to fail initially:

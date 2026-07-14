@@ -13,9 +13,24 @@ Three deliberate behavior fixes vs. the legacy runtime:
     persisting) escalates to the user, and true budget exhaustion completes with
     ``met=False`` and the unresolved issues reported;
   * escalation resume no longer fabricates gate passage via transition replay —
-    the durable checkpointer owns state and ``clarify`` resumes exploration;
+    the durable checkpointer owns state and ``clarify`` resumes at ``scoping``;
   * the verify gate is a real engine gate (entered only when verification is
     warranted), not an in-band ``escalate_to_user`` the legacy path disarmed.
+
+Bitter-lesson / atomic-loops compliance (2026-07-14):
+  * **exploration topology is the model's runtime output** (arrangement 4). A
+    ``scoping`` state (piper) emits ``explore_branches`` — the foci to fan out on
+    — which ``route_after`` turns into ``ctx.extras["dynamic_branches"]``; the
+    engine dispatches one echo branch per focus, bounded by
+    ``constraints["max_fan_width"]`` (default 8). Branch agents are pinned to
+    read-only ``echo`` (a consequence boundary, not a topology choice). The
+    legacy fixed 3-branch split survives only as the tagged LOAN
+    ``plan_default_explore_topology`` fallback (``PLAN_EXPLORE_DEFAULT``);
+  * **critique is evidence-gated** (Rec 4): ``PLAN_CRITIQUE`` requires a
+    non-empty ``evidence`` field — what carren actually examined — or the
+    engine's contract rejects the verdict;
+  * dial: routing stays code-owned on wire verdicts; topology is model-owned.
+    ``fire_model_route`` is not used (every edge is verdict- or gate-determined).
 
 Domain guidance stays in ``.pi/skills/plan/assets/prompts/<agent>.md``; the
 mempalace room ``skills/plan-{session_id}`` and drawer headers are preserved
@@ -30,11 +45,62 @@ from statemachine import State, StateMachine
 
 from ..context import RunContext
 from ..engine import BasePlaybook
+from ..loans import loan_enabled
 from ..primitives.spec import ParallelSpec, PrimitiveSpec
 
 
-def _c(required: dict, optional: dict | None = None) -> dict:
-    return {"required": required, "optional": optional or {}}
+def _c(required: dict, optional: dict | None = None, evidence: list | None = None) -> dict:
+    contract: dict = {"required": required, "optional": optional or {}}
+    if evidence:
+        contract["evidence"] = evidence
+    return contract
+
+
+# JSON-safe echo branch contract (type NAMES) for runtime-emitted fan branches.
+# Mirrors ``_ECHO_C`` so a dynamic branch validates identically to the default
+# topology (the engine's ``parallel_spec_from_dict`` converts the names).
+_ECHO_C_JSON = {
+    "required": {"explore_complete": "bool"},
+    "optional": {
+        "findings_count": "int",
+        "files_count": "int",
+        "unknowns_count": "int",
+        "mempalace_drawer": "str",
+        "needs_clarification": "bool",
+        "clarifying_questions": "list",
+        "confidence": "str",
+    },
+}
+
+
+def _build_dynamic_branches(emitted: Any) -> dict | None:
+    """Turn piper's ``explore_branches`` (``{branch_id: focus}`` or
+    ``{branch_id: {focus/task_hint}}``) into the engine's JSON-safe
+    ``dynamic_branches`` shape. Every branch is pinned to read-only ``echo``
+    (consequence boundary) with the canonical echo contract; only the topology
+    (how many branches, what foci) is the model's. Returns ``None`` when nothing
+    valid was emitted (caller decides: LOAN default fallback or escalate)."""
+    if not isinstance(emitted, dict) or not emitted:
+        return None
+    branches: dict = {}
+    for bid, val in emitted.items():
+        if isinstance(val, str):
+            focus = val
+        elif isinstance(val, dict):
+            focus = str(val.get("focus") or val.get("task_hint") or "")
+        else:
+            focus = ""
+        focus = focus.strip()
+        if not focus:
+            continue
+        sid = str(bid).strip() or f"branch{len(branches)}"
+        branches[sid] = {
+            "agent": "echo",
+            "name": f"PLAN_EXPLORE_{sid.upper()}",
+            "task_hint": focus,
+            "summary_contract": _ECHO_C_JSON,
+        }
+    return branches or None
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +110,8 @@ def _c(required: dict, optional: dict | None = None) -> dict:
 
 class PlanMachine(StateMachine):
     intake = State(initial=True)
-    exploring = State()  # parallel echo fan-out (3 focuses)
+    scoping = State()  # piper: emit the runtime exploration topology
+    exploring = State()  # parallel echo fan-out (model-emitted or default focuses)
     planning = State()
     verify_gate = State()  # HITL: confirm high-stakes plan / revise
     critiquing = State()
@@ -54,7 +121,9 @@ class PlanMachine(StateMachine):
     complete = State(final=True)
     error = State(final=True)
 
-    start_explore = intake.to(exploring)
+    start_scope = intake.to(scoping)
+    start_explore = intake.to(exploring)  # caller-supplied topology skips scoping
+    scope_done = scoping.to(exploring)
     explore_done = exploring.to(planning)
     plan_to_verify = planning.to(verify_gate)
     plan_to_critique = planning.to(critiquing)
@@ -70,15 +139,17 @@ class PlanMachine(StateMachine):
     # exploring is escalatable (a branch may need clarification), so it needs a
     # to_unknown edge for the engine's _escalate path to reach awaiting_clarification.
     to_unknown = (
-        exploring.to(unknown)
+        scoping.to(unknown)
+        | exploring.to(unknown)
         | planning.to(unknown)
         | critiquing.to(unknown)
         | taskifying.to(unknown)
     )
     escalate = unknown.to(awaiting_clarification)
-    clarify = awaiting_clarification.to(exploring)
+    clarify = awaiting_clarification.to(scoping)  # re-scope after clarification
     abort = (
         intake.to(error)
+        | scoping.to(error)
         | exploring.to(error)
         | planning.to(error)
         | verify_gate.to(error)
@@ -125,19 +196,37 @@ PLAN_PLAN = PrimitiveSpec(
     ),
     "Write an execution-grade plan; read explore findings from mempalace first. Emit plan_steps + stakes.",
 )
+PLAN_SCOPE = PrimitiveSpec(
+    "PLAN_SCOPE",
+    "piper",
+    _c(
+        {"scope_complete": bool, "explore_branches": dict, "confidence": str},
+        {
+            "mempalace_drawer": str,
+            "needs_clarification": bool,
+            "clarifying_questions": list,
+        },
+    ),
+    "Decompose the goal into the exploration subtasks whose answers the plan needs. "
+    "Emit explore_branches: a small map of branch_id -> focus. Every branch is "
+    "read-only echo work; the topology (how many, what foci) is yours.",
+)
 PLAN_CRITIQUE = PrimitiveSpec(
     "PLAN_CRITIQUE",
     "carren",
     _c(
-        {"verdict": str, "issues": list},
+        # Evidence-gated (Rec 4): the verdict must carry what carren examined.
+        {"verdict": str, "issues": list, "evidence": list},
         {
             "mempalace_drawer": str,
             "needs_clarification": bool,
             "clarifying_questions": list,
             "confidence": str,
         },
+        evidence=["evidence"],
     ),
-    "Critique the plan (CREST). Verdict APPROVE or NEEDS_REVISION with issue titles.",
+    "Critique the plan (CREST) as an interpreter of evidence. Verdict APPROVE or "
+    "NEEDS_REVISION with issue titles + the evidence you examined.",
 )
 PLAN_TASKIFY = PrimitiveSpec(
     "PLAN_TASKIFY",
@@ -145,6 +234,7 @@ PLAN_TASKIFY = PrimitiveSpec(
     _c(
         {"title": str, "step_count": int, "complete": bool},
         {
+            "evidence": list,  # optional task-coverage enumeration
             "mempalace_drawer": str,
             "needs_clarification": bool,
             "clarifying_questions": list,
@@ -154,9 +244,10 @@ PLAN_TASKIFY = PrimitiveSpec(
     "Convert the approved plan into a structured task list. Emit title + step_count.",
 )
 
-# Parallel exploration: three echo branches, each with a distinct focus (held in
-# the branch spec's task_hint, read by _build_explore).
-PLAN_EXPLORE = ParallelSpec(
+# Default (LOAN fallback) exploration topology: three echo branches. Used only
+# when scoping emits no valid runtime topology and the tagged LOAN
+# ``plan_default_explore_topology`` is enabled; delete when the loan is repaid.
+PLAN_EXPLORE_DEFAULT = ParallelSpec(
     branches={
         "entrypoints": PrimitiveSpec(
             "PLAN_EXPLORE_ENTRYPOINTS", "echo", _ECHO_C, "entry points and call graph"
@@ -253,7 +344,18 @@ def _build_taskify(pb: "PlanPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> 
     )
 
 
+def _build_scope(pb: "PlanPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
+    room = _room(ctx)
+    return (
+        f"Session: {ctx.session_id}. Goal: {pb._cap(ctx.goal)}. Mempalace room: {room}. "
+        f"Decompose the goal into the exploration foci whose answers the plan needs, and "
+        f"emit them as explore_branches (branch_id -> focus). Every branch is read-only "
+        f"echo work. Check room {room} for prior session results first."
+    )
+
+
 _TASK_BUILDERS = {
+    "scoping": _build_scope,
     "exploring": _build_explore,
     "planning": _build_plan,
     "critiquing": _build_critique,
@@ -270,21 +372,30 @@ class PlanPlaybook(BasePlaybook):
     NAME = "plan"
     machine_cls = PlanMachine
     PRIMITIVE_BY_STATE = {
+        "scoping": PLAN_SCOPE,
         "planning": PLAN_PLAN,
         "critiquing": PLAN_CRITIQUE,
         "taskifying": PLAN_TASKIFY,
     }
-    PARALLEL_BY_STATE = {"exploring": PLAN_EXPLORE}
+    # Class-level fallback topology; the engine's parallel_spec prefers a
+    # runtime ``ctx.extras["dynamic_branches"]["exploring"]`` when present.
+    PARALLEL_BY_STATE = {"exploring": PLAN_EXPLORE_DEFAULT}
     GATE_STATES = frozenset({"verify_gate"})
-    ESCALATABLE_STATES = frozenset({"exploring", "planning", "critiquing", "taskifying"})
+    ESCALATABLE_STATES = frozenset({"scoping", "exploring", "planning", "critiquing", "taskifying"})
 
     # -- lifecycle ---------------------------------------------------------
     def initial_transition(self, ctx: RunContext) -> str:
         if not (ctx.goal or "").strip():
             raise RuntimeError("plan skill requires a non-empty goal")
         ctx.extras.setdefault("plan", {})
-        self.sm.send("start_explore")
-        return "exploring"
+        # Caller-supplied topology (constraints.explore_branches) skips scoping.
+        caller = _build_dynamic_branches((ctx.constraints or {}).get("explore_branches"))
+        if caller:
+            ctx.extras.setdefault("dynamic_branches", {})["exploring"] = caller
+            self.sm.send("start_explore")
+            return "exploring"
+        self.sm.send("start_scope")
+        return "scoping"
 
     # -- progress / escalation gate (needs_clarification + stall) ----------
     def progress_check(self, state: str, ctx: RunContext, summary: dict) -> str | None:
@@ -292,6 +403,16 @@ class PlanPlaybook(BasePlaybook):
             qs = summary.get("clarifying_questions") or []
             detail = f": {'; '.join(str(q) for q in qs)}" if qs else ""
             return f"{state} agent requested clarification{detail}"
+        if state == "scoping":
+            # An invalid/empty topology with the default-fallback LOAN ablated has
+            # nowhere to go but the user (arrangement 4 wants the model's output).
+            if not _build_dynamic_branches(summary.get("explore_branches")) and not loan_enabled(
+                "plan_default_explore_topology"
+            ):
+                return (
+                    "scoping produced no valid exploration topology and the default-"
+                    "topology fallback is ablated — clarify how to explore the goal"
+                )
         if state == "critiquing" and summary.get("verdict") != "APPROVE":
             if self.is_stalled(ctx, summary.get("issues", [])):
                 return (
@@ -303,7 +424,14 @@ class PlanPlaybook(BasePlaybook):
     # -- routing -----------------------------------------------------------
     def route_after(self, state: str, ctx: RunContext, summary: dict) -> None:  # noqa: C901
         plan = ctx.extras.setdefault("plan", {})
-        if state == "exploring":
+        if state == "scoping":
+            built = _build_dynamic_branches(summary.get("explore_branches"))
+            if built:
+                ctx.extras.setdefault("dynamic_branches", {})["exploring"] = built
+            # else: fall through to the class-level default topology (the tagged
+            # LOAN; the ablated-invalid case already escalated in progress_check).
+            self.sm.send("scope_done")
+        elif state == "exploring":
             plan["explored"] = True
             self.sm.send("explore_done")
         elif state == "planning":
@@ -427,6 +555,14 @@ class PlanPlaybook(BasePlaybook):
             if builder
             else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
         )
+        # Recall (F2): seed the FIRST agent directive with distilled lessons
+        # (this override replaces the base _task_summary, so re-add it).
+        if ctx.recall_lessons and ctx.total_steps == 0:
+            lessons = "\n".join(f"- {self._cap(lsn)}" for lsn in ctx.recall_lessons)
+            base += (
+                "\n\nLessons from prior runs (advisory — weigh against current evidence; "
+                "they never override this run's goal or constraints):\n" + lessons
+            )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {ctx.clarification_text}"
         return base

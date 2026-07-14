@@ -51,6 +51,10 @@
         "@sinclair/typebox": "^0.34.49",
       },
     },
+    ".pi/extensions/enhance": {
+      "name": "pi-extension-enhance",
+      "version": "1.0.0",
+    },
     ".pi/extensions/environment": {
       "name": "pi-environment-extension",
       "version": "0.1.0",
@@ -150,10 +154,6 @@
         "typescript": "^6.0.3",
         "vitest": "^4.1.7",
       },
-    },
-    ".pi/extensions/prompt-improver": {
-      "name": "pi-extension-prompt-improver",
-      "version": "1.0.0",
     },
     ".pi/extensions/questionnaire": {
       "name": "pi-questionnaire-extension",
@@ -1308,6 +1308,8 @@
 
     "pi-extension-cve-lookup": ["pi-extension-cve-lookup@workspace:.pi/extensions/cve-lookup"],
 
+    "pi-extension-enhance": ["pi-extension-enhance@workspace:.pi/extensions/enhance"],
+
     "pi-extension-eslint-security": ["pi-extension-eslint-security@workspace:.pi/extensions/eslint-security"],
 
     "pi-extension-gitleaks": ["pi-extension-gitleaks@workspace:.pi/extensions/gitleaks"],
@@ -1317,8 +1319,6 @@
     "pi-extension-njsscan": ["pi-extension-njsscan@workspace:.pi/extensions/njsscan"],
 
     "pi-extension-osv-scanner": ["pi-extension-osv-scanner@workspace:.pi/extensions/osv-scanner"],
-
-    "pi-extension-prompt-improver": ["pi-extension-prompt-improver@workspace:.pi/extensions/prompt-improver"],
 
     "pi-extension-retire-js": ["pi-extension-retire-js@workspace:.pi/extensions/retire-js"],
 

@@ -1,10 +1,10 @@
 stateDiagram-v2
     [*] --> intake
-    intake --> analyzing : start_analyze
+    intake --> analyzing : start_analyze (Recall lessons seed the first directive)
     analyzing --> aligning : analyze_done (annie: JD ingest + gap analysis)
-    aligning --> tailoring : align_done (echo: fresh NICE lookup, aligned OR unaligned)
+    aligning --> tailoring : align_done (echo: FRESH NICE lookup every run — live retrieval)
     tailoring --> validating : tailor_done (synthia: XYZ/ATS/NICE tailoring)
-    validating --> exporting : validate_pass (vera: anti-fabrication + compliance)
+    validating --> exporting : validate_pass (vera: anti-fabrication + compliance; EVIDENCE-GATED)
     validating --> tailoring : revise (issues found, within budget)
     validating --> complete : validate_exhausted (budget spent; met=False, NO export)
     exporting --> complete : export_done (skribble: .docx to /tmp/resumes/)

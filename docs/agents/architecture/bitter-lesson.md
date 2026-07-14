@@ -64,6 +64,9 @@ The specific mechanisms, thresholds, and file references — *what is LEVERAGE v
 
 ## Related
 
+- [Atomic Loop Components](atomic-loop-components.md) — the construction companion: this doctrine's LEVERAGE/SAFETY/KNOWLEDGE-CONSTRAINT triage expressed as a catalog of loop atoms plus assembly rules, so the doctrine is buildable, not just auditable.
+- [Agentic Loops](../skills/loops.md) — the seven loop classes (arrangements of those atoms) and per-class design rules.
 - [Outcome Ledger](outcome-ledger.md) — the ratchet / eval substrate within which these capabilities are protected.
 - [Project Standards](project-standards.md) — home of the add-side Bitter-Lesson Gate.
 - [Tiered Memory](tiered-memory.md) — one of the protected leverage capabilities (durable memory).
+- [Bitter-Lesson Doctrine (Human)](../../humans/architecture/bitter-lesson.md) — the conceptual WHAT/WHY companion to this operational doctrine.

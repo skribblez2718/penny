@@ -4,7 +4,7 @@ import {
   callBridge,
   queryMempalaceSkillRooms,
   queryMempalaceSkillRoomsForSession,
-  queryKGEntitiesForSession,
+  queryKGEntitiesForScope,
   queryOutcomeLedgerDecisions,
 } from "../../bridge.js";
 
@@ -159,35 +159,40 @@ describe("queryMempalaceSkillRoomsForSession", () => {
 // KG Entity Verification
 // ============================================================
 
-describe("queryKGEntitiesForSession", () => {
-  it("returns KG entities with lifecycle fields", async () => {
-    mockCall.mockImplementation(async (tool: string) => {
-      if (tool === "kg_query") {
+describe("queryKGEntitiesForScope", () => {
+  it("queries each scoped id and merges the related entities", async () => {
+    mockCall.mockImplementation(async (tool: string, params?: any) => {
+      if (tool === "kg_query" && params?.entity === "plan-1") {
         return {
           success: true,
           data: {
             facts: [
-              { subject: "Decision:D1", predicate: "approved_by", object: "Session:test" },
-              { subject: "Session:test", predicate: "has_agent", object: "Agent:echo" },
+              { subject: "Decision:D1", predicate: "approved_by", object: "plan-1" },
+              { subject: "plan-1", predicate: "has_agent", object: "Agent:echo" },
             ],
           },
         };
       }
-      return { success: false };
+      return { success: true, data: { facts: [] } };
     });
 
-    const entities = await queryKGEntitiesForSession("test");
+    const entities = await queryKGEntitiesForScope(["plan-1", "code-2"]);
     expect(entities).toHaveLength(2);
     expect(entities[0].entity_id).toBe("Decision:D1");
     expect(entities[0].entity_type).toBe("Decision");
-    expect(entities[0].last_verified).toBeDefined();
     expect(entities[1].entity_id).toBe("Agent:echo");
     expect(entities[1].entity_type).toBe("Agent");
   });
 
+  it("returns [] for an empty scope (no dead Session:<uuid> query)", async () => {
+    const entities = await queryKGEntitiesForScope([]);
+    expect(entities).toEqual([]);
+    expect(mockCall).not.toHaveBeenCalled();
+  });
+
   it("returns empty array on kg_query failure", async () => {
     mockCall.mockResolvedValue({ success: false });
-    const entities = await queryKGEntitiesForSession("test");
+    const entities = await queryKGEntitiesForScope(["plan-1"]);
     expect(entities).toEqual([]);
   });
 });
@@ -204,8 +209,8 @@ describe("queryOutcomeLedgerDecisions", () => {
           success: true,
           data: {
             results: [
-              { id: "outcome-8842", text: "Approved plan for compaction extension" },
-              { text: "Rejected observability augmentation" },
+              { id: "outcome-8842", text: "session_id: plan-7 | Approved plan for compaction" },
+              { text: "session_id: plan-7 | Rejected observability augmentation" },
             ],
           },
         };
@@ -213,7 +218,8 @@ describe("queryOutcomeLedgerDecisions", () => {
       return { success: false };
     });
 
-    const decisions = await queryOutcomeLedgerDecisions(20);
+    // Scope matches both drawers' text (they carry the scoped id).
+    const decisions = await queryOutcomeLedgerDecisions(["plan-7"], 20);
     expect(decisions).toHaveLength(2);
     expect(decisions[0].decision_id).toBe("outcome-8842"); // real pointer
     expect(decisions[1].decision_id).toBe("outcome-1"); // index fallback
@@ -221,9 +227,35 @@ describe("queryOutcomeLedgerDecisions", () => {
     expect(decisions[0].outcome_room).toBe("penny/outcomes");
   });
 
+  it("keeps ONLY drawers matching a scoped id (no cross-session bleed)", async () => {
+    mockCall.mockImplementation(async (tool: string) => {
+      if (tool === "search") {
+        return {
+          success: true,
+          data: {
+            results: [
+              { id: "o-1", text: "session_id: plan-111 | decided X" },
+              { id: "o-2", text: "session_id: other-999 | decided Y" },
+            ],
+          },
+        };
+      }
+      return { success: false };
+    });
+    const decisions = await queryOutcomeLedgerDecisions(["plan-111"], 20);
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].decision_id).toBe("o-1");
+  });
+
+  it("returns [] for an empty scope (no global bleed)", async () => {
+    const decisions = await queryOutcomeLedgerDecisions([], 20);
+    expect(decisions).toEqual([]);
+    expect(mockCall).not.toHaveBeenCalled();
+  });
+
   it("returns empty array on search failure", async () => {
     mockCall.mockResolvedValue({ success: false });
-    const decisions = await queryOutcomeLedgerDecisions();
+    const decisions = await queryOutcomeLedgerDecisions(["plan-1"]);
     expect(decisions).toEqual([]);
   });
 });

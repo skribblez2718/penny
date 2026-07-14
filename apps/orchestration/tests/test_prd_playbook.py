@@ -10,7 +10,8 @@ the run_id/checkpointer contract (fresh instance per step).
 import pytest
 
 from orchestration.checkpointer import STATUS_AWAITING_USER, Checkpointer
-from orchestration.playbooks.prd import PrdPlaybook, detect_domain
+from orchestration.context import RunContext
+from orchestration.playbooks.prd import PRD_GENERATE, PrdPlaybook, available_domains
 
 SID, RID = "sess-prd", "run-prd"
 GOAL = "build a fastapi service for document search"
@@ -27,6 +28,7 @@ CLARIFY_SUMMARY = {
 }
 SYNTH_SUMMARY = {
     "complete": True,
+    "domain": "web-app",  # synthia declares the best-fit pack (model-owned, R1)
     "requirement_count": 12,
     "narrative_sections": 12,
     "verification_matrix_complete": True,
@@ -35,11 +37,24 @@ SYNTH_SUMMARY = {
     "clarifying_questions": [],
     "confidence": "PROBABLE",
 }
-VERA_PASS = {"valid": True, "ideal_state_valid": True, "issues": [], "confidence": "CERTAIN"}
+# vera is evidence-gated (Rec 4): every verdict carries captured evidence.
+VERA_PASS = {
+    "valid": True,
+    "ideal_state_valid": True,
+    "issues": [],
+    "evidence": ["validate_ideal_state: OK", "12/12 narrative sections found"],
+    "confidence": "CERTAIN",
+}
 
 
 def _vera_fail(issues):
-    return {"valid": False, "ideal_state_valid": False, "issues": issues, "confidence": "PROBABLE"}
+    return {
+        "valid": False,
+        "ideal_state_valid": False,
+        "issues": issues,
+        "evidence": ["schema check ran", "section audit ran"],
+        "confidence": "PROBABLE",
+    }
 
 
 @pytest.fixture
@@ -86,12 +101,41 @@ def test_start_dispatches_clarification_mode(cp):
     assert "wing=penny" in d["task_summary"]
 
 
-def test_domain_detection_folded_into_start(cp):
-    # keyword goal -> web-app; the vestigial echo classify state is gone
-    assert detect_domain(GOAL) == "web-app"
-    assert detect_domain("summarize quarterly sales numbers") == "generic"
+def test_first_task_lists_available_packs_for_model_choice(cp):
+    # No caller domain: the first task lists the packs and asks the model to
+    # declare one — no keyword detection.
     d = _start(cp)
+    assert "Available domain guidance packs" in d["task_summary"]
+    assert "web-app" in d["task_summary"] and "generic" in d["task_summary"]
+    assert "Domain:" not in d["task_summary"]  # unresolved until declared
+
+
+def test_available_domains_includes_generic_and_web_app():
+    ctx = RunContext(session_id=SID, run_id=RID, playbook="prd", goal=GOAL)
+    names = available_domains(ctx)
+    assert "generic" in names and "web-app" in names
+
+
+def test_caller_domain_constraint_wins_and_is_not_overridden(cp):
+    d = _start(cp, constraints={"domain": "web-app"})
     assert "Domain: web-app" in d["task_summary"]
+    _step(cp, "synthia", CLARIFY_SUMMARY)
+    _step(cp, "user", {"answer": "ops"})
+    _step(cp, "synthia", {**SYNTH_SUMMARY, "domain": "generic"})  # model tries to differ
+    assert cp.load(RID).context.extras["prd"]["domain"] == "web-app"
+
+
+def test_model_declared_domain_is_captured(cp):
+    _to_validating(cp)  # SYNTH_SUMMARY declares web-app
+    assert cp.load(RID).context.extras["prd"]["domain"] == "web-app"
+
+
+def test_unknown_declared_domain_falls_back_to_generic(cp):
+    _start(cp)
+    _step(cp, "synthia", CLARIFY_SUMMARY)
+    _step(cp, "user", {"answer": "ops"})
+    _step(cp, "synthia", {**SYNTH_SUMMARY, "domain": "not-a-real-pack"})
+    assert cp.load(RID).context.extras["prd"]["domain"] == "generic"
 
 
 def test_max_iterations_defaults_to_legacy_five(cp):
@@ -230,6 +274,7 @@ def test_vera_uncertain_escalates_and_resumes_generation(cp):
             "valid": False,
             "ideal_state_valid": False,
             "issues": ["contradictory artifacts"],
+            "evidence": ["cross-artifact audit ran"],
             "confidence": "UNCERTAIN",
         },
     )
@@ -291,14 +336,42 @@ def test_recovery_re_presents_pending_clarification(cp, monkeypatch):
     assert "Who are the users?" in directives[0]["unknown_reason"]
 
 
-def test_detect_domain_lit_substring_no_false_positive():
-    """'lit' must NOT be a bare keyword — 'quality' contains the substring 'lit'."""
-    assert detect_domain("improve code quality") == "generic"
-    assert detect_domain("audit reliability and stability") == "generic"
+# ---------------------------------------------------------------------------
+# evidence-gated validation (Rec 4) + recall injection (R5.5)
+# ---------------------------------------------------------------------------
 
 
-def test_detect_domain_recognizes_lit_and_tailwind():
-    """Precise Lit tokens and Tailwind are recognized as web-app."""
-    assert detect_domain("build a litelement design system") == "web-app"
-    assert detect_domain("refactor the lit-html templates") == "web-app"
-    assert detect_domain("style the panel with tailwind") == "web-app"
+def test_validate_rejects_empty_evidence_then_accepts_grounded(cp):
+    _to_validating(cp)
+    # PASS with EMPTY evidence violates the contract -> bounded retry, not a pass.
+    d = _step(
+        cp,
+        "vera",
+        {
+            "valid": True,
+            "ideal_state_valid": True,
+            "issues": [],
+            "evidence": [],
+            "confidence": "CERTAIN",
+        },
+    )
+    assert d["action"] == "invoke_agent" and d["state_id"] == "validating"
+    # With captured evidence it passes.
+    d2 = _step(cp, "vera", VERA_PASS)
+    assert d2["action"] == "complete" and d2["result"]["met"] is True
+
+
+def test_validate_evidence_lands_on_context(cp):
+    _to_validating(cp)
+    _step(cp, "vera", VERA_PASS)
+    assert cp.load(RID).context.verify_evidence  # captured for the outcome ledger
+
+
+def test_recall_lessons_render_in_first_directive(cp):
+    pb = PrdPlaybook(cp)
+    ctx = RunContext(session_id=SID, run_id=RID, playbook="prd", goal=GOAL)
+    ctx.recall_lessons = ["prefer measurable, testable success criteria"]
+    ctx.extras["prd"] = {"mode": "clarification", "domain": "", "available_domains": ["generic"]}
+    txt = pb._task_summary("generating", PRD_GENERATE, ctx)
+    assert "Lessons from prior runs" in txt
+    assert "prefer measurable, testable success criteria" in txt

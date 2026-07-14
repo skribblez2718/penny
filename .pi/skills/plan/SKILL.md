@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Structured planning workflow that breaks complex goals into actionable steps. Use when planning, sequencing steps, creating a roadmap, mapping dependencies, or decomposing a goal into a reviewable plan deliverable. Do not use for a simple single-step task or quick fix, when the user says "just do it," when lightweight sequencing without a deliverable suffices (piper), or when breaking an existing plan into executable tasks (tabitha).
+description: Structured planning workflow that breaks complex goals into actionable steps. Use when planning, sequencing steps, creating a roadmap, mapping dependencies, or decomposing a goal into a reviewable plan deliverable. Do not use when the task is a simple single-step task or quick fix, when the user says "just do it," when lightweight sequencing without a deliverable suffices (piper), or when breaking an existing plan into executable tasks (tabitha).
 license: MIT
 metadata:
   version: "2.0.0"
@@ -51,7 +51,18 @@ skill({
 | `goal`         | Yes      | The goal to plan for                          |
 | `session_id`   | No       | Unique session ID (auto-generated if omitted) |
 | `project_root` | No       | Project root directory (defaults to cwd)      |
-| `constraints`  | No       | JSON object of constraints                    |
+| `constraints`  | No       | JSON object of constraints (see below)        |
+
+### Constraints
+
+| Key                 | Effect                                                                                                          |
+| ------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `explore_branches`  | `{branch_id: focus}` — supply the exploration topology directly and skip `scoping`. Otherwise piper's `scoping` step emits it at runtime (arrangement 4). |
+| `max_fan_width`     | Cap on exploration branches (default 8). Over-width scoping output errors.                                      |
+| `verification_mode` | `off` / `relaxed` (default) / `default` / `strict` — when the high-stakes verify gate fires.                    |
+| `max_iterations`    | Critique revision budget (default 3).                                                                          |
+
+**Exploration topology is model-owned:** piper's `scoping` step decomposes the goal into read-only `echo` foci and emits `explore_branches`; the engine fans out one branch per focus. The legacy fixed 3-branch split survives only as a tagged LOAN fallback (`plan_default_explore_topology`) for when scoping emits nothing. **Critique is evidence-gated** (Rec 4): carren's verdict must carry captured evidence or the engine rejects it.
 
 ## Post-Completion
 
@@ -116,7 +127,7 @@ The skill pauses in two cases: the **verify gate** (`verify_gate` — a high-sta
 | `confirm` / `approve` / `proceed` / `yes` | Proceed to critique (`verify_confirm`)  |
 | Any other value                   | Return to planning with the note (`verify_revise`) |
 
-For clarification escalation, the user's reply resumes exploration (`clarify → exploring`).
+For clarification escalation, the user's reply resumes at `scoping` (`clarify → scoping`) — re-scoping after an answer is cheaper and safer than resuming downstream with a stale topology.
 
 ## Post-Completion Storage
 

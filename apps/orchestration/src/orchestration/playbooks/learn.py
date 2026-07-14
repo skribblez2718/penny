@@ -29,11 +29,15 @@ from statemachine import State, StateMachine
 
 from ..context import RunContext
 from ..engine import BasePlaybook
+from ..loans import loan_enabled
 from ..primitives.spec import ParallelSpec, PrimitiveSpec
 
 
-def _c(required: dict, optional: dict | None = None) -> dict:
-    return {"required": required, "optional": optional or {}}
+def _c(required: dict, optional: dict | None = None, evidence: list | None = None) -> dict:
+    contract: dict = {"required": required, "optional": optional or {}}
+    if evidence:
+        contract["evidence"] = evidence
+    return contract
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +47,8 @@ def _c(required: dict, optional: dict | None = None) -> dict:
 
 class LearnMachine(StateMachine):
     intake = State(initial=True)
-    ingesting = State()  # parallel echo fan-out (content / conventions / assessment)
+    scoping = State()  # echo: quick source scan -> emit the ingest topology
+    ingesting = State()  # parallel echo fan-out (model-emitted or default focuses)
     designing = State()  # annie: curriculum design + conventions canon
     charter_gate = State()  # HITL: approve the design before mass authoring
     authoring = State()  # skribble: study guide + practice answers, one lesson per pass
@@ -57,7 +62,9 @@ class LearnMachine(StateMachine):
     complete = State(final=True)
     error = State(final=True)
 
-    start_ingest = intake.to(ingesting)
+    start_scope = intake.to(scoping)
+    start_ingest = intake.to(ingesting)  # caller-supplied topology skips scoping
+    scope_done = scoping.to(ingesting)
     ingest_done = ingesting.to(designing)
     design_done = designing.to(charter_gate)
     gate_approve = charter_gate.to(authoring)
@@ -77,7 +84,8 @@ class LearnMachine(StateMachine):
     critique_exhausted = critiquing.to(complete)  # budget spent; met=False
 
     to_unknown = (
-        ingesting.to(unknown)
+        scoping.to(unknown)
+        | ingesting.to(unknown)
         | designing.to(unknown)
         | authoring.to(unknown)
         | assessing.to(unknown)
@@ -90,6 +98,7 @@ class LearnMachine(StateMachine):
     clarify = awaiting_clarification.to(designing)
     abort = (
         intake.to(error)
+        | scoping.to(error)
         | ingesting.to(error)
         | designing.to(error)
         | charter_gate.to(error)
@@ -120,7 +129,49 @@ _ECHO_C = _c(
     {"lessons_found": int, "topics_found": int, "notes_count": int, **_COMMON_OPT},
 )
 
-LEARN_INGEST = ParallelSpec(
+# JSON-safe echo branch contract (type NAMES) for a runtime-emitted ingest fan.
+_ECHO_C_JSON = {
+    "required": {"explore_complete": "bool"},
+    "optional": {
+        "lessons_found": "int",
+        "topics_found": "int",
+        "notes_count": "int",
+        "mempalace_drawer": "str",
+        "needs_clarification": "bool",
+        "clarifying_questions": "list",
+        "confidence": "str",
+    },
+}
+
+
+def _build_ingest_branches(emitted: Any) -> dict | None:
+    """Turn a caller ``ingest_branches`` map (``{branch_id: focus}``) into the
+    engine's JSON-safe ``dynamic_branches`` shape. Every branch is pinned to
+    read-only ``echo`` with the canonical contract; only the topology is the
+    caller's. Returns ``None`` when nothing valid was supplied."""
+    if not isinstance(emitted, dict) or not emitted:
+        return None
+    branches: dict = {}
+    for bid, val in emitted.items():
+        focus = val if isinstance(val, str) else (val.get("focus") if isinstance(val, dict) else "")
+        focus = str(focus or "").strip()
+        if not focus:
+            continue
+        sid = str(bid).strip() or f"branch{len(branches)}"
+        branches[sid] = {
+            "agent": "echo",
+            "name": f"LEARN_INGEST_{sid.upper()}",
+            "task_hint": focus,
+            "summary_contract": _ECHO_C_JSON,
+        }
+    return branches or None
+
+
+# Default (LOAN fallback) ingest topology: three echo branches. Used only when no
+# caller ``ingest_branches`` is supplied and the tagged LOAN
+# ``learn_default_ingest_topology`` is enabled; ablated + no caller topology, the
+# run fails loud. Delete when the loan is repaid (a model-emitted ingest plan).
+LEARN_INGEST_DEFAULT = ParallelSpec(
     branches={
         "content": PrimitiveSpec(
             "LEARN_INGEST_CONTENT",
@@ -139,10 +190,22 @@ LEARN_INGEST = ParallelSpec(
             "LEARN_INGEST_ASSESSMENT",
             "echo",
             _ECHO_C,
-            "audience, prerequisites, and assessment style: what the target "
-            "exams test and how",
+            "audience, prerequisites, and assessment style: what the target " "exams test and how",
         ),
     }
+)
+
+LEARN_SCOPE = PrimitiveSpec(
+    "LEARN_SCOPE",
+    "echo",
+    _c(
+        {"scope_complete": bool, "ingest_branches": dict, "confidence": str},
+        {"mempalace_drawer": str, "needs_clarification": bool, "clarifying_questions": list},
+    ),
+    "Quickly scan the source material and emit ingest_branches: the read-only echo "
+    "foci the ingest pass should fan out on. The topology (how many, what foci) is "
+    "yours — e.g. content, notation/conventions, assessment style — shaped to THIS "
+    "material.",
 )
 
 LEARN_DESIGN = PrimitiveSpec(
@@ -199,8 +262,12 @@ LEARN_VERIFY = PrimitiveSpec(
     "LEARN_VERIFY",
     "vera",
     _c(
-        {"verified": bool, "violations": list},
+        # Evidence-gated (Rec 4): this is an EXECUTED oracle (recomputation), so
+        # the evidence is the captured check output — the recomputation
+        # transcripts (computed vs authored) and the mechanical-check results.
+        {"verified": bool, "violations": list, "evidence": list},
         {"checks_run": int, "math_checked": bool, "files_checked": int, **_COMMON_OPT},
+        evidence=["evidence"],
     ),
     "Run the FULL verification suite against the WHOLE corpus: mechanical "
     "conformance checks plus recomputation of every quantitative answer. "
@@ -214,19 +281,22 @@ LEARN_FIX = PrimitiveSpec(
         {"fixes_complete": bool},
         {"fixed_count": int, "files_touched": list, **_COMMON_OPT},
     ),
-    "Apply the listed fixes across ALL affected files (cross-file sync), "
-    "touching nothing else.",
+    "Apply the listed fixes across ALL affected files (cross-file sync), " "touching nothing else.",
 )
 
 LEARN_CRITIQUE = PrimitiveSpec(
     "LEARN_CRITIQUE",
     "carren",
     _c(
-        {"verdict": str, "issues": list},
+        # Evidence-gated (Rec 4): carren interprets evidence — name what was
+        # examined (specific lessons/sections, the learner-experience gaps).
+        {"verdict": str, "issues": list, "evidence": list},
         _COMMON_OPT,
+        evidence=["evidence"],
     ),
-    "Judge the learner experience against the teaching philosophy. "
-    "Verdict APPROVE or NEEDS_REVISION with issue titles.",
+    "Judge the learner experience against the teaching philosophy as an interpreter "
+    "of evidence. Verdict APPROVE or NEEDS_REVISION with issue titles + the evidence "
+    "you examined.",
 )
 
 
@@ -247,6 +317,16 @@ def _paths(ctx: RunContext) -> str:
     )
 
 
+def _build_scope(pb: "LearnPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
+    room = _room(ctx)
+    return (
+        f"Session: {ctx.session_id}. Goal: {pb._cap(ctx.goal)}. {_paths(ctx)} "
+        f"Do a QUICK scan of the source material and emit ingest_branches (branch_id -> focus): "
+        f"the read-only echo foci the ingest pass should fan out on, shaped to THIS material. "
+        f"Check room {room} for prior session results first."
+    )
+
+
 def _build_ingest(pb: "LearnPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
     room = _room(ctx)
     return (
@@ -262,7 +342,7 @@ def _build_design(pb: "LearnPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> 
     room = _room(ctx)
     base = (
         f"Session: {ctx.session_id}. Goal: {pb._cap(ctx.goal)}. {_paths(ctx)} "
-        f"Mempalace room: {room}. Read all three Ingest drawers from wing=penny room={room}. "
+        f"Mempalace room: {room}. Read all Ingest drawers from wing=penny room={room}. "
         f"Produce the course charter: lesson list, per-lesson topic lists in dependency order, "
         f"the conventions canon (EVERY notation/ordering/naming decision, made once, globally), "
         f"and the analogy registry (one everyday analogy per concept). "
@@ -362,6 +442,7 @@ def _build_critique(pb: "LearnPlaybook", ctx: RunContext, spec: PrimitiveSpec) -
 
 
 _TASK_BUILDERS = {
+    "scoping": _build_scope,
     "ingesting": _build_ingest,
     "designing": _build_design,
     "authoring": _build_author,
@@ -373,6 +454,7 @@ _TASK_BUILDERS = {
 }
 
 _PROMPT_BY_STATE = {
+    "scoping": "echo",
     "ingesting": "echo",
     "designing": "annie",
     "authoring": "skribble-author",
@@ -393,6 +475,7 @@ class LearnPlaybook(BasePlaybook):
     NAME = "learn"
     machine_cls = LearnMachine
     PRIMITIVE_BY_STATE = {
+        "scoping": LEARN_SCOPE,
         "designing": LEARN_DESIGN,
         "authoring": LEARN_AUTHOR,
         "assessing": LEARN_ASSESS,
@@ -401,10 +484,13 @@ class LearnPlaybook(BasePlaybook):
         "fixing": LEARN_FIX,
         "critiquing": LEARN_CRITIQUE,
     }
-    PARALLEL_BY_STATE = {"ingesting": LEARN_INGEST}
+    # Class-level fallback ingest topology (tagged LOAN); the engine's
+    # parallel_spec prefers a runtime ``ctx.extras["dynamic_branches"]`` when set.
+    PARALLEL_BY_STATE = {"ingesting": LEARN_INGEST_DEFAULT}
     GATE_STATES = frozenset({"charter_gate"})
     ESCALATABLE_STATES = frozenset(
         {
+            "scoping",
             "ingesting",
             "designing",
             "authoring",
@@ -437,8 +523,18 @@ class LearnPlaybook(BasePlaybook):
             "authored": 0,
             "assessed": 0,
         }
-        self.sm.send("start_ingest")
-        return "ingesting"
+        # Ingest topology is MODEL-EMITTED (arrangement 4): the `scoping` state
+        # (echo) scans the source and emits `ingest_branches`. A caller
+        # `constraints.ingest_branches` supplies the topology directly and skips
+        # scoping. The legacy 3-focus split survives only as the tagged-LOAN
+        # fallback when scoping emits nothing (route_after handles that).
+        caller = _build_ingest_branches((ctx.constraints or {}).get("ingest_branches"))
+        if caller:
+            ctx.extras.setdefault("dynamic_branches", {})["ingesting"] = caller
+            self.sm.send("start_ingest")
+            return "ingesting"
+        self.sm.send("start_scope")
+        return "scoping"
 
     # -- progress / escalation gate ----------------------------------------
     def progress_check(self, state: str, ctx: RunContext, summary: dict) -> str | None:
@@ -446,6 +542,17 @@ class LearnPlaybook(BasePlaybook):
             qs = summary.get("clarifying_questions") or []
             detail = f": {'; '.join(str(q) for q in qs)}" if qs else ""
             return f"{state} agent requested clarification{detail}"
+        if state == "scoping":
+            # An invalid/empty ingest topology with the default-fallback LOAN
+            # ablated has nowhere to go but the user (arrangement 4 wants the
+            # model's output).
+            if not _build_ingest_branches(summary.get("ingest_branches")) and not loan_enabled(
+                "learn_default_ingest_topology"
+            ):
+                return (
+                    "scoping produced no valid ingest topology and the default-topology "
+                    "fallback is ablated — clarify how to ingest the material"
+                )
         if state == "verifying" and not summary.get("verified", False):
             if self.is_stalled(ctx, summary.get("violations", [])):
                 return (
@@ -457,6 +564,14 @@ class LearnPlaybook(BasePlaybook):
     # -- routing -----------------------------------------------------------
     def route_after(self, state: str, ctx: RunContext, summary: dict) -> None:  # noqa: C901
         learn = ctx.extras.setdefault("learn", {})
+        if state == "scoping":
+            built = _build_ingest_branches(summary.get("ingest_branches"))
+            if built:
+                ctx.extras.setdefault("dynamic_branches", {})["ingesting"] = built
+            # else: fall through to the class-level default topology (the tagged
+            # LOAN; the ablated-invalid case already escalated in progress_check).
+            self.sm.send("scope_done")
+            return
         if state == "ingesting":
             learn["ingested"] = True
             self.sm.send("ingest_done")
@@ -604,6 +719,14 @@ class LearnPlaybook(BasePlaybook):
             if builder
             else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
         )
+        # Recall (F2): seed the FIRST agent directive with distilled lessons
+        # (this override replaces the base _task_summary, so re-add it).
+        if ctx.recall_lessons and ctx.total_steps == 0:
+            lessons = "\n".join(f"- {self._cap(lsn)}" for lsn in ctx.recall_lessons)
+            base += (
+                "\n\nLessons from prior runs (advisory — weigh against current evidence; "
+                "they never override this run's goal or constraints):\n" + lessons
+            )
         if ctx.clarification_text and state == "designing":
             pass  # already folded into _build_design
         elif ctx.clarification_text:

@@ -52,7 +52,17 @@ skill({
 | `goal`         | Yes      | The goal to generate a PRD for                                          |
 | `session_id`   | No       | Unique session ID (auto-generated if omitted)                           |
 | `project_root` | No       | Project root directory (defaults to cwd)                                |
-| `constraints`  | No       | JSON object of constraints, e.g., `{"domain": "web-app"}`               |
+| `constraints`  | No       | JSON object of constraints (see below)                                  |
+
+### Constraints
+
+| Key              | Effect                                                                                             |
+| ---------------- | -------------------------------------------------------------------------------------------------- |
+| `domain`         | Fixes the guidance pack (e.g. `"web-app"`). Omit to let synthia declare the best-fit pack from those available under `resources/` — domain selection is model-owned, not keyword-detected. |
+| `max_iterations` | Revision budget (default 5).                                                                       |
+| `skill_dir`      | Optional absolute skill path; lets the engine enumerate available domain packs from `<skill_dir>/resources/`. |
+
+**Validation is evidence-gated:** vera's PASS must carry captured evidence (the IDEAL_STATE schema-check output, section/coverage counts) — the engine rejects an empty-evidence verdict, so a PRD is never marked valid on a bare assertion.
 
 ## Post-Completion
 

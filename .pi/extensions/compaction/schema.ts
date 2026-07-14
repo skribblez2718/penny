@@ -6,7 +6,13 @@
  * outcome ledger). These schemas are the single source of truth for
  * TypeScript types AND runtime validators.
  *
- * 2.1.0 is an ADDITIVE bump over 2.0.0: every new field is optional, so a
+ * 2.3.0 is an ADDITIVE bump: model-owned-prose provenance (`summary_source`,
+ * `summary_model`, `prose_summary`), session-scoping transparency
+ * (`scoped_session_ids`), and the cross-session run bucket
+ * (`other_session_runs`). Every new field is optional, so a 2.1.0/2.2.0-shaped
+ * artifact still validates unchanged.
+ *
+ * 2.1.0 was an ADDITIVE bump over 2.0.0: every new field is optional, so a
  * 2.0.0-shaped artifact still validates unchanged. New in 2.1.0:
  *   - `dominant_skill.superseded` — a completed skill whose goal was
  *     displaced by a fresher user pivot (listed under Active Skill, but it
@@ -22,7 +28,11 @@
 import { z } from "zod";
 
 /** The current artifact schema version. Single source of truth. */
-export const SCHEMA_VERSION = "2.1.0" as const;
+export const SCHEMA_VERSION = "2.3.0" as const;
+
+/** Which path produced the prose brief: the summarization model, or the
+ *  deterministic LOAN fallback when no model was reachable. */
+export const SummarySourceEnum = z.enum(["model", "deterministic_fallback"]);
 
 /** The reason Pi triggered this compaction (mirrors Pi's event.reason). */
 export const CompactionReasonEnum = z.enum(["manual", "threshold", "overflow"]);
@@ -206,6 +216,25 @@ export const PennyCompactArtifactSchema = z.object({
 
   // METADATA
   metadata: ArtifactMetadataSchema,
+
+  // ============================================================
+  // 2.3.0 (additive, all optional): model-owned-prose provenance +
+  // session-scoping transparency + the cross-session run bucket. A
+  // 2.1.0/2.2.0-shaped artifact still validates unchanged.
+  // ============================================================
+  /** Which path produced the prose brief (model vs deterministic fallback). */
+  summary_source: SummarySourceEnum.optional(),
+  /** provider/model-id of the summarization model, when the model path ran. */
+  summary_model: z.string().max(200).optional(),
+  /** The session ids the grounded state was scoped to (skill results ∪ their
+   *  checkpointer rows ∪ prior-refs ids). Transparency for the archive. */
+  scoped_session_ids: z.array(z.string().min(1)).max(50).optional(),
+  /** Pending runs from OTHER sessions — never in the prose, surfaced only in
+   *  RESUME-REFS under an explicit "verify before resuming" label. */
+  other_session_runs: z.array(EngineRunRefSchema).max(10).optional(),
+  /** The model prose brief, archived so compaction quality is measurable
+   *  offline (the Ablate substrate: compare summary_source populations). */
+  prose_summary: z.string().max(20000).optional(),
 });
 
 // ============================================================
@@ -227,3 +256,4 @@ export type ArtifactMetadata = z.infer<typeof ArtifactMetadataSchema>;
 export type EvictionRecord = z.infer<typeof EvictionRecordSchema>;
 export type BoundaryShiftRecord = z.infer<typeof BoundaryShiftRecordSchema>;
 export type CompactionReason = z.infer<typeof CompactionReasonEnum>;
+export type SummarySource = z.infer<typeof SummarySourceEnum>;

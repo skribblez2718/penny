@@ -32,6 +32,7 @@ stateDiagram-v2
     deep_dive: deep_dive — P9 (annie)
     verification_gate: verification_gate — GATE BEFORE
     verification: verification — P10 (vera)
+    reverification: reverification — P10B (vera#2, optional dual-verify)
     fix_verification: fix_verification — P11 (vera)
     report_gate: report_gate — GATE AT
     report: report — P12 (skribble)
@@ -70,7 +71,11 @@ stateDiagram-v2
     deep_dive --> verification_gate: dd_verify [no augment or cap reached]
 
     verification_gate --> verification: vgate_ok [approve]
-    verification --> fix_verification: verification_done
+    verification --> fix_verification: verification_done [dual_verify off]
+    verification --> reverification: verification_reverify [dual_verify on]
+    reverification --> fix_verification: reverification_done
+    %% reverification = a SECOND independent vera (constraints.reverify_model)
+    %% producing its own non-destructive PoC batch; agreement is recorded.
     fix_verification --> report_gate: fix_done
     report_gate --> report: rgate_ok [approve]
     report --> complete: report_done

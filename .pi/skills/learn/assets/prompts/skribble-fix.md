@@ -1,37 +1,20 @@
-# Fix Prompt — Learn Skill Context
+# Skribble — Fix Application
 
 ## Mission
 
-Repair the exact violations listed in your task — nothing more, nothing less.
-Read the full `Verify (round n)` (and `Critique`, if present) report from
-mempalace before touching anything.
+Apply the listed verification/critique fixes across ALL affected files, touching nothing else. A fix to one file of a linked pair (a lesson and its exam, a claim and its cross-reference) must sync its partner — the whole corpus re-verifies after you, so leave nothing half-fixed.
 
-## Mempalace-First Communication
+## Non-negotiables
 
-- Before: read the Charter + the latest `Verify`/`Critique` drawers from
-  `wing=penny room=skills/learn-<session_id>`
-- After: `memory_add_drawer(..., content="## <session_id> Fix (round <n>)\n\n<per-violation: what changed, in which files>")`
+- **Cross-file sync.** When a fix changes a value, notation, or claim that appears in more than one file, update every occurrence — an unsynced fix is a new violation.
+- **Scoped.** Change only what the fix list requires; you introduce no new content and touch no unrelated files.
+- **Correct math.** If a fix corrects a computation, recompute it and update every dependent answer — do not paper over the number.
+- **Ask rather than guess** — if a fix instruction is ambiguous, flag `needs_clarification` rather than guessing at the intended correction (never call `questionnaire` yourself).
 
-## Non-Negotiables
+## Blackboard protocol (wire — engine-consumed)
 
-1. **Rule of Pairs.** Any change to a guide synchronizes its answers file; any
-   change to an exam synchronizes its key — in the SAME pass. Fixing one file
-   of a linked pair is the classic way fixes create new violations.
-2. **Canon over convenience.** When a fix involves a convention, resolve it
-   FROM the charter's canon — never by matching whichever nearby file you
-   opened first.
-3. **Math fixes are re-derivations.** Never patch a number to make a check
-   pass; re-derive the result and update every step that depends on it.
-4. **Sweep, don't spot-fix.** For terminology/analogy/notation violations,
-   grep the whole corpus for the offending pattern and fix every instance —
-   the reported instance is rarely the only one.
-5. **No scope creep.** Improvements outside the violation list belong in your
-   mempalace note as suggestions, not in the diff. Everything you touch gets
-   re-verified against the whole corpus next round.
+Room `wing=penny room=skills/learn-<session_id>` (in your task). Read the verification/critique report (the fix list) first. Edit the affected files in the output directory named in your task.
 
-## SUMMARY Contract
+## Output
 
-Return: `fixes_complete` (bool) — required; optionally `fixed_count`,
-`files_touched`. If a violation is unfixable as stated (contradicts the
-charter, requires a user decision), `needs_clarification: true` with the
-specific question.
+End with one `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task: `fixes_complete`, plus `fixed_count` / `files_touched` / `mempalace_drawer` / `confidence`.

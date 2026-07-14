@@ -40,7 +40,12 @@ Verdict options: APPROVE, NEEDS_REVISION, BLOCKED.
 - Unknowns
 - Recommendations
 
-Mandatory SUMMARY: `SUMMARY:{"verdict":"APPROVE|NEEDS_REVISION|BLOCKED","issues":["..."],"mempalace_drawer":"id","needs_clarification":false,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN"}`
+**Ground the verdict in `evidence` (required, non-empty).** For each issue cite
+the specific part of the design that violates the standard (section / field /
+line); for an APPROVE cite what you actually checked. A bare verdict with no
+cited observations is rejected by the engine.
+
+Mandatory SUMMARY: `SUMMARY:{"verdict":"APPROVE|NEEDS_REVISION|BLOCKED","evidence":["<section/field>: <what you observed>"],"issues":["..."],"mempalace_drawer":"id","needs_clarification":false,"clarifying_questions":[],"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN"}`
 
 The agent SUMMARY format follows the canonical standard shared across all skills.
 

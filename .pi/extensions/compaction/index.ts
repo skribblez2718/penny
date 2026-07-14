@@ -32,6 +32,8 @@ import type {
   MempalaceRoomRef,
   KGEntityRef,
   DecisionRef,
+  ErrorRef,
+  EngineRunRef,
   EvictionRecord,
   CompactionReason,
   BoundaryShiftRecord,
@@ -42,10 +44,11 @@ import {
   queryEngineRuns,
   queryMempalaceSkillRooms,
   queryMempalaceSkillRoomsForSession,
-  queryKGEntitiesForSession,
+  queryKGEntitiesForScope,
   queryOutcomeLedgerDecisions,
-  llmMergeGoal,
 } from "./bridge.js";
+import { generateModelSummary, renderGroundedDigest, type SummarizerCtx } from "./summarizer.js";
+import { loanEnabled } from "./loans.js";
 import type { SessionMessage } from "./pi-messages.js";
 import { asRecord, asString } from "./pi-messages.js";
 import { createLogger, setSessionId } from "../../lib/logger/logger.js";
@@ -258,12 +261,13 @@ function latestSkillCallIndex(messages: SessionMessage[]): number {
 }
 
 /**
- * Extract the session goal and explicit constraints, honoring the canonical
- * goal-selection precedence:
+ * Extract the session goal and explicit constraints (the deterministic LOAN
+ * fallback path — the model path derives the goal from the conversation).
+ * Precedence puts recency ahead of stale durable state (RC3 fix):
  *
- *   1. INCOMPLETE active skill goal
- *   2. engine-run goal
- *   3. newest substantive user message in the merged window
+ *   1. INCOMPLETE active skill goal (genuinely current work)
+ *   2. newest substantive user message in the merged window (latest intent)
+ *   3. scoped engine-run goal
  *   4. previousSummary carry-forward (never overrides a fresh user pivot)
  *   5. system message
  *   6. default (caller supplies)
@@ -317,14 +321,18 @@ export function extractSessionState(
     }
   }
 
-  // Precedence #2: engine-run goal.
-  if (!goal && engineRunGoal) {
-    goal = engineRunGoal.slice(0, 500);
-  }
-
-  // Precedence #3: newest substantive user message.
+  // Precedence #2: newest substantive user message. Recency beats stale
+  // durable state (RC3 fix): a fresh user pivot must outrank a scoped engine
+  // run's goal and any carry-forward. An INCOMPLETE active skill (above) is
+  // genuinely current, so it still wins; everything downstream is staler than
+  // the user's latest word.
   if (!goal && newestUser) {
     goal = newestUser.text.slice(0, 500);
+  }
+
+  // Precedence #3: scoped engine-run goal.
+  if (!goal && engineRunGoal) {
+    goal = engineRunGoal.slice(0, 500);
   }
 
   // Precedence #4: carry forward the prior Goal. This only fires when the
@@ -1021,17 +1029,122 @@ interface BuildArtifactInput {
   };
   /** What triggered this compaction (Pi event.reason). Sink + Next Steps, no code fork. */
   reason?: CompactionReason;
-  /** The user's focus hint (Pi event.customInstructions). Sink + Next Steps + Fix B. */
+  /** The user's focus hint (Pi event.customInstructions). Sink + Next Steps. */
   customInstructions?: string;
   /** previous/current firstKeptEntryId shift, computed from branchEntries. */
   boundaryShift?: BoundaryShiftRecord;
-  /** The compaction event's abort signal, forwarded to Fix B. */
+  /** The compaction event's abort signal (reserved; the model path is signal-
+   *  wired in the handler). */
   signal?: AbortSignal;
 }
 
-async function buildArtifact(
-  input: BuildArtifactInput
-): Promise<{ artifact: PennyCompactArtifact; protectedSessionIds: string[] }> {
+// ============================================================
+// Session scoping (RC2 fix) — bind grounded state to THIS conversation's work
+// ============================================================
+
+/** Every session id named by a `skill` tool RESULT in the window (real ids
+ *  only — a skill result carries the true session_id). */
+export function collectSkillSessionIds(messages: SessionMessage[]): string[] {
+  const ids = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role !== "toolResult" || msg.toolName !== "skill") continue;
+    const parsed = asRecord(safeJsonParse(extractTextContent(msg)));
+    const sid = asString(parsed.session_id);
+    if (sid) ids.add(sid);
+  }
+  return Array.from(ids);
+}
+
+/** Session/run ids carried forward from THIS conversation's earlier compaction
+ *  refs (our own `resume=skill(..., resumeFrom="<id>")` format). Lets scope
+ *  survive across compactions even after the originating skill call is evicted. */
+export function parseRefsSessionIds(previousSummary: string | undefined): string[] {
+  if (!previousSummary) return [];
+  const ids = new Set<string>();
+  const re = /resumeFrom="([^"]+)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(previousSummary)) !== null) {
+    if (m[1]) ids.add(m[1]);
+  }
+  return Array.from(ids);
+}
+
+/** The session ids grounded state is scoped to: skill-result ids ∪ prior-refs
+ *  ids. A stale run from a DIFFERENT past conversation has neither, so it is
+ *  never treated as current (the reported staleness symptom). */
+export function computeScopedSessionIds(
+  messages: SessionMessage[],
+  previousSummary: string | undefined
+): string[] {
+  return Array.from(
+    new Set([...collectSkillSessionIds(messages), ...parseRefsSessionIds(previousSummary)])
+  );
+}
+
+/** Partition pending runs into those belonging to this conversation's scope
+ *  and those from other sessions (surfaced only in refs, never the prose). */
+export function partitionRunsByScope(
+  runs: EngineRunRef[],
+  scopedIds: string[]
+): { scoped: EngineRunRef[]; other: EngineRunRef[] } {
+  const set = new Set(scopedIds);
+  const scoped: EngineRunRef[] = [];
+  const other: EngineRunRef[] = [];
+  for (const r of runs) (set.has(r.session_id) ? scoped : other).push(r);
+  return { scoped, other };
+}
+
+function safeJsonParse(text: string | null): unknown {
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Derive unresolved-error refs from the conversation (RC5, fallback path). A
+ * tool result flagged as an error is unresolved unless a LATER result from the
+ * same tool succeeded. turn_id/drawer are placeholders (`unknown`), so
+ * buildResumeRefs skips them — never a fabricated pointer. The MODEL path
+ * carries errors in prose instead; this feeds the deterministic fallback's
+ * `## Unresolved Errors` and the archive.
+ */
+export function deriveErrorRefs(messages: SessionMessage[]): ErrorRef[] {
+  const errorsByTool = new Map<string, { message: string; index: number }>();
+  const successAfter = new Map<string, number>();
+  messages.forEach((msg, i) => {
+    if (msg.role !== "toolResult") return;
+    const tool = msg.toolName || "tool";
+    if (isToolResultError(msg)) {
+      const text = extractTextContent(msg) || "tool error";
+      errorsByTool.set(tool, { message: text.slice(0, 300), index: i });
+    } else {
+      successAfter.set(tool, i);
+    }
+  });
+  const refs: ErrorRef[] = [];
+  for (const [tool, err] of errorsByTool) {
+    const recovered = (successAfter.get(tool) ?? -1) > err.index;
+    refs.push({
+      error_type: tool,
+      message: err.message,
+      turn_id: "unknown",
+      mempalace_drawer_id: "unknown",
+      resolved: recovered,
+    });
+    if (refs.length >= 10) break;
+  }
+  return refs;
+}
+
+async function buildArtifact(input: BuildArtifactInput): Promise<{
+  artifact: PennyCompactArtifact;
+  protectedSessionIds: string[];
+  scopedSessionIds: string[];
+  digest: string;
+}> {
   const now = new Date().toISOString();
   const seq = input.compactionSeq;
 
@@ -1044,11 +1157,19 @@ async function buildArtifact(
   // Step 1: dominant skill from the message log (sync).
   const dominant = detectDominantSkill(input.messages);
 
-  // Step 2: in-flight runs from the engine checkpointer — needed first
-  // because their session_ids drive mempalace scoping.
-  let engineRuns: PennyCompactArtifact["engine_runs"] = [];
+  // Session scoping (RC2): bind grounded state to THIS conversation's work —
+  // skill-result ids ∪ prior-refs ids. A wedged run from a DIFFERENT past
+  // session has neither, so it never drives the goal/work/rooms (the reported
+  // "old context from a previous session" symptom).
+  const scopedSessionIds = computeScopedSessionIds(
+    input.messages,
+    input.preparation.previousSummary
+  );
+
+  // Step 2: ALL pending runs from the checkpointer, then partitioned by scope.
+  let allRuns: EngineRunRef[] = [];
   try {
-    engineRuns = await queryEngineRuns();
+    allRuns = await queryEngineRuns();
   } catch (err) {
     logger.error(
       "Engine checkpointer query failed during compaction",
@@ -1058,21 +1179,23 @@ async function buildArtifact(
       })
     );
   }
+  const { scoped: engineRuns, other: otherSessionRuns } = partitionRunsByScope(
+    allRuns,
+    scopedSessionIds
+  );
 
-  // Real session IDs only: skill results + checkpointer rows.
-  const protectedSessionIds = [
-    ...(dominant?.session_id ? [dominant.session_id] : []),
-    ...engineRuns.map((r) => r.session_id),
-  ];
+  // Room eviction protection = the scope (real ids from results/refs).
+  const protectedSessionIds = scopedSessionIds;
 
-  // Step 3: everything else is independent — query in parallel.
+  // Step 3: everything else is independent — query in parallel, all SCOPED so
+  // no other session's rooms/decisions/kg bleed into this summary.
   const [pending, mempalaceRooms, kgEntities, decisions] = await Promise.all([
     detectPendingState(input.messages, input.sessionId).catch((err) => {
       logger.warn("Pending state detection failed", { error: String(err) });
       return null;
     }),
-    (protectedSessionIds.length > 0
-      ? queryMempalaceSkillRoomsForSession(protectedSessionIds)
+    (scopedSessionIds.length > 0
+      ? queryMempalaceSkillRoomsForSession(scopedSessionIds)
       : queryMempalaceSkillRooms()
     ).catch((err) => {
       logger.error(
@@ -1084,7 +1207,7 @@ async function buildArtifact(
       );
       return [] as MempalaceRoomRef[];
     }),
-    queryKGEntitiesForSession(input.sessionId).catch((err) => {
+    queryKGEntitiesForScope(scopedSessionIds).catch((err) => {
       logger.error(
         "KG query failed during compaction",
         { error: err instanceof Error ? err.message : String(err) },
@@ -1092,7 +1215,7 @@ async function buildArtifact(
       );
       return [] as KGEntityRef[];
     }),
-    queryOutcomeLedgerDecisions(20).catch((err) => {
+    queryOutcomeLedgerDecisions(scopedSessionIds, 20).catch((err) => {
       logger.error(
         "Outcome ledger query failed during compaction",
         { error: err instanceof Error ? err.message : String(err) },
@@ -1116,25 +1239,7 @@ async function buildArtifact(
     previousSummaryGoal ?? undefined
   );
 
-  let goal = extracted.goal || "Active session - goal not yet extracted";
-
-  // Fix B (P1, config-gated, OFF by default): an LLM-assisted merge of the
-  // previous summary with the deterministic candidate goal. Returns null when
-  // disabled/misconfigured or on any timeout/abort/error, so Fix A always
-  // remains the authoritative fallback — the summary is never abandoned.
-  if (input.preparation.previousSummary) {
-    try {
-      const merged = await llmMergeGoal({
-        previousSummary: input.preparation.previousSummary,
-        candidateGoal: goal,
-        customInstructions: input.customInstructions,
-        signal: input.signal,
-      });
-      if (merged) goal = merged;
-    } catch (err) {
-      logger.warn("Fix B merge threw; using Fix A goal", { error: String(err) });
-    }
-  }
+  const goal = extracted.goal || "Active session - goal not yet extracted";
 
   // Goal-stagnation canary (P2, observational only — never alters the goal).
   const previousStreak = parseGoalStreak(input.preparation.previousSummary);
@@ -1180,7 +1285,8 @@ async function buildArtifact(
       : undefined,
 
     decisions,
-    errors: [],
+    // RC5: unresolved errors survive compaction (fallback prose + archive).
+    errors: deriveErrorRefs(input.messages),
 
     engine_runs: engineRuns,
 
@@ -1207,11 +1313,30 @@ async function buildArtifact(
       ...(input.customInstructions ? { custom_instructions: input.customInstructions } : {}),
       goal_streak: goalStreak,
     },
+
+    // 2.3.0: cross-session run bucket + scope transparency (summary_source /
+    // summary_model / prose_summary are set by the handler after the model
+    // path resolves).
+    ...(otherSessionRuns.length > 0 ? { other_session_runs: otherSessionRuns } : {}),
+    ...(scopedSessionIds.length > 0 ? { scoped_session_ids: scopedSessionIds } : {}),
   };
+
+  // Grounded digest for the model path — computed from the FULL scoped state
+  // (before eviction, which only trims the final summary's token budget).
+  const digest = renderGroundedDigest({
+    scopedRuns: engineRuns,
+    otherSessionRuns,
+    rooms: mempalaceRooms,
+    decisions,
+    kgEntities,
+    pending,
+    readFiles,
+    modifiedFiles,
+  });
 
   artifact = applyEviction(artifact, protectedSessionIds);
 
-  return { artifact, protectedSessionIds };
+  return { artifact, protectedSessionIds, scopedSessionIds, digest };
 }
 
 // ============================================================
@@ -1367,7 +1492,7 @@ interface SessionBeforeCompactEvent {
   customInstructions?: string;
   /** True when the aborted turn is retried after this compaction. */
   willRetry?: boolean;
-  /** Abort signal for the compaction; forwarded to Fix B. */
+  /** Abort signal for the compaction; forwarded to the summarization model. */
   signal?: AbortSignal;
 }
 
@@ -1380,6 +1505,16 @@ interface SessionBeforeCompactEvent {
  */
 function mergeCompactionMessages(preparation: CompactionPreparation): SessionMessage[] {
   return [...(preparation.messagesToSummarize || []), ...(preparation.turnPrefixMessages || [])];
+}
+
+/**
+ * Assemble the summary spliced into context: the prose brief followed by the
+ * code-owned [RESUME-REFS] pointer appendix. Used for the MODEL path (the
+ * deterministic fallback's createProseSummary already appends refs itself).
+ */
+export function withResumeRefs(prose: string, artifact: PennyCompactArtifact): string {
+  const refs = buildResumeRefs(artifact);
+  return refs ? `${prose}\n\n---\n${refs}` : prose;
 }
 
 /**
@@ -1412,7 +1547,7 @@ export default function compactionExtension(pi: ExtensionAPI) {
     apiKey: getEnvVar("PI_OBSERVABILITY_API_KEY") || "",
   };
 
-  pi.on("session_before_compact", async (event: SessionBeforeCompactEvent) => {
+  pi.on("session_before_compact", async (event: SessionBeforeCompactEvent, ctx: unknown) => {
     const { preparation, branchEntries } = event;
     const sessionId =
       branchEntries.length > 0 && branchEntries[0].sessionId
@@ -1451,6 +1586,50 @@ export default function compactionExtension(pi: ExtensionAPI) {
     let artifact = build.artifact;
     const protectedSessionIds = build.protectedSessionIds;
 
+    // Model-owned prose (the leverage path): the session model summarizes the
+    // ACTUAL evicted conversation, given the previous brief + the session-scoped
+    // grounded digest. Returns null on ANY failure (no model/auth, timeout,
+    // abort, empty) → the deterministic LOAN fallback, or Pi's default when
+    // that loan is ablated.
+    const proseTokenTarget = Math.floor(CONFIG.maxArtifactTokens * 0.66);
+    const modelResult = await generateModelSummary(
+      {
+        messages,
+        previousSummary: preparation.previousSummary,
+        digest: build.digest,
+        customInstructions: event.customInstructions,
+        proseTokenTarget,
+        signal: event.signal,
+      },
+      ctx as SummarizerCtx
+    );
+
+    let modelProse: string | null = null;
+    if (modelResult) {
+      artifact.summary_source = "model";
+      artifact.summary_model = modelResult.model;
+      artifact.prose_summary = modelResult.prose;
+      // Keep artifact.goal (archive + stagnation canary) consistent with the
+      // brief the model actually wrote.
+      const modelGoal = parseGoalFromSummary(modelResult.prose);
+      if (modelGoal) artifact.goal = modelGoal;
+      modelProse = modelResult.prose;
+    } else if (loanEnabled("compaction_deterministic_summary")) {
+      artifact.summary_source = "deterministic_fallback";
+    } else {
+      // Loan ablated AND no model reachable → hand back to Pi's default
+      // compaction (the scaffold-OFF measurement). The ONLY path where this
+      // extension yields the summary.
+      failLoudly(
+        "Compaction model path failed and deterministic fallback is ablated; using Pi default",
+        { session_id: sessionId },
+        Object.assign(new Error("compaction yielded to Pi default"), {
+          code: "COMPACTION_YIELDED_TO_DEFAULT",
+        })
+      );
+      return;
+    }
+
     // Validation failure is loud but NOT fatal: the prose summary is still
     // our best checkpoint — falling back to Pi's default prose would lose
     // strictly more. The invalid artifact is still archived for debugging.
@@ -1465,15 +1644,24 @@ export default function compactionExtension(pi: ExtensionAPI) {
       );
     }
 
+    // Assemble the spliced summary: prose brief + code-owned RESUME-REFS. The
+    // model path pairs the model prose with refs; the fallback's
+    // createProseSummary already appends refs itself. Addresses always come
+    // from the artifact, never the model (which is told not to emit refs).
+    const assemble = (a: PennyCompactArtifact): string =>
+      modelProse !== null ? withResumeRefs(modelProse, a) : createProseSummary(a);
+
     // Degrade, never abandon: on budget overflow, tighten every cardinality
-    // cap and rebuild until the summary fits (or we hit the floor).
-    let proseSummary = createProseSummary(artifact);
+    // cap and rebuild until the summary fits (or we hit the floor). On the
+    // model path this trims the refs; the prose is truncated only as a last
+    // resort below.
+    let proseSummary = assemble(artifact);
     let summaryTokens = estimateTokens(proseSummary);
     let scale = 1;
     while (summaryTokens > CONFIG.maxArtifactTokens && scale > 0.15) {
       scale /= 2;
       artifact = applyEviction(artifact, protectedSessionIds, scale);
-      proseSummary = createProseSummary(artifact);
+      proseSummary = assemble(artifact);
       summaryTokens = estimateTokens(proseSummary);
     }
     if (summaryTokens > CONFIG.maxArtifactTokens) {

@@ -8,12 +8,24 @@ domain-neutral — it never special-cases a state name:
   * two HITL paths: ``UNCERTAIN`` -> escalate (uncertainty), and PLANNED gates
     (a declared ``GATE_STATES`` pause with multi-way ``route_user`` resume)
   * parallel fan-out (a ``PARALLEL_BY_STATE`` state dispatches N branch agents and
-    routes once on fan-in, aggregating by weakest confidence)
+    routes once on fan-in, aggregating by weakest confidence) — topology may also
+    be DATA: runtime-emitted branches in ``ctx.extras["dynamic_branches"]`` via the
+    ``parallel_spec`` seam, bounded by the ``max_fan_width`` budget
   * resume (direct rehydrate by run_id — NO transition replay)
   * checkpointing after every committed transition
   * best-effort observability emission (never blocks)
-  * budgets (max_iterations loop cap + a global step cap)
-  * self-recovery (bounded step-retry on transient failure)
+  * budgets (max_iterations loop cap + a global step cap) with an HONEST-EXHAUSTION
+    backstop: routing past the iteration budget forces completion with
+    ``met = done_predicate`` and an ``exhausted`` result flag — never a fake pass
+  * self-recovery (bounded step-retry on transient failure); the malformed-SUMMARY
+    retry is a tagged LOAN (``loans.py``) with an Ablate toggle
+  * Recall (atom F2): distilled lessons retrieved at ``start()`` and seeded into
+    the FIRST agent directive as advisory context (never gating)
+  * default-on loop guards (loops.md Recs 1 & 2): the base ``progress_check``
+    escalates a repeated retry strategy or a stalled gap set; the engine
+    auto-records per-iteration digests; opt-out via ``LOOP_GUARDS = False``
+  * model-owned routing as a small edit: ``fire_model_route`` fires a
+    model-chosen event iff it is a declared, allowed, non-reserved transition
 
 A subclass provides: ``NAME``, ``machine_cls`` (a python-statemachine class),
 ``PRIMITIVE_BY_STATE`` (and optionally ``PARALLEL_BY_STATE`` / ``GATE_STATES``),
@@ -45,8 +57,10 @@ from .checkpointer import (
 )
 from .contracts import Confidence, Directives, validate_summary_contract, weakest_confidence
 from .context import RunContext
+from .loans import loan_enabled
 from .outcome_writer import record_outcome
-from .primitives.spec import ParallelSpec, PrimitiveSpec
+from .primitives.spec import ParallelSpec, PrimitiveSpec, parallel_spec_from_dict
+from .recall import recall_lessons
 
 
 def _autonomy_ask_reason(action_text: str) -> Optional[str]:
@@ -73,6 +87,10 @@ def _autonomy_ask_reason(action_text: str) -> Optional[str]:
 
 TERMINAL_STATES: frozenset[str] = frozenset({"complete", "error"})
 _DEFAULT_STEP_CAP = 50
+# Budget boundary on fan width (code caps, the model spends): a dynamic fan-out
+# may not exceed this many branches unless the caller raises
+# ``constraints["max_fan_width"]``.
+_DEFAULT_MAX_FAN_WIDTH = 8
 
 
 class _NullObs:
@@ -101,9 +119,20 @@ class BasePlaybook:
     # Only consulted when PENNY_AUTONOMY_GATE is set (dormant by default).
     AUTONOMY_STATES: frozenset[str] = frozenset()
     STEP_CAP: int = _DEFAULT_STEP_CAP
+    # Default-on loop-quality guards (loops.md Recs 1 & 2). A subclass that
+    # cannot use the generic base ``progress_check`` sets this False (playbooks
+    # with their own ``progress_check`` override are unaffected either way).
+    LOOP_GUARDS: bool = True
+    # Engine-owned FSM events a model-chosen route may never fire directly.
+    RESERVED_EVENTS: frozenset[str] = frozenset({"to_unknown", "escalate", "clarify", "abort"})
 
     def done_predicate(self, ctx: RunContext) -> bool:  # noqa: D401
-        return True
+        """Whether the run's goal is MET at completion. The base default is
+        ``False`` — success is never claimed on a Done claim alone (assembly
+        invariant 3: at least one grounded exit; safe defaults never claim
+        completion). Every playbook overrides this with its externally-grounded
+        predicate (e.g. ``verify_verdict == PASS``)."""
+        return False
 
     def route_after(self, state: str, ctx: RunContext, summary: dict) -> None:
         """Capture the primitive's SUMMARY into ctx and fire the FSM event(s)."""
@@ -149,16 +178,42 @@ class BasePlaybook:
         return None
 
     def progress_check(self, state: str, ctx: RunContext, summary: dict) -> str | None:
-        """Meta-cognitive progress gate (research/loop-research Recs 1 & 2).
+        """Meta-cognitive progress gate (research/loop-research Recs 1 & 2) —
+        DEFAULT-ON.
 
         Run in ``step`` AFTER the SUMMARY passes and the UNCERTAIN check, but
-        BEFORE routing. Return a reason string to force escalation to the user
-        (e.g. a retry whose strategy is unchanged, or N identical failing
-        iterations with no progress), or ``None`` to proceed normally. Escalation
-        only fires when ``state`` is escalatable. The base returns ``None`` — no
-        gate — so a playbook opts in by overriding this, typically using the
-        ``strategy_repeated`` / ``is_stalled`` helpers below.
+        BEFORE routing. Return a reason string to force escalation to the user,
+        or ``None`` to proceed normally. Escalation only fires when ``state``
+        is escalatable.
+
+        The base enforces the two generic guards for any playbook that does not
+        override this hook (the engine-level enforcement loops.md Rec 1 calls
+        for — "the engine should reject a retry whose planned change is absent
+        or ~identical"):
+
+        * anti-paralysis — a retry SUMMARY that explicitly declares a
+          ``strategy_change`` repeating the previously recorded one;
+        * stall — a SUMMARY whose ``gaps`` list matches the last two recorded
+          iterations' gaps (no measurable progress), escalating instead of
+          burning the remaining budget.
+
+        Both read ``ctx.iteration_history``, which the engine auto-records when
+        a playbook advances ``ctx.iteration`` (see ``_auto_record_iteration``).
+        Opt-out: ``LOOP_GUARDS = False``. A playbook with its own override
+        (typically via ``strategy_repeated`` / ``is_stalled``) replaces this
+        wholesale and is unaffected.
         """
+        if not self.LOOP_GUARDS:
+            return None
+        if (
+            ctx.iteration >= 1
+            and "strategy_change" in summary
+            and self.strategy_repeated(ctx, summary.get("strategy_change", ""))
+        ):
+            return "retry repeats a failed strategy — escalating (anti-paralysis guard)"
+        gaps = summary.get("gaps")
+        if isinstance(gaps, list) and self.is_stalled(ctx, gaps):
+            return "no measurable progress across iterations — escalating (stall guard)"
         return None
 
     def gate_questions(self, state: str, ctx: RunContext) -> list[dict]:
@@ -213,6 +268,29 @@ class BasePlaybook:
                 return prior == proposed
         return False
 
+    def fire_model_route(self, summary: dict, field: str = "next_event") -> bool:
+        """Model-owned routing (the control-flow dial): fire the FSM event the
+        model chose in ``summary[field]`` — iff it is a declared, currently
+        allowed transition of the machine (the graph still bounds the blast
+        radius) and not an engine-reserved event (``RESERVED_EVENTS``). Returns
+        True when the event fired; False with the FSM unmoved otherwise, so the
+        caller decides the fallback (fixed routing, or escalate).
+
+        This is what makes moving the dial toward the model a SMALL EDIT per
+        state: ``route_after`` delegates to this helper and keeps its code-owned
+        logic as the fallback — no rewrite, no new machinery.
+        """
+        event = summary.get(field)
+        if not isinstance(event, str) or not event or event in self.RESERVED_EVENTS:
+            return False
+        try:
+            allowed = {e.id for e in self.sm.allowed_events}
+        except Exception:  # noqa: BLE001 — unknown machine introspection failure
+            return False
+        if event not in allowed:
+            return False
+        return self._safe_send(event)
+
     def is_stalled(self, ctx: RunContext, gaps: list | None = None, *, window: int = 2) -> bool:
         """Stall / progress-assessment (Rec 2): True when the last ``window``
         recorded iterations show the SAME non-empty gaps as the current ones — no
@@ -236,6 +314,16 @@ class BasePlaybook:
         self.max_step_retries = max_step_retries
         self.ctx: RunContext | None = None
         self.sm: Any = None
+
+    @property
+    def _ctx(self) -> RunContext:
+        """The active run context, type-narrowed. ``start``/``step`` set
+        ``self.ctx`` before any internal helper runs; a None here is a protocol
+        violation, not a recoverable state."""
+        ctx = self.ctx
+        if ctx is None:  # pragma: no cover — engine misuse
+            raise RuntimeError("engine used before start()/step() set the run context")
+        return ctx
 
     # -- public protocol ---------------------------------------------------
     def start(
@@ -261,6 +349,10 @@ class BasePlaybook:
         except (TypeError, ValueError):
             ctx.max_iterations = 3
         self.ctx = ctx
+        # Recall (atom F2): seed the run with distilled lessons from prior runs.
+        # Best-effort and advisory — a failure or empty result never affects the
+        # run, and no routing ever reads these (loops.md Rec 3).
+        ctx.recall_lessons = recall_lessons(ctx)
         self.sm = self.machine_cls()
         try:
             entry = self.initial_transition(ctx)
@@ -301,7 +393,10 @@ class BasePlaybook:
 
         # Parallel fan-out states buffer per-branch SUMMARYs and route once on
         # fan-in (see _step_parallel).
-        pspec = self.PARALLEL_BY_STATE.get(state)
+        try:
+            pspec = self.parallel_spec(state, self._ctx)
+        except Exception as exc:
+            return self._to_error(f"fan-out spec error at '{state}': {exc}")
         if pspec is not None:
             return self._step_parallel(state, pspec, agent, result)
 
@@ -325,7 +420,7 @@ class BasePlaybook:
             if result.get("exitCode", 0) not in (0, None):
                 return self._retry_or_fail(state, result.get("error") or f"agent '{agent}' failed")
             if result.get("summary_missing"):
-                return self._retry_or_fail(
+                return self._retry_malformed(
                     state, result.get("error") or "no parseable SUMMARY emitted"
                 )
             inner = result.get("summary")
@@ -335,10 +430,11 @@ class BasePlaybook:
         ok, err = validate_summary_contract(spec.name, spec.summary_contract, summary)
         if not ok:
             # Transient: a malformed SUMMARY is retried (bounded) before failing.
-            return self._retry_or_fail(state, f"invalid SUMMARY: {err}")
+            return self._retry_malformed(state, f"invalid SUMMARY: {err}")
 
         # A well-formed SUMMARY: retry budget resets.
         self.ctx.step_retries = 0
+        self._capture_evidence(summary)
         confidence = summary.get("confidence", "")
 
         # Escalation: UNCERTAIN on an escalatable state -> single HITL path.
@@ -362,16 +458,20 @@ class BasePlaybook:
         self.obs.step_end(self.ctx, spec.name, digest, confidence)
 
         # Route (subclass fires the FSM event(s)).
+        pre_iteration = self._ctx.iteration
         try:
-            self.route_after(state, self.ctx, summary)
+            self.route_after(state, self._ctx, summary)
         except Exception as exc:
             return self._to_error(f"routing error at '{state}': {exc}")
+        self._auto_record_iteration(pre_iteration, summary)
 
         new_state = self.sm.current_state_value
         self.obs.transition(self.ctx, state, new_state, event="route")
 
         if new_state in TERMINAL_STATES:
             return self._finish(new_state)
+        if self._ctx.iteration > self._ctx.max_iterations:
+            return self._force_exhausted(new_state)
         return self._advance_to(new_state)
 
     def status(self, *, session_id: str, run_id: str) -> dict:
@@ -401,11 +501,116 @@ class BasePlaybook:
     @staticmethod
     def _cap(text: str, limit: int = 600) -> str:
         """Bound an embedded value so the task message stays a digest, not a
-        payload dump (full data lives in MemPalace)."""
+        payload dump (full data lives in MemPalace). Tagged LOAN
+        ``task_digest_cap`` (a Compact/E2 mechanism): ablated, values pass
+        through untruncated so scaffold-OFF runs can measure the mechanism."""
+        if not loan_enabled("task_digest_cap"):
+            return text
         return text if len(text) <= limit else text[:limit] + " …[truncated]"
+
+    def parallel_spec(self, state: str, ctx: RunContext) -> ParallelSpec | None:
+        """The fan-out topology for ``state`` — topology as DATA (assembly
+        invariant 7: arrangement is data, chosen late).
+
+        Runtime-emitted branches in ``ctx.extras["dynamic_branches"][state]``
+        (a model's PLAN/Decide output in JSON-safe form — see
+        ``parallel_spec_from_dict``) take precedence over the class-level
+        ``PARALLEL_BY_STATE`` wiring, and survive checkpoint/resume because
+        ``extras`` round-trips wholesale. Both are bounded by
+        ``constraints["max_fan_width"]`` — a Budget boundary: code caps the
+        width, the model spends it. Raises ``ValueError`` on malformed branch
+        data or an over-width fan (call sites surface a parseable error
+        directive)."""
+        dynamic = (ctx.extras.get("dynamic_branches") or {}).get(state) if ctx else None
+        spec = parallel_spec_from_dict(dynamic) if dynamic else self.PARALLEL_BY_STATE.get(state)
+        if spec is not None:
+            try:
+                width_cap = int(ctx.constraints.get("max_fan_width", _DEFAULT_MAX_FAN_WIDTH))
+            except (TypeError, ValueError):
+                width_cap = _DEFAULT_MAX_FAN_WIDTH
+            if len(spec.branches) > width_cap:
+                raise ValueError(
+                    f"fan-out at '{state}' has {len(spec.branches)} branches, over the "
+                    f"max_fan_width budget ({width_cap})"
+                )
+        return spec
+
+    def _capture_evidence(self, summary: dict) -> None:
+        """Stash a capped digest of a SUMMARY's non-empty ``evidence`` field on
+        the context (last-write-wins) so the outcome ledger records
+        outcome+evidence, not outcome alone (atomic-loop checklist)."""
+        ev = summary.get("evidence")
+        if isinstance(ev, str):
+            ev = [ev] if ev.strip() else []
+        if isinstance(ev, (list, tuple)) and len(ev) > 0:
+            self._ctx.verify_evidence = [
+                s if len(s) <= 300 else s[:300] + " …[truncated]"
+                for s in (str(e) for e in list(ev)[:5])
+            ]
+
+    def _auto_record_iteration(self, pre_iteration: int, summary: dict) -> None:
+        """Ledger side of the default-on loop guards: when ``route_after``
+        advanced ``ctx.iteration``, append the completed iteration's digest —
+        unless the playbook already recorded it via ``record_iteration``
+        (dedupe by iteration number). This keeps ``strategy_repeated`` /
+        ``is_stalled`` fed for playbooks that never record themselves."""
+        ctx = self._ctx
+        if ctx.iteration <= pre_iteration:
+            return
+        if any(e.get("iteration") == pre_iteration for e in ctx.iteration_history):
+            return
+        gaps = summary.get("gaps")
+        ctx.iteration_history.append(
+            {
+                "iteration": pre_iteration,
+                "strategy_change": self._norm_text(summary.get("strategy_change", "")),
+                "gaps": [self._norm_text(g) for g in (gaps if isinstance(gaps, list) else [])],
+                "confidence": summary.get("confidence", ""),
+            }
+        )
+
+    def _force_exhausted(self, state: str) -> dict:
+        """Iteration-budget backstop (honest exhaustion, compliance rule 3): a
+        playbook that routes PAST its iteration budget (``ctx.iteration >
+        max_iterations`` at a non-terminal state) is terminated as complete with
+        ``met = done_predicate(ctx)`` — never a fabricated pass, and never a
+        silent loop-past that burns the global step cap. The result payload
+        carries ``exhausted`` + the reason."""
+        reason = (
+            f"iteration budget exceeded (iteration {self._ctx.iteration} > "
+            f"max_iterations {self._ctx.max_iterations}) at '{state}' — engine "
+            "forced honest exhaustion"
+        )
+        self._ctx.extras["engine_exhausted"] = reason
+        if self.sm.current_state_value != "complete":
+            try:
+                self.sm.current_state_value = "complete"
+            except Exception:  # noqa: BLE001 — fall through; _finish persists complete
+                pass
+        return self._finish("complete")
+
+    def _retry_malformed(self, state: str, reason: str) -> dict:
+        """Format-repair retry — tagged LOAN ``malformed_summary_retry``: bounded
+        re-issue when the agent emitted a malformed or missing SUMMARY. Ablated
+        (scaffold-OFF), the step fails immediately so ablation runs measure
+        whether current models still need the layer. Transport failures
+        (non-zero exitCode) retry unconditionally via ``_retry_or_fail`` — that
+        is plumbing, not a loan."""
+        if not loan_enabled("malformed_summary_retry"):
+            return self._to_error(f"step failed (format-repair retry ablated): {reason}")
+        return self._retry_or_fail(state, reason)
 
     def _task_summary(self, state: str, spec: PrimitiveSpec, ctx: RunContext) -> str:
         parts = [spec.task_hint, f"Goal: {self._cap(ctx.goal)}"]
+        # Recall (F2): lessons ride ONLY the first directive of the run
+        # (total_steps is 0 until the first step() ingests a result) — advisory
+        # context for the entry agent, never a rule and never routing input.
+        if ctx.recall_lessons and ctx.total_steps == 0:
+            parts.append(
+                "Lessons from prior runs (advisory — weigh against current evidence; "
+                "they never override this run's goal or constraints):"
+            )
+            parts.extend(f"- {self._cap(lesson)}" for lesson in ctx.recall_lessons)
         parts.extend(self._cap(p) for p in self.task_context_parts(state, ctx))
         if ctx.iteration:
             parts.append(f"(retry iteration {ctx.iteration + 1}/{ctx.max_iterations})")
@@ -416,7 +621,9 @@ class BasePlaybook:
     @staticmethod
     def _summary_contract_directive(spec: PrimitiveSpec) -> str:
         """Restate the state's SUMMARY contract as an explicit, typed schema, appended
-        LAST to the agent task (recency).
+        LAST to the agent task (recency). Tagged LOAN ``summary_schema_restatement``
+        (see ``loans.py``): ablated, this returns "" so scaffold-OFF runs measure
+        whether current models still need the restatement.
 
         Weaker (non-Claude) models reliably DROP a structured-output contract buried
         mid-prompt in the skill_context, and when reminded only generically they
@@ -426,6 +633,8 @@ class BasePlaybook:
         example in its domain guidance; this only guarantees the key set, the JSON
         shape, and recency.
         """
+        if not loan_enabled("summary_schema_restatement"):
+            return ""
         contract = getattr(spec, "summary_contract", None) or {}
         required = contract.get("required", {}) or {}
         optional = contract.get("optional", {}) or {}
@@ -484,7 +693,10 @@ class BasePlaybook:
         if state in self.GATE_STATES:
             return self._enter_gate(state)
         # A parallel state announces step_start for every branch, then fans out.
-        pspec = self.PARALLEL_BY_STATE.get(state)
+        try:
+            pspec = self.parallel_spec(state, self._ctx)
+        except Exception as exc:
+            return self._to_error(f"fan-out spec error at '{state}': {exc}")
         if pspec is not None:
             for b in pspec.branches.values():
                 self.obs.step_start(self.ctx, b.name, b.agent, state)
@@ -525,7 +737,10 @@ class BasePlaybook:
         every branch (branch agents must be idempotent)."""
         sc = self.skill_context(state, self.ctx)
         model = self.model_for_state(state, self.ctx)
-        pspec = self.PARALLEL_BY_STATE.get(state)
+        try:
+            pspec = self.parallel_spec(state, self._ctx)
+        except Exception as exc:
+            return self._to_error(f"fan-out spec error at '{state}': {exc}")
         if pspec is not None:
             tasks = []
             for bid, b in pspec.branches.items():
@@ -602,7 +817,7 @@ class BasePlaybook:
             summary = summary if isinstance(summary, dict) else {}
             ok, err = validate_summary_contract(branch.name, branch.summary_contract, summary)
             if not ok:
-                return self._retry_or_fail(
+                return self._retry_malformed(
                     state, f"parallel '{state}': invalid SUMMARY on branch '{bid}': {err}"
                 )
             branches[bid] = summary
@@ -614,6 +829,15 @@ class BasePlaybook:
             )
 
         self.ctx.step_retries = 0
+        merged_evidence: list[Any] = []
+        for s in branches.values():
+            ev = s.get("evidence")
+            if isinstance(ev, str) and ev.strip():
+                merged_evidence.append(ev)
+            elif isinstance(ev, (list, tuple)):
+                merged_evidence.extend(str(e) for e in ev)
+        if merged_evidence:
+            self._capture_evidence({"evidence": merged_evidence})
         for bid, s in branches.items():
             self.obs.step_end(
                 self.ctx, pspec.branches[bid].name, {"branch_id": bid}, s.get("confidence", "")
@@ -630,14 +854,18 @@ class BasePlaybook:
                 or Confidence.is_uncertain(s.get("confidence"))
             )
             return self._escalate(state, pspec.branches[weak], aggregated)
+        pre_iteration = self._ctx.iteration
         try:
-            self.route_after(state, self.ctx, aggregated)
+            self.route_after(state, self._ctx, aggregated)
         except Exception as exc:
             return self._to_error(f"routing error at '{state}': {exc}")
+        self._auto_record_iteration(pre_iteration, aggregated)
         new_state = self.sm.current_state_value
         self.obs.transition(self.ctx, state, new_state, event="route")
         if new_state in TERMINAL_STATES:
             return self._finish(new_state)
+        if self._ctx.iteration > self._ctx.max_iterations:
+            return self._force_exhausted(new_state)
         return self._advance_to(new_state)
 
     def _escalate(self, state: str, spec: PrimitiveSpec, summary: dict) -> dict:
@@ -767,6 +995,11 @@ class BasePlaybook:
         record_outcome(self.ctx)  # best-effort capture into penny/outcomes
         self.obs.run_end(self.ctx, STATUS_COMPLETE, self.ctx.met, self.ctx.iteration)
         result = self.result_payload(self.ctx)
+        exhausted_reason = self._ctx.extras.get("engine_exhausted")
+        if exhausted_reason:
+            # Honest exhaustion is reported, never dressed as a pass.
+            result.setdefault("exhausted", True)
+            result.setdefault("exhausted_reason", exhausted_reason)
         return Directives.complete(
             result=result, session_id=self.ctx.session_id, run_id=self.ctx.run_id
         )

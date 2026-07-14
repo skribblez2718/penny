@@ -149,6 +149,24 @@ def test_start_dispatches_charter_echo(cp, target):
     assert "wing_sca" in d["task_summary"]
 
 
+def test_recall_lessons_render_in_first_directive(cp, target):
+    from orchestration.playbooks.sca import SCA_CHARTER
+
+    pb = StubSca(cp)
+    pb.start(
+        session_id=SID,
+        run_id=RID,
+        goal="analyze",
+        constraints={"target_path": target},
+        project_root=REPO_ROOT,
+    )
+    ctx = cp.load(RID).context
+    ctx.recall_lessons = ["prefer an executed PoC over an asserted severity"]
+    txt = pb._task_summary("charter", SCA_CHARTER, ctx)
+    assert "Lessons from prior runs" in txt
+    assert "executed PoC" in txt
+
+
 def test_start_rejects_url_target(cp):
     d = StubSca(cp).start(
         session_id=SID,
@@ -270,7 +288,12 @@ _TRIAGE_SUMMARY = {
 _DEEP_DIVE_SUMMARY = {
     "confidence": "CERTAIN",
     "deep_dived": 1,
-    "tool_blind_findings": {"idor": 1, "authz": 0, "business_logic": 0, "race_condition": 0},  # DICT
+    "tool_blind_findings": {
+        "idor": 1,
+        "authz": 0,
+        "business_logic": 0,
+        "race_condition": 0,
+    },  # DICT
     "new_confirmed": 0,
     "augment_requested": False,
     "new_rules": 0,  # INT count
@@ -348,6 +371,34 @@ def test_full_happy_path_to_complete(cp, target):
     assert d["result"]["report_md_present"] is True
     assert d["result"]["findings_summary"]["total_findings"] == 1
     assert d["result"]["augment_capped"] is False
+
+
+def test_dual_verify_runs_a_second_independent_reverification(cp, target):
+    _walk_to_deep_dive(
+        cp, target, constraints={"dual_verify": True, "reverify_model": "other/model"}
+    )
+    d = _step(cp, "annie", dict(_DEEP_DIVE_SUMMARY))  # deep_dive -> verification_gate
+    assert d["action"] == "escalate_to_user"
+    d = _approve(cp)  # -> verification (vera)
+    assert d["agent"] == "vera" and d["state_id"] == "verification"
+    # first PoC batch -> a SECOND independent verifier (reverification), not fix_verification
+    d1 = _step(cp, "vera", {"run_pocs": [{"name": "p1"}], "confidence": "CERTAIN"})
+    assert d1["agent"] == "vera" and d1["state_id"] == "reverification"
+    assert d1["model"] == "other/model"  # independent judge
+    assert "DUAL-VERIFY" in d1["task_summary"]
+    # second batch -> fix_verification; agreement recorded
+    d2 = _step(cp, "vera", {"run_pocs": [{"name": "p1"}], "confidence": "CERTAIN"})
+    assert d2["state_id"] == "fix_verification"
+    assert cp.load(RID).context.extras["sca"]["dual_verify_agreed"] is True
+
+
+def test_dual_verify_off_by_default_goes_straight_to_fix_verification(cp, target):
+    _walk_to_deep_dive(cp, target)  # no dual_verify
+    _step(cp, "annie", dict(_DEEP_DIVE_SUMMARY))
+    _approve(cp)  # -> verification
+    d = _step(cp, "vera", {"run_pocs": [{"name": "p1"}], "confidence": "CERTAIN"})
+    assert d["state_id"] == "fix_verification"
+    assert "reverification" not in cp.load(RID).context.extras["sca"]
 
 
 def test_missing_run_pocs_field_is_rejected(cp, target):

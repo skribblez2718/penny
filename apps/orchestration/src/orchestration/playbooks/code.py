@@ -3,7 +3,7 @@
 A faithful behavioral port of the legacy 1895-line ``.pi/skills/code`` orchestrator
 onto ``BasePlaybook``: custom-named states (exploring→analyzing→checking_criteria
 →[criteria_gate]→planning→plan_gate→implementing→verifying⇄learning), per-state
-SUMMARY contracts, the RED→GREEN→REFACTOR Ralph-Wiggum loop, both HITL gates on the
+SUMMARY contracts, the implement⇄verify Ralph-Wiggum loop, both HITL gates on the
 engine's planned-gate seam, and the PRD hard dependency enforced at start().
 
 Two deliberate behavior fixes vs. the legacy runtime (which routed on an imperative
@@ -162,9 +162,7 @@ def load_ideal_state(constraints: dict, project_root: str) -> dict | None:
                 # of its sibling chunks or reassembly is incomplete. PRD rooms are
                 # bounded (a handful of artifacts x a few chunks each).
                 results = (
-                    drawers.get(
-                        where={"$and": [{"room": prd_room}, {"wing": "penny"}]}, limit=1000
-                    )
+                    drawers.get(where={"$and": [{"room": prd_room}, {"wing": "penny"}]}, limit=1000)
                     or {}
                 )
                 found = _latest_ideal_state(
@@ -314,7 +312,8 @@ CODE_PLAN = PrimitiveSpec(
         {"plan_complete": bool, "confidence": str},
         {"plan_steps": int, "phases": int, "expected_test_failures": int, "mempalace_drawer": str},
     ),
-    "Produce a TDD implementation plan: dependency chains, build order, per-tier test strategy. Always emit confidence.",
+    "Produce an implementation plan: dependency chains, build order, and a per-tier test "
+    "strategy for the verification tiers the IDEAL STATE requires. Always emit confidence.",
 )
 CODE_IMPLEMENT = PrimitiveSpec(
     "CODE_IMPLEMENT",
@@ -331,7 +330,9 @@ CODE_IMPLEMENT = PrimitiveSpec(
             "needs_clarification": bool,
         },
     ),
-    "Write code TDD-first (RED->GREEN->REFACTOR). Read the mandated resources before any code. Always emit confidence.",
+    "Implement the change and its tests to satisfy the IDEAL STATE; the required outcome is "
+    "passing tests at the configured verification tiers (sequencing is yours). Read the mandated "
+    "security + language resources before any code. Always emit confidence.",
 )
 CODE_VERIFY = PrimitiveSpec(
     "CODE_VERIFY",
@@ -431,11 +432,11 @@ def _server_plan_block(ideal: dict) -> str:
 
 def _build_plan(ctx: RunContext, code: dict, ideal: dict) -> str:
     return (
-        f"Create TDD implementation plan. IDEAL STATE: {json.dumps(ideal)}. "
+        f"Create an implementation plan. IDEAL STATE: {json.dumps(ideal)}. "
         f"Language: {code.get('language', 'python')}. "
         f"Include: dependency chains, build order (dependencies first), "
-        f"phase-by-phase IDEAL STATES for each build step, "
-        f"test strategy (unit first, then integration, then E2E). "
+        f"phase-by-phase IDEAL STATES for each build step, and the test strategy for each "
+        f"verification tier the IDEAL STATE requires (unit / integration / e2e / server-startup). "
         f"Note: integration/E2E tests may have unmet dependencies initially - "
         f"document these in the plan. Session: {ctx.session_id}"
         f"{_server_plan_block(ideal)}"
@@ -478,7 +479,7 @@ def _build_implement(ctx: RunContext, code: dict, ideal: dict) -> str:
         else "docs/agents/secure-coding/AGENTS.md"
     )
     task = (
-        f"Implement code following TDD (RED → GREEN → REFACTOR). "
+        f"Implement the change to satisfy the IDEAL STATE. "
         f"Iteration: {ctx.iteration + 1}. "
         f"IDEAL STATE: {json.dumps(ideal)}. "
         f"\n\nBEFORE WRITING ANY CODE, read these references: "
@@ -488,10 +489,11 @@ def _build_implement(ctx: RunContext, code: dict, ideal: dict) -> str:
         f"{code_detection.build_resource_context(ctx)}"
         f"{_server_implement_block(ideal)}"
         f"{code_detection.build_multi_server_block(ctx)}"
-        f"\n\nRULES: "
-        f"\n- Write a FAILING test FIRST (TDD: RED phase) "
-        f"\n- Implement minimum code to pass (GREEN phase) "
-        f"\n- Refactor while keeping tests green "
+        f"\n\nOUTCOME (what 'done' means — the sequencing is yours; test-first, alongside, or "
+        f"after are all fine): "
+        f"\n- The code ships WITH tests, and every verification tier the IDEAL STATE marks true "
+        f"(unit / integration / e2e / server-startup) PASSES in the verify phase with the "
+        f"captured command output as evidence — a pass is backed by an oracle, never asserted. "
         f"\n- Use DRY methodology "
         f"\n- Use secure coding practices from referenced docs "
         f"\n- For Python: activate .venv/ first, use uv for ALL packages, NEVER install globally "

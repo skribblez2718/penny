@@ -4,17 +4,19 @@ Exercises the linear five-lane pipeline (analyzing→aligning→tailoring→
 validating→exporting), the skill's hard guarantees (no JD / no base resume →
 error; no accomplishments → proceed; NIST down → UNALIGNED degraded run;
 export failure → error with no fallback), the bounded tailor⇄validate revision
-loop with honest exhaustion (no export of an unverified resume), stall + 
+loop with honest exhaustion (no export of an unverified resume), stall +
 UNCERTAIN escalation, and the run_id/checkpointer contract.
 """
 
 import pytest
 
 from orchestration.checkpointer import STATUS_AWAITING_USER, Checkpointer
+from orchestration.context import RunContext
 from orchestration.playbooks.rez import (
     EXPORT_ERROR,
     NO_JD_ERROR,
     NO_RESUME_ERROR,
+    REZ_ANALYZE,
     RezPlaybook,
 )
 
@@ -46,6 +48,7 @@ VERA_PASS = {
     "valid": True,
     "fabrication_free": True,
     "issues": [],
+    "evidence": ["bullet 1→source line 4", "STAR ok", "ATS clean"],
     "star_compliant": True,
     "ats_ok": True,
     "confidence": "CERTAIN",
@@ -63,6 +66,7 @@ def _vera_fail(issues, fabrication_free=False):
         "valid": False,
         "fabrication_free": fabrication_free,
         "issues": issues,
+        "evidence": ["traced every bullet to sources"],
         "confidence": "PROBABLE",
     }
 
@@ -319,10 +323,39 @@ def test_vera_uncertain_escalates(cp):
     d = _step(
         cp,
         "vera",
-        {"valid": False, "fabrication_free": False, "issues": [], "confidence": "UNCERTAIN"},
+        {
+            "valid": False,
+            "fabrication_free": False,
+            "issues": [],
+            "evidence": ["ambiguous source attribution"],
+            "confidence": "UNCERTAIN",
+        },
     )
     assert d["action"] == "escalate_to_user"
     assert d["previous_state"] == "validating"
+
+
+def test_validate_rejects_empty_evidence(cp):
+    _to_validating(cp)
+    d = _step(cp, "vera", {"valid": True, "fabrication_free": True, "issues": [], "evidence": []})
+    assert d["action"] == "invoke_agent" and d["state_id"] == "validating"
+    d2 = _step(cp, "vera", VERA_PASS)
+    assert d2["state_id"] == "exporting"
+
+
+def test_validate_evidence_lands_on_context(cp):
+    _to_validating(cp)
+    _step(cp, "vera", VERA_PASS)
+    assert cp.load(RID).context.verify_evidence
+
+
+def test_recall_lessons_render_in_first_directive(cp):
+    pb = RezPlaybook(cp)
+    ctx = RunContext(session_id=SID, run_id=RID, playbook="rez", goal="tailor for JD")
+    ctx.recall_lessons = ["quantify every bullet; never fabricate a metric"]
+    txt = pb._task_summary("analyzing", REZ_ANALYZE, ctx)
+    assert "Lessons from prior runs" in txt
+    assert "quantify every bullet" in txt
 
 
 # ---------------------------------------------------------------------------

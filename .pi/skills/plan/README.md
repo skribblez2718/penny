@@ -24,7 +24,8 @@ The plan skill runs on the shared **orchestration engine**. It is defined as a `
 | State                   | Agent            | Purpose                                                     |
 | ----------------------- | ---------------- | ---------------------------------------------------------- |
 | `intake`                | — (initial)      | Validate a non-empty goal; seed `plan` extras              |
-| `exploring`             | `echo` × 3       | Parallel fan-out — entrypoints, tests, config focuses      |
+| `scoping`               | `piper`          | Emit the runtime exploration topology (`explore_branches`) |
+| `exploring`             | `echo` × N       | Parallel fan-out over the model-emitted (or default) foci  |
 | `planning`              | `piper`          | Write the execution-grade plan; emit `plan_steps` + stakes |
 | `verify_gate`           | — (HITL gate)    | Confirm or revise a high-stakes plan before critique       |
 | `critiquing`            | `carren`         | Critique the plan (CREST); verdict APPROVE / NEEDS_REVISION |
@@ -36,8 +37,10 @@ The plan skill runs on the shared **orchestration engine**. It is defined as a `
 
 ## Flow
 
-1. `intake → exploring` (`start_explore`). Empty goal raises at intake.
-2. `exploring → planning` (`explore_done`) after the three echo branches fan in.
+1. `intake → scoping` (`start_scope`); or `intake → exploring` (`start_explore`) when `constraints.explore_branches` supplies the topology. Empty goal raises at intake.
+2. `scoping → exploring` (`scope_done`) — piper's `explore_branches` become `ctx.extras["dynamic_branches"]`; the engine fans out one read-only echo branch per focus (bounded by `max_fan_width`). The legacy fixed 3-branch split is a tagged LOAN fallback; ablated, an invalid topology escalates. `exploring → planning` (`explore_done`) after fan-in.
+
+**Critique is evidence-gated** (Rec 4): `PLAN_CRITIQUE` requires a non-empty `evidence` field, so carren cannot APPROVE/BLOCK on a bare assertion; the evidence rides to the outcome ledger. Clarification resumes at `scoping` (`clarify → scoping`).
 3. `planning` routes on the verification gate:
    - `plan_to_verify → verify_gate` when `_needs_verification` is true.
    - `plan_to_critique → critiquing` otherwise.

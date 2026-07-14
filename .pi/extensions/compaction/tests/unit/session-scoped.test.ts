@@ -113,13 +113,23 @@ describe("extractSessionState", () => {
     expect(state.goal).toBe("Design a scoring system");
   });
 
-  it("falls back to the engine run goal before message text", () => {
+  it("a substantive user message beats the engine-run goal (recency, RC3 fix)", () => {
     const state = extractSessionState(
-      [{ role: "user", content: "some general chatter here" }],
+      [{ role: "user", content: "some general chatter here that is substantive" }],
       null,
       "Migrate research skill onto engine"
     );
-    expect(state.goal).toBe("Migrate research skill onto engine");
+    // The fresh user intent outranks a scoped run's (staler) goal.
+    expect(state.goal).toBe("some general chatter here that is substantive");
+  });
+
+  it("uses the scoped engine-run goal when no substantive user message exists", () => {
+    const state = extractSessionState(
+      [{ role: "user", content: "ok" }],
+      null,
+      "Migrate onto engine"
+    );
+    expect(state.goal).toBe("Migrate onto engine");
   });
 
   it("does NOT keyword-scrape constraints from user messages", () => {
