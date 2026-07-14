@@ -75,9 +75,9 @@ Judge the OUTCOME, not the effort, length, or tone. If the response only partial
 Output EXACTLY three lines and nothing else:
 VERDICT: PASS
 WHY: <one sentence — for FAIL, the KIND of thing that went wrong (a groupable failure signature)>
-FAILURE_MODE: <for FAIL, exactly ONE of: {_FAILURE_MODE_LIST}; for PASS, write: none>
+FAILURE_MODE: <for FAIL, a short snake_case tag for the KIND of failure. Prefer one of: {_FAILURE_MODE_LIST}; if none fits, coin a specific 2-4 word snake_case tag. For PASS, write: none>
 
-Pick the single closest FAILURE_MODE. Use "other" only when none of the specific categories fit.
+Prefer an existing category when it fits; only coin a new tag for a genuinely distinct failure kind (not a reworded synonym).
 """
 
 _WHY_RE = re.compile(r"^\s*why\s*[:\-]\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)

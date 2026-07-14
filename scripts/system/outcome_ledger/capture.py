@@ -58,15 +58,19 @@ FAILURE_MODES = (
 
 
 def normalize_failure_mode(value: str) -> str:
-    """Coerce a (possibly LLM-authored) failure_mode to the controlled vocab.
+    """Normalize a (possibly LLM-authored) failure tag.
 
-    Lenient by design: a garbled enum from a weak judge must not crash capture,
-    so an unrecognized *non-empty* value buckets to "other" rather than raising.
-    Empty stays empty (unclassified — e.g. a MATCH)."""
+    #19 OPEN-VOCABULARY: ``FAILURE_MODES`` is a suggested STARTER vocab, not a
+    ceiling. An unrecognized tag is PRESERVED as a compact snake_case token
+    (letters/digits/underscore, <=40 chars) instead of being flattened to
+    "other", so specific failures stay distinguishable and semantic clustering
+    (compression_loop) can group the open vocabulary by meaning. Empty / "none"
+    stays empty (unclassified — e.g. a MATCH). Never raises."""
     v = (value or "").strip().lower()
     if not v or v in ("none", "n/a", "na"):
         return ""
-    return v if v in FAILURE_MODES else "other"
+    tag = re.sub(r"[^a-z0-9]+", "_", v).strip("_")
+    return tag[:40] or "other"
 
 
 # Keyword → domain, matched against the goal text (first hit wins). Mirrors the

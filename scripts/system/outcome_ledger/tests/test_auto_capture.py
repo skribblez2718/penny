@@ -60,8 +60,8 @@ def test_parse_failure_mode_normalizes_to_vocab():
     )
     # case/space tolerant
     assert ac.parse_failure_mode("FAILURE_MODE:  Wrong_Result ") == "wrong_result"
-    # an off-vocab value buckets to "other" rather than poisoning the key
-    assert ac.parse_failure_mode("FAILURE_MODE: some nonsense") == "other"
+    # #19 open-vocab: an off-menu tag is preserved as a snake_case token
+    assert ac.parse_failure_mode("FAILURE_MODE: some nonsense") == "some_nonsense"
     # PASS-style / absent → empty (never enters the compression loop)
     assert ac.parse_failure_mode("FAILURE_MODE: none") == ""
     assert ac.parse_failure_mode("VERDICT: PASS") == ""

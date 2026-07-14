@@ -173,7 +173,7 @@ def test_record_work_outcome_carries_and_normalizes_failure_mode():
     body = json.loads(calls[0]["content"].split("\n", 1)[1])
     assert body["failure_mode"] == "missing_constraint"  # the clustering key
 
-    # an off-vocab failure_mode buckets to "other" (never raises)
+    # #19 open-vocab: an off-menu tag is PRESERVED (snake_case), not flattened to "other"
     calls2 = []
     capture.record_work_outcome(
         goal="g",
@@ -183,7 +183,7 @@ def test_record_work_outcome_carries_and_normalizes_failure_mode():
         session_id="s2",
         writer=_fake_writer(calls2),
     )
-    assert json.loads(calls2[0]["content"].split("\n", 1)[1])["failure_mode"] == "other"
+    assert json.loads(calls2[0]["content"].split("\n", 1)[1])["failure_mode"] == "garbled_nonsense"
 
     # a clean MATCH leaves it empty
     calls3 = []
