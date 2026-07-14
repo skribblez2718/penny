@@ -1,12 +1,17 @@
 # compression_loop tests — TDD
 """Main self-improvement loop: outcomes → patterns → amendments."""
 
+import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from compression_loop import identify_patterns, run_compression_loop  # noqa: E402
+from compression_loop import (  # noqa: E402
+    cluster_outcomes,
+    identify_patterns,
+    run_compression_loop,
+)
 
 
 class TestIdentifyPatterns:
@@ -226,3 +231,70 @@ class TestRunCompressionLoop:
         # Same data fed again → dedup against previous
         result2 = run_compression_loop(outcomes, previous_amendments=result1)
         assert len(result2) == 0  # deduplicated
+
+
+# ── #20: semantic clustering (model-first, exact-string fallback) ─────────────
+
+
+def _cluster_stream(payload_text: str) -> str:
+    msg = {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+           "content": [{"type": "text", "text": payload_text}]}}
+    return json.dumps({"type": "agent_start"}) + "\n" + json.dumps(msg)
+
+
+def _fake_runner(stdout="", *, returncode=0, raise_exc=None):
+    class _Proc:
+        pass
+
+    def run(cmd, **kwargs):
+        if raise_exc is not None:
+            raise raise_exc
+        p = _Proc()
+        p.stdout, p.stderr, p.returncode = stdout, "", returncode
+        return p
+
+    return run
+
+
+class TestSemanticClustering:
+    """#20: cluster failures by MEANING (model), falling back to exact-string."""
+
+    _FAILS = [
+        {"decision_id": "d1", "outcome": "MISMATCH", "domain": "coding",
+         "reason": "assumed uv but the project uses pip", "failure_mode": "wrong_pkg_mgr"},
+        {"decision_id": "d2", "outcome": "MISMATCH", "domain": "coding",
+         "reason": "forgot to run the linter before finishing", "failure_mode": "skipped_lint"},
+        {"decision_id": "d3", "outcome": "MISMATCH", "domain": "coding",
+         "reason": "used the wrong package manager again", "failure_mode": "pkg_mismatch"},
+    ]
+
+    def test_fallback_exact_string_when_gate_off(self, monkeypatch):
+        monkeypatch.delenv("PI_SELFIMPROVE_CLUSTER_MODEL", raising=False)
+        # open-vocab tags + reasons all differ -> exact-string finds no cluster >=2
+        assert cluster_outcomes(self._FAILS) == []
+
+    def test_model_groups_semantically(self, monkeypatch):
+        monkeypatch.setenv("PI_SELFIMPROVE_CLUSTER_MODEL", "anthropic/haiku")
+        # d1 & d3 share a root cause (wrong toolchain); the model groups them,
+        # while the lone lint failure stays a single-member cluster (dropped).
+        payload = json.dumps({"clusters": [
+            {"label": "wrong toolchain assumption", "members": [0, 2]},
+            {"label": "skipped_lint", "members": [1]},
+        ]})
+        clusters = cluster_outcomes(self._FAILS, runner=_fake_runner(_cluster_stream(payload)))
+        assert len(clusters) == 1
+        c = clusters[0]
+        assert c["label"] == "wrong_toolchain_assumption"
+        assert {m["decision_id"] for m in c["members"]} == {"d1", "d3"}
+
+    def test_model_failure_falls_back_to_exact_string(self, monkeypatch):
+        monkeypatch.setenv("PI_SELFIMPROVE_CLUSTER_MODEL", "anthropic/haiku")
+        # spawn raises -> fallback -> exact-string (all differ) -> no cluster
+        assert cluster_outcomes(self._FAILS, runner=_fake_runner(raise_exc=OSError("x"))) == []
+
+    def test_run_loop_uses_semantic_clusters(self, monkeypatch):
+        monkeypatch.setenv("PI_SELFIMPROVE_CLUSTER_MODEL", "anthropic/haiku")
+        payload = json.dumps({"clusters": [{"label": "wrong toolchain", "members": [0, 2]}]})
+        result = run_compression_loop(self._FAILS, runner=_fake_runner(_cluster_stream(payload)))
+        assert len(result) == 1
+        assert "amendment_id" in result[0]

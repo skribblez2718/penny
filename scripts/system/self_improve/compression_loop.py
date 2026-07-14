@@ -9,11 +9,18 @@ Orchestrates:
 Returns a list of amendment dicts ready for mempalace storage.
 """
 
+import json
+import os
+import re
+import subprocess
 from collections import Counter
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from target_classifier import classify_target, TargetLayer
 from amendment_generator import generate_amendment
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Minimum occurrences of a grouping key to trigger a pattern
 _PATTERN_THRESHOLD = 2
@@ -72,6 +79,142 @@ def identify_patterns(outcomes: List[Dict[str, Any]]) -> List[str]:
 
     counts = Counter(keys)
     return [key for key, count in counts.items() if count >= _PATTERN_THRESHOLD]
+
+
+# ── #20: semantic failure clustering (model-first, exact-string fallback) ─────
+# The exact-string grouping above clusters only identical failure_mode tokens; the
+# information-rich free-text `reason` never matches verbatim, so it goes unused.
+# When PI_SELFIMPROVE_CLUSTER_MODEL is set, a model groups the recent failures by
+# ROOT CAUSE (meaning) — unlocking the reason text and the #19 open-vocab tags.
+# Unset (default) or ANY failure -> the exact-string path below (never raises).
+_CLUSTER_MODEL_ENV = "PI_SELFIMPROVE_CLUSTER_MODEL"
+_CLUSTER_HERMETIC = [
+    "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates",
+    "--no-themes", "--no-context-files", "--no-tools",
+]
+_CLUSTER_SYSTEM = (
+    "You group software-assistant FAILURE records by ROOT CAUSE (semantic meaning), "
+    "not by exact wording: two records share a cluster iff fixing the same underlying "
+    "problem would address both. Reply with EXACTLY one JSON object and nothing else: "
+    '{"clusters": [{"label": "<short snake_case tag>", "members": [<record indices>]}]}. '
+    "Each index appears in at most one cluster; a record matching nothing forms its "
+    "own single-member cluster."
+)
+
+
+def _tag(text: str, cap: int = 40) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(text).strip().lower()).strip("_")[:cap]
+
+
+def _call_pi_json(prompt, *, spec, system, runner=None, timeout_s=60):  # noqa: C901
+    """One headless-pi JSON call; last assistant text or None on any failure."""
+    if "/" in spec and not spec.startswith("/") and not spec.endswith("/"):
+        provider, model_id = spec.split("/", 1)
+    else:
+        provider, model_id = "", spec
+    cmd = ["pi", "--mode", "json", "-p", *_CLUSTER_HERMETIC]
+    if provider:
+        cmd += ["--provider", provider]
+    cmd += ["--model", model_id, "--thinking", "low", "--system-prompt", system, prompt]
+    env = dict(os.environ)
+    env["PI_SKIP_VERSION_CHECK"] = "1"
+    run = runner or subprocess.run
+    try:
+        proc = run(cmd, cwd=str(REPO_ROOT), env=env, stdin=subprocess.DEVNULL,
+                   capture_output=True, text=True, timeout=timeout_s)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if getattr(proc, "returncode", 0) not in (0, None):
+        return None
+    last = None
+    for line in (getattr(proc, "stdout", "") or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if event.get("type") != "message_end":
+            continue
+        message = event.get("message", event)
+        if message.get("role") != "assistant":
+            continue
+        if message.get("stopReason") == "error":
+            return None
+        last = "".join(
+            b.get("text", "") for b in message.get("content", [])
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    return last
+
+
+def _cluster_via_model(relevant, spec, *, runner=None):
+    """Ask the model to group `relevant` failures; return [{label, members:[idx]}]
+    or None on any failure (-> caller falls back to exact-string grouping)."""
+    lines = []
+    for i, o in enumerate(relevant):
+        reason = _one_line(o.get("reason", ""))
+        fm = str(o.get("failure_mode", "")).strip()
+        lines.append(f"[{i}] {reason}" + (f"  (tag: {fm})" if fm else ""))
+    prompt = ("FAILURE RECORDS:\n" + "\n".join(lines)
+              + '\n\nReturn {"clusters":[...]} grouping them by root cause.')
+    text = _call_pi_json(prompt, spec=spec, system=_CLUSTER_SYSTEM, runner=runner)
+    if not text:
+        return None
+    match = re.search(r"\{.*\}", text, re.S)
+    if not match:
+        return None
+    try:
+        obj = json.loads(match.group(0))
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(obj, dict) or not isinstance(obj.get("clusters"), list):
+        return None
+    n = len(relevant)
+    out, seen = [], set()
+    for c in obj["clusters"]:
+        if not isinstance(c, dict):
+            continue
+        members = [m for m in c.get("members", [])
+                   if isinstance(m, int) and 0 <= m < n and m not in seen]
+        if not members:
+            continue
+        seen.update(members)
+        out.append({"label": _tag(c.get("label", "")) or "cluster", "members": members})
+    return out or None
+
+
+def cluster_outcomes(relevant, *, runner=None):
+    """Group MISMATCH/PARTIAL failures into clusters ``{label, members:[outcome]}``
+    meeting the recurrence threshold. Semantic (model) when
+    PI_SELFIMPROVE_CLUSTER_MODEL is set; otherwise exact-string grouping on the
+    categorical failure_mode/reason (the pre-#20 behavior). Never raises."""
+    if not relevant:
+        return []
+    spec = os.environ.get(_CLUSTER_MODEL_ENV, "").strip()
+    if spec:
+        try:
+            groups = _cluster_via_model(relevant, spec, runner=runner)
+        except Exception:  # noqa: BLE001 - clustering must never break the loop
+            groups = None
+        if groups is not None:
+            clusters = [
+                {"label": g["label"], "members": [relevant[i] for i in g["members"]]}
+                for g in groups
+            ]
+            return [c for c in clusters if len(c["members"]) >= _PATTERN_THRESHOLD]
+    # Fallback: exact-string grouping (equivalent to identify_patterns + matched).
+    by_key: Dict[str, List[Dict[str, Any]]] = {}
+    for o in relevant:
+        key = _grouping_key(o)
+        if key:
+            by_key.setdefault(key, []).append(o)
+    return [
+        {"label": key, "members": members}
+        for key, members in by_key.items()
+        if len(members) >= _PATTERN_THRESHOLD
+    ]
 
 
 def _deduplicate(
@@ -140,28 +283,27 @@ def _map_domain_to_target_file(domain: str) -> str:
 def run_compression_loop(
     outcomes: List[Dict[str, Any]],
     previous_amendments: Optional[List[Dict[str, Any]]] = None,
+    *,
+    runner=None,
 ) -> List[Dict[str, Any]]:
     """Run the full compression loop on a set of outcomes.
 
-    Returns a list of proposed amendment dicts.
+    Failures are grouped by ``cluster_outcomes`` — semantic (model) when
+    PI_SELFIMPROVE_CLUSTER_MODEL is set, else exact-string on the categorical
+    failure_mode/reason. Returns a list of proposed amendment dicts.
     """
-    patterns = identify_patterns(outcomes)
-    if not patterns:
+    relevant = [o for o in outcomes if o.get("outcome") in ("MISMATCH", "PARTIAL")]
+    clusters = cluster_outcomes(relevant, runner=runner)
+    if not clusters:
         return []
 
     amendments = []
-    for pattern in patterns:
-        # The records that share this grouping key (exact match on the key, not a
-        # substring-in-reason scan — the key may be a categorical failure_mode
-        # that never appears literally in the free-text reason).
-        matched = [
-            o
-            for o in outcomes
-            if o.get("outcome") in ("MISMATCH", "PARTIAL") and _grouping_key(o) == pattern
-        ]
+    for cluster in clusters:
+        matched = cluster["members"]
+        label = cluster["label"]
 
         # Evidence keeps the human-readable reasons so the amendment cites the
-        # concrete instances behind the categorical pattern.
+        # concrete instances behind the cluster.
         evidence = [
             f"{o.get('decision_id', 'unknown')} ({o.get('outcome')}): {o.get('reason', '')}"
             for o in matched
@@ -176,8 +318,8 @@ def run_compression_loop(
         domain = domain[0][0] if domain else "other"
 
         # Classification and guidance run on natural language — a failure-mode
-        # enum is rendered to its phrase; a reason string passes through.
-        learning = _describe(pattern)
+        # enum is rendered to its phrase; a cluster label / reason passes through.
+        learning = _describe(label)
         target = classify_target(learning, evidence)
 
         # Determine target file
