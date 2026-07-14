@@ -11,7 +11,14 @@ import json
 import pytest
 
 from orchestration.checkpointer import STATUS_AWAITING_USER, Checkpointer
-from orchestration.playbooks.code import CodePlaybook, _latest_ideal_state, _try_ideal_state
+from orchestration.context import RunContext
+from orchestration.playbooks.code import (
+    CodePlaybook,
+    _build_verify,
+    _discover_repo_commands,
+    _latest_ideal_state,
+    _try_ideal_state,
+)
 
 SID, RID = "sess-code", "run-code"
 
@@ -30,6 +37,49 @@ IDEAL = {
 @pytest.fixture
 def cp(tmp_path):
     return Checkpointer(db_path=tmp_path / "orch.db")
+
+
+# ---------------------------------------------------------------------------
+# #10: discover the repo's own verify commands (Makefile / package.json)
+# ---------------------------------------------------------------------------
+
+
+def test_discover_repo_commands_reads_makefile_and_package_json(tmp_path):
+    (tmp_path / "Makefile").write_text(
+        "test:\n\tpytest -q\n\nlint:\n\truff check .\n\ninstall:\n\tuv sync\n"
+    )
+    (tmp_path / "package.json").write_text(
+        json.dumps({"scripts": {"test": "vitest run", "typecheck": "tsc --noEmit", "dev": "vite"}})
+    )
+    names = {d["name"] for d in _discover_repo_commands(str(tmp_path))}
+    assert "make test" in names and "make lint" in names
+    assert "make install" not in names  # not verify-ish -> filtered out
+    assert "test" in names and "typecheck" in names
+    assert "dev" not in names  # not verify-ish -> filtered out
+
+
+def test_discover_repo_commands_missing_or_empty_is_empty(tmp_path):
+    assert _discover_repo_commands("") == []
+    assert _discover_repo_commands(str(tmp_path / "nope")) == []
+    assert _discover_repo_commands(str(tmp_path)) == []  # empty dir
+
+
+def test_build_verify_prefers_discovered_repo_commands(tmp_path):
+    (tmp_path / "Makefile").write_text("test:\n\tpytest -q\n")
+    ctx = RunContext(session_id="s", run_id="r", playbook="code", goal="g")
+    ctx.project_root = str(tmp_path)
+    directive = _build_verify(ctx, {"language": "python"}, {"verification": {"unit_tests": True}})
+    assert "PREFER" in directive and "make test" in directive
+
+
+def test_build_verify_falls_back_to_language_defaults_when_no_repo_commands(tmp_path):
+    ctx = RunContext(session_id="s", run_id="r", playbook="code", goal="g")
+    ctx.project_root = str(tmp_path)  # empty repo -> nothing declared
+    directive = _build_verify(
+        ctx, {"language": "python"}, {"verification": {"lint": True, "unit_tests": True}}
+    )
+    assert "PREFER" not in directive
+    assert "ruff check ." in directive and "pytest" in directive
 
 
 def _start(cp, constraints=None):

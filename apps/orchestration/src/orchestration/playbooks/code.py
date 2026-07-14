@@ -17,6 +17,7 @@ detection and the rich per-state prompts — is preserved verbatim (detection in
 from __future__ import annotations
 
 import json
+import re
 import sys
 from typing import Any
 
@@ -512,6 +513,66 @@ def _build_implement(ctx: RunContext, code: dict, ideal: dict) -> str:
     return task
 
 
+# ── #10: discover the repo's OWN verify commands, so the verify agent runs what the
+# project actually declares (Makefile targets, package.json scripts) instead of the
+# hard-coded per-language guesses below. Deterministic + best-effort; the language
+# defaults stay as the fallback for any enabled tier the repo declares nothing for.
+# Never raises.
+_VERIFY_HINT_RE = re.compile(
+    r"\b(tests?|lint|check|typecheck|tsc|mypy|ruff|eslint|pytest|vitest|jest|"
+    r"pyright|flake8|coverage|verify|build|ci)\b",
+    re.IGNORECASE,
+)
+
+
+def _discover_repo_commands(project_root: str) -> list[dict]:  # noqa: C901
+    """Surface the repo's own declared verify-ish commands from high-signal sources
+    (Makefile targets, package.json scripts), filtered to lint/type/test/build-looking
+    entries. Returns ``[{"source", "name", "command"}]``. Best-effort; never raises."""
+    from pathlib import Path
+
+    out: list[dict] = []
+    if not project_root:
+        return out
+    root = Path(project_root)
+    if not root.is_dir():
+        return out
+    # Makefile: target -> its first recipe line, surfaced as a runnable `make <target>`.
+    mk = root / "Makefile"
+    if mk.is_file():
+        try:
+            lines = mk.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except OSError:
+            lines = []
+        target: str | None = None
+        for ln in lines:
+            head = re.match(r"^([A-Za-z0-9][\w.-]*)\s*:(?!=)", ln)
+            if head:
+                target = head.group(1)
+                continue
+            if target and ln[:1] in ("\t", " ") and ln.strip():
+                recipe = ln.strip().lstrip("@-")
+                if not recipe.startswith("#") and _VERIFY_HINT_RE.search(f"{target} {recipe}"):
+                    out.append(
+                        {"source": "Makefile", "name": f"make {target}", "command": f"make {target}"}
+                    )
+                target = None  # only the first recipe line of each target
+            elif ln.strip() and ln[:1] not in ("\t", " "):
+                target = None
+    # package.json: declared scripts (the repo's own test/lint/build invocations).
+    pkg = root / "package.json"
+    if pkg.is_file():
+        try:
+            data = json.loads(pkg.read_text(encoding="utf-8", errors="ignore"))
+        except (OSError, ValueError):
+            data = {}
+        scripts = data.get("scripts") if isinstance(data, dict) else {}
+        for name, cmd in (scripts or {}).items():
+            if _VERIFY_HINT_RE.search(f"{name} {cmd}"):
+                out.append({"source": "package.json", "name": str(name), "command": str(cmd)})
+    return out[:20]
+
+
 def _build_verify(ctx: RunContext, code: dict, ideal: dict) -> str:
     verification = ideal.get("verification", {})
     language = code.get("language", "python")
@@ -554,9 +615,31 @@ def _build_verify(ctx: RunContext, code: dict, ideal: dict) -> str:
             f"  (c) CORS preflight test from a representative browser origin (if the server uses CORS).\n"
             f"\nIf any of these tests are missing, FAIL the verification with a specific gap listing which categories are absent. Do NOT pass verification just because the unit tests pass — for a server project, that is a false positive."
         )
+    enabled = [
+        k for k in (
+            "lint", "type_check", "unit_tests", "integration_tests",
+            "e2e_tests", "server_startup",
+        ) if verification.get(k)
+    ]
+    discovered = _discover_repo_commands(getattr(ctx, "project_root", "") or "")
+    if discovered:
+        disc = "; ".join(f"`{d['command']}` ({d['source']}: {d['name']})" for d in discovered)
+        command_directive = (
+            f"PREFER the verification commands THIS REPO declares (discovered from its own "
+            f"Makefile / package.json scripts): {disc}. Run the ones that lint, type-check, "
+            f"and test the code for the enabled tiers. Fall back to the language defaults only "
+            f"for an enabled tier the repo declares no command for: "
+            f"{'; '.join(commands) if commands else '(none)'}. "
+        )
+    else:
+        command_directive = (
+            f"Run these verification commands: "
+            f"{'; '.join(commands) if commands else '(none configured — that itself is a failure for a server project)'}. "
+        )
     return (
         f"Verify implementation. IDEAL STATE: {json.dumps(ideal)}. "
-        f"Run these verification commands: {'; '.join(commands) if commands else '(none configured — that itself is a failure for a server project)'}. "
+        f"Enabled verification tiers: {', '.join(enabled) if enabled else '(none)'}. "
+        f"{command_directive}"
         f"For any tier not configured in the project, explicitly state it. "
         f"Paste the ACTUAL captured output of every command you ran (the tail of "
         f"pytest / ruff / tsc / the server-startup test) as evidence — a pass verdict "
