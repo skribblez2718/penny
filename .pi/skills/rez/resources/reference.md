@@ -49,30 +49,94 @@ then follow its links (or targeted `web_search`) to pull the TKS statements
 for only the 1–3 work roles relevant to the JD — the full components dataset
 is large and unnecessary.
 
-## STAR Bullet Format
+## Bullet Craft (canonical — applies to every run)
 
-Each bullet compresses Situation/Task, Action, Result into one fluent line:
+> This is the single source of truth for how rez writes and validates resume
+> bullets. synthia writes to it; vera enforces it. Keep the base resume and
+> every tailored output in this style — do **not** regress to dense, narrative,
+> multi-clause prose. (This spec was hardened 2026-07 after a base-resume review
+> found the bullets had drifted into long STAR-narrative form.)
+
+### Format: XYZ / achievement-focused (not STAR prose)
+
+Resume bullets are **XYZ**, the format popularized by Google (Laszlo Bock):
 
 ```
-<Action verb + method/tooling> <situation/task context>, <quantified or strong qualitative result>
+Accomplished [X] [, as measured by Z,] by doing [Y]
 ```
 
-Examples of the shape (illustrative, not content to copy):
+Lead with the **outcome or a concrete action verb**; land the payoff **at the
+front or the end of the line — never buried mid-sentence between em-dash asides**.
+XYZ is denser and more scannable than STAR: recruiters scan a resume in ~6–7
+seconds and only the first 2–3 words of each line are guaranteed to be read.
+(STAR is the *interview* cousin — keep a STAR-shaped version of the 3 strongest
+bullets ready for interview prep, but the resume itself is XYZ.)
 
-- ✅ "Performed 110+ penetration tests across web, API, and mobile targets
-  (situation/task + quantity), adapting methodologies to uncommon stacks
-  (action), consistently identifying critical vulnerabilities missed by prior
-  assessments (result)."
-- ❌ "Responsible for penetration testing." (no action detail, no result)
+### The nine rules
 
-Rules:
+1. **First word is a strong, concrete, past-tense ownership verb.** Present
+   tense is acceptable for the current role if the base resume uses it.
+2. **Outcome-led, never buried.** The result leads or closes the line — it is
+   never sandwiched inside em-dash asides. If you have to hunt for the payoff,
+   rewrite.
+3. **One result per bullet.** Split double-barreled bullets — two achievements
+   crammed into one line become two tighter lines.
+4. **15–30 words, one to two lines.** Three+ lines get skipped on the skim.
+5. **Quantify only from the sources; be honest about scope.** Use numbers that
+   appear in `resources/`. When the figure was a team result, write
+   "Contributed to…", "Owned X within Y…", or "1 of N…" rather than claiming
+   the whole. A round number with no baseline or scope reads as inflated —
+   anchor it.
+6. **No metric? Use a concrete substitute:** range, frequency, scope, or a
+   before→after state ("cut intake from 4 months to 6 weeks"). Never vague
+   filler ("improved security", "drove impact").
+7. **Retire the 2026 AI-tell verbs** (they now read as machine-written):
+   Spearheaded, Orchestrated, Leveraged (as a verb), Showcased, Synergized,
+   Delved; Architected unless literally software architecture; Drove *unless*
+   paired with a number. Also kill weak openers: "Responsible for", "Helped
+   with", "Assisted in", "Worked on", "Duties included".
+8. **Prefer concrete verbs:** Built, Shipped, Led, Designed, Developed, Reduced,
+   Cut, Eliminated, Automated, Migrated, Standardized, Completed, Earned,
+   Discovered, Uncovered, Exploited, Bypassed, Drove (+ number).
+9. **Personality/voice stays off the resume.** A punchy, scannable line *is* the
+   "human" element here; save the narrative headline voice for LinkedIn.
 
-- Lead with a strong past-tense action verb (present tense for current role
-  is acceptable if the base resume uses it).
-- One result per bullet; the result is the payoff — never omit it.
-- Quantify only with numbers present in the source materials.
-- Qualitative results must still be concrete: "adopted across teams",
-  "eliminated a recurring finding class" — not "improved security".
+### Offensive-security / pentester bullets — attack narrative
+
+A senior practitioner reads the resume after the recruiter, and they want
+**exploitation and impact, not scanning**. Shape offensive bullets as an attack
+narrative and lead with the finding class + impact:
+
+```
+entry point → vulnerability → exploitation → impact [→ remediation]
+```
+
+- Show manual exploitation and **chaining**, not automated scan output.
+- Name the **CVE or critical finding early** — it is the strongest credibility
+  signal on the page.
+- "Bypassed authentication via flawed session validation, achieving account
+  takeover" beats "Tested authentication mechanisms."
+
+### Worked example (from this base resume)
+
+- ❌ *Performed 110+ authorized penetration tests over 6 years across web, API,
+  mobile, cloud, and microservice targets — including large-scale API/GraphQL
+  tests that uncovered authorization gaps exposing PII and cut cross-team
+  remediation from months to days — repeatedly finding critical vulnerabilities
+  missed by internal, third-party, and code-review assessments.*
+  (58 words; result buried mid-sentence; two achievements in one line)
+- ✅ **Completed 110+ authorized penetration tests** across web, API, mobile,
+  cloud, and microservice targets, repeatedly surfacing critical vulnerabilities
+  that internal, third-party, and code-review assessments had missed.
+- ✅ **Uncovered broken authorization in large-scale API/GraphQL testing** that
+  exposed PII across downstream applications; drove cross-team remediation from
+  months to days.
+
+### Bullets per role
+
+- Most recent / senior role: 6–8 (offensive roles can run to ~9 when each line
+  is a distinct, tight achievement).
+- Prior roles: 3–4. Roles 5+ years old: 2–3. Oldest: 1–2 or a one-line summary.
 
 ## ATS Guidance
 
@@ -91,9 +155,9 @@ Rules:
 | Parameter | Value |
 |---|---|
 | `theme` | `modern` |
-| `font_size_pt` | 10.5–11 |
-| `margin_inches` | 0.6–0.8 |
-| `line_spacing` | 1.0–1.15 |
+| `font_size_pt` | 11 (drop to 10.5 if a page spills) |
+| `margin_inches` | 0.7–0.8 (tighten toward 0.6 if a page spills) |
+| `line_spacing` | **1.0** (max 1.05) — the base resume renders to exactly 2 pages at 1.0; 1.1+ orphans the trailing section onto a 3rd page |
 | `table_style` | `minimal` (only if a skills table is used; prefer plain lists) |
 | `include_page_numbers` | `false` |
 | `cover_page` / `include_toc` | `false` |
@@ -102,3 +166,11 @@ Rules:
 Markdown composition: `#` for the candidate name, contact line as a single
 paragraph under it, `##` for section headings, `###` for role titles with a
 bold employer/date line, `-` bullets for experience items.
+
+**Page-limit rule (hard):** the exported `.docx` MUST be ≤ 2 pages. The base
+resume is tuned to fit 2 pages at `line_spacing: 1.0`, `font_size_pt: 11`,
+`margin_inches: 0.7–0.8` (modern theme). After export, verify page count
+(e.g., `soffice --headless --convert-to pdf <file>.docx` then `pdfinfo`); if it
+spills to 3 pages, recover in this order before cutting substance: (1) set
+`line_spacing: 1.0`, (2) `margin_inches: 0.6`, (3) `font_size_pt: 10.5`,
+(4) trim the weakest JD-irrelevant bullet. Do not exceed 2 pages.

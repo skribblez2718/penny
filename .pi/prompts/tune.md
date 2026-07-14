@@ -26,7 +26,9 @@ All five variants parse as follows:
 
 When `deep` is `false`, run Steps 1–5 and Close only — **no Step 6, no Step 3 trajectory exception** (backward compatibility). When `deep` is `true`, also run Step 6 after Step 5 and apply the Step 3 trajectory exception.
 
-Use `${count}` in place of `${1:-10}` throughout.
+The user's raw arguments are: `$ARGUMENTS`
+
+Parse that string per the table above: `count` = the first bare numeric token (default `10` if none); `deep` = `true` if the literal word `deep` appears anywhere, otherwise `false`. Then use the parsed integer in place of every `${count}` below, and use the parsed `deep` boolean to gate the deep-only phases. When `deep` is `true` you MUST run Step 6 (producer refresh) after Step 5 and apply the Step 3 trajectory exception; do not skip them.
 
 ## Step 1 — Rate recent work (the user judges)
 

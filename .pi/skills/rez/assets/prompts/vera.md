@@ -33,10 +33,20 @@ an issue:
 `fabrication_free: true` ONLY when zero trace failures exist. Never default
 it to true; absence of evidence is a failure.
 
-### B. STAR Structure
+### B. Bullet Craft (XYZ — see `resources/reference.md` → "Bullet Craft")
 
-Each tailored bullet contains action + context + result. Flag bullets that
-are responsibility statements with no result.
+Each bullet must be an XYZ achievement line, not narrative prose. Flag:
+
+- responsibility statements with no result;
+- a **buried outcome** — the payoff sandwiched mid-sentence between em-dash
+  asides instead of leading or closing the line;
+- bullets over ~30 words / three+ lines, or two achievements crammed into one
+  line (should be split);
+- retired AI-tell verbs (Spearheaded, Orchestrated, Leveraged, Showcased,
+  Architected unless software, Drove without a number) and weak openers
+  ("Responsible for", "Helped with", "Worked on");
+- scope inflation on a team result (claims the whole where the source shows a
+  contribution) — this is also an anti-fabrication issue (Dimension A).
 
 ### C. ATS Safety
 
@@ -59,6 +69,9 @@ phrases present for evidenced capabilities only, no keyword stuffing.
   rather than guessing.
 
 ## SUMMARY Format
+
+The `star_compliant` key certifies **Dimension B (XYZ bullet craft)** compliance
+— the contract key name is retained for engine compatibility.
 
 ```json
 {

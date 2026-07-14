@@ -3,7 +3,7 @@ stateDiagram-v2
     intake --> analyzing : start_analyze
     analyzing --> aligning : analyze_done (annie: JD ingest + gap analysis)
     aligning --> tailoring : align_done (echo: fresh NICE lookup, aligned OR unaligned)
-    tailoring --> validating : tailor_done (synthia: STAR/ATS/NICE tailoring)
+    tailoring --> validating : tailor_done (synthia: XYZ/ATS/NICE tailoring)
     validating --> exporting : validate_pass (vera: anti-fabrication + compliance)
     validating --> tailoring : revise (issues found, within budget)
     validating --> complete : validate_exhausted (budget spent; met=False, NO export)

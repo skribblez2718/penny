@@ -12,8 +12,9 @@ ATS-friendly `.docx` to `/tmp/resumes/`.
    to get current Work Roles and TKS verbiage — the canonical truth for
    cybersecurity concepts.
 4. Runs a gap analysis: skill matches, skill misses, transferable skills.
-5. Rewrites the strongest matches/transferables as **STAR-format bullets**
-   with JD keywords for ATS, quantified where the evidence allows.
+5. Rewrites the strongest matches/transferables as **XYZ achievement bullets**
+   (canonical spec: `resources/reference.md` → Bullet Craft) with JD keywords
+   for ATS, quantified where the evidence allows.
 6. **Never fabricates or exaggerates** — every bullet must trace to a source
    statement.
 7. Exports via the word extension (`word_generate`) to
@@ -28,7 +29,7 @@ Python-orchestrated skill on the shared engine
 |---|---|---|
 | analyzing | annie | JD ingest + gap analysis |
 | aligning | echo | fresh NIST NICE lookup (every run) |
-| tailoring | synthia | STAR/ATS/NICE tailoring |
+| tailoring | synthia | XYZ/ATS/NICE tailoring |
 | validating | vera | anti-fabrication trace + compliance (bounded revise loop) |
 | exporting | skribble | .docx render to /tmp/resumes/ via the word extension's `word_generate` tool |
 

@@ -1,6 +1,6 @@
 ---
 name: rez
-description: Tailors the base resume to a specific job description — gap analysis (matches, misses, transferables), STAR-format bullet rewriting, ATS keyword optimization, fresh NIST NICE Framework alignment every run, and modern .docx export to /tmp/resumes/. Use when the user provides a job description (URL or pasted text) and wants a tailored resume — signals like "tailor my resume", "resume for this job", "apply to this posting", "rez this JD". Do not use when the deliverable is a cover letter, when editing the base resume itself, or when no job description is provided.
+description: Tailors the base resume to a specific job description — gap analysis (matches, misses, transferables), achievement-focused (XYZ) bullet rewriting, ATS keyword optimization, fresh NIST NICE Framework alignment every run, and modern .docx export to /tmp/resumes/. Use when the user provides a job description (URL or pasted text) and wants a tailored resume — signals like "tailor my resume", "resume for this job", "apply to this posting", "rez this JD". Do not use when the deliverable is a cover letter, when editing the base resume itself, or when no job description is provided.
 license: MIT
 compatibility: Requires the shared orchestration engine, the word extension's word_generate tool (invoked by skribble) for .docx export, and web access for URL job descriptions and the NIST NICE lookup.
 metadata:
@@ -65,8 +65,8 @@ yields no usable JD content aborts the run with
 |---|---|---|
 | `analyzing` | annie | Ingest JD (fetch/read/inline), load `resources/resume/` + `resources/accomplishments/` read-only, gap analysis: matches / misses / transferables |
 | `aligning` | echo | **Fresh NIST NICE lookup every run** — current components version from the NICE Current Versions page + TKS verbiage for the 1–3 JD-relevant work roles. Never cached data |
-| `tailoring` | synthia | STAR bullets, ATS keywords, NICE canonical verbiage, zero fabrication; full resume markdown → mempalace |
-| `validating` | vera | Anti-fabrication trace of every bullet against sources + STAR/ATS/NICE compliance; bounded revise loop (default budget 3) |
+| `tailoring` | synthia | XYZ achievement bullets (see `reference.md` → Bullet Craft), ATS keywords, NICE canonical verbiage, zero fabrication; full resume markdown → mempalace |
+| `validating` | vera | Anti-fabrication trace of every bullet against sources + XYZ-bullet-craft/ATS/NICE compliance; bounded revise loop (default budget 3) |
 | `exporting` | skribble | Render validated markdown → `.docx` in `/tmp/resumes/` via the word extension's `word_generate` tool; verify on disk |
 
 Hard guarantees enforced by the playbook
@@ -154,7 +154,7 @@ durable in the `run_id`-keyed checkpointer, so a killed run is resumable via
 ## Resources
 
 - [resources/reference.md](resources/reference.md) — NICE orientation
-  (structure + lookup entry points only, never a data source), STAR/ATS
-  guidance, .docx export spec
+  (structure + lookup entry points only, never a data source), **Bullet Craft**
+  (canonical XYZ bullet spec) + ATS guidance, .docx export spec
 - `resources/resume/` — base resume (source of truth, read-only)
 - `resources/accomplishments/` — accomplishment evidence (optional, read-only)
