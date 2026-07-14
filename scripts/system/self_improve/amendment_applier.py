@@ -12,8 +12,14 @@ SYSTEM.md) adds no safety, only toil. Guardrails that keep approval meaningful:
   * R3 immutable security block is human-only — any change that touches a
     `<system_directives>` / `<system_boundary>` region (or the SECURITY
     DIRECTIVES / SECURITY REINFORCEMENT sentinels) is refused even with approval,
-    so the self-improvement loop can never edit its own security frame;
-  * R4 the trajectory ratchet still gates apply; every apply is git-committed.
+    so the self-improvement loop can never edit its own security frame. This
+    includes an ADD (append) to any file that carries the frame — appending lands
+    after `</system_boundary>`, so an anchored MODIFY is required instead;
+  * R4 the trajectory ratchet still gates apply; every apply is git-committed;
+  * R5 post-apply INVARIANT + rollback (#22) — the immutable blocks must be
+    BYTE-IDENTICAL after apply. If any change altered the frame in a way the R3
+    pre-check missed, OR any change failed partway, the file is rolled back to its
+    exact pre-apply content (apply is atomic). Belt-and-suspenders behind R3.
 """
 
 import subprocess
@@ -73,11 +79,31 @@ def _protected_spans(content: str) -> "list[tuple[int, int]]":
     return spans
 
 
+def _protected_text(content: str) -> str:
+    """(#22) The concatenated text of every immutable security-block region — the
+    invariant that must be byte-identical before and after any apply. Position-
+    independent: edits ELSEWHERE (which shift offsets) leave this string unchanged;
+    any edit to a block's content, or a newly injected block, changes it."""
+    return "\x00".join(content[s:e] for s, e in _protected_spans(content))
+
+
+def _rollback(target_file: str, original: str) -> None:
+    """Restore the target to its exact pre-apply content (best-effort)."""
+    try:
+        Path(target_file).write_text(original, encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _touches_security_block(content: str, change: Dict[str, str]) -> bool:
     """True if a change would add, remove, reword, or edit INSIDE the immutable
     security-directives block — refused even for an APPROVED amendment."""
     old_text = change.get("old_text", "") or ""
     new_text = change.get("new_text", "") or ""
+    # 0) An ADD appends to EOF; on a file that carries the immutable frame that
+    #    would place content after </system_boundary>. Require an anchored MODIFY.
+    if (change.get("action") or "ADD").upper() == "ADD" and _protected_spans(content):
+        return True
     # 1) The payload must not introduce / remove / reword a security sentinel.
     for sentinel in _SECURITY_SENTINELS:
         if sentinel in old_text or sentinel in new_text:
@@ -263,6 +289,10 @@ def apply_amendment(  # noqa: C901 (linear validate-then-apply guard chain)
                 ),
                 "committed": False,
             }
+    # #22: snapshot the pre-apply content (for atomic rollback) and the immutable
+    # frame (for the R5 post-apply invariant).
+    original = current
+    before_protected = _protected_text(current)
 
     # R4 — behavioral-regression gate: don't layer a new change on top of an
     # unacknowledged drift below Oracle-era quality (see scripts/system/trajectory/).
@@ -281,11 +311,31 @@ def apply_amendment(  # noqa: C901 (linear validate-then-apply guard chain)
             failed += 1
 
     if failed > 0:
+        _rollback(target_file, original)  # atomic — undo any partial writes
         return {
             "success": False,
             "error": (
                 f"{failed} of {applied + failed} changes failed to apply "
-                "(old_text no longer matches the file?)"
+                "(old_text no longer matches the file?) — rolled back"
+            ),
+            "committed": False,
+        }
+
+    # R5 (#22) — post-apply INVARIANT: the immutable security blocks must be
+    # byte-identical after apply. If a change altered the frame in a way the R3
+    # pre-check missed, roll back to the exact pre-apply content and refuse.
+    try:
+        after = Path(target_file).read_text(encoding="utf-8")
+    except OSError as exc:
+        _rollback(target_file, original)
+        return {"success": False, "error": f"could not re-read target: {exc}", "committed": False}
+    if _protected_text(after) != before_protected:
+        _rollback(target_file, original)
+        return {
+            "success": False,
+            "error": (
+                "Refused: applying this amendment would alter the immutable "
+                "security-directives block — rolled back (human-only)"
             ),
             "committed": False,
         }

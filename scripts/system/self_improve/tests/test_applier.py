@@ -14,6 +14,7 @@ from amendment_applier import (  # noqa: E402
     apply_amendment,
     _write_file_change,
     _build_commit_message,
+    _protected_text,
 )
 
 
@@ -292,3 +293,50 @@ class TestApplyAmendment:
         assert "Beta" in content
         assert "AAA\n" not in content
         assert "BBB\n" not in content
+
+    def test_refuses_add_to_file_with_security_block(self, tmp_path):
+        # #22: an ADD (append) to a file carrying the immutable frame is refused —
+        # appending lands after </system_boundary>. File must be unchanged.
+        target = tmp_path / "SYSTEM.md"
+        original = "<system_directives>\nrule\n</system_directives>\n\n# Who You Are\n\nPenny.\n"
+        target.write_text(original)
+        amendment = {
+            "amendment_id": "amend_add_sys",
+            "status": "APPROVED",
+            "target_file": str(target),
+            "changes": [
+                {"action": "ADD", "old_text": "", "new_text": "\nnew section\n", "rationale": "r"}
+            ],
+        }
+        result = apply_amendment(amendment, git_commit=False)
+        assert result["success"] is False
+        assert "security" in result["error"].lower()
+        assert target.read_text() == original  # unchanged
+
+    def test_atomic_rollback_on_partial_failure(self, tmp_path):
+        # #22: if any change fails, already-applied changes are rolled back so the
+        # working tree is never left partially amended.
+        target = self._domain_target(tmp_path, "piper.md")
+        original = "AAA\nBBB\nCCC\n"
+        target.write_text(original)
+        amendment = {
+            "amendment_id": "amend_partial",
+            "status": "APPROVED",
+            "target_file": str(target),
+            "changes": [
+                {"action": "MODIFY", "old_text": "AAA", "new_text": "Alpha", "rationale": "r1"},
+                {"action": "MODIFY", "old_text": "ZZZ", "new_text": "x", "rationale": "r2"},
+            ],
+            "evidence": [],
+        }
+        result = apply_amendment(amendment, git_commit=False)
+        assert result["success"] is False
+        assert target.read_text() == original  # first change rolled back — atomic
+
+
+def test_protected_text_extracts_only_block_content():
+    content = "before\n<system_directives>\nSECRET\n</system_directives>\nafter\n"
+    pt = _protected_text(content)
+    assert "SECRET" in pt and "</system_directives>" in pt
+    assert "before" not in pt and "after" not in pt
+    assert _protected_text("just text with no frame") == ""
