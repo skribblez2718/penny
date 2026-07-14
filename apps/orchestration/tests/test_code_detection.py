@@ -475,3 +475,57 @@ def test_detect_web_ui_lit_not_falsely_triggered(tmp_path: Path) -> None:
 
     info = code_detection._detect_web_ui_framework(str(tmp_path))
     assert info["is_web_ui"] is False
+
+
+# ── #9: model-first server detection (gated), tables as fallback ─────────────
+
+
+def _mstream(text: str) -> str:
+    msg = {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+           "content": [{"type": "text", "text": text}]}}
+    return json.dumps({"type": "agent_start"}) + "\n" + json.dumps(msg)
+
+
+def _mrunner(stdout: str):
+    def run(cmd, **kwargs):
+        return types.SimpleNamespace(stdout=stdout, stderr="", returncode=0)
+    return run
+
+
+def test_detect_server_gate_off_uses_tables(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("PI_CODE_DETECT_MODEL", raising=False)
+    (tmp_path / "pyproject.toml").write_text('[project]\ndependencies = ["fastapi"]\n')
+    info = code_detection._detect_server_framework(str(tmp_path))
+    assert info["is_server"] is True and info["framework"] == "fastapi"
+
+
+def test_detect_server_model_catches_unlisted_framework(tmp_path: Path, monkeypatch) -> None:
+    # hono is NOT in _TS_SERVER_DEPS -- the tables miss it; the model catches it.
+    monkeypatch.setenv("PI_CODE_DETECT_MODEL", "anthropic/haiku")
+    (tmp_path / "package.json").write_text(json.dumps({"dependencies": {"hono": "^4"}}))
+    payload = json.dumps({"answer": "hono", "evidence": ["hono in package.json"],
+                          "confidence": "CERTAIN"})
+    info = code_detection._detect_server_framework(str(tmp_path), runner=_mrunner(_mstream(payload)))
+    assert info["is_server"] is True
+    assert info["framework"] == "hono"
+    assert info["language"] == "typescript"
+
+
+def test_detect_server_model_none_falls_back_to_tables(tmp_path: Path, monkeypatch) -> None:
+    # model (wrongly) says 'none'; the fastapi table still catches the server.
+    monkeypatch.setenv("PI_CODE_DETECT_MODEL", "anthropic/haiku")
+    (tmp_path / "pyproject.toml").write_text('[project]\ndependencies = ["fastapi"]\n')
+    payload = json.dumps({"answer": "none", "confidence": "POSSIBLE"})
+    info = code_detection._detect_server_framework(str(tmp_path), runner=_mrunner(_mstream(payload)))
+    assert info["is_server"] is True and info["framework"] == "fastapi"
+
+
+def test_detect_server_model_failure_falls_back_to_tables(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PI_CODE_DETECT_MODEL", "anthropic/haiku")
+    (tmp_path / "pyproject.toml").write_text('[project]\ndependencies = ["flask"]\n')
+
+    def boom(cmd, **kwargs):
+        raise OSError("spawn failed")
+
+    info = code_detection._detect_server_framework(str(tmp_path), runner=boom)
+    assert info["is_server"] is True and info["framework"] == "flask"

@@ -16,7 +16,9 @@ orchestration engine's ``RunContext`` (``ctx``) rather than the legacy
 from __future__ import annotations
 
 import json
+import os
 import re
+import sys
 from pathlib import Path
 
 # Map of framework names to the dep tokens that signal their presence.
@@ -41,7 +43,95 @@ _TS_SERVER_DEPS: dict[str, list[str]] = {
 }
 
 
-def _detect_server_framework(project_root: str) -> dict:  # noqa: C901
+# ── #9: model-first server-framework detection (tables are the fallback) ──────
+# The dep tables above miss any framework they don't enumerate (e.g. hono) — the
+# +33% gap the ablation harness measured. When PI_CODE_DETECT_MODEL is set, a cheap
+# model reads the project manifests and NAMES the framework (open vocabulary, so it
+# catches unlisted ones); unset OR any failure -> the tables below. Output contract
+# unchanged; never raises.
+_PY_FRAMEWORKS = set(_PYTHON_SERVER_DEPS) | {
+    "quart", "sanic", "tornado", "aiohttp", "bottle", "falcon",
+}
+
+
+def _load_detect():
+    """Lazy-import the shared detect() primitive (scripts/system/lib), or None."""
+    try:
+        for parent in Path(__file__).resolve().parents:
+            lib = parent / "scripts" / "system" / "lib"
+            if lib.is_dir():
+                if str(lib) not in sys.path:
+                    sys.path.insert(0, str(lib))
+                from detect import detect as _detect  # type: ignore[import-not-found]
+                return _detect
+    except Exception:
+        return None
+    return None
+
+
+def _server_artifact(root: Path, cap: int = 6000) -> str:
+    """Compact artifact of the project's manifests + source listing for the model."""
+    parts: list[str] = []
+    for name in ("pyproject.toml", "package.json", "requirements.txt", "Pipfile", "setup.py"):
+        f = root / name
+        if f.is_file():
+            try:
+                parts.append(f"=== {name} ===\n{f.read_text(encoding='utf-8', errors='ignore')[:2000]}")
+            except OSError:
+                pass
+    try:
+        names = [
+            p.name for p in sorted(root.iterdir())
+            if p.is_file() and p.suffix in (".py", ".ts", ".js", ".mjs")
+        ][:20]
+        if names:
+            parts.append("=== top-level source files ===\n" + ", ".join(names))
+    except OSError:
+        pass
+    return ("\n\n".join(parts))[:cap]
+
+
+def _language_for_framework(framework: str, root: Path) -> str:
+    if framework in _PY_FRAMEWORKS:
+        return "python"
+    if (root / "package.json").is_file() or (root / "tsconfig.json").is_file():
+        return "typescript"
+    if (root / "pyproject.toml").is_file() or (root / "setup.py").is_file():
+        return "python"
+    return "typescript"
+
+
+def _detect_server_via_model(root: Path, spec: str, runner=None):
+    """Model-first server detection. Returns {framework, language, evidence} when the
+    model names a server framework, else None (=> fall back to the tables)."""
+    detect = _load_detect()
+    if detect is None:
+        return None
+    artifact = _server_artifact(root)
+    if not artifact.strip():
+        return None
+    result = detect(
+        artifact,
+        "Is this a server or backend web project, and if so which server/web "
+        "framework does it use? Answer with the framework name in lowercase "
+        "(e.g. fastapi, express, hono), or 'none' if it is not a server/backend "
+        "web application.",
+        model_spec=spec, runner=runner,
+    )
+    if not result.get("ok"):
+        return None
+    answer = str(result.get("answer", "")).strip().lower()
+    if not answer or answer in ("none", "other", "n/a", "na", "unknown"):
+        return None
+    ev = "; ".join(result.get("evidence") or []) or f"model named {answer}"
+    return {
+        "framework": answer,
+        "language": _language_for_framework(answer, root),
+        "evidence": f"model: {ev}",
+    }
+
+
+def _detect_server_framework(project_root: str, *, runner=None) -> dict:  # noqa: C901
     """Inspect the project to detect whether it is a server project.
 
     Returns a dict describing the server (or ``{"is_server": False}`` if
@@ -80,9 +170,20 @@ def _detect_server_framework(project_root: str) -> dict:  # noqa: C901
     entry_points: list[str] = []
     evidence: list[str] = []
 
+    # #9: model-first (gated). The model names the framework from the manifests
+    # (open-vocabulary, so unlisted frameworks are caught); the tables below then
+    # fill any gap when the model is off, unavailable, or answers 'none'.
+    _spec = os.environ.get("PI_CODE_DETECT_MODEL", "").strip()
+    if _spec:
+        _m = _detect_server_via_model(root, _spec, runner=runner)
+        if _m:
+            detected_framework = _m["framework"]
+            detected_language = _m["language"]
+            evidence.append(_m["evidence"])
+
     # --- Python: inspect pyproject.toml --------------------------------
     pyproject = root / "pyproject.toml"
-    if pyproject.is_file():
+    if detected_framework is None and pyproject.is_file():
         try:
             content = pyproject.read_text(encoding="utf-8").lower()
         except OSError:
