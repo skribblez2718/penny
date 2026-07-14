@@ -76,7 +76,7 @@
       "direction": "up_good",
       "tolerance": 0.05,
       "unit": "fraction",
-      "value": 0.7
+      "value": 0.9
     }
   }
 }

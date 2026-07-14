@@ -364,9 +364,9 @@ def tool_smart_search(params: dict) -> dict:
     Context-aware memory search that minimizes context usage.
 
     Features:
-    - Extracts entities and keywords from query
-    - Uses knowledge graph for related entities
-    - Suggests wing/room filters based on context
+    - Semantic vector search over ALL rooms (the embedding is the router; no
+      keyword room-routing or regex entity extraction — Bitter-Lesson #12)
+    - Optional explicit wing/room metadata filters, honored as-is
     - Returns summaries (truncated) not full content
     - Filters by minimum similarity threshold (default 0.25, uses 1/(1+L2dist) mapping)
     - Lower default limit (3 vs 5)

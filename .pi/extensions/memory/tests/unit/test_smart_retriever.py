@@ -1,29 +1,16 @@
 #!/usr/bin/env python3
 """
-Characterization tests for smart_retriever.SmartRetriever.
+Tests for smart_retriever.SmartRetriever (the vector-search path).
 
-These tests lock the CURRENT observable behavior of the two functions that are
-being refactored to clear flake8 C901 (McCabe complexity) warnings:
+  - ``search_summaries`` — ChromaDB query, similarity threshold, summary
+    truncation, limit trimming, and where-filter construction.
+  - ``smart_search`` (Bitter-Lesson #12) — the embedding is the router: NO
+    keyword room-routing and NO regex entity mutation sit in front of the store.
+    Retrieval spans all rooms unless an explicit wing/room is passed.
 
-  - ``search_summaries`` (was complexity 11)
-  - ``suggest_wing_room`` (was complexity 12)
-
-They are byte-identical characterization tests: they assert the FULL output
-dicts (suggestions incl. reasoning order + confidence; hits incl. summaries /
-similarities / filter / order) so that the extract-method refactor can be
-proven to preserve behavior exactly. They must pass GREEN against the
-pre-refactor code and remain GREEN unchanged after the refactor.
-
-Determinism (no dependence on live embeddings or a real knowledge graph):
-  - ``_get_collection`` is replaced with a fake collection whose ``.query``
-    returns the ChromaDB nested-list shape.
-  - ``_get_kg`` is replaced with either ``None`` or a fake sqlite-like
-    connection.
-  - ``get_related_entities`` / ``extract_entities`` / ``extract_keywords`` are
-    monkeypatched on the instance where a specific, order-stable input is
-    needed (``extract_entities`` returns ``list(set(...))`` in the real code,
-    which is intentionally left to its own dedicated feeder-lock test that
-    asserts as a set).
+Determinism (no live embeddings): ``_get_collection`` is replaced with a fake
+collection returning the ChromaDB nested-list shape; ``search_summaries`` is
+stubbed on the instance when a smart_search test only asserts the args it passed.
 """
 
 import sys
@@ -56,33 +43,6 @@ class FakeCollection:
         if self._raise is not None:
             raise self._raise
         return self._response
-
-
-class FakeCursor:
-    def __init__(self, rows):
-        self._rows = list(rows)
-
-    def fetchone(self):
-        return self._rows[0] if self._rows else None
-
-    def fetchall(self):
-        return list(self._rows)
-
-
-class FakeKG:
-    """Stand-in for the sqlite knowledge-graph connection. Only needs to serve
-    the ``suggest_wing_room`` known-entity probe:
-    ``SELECT name FROM entities WHERE name = ? OR id = ?``."""
-
-    def __init__(self, known=()):
-        self.known = set(known)
-
-    def execute(self, _sql, params=()):
-        name = params[0] if len(params) > 0 else None
-        ident = params[1] if len(params) > 1 else None
-        if name in self.known or ident in self.known:
-            return FakeCursor([("known-name",)])
-        return FakeCursor([])
 
 
 @pytest.fixture
@@ -259,157 +219,62 @@ def test_search_summaries_where_wing_only_and_room_only(retriever):
     retriever.search_summaries("q")
     assert "where" not in fake_n.last_kwargs
 
+# ─── smart_search (#12): embedding is the router, no keyword layer ─────────────
 
-# ─── suggest_wing_room: keyword -> room detection ────────────────────────
+
+def _spy_search_summaries(retriever, captured, results=None):
+    """Stub search_summaries to record the args smart_search passes it."""
+    def spy(query, wing=None, room=None, limit=None):
+        captured.update(query=query, wing=wing, room=room, limit=limit)
+        return {"results": results or []}
+    retriever.search_summaries = spy
 
 
-def test_suggest_wing_room_room_from_keyword(retriever):
-    retriever.extract_entities = lambda _text: []
-    retriever.extract_keywords = lambda _text: ["decision"]
-    retriever._get_kg = lambda: None
+def test_smart_search_no_keyword_room_routing(retriever):
+    captured = {}
+    _spy_search_summaries(retriever, captured)
+    # A query dense with 'decision' keywords must NOT be routed to a room; the
+    # old keyword layer would have filtered to room='decisions'.
+    retriever.smart_search("we decided to choose the plan and picked the design")
+    assert captured["wing"] is None and captured["room"] is None
 
-    result = retriever.suggest_wing_room("some query")
 
-    assert result == {
-        "wing": None,
-        "room": "decisions",
-        "confidence": 0.3,
-        "reasoning": ["Keyword 'decision' suggests room 'decisions'"],
-        "entities_found": [],
-        "keywords_found": ["decision"],
+def test_smart_search_no_entity_query_mutation(retriever):
+    captured = {}
+    _spy_search_summaries(retriever, captured)
+    # No context -> the embedded query is the raw query (no appended entities).
+    retriever.smart_search("The FooBar refactor in smart_retriever")
+    assert captured["query"] == "The FooBar refactor in smart_retriever"
+
+
+def test_smart_search_explicit_filters_pass_through(retriever):
+    captured = {}
+    _spy_search_summaries(retriever, captured)
+    retriever.smart_search("q", wing="penny", room="decisions")
+    assert captured["wing"] == "penny" and captured["room"] == "decisions"
+
+
+def test_smart_search_folds_context_into_query(retriever):
+    captured = {}
+    _spy_search_summaries(retriever, captured)
+    out = retriever.smart_search("main query", context="prior chat about auth tokens")
+    assert "main query" in captured["query"] and "auth tokens" in captured["query"]
+    assert out["context_analysis"]["query_enhanced"] is True
+
+
+def test_smart_search_context_analysis_has_no_keyword_layer(retriever):
+    retriever.search_summaries = lambda query, wing=None, room=None, limit=None: {"results": []}
+    out = retriever.smart_search("q")
+    ca = out["context_analysis"]
+    assert set(ca) == {"effective_filters", "query_enhanced"}
+    assert ca["effective_filters"] == {"wing": None, "room": None}
+    assert ca["query_enhanced"] is False
+
+
+def test_smart_search_include_full_expands_hits(retriever):
+    retriever.search_summaries = lambda query, wing=None, room=None, limit=None: {
+        "results": [{"id": "d1", "summary": "s"}]
     }
-
-
-def test_suggest_wing_room_first_room_wins_in_dict_order(retriever):
-    # keywords that match BOTH 'architecture' and 'technical'; dict order puts
-    # 'architecture' before 'technical', so architecture wins and confidence
-    # increments exactly once.
-    retriever.extract_entities = lambda _text: []
-    retriever.extract_keywords = lambda _text: ["bug", "design"]
-    retriever._get_kg = lambda: None
-
-    result = retriever.suggest_wing_room("q")
-
-    assert result["room"] == "architecture"
-    assert result["confidence"] == 0.3
-    assert result["reasoning"] == ["Keyword 'design' suggests room 'architecture'"]
-
-
-def test_suggest_wing_room_no_keyword_match(retriever):
-    retriever.extract_entities = lambda _text: []
-    retriever.extract_keywords = lambda _text: ["unrelated", "words"]
-    retriever._get_kg = lambda: None
-
-    result = retriever.suggest_wing_room("q")
-
-    assert result == {
-        "wing": None,
-        "room": None,
-        "confidence": 0,
-        "reasoning": [],
-        "entities_found": [],
-        "keywords_found": ["unrelated", "words"],
-    }
-
-
-# ─── suggest_wing_room: relationship + known-entity reasoning ─────────────
-
-
-def test_suggest_wing_room_relationship_reasoning_first(retriever):
-    retriever.extract_entities = lambda _text: ["Alpha", "Beta"]
-    retriever.extract_keywords = lambda _text: []
-    retriever._get_kg = lambda: None
-
-    def fake_related(entity):
-        rels = ["Alpha \u2192 uses \u2192 X"] if entity == "Alpha" else []
-        return {"entity": entity, "related": [], "relationships": rels}
-
-    retriever.get_related_entities = fake_related
-
-    result = retriever.suggest_wing_room("q")
-
-    assert result["reasoning"] == [
-        "Entity 'Alpha' has relationships: ['Alpha \u2192 uses \u2192 X']"
-    ]
-    assert result["confidence"] == 0
-    assert result["room"] is None
-
-
-def test_suggest_wing_room_known_entity_reasoning(retriever):
-    retriever.extract_entities = lambda _text: ["Gamma"]
-    retriever.extract_keywords = lambda _text: []
-    retriever.get_related_entities = lambda e: {"entity": e, "related": [], "relationships": []}
-    retriever._get_kg = lambda: FakeKG(known={"Gamma"})
-
-    result = retriever.suggest_wing_room("q")
-
-    assert result["reasoning"] == ["Entity 'Gamma' is known"]
-
-
-def test_suggest_wing_room_reasoning_order_and_confidence_once(retriever):
-    """SC-6 dedicated test: reasoning append order is
-    relationships -> room -> known-entities, and confidence increments by
-    exactly 0.3 once when a room is found."""
-    retriever.extract_entities = lambda _text: ["Alpha"]
-    retriever.extract_keywords = lambda _text: ["decision"]
-    retriever.get_related_entities = lambda e: {
-        "entity": e,
-        "related": [],
-        "relationships": ["Alpha \u2192 works_on \u2192 Proj"],
-    }
-    retriever._get_kg = lambda: FakeKG(known={"Alpha"})
-
-    result = retriever.suggest_wing_room("q")
-
-    assert result["reasoning"] == [
-        "Entity 'Alpha' has relationships: ['Alpha \u2192 works_on \u2192 Proj']",
-        "Keyword 'decision' suggests room 'decisions'",
-        "Entity 'Alpha' is known",
-    ]
-    assert result["confidence"] == 0.3
-    assert result["room"] == "decisions"
-
-
-def test_suggest_wing_room_full_output_dict(retriever):
-    """Assert the entire suggestions dict, including entities_found /
-    keywords_found passthrough and the exact reasoning list."""
-    # 'decisions' and 'architecture' are earlier in dict order but match nothing;
-    # 'technical' is the first room with a matching keyword ('code'), so it wins
-    # even though 'session' (a 'sessions' keyword) is present.
-    retriever.extract_entities = lambda _text: ["Alpha"]
-    retriever.extract_keywords = lambda _text: ["session", "code"]
-    retriever.get_related_entities = lambda e: {"entity": e, "related": [], "relationships": []}
-    retriever._get_kg = lambda: None
-
-    result = retriever.suggest_wing_room("query", context="ctx")
-
-    assert result == {
-        "wing": None,
-        "room": "technical",
-        "confidence": 0.3,
-        "reasoning": ["Keyword 'code' suggests room 'technical'"],
-        "entities_found": ["Alpha"],
-        "keywords_found": ["session", "code"],
-    }
-
-
-# ─── Feeder locks: extract_keywords / extract_entities ───────────────────
-
-
-def test_extract_keywords_deterministic(retriever):
-    """Lock the frequency-ordered keyword extraction (Counter.most_common)."""
-    text = "decided decided architecture bug bug bug"
-    # bug=3, decided=2, architecture=1 -> most_common order
-    assert retriever.extract_keywords(text) == ["bug", "decided", "architecture"]
-
-
-def test_extract_entities_deterministic(retriever):
-    """Lock capitalized-stopword removal, snake_case, camelCase, and quoted
-    extraction. Result is order-independent (real code returns list(set(...)))
-    so it is asserted as a set."""
-    text = 'The smart_retriever handles myVariable and "quoted text"'
-    assert set(retriever.extract_entities(text)) == {
-        "smart_retriever",
-        "myVariable",
-        "quoted text",
-    }
+    retriever.get_full_content = lambda drawer_id: {"content": "FULL BODY"}
+    out = retriever.smart_search("q", include_full=True)
+    assert out["results"][0]["full_content"] == "FULL BODY"

@@ -25,7 +25,6 @@ The solution:
 """
 
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -62,16 +61,6 @@ DEFAULT_CONFIG = {
     "query_multiplier": 3,  # Over-fetch from ChromaDB for threshold filtering (3x limit, capped at 100)
 }
 
-# Keyword -> room mapping for suggest_wing_room. Dict order is significant: the
-# first room whose first matching keyword appears in the query wins.
-_ROOM_KEYWORDS = {
-    "decisions": ["decided", "decision", "chose", "choice", "selected", "picked"],
-    "architecture": ["architecture", "design", "structure", "component", "system", "pattern"],
-    "technical": ["bug", "fix", "error", "issue", "implementation", "code", "function"],
-    "sessions": ["session", "meeting", "discussion", "conversation", "talked"],
-    "planning": ["plan", "roadmap", "goal", "milestone", "timeline", "future"],
-}
-
 
 class SmartRetriever:
     def __init__(self, config: dict = None):
@@ -106,240 +95,7 @@ class SmartRetriever:
                 return None
         return self._collection
 
-    def _get_kg(self):
-        """Lazy-load knowledge graph connection."""
-        if self._kg_conn is None:
-            import sqlite3
-            kg_path = Path(self.config["kg_path"])
-            if kg_path.exists():
-                self._kg_conn = sqlite3.connect(str(kg_path))
-        return self._kg_conn
-
-    # ─── Context Extraction ──────────────────────────────────────────────
-
-    def extract_entities(self, text: str) -> list[str]:
-        """Extract potential entities from text using patterns."""
-        entities = []
-
-        # Capitalized words (names, projects)
-        caps = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text)
-        entities.extend(caps)
-
-        # CamelCase and snake_case identifiers
-        identifiers = re.findall(r'\b[a-z]+(?:[A-Z][a-z]+)+\b|\b[a-z]+(?:_[a-z]+)+\b', text)
-        entities.extend(identifiers)
-
-        # Quoted strings
-        quoted = re.findall(r'"([^"]+)"|\'([^\']+)\'', text)
-        for q in quoted:
-            entities.extend([x for x in q if x])
-
-        # Remove common words
-        stopwords = {'The', 'This', 'That', 'These', 'Those', 'What', 'When', 'Where', 'Why', 'How'}
-        entities = [e for e in entities if e not in stopwords and len(e) > 2]
-
-        return list(set(entities))
-
-    def extract_keywords(self, text: str, n: int = None) -> list[str]:
-        """Extract key terms from text for search query."""
-        n = n or self.config["context_window_keywords"]
-
-        # Remove common words
-        stopwords = {
-            'the', 'a', 'an', 'is', 'it', 'to', 'for', 'of', 'and', 'or', 'in',
-            'on', 'at', 'by', 'with', 'from', 'that', 'this', 'be', 'are', 'was',
-            'were', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
-            'will', 'would', 'could', 'should', 'may', 'might', 'must', 'shall',
-            'can', 'need', 'dare', 'ought', 'used', 'get', 'got', 'getting',
-            'how', 'what', 'when', 'where', 'why', 'who', 'which', 'whom', 'whose',
-            'i', 'me', 'my', 'we', 'us', 'our', 'you', 'your', 'he', 'him', 'his',
-            'she', 'her', 'they', 'them', 'their', 'it', 'its', 's', 't', 'll',
-            've', 're', 'd', 'm', 'o', 'y', 'ain', 'aren', 'couldn', 'didn',
-            'doesn', 'hadn', 'hasn', 'haven', 'isn', 'ma', 'mightn', 'mustn',
-            'needn', 'shan', 'shouldn', 'wasn', 'weren', 'won', 'wouldn',
-        }
-
-        # Tokenize and filter
-        words = re.findall(r'\b[a-zA-Z]{3,}\b', text.lower())
-        keywords = [w for w in words if w not in stopwords]
-
-        # Count frequency
-        from collections import Counter
-        counts = Counter(keywords)
-
-        return [w for w, _ in counts.most_common(n)]
-
-    # ─── Knowledge Graph Integration ──────────────────────────────────────
-
-    def get_related_entities(self, entity: str) -> dict:
-        """Find entities related to this one via knowledge graph."""
-        kg = self._get_kg()
-        if not kg:
-            return {"entity": entity, "related": [], "relationships": []}
-
-        entity_id = entity.lower().replace(" ", "_")
-
-        try:
-            # Find outgoing relationships
-            cursor = kg.execute(
-                """
-                SELECT t.predicate, e.name as obj_name, t.valid_to IS NULL as current
-                FROM triples t
-                JOIN entities e ON t.object = e.id
-                WHERE t.subject = ? AND (t.valid_to IS NULL OR t.valid_to >= date('now'))
-                ORDER BY t.valid_from DESC
-                """,
-                (entity_id,)
-            )
-            outgoing = cursor.fetchall()
-
-            # Find incoming relationships
-            cursor = kg.execute(
-                """
-                SELECT t.predicate, e.name as sub_name, t.valid_to IS NULL as current
-                FROM triples t
-                JOIN entities e ON t.subject = e.id
-                WHERE t.object = ? AND (t.valid_to IS NULL OR t.valid_to >= date('now'))
-                ORDER BY t.valid_from DESC
-                """,
-                (entity_id,)
-            )
-            incoming = cursor.fetchall()
-
-            related = set()
-            relationships = []
-
-            for pred, name, current in outgoing:
-                related.add(name)
-                relationships.append(f"{entity} → {pred} → {name}")
-
-            for pred, name, current in incoming:
-                related.add(name)
-                relationships.append(f"{name} → {pred} → {entity}")
-
-            return {
-                "entity": entity,
-                "related": list(related),
-                "relationships": relationships,
-            }
-        except Exception:
-            return {"entity": entity, "related": [], "relationships": []}
-
-    def detect_project_context(self, text: str) -> list[str]:
-        """Detect project names/identifiers from context."""
-        # Check knowledge graph for known projects
-        kg = self._get_kg()
-        if not kg:
-            return []
-
-        entities = self.extract_entities(text)
-        projects = []
-
-        try:
-            for entity in entities:
-                entity_id = entity.lower().replace(" ", "_")
-                # Check if entity has works_on relationship
-                cursor = kg.execute(
-                    """
-                    SELECT e.name FROM triples t
-                    JOIN entities e ON t.object = e.id
-                    WHERE t.subject = ? AND t.predicate = 'works_on'
-                    UNION
-                    SELECT e.name FROM triples t
-                    JOIN entities e ON t.subject = e.id
-                    WHERE t.object = ? AND t.predicate = 'works_on'
-                    """,
-                    (entity_id, entity_id)
-                )
-                for row in cursor.fetchall():
-                    projects.append(row[0])
-        except Exception:
-            pass
-
-        return list(set(projects))
-
-    # ─── Wing/Room Detection ───────────────────────────────────────────────
-
-    def _entity_relationship_reasoning(self, entities: list[str]) -> list[str]:
-        """Reasoning lines for the top-5 entities that have known KG relationships."""
-        reasoning = []
-        for entity in entities[:5]:  # Check top 5
-            related = self.get_related_entities(entity)
-            if related["relationships"]:
-                reasoning.append(
-                    f"Entity '{entity}' has relationships: {related['relationships'][:3]}"
-                )
-        return reasoning
-
-    @staticmethod
-    def _room_from_keywords(keywords: list[str]):
-        """Return (room, reasoning) for the first room in _ROOM_KEYWORDS order whose
-        first matching keyword appears in ``keywords``; None when nothing matches."""
-        for room, kws in _ROOM_KEYWORDS.items():
-            for kw in kws:
-                if kw in keywords:
-                    return room, f"Keyword '{kw}' suggests room '{room}'"
-        return None
-
-    def _known_entity_reasoning(self, entities: list[str]) -> list[str]:
-        """Reasoning lines for the top-5 entities that exist in the knowledge graph."""
-        kg = self._get_kg()
-        reasoning = []
-        if kg and entities:
-            try:
-                # Check if any entity is in a known wing
-                for entity in entities[:5]:
-                    cursor = kg.execute(
-                        "SELECT name FROM entities WHERE name = ? OR id = ?",
-                        (entity, entity.lower().replace(" ", "_"))
-                    )
-                    if cursor.fetchone():
-                        # Could check for wing metadata here
-                        reasoning.append(f"Entity '{entity}' is known")
-            except Exception:
-                pass
-        return reasoning
-
-    def suggest_wing_room(self, query: str, context: str = None) -> dict:
-        """
-        Suggest wing/room filters based on query and context.
-        Returns recommended filters and reasoning.
-
-        Reasoning is appended in a fixed order: relationships -> room -> known
-        entities. Confidence increments by 0.3 exactly once, when a room match
-        is found.
-        """
-        full_text = f"{query} {context or ''}"
-        entities = self.extract_entities(full_text)
-        keywords = self.extract_keywords(full_text)
-
-        suggestions = {
-            "wing": None,
-            "room": None,
-            "confidence": 0,
-            "reasoning": [],
-            "entities_found": entities,
-            "keywords_found": keywords,
-        }
-
-        # Check knowledge graph for known entities (relationship reasoning)
-        suggestions["reasoning"].extend(self._entity_relationship_reasoning(entities))
-
-        # Keyword-based room detection
-        room_match = self._room_from_keywords(keywords)
-        if room_match:
-            room, reason = room_match
-            suggestions["room"] = room
-            suggestions["confidence"] += 0.3
-            suggestions["reasoning"].append(reason)
-
-        # Wing detection from entity/project names (known-entity reasoning)
-        suggestions["reasoning"].extend(self._known_entity_reasoning(entities))
-
-        return suggestions
-
     # ─── Progressive Retrieval ──────────────────────────────────────────────
-
     @staticmethod
     def _l2_to_similarity(distance: float) -> float:
         """
@@ -499,55 +255,38 @@ class SmartRetriever:
         limit: int = None,
         include_full: bool = False,
     ) -> dict:
-        """
-        Intelligent search that:
-        1. Extracts context-aware query terms
-        2. Suggests wing/room filters
-        3. Returns summaries (or full content)
-        4. Filters by relevance threshold
+        """Semantic memory search over the vector store (Bitter-Lesson #12).
+
+        The embedding IS the router. There is no keyword room-guessing and no
+        regex entity/stopword layer in front of ChromaDB anymore: retrieval spans
+        ALL rooms by relevance unless the caller passes an explicit ``wing``/
+        ``room`` filter, so a paraphrase can no longer be silently mis-routed to
+        the wrong room. Any ``context`` is folded into the embedded query as free
+        text — the vector store handles entities, paraphrase, and languages
+        natively.
 
         Args:
-            query: The search query
-            context: Additional context (e.g., recent conversation)
-            wing: Optional wing filter
-            room: Optional room filter
-            limit: Max results (default 3)
-            include_full: Return full content instead of summary
-
-        Returns:
-            Dict with results and metadata
+            query: The search query.
+            context: Optional free-text context, embedded alongside the query.
+            wing/room: Optional explicit metadata filters (honored as-is).
+            limit: Max results (default 3).
+            include_full: Return full content instead of summary.
         """
         limit = limit or self.config["default_limit"]
 
-        # Step 1: Extract context
-        full_text = f"{query} {context or ''}"
-        entities = self.extract_entities(full_text)
-        keywords = self.extract_keywords(full_text)
+        # The embedding query is the raw query, optionally enriched with free-text
+        # context. No regex entity mutation, no keyword room routing.
+        ctx = (context or "").strip()
+        enhanced_query = f"{query}\n\n{ctx}" if ctx else query
 
-        # Step 2: Suggest filters if not provided
-        suggested = None
-        if not (wing and room):
-            suggested = self.suggest_wing_room(query, context)
-
-        # Use provided filters or suggestions
-        effective_wing = wing or (suggested["wing"] if suggested else None)
-        effective_room = room or (suggested["room"] if suggested else None)
-
-        # Step 3: Build enhanced query using context
-        enhanced_query = query
-        if entities and not wing and not room:
-            # Add entity context if no filters
-            enhanced_query = f"{query} {' '.join(entities[:3])}"
-
-        # Step 4: Search with summaries
         results = self.search_summaries(
             enhanced_query,
-            wing=effective_wing,
-            room=effective_room,
+            wing=wing,
+            room=room,
             limit=limit,
         )
 
-        # Step 5: Optionally expand to full content
+        # Optionally expand to full content
         if include_full and results.get("results"):
             for hit in results["results"]:
                 if hit.get("id"):
@@ -555,19 +294,10 @@ class SmartRetriever:
                     if "content" in full:
                         hit["full_content"] = full["content"]
 
-        # Add metadata
         results["context_analysis"] = {
-            "entities_extracted": entities[:5],
-            "keywords_extracted": keywords[:5],
-            "suggested_filters": suggested,
-            "effective_filters": {
-                "wing": effective_wing,
-                "room": effective_room,
-            },
+            "effective_filters": {"wing": wing, "room": room},
             "query_enhanced": enhanced_query != query,
-            "enhanced_query": enhanced_query if enhanced_query != query else None,
         }
-
         return results
 
 

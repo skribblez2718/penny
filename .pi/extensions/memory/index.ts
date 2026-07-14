@@ -307,7 +307,7 @@ const toolSmartSearch = createTool(
     "Use memory_smart_search instead of memory_search for context-efficient retrieval.",
     "Smart search returns summaries (truncated content) not full text.",
     "Default limit is 3 (vs 5 for regular search) and min_similarity is 0.25.",
-    "Results include entity extraction and suggested wing/room filters.",
+    "Retrieval is semantic over all rooms unless you pass an explicit wing/room filter.",
     "Set include_full=true if you need complete content after reviewing summaries.",
   ],
   {
