@@ -1,6 +1,7 @@
 # target_classifier tests — TDD
 """Target layer classification for self-improvement amendments."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -149,3 +150,76 @@ class TestClassifyTargetEdgeCases:
             ["outcome_aaa (MISMATCH)"],
         )
         assert result == TargetLayer.REJECTED_UNIVERSAL
+
+
+# ── #21: model-judged target layer (model-first, keyword fallback) ────────────
+
+
+def _stream(text: str) -> str:
+    msg = {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+           "content": [{"type": "text", "text": text}]}}
+    return json.dumps({"type": "agent_start"}) + "\n" + json.dumps(msg)
+
+
+def _fake_runner(stdout="", *, raise_exc=None):
+    class _Proc:
+        pass
+
+    def run(cmd, **kwargs):
+        if raise_exc is not None:
+            raise raise_exc
+        p = _Proc()
+        p.stdout, p.stderr, p.returncode = stdout, "", 0
+        return p
+
+    return run
+
+
+class TestClassifyTargetModel:
+    """#21: a model judges the layer when PI_SELFIMPROVE_TARGET_MODEL is set."""
+
+    _ENV = "PI_SELFIMPROVE_TARGET_MODEL"
+
+    def test_gate_off_uses_keyword_fallback(self, monkeypatch):
+        monkeypatch.delenv(self._ENV, raising=False)
+        # broad keyword false-positive: "validation" forces REJECTED_UNIVERSAL
+        assert classify_target("improve validation of inputs", []) == TargetLayer.REJECTED_UNIVERSAL
+
+    def test_model_overrides_keyword_false_positive(self, monkeypatch):
+        monkeypatch.setenv(self._ENV, "anthropic/haiku")
+        # keywords would (wrongly) REJECT this on "validation"; the model routes it right
+        runner = _fake_runner(_stream('{"layer": "DOMAIN_GUIDANCE"}'))
+        assert classify_target(
+            "improve input validation in the code skill", [], runner=runner
+        ) == TargetLayer.DOMAIN_GUIDANCE
+
+    def test_model_can_reject_universal(self, monkeypatch):
+        monkeypatch.setenv(self._ENV, "anthropic/haiku")
+        runner = _fake_runner(_stream('{"layer": "REJECTED_UNIVERSAL"}'))
+        assert classify_target(
+            "always disclose uncertainty in every answer", [], runner=runner
+        ) == TargetLayer.REJECTED_UNIVERSAL
+
+    def test_model_preference_and_config(self, monkeypatch):
+        monkeypatch.setenv(self._ENV, "anthropic/haiku")
+        assert classify_target(
+            "x", [], runner=_fake_runner(_stream('{"layer":"MEMPALACE_PREF"}'))
+        ) == TargetLayer.MEMPALACE_PREF
+        assert classify_target(
+            "x", [], runner=_fake_runner(_stream('{"layer":"CONFIG"}'))
+        ) == TargetLayer.CONFIG
+
+    def test_falls_back_on_model_failure(self, monkeypatch):
+        monkeypatch.setenv(self._ENV, "anthropic/haiku")
+        # spawn raises -> keyword fallback; "timeout" -> CONFIG
+        assert classify_target(
+            "increase the timeout", [], runner=_fake_runner(raise_exc=OSError("x"))
+        ) == TargetLayer.CONFIG
+
+    def test_falls_back_on_bad_label(self, monkeypatch):
+        monkeypatch.setenv(self._ENV, "anthropic/haiku")
+        # invalid layer -> keyword fallback (this text -> DOMAIN_GUIDANCE)
+        assert classify_target(
+            "assume uv without checking the project", [],
+            runner=_fake_runner(_stream('{"layer": "NONSENSE"}'))
+        ) == TargetLayer.DOMAIN_GUIDANCE
