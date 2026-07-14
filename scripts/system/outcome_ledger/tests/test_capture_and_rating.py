@@ -35,6 +35,84 @@ def test_infer_domain():
     assert capture.infer_domain("water the plants") == "other"
 
 
+# ── #11: model domain classifier (keyword as resilient fallback) ─────────────
+
+
+def _domain_stream(text: str) -> str:
+    """A --mode json stdout with one assistant message_end carrying `text`."""
+    msg = {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
+           "content": [{"type": "text", "text": text}]}}
+    return json.dumps({"type": "agent_start"}) + "\n" + json.dumps(msg)
+
+
+def _fake_runner(stdout="", *, returncode=0, raise_exc=None):
+    class _Proc:
+        pass
+
+    def run(cmd, **kwargs):
+        if raise_exc is not None:
+            raise raise_exc
+        p = _Proc()
+        p.stdout, p.stderr, p.returncode = stdout, "", returncode
+        return p
+
+    return run
+
+
+def test_normalize_domain():
+    assert capture.normalize_domain("Coding") == "coding"
+    assert capture.normalize_domain("  research ") == "research"
+    assert capture.normalize_domain("astrology") == "other"   # unknown -> other
+    assert capture.normalize_domain("") == ""                  # empty stays empty
+
+
+def test_extract_domain_json_bareword_and_none():
+    assert capture._extract_domain('{"domain": "coding"}') == "coding"
+    assert capture._extract_domain("The domain here is research.") == "research"
+    assert capture._extract_domain('{"domain": "astrology"}') == "other"  # normalized
+    assert capture._extract_domain("no recognizable label") is None
+
+
+def test_classify_domain_gate_off_uses_keyword(monkeypatch):
+    monkeypatch.delenv(capture.DOMAIN_MODEL_ENV, raising=False)
+    # gate off: keyword only; a runner would never be consulted
+    assert capture.classify_domain("refactor the auth code") == "coding"
+
+
+def test_classify_domain_model_label_wins(monkeypatch):
+    monkeypatch.setenv(capture.DOMAIN_MODEL_ENV, "anthropic/haiku")
+    runner = _fake_runner(_domain_stream('{"domain": "planning"}'))
+    # keywords say 'coding'; the model says 'planning' -> model wins
+    assert capture.classify_domain("refactor the code", runner=runner) == "planning"
+
+
+def test_classify_domain_falls_back_on_model_failure(monkeypatch):
+    monkeypatch.setenv(capture.DOMAIN_MODEL_ENV, "anthropic/haiku")
+    runner = _fake_runner(raise_exc=OSError("boom"))
+    assert capture.classify_domain("refactor the code", runner=runner) == "coding"
+
+
+def test_classify_domain_falls_back_on_unrecognized_output(monkeypatch):
+    monkeypatch.setenv(capture.DOMAIN_MODEL_ENV, "anthropic/haiku")
+    runner = _fake_runner(_domain_stream("I cannot tell."))  # no menu label
+    assert capture.classify_domain("plan the migration", runner=runner) == "planning"
+
+
+def test_classify_domain_falls_back_on_error_stop(monkeypatch):
+    monkeypatch.setenv(capture.DOMAIN_MODEL_ENV, "anthropic/haiku")
+    err = json.dumps({"type": "message_end", "message": {"role": "assistant",
+                      "stopReason": "error", "content": []}})
+    runner = _fake_runner(err)
+    assert capture.classify_domain("research the CVE", runner=runner) == "research"
+
+
+def test_classify_domain_falls_back_on_nonzero_exit(monkeypatch):
+    monkeypatch.setenv(capture.DOMAIN_MODEL_ENV, "anthropic/haiku")
+    runner = _fake_runner(_domain_stream('{"domain": "planning"}'), returncode=1)
+    # non-zero exit -> treated as failure -> keyword ('coding')
+    assert capture.classify_domain("refactor the code", runner=runner) == "coding"
+
+
 def test_default_decision_id_is_stable_and_session_specific():
     a = capture.default_decision_id("s1", "do the thing")
     assert a == capture.default_decision_id("s1", "do the thing")

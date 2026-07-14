@@ -23,11 +23,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -88,6 +90,154 @@ def infer_domain(goal: str) -> str:
         if any(re.search(rf"\b{re.escape(k)}\b", text) for k in keywords):
             return domain
     return "other"
+
+
+# ── Model domain classifier (#11 — classify by model; keyword as the fallback) ──
+# infer_domain's keyword routing mis-tags sessions, biasing every per-domain
+# metric downstream (dashboard/digest/watchers). classify_domain asks a cheap
+# model to pick from the SAME fixed menu (soft menu + explicit "other", so no
+# novel label ever reaches a dashboard) and falls back to the keyword table on
+# ANY failure — the doctrine's default+fallback: the keyword scaffold is retired
+# to a resilient backstop, not deleted. Gated behind PI_LEDGER_DOMAIN_MODEL
+# (unset => keyword only) so the ambient cron stays cheap/offline-safe unless an
+# operator opts in; set it to a cheap `provider/model` spec, e.g.
+# "anthropic/claude-haiku-4-5" or the alias "anthropic/haiku".
+DOMAIN_MENU = (
+    "planning", "coding", "research", "communication",
+    "learning", "events", "decision", "other",
+)
+DOMAIN_MODEL_ENV = "PI_LEDGER_DOMAIN_MODEL"
+
+_DOMAIN_HERMETIC_FLAGS = [
+    "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates",
+    "--no-themes", "--no-context-files", "--no-tools",
+]
+_DOMAIN_SYSTEM = (
+    "You are a precise task-domain classifier. Choose the single best-fitting "
+    "domain for a work goal. Reply with EXACTLY one JSON object and nothing else: "
+    '{"domain": "<label>"}. Allowed labels: ' + ", ".join(DOMAIN_MENU)
+    + '. Use "other" only when none clearly fit.'
+)
+
+
+def normalize_domain(value: str) -> str:
+    """Coerce a (possibly model-authored) domain to the controlled menu — the mirror
+    of ``normalize_failure_mode``. An unrecognized non-empty value buckets to
+    "other" (a dashboard never sees a novel label); empty stays empty."""
+    v = (value or "").strip().lower()
+    if not v:
+        return ""
+    return v if v in DOMAIN_MENU else "other"
+
+
+def _split_model_spec(spec: str) -> Tuple[str, str]:
+    """'provider/model' -> ('provider', 'model'); a bare 'model' -> ('', 'model')."""
+    if "/" in spec and not spec.startswith("/") and not spec.endswith("/"):
+        provider, model_id = spec.split("/", 1)
+        return provider, model_id
+    return "", spec
+
+
+def _build_domain_prompt(goal: str, action: str = "") -> str:
+    parts = [f"GOAL:\n{(goal or '').strip()[:1000]}"]
+    act = (action or "").strip()
+    if act:
+        parts.append(f"WHAT WAS DONE (context only):\n{act[:600]}")
+    parts.append('Return one JSON object: {"domain": "<label>"}.')
+    return "\n\n".join(parts)
+
+
+def _last_assistant_text(stdout: str) -> Optional[str]:
+    """Last assistant text from a --mode json stream; None on an error stop."""
+    last: Optional[str] = None
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if event.get("type") != "message_end":
+            continue
+        message = event.get("message", event)
+        if message.get("role") != "assistant":
+            continue
+        if message.get("stopReason") == "error":
+            return None
+        last = "".join(
+            b.get("text", "") for b in message.get("content", [])
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    return last
+
+
+def _extract_domain(text: Optional[str]) -> Optional[str]:
+    """A menu label from the model text: JSON ``{"domain": X}`` first, then a bare
+    menu word. None when nothing recognizable is present (=> keyword fallback)."""
+    if not text:
+        return None
+    match = re.search(r"\{[^{}]*\}", text)
+    if match:
+        try:
+            obj = json.loads(match.group(0))
+        except (json.JSONDecodeError, ValueError):
+            obj = None
+        if isinstance(obj, dict) and str(obj.get("domain", "")).strip():
+            return normalize_domain(str(obj["domain"]))
+    low = text.lower()
+    for label in DOMAIN_MENU:
+        if re.search(rf"\b{re.escape(label)}\b", low):
+            return label
+    return None
+
+
+def _call_domain_model(
+    prompt: str, *, model_spec: str, cwd: str, timeout_s: int = 30,
+    runner: Optional[Callable] = None,
+) -> Optional[str]:
+    """Invoke the classifier model ONCE; return raw assistant text, or None on any
+    failure (spawn/timeout/error/empty/non-zero) so the caller falls back to
+    keywords. ``runner`` defaults to subprocess.run; injected in tests."""
+    provider, model_id = _split_model_spec(model_spec)
+    cmd = ["pi", "--mode", "json", "-p", *_DOMAIN_HERMETIC_FLAGS]
+    if provider:
+        cmd += ["--provider", provider]
+    cmd += ["--model", model_id, "--thinking", "low",
+            "--system-prompt", _DOMAIN_SYSTEM, prompt]
+    env = dict(os.environ)
+    env["PI_SKIP_VERSION_CHECK"] = "1"
+    run = runner or subprocess.run
+    try:
+        proc = run(cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                   capture_output=True, text=True, timeout=timeout_s)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if getattr(proc, "returncode", 0) not in (0, None):
+        return None
+    return _last_assistant_text(getattr(proc, "stdout", "") or "")
+
+
+def classify_domain(
+    goal: str, *, action: str = "", cwd: Optional[str] = None,
+    timeout_s: int = 30, runner: Optional[Callable] = None,
+) -> str:
+    """Classify the outcome domain (#11). Model-first when PI_LEDGER_DOMAIN_MODEL is
+    set (a ``provider/model`` spec), else keyword. Falls back to the keyword
+    ``infer_domain`` on ANY failure or unrecognized output — never raises, so the
+    ambient cron stays resilient and the dashboard label set stays stable."""
+    spec = os.environ.get(DOMAIN_MODEL_ENV, "").strip()
+    if not spec:
+        return infer_domain(goal)
+    try:
+        text = _call_domain_model(
+            _build_domain_prompt(goal, action), model_spec=spec,
+            cwd=cwd or str(REPO_ROOT), timeout_s=timeout_s, runner=runner,
+        )
+        label = _extract_domain(text)
+    except Exception:  # noqa: BLE001 - capture must never raise; degrade to keyword
+        label = None
+    return label if label else infer_domain(goal)
 
 
 def default_decision_id(session_id: str, goal: str) -> str:
@@ -168,7 +318,7 @@ def record_work_outcome(
         "delta_score": delta_score,
         "outcome": delta_score,  # alias some readers key on
         "confidence_at_action": confidence,
-        "domain": domain or infer_domain(goal),
+        "domain": domain or classify_domain(goal, action=action_taken),
         "reason": reason,
         "failure_mode": normalize_failure_mode(failure_mode),
         "user_feedback": user_feedback,
