@@ -43,6 +43,7 @@ from __future__ import annotations
 import os
 import random
 import sys
+from pathlib import Path
 from typing import Any
 
 from statemachine import State, StateMachine
@@ -106,19 +107,63 @@ _ROUTE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
-def route_preset(goal: str, requested: str | None = None) -> str:
+# #16: model-first preset selection (gated). detect() reads the request and picks
+# from the soft PRESET menu; unset PI_IMAGEGEN_PRESET_MODEL => the keyword router
+# (a tagged loan) / general-flux fallback, i.e. behavior is unchanged by default.
+_PRESET_MODEL_ENV = "PI_IMAGEGEN_PRESET_MODEL"
+
+
+def _load_detect():
+    """Lazy-import the shared detect() primitive (scripts/system/lib, #8), or None."""
+    try:
+        for parent in Path(__file__).resolve().parents:
+            lib = parent / "scripts" / "system" / "lib"
+            if lib.is_dir():
+                if str(lib) not in sys.path:
+                    sys.path.insert(0, str(lib))
+                from detect import detect as _detect  # type: ignore[import-not-found]
+                return _detect
+    except Exception:
+        return None
+    return None
+
+
+def _preset_via_model(goal: str, spec: str, *, runner=None) -> str | None:
+    """Model-pick one of PRESETS from the request via detect(); None on any failure
+    or 'other' (=> caller falls back to the keyword router)."""
+    detect = _load_detect()
+    if detect is None:
+        return None
+    result = detect(
+        goal or "", "Which image preset best fits this image-generation request?",
+        model_spec=spec, labels=PRESETS, runner=runner,
+    )
+    if not result.get("ok"):
+        return None
+    answer = str(result.get("answer", "")).strip()
+    return answer if answer in PRESETS else None
+
+
+def route_preset(goal: str, requested: str | None = None, *, runner=None) -> str:
     """Route a request to one of the 4 presets.
 
-    An explicit valid ``requested`` preset always wins (caller-specified). The
-    keyword heuristic over the goal text is a **tagged LOAN**
-    (``imagegen_preset_keyword_router``): preset selection picks the generation
-    model/workflow, so it is resolved before any agent runs — the router is the
-    fallback. Ablated, an unspecified preset falls straight to the
-    ``general-flux`` catch-all instead of keyword routing. Pure + total so the
-    4-way matrix is misroute-testable without an agent.
+    An explicit valid ``requested`` preset always wins (caller-specified). #16:
+    when PI_IMAGEGEN_PRESET_MODEL is set, detect() reads the request and picks from
+    the soft PRESET menu — catching mixed/open-ended intent the keyword sets miss
+    (e.g. "a steampunk-styled hero header"). Unset OR any model failure falls
+    through to the keyword heuristic — a **tagged LOAN**
+    (``imagegen_preset_keyword_router``) — and finally the ``general-flux``
+    catch-all. Preset selection picks the generation model/workflow, so it is
+    resolved before any agent runs. Pure + total with the gate off, so the 4-way
+    matrix stays misroute-testable without an agent.
     """
     if requested and requested in PRESETS:
         return requested
+    spec = os.environ.get(_PRESET_MODEL_ENV, "").strip()
+    if spec:
+        picked = _preset_via_model(goal, spec, runner=runner)
+        if picked:
+            return picked
     if loan_enabled("imagegen_preset_keyword_router"):
         text = (goal or "").lower()
         for preset, keywords in _ROUTE_KEYWORDS:

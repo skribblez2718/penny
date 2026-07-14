@@ -125,9 +125,13 @@ def _c(required: dict, optional: dict | None = None, evidence: tuple[str, ...] =
 
 
 # ---------------------------------------------------------------------------
-# INTAKE schema (ported verbatim from orchestrate._INTAKE_SCHEMA). Kept in the
-# playbook (pure Python, no disk) so the gate is fully testable without the
-# skill-dir modules.
+# INTAKE schema (ported from orchestrate._INTAKE_SCHEMA). Kept in the playbook
+# (pure Python, no disk) so the gate is fully testable without the skill-dir
+# modules. #15: session_management is free text (its options are SUGGESTIONS, not
+# a whitelist) so novel/hybrid auth schemes can be described instead of hard-
+# rejected; the model interprets the free text downstream. Only genuine invariants
+# are hard-validated (target_url is http(s); auth_instructions present when
+# authenticated testing is requested).
 # ---------------------------------------------------------------------------
 
 INTAKE_SCHEMA: list[dict] = [
@@ -156,15 +160,24 @@ INTAKE_SCHEMA: list[dict] = [
     {
         "key": "session_management",
         "label": "Sessions",
-        "prompt": "How does the application manage sessions?",
+        "prompt": (
+            "How does the application manage sessions? Pick the closest option or "
+            "describe it in your own words \u2014 novel/hybrid schemes are welcome "
+            "(e.g. 'passkeys + rotating refresh token', 'signed cookie + JWT')."
+        ),
         "options": [
             {"value": "cookie", "label": "Cookie-based sessions (Set-Cookie header)"},
             {"value": "jwt_header", "label": "JWT in Authorization header (Bearer token)"},
             {"value": "oauth2", "label": "OAuth 2.0 / OpenID Connect"},
             {"value": "custom_header", "label": "Custom header (e.g., X-Session-Token)"},
             {"value": "mixed", "label": "Mixed / Multiple mechanisms"},
+            {"value": "other", "label": "Other \u2014 describe it (free text)"},
         ],
-        "validate": lambda v: v in ("cookie", "jwt_header", "oauth2", "custom_header", "mixed"),
+        # #15: accept ANY non-empty description; the options above are suggestions,
+        # not a whitelist. The old enum hard-failed novel/hybrid auth so a real
+        # target could not even be described. Genuine invariants stay enforced by
+        # the other entries.
+        "validate": lambda v: isinstance(v, str) and len(v.strip()) > 0,
     },
     {
         "key": "auth_instructions",

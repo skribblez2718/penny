@@ -201,6 +201,65 @@ def test_invalid_caller_preset_falls_back_to_heuristic():
 
 
 # ---------------------------------------------------------------------------
+# #16: model-first preset selection (gated), keyword router as fallback
+# ---------------------------------------------------------------------------
+
+
+def _mstream(text: str) -> str:
+    import json as _j
+
+    msg = {
+        "type": "message_end",
+        "message": {
+            "role": "assistant", "stopReason": "stop",
+            "content": [{"type": "text", "text": text}],
+        },
+    }
+    return _j.dumps({"type": "agent_start"}) + "\n" + _j.dumps(msg)
+
+
+def _mrunner(stdout: str):
+    import types as _t
+
+    def run(cmd, **kwargs):
+        return _t.SimpleNamespace(stdout=stdout, stderr="", returncode=0)
+
+    return run
+
+
+def test_preset_model_first_picks_from_menu(monkeypatch):
+    import json as _j
+
+    monkeypatch.setenv("PI_IMAGEGEN_PRESET_MODEL", "anthropic/haiku")
+    # mixed intent the keyword sets misroute (steampunk + hero) -> model disambiguates
+    payload = _j.dumps(
+        {"answer": "hero-flux", "evidence": ["hero header intent"], "confidence": "PROBABLE"}
+    )
+    assert route_preset(
+        "a steampunk-styled hero header", runner=_mrunner(_mstream(payload))
+    ) == "hero-flux"
+
+
+def test_preset_model_other_falls_back_to_keyword(monkeypatch):
+    import json as _j
+
+    monkeypatch.setenv("PI_IMAGEGEN_PRESET_MODEL", "anthropic/haiku")
+    payload = _j.dumps({"answer": "other", "confidence": "UNCERTAIN"})
+    # model abstains -> the keyword router still routes 'blog' correctly
+    assert route_preset(
+        "a steampunk owl for the blog post", runner=_mrunner(_mstream(payload))
+    ) == "blog-flux-steampunk"
+
+
+def test_preset_caller_request_wins_over_model(monkeypatch):
+    monkeypatch.setenv("PI_IMAGEGEN_PRESET_MODEL", "anthropic/haiku")
+    # an explicit valid request short-circuits before any model call is made
+    assert route_preset(
+        "anything", "learning-qwen", runner=_mrunner("NOT-JSON-SHOULD-NOT-BE-USED")
+    ) == "learning-qwen"
+
+
+# ---------------------------------------------------------------------------
 # Fail-fast readiness
 # ---------------------------------------------------------------------------
 

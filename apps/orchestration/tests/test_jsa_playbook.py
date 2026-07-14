@@ -170,6 +170,28 @@ def test_intake_conditional_auth_instructions_required(cp):
     assert {q["id"] for q in d["questions"]} == {"auth_instructions"}
 
 
+def test_intake_accepts_novel_session_mechanism(cp):
+    # #15: session_management is free text now — a novel/hybrid scheme the old enum
+    # would hard-reject is accepted, so a real target can actually be described.
+    _start(cp, constraints={})
+    d = _step(
+        cp,
+        "user",
+        {
+            "responses": {
+                "target_url": "https://example.com",
+                "authenticated_testing": "anonymous_only",
+                "session_management": "passkeys + rotating refresh token (WebAuthn)",
+            }
+        },
+    )
+    assert (
+        d["action"] == "invoke_agent"
+        and d["agent"] == "annie"
+        and d["state_id"] == "investigate"
+    )
+
+
 # ---------------------------------------------------------------------------
 # INVESTIGATE wave loop (bounded fan-through)
 # ---------------------------------------------------------------------------
