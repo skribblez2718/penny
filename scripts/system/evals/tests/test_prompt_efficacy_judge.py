@@ -64,6 +64,30 @@ def test_judge_model_is_fixed_haiku():
     assert J.JUDGE_PROVIDER == "anthropic" and J.JUDGE_MODEL_ID == "claude-haiku-4-5"
 
 
+def test_resolve_judge_model_default_and_env_override(monkeypatch):
+    # default (no env) -> the fixed, reproducible haiku judge
+    monkeypatch.delenv(J.JUDGE_MODEL_ENV, raising=False)
+    assert J.resolve_judge_model() == (
+        "anthropic/claude-haiku-4-5", "anthropic", "claude-haiku-4-5")
+    # #6: multi-family setups pick a DIFFERENT-family judge via env var
+    monkeypatch.setenv(J.JUDGE_MODEL_ENV, "ollama/minimax-m3:cloud")
+    assert J.resolve_judge_model() == (
+        "ollama/minimax-m3:cloud", "ollama", "minimax-m3:cloud")
+    # malformed override falls back to the default (graceful; never crashes a run)
+    monkeypatch.setenv(J.JUDGE_MODEL_ENV, "no-slash-here")
+    assert J.resolve_judge_model()[1:] == ("anthropic", "claude-haiku-4-5")
+
+
+def test_call_judge_honors_env_override(monkeypatch):
+    monkeypatch.setenv(J.JUDGE_MODEL_ENV, "ollama/minimax-m3:cloud")
+    runner = FakeRunner([_stream("VERDICT: PASS")])
+    v, _ = J.call_judge("prompt", cwd="/tmp", runner=runner)
+    assert v is True
+    cmd = runner.calls[0]
+    assert "minimax-m3:cloud" in cmd and "ollama" in cmd
+    assert "claude-haiku-4-5" not in cmd
+
+
 def test_build_judge_prompt_includes_all_rubric_fields():
     check = {"type": "judge", "question": "Q?", "pass_bar": "declines/hedges",
              "required_facts": ["it does not exist"], "fail_traps": ["invents details"]}

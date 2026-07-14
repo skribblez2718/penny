@@ -152,6 +152,14 @@ never diffed; a judge-call failure retries once then EXCLUDES the cell (never a
 silent PASS, never a keyword fallback). Use `--experimental` for a non-gating
 iteration lane and `--judge-repeats`/`--max-judge-calls` to tune cost/noise.
 
+**Judge model (#6 — judge ≠ subject family).** The judge defaults to the fixed,
+reproducible `anthropic/claude-haiku-4-5` and is never drawn from the subject
+`--models`. A setup with **multiple** model families can point it at a
+*different-family* judge via `PI_EVAL_JUDGE_MODEL=provider/model` (e.g.
+`ollama/minimax-m3:cloud` when grading Anthropic subjects) so the judge never
+shares a family with the graded subject. A single-family setup needs no config and
+keeps the default — the policy is opt-in and never blocks a run.
+
 Known limits (deliberate v1 scope): tasks are single-turn and tool-less, so
 the eval measures the frame's effect on reasoning/answer quality, not on
 agentic tool-use behavior; and `--thinking` is pinned per run (default `low`)

@@ -30,9 +30,33 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from eval_prompt_efficacy import check_text  # deterministic grader (unchanged)
 
 # REQ-003: fixed independent judge — one named constant, never a --models entry.
+# The default is a CONCRETE model id on purpose: eval artifacts must stay
+# reproducible across model upgrades (unlike agents, which use tier aliases).
+# #6 (judge != subject FAMILY): a setup with MULTIPLE model families can point the
+# judge at a different-family model via the PI_EVAL_JUDGE_MODEL env var so the judge
+# never shares a family with the subject under grade. A single-family setup needs no
+# config — it simply keeps this default (graceful; the policy never blocks a run).
 JUDGE_MODEL = "anthropic/claude-haiku-4-5"
 JUDGE_PROVIDER, JUDGE_MODEL_ID = JUDGE_MODEL.split("/", 1)
+JUDGE_MODEL_ENV = "PI_EVAL_JUDGE_MODEL"
 JUDGE_THINKING = "low"
+
+
+def resolve_judge_model() -> Tuple[str, str, str]:
+    """(#6) Resolve the judge as ``(spec, provider, model_id)``.
+
+    Honors the ``PI_EVAL_JUDGE_MODEL`` env override (``provider/model``) so a
+    multi-family operator can enforce a cross-family judge; falls back to the fixed
+    default when unset or malformed — single-family setups need no config and a bad
+    override never crashes an (expensive) run. Read at call time so it can be flipped
+    per-invocation without reimport.
+    """
+    spec = os.environ.get(JUDGE_MODEL_ENV, "").strip() or JUDGE_MODEL
+    if spec.count("/") < 1 or spec.startswith("/") or spec.endswith("/"):
+        spec = JUDGE_MODEL  # malformed override -> graceful fallback
+    provider, model_id = spec.split("/", 1)
+    return spec, provider, model_id
+
 
 # Hermetic flags mirror the matrix runner; a NON-EMPTY --system-prompt is required
 # so Anthropic-OAuth calls from a hermetic cwd are not rejected with a 400.
@@ -122,9 +146,10 @@ def call_judge(prompt: str, *, cwd: str, timeout_s: int = 120, runner: Optional[
     ``runner`` defaults to subprocess.run and is injected in tests so no live
     model call ever happens under unit test.
     """
+    _, provider, model_id = resolve_judge_model()
     cmd = [
         "pi", "--mode", "json", "-p", *HERMETIC_FLAGS,
-        "--provider", JUDGE_PROVIDER, "--model", JUDGE_MODEL_ID,
+        "--provider", provider, "--model", model_id,
         "--thinking", JUDGE_THINKING, "--system-prompt", GRADER_SYSTEM, prompt,
     ]
     env = dict(os.environ)
@@ -146,7 +171,7 @@ def call_judge(prompt: str, *, cwd: str, timeout_s: int = 120, runner: Optional[
     return verdict, text[:120]
 
 
-def make_judge_fn(
+def make_judge_fn(  # noqa: C901 - cohesive retry/majority/budget state machine; tested
     *, cwd: str, repeats: int = 1, timeout_s: int = 120,
     runner: Optional[Callable] = None, max_calls: int = 0,
 ) -> JudgeFn:
