@@ -32,7 +32,7 @@ Penny is not a single prompt or a single model call. She is a layered reasoning 
 - **Composes the right instructions** for the current moment via five separated prompt layers
 - **Delegates complex work** to specialized agents with isolated context windows
 - **Remembers across sessions** through [MemPalace](https://github.com/milla-jovovich/mempalace) — persistent memory powered by ChromaDB
-- **Learns from mistakes** via a self-improvement loop that detects patterns in failed predictions and proposes amendments
+- **Learns from mistakes** via a self-improvement loop that clusters failed predictions by root cause and drafts concrete amendments for review
 - **Surfaces problems proactively** through ambient watchers that run in the background
 - **Reports accountability** through weekly digests that aggregate outcomes, signals, and trends
 
@@ -54,8 +54,8 @@ Skills are Python state machines that dispatch agents, process results, and prod
 
 Penny learns from her own mistakes. The self-improvement loop runs automatically:
 
-1. **Outcome Ledger** — Before consequential actions, Penny records predictions. Afterward, actual results are compared (MATCH / PARTIAL / MISMATCH) and stored in MemPalace.
-2. **Compression Loop** — A daily cron job queries recent outcomes, identifies recurring MISMATCH patterns, classifies targets (domain guidance, preferences, config, or rejected universal), and generates structured amendments.
+1. **Outcome Ledger** — Before consequential actions, Penny records predictions. Afterward, actual results are compared (MATCH / PARTIAL / MISMATCH), tagged with a domain and — on a miss — an open-vocabulary failure signature, and stored in MemPalace.
+2. **Compression Loop** — A daily cron job queries recent outcomes, clusters recurring failures by root cause, has a model judge which layer each learning targets (domain guidance, preferences, config, or rejected universal), and drafts a concrete `old → new` diff with a rationale for each.
 3. **Amendment Review** — Proposed amendments are stored as PENDING in MemPalace. A human or Penny reviews, approves, or rejects them.
 4. **Amendment Application** — Approving the exact diff _is_ the human-in-the-loop, so an approved amendment is applied to its target file — any file, **including SYSTEM.md**. Two guardrails keep this safe: the diff must be concrete (empty diffs are refused at approve and apply), and the immutable security-directives block (`<system_directives>` / `<system_boundary>`) is never machine-editable, even with approval. The conservatism lives in what the loop _proposes_, not in what an approval may _touch_: the auto-generator only emits applicable diffs for Domain Guidance, preferences, and config, and a learning that would touch SYSTEM.md's Cognitive Frame is classified `REJECTED_UNIVERSAL` and logged for a human to author (its auto-generated target is a placeholder, never an applicable file). Once a human writes that SYSTEM.md diff, approving it applies like any other — the blast radius of an *unreviewed* universal edit is what stays off-limits, not universal edits as such.
 
@@ -107,11 +107,11 @@ Long-running agents are monitored with staleness-based progress tracking instead
 
 ## Confidence & Vocabulary
 
-Penny uses a **global canonical vocabulary** defined in SYSTEM.md — a set of precisely-defined terms that cannot be substituted. "Constraints" always means hard immutable limits, never "limitations" or "restrictions." This eliminates ambiguity across the entire system: agents, skills, documentation, and human communication all use the same language.
+Penny signals **calibrated certainty where it matters** — keeping "I verified this" distinct from "this is likely" and "I'd need to check," and flagging assumptions, unverified claims, and what would change the answer. Uncertainty is surfaced where it changes a decision rather than stamped on every sentence.
 
-**Domain-specific vocabularies** extend this for specialized contexts — coding standards define their own terms, security docs define threat categories, and skill prompts define workflow-specific concepts. The global vocabulary provides the foundation; domain vocabularies build on it without conflicting.
+Four confidence levels — **CERTAIN → PROBABLE → POSSIBLE → UNCERTAIN** — are the controlled vocabulary the machinery reasons over: the outcome ledger records a `confidence_at_action` on each prediction, the weekly digest tallies their distribution, and the confidence-trend watcher fires when low-confidence work (POSSIBLE / UNCERTAIN) dominates.
 
-Confidence levels (CERTAIN → PROBABLE → POSSIBLE → UNCERTAIN) are declared on every non-trivial claim, and an instruction hierarchy (Truth > Clarity > User intent > Thoroughness) resolves rule conflicts.
+An **instruction hierarchy** — Truth > Clarity > User intent > Thoroughness — resolves rule conflicts: accuracy outranks helpfulness, ambiguity is resolved before work begins, and verification is never skipped. Specialized documents — coding standards, agent and skill definitions — define their own domain terms where precision earns it.
 
 ## AGENTS.md Indexing
 
