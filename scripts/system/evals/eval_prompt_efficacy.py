@@ -285,16 +285,12 @@ def check_frame_gain_overall() -> EvalResult:
 
 
 def check_frame_on_pass_rate() -> EvalResult:
-    """The capability guard: absolute frame-on (production-config) task success.
-
-    Mean pass-rate of the ON arm across families. Ratcheted UP_GOOD so a real
-    drop in what the shipped prompt actually achieves regresses the suite —
-    unlike the frame-vs-off delta, which is allowed to shrink as models improve.
-
-    NOTE (roster sensitivity): the mean shifts with which families a run
-    includes, so the baseline is seeded as a conservative collapse floor (below
-    the weakest observed family), not the current high. Per-family floors are the
-    follow-up upgrade; ``frame_regressed_families`` still catches per-family harm.
+    """INFORMATIONAL summary: mean frame-on (production-config) pass-rate across
+    families. This aggregate is ROSTER-SENSITIVE (its mean shifts with which
+    families a run includes and can mask one family's collapse), so it no longer
+    GATES — it is a convenience number. The gating capability guard is now
+    PER-FAMILY (``frame_on_pass_rate.<family>``; see
+    ``_frame_on_per_family_results``), which is roster-robust.
     """
     rates = family_rates(load_latest())
     if not rates:
@@ -308,13 +304,40 @@ def check_frame_on_pass_rate() -> EvalResult:
         name="prompt_efficacy.frame_on_pass_rate",
         status=PASS,
         value=round(overall, 4),
-        direction=UP_GOOD,
         unit="fraction",
-        detail=(
-            "mean frame-on (production-config) task pass-rate across families — the "
-            f"capability that must not regress; ratcheted. — {detail}"
-        ),
+        informational=True,
+        detail=f"INFORMATIONAL — mean frame-on pass-rate across families. — {detail}",
     )
+
+
+def _frame_on_per_family_results() -> List[EvalResult]:
+    """Per-family absolute frame-on floors — the roster-robust capability guard.
+
+    One ratcheted UP_GOOD metric per family (``frame_on_pass_rate.<family>``): a
+    single family's collapse trips ITS OWN floor and cannot be hidden behind the
+    cross-family mean, and adding/removing a family never moves another family's
+    floor. A family absent from a run emits nothing (not checked that run); a NEW
+    family is KIND_NEW_METRIC (no baseline yet) until absorbed — never a false
+    regression. The aggregate ``check_frame_on_pass_rate`` is informational only.
+    """
+    try:
+        rates = family_rates(load_latest())
+    except EvalSkip:
+        return []  # the aggregate check already emits the SKIP; avoid double-report
+    return [
+        EvalResult(
+            name=f"prompt_efficacy.frame_on_pass_rate.{fam}",
+            status=PASS,
+            value=round(r["on"], 4),
+            direction=UP_GOOD,
+            unit="fraction",
+            detail=(
+                f"{fam}: frame-on task pass-rate {r['on']:.0%} (n={r['n']}) — "
+                "per-family capability floor (roster-robust; ratcheted)"
+            ),
+        )
+        for fam, r in sorted(rates.items())
+    ]
 
 
 def check_frame_regressed_families() -> EvalResult:
@@ -377,4 +400,6 @@ CHECKS: List[Tuple[str, Callable[[], EvalResult]]] = [
 
 
 def collect() -> List[EvalResult]:
-    return run_checks(CHECKS)
+    # CHECKS emits the fixed-name checks (incl. the informational aggregate);
+    # per-family floors are appended dynamically (one ratcheted metric per family).
+    return run_checks(CHECKS) + _frame_on_per_family_results()

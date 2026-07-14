@@ -218,21 +218,45 @@ def test_frame_gain_overall_is_informational_and_never_gates(monkeypatch):
         assert result.value == pytest.approx(expect)
 
 
-def test_frame_on_pass_rate_is_absolute_and_ratcheted(monkeypatch):
-    # Two claude tasks: one ON passes, one ON fails ⇒ absolute on-rate = 0.5,
-    # independent of the OFF arm (this is a capability metric, not a delta).
+def test_frame_on_pass_rate_aggregate_is_informational(monkeypatch):
+    # The cross-family MEAN is roster-sensitive, so it is informational (never gates).
     cells = [
-        _cell("t1", "claude", "on", True),
-        _cell("t1", "claude", "off", False),
-        _cell("t2", "claude", "on", False),
-        _cell("t2", "claude", "off", True),
+        _cell("t1", "claude", "on", True), _cell("t1", "claude", "off", False),
+        _cell("t2", "claude", "on", False), _cell("t2", "claude", "off", True),
     ]
     monkeypatch.setattr(pe, "load_latest", lambda: _artifact(cells=cells))
     r = pe.check_frame_on_pass_rate()
-    assert r.status == PASS
-    assert r.informational is False
-    assert r.direction == pe.UP_GOOD  # up_good ⇒ ratcheted; regresses if it falls
+    assert r.status == PASS and r.informational is True
+    assert r.direction == ""  # no direction ⇒ not a ratchet metric
     assert r.value == pytest.approx(0.5)
+
+
+def test_frame_on_per_family_floors_are_ratcheted_and_independent(monkeypatch):
+    # claude on=1.0, glm on=0.5 -> one ratcheted metric each, keyed by family.
+    cells = [
+        _cell("t1", "claude", "on", True), _cell("t1", "claude", "off", True),
+        _cell("t2", "claude", "on", True), _cell("t2", "claude", "off", True),
+        _cell("t1", "glm", "on", True), _cell("t1", "glm", "off", False),
+        _cell("t2", "glm", "on", False), _cell("t2", "glm", "off", False),
+    ]
+    monkeypatch.setattr(pe, "load_latest", lambda: _artifact(cells=cells))
+    res = {r.name: r for r in pe._frame_on_per_family_results()}
+    assert set(res) == {
+        "prompt_efficacy.frame_on_pass_rate.claude",
+        "prompt_efficacy.frame_on_pass_rate.glm",
+    }
+    for r in res.values():
+        assert r.direction == pe.UP_GOOD and not r.informational and r.unit == "fraction"
+    assert res["prompt_efficacy.frame_on_pass_rate.claude"].value == pytest.approx(1.0)
+    assert res["prompt_efficacy.frame_on_pass_rate.glm"].value == pytest.approx(0.5)
+
+
+def test_frame_on_per_family_empty_and_collect_clean_when_no_artifact(tmp_path, monkeypatch):
+    monkeypatch.setattr(pe, "LATEST_PATH", tmp_path / "missing.json")
+    assert pe._frame_on_per_family_results() == []
+    names = {r.name for r in pe.collect()}
+    assert "prompt_efficacy.frame_on_pass_rate" in names  # aggregate still SKIPs
+    assert not any(n.startswith("prompt_efficacy.frame_on_pass_rate.") for n in names)
 
 
 def test_frame_regressed_families_respects_min_sample_and_margin(monkeypatch):
