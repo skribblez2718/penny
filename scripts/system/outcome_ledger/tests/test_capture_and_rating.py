@@ -282,6 +282,34 @@ def test_parse_outcome_drawer_and_load_by_source():
     assert autos[0]["_drawer_id"] == "da"
 
 
+def test_load_recent_outcomes_windows_and_sorts_newest_first():
+    import datetime as _dt
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+
+    def _drawer(did, delta, ts):
+        rec = {"decision_id": did, "delta_score": delta, "outcome": delta, "timestamp": ts}
+        header = f"decision_id: {did} | delta_score: {delta}"
+        return {"id": did, "content": header + "\n" + json.dumps(rec)}
+
+    drawers = [
+        _drawer("old", "MISMATCH", (now - _dt.timedelta(days=30)).isoformat()),
+        _drawer("r1", "MISMATCH", (now - _dt.timedelta(days=2)).isoformat()),
+        _drawer("r2", "MATCH", (now - _dt.timedelta(hours=3)).isoformat()),
+    ]
+    got = capture.load_recent_outcomes(window_days=7, reader=lambda: drawers)
+    # old (30d) excluded by the structured timestamp window; newest first
+    assert [r["decision_id"] for r in got] == ["r2", "r1"]
+
+
+def test_load_recent_outcomes_keeps_records_without_timestamp():
+    rec = {"decision_id": "nots", "outcome": "MISMATCH"}  # no timestamp -> fail-open
+    got = capture.load_recent_outcomes(
+        window_days=7, reader=lambda: [{"id": "nots", "content": json.dumps(rec)}]
+    )
+    assert [r["decision_id"] for r in got] == ["nots"]
+
+
 def test_override_outcome_flips_verdict_and_deletes_old():
     record = capture.parse_outcome_drawer(
         _outcome_drawer("d_auto", "MATCH", "judge_auto", drawer_id="da")

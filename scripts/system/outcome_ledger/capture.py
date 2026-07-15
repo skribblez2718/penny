@@ -26,7 +26,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -356,6 +356,47 @@ def load_outcomes_by_source(
     for d in drawers:
         record = parse_outcome_drawer(d)
         if record and str(record.get("source")) == source:
+            out.append(record)
+    out.sort(key=lambda r: str(r.get("timestamp", "")), reverse=True)
+    return out
+
+
+def _parse_iso(ts: str) -> Optional[datetime]:
+    """Parse an ISO-8601 timestamp (a structured field — NO regex); None if unparseable.
+    A naive timestamp is treated as UTC so it compares against an aware cutoff."""
+    ts = (ts or "").strip()
+    if not ts:
+        return None
+    if ts.endswith("Z"):
+        ts = ts[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(ts)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def load_recent_outcomes(
+    window_days: int = 7,
+    reader: Optional[Callable[[], List[Dict[str, object]]]] = None,
+) -> List[Dict[str, object]]:
+    """All outcome records within the last ``window_days``, read STRUCTURALLY from the
+    outcome ledger (#18): an exhaustive drawer listing + header/JSON parse
+    (``parse_outcome_drawer``) + the structured ``timestamp`` field. No fuzzy semantic
+    search and no regex-prose parsing — the compression loop's data foundation. A record
+    whose timestamp is missing/unparseable is KEPT (fail-open) so a producer that omitted
+    it is never silently dropped. Newest first. Never raises."""
+    drawers = (reader or _bridge_reader)()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max(0, window_days))
+    out: List[Dict[str, object]] = []
+    for d in drawers:
+        record = parse_outcome_drawer(d)
+        if not record:
+            continue
+        ts = _parse_iso(str(record.get("timestamp", "")))
+        if ts is not None and ts < cutoff:
+            continue
+        if record.get("outcome") or record.get("delta_score") or record.get("decision_id"):
             out.append(record)
     out.sort(key=lambda r: str(r.get("timestamp", "")), reverse=True)
     return out

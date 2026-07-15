@@ -11,9 +11,8 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -44,9 +43,16 @@ _WATCHERS_DIR = _PROJECT_ROOT / "scripts" / "system" / "watchers"
 if str(_WATCHERS_DIR) not in sys.path:
     sys.path.insert(0, str(_WATCHERS_DIR))
 
+# #18: read outcomes STRUCTURALLY from the outcome ledger, not via a fuzzy semantic
+# search + regex-prose parsing.
+_LEDGER_DIR = _PROJECT_ROOT / "scripts" / "system" / "outcome_ledger"
+if str(_LEDGER_DIR) not in sys.path:
+    sys.path.insert(0, str(_LEDGER_DIR))
+
 from compression_loop import run_compression_loop  # noqa: E402
 from watcher_logger import info, warn, error, exception  # noqa: E402
 from memory_bridge import tool_smart_search, tool_add_drawer, _CHUNK_THRESHOLD  # noqa: E402
+from capture import load_recent_outcomes  # noqa: E402
 
 # Outcome records from the last N days.
 _DEFAULT_WINDOW_DAYS = 7
@@ -76,62 +82,6 @@ def _try_parse_json(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _parse_timestamp(text: str) -> Optional[datetime]:
-    """Extract the first ISO-8601 timestamp from text, if any."""
-    match = re.search(
-        r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)",
-        text,
-    )
-    if not match:
-        return None
-
-    ts = match.group(1)
-    if ts.endswith("Z"):
-        ts = ts[:-1] + "+00:00"
-
-    try:
-        parsed = datetime.fromisoformat(ts)
-    except ValueError:
-        return None
-
-    # A timestamp without an explicit offset is treated as UTC so it can be
-    # compared against the offset-aware cutoff without raising TypeError.
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
-def _parse_outcome_record(text: str) -> Dict[str, Any]:
-    """Parse an outcome drawer into a dict with canonical fields."""
-    parsed = _try_parse_json(text)
-    if parsed is not None and isinstance(parsed, dict):
-        # Some producers store the verdict as `delta_score` instead of `outcome`.
-        if parsed.get("outcome") is None and parsed.get("delta_score") is not None:
-            parsed["outcome"] = parsed["delta_score"]
-        return parsed
-
-    record: Dict[str, Any] = {}
-    for field in (
-        "decision_id",
-        "outcome",
-        "domain",
-        "reason",
-        "session_id",
-        "confidence_at_action",
-    ):
-        pattern = rf"{field}:\s*(.*?)(?=\n\w+[\w_]*:\s|$)"
-        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-        if match:
-            record[field] = match.group(1).strip()
-
-    if record.get("outcome") is None:
-        delta_match = re.search(r"delta_score:\s*(\S+)", text, re.IGNORECASE)
-        if delta_match:
-            record["outcome"] = delta_match.group(1).strip()
-
-    return record
-
-
 def _parse_amendment_record(text: str) -> Optional[Dict[str, Any]]:
     """Parse an amendment drawer into its JSON payload."""
     parsed = _try_parse_json(text)
@@ -145,61 +95,41 @@ def fetch_recent_outcomes(
     window_days: int = _DEFAULT_WINDOW_DAYS,
     limit: int = _DEFAULT_QUERY_LIMIT,
 ) -> List[Dict[str, Any]]:
-    """Query mempalace for recent outcome records."""
+    """Load recent outcomes STRUCTURALLY from the outcome ledger (#18).
+
+    Uses ``capture.load_recent_outcomes`` — an exhaustive drawer listing + header/JSON
+    parse + the structured ``timestamp`` field — instead of the old fuzzy semantic
+    search + regex-prose parsing. Exhaustive (not a top-N vector search) so the loop
+    sees every recent outcome; reliably parsed so clustering/targeting/drafting run on
+    clean inputs. Never raises.
+    """
     info(
         "compression_runner",
-        "Querying recent outcomes",
+        "Loading recent outcomes (structured, from the ledger)",
         session_id=session_id,
         data={"window_days": window_days, "limit": limit},
     )
-
     try:
-        result = tool_smart_search(
-            {
-                "query": "outcome decision_id reason domain session_id",
-                "wing": "penny",
-                "room": "outcomes",
-                "limit": limit,
-                "include_full": True,
-                "context": f"Recent outcomes within last {window_days} days",
-            }
-        )
+        outcomes = load_recent_outcomes(window_days)
     except Exception as exc:
-        exception("compression_runner", "Failed to query outcomes", exc, session_id=session_id)
+        exception("compression_runner", "Failed to load outcomes", exc, session_id=session_id)
         return []
 
-    results = result.get("results", [])
-    if not results:
+    if limit and len(outcomes) > limit:
+        outcomes = outcomes[:limit]
+    if not outcomes:
         warn(
             "compression_runner",
-            "No outcome records returned from mempalace",
+            "No recent outcome records in the ledger",
             session_id=session_id,
         )
         return []
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
-    outcomes: List[Dict[str, Any]] = []
-    skipped = 0
-
-    for result in results:
-        text = result.get("text", "")
-        if not text:
-            continue
-
-        ts = _parse_timestamp(text)
-        if ts is not None and ts < cutoff:
-            skipped += 1
-            continue
-
-        parsed = _parse_outcome_record(text)
-        if parsed.get("outcome") or parsed.get("decision_id"):
-            outcomes.append(parsed)
-
     info(
         "compression_runner",
-        f"Parsed {len(outcomes)} recent outcome records ({skipped} outside window)",
+        f"Loaded {len(outcomes)} recent outcome records",
         session_id=session_id,
-        data={"raw_results": len(results), "parsed": len(outcomes), "skipped": skipped},
+        data={"parsed": len(outcomes)},
     )
     return outcomes
 
