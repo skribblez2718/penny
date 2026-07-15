@@ -134,6 +134,19 @@ def _c(
     return contract
 
 
+def _passed_ids(verified_findings) -> list:
+    """The finding_ids marked verdict==PASS in a `verified_findings` list — the per-finding
+    agreement basis (T5). [] when absent/malformed, so the coarse top-level-verdict path is
+    the fallback. Deduped + sorted for stable, JSON-serializable storage."""
+    out: set = set()
+    for finding in verified_findings or []:
+        if isinstance(finding, dict) and str(finding.get("verdict", "")).strip().upper() == "PASS":
+            fid = finding.get("finding_id")
+            if fid is not None and str(fid).strip():
+                out.add(str(fid))
+    return sorted(out)
+
+
 # ---------------------------------------------------------------------------
 # INTAKE schema (ported from orchestrate._INTAKE_SCHEMA). Kept in the playbook
 # (pure Python, no disk) so the gate is fully testable without the skill-dir
@@ -380,6 +393,10 @@ JSA_VERIFY = PrimitiveSpec(
             "verified_count": int,
             "refuted_count": int,
             "out_of_scope_count": int,
+            # T5: per-finding [{finding_id, verdict, evidence}] — the agreement basis for
+            # dual-verify (the set-intersection of finding_ids both passes confirm),
+            # replacing the coarse top-level verdict. Optional: a single-pass run omits it.
+            "verified_findings": list,
             "mempalace_drawer": str,
             "needs_clarification": bool,
             "clarifying_questions": list,
@@ -662,6 +679,7 @@ class JSAPlaybook(BasePlaybook):
                 "verified_count": int(summary.get("verified_count", 0) or 0),
                 "refuted_count": int(summary.get("refuted_count", 0) or 0),
                 "out_of_scope_count": int(summary.get("out_of_scope_count", 0) or 0),
+                "verified_findings": _passed_ids(summary.get("verified_findings")),
             }
             # Dual-verify (Rec 5, opt-in): a PASS runs a SECOND independent
             # verifier and reports as verified only what both confirm.
@@ -672,15 +690,29 @@ class JSAPlaybook(BasePlaybook):
         elif state == "reverify":
             verdict = str(summary.get("verdict", ""))
             first = jsa.get("verify", {}).get("verdict", "")
-            agreed = verdict == "PASS" and first == "PASS"
+            verify_ids = set(jsa.get("verify", {}).get("verified_findings", []) or [])
+            reverify_ids = set(_passed_ids(summary.get("verified_findings")))
             jsa["reverify"] = {
                 "verdict": verdict,
                 "verified_count": int(summary.get("verified_count", 0) or 0),
+                "verified_findings": sorted(reverify_ids),
                 "could_not_reproduce": summary.get("gaps", []),
             }
-            jsa["dual_verify_agreed"] = agreed
-            # The engine records agreement; the report reads the (independently
-            # re-checked) verified room, so disagreements are surfaced honestly.
+            # T5/T6: agreement is the per-finding INTERSECTION of what BOTH passes PASSed; a
+            # finding confirmed by only ONE pass is DEMOTED to 'unconfirmed' (reported
+            # honestly, NEVER as verified). jsa has no human gate after verify, so this is
+            # code-enforced here (not escalated). Falls back to the coarse top-level-verdict
+            # agreement only when NEITHER pass reported per-finding data.
+            if verify_ids or reverify_ids:
+                agreed_ids = sorted(verify_ids & reverify_ids)
+                unconfirmed_ids = sorted((verify_ids | reverify_ids) - set(agreed_ids))
+                jsa["dual_verify_agreed_findings"] = agreed_ids
+                jsa["dual_verify_unconfirmed_findings"] = unconfirmed_ids
+                jsa["dual_verify_agreed"] = not unconfirmed_ids
+            else:
+                jsa["dual_verify_agreed_findings"] = []
+                jsa["dual_verify_unconfirmed_findings"] = []
+                jsa["dual_verify_agreed"] = verdict == "PASS" and first == "PASS"
             self.sm.send("reverify_done")
         elif state == "report":
             jsa["report"] = {
@@ -891,6 +923,16 @@ class JSAPlaybook(BasePlaybook):
     def _report_task(self, ctx: RunContext) -> str:
         jsa = ctx.extras.get("jsa", {})
         rooms = _rooms(ctx.session_id)
+        demotion = ""
+        unconfirmed = jsa.get("dual_verify_unconfirmed_findings") or []
+        if unconfirmed:
+            agreed = jsa.get("dual_verify_agreed_findings") or []
+            demotion = (
+                " DUAL-VERIFY AGREEMENT (MANDATORY): two independent verifiers ran. Report ONLY "
+                f"the findings BOTH passes confirmed as VERIFIED: {agreed}. Report every finding "
+                f"confirmed by only ONE pass as UNCONFIRMED (single-verifier) — NEVER as verified: "
+                f"{unconfirmed}. Do not upgrade an unconfirmed finding on your own judgement."
+            )
         return (
             f"For each verified finding in wing={WING} room={rooms['verified']}, write a structured "
             f"vulnerability report: title; a description of the vulnerability WITHIN THE CONTEXT OF "
@@ -900,7 +942,7 @@ class JSAPlaybook(BasePlaybook):
             f"NOT replace the application-context impact narrative). Save each as report.md under "
             f"{jsa.get('output_dir', '')}/findings/, plus a consolidated report at the output root. "
             f"Carry each finding's application-context narrative in the SUMMARY `application_context` "
-            f"list. Post to wing={WING} room={rooms['reports']}. Session: {ctx.session_id}."
+            f"list. Post to wing={WING} room={rooms['reports']}. Session: {ctx.session_id}.{demotion}"
         )
 
     def _reflect_task(self, ctx: RunContext) -> str:

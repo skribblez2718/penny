@@ -23,4 +23,4 @@ Read merged findings from `wing=wing_jsa room={session_id}-merged`; save PoC scr
 
 ## Output
 
-End with one `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task: `verdict` (PASS/FAIL), `gaps`, `verified_count`, `out_of_scope_count`, `evidence` (executed-PoC transcripts — required, non-empty when `verified_count>0`), and `confidence` (always).
+End with one `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task: `verdict` (PASS/FAIL), `gaps`, `verified_count`, `out_of_scope_count`, `evidence` (executed-PoC transcripts — required, non-empty when `verified_count>0`), `verified_findings` (a per-finding list `[{finding_id, verdict, evidence}]` — the agreement basis when a second verifier runs; a finding counts as agreed only when BOTH passes mark it PASS), and `confidence` (always).

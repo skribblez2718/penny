@@ -373,6 +373,46 @@ def test_dual_verify_disagreement_is_recorded_honestly(cp):
     assert jsa["reverify"]["could_not_reproduce"] == ["could not reproduce finding #2"]
 
 
+def test_dual_verify_per_finding_disagreement_demotes_single_pass(cp):
+    # T5/T6: verify PASSes {A,B}; reverify PASSes {B,C}. Agreement = the INTERSECTION {B};
+    # A and C are single-pass -> DEMOTED to 'unconfirmed', never 'agreed' (which the coarse
+    # top-level-verdict signal would have falsely reported, since both passes are PASS).
+    _to_verify_with_dual(cp)
+    _step(cp, "vera", {**_VPASS, "verified_findings": [
+        {"finding_id": "A", "verdict": "PASS", "evidence": "poc-A"},
+        {"finding_id": "B", "verdict": "PASS", "evidence": "poc-B"},
+    ]})
+    d = _step(cp, "vera", {**_VPASS, "evidence": ["independent poc"], "verified_findings": [
+        {"finding_id": "B", "verdict": "PASS", "evidence": "poc-B2"},
+        {"finding_id": "C", "verdict": "PASS", "evidence": "poc-C"},
+    ]})
+    assert d["agent"] == "skribble" and d["state_id"] == "report"
+    jsa = cp.load(RID).context.extras["jsa"]
+    assert jsa["dual_verify_agreed_findings"] == ["B"]
+    assert jsa["dual_verify_unconfirmed_findings"] == ["A", "C"]
+    assert jsa["dual_verify_agreed"] is False  # a single-pass finding exists -> not full agreement
+    # T6: the report task DEMOTES the single-pass findings (reported unconfirmed, never verified)
+    assert "UNCONFIRMED" in d["task_summary"]
+    assert "'A'" in d["task_summary"] and "'C'" in d["task_summary"] and "'B'" in d["task_summary"]
+
+
+def test_dual_verify_per_finding_full_agreement(cp):
+    # Both passes confirm the SAME findings {A,B} -> fully agreed, no demotion.
+    _to_verify_with_dual(cp)
+    vf = [
+        {"finding_id": "A", "verdict": "PASS", "evidence": "a"},
+        {"finding_id": "B", "verdict": "PASS", "evidence": "b"},
+    ]
+    _step(cp, "vera", {**_VPASS, "verified_findings": vf})
+    d = _step(cp, "vera", {**_VPASS, "evidence": ["ind"], "verified_findings": vf})
+    assert d["agent"] == "skribble" and d["state_id"] == "report"
+    jsa = cp.load(RID).context.extras["jsa"]
+    assert jsa["dual_verify_agreed_findings"] == ["A", "B"]
+    assert jsa["dual_verify_unconfirmed_findings"] == []
+    assert jsa["dual_verify_agreed"] is True
+    assert "UNCONFIRMED" not in d["task_summary"]  # nothing demoted
+
+
 def test_dual_verify_off_by_default_goes_straight_to_report(cp):
     # No dual_verify constraint: a PASS routes directly to report (no reverify).
     _to_merge(cp)
