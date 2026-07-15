@@ -675,3 +675,64 @@ if __name__ == "__main__":
     import pytest
 
     pytest.main([__file__, "-v"])
+
+
+# ---------------------------------------------------------------------------
+# #24: trailing-baseline outlier detection (opt-in via PI_WATCHER_BASELINE)
+# ---------------------------------------------------------------------------
+
+
+def test_is_high_outlier_uses_zscore_and_min_history():
+    from signal_generators import _is_high_outlier
+
+    baseline = [1.0, 2.0, 1.0, 2.0, 1.0, 2.0]  # mean 1.5, sd 0.5
+    assert _is_high_outlier(3.0, baseline) is True   # z = 3 -> outlier
+    assert _is_high_outlier(2.0, baseline) is False  # z = 1 -> normal for us
+    assert _is_high_outlier(9.0, [1.0]) is False     # < min baseline windows
+
+
+class TestBaselineOutlier:
+    """#24: an alert means 'unusual for us', self-calibrating vs a trailing baseline."""
+
+    @patch("signal_generators.tool_list_drawers")
+    def test_baseline_fires_on_spike(self, mock_list, monkeypatch):
+        monkeypatch.setenv("PI_WATCHER_BASELINE", "1")
+        drawers = []
+        for w in range(1, 9):  # 8 prior weeks, ~1 MISMATCH/window -> low, stable baseline
+            drawers.append(_outcome_drawer("MISMATCH", decision_id=f"b{w}", timestamp=_iso_days_ago(7 * w + 1)))
+            drawers.append(_outcome_drawer("MATCH", decision_id=f"g{w}", timestamp=_iso_days_ago(7 * w + 2)))
+        for i in range(7):  # current window: 7 MISMATCH -> a clear spike
+            drawers.append(_outcome_drawer("MISMATCH", decision_id=f"c{i}", timestamp=_iso_days_ago(1)))
+        mock_list.return_value = _ledger(*drawers)
+        result = generate_mismatch_rate_signal("s", threshold=3, window_days=7)
+        assert result is not None
+        assert "trailing baseline" in result["context"]
+
+    @patch("signal_generators.tool_list_drawers")
+    def test_baseline_quiet_when_normal_for_us(self, mock_list, monkeypatch):
+        monkeypatch.setenv("PI_WATCHER_BASELINE", "1")
+        drawers = []
+        for w in range(1, 9):  # baseline ~5 MISMATCH/window
+            for i in range(5):
+                drawers.append(_outcome_drawer("MISMATCH", decision_id=f"b{w}_{i}", timestamp=_iso_days_ago(7 * w + 1)))
+        for i in range(5):  # current also 5 -> normal for us
+            drawers.append(_outcome_drawer("MISMATCH", decision_id=f"c{i}", timestamp=_iso_days_ago(1)))
+        mock_list.return_value = _ledger(*drawers)
+        # static threshold(3) WOULD fire (5 > 3); baseline mode sees it as normal
+        assert generate_mismatch_rate_signal("s", threshold=3, window_days=7) is None
+
+    @patch("signal_generators.tool_list_drawers")
+    def test_baseline_cold_start_falls_back_to_static(self, mock_list, monkeypatch):
+        monkeypatch.setenv("PI_WATCHER_BASELINE", "1")
+        # only the current window has activity -> < 3 active prior windows -> static
+        drawers = [_outcome_drawer("MISMATCH", decision_id=f"c{i}", timestamp=_iso_days_ago(1)) for i in range(4)]
+        mock_list.return_value = _ledger(*drawers)
+        assert generate_mismatch_rate_signal("s", threshold=3, window_days=7) is not None
+
+    @patch("signal_generators.tool_list_drawers")
+    def test_default_off_is_pure_static_threshold(self, mock_list, monkeypatch):
+        monkeypatch.delenv("PI_WATCHER_BASELINE", raising=False)
+        drawers = [_outcome_drawer("MISMATCH", decision_id=f"c{i}", timestamp=_iso_days_ago(1)) for i in range(4)]
+        mock_list.return_value = _ledger(*drawers)
+        result = generate_mismatch_rate_signal("s", threshold=3, window_days=7)
+        assert result is not None and "trailing baseline" not in result["context"]

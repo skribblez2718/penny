@@ -13,7 +13,9 @@ Run within the project's venv to access mempalace modules:
 from __future__ import annotations
 
 import json
+import os
 import re
+import statistics
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -282,6 +284,88 @@ def acknowledge_signal(signal_id: str, session_id: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# #24: trailing-baseline outlier detection (opt-in)
+# ---------------------------------------------------------------------------
+# A static threshold ("> N in 7 days") is identical on day 1 and day 1000 — a busy-but-
+# normal week trips it, a genuinely anomalous one may not. When PI_WATCHER_BASELINE is
+# set, the outcome-based watchers instead fire only when the CURRENT window is a high
+# outlier vs the metric's OWN recent history (z-score over prior equal-size windows), so
+# an alert means "unusual for us" and self-calibrates as the baseline drifts. Too little
+# history => the static threshold is the cold-start fallback. Default (unset) keeps the
+# static thresholds exactly.
+_BASELINE_ENV = "PI_WATCHER_BASELINE"
+_BASELINE_N_PRIOR = 8       # trailing equal-size windows that form the baseline
+_BASELINE_MIN_WINDOWS = 3   # minimum baseline points required to calibrate
+_BASELINE_SIGMA = 2.0       # z-score for a high outlier
+_BASELINE_CRIT_SIGMA = 3.0  # z-score for CRITICAL vs INFO
+_BASELINE_ACTIVITY_MIN = 2  # absolute floor so a 0->1 blip never alerts
+
+
+def _baseline_enabled() -> bool:
+    return bool(os.environ.get(_BASELINE_ENV, "").strip())
+
+
+def _window_series(records, predicate, *, window_days, n_prior, ratio=False):
+    """``[(value, total), ...]`` per window for [current, prior1..prior_n] going back from
+    now: ``value`` is the count (or ratio, if ``ratio``) of records matching ``predicate``;
+    ``total`` is the window's record count (0 marks an INACTIVE window the caller drops
+    from the baseline, so a sparse ledger cold-starts on the static threshold)."""
+    now = _now()
+    out: list = []
+    for k in range(n_prior + 1):
+        lo = now - timedelta(days=window_days * (k + 1))
+        hi = now - timedelta(days=window_days * k)
+        bucket = [
+            r for r in records
+            if r.get("_when") and (r["_when"] >= lo if k == 0 else lo <= r["_when"] < hi)
+        ]
+        hits = sum(1 for r in bucket if predicate(r))
+        value = (hits / len(bucket)) if (ratio and bucket) else (0.0 if ratio else float(hits))
+        out.append((value, len(bucket)))
+    return out
+
+
+def _zscore(current: float, baseline: list) -> float:
+    if len(baseline) < 2:
+        return 0.0
+    mu = statistics.fmean(baseline)
+    sd = statistics.pstdev(baseline)
+    if sd == 0:
+        return 999.0 if current > mu else 0.0
+    return (current - mu) / sd
+
+
+def _is_high_outlier(current: float, baseline: list, *, sigma: float = _BASELINE_SIGMA) -> bool:
+    if len(baseline) < _BASELINE_MIN_WINDOWS:
+        return False
+    mu = statistics.fmean(baseline)
+    sd = statistics.pstdev(baseline)
+    return current > mu if sd == 0 else (current - mu) / sd >= sigma
+
+
+def _outlier_or_threshold(*, current, static_threshold, series, crit_2x, activity_ok):
+    """(#24) -> (fire, priority, note). With enough ACTIVE prior windows (``series`` given):
+    fire only on a high outlier vs the trailing baseline AND the activity floor. Otherwise
+    (baseline disabled => series is None, or too few active windows to calibrate): the
+    static threshold — fire when current > threshold, CRITICAL if > 2x when ``crit_2x``.
+    ``note`` annotates a baseline-driven signal's context."""
+    if series is not None:
+        baseline = [value for (value, total) in series[1:] if total > 0]
+        if len(baseline) >= _BASELINE_MIN_WINDOWS:
+            if activity_ok and _is_high_outlier(current, baseline):
+                z = _zscore(current, baseline)
+                note = (
+                    f" — unusually high vs the trailing baseline "
+                    f"(mean {statistics.fmean(baseline):.2f}/window, z={z:.1f})"
+                )
+                return True, ("CRITICAL" if z >= _BASELINE_CRIT_SIGMA else "INFO"), note
+            return False, "", ""
+    if current > static_threshold:
+        return True, ("CRITICAL" if (crit_2x and current > static_threshold * 2) else "INFO"), ""
+    return False, "", ""
+
+
+# ---------------------------------------------------------------------------
 # Metric-based watchers
 # ---------------------------------------------------------------------------
 
@@ -329,23 +413,34 @@ def generate_mismatch_rate_signal(
         },
     )
 
-    if mismatch_count > threshold:
-        seq = 1
-        priority = "CRITICAL" if mismatch_count > threshold * 2 else "INFO"
-        return {
-            "signal_id": _signal_id("mismatch_rate", seq),
-            "signal_type": "METRIC",
-            "source": "mismatch_rate_watcher",
-            "priority": priority,
-            "title": f"High MISMATCH rate: {mismatch_count} recent decisions",
-            "context": f"{mismatch_count} decisions with MISMATCH delta in last {window_days} days (out of {total_relevant} checked)",
-            "suggested_action": "Review recent MISMATCH outcomes in penny/outcomes room",
-            "timestamp": _iso(_now()),
-            "expires": _default_expiry(),
-            "status": "PENDING",
-        }
-
-    return None
+    series = (
+        _window_series(
+            records, lambda r: r.get("outcome") == "MISMATCH",
+            window_days=window_days, n_prior=_BASELINE_N_PRIOR,
+        )
+        if _baseline_enabled() else None
+    )
+    fire, priority, note = _outlier_or_threshold(
+        current=mismatch_count, static_threshold=threshold, series=series,
+        crit_2x=True, activity_ok=(mismatch_count >= _BASELINE_ACTIVITY_MIN),
+    )
+    if not fire:
+        return None
+    return {
+        "signal_id": _signal_id("mismatch_rate", 1),
+        "signal_type": "METRIC",
+        "source": "mismatch_rate_watcher",
+        "priority": priority,
+        "title": f"High MISMATCH rate: {mismatch_count} recent decisions",
+        "context": (
+            f"{mismatch_count} decisions with MISMATCH delta in last {window_days} days "
+            f"(out of {total_relevant} checked){note}"
+        ),
+        "suggested_action": "Review recent MISMATCH outcomes in penny/outcomes room",
+        "timestamp": _iso(_now()),
+        "expires": _default_expiry(),
+        "status": "PENDING",
+    }
 
 
 def generate_confidence_trend_signal(
@@ -365,13 +460,14 @@ def generate_confidence_trend_signal(
         data={"threshold": threshold, "window_days": window_days},
     )
     cutoff = _now() - timedelta(days=window_days)
-    recent = [r for r in _load_outcome_records() if r.get("_when") and r["_when"] >= cutoff]
+    records = _load_outcome_records()
+    recent = [r for r in records if r.get("_when") and r["_when"] >= cutoff]
     total = len(recent)
-    low_confidence = sum(
-        1
-        for r in recent
-        if str(r.get("confidence_at_action") or "").strip().upper() in ("POSSIBLE", "UNCERTAIN")
-    )
+
+    def _is_low(r):
+        return str(r.get("confidence_at_action") or "").strip().upper() in ("POSSIBLE", "UNCERTAIN")
+
+    low_confidence = sum(1 for r in recent if _is_low(r))
 
     info(
         "confidence_trend_watcher",
@@ -380,22 +476,33 @@ def generate_confidence_trend_signal(
         data={"low_confidence": low_confidence, "total": total, "threshold": threshold},
     )
 
-    if total > 0 and (low_confidence / total) > threshold:
-        pct = int(low_confidence / total * 100)
-        return {
-            "signal_id": _signal_id("confidence_trend", 1),
-            "signal_type": "METRIC",
-            "source": "confidence_trend_watcher",
-            "priority": "INFO",
-            "title": f"Low confidence trend: {pct}% recent actions uncertain",
-            "context": f"{low_confidence} of {total} recent actions at POSSIBLE or UNCERTAIN confidence in last {window_days} days",
-            "suggested_action": "Consider adding more verification steps for uncertain tasks",
-            "timestamp": _iso(_now()),
-            "expires": _default_expiry(),
-            "status": "PENDING",
-        }
-
-    return None
+    ratio_now = (low_confidence / total) if total else 0.0
+    series = (
+        _window_series(records, _is_low, window_days=window_days, n_prior=_BASELINE_N_PRIOR, ratio=True)
+        if _baseline_enabled() else None
+    )
+    fire, priority, note = _outlier_or_threshold(
+        current=ratio_now, static_threshold=threshold, series=series,
+        crit_2x=False, activity_ok=(total >= 3),
+    )
+    if not fire:
+        return None
+    pct = int(ratio_now * 100)
+    return {
+        "signal_id": _signal_id("confidence_trend", 1),
+        "signal_type": "METRIC",
+        "source": "confidence_trend_watcher",
+        "priority": priority,
+        "title": f"Low confidence trend: {pct}% recent actions uncertain",
+        "context": (
+            f"{low_confidence} of {total} recent actions at POSSIBLE or UNCERTAIN "
+            f"confidence in last {window_days} days{note}"
+        ),
+        "suggested_action": "Consider adding more verification steps for uncertain tasks",
+        "timestamp": _iso(_now()),
+        "expires": _default_expiry(),
+        "status": "PENDING",
+    }
 
 
 def generate_mempalace_growth_signal(
