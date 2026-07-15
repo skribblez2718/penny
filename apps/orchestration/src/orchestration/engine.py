@@ -105,6 +105,9 @@ _GATE_DENY = frozenset({
     "deny", "denied", "no", "n", "abort", "cancel", "discard", "stop",
     "reject", "rejected",
 })
+# #26/#27: model-judged loop guards (gated; the string checks stay as the fallback).
+_STALL_MODEL_ENV = "PI_STALL_MODEL"
+_STRATEGY_MODEL_ENV = "PI_STRATEGY_MODEL"
 
 
 def _load_detect():
@@ -340,18 +343,33 @@ class BasePlaybook:
             }
         )
 
-    def strategy_repeated(self, ctx: RunContext, strategy_change: Any) -> bool:
-        """Anti-paralysis (Rec 1): a retry must change strategy. True when the
-        proposed ``strategy_change`` is empty, or ~identical to the most recent
-        recorded one — i.e. this retry would repeat a failed approach."""
+    def strategy_repeated(
+        self, ctx: RunContext, strategy_change: Any, *, runner: Optional[Callable] = None
+    ) -> bool:
+        """Anti-paralysis (Rec 1): a retry must change strategy. True when the proposed
+        ``strategy_change`` is empty, or the SAME approach as the most recent recorded
+        one — i.e. this retry would repeat a failed approach. #27: when
+        PI_STRATEGY_MODEL is set a model judges "same approach?" semantically (a reworded
+        but identical plan no longer slips through, a genuinely new plan phrased similarly
+        is no longer blocked); unset or any failure falls back to normalized-string
+        equality. Bounded either way by the hard iteration ceiling."""
         proposed = self._norm_text(strategy_change)
         if not proposed:
             return True
+        prior = ""
         for prev in reversed(ctx.iteration_history):
-            prior = self._norm_text(prev.get("strategy_change", ""))
-            if prior:
-                return prior == proposed
-        return False
+            candidate = self._norm_text(prev.get("strategy_change", ""))
+            if candidate:
+                prior = candidate
+                break
+        if not prior:
+            return False
+        spec = os.environ.get(_STRATEGY_MODEL_ENV, "").strip()
+        if spec:
+            verdict = self._strategy_same_via_model(proposed, prior, spec, runner=runner)
+            if verdict is not None:
+                return verdict
+        return prior == proposed
 
     def fire_model_route(self, summary: dict, field: str = "next_event") -> bool:
         """Model-owned routing (the control-flow dial): fire the FSM event the
@@ -376,19 +394,91 @@ class BasePlaybook:
             return False
         return self._safe_send(event)
 
-    def is_stalled(self, ctx: RunContext, gaps: list | None = None, *, window: int = 2) -> bool:
-        """Stall / progress-assessment (Rec 2): True when the last ``window``
-        recorded iterations show the SAME non-empty gaps as the current ones — no
-        measurable progress — so the playbook can escalate instead of burning the
-        remaining retry budget."""
+    def is_stalled(
+        self, ctx: RunContext, gaps: list | None = None, *, window: int = 2,
+        runner: Optional[Callable] = None,
+    ) -> bool:
+        """Stall / progress-assessment (Rec 2): True when the last ``window`` recorded
+        iterations show no measurable progress on the gaps, so the playbook can escalate
+        instead of burning the remaining retry budget. #26: when PI_STALL_MODEL is set the
+        verifier judges "did these iterations reduce the gap?" (paraphrased-identical gaps
+        no longer read as progress, genuinely-shrinking-but-similar gaps no longer read as
+        a stall); unset or any failure falls back to exact gap-set equality across the
+        window. Bounded either way by the hard iteration ceiling."""
         if window < 1 or len(ctx.iteration_history) < window:
             return False
         current = frozenset(self._norm_text(g) for g in (gaps or []))
         if not current:
             return False
+        spec = os.environ.get(_STALL_MODEL_ENV, "").strip()
+        if spec:
+            verdict = self._stall_via_model(ctx, list(gaps or []), window, spec, runner=runner)
+            if verdict is not None:
+                return verdict
         return all(
             frozenset(prev.get("gaps", [])) == current for prev in ctx.iteration_history[-window:]
         )
+
+    def _stall_via_model(self, ctx, gaps, window, spec, *, runner=None):
+        """#26: does the recent history show NO progress on the gaps? True (stalled) /
+        False (progressing) / None on any failure (=> the string fallback decides)."""
+        detect = _load_detect()
+        if detect is None:
+            return None
+        prior = [
+            "; ".join(str(g) for g in prev.get("gaps", []))
+            for prev in ctx.iteration_history[-window:]
+        ]
+        artifact = (
+            "PRIOR ITERATIONS (oldest→newest) — the gaps each still had:\n"
+            + "\n".join(f"- iter {i + 1}: {p or '(none)'}" for i, p in enumerate(prior))
+            + "\n\nCURRENT gaps after the latest iteration:\n"
+            + ("; ".join(str(g) for g in gaps) or "(none)")
+        )
+        try:
+            result = detect(
+                artifact,
+                "Across these iterations, is the work STALLED (the same gaps keep "
+                "recurring, no measurable progress) or PROGRESSING (the gaps are being "
+                "reduced or resolved)?",
+                model_spec=spec, labels=("stalled", "progressing"), runner=runner,
+            )
+        except Exception:  # noqa: BLE001 - a guard must never raise
+            return None
+        if not result.get("ok"):
+            return None
+        answer = str(result.get("answer", "")).strip().lower()
+        if answer == "stalled":
+            return True
+        if answer == "progressing":
+            return False
+        return None
+
+    def _strategy_same_via_model(self, proposed, prior, spec, *, runner=None):
+        """#27: is the proposed retry strategy the SAME approach as the prior one? True
+        (repeat) / False (different) / None on any failure (=> the string fallback)."""
+        detect = _load_detect()
+        if detect is None:
+            return None
+        artifact = f"PRIOR strategy:\n{prior}\n\nPROPOSED next strategy:\n{proposed}"
+        try:
+            result = detect(
+                artifact,
+                "Is the PROPOSED strategy essentially the SAME approach as the PRIOR one "
+                "(repeating it would likely fail the same way), or a genuinely DIFFERENT "
+                "approach?",
+                model_spec=spec, labels=("same", "different"), runner=runner,
+            )
+        except Exception:  # noqa: BLE001 - a guard must never raise
+            return None
+        if not result.get("ok"):
+            return None
+        answer = str(result.get("answer", "")).strip().lower()
+        if answer == "same":
+            return True
+        if answer == "different":
+            return False
+        return None
 
     # -- lifecycle ---------------------------------------------------------
     def __init__(

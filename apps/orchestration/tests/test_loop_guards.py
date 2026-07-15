@@ -211,6 +211,99 @@ def test_is_stalled_helper(cp):
     assert pb.is_stalled(ctx, []) is False  # empty current gaps never stall
 
 
+# ---------------------------------------------------------------------------
+# #26 / #27: model-judged loop guards (gated; the string checks are the fallback)
+# ---------------------------------------------------------------------------
+
+
+def _mstream(text):
+    import json as _j
+
+    msg = {
+        "type": "message_end",
+        "message": {
+            "role": "assistant", "stopReason": "stop",
+            "content": [{"type": "text", "text": text}],
+        },
+    }
+    return _j.dumps({"type": "agent_start"}) + "\n" + _j.dumps(msg)
+
+
+def _mrunner(stdout):
+    import types as _t
+
+    def run(cmd, **kwargs):
+        return _t.SimpleNamespace(stdout=stdout, stderr="", returncode=0)
+
+    return run
+
+
+def test_strategy_repeated_model_overrides_string_equality(cp, monkeypatch):
+    import json as _j
+
+    monkeypatch.setenv("PI_STRATEGY_MODEL", "anthropic/haiku")
+    pb = LoopPlaybook(cp)
+    ctx = _ctx()
+    ctx.iteration_history.append({"strategy_change": "add a database index on user_id", "gaps": []})
+    # strings differ, but the model judges the approach the SAME -> repeat (blocked)
+    same = _j.dumps({"answer": "same", "confidence": "PROBABLE"})
+    assert pb.strategy_repeated(
+        ctx, "index the users table by id", runner=_mrunner(_mstream(same))
+    ) is True
+    # model judges a genuinely DIFFERENT approach -> not a repeat (allowed)
+    diff = _j.dumps({"answer": "different", "confidence": "CERTAIN"})
+    assert pb.strategy_repeated(
+        ctx, "add a caching layer", runner=_mrunner(_mstream(diff))
+    ) is False
+
+
+def test_strategy_repeated_model_failure_falls_back_to_string(cp, monkeypatch):
+    monkeypatch.setenv("PI_STRATEGY_MODEL", "anthropic/haiku")
+
+    def boom(cmd, **kwargs):
+        raise OSError("spawn failed")
+
+    pb = LoopPlaybook(cp)
+    ctx = _ctx()
+    ctx.iteration_history.append({"strategy_change": "add index", "gaps": []})
+    assert pb.strategy_repeated(ctx, "ADD  index", runner=boom) is True  # string fallback
+    assert pb.strategy_repeated(ctx, "cache it", runner=boom) is False
+
+
+def test_is_stalled_model_overrides_string_equality(cp, monkeypatch):
+    import json as _j
+
+    monkeypatch.setenv("PI_STALL_MODEL", "anthropic/haiku")
+    pb = LoopPlaybook(cp)
+    ctx = _ctx()
+    ctx.iteration_history.append({"gaps": ["auth still broken"]})
+    ctx.iteration_history.append({"gaps": ["auth still broken"]})
+    # identical gap strings, but the model sees PROGRESS -> not stalled
+    prog = _j.dumps({"answer": "progressing", "confidence": "PROBABLE"})
+    assert pb.is_stalled(
+        ctx, ["auth still broken"], runner=_mrunner(_mstream(prog))
+    ) is False
+    # different gap strings, but the model judges STALLED -> stalled
+    stalled = _j.dumps({"answer": "stalled", "confidence": "PROBABLE"})
+    assert pb.is_stalled(
+        ctx, ["auth partially broken"], runner=_mrunner(_mstream(stalled))
+    ) is True
+
+
+def test_is_stalled_model_failure_falls_back_to_string(cp, monkeypatch):
+    monkeypatch.setenv("PI_STALL_MODEL", "anthropic/haiku")
+
+    def boom(cmd, **kwargs):
+        raise OSError("spawn failed")
+
+    pb = LoopPlaybook(cp)
+    ctx = _ctx()
+    ctx.iteration_history.append({"gaps": ["same"]})
+    ctx.iteration_history.append({"gaps": ["same"]})
+    assert pb.is_stalled(ctx, ["same"], runner=boom) is True  # string fallback
+    assert pb.is_stalled(ctx, ["different"], runner=boom) is False
+
+
 def _ctx():
     from orchestration.context import RunContext
 
