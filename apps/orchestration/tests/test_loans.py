@@ -89,6 +89,26 @@ def test_summary_restatement_kept_for_cheap_tier(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# #25: fixed caps -> tier-scaled budgets (bounded by a hard ceiling)
+# ---------------------------------------------------------------------------
+
+
+def test_tier_budget_scales_by_model_tier(monkeypatch):
+    from orchestration.engine import tier_budget
+
+    monkeypatch.delenv("PI_MODEL_TIER", raising=False)
+    assert tier_budget(4, ceiling=8) == 4        # default: base unchanged
+    monkeypatch.setenv("PI_MODEL_TIER", "strong")
+    assert tier_budget(4, ceiling=8) == 8        # 2x, at the ceiling
+    assert tier_budget(10, ceiling=15) == 15     # 2x=20 clamped to the hard ceiling
+    monkeypatch.setenv("PI_MODEL_TIER", "cheap")
+    assert tier_budget(4, ceiling=8) == 2        # 0.5x
+    assert tier_budget(1, ceiling=8) == 1        # floored at 1
+    monkeypatch.setenv("PI_MODEL_TIER", "mystery")
+    assert tier_budget(4, ceiling=8) == 4        # unknown tier -> base unchanged
+
+
+# ---------------------------------------------------------------------------
 # #33: HITL gate-answer intent classifier (keyword fast-path + gated model)
 # ---------------------------------------------------------------------------
 

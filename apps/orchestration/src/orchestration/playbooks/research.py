@@ -67,7 +67,7 @@ from pathlib import Path
 from statemachine import State, StateMachine
 
 from ..context import RunContext
-from ..engine import BasePlaybook
+from ..engine import BasePlaybook, tier_budget
 from ..primitives.spec import PrimitiveSpec
 
 
@@ -510,13 +510,20 @@ class ResearchPlaybook(BasePlaybook):
         # One sub-query budget (replaces the per-mode table), clamped to the fan
         # width since sub-queries become fan branches. Code caps; model spends.
         try:
-            max_sub_queries = int(ctx.constraints.get("max_sub_queries", DEFAULT_MAX_SUB_QUERIES))
-        except (TypeError, ValueError):
-            max_sub_queries = DEFAULT_MAX_SUB_QUERIES
-        try:
             fan_width = int(ctx.constraints.get("max_fan_width", 8))
         except (TypeError, ValueError):
             fan_width = 8
+        # #25: with no caller override the sub-query count is a TIER-SCALED budget (a
+        # strong/long-context model fans wider, a cheap one narrower), bounded by the fan
+        # width as the hard ceiling; an explicit constraint always wins.
+        raw_sub_queries = ctx.constraints.get("max_sub_queries")
+        if raw_sub_queries is None:
+            max_sub_queries = tier_budget(DEFAULT_MAX_SUB_QUERIES, ceiling=fan_width)
+        else:
+            try:
+                max_sub_queries = int(raw_sub_queries)
+            except (TypeError, ValueError):
+                max_sub_queries = DEFAULT_MAX_SUB_QUERIES
         research["max_sub_queries"] = max(
             1, min(max_sub_queries or DEFAULT_MAX_SUB_QUERIES, fan_width)
         )

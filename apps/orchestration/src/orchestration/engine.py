@@ -133,6 +133,20 @@ def _needs_summary_restatement() -> bool:
     return os.environ.get("PI_MODEL_TIER", "").strip().lower() != "strong"
 
 
+_TIER_BUDGET_FACTOR = {"strong": 2.0, "cheap": 0.5}
+
+
+def tier_budget(base: int, *, ceiling: int) -> int:
+    """(#25) Scale an operating-point BUDGET by the model's capability tier (PI_MODEL_TIER),
+    bounded by a hard ceiling. A strong/long-context model does more per wave / fans wider;
+    a cheap one does less. Unset (the default) => ``base`` unchanged. The result is clamped
+    to [1, ceiling] — the constant stays a safety MAX, only the operating point is adaptive;
+    an explicit caller constraint still overrides this upstream."""
+    tier = os.environ.get("PI_MODEL_TIER", "").strip().lower()
+    factor = _TIER_BUDGET_FACTOR.get(tier, 1.0)
+    return max(1, min(int(ceiling), round(base * factor)))
+
+
 # Budget boundary on fan width (code caps, the model spends): a dynamic fan-out
 # may not exceed this many branches unless the caller raises
 # ``constraints["max_fan_width"]``.

@@ -57,7 +57,7 @@ from typing import Any
 from statemachine import State, StateMachine
 
 from ..context import RunContext
-from ..engine import BasePlaybook
+from ..engine import BasePlaybook, tier_budget
 from ..primitives.spec import PrimitiveSpec
 
 # ---------------------------------------------------------------------------
@@ -71,12 +71,15 @@ _DEFAULT_WAVE_SIZE = 10  # default findings per annie wave (a tunable Budget, no
 def _wave_size(ctx: "RunContext") -> int:
     """Findings per annie wave — a tunable Budget (code caps the batch, the model
     spends the waves). ``constraints["wave_size"]`` overrides the default; clamped
-    to >= 1. The frozen ``WAVE_SIZE = 10`` constant is gone (Bitter-Lesson gate)."""
+    to >= 1. With no override the default is a TIER-SCALED budget (#25) bounded by a
+    ceiling. The frozen ``WAVE_SIZE = 10`` constant is gone (Bitter-Lesson gate)."""
+    raw = (ctx.constraints or {}).get("wave_size")
+    if raw is None:
+        return tier_budget(_DEFAULT_WAVE_SIZE, ceiling=_DEFAULT_WAVE_SIZE * 2)
     try:
-        n = int((ctx.constraints or {}).get("wave_size", _DEFAULT_WAVE_SIZE))
+        return max(1, int(raw))
     except (TypeError, ValueError):
-        n = _DEFAULT_WAVE_SIZE
-    return max(1, n)
+        return _DEFAULT_WAVE_SIZE
 
 
 WING = "wing_jsa"
