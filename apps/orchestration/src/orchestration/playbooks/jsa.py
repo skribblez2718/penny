@@ -120,10 +120,17 @@ def _rooms(session_id: str) -> dict[str, str]:
     }
 
 
-def _c(required: dict, optional: dict | None = None, evidence: tuple[str, ...] = ()) -> dict:
+def _c(
+    required: dict,
+    optional: dict | None = None,
+    evidence: tuple[str, ...] = (),
+    conditional_evidence: tuple = (),
+) -> dict:
     contract: dict = {"required": required, "optional": optional or {}}
     if evidence:
         contract["evidence"] = evidence
+    if conditional_evidence:
+        contract["conditional_evidence"] = conditional_evidence
     return contract
 
 
@@ -378,11 +385,16 @@ JSA_VERIFY = PrimitiveSpec(
             "clarifying_questions": list,
         },
         # Externally-grounded VERIFY (Rec 4): `evidence` is required as a list so
-        # vera must report the browser-PoC transcripts it ran — but it is NOT
-        # forced non-empty. A clean target (nothing to verify) legitimately yields
-        # an empty transcript list; forcing non-empty would pressure fabricating a
-        # PoC, the exact failure the loop research warns about for security
-        # verifiers.
+        # vera must report the browser-PoC transcripts it ran. It is NOT forced
+        # non-empty unconditionally — a clean target (nothing to verify) legitimately
+        # yields an empty transcript list, and forcing non-empty would pressure
+        # fabricating a PoC (the failure loop-research warns about for security
+        # verifiers). But a CLAIMED positive must carry its artifact (#T7b):
+        # verified_count > 0 requires non-empty evidence. This fires ONLY on the
+        # agent's own claimed positives, so clean/no-repro targets stay pressure-free,
+        # and it makes real the gate vera-base.md already tells the verifier the engine
+        # enforces (closing the prompt-vs-code drift).
+        conditional_evidence=(("evidence", "verified_count"),),
     ),
     "Run browser-based PoC per merged finding (transcripts may be empty for a clean target); confirm/refute honestly; ENFORCE out_of_scope. Attach the executed-PoC transcripts as evidence. Always emit confidence.",
 )

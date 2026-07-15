@@ -215,3 +215,28 @@ def test_all_directives_carry_session_and_run_id():
         assert d["run_id"] == "R"
         assert "orchestrator_state" not in d
         assert "state" not in d or d["action"] == "status"
+
+
+def test_conditional_evidence_gates_only_on_positive_condition():
+    # #T7b: (evidence_field, condition_field) requires evidence non-empty ONLY when the
+    # condition is positive — a claimed positive must carry its artifact; a clean target
+    # (condition == 0) is never pressured to fabricate.
+    contract = {
+        "required": {"verdict": str, "verified_count": int, "evidence": list},
+        "optional": {},
+        "conditional_evidence": (("evidence", "verified_count"),),
+    }
+    ok, err = validate_summary_contract(
+        "X", contract, {"verdict": "PASS", "verified_count": 2, "evidence": []}
+    )
+    assert not ok and "evidence" in err  # claimed positive + empty -> gated
+
+    ok, _ = validate_summary_contract(
+        "X", contract, {"verdict": "PASS", "verified_count": 2, "evidence": ["poc"]}
+    )
+    assert ok  # claimed positive + artifact -> ok
+
+    ok, _ = validate_summary_contract(
+        "X", contract, {"verdict": "PASS", "verified_count": 0, "evidence": []}
+    )
+    assert ok  # zero condition -> never pressured

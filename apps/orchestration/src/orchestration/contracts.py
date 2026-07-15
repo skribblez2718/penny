@@ -145,7 +145,7 @@ def _is_nonempty(value: Any) -> bool:
     return bool(value)
 
 
-def validate_summary_contract(name: str, contract: dict, summary: Any) -> tuple[bool, str]:
+def validate_summary_contract(name: str, contract: dict, summary: Any) -> tuple[bool, str]:  # noqa: C901
     """Validate a SUMMARY against an explicit contract dict.
 
     ``contract`` is a ``{"required": {...}, "optional": {...}}`` mapping —
@@ -180,6 +180,18 @@ def validate_summary_contract(name: str, contract: dict, summary: Any) -> tuple[
             return False, (
                 f"{name}: evidence field '{field}' must be present and non-empty "
                 "(externally-grounded VERIFY: attach the artifact, not a bare claim)"
+            )
+
+    # Conditional evidence: each (evidence_field, condition_field) requires
+    # ``evidence_field`` non-empty ONLY when ``condition_field`` is positive/non-empty.
+    # This lets a security verifier stay pressure-free on a clean target (the condition,
+    # e.g. verified_count, is 0 -> nothing enforced) while refusing a self-claimed
+    # positive that carries no artifact (verified_count > 0 -> evidence must be present).
+    for evidence_field, condition_field in contract.get("conditional_evidence", ()):
+        if _is_nonempty(summary.get(condition_field)) and not _is_nonempty(summary.get(evidence_field)):
+            return False, (
+                f"{name}: '{evidence_field}' must be non-empty when '{condition_field}' is "
+                "positive (a claimed positive must carry its artifact, not a bare count)"
             )
 
     return True, ""

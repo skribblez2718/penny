@@ -517,29 +517,48 @@ def test_verify_empty_evidence_advances_honestly(cp):
     assert d["action"] == "invoke_agent" and d["agent"] == "skribble" and d["state_id"] == "report"
 
 
-def test_verify_pass_with_verified_count_but_empty_evidence_is_not_gated(cp):
-    # DOCUMENTED HONOR-SYSTEM behavior (matches the module docstring + _verify_task
-    # prompt): the engine does NOT force `evidence` non-empty, so a PASS claiming
-    # verified findings with an empty transcript list is ACCEPTED, not rejected.
-    # (Forcing non-empty would pressure PoC fabrication on clean/no-repro targets —
-    # the deliberate loop-research choice. vera is on its honor to attach a
-    # transcript per verified finding.)
+def test_verify_claimed_positive_with_empty_evidence_is_gated(cp):
+    # #T7b: a PASS claiming verified findings (verified_count>0) with an EMPTY transcript
+    # list is now REJECTED by the conditional-evidence gate and vera is re-issued to
+    # attach the executed-PoC transcripts — realizing the gate vera-base.md already
+    # promises. Fires ONLY on the agent's own claimed positive, so clean targets stay free.
+    _through_merge(cp)
+    _step(cp, "synthia", {"merge_complete": True, "confidence": "PROBABLE"})
+    d = _step(
+        cp,
+        "vera",
+        {"verdict": "PASS", "gaps": [], "confidence": "CERTAIN", "evidence": [], "verified_count": 2},
+    )
+    assert d["action"] == "invoke_agent" and d["agent"] == "vera" and d["state_id"] == "verify"
+    assert cp.load(RID).context.step_retries == 1
+
+
+def test_verify_claimed_positive_with_evidence_advances(cp):
+    # #T7b: verified_count>0 WITH attached PoC transcripts passes the gate -> advances.
     _through_merge(cp)
     _step(cp, "synthia", {"merge_complete": True, "confidence": "PROBABLE"})
     d = _step(
         cp,
         "vera",
         {
-            "verdict": "PASS",
-            "gaps": [],
-            "confidence": "CERTAIN",
-            "evidence": [],
+            "verdict": "PASS", "gaps": [], "confidence": "CERTAIN",
+            "evidence": ["PoC: navigated /x, payload fired, DOM mutated, screenshot p.png"],
             "verified_count": 2,
         },
     )
-    # Not gated: advances to report, and the claimed count is recorded as-is.
     assert d["action"] == "invoke_agent" and d["agent"] == "skribble" and d["state_id"] == "report"
-    assert cp.load(RID).context.extras["jsa"]["verify"]["verified_count"] == 2
+
+
+def test_verify_clean_target_zero_count_empty_evidence_advances(cp):
+    # #T7b: a clean target (verified_count==0) is NEVER pressured — empty evidence is fine.
+    _through_merge(cp)
+    _step(cp, "synthia", {"merge_complete": True, "confidence": "PROBABLE"})
+    d = _step(
+        cp,
+        "vera",
+        {"verdict": "PASS", "gaps": [], "confidence": "CERTAIN", "evidence": [], "verified_count": 0},
+    )
+    assert d["action"] == "invoke_agent" and d["agent"] == "skribble" and d["state_id"] == "report"
 
 
 # ---------------------------------------------------------------------------
