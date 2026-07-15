@@ -222,6 +222,48 @@ def test_high_stakes_opens_verify_gate(cp):
     assert rec.status == STATUS_AWAITING_USER and rec.current_state_id == "verify_gate"
 
 
+# ---------------------------------------------------------------------------
+# the approval gate must present the FULL plan, well-formatted (not a one-liner)
+# ---------------------------------------------------------------------------
+
+
+def test_format_plan_steps_renders_strings_and_dicts():
+    from orchestration.playbooks.plan import _format_plan_steps
+
+    out = _format_plan_steps(["do X", {"outcome": "do Y", "acceptance": "tests pass"}])
+    assert "1. do X" in out
+    assert "2. do Y" in out and "tests pass" in out
+    assert _format_plan_steps([]) == ""
+
+
+def test_latest_planner_plan_picks_newest_revision():
+    from orchestration.context import RunContext
+    from orchestration.playbooks.plan import _latest_planner_plan
+
+    ctx = RunContext(session_id="sess-plan", run_id="r", playbook="plan")
+    drawers = [
+        {"content": "## sess-plan Planner\noriginal plan body"},
+        {"content": "## sess-plan Planner (Revision 2)\nrevised plan body"},
+        {"content": "## sess-plan Explore — foo\nnot the plan"},
+    ]
+    got = _latest_planner_plan(ctx, reader=lambda room: drawers)
+    assert "revised plan body" in got and "original" not in got
+
+
+def test_gate_questions_presents_the_full_plan(cp):
+    from orchestration.context import RunContext
+    from orchestration.playbooks.plan import PlanPlaybook
+
+    ctx = RunContext(session_id="sess-plan", run_id="r", playbook="plan")
+    ctx.stakes = "high"
+    ctx.plan_steps = [{"outcome": "Add dual-verifier agreement", "acceptance": "two critics agree"}]
+    ctx.extras["plan"] = {"proposed_action": "harden verifiers", "counter_argument": "adds latency"}
+    prompt = PlanPlaybook(cp).gate_questions("verify_gate", ctx)[0]["prompt"]
+    assert "Review the full plan" in prompt
+    assert "Add dual-verifier agreement" in prompt and "two critics agree" in prompt
+    assert "harden verifiers" in prompt and "adds latency" in prompt
+
+
 def test_verify_confirm_proceeds_to_critique(cp):
     _advance_to_planning(cp, constraints={"verification_mode": "default"})
     _step(cp, "piper", {"plan_complete": True, "plan_steps": [{"step": 1}], "stakes": "high"})

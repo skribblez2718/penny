@@ -39,6 +39,10 @@ verbatim so SKILL.md's post-completion queries keep working.
 
 from __future__ import annotations
 
+import os
+import re
+import sys
+from pathlib import Path
 from typing import Any
 
 from statemachine import State, StateMachine
@@ -267,6 +271,77 @@ PLAN_EXPLORE_DEFAULT = ParallelSpec(
 
 def _room(ctx: RunContext) -> str:
     return f"skills/plan-{ctx.session_id}"
+
+
+# ── approval-gate rendering: show the FULL plan, not a one-line summary ────────
+def _list_room_drawers(room: str) -> list:
+    """Best-effort read of a mempalace room via the bridge; [] on any failure. Skipped
+    under pytest so the FSM tests stay hermetic (the gate falls back to plan_steps)."""
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return []
+    try:
+        for parent in Path(__file__).resolve().parents:
+            bridge = parent / "scripts" / "system" / "bridge"
+            if bridge.is_dir():
+                if str(bridge) not in sys.path:
+                    sys.path.insert(0, str(bridge))
+                from memory_bridge import tool_list_drawers  # type: ignore[import-not-found]
+
+                res = tool_list_drawers(
+                    {"wing": "penny", "room": room, "include_content": True,
+                     "limit": 100, "offset": 0}
+                )
+                if isinstance(res, dict):
+                    return res.get("drawers", res.get("results", [])) or []
+                return []
+    except Exception:
+        return []
+    return []
+
+
+def _latest_planner_plan(ctx: RunContext, *, reader=None) -> str:
+    """The full plan text piper wrote to mempalace — the newest '<session> Planner' (or
+    '(Revision N)') drawer. Empty when unavailable, so the gate renders plan_steps."""
+    sid = str(ctx.session_id).lower()
+    candidates: list[tuple[int, str]] = []
+    for drawer in (reader or _list_room_drawers)(_room(ctx)):
+        content = str(drawer.get("content", "")).strip()
+        if not content:
+            continue
+        head = content.splitlines()[0].lower()
+        if "planner" in head and sid in head:
+            rev = re.search(r"revision\s+(\d+)", head)
+            candidates.append((int(rev.group(1)) if rev else 0, content))
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda c: c[0])
+    return candidates[-1][1]
+
+
+def _format_plan_steps(steps: list) -> str:
+    """Render captured plan_steps (strings or dicts) as a readable numbered list."""
+    if not steps:
+        return ""
+    out: list[str] = []
+    for i, step in enumerate(steps, 1):
+        if isinstance(step, dict):
+            title = (
+                step.get("outcome") or step.get("title") or step.get("step")
+                or step.get("name") or step.get("description") or ""
+            )
+            details = []
+            for key in ("dependencies", "deps", "acceptance", "acceptance_criteria",
+                        "effort", "risk"):
+                val = step.get(key)
+                if val:
+                    details.append(f"_{key}:_ {val}")
+            line = f"{i}. {title}".rstrip()
+            if details:
+                line += "\n   " + "  ·  ".join(str(d) for d in details)
+            out.append(line)
+        else:
+            out.append(f"{i}. {step}")
+    return "\n".join(out)
 
 
 def _build_explore(pb: "PlanPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
@@ -507,16 +582,26 @@ class PlanPlaybook(BasePlaybook):
         pending = plan.get("proposed_action") or "The plan is ready but warrants your confirmation."
         alternatives = plan.get("alternatives") or ["(none provided)"]
         counter = plan.get("counter_argument") or "(no counter-argument generated)"
+        # Show the FULL plan (the mempalace plan body, else the captured plan_steps) so
+        # the human approves what they can actually read — not a one-line summary.
+        body = (
+            _latest_planner_plan(ctx)
+            or _format_plan_steps(ctx.plan_steps)
+            or f"_(plan body not captured inline — see mempalace room `{_room(ctx)}`)_"
+        )
         return [
             {
                 "id": "verification_action",
                 "label": "Verify Plan",
                 "prompt": (
-                    "This plan is high-stakes; confirm before I taskify it.\n\n"
-                    f"**Proposed approach:** {pending}\n\n"
-                    f"**Stakes:** {ctx.stakes}\n\n"
+                    "**Review the full plan below, then confirm before I taskify it.**\n\n"
+                    "---\n\n"
+                    f"{body}\n\n"
+                    "---\n\n"
+                    f"**Stakes:** {ctx.stakes or 'unspecified'}\n\n"
+                    f"**Approach (one line):** {pending}\n\n"
                     f"**Counter-argument (why it might go wrong):** {counter}\n\n"
-                    f"**Alternative approach:** {alternatives[0]}"
+                    f"**Alternative considered:** {alternatives[0]}"
                 ),
                 "options": [
                     {
