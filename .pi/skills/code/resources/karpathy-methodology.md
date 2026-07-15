@@ -139,13 +139,14 @@ lands in the real graph.
 | Think Before Coding | `checking_criteria` (carren judges criteria quality) + the `criteria_gate` HITL, both before any code |
 | Simplicity First / Surgical Changes | carren's `learning` gap check (DRY, self-documenting, no orthogonal edits) |
 | Goal-Driven / criteria == verification | IDEAL_STATE `success_criteria` (from the prd skill) drive the `verifying` battery |
-| Naive-correct then optimize | `implementing` (RED → GREEN → REFACTOR) → `verifying`; there is no separate `optimizing` state |
+| Naive-correct then optimize | `implementing` (write the simplest code + tests that satisfy the battery; authoring rhythm is the model's call) → `verifying`; there is no separate `optimizing` state |
 | Guarantee (all tiers green) | `verifying` runs every configured tier; the `verifying ⇄ learning ⇄ implementing` loop drives to green, bounded by `max_iterations` |
 | Human-as-hawk | `plan_gate` approval + `unknown`/`awaiting_clarification` escalation |
 
-Note where the FSM diverges from §4's proposed alternative: it **keeps** the
-per-unit RED → GREEN → REFACTOR rhythm (skribble's `implementing` guidance) rather
-than dropping it, and it folds the Simplicity/Surgical review into carren's
-`learning` gap check rather than a dedicated `reviewing`/`optimizing` state. The
+Note how the FSM realizes §4's alternative: skribble's `implementing` guidance
+leaves the authoring rhythm to the model (test-first / alongside / after) — the
+all-tiers-green battery is the gate, not a per-unit RED → GREEN → REFACTOR ritual —
+and it folds the Simplicity/Surgical review into carren's `learning` gap check
+rather than a dedicated `reviewing`/`optimizing` state. The
 §4 **guarantee** — all configured tiers green, enforced as a loop battery — is
 what the `verifying` state implements.

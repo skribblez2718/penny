@@ -2,7 +2,7 @@
 
 ## Overview
 
-- **Purpose**: TDD-first coding skill using the Ralph Wiggum Loop. Always invoked for code generation, refactoring, or bug fixes. Uses skribble for implementation with mandatory security and coding standard compliance.
+- **Purpose**: Test-verified coding skill using the Ralph Wiggum Loop. Always invoked for code generation, refactoring, or bug fixes. Uses skribble for implementation with mandatory security and coding standard compliance.
 - **Hard Dependency**: Requires PRD + IDEAL_STATE from the `prd` skill. Use chain mode: `skill({ chain: [{ skill_name: "prd", ... }, { skill_name: "code", ... }] })`.
 - **Use When**: Multi-step process requiring code orchestration after a PRD has been written
 - **Outcome**: Validated implementation matching the IDEAL STATE from the PRD
@@ -37,8 +37,8 @@ Entry point is `exploring`. The `prd` skill handles intake and specification
 | echo | exploring | Deep exploration — find impacted files, verify IDEAL_STATE | assets/prompts/echo.md |
 | annie | analyzing | Security analysis — risks, integration surface, dependencies | assets/prompts/annie.md |
 | carren | checking_criteria, learning | Judge criteria quality before planning; judge output-vs-IDEAL-STATE gap | assets/prompts/carren.md |
-| piper | planning | TDD implementation planning | assets/prompts/piper.md |
-| skribble | implementing, verifying | Code implementation (RED → GREEN → REFACTOR) and verification | assets/prompts/skribble.md |
+| piper | planning | Implementation planning (build order + per-tier test strategy) | assets/prompts/piper.md |
+| skribble | implementing, verifying | Code + tests to satisfy the IDEAL STATE (sequencing is the model's call), and verification | assets/prompts/skribble.md |
 
 ## Mempalace Integration
 

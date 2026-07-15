@@ -11,9 +11,9 @@ The code skill runs on the shared orchestration engine as `CodeMachine`
 | analyzing | Security surface, integration/dependency risks | annie |
 | checking_criteria | Judge IDEAL_STATE criteria quality | carren |
 | criteria_gate | HITL: refine / accept / skip criteria | *(user)* |
-| planning | TDD plan, build order, per-tier test strategy | piper |
+| planning | Implementation plan, build order, per-tier test strategy | piper |
 | plan_gate | HITL: approve / refine / deny plan | *(user)* |
-| implementing | Write code RED → GREEN → REFACTOR | skribble |
+| implementing | Write code + tests to satisfy the IDEAL STATE (sequencing is the model's call) | skribble |
 | verifying | Run every configured verification tier | skribble |
 | learning | Judge output-vs-IDEAL-STATE gap | carren |
 | unknown / awaiting_clarification | Escalation: UNCERTAIN confidence at any working state (exploring…learning), or a stalled/repeated-strategy retry at learning; awaiting_clarification resumes at exploring | *(user)* |

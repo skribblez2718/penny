@@ -22,7 +22,7 @@ Before writing, check these files. If they exist, follow their conventions:
 ## Testing (CRITICAL)
 - Use `pytest` (project default unless overridden in pyproject.toml)
 - Test files: `test_<module>.py` in `tests/` directory
-- Write failing test FIRST (RED), then implementation (GREEN), then refactor
+- Tests are required at the tiers the IDEAL STATE marks applicable (lint/type/unit/integration/e2e); the sequencing (test-first, test-alongside, or test-after) is your call — the non-negotiable outcome is code + passing tests at those tiers, not a specific authoring rhythm. Never add a tier the project doesn't warrant.
 - Every public function: ≥1 test
 - Use fixtures for shared setup
 - Mock external dependencies (APIs, databases, file I/O)

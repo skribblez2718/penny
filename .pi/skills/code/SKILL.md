@@ -1,6 +1,6 @@
 ---
 name: code
-description: Write, refactor, or fix code — test-first, with security and coding-standard compliance built in. Use when the task requires implementing a feature, fixing a bug, or refactoring. Requires a PRD + IDEAL_STATE from the prd skill (hard dependency). Do not use when the change is fully specified and trivial (just do it), for pure planning or architecture work (the plan skill), or for non-code deliverables (skribble or synthia).
+description: Write, refactor, or fix code — verified by passing tests at the applicable tiers, with security and coding-standard compliance built in. Use when the task requires implementing a feature, fixing a bug, or refactoring. Requires a PRD + IDEAL_STATE from the prd skill (hard dependency). Do not use when the change is fully specified and trivial (just do it), for pure planning or architecture work (the plan skill), or for non-code deliverables (skribble or synthia).
 license: MIT
 metadata:
   penny:
@@ -11,7 +11,7 @@ metadata:
 
 # Code Skill
 
-Ralph Wiggum Loop skill for coding tasks. Takes IDEAL STATE from the prd skill, explores context, analyzes risks, plans implementation, writes code via TDD, verifies output, and iterates until IDEAL STATE is achieved.
+Ralph Wiggum Loop skill for coding tasks. Takes IDEAL STATE from the prd skill, explores context, analyzes risks, plans implementation, writes code and its tests, verifies output, and iterates until IDEAL STATE is achieved.
 
 ## When to Use
 
@@ -112,9 +112,9 @@ Escalation & terminals:
 | analyzing | annie | Security risks, integration surface, dependencies |
 | **checking_criteria** | **carren** | **Evaluates the IDEAL_STATE criteria for quality BEFORE planning begins. Checks: is each criterion measurable, achievable, precise, non-overlapping?** |
 | criteria_gate | *(HITL)* | **If carren found a gap in the criteria, presents a questionnaire showing which criteria need fixing and why. User can refine, accept as-is, or skip validation.** |
-| planning | piper | TDD implementation plan with dependency chains |
+| planning | piper | Implementation plan with dependency chains + per-tier test strategy |
 | **plan_gate** | *(HITL)* | **Presents the full plan summary (build order, deliverables, criteria) for explicit user approval before any code is written. User can approve, refine, or deny.** |
-| implementing | skribble | Write code: RED → GREEN → REFACTOR |
+| implementing | skribble | Write code + tests to satisfy the IDEAL STATE (sequencing is the model's call) |
 | verifying | skribble | Run lint, type-check, unit, integration, E2E |
 | learning | carren | Compare output to IDEAL STATE, decide: iterate or complete |
 

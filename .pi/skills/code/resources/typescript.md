@@ -24,7 +24,7 @@ Before writing, check these files. If they exist, follow their conventions:
 ## Testing (CRITICAL)
 - Use `vitest` (project default unless overridden)
 - Test files: `*.test.ts` in `tests/` directory
-- Write failing test FIRST (RED), then implementation (GREEN), then refactor
+- Tests are required at the tiers the IDEAL STATE marks applicable (lint/type/unit/integration/e2e); the sequencing (test-first, test-alongside, or test-after) is your call — the non-negotiable outcome is code + passing tests at those tiers, not a specific authoring rhythm. Never add a tier the project doesn't warrant.
 - Every public function: ≥1 test
 - Use `describe`/`it` blocks for organization
 

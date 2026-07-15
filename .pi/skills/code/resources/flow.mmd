@@ -52,7 +52,7 @@ stateDiagram-v2
     plan_gate --> planning : plan_refine\n[user: refine]
     plan_gate --> error : plan_denied\n[user: deny]
 
-    %% ACT (RED -> GREEN -> REFACTOR) — skribble writes code TDD-first
+    %% ACT — skribble writes code + its tests to satisfy the IDEAL STATE (sequencing is the model's call)
     implementing --> verifying : implement_done
     implementing --> unknown : to_unknown\n[confidence_is_uncertain]
 
