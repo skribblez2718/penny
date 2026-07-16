@@ -100,6 +100,135 @@ export function normalizeEscalationQuestions(
 }
 
 /**
+ * True when a SkillResult is a *clarification pause* (the skill needs user input)
+ * rather than a hard error. A clarification carries the skill's actual questions
+ * and no error text; a chain surfaces those questions and routes the answer back
+ * to the paused step, instead of the generic retry/skip/diagnose recovery prompt.
+ */
+export function isClarificationEscalation(result: SkillResult): boolean {
+  return (
+    !result.success &&
+    !!result.escalation &&
+    Array.isArray(result.escalation.questions) &&
+    result.escalation.questions.length > 0 &&
+    (result.state === "awaiting_clarification" || result.errors.length === 0)
+  );
+}
+
+/**
+ * A step to run when resuming a chain from a checkpoint.
+ */
+export interface ResumeChainStep {
+  skill_name: string;
+  goal: string;
+  session_id?: string;
+  constraints?: Record<string, unknown>;
+}
+
+/** Minimal checkpoint shape reconstructResumeChain reads (subset of ChainCheckpoint). */
+export interface ResumeCheckpointStep {
+  index: number;
+  skill_name: string;
+  goal: string;
+  session_id: string;
+  status: "pending" | "running" | "complete" | "failed";
+  result_summary?: string;
+}
+
+export interface ResumeCheckpointShape {
+  steps: ResumeCheckpointStep[];
+  pending_steps?: Array<{ index: number; skill_name: string; goal: string }>;
+}
+
+export interface ResumeReconstruction {
+  /** Steps still to run (failed step first, then still-pending), each exactly once. */
+  chain: ResumeChainStep[];
+  /** Already-completed steps in order, with their {previous} handoff summaries. */
+  completed: Array<{
+    index: number;
+    skill_name: string;
+    session_id: string;
+    result_summary: string;
+  }>;
+  /** 0-based index of the first step to (re)run. */
+  startStep: number;
+}
+
+/**
+ * Reconstruct the remaining chain from a failed/paused checkpoint.
+ *
+ * Fixes two resume bugs that broke resuming a chain after a step paused for
+ * clarification:
+ *  1. **No duplicate steps.** Pending steps live in BOTH `checkpoint.steps`
+ *     (status "pending") and `checkpoint.pending_steps`; the old code added them
+ *     from both loops, yielding e.g. "prd → code → code". This dedupes by step
+ *     index (a step is added at most once).
+ *  2. **Session identity preserved.** Each still-to-run step carries its
+ *     checkpointed `session_id`, so the resumed run reuses the SAME session and
+ *     the durable checkpointer can `recover` the paused run (e.g. a clarification
+ *     pause) instead of minting a fresh run_id — the cause of "unknown run_id".
+ *
+ * `stepOverrides` (goal/constraints) apply only to the failed step. Pure and
+ * side-effect free for testability.
+ */
+export function reconstructResumeChain(
+  checkpoint: ResumeCheckpointShape,
+  stepOverrides?: Record<number, { goal?: string; constraints?: Record<string, unknown> }>
+): ResumeReconstruction {
+  const chain: ResumeChainStep[] = [];
+  const completed: ResumeReconstruction["completed"] = [];
+  const seen = new Set<number>();
+  let startStep = 0;
+  let sawFailed = false;
+
+  for (const step of checkpoint.steps) {
+    if (step.status === "complete") {
+      completed.push({
+        index: step.index,
+        skill_name: step.skill_name,
+        session_id: step.session_id,
+        result_summary: step.result_summary || "",
+      });
+      continue;
+    }
+    if (seen.has(step.index)) continue;
+    if (step.status === "failed") {
+      const override = stepOverrides?.[step.index];
+      chain.push({
+        skill_name: step.skill_name,
+        goal: override?.goal ?? step.goal,
+        constraints: override?.constraints ?? {},
+        session_id: step.session_id,
+      });
+      startStep = step.index;
+      sawFailed = true;
+    } else {
+      // pending / running — carry the checkpointed session_id
+      chain.push({
+        skill_name: step.skill_name,
+        goal: step.goal,
+        session_id: step.session_id,
+      });
+    }
+    seen.add(step.index);
+  }
+
+  for (const pending of checkpoint.pending_steps ?? []) {
+    if (seen.has(pending.index)) continue;
+    chain.push({ skill_name: pending.skill_name, goal: pending.goal });
+    seen.add(pending.index);
+  }
+
+  // No failed step recorded (e.g. a pause-only checkpoint) → resume from the
+  // lowest still-to-run index.
+  if (!sawFailed && seen.size > 0) {
+    startStep = Math.min(...seen);
+  }
+
+  return { chain, completed, startStep };
+}
+
+/**
  * Detect the invocation mode from tool parameters.
  *
  * Exactly one mode must be provided — ambiguous params produce an error.
@@ -125,13 +254,15 @@ export function detectSkillMode(params: {
   if (modeCount === 0) {
     return {
       mode: "single",
-      error: "No invocation mode provided. Provide skill_name+goal, skills, chain, or resume_chain.",
+      error:
+        "No invocation mode provided. Provide skill_name+goal, skills, chain, or resume_chain.",
     };
   }
   if (modeCount > 1) {
     return {
       mode: "single",
-      error: "Ambiguous parameters. Provide exactly one of: skill_name+goal, skills, chain, or resume_chain.",
+      error:
+        "Ambiguous parameters. Provide exactly one of: skill_name+goal, skills, chain, or resume_chain.",
     };
   }
 
@@ -255,15 +386,32 @@ export function formatResult(
     // owns all FSM state, keyed by session_id/run_id. Re-invoking with the SAME
     // session_id + constraints.user_response is sufficient: `recover` finds the
     // pending run and `step --agent user` consumes the answer.
-    lines.push(theme("muted", "  After the user responds, re-invoke the skill with:"));
-    lines.push(theme("muted", "  skill({"));
-    lines.push(theme("muted", `    skill_name: "${result.skill_name}",`));
-    lines.push(theme("muted", `    session_id: "${result.session_id}",`));
-    lines.push(theme("muted", '    goal: "<original goal>",'));
-    lines.push(theme("muted", "    constraints: {"));
-    lines.push(theme("muted", '      user_response: "<answer from questionnaire>"'));
-    lines.push(theme("muted", "    }"));
-    lines.push(theme("muted", "  })"));
+    if (result.mode === "chain" && result.chain_session_id) {
+      // Chain escalation: resume the CHAIN (not a bare skill). The answer is
+      // routed to the paused step as constraints.user_response via step_overrides.
+      lines.push(theme("muted", "  After the user responds, resume the chain with:"));
+      lines.push(theme("muted", "  skill({"));
+      lines.push(theme("muted", `    resume_chain: "${result.chain_session_id}",`));
+      if (typeof result.chain_error_step === "number") {
+        lines.push(
+          theme(
+            "muted",
+            `    step_overrides: { "${result.chain_error_step}": { constraints: { user_response: "<answer from questionnaire>" } } }`
+          )
+        );
+      }
+      lines.push(theme("muted", "  })"));
+    } else {
+      lines.push(theme("muted", "  After the user responds, re-invoke the skill with:"));
+      lines.push(theme("muted", "  skill({"));
+      lines.push(theme("muted", `    skill_name: "${result.skill_name}",`));
+      lines.push(theme("muted", `    session_id: "${result.session_id}",`));
+      lines.push(theme("muted", '    goal: "<original goal>",'));
+      lines.push(theme("muted", "    constraints: {"));
+      lines.push(theme("muted", '      user_response: "<answer from questionnaire>"'));
+      lines.push(theme("muted", "    }"));
+      lines.push(theme("muted", "  })"));
+    }
   } else {
     lines.push(theme("error", `✗ ${result.skill_name} failed`));
     lines.push(`  State: ${result.state}`);

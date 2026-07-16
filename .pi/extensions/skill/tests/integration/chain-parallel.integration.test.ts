@@ -8,7 +8,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as fs from "fs";
 import type { SkillResult } from "../../skill-utils.js";
-import { truncateForPrevious, getFinalOutputFromSkillResult } from "../../skill-utils.js";
+import {
+  truncateForPrevious,
+  getFinalOutputFromSkillResult,
+  reconstructResumeChain,
+  isClarificationEscalation,
+  formatResult,
+} from "../../skill-utils.js";
 
 // ============================================================
 // Mocks
@@ -319,5 +325,177 @@ describe("resume from checkpoint (integration simulation)", () => {
     const checkpoint = null;
     expect(checkpoint).toBeNull();
     // The executeSkillsChain function returns error when checkpoint not found
+  });
+});
+
+// ============================================================
+// Regression: reconstructResumeChain (the REAL function, not a simulation)
+// Guards the two resume bugs that broke resuming after a clarification pause.
+// ============================================================
+
+describe("reconstructResumeChain (resume bug regression)", () => {
+  // The real checkpoint shape: pending steps live in BOTH `steps` (status
+  // "pending") AND `pending_steps`. The old inline logic added them from both,
+  // producing "prd → code → code".
+  const failedTwoStep = {
+    steps: [
+      {
+        index: 0,
+        skill_name: "prd",
+        goal: "spec it",
+        session_id: "prd-100",
+        status: "failed" as const,
+      },
+      {
+        index: 1,
+        skill_name: "code",
+        goal: "build {previous}",
+        session_id: "code-101",
+        status: "pending" as const,
+      },
+    ],
+    pending_steps: [{ index: 1, skill_name: "code", goal: "build {previous}" }],
+  };
+
+  it("does NOT duplicate pending steps (fixes prd → code → code)", () => {
+    const { chain } = reconstructResumeChain(failedTwoStep);
+    expect(chain.map((s) => s.skill_name)).toEqual(["prd", "code"]);
+    expect(chain).toHaveLength(2); // not 3
+  });
+
+  it("preserves each step's session_id so a paused run can be recovered", () => {
+    const { chain, startStep } = reconstructResumeChain(failedTwoStep);
+    expect(startStep).toBe(0);
+    expect(chain[0].session_id).toBe("prd-100"); // paused/failed step keeps its session
+    expect(chain[1].session_id).toBe("code-101");
+  });
+
+  it("applies overrides only to the failed step", () => {
+    const { chain } = reconstructResumeChain(failedTwoStep, {
+      0: { goal: "spec it (clarified)", constraints: { user_response: "go" } },
+    });
+    expect(chain[0].goal).toBe("spec it (clarified)");
+    expect(chain[0].constraints).toEqual({ user_response: "go" });
+    expect(chain[1].goal).toBe("build {previous}"); // untouched
+  });
+
+  it("skips completed steps and returns them for {previous} handoff", () => {
+    const cp = {
+      steps: [
+        {
+          index: 0,
+          skill_name: "research",
+          goal: "r",
+          session_id: "r-1",
+          status: "complete" as const,
+          result_summary: "found X",
+        },
+        {
+          index: 1,
+          skill_name: "plan",
+          goal: "p {previous}",
+          session_id: "p-1",
+          status: "failed" as const,
+        },
+        {
+          index: 2,
+          skill_name: "code",
+          goal: "c {previous}",
+          session_id: "c-1",
+          status: "pending" as const,
+        },
+      ],
+      pending_steps: [{ index: 2, skill_name: "code", goal: "c {previous}" }],
+    };
+    const { chain, completed, startStep } = reconstructResumeChain(cp);
+    expect(completed.map((c) => c.skill_name)).toEqual(["research"]);
+    expect(completed[0].result_summary).toBe("found X");
+    expect(chain.map((s) => s.skill_name)).toEqual(["plan", "code"]);
+    expect(startStep).toBe(1);
+  });
+
+  it("dedupes when a pending step appears ONLY in pending_steps (defensive)", () => {
+    const cp = {
+      steps: [
+        {
+          index: 0,
+          skill_name: "prd",
+          goal: "spec",
+          session_id: "prd-1",
+          status: "failed" as const,
+        },
+      ],
+      pending_steps: [{ index: 1, skill_name: "code", goal: "build" }],
+    };
+    const { chain } = reconstructResumeChain(cp);
+    expect(chain.map((s) => s.skill_name)).toEqual(["prd", "code"]);
+  });
+});
+
+// ============================================================
+// Chain clarification surfacing (follow-up): a paused step shows its OWN
+// questions + a resume_chain instruction, not the generic retry/skip prompt.
+// ============================================================
+
+describe("chain clarification surfacing", () => {
+  const base = (over: Partial<SkillResult>): SkillResult => ({
+    success: false,
+    session_id: "s",
+    skill_name: "prd",
+    state: "awaiting_clarification",
+    requires_approval: false,
+    steps_total: 0,
+    agents_invoked: [],
+    errors: [],
+    ...over,
+  });
+  const theme = (_c: string, t: string) => t;
+
+  it("detects a clarification pause (questions present, no error text)", () => {
+    expect(
+      isClarificationEscalation(
+        base({ escalation: { questions: [{ id: "q1", label: "Q", prompt: "confirm?" }] } })
+      )
+    ).toBe(true);
+  });
+
+  it("does NOT treat a hard error or a success as a clarification", () => {
+    expect(
+      isClarificationEscalation(base({ state: "error", errors: ["400 invalid_request"] }))
+    ).toBe(false);
+    expect(isClarificationEscalation(base({ success: true, state: "complete" }))).toBe(false);
+  });
+
+  it("renders a resume_chain instruction routing the answer to the paused step", () => {
+    const out = formatResult(
+      base({
+        skill_name: "chain",
+        mode: "chain",
+        chain_session_id: "chain-42",
+        chain_error_step: 0,
+        escalation: {
+          questions: [{ id: "design", label: "Confirm", prompt: "confirm the veto design?" }],
+        },
+      }),
+      theme
+    );
+    expect(out).toContain('resume_chain: "chain-42"');
+    expect(out).toContain('"0": { constraints: { user_response:');
+    expect(out).toContain("confirm the veto design?"); // the SKILL's real question
+    expect(out).not.toContain('skill_name: "chain"'); // not the invalid bare-skill form
+  });
+
+  it("single-skill escalation still renders the bare-skill resume form", () => {
+    const out = formatResult(
+      base({
+        skill_name: "prd",
+        session_id: "prd-1",
+        escalation: { questions: [{ id: "q", label: "Q", prompt: "which mode?" }] },
+      }),
+      theme
+    );
+    expect(out).toContain('skill_name: "prd"');
+    expect(out).toContain('session_id: "prd-1"');
+    expect(out).not.toContain("resume_chain");
   });
 });

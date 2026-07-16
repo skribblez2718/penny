@@ -42,6 +42,8 @@ import {
   getFinalOutputFromSkillResult,
   detectSkillMode,
   normalizeEscalationQuestions,
+  reconstructResumeChain,
+  isClarificationEscalation,
 } from "./skill-utils.js";
 import { createLogger, setSessionId, type ErrorCode } from "../../lib/logger/logger.js";
 
@@ -860,7 +862,8 @@ async function executeSkill(
     // durable checkpointer (keyed by run_id) owns all FSM state.
     const recovered = await pythonRecover(orchestratePath, sessionId, projectRoot, sessionId);
     const hasPending = recovered && recovered.action !== "status" && recovered.action !== "error";
-    const recoveredRunId = recovered && typeof recovered.run_id === "string" ? recovered.run_id : "";
+    const recoveredRunId =
+      recovered && typeof recovered.run_id === "string" ? recovered.run_id : "";
     if (isClarificationResume) {
       runId = recoveredRunId || randomUUID();
       emitProgress(`Resuming ${skillName} with user clarification...`);
@@ -869,7 +872,14 @@ async function executeSkill(
         clarification: clarificationResponse,
         user_response: clarificationResponse,
       });
-      action = await pythonStep(orchestratePath, sessionId, "user", resumeResult, projectRoot, runId);
+      action = await pythonStep(
+        orchestratePath,
+        sessionId,
+        "user",
+        resumeResult,
+        projectRoot,
+        runId
+      );
     } else if (hasPending) {
       runId = recoveredRunId || randomUUID();
       emitProgress(`Resuming ${skillName} run from checkpointer...`);
@@ -877,7 +887,14 @@ async function executeSkill(
     } else {
       runId = randomUUID();
       emitProgress(`Starting ${skillName} skill...`);
-      action = await pythonStart(orchestratePath, sessionId, params.goal, projectRoot, constraints, runId);
+      action = await pythonStart(
+        orchestratePath,
+        sessionId,
+        params.goal,
+        projectRoot,
+        constraints,
+        runId
+      );
     }
 
     if (action.action === "error") {
@@ -1022,7 +1039,14 @@ async function executeSkill(
 
         // Feed result back to Python
         emitProgress(`Processing ${action.agent} results...`);
-        action = await pythonStep(orchestratePath, sessionId, action.agent, resultJson, projectRoot, runId);
+        action = await pythonStep(
+          orchestratePath,
+          sessionId,
+          action.agent,
+          resultJson,
+          projectRoot,
+          runId
+        );
       } else if (action.action === "invoke_agents_parallel" && action.tasks) {
         // === Parallel agent invocation via agent-runner ===
         for (const t of action.tasks) {
@@ -1655,54 +1679,33 @@ async function executeSkillsChain(
       };
     }
 
-    // Reconstruct chain from checkpoint
+    // Reconstruct chain from checkpoint. Pure + unit-tested: dedupes pending
+    // steps by index (fixes the "prd → code → code" duplication) and preserves
+    // each step's session_id so a paused run is recovered on resume instead of
+    // minting a fresh run_id (fixes "unknown run_id"). See reconstructResumeChain.
     chainSessionId = resumeFrom;
-    chain = [];
-    for (const step of checkpoint.steps) {
-      if (step.status === "complete") {
-        results.push({
-          success: true,
-          session_id: step.session_id,
-          skill_name: step.skill_name,
-          state: "complete",
-          requires_approval: false,
-          steps_total: 1,
-          agents_invoked: [],
-          errors: [],
-          mode: "chain",
-          chain_step: step.index,
-          chain_total: checkpoint.total_steps,
-          chain_session_id: resumeFrom,
-          plan: { plan_summary: step.result_summary || "" },
-        });
-        if (step.result_summary) {
-          previousOutput = step.result_summary;
-        }
-      } else if (step.status === "failed") {
-        // This is the step to retry — apply overrides
-        const override = stepOverrides?.[step.index];
-        const resolvedGoal = override?.goal ?? step.goal;
-        const resolvedConstraints = override?.constraints ?? {};
-        chain.push({
-          skill_name: step.skill_name,
-          goal: resolvedGoal,
-          constraints: resolvedConstraints,
-        });
-        startStep = step.index;
-      } else {
-        // pending steps — add to chain for execution
-        chain.push({
-          skill_name: step.skill_name,
-          goal: step.goal,
-        });
-      }
-    }
-    // Add remaining pending steps
-    for (const pending of checkpoint.pending_steps) {
-      chain.push({
-        skill_name: pending.skill_name,
-        goal: pending.goal,
+    const reconstruction = reconstructResumeChain(checkpoint, stepOverrides);
+    chain = reconstruction.chain;
+    startStep = reconstruction.startStep;
+    for (const done of reconstruction.completed) {
+      results.push({
+        success: true,
+        session_id: done.session_id,
+        skill_name: done.skill_name,
+        state: "complete",
+        requires_approval: false,
+        steps_total: 1,
+        agents_invoked: [],
+        errors: [],
+        mode: "chain",
+        chain_step: done.index,
+        chain_total: checkpoint.total_steps,
+        chain_session_id: resumeFrom,
+        plan: { plan_summary: done.result_summary },
       });
+      if (done.result_summary) {
+        previousOutput = done.result_summary;
+      }
     }
 
     logger.info("Resuming chain from checkpoint", {
@@ -1805,8 +1808,11 @@ async function executeSkillsChain(
     const result = await executeSkill(
       step.skill_name,
       {
+        // Use the CHECKPOINTED session_id (minted once in allStepDefs) so the run
+        // and the checkpoint agree — otherwise executeSkill would mint its own
+        // `plan-<ts>` and a later resume could not recover this run.
         goal: resolvedGoal,
-        session_id: step.session_id,
+        session_id: stepEntry?.session_id ?? step.session_id,
         constraints: step.constraints,
       },
       cwd,
@@ -1835,6 +1841,38 @@ async function executeSkillsChain(
       }
       checkpoint.chain_status = "failed";
       saveCheckpoint(checkpoint, projectRoot);
+
+      // A clarification PAUSE (the step needs user input) is not a hard error:
+      // surface the STEP's actual questions so the user answers them, and route
+      // the answer back to THIS step (constraints.user_response) on resume,
+      // instead of the generic retry/skip/diagnose recovery prompt.
+      if (isClarificationEscalation(result)) {
+        return {
+          success: false,
+          session_id: chainSessionId,
+          skill_name: "chain",
+          state: "awaiting_clarification",
+          requires_approval: false,
+          session_room: result.session_room,
+          steps_total: checkpoint.total_steps,
+          agents_invoked: results.flatMap((r) => r.agents_invoked),
+          errors: [],
+          mode: "chain",
+          chain_step: stepIndex,
+          chain_total: checkpoint.total_steps,
+          chain_session_id: chainSessionId,
+          chain_error_step: stepIndex,
+          chain_results: results.slice(0, -1),
+          resumable: true,
+          escalation: {
+            questions: result.escalation!.questions,
+            unknown_reason:
+              `Step ${stepIndex + 1}/${checkpoint.total_steps} (${step.skill_name}) needs clarification before the chain can continue.` +
+              (result.escalation!.unknown_reason ? ` ${result.escalation!.unknown_reason}` : ""),
+            previous_state: result.escalation!.previous_state,
+          },
+        };
+      }
 
       return {
         success: false,
@@ -2175,7 +2213,6 @@ export default function skillExtension(pi: ExtensionAPI): void {
           theme("accent", args.resume_chain.slice(0, 20));
         return new Text(text, 0, 0);
       }
-
 
       // ── Single mode (unchanged) ──
       const skill = skills.find((s) => s.name === args.skill_name);
