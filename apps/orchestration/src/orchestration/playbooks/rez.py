@@ -30,6 +30,11 @@ materials under ``.pi/skills/rez/resources/`` are read-only for every lane.
 
 from __future__ import annotations
 
+import os
+import re
+import sys
+from pathlib import Path
+
 from statemachine import State, StateMachine
 
 from ..context import RunContext
@@ -219,6 +224,105 @@ def _skill_dir(ctx: RunContext) -> str:
     return f"{root}/.pi/skills/rez" if root else ".pi/skills/rez"
 
 
+# ── T4: deterministic source-provenance ASSIST for vera (rules-tier flag, NOT a gate) ──
+# vera is the anti-fabrication oracle; this hands it a cheap first-pass suspect list — tailored
+# bullets whose content tokens (almost) never appear in the base resume/accomplishments are likely
+# invented. Scoped as EVIDENCE for the interpreter (never a rule taxonomy that decides the
+# verdict), because paraphrase defeats exact matching.
+_PROVENANCE_STOP = frozenset({
+    "with", "from", "that", "this", "have", "were", "will", "using", "used", "into", "than",
+    "over", "your", "their", "them", "they", "and", "the", "for", "was", "are", "role", "roles",
+    "led", "built", "developed", "managed", "created", "designed", "implemented", "engineered",
+    "improved", "increased", "reduced", "delivered", "team", "teams", "project", "projects",
+    "work", "worked", "across", "within", "including", "various", "multiple", "responsible",
+})
+
+
+def _content_tokens(text: str) -> list:
+    return [
+        t for t in re.findall(r"[a-z0-9]+", (text or "").lower())
+        if len(t) >= 4 and t not in _PROVENANCE_STOP
+    ]
+
+
+def _flag_unprovenanced_bullets(
+    bullets, source_text, *, min_overlap: float = 0.34, min_missing: int = 4
+) -> list:
+    """Tailored bullets with NO/low source provenance. A bullet is flagged when BOTH: the fraction
+    of its content tokens (>=4 chars, minus a resume-filler stoplist) present in the source corpus
+    is below ``min_overlap``, AND at least ``min_missing`` of its content tokens are absent from
+    the source. The absolute-count floor keeps a short, grounded-but-reworded bullet (a couple of
+    number-word/plural mismatches) from firing, while a clearly-invented bullet (many unfamiliar
+    tokens) still does. Bullets with too few content tokens are never flagged. Pure heuristic — an
+    ASSIST for vera, tuned to over-spare rather than over-flag."""
+    source = set(_content_tokens(source_text))
+    flagged: list = []
+    for bullet in bullets or []:
+        toks = _content_tokens(bullet)
+        if len(toks) < 3:
+            continue
+        present = sum(1 for t in toks if t in source)
+        missing = len(toks) - present
+        if missing >= min_missing and (present / len(toks)) < min_overlap:
+            flagged.append(str(bullet).strip())
+    return flagged
+
+
+def _read_source_text(ctx: RunContext) -> str:
+    """Base resume + accomplishments text on disk (READ-ONLY source corpus); '' on failure."""
+    parts: list = []
+    base = Path(_skill_dir(ctx)) / "resources"
+    for sub in ("resume", "accomplishments"):
+        directory = base / sub
+        if not directory.is_dir():
+            continue
+        try:
+            files = sorted(directory.iterdir())
+        except OSError:
+            continue
+        for f in files:
+            if (f.is_file() and f.suffix.lower() in (".md", ".txt")
+                    and f.name.lower() != "readme.md"):
+                try:
+                    parts.append(f.read_text(encoding="utf-8", errors="ignore"))
+                except OSError:
+                    pass
+    return "\n".join(parts)
+
+
+def _read_tailored_bullets(ctx: RunContext) -> list:
+    """Bullet lines from the '## <session> Tailored Resume' drawer in the rez room, or []."""
+    text = ""
+    try:
+        for parent in Path(__file__).resolve().parents:
+            bridge = parent / "scripts" / "system" / "bridge"
+            if bridge.is_dir():
+                if str(bridge) not in sys.path:
+                    sys.path.insert(0, str(bridge))
+                from memory_bridge import tool_list_drawers  # type: ignore[import-not-found]
+
+                res = tool_list_drawers(
+                    {"wing": "penny", "room": _room(ctx), "include_content": True,
+                     "limit": 100, "offset": 0}
+                )
+                drawers = res.get("drawers", res.get("results", [])) if isinstance(res, dict) else []
+                sid = str(ctx.session_id).lower()
+                for d in drawers:
+                    content = str(d.get("content", ""))
+                    head = content.splitlines()[0].lower() if content else ""
+                    if "tailored resume" in head and sid in head:
+                        text = content
+                        break
+                break
+    except Exception:
+        return []
+    return [
+        ln.strip().lstrip("-*\u2022 ").strip()
+        for ln in text.splitlines()
+        if ln.strip().startswith(("-", "*", "\u2022"))
+    ]
+
+
 def _build_analyze(pb: "RezPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
     return (
         f"Session: {ctx.session_id}. "
@@ -300,6 +404,16 @@ def _build_tailor(pb: "RezPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> st
 
 def _build_validate(pb: "RezPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
     room = _room(ctx)
+    flags = pb._provenance_flags(ctx)
+    assist = ""
+    if flags:
+        shown = "; ".join(f'"{str(b)[:120]}"' for b in flags[:8])
+        assist = (
+            " PROVENANCE ASSIST (deterministic pre-scan — a HINT, not a verdict): these tailored "
+            f"bullets show no source-token overlap and are fabrication SUSPECTS — trace each to the "
+            f"base resume/accomplishments and REJECT any you cannot ground: {shown}. You remain the "
+            "anti-fabrication oracle."
+        )
     return (
         f"Session: {ctx.session_id}. "
         f"Mempalace room: {room}. "
@@ -315,12 +429,11 @@ def _build_validate(pb: "RezPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> 
         f"canonical verbiage when alignment ran, [UNALIGNED] prefixes when it "
         f"did not. "
         f"Write the validation report to mempalace wing=penny room={room}. "
-        f"Return SUMMARY with valid, fabrication_free, issues."
+        f"Return SUMMARY with valid, fabrication_free, issues.{assist}"
     )
 
 
 def _build_export(pb: "RezPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
-    rez = ctx.extras.get("rez", {})
     room = _room(ctx)
     return (
         f"Session: {ctx.session_id}. "
@@ -400,7 +513,7 @@ class RezPlaybook(BasePlaybook):
         return None
 
     # -- routing -----------------------------------------------------------
-    def route_after(self, state: str, ctx: RunContext, summary: dict) -> None:
+    def route_after(self, state: str, ctx: RunContext, summary: dict) -> None:  # noqa: C901
         rez = ctx.extras.setdefault("rez", {})
         if state == "analyzing":
             if not summary.get("jd_loaded"):
@@ -461,6 +574,19 @@ class RezPlaybook(BasePlaybook):
     def done_predicate(self, ctx: RunContext) -> bool:
         rez = ctx.extras.get("rez", {})
         return bool(rez.get("valid")) and bool(rez.get("exported"))
+
+    def _provenance_flags(self, ctx: RunContext) -> list:
+        """(T4) Tailored bullets a deterministic scan flags as having no source provenance — a
+        first-pass fabrication suspect list handed to vera (the anti-fabrication oracle; this is
+        a hint, not a gate). Best-effort: reads the tailored resume from mempalace + the base
+        resume/accomplishments from disk. [] when unreadable or under pytest (unless a test
+        overrides this). Never raises."""
+        if "PYTEST_CURRENT_TEST" in os.environ:
+            return []
+        try:
+            return _flag_unprovenanced_bullets(_read_tailored_bullets(ctx), _read_source_text(ctx))
+        except Exception:
+            return []
 
     # -- prompts + result --------------------------------------------------
     def _task_summary(self, state: str, spec: PrimitiveSpec, ctx: RunContext) -> str:

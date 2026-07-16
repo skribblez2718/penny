@@ -398,3 +398,43 @@ def test_recovery_re_presents_pending_clarification(cp, monkeypatch):
     directives = recover_pending(cp, session_id=SID, playbook="rez")
     assert len(directives) == 1 and directives[0]["action"] == "escalate_to_user"
     assert directives[0]["previous_state"] == "analyzing"
+
+
+# ---------------------------------------------------------------------------
+# T4: deterministic source-provenance ASSIST for vera (rules-tier flag, not a gate)
+# ---------------------------------------------------------------------------
+
+
+def test_flag_unprovenanced_bullets_flags_invented_spares_grounded():
+    from orchestration.playbooks.rez import _flag_unprovenanced_bullets
+
+    source = (
+        "Senior engineer at Acme. Built a Python billing pipeline processing 2M invoices. "
+        "Cut request latency 40%. Skilled in PostgreSQL and Kubernetes."
+    )
+    grounded = "Engineered a Python billing pipeline that processed 2M invoices, trimming latency"
+    invented = "Directed a 50-person organization at Google Cloud on a Snowflake datawarehouse rollout"
+    flags = _flag_unprovenanced_bullets([grounded, invented], source)
+    assert invented in flags       # no source overlap -> flagged as a fabrication suspect
+    assert grounded not in flags   # paraphrase, but content tokens trace to the source
+
+
+class _FlagRez(RezPlaybook):
+    def _provenance_flags(self, ctx):
+        return ["Directed a 50-person org at Google Cloud"]
+
+
+def test_validate_task_injects_provenance_flags(cp):
+    from orchestration.playbooks.rez import _build_validate
+
+    ctx = RunContext(session_id=SID, run_id=RID, playbook="rez")
+    task = _build_validate(_FlagRez(cp), ctx, None)
+    assert "PROVENANCE ASSIST" in task and "Google Cloud" in task
+
+
+def test_validate_task_no_flags_no_assist(cp):
+    from orchestration.playbooks.rez import _build_validate
+
+    ctx = RunContext(session_id=SID, run_id=RID, playbook="rez")  # default -> [] under pytest
+    task = _build_validate(RezPlaybook(cp), ctx, None)
+    assert "PROVENANCE ASSIST" not in task
