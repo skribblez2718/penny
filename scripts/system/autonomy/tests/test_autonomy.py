@@ -5,6 +5,7 @@ Hermetic and pure — no live stores (the trust math takes outcomes as input).
 
 from __future__ import annotations
 
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -191,3 +192,170 @@ def test_gate_fail_safe_on_unknown_reversibility(monkeypatch):
     monkeypatch.setattr(gt, "classify", lambda t: ac.ActionClass("coding", "edit", "some-new-tag"))
     d = gt.decide("edit the file", _lookup(1.0))
     assert d.action == gt.ASK
+
+
+# ── gate: optional model reversibility veto (env-gated, veto-only, fail-safe) ──
+
+# Keyword-REVERSIBLE phrasings that are semantically risky — the false positives
+# the model layer exists to catch. Each MUST classify as REVERSIBLE by keywords
+# alone (else the veto layer would never be consulted for them).
+_KEYWORD_FALSE_POSITIVES = [
+    "update config to shorten data retention",
+    "toggle off the nightly backup job",
+    "set config to keep zero snapshots",
+    "refactor the archiver so it stops writing",
+    "rewrite the cleanup rule to retain nothing",
+]
+
+# Genuinely reversible actions the model should confirm as reversible.
+_TRUE_REVERSIBLE = [
+    "rename a variable in the auth module",
+    "refactor the parser for clarity",
+    "summarize the meeting notes",
+    "draft a plan for the migration",
+    "add a test for the edge case",
+]
+
+
+def _model_reply(assistant_text):
+    """A subprocess.run replacement returning `assistant_text` as the model's JSON
+    reply, in the message_end stream format pi_json_call parses. Records whether
+    it was called via `.calls`."""
+    stdout = json.dumps(
+        {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "stopReason": "stop",
+                "content": [{"type": "text", "text": assistant_text}],
+            },
+        }
+    )
+
+    class _Proc:
+        returncode = 0
+
+    def run(*args, **kwargs):
+        run.calls.append(1)
+        proc = _Proc()
+        proc.stdout = stdout
+        return proc
+
+    run.calls = []
+    return run
+
+
+def _exploding_runner():
+    """A runner that fails loudly if ever invoked (proves no model call happens)."""
+
+    def run(*args, **kwargs):
+        run.calls.append(1)
+        raise AssertionError("the model must not be called here")
+
+    run.calls = []
+    return run
+
+
+def test_veto_fixtures_classify_as_keyword_reversible():
+    # The fixtures must be REVERSIBLE by keywords alone, or the veto layer would
+    # never be consulted for them.
+    for text in _KEYWORD_FALSE_POSITIVES + _TRUE_REVERSIBLE:
+        assert ac.classify(text).reversibility == ac.REVERSIBLE, text
+
+
+def test_gate_model_vetoes_keyword_false_positive(monkeypatch):
+    # (a) keyword says REVERSIBLE, model flags it destructive -> ASK.
+    monkeypatch.setenv("PENNY_AUTONOMY_REVERSIBILITY_MODEL", "test/model")
+    runner = _model_reply('{"reversibility": "destructive", "confidence": "high"}')
+    d = gt.decide("update config to shorten data retention", _lookup(1.0), runner=runner)
+    assert d.action == gt.ASK
+    assert d.reversibility == ac.DESTRUCTIVE
+    assert "model" in d.reason
+    assert runner.calls  # the model WAS consulted
+
+
+def test_gate_model_disabled_is_byte_identical(monkeypatch):
+    # (b) env unset -> identical to keyword-only; the model is never called. Note
+    # these risky phrasings would (dangerously) ACT without the model — exactly
+    # the false positive the veto layer catches when enabled.
+    monkeypatch.delenv("PENNY_AUTONOMY_REVERSIBILITY_MODEL", raising=False)
+    exploding = _exploding_runner()
+    for text in _TRUE_REVERSIBLE + _KEYWORD_FALSE_POSITIVES:
+        assert gt.decide(text, _lookup(0.9), runner=exploding).action == gt.ACT, text
+    assert exploding.calls == []  # gated off before any runner use
+
+
+def test_gate_model_failure_falls_back_to_keyword(monkeypatch):
+    # (c) any model failure keeps the keyword verdict; the gate never crashes.
+    monkeypatch.setenv("PENNY_AUTONOMY_REVERSIBILITY_MODEL", "test/model")
+
+    def boom(*a, **k):
+        raise OSError("spawn failed")
+
+    assert gt.decide("refactor the auth module", _lookup(0.9), runner=boom).action == gt.ACT
+    # non-JSON assistant text -> no parseable object -> keyword kept
+    assert (
+        gt.decide(
+            "refactor the auth module", _lookup(0.9), runner=_model_reply("not json at all")
+        ).action
+        == gt.ACT
+    )
+    # valid stream but unparseable reversibility label -> keyword kept
+    assert (
+        gt.decide(
+            "refactor the auth module",
+            _lookup(0.9),
+            runner=_model_reply('{"reversibility": "banana", "confidence": "high"}'),
+        ).action
+        == gt.ACT
+    )
+
+
+def test_gate_model_cannot_upgrade_non_reversible(monkeypatch):
+    # (d) a model 'reversible' can NEVER override a keyword irreversible/destructive,
+    # and the model is not even consulted for those classes (monotone floor).
+    monkeypatch.setenv("PENNY_AUTONOMY_REVERSIBILITY_MODEL", "test/model")
+    runner = _model_reply('{"reversibility": "reversible", "confidence": "high"}')
+    assert gt.decide("delete the production database", _lookup(1.0), runner=runner).action == gt.ASK
+    assert gt.decide("deploy to production", _lookup(1.0), runner=runner).action == gt.ASK
+    assert runner.calls == []  # never attempted for non-reversible keyword classes
+
+
+def test_gate_model_agrees_still_acts(monkeypatch):
+    # (e) genuinely reversible + trusted + model agrees (high confidence) -> ACT.
+    monkeypatch.setenv("PENNY_AUTONOMY_REVERSIBILITY_MODEL", "test/model")
+    runner = _model_reply('{"reversibility": "reversible", "confidence": "high"}')
+    for text in _TRUE_REVERSIBLE:
+        assert gt.decide(text, _lookup(0.9), runner=runner).action == gt.ACT, text
+
+
+def test_gate_model_low_confidence_vetoes(monkeypatch):
+    # (f) model reports 'reversible' but LOW confidence -> veto (force ASK).
+    monkeypatch.setenv("PENNY_AUTONOMY_REVERSIBILITY_MODEL", "test/model")
+    runner = _model_reply('{"reversibility": "reversible", "confidence": "low"}')
+    d = gt.decide("update config to shorten data retention", _lookup(1.0), runner=runner)
+    assert d.action == gt.ASK
+    assert d.reversibility == ac.IRREVERSIBLE
+
+
+def test_model_veto_reversibility_is_most_severe_and_monotone(monkeypatch):
+    # unit-level: combine is most-severe; a non-reversible base is never upgraded
+    # and never triggers a model call.
+    monkeypatch.setenv("PENNY_AUTONOMY_REVERSIBILITY_MODEL", "test/model")
+    says_rev = _model_reply('{"reversibility": "reversible", "confidence": "high"}')
+    says_irr = _model_reply('{"reversibility": "irreversible", "confidence": "high"}')
+    assert (
+        ac.model_veto_reversibility("refactor x", ac.REVERSIBLE, runner=says_rev) == ac.REVERSIBLE
+    )
+    assert (
+        ac.model_veto_reversibility("refactor x", ac.REVERSIBLE, runner=says_irr) == ac.IRREVERSIBLE
+    )
+    exploding = _exploding_runner()
+    assert (
+        ac.model_veto_reversibility("delete x", ac.DESTRUCTIVE, runner=exploding) == ac.DESTRUCTIVE
+    )
+    assert (
+        ac.model_veto_reversibility("deploy x", ac.IRREVERSIBLE, runner=exploding)
+        == ac.IRREVERSIBLE
+    )
+    assert exploding.calls == []

@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional
 
-from action_classes import REVERSIBLE, classify
+from action_classes import REVERSIBLE, classify, model_veto_reversibility
 from trust import (
     TrustScore,
     compute_trust,
@@ -49,21 +49,37 @@ def decide(
     trust_lookup: Callable[[str], TrustScore],
     threshold: float = DEFAULT_THRESHOLD,
     graduated: Optional[Callable[[str], bool]] = None,
+    *,
+    runner: Optional[Callable] = None,
 ) -> Decision:
     """Pure decision. ``trust_lookup(domain) -> TrustScore``; ``graduated(domain)``
     (optional) is the calibration gate — a domain is eligible for ACT only when
-    its confidence predicts success. Absent → treated as graduated (trust-only)."""
+    its confidence predicts success. Absent → treated as graduated (trust-only).
+    ``runner`` is injected in tests so the optional reversibility model second-
+    opinion never spawns a live model under unit test."""
     cls = classify(action_text)
     # Hard rule first — no trust score overrides it. Fail-SAFE: only an
     # explicitly REVERSIBLE action is eligible to act unattended. Anything else
     # (irreversible, destructive, or an unexpected/unknown reversibility value)
     # asks — so a taxonomy gap can never silently unlock autonomy.
-    if cls.reversibility != REVERSIBLE:
+    #
+    # The optional model second-opinion (env PENNY_AUTONOMY_REVERSIBILITY_MODEL)
+    # is a VETO ONLY: consulted just for keyword-REVERSIBLE actions, it can only
+    # downgrade the verdict (most-severe wins), never upgrade it — so it can add
+    # ASKs but never unlock an ACT the keyword floor would have refused.
+    effective = model_veto_reversibility(action_text, cls.reversibility, runner=runner)
+    if effective != REVERSIBLE:
+        reason = (
+            f"model second opinion flagged this '{effective}' (keyword: reversible)"
+            " — asking a human"
+            if cls.reversibility == REVERSIBLE
+            else f"{effective} action always asks a human"
+        )
         return Decision(
             action=ASK,
-            reason=f"{cls.reversibility} action always asks a human",
+            reason=reason,
             action_class=cls.key,
-            reversibility=cls.reversibility,
+            reversibility=effective,
             trust=0.0,
         )
     score = trust_lookup(cls.domain)
@@ -94,7 +110,9 @@ def decide(
     )
 
 
-def decide_live(action_text: str, threshold: float = DEFAULT_THRESHOLD) -> Decision:
+def decide_live(
+    action_text: str, threshold: float = DEFAULT_THRESHOLD, *, runner: Optional[Callable] = None
+) -> Decision:
     """Decision against the live ledger + verifier false-pass cap. Best-effort:
     with no data, every domain has zero trust, so everything asks (safe default)."""
     outcomes = load_ledger_outcomes()
@@ -106,4 +124,4 @@ def decide_live(action_text: str, threshold: float = DEFAULT_THRESHOLD) -> Decis
             cache[domain] = compute_trust(outcomes, domain, false_pass_rate=fp)
         return cache[domain]
 
-    return decide(action_text, lookup, threshold)
+    return decide(action_text, lookup, threshold, runner=runner)
