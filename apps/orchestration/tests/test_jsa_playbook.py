@@ -746,3 +746,130 @@ def test_mid_tool_crash_recovers_by_rerunning_tool_loop(cp):
     assert len(directives) == 1
     assert directives[0]["action"] == "invoke_agent" and directives[0]["state_id"] == "investigate"
     assert cp.load(RID).context.extras["jsa"]["ran"] == ["structure", "slice"]
+
+
+# ---------------------------------------------------------------------------
+# T7d: engine-owned browser-PoC artifact capture (B-light) — verify -> poc_capture -> report
+# ---------------------------------------------------------------------------
+
+from orchestration.playbooks.jsa import _slug  # noqa: E402
+
+
+def _png(path):
+    from PIL import Image
+
+    Image.new("RGB", (320, 200)).save(path)
+
+
+def test_slug_is_filesystem_safe_and_deterministic():
+    assert _slug("DOM-XSS #3 /search?q=x") == "DOM-XSS_3_search_q_x"
+    assert _slug("a/b\\c:d") == "a_b_c_d"
+    assert _slug("") == "finding"
+
+
+def test_artifact_present_only_true_for_a_decodable_png(tmp_path):
+    good = tmp_path / "f1.png"
+    _png(good)
+    assert JSAPlaybook._artifact_present(str(good)) is True
+    bad = tmp_path / "f2.png"
+    bad.write_bytes(b"not a png")
+    assert JSAPlaybook._artifact_present(str(bad)) is False
+    assert JSAPlaybook._artifact_present(str(tmp_path / "missing.png")) is False
+
+
+def test_poc_candidate_ids_single_pass_vs_dual_agreed():
+    single = {"verify": {"verified_findings": ["F1", "F2"]}}
+    assert JSAPlaybook._poc_candidate_ids(single) == ["F1", "F2"]
+    dual = {
+        "verify": {"verified_findings": ["F1", "F2"]},
+        "reverify": {"verified_findings": ["F1", "F3"]},
+        "dual_verify_agreed_findings": ["F1"],
+    }
+    assert JSAPlaybook._poc_candidate_ids(dual) == ["F1"]  # only the agreed intersection is a candidate
+
+
+class _RealPoc(FakeJSA):
+    _poc_force_real = True  # bypass the pytest hermetic guard -> exercise the real artifact check
+
+
+def test_poc_partition_real_confirms_only_findings_with_a_decodable_screenshot(cp, tmp_path):
+    out = tmp_path / "jsaout"
+    (out / "poc").mkdir(parents=True)
+    _png(out / "poc" / "F1.png")                     # real browser screenshot
+    (out / "poc" / "F2.png").write_bytes(b"garbage")  # corrupt -> demote
+    # F3 has no file at all -> demote
+    ctx = RunContext(session_id=SID, run_id=RID, playbook="jsa")
+    ctx.extras["jsa"] = {"output_dir": str(out)}
+    confirmed, demoted, checked = _RealPoc(cp)._poc_partition(ctx, ["F1", "F2", "F3"])
+    assert checked is True
+    assert confirmed == ["F1"]
+    assert sorted(demoted) == ["F2", "F3"]
+
+
+def test_poc_partition_ablated_confirms_all_and_demotes_nothing(cp, tmp_path, monkeypatch):
+    monkeypatch.setenv("PENNY_ABLATE_JSA_POC_ARTIFACT_CAPTURE", "1")
+    out = tmp_path / "jsaout"
+    (out / "poc").mkdir(parents=True)  # no screenshots at all
+    ctx = RunContext(session_id=SID, run_id=RID, playbook="jsa")
+    ctx.extras["jsa"] = {"output_dir": str(out)}
+    confirmed, demoted, checked = _RealPoc(cp)._poc_partition(ctx, ["F1", "F2"])
+    assert confirmed == ["F1", "F2"] and demoted == [] and checked is False
+
+
+class _PocCanned(FakeJSA):
+    def _poc_partition(self, ctx, candidates):
+        return ["F1"], ["F2"], True  # F2 has no engine-captured artifact
+
+
+def test_poc_capture_demotes_artifactless_finding_and_surfaces_it_to_report(cp):
+    _through_merge(cp)
+    _step(cp, "synthia", {"merge_complete": True, "confidence": "PROBABLE", "merged_count": 2}, cls=_PocCanned)
+    d_report = _step(
+        cp,
+        "vera",
+        {
+            "verdict": "PASS",
+            "gaps": [],
+            "confidence": "CERTAIN",
+            "evidence": ["poc transcript"],
+            "verified_count": 2,
+            "verified_findings": [
+                {"finding_id": "F1", "verdict": "PASS", "evidence": ["t1"]},
+                {"finding_id": "F2", "verdict": "PASS", "evidence": ["t2"]},
+            ],
+        },
+        cls=_PocCanned,
+    )
+    assert d_report["agent"] == "skribble" and d_report["state_id"] == "report"  # poc_capture ran inline
+    jsa = cp.load(RID).context.extras["jsa"]
+    assert jsa["poc_capture"] == {
+        "confirmed": ["F1"],
+        "demoted": ["F2"],
+        "evidence_dir": jsa["output_dir"] + "/poc",
+        "checked": True,
+    }
+    # The engine's demotion is handed to the report agent as a MANDATORY instruction.
+    assert "ENGINE POC-CAPTURE" in d_report["task_summary"] and "F2" in d_report["task_summary"]
+
+
+def test_poc_capture_verify_task_mandates_the_deterministic_screenshot_path(cp):
+    _through_merge(cp)
+    d_verify = _step(cp, "synthia", {"merge_complete": True, "confidence": "PROBABLE", "merged_count": 1})
+    assert "/poc/<finding_id>.png" in d_verify["task_summary"]
+
+
+def test_dual_verify_poc_capture_checks_only_the_agreed_set(cp):
+    _to_verify_with_dual(cp, reverify_model="anthropic/other")
+    # first pass: F1,F2 verified
+    _step(cp, "vera", {**_VPASS, "verified_findings": [
+        {"finding_id": "F1", "verdict": "PASS", "evidence": ["a"]},
+        {"finding_id": "F2", "verdict": "PASS", "evidence": ["b"]},
+    ]})
+    # second pass: F1,F3 -> agreed intersection = {F1}
+    d_report = _step(cp, "vera", {**_VPASS, "verified_findings": [
+        {"finding_id": "F1", "verdict": "PASS", "evidence": ["a"]},
+        {"finding_id": "F3", "verdict": "PASS", "evidence": ["c"]},
+    ]})
+    assert d_report["state_id"] == "report"
+    jsa = cp.load(RID).context.extras["jsa"]
+    assert jsa["poc_capture"]["confirmed"] == ["F1"]  # only the dual-agreed finding is a candidate

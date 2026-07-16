@@ -142,6 +142,26 @@ LOANS: dict[str, Loan] = {
             review_by="2026-10-01",
         ),
         Loan(
+            loan_id="jsa_poc_artifact_capture",
+            description=(
+                "The jsa `poc_capture` TOOL_STATE (playbooks/jsa.py _run_poc_capture) that, for each "
+                "claimed-verified finding, code-checks the evidence dir for a decodable browser "
+                "screenshot and DEMOTES to 'unconfirmed' any finding lacking one (T7d B-light)."
+            ),
+            rationale=(
+                "Capture-in-place hardening of jsa's SOLE autonomous gate (GATE_STATES={intake}, no "
+                "human backstop) on its highest gaming-incentive output: current models can assert a "
+                "browser PoC they did not run, and the engine cannot tell an asserted free-string "
+                "transcript from a fabrication. A PARTIAL oracle (a screenshot proves a browser ran, "
+                "not that the exploit fired; hardens the replayable subset). Repay by a stronger "
+                "executed-marker harness (T7c Architecture A) or delete once an asserted transcript is "
+                "trustworthy. Ablate (PENNY_ABLATE_JSA_POC_ARTIFACT_CAPTURE=1) to measure asserted-only "
+                "vs artifact-checked catch rate (T8)."
+            ),
+            added="2026-07-14",
+            review_by="2026-10-01",
+        ),
+        Loan(
             loan_id="failure_mode_keywords",
             description=(
                 "Keyword table classifying verifier-gap text into categorical failure "

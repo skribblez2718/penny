@@ -51,6 +51,7 @@ Penny to replay ``memory_add_drawer`` for each stub into ``wing_jsa``.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from typing import Any
 
@@ -58,6 +59,7 @@ from statemachine import State, StateMachine
 
 from ..context import RunContext
 from ..engine import BasePlaybook, tier_budget
+from ..loans import loan_enabled
 from ..primitives.spec import PrimitiveSpec
 
 # ---------------------------------------------------------------------------
@@ -145,6 +147,24 @@ def _passed_ids(verified_findings) -> list:
             if fid is not None and str(fid).strip():
                 out.add(str(fid))
     return sorted(out)
+
+
+def _slug(finding_id) -> str:
+    """Filesystem-safe finding_id for the deterministic PoC-screenshot path (T7d). vera and the
+    engine must derive the SAME name, so the rule is fixed: any run of characters outside
+    [A-Za-z0-9._-] collapses to a single underscore."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", str(finding_id)).strip("_") or "finding"
+
+
+def _pil_available() -> bool:
+    """Whether the artifact-decode capability exists. Absent -> the T7d check cannot run and must
+    not demote findings for OUR missing dependency (recorded via poc_capture['checked']=False)."""
+    try:
+        import PIL  # noqa: F401
+
+        return True
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +299,7 @@ class JSAMachine(StateMachine):
     merge = State()  # synthia
     verify = State()  # vera, browser PoC (evidence oracle)
     reverify = State()  # vera#2 (different model) — optional dual-verify agreement (Rec 5)
+    poc_capture = State()  # T7d local tool state — engine checks per-finding browser-screenshot artifacts
     report = State()  # skribble
     reflect = State()  # carren
     # engine control states ------------------------------------------------
@@ -306,9 +327,10 @@ class JSAMachine(StateMachine):
     investigate_done = investigate.to(collect)
     collect_done = collect.to(merge)
     merge_done = merge.to(verify)
-    verify_done = verify.to(report)
+    verify_done = verify.to(poc_capture)
     verify_reverify = verify.to(reverify)  # dual_verify on + first pass PASS
-    reverify_done = reverify.to(report)
+    reverify_done = reverify.to(poc_capture)
+    poc_capture_done = poc_capture.to(report)  # T7d: after the engine artifact check
     report_done = report.to(reflect)
     reflect_done = reflect.to(complete)
 
@@ -343,6 +365,7 @@ class JSAMachine(StateMachine):
         | merge.to(error)
         | verify.to(error)
         | reverify.to(error)
+        | poc_capture.to(error)
         | report.to(error)
         | reflect.to(error)
         | unknown.to(error)
@@ -479,6 +502,7 @@ _TOOL_EVENT = {
     "structure": "structure_done",
     "slice": "slice_done",
     "collect": "collect_done",
+    "poc_capture": "poc_capture_done",
 }
 
 
@@ -610,6 +634,70 @@ class JSAPlaybook(BasePlaybook):
 
     def _run_collect(self, ctx: RunContext) -> None:
         self._domain_run(ctx, "collect")
+
+    # -- T7d: engine-owned browser-PoC artifact capture (B-light) ----------
+    def _run_poc_capture(self, ctx: RunContext) -> None:
+        """Local TOOL_STATE (no MCP): for each CLAIMED-verified finding the engine independently
+        checks the evidence dir for a decodable browser screenshot and DEMOTES any finding lacking
+        one to 'unconfirmed'. This raises jsa's evidence floor from an agent-asserted free-string
+        transcript (which the engine cannot tell from a fabrication) to an artifact the engine
+        itself verified. A PARTIAL oracle by design — a screenshot proves a browser ran, not that
+        the exploit fired; it hardens the replayable subset (see the T7c feasibility memo). Ablate
+        via the ``jsa_poc_artifact_capture`` LOAN. Never raises."""
+        jsa = ctx.extras.setdefault("jsa", {})
+        candidates = self._poc_candidate_ids(jsa)
+        confirmed, demoted, checked = self._poc_partition(ctx, candidates)
+        jsa["poc_capture"] = {
+            "confirmed": sorted(confirmed),
+            "demoted": sorted(demoted),
+            "evidence_dir": self._poc_dir(jsa.get("output_dir", "")),
+            "checked": checked,
+        }
+
+    @staticmethod
+    def _poc_candidate_ids(jsa: dict) -> list:
+        """The claimed-verified finding_ids to check: under dual-verify the T5/T6 AGREED set (already
+        the intersection of both passes); otherwise the single pass's verified set."""
+        if jsa.get("reverify"):
+            return list(jsa.get("dual_verify_agreed_findings", []) or [])
+        return list(jsa.get("verify", {}).get("verified_findings", []) or [])
+
+    def _poc_partition(self, ctx: RunContext, candidates) -> tuple:
+        """``(confirmed, demoted, checked)`` for the candidate finding_ids. A finding is confirmed
+        only when a decodable browser screenshot exists at its deterministic path; else it is
+        demoted. ``checked=False`` (and NOTHING demoted) when the check did not run — LOAN ablated,
+        under pytest without a real fixture, or PIL unavailable. Overridable for tests."""
+        candidates = list(candidates or [])
+        if not loan_enabled("jsa_poc_artifact_capture"):
+            return candidates, [], False
+        if "PYTEST_CURRENT_TEST" in os.environ and not getattr(self, "_poc_force_real", False):
+            return candidates, [], False
+        if not _pil_available():
+            return candidates, [], False
+        poc_dir = self._poc_dir(ctx.extras.setdefault("jsa", {}).get("output_dir", ""))
+        confirmed: list = []
+        demoted: list = []
+        for fid in candidates:
+            path = os.path.join(poc_dir, f"{_slug(fid)}.png")
+            (confirmed if self._artifact_present(path) else demoted).append(fid)
+        return confirmed, demoted, True
+
+    @staticmethod
+    def _poc_dir(output_dir: str) -> str:
+        return os.path.join(str(output_dir or ""), "poc")
+
+    @staticmethod
+    def _artifact_present(path: str) -> bool:
+        """True iff ``path`` is a decodable PNG (a real browser screenshot). Never raises; a missing
+        or corrupt file -> False (fail-closed: no readable artifact => demote that finding)."""
+        try:
+            from PIL import Image
+
+            with Image.open(path) as im:
+                im.verify()
+            return True
+        except Exception:
+            return False
 
     def _domain_run(self, ctx: RunContext, phase: str) -> None:
         """THE overridable tool-execution seam. Default: bridge to the skill-dir
@@ -879,6 +967,11 @@ class JSAPlaybook(BasePlaybook):
             f"PoC verification: navigate to the target page, inject payloads, test bypass variants, "
             f"capture screenshots. Confirm or refute each finding, and attach the executed-PoC "
             f"transcript as EVIDENCE for every finding you mark verified (any verified_count>0). "
+            f"For EACH finding you mark verified, SAVE its browser PoC screenshot to "
+            f"{jsa.get('output_dir', '')}/poc/<finding_id>.png (finding_id sanitized: any run of "
+            f"characters outside letters/digits/dot/dash/underscore becomes a single '_'). The engine "
+            f"independently checks for that screenshot and DEMOTES any claimed-verified finding whose "
+            f"screenshot is missing or unreadable to UNCONFIRMED — so it must be a real browser capture. "
             f"Leave the evidence list empty ONLY for a genuinely clean / no-repro target — never "
             f"fabricate a PoC to fill it. A bare PASS is NOT auto-rejected by the engine, so you "
             f"are on your honor to carry a transcript per verified finding. "
@@ -932,6 +1025,13 @@ class JSAPlaybook(BasePlaybook):
                 f"the findings BOTH passes confirmed as VERIFIED: {agreed}. Report every finding "
                 f"confirmed by only ONE pass as UNCONFIRMED (single-verifier) — NEVER as verified: "
                 f"{unconfirmed}. Do not upgrade an unconfirmed finding on your own judgement."
+            )
+        poc_demoted = (jsa.get("poc_capture") or {}).get("demoted") or []
+        if poc_demoted:
+            demotion += (
+                " ENGINE POC-CAPTURE (MANDATORY): the engine found NO readable browser-screenshot "
+                f"artifact for these claimed-verified findings: {poc_demoted}. Report them as "
+                "UNCONFIRMED (no engine-captured PoC evidence) — never as verified."
             )
         return (
             f"For each verified finding in wing={WING} room={rooms['verified']}, write a structured "
