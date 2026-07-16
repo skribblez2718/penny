@@ -465,6 +465,27 @@ SCA_DEEP_DIVE = PrimitiveSpec(
     ),
     "Deep-dive suspicious findings; optionally author targeted rules (augment=true).",
 )
+
+
+def _demonstrated_ids(pass_result: dict) -> list:
+    """(T7a) finding_ids whose sandbox PoC DEMONSTRATED the exploit in a verification pass:
+    ``sandbox_used`` AND not ``timed_out`` AND ``exit_code == 0``. The exit code is recorded
+    by the sandbox, NOT the verifier, so this is a machine-checkable marker the actor cannot
+    fabricate — the per-finding agreement basis (T5). [] when absent. Sorted + deduped.
+    Convention: exit 0 = the PoC ran to a successful demonstration; a non-zero / timeout /
+    no-sandbox result does NOT count as demonstrated."""
+    out: set = set()
+    for rec in (pass_result or {}).get("executed", []) or []:
+        if not isinstance(rec, dict):
+            continue
+        fid = rec.get("finding_id")
+        if not (isinstance(fid, str) and fid.strip()):
+            continue
+        if rec.get("sandbox_used") and not rec.get("timed_out") and rec.get("exit_code") == 0:
+            out.add(fid)
+    return sorted(out)
+
+
 SCA_VERIFICATION = PrimitiveSpec(
     "SCA_VERIFICATION",
     "vera",
@@ -776,11 +797,26 @@ class ScaPlaybook(BasePlaybook):
             first = dict(meta.get("verification", {}) or {})
             second = self._run_pocs(ctx, summary)
             meta["reverification"] = second
-            # Coarse, honest agreement signal (defense-in-depth, not a solved
-            # problem): do both independent passes execute a comparable batch?
-            fn = len((first or {}).get("executed", []) or [])
-            sn = len((second or {}).get("executed", []) or [])
-            meta["dual_verify_agreed"] = fn == sn
+            # T5/T7a: per-finding agreement from the SANDBOX-recorded PoC exit codes (the
+            # verifier cannot fabricate them) — a finding is "demonstrated" iff its PoC ran in
+            # the sandbox, did not time out, and exited 0. Agreement is the INTERSECTION of
+            # findings demonstrated by BOTH independent passes; a single-pass demonstration is
+            # DEMOTED to unconfirmed and surfaced to the human report_gate (T6). Falls back to
+            # the coarse executed-count parity only when neither pass has per-finding data.
+            first_ids = set(_demonstrated_ids(first))
+            second_ids = set(_demonstrated_ids(second))
+            if first_ids or second_ids:
+                agreed = sorted(first_ids & second_ids)
+                unconfirmed = sorted((first_ids | second_ids) - set(agreed))
+                meta["dual_verify_agreed_findings"] = agreed
+                meta["dual_verify_unconfirmed_findings"] = unconfirmed
+                meta["dual_verify_agreed"] = not unconfirmed
+            else:
+                fn = len((first or {}).get("executed", []) or [])
+                sn = len((second or {}).get("executed", []) or [])
+                meta["dual_verify_agreed_findings"] = []
+                meta["dual_verify_unconfirmed_findings"] = []
+                meta["dual_verify_agreed"] = fn == sn
             self.sm.send("reverification_done")
         elif state == "fix_verification":
             self.sm.send("fix_done")
@@ -862,11 +898,25 @@ class ScaPlaybook(BasePlaybook):
             "report_gate": "Approve assembling + signing off the final report",
         }
         label = labels.get(state, "Approve gate")
+        prompt = f"{label}. Approve to continue, or provide direction."
+        # T6: surface a dual-verify disagreement to the human at the report gate — a finding
+        # confirmed by only ONE independent PoC pass is reported UNCONFIRMED, never verified.
+        if state == "report_gate":
+            unconfirmed = meta.get("dual_verify_unconfirmed_findings") or []
+            if unconfirmed:
+                agreed = meta.get("dual_verify_agreed_findings") or []
+                prompt = (
+                    f"{label}. ⚠ DUAL-VERIFY DISAGREEMENT — two independent PoC passes did NOT "
+                    f"agree on every finding. Demonstrated by BOTH passes (report as VERIFIED): "
+                    f"{agreed}. Demonstrated by only ONE pass (report as UNCONFIRMED, not "
+                    f"verified): {unconfirmed}. Review this before sign-off. Approve to continue, "
+                    "or provide direction."
+                )
         return [
             {
                 "id": state,
                 "label": "Approve gate",
-                "prompt": f"{label}. Approve to continue, or provide direction.",
+                "prompt": prompt,
                 "options": [
                     {"value": "approve", "label": "Approve and continue"},
                     {"value": "revise", "label": "Request revisions"},

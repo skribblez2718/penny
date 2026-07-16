@@ -81,17 +81,23 @@ class StubSca(ScaPlaybook):
             "mempalace": {"wing": "wing_sca", "room": "r7", "content": "targeted stub"},
         }
 
+    poc_batches = None  # optional queue of executed-results, popped per _run_pocs call (tests)
+
     def _run_pocs(self, ctx, summary):
         meta = ctx.extras["sca"]
-        meta["verification"] = {
-            "executed": [{"name": "p1", "verification_status": "poc_executed_pending_review"}],
-            "skipped": [],
-            "sandbox_available": True,
-            "poc_requested_count": 1,
-            "poc_executed_count": 1,
-            "poc_skipped_count": 0,
-        }
-        return meta["verification"]
+        if type(self).poc_batches:
+            result = type(self).poc_batches.pop(0)
+        else:
+            result = {
+                "executed": [{"name": "p1", "verification_status": "poc_executed_pending_review"}],
+                "skipped": [],
+                "sandbox_available": True,
+                "poc_requested_count": 1,
+                "poc_executed_count": 1,
+                "poc_skipped_count": 0,
+            }
+        meta["verification"] = result
+        return result
 
     def _write_augment_rules(self, ctx, summary):
         ctx.extras["sca"].setdefault("augment_rules_written", []).append("stub.yml")
@@ -541,3 +547,89 @@ def test_recovery_re_presents_charter_gate(cp, target):
         pb_mod.PLAYBOOKS.update(orig)
     assert len(directives) == 1 and directives[0]["action"] == "escalate_to_user"
     assert directives[0]["previous_state"] == "charter_gate"
+
+
+# ---------------------------------------------------------------------------
+# T5/T6/T7a: per-finding dual-verify agreement from sandbox PoC exit codes
+# ---------------------------------------------------------------------------
+
+
+def test_demonstrated_ids_uses_unfabricatable_exit_code():
+    from orchestration.playbooks.sca import _demonstrated_ids
+
+    result = {
+        "executed": [
+            {"finding_id": "A", "sandbox_used": True, "timed_out": False, "exit_code": 0},   # demonstrated
+            {"finding_id": "B", "sandbox_used": True, "timed_out": False, "exit_code": 1},   # non-zero -> no
+            {"finding_id": "C", "sandbox_used": True, "timed_out": True, "exit_code": 0},    # timed out -> no
+            {"finding_id": "D", "sandbox_used": False, "timed_out": False, "exit_code": 0},  # no sandbox -> no
+            {"finding_id": None, "sandbox_used": True, "timed_out": False, "exit_code": 0},  # no finding_id -> no
+        ]
+    }
+    assert _demonstrated_ids(result) == ["A"]
+    assert _demonstrated_ids({}) == []
+
+
+def _poc_batch(ids):
+    return {
+        "executed": [
+            {"name": f"p{i}", "finding_id": i, "sandbox_used": True, "timed_out": False, "exit_code": 0}
+            for i in ids
+        ],
+        "skipped": [],
+        "sandbox_available": True,
+        "poc_requested_count": len(ids),
+        "poc_executed_count": len(ids),
+        "poc_skipped_count": 0,
+    }
+
+
+def test_dual_verify_per_finding_agreement_from_exit_codes(cp, target):
+    # T5/T7a: pass1 demonstrates {A,B}; pass2 demonstrates {B,C} (all exit 0, sandbox, no
+    # timeout). Agreement = INTERSECTION {B}; A and C are single-pass -> UNCONFIRMED. The
+    # coarse executed-count parity would have falsely reported "agreed" (both ran 2 PoCs).
+    StubSca.poc_batches = [_poc_batch(["A", "B"]), _poc_batch(["B", "C"])]
+    try:
+        _walk_to_deep_dive(
+            cp, target, constraints={"dual_verify": True, "reverify_model": "other/model"}
+        )
+        _step(cp, "annie", dict(_DEEP_DIVE_SUMMARY))
+        _approve(cp)  # -> verification
+        _step(cp, "vera", {"run_pocs": [{"name": "pA"}], "confidence": "CERTAIN"})  # -> reverification
+        d = _step(cp, "vera", {"run_pocs": [{"name": "pB"}], "confidence": "CERTAIN"})  # -> fix_verification
+        assert d["state_id"] == "fix_verification"
+        sca = cp.load(RID).context.extras["sca"]
+        assert sca["dual_verify_agreed_findings"] == ["B"]
+        assert sca["dual_verify_unconfirmed_findings"] == ["A", "C"]
+        assert sca["dual_verify_agreed"] is False
+    finally:
+        StubSca.poc_batches = None
+
+
+class _GateSca(StubSca):
+    def _domain(self, ctx):  # the report_gate prompt path doesn't use the domain
+        return None
+
+
+def test_report_gate_surfaces_dual_verify_disagreement(cp):
+    from orchestration.context import RunContext
+
+    pb = _GateSca(cp)
+    ctx = RunContext(session_id="s", run_id="r", playbook="sca")
+    ctx.extras["sca"] = {
+        "dual_verify_unconfirmed_findings": ["A"],
+        "dual_verify_agreed_findings": ["B"],
+    }
+    prompt = pb.gate_questions("report_gate", ctx)[0]["prompt"]
+    assert "DUAL-VERIFY DISAGREEMENT" in prompt
+    assert "UNCONFIRMED" in prompt and "'A'" in prompt and "'B'" in prompt
+
+
+def test_report_gate_no_disagreement_is_plain(cp):
+    from orchestration.context import RunContext
+
+    pb = _GateSca(cp)
+    ctx = RunContext(session_id="s", run_id="r", playbook="sca")
+    ctx.extras["sca"] = {}
+    prompt = pb.gate_questions("report_gate", ctx)[0]["prompt"]
+    assert "DUAL-VERIFY DISAGREEMENT" not in prompt
