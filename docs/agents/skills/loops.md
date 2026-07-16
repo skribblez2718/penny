@@ -78,7 +78,7 @@ Loops are not alternatives — they **nest**. A production system layers them:
 **Design rules:**
 - **External, grounded feedback beats self-critique.** Pure LLM self-critique hallucinates violations and over-corrects. Rules-based feedback (lint, tests, schema validation, environment state) is the strongest verifier. LLM-as-judge is valid but weak.
 - **Position the LLM verifier as an interpreter of external evidence, not as the evidence itself.** Vera's `evidence` field MUST contain captured output of verification commands actually run — not assertions.
-- **Cross-model verification:** a different model verifies than the one that acted. Already Penny policy.
+- **Cross-model verification:** a different model verifies than the one that acted — enforced by `orchestration/independence.py`, not just policy (registered same-model exceptions are review-dated).
 - **Per-domain verifier contracts** are where loop quality will be won or lost. Each skill's VERIFY `summary_contract` defines what evidence is required.
 
 ### L3 — Retry / Repair Loop (Bounded)
@@ -181,17 +181,22 @@ The strongest and most actionable cluster of findings from the research:
 
 ### Verifier Strength Ranking
 
-| Strength | Type | Example | Use When |
+The canonical [`Verify` strength hierarchy](../architecture/atomic-loop-components.md) — **oracle > rules > proxy > critic**:
+
+| Strength | Tier | Example | Use When |
 |----------|------|---------|----------|
-| Strongest | Rules-based feedback | Lint, tests, schema validation, environment state | Code, security PoC, structured output |
-| Valid but weak | LLM-as-judge | Cross-model verification, Carren critique | Research quality, design review, fuzzy criteria |
-| Do not use alone | Self-critique | Same model re-reading its own output | Never as the sole verifier |
+| Strongest | **Oracle** | Test suite, compiler, executed PoC, environment state | A crisp external truth exists (code: tests; security: a PoC actually run) |
+| Strong | **Rules** | Schema/JSON validation, lint, deterministic invariant, decode/dimensions check | Structured output or any checkable invariant (prd IDEAL_STATE schema-floor, imagegen PIL floor) |
+| Weak (Goodhart-prone) | **Proxy** | A gameable measurable stand-in (keyword / token-overlap heuristic) | Only as an ASSIST that feeds a stronger judge — never as the gate (rez source-provenance hint) |
+| Weakest | **Critic** (LLM-as-judge) | Cross-model verification, Carren critique | Fuzzy criteria (research quality, design review) — **never the sole verifier** |
+
+Same-model self-critique (a model re-reading its own output) is the degenerate critic — never a gate. The design move governing the recent verifier work: **climb each skill's VERIFY to the strongest tier its output admits.** Where no oracle exists, stack a deterministic RULES floor *beneath* the critic (prd schema-floor, imagegen PIL decode/dimensions) or feed the critic a PROXY ASSIST (rez provenance) — evidence for the interpreter, never a rule that silently decides the verdict.
 
 ### Design Rules
 
 1. **External, grounded feedback beats self-critique.** Pure LLM self-critique hallucinates violations and over-corrects. Without an oracle, LLMs cannot reliably self-correct.
 2. **Position the LLM verifier as an interpreter of external evidence, not as the evidence itself.** Vera produces PASS/FAIL — the PASS must be backed by captured tool output, not by the model's say-so.
-3. **Cross-model verification.** A different model verifies than the one that acted. Already Penny policy.
+3. **Cross-model verification — now an enforced invariant.** A different model verifies than the one that acted. `orchestration/independence.py` pins this at model granularity: same-model bare-judgement verify edges must be registered, review-dated exceptions (see Rec 5).
 4. **Demand evidence artifacts in VERIFY contracts.** Each skill's VERIFY `summary_contract` should require an evidence field containing captured output (test output, lint result, PoC transcript), not assertions. The contract validator should fail-loud if the evidence field is a bare claim.
 5. **Harden against verifier gaming (highest incentive: security skills).** Keep cross-model discipline; for high-stakes gates, add a second independent verifier and require agreement. Prefer evidence the actor cannot fabricate (executed output over asserted output).
 
@@ -209,29 +214,35 @@ Match the loop stack to the task's verifiability and step-predictability:
 
 **Principle:** Tasks with crisp external oracles (code: tests; security: PoC execution) can lean hard on tight verifier-gated retry loops. Fuzzy-oracle tasks (research quality, writing) must lean on HITL gates and structured criteria because the verifier is weak.
 
-## Loop-Quality Recommendations (status)
+## Loop-Quality Recommendations
 
-Five concrete recommendations from the research, ordered by leverage. As of 2026-07-14, Recs 1–4 are implemented in the engine (`apps/orchestration/`); Rec 5 remains open.
+Five concrete recommendations from the research, ordered by leverage. Current engine implementation status is tracked in [Atomic Loop Components](../architecture/atomic-loop-components.md) (“How this maps onto Penny today”), not duplicated here — a frozen status list rots the moment a gap closes.
 
-### Rec 1 — Enforce a strategy delta between retries (anti-paralysis) — CLOSED (default-on)
+### Rec 1 — Enforce a strategy delta between retries (anti-paralysis)
 
 `max_iterations` caps how many retries, but nothing required each retry to be different. Now the base `progress_check` is **default-on**: a retry SUMMARY that explicitly declares a `strategy_change` ~identical to the prior recorded iteration's escalates instead of looping. The engine auto-records per-iteration digests (deduped against playbook `record_iteration` calls) so the guard is fed even for playbooks that never opt in. Opt-out: `LOOP_GUARDS = False`; playbooks with their own `progress_check` override are unaffected.
 
-### Rec 2 — Add a stall / progress-assessment gate (meta-cognition) — CLOSED (default-on)
+### Rec 2 — Add a stall / progress-assessment gate (meta-cognition)
 
 The same default-on base `progress_check` compares successive recorded iterations' `gaps`: identical non-empty gaps across the window mean no measurable progress, and the run escalates to the human (L4) rather than burning the remaining budget. Backing it up, the engine's iteration-budget backstop forces **honest exhaustion** (complete, `met=False`, `exhausted` reason in the result) on any playbook that routes past its `max_iterations` — never a fake pass, never a silent spin to `STEP_CAP`.
 
-### Rec 3 — Retrieve past-run reflections at run start (close the L6 loop) — CLOSED
+### Rec 3 — Retrieve past-run reflections at run start (close the L6 loop)
 
 The engine's `start()` calls `recall_lessons` (atom F2, `orchestration/recall.py`): a best-effort MemPalace query over `penny/system_amendments` seeds up to 3 distilled lessons into the **first** agent directive as explicitly advisory context. No routing reads them — a past lesson never hard-gates a new run. Opt-out: `PENNY_RECALL=0` or `constraints={"recall": false}`.
 
-### Rec 4 — Require externally-grounded evidence in VERIFY contracts — CLOSED
+### Rec 4 — Require externally-grounded evidence in VERIFY contracts
 
 A state contract may declare `evidence` fields; the validator fails loud when they are empty (a PASS on a bare claim is a contract violation). The engine additionally captures any non-empty SUMMARY `evidence` into `ctx.verify_evidence`, and the outcome ledger records it — outcome+evidence, not outcome alone.
 
-### Rec 5 — Harden verifiers against gaming (highest-incentive: security skills) — OPEN
+**The contract check is non-emptiness only, not authenticity.** The validator cannot tell a captured transcript from a plausible-but-fabricated string — a model that invents non-empty `evidence` still clears the contract. Authenticity is closed per-skill, downstream of the contract: jsa's *conditional* evidence gate (a `verdict: PASS` with `verified_count>0` and empty `evidence` is rejected — T7b, making the jsa `vera-base.md` claim true in code) and sca grounding its per-finding agreement in **sandbox-recorded exit codes** the actor cannot forge. Contract non-emptiness is the floor; unfabricatable evidence is the real defense.
 
-Keep cross-model VERIFY discipline. For high-stakes gates, add a second independent verifier and require agreement. Prefer evidence the actor cannot fabricate (executed output over asserted output). Treat as defense-in-depth, not a solved problem.
+### Rec 5 — Harden verifiers against gaming (highest-incentive: security skills)
+
+Cross-model discipline is now an **enforced invariant**, not a convention: `orchestration/independence.py` classifies every skill's primary actor→verify edge (resolving each agent's model live from frontmatter), and a same-model *bare-judgement* verify must be a registered, review-dated exception (prd, rez, research, plan) — a fail-loud test rejects any new unregistered one.
+
+Second-verifier **agreement** ships in both security skills: jsa requires per-finding cross-source agreement (a finding counts verified only when BOTH passes mark it PASS; single-pass findings are demoted to unconfirmed) atop the conditional-evidence gate; sca computes agreement as the intersection of two PoC passes **grounded in sandbox exit codes**, and surfaces any dual-verify disagreement to the human report gate rather than looping to force consensus. Where no oracle exists, a deterministic RULES floor sits beneath the critic (prd schema, imagegen PIL) or a PROXY assist feeds it (rez provenance).
+
+**The true open frontier** (not yet solved): (a) jsa asks its verifier for *executed* browser-PoC transcripts, but the automated harness that runs them is still a feasibility spike — today "executed" rests on the agent's discipline, not an engine-run browser; (b) whether to promote agreement from *report-and-escalate* to a *hard* gate (the risk is pressuring a rubber-stamp); (c) repaying the four registered same-model exceptions by adopting jsa's `reverify_model` cross-model hook and measuring same- vs cross-model catch rate. Still defense-in-depth, still not a solved problem.
 
 ## Related Documents
 

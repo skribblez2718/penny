@@ -93,11 +93,11 @@ Penny's architecture is already aligned with what the research prescribes:
 
 3. **The FSM is a safety mechanism.** An FSM whose only edges are the intended loop edges cannot wander into an unintended cycle. The graph boundary defines what actions are even possible, reducing the frequency and severity of runaway loops.
 
-4. **Six of seven loop classes are already implemented** at some level of maturity. The seventh (L6 reflection) has the write side (MemPalace, daily compression) but the read side (retrieving past reflections at run start) is a gap.
+4. **All seven loop classes now have at least a first implementation.** L6 reflection long had only the write side (MemPalace, daily compression); the read side now ships too — the engine's `start()` seeds distilled past-run lessons into the first agent as advisory context (`recall_lessons`), closing the last write-only gap.
 
-## Five Gaps Worth Closing
+## Five Leverage Points the Engine Has Since Acted On
 
-The research identified five concrete improvements, ordered by leverage:
+The research identified five concrete improvements, ordered by leverage. Penny's engine has since implemented all five — the descriptions below are the original *recommendations*; for exactly what shipped and its live status (a frozen status list rots the moment a gap closes), see the agent-facing [Loops reference](../../agents/skills/loops.md) (Rec 1–5) and [Atomic Loop Components](../architecture/atomic-loop-components.md):
 
 1. **Enforce a strategy delta between retries** — Require the LEARN SUMMARY to carry a `strategy_change` field stating what will be done differently. Reject retries with no change. This prevents agent paralysis.
 
@@ -107,7 +107,7 @@ The research identified five concrete improvements, ordered by leverage:
 
 4. **Require externally-grounded evidence in VERIFY contracts** — Each skill's VERIFY contract should demand an evidence artifact (test output, lint result, PoC transcript), not an assertion. The validator should fail-loud if the evidence is a bare claim.
 
-5. **Harden verifiers against gaming** — For high-stakes gates (especially security), add a second independent verifier and require agreement. Prefer evidence the actor cannot fabricate.
+5. **Harden verifiers against gaming** — For high-stakes gates (especially security), add a second independent verifier and require agreement; prefer evidence the actor cannot fabricate. *(Shipped as an enforced cross-model independence invariant plus per-finding agreement in jsa/sca grounded in unfabricatable execution evidence; the executed-browser-PoC harness remains the open frontier.)*
 
 ## Research Basis
 
