@@ -44,6 +44,8 @@ IDEAL_STATE from that room as a hard dependency.
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
 from statemachine import State, StateMachine
@@ -325,9 +327,18 @@ class PrdPlaybook(BasePlaybook):
         elif state == "validating":
             valid = summary["valid"]
             ideal_ok = summary.get("ideal_state_valid", False)
-            issues = summary.get("issues", [])
+            issues = list(summary.get("issues", []) or [])
+            # T4: a deterministic CODE schema-floor beneath vera's quality judgement — a
+            # schema-malformed IDEAL_STATE is rejected by RULES (validate_ideal_state), never
+            # on vera's say-so. Unreadable (not yet written / test) -> skipped, vera stands.
+            schema_ok, schema_errors = self._schema_check_ideal_state(ctx)
+            if schema_ok is False:
+                ideal_ok = False
+                issues = issues + [f"schema: {e}" for e in schema_errors]
+                prd["schema_evidence"] = schema_errors
+            prd["schema_checked"] = schema_ok is not None
             prd["valid"] = valid
-            prd["ideal_state_valid"] = ideal_ok  # vera's verdict overrides synthia's claim
+            prd["ideal_state_valid"] = ideal_ok  # code schema-floor stacked on vera's verdict
             prd["issues"] = issues
             if valid and ideal_ok:
                 self.sm.send("validate_pass")
@@ -346,6 +357,39 @@ class PrdPlaybook(BasePlaybook):
                 self.sm.send("validate_exhausted")
         else:
             raise ValueError(f"route_after: unexpected state '{state}'")
+
+    # -- T4: deterministic IDEAL_STATE schema-floor beneath vera's judgement ------
+    def _read_ideal_state(self, ctx: RunContext):
+        """The IDEAL_STATE this prd run produced, read from its mempalace room, or None.
+        Skipped under pytest (hermetic) unless a test overrides this; production reuses the
+        code skill's loader (room read + chunk reassembly). Best-effort, never raises."""
+        if "PYTEST_CURRENT_TEST" in os.environ:
+            return None
+        try:
+            from .code import load_ideal_state
+            return load_ideal_state({"prd_room": f"skills/prd-{ctx.session_id}"}, ctx.project_root)
+        except Exception:
+            return None
+
+    def _schema_check_ideal_state(self, ctx: RunContext):
+        """(True, []) valid / (False, [errors]) schema-malformed / (None, []) unreadable => skip.
+        The rules-tier floor: validate_ideal_state.validate_json is deterministic CODE, so a
+        schema-malformed IDEAL_STATE cannot pass on vera's say-so. Never raises."""
+        ideal = self._read_ideal_state(ctx)
+        if not isinstance(ideal, dict):
+            return None, []
+        try:
+            for parent in Path(__file__).resolve().parents:
+                cand = parent / "scripts" / "validate_ideal_state.py"
+                if cand.is_file():
+                    if str(cand.parent) not in sys.path:
+                        sys.path.insert(0, str(cand.parent))
+                    from validate_ideal_state import validate_json  # type: ignore[import-not-found]
+                    ok, errors = validate_json(ideal)
+                    return bool(ok), [str(e) for e in (errors or [])]
+        except Exception:
+            return None, []
+        return None, []
 
     def done_predicate(self, ctx: RunContext) -> bool:
         prd = ctx.extras.get("prd", {})

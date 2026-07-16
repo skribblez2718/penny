@@ -62,22 +62,30 @@ def cp(tmp_path):
     return Checkpointer(db_path=tmp_path / "orch.db")
 
 
-def _start(cp, goal=GOAL, constraints=None):
-    return PrdPlaybook(cp).start(
+def _start(cp, goal=GOAL, constraints=None, cls=PrdPlaybook):
+    return cls(cp).start(
         session_id=SID, run_id=RID, goal=goal, constraints=constraints or {}
     )
 
 
-def _step(cp, agent, result):
-    return PrdPlaybook(cp).step(session_id=SID, run_id=RID, agent=agent, result=result)
+def _step(cp, agent, result, cls=PrdPlaybook):
+    return cls(cp).step(session_id=SID, run_id=RID, agent=agent, result=result)
 
 
-def _to_validating(cp, constraints=None):
+def _to_validating(cp, constraints=None, cls=PrdPlaybook):
     """Walk the canonical clarify-first path up to the first vera dispatch."""
-    _start(cp, constraints=constraints)
-    _step(cp, "synthia", CLARIFY_SUMMARY)  # -> escalate with questions
-    _step(cp, "user", {"answer": "internal ops team; ~10k documents"})  # -> SYNTHESIS
-    _step(cp, "synthia", SYNTH_SUMMARY)  # -> validating
+    _start(cp, constraints=constraints, cls=cls)
+    _step(cp, "synthia", CLARIFY_SUMMARY, cls=cls)  # -> escalate with questions
+    _step(cp, "user", {"answer": "internal ops team; ~10k documents"}, cls=cls)  # -> SYNTHESIS
+    _step(cp, "synthia", SYNTH_SUMMARY, cls=cls)  # -> validating
+
+
+class _MalformedIdealPrd(PrdPlaybook):
+    """PrdPlaybook whose IDEAL_STATE read returns a schema-MALFORMED spec (missing the
+    required fields), so the T4 code schema-floor must reject it regardless of vera."""
+
+    def _read_ideal_state(self, ctx):
+        return {"goal": "x"}  # not a valid IdealState -> validate_json fails
 
 
 # ---------------------------------------------------------------------------
@@ -375,3 +383,38 @@ def test_recall_lessons_render_in_first_directive(cp):
     txt = pb._task_summary("generating", PRD_GENERATE, ctx)
     assert "Lessons from prior runs" in txt
     assert "prefer measurable, testable success criteria" in txt
+
+
+# ---------------------------------------------------------------------------
+# T4: deterministic IDEAL_STATE schema-floor beneath vera's judgement
+# ---------------------------------------------------------------------------
+
+
+def test_schema_check_rejects_malformed_and_skips_unreadable(cp):
+    from orchestration.context import RunContext
+
+    ctx = RunContext(session_id=SID, run_id=RID, playbook="prd")
+    ok, errors = _MalformedIdealPrd(cp)._schema_check_ideal_state(ctx)
+    assert ok is False and errors  # malformed -> rejected by code, with errors
+    # default read is None under pytest -> the floor is skipped (vera stands)
+    assert PrdPlaybook(cp)._schema_check_ideal_state(ctx) == (None, [])
+
+
+def test_schema_floor_overrides_vera_pass_on_malformed_ideal_state(cp):
+    # vera PASSes (valid + ideal_state_valid True), but the code schema-floor finds the
+    # IDEAL_STATE malformed -> the run does NOT complete; it revises. A schema-malformed
+    # spec can never pass on vera's say-so.
+    _to_validating(cp, cls=_MalformedIdealPrd)
+    d = _step(cp, "vera", VERA_PASS, cls=_MalformedIdealPrd)
+    assert d["action"] == "invoke_agent" and d["state_id"] == "generating"  # forced revise
+    prd = cp.load(RID).context.extras["prd"]
+    assert prd["ideal_state_valid"] is False  # code floor overrode vera's PASS
+    assert prd.get("schema_evidence")  # deterministic schema errors captured as evidence
+
+
+def test_schema_floor_skipped_when_unreadable_lets_vera_pass(cp):
+    # Unreadable IDEAL_STATE (pytest-hermetic default) -> floor skipped, vera's PASS stands.
+    _to_validating(cp)
+    d = _step(cp, "vera", VERA_PASS)
+    assert d["action"] == "complete"
+    assert cp.load(RID).context.extras["prd"]["schema_checked"] is False
