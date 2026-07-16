@@ -81,12 +81,67 @@ function emitObservability(event: string, data: Record<string, unknown>): void {
   }
 }
 
-async function callBridge(
+// ── Bridge resilience ──────────────────────────────────────────────────
+// The bridge is a fresh Python process per call that opens ChromaDB + the
+// embedding model. Under heavy whole-system load it was observed to die
+// intermittently by SIGNAL during startup (Node reports exit code `null`, empty
+// stderr) — a native crash / OOM / kill, not a clean error. Durable memory is a
+// protected capability, so such a transient death is retried rather than
+// silently dropping the operation.
+const BRIDGE_TIMEOUT_MS = 30000; // 30s — prevent infinite hangs from ChromaDB lock contention
+const MAX_BRIDGE_ATTEMPTS = 3; // 1 initial + up to 2 retries
+
+/**
+ * A bridge process killed by a SIGNAL (Node reports `code === null` / a non-null
+ * `signal`) is a transient native crash worth retrying. A clean non-zero exit
+ * (the bridge ran and reported an error) is terminal — retrying won't change it.
+ */
+export function isRetryableBridgeExit(code: number | null, signal: NodeJS.Signals | null): boolean {
+  return code === null || signal !== null;
+}
+
+/** Backoff (ms) before retry attempt N (0-based): 150ms, then 400ms. */
+export function bridgeRetryBackoffMs(attempt: number): number {
+  return [150, 400][attempt] ?? 400;
+}
+
+/**
+ * Run `fn` with bounded retry. Retries only when `isRetryable(err)` is true, up
+ * to `maxAttempts` total, sleeping `backoffMs(attempt)` between tries. Pure of
+ * any bridge/IO specifics so the retry BEHAVIOR is unit-testable.
+ */
+export async function retryTransient<T>(
+  fn: (attempt: number) => Promise<T>,
+  opts: {
+    maxAttempts: number;
+    isRetryable: (err: unknown) => boolean;
+    backoffMs: (attempt: number) => number;
+    onRetry?: (attempt: number, backoffMs: number, err: unknown) => void;
+    sleep?: (ms: number) => Promise<void>;
+  }
+): Promise<T> {
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < opts.maxAttempts; attempt++) {
+    try {
+      return await fn(attempt);
+    } catch (err) {
+      lastErr = err;
+      if (!opts.isRetryable(err) || attempt === opts.maxAttempts - 1) break;
+      const b = opts.backoffMs(attempt);
+      opts.onRetry?.(attempt, b, err);
+      await sleep(b);
+    }
+  }
+  throw lastErr;
+}
+
+/** One bridge invocation. Rejects with `retryable` set on transient failures. */
+function callBridgeOnce(
   tool: string,
-  params: Record<string, unknown> = {}
+  params: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    const BRIDGE_TIMEOUT_MS = 30000; // 30s — prevent infinite hangs from ChromaDB lock contention
     const request = JSON.stringify({ tool, params });
     const proc = spawn(config.venvPython, [config.bridgePath], { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
@@ -116,19 +171,26 @@ async function callBridge(
     proc.stderr.on("data", (data) => {
       stderr += data.toString();
     });
-    proc.on("close", (code) => {
+    proc.on("close", (code, signal) => {
       clearTimeout(timer);
       if (settled) return; // Already rejected by timeout
       settled = true;
       if (code !== 0) {
+        const retryable = isRetryableBridgeExit(code, signal);
+        const sigNote = signal ? ` (signal ${signal})` : "";
         logger.error(
           "Bridge exited with non-zero code",
-          { tool, exitCode: code },
-          Object.assign(new Error(`Bridge exited with code ${code}: ${stderr}`), {
+          { tool, exitCode: code, signal, retryable },
+          Object.assign(new Error(`Bridge exited with code ${code}${sigNote}: ${stderr}`), {
             code: "BRIDGE_EXIT_CODE" as const,
           })
         );
-        reject(new Error(`Bridge exited with code ${code}: ${stderr}`));
+        reject(
+          Object.assign(new Error(`Bridge exited with code ${code}${sigNote}: ${stderr}`), {
+            code: "BRIDGE_EXIT_CODE" as const,
+            retryable,
+          })
+        );
         return;
       }
       try {
@@ -137,9 +199,16 @@ async function callBridge(
         logger.warn(
           "Bridge response parse error",
           { tool, exitCode: code, stderr: stderr.slice(0, 300) },
-          Object.assign(new Error(`Failed to parse: ${stdout}`), { code: "BRIDGE_PARSE_ERROR" as const })
+          Object.assign(new Error(`Failed to parse: ${stdout}`), {
+            code: "BRIDGE_PARSE_ERROR" as const,
+          })
         );
-        reject(new Error(`Failed to parse: ${stdout}`));
+        reject(
+          Object.assign(new Error(`Failed to parse: ${stdout}`), {
+            code: "BRIDGE_PARSE_ERROR" as const,
+            retryable: false,
+          })
+        );
       }
     });
     proc.on("error", (err) => {
@@ -151,7 +220,7 @@ async function callBridge(
           { tool },
           Object.assign(err, { code: "BRIDGE_SPAWN_ERROR" as const })
         );
-        reject(err);
+        reject(Object.assign(err, { code: "BRIDGE_SPAWN_ERROR" as const, retryable: true }));
       }
     });
     // Wait for spawn to complete before writing stdin (prevents race on cold starts)
@@ -159,6 +228,32 @@ async function callBridge(
       proc.stdin.write(request);
       proc.stdin.end();
     });
+  });
+}
+
+/**
+ * Call the memory bridge with bounded retry on transient (signal-kill / spawn)
+ * failures. The observed intermittent deaths occur during bridge *startup*
+ * (before the request is read/applied), so a retry does not re-run a partial
+ * write. Terminal failures (clean error exit, parse error, timeout) are not
+ * retried.
+ */
+async function callBridge(
+  tool: string,
+  params: Record<string, unknown> = {}
+): Promise<Record<string, unknown>> {
+  return retryTransient((_attempt) => callBridgeOnce(tool, params), {
+    maxAttempts: MAX_BRIDGE_ATTEMPTS,
+    isRetryable: (err) => (err as { retryable?: boolean } | null)?.retryable === true,
+    backoffMs: bridgeRetryBackoffMs,
+    onRetry: (attempt, backoffMs, err) =>
+      logger.warn("Bridge transient failure — retrying", {
+        tool,
+        attempt: attempt + 1,
+        maxAttempts: MAX_BRIDGE_ATTEMPTS,
+        backoffMs,
+        error: err instanceof Error ? err.message : String(err),
+      }),
   });
 }
 
@@ -415,7 +510,8 @@ const toolAddDrawer = createTool(
   ],
   {
     wing: Type.String({
-      description: "Wing name. Use 'penny' (Penny's main wing) with a room like 'decisions'/'user'/'architecture'; dedicated skill wings are 'wing_<skill>' (e.g. 'wing_jsa'). Prefer 'penny' + a room over creating new top-level wings.",
+      description:
+        "Wing name. Use 'penny' (Penny's main wing) with a room like 'decisions'/'user'/'architecture'; dedicated skill wings are 'wing_<skill>' (e.g. 'wing_jsa'). Prefer 'penny' + a room over creating new top-level wings.",
     }),
     room: Type.String({ description: "Room name (e.g., 'decisions', 'architecture', 'sessions')" }),
     content: Type.String({
@@ -475,7 +571,8 @@ const toolKgAdd = createTool(
   {
     subject: Type.String({ description: "Entity doing/being something (e.g., 'User', 'Penny')" }),
     predicate: Type.String({
-      description: "Canonical predicate (see kg-patterns.md): e.g. completed, decided, produced, works_on, uses, prefers, verified_by, fixes",
+      description:
+        "Canonical predicate (see kg-patterns.md): e.g. completed, decided, produced, works_on, uses, prefers, verified_by, fixes",
     }),
     object: Type.String({ description: "Related entity (e.g., 'MemPalace', 'auth-migration')" }),
     valid_from: Type.Optional(Type.String({ description: "When this became true (YYYY-MM-DD)" })),

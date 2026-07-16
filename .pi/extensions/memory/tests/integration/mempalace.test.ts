@@ -449,16 +449,32 @@ describe("Navigation Tools (Integration)", () => {
 describe("Agent Diary Tools (Integration)", () => {
   const testAgent = `test-agent-${Date.now()}`;
 
+  // diary_write files into the REAL, persistent palace, whose dedup guard is GLOBAL
+  // (threshold 0.9). Fixed-text entries collide with prior runs' identical entries and are
+  // rejected (success:false), so each entry must be unique per run. `testAgent` is unique per
+  // run; a distinct per-entry token keeps them from colliding with each other too. We delete
+  // every entry we write afterAll so the palace isn't polluted (diary entries ARE deletable).
+  const writtenIds: string[] = [];
+  async function writeDiary(params: Record<string, unknown>): Promise<{ success?: boolean }> {
+    const result = (await callBridge("diary_write", params)) as {
+      success?: boolean;
+      entry_id?: string;
+    };
+    if (result?.entry_id) writtenIds.push(result.entry_id);
+    return result;
+  }
+
   afterAll(async () => {
-    // Note: Diary entries can't be deleted in current implementation
-    // They will remain as test entries
+    for (const id of writtenIds) {
+      await callBridge("delete_drawer", { drawer_id: id });
+    }
   });
 
   describe("memory_diary_write", () => {
     it("should write diary entry", async () => {
-      const result = await callBridge("diary_write", {
+      const result = await writeDiary({
         agent_name: testAgent,
-        entry: `SESSION:2026-04-08|integration.test|test.entry|★★★`,
+        entry: `SESSION:2026-04-08|integration.test|test.entry ${testAgent} w1|★★★`,
         topic: "test",
       });
 
@@ -466,9 +482,9 @@ describe("Agent Diary Tools (Integration)", () => {
     });
 
     it("should default topic to general", async () => {
-      const result = await callBridge("diary_write", {
+      const result = await writeDiary({
         agent_name: testAgent,
-        entry: "SESSION:2026-04-08|test|testing|★★",
+        entry: `SESSION:2026-04-08|test|testing ${testAgent} w2|★★`,
       });
 
       expect(result.success).toBe(true);
@@ -478,9 +494,9 @@ describe("Agent Diary Tools (Integration)", () => {
   describe("memory_diary_read", () => {
     it("should read recent diary entries", async () => {
       // First write an entry
-      await callBridge("diary_write", {
+      await writeDiary({
         agent_name: testAgent,
-        entry: "SESSION:2026-04-08|test.read|read.test|★★",
+        entry: `SESSION:2026-04-08|test.read|read.test ${testAgent} r1|★★`,
       });
 
       // Then read it
