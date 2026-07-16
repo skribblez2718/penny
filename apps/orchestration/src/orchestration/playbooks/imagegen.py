@@ -516,6 +516,7 @@ class ImagegenPlaybook(BasePlaybook):
         }
         result = self._comfy_generate(ctx, plan) or {}
         self._merge_candidates(img, result.get("candidates", []))
+        self._pil_check_candidates(img)  # T3: deterministic decode + dimensions floor
         errors = result.get("errors", []) or []
         if errors:
             img.setdefault("partial_errors", []).extend(errors)
@@ -537,6 +538,66 @@ class ImagegenPlaybook(BasePlaybook):
         for record in candidates:
             if isinstance(record, dict) and "index" in record:
                 by_index[str(record["index"])] = record
+
+    # -- T3: deterministic PIL decode + dimensions floor (rules > aesthetic critic) ----
+    @staticmethod
+    def _candidate_files(record: dict) -> list:
+        if not isinstance(record, dict):
+            return []
+        files = record.get("files")
+        if isinstance(files, list):
+            return [str(f) for f in files if f]
+        one = record.get("path") or record.get("file")
+        return [str(one)] if one else []
+
+    @staticmethod
+    def _pil_validate(path: str, width, height) -> tuple:
+        """(ok, reason) for ONE candidate FILE: decode-validity (PIL raises on a corrupt/
+        truncated file) + exact dimensions vs the requested size (when specified). A deterministic
+        rules floor the aesthetic critics can't provide — a critic can't even load a corrupt image.
+        Never raises; PIL missing -> skip (ok, never block on a missing dep)."""
+        try:
+            from PIL import Image
+        except Exception:
+            return True, ""
+        try:
+            with Image.open(path) as im:
+                im.verify()  # decode-validity: raises on a corrupt/truncated file
+            with Image.open(path) as im:
+                w, h = im.size
+        except Exception as exc:
+            return False, f"undecodable image ({type(exc).__name__})"
+        if isinstance(width, int) and width > 0 and w != width:
+            return False, f"width {w} != requested {width}"
+        if isinstance(height, int) and height > 0 and h != height:
+            return False, f"height {h} != requested {height}"
+        return True, ""
+
+    def _pil_check_candidates(self, img: dict) -> None:
+        """(T3) Run the PIL floor over every candidate; record the invalid indices + per-candidate
+        evidence in img so _route_critiquing fails them regardless of the aesthetic critics.
+        Skipped under pytest (the generation seam is stubbed with non-existent files). Never raises."""
+        if "PYTEST_CURRENT_TEST" in os.environ:
+            return
+        width, height = img.get("width"), img.get("height")
+        invalid: list = []
+        evidence: list = []
+        for key, record in (img.get("candidates_by_index") or {}).items():
+            idx = int(record.get("index", key)) if isinstance(record, dict) else int(key)
+            files = self._candidate_files(record)
+            reason = "" if files else "no image file produced"
+            for f in files:
+                ok, r = self._pil_validate(f, width, height)
+                if not ok:
+                    reason = r
+                    break
+            if isinstance(record, dict):
+                record["pil_ok"] = not reason
+            if reason:
+                invalid.append(idx)
+                evidence.append(f"candidate {idx}: {reason}")
+        img["pil_invalid"] = sorted(set(invalid))
+        img["pil_evidence"] = evidence
 
     def _comfy_generate(self, ctx: RunContext, plan: dict) -> dict:
         """THE overridable generate seam. Default: submit each candidate ONE at a
@@ -716,11 +777,17 @@ class ImagegenPlaybook(BasePlaybook):
         needs_revision = any(
             critic.get("verdict") == VERDICT_NEEDS_REVISION for critic in (vera, carren)
         )
+        pil_invalid = {int(i) for i in (img.get("pil_invalid") or [])}
         failed = sorted(
             {int(i) for i in (vera.get("failed_candidates") or [])}
             | {int(i) for i in (carren.get("failed_candidates") or [])}
+            | pil_invalid  # T3: deterministic PIL floor — a corrupt/wrong-size candidate fails
         )
-        issues = list(vera.get("issues") or []) + list(carren.get("issues") or [])
+        issues = (
+            list(vera.get("issues") or [])
+            + list(carren.get("issues") or [])
+            + list(img.get("pil_evidence") or [])
+        )
         img["unresolved_issues"] = issues
         img["failed_candidates"] = failed
         # vera is the technical-validity oracle -> presenting picks a vera-valid one.
@@ -730,10 +797,11 @@ class ImagegenPlaybook(BasePlaybook):
             vera_valid = sorted(
                 all_idx - set(int(i) for i in (vera.get("failed_candidates") or []))
             )
-        img["vera_valid_candidates"] = list(vera_valid)
+        img["vera_valid_candidates"] = [i for i in vera_valid if int(i) not in pil_invalid]
         img["best_candidate"] = vera.get("best_candidate")
 
-        if not needs_revision:
+        # T3: a PIL-invalid candidate forces a revise even if BOTH critics APPROVED.
+        if not needs_revision and not pil_invalid:
             img["approved"] = True
             img["exhausted"] = False
             self.sm.send("critique_pass")

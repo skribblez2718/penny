@@ -623,3 +623,59 @@ def test_dual_format_result_contract(cp):
     assert machine["candidate_count"] == 3
     assert machine["approved"] is True
     assert "candidates" in machine and "manifest_path" in machine
+
+
+# ---------------------------------------------------------------------------
+# T3: deterministic PIL decode + dimensions floor (rules > aesthetic critic)
+# ---------------------------------------------------------------------------
+
+
+class _PilFailImagegen(FakeImagegen):
+    def _pil_check_candidates(self, img):
+        img["pil_invalid"] = [1]
+        img["pil_evidence"] = ["candidate 1: width 512 != requested 1024"]
+
+
+def test_pil_floor_fails_candidate_even_when_both_critics_approve(cp):
+    # T3: PIL flags candidate 1 (wrong dimensions). Even with BOTH critics APPROVING all three,
+    # the run must NOT present -> it revises to regenerate ONLY the PIL-invalid candidate.
+    _start(cp, cls=_PilFailImagegen)
+    _frame(cp, cls=_PilFailImagegen)
+    _compose(cp, cls=_PilFailImagegen, positive_prompt="x", negative_prompt=WORDLESS_NEGATIVE)
+    d = _critique(
+        cp,
+        _APPROVE | {"valid_candidates": [0, 1, 2], "best_candidate": 1},
+        _APPROVE,
+        cls=_PilFailImagegen,
+    )
+    assert d["action"] == "invoke_agent" and d["state_id"] == "adjusting"  # forced revise
+    img = cp.load(RID).context.extras["imagegen"]
+    assert 1 in img["failed_candidates"]
+    assert 1 not in img["vera_valid_candidates"]        # excluded from what can be presented
+    assert img["regenerate_only"] == [1]                # regenerate ONLY the PIL-invalid one
+    assert any("width 512" in e for e in img["unresolved_issues"])  # PIL evidence surfaced
+
+
+def test_pil_validate_decode_and_dimensions(tmp_path):
+    from PIL import Image
+
+    from orchestration.playbooks.imagegen import ImagegenPlaybook as IP
+
+    good = tmp_path / "good.png"
+    Image.new("RGB", (1024, 768)).save(good)
+    assert IP._pil_validate(str(good), 1024, 768) == (True, "")
+    assert IP._pil_validate(str(good), None, None) == (True, "")   # no dims required -> ok
+    ok, reason = IP._pil_validate(str(good), 512, 768)             # wrong width
+    assert ok is False and "width" in reason
+    bad = tmp_path / "bad.png"
+    bad.write_bytes(b"not a png")
+    ok, reason = IP._pil_validate(str(bad), None, None)
+    assert ok is False and "undecodable" in reason
+
+
+def test_candidate_files_extracts_paths():
+    from orchestration.playbooks.imagegen import ImagegenPlaybook as IP
+
+    assert IP._candidate_files({"files": ["a.png", "b.png"]}) == ["a.png", "b.png"]
+    assert IP._candidate_files({"path": "c.png"}) == ["c.png"]
+    assert IP._candidate_files({}) == []
