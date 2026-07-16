@@ -26,6 +26,10 @@ awk 'length($0)>200' <file> | sort | uniq -d
 # 5. ASCII math, backtick math, latex fences, literal unicode escapes:
 grep -rn '`[\\$]\|```latex\|\\u00[0-9a-f]' $LF
 
+# 5b. Retired structures + stale wording (standalone Formal-Definitions section, Quick Check,
+#     "the below definition" pointers) — all must return zero:
+grep -rni "^#\+ *Formal Definitions\|Quick Check\|below definition\|definition below\|the below\b" $LF
+
 # 6. Callout canon — whitelist approach (anything not canonical is a violation):
 grep -rh "^> \*\*" $LF | grep -v "🍳 Everyday analogy\|📌 Note\|🧠 Remember This\|Front:\|Back:"
 grep -rn "layman\|Layman" $LF   # inclusive-language check
@@ -51,16 +55,19 @@ grep -rn "<vendor names from the charter>" $LF
       with the same parameters and wording
 - [ ] Every answer/key solution has Approach / Step-by-Step Solution / Key
       Formula stages, an `**Answer:**` line, one ⚠️ and one 💡
-- [ ] Every Formal Definitions section opens with a "nothing new" statement and
-      ends with exactly one 🧠
-- [ ] Every topic has ≥2 practice problems; exams ramp in labeled difficulty
+- [ ] Every concept chunk CLOSES with its inline formal definition (a "nothing
+      new" statement + exactly one 🧠) — there is NO standalone
+      `### Formal Definitions` section and no "Quick Check"
+- [ ] Practice is graded + interactive, one question per chunk, answerable from
+      the content that precedes it; exams ramp in labeled difficulty
 - [ ] Exam-teaches-what-guides-teach audit: every named formula/operator/
       technique in an exam grep-hits in that lesson's guide (or carries an
       inline Recall restatement)
 - [ ] Forward references have 📌 Notes; "Recall" never references untaught
       content
-- [ ] Guide-required fixed sections present: Quick-Reference Flashcard Summary,
-      The One Diagram That Ties It All Together
+- [ ] Guide-required fixed sections present: Quick-Reference Flashcard Summary
+      (atomic one-per-card entries) and Unified Diagram; wide math is stacked to
+      fit the display column (no horizontal overflow)
 
 ## Tier 3 — Mathematical recomputation (never trust, always recompute)
 

@@ -18,30 +18,28 @@
   (read-aloud + visuals, future renderer). Author text-first but
   modality-ready (Rule 10).
 
-## 1. Three-Phase Teaching (always followed, never labeled)
+## 1. Concept Structure (intuition → example → formal per concept; graded practice)
 
-Every topic: **intuitive explanation → worked examples → formal definitions →
-practice**, under natural headers only:
+Each **concept** is taught end-to-end in ONE chunk — **intuition → worked example → its formal
+definition** — and the formal definition **CLOSES that chunk**. There is NO separate "Formal
+Definitions" section. Practice is **graded and interactive**, one question per chunk. Natural
+headers only:
 
-- Intuition flows directly under the topic title (no separate header). It MUST
-  contain: one `> **🍳 Everyday analogy:**` callout, a forward hook (one or two
-  sentences naming where the concept pays off later — a specific section,
-  lesson, or named application), and `> **📌 Note:**` callouts for any concept
-  used before its formal introduction.
-- `### Worked Examples` — 2–3 examples building in complexity, every algebraic
-  step shown, nothing "left to the reader", each ending in verification.
-  Consistent pattern: identify states/objects → scenario creating the need →
-  step-by-step derivation → result in every notation taught so far. Ends with
-  a `#### Why This Matters` bridge: 2–3 concrete applications tied to specific
-  later sections/lessons. NEVER narrate the teaching method itself ("the
-  analogy gave you the intuition, the examples gave you the mechanics…" is
-  banned meta-commentary).
-- `### Formal Definitions` — opens with a "nothing new here" statement (varied
-  wording), maps every definition back to the worked examples explicitly, ends
-  with `> **🧠 Remember This:**` (one sentence).
-- `### Practice Problems` — 2–3 numbered problems testing THIS topic only,
-  with all needed context inline; substantive, not one-word answers. Every
-  problem has an identically-scoped solution in the companion answers file.
+- **Intuition** opens the concept chunk (no separate header). It MUST contain: one
+  `> **🍳 Everyday analogy:**` (verified per Rule 3), a forward hook (one or two sentences naming
+  where the concept pays off later), and `> **📌 Note:**` callouts for any concept used before its
+  formal introduction.
+- The **worked example** (inside the same chunk) shows every algebraic step from the problem
+  statement to the solution, ends in verification, then a `#### Why This Matters` bridge (2–3
+  applications tied to specific later sections/lessons). NEVER narrate the teaching method itself.
+- The **formal definition CLOSES the same chunk**: a "nothing new here" statement (varied wording),
+  the definition mapped back to THAT chunk's example, and `> **🧠 Remember This:**`. Never a standalone
+  `### Formal Definitions` section; never "see the definition below".
+- **Practice = graded questions, one per chunk.** Each practice item is its OWN chunk with a single
+  graded, interactive question (multiple-choice, ordering, true/false, numeric) answerable from the
+  content that PRECEDES it. NO "Quick Check" — those are just practice questions. The companion
+  answers file carries the full worked solution (Approach → Step-by-Step → Key Formula) for the
+  deeper problems.
 
 **Meta-reference ban:** no methodology labels (crawl/walk/run or equivalents,
 ANY case), no "how to use this guide" blocks, no authoring conventions, no
@@ -63,9 +61,13 @@ one course-wide in the charter:
 - Header grammar: topics `## N. Title` (numbering may start at 0 or 1 but must
   be consistent per lesson and match the answers file); phase headers at
   `###`; sub-parts at `####`; exams `## Problem N: Title (Difficulty)`
-- Fixed section names: `Quick-Reference Flashcard Summary` and
-  `The One Diagram That Ties It All Together` close every guide
-- All math in LaTeX (`$`/`$$`), never ASCII math, never backtick-wrapped math
+- Fixed section names: `Quick-Reference Flashcard Summary` (each entry an atomic one-per-chunk card)
+  and `Unified Diagram` close every guide; gate-teaching guides add a **gate cheat sheet** giving
+  each covered gate in matrix + Dirac form
+- All math in LaTeX (`$`/`$$`), never ASCII math, never backtick-wrapped math — AND it must **fit the
+  display column**: wide expressions (ket lists, ket→bra conversions, rows of column vectors) are
+  **stacked vertically**, never laid out horizontally where they overflow; use LaTeX symbols
+  (`\neq`, `\otimes`) not pasted Unicode that can render as a blank box
 
 Where the source material itself is inconsistent, the charter picks the
 variant that maximizes transfer to real-world tools/exams and documents the
@@ -80,6 +82,10 @@ translation.
   analogies. Analogies must carry structural meaning (what the result IS), not
   just computation steps ("multiplication table"-style mechanical analogies
   are banned).
+- **Verify the analogy actually DEMONSTRATES the concept's key property before shipping it** — a
+  mismatched analogy is worse than none. A non-commutative operation needs an analogy where order
+  genuinely changes the result (cake-making: mix-then-bake ≠ bake-then-mix), not steps that commute.
+  Drop forced or self-referential metaphors in favor of ones that map cleanly.
 - Physical orientation matches mathematical orientation (vertical analogies
   for column-like objects, horizontal for row-like).
 - Analogies must be drawable (future visuals) and speakable (future
@@ -147,10 +153,11 @@ never learns a procedure without knowing what it buys them.
 
 ## 10. Modality-Ready Authoring
 
-Text-only today; a web app with read-aloud and visuals is the roadmap. So:
-callouts are stable machine-recognizable blocks; worked-example steps are
-atomic (one transformation per displayed equation, stated in words first);
-analogies are physically drawable; no layout-dependent meaning (markdown
-tables and LaTeX arrays, not ASCII art — ASCII diagrams only where the concept
-IS the diagram, always with equivalent prose); flashcard tables use a
-consistent extractable shape.
+The web app renders read-aloud narration, inline images, and **interactive exhibits** (e.g.
+Bloch-sphere animations for gate operations). Author text-first (the prose must stand alone as a
+text-only fallback), modality-ready: callouts are stable machine-recognizable blocks; worked-example
+steps are atomic (one transformation per displayed equation, stated in words first); analogies are
+physically drawable; no layout-dependent meaning (markdown tables and LaTeX arrays, not ASCII art —
+ASCII diagrams only where the concept IS the diagram, always with equivalent prose); flashcard tables
+use a consistent extractable shape. **Inherently-visual operations specify an interactive
+visualization** (initial state → operation → resulting motion) alongside the standalone prose.

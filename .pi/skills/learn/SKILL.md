@@ -12,8 +12,9 @@ metadata:
 # Learn Skill
 
 Transforms a set of raw learning material into a self-consistent, exam-ready
-study companion: per-lesson study guides (intuition → worked examples → formal
-definitions → practice), companion practice answers, per-lesson practice exams
+study companion: per-lesson study guides (each concept taught intuition → worked
+example → its formal definition, closing the concept, then graded practice),
+companion practice answers, per-lesson practice exams
 with fully worked answer keys, and course-wide final prep (comprehensive
 review, notation reference, final exam + key). Everything is authored to the
 pedagogy spec in `resources/pedagogy-spec.md` and gated by mechanical and
