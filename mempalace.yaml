@@ -1,9 +1,57 @@
+# mempalace.yaml — MemPalace project config
+#
+# Consumed by the `mempalace` CLI (github.com/mempalace/mempalace, installed v3.0.0):
+#   - `mempalace init <dir>`  GENERATES/overwrites this file from folder structure (interactive).
+#   - `mempalace mine <dir>`  READS `wing` + `rooms` to classify source-file chunks into rooms.
+#                              Hard-exits if this file is missing.
+#
+# NOT read by the runtime `memory_add_drawer` tool: agents write to free-form rooms via the
+# MCP bridge and are NEVER validated against this list. So this `rooms` list is a curated,
+# documentation-grade taxonomy of Penny's durable canonical rooms — editing it does not
+# delete drawers or affect live agent writes.
+#
+# Ephemeral `skills/<skill_name>-<session_id>` rooms are created per skill run and are
+# intentionally NOT listed here (they are cleaned up / T2-expired). See
+# docs/agents/skills/mempalace-integration.md.
+#
+# NOTE: `mempalace init` regenerates this file and strips comments/extra keys — avoid running
+# it unless you intend to regenerate. `file_patterns`/`exclude` are ignored by miner v3.0.0
+# (it uses hardcoded READABLE_EXTENSIONS/SKIP_DIRS); kept here to express intent.
+
 wing: penny
+
 rooms:
   - name: architecture
+    description: System architecture, design, and structural decisions
   - name: decisions
+    description: Decision records and their rationale
+  - name: planning
+    description: Plans, roadmaps, and task decomposition
+  - name: research
+    description: Research findings and reports
+  - name: technical
+    description: Technical notes, implementation details, and code references
+  - name: skills
+    description: Skill outputs, learnings, and durable results
   - name: sessions
+    description: Session summaries and end-of-session notes
+  - name: diary
+    description: Agent diary entries (AAAK format)
+  - name: outcomes
+    description: Outcome ledger — MATCH/MISMATCH ratings and rationale
+  - name: signals
+    description: Ambient watcher signals
+  - name: system_amendments
+    description: Self-improvement proposals and amendments
+  - name: digests
+    description: Weekly digests
+  - name: projects
+    description: Per-project working memory and context
+  - name: user
+    description: User profile, preferences, and personal context
   - name: general
+    description: Fallback for uncategorized content (miner default)
+
 file_patterns:
   - "**/*.ts"
   - "**/*.js"
