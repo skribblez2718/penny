@@ -143,7 +143,7 @@ Confidence markers used in the report:
 
 1. **Plan critique** — Carren reviews Piper's sub-query plan before dispatch.
 2. **Report critique** — Carren reviews Synthia's final report for overclaiming, bias, and fairness to conflicting evidence.
-3. **Conflict resolution** — Uses a 5-step hierarchy: tier authority → recency → consensus → context match → escalation.
+3. **Conflict resolution** — Conflicting sources must be resolved and the resolution justified with cited evidence; genuine disagreement is reported, not smoothed over. The weighing (source authority, recency, consensus, context fit) is synthia's judgment per case, not a fixed ordering.
 
 ### Mempalace room organization
 
@@ -161,12 +161,7 @@ Run state is not stored in mempalace — it lives in the engine's durable checkp
 
 ## Constraints
 
-| Mode | Max sub-queries |
-|------|-----------------|
-| Quick | 1 |
-| Standard | 3 |
-| Deep | 4 |
-
+- **Sub-query budget (not a per-mode table).** One `max_sub_queries` budget (default 4, tier-adjusted, clamped to `max_fan_width`) caps how many sub-queries are dispatched — code caps, the model spends. The per-mode `MAX_SUB_QUERIES_BY_MODE` table was deleted per the Bitter-Lesson gate (see the dynamic-fan description above); mode is caller- or model-declared, not a cap lookup.
 - `max_sub_queries` is enforced at dispatch: the plan is truncated to the cap before researching.
 - Malformed or empty agent summaries are rejected by the engine (no fabricated defaults; the run does not advance).
 - Critique revise loops are bounded by `ctx.max_iterations` and report exhaustion honestly.

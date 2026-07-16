@@ -81,7 +81,7 @@ The legacy `classify` state is gone. Domain selection is **model-owned** (the ke
 | Synthia  | Three modes: clarifying questions / synthesis / revision | `read,grep,find,ls,questionnaire,memory_*`                 |
 | Vera     | Validate IDEAL_STATE + PRD quality             | `read,grep,find,ls,questionnaire,memory_*`                           |
 
-Domain detection is a deterministic keyword scan in the playbook, not an agent step; echo does not run on the engine path.
+Domain selection is model-owned, not an agent step on the engine path (see the states description above): synthia declares the best-fit `domain` in its SUMMARY, `route_after` stores it, and `constraints["domain"]` overrides (unknown → `generic`). There is no keyword scan — the legacy `detect_domain` table was deleted per the Bitter-Lesson gate. (Echo does not run on the engine path.)
 
 ## Output Contract — Mempalace Room
 

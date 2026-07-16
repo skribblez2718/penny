@@ -35,18 +35,16 @@ first use (a failed fetch self-heals and dates the row).
 
 ## Using Tailwind with Lit (shadow DOM)
 
-Tailwind's global stylesheet does **not** cross Lit's shadow boundary. The
-required project pattern is to adopt a compiled Tailwind sheet into each
-component:
+Tailwind's global stylesheet does **not** cross Lit's shadow boundary, so a
+compiled Tailwind sheet must be adopted into each component's shadow root
+(Vite `?inline` → `unsafeCSS()` → `adoptStyles()`/`static styles`, via a shared
+`TW` mixin). Theme tokens declared on `:root`/`:host` (via `@theme`) are CSS
+custom properties and **do** cross the boundary, so one host-level theme drives
+every component.
 
-1. Author `tailwind.global.css` with `@import "tailwindcss";` and your `@theme`.
-2. Import the built CSS as a string with Vite: `import tw from "./tailwind.global.css?inline";`
-3. Wrap it with `unsafeCSS(tw)` and apply via `adoptStyles(this.shadowRoot, [sheet])` in a shared `TW` mixin (or `static styles`).
-4. Put utility classes in the `html` template; reserve `static styles` for `:host` / `::slotted()`.
-
-Theme tokens declared on `:root`/`:host` (via `@theme`) are CSS custom
-properties and **do** cross the shadow boundary, so a single host-level theme
-drives every component. Full code is in `.pi/skills/code/resources/web-ui.md`.
+The step-by-step procedure and full code live in **one** place —
+`.pi/skills/code/resources/web-ui.md` (§6). This doc deliberately does not
+restate them, so the pattern has a single source of truth.
 
 > **Security:** `unsafeCSS()` must only ever receive **trusted, compiled** CSS —
 > never user input. See [../security/configuration.md](../security/configuration.md)

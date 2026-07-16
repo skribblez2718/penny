@@ -38,8 +38,10 @@ Without tiering, every memory competes for the same context window. Tiering ensu
 | Transition | Trigger | Action |
 |-----------|---------|--------|
 | T1 → T2 | Session end | `memory_diary_write` |
-| T2 → T3 | 30 days | Age out of pre-turn window |
-| T3 → T4 | 90 days / completed | `scripts/system/tiered_memory/archiver.py` |
+| T2 → T3 | 30 days (default) | Age out of pre-turn window |
+| T3 → T4 | 90 days (default) / completed | `scripts/system/tiered_memory/archiver.py` |
+
+TTLs are **per-room defaults** configured in `scripts/system/tiered_memory/skill_rooms.json` (the archiver reads `ttl_days`, default 30), not global law — tune per room there rather than treating the cadence as fixed.
 
 ## Constraints
 

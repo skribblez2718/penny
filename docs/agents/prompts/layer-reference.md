@@ -219,7 +219,7 @@ Each responsibility belongs to exactly one layer. If Cognitive Frame requires ev
 
 ### 2. No Layer Contradicts Another Layer
 
-If Cognitive Frame says "unresolved ambiguity = ask, don't assume," Domain Guidance cannot say "do NOT ask for more information." The Instruction Hierarchy resolves conflicts: Safety > Truth > Clarity > User Intent > Thoroughness.
+If Cognitive Frame says "unresolved ambiguity = ask, don't assume," Domain Guidance cannot say "do NOT ask for more information." The Instruction Hierarchy (canonical home: SYSTEM.md) resolves conflicts — Truth > Clarity > User intent > Thoroughness — and the immutable security directives override all of them.
 
 ### 3. Lower Layers Are Always Present
 
@@ -310,7 +310,7 @@ These components are not prompt layers but are essential to understanding the fu
 
 #### Extensions
 
-Extensions provide **tools and event handlers**. They add capabilities, not instructions.
+Extensions provide **tools and event handlers**. They add capabilities, not instructions. (The table below is illustrative of the extension→layer roles, not a roster — the live set is whatever is under `.pi/extensions/`.)
 
 | Extension         | What It Provides                                                                      | Relationship to Layers                                                           |
 | ----------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |

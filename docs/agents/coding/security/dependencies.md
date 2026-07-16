@@ -14,7 +14,7 @@ Supply chain attacks and known CVEs in dependencies are the fastest-growing thre
 2. **Pin exact versions.** `"lodash": "4.17.21"`, not `"^4.0.0"`.
 3. **Minimize dependencies.** Prefer standard library over third-party packages.
 4. **Use lockfiles.** `package-lock.json` or `bun.lockb` committed to version control.
-5. **Never depend on unmaintained packages.** Check last publish date. >1 year without updates = unmaintained.
+5. **Never depend on unmaintained packages.** Assess maintenance health from multiple signals (release cadence, open-issue responsiveness, security-fix history). Treat likely-abandoned packages as disqualifying; any age cutoff is a tunable default, not fixed law — a mature, stable library can legitimately go quiet.
 
 ## Constraints
 
@@ -26,7 +26,7 @@ Supply chain attacks and known CVEs in dependencies are the fastest-growing thre
 - [ ] No known CVEs in dependency tree
 - [ ] Exact versions pinned
 - [ ] Lockfile committed
-- [ ] No unmaintained packages (>1 year)
+- [ ] No likely-abandoned packages (maintenance assessed from multiple signals, not a single age cutoff)
 
 ## Files
 

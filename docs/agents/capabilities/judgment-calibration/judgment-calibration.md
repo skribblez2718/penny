@@ -32,8 +32,8 @@ Results → `.penny/evals/judgment/latest.json`. Pick the judge with highest agr
 
 `eval_judgment.py` (section `judgment`, runs in every `make evals` — reads the artifact only, never a model call). Ratchets:
 
-- `judgment.best_judge_agreement` (up_good, floor 0.60) — the frontier: our best available judge's agreement. If it falls, the best verifier we can build got worse.
-- `judgment.best_judge_false_pass_rate` (down_good, absolute ceiling 0.34) — the safety gate.
+- `judgment.best_judge_agreement` (up_good, floor `AGREEMENT_FLOOR = 0.6` in `eval_judgment.py`) — the frontier: our best available judge's agreement. If it falls, the best verifier we can build got worse. The floor is a tunable ratchet gate (tightened as judges improve), not a fixed law.
+- `judgment.best_judge_false_pass_rate` (down_good, ceiling `FALSE_PASS_CEILING = 0.34` in `eval_judgment.py`) — the safety gate; a tunable ceiling, tightened as false-pass detection improves.
 - `judgment.results_fresh_days`, `judgment.corpus_size` (informational).
 
 "Best" is recomputed each run (highest agreement, tie-broken by lowest false-pass), so the metric tracks the frontier, not a pinned model.

@@ -10,7 +10,7 @@ Without pre-generation rules, agents produce inconsistent, untested, unverified 
 
 ## Rules
 
-1. **TDD required.** Write the test first, see it fail, then write the implementation.
+1. **Tests that prove the change.** Every change ships with tests that exercise it and fail on a reverted implementation — a pass is backed by an oracle, never asserted. Sequencing (test-first, alongside, or after) is the author's choice; the outcome is what's required, matching the `code` skill's own contract.
 2. **Lint before delivery.** Code must pass lint with zero errors.
 3. **Format before delivery.** Code must pass format check.
 4. **Typecheck before delivery.** TypeScript: `tsc --noEmit`. Python: `mypy`.
@@ -23,7 +23,7 @@ For web application projects, **build UIs as custom [Lit](https://lit.dev) web c
 
 - **UI default:** Lit web components for all new UI work. See [lit/AGENTS.md](lit/AGENTS.md) for the documentation map and `.pi/skills/code/resources/web-ui.md` for patterns and gotchas.
 - **CSS default:** Tailwind CSS (v4 — CSS-first `@import "tailwindcss"` + `@theme`, no `tailwind.config.js`). See [tailwind/AGENTS.md](tailwind/AGENTS.md).
-- **Lit + Tailwind integration (required pattern):** Lit renders into shadow DOM, which a global Tailwind stylesheet cannot pierce. Compile Tailwind and adopt it into each component's shadow root — import the built CSS with Vite's `?inline`, wrap it in `unsafeCSS()`, and apply it via `static styles` or an `adoptStyles()` mixin. Theme tokens on `:root`/`:host` (Tailwind `@theme`) cross the boundary as CSS custom properties. Only ever pass **trusted, compiled** CSS to `unsafeCSS()`. Details and code in `.pi/skills/code/resources/web-ui.md`.
+- **Lit + Tailwind integration (required pattern):** Lit renders into shadow DOM, which a global Tailwind stylesheet cannot pierce, so a compiled Tailwind sheet is adopted into each component's shadow root; theme tokens on `:root`/`:host` (Tailwind `@theme`) cross the boundary as CSS custom properties. Only ever pass **trusted, compiled** CSS to `unsafeCSS()` (a security boundary). The step-by-step API pattern and code live in **one** place — `.pi/skills/code/resources/web-ui.md` (§6) — this bullet does not restate them.
 - **Exceptions** are allowed when a project already standardizes on another framework (React, Vue, etc.) or a hard constraint rules Lit/Tailwind out — state the reason explicitly in the plan.
 - **Accessibility is mandatory (WCAG 2.2 AA).** Every user-facing surface must meet Level AA at build time — semantic HTML, keyboard operability, visible focus, contrast in **both** themes, and no meaning by color alone. This is a delivery gate, not a later audit. See [accessibility.md](accessibility.md) for the full standard + verification checklist (axe + keyboard + screen-reader).
 

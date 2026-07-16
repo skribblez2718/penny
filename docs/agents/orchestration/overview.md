@@ -3,7 +3,7 @@
 
 ## What
 
-`orchestration` is an installable Python package (`apps/orchestration/`) that provides the shared runtime an engine-backed skill's state machine rides on. Each such skill is a `BasePlaybook` subclass with its own domain-named states and per-state SUMMARY contracts; its `orchestrate.py` is a ~5-line delegate. The package owns the FSM protocol, a durable checkpointer, self-recovery, and best-effort observability emission — replacing the per-skill `orchestrate.py` FSM plumbing and the `--state`/`/tmp` state model. Every workflow skill runs on the engine — `code`, `plan`, `prd`, `research`, `agent`, `sca`, `jsa`, `rez`, and `learn` — each a `BasePlaybook` subclass with a ~5-line delegate `orchestrate.py`, with no exceptions. There are no standalone operation-primitive skills and no user-facing reference-cycle skill.
+`orchestration` is an installable Python package (`apps/orchestration/`) that provides the shared runtime an engine-backed skill's state machine rides on. Each such skill is a `BasePlaybook` subclass with its own domain-named states and per-state SUMMARY contracts; its `orchestrate.py` is a ~5-line delegate. The package owns the FSM protocol, a durable checkpointer, self-recovery, and best-effort observability emission — replacing the per-skill `orchestrate.py` FSM plumbing and the `--state`/`/tmp` state model. Every workflow skill runs on the engine — each a `BasePlaybook` subclass with a ~5-line delegate `orchestrate.py`, with no exceptions; the registered set is the single source of truth in `playbooks/__init__.py` (this doc does not enumerate it). There are no standalone operation-primitive skills and no user-facing reference-cycle skill.
 
 ## Why
 

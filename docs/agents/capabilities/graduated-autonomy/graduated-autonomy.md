@@ -14,16 +14,29 @@ elif trust(domain) >= threshold and graduated(domain):    ACT   # unattended
 else:                                                     ASK
 ```
 
-The hard rule comes first and **no trust score overrides it**.
+The hard rule comes first and **no trust score overrides it**. (When `PENNY_AUTONOMY_REVERSIBILITY_MODEL` is enabled, `reversibility(action)` above is the *vetoed* verdict — see [Reversibility veto](#reversibility-veto--optional-model-second-opinion-penny_autonomy_reversibility_model) below.)
 
 ## Components
 
 | File | Role |
 |------|------|
-| `action_classes.py` | `classify(text) → ActionClass(domain, operation, reversibility)`. Keyword taxonomy, **most-severe rule wins**, unknown → irreversible (ask). Reversible = undoable (edit/summarize/plan/draft); irreversible = deploy/send/merge/publish; destructive = delete/drop/wipe/overwrite. |
+| `action_classes.py` | `classify(text) → ActionClass(domain, operation, reversibility)`. Keyword taxonomy, **most-severe rule wins**, unknown → irreversible (ask). Reversible = undoable (edit/summarize/plan/draft); irreversible = deploy/send/merge/publish; destructive = delete/drop/wipe/overwrite. Also `model_veto_reversibility(...)` — the optional, veto-only model second opinion (see below). |
 | `trust.py` | `compute_trust(outcomes, domain, now, false_pass_rate) → TrustScore`. Per-domain, earned from the ledger. |
 | `gate.py` | `decide(...)` (pure) and `decide_live(action)` (against the live ledger + verifier cap). |
 | `dashboard.py` (`make trust`) | Per-domain trust + sample gate decisions. |
+
+## Reversibility veto — optional model second opinion (`PENNY_AUTONOMY_REVERSIBILITY_MODEL`)
+
+The keyword taxonomy is a conservative floor, but it has one residual blind spot: a **keyword false positive** — an action that matches a `REVERSIBLE` rule yet is actually dangerous (e.g. "update config to shorten data retention", "toggle off the nightly backup"). Unknown verbs already fall to `irreversible → ask`; the only gap is a reversible-*looking* phrasing of a harmful action.
+
+`model_veto_reversibility(action_text, base_reversibility, runner=)` closes it, **veto-only**:
+
+- **Consulted only when the keyword verdict is `REVERSIBLE`** (the sole act-eligible case) and `PENNY_AUTONOMY_REVERSIBILITY_MODEL` is set to a `provider/model` spec. Unset (default) ⇒ byte-identical to the keyword-only gate; irreversible/destructive classes never spend a model call.
+- **Monotone — most-severe wins.** The model emits a label from the same `{reversible, irreversible, destructive}` taxonomy; the effective verdict is the *most severe* of {keyword, model}. So the model can only move a verdict **away** from `REVERSIBLE` (adding an ASK) — it can **never** upgrade a non-reversible verdict into an ACT. The deny-by-default floor is preserved by construction; a better model catches more false positives without ever loosening the gate.
+- **Fail-safe, never raises.** Any transport/parse failure keeps the keyword verdict (zero behavior change); a **low-confidence** answer on a reversible action is treated as a veto (force ASK), per the `classify_gate_intent` precedent ("never silently approve on ambiguity"). Uses the shared `pi_json_call` caller (`timeout 30s`); `classify()` itself stays pure/deterministic — the model layer lives only in `decide()`/`decide_live()`.
+- **Audit:** a veto shows in `Decision.reason` ("model second opinion flagged this '<class>' …"). No separate audit store (v1).
+
+Tested hermetically in `tests/test_autonomy.py` via an injected `runner`: veto forces ASK, disabled = byte-identical, model failure falls back, a model 'reversible' cannot upgrade a keyword irreversible/destructive, and low-confidence vetoes.
 
 ## Trust Properties (all enforced + tested)
 

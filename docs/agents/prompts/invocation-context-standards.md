@@ -143,7 +143,7 @@ This placement preserves the sandwich defense: security directives at the top, s
 
 ## Conflict Resolution
 
-When Invocation Context content conflicts with Cognitive Frame or Role Definition or Domain Guidance, the Instruction Hierarchy resolves:
+When Invocation Context content conflicts with Cognitive Frame or Role Definition or Domain Guidance, the Instruction Hierarchy resolves. Its canonical home is the Cognitive Frame (SYSTEM.md); the table below mirrors that order (the security directives override all) and adds invocation-context-specific resolutions — it does not re-author the priorities:
 
 | Priority | Rule         | Resolves                                                        |
 | -------- | ------------ | --------------------------------------------------------------- |

@@ -11,7 +11,7 @@ The `tools:` field is the single source of truth. Duplicating tool lists in agen
 ## Rules
 
 1. **`tools:` in YAML frontmatter is the only tool declaration.** Pi parses it → `--tools` flag.
-2. **All four memory tools required.** `memory_smart_search`, `memory_add_drawer`, `memory_check_duplicate`, `memory_kg_add`.
+2. **All four memory tools required** — the canonical list + rationale lives in [memory/integration.md](../memory/integration.md#base-tool-set) (the Memory row below enumerates them).
 3. **Extensions are always loaded.** `--no-extensions` is never used. Our tools ARE extensions.
 4. **Tool names must match exactly.** Case-sensitive. `memory_smart_search` ≠ `memory_Smart_Search`.
 

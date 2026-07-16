@@ -28,16 +28,9 @@ Without tiering, every memory competes for the same context window. Tiering ensu
 
 ## Room → Tier Convention
 
-| Room | Tier | Rationale |
-|------|------|-----------|
-| `penny/outcomes` | T2 | Recent outcomes drive pre-turn injection |
-| `penny/diary` | T2 | Recent entries are working memory |
-| `penny/signals` | T2 | Pending signals need attention |
-| `penny/architecture` | T3 | Permanent reference |
-| `penny/decisions` | T3 | Permanent reference |
-| `penny/skills` | T3 | Completed skill summaries |
-| `penny/system_versions` | T4 | Archive only |
-| `penny/audit` | T4 | 90-day post-hoc |
+Per-room tier/TTL policy is declared in **one** place — `scripts/system/tiered_memory/skill_rooms.json` (three consumers read it, so they can never drift; see [memory/schema.md](../memory/schema.md)). Consult that manifest for the authoritative per-room mapping rather than a table here that would drift as rooms are added.
+
+Rule of thumb (not the source of truth): recent working memory (outcomes, diary, signals) → T2; permanent reference (architecture, decisions, completed skill summaries) → T3; archives (system_versions, audit) → T4.
 
 ## Distillation Pipeline
 

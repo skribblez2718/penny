@@ -42,7 +42,7 @@ Consistent extension structure ensures Pi can load and register extensions corre
 
 ## Canonical Vocabulary
 
-Extension-specific terms. The system-wide vocabulary (constraints, variables, assumptions, unknowns, tradeoffs, verification) is defined in `.pi/SYSTEM.md`.
+Extension-specific terms. (The frame no longer carries a system-wide vocabulary table; cross-layer term consistency is review-enforced — see [Cognitive Frame Standards Rule 3](../prompts/cognitive-frame-standards.md).)
 
 | Term | Definition | Code Binding | Do NOT substitute |
 |------|-----------|-------------|-------------------|

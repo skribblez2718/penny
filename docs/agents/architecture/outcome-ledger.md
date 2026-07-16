@@ -45,7 +45,7 @@ memory_smart_search(query="outcome MISMATCH", wing="penny", room="outcomes", lim
 
 - **Never skip recording for irreversible actions.** The ledger is the only mechanism for learning from mistakes.
 - **Never claim CERTAIN for predictions about external systems.** User behavior, API responses, and tool outputs are inherently uncertain.
-- **Rolling window for pre-turn injection:** last 10 entries or last 7 days, whichever is smaller.
+- **Rolling window for pre-turn injection:** a tunable default of the last 10 entries or last 7 days, whichever is smaller (a knob, not fixed law).
 
 ## Delta Scores
 
@@ -60,7 +60,7 @@ memory_smart_search(query="outcome MISMATCH", wing="penny", room="outcomes", lim
 - [ ] Decision recorded before every file modification
 - [ ] MISMATCHes reviewed before consequential actions
 - [ ] Open records closed at session end
-- [ ] ≥3 MISMATCH in same domain over 7 days → triggers amendment proposal
+- [ ] ≥3 MISMATCH in same domain over 7 days → triggers amendment proposal (a tunable default matching the `mismatch_rate` watcher's `threshold=3`/`window_days=7` params, or its adaptive baseline — not fixed law)
 
 ## Files
 

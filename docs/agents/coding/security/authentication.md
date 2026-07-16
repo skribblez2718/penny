@@ -13,14 +13,14 @@ Authentication failures are the highest-impact security bugs. A single weak pass
 1. **Use established auth libraries.** Passport.js, NextAuth, Django auth, Flask-Login. Never implement auth from scratch.
 2. **Hash passwords with bcrypt, argon2, or scrypt.** Never MD5, SHA1, or plaintext.
 3. **Use secure session management.** HttpOnly, Secure, SameSite=Strict cookies. Never store sessions in localStorage.
-4. **Implement rate limiting on login.** 5 attempts per minute per account minimum.
+4. **Rate-limit auth endpoints.** Throttling login/reset/token attempts is mandatory; make the limit a configurable knob with a sane default (e.g. ~5/min per account). The control is required; the exact number is deployment-tunable, not fixed law.
 5. **Use multi-factor where possible.** TOTP or WebAuthn for sensitive operations.
 6. **Never expose whether username or password was wrong.** "Invalid credentials" — not "user not found" vs "wrong password."
 
 ## Constraints
 
 - **BLOCKER severity.** Weak auth must be fixed before delivery.
-- **Never generate password reset without token expiry.** Tokens must expire in ≤1 hour.
+- **Never generate password reset without token expiry.** Reset tokens must be short-lived and single-use; the exact TTL is a configurable default (e.g. ~1 hour), not a fixed law.
 
 ## Verification
 

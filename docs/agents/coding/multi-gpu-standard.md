@@ -5,16 +5,21 @@
 
 ## The Rule
 
-All AI applications in this workspace **MUST** make both RTX 4090s
-visible to PyTorch, but they **MUST NOT** assume 2 GPUs.
+The invariant is capability-first: **make every GPU present on the host
+visible to PyTorch, select exactly one device adaptively at startup, and
+degrade to CPU when there is none** — never hard-code a device or assume a
+fixed GPU count.
 
 Concretely:
-1. `.env` and `.env.example` must contain `CUDA_VISIBLE_DEVICES=0,1` at
-   the top — this makes both cards visible, but the app must still
-   handle 1 GPU, N GPUs, or no GPU gracefully.
+1. `.env` and `.env.example` expose all present cards to PyTorch, and the
+   app still handles 1 GPU, N GPUs, or no GPU gracefully. On the current
+   host (2× RTX 4090) that is `CUDA_VISIBLE_DEVICES=0,1` — an example for
+   this box, not a universal constant; a 1-GPU or different host sets its
+   own value.
 2. **All models in a single app share ONE device.** Do NOT split
-   multiple models across different cards. Do NOT use
-   `device_map="auto"` on small models.
+   multiple models across different cards. Prefer an explicit
+   single-device map; `device_map="auto"` is only appropriate when a
+   model genuinely exceeds one card (see “Why not `device_map="auto"`?”).
 3. The device is chosen once at startup by a shared helper and cached.
    The app code uses `get_device()` to read the choice.
 4. A `MEETING_DEVICE` (or project-specific) env var lets the user
@@ -36,9 +41,11 @@ workspace is **splitting one model's submodules across GPUs**:
   a similar coupling: data lives on GPU 0, the model lives on GPU 1,
   and the first request fails.
 
-The fix is to pin all models in an app to the same single device. Both
-Whisper medium (~1.5 GB) and Qwen3-TTS-0.6B (~1.2 GB) fit on one
-24 GB card with ~20 GB of headroom. Splitting is wasteful AND broken.
+The fix is to pin all models in an app to the same single device.
+(Concretely, this workspace's current audio pipeline — Whisper medium and
+Qwen3-TTS-0.6B, ~1.5 GB + ~1.2 GB at time of writing — fits comfortably on
+one 24 GB card; verify headroom at load time rather than trusting these
+point-in-time sizes.) Splitting is wasteful AND broken.
 
 ## `.env` Template
 

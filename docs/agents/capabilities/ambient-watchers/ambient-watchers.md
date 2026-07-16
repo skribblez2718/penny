@@ -12,17 +12,19 @@ Penny cannot initiate — she only responds to user input. Watchers bridge this 
 
 1. **CRITICAL signals must be addressed before proceeding.** Acknowledge resolution in `penny/signals`.
 2. **Amendments must be addressed before proceeding.** Same acknowledgment requirement.
-3. **Skip duplicate signals.** `check_duplicate` (0.99 threshold) prevents spam.
+3. **Skip duplicate signals.** `check_duplicate` (default `0.99` similarity in the dedup call) prevents spam.
 4. **Individual watcher failures do not crash the pipeline.** Each watcher is wrapped in try/except.
 
 ## Watchers
 
-| Watcher | Trigger | Threshold |
-|---------|---------|-----------|
-| `mismatch_rate` | ≥N MISMATCH outcomes in window | 3 in 7 days |
-| `confidence_trend` | Declining confidence across sessions | 0.5 trend over 7 days |
-| `mempalace_growth` | Drawer count exceeds threshold | 500 drawers |
-| `task_staleness` | Task untouched for N days | 7 days |
+| Watcher | Trigger | Default (tunable — see note) |
+|---------|---------|------------------------------|
+| `mismatch_rate` | ≥N MISMATCH outcomes in window | `threshold=3`, `window_days=7` |
+| `confidence_trend` | Declining confidence across sessions | `threshold=0.5`, `window_days=7` |
+| `mempalace_growth` | Drawer count exceeds threshold | `drawer_count_threshold=500` |
+| `task_staleness` | Task untouched for N days | `threshold_days=7` |
+
+These numbers are **function-parameter defaults** in `scripts/system/watchers/signal_generators.py`, not fixed law. The outcome-based watchers also support **self-calibrating outlier detection** (opt-in via the `PI_WATCHER_BASELINE` env var): a signal then fires when the current window is a high z-score outlier vs. the metric's own trailing baseline (`_BASELINE_*` constants), and the static default is only the cold-start fallback when there is too little history to calibrate. Tune the defaults or enable the baseline rather than treating any number as law.
 
 ## External emitters (same signal pipeline, not in `run_all_metric_watchers`)
 

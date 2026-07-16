@@ -15,12 +15,7 @@ front-load global decisions behind a gate, and draw `resources/flow.mmd`.
 ### Create a skill
 1. **Write the playbook.** Add a `BasePlaybook` subclass to `apps/orchestration/src/orchestration/playbooks/<name>.py` — a python-statemachine `machine_cls` plus `NAME`, `PRIMITIVE_BY_STATE`, `route_after`, `done_predicate`, and (as needed) `GATE_STATES`/`gate_questions`/`route_user`, `PARALLEL_BY_STATE`, `TOOL_STATES`/`run_tool_state`, `ESCALATABLE_STATES`/`progress_check`, `skill_context` (per-state prompt files). Model it on `playbooks/code.py`, `playbooks/plan.py`, and `playbooks/learn.py`.
 2. **Register it** in `playbooks/__init__.py` (`PLAYBOOKS` dict).
-3. **Add the delegate.** `.pi/skills/<name>/scripts/orchestrate.py`:
-   ```python
-   from orchestration.cli import main
-   if __name__ == "__main__":
-       raise SystemExit(main(default_playbook="<name>"))
-   ```
+3. **Add the delegate.** Copy the canonical ~5-line stub from [skill-standard.md](skill-standard.md) into `.pi/skills/<name>/scripts/orchestrate.py` — it imports `orchestration.cli.main` and calls `raise SystemExit(main(default_playbook="<name>"))`, nothing else.
 4. **Write SKILL.md** with `metadata.penny.engine: orchestration`: When to Use, When NOT to Use, invocation syntax.
 5. **Create `assets/prompts/<agent>.md`** for each agent role (domain guidance). One agent serving multiple states gets per-state files (`<agent>-<state>.md`) named by the playbook's `skill_context()`.
 6. **Create the checker-required files:** `README.md` (include the order-rule → failure-mode table), `resources/reference.md` (FSM/contracts/constraints reference mirroring the playbook), `resources/flow.mmd` (state diagram).

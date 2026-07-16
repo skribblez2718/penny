@@ -12,9 +12,11 @@ Consistent structure enables Pi's auto-discovery, the skill tool's mode detectio
 
 1. **SKILL.md is the manifest.** YAML frontmatter with `name`, `description`, `metadata.penny` fields (including `engine: orchestration`). Markdown body with When to Use, When NOT to Use, invocation syntax.
 2. **The state machine is a playbook in the engine.** Write a `BasePlaybook` subclass in `apps/orchestration/src/orchestration/playbooks/<name>.py` (a python-statemachine `machine_cls` plus `NAME`, `PRIMITIVE_BY_STATE`, `route_after`, `done_predicate`, and — as needed — `GATE_STATES`/`gate_questions`/`route_user`, `PARALLEL_BY_STATE`, `TOOL_STATES`/`run_tool_state`, `ESCALATABLE_STATES`/`progress_check`). Register it in `playbooks/__init__.py`.
-3. **`scripts/orchestrate.py` is a ~5-line delegate.** It only routes `start`/`step`/`status`/`recover` to the engine — no FSM, no state serialization:
+3. **`scripts/orchestrate.py` is the ~5-line delegate** — this is the **canonical stub** (copy verbatim, changing only `<name>`; other docs reference it rather than re-pasting). It only routes `start`/`step`/`status`/`recover` to the engine — no FSM, no state serialization:
    ```python
+   #!/usr/bin/env python3
    from orchestration.cli import main
+
    if __name__ == "__main__":
        raise SystemExit(main(default_playbook="<name>"))
    ```
@@ -25,7 +27,7 @@ Consistent structure enables Pi's auto-discovery, the skill tool's mode detectio
 
 ## Bitter-Lesson / Atomic-Loops Compliance (mandatory for new skills)
 
-Every new playbook MUST comply with the [Atomic Loop Components](../architecture/atomic-loop-components.md) doctrine and the [Bitter-Lesson gate](../architecture/project-standards.md#the-bitter-lesson-gate--before-adding-scaffolding). The six shipped playbooks (`prd`/`plan`/`research`/`sca`/`jsa`/`rez`) are the reference implementations. The rules, with the engine seam that implements each:
+Every new playbook MUST comply with the [Atomic Loop Components](../architecture/atomic-loop-components.md) doctrine and the [Bitter-Lesson gate](../architecture/project-standards.md#the-bitter-lesson-gate--before-adding-scaffolding). The playbooks registered in `playbooks/__init__.py` are the reference implementations (that registry is the single source of truth for the current set — this doc does not enumerate them). The rules, with the engine seam that implements each:
 
 1. **No keyword routers or magic-number tables.** Task understanding lives in the model, not an `if keyword in text` ladder or a `THRESHOLD_BY_MODE` dict. Mode/domain/topology decisions are **caller-constraint > model-declared (in a SUMMARY field) > safe default**, captured in `route_after`. (See `prd` domain, `research` mode.) A count/size that must be bounded is a **Budget** (`constraints["max_..."]`, a default clamp), not a frozen constant.
 2. **Verify is evidence-gated.** Any VERIFY/VALIDATE/critique state declares an `evidence` field in its contract (`_c(required={..., "evidence": list}, evidence=["evidence"])`) so the engine rejects a PASS carrying no captured evidence (Rec 4). The verifier prompt states the evidence-tier hierarchy (execute > apply-the-rule > judge); a PASS that could have been executed but was only judged is under-verified. The captured evidence rides to `ctx.verify_evidence` and the outcome ledger automatically.

@@ -3,7 +3,7 @@
 
 ## What
 
-An engine-backed skill's `orchestrate.py` is a **thin (~5-line) delegate** to the shared `orchestration` package — but the skill's real state machine is a concrete **`BasePlaybook` subclass** in `apps/orchestration/src/orchestration/playbooks/<skill>.py`. That subclass owns *what* (its own domain-named states, per-state SUMMARY contracts, routing); the engine owns *how* (protocol, validation, checkpointing, recovery, observability). Every workflow skill runs this way — `code`, `plan`, `prd`, `agent`, `research`, `sca`, `jsa`, `rez`, and `learn` are all registered playbooks in `playbooks/__init__.py`; there are no legacy per-skill FSMs left.
+An engine-backed skill's `orchestrate.py` is a **thin (~5-line) delegate** to the shared `orchestration` package — but the skill's real state machine is a concrete **`BasePlaybook` subclass** in `apps/orchestration/src/orchestration/playbooks/<skill>.py`. That subclass owns *what* (its own domain-named states, per-state SUMMARY contracts, routing); the engine owns *how* (protocol, validation, checkpointing, recovery, observability). Every workflow skill runs this way — each is a registered `BasePlaybook` subclass in `playbooks/__init__.py` (that registry is the single source of truth for the current set); there are no legacy per-skill FSMs left.
 
 ## Why
 
@@ -11,14 +11,7 @@ One engine replaces the ~10k lines of per-skill FSM plumbing that previously dri
 
 ## Rules
 
-1. **The skill dir holds only a thin delegate; the playbook is a real subclass.** The entire `.pi/skills/<name>/scripts/orchestrate.py` is:
-   ```python
-   #!/usr/bin/env python3
-   from orchestration.cli import main
-   if __name__ == "__main__":
-       main(default_playbook="<name>")
-   ```
-   The FSM itself — states, `PRIMITIVE_BY_STATE`, `route_after`, `done_predicate` — lives in the package's `playbooks/<name>.py` as a `BasePlaybook` subclass. There is no shared "standard cycle" base to inherit and no single-operation ("primitive") skill category — every skill is its own bespoke subclass.
+1. **The skill dir holds only a thin delegate; the playbook is a real subclass.** The entire `.pi/skills/<name>/scripts/orchestrate.py` is the canonical ~5-line stub in [skill-standard.md](skill-standard.md) — it imports `orchestration.cli.main` and calls `raise SystemExit(main(default_playbook="<name>"))`, nothing else. The FSM itself — states, `PRIMITIVE_BY_STATE`, `route_after`, `done_predicate` — lives in the package's `playbooks/<name>.py` as a `BasePlaybook` subclass. There is no shared "standard cycle" base to inherit and no single-operation ("primitive") skill category — every skill is its own bespoke subclass.
 2. **Four subcommands, via the package CLI.** `start`, `step`, `status`, `recover` — dispatched by `orchestration.cli:main`. `start` initializes + checkpoints; `step` validates the agent SUMMARY, routes, checkpoints; `status` reports; `recover` auto-resumes a pending run for the session (playbook-scoped).
 3. **State lives in the durable checkpointer**, keyed by `run_id` (SQLite at `PENNY_ORCH_DB`, session-indexed). **Never** serialize state to `argv` and **never** reintroduce a transition-replay `_force_state`.
 4. **One JSON directive per invocation to stdout.** No other stdout output; use stderr for logs.

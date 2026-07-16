@@ -46,29 +46,27 @@ Optional constraints:
 ### States and transitions
 
 ```
-intake ──start_explore──▶ exploring ──explore_done──▶ planning
-                            ▲   ▲                         │
-                            │   │            plan_to_verify│ plan_to_critique
-   critique_retry_explore   │   │                         ▼           │
-                            │   │                    verify_gate       │
-                            │   │        verify_revise │  │ verify_confirm
-                            │   └──────────────────────┘  ▼           ▼
-                            │                          critiquing ◀────┘
-                            │        critique_retry_plan │  │  │
-                            └── (via planning) ──────────┘  │  │
-                                                critique_pass│  │critique_exhausted
-                                                             ▼  ▼
-                                                         taskifying ──taskify_done──▶ complete
-                                    critiquing ──critique_blocked (verdict BLOCKED)──▶ complete (met=False)
+intake ──start_scope──▶ scoping ──scope_done──▶ exploring ──explore_done──▶ planning
+        (a caller-supplied constraints["explore_branches"] takes start_explore straight to exploring, skipping scoping)
 
-  exploring│planning│critiquing│taskifying ──to_unknown──▶ unknown ──escalate──▶ awaiting_clarification ──clarify──▶ exploring
-  any non-terminal state ──abort──▶ error
+planning ──plan_to_critique──▶ critiquing
+planning ──plan_to_verify──▶ verify_gate;  verify_gate ──verify_confirm──▶ critiquing;  verify_gate ──verify_revise──▶ planning
+
+critiquing ──critique_pass──────────▶ taskifying ──taskify_done──▶ complete
+critiquing ──critique_retry_explore──▶ exploring   (first ≤2 rounds; explore_rounds < 2)
+critiquing ──critique_retry_plan─────▶ planning    (thereafter)
+critiquing ──critique_exhausted──────▶ taskifying  (budget spent; completes met=False)
+critiquing ──critique_blocked───────▶ complete     (verdict BLOCKED; met=False, no retry)
+
+scoping│exploring│planning│critiquing│taskifying ──to_unknown──▶ unknown ──escalate──▶ awaiting_clarification ──clarify──▶ scoping
+any non-terminal state ──abort──▶ error
 ```
 
 | State | Agent | Purpose | Mempalace header |
 |-------|-------|---------|------------------|
 | `intake` | — | Validate non-empty goal, seed `ctx.extras["plan"]` | — |
-| `exploring` | `echo` ×3 | Parallel fan-out (entrypoints, tests, config) | `<session> Explore — <focus>` |
+| `scoping` | `piper` | Emit the runtime exploration topology (`explore_branches`); skipped when the caller supplies `explore_branches` | — |
+| `exploring` | `echo` ×N | Parallel fan-out over the model-emitted foci (the fixed `entrypoints`/`tests`/`config` split is a tagged-LOAN fallback) | `<session> Explore — <focus>` |
 | `planning` | `piper` | Synthesize findings into an execution-grade plan; emit `plan_steps` + `stakes` | `<session> Planner` |
 | `verify_gate` | — | Planned HITL gate for high-stakes plans | — |
 | `critiquing` | `carren` | CREST critique; verdict `APPROVE`, `NEEDS_REVISION`, or `BLOCKED` + issues | `<session> Critique` |
@@ -79,11 +77,9 @@ intake ──start_explore──▶ exploring ──explore_done──▶ planni
 
 ### Parallel exploration
 
-`exploring` always fans out (`PARALLEL_BY_STATE = {"exploring": PLAN_EXPLORE}`) into three `echo` branches, each with a distinct focus:
+Exploration topology is the model's runtime output (arrangement 4). The `scoping` state (`piper`) emits `explore_branches` — a small `branch_id → focus` map — which `route_after` turns into `ctx.extras["dynamic_branches"]["exploring"]`; the engine fans out one read-only `echo` branch per focus, bounded by `constraints["max_fan_width"]` (default 8). A caller can supply `constraints["explore_branches"]` to fix the topology and skip `scoping`.
 
-1. `entrypoints` — entry points and call graph
-2. `tests` — tests and build pipeline
-3. `config` — configurations and dependencies
+The legacy fixed 3-branch split (`entrypoints` / `tests` / `config`) survives only as the tagged LOAN `plan_default_explore_topology` (`PLAN_EXPLORE_DEFAULT`), used when `scoping` emits no valid topology **and** the loan is enabled. When the loan is ablated, an invalid or empty topology escalates to the user rather than baking a fixed decomposition.
 
 Each branch writes findings to the shared mempalace room; `planning` reads them. On a critique-driven re-explore, the branches receive the prior critique issues to fill gaps (header suffixed `(Revision N)`).
 
@@ -111,14 +107,15 @@ The loop is bounded by `ctx.max_iterations`. On true budget exhaustion it takes 
 
 ### Escalation path
 
-`ESCALATABLE_STATES = {"exploring", "planning", "critiquing", "taskifying"}`. `progress_check` returns a reason when:
+`ESCALATABLE_STATES = {"scoping", "exploring", "planning", "critiquing", "taskifying"}`. `progress_check` returns a reason when:
 
 - a SUMMARY has `needs_clarification: true` (returns the clarifying questions), or
+- `scoping` emits no valid exploration topology and the `plan_default_explore_topology` loan is ablated (asks the user how to explore the goal), or
 - `critiquing` is stalled (verdict not `APPROVE` and issues unchanged across revisions).
 
 `exploring` is escalatable so a parallel `echo` branch can surface a blocking ambiguity. The parallel fan-in only inspects **aggregated confidence**, so a branch needing clarification must also set `confidence == UNCERTAIN` (its questions ride in `clarifying_questions`); `echo.md` requires this pairing, otherwise the questions would be silently dropped.
 
-A returned reason drives `to_unknown → escalate` into `awaiting_clarification`, pausing the run. The user's answer resumes the **same run** (keyed by `run_id`) via a `user` step; the driver passes the response through `constraints.user_response`. `clarify` resumes at `exploring`. `previous_state` lives in `ctx` and is checkpointed — there is no state blob threaded back on the wire.
+A returned reason drives `to_unknown → escalate` into `awaiting_clarification`, pausing the run. The user's answer resumes the **same run** (keyed by `run_id`) via a `user` step; the driver passes the response through `constraints.user_response`. `clarify` resumes at `scoping` (re-scoping after clarification). `previous_state` lives in `ctx` and is checkpointed — there is no state blob threaded back on the wire.
 
 ### Approval cycle
 

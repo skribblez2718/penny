@@ -29,7 +29,7 @@ Outcome MISMATCHes → compression_loop → target_classifier → amendment_gene
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| Target Classifier | `target_classifier.py` | Maps learning to target layer via keyword heuristics |
+| Target Classifier | `target_classifier.py` | Maps learning to its target layer — model-first (`classify_target` → `_classify_via_model`), keyword heuristics as the fallback |
 | Amendment Generator | `amendment_generator.py` | Builds structured amendment JSON |
 | Amendment Applier | `amendment_applier.py` | Applies APPROVED amendments + git commit |
 | Compression Loop | `compression_loop.py` | Orchestrates: outcomes → patterns → classification → generation |
@@ -37,7 +37,9 @@ Outcome MISMATCHes → compression_loop → target_classifier → amendment_gene
 
 ## Target Layers
 
-| Layer | Target Files | Classifier Keywords |
+Classification is **model-first**: `classify_target` calls `_classify_via_model` when `PI_SELFIMPROVE_TARGET_MODEL` is set (fail-safing toward `REJECTED_UNIVERSAL` for immutable-rule touches) and falls back to the keyword hints below on unset/failure — the keywords are a resilient backstop, not the routing law.
+
+| Layer | Target Files | Fallback keyword hints |
 |-------|-------------|-------------------|
 | DOMAIN_GUIDANCE | `.pi/skills/*/assets/prompts/*.md` | Domain-specific terms |
 | MEMPALACE_PREF | Mempalace preference rooms | "prefer", "always", "never" |

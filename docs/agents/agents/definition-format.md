@@ -53,7 +53,7 @@ Generic shape; exact schema per Domain Guidance.
 - **No domain-specific content.** Checklists and CREST tables belong in Domain Guidance.
 - **No contradictions with Cognitive Frame.** "Do NOT ask" conflicts with Priority 2 (Clarity).
 - **Concrete verbs, not nominalized actions.** Write "Identify gaps," not "responsible for the identification of gaps." See [Design Principles §10](../../humans/prompts/design-principles.md).
-- **All four memory tools required.** `memory_smart_search`, `memory_add_drawer`, `memory_check_duplicate`, `memory_kg_add`.
+- **All four memory tools required** — canonical list + rationale in [memory/integration.md](../memory/integration.md#base-tool-set) (the frontmatter example above shows the names).
 - **Never write output to the project tree.** Agents with `write`/`edit`/`bash` tools must write output files to `/tmp/` or mempalace, never to the project directory, unless the task explicitly specifies a project path.
 
 ## Canonical Vocabulary

@@ -1,6 +1,7 @@
 # Coding Best Practices — Agent Reference Index
 
 - [conventions.md](conventions.md): Universal pre-generation rules and severity legend
+- [deployment-conventions.md](deployment-conventions.md): **Dev vs prod for web apps** — `make dev`=local / `make prod`=Docker, dedicated `.env.prod`, fail-closed prod config validator, per-environment DB-stored admin bootstrap (`create-admin`/`delete-admin`), and the hardened container shape (blog + ketwise reference impls)
 - [multi-gpu-standard.md](multi-gpu-standard.md): Multi-GPU coding standards and patterns
 - [python.md](python.md): Python style, patterns, idioms, and testing
 - [typescript.md](typescript.md): TypeScript strict mode, types, validation, and patterns

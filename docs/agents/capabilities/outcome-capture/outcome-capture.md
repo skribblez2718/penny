@@ -4,7 +4,7 @@ Operational reference for source-agnostic outcome capture (`scripts/system/outco
 
 ## Why This Exists
 
-The outcome ledger's only wired source was the orchestration engine's terminal state (`outcome_writer.record_outcome`, called at `engine.py:657/675`). In production that path almost never fires: as of 2026-07-07 the checkpointer `runs` table had 0 rows and observability recorded 1 orchestration run (a smoke test) against 966 agent invocations — Penny does most work via direct agent/subagent calls that never drive the engine to completion. The capture code was correct and enabled (`PENNY_CAPTURE_OUTCOMES` defaults to `1`); it was simply plumbed to a source that doesn't flow. Result: an empty ledger, and the nightly compression cron logging `amendments_created: 0` forever.
+The outcome ledger's only wired source was the orchestration engine's terminal state (`outcome_writer.record_outcome`, called at `engine.py:657/675`). In production that path almost never fires — Penny does most work via direct agent/subagent calls that never drive the engine to completion, so the engine-only ledger stayed empty and the nightly compression cron logged `amendments_created: 0`. (A 2026-07-07 spot check that motivated this work found the checkpointer `runs` table empty against ~1k agent invocations — a dated one-time observation, not a standing metric.) The capture code was correct and enabled (`PENNY_CAPTURE_OUTCOMES` defaults to `1`); it was simply plumbed to a source that doesn't flow.
 
 This capability gives the ledger a source that matches reality and the moderate human-feedback budget.
 
@@ -24,7 +24,7 @@ Non-negotiables:
 - **The `reason` field is load-bearing.** It is the groupable failure signature `compression_loop.identify_patterns` clusters MISMATCHes on. A MISMATCH/PARTIAL without a `reason` is dead weight for pattern mining — the old flywheel break. Always pass a `reason` on non-MATCH.
 - **Drawer format matches the engine writer**: a header line (mismatch-signal fields first, truncation-durable) + a JSON body. Both sources are read identically by `eval_lib.parse_outcome` and `run_compression._parse_outcome_record`.
 - **Dedup** via `existing_ids` + a stable `decision_id` derived from `(session_id, goal)`, so re-capturing the same work does not double-record.
-- **Domain** is inferred from the goal (word-boundary keyword match) when not supplied.
+- **Domain** is model-classified when not supplied — a cheap model picks from the fixed domain menu (gated by `PI_LEDGER_DOMAIN_MODEL`), with the word-boundary keyword table (`infer_domain`) as the resilient fallback on unset/failure. The keyword scaffold is a backstop, not the primary path.
 
 ## `make rate` (the human source)
 
@@ -50,11 +50,13 @@ Trust discipline: these labels are only as good as the judge, and the judge's fa
 
 The orchestration engine's terminal outcome (`outcome_writer.record_outcome`) records `ctx.verify_verdict`, which each playbook's `done_predicate` derives from vera's SUMMARY. Switching vera to minimax-m3 (the calibrated verifier) makes those engine labels calibrated too — no engine code change was needed.
 
-## Verified Facts (do not re-litigate)
+## Validation (2026-07-07, one-time)
 
-- Capture write path works against the live store (proven by a probe write to `penny/outcomes`).
-- Auto-capture works end-to-end against live MiniMax (proven: 2 real tasks judged MATCH with sensible reasons).
-- `make setup` **does** install the watcher crons (via `init` → `setup.sh` globbing `init-*.sh`, including `init-watchers.sh`); the crontab confirms watchers/compression/digest are scheduled. There is no setup gap.
+Dated results from when the capability shipped — not standing guarantees; re-verify against the live system if in doubt:
+
+- Capture write path works against the live store (probe write to `penny/outcomes`).
+- Auto-capture works end-to-end against live MiniMax (2 tasks judged MATCH with sensible reasons).
+- `make setup` installs the watcher crons (via `init` → `setup.sh` globbing `init-*.sh`, including `init-watchers.sh`); the crontab confirmed watchers/compression/digest are scheduled.
 
 ## Next Steps (planned)
 
