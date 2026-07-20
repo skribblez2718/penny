@@ -1,29 +1,62 @@
 {
-  "_comment": "Per-skill MemPalace memory footprint — the SINGLE SOURCE OF TRUTH for skill-scratch retention. archiver.py loads this and applies each skill's decay rules; scaffold-skill.py appends an entry per new skill; scripts/system/checks/check_skill_structure.py verifies every live skill is registered here AND decay-covered (so a new dedicated-wing skill can never silently re-create the wing_jsa accretion). Penny-wing skills use the shared `penny/skills/<skill>-<session_id>` convention (already covered by the `penny/skills/` base prefix rule) and need only convention:penny-wing. Dedicated-wing skills declare their wing, transient scratch room prefixes (matched under that wing), curated (permanent) rooms, and TTL. An empty scratch_prefix (\"\") means every room in the wing decays except the curated_rooms.",
-  "penny_wing_scratch_prefix": "penny/skills/",
-  "penny_wing_scratch_ttl_days": 30,
-  "skills": {
-    "agent": { "convention": "penny-wing" },
-    "code": { "convention": "penny-wing" },
-    "imagegen": { "convention": "penny-wing" },
-    "learn": { "convention": "penny-wing" },
-    "plan": { "convention": "penny-wing" },
-    "prd": { "convention": "penny-wing" },
-    "research": { "convention": "penny-wing" },
-    "rez": { "convention": "penny-wing" },
-    "jsa": {
-      "convention": "dedicated-wing",
-      "wing": "wing_jsa",
-      "scratch_prefixes": ["plan-", "jsa-gj-"],
-      "curated_rooms": ["jsa-learnings", "bug_bounty_methodology", "vulnerability_research"],
-      "ttl_days": 30
-    },
-    "sca": {
-      "convention": "dedicated-wing",
-      "wing": "wing_sca",
-      "scratch_prefixes": [""],
-      "curated_rooms": ["sca-learnings"],
-      "ttl_days": 30
-    }
+ "_comment": "Per-skill MemPalace memory footprint \u2014 the SINGLE SOURCE OF TRUTH for skill-scratch retention. archiver.py loads this and applies each skill's decay rules; scaffold-skill.py appends an entry per new skill; scripts/system/checks/check_skill_structure.py verifies every live skill is registered here AND decay-covered (so a new dedicated-wing skill can never silently re-create the wing_jsa accretion). Penny-wing skills use the shared `penny/skills/<skill>-<session_id>` convention (already covered by the `penny/skills/` base prefix rule) and need only convention:penny-wing. Dedicated-wing skills declare their wing, transient scratch room prefixes (matched under that wing), curated (permanent) rooms, and TTL. An empty scratch_prefix (\"\") means every room in the wing decays except the curated_rooms.",
+ "penny_wing_scratch_prefix": "penny/skills/",
+ "penny_wing_scratch_ttl_days": 30,
+ "skills": {
+  "agent": {
+   "convention": "penny-wing"
+  },
+  "code": {
+   "convention": "penny-wing"
+  },
+  "derivation": {
+   "convention": "penny-wing"
+  },
+  "imagegen": {
+   "convention": "penny-wing"
+  },
+  "learn": {
+   "convention": "penny-wing"
+  },
+  "plan": {
+   "convention": "penny-wing"
+  },
+  "prd": {
+   "convention": "penny-wing"
+  },
+  "research": {
+   "convention": "penny-wing"
+  },
+  "rez": {
+   "convention": "penny-wing"
+  },
+  "jsa": {
+   "convention": "dedicated-wing",
+   "wing": "wing_jsa",
+   "scratch_prefixes": [
+    "plan-",
+    "jsa-gj-"
+   ],
+   "curated_rooms": [
+    "jsa-learnings",
+    "bug_bounty_methodology",
+    "vulnerability_research"
+   ],
+   "ttl_days": 30
+  },
+  "sca": {
+   "convention": "dedicated-wing",
+   "wing": "wing_sca",
+   "scratch_prefixes": [
+    ""
+   ],
+   "curated_rooms": [
+    "sca-learnings"
+   ],
+   "ttl_days": 30
+  },
+  "manim": {
+   "convention": "penny-wing"
   }
+ }
 }

@@ -16,7 +16,6 @@ class IDORAnalyzer(VulnerabilityAnalyzer):
     def get_source_sink_pairs(self) -> list[SourceSink]: return [SourceSink("Predictable object reference",["/api/users/{id}","/orders/{id}","req.params.id"],["No ownership check in query","Missing WHERE user_id = ?"],"high","CWE-639")]
     def get_semgrep_rulesets(self) -> list[str]: return ["p/javascript","p/owasp-top-ten"]
     def get_custom_scanners(self) -> list[str]: return []
-    def get_analysis_guide(self) -> str: return self._load_prompt("annie-idor.md")
     def get_payload_templates(self) -> list[PayloadTemplate]: return []
     def get_verification_procedure(self,f:dict) -> str: return "Change object ID in request -> check if unauthorized data returned -> test sequential/predictable IDs"
     def assess_exploitability(self,f:dict) -> dict: return {"exploitable":True,"difficulty":"low","preconditions":["Sequential or predictable object IDs without ownership check"]}

@@ -9,6 +9,7 @@
 - [ORM Injection Patterns](#orm-injection-patterns) — Sequelize, Knex, TypeORM, Prisma, Drizzle
 - [NoSQL Injection Patterns](#nosql-injection-patterns) — MongoDB, DynamoDB, Redis
 - [Payloads](#payloads) — Test payloads for SQL and NoSQL
+- [Scanners & Commands](#scanners--commands) — semgrep / tool invocations
 - [Detection Heuristics](#detection-heuristics) — Pattern matching guidance
 - [False Positives](#false-positives) — Parameterized queries, ORM safe patterns
 - [Framework Notes](#framework-notes) — Express, Next.js, NestJS specifics
@@ -63,6 +64,7 @@
 | `repository.query(sql)` | 🔴 Raw query | `repository.query('SELECT * FROM users WHERE id=' + id)` |
 | `repository.createQueryBuilder().where('id=' + id)` | 🔴 Concatenation in `.where()` | Use `.where('id = :id', { id })` |
 | `manager.query(sql)` | 🔴 Raw query via entity manager | Same as `repository.query` |
+| `getConnection().query(sql)` | 🔴 Raw query via legacy connection | `getConnection().query('SELECT * FROM users WHERE id=' + id)` |
 
 ### Prisma
 | Pattern | Risk | Example |
@@ -139,6 +141,15 @@ admin'--
 
 ---
 
+## Scanners & Commands
+
+```bash
+# Semgrep — JS + OWASP Top Ten rulesets, JSON output for triage
+semgrep --config p/javascript --config p/owasp-top-ten --json <file>
+```
+
+---
+
 ## Detection Heuristics
 
 ### Grep Patterns
@@ -146,8 +157,8 @@ admin'--
 # Raw SQL sinks
 grep -nE '\.query\(|\.execute\(|\.raw\(|\.all\(|\.get\(|\.run\(|queryRaw|executeRaw|queryRawUnsafe|executeRawUnsafe' file.js
 
-# String concatenation in queries
-grep -nE "SELECT.*\+|SELECT.*\$\{|INSERT.*\+|UPDATE.*\+|DELETE.*\+" file.js
+# String concatenation / interpolation in queries
+grep -nE "SELECT.*\+|SELECT.*\$\{|SELECT.*concat|INSERT.*\+|UPDATE.*\+|DELETE.*\+|\.sql\(" file.js
 
 # ORM raw methods
 grep -nE 'sequelize\.query|knex\.raw|\.whereRaw|\.orderByRaw|\.queryRawUnsafe|sql\`.*\$\{' file.js
@@ -175,6 +186,7 @@ grep -nE '\$\b(where|ne|gt|lt|regex|func|nin|exists|type|mod|elemMatch|all|size)
 | `JSON.stringify(req.body)` passed to query | Not direct injection if used as data | Check if it's used as data, not query structure |
 | `mongoSanitize(req.body)` before `find()` | `express-mongo-sanitize` strips `$` operators | Verify sanitizer is applied |
 | Template literal with ONLY hardcoded values | `` sql`SELECT 1` `` | No user input interpolation |
+| `parseInt(req.params.id)` / `Number(x)` before the query | Value coerced to a number — no string breakout for that param | Confirm coercion precedes the sink AND the value isn't re-used in another string clause |
 
 ---
 

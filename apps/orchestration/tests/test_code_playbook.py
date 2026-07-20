@@ -96,14 +96,17 @@ def _step(cp, agent, result):
 
 
 # ---------------------------------------------------------------------------
-# PRD hard dependency
+# PRD / IDEAL_STATE (optional)
 # ---------------------------------------------------------------------------
 
 
-def test_start_without_ideal_state_errors_with_chain_contract(cp):
+def test_start_without_ideal_state_synthesizes_from_goal(cp):
+    # PRD is OPTIONAL: with no IDEAL_STATE the run proceeds in goal-driven mode
+    # (success criteria synthesized from the goal) rather than hard-erroring.
     d = CodePlaybook(cp).start(session_id=SID, run_id=RID, goal="x", constraints={})
-    assert d["action"] == "error"
-    assert any("PRD dependency not satisfied" in e for e in d["errors"])
+    assert d["action"] == "invoke_agent"
+    assert d["agent"] == "echo" and d["state_id"] == "exploring"
+    assert not any("PRD dependency not satisfied" in e for e in d.get("errors", []))
 
 
 def test_start_with_ideal_state_emits_explore(cp):

@@ -2,7 +2,8 @@
 
 Rules for how Penny-built web apps separate **development** from **production**, bootstrap the
 admin, and stay fail-closed in prod. Apply these to any new service and when touching an existing
-one. Reference implementations: `~/projects/blog` and `~/projects/ketwise` (identical shape).
+one. Reference implementations that follow this identical shape live in the operator's local project
+workspace (outside this public repo).
 
 The intent is a **clear, total, intentional** dev/prod split — never an accidental one.
 

@@ -96,7 +96,7 @@ phases are `PRIMITIVE_BY_STATE`; `intake` is the sole `GATE_STATE` (`GATE_STATES
 | `sast_validate` | TOOL (local heuristic) | — | Triage SAST findings: `confirmed`, `false_positive`, `needs_deeper` |
 | `structure` | TOOL (local) | — | Build typed store: `PageCard`, `ModuleCard`, AST indexes |
 | `slice` | TOOL (local) | — | Per-class candidate generation, emit `FlowCard` records; seed the INVESTIGATE wave plan |
-| `investigate` | AGENT (loop) | `annie` | Bounded wave loop — `total_waves = max(1, ceil(needs_llm / wave_size))`, runs at least one wave (the general sweep). **`wave_size` is a tunable Budget** (`constraints["wave_size"]`, default 10; the frozen `WAVE_SIZE` constant was removed per the Bitter-Lesson gate). `route_after` self-transitions (`investigate_wave`) until waves exhaust, then `investigate_done` fires straight into `collect` (no gate). Reports `unverified_count` honestly. Recall lessons seed the first directive |
+| `investigate` | AGENT fan (loop) | `annie` | Bounded, iterative **PARALLEL batch fan per vuln class**: `slice` emits one annie branch per candidate class (fresh context + its `assets/references/<class>.md` catalog) into `dynamic_branches`; the engine fans up to **`max_fan_width`** agents CONCURRENTLY per batch (`constraints["max_fan_width"]`, jsa default 5), iterating until every class is covered, then a trailing generalist SWEEP batch. `total_batches = ceil(len(candidate_classes) / max_fan_width) + 1`; always runs ≥ 1 batch (the sweep). `route_after` self-transitions (`investigate_wave`) until batches exhaust, then `investigate_done` fires straight into `collect` (no gate). Reports `unverified_count` honestly. Recall lessons seed the first batch |
 | `collect` | TOOL (local) | — | Gather per-agent findings from mempalace `{session_id}-findings` room |
 | `merge` | AGENT | `synthia` | Algorithmic dedup + cross-card stitching + confidence promotion |
 | `verify` | AGENT | `vera` | Browser PoC (external evidence oracle): navigate, inject payloads, capture screenshots; enforces `out_of_scope`; SUMMARY `evidence` contract requires the executed-PoC transcripts (a bare `verdict` is rejected) |
@@ -187,7 +187,6 @@ Each finding report contains:
 | `.pi/skills/jsa/scripts/orchestrate.py` | ~5-line delegate: `raise SystemExit(main(default_playbook="jsa"))` |
 | `.pi/skills/jsa/scripts/jsa_domain.py` | Domain seam the deterministic tool bodies bridge to (legacy scan/handler modules) |
 | `.pi/skills/jsa/SKILL.md` | Skill definition and full invocation spec (`metadata.penny.engine: orchestration`) |
-| `.pi/skills/jsa/assets/prompts/annie-*.md` | Per-class worker prompts |
-| `.pi/skills/jsa/assets/prompts/{agent}-base.md` | Per-agent protocol prompts (loaded via `skill_context` / `_PROMPT_BY_STATE`) |
-| `.pi/skills/jsa/assets/references/*.md` | Reference catalogs for each vuln class |
+| `.pi/skills/jsa/assets/prompts/{agent}-base.md` | Per-agent protocol prompts (loaded via `skill_context` / `_PROMPT_BY_STATE`); plus `annie-cve.md` (CVE researcher) |
+| `.pi/skills/jsa/assets/references/*.md` | Per-class reference catalogs — the single per-class knowledge source annie and the verifier read (the former `annie-<class>.md` worker prompts were retired and harvested in here) |
 | `docs/humans/capabilities/jsa-skill/jsa-skill.md` | Human-facing overview |

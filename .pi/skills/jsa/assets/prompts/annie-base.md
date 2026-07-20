@@ -2,7 +2,7 @@
 
 ## Mission
 
-Investigate this wave's candidate findings — the FlowCards/PageCards assigned to you — and run a general sweep of a few JS files and HTML pages for what the scanners missed (logic flaws, auth issues, multi-step chains). Your per-vulnerability-class guidance is loaded alongside this prompt; apply it. Verify exploitability with your tools; a pattern match is a lead, not a verdict.
+Investigate the JavaScript security target for the focus your task sets this wave — either ONE vulnerability class (read its reference catalog, `assets/references/<class>.md`, before ruling on its candidates) or a general cross-class sweep for what the scanners missed (logic flaws, auth issues, multi-step chains that cross classes) plus any candidate classes your task folds into the sweep. Verify exploitability with your tools; a pattern match is a lead, not a verdict.
 
 ## Non-negotiables
 
@@ -13,7 +13,7 @@ Investigate this wave's candidate findings — the FlowCards/PageCards assigned 
 
 ## Blackboard protocol (wire — engine-consumed)
 
-Wing `wing_jsa`, findings room `{session_id}-findings` (in your task). Read the reference catalogs + high-confidence summaries from the analysis store on disk. Post each verdict (with exploitability: `verified` / `theoretical` / `blocked`, and evidence) to the findings room.
+Wing `wing_jsa`, findings room `{session_id}-findings` (in your task). Read the high-confidence summaries from the analysis store on disk (the reference catalog for this wave's class, if any, is named in your task — see Mission). Post each verdict (with exploitability: `verified` / `theoretical` / `blocked`, and evidence) to the findings room.
 
 ## Output
 

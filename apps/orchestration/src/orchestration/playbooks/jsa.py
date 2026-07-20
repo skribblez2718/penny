@@ -18,12 +18,18 @@ two runtime quirks the engine now models cleanly:
     flows straight into collect → merge with no further human gate.
 
 Deliberate honesty upgrades over the legacy runtime (documented, not hidden):
-  * the INVESTIGATE wave loop is a bounded fan-through over ``needs_llm`` findings
-    (``total_waves = max(1, ceil(needs_llm / WAVE_SIZE))``); annie runs at least
-    one wave (the general sweep) even with zero SAST-derived candidates rather
-    than silently skipping investigation. Findings still unverified after the
-    waves are reported honestly (``unverified_after_waves``) — NO verifier gate is
-    invented that could fabricate an exploit;
+  * INVESTIGATE is a bounded, iterative PARALLEL batch fan dispatched PER VULN CLASS:
+    ``slice`` emits one annie branch per candidate class (fresh context, focused on a
+    single class + its ``assets/references/<class>.md`` catalog) into
+    ``dynamic_branches["investigate"]``; the engine fans up to ``max_fan_width`` (jsa
+    default 5) agents CONCURRENTLY per batch, and ``route_after`` re-emits the next
+    batch and self-transitions until EVERY candidate class is covered, then runs one
+    trailing GENERALIST SWEEP batch (novel patterns, logic/auth, cross-class chains).
+    ``total_batches = ceil(len(candidate_classes) / max_fan_width) + 1``; annie runs at
+    least the sweep (≥ 1 batch) even with zero SAST-derived candidates rather than
+    silently skipping investigation. Findings still unverified after the batches are
+    reported honestly (``unverified_after_waves``) — NO verifier gate is invented that
+    could fabricate an exploit;
   * VERIFY (vera, browser PoC) is the external oracle: its SUMMARY carries a
     REQUIRED ``evidence`` list (Rec 4) — vera must report the captured browser-PoC
     transcript for any finding it marks verified (``verified_count>0``). The
@@ -66,8 +72,15 @@ from ..primitives.spec import PrimitiveSpec
 # Constants (ported verbatim)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_WAVE_SIZE = 10  # default findings per annie wave (a tunable Budget, not a
+_DEFAULT_WAVE_SIZE = 10  # informational per-class candidate-batch hint (a Budget, not a
 #                          frozen threshold): constraints["wave_size"] overrides.
+_DEFAULT_FAN_WIDTH = 5  # per-batch INVESTIGATE parallelism: how many per-class annie
+#                          agents run CONCURRENTLY in one batch (a tunable Budget).
+#                          constraints["max_fan_width"] overrides (also the engine's own
+#                          fan ceiling, so batch width == the ceiling => never over-fans).
+#                          Bug-bounty default is 5 (production targets have a lot to cover).
+_SWEEP = "__sweep__"  # sentinel focus for the trailing generalist-sweep batch (novel
+#                          patterns, logic/auth, cross-class chains) — not a vuln class.
 
 
 def _wave_size(ctx: "RunContext") -> int:
@@ -82,6 +95,22 @@ def _wave_size(ctx: "RunContext") -> int:
         return max(1, int(raw))
     except (TypeError, ValueError):
         return _DEFAULT_WAVE_SIZE
+
+
+def _fan_width(ctx: "RunContext") -> int:
+    """Per-batch INVESTIGATE parallelism — how many per-class annie agents run
+    CONCURRENTLY in one batch. A tunable Budget (``constraints["max_fan_width"]``),
+    default ``_DEFAULT_FAN_WIDTH`` (5). Reuses the SAME ``max_fan_width`` key the
+    engine's fan ceiling reads, so batch width never exceeds that ceiling (the
+    engine raises on an over-width fan). Clamped to >= 1. All candidate classes are
+    covered across ceil(N / width) batches — no cap, no fold (bug-bounty thoroughness)."""
+    raw = (ctx.constraints or {}).get("max_fan_width")
+    if raw is None:
+        return _DEFAULT_FAN_WIDTH
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return _DEFAULT_FAN_WIDTH
 
 
 WING = "wing_jsa"
@@ -391,8 +420,23 @@ JSA_INVESTIGATE = PrimitiveSpec(
             "clarifying_questions": list,
         },
     ),
-    "Investigate this wave's findings + general sweep; verify with your tools; post verdicts. Always emit confidence.",
+    "Investigate this batch's focus; verify with your tools; post verdicts. Always emit confidence.",
 )
+
+# JSON-safe branch contract (type NAMES) for the INVESTIGATE parallel fan — mirrors
+# JSA_INVESTIGATE so every per-class / sweep branch validates identically. Consumed by
+# ``parallel_spec_from_dict`` when the batch is emitted into ``dynamic_branches``.
+_JSA_INVESTIGATE_C_JSON = {
+    "required": {"wave_complete": "bool", "confidence": "str"},
+    "optional": {
+        "findings_count": "int",
+        "verified_count": "int",
+        "unverified_count": "int",
+        "mempalace_drawer": "str",
+        "needs_clarification": "bool",
+        "clarifying_questions": "list",
+    },
+}
 JSA_MERGE = PrimitiveSpec(
     "JSA_MERGE",
     "synthia",
@@ -628,9 +672,10 @@ class JSAPlaybook(BasePlaybook):
         self._domain_run(ctx, "structure")
 
     def _run_slice(self, ctx: RunContext) -> None:
-        # slice_handler + the F0 PythonVerifier pre-pass; sets the wave plan.
+        # slice_handler + the F0 PythonVerifier pre-pass; sets the INVESTIGATE batch plan
+        # and emits the first parallel fan batch into dynamic_branches.
         self._domain_run(ctx, "slice")
-        self._seed_wave_plan(ctx)
+        self._seed_investigate_plan(ctx)
 
     def _run_collect(self, ctx: RunContext) -> None:
         self._domain_run(ctx, "collect")
@@ -710,21 +755,77 @@ class JSAPlaybook(BasePlaybook):
         jsa = ctx.extras.setdefault("jsa", {})
         jsa_domain.run_phase(phase, jsa, ctx.constraints or {})
 
-    def _seed_wave_plan(self, ctx: RunContext) -> None:
-        """Compute the INVESTIGATE wave plan from the F0 verification counts. Runs
-        after slice (deterministic). ``total_waves = max(1, ceil(needs_llm /
-        wave_size))`` — annie always runs at least one wave (the general sweep).
-        ``wave_size`` is a tunable Budget (``constraints["wave_size"]``)."""
+    def _seed_investigate_plan(self, ctx: RunContext) -> None:
+        """Compute the INVESTIGATE batch plan and emit the FIRST batch's fan. Runs after
+        slice (deterministic).
+
+        PER-CLASS PARALLEL model (Phase 2): every candidate vuln class gets a dedicated,
+        fresh-context annie agent; agents run in BATCHES of up to ``max_fan_width``
+        (default 5) CONCURRENTLY; the engine iterates batch after batch until ALL classes
+        are covered, then runs ONE trailing GENERALIST SWEEP batch (novel patterns,
+        logic/auth, cross-class chains). No cap/fold — every candidate class is covered
+        (bug-bounty thoroughness); the class count is inherently bounded (≤ 22 classes).
+        The current batch's branches live in ``ctx.extras["dynamic_branches"]["investigate"]``
+        (the engine fan dispatches one agent per branch); ``route_after`` re-emits the next
+        batch and self-transitions until the plan is exhausted."""
         jsa = ctx.extras.setdefault("jsa", {})
         inv = jsa.setdefault("investigate", {})
-        needs_llm = int(inv.get("needs_llm", jsa.get("needs_llm", 0)) or 0)
-        wave_size = _wave_size(ctx)
-        total = max(1, -(-needs_llm // wave_size)) if needs_llm > 0 else 1
-        inv.setdefault("wave", 0)
-        inv["needs_llm"] = needs_llm
-        inv["wave_size"] = wave_size  # effective budget, recorded for the pass
-        inv["total_waves"] = int(inv.get("total_waves") or total)
+        classes = [str(c) for c in (inv.get("candidate_classes") or []) if str(c).strip()]
+        width = _fan_width(ctx)
+        class_batches = [classes[i : i + width] for i in range(0, len(classes), width)]
+        batches = class_batches + [[_SWEEP]]  # generalist sweep is the FINAL batch
+        inv.setdefault("batch", 0)
+        inv["candidate_classes"] = classes
+        inv["fan_width"] = width
+        inv["batches"] = batches
+        inv["total_batches"] = len(batches)
+        inv["wave_size"] = _wave_size(ctx)  # informational per-class candidate hint
+        inv["needs_llm"] = int(inv.get("needs_llm", jsa.get("needs_llm", 0)) or 0)
         inv.setdefault("unverified", 0)
+        inv.setdefault("findings", 0)
+        self._emit_batch(ctx, inv, 0)  # fan the first batch
+
+    def _emit_batch(self, ctx: RunContext, inv: dict, idx: int) -> None:
+        """Stash batch ``idx``'s branches into ``dynamic_branches["investigate"]`` so the
+        engine's parallel fan dispatches one annie per focus (class or sweep). Survives
+        checkpoint/resume because ``ctx.extras`` round-trips wholesale."""
+        batches = inv.get("batches") or [[_SWEEP]]
+        foci = batches[idx] if 0 <= idx < len(batches) else [_SWEEP]
+        dyn = ctx.extras.setdefault("dynamic_branches", {})
+        dyn["investigate"] = self._branches_for_batch(foci, inv)
+
+    def _branches_for_batch(self, foci: list, inv: dict) -> dict:
+        """Build the JSON-safe branch dict for a batch: one branch per focus. A class focus
+        -> a per-class annie (its catalog baked into ``task_hint``); ``_SWEEP`` -> the
+        generalist sweep annie. All share the JSA_INVESTIGATE contract."""
+        branches: dict = {}
+        for focus in foci:
+            if focus == _SWEEP:
+                branches["sweep"] = {
+                    "agent": "annie",
+                    "name": "JSA_INVESTIGATE_SWEEP",
+                    "task_hint": self._sweep_body(inv),
+                    "summary_contract": _JSA_INVESTIGATE_C_JSON,
+                }
+            else:
+                slug = re.sub(r"[^a-z0-9_]+", "", str(focus).lower()) or "unknown"
+                branches[f"cls_{slug}"] = {
+                    "agent": "annie",
+                    "name": f"JSA_INVESTIGATE_{slug.upper()}",
+                    "task_hint": self._class_body(focus, inv),
+                    "summary_contract": _JSA_INVESTIGATE_C_JSON,
+                }
+        return branches
+
+    @staticmethod
+    def _branch_summaries(summary: dict) -> list:
+        """The per-branch SUMMARYs from a parallel fan-in aggregate
+        (``{"branches": {branch_id: SUMMARY}}``). Falls back to ``[summary]`` for a
+        single-agent shape (defensive; investigate is always a fan)."""
+        branches = summary.get("branches") if isinstance(summary, dict) else None
+        if isinstance(branches, dict):
+            return [s for s in branches.values() if isinstance(s, dict)]
+        return [summary] if isinstance(summary, dict) else []
 
     # -- progress / escalation gate (needs_clarification) ------------------
     def progress_check(self, state: str, ctx: RunContext, summary: dict) -> str | None:
@@ -734,23 +835,30 @@ class JSAPlaybook(BasePlaybook):
             return f"{state} agent requested clarification{detail}"
         return None
 
-    # -- routing (agent states + wave loop) --------------------------------
+    # -- routing (agent states + investigate batch loop) -------------------
     def route_after(self, state: str, ctx: RunContext, summary: dict) -> None:  # noqa: C901
         jsa = ctx.extras.setdefault("jsa", {})
         if state == "investigate":
-            inv = jsa.setdefault("investigate", {"wave": 0, "total_waves": 1})
-            inv["wave"] = int(inv.get("wave", 0)) + 1
-            inv["unverified"] = int(inv.get("unverified", 0)) + int(
-                summary.get("unverified_count", 0) or 0
-            )
-            inv["findings"] = int(inv.get("findings", 0)) + int(
-                summary.get("findings_count", 0) or 0
-            )
-            total_waves = max(1, int(inv.get("total_waves", 1) or 1))
-            if inv["wave"] < total_waves:
-                self.sm.send("investigate_wave")  # more waves — re-dispatch annie
+            # Fan-in of one parallel BATCH: ``summary`` is the aggregate
+            # ``{"branches": {branch_id: SUMMARY}, ...}``; accumulate across branches,
+            # then either emit the NEXT batch (self-transition) or finish.
+            inv = jsa.setdefault("investigate", {"batch": 0, "total_batches": 1})
+            for bsum in self._branch_summaries(summary):
+                inv["unverified"] = int(inv.get("unverified", 0)) + int(
+                    bsum.get("unverified_count", 0) or 0
+                )
+                inv["findings"] = int(inv.get("findings", 0)) + int(
+                    bsum.get("findings_count", 0) or 0
+                )
+            inv["batch"] = int(inv.get("batch", 0)) + 1
+            total_batches = max(1, int(inv.get("total_batches", 1) or 1))
+            if inv["batch"] < total_batches:
+                self._emit_batch(ctx, inv, inv["batch"])  # next batch's fan
+                self.sm.send("investigate_wave")  # more batches — re-fan
             else:
-                inv["waves_completed"] = inv["wave"]
+                inv["batches_completed"] = inv["batch"]
+                inv["waves_completed"] = inv["batch"]  # result_payload back-compat
+                (ctx.extras.get("dynamic_branches") or {}).pop("investigate", None)
                 self.sm.send("investigate_done")
         elif state == "merge":
             jsa["merge"] = {
@@ -904,14 +1012,20 @@ class JSAPlaybook(BasePlaybook):
     # -- prompts (agent task builders; pure ctx data, no disk) -------------
     def _task_summary(self, state: str, spec: PrimitiveSpec, ctx: RunContext) -> str:
         builder = {
-            "investigate": self._investigate_task,
             "merge": self._merge_task,
             "verify": self._verify_task,
             "reverify": self._reverify_task,
             "report": self._report_task,
             "reflect": self._reflect_task,
         }.get(state)
-        base = builder(ctx) if builder else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
+        # investigate is a PARALLEL fan: the per-branch focus rides ``spec`` (each
+        # branch's own PrimitiveSpec), so it needs the spec, not just ctx.
+        if state == "investigate":
+            base = self._investigate_task(ctx, spec)
+        elif builder:
+            base = builder(ctx)
+        else:
+            base = f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
         # Recall (F2): seed the FIRST agent directive with distilled lessons
         # (this override replaces the base _task_summary, so re-add it).
         if ctx.recall_lessons and ctx.total_steps == 0:
@@ -924,24 +1038,61 @@ class JSAPlaybook(BasePlaybook):
             base += f"\n\nUser clarification: {self._cap(ctx.clarification_text)}"
         return base
 
-    def _investigate_task(self, ctx: RunContext) -> str:
+    def _investigate_task(self, ctx: RunContext, spec: PrimitiveSpec) -> str:
+        """Per-BRANCH INVESTIGATE task. The branch's focus (a single vuln class or the
+        generalist sweep) is baked into ``spec.task_hint`` by ``_branches_for_batch``;
+        this wraps it with the batch header + the post-verdict tail. Called once per
+        branch by the engine fan."""
         jsa = ctx.extras.get("jsa", {})
         rooms = _rooms(ctx.session_id)
         inv = jsa.get("investigate", {})
-        wave = int(inv.get("wave", 0)) + 1
-        total = max(1, int(inv.get("total_waves", 1) or 1))
-        return (
-            f"Investigate the JavaScript security target. Wave {wave}/{total}.\n"
+        batch = int(inv.get("batch", 0) or 0) + 1
+        total = max(1, int(inv.get("total_batches", 1) or 1))
+        out_dir = jsa.get("output_dir", "")
+        header = (
+            f"Investigate the JavaScript security target. Batch {batch}/{total} (parallel).\n"
             f"Session: {ctx.session_id}. Target: {jsa.get('target_url', '')}. "
-            f"Output dir: {jsa.get('output_dir', '')}.\n"
-            f"For THIS wave's findings (up to {int(inv.get('wave_size', _DEFAULT_WAVE_SIZE))}): "
-            f"read the relevant source from "
-            f"assets/js/, run semgrep on the file if useful, and use the browser to test "
-            f"exploitability. Then do a GENERAL SWEEP of a few JS files and HTML pages for "
-            f"novel patterns SAST may have missed (logic flaws, auth issues, multi-step chains).\n"
-            f"Post each verdict to wing={WING} room={rooms['findings']}. "
-            f"Read reference catalogs + high-confidence summaries from the analysis store on disk. "
-            f"Report unverified_count honestly — do NOT fabricate exploitability."
+            f"Output dir: {out_dir}.\n"
+            f"If reconstructed original source exists under {out_dir}/sources/ (recovered from "
+            f"source maps — readable pre-bundle code), prefer reading it over the minified "
+            f"bundles in assets/js/.\n"
+        )
+        body = spec.task_hint or self._sweep_body(inv)
+        tail = (
+            f"\nPost each verdict (exploitability: verified / theoretical / blocked, with "
+            f"evidence) to wing={WING} room={rooms['findings']}. Report unverified_count "
+            f"honestly — do NOT fabricate exploitability."
+        )
+        return header + body + tail
+
+    @staticmethod
+    def _class_body(focus, inv: dict) -> str:
+        """Per-class branch body: a FRESH annie context focused ENTIRELY on one vuln
+        class and its reference catalog. The slug is sanitized defensively before it
+        touches a path (a safety guard, not a knowledge table — the class set is
+        validated upstream in jsa_domain against lane_router)."""
+        slug = re.sub(r"[^a-z0-9_]+", "", str(focus).lower()) or "unknown"
+        batch_hint = int(inv.get("wave_size", _DEFAULT_WAVE_SIZE))
+        return (
+            f"PER-CLASS agent — focus ENTIRELY on `{slug}`; do NOT investigate other classes. "
+            f"Read its reference catalog `assets/references/{slug}.md` (`read limit=30` for the "
+            f"ToC, then `grep` the section you need). Grep the JS under assets/js/ for that "
+            f"class's sources/sinks, run semgrep on suspect files if useful, and drive the "
+            f"browser to test exploitability for up to {batch_hint} of its strongest candidates."
+        )
+
+    @staticmethod
+    def _sweep_body(inv: dict) -> str:
+        """Trailing generalist-sweep branch body: the breadth-and-chains seam that per-class
+        isolation would otherwise miss. Runs LAST (after every per-class batch), so it can
+        weigh their findings for cross-class chains. Every candidate class already has a
+        dedicated agent, so the sweep hunts what no single class owns."""
+        return (
+            "GENERAL SWEEP agent (breadth + chains): review a selection of JS files and HTML "
+            "pages for novel patterns the per-class agents and SAST may have missed — logic "
+            "flaws, auth/authorization issues, and MULTI-STEP CHAINS that cross vuln classes "
+            "(e.g. prototype pollution -> DOM XSS, DOM clobbering -> XSS, postMessage -> XSS). "
+            "Consult `assets/references/INDEX.md` to pull any class catalog you need."
         )
 
     def _merge_task(self, ctx: RunContext) -> str:

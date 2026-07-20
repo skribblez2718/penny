@@ -120,4 +120,4 @@ On completion the engine writes the run outcome automatically; SKILL.md's post-c
 | `scripts/orchestrate.py` | Thin delegate to the orchestration engine            |
 | `assets/prompts/*.md`    | Domain-agnostic agent prompts                        |
 | `resources/reference.md` | State/transition/agent reference                     |
-| `resources/flow.mmd`     | Mermaid state diagram (matches the playbook FSM)     |
+| `resources/flow.html`    | Self-contained state diagram (matches the playbook FSM) |

@@ -10,7 +10,7 @@ The prd skill is a `BasePlaybook` subclass (`PrdPlaybook` in `apps/orchestration
 
 | State                    | Agent     | Description                                                                 |
 | ------------------------ | --------- | -------------------------------------------------------------------------- |
-| `intake`                 | —         | Initial state. `initial_transition` detects domain, sets clarify-first mode, seeds the revision budget, then fires `start_generate`. |
+| `intake`                 | —         | Initial state. `initial_transition` resolves the domain (caller `constraints["domain"]` wins, else deferred to synthia's model-declared choice), sets clarify-first mode, seeds the revision budget, then fires `start_generate`. |
 | `generating`             | `synthia` | Produce the four PRD artifacts. Three modes: `clarification` (questions first), `synthesis` (full artifacts), `revision` (fix vera's issues). |
 | `validating`             | `vera`    | Validate IDEAL_STATE schema + 12 narrative sections + catalog quality + matrix coverage + cross-artifact traceability. |
 | `unknown`                | —         | Escalation staging state (entered via `to_unknown` from an escalatable state). |
@@ -58,7 +58,7 @@ Prose document following the 12-section PRD template (`resources/prd-template.md
 2. Problem Statement — who's affected, quantified pain
 3. Success Metrics — 2-5 measurable outcomes
 4. User Stories — with acceptance criteria
-5. Features — P0/P1/P2 priority table (max 5 per iteration)
+5. Features — P0/P1/P2 priority table, scoped to the objective
 6. Out of Scope — what will NOT be built
 7. Non-Functional Requirements — performance, security, reliability
 8. Dependencies & Constraints — external systems, platform limits
@@ -119,7 +119,7 @@ Canonical schema consumed by the `code` skill:
 | `impacted_files_estimate` | No       | Estimated files affected                               |
 | `dependencies`            | No       | External systems, APIs, packages                       |
 | `deliverables`            | No       | All artifacts this task produces                       |
-| `build_order`             | No       | Implementation sequence, dependencies first            |
+| `build_order`             | No       | Dependency-ordering constraints (which deliverables block others) — a non-binding hint, not a prescribed step sequence |
 
 vera's `ideal_state_valid` verdict is the artifact oracle on the engine path — it overrides synthia's self-reported claim, and the run cannot complete unless it is true.
 
@@ -134,21 +134,16 @@ Contents written by agents:
 - `{session_id} IDEAL_STATE` — synthia's IDEAL_STATE JSON
 - `{session_id} Validate` — vera's validation report
 
-Downstream skills (especially `code`) read from this room after the prd skill completes; `code` reads IDEAL_STATE from it as a hard dependency.
+Downstream skills (especially `code`) read from this room after the prd skill completes; `code` reads IDEAL_STATE from it when chained (optional — `code` also runs standalone, synthesizing criteria from the goal).
 
 ## Domain Detection
 
-Keyword scan in goal text against `WEB_APP_KEYWORDS`, run in `initial_transition` and stashed in `ctx.extras["prd"]["domain"]`:
+**Model-owned — there is no keyword table.** `initial_transition` enumerates the guidance packs available under `resources/` (`available_domains`) and stashes the resolved choice in `ctx.extras["prd"]["domain"]` (empty until resolved). Resolution order:
 
-```
-react, vue, angular, django, flask, fastapi, next, next.js, nuxt,
-frontend, backend, api, web, website, spa, ssr, express,
-node, node.js, postgres, mysql, supabase, firebase, tailwind,
-bootstrap, css, html, javascript, typescript, htmx, graphql,
-rest, websocket, svelte, lit-html, lit-element, litelement
-```
+1. A caller-supplied `constraints["domain"]` wins outright and short-circuits the choice.
+2. Otherwise synthia declares the best-fit pack for the goal as `domain` in its SUMMARY; the engine accepts it when it is one of the available packs, else falls back to `generic` (fail-safe, never fail-loud — an odd domain must not wedge a run).
 
-Match → `web-app`. No match → `generic`.
+The legacy `detect_domain` / `WEB_APP_KEYWORDS` keyword scan was **deleted** by design: a hand-maintained keyword table is a KNOWLEDGE-CONSTRAINT that ages against better models (bitter-lesson). Packs available today are whatever exists under `resources/` (currently `web-app`, plus the always-available `generic` baseline).
 
 ## Agent SUMMARY Contracts
 

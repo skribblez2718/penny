@@ -195,8 +195,38 @@ def run_phase(phase: str, jsa: dict, constraints: dict) -> dict:
         inv = jsa.setdefault("investigate", {})
         inv["needs_llm"] = needs_llm
         jsa["needs_llm"] = needs_llm
+        # Surface the distinct candidate vuln classes so _investigate_task can name
+        # each class's reference catalog for annie (replaces the old, false
+        # "guidance loaded alongside this prompt" claim in annie-base.md).
+        inv["candidate_classes"] = _candidate_classes(st)
 
     return jsa
+
+
+def _candidate_classes(st: Any) -> list:
+    """Distinct vuln classes that have SLICE candidates this run, filtered to the
+    known analyzer set (``lane_router`` is the single source of truth for that set,
+    not a table frozen here). FlowCards may be objects (fresh) or plain dicts
+    (restored from ``session.json``) — handle both. Surfaced into the lean engine
+    state so the INVESTIGATE task can name ``assets/references/<class>.md`` per
+    candidate class."""
+    try:
+        import lane_router
+
+        known = set(lane_router.get_all_analyzers())
+    except Exception:
+        known = set()
+    out: set = set()
+    for card in st.flow_cards or []:
+        cls = (
+            card.get("vulnerability_class")
+            if isinstance(card, dict)
+            else getattr(card, "vulnerability_class", "")
+        )
+        cls = str(cls or "").strip()
+        if cls and (not known or cls in known):
+            out.add(cls)
+    return sorted(out)
 
 
 def _compute_needs_llm(st: Any) -> int:

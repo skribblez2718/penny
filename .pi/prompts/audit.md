@@ -133,7 +133,7 @@ confirm from a file as [UNVERIFIED] and never present it as fact; if a source
 cannot be found or read, say so rather than inferring it.
 
 SAVE THE REPORT: write the completed four-part report followed by the verification
-JSON, as Markdown, to ~/projects/penny/audits/audit-<the current date, YYYY-MM-DD>.md
+JSON, as Markdown, to $PROJECT_ROOT/audits/audit-<the current date, YYYY-MM-DD>.md
 — create the audits/ directory if it does not exist. This report file is the only
 file you may create; the harness under audit stays read-only. If a report for the
 current date already exists, append -2, -3, ... to the filename rather than

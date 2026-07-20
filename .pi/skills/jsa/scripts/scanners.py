@@ -51,6 +51,8 @@ JSLUICE_TIMEOUT = 30
 KATANA_DEPTH = 5
 KATANA_TIMEOUT = 300
 MAX_CRAWL_DEPTH = 5  # recursive jsluice JS-discovery depth cap
+TRUFFLEHOG_TIMEOUT = 180  # optional best-in-class secret scanner (graceful if absent)
+GITLEAKS_TIMEOUT = 180
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +111,28 @@ def _katana_bin() -> str | None:
         if c.is_file():
             return str(c)
     return None
+
+
+def _find_bin(name: str) -> str | None:
+    """Discover an OPTIONAL CLI on PATH or in ~/go/bin (Go binaries). Returns None
+    when absent so the caller degrades gracefully — the tool is a bonus, not a
+    dependency."""
+    cand = Path.home() / "go" / "bin" / name
+    if cand.exists():
+        return str(cand)
+    for pdir in os.environ.get("PATH", "").split(os.pathsep):
+        c = Path(pdir) / name
+        if c.is_file():
+            return str(c)
+    return None
+
+
+def _trufflehog_bin() -> str | None:
+    return _find_bin("trufflehog")
+
+
+def _gitleaks_bin() -> str | None:
+    return _find_bin("gitleaks")
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +314,7 @@ def run_acquire(state) -> None:
     jbin = _jsluice_bin()
     queue = list(dict.fromkeys(script_srcs))
     depth = 0
+    url_by_dest: dict[str, str] = {}  # local path -> origin URL (for external .map fetch)
     while queue and depth < MAX_CRAWL_DEPTH:
         next_queue: list[str] = []
         for url in queue:
@@ -300,6 +325,7 @@ def run_acquire(state) -> None:
             if dest is None:
                 continue
             counts["downloaded"] += 1
+            url_by_dest[str(dest)] = url
             if jbin:
                 for e in _run_jsluice(jbin, "urls", dest):
                     if e.get("type", "") in _ENDPOINT_TYPES:
@@ -310,6 +336,9 @@ def run_acquire(state) -> None:
                             next_queue.append(full)
         queue = next_queue
         depth += 1
+
+    # ── Step 4: reconstruct first-party ORIGINAL source from source maps ──
+    _reconstruct_source_maps(state, url_by_dest, curl_cfg)
 
     _finalize_acquire(state, counts, endpoints, page_entries, depth)
 
@@ -506,9 +535,11 @@ def _finalize_acquire(state, counts: dict, endpoints: list, page_entries: list, 
 # ---------------------------------------------------------------------------
 
 def run_sast_scan(state) -> None:
-    """Run semgrep + jsluice over the acquired JS/HTML and populate
-    ``state.sast_findings`` (+ ``state.metadata['sast']`` counts). Mutates
-    ``state`` in place; never raises.
+    """Run semgrep + jsluice (+ optional trufflehog/gitleaks) over the acquired
+    JS/HTML and populate ``state.sast_findings`` (+ ``state.metadata['sast']``
+    counts). Deduped secrets are appended as first-class SAST findings so they flow
+    to candidate generation (a ``secret_disclosure`` investigation), not just
+    stashed in metadata. Mutates ``state`` in place; never raises.
     """
     sast = state.metadata.setdefault("sast", {})
     js_files = list(state.js_dir.glob("*.js")) if state.js_dir.exists() else []
@@ -526,7 +557,6 @@ def run_sast_scan(state) -> None:
         }
         for f in raw
     ]
-    state.sast_findings = findings
     sast["semgrep_count"] = len(findings)
 
     jbin = _jsluice_bin()
@@ -535,7 +565,10 @@ def run_sast_scan(state) -> None:
     filtered = 0
     if jbin and js_files:
         for jf in js_files:
-            secrets.extend(_run_jsluice(jbin, "secrets", jf))
+            for sec in _run_jsluice(jbin, "secrets", jf):
+                if isinstance(sec, dict):
+                    sec.setdefault("source", "jsluice")
+                secrets.append(sec)
         for jf in js_files:
             for entry in _run_jsluice(jbin, "urls", jf):
                 u = entry.get("url", "")
@@ -546,8 +579,51 @@ def run_sast_scan(state) -> None:
     sast["jsluice_secrets_count"] = len(secrets)
     sast["jsluice_urls_count"] = len(urls)
     sast["jsluice_urls_filtered"] = filtered
+
+    # ── Optional best-in-class named-secret scanners (graceful) ──
+    # trufflehog / gitleaks bring hundreds of provider-specific detectors (and
+    # trufflehog can live-VERIFY a key against the provider) that jsluice +
+    # semgrep p/secrets don't cover. They are a BONUS, not a dependency: absent
+    # binary -> skipped, nothing added, no error. Scans the whole acquired tree
+    # once (js_dir + html_dir), not per-file.
+    scan_roots = [str(state.js_dir)]
+    if state.html_dir.exists() and any(state.html_dir.glob("*.html")):
+        scan_roots.append(str(state.html_dir))
+    tbin = _trufflehog_bin()
+    th_secrets = _run_trufflehog(tbin, scan_roots) if (tbin and js_files) else []
+    gbin = _gitleaks_bin()
+    gl_secrets = _run_gitleaks(gbin, scan_roots) if (gbin and js_files) else []
+    sast["trufflehog_secrets_count"] = len(th_secrets)
+    sast["gitleaks_secrets_count"] = len(gl_secrets)
+    sast["trufflehog_available"] = tbin is not None
+    sast["gitleaks_available"] = gbin is not None
+
+    secrets = _dedup_secrets(secrets + th_secrets + gl_secrets)
+    sast["secrets_count"] = len(secrets)
     state.metadata["sast_secrets"] = secrets
     state.metadata["sast_urls"] = urls
+
+    # Surface deduped secrets as first-class SAST findings so candidate generation
+    # routes them to a secret_disclosure investigation (the rule_id carries 'secret'
+    # so the SAST->vuln-class map picks it up) and annie sees them in the stub.
+    for s in secrets:
+        kind = str(s.get("kind", "unknown")).lower().replace(" ", "_")
+        findings.append(
+            {
+                "rule_id": f"jsa.secret.{kind}",
+                "severity": str(s.get("severity", "MEDIUM")),
+                "path": str(s.get("path", "")),
+                "line": int(s.get("line", 0) or 0),
+                "message": (
+                    f"Potential secret ({s.get('kind', 'unknown')}) detected by "
+                    f"{s.get('source', 'scanner')}"
+                    + (" [VERIFIED against provider]" if s.get("verified") else "")
+                ),
+                "code": str(s.get("secret", ""))[:200],
+                "source": str(s.get("source", "secret-scanner")),
+            }
+        )
+    state.sast_findings = findings
 
 
 def _run_semgrep(state) -> list[dict]:
@@ -561,6 +637,11 @@ def _run_semgrep(state) -> list[dict]:
     cmd.append(str(state.js_dir))
     if state.html_dir.exists() and any(state.html_dir.glob("*.html")):
         cmd.append(str(state.html_dir))
+    # Reconstructed first-party source (from source maps) is readable TS/JSX/JS that
+    # semgrep parses well — scan it too when present (Gap 2).
+    sources_dir = Path(state.output_dir) / "sources"
+    if sources_dir.exists() and any(sources_dir.rglob("*.*")):
+        cmd.append(str(sources_dir))
 
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=SEMGREP_TIMEOUT)
@@ -600,3 +681,225 @@ def _run_jsluice(jbin: str, mode: str, js_file: Path) -> list[dict]:
         except json.JSONDecodeError:
             pass
     return out
+
+
+def _run_trufflehog(tbin: str, roots: list[str]) -> list[dict]:
+    """Run trufflehog (filesystem mode) over the acquired tree and normalize its
+    JSONL output into secret findings. ``Verified`` flags a key trufflehog live-
+    checked against the provider (upgraded to HIGH severity). Never raises;
+    returns [] on any failure. Non-JSON progress/log lines are skipped."""
+    out: list[dict] = []
+    cmd = [tbin, "filesystem", *roots, "--json", "--no-update"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=TRUFFLEHOG_TIMEOUT)
+    except Exception:  # noqa: BLE001
+        return []
+    for line in (res.stdout or "").splitlines():
+        line = line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict) or "DetectorName" not in obj:
+            continue  # skip trufflehog log/progress objects
+        fs = ((obj.get("SourceMetadata") or {}).get("Data") or {}).get("Filesystem") or {}
+        out.append(
+            {
+                "kind": str(obj.get("DetectorName", "unknown")),
+                "secret": str(obj.get("Redacted") or obj.get("Raw") or "")[:200],
+                "verified": bool(obj.get("Verified", False)),
+                "severity": "HIGH" if obj.get("Verified") else "MEDIUM",
+                "path": str(fs.get("file", "")),
+                "line": int(fs.get("line", 0) or 0),
+                "source": "trufflehog",
+            }
+        )
+    return out
+
+
+def _run_gitleaks(gbin: str, roots: list[str]) -> list[dict]:
+    """Run gitleaks (no-git directory scan) over the acquired tree and normalize its
+    JSON-array report into secret findings. Never raises; returns [] on any failure.
+    gitleaks exits 1 when leaks are found — both 0 and 1 carry a report on stdout."""
+    out: list[dict] = []
+    for root in roots:
+        cmd = [
+            gbin, "detect", "--no-git", "--redact",
+            "--report-format", "json", "--report-path", "/dev/stdout",
+            "--source", root,
+        ]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=GITLEAKS_TIMEOUT)
+        except Exception:  # noqa: BLE001
+            continue
+        body = (res.stdout or "").strip()
+        if not body:
+            continue
+        try:
+            report = json.loads(body)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(report, list):
+            continue
+        for f in report:
+            if not isinstance(f, dict):
+                continue
+            out.append(
+                {
+                    "kind": str(f.get("RuleID", "unknown")),
+                    "secret": str(f.get("Secret") or f.get("Match") or "")[:200],
+                    "verified": False,
+                    "severity": "MEDIUM",
+                    "path": str(f.get("File", "")),
+                    "line": int(f.get("StartLine", 0) or 0),
+                    "source": "gitleaks",
+                }
+            )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Source-map reconstruction (recover analyzable first-party source)
+# ---------------------------------------------------------------------------
+
+MAX_RECONSTRUCTED_SOURCES = 2000  # per-run cap (a big app's map can hold thousands)
+
+
+def _curl_get_text(url: str, curl_cfg: str | None) -> str | None:
+    """Fetch a URL's body as text via curl (auth config reused). None on any
+    failure. Used to pull external ``.map`` files. Never raises."""
+    cmd = ["curl", "-sSL", "--max-time", str(CURL_TIMEOUT)]
+    if curl_cfg:
+        cmd += ["--config", curl_cfg]
+    cmd.append(url)
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=CURL_TIMEOUT + 5)
+    except Exception:  # noqa: BLE001
+        return None
+    return res.stdout if (res.returncode == 0 and res.stdout) else None
+
+
+def _sanitize_source_rel(src_path: str) -> str:
+    """Turn a source-map ``sources[]`` entry into a SAFE relative path under
+    ``sources/`` — strips ``webpack://``/scheme prefixes and any ``../`` so a
+    malicious map can't write outside the sources dir (path-traversal guard)."""
+    p = str(src_path)
+    p = re.sub(r"^[a-zA-Z]+://", "", p)  # webpack://, file://, etc.
+    p = re.sub(r"^(\.\./)+", "", p)
+    p = p.lstrip("./").lstrip("/")
+    parts = [
+        re.sub(r"[^A-Za-z0-9._-]+", "_", seg)
+        for seg in p.split("/")
+        if seg not in ("", ".", "..")
+    ]
+    return "/".join(parts)[:200]
+
+
+def _extract_source_map_json(js_text: str, dest: str, url: str | None, curl_cfg: str | None):
+    """Return the parsed source-map dict for a JS file, or None. Handles an INLINE
+    ``data:...;base64,`` map (self-contained), a co-located ``<file>.map``, or an
+    EXTERNAL ``.map`` fetched from ``<url>``'s resolved sourceMappingURL."""
+    import base64
+
+    m = re.search(r"//[#@]\s*sourceMappingURL=(\S+)", js_text)
+    if not m:
+        return None
+    ref = m.group(1).strip()
+    raw_map: str | None = None
+    if ref.startswith("data:"):
+        b64 = re.search(r"base64,(.+)$", ref)
+        if b64:
+            try:
+                raw_map = base64.b64decode(b64.group(1)).decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001
+                raw_map = None
+    else:
+        local = Path(dest).with_name(Path(dest).name + ".map")
+        if local.exists():
+            raw_map = local.read_text(errors="replace")
+        elif url:
+            raw_map = _curl_get_text(urljoin(url, ref), curl_cfg)
+    if not raw_map:
+        return None
+    try:
+        return json.loads(raw_map)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _reconstruct_source_maps(state, url_by_dest: dict, curl_cfg: str | None) -> None:
+    """Reconstruct first-party ORIGINAL source from source maps (inline base64,
+    co-located, or external ``.map``) into ``{output_dir}/sources/`` so the analyzers
+    review readable pre-bundle code instead of minified output. ``node_modules`` /
+    bundler-internal sources are skipped (third-party — already fingerprinted for
+    CVE). Records ``state.metadata['source_maps']``. Never raises."""
+    sources_dir = Path(state.output_dir) / "sources"
+    reconstructed = 0
+    files_written: list[str] = []
+    seen_rel: set[str] = set()
+    js_dir = state.js_dir
+    js_files = sorted(js_dir.glob("*.js")) if js_dir.exists() else []
+    for js_file in js_files:
+        if reconstructed >= MAX_RECONSTRUCTED_SOURCES:
+            break
+        try:
+            js_text = js_file.read_text(errors="replace")
+        except Exception:  # noqa: BLE001
+            continue
+        sm = _extract_source_map_json(
+            js_text, str(js_file), url_by_dest.get(str(js_file)), curl_cfg
+        )
+        if not isinstance(sm, dict):
+            continue
+        sources = sm.get("sources", []) or []
+        contents = sm.get("sourcesContent", []) or []
+        for i, src_path in enumerate(sources):
+            if reconstructed >= MAX_RECONSTRUCTED_SOURCES:
+                break
+            if i >= len(contents) or not contents[i]:
+                continue
+            sp = str(src_path)
+            if "node_modules" in sp or "/webpack/" in sp or sp.startswith("webpack/"):
+                continue  # third-party / bundler internals
+            rel = _sanitize_source_rel(sp)
+            if not rel or rel in seen_rel:
+                continue
+            seen_rel.add(rel)
+            out_path = sources_dir / rel
+            try:
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(str(contents[i]))
+            except OSError:
+                continue
+            reconstructed += 1
+            files_written.append(str(out_path))
+    state.metadata["source_maps"] = {
+        "reconstructed_files": reconstructed,
+        "sources_dir": str(sources_dir) if reconstructed else "",
+        "files": files_written[:200],
+    }
+
+
+def _dedup_secrets(secrets: list[dict]) -> list[dict]:
+    """Collapse the same secret reported by more than one scanner. Key = (normalized
+    kind, secret snippet) — deliberately NOT path, so a hit jsluice (no path) and
+    trufflehog (with path) both surface is collapsed once. A VERIFIED duplicate wins
+    over an unverified one. First-seen order is preserved."""
+    best: dict[tuple, dict] = {}
+    order: list[tuple] = []
+    for s in secrets:
+        if not isinstance(s, dict):
+            continue
+        key = (
+            str(s.get("kind", "")).lower(),
+            str(s.get("secret", s.get("data", "")))[:120],
+        )
+        prev = best.get(key)
+        if prev is None:
+            best[key] = s
+            order.append(key)
+        elif s.get("verified") and not prev.get("verified"):
+            best[key] = s  # prefer the verified duplicate
+    return [best[k] for k in order]

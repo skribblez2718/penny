@@ -21,7 +21,7 @@ Load domain guidance before synthesizing: always `resources/prd-template.md` (th
 
 - **Requirement catalog** — array of `{id: "REQ-NNN", priority: "P0|P1|P2", title, description, acceptance_criteria: [testable, binary]}`; atomic, sequential ids, every REQ has ≥2 criteria.
 - **Verification matrix** — object keyed by every REQ-ID → `{unit_tests, integration_tests, e2e_tests, manual_tests}` (arrays; `[]` not omitted); every REQ has ≥1 strategy.
-- **IDEAL_STATE** — canonical schema (validates against `scripts/validate_ideal_state.py`): `goal`, `source`, `success_criteria` (≥1, tracing to narrative Success Metrics), `anti_criteria`, `verification` (bool map), `security_review`, `edge_cases`, `language`, `impacted_files_estimate`, `dependencies`, `deliverables` (real paths), `build_order` (matching narrative Build Order).
+- **IDEAL_STATE** — canonical schema (validates against `scripts/validate_ideal_state.py`): `goal`, `source`, `success_criteria` (≥1, tracing to narrative Success Metrics), `anti_criteria`, `verification` (bool map), `security_review`, `edge_cases`, `language`, `impacted_files_estimate`, `dependencies`, `deliverables` (real paths), `build_order` (dependency-ordering constraints only — which deliverables block others; a non-binding hint, not a prescribed step sequence).
 
 ## Non-negotiables
 

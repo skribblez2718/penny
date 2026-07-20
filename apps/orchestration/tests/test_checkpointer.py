@@ -177,7 +177,22 @@ def test_default_path_uses_env(tmp_path, monkeypatch):
     assert target.parent.exists()  # parent dir created
 
 
-def test_default_path_uses_project_root(tmp_path, monkeypatch):
+def test_project_root_env_wins_over_target_arg(tmp_path, monkeypatch):
+    # Orchestration state is Penny-global: PROJECT_ROOT (.env) ALWAYS wins over a target
+    # project_root a skill operates on, so .penny/orchestration.db never lands in the
+    # target project tree.
     monkeypatch.delenv("PENNY_ORCH_DB", raising=False)
+    penny_root = tmp_path / "penny"
+    target = tmp_path / "some-target-repo"
+    monkeypatch.setenv("PROJECT_ROOT", str(penny_root))
+    cp = Checkpointer(project_root=target)
+    assert cp.db_path == penny_root / ".penny" / "orchestration.db"
+
+
+def test_default_path_project_root_arg_fallback(tmp_path, monkeypatch):
+    # Last-resort fallback: the project_root arg is honored ONLY when neither
+    # PENNY_ORCH_DB nor PROJECT_ROOT is set.
+    monkeypatch.delenv("PENNY_ORCH_DB", raising=False)
+    monkeypatch.delenv("PROJECT_ROOT", raising=False)
     cp = Checkpointer(project_root=tmp_path)
     assert cp.db_path == tmp_path / ".penny" / "orchestration.db"

@@ -28,7 +28,7 @@ Deliberate behavior fixes vs. the legacy runtime:
     list matched no transition and hard-errored) is fixed: any non-APPROVE
     verdict routes to a bounded revision;
   * ``report_writing``'s output directory is a real ABSOLUTE path (the legacy
-    passed an unexpanded ``~/projects/penny/research/...`` literal);
+    passed an unexpanded ``~`` tilde literal instead of an absolute path);
   * ``max_sub_queries`` is actually enforced at dispatch (the legacy launched
     however many sub-queries piper returned);
   * ``write_complete=false`` completes honestly with ``met=False`` instead of
@@ -61,6 +61,7 @@ mempalace room ``skills/research-{session_id}`` and the drawer conventions
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -133,8 +134,12 @@ def _room(ctx: RunContext) -> str:
 
 
 def _report_dir(ctx: RunContext) -> str:
-    """ABSOLUTE report directory (fix: the legacy passed an unexpanded tilde)."""
-    return str(Path("~/projects/penny/research").expanduser() / _sanitize_topic(ctx.goal))
+    """ABSOLUTE report directory under the project root, never a hardcoded path.
+
+    Prefers the run's ``ctx.project_root`` (populated from the CLI ``--project-root``),
+    falling back to ``$PROJECT_ROOT`` then the cwd — always absolute, never a tilde."""
+    root = ctx.project_root or os.environ.get("PROJECT_ROOT") or str(Path.cwd())
+    return str(Path(root).expanduser() / "research" / _sanitize_topic(ctx.goal))
 
 
 # ---------------------------------------------------------------------------

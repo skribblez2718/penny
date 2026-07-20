@@ -105,6 +105,24 @@ LOANS: dict[str, Loan] = {
             review_by="2026-10-01",
         ),
         Loan(
+            loan_id="manim_default_ingest_topology",
+            description=(
+                "The manim skill's fixed 3-branch ingest fan-out "
+                "(concepts / equations / code) used as the FALLBACK when the "
+                "model-emitted scoping step returns no valid ingest topology "
+                "(playbooks/manim.py MANIM_INGEST_DEFAULT / PARALLEL_BY_STATE)."
+            ),
+            rationale=(
+                "Ingest topology is model-emitted by the `scoping` state; this "
+                "fixed split is only the fallback when scoping emits nothing. "
+                "Ablated, an empty scoping output fails loud instead of using "
+                "the default — the model's topology (arrangement 4) is "
+                "authoritative. Delete when models reliably scope ingest."
+            ),
+            added="2026-07-18",
+            review_by="2026-10-01",
+        ),
+        Loan(
             loan_id="learn_default_ingest_topology",
             description=(
                 "The learn skill's fixed 3-branch ingest fan-out "

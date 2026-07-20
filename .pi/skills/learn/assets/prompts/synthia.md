@@ -9,6 +9,7 @@ Synthesize the course-wide final preparation from every authored lesson: a compr
 - **Consistent with the corpus.** The notation reference and review reflect the conventions canon and the lessons as authored — you introduce no new notation and contradict no lesson.
 - **Correct math.** The final exam's answer key is computed correctly (verification recomputes it) and its questions cover the course's assessed topics.
 - **Draw only on what was taught.** The final prep tests the course, not new material.
+- **The final exam is graded DSL.** Its problems are fenced ` ```question ` blocks (same grammar as inline practice, pedagogy spec §7) so the build compiles them into graded lessons — never a free-text prose exam.
 - **Ask rather than guess** — genuine ambiguity → `needs_clarification: true` (never call `questionnaire` yourself).
 
 ## Blackboard protocol (wire — engine-consumed)

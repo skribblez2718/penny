@@ -16,7 +16,6 @@ class CachePoisoningAnalyzer(VulnerabilityAnalyzer):
     def get_source_sink_pairs(self) -> list[SourceSink]: return [SourceSink("Unkeyed input->cached response",["X-Forwarded-Host","X-Forwarded-Scheme","User-Agent"],["Reflected in cacheable response without Vary header"],"medium","CWE-444")]
     def get_semgrep_rulesets(self) -> list[str]: return ["p/javascript"]
     def get_custom_scanners(self) -> list[str]: return []
-    def get_analysis_guide(self) -> str: return self._load_prompt("annie-cache_poisoning.md")
     def get_payload_templates(self) -> list[PayloadTemplate]: return [PayloadTemplate("cp","Cache poison","X-Forwarded-Host: evil.com",target_context="html")]
     def get_verification_procedure(self,f:dict) -> str: return "Send request with unkeyed header -> check if reflected in cached response -> test cache duration"
     def assess_exploitability(self,f:dict) -> dict: return {"exploitable":True,"difficulty":"high","preconditions":["Cache in front of application","Unkeyed input reflected in response"]}

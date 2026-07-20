@@ -18,10 +18,12 @@ stateDiagram-v2
     state "sast_validate — TOOL (local heuristic)" as sast_validate
     state "structure — TOOL (local)" as structure
     state "slice — TOOL (local, seeds wave plan)" as slice
-    state "investigate — AGENT annie (bounded wave loop)" as investigate
+    state "investigate — AGENT annie (parallel per-class batch fan)" as investigate
     state "collect — TOOL (local)" as collect
     state "merge — AGENT synthia" as merge
     state "verify — AGENT vera (browser PoC, evidence oracle)" as verify
+    state "reverify — AGENT vera#2 (optional dual-verify, different model)" as reverify
+    state "poc_capture — TOOL (local, engine browser-PoC artifact check)" as poc_capture
     state "report — AGENT skribble" as report
     state "reflect — AGENT carren" as reflect
     state "unknown — escalation" as unknown
@@ -42,21 +44,32 @@ stateDiagram-v2
     structure --> slice : structure_done
     slice --> investigate : slice_done
 
-    %% INVESTIGATE bounded wave loop
-    investigate --> investigate : investigate_wave [wave < total_waves]
-    %% total_waves = ceil(needs_llm / wave_size); wave_size is a tunable Budget
-    %% (constraints.wave_size, default 10) — no frozen constant. Recall lessons
-    %% seed the first agent directive.
-    investigate --> collect : investigate_done [waves complete]
+    %% INVESTIGATE bounded PARALLEL batch loop (PER-CLASS fan)
+    investigate --> investigate : investigate_wave [batch < total_batches]
+    %% investigate is a PARALLEL fan (dynamic_branches): one annie branch per candidate
+    %% vuln class (fresh context, focused on a single class + its
+    %% assets/references/<class>.md catalog). Branches run in BATCHES of up to
+    %% max_fan_width agents CONCURRENTLY; route_after re-emits the next batch and
+    %% self-transitions until every class is covered, then ONE trailing GENERALIST
+    %% SWEEP batch (novel patterns / logic-auth / cross-class chains).
+    %% total_batches = ceil(len(candidate_classes) / max_fan_width) + 1. max_fan_width
+    %% is a tunable Budget (constraints.max_fan_width, jsa default 5; also the engine's
+    %% fan ceiling). No cap/fold — all classes covered. Recall lessons seed the first
+    %% batch's branch directives.
+    investigate --> collect : investigate_done [batches complete]
 
     %% Agent tail
     collect --> merge : collect_done
     merge --> verify : merge_done
-    verify --> report : verify_done [dual_verify off]
+    verify --> poc_capture : verify_done [dual_verify off]
     verify --> reverify : verify_reverify [dual_verify on + PASS]
-    reverify --> report : reverify_done
+    reverify --> poc_capture : reverify_done
     %% reverify = a SECOND independent vera (constraints.reverify_model for a
     %% different judge); the report reflects only findings both passes confirm.
+    %% poc_capture (TOOL, local) independently checks for a decodable browser
+    %% screenshot per claimed-verified finding and DEMOTES any that lack one to
+    %% 'unconfirmed' — engine-owned evidence the agent cannot fabricate (T7d).
+    poc_capture --> report : poc_capture_done
     report --> reflect : report_done
     reflect --> complete : reflect_done [met=True]
 
@@ -64,6 +77,7 @@ stateDiagram-v2
     investigate --> unknown : to_unknown
     merge --> unknown : to_unknown
     verify --> unknown : to_unknown
+    reverify --> unknown : to_unknown
     report --> unknown : to_unknown
     reflect --> unknown : to_unknown
     unknown --> awaiting_clarification : escalate
@@ -78,14 +92,16 @@ stateDiagram-v2
         cve_research, sast_scan, normalize,
         dedup_within_source, correlate_evidence,
         agent_review, sast_validate, structure, slice,
-        investigate, collect, merge, verify, report,
-        reflect, unknown, awaiting_clarification.
+        investigate, collect, merge, verify, reverify,
+        poc_capture, report, reflect, unknown,
+        awaiting_clarification.
     end note
 
     note right of investigate
         TOOL_STATES run inline via run_tool_state (no agent).
         GATE_STATES = {intake} resume via route_user.
         ESCALATABLE_STATES = {investigate, merge, verify,
-        report, reflect}. Each agent runs the model declared
-        in its own .pi/agents/<name>.md (no per-state override).
+        reverify, report, reflect}. Each agent runs the model
+        declared in its own .pi/agents/<name>.md (no per-state
+        override). poc_capture is a TOOL_STATE (no agent).
     end note

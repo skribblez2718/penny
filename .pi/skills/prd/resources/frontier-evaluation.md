@@ -1,6 +1,6 @@
 # PRD Skill — Frontier Evaluation & Design Rationale
 
-> Companion to `flow.mmd` (the FSM diagram). Method: web research performed manually via the Playwright browser. Primary source fetched verbatim = Anthropic, *Building Effective Agents* (Dec 19 2024), `anthropic.com/engineering/building-effective-agents` (`CERTAIN`). Spec-driven-development practice (Amazon working-backwards / PR-FAQ; GitHub Spec Kit; requirements-engineering INVEST) cited from knowledge (`PROBABLE`).
+> Companion to `flow.html` (the FSM diagram). Method: web research performed manually via the Playwright browser. Primary source fetched verbatim = Anthropic, *Building Effective Agents* (Dec 19 2024), `anthropic.com/engineering/building-effective-agents` (`CERTAIN`). Spec-driven-development practice (Amazon working-backwards / PR-FAQ; GitHub Spec Kit; requirements-engineering INVEST) cited from knowledge (`PROBABLE`).
 
 ## Verdict — the design is sound; no material logic redesign warranted.
 

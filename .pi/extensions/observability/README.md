@@ -119,7 +119,7 @@ bun install
 1. Start the observability server:
 
 ```bash
-cd ~/projects/observability
+cd "$PROJECT_ROOT/apps/observability"
 bun install
 bun run start
 ```

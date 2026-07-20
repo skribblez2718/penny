@@ -16,7 +16,7 @@
 | [cors.md](cors.md) | CORS | `Access-Control-Allow-Origin: *`, null origin, regex bypass |
 | [postmessage.md](postmessage.md) | postMessage | Missing origin check, `event.data` sinks, `window.postMessage` |
 | [open_redirect.md](open_redirect.md) | Open Redirect | `location.href`, `window.open`, URL parameter redirects |
-| [secrets.md](secrets.md) | Secret Disclosure | AWS keys, GCP keys, Stripe, GitHub tokens, JWT secrets, entropy |
+| [secret_disclosure.md](secret_disclosure.md) | Secret Disclosure | AWS keys, GCP keys, Stripe, GitHub tokens, JWT secrets, entropy |
 | [csti.md](csti.md) | Client-Side Template Injection | AngularJS `{{}}`, Vue `v-html`, template literal injection |
 | [clickjacking.md](clickjacking.md) | Clickjacking | `X-Frame-Options`, CSP `frame-ancestors`, framebusting |
 | [idor.md](idor.md) | IDOR | Sequential IDs, UUID prediction, missing ownership checks |

@@ -9,7 +9,13 @@ subprocess rehydrates by ``run_id`` — no argv blob, no replay.
 Path resolution (first hit wins):
   1. explicit ``db_path`` argument
   2. ``PENNY_ORCH_DB`` env var
-  3. ``<project_root>/.penny/orchestration.db`` (``project_root`` arg or CWD)
+  3. ``PROJECT_ROOT`` env var -> ``$PROJECT_ROOT/.penny/orchestration.db``. Orchestration
+     state is PENNY-GLOBAL: it always anchors to the Penny project root (.env), NEVER the
+     target project a skill happens to operate on. A skill may pass a target ``project_root``
+     (a repo under review/build) as the agents' working dir — that must not scatter a
+     ``.penny/orchestration.db`` into that tree.
+  4. ``<project_root>/.penny/orchestration.db`` (``project_root`` arg or CWD) — last-resort
+     fallback used only when ``PROJECT_ROOT`` is unset (e.g. bare unit tests).
 
 The DB is opened per-operation (short-lived connections) so it is safe across
 the subprocess boundaries the skill driver creates (start / step / step ...).
@@ -57,9 +63,17 @@ def _now() -> str:
 
 
 def _default_db_path(project_root: str | Path | None) -> Path:
+    # 1. explicit override
     env = os.environ.get("PENNY_ORCH_DB")
     if env:
         return Path(env)
+    # 2. PENNY-GLOBAL: orchestration state always anchors to the Penny PROJECT_ROOT (.env),
+    #    never the target project a skill operates on. This prevents a .penny/orchestration.db
+    #    from leaking into a repo passed as a skill's target project_root.
+    penny_root = os.environ.get("PROJECT_ROOT")
+    if penny_root:
+        return Path(penny_root) / ".penny" / "orchestration.db"
+    # 3. last-resort fallback (PROJECT_ROOT unset — e.g. bare unit tests)
     root = Path(project_root) if project_root else Path.cwd()
     return root / ".penny" / "orchestration.db"
 

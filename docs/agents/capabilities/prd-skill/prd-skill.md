@@ -85,7 +85,7 @@ Domain selection is model-owned, not an agent step on the engine path (see the s
 
 ## Output Contract — Mempalace Room
 
-The prd skill writes to `skills/prd-{session_id}/` (wing `penny`). The room name and the `wing=penny` mempalace instructions are preserved verbatim because the `code` skill reads IDEAL_STATE from this room as a hard dependency.
+The prd skill writes to `skills/prd-{session_id}/` (wing `penny`). The room name and the `wing=penny` mempalace instructions are preserved verbatim because the `code` skill reads IDEAL_STATE from this room when chained (an optional dependency — `code` also runs standalone).
 
 | Drawer                    | Type    | Content                                                          |
 | ------------------------- | ------- | ---------------------------------------------------------------- |
@@ -97,7 +97,7 @@ The prd skill writes to `skills/prd-{session_id}/` (wing `penny`). The room name
 
 The `code` skill reads `ideal_state` and `prd_goal` from this room on startup.
 
-## Chain Contract (Hard Dependency with code)
+## Chain Contract (with code)
 
 ```typescript
 skill({ chain: [
@@ -143,6 +143,6 @@ The code skill refuses to start without PRD+IDEAL_STATE — emits a chain-contra
 
 ## Version History
 
-- **1.0.0** — Initial release with web-app domain pack. Hard dependency on code skill via chain contract.
+- **1.0.0** — Initial release with web-app domain pack. Chain contract with the code skill (code consumes IDEAL_STATE when chained; the dependency is optional).
 </content>
 </invoke>

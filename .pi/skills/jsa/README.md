@@ -20,40 +20,54 @@ this `scripts/` dir and are imported lazily by the playbook via `jsa_domain.py`.
 
 ## States
 
-The FSM is a strictly linear pipeline with two human gates, a bounded agent loop,
-and an agent tail:
+`resources/flow.mmd` is the canonical FSM diagram (an edge-for-edge mirror of
+`JSAMachine`, drift-tested by `apps/orchestration/tests/test_jsa_flow_diagram.py`).
+The pipeline is strictly linear with a single human gate, a bounded agent wave
+loop, and an evidence-gated agent tail:
 
 ```
 intake ─(gate)→ acquire → cve_research → sast_scan → normalize
 → dedup_within_source → correlate_evidence → agent_review → sast_validate
-→ structure → slice → investigate ⟲(wave loop) → stop ─(gate)→ collect
-→ merge → verify → report → reflect → complete
+→ structure → slice → investigate ⟲(wave loop) → collect → merge
+→ verify →⟨reverify?⟩→ poc_capture → report → reflect → complete
 ```
 
 - **TOOL_STATES** (deterministic, no agent, run inline): `acquire`,
   `cve_research`, `sast_scan`, `normalize`, `dedup_within_source`,
   `correlate_evidence`, `agent_review`, `sast_validate`, `structure`, `slice`,
-  `collect`. Note: `agent_review` and `sast_validate` are LOCAL heuristics
-  despite the name — no agent runs.
+  `collect`, `poc_capture`. `agent_review` and `sast_validate` are LOCAL
+  heuristics despite the name; `poc_capture` is an engine-owned browser-PoC
+  artifact check that demotes any claimed-verified finding lacking a decodable
+  screenshot.
 - **Agent states** (`PRIMITIVE_BY_STATE`): `investigate` → annie,
-  `merge` → synthia, `verify` → vera, `report` → skribble, `reflect` → carren.
-- **GATE_STATES** (`{intake, stop}`): human HITL gates resumed via `route_user`
+  `merge` → synthia, `verify` → vera, `reverify` → vera (optional second pass),
+  `report` → skribble, `reflect` → carren.
+- **GATE_STATES** (`{intake}`): the only human gate, resumed via `route_user`
   (`user_response` on the same `run_id`) — not the legacy `escalate_to_user`
-  protocol.
-  - `intake` — schema questionnaire (target_url, auth mode, session
-    management, auth details). Seeded from `constraints`; if already valid the
-    gate is skipped and the pipeline fires straight into `acquire`.
-  - `stop` — continue/stop checkpoint after INVESTIGATE. `continue` →
-    `collect`; `stop` → `complete` early (findings remain un-merged/un-verified;
-    `done_predicate` reports `met=False` honestly).
-- **INVESTIGATE wave loop**: a bounded self-transition. `total_waves =
-  max(1, ceil(needs_llm / WAVE_SIZE))` with `WAVE_SIZE = 10`; annie always runs
-  at least one wave (the general sweep). Findings still unverified after the
-  waves are reported honestly as `unverified_after_waves`.
+  protocol. `intake` is a schema questionnaire (target_url, auth mode, session
+  management, auth details); seeded from `constraints`, a valid record skips the
+  gate and the pipeline fires straight into `acquire`. There is **no** post-
+  investigate `stop` gate — the waves flow straight into `collect`.
+- **INVESTIGATE parallel batch fan (per-class)**: a bounded self-transition. `slice`
+  emits one annie branch per candidate vuln class (a FRESH context focused on a single
+  class + its `assets/references/<class>.md` catalog) into `dynamic_branches`; the
+  engine dispatches them in BATCHES of up to `max_fan_width` agents CONCURRENTLY,
+  iterating batch after batch until ALL classes are covered, then a trailing GENERALIST
+  SWEEP batch (novel patterns, logic/auth flaws, cross-class chains). `total_batches =
+  ceil(len(candidate_classes) / max_fan_width) + 1`; `max_fan_width` is a tunable Budget
+  (`constraints["max_fan_width"]`, jsa default 5) that also caps the engine fan. No
+  cap/fold — every class gets a dedicated agent (class count ≤ 22); annie always runs at
+  least the sweep (≥ 1 batch). Findings still unverified after the batches are reported
+  honestly as `unverified_after_waves`. (`wave_size` is an informational per-class
+  candidate-batch hint.)
+- **Dual-verify (optional)**: with `constraints["dual_verify"]`, a `verify` PASS
+  routes to `reverify` — a second, independent vera (a different model via
+  `constraints["reverify_model"]`) — and only findings BOTH passes confirm are
+  reported verified.
 - **Escalation seam** (`ESCALATABLE_STATES = {investigate, merge, verify,
-  report, reflect}`): an agent SUMMARY with `needs_clarification` routes
-  `to_unknown → escalate → awaiting_clarification`, and `clarify` resumes the
-  agent portion at `investigate`.
+  reverify, report, reflect}`): an agent SUMMARY with `needs_clarification`
+  routes `to_unknown → escalate → awaiting_clarification`, and `clarify` resumes
+  the agent portion at `investigate`.
 - **Completion**: `done_predicate` is met when the pipeline reaches `reflect`
   with a `verify` verdict recorded.
 

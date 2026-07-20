@@ -34,6 +34,13 @@ SKILL_REQUIRED_FILES = [
     "scripts/orchestrate.py",
     "assets/prompts",
     "resources/reference.md",
+]
+
+# A flow diagram (state-machine mirror) is required in EITHER format — the newer
+# self-contained HTML (preferred) or the legacy mermaid. Mirrors
+# check_skill_structure.py's FLOW_DIAGRAM_ANY.
+SKILL_FLOW_DIAGRAM_ANY = [
+    "resources/flow.html",
     "resources/flow.mmd",
 ]
 
@@ -127,6 +134,9 @@ def check_skills() -> bool:
             req_path = skill_path / req
             if not req_path.exists():
                 missing.append(req)
+
+        if not any((skill_path / rel).is_file() for rel in SKILL_FLOW_DIAGRAM_ANY):
+            missing.append("resources/flow.html (or legacy flow.mmd)")
 
         if missing:
             print(f"   ❌ {skill_path.name}: missing {', '.join(missing)}")

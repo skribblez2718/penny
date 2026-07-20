@@ -31,9 +31,12 @@ REQUIRED_FILES = [
     "SKILL.md",
     "README.md",
     "scripts/orchestrate.py",
-    "resources/reference.md",
-    "resources/flow.mmd",
 ]
+# A flow diagram (state machine mirror) IS required, in EITHER format: the newer
+# self-contained HTML (resources/flow.html) or the legacy mermaid
+# (resources/flow.mmd). At least one must exist. Other resource files have NO
+# mandated filename — skills name them freely.
+FLOW_DIAGRAM_ANY = ["resources/flow.html", "resources/flow.mmd"]
 
 
 def discover_skills() -> List[Path]:
@@ -80,6 +83,16 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
                 issues.append(("ERROR", f"Missing file: {rel_file}"))
             elif not full_path.is_file():
                 issues.append(("ERROR", f"Not a file: {rel_file}"))
+
+        # Flow diagram: require at least one of flow.html / flow.mmd (either format).
+        if not any((skill_dir / rel).is_file() for rel in FLOW_DIAGRAM_ANY):
+            issues.append(
+                (
+                    "ERROR",
+                    "Missing flow diagram: expected resources/flow.html (preferred) or "
+                    "resources/flow.mmd",
+                )
+            )
 
         # Check for test files in tests/
         tests_dir = skill_dir / "tests"
@@ -175,11 +188,16 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
                             "SKILL.md description missing 'Use when' — must follow: '[sentence]. Use when [trigger conditions + signal phrases]. Do not use when [anti-cases].'",
                         )
                     )
-                if "do not use when" not in desc.lower():
+                # Anti-case clause: accept any natural phrasing of "do not use …"
+                # ("do not use when/for/to/on/if …", "don't use …"), not just the
+                # exact trigram — the clause's presence is what matters, not its wording.
+                anti_case_markers = ("do not use", "don't use", "do not apply", "avoid using")
+                if not any(marker in desc.lower() for marker in anti_case_markers):
                     issues.append(
                         (
                             "ERROR",
-                            "SKILL.md description missing 'Do not use when' — must follow: '[sentence]. Use when [trigger conditions + signal phrases]. Do not use when [anti-cases].'",
+                            "SKILL.md description missing an anti-case clause — include 'Do not use …' "
+                            "(e.g. 'Do not use when/for/to …') describing when NOT to use this skill.",
                         )
                     )
 

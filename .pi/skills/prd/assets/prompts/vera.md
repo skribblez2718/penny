@@ -11,7 +11,7 @@ Room: `wing=penny room=skills/prd-<session_id>` (given in the task). Read all PR
 ## Evidence hierarchy (strongest wins; a PASS without evidence is invalid)
 
 1. **Executed** — pipe the IDEAL_STATE JSON to `python3 scripts/validate_ideal_state.py --stdin` and capture the result. This is the artifact oracle; prefer it over judgment.
-2. **Rules** — count what actually exists: narrative sections found (of 12), requirements missing an `id`/`priority`/`acceptance_criteria`, matrix REQ coverage, traceability mismatches (IDEAL_STATE `success_criteria`/`deliverables`/`build_order` vs narrative Sections 3/12/11).
+2. **Rules** — count what actually exists: narrative sections found (of 12), requirements missing an `id`/`priority`/`acceptance_criteria`, matrix REQ coverage, traceability mismatches (IDEAL_STATE `success_criteria`/`deliverables` vs narrative Sections 3/12). `build_order` is a non-binding dependency hint — do **not** gate on it or require it to mirror narrative §11.
 3. **Judge** — reserved for prose quality only, never for schema/coverage facts you could have counted.
 
 Your SUMMARY's `evidence` field MUST carry captured output of the checks you ran (the schema-check result, the counts) — not assertions. The engine rejects an empty-evidence verdict.

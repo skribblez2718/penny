@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>derivation skill — execution flow</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2a3341;
+    --ink:#e6edf3; --muted:#8b949e; --desc:#b3bdc9;
+    --echo:#22d3ee; --annie:#a78bfa;
+    --start:#94a3b8; --gate:#e3b341; --esc:#9ca3af; --done:#3fb950; --error:#f85149;
+    --fwd:#8b98a9; --exit:#3fb950; --loop:#e3a52e; --abort:#f85149;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  header{padding:22px 28px 8px}
+  h1{margin:0;font-size:22px;letter-spacing:-.01em}
+  .sub{color:var(--muted);margin-top:4px;font-size:13px;max-width:1180px}
+  .callout{margin:14px 28px;padding:12px 14px;border-left:4px solid var(--gate);
+    background:#211d10;border-radius:6px;font-size:13px;color:#e8d9a8}
+  .callout b{color:#f0c657}
+  .legend{display:flex;flex-wrap:wrap;gap:18px 26px;padding:10px 28px 16px;font-size:12.5px;color:#c9d3df}
+  .legend .grp{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
+  .chip{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:12px;height:12px;border-radius:3px;display:inline-block}
+  .aline{width:26px;height:0;border-top:3px solid var(--fwd);display:inline-block}
+  .aline.dash{border-top-style:dashed}
+  #wrap{position:relative;margin:8px 20px 40px;width:1240px;height:760px}
+  svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+  .node{position:absolute;background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    box-shadow:0 1px 2px rgba(0,0,0,.35),0 2px 8px rgba(0,0,0,.25);padding:10px 12px}
+  .node .t{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:7px}
+  .node .t .who{font-weight:600;color:var(--muted);font-size:11.5px}
+  .node .d{color:var(--desc);font-size:12px;margin-top:5px}
+  .node::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;border-radius:10px 0 0 10px}
+  .node.echo::before{background:var(--echo)} .node.annie::before{background:var(--annie)}
+  .node.start::before{background:var(--start)} .node.esc::before{background:var(--esc)}
+  .node.done{background:#0f2417;border-color:#1f5136}.node.done::before{background:var(--done)}
+  .node.error{background:#2a1517;border-color:#5c2a2a}.node.error::before{background:var(--error)}
+  .node .badge{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.04em;
+    text-transform:uppercase;color:#0d1117;padding:2px 6px;border-radius:999px}
+  .badge.term{background:#5b6675;color:#e6edf3}
+  .lbl{position:absolute;transform:translate(-50%,-50%);background:var(--panel2);
+    border:1px solid #313c4a;color:#c9d3df;font-size:11px;padding:1px 6px;border-radius:999px;
+    white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+  .foot{margin:0 28px 48px;font-size:12.5px;color:#c3cdd9}
+  .foot h3{font-size:13px;margin:18px 0 6px;color:#e6edf3}
+  .foot ul{margin:6px 0;padding-left:18px} .foot li{margin:3px 0}
+  .foot b{color:#e6edf3}
+  code{background:#22293a;color:#cdd6e3;padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>derivation skill — execution flow</h1>
+  <div class="sub">Validated against <code>orchestration/playbooks/derivation.py</code> (<code>DerivationMachine</code>) · runs on the shared orchestration engine. A <b>verify-only, source-agnostic</b> independence gate: two phases, auto-routed by the SHAPE of <code>constraints.sources</code> (no extra flag). It judges, never fixes.</div>
+</header>
+
+<div class="callout">
+  <b>Corpus-completeness guard (no vacuous pass):</b> independence is judged <i>against</i> the corpus — a manifest that omits the restricted source a lesson was rebuilt from would "pass" with nothing restricted to compare against. A clean-room rebuild's source MUST be present, tagged <code>role: "coverage-reference"</code>; if absent, the reviewer returns <b>UNCERTAIN</b> (escalates to a human), never a clean verdict. Pass the <b>gate corpus</b> here, not a shipped manifest that deliberately omits restricted artifacts.
+</div>
+
+<div class="legend">
+  <div class="grp">
+    <span class="chip"><span class="dot" style="background:var(--echo)"></span>echo · observe (gather fan)</span>
+    <span class="chip"><span class="dot" style="background:var(--annie)"></span>annie · judge (the "dirty" reviewer)</span>
+    <span class="chip"><span class="dot" style="background:var(--esc)"></span>escalation</span>
+    <span class="chip"><span class="dot" style="background:var(--done)"></span>complete</span>
+    <span class="chip"><span class="dot" style="background:var(--error)"></span>error</span>
+  </div>
+  <div class="grp">
+    <span class="chip"><span class="aline" style="border-color:var(--fwd)"></span>forward</span>
+    <span class="chip"><span class="aline" style="border-color:var(--exit)"></span>success / exit</span>
+    <span class="chip"><span class="aline" style="border-color:var(--loop)"></span>loop-back (bounded)</span>
+    <span class="chip"><span class="aline dash" style="border-color:var(--esc)"></span>escalation</span>
+    <span class="chip"><span class="aline" style="border-color:var(--abort)"></span>abort</span>
+  </div>
+</div>
+
+<div id="wrap">
+  <svg id="edges"><defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="context-stroke"></path>
+    </marker>
+  </defs></svg>
+</div>
+
+<div class="foot">
+  <h3>Phase 1 — gathering (echo dynamic fan; runs ONLY when <code>sources</code> is a directory)</h3>
+  <ul>
+    <li><b>LOCAL, READ-ONLY inventory:</b> one branch per scannable source file (<code>.md/.txt/.rst/.text</code>, mirroring <code>prefilter.py</code>; large files sharded). Each branch reports a grounded license/bucket call (identifier + evidence snippet + confidence) and a headings-only outline. <b>NEVER fetches, NEVER discovers new sources, NEVER mutates the corpus, NEVER sets the verdict.</b></li>
+    <li><b>Bounded:</b> <code>constraints.max_fan_width</code> (default 8) per round; multi-round batching bounded by <code>ctx.max_iterations</code>. NOT escalatable — a shortfall (zero scannable files, or budget spent before 100% coverage) is a <b>terminal error</b>, never a partial-corpus pass-through.</li>
+    <li><b>Output:</b> exactly one <code>prefilter.py</code>-compatible <code>manifest.json</code> in a run-scoped <code>0o700</code> workdir (<code>{tempdir}/derivation-{session_id}/</code> or <code>constraints.gather_workdir</code>) — never inside the caller's <code>sources</code> — plus one <code>"&lt;sid&gt; Gather Provenance"</code> mempalace drawer (best-effort, non-fatal).</li>
+    <li><b>Fail-safe licensing:</b> a non-<code>unknown</code> license with no evidence snippet is downgraded to <code>unknown</code> (unknown ⇒ restricted); a bucket with no marker defaults to <code>""</code> — never fabricated from the license.</li>
+  </ul>
+  <h3>Phase 2 — reviewing (annie; two tiers, UNCHANGED by gather)</h3>
+  <ul>
+    <li><b>Tier-1 (deterministic):</b> <code>scripts/prefilter.py</code> — per-source verbatim/n-gram overlap. A hard breach may short-circuit toward <code>DERIVATIVE_RISK</code>; a clean report does NOT imply independence.</li>
+    <li><b>Tier-2 (judgement):</b> <code>resources/rubric.md</code> — Abstraction → <b>Filtration</b> (facts, math, standard notation, merger, scènes à faire filtered out BEFORE comparing) → Comparison across <b>D1–D7</b>, incl. D3's source-identity tell (adopted course/lesson titles / "Lesson N" numbering) and <b>D7 single-source dependence</b> (the decisive originality signal).</li>
+    <li><b>Evidence-gated:</b> the engine rejects a verdict without the Tier-1 artifact + per-dimension scoring; a flagged dimension must name both a fix and its matched source(s). When gather ran, annie receives the manifest PATH + outline/pairings as <b>pointers only</b> — they never set or bias the verdict.</li>
+    <li><b>Verdict → caller action:</b> <code>INDEPENDENT</code> ship · <code>NEEDS_REVISION</code> apply fixes, re-run · <code>DERIVATIVE_RISK</code> do not ship, re-author. Reviewer ≠ author: pin the review to a different model where possible.</li>
+  </ul>
+  <h3>Other true-to-code notes</h3>
+  <ul>
+    <li><b>Only <code>reviewing</code> escalates</b> (<code>ESCALATABLE_STATES = {reviewing}</code>): UNCERTAIN — including a missing coverage-reference source — pauses in <code>awaiting_clarification</code> and resumes at <code>reviewing</code> on clarify.</li>
+    <li><b>Abort:</b> every non-final state can <code>abort → error</code>; those arrows are omitted for legibility (only gather's terminal shortfall is drawn).</li>
+  </ul>
+</div>
+
+<script>
+const COLS = { Louter:30, C:470, Router:960 };
+const W = { C:300, side:250 };
+const N = {
+  intake:{col:'C',y:30,cls:'start',title:'intake',desc:'Engine start() validates the goal and routes by the SHAPE of constraints.sources: directory ⇒ gathering, manifest.json file ⇒ reviewing (byte-identical fast path).'},
+  gathering:{col:'C',y:175,cls:'echo',title:'gathering',who:'echo × N',desc:'Local, read-only corpus inventory — one branch per scannable file: grounded license/bucket call (evidence + confidence) + headings-only outline. Aggregates into exactly ONE manifest.json in a run-scoped 0o700 workdir. Never fetches, never discovers, never mutates, never judges.'},
+  reviewing:{col:'C',y:360,cls:'annie',title:'reviewing',who:'annie',desc:'Tier-1 prefilter.py (verbatim overlap) + Tier-2 rubric.md (AFC, D1–D7; filtration BEFORE comparison; D7 single-source dependence decisive). Confirms a rebuild\u2019s coverage-reference source is IN the corpus. Verdict: INDEPENDENT | NEEDS_REVISION | DERIVATIVE_RISK.'},
+  complete:{col:'C',y:560,cls:'done',title:'complete',badge:'TERM',desc:'Terminal. Verdict + full review in mempalace room skills/derivation-{session_id}. Ship only on INDEPENDENT.'},
+  error:{col:'Router',y:560,cls:'error',title:'error',badge:'TERM',desc:'Terminal. Gather shortfall (zero scannable files / budget spent before 100% coverage), unknown verdict, or abort.'},
+  unknown:{col:'Louter',y:360,cls:'esc',title:'unknown',desc:'Escalation entry (from reviewing ONLY): UNCERTAIN — a borderline idea/expression call, a missing required input, or a missing coverage-reference source.'},
+  awaiting:{col:'Louter',y:530,cls:'esc',title:'awaiting_clarification',desc:'Paused with annie\u2019s questions (present via questionnaire); resumes the SAME run at reviewing.'},
+};
+const E = [
+  {from:'intake',to:'gathering',s1:'bottom',s2:'top',kind:'fwd',label:'start_gather — sources is a DIRECTORY'},
+  {from:'intake',to:'reviewing',s1:'right',s2:'right',kind:'fwd',label:'start_review — manifest.json FILE (fast path)',bow:260},
+  {from:'gathering',to:'gathering',s1:'left',s2:'left',kind:'loop',label:'gather_batch ⟲ next fan round',c1:{dx:-90,dy:-30},c2:{dx:-90,dy:30}},
+  {from:'gathering',to:'reviewing',s1:'bottom',s2:'top',kind:'fwd',label:'gather_done — manifest.json written · 100% coverage'},
+  {from:'gathering',to:'error',s1:'right',s2:'top',kind:'abort',label:'zero scannable files / budget exhausted — terminal, never partial-corpus',c1:{dx:300,dy:60},c2:{dx:40,dy:-120}},
+  {from:'reviewing',to:'complete',s1:'bottom',s2:'top',kind:'exit',label:'review_done — verdict (evidence-gated)'},
+  {from:'reviewing',to:'unknown',s1:'left',s2:'right',kind:'esc',label:'UNCERTAIN / needs_clarification',c1:{dx:-40,dy:0},c2:{dx:40,dy:0}},
+  {from:'unknown',to:'awaiting',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
+  {from:'awaiting',to:'reviewing',s1:'right',s2:'left',kind:'esc',label:'clarify — same run_id',c1:{dx:60,dy:-40},c2:{dx:-60,dy:40}},
+];
+const KIND = {fwd:getComputedStyle(document.documentElement).getPropertyValue('--fwd').trim(),
+  exit:'#3fb950',loop:'#e3a52e',esc:'#9ca3af',abort:'#f85149'};
+
+const wrap=document.getElementById('wrap'), svg=document.getElementById('edges');
+for(const id in N){const n=N[id];const w=(n.col==='C')?W.C:W.side;
+  const el=document.createElement('div');el.className='node '+n.cls;el.id='n_'+id;
+  el.style.left=COLS[n.col]+'px';el.style.top=n.y+'px';el.style.width=w+'px';
+  const who=n.who?`<span class="who">· ${n.who}</span>`:'';
+  const badge=n.badge?`<span class="badge term">${n.badge}</span>`:'';
+  el.innerHTML=`<div class="t">${n.title}${who}${badge}</div><div class="d">${n.desc}</div>`;
+  wrap.appendChild(el);}
+const base=wrap.getBoundingClientRect();
+function rect(id){const r=document.getElementById('n_'+id).getBoundingClientRect();
+  return{left:r.left-base.left,top:r.top-base.top,width:r.width,height:r.height};}
+function anchor(r,side){switch(side){
+  case'top':return{x:r.left+r.width/2,y:r.top};
+  case'bottom':return{x:r.left+r.width/2,y:r.top+r.height};
+  case'left':return{x:r.left,y:r.top+r.height/2};
+  case'right':return{x:r.left+r.width,y:r.top+r.height/2};}}
+function ctrl(p,side,bow){const k=64,b=bow||0;switch(side){
+  case'top':return{x:p.x+b,y:p.y-k};
+  case'bottom':return{x:p.x+b,y:p.y+k};
+  case'left':return{x:p.x-k-Math.abs(b),y:p.y};
+  case'right':return{x:p.x+k+Math.abs(b),y:p.y};}}
+const SVGNS='http://www.w3.org/2000/svg';
+for(const e of E){
+  const ra=rect(e.from),rb=rect(e.to);
+  const p1=anchor(ra,e.s1),p2=anchor(rb,e.s2);
+  const c1=e.c1?{x:p1.x+e.c1.dx,y:p1.y+e.c1.dy}:ctrl(p1,e.s1,e.bow);
+  const c2=e.c2?{x:p2.x+e.c2.dx,y:p2.y+e.c2.dy}:ctrl(p2,e.s2,e.kind==='exit'?-(e.bow||0):e.bow);
+  const path=document.createElementNS(SVGNS,'path');
+  path.setAttribute('d',`M ${p1.x} ${p1.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${p2.x} ${p2.y}`);
+  path.setAttribute('fill','none');path.setAttribute('stroke',KIND[e.kind]);
+  path.setAttribute('stroke-width','2');path.setAttribute('marker-end','url(#ah)');
+  if(e.kind==='esc')path.setAttribute('stroke-dasharray','6 5');
+  svg.appendChild(path);
+  if(e.label){const t=0.5,mt=1-t;
+    const x=mt*mt*mt*p1.x+3*mt*mt*t*c1.x+3*mt*t*t*c2.x+t*t*t*p2.x;
+    const y=mt*mt*mt*p1.y+3*mt*mt*t*c1.y+3*mt*t*t*c2.y+t*t*t*p2.y;
+    const l=document.createElement('div');l.className='lbl';l.textContent=e.label;
+    l.style.left=x+'px';l.style.top=y+'px';wrap.appendChild(l);}
+}
+</script>
+</body>
+</html>

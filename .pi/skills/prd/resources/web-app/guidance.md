@@ -68,10 +68,7 @@ Web-app-specific edge cases:
 
 ## 11. Build Order
 
-Web-app build order: infrastructure → backend API → database → frontend → integration. Each step must include:
-1. The specific files/packages to create
-2. Test strategy (unit/integration/E2E)
-3. How to verify independently
+Capture web-app *dependency constraints* as objectives, not a fixed pipeline. Real dependencies look like: an endpoint can't be integration-tested until its data store exists; a page can't be E2E-tested until its backing API is reachable; auth middleware must exist before the endpoints it gates can be verified. Record those dependency facts and let the implementer choose any sequence that satisfies them. For each deliverable, make explicit **how it is verified independently** (unit/integration/E2E strategy) — the verification is the objective; the ordering is a consequence of the dependencies, not a prescribed recipe (do not hard-code "infrastructure → backend → frontend").
 
 ## 12. Deliverables
 

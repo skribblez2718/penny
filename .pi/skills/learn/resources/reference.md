@@ -13,7 +13,8 @@ files, no `--state` argv.
 | State                    | Kind         | Agent        | Description                                                        |
 | ------------------------ | ------------ | ------------ | ------------------------------------------------------------------ |
 | `intake`                 | initial      | —            | Validate goal + `constraints.source_dir`; seed `learn` extras       |
-| `ingesting`              | parallel     | `echo` × 3   | Fan out content / conventions / assessment inventory                |
+| `scoping`                | primitive    | `echo`       | Quick source scan; emit the ingest fan topology (`ingest_branches`). Skipped when the caller supplies `constraints.ingest_branches` |
+| `ingesting`              | parallel     | `echo` × N   | Fan out the model-emitted (or caller-supplied) ingest branches; tagged-LOAN 3-focus default (content / conventions / assessment) when scoping emits nothing |
 | `designing`              | primitive    | `annie`      | Course charter: curriculum, conventions canon, analogy registry; emit `lesson_count` |
 | `charter_gate`           | planned gate | — (user)     | HITL approve / refine / deny the charter before authoring           |
 | `authoring`              | primitive    | `skribble`   | ONE lesson's guide + practice answers per pass (self-loops)         |
@@ -29,7 +30,8 @@ files, no `--state` argv.
 
 ### Transitions
 
-`intake → ingesting → designing → charter_gate → {authoring | designing | error}`;
+`intake → scoping → ingesting` (or `intake → ingesting` when `constraints.ingest_branches`
+is supplied); `ingesting → designing → charter_gate → {authoring | designing | error}`;
 `authoring ⟲ per lesson → assessing ⟲ per lesson → synthesizing → verifying`;
 `verifying → {critiquing | fixing | complete(met=False)}`; `fixing → verifying`;
 `critiquing → {complete | fixing | complete(met=False)}`.
@@ -43,6 +45,7 @@ files, no `--state` argv.
 
 | State | Required | Notable optional |
 |-------|----------|------------------|
+| scoping | `scope_complete: bool`, `ingest_branches: dict`, `confidence: str` | `mempalace_drawer` |
 | ingesting (each branch) | `explore_complete: bool` | `lessons_found`, `topics_found` |
 | designing | `design_complete: bool`, `lesson_count: int` | `topic_count`, `conventions`, `analogy_count`, `open_questions` |
 | authoring / assessing | `lesson_complete: bool`, `lesson_index: int` | `files_written`, `topic_count` / `problem_count` |
@@ -60,12 +63,16 @@ All states accept `needs_clarification` + `clarifying_questions` + `confidence`
 |-----|----------|---------|
 | `source_dir` | **yes** | Directory holding the raw learning material |
 | `output_dir` | no | Output root (default `<source_dir>/../study_materials`) |
+| `source_registry` | no | The license-vetted source registry/corpus (in the course dir) grounding the ≥2-sources clean-room discipline + the `derivation` handoff; omit ⇒ the ≥2-source target is reported unmet |
+| `app_contract` | no | The target app's caller-provided output contract (DSL/sim/build docs, in the app's own repo); omit ⇒ generic markdown practice |
+| `ingest_branches` | no | Caller-supplied ingest topology (`branch_id → focus`); skips `scoping` |
+| `max_fan_width` | no | Cap on parallel ingest branches |
 | `spec_docs` | no | Existing teaching-approach/spec docs to reuse |
 | `audience` | no | Audience override notes |
 
 ## Mempalace
 
-Room `skills/learn-{session_id}` (penny-wing convention). Drawers: `Ingest — <focus>` ×3,
+Room `skills/learn-{session_id}` (penny-wing convention). Drawers: `Ingest — <focus>` per branch,
 `Charter`, `Author — lesson <i>`, `Assess — lesson <i>`, `Synthesize`,
 `Verify (round n)`, `Fix (round n)`, `Critique`.
 

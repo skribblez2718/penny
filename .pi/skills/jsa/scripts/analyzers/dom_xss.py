@@ -11,8 +11,7 @@ Sinks: innerHTML, outerHTML, document.write, document.writeln, eval,
        jQuery $.html(), React dangerouslySetInnerHTML, Vue v-html,
        Angular [innerHTML], script.text, script.textContent
 
-Reference: assets/prompts/annie-dom_xss.md
-Research:  research/jsa/analyze-dom_xss.md
+Reference: assets/references/dom_xss.md
 """
 
 from .base import VulnerabilityAnalyzer, SourceSink, PayloadTemplate
@@ -123,11 +122,6 @@ class DOMXSSAnalyzer(VulnerabilityAnalyzer):
     
     def get_custom_scanners(self) -> list[str]:
         return ["dom_manipulation", "dom_xss_scanner"]
-    
-    # ── Analysis Guide ──
-    
-    def get_analysis_guide(self) -> str:
-        return self._load_prompt("annie-dom_xss.md")
     
     # ── Verification ──
     

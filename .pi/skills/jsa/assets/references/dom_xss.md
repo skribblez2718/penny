@@ -10,6 +10,8 @@
 - [Payloads](#payloads) — Test payloads organized by sink category
 - [Bypass Techniques](#bypass-techniques) — Sanitizer, CSP, and filter bypasses
 - [Detection Heuristics](#detection-heuristics) — Multi-step chain detection
+- [Scanners & Commands](#scanners--commands) — semgrep / jsluice / AST scanner invocations
+- [Multi-Step Chains](#multi-step-chains) — cross-class chains that feed a DOM XSS sink
 - [False Positives](#false-positives) — What looks like DOM XSS but isn't
 - [Framework Notes](#framework-notes) — React, Angular, Vue, jQuery specifics
 
@@ -181,6 +183,33 @@ grep -nE '\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML|document\.write|eva
 # jQuery sinks
 grep -nE '\$\(.*\)\.(html|append|prepend|after|before|replaceWith|wrap)\(' file.js
 ```
+
+---
+
+## Scanners & Commands
+
+```bash
+# semgrep — DOM XSS rulesets
+semgrep --config p/xss --config p/javascript --config p/owasp-top-ten --json {file}
+
+# jsluice — extract dynamic endpoints / URLs from JS
+jsluice urls < {file}
+
+# AST-level source→sink trace
+python3 scripts/analyzers/dom_xss.py --file {file}
+```
+
+---
+
+## Multi-Step Chains
+
+Cross-class flows where another bug supplies the DOM XSS source:
+
+| Chain | What to check |
+|-------|---------------|
+| Prototype pollution → DOM XSS | `Object.prototype` / `__proto__` polluted before the sink (e.g. jQuery `$('<div/>')` gadget) |
+| DOM clobbering → DOM XSS | Global/config variable checks bypassed via named HTML elements (`<form id=...>`, `name=`) |
+| postMessage → DOM XSS | `event.data` reaches a sink without `event.origin` validation |
 
 ---
 

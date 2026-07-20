@@ -8,6 +8,7 @@ Inventory the raw learning material for your assigned focus (named in your task)
 
 - **READ-ONLY.** You read the source material and report; you never modify it or generate study content.
 - **Surface collisions, don't smooth them.** Where two conventions or notations could collide (symbols, orderings, naming), report every such place — the design step turns these into the conventions canon.
+- **Idea layer only (clean-room).** Inventory the *facts / what* the material teaches — the non-copyrightable skeleton — never a source's prose, section order, selection, or distinctive examples. Where multiple sources cover a concept, record which do (the ≥2-sources rule) and seed the per-concept source map + provenance (concept → source). If a source is the course's restricted **coverage-reference** (the course being rebuilt), glance it ONCE for *coverage* — which topics exist — and record that role honestly; never inventory *how* it teaches and never treat it as a learn-from source. Authors build sources-closed from this idea layer, so do not transcribe expression. (Pedagogy spec §11.)
 - **Ask rather than guess** — if the source is missing or unreadable, say so honestly; genuine scope ambiguity → `needs_clarification: true` with `clarifying_questions` (never call `questionnaire` yourself).
 
 ## Blackboard protocol (wire — engine-consumed)

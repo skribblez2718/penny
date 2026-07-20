@@ -1,6 +1,6 @@
 # Plan Skill — Frontier Evaluation & Design Rationale
 
-> Companion to `flow.mmd`. Method: web research performed manually via the Playwright
+> Companion to `flow.html`. Method: web research performed manually via the Playwright
 > browser. Primary source fetched verbatim = Anthropic, *Building Effective Agents*
 > (Dec 19 2024) (`CERTAIN`). Classical planning (HTN methods, plan-and-solve,
 > tree-of-thought) cited from knowledge (`PROBABLE`).

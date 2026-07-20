@@ -1,5 +1,23 @@
 # Penny Index
 
+## Public repository boundary (invariant)
+
+Penny is a **public** repository. **No tracked file may reference the operator's
+filesystem or any specific downstream project.** The boundary:
+
+- **Penny = generic tools that hardcode nothing.** Skills and agents receive every path
+  (source, reference, output) from the caller as constraints at invocation; they assume
+  nothing about where content lives or what project they serve.
+- **The operator's project owns all specifics** — directory layout, source
+  corpus/manifest, build/upload steps, and any domain methodology. None of that belongs
+  in tracked Penny files.
+- **Penny's own root is `PROJECT_ROOT`** (`.env`). In code use `ctx.project_root`; in docs
+  and prompts write `$PROJECT_ROOT` — never a hardcoded absolute path.
+- **Operator-private inputs** (e.g. the rez résumé/accomplishments) are gitignored, never
+  committed.
+- `plans/`, `ideas/`, `research/` are **gitignored staging** for work-in-progress and may
+  hold specifics; nothing tracked may.
+
 ## Reading Documentation
 
 **Default discipline (most docs):** Read only files relevant to the current task. Do not greedily follow all index references — use the descriptions to identify the 1–2 features you need, then drill down.

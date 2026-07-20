@@ -1,0 +1,35 @@
+stateDiagram-v2
+    [*] --> intake
+    intake --> scoping: start_scope
+    intake --> ingesting: start_ingest (caller topology)
+    scoping --> ingesting: scope_done
+    ingesting --> designing_canon: ingest_done
+    designing_canon --> canon_gate: design_done
+    canon_gate --> storyboarding: gate_approve
+    canon_gate --> designing_canon: gate_refine
+    canon_gate --> error: gate_deny
+    storyboarding --> narrating: storyboard_done
+    narrating --> authoring: narrate_done (TOOL)
+    authoring --> authoring: author_next (per-scene self-loop)
+    authoring --> verifying: author_done
+    verifying --> fixing: verify_fix (violations + budget)
+    verifying --> critiquing: verify_clean
+    verifying --> packaging: verify_exhausted (met=False)
+    fixing --> verifying: fix_done (always re-verify)
+    critiquing --> fixing: critique_fix (budget remains)
+    critiquing --> packaging: critique_pass
+    critiquing --> packaging: critique_exhausted (met=False)
+    packaging --> complete: package_done
+    scoping --> unknown
+    ingesting --> unknown
+    designing_canon --> unknown
+    storyboarding --> unknown
+    authoring --> unknown
+    verifying --> unknown
+    fixing --> unknown
+    critiquing --> unknown
+    packaging --> unknown
+    unknown --> awaiting_clarification: escalate
+    awaiting_clarification --> designing_canon: clarify
+    complete --> [*]
+    error --> [*]

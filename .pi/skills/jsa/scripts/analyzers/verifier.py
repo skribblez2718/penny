@@ -442,11 +442,10 @@ class PythonVerifier:
         )
 
     def _load_reference_excerpt(self, vuln_class: str) -> str:
-        """Load reference catalog for a vuln class (truncated for context budget)."""
+        """Load the reference catalog for a vuln class (truncated for context budget).
+        The retired per-class worker prompts are no longer a fallback — the catalogs
+        are the single per-class knowledge source annie and the verifier read."""
         ref_path = self.prompts_dir.parent / "assets" / "references" / f"{vuln_class}.md"
-        if not ref_path.exists():
-            ref_path = self.prompts_dir / f"annie-{vuln_class}.md"
-
         if ref_path.exists():
             content = ref_path.read_text()
             # Truncate to first 3K chars (~750 tokens)

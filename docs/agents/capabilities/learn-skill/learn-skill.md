@@ -17,7 +17,7 @@ skill({ skill_name: "learn", goal: "Build a study companion for the quantum cour
         constraints: { source_dir: "/path/to/material" } })
 ```
 
-`constraints.source_dir` is required (`start()` raises without it). Optional: `output_dir` (default `<source_dir>/../study_materials`), `spec_docs`, `ingest_branches`, `max_fan_width`, `max_iterations`.
+`constraints.source_dir` is required (`start()` raises without it). Optional: `output_dir` (default `<source_dir>/../study_materials`), `source_registry` (the license-vetted corpus grounding the ≥2-sources clean-room discipline), `app_contract` (the target app's output contract), `spec_docs`, `audience`, `ingest_branches`, `max_fan_width`, `max_iterations`.
 
 ### Engine states (`LearnMachine`)
 
@@ -46,7 +46,7 @@ echo (ingest, READ-ONLY), annie (curriculum design + conventions canon), skribbl
 - [ ] Playbook tests pass: `python3 -m pytest apps/orchestration/tests/test_learn_playbook.py`
 - [ ] `LEARN_VERIFY`/`LEARN_CRITIQUE` reject empty evidence; `verify_evidence` lands in ctx + ledger
 - [ ] Ingest topology: caller override drives the fan; loan-ablated + no caller topology fails loud
-- [ ] `resources/flow.mmd` matches `LearnMachine` transition-for-transition
+- [ ] `resources/flow.html` matches `LearnMachine` transition-for-transition
 
 ## Files
 
@@ -54,5 +54,5 @@ echo (ingest, READ-ONLY), annie (curriculum design + conventions canon), skribbl
 |------|---------|
 | `apps/orchestration/src/orchestration/playbooks/learn.py` | `LearnPlaybook` FSM |
 | `.pi/skills/learn/assets/prompts/*.md` | Per-state domain guidance |
-| `.pi/skills/learn/resources/{pedagogy-spec,file-structure,flow.mmd}` | Teaching canon + diagram |
+| `.pi/skills/learn/resources/{pedagogy-spec,file-structure,flow.html}` | Teaching canon + diagram |
 | `research/atomic-loop-components/prds/learn-skill-revamp.md` | Compliance PRD |

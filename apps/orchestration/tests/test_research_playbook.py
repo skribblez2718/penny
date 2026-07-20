@@ -32,9 +32,12 @@ def cp(tmp_path):
     return Checkpointer(db_path=tmp_path / "orch.db")
 
 
-def _start(cp, goal=STANDARD_GOAL, constraints=None):
+_TEST_ROOT = "/tmp/penny-test"
+
+
+def _start(cp, goal=STANDARD_GOAL, constraints=None, project_root=_TEST_ROOT):
     return ResearchPlaybook(cp).start(
-        session_id=SID, run_id=RID, goal=goal, constraints=constraints or {}
+        session_id=SID, run_id=RID, goal=goal, constraints=constraints or {}, project_root=project_root
     )
 
 
@@ -136,7 +139,7 @@ def test_quick_happy_path_to_complete(cp):
     d = _step(cp, "vera", _validate("PASS", []))
     assert d["agent"] == "skribble" and d["state_id"] == "report_writing"
     expected_dir = str(
-        Path("~/projects/penny/research").expanduser() / "what-is-retrieval-augmented-generation"
+        Path(_TEST_ROOT) / "research" / "what-is-retrieval-augmented-generation"
     )
     assert expected_dir in d["task_summary"] and "~" not in d["task_summary"]
     d = _step(cp, "skribble", SKRIBBLE_OK)

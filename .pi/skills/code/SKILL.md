@@ -1,6 +1,6 @@
 ---
 name: code
-description: Write, refactor, or fix code — verified by passing tests at the applicable tiers, with security and coding-standard compliance built in. Use when the task requires implementing a feature, fixing a bug, or refactoring. Requires a PRD + IDEAL_STATE from the prd skill (hard dependency). Do not use when the change is fully specified and trivial (just do it), for pure planning or architecture work (the plan skill), or for non-code deliverables (skribble or synthia).
+description: Write, refactor, or fix code — verified by passing tests at the applicable tiers, with security and coding-standard compliance built in. Use when the task requires implementing a feature, fixing a bug, or refactoring; runs standalone or as a prd → code chain (a PRD + IDEAL_STATE is used when available, otherwise lightweight criteria are synthesized from the goal). Do not use when the change is fully specified and trivial (just do it), for pure planning or architecture work (the plan skill), or for non-code deliverables (skribble or synthia).
 license: MIT
 metadata:
   penny:
@@ -11,7 +11,7 @@ metadata:
 
 # Code Skill
 
-Ralph Wiggum Loop skill for coding tasks. Takes IDEAL STATE from the prd skill, explores context, analyzes risks, plans implementation, writes code and its tests, verifies output, and iterates until IDEAL STATE is achieved.
+Ralph Wiggum Loop skill for coding tasks. Works from an IDEAL STATE — supplied by the prd skill when chained, or synthesized from the goal when run standalone — then explores context, analyzes risks, plans implementation, writes code and its tests, verifies output, and iterates until the IDEAL STATE is achieved.
 
 ## When to Use
 
@@ -23,19 +23,19 @@ Ralph Wiggum Loop skill for coding tasks. Takes IDEAL STATE from the prd skill, 
 
 ## When Not to Use
 
-- The user has not yet defined what to build (invoke `prd` skill first)
+- The goal is too vague to synthesize criteria from — run `prd` first (recommended, not required)
 - Simple text edits or one-line file changes (execute directly)
 - Pure exploration or research questions (use `echo` agent directly)
 - User explicitly says "just do it" without a clear specification
 
-## PRD Dependency (Hard)
+## PRD / IDEAL_STATE (Optional)
 
-The code skill requires a complete PRD + IDEAL_STATE from the `prd` skill before it can run. `start()` resolves the IDEAL_STATE from `constraints` two ways:
+The code skill **uses** a PRD + IDEAL_STATE when one is available, but does **not** require it — it runs standalone or as a `prd → code` chain. `start()` resolves an IDEAL_STATE from `constraints` two ways:
 
 - **Direct** — `constraints.ideal_state` is a dict carrying `success_criteria`.
 - **Chain fallback** — `constraints.prd_room` is a room id of the form `"skills/prd-…"`; the skill looks that drawer up in MemPalace (the prd skill writes IDEAL_STATE there).
 
-If neither yields an IDEAL_STATE with `success_criteria`, `start()` raises with chain-contract instructions and the run terminates.
+If neither yields an IDEAL_STATE with `success_criteria`, `start()` synthesizes lightweight criteria from the goal (`ideal_state_from_goal`) and proceeds — carren still judges and refines them in `checking_criteria`, and the verify/test battery remains the real acceptance bar. The quality loop stays; only the PRD mandate is optional.
 
 ### Chain Contract
 
@@ -148,7 +148,7 @@ When carren reports no gap in `learning`, the skill runs one final `verifying` p
 
 ## Input Contract
 
-`start()` reads the IDEAL_STATE from `constraints` (see **PRD Dependency** above): either `constraints.ideal_state` directly, or `constraints.prd_room` (`"skills/prd-…"`), which is resolved against the following mempalace drawers written by the prd skill:
+`start()` reads the IDEAL_STATE from `constraints` (see **PRD / IDEAL_STATE (Optional)** above): either `constraints.ideal_state` directly, or `constraints.prd_room` (`"skills/prd-…"`), which is resolved against the following mempalace drawers written by the prd skill. When neither is supplied, `start()` synthesizes the criteria from the goal instead:
 
 | Drawer | Source Skill | Content |
 |--------|-------------|---------|
@@ -172,24 +172,24 @@ Before any code is written (implement state):
 - `resources/python.md` — Python coding standards
 - `resources/typescript.md` — TypeScript coding standards
 - `resources/security-checklist.md` — Mandatory pre-code security review
-- `resources/server-startup-tests.md` — **Mandatory** server-startup integration-test checklist for any project that ships a server (FastAPI, Flask, Express, etc.). The verify phase will fail if these tests are missing.
+- `resources/server-startup-tests.md` — proven server-startup test patterns (a reference to draw on) for any project that ships a server (FastAPI, Flask, Express, etc.). The verify phase fails if the server-startup **outcomes** aren't demonstrated by evidence.
 - `resources/ai-application.md` — **Auto-injected** when AI framework imports detected (transformers, openai, langchain, etc.). Covers generation parameters, streaming patterns, system prompt design, model loading, hardware detection, context windows.
 - `resources/web-ui.md` — **Auto-injected** when web UI framework detected (Lit, React, etc.). Covers CSS selector hygiene, theme system interaction, state synchronization, UI patterns, framework-specific gotchas.
 - `resources/resilience.md` — **Always injected**. Language-agnostic defensive patterns: error-boundary state, garbage collection, loading UX, idempotency, graceful degradation.
 
 ## Server-Project Verification (Mandatory)
 
-If the project is a server (detected by inspecting `pyproject.toml`, `package.json`, or source-file imports for FastAPI / Flask / Express / etc.), the orchestrator automatically enables an additional verification tier: **`verification.server_startup`**. The plan, implement, and verify phases all gain server-specific instructions:
+If the project is a server, the orchestrator automatically enables an additional verification tier: **`verification.server_startup`**. Detection is **model-first** when `PI_CODE_DETECT_MODEL` is set (a cheap model names the framework from the project manifests — open-vocabulary, so it catches frameworks no table lists); it falls back to a dependency-manifest / source-import scan (FastAPI / Flask / Express / etc.) when the model is off or unavailable. The plan, implement, and verify phases all gain server-specific instructions:
 
-- **plan** — piper's plan must include a server-startup integration-test phase.
-- **implement** — skribble is given an explicit four-category checklist it must satisfy: (1) real server, real HTTP, (2) entry-point-script-from-its-own-directory, (3) CORS preflight if applicable, (4) end-to-end happy path.
-- **verify** — skribble must explicitly check for tests in all four categories and FAIL verification if any are missing. Unit tests alone are not sufficient for a server project.
+- **plan** — piper plans the test strategy that will prove the server-startup outcomes.
+- **implement** — skribble is given the server-startup **outcomes** that must hold (real server serves real HTTP; each entry-point's import chain holds from its own cwd; CORS preflight correct if applicable; a happy path runs end-to-end) plus `resources/server-startup-tests.md` as a proven-pattern reference — the test shape is the model's call.
+- **verify** — skribble must confirm each outcome is **demonstrated by captured evidence** and FAIL verification for any outcome not proven. Passing unit tests alone do not satisfy a server project.
 
-This is enforced, not optional. Unit tests with mocked framework classes consistently miss a class of real-world bugs (CORS misconfiguration, import-chain breakage when cwd changes, port conflicts, lifespan-event typos). See `resources/server-startup-tests.md` for the full rationale and copy-pastable patterns.
+The outcomes are enforced by evidence, not by a fixed checklist of test names. Unit tests with mocked framework classes consistently miss a class of real-world bugs (CORS misconfiguration, import-chain breakage when cwd changes, port conflicts, lifespan-event typos), which is why the functional/server tier is required. See `resources/server-startup-tests.md` for the full rationale and copy-pastable patterns.
 
 ## IDEAL STATE Validation
 
-The IDEAL STATE is produced and validated by the prd skill. The code skill assumes it is valid on arrival — `start()` only checks that it carries `success_criteria`, and enriches its `verification` block with server-startup detection before exploring begins.
+When supplied by the prd skill, the IDEAL STATE is already validated there, so the code skill assumes it is valid on arrival. When absent, `start()` synthesizes an IDEAL STATE from the goal. Either way, `start()` only checks that it carries `success_criteria`, and enriches its `verification` block with server-startup detection before exploring begins.
 
 ## Outcome Capture
 

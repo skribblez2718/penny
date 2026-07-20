@@ -107,7 +107,7 @@ does not escalate.
 ## Output
 
 `report_writing` writes to the absolute path
-`~/projects/penny/research/<sanitized-topic>` (expanded), producing `report.md`,
+`$PROJECT_ROOT/research/<sanitized-topic>`, producing `report.md`,
 `sources.md`, and `README.md`. The run completes honestly: if the write fails,
 `done_predicate` returns false and the result reports `met: false` rather than
 fabricating success.
@@ -123,7 +123,7 @@ Embedded in Echo's domain guidance (`assets/prompts/echo.md`):
 ## Reference
 
 - `resources/reference.md` — full state/transition/gate tables.
-- `resources/flow.mmd` — the FSM as a Mermaid state diagram (edge-for-edge with
-  the playbook).
+- `resources/flow.html` — the FSM as a self-contained state diagram (edge-for-edge
+  with the playbook).
 - `resources/research-frontier-evaluation.md` — the deep-research design
   rationale.

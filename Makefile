@@ -1,4 +1,4 @@
-.PHONY: setup venv install-py install-js init sca-tools clean test test-integration lint format evals evals-update-baseline rate auto-capture trust trajectory review tune tune-deep
+.PHONY: setup venv install-py install-js init sca-tools clean test test-integration check-public lint format evals evals-update-baseline rate auto-capture trust trajectory review tune tune-deep
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 
@@ -47,6 +47,9 @@ test:
 	@echo ""
 	@echo "==================== orchestration CI guards ===================="
 	@.venv/bin/python scripts/system/checks/check_orchestration_guards.py
+	@echo ""
+	@echo "==================== public-boundary guard ===================="
+	@.venv/bin/python scripts/system/checks/check_public_boundary.py
 	@echo ""
 	@echo "==================== eval compat guards ===================="
 	@.venv/bin/python scripts/system/evals/run_evals.py --sections compat --quiet --no-history
@@ -154,6 +157,11 @@ tune:
 # no --models/--driver-model/--judge-model flags. Sequential, best-effort.
 tune-deep:
 	@.venv/bin/python scripts/system/evals/tune_freshness.py
+
+# Public-boundary guard: fail if a tracked file reintroduces an operator-filesystem path
+# (enforces the AGENTS.md "Public repository boundary" invariant; also runs inside `make test`).
+check-public:
+	@.venv/bin/python scripts/system/checks/check_public_boundary.py
 
 lint:
 	bun run lint

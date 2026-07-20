@@ -16,7 +16,6 @@ class CORSAnalyzer(VulnerabilityAnalyzer):
     def get_source_sink_pairs(self) -> list[SourceSink]: return [SourceSink("Overly permissive CORS",["Origin header"],["Access-Control-Allow-Origin: *","Access-Control-Allow-Origin: null","Reflected Origin","Allow-Credentials: true + wildcard"],"medium","CWE-942")]
     def get_semgrep_rulesets(self) -> list[str]: return ["p/javascript","p/security-audit"]
     def get_custom_scanners(self) -> list[str]: return []
-    def get_analysis_guide(self) -> str: return self._load_prompt("annie-cors.md")
     def get_payload_templates(self) -> list[PayloadTemplate]: return []
     def get_verification_procedure(self,f:dict) -> str: return "Send cross-origin request -> check CORS response headers -> test with credentials"
     def assess_exploitability(self,f:dict) -> dict: return {"exploitable":True,"difficulty":"low","preconditions":["CORS allows arbitrary origins with credentials"]}

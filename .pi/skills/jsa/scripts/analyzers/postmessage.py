@@ -13,7 +13,6 @@ class PostMessageAnalyzer(VulnerabilityAnalyzer):
     def get_source_sink_pairs(self) -> list[SourceSink]: return [SourceSink("event.data->execution",["event.data","MessageEvent.data"],["innerHTML","eval()","document.write","new Function()"],"high","CWE-20"),SourceSink("Missing origin check",["addEventListener('message')"],["event.data->any sink without origin validation"],"high","CWE-345")]
     def get_semgrep_rulesets(self) -> list[str]: return ["p/javascript"]
     def get_custom_scanners(self) -> list[str]: return ["postmessage_scanner"]
-    def get_analysis_guide(self) -> str: return self._load_prompt("annie-postmessage.md")
     def get_payload_templates(self) -> list[PayloadTemplate]: return [PayloadTemplate("pm","postMessage XSS","<img src=x onerror=alert(1)>",target_context="html")]
     def get_verification_procedure(self,f:dict) -> str: return "From attacker origin, postMessage payload -> check execution"
     def assess_exploitability(self,f:dict) -> dict: return {"exploitable":True,"difficulty":"low","preconditions":["Attacker can frame target"]}

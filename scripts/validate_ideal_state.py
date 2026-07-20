@@ -67,7 +67,11 @@ class IdealState(BaseModel):
     )
     
     build_order: list[str] = Field(
-        default_factory=list, description="Implementation sequence, dependencies first"
+        default_factory=list,
+        description=(
+            "Dependency-ordering constraints (which deliverables block others) — "
+            "a non-binding hint, not a prescribed step sequence"
+        ),
     )
 
 

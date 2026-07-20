@@ -1,7 +1,7 @@
 # Karpathy Coding Methodology — Synthesis & Design Rationale
 
 > Purpose: the durable justification for the `code`-skill flow diagram in this
-> directory (`flow.mmd`). It describes the actual `CodeMachine` FSM — ONE
+> directory (`flow.html`). It describes the actual `CodeMachine` FSM — ONE
 > `BasePlaybook` subclass (`orchestration.playbooks.code:CodePlaybook`) with
 > custom-named states — that the code skill now runs on the shared orchestration
 > engine. (An earlier `flow.v2.mmd` sketched a never-built "composable primitive
@@ -67,7 +67,7 @@ Verbatim from S1 (`CERTAIN`):
 Five operational directives fall out of this one paragraph:
 
 1. **Declarative, not imperative** — hand the agent success criteria, not step-by-step instructions.
-2. **Success criteria == verification criteria** — the same artifact written once, checked at the end. (This is exactly Penny's existing `prd` `IDEAL_STATE`, which the code skill consumes as a hard dependency.)
+2. **Success criteria == verification criteria** — the same artifact written once, checked at the end. (This is exactly Penny's existing `prd` `IDEAL_STATE`, which the code skill consumes when available — synthesized from the goal otherwise.)
 3. **Tests first, then pass them** — Karpathy explicitly endorses tests-first *as the encoding of the criteria*, not as per-line ceremony.
 4. **Naive-correct first, then optimize preserving correctness** — a two-beat ACT: get it green simply, *then* optimize with the green battery as the guardrail.
 5. **Loop with real execution** ("browser MCP") — verification must include a **functional/e2e** tier, not just unit mocks. `PROBABLE` link to S3: keep the generation↔verification loop fast.
@@ -127,12 +127,12 @@ two review gates that target Karpathy's documented failure modes.
 
 ## 5. Mapping to the CodeMachine FSM
 
-`flow.mmd` encodes §4 as ONE `BasePlaybook` subclass (`CodePlaybook`) with
+`flow.html` encodes §4 as ONE `BasePlaybook` subclass (`CodePlaybook`) with
 custom-named states — not a composition of primitive skills, and not a separate
 `build-cycle` playbook. The table below traces each Karpathy concern to where it
 lands in the real graph.
 
-| Concern | Where it lands in `flow.mmd` / `CodeMachine` |
+| Concern | Where it lands in `flow.html` / `CodeMachine` |
 |---|---|
 | Unit of orchestration | one `CodePlaybook` (a `BasePlaybook` subclass) on the shared engine |
 | States | custom domain phases: `exploring`/`analyzing`/`checking_criteria`/`planning`/`implementing`/`verifying`/`learning` |

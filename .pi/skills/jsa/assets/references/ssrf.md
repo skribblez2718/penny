@@ -211,6 +211,7 @@ http://localhost%23.evil.com/        # Fragment bypass
 | `axios.get(\`https://api.stripe.com/v1/${endpoint}\`)` | Fixed domain, variable path | Not SSRF if domain is hardcoded |
 | `new URL(userInput)` for validation only | URL parsed but never fetched | Check that `href`/`toString()` reaches a sink |
 | `req.get('host')` used in redirect | Not user input — it's request header | `Host` header is user-controlled but context matters |
+| URL only used client-side (`fetch`/XHR in the browser), never sent to a server fetcher | Browser SSRF ≠ server SSRF — hits the victim's own browser/origin | Confirm the URL never reaches a backend `/proxy`-style endpoint |
 
 ---
 
@@ -226,10 +227,13 @@ grep -nE 'url\.parse\(|new URL\(|url\.format\(' file.js
 
 # Cloud metadata endpoints
 grep -nE '169\.254\.169\.254|metadata\.google\.internal' file.js
+
+# SSRF-prone API endpoint / param names (server fetches a user-supplied URL)
+grep -nE '/proxy|/fetch|/fetch-url|/preview|/thumbnail|/import|/webhook|url=|target=|path=' file.js
 ```
 
 ### Multi-Step Chain Detection
-1. **Source:** User input → `req.query.url`, `req.body.url`, `req.params.path`
+1. **Source:** User input → `req.query.url`, `req.body.url`, `req.params.path`; client-side → `location.search`, `URLSearchParams`, `postMessage` data, `localStorage`
 2. **Validation gap:** Check for allowlist validation, protocol restrictions, IP filtering
 3. **Sink:** HTTP request to user-controlled URL
 4. **Red flags:** URL concatenation, missing protocol enforcement, no IP allowlisting

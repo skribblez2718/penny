@@ -98,13 +98,15 @@ class VulnerabilityAnalyzer(ABC):
     
     # ── Analysis Guide ──
     
-    @abstractmethod
     def get_analysis_guide(self) -> str:
-        """
-        Return the analysis guide markdown for the worker agent.
-        This is injected as skillContext in the worker's system prompt.
-        """
-        ...
+        """Per-class analysis guidance = the reference catalog annie and the
+        deterministic verifier read (``assets/references/<vuln_class>.md``, the
+        harvested superset of the retired per-class worker prompts). Graceful stub
+        if the catalog is absent (never raises)."""
+        catalog = _PROMPTS_DIR.parent / "references" / f"{self.vuln_class}.md"
+        if catalog.exists():
+            return catalog.read_text()
+        return f"# {self.display_name}\n\nAnalyze code for {self.vuln_class} vulnerabilities.\n"
     
     # ── Pre-Filtering ──
     
@@ -159,13 +161,6 @@ class VulnerabilityAnalyzer(ABC):
         ...
     
     # ── Helpers ──
-    
-    def _load_prompt(self, prompt_name: str) -> str:
-        """Load a prompt file from assets/prompts/."""
-        path = _PROMPTS_DIR / prompt_name
-        if path.exists():
-            return path.read_text()
-        return f"# {self.display_name}\n\nAnalyze code for {self.vuln_class} vulnerabilities.\n"
     
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(vuln_class={self.vuln_class})"

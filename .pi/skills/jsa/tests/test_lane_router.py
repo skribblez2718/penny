@@ -145,9 +145,14 @@ class TestHelperFunctions:
 
 class TestLaneRouterMatchesImplementation:
     """Drift guard: the lane router's analyzer set MUST equal the actual analyzer
-    implementations AND the specialist prompts (they are 1:1:1). This is what
-    prevents the router from silently omitting a class (or inventing a phantom
-    one) again."""
+    implementations AND the per-class reference catalogs (they are 1:1:1). This is
+    what prevents the router from silently omitting a class (or inventing a phantom
+    one) again.
+
+    NOTE: the per-class *worker prompts* (assets/prompts/annie-<class>.md) were
+    retired — their knowledge was harvested into the reference catalogs, which is
+    what annie actually reads (the INVESTIGATE task names assets/references/<class>.md
+    per candidate class). The catalogs are therefore the correct 1:1 drift target."""
 
     _SKILL = Path(__file__).parent.parent
 
@@ -155,22 +160,17 @@ class TestLaneRouterMatchesImplementation:
         d = self._SKILL / "scripts" / "analyzers"
         return {p.stem for p in d.glob("*.py") if p.stem not in ("__init__", "base", "verifier")}
 
-    def _prompt_classes(self):
-        d = self._SKILL / "assets" / "prompts"
-        skip = {"base", "cve", "agent-review", "sast-validate"}
-        classes = set()
-        for p in d.glob("annie-*.md"):
-            cls = p.stem[len("annie-"):]
-            if cls not in skip:
-                classes.add(cls)
-        return classes
+    def _reference_classes(self):
+        d = self._SKILL / "assets" / "references"
+        return {p.stem for p in d.glob("*.md") if p.stem != "INDEX"}
 
     def test_lane_set_matches_analyzer_implementations(self):
         # True 1:1:1 — every routed class has an analyzer file and vice versa.
         assert set(get_all_analyzers()) == self._analyzer_impls()
 
-    def test_lane_set_matches_specialist_prompts(self):
-        assert set(get_all_analyzers()) == self._prompt_classes()
+    def test_lane_set_matches_reference_catalogs(self):
+        # Every routed class has a reference catalog annie reads, and vice versa.
+        assert set(get_all_analyzers()) == self._reference_classes()
 
 
 class TestSelectLane:

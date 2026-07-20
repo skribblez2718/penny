@@ -39,11 +39,13 @@ For each `edge_case` in IDEAL STATE:
 - Are expected test failures documented with reasons?
 - Is the reason for each expected failure valid (genuine unmet dependency vs. bug)?
 
-### 6. Code Quality
-- Does the code follow language conventions?
-- Is it DRY? (no duplication)
-- Is it self-documenting?
-- Are error cases handled?
+### 6. Maintainability (DRY + simple functions)
+Flag only concrete, locatable issues — not taste. These are the ones that make code error-prone and costly to change:
+- **Duplicated logic (DRY):** the same non-trivial logic appears in 2+ places and should be a single source of truth — cite the duplicated blocks.
+- **Convoluted functions:** a function is large / deeply nested / doing several unrelated jobs enough that changing it is error-prone or hard to follow — name the function and what to decompose.
+- **Unhandled error cases / bare except-pass** on a path that can realistically fail.
+- **Language-convention violations** the project's own standards/linter define.
+Cite the specific location and the concrete harm. A vague "could be cleaner" is NOT a gap — only concrete, locatable issues are.
 
 ## Decision: GAP or COMPLETE?
 
@@ -54,7 +56,7 @@ Any of:
 - Edge cases unhandled
 - Security gaps unaddressed
 - Tests failing (excluding documented expected failures)
-- Code quality below standard
+- Maintainability issue with a cited location (DRY duplication, or a convoluted/multi-responsibility function that makes change error-prone)
 
 Specify WHAT is missing so skribble knows what to fix.
 
@@ -66,7 +68,7 @@ All of:
 - Security review compliant
 - All applicable tests pass
 - Expected failures documented with valid reasons
-- Code quality meets standards
+- No cited DRY/complexity issues remain (logic deduplicated; functions single-purpose)
 
 ## Verdict
 

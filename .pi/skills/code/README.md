@@ -3,8 +3,8 @@
 ## Overview
 
 - **Purpose**: Test-verified coding skill using the Ralph Wiggum Loop. Always invoked for code generation, refactoring, or bug fixes. Uses skribble for implementation with mandatory security and coding standard compliance.
-- **Hard Dependency**: Requires PRD + IDEAL_STATE from the `prd` skill. Use chain mode: `skill({ chain: [{ skill_name: "prd", ... }, { skill_name: "code", ... }] })`.
-- **Use When**: Multi-step process requiring code orchestration after a PRD has been written
+- **PRD (optional)**: Uses a PRD + IDEAL_STATE from the `prd` skill when available; otherwise synthesizes lightweight criteria from the goal. Runs standalone, or as a chain: `skill({ chain: [{ skill_name: "prd", ... }, { skill_name: "code", ... }] })`.
+- **Use When**: Multi-step process requiring code orchestration (with or without a preceding PRD)
 - **Outcome**: Validated implementation matching the IDEAL STATE from the PRD
 
 ## State Machine
@@ -26,9 +26,9 @@ Terminal: complete, error
 Escalation: <working state incl. learning> → unknown → awaiting_clarification → exploring
 ```
 
-Entry point is `exploring`. The `prd` skill handles intake and specification
-(IDEAL_STATE), a hard dependency resolved by `start()`. See
-`resources/flow.mmd` for the full mermaid diagram.
+Entry point is `exploring`. When chained, the `prd` skill handles intake and
+specification (IDEAL_STATE), which `start()` resolves; run standalone, `start()`
+synthesizes it from the goal. See `resources/flow.html` for the full diagram.
 
 ## Subagents Used
 
@@ -57,7 +57,7 @@ Entry point is `exploring`. The `prd` skill handles intake and specification
 | `scripts/orchestrate.py` | Thin delegate routing `start`/`step`/`status`/`recover` to the orchestration engine |
 | `assets/prompts/*.md` | Domain Guidance for subagents |
 | `resources/reference.md` | Technical reference |
-| `resources/flow.mmd` | Pure Mermaid state diagram |
+| `resources/flow.html` | Self-contained state diagram (dark HTML) |
 
 The FSM itself lives in `apps/orchestration/src/orchestration/playbooks/code.py`
 (and `code_detection.py` for server-framework detection).
@@ -76,3 +76,4 @@ pytest apps/orchestration/tests/test_code_detection.py -v
 - **1.0.0** — Initial scaffold
 - **2.0.0** — Removed intake/define_specs; PRD skill is now a hard dependency. Explore is the entry point.
 - **3.0.0** — Migrated onto the shared orchestration engine. `scripts/orchestrate.py` is now a thin delegate; the FSM lives in `orchestration.playbooks.code:CodePlaybook`. State persists in the engine's durable checkpointer (no `--state-data`).
+- **3.1.0** — PRD/IDEAL_STATE is now **optional**: standalone runs synthesize criteria from the goal (`ideal_state_from_goal`); `code` runs independently or as a `prd → code` chain. Flow diagram migrated to self-contained `resources/flow.html`.

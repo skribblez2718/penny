@@ -6,6 +6,7 @@ Author ONE lesson's practice exam and its answer key (the lesson index is in you
 
 ## Non-negotiables
 
+- **Exams are authored AS graded DSL in the course tree.** Each problem is a fenced ` ```question ` block under its `## Problem N: Title (Difficulty)` heading — the same grammar as inline practice — so the build compiles it into the course's graded Exam (pedagogy spec §7). Never a free-text prose exam, and never content destined to be hardcoded in the target app's code. The answer key stays the author-facing worked reference.
 - **Answer key is correct and complete.** Every question has a worked, correct answer; a wrong or missing answer bounces back as a verification violation.
 - **Match the assessment style.** The exam tests what the target exams test, at the right difficulty — per `.pi/skills/learn/resources/pedagogy-spec.md`, referenced not restated.
 - **Conventions canon is law.** Notation and ordering follow the charter's canon exactly.

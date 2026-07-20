@@ -311,10 +311,26 @@ def _room(ctx: RunContext) -> str:
 
 def _paths(ctx: RunContext) -> str:
     learn = ctx.extras.get("learn", {})
-    return (
-        f"Source material: {learn.get('source_dir', '(see constraints)')}. "
-        f"Output directory: {learn.get('output_dir', '(see constraints)')}."
-    )
+    parts = [
+        f"Source material: {learn.get('source_dir', '(see constraints)')}.",
+        f"Output directory: {learn.get('output_dir', '(see constraints)')}.",
+    ]
+    # Caller-provided, external, optional. Surfaced only when present so omitting them
+    # leaves the task prompt (and existing behaviour) unchanged.
+    registry = learn.get("source_registry", "")
+    if registry:
+        parts.append(
+            f"Source registry (caller-provided license-vetted corpus in the course dir): "
+            f"{registry} — build understanding from ≥2 independent sources per non-trivial "
+            f"concept, author sources-closed, and log provenance."
+        )
+    contract = learn.get("app_contract", "")
+    if contract:
+        parts.append(
+            f"Target-app output contract (caller-provided, in the app's own repo): {contract} "
+            f"— emit graded practice and interactive exhibits to that app's DSL/format."
+        )
+    return " ".join(parts)
 
 
 def _build_scope(pb: "LearnPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
@@ -511,15 +527,25 @@ class LearnPlaybook(BasePlaybook):
             raise RuntimeError(
                 "learn skill requires constraints.source_dir — the directory holding "
                 "the raw learning material (transcripts, slides, notebooks, chapters). "
-                "Optionally pass constraints.output_dir (default: <source_dir>/../study_materials) "
-                "and constraints.spec_docs (existing teaching-approach/spec docs to reuse)."
+                "Optionally pass constraints.output_dir (default: <source_dir>/../study_materials), "
+                "constraints.source_registry (the license-vetted source corpus/manifest for "
+                "clean-room grounding + the derivation handoff), constraints.app_contract (the "
+                "target app's output conventions), and constraints.spec_docs (teaching-approach "
+                "docs to reuse). All are caller-provided EXTERNAL paths; the skill hardcodes none."
             )
         output_dir = str(ctx.constraints.get("output_dir", "")).strip() or (
             source_dir.rstrip("/") + "/../study_materials"
         )
+        # Optional, caller-provided, EXTERNAL locations (the skill hardcodes none):
+        #   source_registry — the license-vetted source corpus/manifest for this course
+        #     (clean-room grounding + the `derivation` handoff), in the course dir.
+        #   app_contract    — the target app's output conventions (DSL/sims/build), in the
+        #     app's OWN repo. Omitted → inert (guides fall back to generic markdown practice).
         ctx.extras["learn"] = {
             "source_dir": source_dir,
             "output_dir": output_dir,
+            "source_registry": str(ctx.constraints.get("source_registry", "")).strip(),
+            "app_contract": str(ctx.constraints.get("app_contract", "")).strip(),
             "authored": 0,
             "assessed": 0,
         }

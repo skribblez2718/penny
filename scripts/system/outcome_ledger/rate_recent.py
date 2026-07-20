@@ -337,7 +337,18 @@ def main() -> int:
         if con is None:
             print(json.dumps({"error": "no observability db"}))
             return 1
-        did = record_rating(con, args.session, args.verdict, args.reason, args.failure_mode)
+        # Pass existing_ids so a true double-record (same session re-rated -> same
+        # decision_id) is deduped via the stable decision_id, matching the
+        # interactive and auto_capture paths. quiet=True keeps the read-error
+        # notice off stdout so it can't corrupt this branch's JSON output.
+        did = record_rating(
+            con,
+            args.session,
+            args.verdict,
+            args.reason,
+            args.failure_mode,
+            existing_ids=_safe_existing_ids(True),
+        )
         print(json.dumps({"decision_id": did} if did else {"error": "bad verdict or duplicate"}))
         return 0 if did else 1
 

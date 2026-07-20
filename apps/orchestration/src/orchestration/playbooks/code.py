@@ -4,7 +4,8 @@ A faithful behavioral port of the legacy 1895-line ``.pi/skills/code`` orchestra
 onto ``BasePlaybook``: custom-named states (exploring→analyzing→checking_criteria
 →[criteria_gate]→planning→plan_gate→implementing→verifying⇄learning), per-state
 SUMMARY contracts, the implement⇄verify Ralph-Wiggum loop, both HITL gates on the
-engine's planned-gate seam, and the PRD hard dependency enforced at start().
+engine's planned-gate seam, and an OPTIONAL PRD/IDEAL_STATE resolved at start()
+(present → its criteria drive the run; absent → criteria are synthesized from the goal).
 
 Two deliberate behavior fixes vs. the legacy runtime (which routed on an imperative
 walk, not its dead declared FSM): plan-deny now terminates in ``error`` instead of a
@@ -17,6 +18,7 @@ detection and the rich per-state prompts — is preserved verbatim (detection in
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from typing import Any
@@ -29,7 +31,7 @@ from ..primitives.spec import PrimitiveSpec
 from . import code_detection
 
 # ---------------------------------------------------------------------------
-# PRD hard dependency
+# PRD dependency (OPTIONAL) — IDEAL_STATE resolution
 # ---------------------------------------------------------------------------
 
 
@@ -153,7 +155,13 @@ def load_ideal_state(constraints: dict, project_root: str) -> dict | None:
             import chromadb  # lazy: only the chain-fallback path needs it
             from pathlib import Path
 
-            client = chromadb.PersistentClient(path=str(Path(project_root or ".") / ".mempalace"))
+            # Mempalace is Penny-global: it ALWAYS anchors to the constant
+            # $PROJECT_ROOT (.env), never the per-run target project_root a skill
+            # operates on (that points at the work repo, e.g. a downstream app).
+            # Mirrors checkpointer/outcome_writer/recall. Deriving the path from the
+            # passed project_root looks in the wrong (or a nonexistent) .mempalace.
+            penny_root = os.environ.get("PROJECT_ROOT") or project_root or "."
+            client = chromadb.PersistentClient(path=str(Path(penny_root) / ".mempalace"))
             try:
                 drawers = client.get_collection("mempalace_drawers")
             except Exception:
@@ -177,13 +185,28 @@ def load_ideal_state(constraints: dict, project_root: str) -> dict | None:
     return None
 
 
-_PRD_DEPENDENCY_ERROR = (
-    "PRD dependency not satisfied: the code skill requires a complete IDEAL_STATE "
-    "from the prd skill before it can run. Invoke code as part of a chain: "
-    "skill({ chain: [ { skill_name: 'prd', goal: '<goal>' }, "
-    "{ skill_name: 'code', goal: '<goal>' } ] }). The prd skill writes IDEAL_STATE "
-    "to mempalace room skills/prd-{session_id}/, which the code skill reads on startup."
-)
+def ideal_state_from_goal(goal: str) -> dict:
+    """Synthesize a minimal IDEAL_STATE from the run goal when NO PRD is present.
+
+    The PRD is OPTIONAL. With one, its criteria drive the run; without one, the
+    skill runs in goal-driven mode from these synthesized criteria. carren still
+    judges/refines them at the criteria gate, and the implement<->verify test
+    battery remains the real acceptance bar — so dropping the PRD mandate keeps the
+    quality loop, it only removes the ceremony.
+    """
+    goal = (goal or "").strip()
+    return {
+        "success_criteria": [
+            f"The goal is fully implemented as stated: {goal}"
+            if goal
+            else "The stated goal is fully implemented.",
+            "New and changed behavior is covered by tests that pass at the applicable tiers.",
+            "The change follows the repository's coding standards and introduces no regressions.",
+        ],
+        "deliverables": [],
+        "verification": {},
+        "_synthesized_from_goal": True,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -424,10 +447,14 @@ def _server_plan_block(ideal: dict) -> str:
     framework = verification.get("server_framework", "server")
     entry_points = verification.get("server_entry_points", [])
     return (
-        f"\n\nSERVER-STARTUP TEST PLAN (REQUIRED):\n"
-        f"This project ships a {framework} server. The implementation phase MUST include an integration test that actually starts the server in a background thread (or subprocess) and makes real HTTP requests against it. Mock heavy dependencies (databases, model downloads, third-party APIs) but use the real framework, real middleware, real CORS, real startup, and real handlers. See `.pi/skills/code/resources/server-startup-tests.md` for the mandatory checklist.\n"
+        f"\n\nSERVER-STARTUP OUTCOMES (this project ships a {framework} server):\n"
+        f"A server project is only 'done' when these outcomes are demonstrated by real evidence in the verify phase — plan the test strategy that PROVES them (the exact shape of the tests is yours):\n"
+        f"\n- The real {framework} server boots (background thread or subprocess) and serves real HTTP: representative endpoints return their expected status/body with the real framework, middleware, CORS, startup, and handlers (heavy deps like model downloads / databases / third-party APIs may be mocked).\n"
+        f"- Each entry-point script runs from its own working directory with its import chain intact (the class of cwd / sys.path bugs unit tests miss).\n"
+        f"- If the server uses CORS, a browser-origin preflight returns the correct access-control headers.\n"
+        f"- At least one real happy-path flow runs end-to-end through the running server.\n"
         f"\nEntry points to cover: {entry_points if entry_points else '(auto-detect during implement)'}\n"
-        f"The plan must include: (1) server-startup integration test, (2) entry-point-script-from-its-own-dir test, (3) CORS preflight test if applicable. These are NON-NEGOTIABLE for server projects — the orchestrator's verify phase will fail if any are missing."
+        f"`.pi/skills/code/resources/server-startup-tests.md` has proven, copy-pastable patterns for each — use it as a reference, not a script. These outcomes are checked by evidence in verify; passing unit tests alone do not satisfy them."
     )
 
 
@@ -457,16 +484,14 @@ def _server_implement_block(ideal: dict) -> str:
         else "   (no specific entry points detected — locate by inspection)"
     )
     return (
-        f"\n\nSERVER-STARTUP TEST REQUIREMENTS (MANDATORY for {framework}):\n"
-        f"This project ships a {framework} server. The orchestrator's verify phase will fail if the test suite does not contain tests that actually start the server. You MUST add the following test categories to the test plan and write them as part of this iteration:\n"
-        f"\n1. SERVER-STARTUP INTEGRATION TEST: A real uvicorn/Flask/Node server boots in a background thread (or subprocess) with HEAVY DEPS MOCKED (model downloads, databases, third-party APIs). The test makes real HTTP requests against the live server and asserts the expected status codes / response bodies for representative endpoints (e.g. /health, /, one business endpoint). This catches issues that unit tests with mocks cannot: misconfigured middleware, CORS, startup hooks, lifespan events, port conflicts.\n"
-        f"\n2. ENTRY-POINT SCRIPT TEST (CRITICAL — this is a recurring bug class):\n"
-        f"   - For each entry point listed below, run the script as a SUBPROCESS from inside its own directory and verify the import chain works. Many runners (uvicorn --reload wrappers, CLI tools, and bundler dev servers) change cwd to the script's directory before importing, so `from sibling_pkg import ...` silently breaks unless the script itself puts the project root on sys.path.\n"
-        f"   - Add a test that does exactly this: subprocess.run([sys.executable, '-c', '<driver code that imports the entry point and exercises its imports>'], cwd=os.path.dirname(entry_point), check=True). If the script needs PYTHONPATH set, the test should set it; but ideally the production script itself handles sys.path.\n"
-        f"   - Entry points to cover:\n{entry_list}\n"
-        f"\n3. CORS / ORIGIN PREFLIGHT TEST (if the server has CORS): make an OPTIONS request from a representative browser origin and assert the access-control-allow-origin header is present and correct.\n"
-        f"\n4. FULL UNITS-OF-WORK TEST: at least one test exercises the actual happy path of the main business flow end-to-end through the running server (e.g. create conversation → send message → fetch → delete).\n"
-        f"\nSee `.pi/skills/code/resources/server-startup-tests.md` for a complete reference and copy-pastable patterns. Treat these as NON-NEGOTIABLE for the verify phase to succeed."
+        f"\n\nSERVER-STARTUP OUTCOMES (this project ships a {framework} server):\n"
+        f"For a server project, 'done' means these are TRUE and shown by captured evidence in the verify phase — how you structure the tests is your call. Unit tests with mocked framework classes do NOT satisfy them (they miss middleware / CORS / startup / import-chain bugs):\n"
+        f"\n- REAL SERVER SERVES REAL HTTP: the real {framework} server boots (background thread or subprocess) with heavy deps mocked (model downloads, databases, third-party APIs) but real framework / middleware / CORS / startup / handlers, and representative endpoints (e.g. /health, /, one business endpoint) return their expected status/body over real HTTP. Catches misconfigured middleware, CORS, startup / lifespan hooks, port conflicts.\n"
+        f"\n- ENTRY-POINT IMPORT CHAIN HOLDS FROM ITS OWN CWD (recurring bug class): each entry point, run as a subprocess from inside its own directory, imports and exercises its import chain successfully. Many runners (uvicorn --reload wrappers, CLI tools, bundler dev servers) chdir to the script's directory before importing, so `from sibling_pkg import ...` silently breaks unless the script puts the project root on sys.path. A proven way to prove it: subprocess.run([sys.executable, '-c', '<driver that imports the entry point and exercises its imports>'], cwd=os.path.dirname(entry_point), check=True).\n"
+        f"   Entry points:\n{entry_list}\n"
+        f"\n- CORS PREFLIGHT CORRECT (if the server uses CORS): an OPTIONS request from a representative browser origin returns the correct access-control-allow-origin header.\n"
+        f"\n- HAPPY PATH END-TO-END: at least one real business flow runs end-to-end through the running server (e.g. create → send → fetch → delete).\n"
+        f"\n`.pi/skills/code/resources/server-startup-tests.md` has copy-pastable patterns — a reference to draw on, not a checklist to satisfy mechanically. These outcomes are checked by evidence in verify."
     )
 
 
@@ -497,8 +522,8 @@ def _build_implement(ctx: RunContext, code: dict, ideal: dict) -> str:
         f"captured command output as evidence — a pass is backed by an oracle, never asserted. "
         f"\n- Use DRY methodology "
         f"\n- Use secure coding practices from referenced docs "
-        f"\n- For Python: activate .venv/ first, use uv for ALL packages, NEVER install globally "
-        f"\n- For TypeScript: use bun for ALL packages, NEVER npm/yarn, NEVER install globally "
+        f"\n- Package manager: match the one THIS project already uses — detect it from the repo's lockfile/manifest (uv.lock / poetry.lock / requirements.txt; bun.lockb / pnpm-lock.yaml / package-lock.json / yarn.lock) and do not switch a project's tooling. Greenfield / no established tooling -> default to the preferred stack: uv (Python), bun (JS/TS). "
+        f"\n- Always activate .venv/ first for Python; NEVER install globally. "
         f"\n- Diagnose and fix test failures - the last change is always the breaking change "
         f"\n- Report expected test failures (integration/E2E with unmet dependencies) to the output "
     )
@@ -608,12 +633,12 @@ def _build_verify(ctx: RunContext, code: dict, ideal: dict) -> str:
     if verification.get("server_startup"):
         framework = verification.get("server_framework", "server")
         server_check = (
-            f"\n\nSERVER-STARTUP VERIFICATION (REQUIRED for {framework}):\n"
-            f"In addition to running the test commands above, explicitly verify that the following tests exist and pass:\n"
-            f"  (a) At least one test that starts the real {framework} server in a background thread (or subprocess) and makes real HTTP requests against it. Mock heavy deps (model downloads, databases) but use the real framework, real startup, real CORS, real handlers.\n"
-            f"  (b) At least one test that runs the entry-point script as a subprocess from inside its own directory (os.path.dirname(entry_point)) to catch sys.path / PYTHONPATH bugs that unit tests miss.\n"
-            f"  (c) CORS preflight test from a representative browser origin (if the server uses CORS).\n"
-            f"\nIf any of these tests are missing, FAIL the verification with a specific gap listing which categories are absent. Do NOT pass verification just because the unit tests pass — for a server project, that is a false positive."
+            f"\n\nSERVER-STARTUP VERIFICATION (this project ships a {framework} server):\n"
+            f"Beyond running the commands above, confirm the captured test output DEMONSTRATES these outcomes, and cite the evidence for each:\n"
+            f"  (a) the real {framework} server actually started (background thread or subprocess) and served real HTTP requests with the expected responses — real framework / startup / CORS / handlers; heavy deps (model downloads, databases) may be mocked.\n"
+            f"  (b) each entry-point script ran from its own directory (os.path.dirname(entry_point)) with its import chain intact — catches sys.path / PYTHONPATH bugs unit tests miss.\n"
+            f"  (c) CORS preflight from a representative browser origin returned the correct headers (if the server uses CORS).\n"
+            f"\nFAIL verification for any outcome NOT demonstrated by evidence, naming the unmet outcome. Passing unit tests alone do NOT satisfy a server project — that is a false positive."
         )
     enabled = [
         k for k in (
@@ -696,10 +721,10 @@ def _plan_approval_question(ctx: RunContext, code: dict) -> dict:
         "### Goal",
         f"{ideal.get('goal', ctx.goal)}",
         "",
-        "### Build Order",
+        "### Dependency Order (hint — not a mandated sequence)",
     ]
-    for i, step in enumerate(build_order):
-        lines.append(f"  {i + 1}. {step}")
+    for step in build_order:
+        lines.append(f"  - {step}")
     lines += ["", "### Key Deliverables"]
     for d in deliverables[:15]:
         lines.append(f"  - {d}")
@@ -842,7 +867,11 @@ class CodePlaybook(BasePlaybook):
     def initial_transition(self, ctx: RunContext) -> str:
         ideal = load_ideal_state(ctx.constraints, ctx.project_root)
         if not ideal or not ideal.get("success_criteria"):
-            raise RuntimeError(_PRD_DEPENDENCY_ERROR)
+            # PRD is OPTIONAL: with an IDEAL_STATE (room or inline) it drives the
+            # run; without one, synthesize lightweight criteria from the goal and
+            # proceed. carren still judges/refines them and the verify/test battery
+            # is the real acceptance bar — the quality loop stays, the mandate goes.
+            ideal = ideal_state_from_goal(getattr(ctx, "goal", ""))
         code = ctx.extras.setdefault("code", {})
         code["ideal_state"] = ideal
         code["language"] = ideal.get("language", "python")

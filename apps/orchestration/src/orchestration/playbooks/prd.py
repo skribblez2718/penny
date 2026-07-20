@@ -39,7 +39,8 @@ silently passed whenever no DB was found or any exception fired); vera's
 Domain guidance stays in ``.pi/skills/prd/assets/prompts/<agent>.md``; the
 mempalace room ``skills/prd-{session_id}`` and the task-message wording that
 drives the drawer headers are preserved verbatim — the code skill reads
-IDEAL_STATE from that room as a hard dependency.
+IDEAL_STATE from that room when chained (an optional dependency — code also
+runs standalone, synthesizing criteria from the goal).
 """
 
 from __future__ import annotations

@@ -35,8 +35,8 @@ Format: "As a [persona], I want [action], so that [benefit]." Each story require
    Acceptance: After 5 failed attempts from same IP in 60s, subsequent attempts return 429.
 ```
 
-## 5. Features (max 5 per iteration)
-Priority: P0 (must have), P1 (should have), P2 (nice to have).
+## 5. Features
+Scope the feature set to the objective — every feature the work needs to be "done," no more. Prioritize P0 (must have), P1 (should have), P2 (nice to have) so the must-haves are unambiguous. A large P0 set is a signal to re-check scope, not a reason to truncate.
 ```
 | P0 | Rate limit counter | Track failed attempts per IP with 60s sliding window |
 | P0 | 429 response | Return HTTP 429 with Retry-After header when exceeded |
@@ -88,14 +88,14 @@ What if scenarios. Anticipate failures.
 - What happens during server restart? Counters reset.
 ```
 
-## 11. Build Order
-Implementation sequence. Dependencies first.
+## 11. Build Order (Dependency Constraints — a hint, not a mandate)
+Ordering **constraints only**: which deliverables must exist before others can be built or verified. Write them as dependency facts, not a prescribed step-by-step procedure — the implementer owns the actual sequence and may reorder freely, provided the dependencies, success metrics, and acceptance criteria are all honored.
 ```
-1. Rate limit counter (in-memory, sliding window) → unit tests
-2. 429 response with Retry-After header → integration tests  
-3. Rate limit headers (X-RateLimit-*) → unit tests
-4. Admin override endpoint (P2) → E2E tests
-5. Logging to audit trail → integration tests
+- 429 middleware depends on the rate-limit counter (the counter must exist to be exercised).
+- Rate-limit headers depend on the counter's remaining/reset state.
+- Audit-trail logging depends on the 429 decision point existing.
+- Admin override (P2) depends on the counter exposing a reset API.
+(Sequencing within these constraints is the implementer's choice — not a fixed recipe.)
 ```
 
 ## 12. Deliverables

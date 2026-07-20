@@ -1,7 +1,7 @@
 # Code Reference
 
 The code skill runs on the shared orchestration engine as `CodeMachine`
-(`orchestration.playbooks.code`). Full graph: `resources/flow.mmd`.
+(`orchestration.playbooks.code`). Full graph: `resources/flow.html`.
 
 ### States
 | State | Description | Agent |

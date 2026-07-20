@@ -8,9 +8,11 @@ tests can drive a full run — it is not a user-facing skill.
 from ..engine import BasePlaybook
 from .agent import AgentPlaybook
 from .code import CodePlaybook
+from .derivation import DerivationPlaybook
 from .imagegen import ImagegenPlaybook
 from .jsa import JSAPlaybook
 from .learn import LearnPlaybook
+from .manim import ManimPlaybook
 from .plan import PlanPlaybook
 from .prd import PrdPlaybook
 from .reference_cycle import ReferenceCycle, ReferenceCycleMachine
@@ -29,6 +31,8 @@ PLAYBOOKS: dict[str, type[BasePlaybook]] = {
     RezPlaybook.NAME: RezPlaybook,  # domain skill (resume tailoring)
     LearnPlaybook.NAME: LearnPlaybook,  # domain skill (study-material generation)
     ImagegenPlaybook.NAME: ImagegenPlaybook,  # domain skill (local image generation)
+    DerivationPlaybook.NAME: DerivationPlaybook,  # domain skill (derivation/independence gate)
+    ManimPlaybook.NAME: ManimPlaybook,  # domain skill (educational-video render bundles)
     ReferenceCycle.NAME: ReferenceCycle,  # engine smoke-test fixture only
 }
 
@@ -50,6 +54,8 @@ __all__ = [
     "LearnPlaybook",
     "RezPlaybook",
     "ImagegenPlaybook",
+    "DerivationPlaybook",
+    "ManimPlaybook",
     "ReferenceCycle",
     "ReferenceCycleMachine",
 ]

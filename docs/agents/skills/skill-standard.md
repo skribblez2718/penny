@@ -56,8 +56,12 @@ apps/orchestration/tests/test_<name>_playbook.py           # playbook tests
 │       ├── echo.md             # Domain guidance per agent
 │       └── ...
 └── resources/
-    ├── reference.md            # Skill-specific reference (checker-required)
-    └── flow.mmd                # State diagram mirroring machine_cls (checker-required)
+    ├── reference.md            # Skill-specific reference (conventional name; NOT checker-enforced)
+    └── flow.html              # State diagram mirroring machine_cls (self-contained dark HTML —
+                               #   the preferred format; legacy resources/flow.mmd is also accepted)
+    # The checker requires resources/ to exist and requires a flow diagram in EITHER
+    # format — resources/flow.html (preferred) OR resources/flow.mmd. All OTHER
+    # resource filenames (reference, rubric, etc.) are conventional — name them freely.
 ```
 
 ## SKILL.md Frontmatter

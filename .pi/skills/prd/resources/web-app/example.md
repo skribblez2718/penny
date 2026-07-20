@@ -102,22 +102,17 @@ The SaaS platform has 200+ business customers with 15,000+ end users. When a cus
 - What happens on 404? → Custom 404 page with navigation back to dashboard.
 - What on session expiry? → Silent token refresh; if refresh fails, redirect to login with return URL.
 
-### 11. Build Order
+### 11. Build Order (Dependency Constraints — a hint, not a mandate)
 
-1. Database migration: add roles table, audit_log table → unit tests
-2. Backend API: user list endpoint (paginated, searchable) → integration tests
-3. Backend API: invite, role, deactivation endpoints → integration tests
-4. Frontend: user list page with search/filter → unit tests + E2E
-5. Frontend: invite modal → unit tests + E2E
-6. Frontend: role management + deactivation → unit tests + E2E
-7. Backend: login activity endpoint → integration tests
-8. Frontend: activity dashboard → unit tests
-9. Backend: password policy CRUD → integration tests
-10. Frontend: policy configuration page → unit tests
-11. Audit log endpoint → integration tests
-12. Audit log viewer → unit tests
-13. Accessibility audit and remediation → manual + automated
-14. Load testing and performance optimization
+Ordering **constraints only** — the implementer owns the actual sequence:
+
+- The `roles` + `audit_log` migration must land before any admin endpoint can be integration-tested (endpoints read/write those tables).
+- Admin auth middleware gates every `/api/admin/*` route → those endpoints can't be verified until it exists.
+- Each frontend page depends on its backing endpoint being reachable for E2E (e.g. user-list page ↔ `GET /api/admin/users`).
+- The audit-log viewer depends on the audit-log endpoint, which depends on the `audit_log` table.
+- Accessibility remediation and load/performance verification apply to the assembled system — they depend on the features being present.
+
+Each deliverable states its own verification tier (unit / integration / E2E / manual); sequencing within the constraints above is the implementer's choice, not a fixed recipe.
 
 ### 12. Deliverables
 
@@ -538,24 +533,11 @@ CHANGELOG.md
     "docs/api-spec.yaml"
   ],
   "build_order": [
-    "Database migration: roles + audit_log tables",
-    "Backend: user list endpoint (GET /api/admin/users)",
-    "Backend: invite user endpoint (POST /api/admin/users/invite)",
-    "Backend: role update endpoint (PATCH /api/admin/users/:id/role)",
-    "Backend: deactivation endpoints",
-    "Backend: admin auth middleware",
-    "Frontend: user list page",
-    "Frontend: invite modal",
-    "Frontend: role management UI",
-    "Frontend: deactivation UI",
-    "Backend: login activity endpoint",
-    "Frontend: activity dashboard",
-    "Backend: password policy endpoint",
-    "Frontend: policy configuration page",
-    "Backend: audit log endpoint",
-    "Frontend: audit log viewer",
-    "Accessibility audit and remediation",
-    "Load testing and performance optimization"
+    "roles + audit_log tables must exist before any admin endpoint can be verified",
+    "admin auth middleware gates all /api/admin/* endpoints (endpoints depend on it)",
+    "each frontend page depends on its backing endpoint being reachable for E2E",
+    "audit log viewer depends on the audit log endpoint and the audit_log table",
+    "accessibility + load/perf verification depend on the features being present"
   ]
 }
 ```

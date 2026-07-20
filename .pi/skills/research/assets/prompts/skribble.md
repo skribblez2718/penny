@@ -17,7 +17,7 @@ Room: `wing=penny room=skills/research-<session_id>` (in the task). Read the syn
 ## What the files carry
 
 - **report.md** — the thematic report, headings and prose, every material claim cited inline.
-- **sources.md** — the full bibliography, source-tiered.
+- **sources.md** — the full bibliography, source-tiered. **If the task named an approved source registry:** mark each entry as **vetted** (already in the registry) or **new** (`unvetted — needs license triage`), and record a license where visible, so downstream triage can classify the new ones before they enter the corpus.
 - **README.md** — a short orientation: the query, the headline findings, how to read the report.
 
 ## Output

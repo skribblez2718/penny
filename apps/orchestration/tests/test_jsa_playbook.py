@@ -33,7 +33,8 @@ class FakeJSA(JSAPlaybook):
     scanner."""
 
     NAME = "jsa"
-    needs_llm_count = 5  # -> 1 wave (ceil(5/10)=1)
+    needs_llm_count = 5  # informational only now; wave count is per-class + sweep
+    #                      (default stub seeds no candidate classes -> 1 sweep wave)
     canned_stubs: list | None = None
 
     def _domain_run(self, ctx, phase):
@@ -65,6 +66,28 @@ def _start(cp, constraints=None, cls=FakeJSA):
 
 def _step(cp, agent, result, cls=FakeJSA):
     return cls(cp).step(session_id=SID, run_id=RID, agent=agent, result=result)
+
+
+# --- INVESTIGATE parallel fan-in helpers ------------------------------------
+# investigate is a parallel fan: the driver feeds ALL branch results back in one
+# step (agent="__parallel__", result=a list of {branch_id, agent, summary, exitCode}).
+def _isummary(**over):
+    s = {"wave_complete": True, "confidence": "PROBABLE"}
+    s.update(over)
+    return s
+
+
+def _fan(*branch_ids, **summary_over):
+    """A __parallel__ fan-in batch: one entry per branch_id, all sharing a summary."""
+    return [
+        {"branch_id": bid, "agent": "annie", "exitCode": 0, "summary": _isummary(**summary_over)}
+        for bid in branch_ids
+    ]
+
+
+def _finish_investigate(cp, cls=FakeJSA, **summary_over):
+    """Advance a no-candidate-classes stub past investigate: one sweep-only batch."""
+    return _step(cp, "__parallel__", _fan("sweep", **summary_over), cls=cls)
 
 
 @pytest.fixture
@@ -100,12 +123,12 @@ def test_escalatable_states_are_reachable_by_to_unknown():
 
 def test_start_with_valid_intake_runs_tools_to_investigate(cp):
     d = _start(cp, constraints={"intake": _VALID_INTAKE})
-    assert (
-        d["action"] == "invoke_agent" and d["agent"] == "annie" and d["state_id"] == "investigate"
-    )
+    # No candidate classes from the stub -> a single sweep-only fan batch.
+    assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "investigate"
+    assert [t["branch_id"] for t in d["tasks"]] == ["sweep"]
     rec = cp.load(RID)
     assert rec.current_state_id == "investigate" and rec.status == STATUS_RUNNING
-    # All 10 deterministic phases ran inline (collect runs later, after the waves).
+    # All 10 deterministic phases ran inline (collect runs later, after the batches).
     assert rec.context.extras["jsa"]["ran"] == [
         "acquire",
         "cve_research",
@@ -118,12 +141,12 @@ def test_start_with_valid_intake_runs_tools_to_investigate(cp):
         "structure",
         "slice",
     ]
-    # Model-agnostic: NO per-state model override and NO local-model hint in the
+    # Model-agnostic: NO per-branch model override and NO local-model hint in the
     # task text — annie (like every agent) resolves its own frontmatter model.
-    assert "model" not in d
-    assert "qwen" not in d["task_summary"].lower()
-    assert "ollama" not in d["task_summary"].lower()
-    assert "Wave 1/1" in d["task_summary"]
+    task = d["tasks"][0]["task_summary"]
+    assert "model" not in d["tasks"][0]
+    assert "qwen" not in task.lower() and "ollama" not in task.lower()
+    assert "Batch 1/1" in task
 
 
 def test_start_missing_intake_opens_gate(cp):
@@ -147,9 +170,7 @@ def test_intake_gate_invalid_answer_reasks_only_missing(cp):
 def test_intake_gate_valid_answer_advances_to_investigate(cp):
     _start(cp, constraints={})
     d = _step(cp, "user", {"responses": _VALID_INTAKE})
-    assert (
-        d["action"] == "invoke_agent" and d["agent"] == "annie" and d["state_id"] == "investigate"
-    )
+    assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "investigate"
 
 
 def test_intake_conditional_auth_instructions_required(cp):
@@ -185,15 +206,11 @@ def test_intake_accepts_novel_session_mechanism(cp):
             }
         },
     )
-    assert (
-        d["action"] == "invoke_agent"
-        and d["agent"] == "annie"
-        and d["state_id"] == "investigate"
-    )
+    assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "investigate"
 
 
 # ---------------------------------------------------------------------------
-# INVESTIGATE wave loop (bounded fan-through)
+# INVESTIGATE parallel batch loop (per-class fan, bounded by max_fan_width)
 # ---------------------------------------------------------------------------
 
 
@@ -201,49 +218,91 @@ def _to_investigate(cp, cls=FakeJSA):
     _start(cp, constraints={"intake": _VALID_INTAKE}, cls=cls)
 
 
-def test_single_wave_advances_to_merge(cp):
+def test_single_sweep_batch_advances_to_merge(cp):
     _to_investigate(cp)
-    d = _step(cp, "annie", {"wave_complete": True, "confidence": "PROBABLE", "unverified_count": 2})
-    # Waves exhausted -> collect runs inline -> merge dispatched, with NO human gate.
+    d = _finish_investigate(cp, unverified_count=2)
+    # Batches exhausted -> collect runs inline -> merge dispatched, with NO human gate.
     assert d["action"] == "invoke_agent" and d["agent"] == "synthia" and d["state_id"] == "merge"
     assert cp.load(RID).context.extras["jsa"]["ran"][-1] == "collect"
     # Honest exhaustion is preserved on the run (surfaced later in result_payload).
     assert cp.load(RID).context.extras["jsa"]["investigate"]["unverified"] == 2
 
 
-def test_wave_loop_redispatches_annie_until_waves_exhausted(cp):
-    class TwoWave(FakeJSA):
-        needs_llm_count = 15  # ceil(15/10) = 2 waves
+class _ClassesJSA(FakeJSA):
+    """FakeJSA whose stubbed slice surfaces a fixed candidate-class set (mirrors
+    jsa_domain._candidate_classes) so the PER-CLASS parallel batch plan can be
+    exercised without importing the skill-dir."""
 
-    _to_investigate(cp, cls=TwoWave)
-    d1 = _step(cp, "annie", {"wave_complete": True, "confidence": "PROBABLE"}, cls=TwoWave)
-    # More waves remain -> annie re-dispatched (self-loop), still at investigate.
-    assert (
-        d1["action"] == "invoke_agent"
-        and d1["agent"] == "annie"
-        and d1["state_id"] == "investigate"
+    seed_classes: list = []
+
+    def _domain_run(self, ctx, phase):
+        super()._domain_run(ctx, phase)
+        if phase == "slice":
+            ctx.extras["jsa"]["investigate"]["candidate_classes"] = list(self.seed_classes)
+
+
+def test_classes_fit_one_batch_then_sweep(cp):
+    # PER-CLASS PARALLEL model: at the default fan width (5), 2 classes fan out in ONE
+    # parallel batch, then a trailing sweep batch -> 2 batches.
+    class TwoClasses(_ClassesJSA):
+        seed_classes = ["cors", "dom_xss"]
+
+    d0 = _start(cp, constraints={"intake": _VALID_INTAKE}, cls=TwoClasses)
+    inv = cp.load(RID).context.extras["jsa"]["investigate"]
+    assert inv["batches"] == [["cors", "dom_xss"], ["__sweep__"]]
+    assert inv["total_batches"] == 2 and inv["fan_width"] == 5
+    assert d0["action"] == "invoke_agents_parallel" and d0["state_id"] == "investigate"
+    assert {t["branch_id"] for t in d0["tasks"]} == {"cls_cors", "cls_dom_xss"}
+    bodies = {t["branch_id"]: t["task_summary"] for t in d0["tasks"]}
+    assert "Batch 1/2" in bodies["cls_cors"] and "`cors`" in bodies["cls_cors"]
+    assert "assets/references/cors.md" in bodies["cls_cors"]
+    assert "assets/references/dom_xss.md" in bodies["cls_dom_xss"]
+    # Fan-in the class batch -> the sweep batch fans out.
+    d1 = _step(cp, "__parallel__", _fan("cls_cors", "cls_dom_xss"), cls=TwoClasses)
+    assert d1["action"] == "invoke_agents_parallel" and d1["state_id"] == "investigate"
+    assert {t["branch_id"] for t in d1["tasks"]} == {"sweep"}
+    assert "Batch 2/2" in d1["tasks"][0]["task_summary"]
+    assert "GENERAL SWEEP" in d1["tasks"][0]["task_summary"]
+    # Fan-in the sweep -> collect -> merge.
+    d2 = _step(cp, "__parallel__", _fan("sweep"), cls=TwoClasses)
+    assert d2["agent"] == "synthia" and d2["state_id"] == "merge"
+
+
+def test_no_candidate_classes_runs_single_sweep_batch(cp):
+    # Default stub seeds no candidate classes -> just the generalist sweep (≥ 1 batch).
+    d0 = _start(cp, constraints={"intake": _VALID_INTAKE})
+    assert {t["branch_id"] for t in d0["tasks"]} == {"sweep"}
+    assert "Batch 1/1" in d0["tasks"][0]["task_summary"]
+    assert "GENERAL SWEEP" in d0["tasks"][0]["task_summary"]
+    d = _finish_investigate(cp)
+    assert d["agent"] == "synthia" and d["state_id"] == "merge"
+
+
+def test_max_fan_width_batches_classes_iteratively(cp):
+    # max_fan_width is a tunable Budget: at width 2, three classes fan out across TWO
+    # class batches (2 + 1), then a sweep batch -> 3 batches. All classes are covered
+    # (no fold), running <= max_fan_width agents in parallel per batch.
+    class ManyClasses(_ClassesJSA):
+        seed_classes = ["cors", "dom_xss", "sqli"]
+
+    d0 = _start(
+        cp,
+        constraints={"intake": _VALID_INTAKE, "max_fan_width": 2},
+        cls=ManyClasses,
     )
-    assert "Wave 2/2" in d1["task_summary"]
-    d2 = _step(cp, "annie", {"wave_complete": True, "confidence": "CERTAIN"}, cls=TwoWave)
-    # Final wave -> auto-advance through collect to merge (no human gate).
-    assert d2["action"] == "invoke_agent" and d2["agent"] == "synthia" and d2["state_id"] == "merge"
-
-
-def test_wave_size_is_a_tunable_budget(cp):
-    # WAVE_SIZE is no longer a frozen constant: constraints.wave_size sets the
-    # batch, so needs_llm=12 at wave_size=5 seeds ceil(12/5)=3 waves.
-    class BigWave(FakeJSA):
-        needs_llm_count = 12
-
-    BigWave(cp).start(
-        session_id=SID,
-        run_id=RID,
-        goal="analyze https://example.com",
-        constraints={"intake": _VALID_INTAKE, "wave_size": 5},
-    )
-    d = _step(cp, "annie", {"wave_complete": True, "confidence": "PROBABLE"}, cls=BigWave)
-    assert "Wave 2/3" in d["task_summary"]
-    assert cp.load(RID).context.extras["jsa"]["investigate"]["wave_size"] == 5
+    inv = cp.load(RID).context.extras["jsa"]["investigate"]
+    assert inv["batches"] == [["cors", "dom_xss"], ["sqli"], ["__sweep__"]]
+    assert inv["total_batches"] == 3 and inv["fan_width"] == 2
+    assert {t["branch_id"] for t in d0["tasks"]} == {"cls_cors", "cls_dom_xss"}
+    assert "Batch 1/3" in d0["tasks"][0]["task_summary"]
+    d1 = _step(cp, "__parallel__", _fan("cls_cors", "cls_dom_xss"), cls=ManyClasses)
+    assert {t["branch_id"] for t in d1["tasks"]} == {"cls_sqli"}
+    assert "Batch 2/3" in d1["tasks"][0]["task_summary"]
+    d2 = _step(cp, "__parallel__", _fan("cls_sqli"), cls=ManyClasses)
+    assert {t["branch_id"] for t in d2["tasks"]} == {"sweep"}
+    assert "Batch 3/3" in d2["tasks"][0]["task_summary"]
+    d3 = _step(cp, "__parallel__", _fan("sweep"), cls=ManyClasses)
+    assert d3["agent"] == "synthia" and d3["state_id"] == "merge"
 
 
 def test_recall_lessons_render_in_first_directive(cp):
@@ -252,7 +311,7 @@ def test_recall_lessons_render_in_first_directive(cp):
     pb = JSAPlaybook(cp)
     ctx = RunContext(session_id=SID, run_id=RID, playbook="jsa", goal="analyze https://example.com")
     ctx.recall_lessons = ["verify DOM XSS with a live browser PoC, never by pattern alone"]
-    ctx.extras["jsa"] = {"investigate": {"wave": 0, "total_waves": 1}}
+    ctx.extras["jsa"] = {"investigate": {"batch": 0, "total_batches": 1}}
     txt = pb._task_summary("investigate", JSA_INVESTIGATE, ctx)
     assert "Lessons from prior runs" in txt
     assert "live browser PoC" in txt
@@ -264,10 +323,11 @@ def test_recall_lessons_render_in_first_directive(cp):
 
 
 def _to_merge(cp, cls=FakeJSA):
-    """Run to the point where the final wave has fired and merge (synthia) is
-    dispatched — collect ran inline, with no human gate in between."""
+    """Run to the point where the final (sweep) batch has fired and merge (synthia) is
+    dispatched — collect ran inline, with no human gate in between. Uses a stub with no
+    candidate classes (one sweep-only batch)."""
     _to_investigate(cp, cls=cls)
-    _step(cp, "annie", {"wave_complete": True, "confidence": "PROBABLE"}, cls=cls)
+    _finish_investigate(cp, cls=cls)
 
 
 # ---------------------------------------------------------------------------
@@ -324,7 +384,7 @@ def _to_verify_with_dual(cp, **extra):
         goal="analyze https://example.com",
         constraints={"intake": _VALID_INTAKE, "dual_verify": True, **extra},
     )
-    _step(cp, "annie", {"wave_complete": True, "confidence": "PROBABLE"})  # investigate -> merge
+    _finish_investigate(cp)  # sweep-only batch -> collect -> merge
     return _step(
         cp, "synthia", {"merge_complete": True, "merged_count": 2, "confidence": "PROBABLE"}
     )
@@ -608,16 +668,14 @@ def test_verify_clean_target_zero_count_empty_evidence_advances(cp):
 
 def test_investigate_uncertain_escalates_then_clarify_resumes(cp):
     _to_investigate(cp)
-    d = _step(cp, "annie", {"wave_complete": True, "confidence": "UNCERTAIN"})
+    # A branch reporting UNCERTAIN makes the batch's weakest confidence UNCERTAIN -> escalate.
+    d = _step(cp, "__parallel__", _fan("sweep", confidence="UNCERTAIN"))
     assert d["action"] == "escalate_to_user" and d["previous_state"] == "investigate"
     rec = cp.load(RID)
     assert rec.status == STATUS_AWAITING_USER and rec.current_state_id == "awaiting_clarification"
     d2 = _step(cp, "user", {"answer": "focus on the auth flow in app.js"})
-    assert (
-        d2["action"] == "invoke_agent"
-        and d2["agent"] == "annie"
-        and d2["state_id"] == "investigate"
-    )
+    # clarify resumes at investigate -> re-fans the current batch.
+    assert d2["action"] == "invoke_agents_parallel" and d2["state_id"] == "investigate"
 
 
 def test_verify_needs_clarification_escalates(cp):
@@ -742,9 +800,13 @@ def test_mid_tool_crash_recovers_by_rerunning_tool_loop(cp):
     finally:
         pb_mod.PLAYBOOKS.clear()
         pb_mod.PLAYBOOKS.update(orig)
-    # Recovery re-drives structure -> slice -> investigate (tools are idempotent).
+    # Recovery re-drives structure -> slice -> investigate (tools are idempotent);
+    # slice re-emits the first parallel fan batch.
     assert len(directives) == 1
-    assert directives[0]["action"] == "invoke_agent" and directives[0]["state_id"] == "investigate"
+    assert (
+        directives[0]["action"] == "invoke_agents_parallel"
+        and directives[0]["state_id"] == "investigate"
+    )
     assert cp.load(RID).context.extras["jsa"]["ran"] == ["structure", "slice"]
 
 
@@ -873,3 +935,32 @@ def test_dual_verify_poc_capture_checks_only_the_agreed_set(cp):
     assert d_report["state_id"] == "report"
     jsa = cp.load(RID).context.extras["jsa"]
     assert jsa["poc_capture"]["confirmed"] == ["F1"]  # only the dual-agreed finding is a candidate
+
+
+# ---------------------------------------------------------------------------
+# Per-class guidance wiring: a per-class branch names that class's reference
+# catalog; the generalist sweep branch points at the catalog INDEX. (The false
+# "loaded alongside this prompt" framing is gone from every branch.)
+# ---------------------------------------------------------------------------
+
+
+def test_per_class_branch_names_only_its_class_catalog(cp):
+    class OneClass(_ClassesJSA):
+        seed_classes = ["prototype_pollution"]
+
+    d = _start(cp, constraints={"intake": _VALID_INTAKE}, cls=OneClass)
+    assert {t["branch_id"] for t in d["tasks"]} == {"cls_prototype_pollution"}
+    task = d["tasks"][0]["task_summary"]
+    # The class branch focuses ENTIRELY on the one class + its catalog...
+    assert "`prototype_pollution`" in task
+    assert "assets/references/prototype_pollution.md" in task
+    assert "loaded alongside" not in task
+
+
+def test_sweep_branch_points_at_the_catalog_index(cp):
+    # No candidate classes -> the single batch is the generalist sweep, which points
+    # at the catalog INDEX (never a dangling "loaded alongside").
+    d = _start(cp, constraints={"intake": _VALID_INTAKE})
+    task = d["tasks"][0]["task_summary"]
+    assert "assets/references/INDEX.md" in task
+    assert "loaded alongside" not in task

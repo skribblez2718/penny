@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>research skill — execution flow</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2a3341;
+    --ink:#e6edf3; --muted:#8b949e; --desc:#b3bdc9;
+    --echo:#22d3ee; --annie:#a78bfa; --carren:#fb7185; --piper:#fbbf24; --skribble:#60a5fa;
+    --synthia:#f472b6; --vera:#4ade80; --tabitha:#fb923c;
+    --start:#94a3b8; --gate:#e3b341; --esc:#9ca3af; --done:#3fb950; --error:#f85149;
+    --fwd:#8b98a9; --exit:#3fb950; --loop:#e3a52e; --abort:#f85149;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  header{padding:22px 28px 8px}
+  h1{margin:0;font-size:22px;letter-spacing:-.01em}
+  .sub{color:var(--muted);margin-top:4px;font-size:13px;max-width:1180px}
+  .callout{margin:14px 28px;padding:12px 14px;border-left:4px solid var(--piper);
+    background:#211d10;border-radius:6px;font-size:13px;color:#e8d9a8}
+  .callout b{color:#f0c657}
+  .legend{display:flex;flex-wrap:wrap;gap:18px 26px;padding:10px 28px 16px;font-size:12.5px;color:#c9d3df}
+  .legend .grp{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
+  .chip{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:12px;height:12px;border-radius:3px;display:inline-block}
+  .aline{width:26px;height:0;border-top:3px solid var(--fwd);display:inline-block}
+  .aline.dash{border-top-style:dashed}
+  #wrap{position:relative;margin:8px 20px 40px;width:1120px;height:1160px}
+  svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+  .node{position:absolute;background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    box-shadow:0 1px 2px rgba(0,0,0,.35),0 2px 8px rgba(0,0,0,.25);padding:10px 12px}
+  .node .t{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:7px}
+  .node .t .who{font-weight:600;color:var(--muted);font-size:11.5px}
+  .node .d{color:var(--desc);font-size:12px;margin-top:5px}
+  .node::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;border-radius:10px 0 0 10px}
+  .node.echo::before{background:var(--echo)} .node.annie::before{background:var(--annie)}
+  .node.carren::before{background:var(--carren)} .node.piper::before{background:var(--piper)}
+  .node.skribble::before{background:var(--skribble)} .node.synthia::before{background:var(--synthia)}
+  .node.vera::before{background:var(--vera)} .node.tabitha::before{background:var(--tabitha)}
+  .node.start::before{background:var(--start)} .node.esc::before{background:var(--esc)}
+  .node.gate{background:#211d10;border-color:#4d3f1a}.node.gate::before{background:var(--gate)}
+  .node.done{background:#0f2417;border-color:#1f5136}.node.done::before{background:var(--done)}
+  .node.error{background:#2a1517;border-color:#5c2a2a}.node.error::before{background:var(--error)}
+  .node .badge{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.04em;
+    text-transform:uppercase;color:#0d1117;padding:2px 6px;border-radius:999px}
+  .badge.hitl{background:var(--gate)} .badge.term{background:#5b6675;color:#e6edf3}
+  .badge.deep{background:var(--annie);color:#0d1117}
+  .lbl{position:absolute;transform:translate(-50%,-50%);background:var(--panel2);
+    border:1px solid #313c4a;color:#c9d3df;font-size:11px;padding:1px 6px;border-radius:999px;
+    white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+  .foot{margin:0 28px 48px;font-size:12.5px;color:#c3cdd9}
+  .foot h3{font-size:13px;margin:18px 0 6px;color:#e6edf3}
+  .foot ul{margin:6px 0;padding-left:18px} .foot li{margin:3px 0}
+  .foot b{color:#e6edf3}
+  code{background:#22293a;color:#cdd6e3;padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>research skill — execution flow</h1>
+  <div class="sub">Validated against <code>orchestration/playbooks/research.py</code> (<code>ResearchMachine</code>). Three modes — <b>quick</b>, <b>standard</b>, <b>deep</b> — share one FSM. Boxes are states dispatching cognitive-primitive agents; MemPalace is the blackboard.</div>
+</header>
+
+<div class="callout">
+  <b>Mode selection is data, not keywords:</b> caller <code>constraints.mode</code> wins; otherwise piper declares the mode in its plan SUMMARY. <b>quick</b> skips planning &amp; both critiques (straight to researching). <b>standard</b> runs the backbone. <b>deep</b> adds the two <span style="color:#c9a7fb">critique detours</span> (plan &amp; report) with bounded revise loops.
+</div>
+
+<div class="legend">
+  <div class="grp">
+    <span class="chip"><span class="dot" style="background:var(--piper)"></span>piper · plan</span>
+    <span class="chip"><span class="dot" style="background:var(--echo)"></span>echo · research (fan-out)</span>
+    <span class="chip"><span class="dot" style="background:var(--synthia)"></span>synthia · synthesize</span>
+    <span class="chip"><span class="dot" style="background:var(--carren)"></span>carren · critique</span>
+    <span class="chip"><span class="dot" style="background:var(--vera)"></span>vera · validate</span>
+    <span class="chip"><span class="dot" style="background:var(--skribble)"></span>skribble · report</span>
+  </div>
+  <div class="grp">
+    <span class="chip"><span class="dot" style="background:var(--done)"></span>complete</span>
+    <span class="chip"><span class="dot" style="background:var(--error)"></span>error</span>
+    <span class="chip"><span class="aline" style="border-color:var(--fwd)"></span>forward</span>
+    <span class="chip"><span class="aline" style="border-color:var(--exit)"></span>pass / exit</span>
+    <span class="chip"><span class="aline" style="border-color:var(--loop)"></span>revise (bounded)</span>
+    <span class="chip"><span class="aline dash" style="border-color:var(--esc)"></span>escalation</span>
+  </div>
+</div>
+
+<div id="wrap">
+  <svg id="edges"><defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="context-stroke"></path>
+    </marker>
+  </defs></svg>
+</div>
+
+<div class="foot">
+  <h3>Bounded revise loops &amp; honest exit</h3>
+  <ul>
+    <li><b>critiquing_plan ⇄ planning</b> and <b>critiquing_report ⇄ synthesizing</b> (deep only) and <b>validating ⇄ synthesizing</b> (all modes) each loop on <code>NEEDS_REVISION</code>/<code>FAIL</code>, bounded by <code>max_iterations</code>. Budget spent → the "exhausted" edge proceeds forward with a warning recorded (never a faked pass).</li>
+    <li><b>validating</b> (vera) is the evidence-based citation-grounding gate in <b>every</b> mode — the report is written only after claims are grounded (or the ground-loop budget is spent).</li>
+  </ul>
+  <h3>Fan-out &amp; escalation</h3>
+  <ul>
+    <li><b>researching</b> (echo) fans out one branch per planned sub-query (<code>dynamic_branches</code>, bounded by <code>max_fan_width</code>); quick mode with no sub-queries stays a single echo agent.</li>
+    <li>Any working phase escalates to <b>unknown</b> on <b>UNCERTAIN</b>; <b>unknown → awaiting_clarification → planning</b> resumes after the user answers.</li>
+    <li><b>Abort:</b> every working phase can <code>abort → error</code> (arrows omitted for legibility).</li>
+  </ul>
+</div>
+
+<script>
+const COLS = { Louter:30, C:430, Rmid:800 };
+const W = { C:300, side:245 };
+const N = {
+  intake:{col:'C',y:30,cls:'start',title:'intake',desc:'Requires a non-empty goal (the query). Resolves mode (caller constraint or piper-declared), then advances.'},
+  planning:{col:'C',y:150,cls:'piper',title:'planning',who:'piper',desc:'Decompose the query into sub-queries + declare the mode. (Skipped in quick mode.)'},
+  critiquing_plan:{col:'Rmid',y:205,cls:'carren',title:'critiquing_plan',badge:'DEEP',desc:'Critique the research plan before spending the fan-out. Deep mode only.'},
+  researching:{col:'C',y:345,cls:'echo',title:'researching',who:'echo',desc:'Gather evidence — one fan-out branch per sub-query (bounded by max_fan_width).'},
+  synthesizing:{col:'C',y:475,cls:'synthia',title:'synthesizing',who:'synthia',desc:'Synthesize findings into a grounded draft with citations.'},
+  critiquing_report:{col:'Rmid',y:545,cls:'carren',title:'critiquing_report',badge:'DEEP',desc:'Critique the draft for gaps / balance. Deep mode only.'},
+  validating:{col:'C',y:695,cls:'vera',title:'validating',who:'vera',desc:'Evidence gate (all modes): are the claims citation-grounded? PASS / revise / exhausted.'},
+  report_writing:{col:'C',y:825,cls:'skribble',title:'report_writing',who:'skribble',desc:'Write the final report + README from the validated synthesis.'},
+  complete:{col:'C',y:975,cls:'done',title:'complete',badge:'TERM',desc:'Terminal. Report delivered; warnings recorded if any revise budget was exhausted.'},
+  error:{col:'Rmid',y:975,cls:'error',title:'error',badge:'TERM',desc:'Terminal. Reached by abort from any working phase.'},
+  unknown:{col:'Louter',y:430,cls:'esc',title:'unknown',desc:'Escalation entry: UNCERTAIN confidence at any working phase.'},
+  awaiting:{col:'Louter',y:600,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes at planning once clarified.'},
+};
+const E = [
+  {from:'intake',to:'planning',s1:'bottom',s2:'top',kind:'fwd',label:'standard / deep'},
+  {from:'intake',to:'researching',s1:'left',s2:'left',kind:'fwd',label:'quick → skip planning',c1:{dx:-70,dy:60},c2:{dx:-70,dy:-40}},
+  {from:'planning',to:'critiquing_plan',s1:'right',s2:'left',kind:'fwd',label:'deep'},
+  {from:'planning',to:'researching',s1:'bottom',s2:'top',kind:'fwd',label:'quick / standard'},
+  {from:'critiquing_plan',to:'researching',s1:'bottom',s2:'right',kind:'exit',label:'APPROVE / exhausted',c1:{dx:0,dy:60},c2:{dx:70,dy:0}},
+  {from:'critiquing_plan',to:'planning',s1:'top',s2:'right',kind:'loop',label:'revise',c1:{dx:0,dy:-50},c2:{dx:70,dy:-10}},
+  {from:'researching',to:'synthesizing',s1:'bottom',s2:'top',kind:'fwd',label:'research_done'},
+  {from:'synthesizing',to:'validating',s1:'bottom',s2:'top',kind:'fwd',label:'quick / standard'},
+  {from:'synthesizing',to:'critiquing_report',s1:'right',s2:'left',kind:'fwd',label:'deep'},
+  {from:'critiquing_report',to:'validating',s1:'bottom',s2:'right',kind:'exit',label:'APPROVE / exhausted',c1:{dx:0,dy:60},c2:{dx:70,dy:0}},
+  {from:'critiquing_report',to:'synthesizing',s1:'top',s2:'right',kind:'loop',label:'revise',c1:{dx:0,dy:-50},c2:{dx:70,dy:-10}},
+  {from:'validating',to:'report_writing',s1:'bottom',s2:'top',kind:'exit',label:'PASS / exhausted'},
+  {from:'validating',to:'synthesizing',s1:'left',s2:'left',kind:'loop',label:'re-ground (revise)',bow:70},
+  {from:'report_writing',to:'complete',s1:'bottom',s2:'top',kind:'fwd',label:'report_done'},
+  {from:'unknown',to:'awaiting',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
+  {from:'awaiting',to:'planning',s1:'left',s2:'left',kind:'esc',label:'clarify',c1:{dx:-18,dy:-230},c2:{dx:-18,dy:150}},
+  {from:'researching',to:'unknown',s1:'left',s2:'right',kind:'esc',label:'UNCERTAIN — any working phase',c1:{dx:-40,dy:0},c2:{dx:40,dy:0}},
+];
+const KIND = {fwd:'#8b98a9',exit:'#3fb950',loop:'#e3a52e',esc:'#9ca3af',abort:'#f85149'};
+
+const wrap=document.getElementById('wrap'), svg=document.getElementById('edges');
+for(const id in N){const n=N[id];const w=(n.col==='C')?W.C:W.side;
+  const el=document.createElement('div');el.className='node '+n.cls;el.id='n_'+id;
+  el.style.left=COLS[n.col]+'px';el.style.top=n.y+'px';el.style.width=w+'px';
+  const who=n.who?`<span class="who">· ${n.who}</span>`:'';
+  const bc=n.badge==='TERM'?'term':(n.badge==='DEEP'?'deep':'hitl');
+  const badge=n.badge?`<span class="badge ${bc}">${n.badge}</span>`:'';
+  el.innerHTML=`<div class="t">${n.title}${who}${badge}</div><div class="d">${n.desc}</div>`;
+  wrap.appendChild(el);}
+const base=wrap.getBoundingClientRect();
+function rect(id){const r=document.getElementById('n_'+id).getBoundingClientRect();
+  return{left:r.left-base.left,top:r.top-base.top,width:r.width,height:r.height};}
+function anchor(r,side,frac){const f=(frac==null?0.5:frac);switch(side){
+  case'top':return{x:r.left+r.width*f,y:r.top};
+  case'bottom':return{x:r.left+r.width*f,y:r.top+r.height};
+  case'left':return{x:r.left,y:r.top+r.height*f};
+  case'right':return{x:r.left+r.width,y:r.top+r.height*f};}}
+function ctrl(p,side,bow){const k=64,b=bow||0;switch(side){
+  case'top':return{x:p.x+b,y:p.y-k};
+  case'bottom':return{x:p.x+b,y:p.y+k};
+  case'left':return{x:p.x-k-Math.abs(b),y:p.y};
+  case'right':return{x:p.x+k+Math.abs(b),y:p.y};}}
+const SVGNS='http://www.w3.org/2000/svg';
+for(const e of E){
+  const ra=rect(e.from),rb=rect(e.to);
+  const p1=anchor(ra,e.s1,e.a1frac),p2=anchor(rb,e.s2,e.a2frac);
+  const c1=e.c1?{x:p1.x+e.c1.dx,y:p1.y+e.c1.dy}:ctrl(p1,e.s1,e.bow);
+  const c2=e.c2?{x:p2.x+e.c2.dx,y:p2.y+e.c2.dy}:ctrl(p2,e.s2,e.kind==='exit'?-(e.bow||0):e.bow);
+  const path=document.createElementNS(SVGNS,'path');
+  path.setAttribute('d',`M ${p1.x} ${p1.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${p2.x} ${p2.y}`);
+  path.setAttribute('fill','none');path.setAttribute('stroke',KIND[e.kind]);
+  path.setAttribute('stroke-width','2');path.setAttribute('marker-end','url(#ah)');
+  if(e.kind==='esc')path.setAttribute('stroke-dasharray','6 5');
+  svg.appendChild(path);
+  if(e.label){const t=0.5,mt=1-t;
+    const x=mt*mt*mt*p1.x+3*mt*mt*t*c1.x+3*mt*t*t*c2.x+t*t*t*p2.x;
+    const y=mt*mt*mt*p1.y+3*mt*mt*t*c1.y+3*mt*t*t*c2.y+t*t*t*p2.y;
+    const l=document.createElement('div');l.className='lbl';l.textContent=e.label;
+    l.style.left=x+'px';l.style.top=y+'px';wrap.appendChild(l);}
+}
+</script>
+</body>
+</html>

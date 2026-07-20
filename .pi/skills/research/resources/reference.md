@@ -104,7 +104,7 @@ There is no `orchestrator_state` to thread back.
 ## Output
 
 `report_writing` writes to the absolute path
-`~/projects/penny/research/<sanitized-topic>` (expanded), producing `report.md`,
+`$PROJECT_ROOT/research/<sanitized-topic>`, producing `report.md`,
 `sources.md`, and `README.md`. The result payload reports `met`, `mode`,
 `sub_queries`, `report_dir`, `report_files`, `warnings`, and any
 `unresolved_issues` from an exhausted critique loop.

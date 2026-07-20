@@ -883,7 +883,7 @@ export default function memoryExtension(pi: ExtensionAPI) {
       ctx.ui.notify("Initializing memory palace...", "info");
       const result = await callBridge("status");
       if (result.error && result.error.toString().includes("No palace found")) {
-        ctx.ui.notify("Run 'mempalace init ~/projects/penny' in terminal first", "warning");
+        ctx.ui.notify("Run 'mempalace init' in the project root (PROJECT_ROOT) first", "warning");
       } else {
         ctx.ui.notify(`Memory palace ready: ${result.total_drawers || 0} drawers`, "success");
       }

@@ -14,7 +14,6 @@ class PrototypePollutionAnalyzer(VulnerabilityAnalyzer):
         return [SourceSink("User input→recursive merge",["location.search","localStorage.getItem","JSON.parse(userInput)","req.body"],["Object.assign","$.extend","_.merge","_.defaultsDeep","for...in without hasOwnProperty"],"high","CWE-1321")]
     def get_semgrep_rulesets(self) -> list[str]: return ["p/javascript","p/owasp-top-ten"]
     def get_custom_scanners(self) -> list[str]: return ["prototype_pollution_scanner"]
-    def get_analysis_guide(self) -> str: return self._load_prompt("annie-prototype_pollution.md")
     def get_payload_templates(self) -> list[PayloadTemplate]: return [PayloadTemplate("pp","__proto__ pollution",'{"__proto__":{"polluted":true}}',target_context="html")]
     def get_verification_procedure(self,f:dict) -> str: return "Inject pollution payload → check Object.prototype → look for gadget chain"
     def assess_exploitability(self,f:dict) -> dict: return {"exploitable":True,"difficulty":"medium","preconditions":["Merge without hasOwnProperty","Gadget exists"]}

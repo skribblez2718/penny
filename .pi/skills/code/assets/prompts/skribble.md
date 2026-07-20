@@ -24,8 +24,9 @@ Before writing ANY code, read the language-specific resource:
 Apply all conventions and anti-pattern rules from that document.
 
 ### 4. DEPENDENCY MANAGEMENT — CRITICAL
-- **Python**: Activate `.venv/` first. Use `uv` for ALL package commands. NEVER use bare `pip`. NEVER install globally.
-- **TypeScript**: Use `bun` for ALL package commands. NEVER use `npm` or `yarn`. NEVER install globally.
+- **Match the project's established package manager.** Detect it from the repo's lockfile/manifest (`uv.lock` / `poetry.lock` / `requirements.txt`; `bun.lockb` / `pnpm-lock.yaml` / `package-lock.json` / `yarn.lock`) and use that tool — do not switch a project's package manager.
+- **Greenfield / no established tooling → default to the preferred stack:** `uv` for Python, `bun` for JS/TS.
+- **Always:** activate `.venv/` first for Python; **never install globally.**
 
 ### 5. DRY METHODOLOGY
 - Don't Repeat Yourself. Extract repeated logic into functions/methods.

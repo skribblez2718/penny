@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>code skill — execution flow</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2a3341;
+    --ink:#e6edf3; --muted:#8b949e; --desc:#b3bdc9;
+    --echo:#22d3ee; --annie:#a78bfa; --carren:#fb7185; --piper:#fbbf24; --skribble:#60a5fa;
+    --start:#94a3b8; --gate:#e3b341; --esc:#9ca3af; --done:#3fb950; --error:#f85149;
+    --fwd:#8b98a9; --exit:#3fb950; --loop:#e3a52e; --abort:#f85149;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  header{padding:22px 28px 8px}
+  h1{margin:0;font-size:22px;letter-spacing:-.01em}
+  .sub{color:var(--muted);margin-top:4px;font-size:13px;max-width:1180px}
+  .callout{margin:14px 28px;padding:12px 14px;border-left:4px solid var(--piper);
+    background:#211d10;border-radius:6px;font-size:13px;color:#e8d9a8}
+  .callout b{color:#f0c657}
+  .legend{display:flex;flex-wrap:wrap;gap:18px 26px;padding:10px 28px 16px;font-size:12.5px;color:#c9d3df}
+  .legend .grp{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
+  .chip{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:12px;height:12px;border-radius:3px;display:inline-block}
+  .aline{width:26px;height:0;border-top:3px solid var(--fwd);display:inline-block}
+  .aline.dash{border-top-style:dashed}
+  #wrap{position:relative;margin:8px 20px 40px;width:1240px;height:1470px}
+  svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+  .node{position:absolute;background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    box-shadow:0 1px 2px rgba(0,0,0,.35),0 2px 8px rgba(0,0,0,.25);padding:10px 12px}
+  .node .t{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:7px}
+  .node .t .who{font-weight:600;color:var(--muted);font-size:11.5px}
+  .node .d{color:var(--desc);font-size:12px;margin-top:5px}
+  .node::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;border-radius:10px 0 0 10px}
+  .node.echo::before{background:var(--echo)} .node.annie::before{background:var(--annie)}
+  .node.carren::before{background:var(--carren)} .node.piper::before{background:var(--piper)}
+  .node.skribble::before{background:var(--skribble)} .node.start::before{background:var(--start)}
+  .node.esc::before{background:var(--esc)}
+  .node.gate{background:#211d10;border-color:#4d3f1a}.node.gate::before{background:var(--gate)}
+  .node.done{background:#0f2417;border-color:#1f5136}.node.done::before{background:var(--done)}
+  .node.error{background:#2a1517;border-color:#5c2a2a}.node.error::before{background:var(--error)}
+  .node .badge{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.04em;
+    text-transform:uppercase;color:#0d1117;padding:2px 6px;border-radius:999px}
+  .badge.hitl{background:var(--gate)} .badge.term{background:#5b6675;color:#e6edf3}
+  .lbl{position:absolute;transform:translate(-50%,-50%);background:var(--panel2);
+    border:1px solid #313c4a;color:#c9d3df;font-size:11px;padding:1px 6px;border-radius:999px;
+    white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+  .foot{margin:0 28px 48px;font-size:12.5px;color:#c3cdd9}
+  .foot h3{font-size:13px;margin:18px 0 6px;color:#e6edf3}
+  .foot ul{margin:6px 0;padding-left:18px} .foot li{margin:3px 0}
+  .foot b{color:#e6edf3}
+  code{background:#22293a;color:#cdd6e3;padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>code skill — execution flow</h1>
+  <div class="sub">Validated against <code>orchestration/playbooks/code.py</code> (<code>CodeMachine</code>) · runs on the shared orchestration engine. Boxes are FSM states; each dispatches one cognitive-primitive agent. MemPalace is the blackboard; only typed per-state SUMMARYs return to the engine.</div>
+</header>
+
+<div class="callout">
+  <b>Key behavior:</b> the PRD/IDEAL_STATE is <b>optional</b> — <code>code</code> runs standalone or as a <code>prd → code</code> chain. <code>initial_transition</code> uses a supplied IDEAL_STATE when present, otherwise falls back to <code>ideal_state_from_goal()</code> and proceeds; carren still judges the criteria and the verify/test battery is the real acceptance bar.
+</div>
+
+<div class="legend">
+  <div class="grp">
+    <span class="chip"><span class="dot" style="background:var(--echo)"></span>echo · observe</span>
+    <span class="chip"><span class="dot" style="background:var(--annie)"></span>annie · analyze</span>
+    <span class="chip"><span class="dot" style="background:var(--carren)"></span>carren · judge</span>
+    <span class="chip"><span class="dot" style="background:var(--piper)"></span>piper · plan</span>
+    <span class="chip"><span class="dot" style="background:var(--skribble)"></span>skribble · act/verify</span>
+  </div>
+  <div class="grp">
+    <span class="chip"><span class="dot" style="background:var(--gate)"></span>HITL gate</span>
+    <span class="chip"><span class="dot" style="background:var(--esc)"></span>escalation</span>
+    <span class="chip"><span class="dot" style="background:var(--done)"></span>complete</span>
+    <span class="chip"><span class="dot" style="background:var(--error)"></span>error</span>
+  </div>
+  <div class="grp">
+    <span class="chip"><span class="aline" style="border-color:var(--fwd)"></span>forward</span>
+    <span class="chip"><span class="aline" style="border-color:var(--exit)"></span>success / exit</span>
+    <span class="chip"><span class="aline" style="border-color:var(--loop)"></span>loop-back (bounded)</span>
+    <span class="chip"><span class="aline dash" style="border-color:var(--esc)"></span>escalation</span>
+    <span class="chip"><span class="aline" style="border-color:var(--abort)"></span>abort</span>
+  </div>
+</div>
+
+<div id="wrap">
+  <svg id="edges"><defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="context-stroke"></path>
+    </marker>
+  </defs></svg>
+</div>
+
+<div class="foot">
+  <h3>Bounded loops &amp; honest exit (never a faked pass)</h3>
+  <ul>
+    <li><b>learning → implementing</b> (retry): bounded by <code>max_iterations</code>. Budget spent with a gap remaining → <code>complete</code> with <b>met=False</b> and the unresolved gaps reported.</li>
+    <li><b>learning ⇄ verifying</b> (final battery): after learning reports <b>no gap</b>, one last full verify battery runs. Bounded by <code>FINAL_VERIFY_CAP = 3</code> — a persistent learn(no-gap)/verify(fail) disagreement completes honestly (met=False) instead of spinning.</li>
+    <li><b>done_predicate:</b> <code>met = (learn_gap is False) AND (verify_passed)</code>. Reaching <code>complete</code> does not imply success — only that predicate does.</li>
+  </ul>
+  <h3>Escalation subsystem (dashed)</h3>
+  <ul>
+    <li>Any working phase (<code>exploring, analyzing, checking_criteria, planning, implementing, verifying, learning</code>) escalates to <b>unknown</b> on <b>UNCERTAIN</b> confidence; <code>learning</code> also escalates on a <b>stall / repeated strategy</b> (progress_check).</li>
+    <li><b>unknown → awaiting_clarification → exploring</b>: the run pauses for the user, then resumes at <code>exploring</code> with the clarification.</li>
+  </ul>
+  <h3>Other true-to-code notes</h3>
+  <ul>
+    <li><b>Two HITL gates:</b> <code>criteria_gate</code> (refine / accept / skip) and <code>plan_gate</code> (approve / refine / deny — deny is a terminal <code>error</code>). No code is written before <code>plan_gate</code> approval.</li>
+    <li><b>Autonomy pre-check</b> on <code>implementing</code> (<code>AUTONOMY_STATES</code>) is dormant unless <code>PENNY_AUTONOMY_GATE</code> is set.</li>
+    <li><b>Abort:</b> every working phase can <code>abort → error</code>; those arrows are omitted for legibility (only <code>plan_gate</code> deny is drawn).</li>
+  </ul>
+</div>
+
+<script>
+const COLS = { Louter:30, C:470, Router:960 };
+const W = { C:300, side:250 };
+const N = {
+  intake:{col:'C',y:30,cls:'start',title:'intake',desc:'Engine start() resolves the IDEAL_STATE (optional) & runs server-framework detection, then advances.'},
+  exploring:{col:'C',y:150,cls:'echo',title:'exploring',who:'echo',desc:'OBSERVE — impacted files, patterns, test conventions, integration points.'},
+  analyzing:{col:'C',y:270,cls:'annie',title:'analyzing',who:'annie',desc:'ANALYZE — security surface, integration risks, dependency conflicts, edge cases.'},
+  checking_criteria:{col:'C',y:390,cls:'carren',title:'checking_criteria',who:'carren',desc:'Judge the success_criteria themselves: measurable, achievable, precise, non-overlapping.'},
+  criteria_gate:{col:'C',y:510,cls:'gate',title:'criteria_gate',badge:'HITL',desc:'Human: refine / accept / skip underspecified criteria.'},
+  planning:{col:'C',y:630,cls:'piper',title:'planning',who:'piper',desc:'Build order, dependency chains, per-tier test strategy.'},
+  plan_gate:{col:'C',y:750,cls:'gate',title:'plan_gate',badge:'HITL',desc:'Human: approve / refine / deny — before ANY code is written.'},
+  implementing:{col:'C',y:870,cls:'skribble',title:'implementing',who:'skribble',desc:'ACT — write code + its tests to satisfy the IDEAL STATE. (Optional autonomy pre-check, env-gated.)'},
+  verifying:{col:'C',y:990,cls:'skribble',title:'verifying',who:'skribble',desc:'Run every configured tier: lint · type · unit · integration · e2e. Modes: normal vs final battery.'},
+  learning:{col:'C',y:1110,cls:'carren',title:'learning',who:'carren',desc:'Compare output to the IDEAL STATE; judge the gap.'},
+  complete:{col:'C',y:1300,cls:'done',title:'complete',badge:'TERM',desc:'Terminal. met=True only if no gap AND verify passed; honest met=False on exhaustion.'},
+  error:{col:'Router',y:1300,cls:'error',title:'error',badge:'TERM',desc:'Terminal. Reached by plan_gate deny, or abort from any working phase.'},
+  unknown:{col:'Louter',y:870,cls:'esc',title:'unknown',desc:'Escalation entry: UNCERTAIN at any working phase, or a learning stall / repeated strategy.'},
+  awaiting:{col:'Louter',y:1030,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes at exploring once clarified.'},
+};
+const E = [
+  {from:'intake',to:'exploring',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'exploring',to:'analyzing',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'analyzing',to:'checking_criteria',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'checking_criteria',to:'criteria_gate',s1:'bottom',s2:'top',kind:'fwd',label:'gap = true'},
+  {from:'checking_criteria',to:'planning',s1:'right',s2:'right',kind:'exit',label:'gap = false (criteria ok)',bow:120},
+  {from:'criteria_gate',to:'checking_criteria',s1:'left',s2:'left',kind:'loop',label:'refine',bow:60},
+  {from:'criteria_gate',to:'planning',s1:'bottom',s2:'top',kind:'fwd',label:'accept / skip'},
+  {from:'planning',to:'plan_gate',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'plan_gate',to:'implementing',s1:'bottom',s2:'top',kind:'fwd',label:'approve'},
+  {from:'plan_gate',to:'planning',s1:'left',s2:'left',kind:'loop',label:'refine',bow:60},
+  {from:'plan_gate',to:'error',s1:'right',s2:'top',kind:'abort',label:'deny',c1:{dx:220,dy:20},c2:{dx:0,dy:-70}},
+  {from:'implementing',to:'verifying',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'verifying',to:'learning',s1:'bottom',s2:'top',kind:'fwd',label:'verify_done · or final-battery fail'},
+  {from:'verifying',to:'complete',s1:'right',s2:'right',kind:'exit',label:'final battery passed → met=True',bow:150},
+  {from:'learning',to:'implementing',s1:'left',s2:'left',kind:'loop',label:'gap & within budget → retry',bow:95},
+  {from:'learning',to:'verifying',s1:'right',s2:'right',kind:'loop',label:'no gap → final battery (≤3)',bow:58},
+  {from:'learning',to:'complete',s1:'bottom',s2:'top',kind:'exit',label:'budget / battery spent → met=False (honest)'},
+  {from:'unknown',to:'awaiting',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
+  {from:'awaiting',to:'exploring',s1:'left',s2:'left',kind:'esc',label:'clarify',c1:{dx:-20,dy:-260},c2:{dx:-20,dy:180}},
+  {from:'implementing',to:'unknown',s1:'left',s2:'right',kind:'esc',label:'UNCERTAIN / stall — any working phase',c1:{dx:-40,dy:0},c2:{dx:40,dy:0}},
+];
+const KIND = {fwd:getComputedStyle(document.documentElement).getPropertyValue('--fwd').trim(),
+  exit:'#3fb950',loop:'#e3a52e',esc:'#9ca3af',abort:'#f85149'};
+
+const wrap=document.getElementById('wrap'), svg=document.getElementById('edges');
+for(const id in N){const n=N[id];const w=(n.col==='C')?W.C:W.side;
+  const el=document.createElement('div');el.className='node '+n.cls;el.id='n_'+id;
+  el.style.left=COLS[n.col]+'px';el.style.top=n.y+'px';el.style.width=w+'px';
+  const who=n.who?`<span class="who">· ${n.who}</span>`:'';
+  const badge=n.badge?`<span class="badge ${n.badge==='TERM'?'term':'hitl'}">${n.badge}</span>`:'';
+  el.innerHTML=`<div class="t">${n.title}${who}${badge}</div><div class="d">${n.desc}</div>`;
+  wrap.appendChild(el);}
+const base=wrap.getBoundingClientRect();
+function rect(id){const r=document.getElementById('n_'+id).getBoundingClientRect();
+  return{left:r.left-base.left,top:r.top-base.top,width:r.width,height:r.height};}
+function anchor(r,side){switch(side){
+  case'top':return{x:r.left+r.width/2,y:r.top};
+  case'bottom':return{x:r.left+r.width/2,y:r.top+r.height};
+  case'left':return{x:r.left,y:r.top+r.height/2};
+  case'right':return{x:r.left+r.width,y:r.top+r.height/2};}}
+function ctrl(p,side,bow){const k=64,b=bow||0;switch(side){
+  case'top':return{x:p.x+b,y:p.y-k};
+  case'bottom':return{x:p.x+b,y:p.y+k};
+  case'left':return{x:p.x-k-Math.abs(b),y:p.y};
+  case'right':return{x:p.x+k+Math.abs(b),y:p.y};}}
+const SVGNS='http://www.w3.org/2000/svg';
+for(const e of E){
+  const ra=rect(e.from),rb=rect(e.to);
+  const p1=anchor(ra,e.s1),p2=anchor(rb,e.s2);
+  const c1=e.c1?{x:p1.x+e.c1.dx,y:p1.y+e.c1.dy}:ctrl(p1,e.s1,e.bow);
+  const c2=e.c2?{x:p2.x+e.c2.dx,y:p2.y+e.c2.dy}:ctrl(p2,e.s2,e.kind==='exit'?-(e.bow||0):e.bow);
+  const path=document.createElementNS(SVGNS,'path');
+  path.setAttribute('d',`M ${p1.x} ${p1.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${p2.x} ${p2.y}`);
+  path.setAttribute('fill','none');path.setAttribute('stroke',KIND[e.kind]);
+  path.setAttribute('stroke-width','2');path.setAttribute('marker-end','url(#ah)');
+  if(e.kind==='esc')path.setAttribute('stroke-dasharray','6 5');
+  svg.appendChild(path);
+  if(e.label){const t=0.5,mt=1-t;
+    const x=mt*mt*mt*p1.x+3*mt*mt*t*c1.x+3*mt*t*t*c2.x+t*t*t*p2.x;
+    const y=mt*mt*mt*p1.y+3*mt*mt*t*c1.y+3*mt*t*t*c2.y+t*t*t*p2.y;
+    const l=document.createElement('div');l.className='lbl';l.textContent=e.label;
+    l.style.left=x+'px';l.style.top=y+'px';wrap.appendChild(l);}
+}
+</script>
+</body>
+</html>

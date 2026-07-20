@@ -4,9 +4,11 @@ Hermetic: the memory bridge is injected (no live store); observability reads use
 an in-memory sqlite matching the real entries schema.
 """
 
+import difflib
 import json
 import sqlite3
 import sys
+import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -472,3 +474,97 @@ def test_list_unrated_returns_goal_and_response_for_presentation():
     assert "refactor" in items[0]["goal"]
     assert items[0]["response"] == "done, tests pass"
     assert items[0]["domain"] == "coding"
+
+
+# ── duplicate-detection bug: shared-boilerplate goals silently dropped ─────────
+# Two coordinated defects on the args/record path caused the SECOND rating of
+# near-identical-goal sessions to be dropped as a false-positive "duplicate":
+#   A. capture._bridge_writer wrote outcome drawers WITHOUT skip_duplicate_check,
+#      so the palace's 0.9 semantic guard rejected them.
+#   B. rate_recent's CLI --record path didn't pass existing_ids, so the real
+#      decision_id dedup never fired and dedup rested solely on the semantic guard.
+# ac1 exercises the REAL capture._bridge_writer through a stateful fake
+# memory_bridge that honors skip_duplicate_check and simulates the 0.9 guard —
+# a writer= override would not prove the fix reaches the palace call site.
+
+
+def _install_semantic_palace(monkeypatch, *, threshold=0.9):
+    """Inject a fake ``memory_bridge`` whose ``tool_add_drawer`` reproduces the
+    palace's behavior: it rejects content that is >= ``threshold`` similar to an
+    already-stored drawer UNLESS ``skip_duplicate_check`` is set. Returns the
+    backing store list so a test can assert how many drawers were actually kept.
+    Injected via sys.modules so capture._bridge_writer's lazy
+    ``from memory_bridge import tool_add_drawer`` resolves to this fake."""
+    stored: list = []
+
+    def fake_add_drawer(params):
+        content = params.get("content", "")
+        if not params.get("skip_duplicate_check"):
+            for prev in stored:
+                if difflib.SequenceMatcher(None, prev, content).ratio() >= threshold:
+                    return {"success": False, "reason": "duplicate"}
+        stored.append(content)
+        return {"success": True, "drawer_id": f"d{len(stored)}"}
+
+    fake_mod = types.ModuleType("memory_bridge")
+    fake_mod.tool_add_drawer = fake_add_drawer  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "memory_bridge", fake_mod)
+    return stored
+
+
+def test_ac1_distinct_sessions_with_near_identical_goals_both_record(monkeypatch):
+    # No model domain classifier during the test — keep it hermetic.
+    monkeypatch.delenv(capture.DOMAIN_MODEL_ENV, raising=False)
+    stored = _install_semantic_palace(monkeypatch)
+
+    # A multi-phase chain: same huge IDEAL_STATE boilerplate, only the phase word
+    # differs -> the two goals are ~identical to a 0.9 semantic guard.
+    boilerplate = "IDEAL_STATE " + ("lorem ipsum dolor sit amet " * 300)
+    goal_plan = f"phase plan for PRD-42. {boilerplate}"
+    goal_verify = f"phase verify for PRD-42. {boilerplate}"
+    con = _obs_with_entries(
+        [
+            ("sess-alpha", "user", 1, goal_plan),
+            ("sess-beta", "user", 2, goal_verify),
+        ]
+    )
+
+    existing = set()  # the args path computes this once via _safe_existing_ids
+    did1 = rate_recent.record_rating(con, "sess-alpha", "match", existing_ids=existing)
+    did2 = rate_recent.record_rating(con, "sess-beta", "match", existing_ids=existing)
+
+    # Both DISTINCT sessions record despite near-identical goals — the exact
+    # scenario that dropped the second rating before the fix.
+    assert did1 and did2
+    assert did1 != did2  # different session_id -> different decision_id
+    assert len(stored) == 2  # both drawers actually reached the palace
+
+
+def test_ac2_re_recording_same_session_is_noop_dedup(monkeypatch):
+    # True-duplicate protection must survive the fix: same session + goal ->
+    # same decision_id -> deduped via existing_ids, no second drawer written.
+    stored = _install_semantic_palace(monkeypatch)
+    con = _obs_with_entries(
+        [("s1", "user", 1, "a substantive goal that is long enough to count here")]
+    )
+
+    existing = set()
+    did1 = rate_recent.record_rating(con, "s1", "match", existing_ids=existing)
+    did2 = rate_recent.record_rating(con, "s1", "match", existing_ids=existing)
+
+    assert did1 is not None
+    assert did2 is None  # decision_id already present -> no-op
+    assert len(stored) == 1  # only one drawer ever written
+
+
+def test_ac3_bad_verdict_still_rejected(monkeypatch):
+    # A genuinely bad verdict is rejected outright — no drawer, no dedup entry.
+    stored = _install_semantic_palace(monkeypatch)
+    con = _obs_with_entries(
+        [("s1", "user", 1, "a substantive goal that is long enough to count here")]
+    )
+
+    existing = set()
+    assert rate_recent.record_rating(con, "s1", "banana", existing_ids=existing) is None
+    assert stored == []
+    assert existing == set()

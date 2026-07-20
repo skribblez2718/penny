@@ -28,8 +28,6 @@ class ReflectedXSSAnalyzer(VulnerabilityAnalyzer):
     def get_custom_scanners(self) -> list[str]:
         return ["reflected_xss_scanner", "reflected_parameter_scanner"]
     
-    def get_analysis_guide(self) -> str:
-        return self._load_prompt("annie-reflected_xss.md")
     
     def get_payload_templates(self) -> list[PayloadTemplate]:
         return [

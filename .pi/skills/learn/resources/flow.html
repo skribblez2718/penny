@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>learn skill — execution flow</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2a3341;
+    --ink:#e6edf3; --muted:#8b949e; --desc:#b3bdc9;
+    --echo:#22d3ee; --annie:#a78bfa; --carren:#fb7185; --piper:#fbbf24; --skribble:#60a5fa;
+    --synthia:#f472b6; --vera:#4ade80;
+    --start:#94a3b8; --gate:#e3b341; --esc:#9ca3af; --done:#3fb950; --error:#f85149;
+    --fwd:#8b98a9; --exit:#3fb950; --loop:#e3a52e; --abort:#f85149;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  header{padding:22px 28px 8px}
+  h1{margin:0;font-size:22px;letter-spacing:-.01em}
+  .sub{color:var(--muted);margin-top:4px;font-size:13px;max-width:1180px}
+  .callout{margin:14px 28px;padding:12px 14px;border-left:4px solid var(--piper);
+    background:#211d10;border-radius:6px;font-size:13px;color:#e8d9a8}
+  .callout b{color:#f0c657}
+  .legend{display:flex;flex-wrap:wrap;gap:18px 26px;padding:10px 28px 16px;font-size:12.5px;color:#c9d3df}
+  .legend .grp{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
+  .chip{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:12px;height:12px;border-radius:3px;display:inline-block}
+  .aline{width:26px;height:0;border-top:3px solid var(--fwd);display:inline-block}
+  .aline.dash{border-top-style:dashed}
+  #wrap{position:relative;margin:8px 20px 40px;width:1240px;height:1500px}
+  svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+  .node{position:absolute;background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    box-shadow:0 1px 2px rgba(0,0,0,.35),0 2px 8px rgba(0,0,0,.25);padding:10px 12px}
+  .node .t{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:7px}
+  .node .t .who{font-weight:600;color:var(--muted);font-size:11.5px}
+  .node .d{color:var(--desc);font-size:12px;margin-top:5px}
+  .node::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;border-radius:10px 0 0 10px}
+  .node.echo::before{background:var(--echo)} .node.annie::before{background:var(--annie)}
+  .node.carren::before{background:var(--carren)} .node.skribble::before{background:var(--skribble)}
+  .node.synthia::before{background:var(--synthia)} .node.vera::before{background:var(--vera)}
+  .node.start::before{background:var(--start)} .node.esc::before{background:var(--esc)}
+  .node.gate{background:#211d10;border-color:#4d3f1a}.node.gate::before{background:var(--gate)}
+  .node.done{background:#0f2417;border-color:#1f5136}.node.done::before{background:var(--done)}
+  .node.error{background:#2a1517;border-color:#5c2a2a}.node.error::before{background:var(--error)}
+  .node .badge{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.04em;
+    text-transform:uppercase;color:#0d1117;padding:2px 6px;border-radius:999px}
+  .badge.hitl{background:var(--gate)} .badge.term{background:#5b6675;color:#e6edf3}
+  .lbl{position:absolute;transform:translate(-50%,-50%);background:var(--panel2);
+    border:1px solid #313c4a;color:#c9d3df;font-size:11px;padding:1px 6px;border-radius:999px;
+    white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+  .foot{margin:0 28px 48px;font-size:12.5px;color:#c3cdd9}
+  .foot h3{font-size:13px;margin:18px 0 6px;color:#e6edf3}
+  .foot ul{margin:6px 0;padding-left:18px} .foot li{margin:3px 0}
+  .foot b{color:#e6edf3}
+  code{background:#22293a;color:#cdd6e3;padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>learn skill — execution flow</h1>
+  <div class="sub">Validated against <code>orchestration/playbooks/learn.py</code> (<code>LearnMachine</code>) · runs on the shared orchestration engine. Boxes are FSM states; each dispatches one cognitive-primitive agent. MemPalace is the blackboard; only typed per-state SUMMARYs return to the engine.</div>
+</header>
+
+<div class="callout">
+  <b>Key behavior:</b> conventions, the analogy registry, <b>original track/course/lesson names, and the author's own spine</b> are locked at <code>charter_gate</code> — a human approves the charter before ANY authoring. Verification is <b>evidence-gated</b>: <code>LEARN_VERIFY</code> requires the recomputation transcripts (every quantitative answer recomputed, never trusted) and <code>LEARN_CRITIQUE</code> requires what carren examined, or the engine rejects the verdict. Independence is <b>not</b> checked here — the separate <code>derivation</code> skill gates each lesson before publish (its corpus must include the coverage-reference source).
+</div>
+
+<div class="legend">
+  <div class="grp">
+    <span class="chip"><span class="dot" style="background:var(--echo)"></span>echo · observe</span>
+    <span class="chip"><span class="dot" style="background:var(--annie)"></span>annie · analyze</span>
+    <span class="chip"><span class="dot" style="background:var(--skribble)"></span>skribble · act</span>
+    <span class="chip"><span class="dot" style="background:var(--synthia)"></span>synthia · synthesize</span>
+    <span class="chip"><span class="dot" style="background:var(--vera)"></span>vera · verify</span>
+    <span class="chip"><span class="dot" style="background:var(--carren)"></span>carren · judge</span>
+  </div>
+  <div class="grp">
+    <span class="chip"><span class="dot" style="background:var(--gate)"></span>HITL gate</span>
+    <span class="chip"><span class="dot" style="background:var(--esc)"></span>escalation</span>
+    <span class="chip"><span class="dot" style="background:var(--done)"></span>complete</span>
+    <span class="chip"><span class="dot" style="background:var(--error)"></span>error</span>
+  </div>
+  <div class="grp">
+    <span class="chip"><span class="aline" style="border-color:var(--fwd)"></span>forward</span>
+    <span class="chip"><span class="aline" style="border-color:var(--exit)"></span>success / exit</span>
+    <span class="chip"><span class="aline" style="border-color:var(--loop)"></span>loop-back (bounded)</span>
+    <span class="chip"><span class="aline dash" style="border-color:var(--esc)"></span>escalation</span>
+    <span class="chip"><span class="aline" style="border-color:var(--abort)"></span>abort</span>
+  </div>
+</div>
+
+<div id="wrap">
+  <svg id="edges"><defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="context-stroke"></path>
+    </marker>
+  </defs></svg>
+</div>
+
+<div class="foot">
+  <h3>Bounded loops &amp; honest exit (never a faked pass)</h3>
+  <ul>
+    <li><b>authoring ⟲ / assessing ⟲</b>: self-loop once per lesson (<code>author_next</code>/<code>assess_next</code>, <code>lesson_count</code> from the design SUMMARY); progress is tracked in the checkpointer, so crash-resume continues at the same lesson.</li>
+    <li><b>verifying ⇄ fixing</b> and <b>critiquing → fixing</b> share <code>ctx.iteration</code> against <code>max_iterations</code> (default 3). Fixes ALWAYS re-verify against the <b>whole corpus</b> — cross-file forks are invisible to single-file checks.</li>
+    <li><b>Honest exhaustion:</b> budget spent → <code>complete</code> with <b>met=False</b> and <code>unresolved_violations</code> reported (<code>verify_exhausted</code> / <code>critique_exhausted</code>) — never a fabricated pass. Stalled identical violations escalate via <code>progress_check</code> instead of spinning.</li>
+  </ul>
+  <h3>Escalation subsystem (dashed)</h3>
+  <ul>
+    <li>Every working state (<code>scoping, ingesting, designing, authoring, assessing, synthesizing, verifying, fixing, critiquing</code>) escalates to <b>unknown</b> on <b>UNCERTAIN</b> / <code>needs_clarification</code>; <code>verifying</code> also escalates on stalled violations.</li>
+    <li><b>unknown → awaiting_clarification → designing</b>: the run pauses for the user, then resumes at <code>designing</code> with lesson progress preserved.</li>
+  </ul>
+  <h3>Other true-to-code notes</h3>
+  <ul>
+    <li><b>Ingest topology is model-emitted</b> (Bitter-Lesson compliance): <code>scoping</code> (echo) emits <code>ingest_branches</code>; a caller <code>constraints.ingest_branches</code> skips <code>scoping</code> entirely (<code>start_ingest</code>). The 3-focus default (content / conventions / assessment) survives only as the <b>tagged LOAN</b> <code>learn_default_ingest_topology</code> — ablated with no caller topology, the run fails loud.</li>
+    <li><b>One HITL gate:</b> <code>charter_gate</code> (approve / refine / deny — deny is a terminal <code>error</code>). Nothing is authored before approval; conventions locked here cannot drift later.</li>
+    <li><b>Abort:</b> every non-final state can <code>abort → error</code>; those arrows are omitted for legibility (only <code>charter_gate</code> deny is drawn).</li>
+  </ul>
+</div>
+
+<script>
+const COLS = { Louter:30, C:470, Router:960 };
+const W = { C:300, side:250 };
+const N = {
+  intake:{col:'C',y:30,cls:'start',title:'intake',desc:'Engine start() validates goal + constraints.source_dir, seeds learn extras, and routes: caller ingest_branches → ingesting, else scoping.'},
+  scoping:{col:'C',y:145,cls:'echo',title:'scoping',who:'echo',desc:'Quick source scan → emits the ingest fan topology (ingest_branches: branch_id → focus), shaped to THIS material.'},
+  ingesting:{col:'C',y:260,cls:'echo',title:'ingesting',who:'echo × N',desc:'Parallel read-only fan over the emitted foci — the IDEA LAYER only (facts/what, never a source\u2019s prose or structure), conventions collisions, assessment style. Bounded by max_fan_width.'},
+  designing:{col:'C',y:395,cls:'annie',title:'designing',who:'annie',desc:'Course charter: lessons in dependency order, conventions canon (decided ONCE, globally), analogy registry, per-concept source map — with original names + the author\u2019s own spine (never a source\u2019s titles or ToC).'},
+  charter_gate:{col:'C',y:545,cls:'gate',title:'charter_gate',badge:'HITL',desc:'Human: approve / refine / deny the charter BEFORE any authoring.'},
+  authoring:{col:'C',y:665,cls:'skribble',title:'authoring',who:'skribble',desc:'ONE lesson per pass: study guide + practice answers, clean-room + sources-closed, graded practice as ```question DSL blocks.'},
+  assessing:{col:'C',y:795,cls:'skribble',title:'assessing',who:'skribble',desc:'ONE lesson per pass: practice exam + answer key — exams authored AS ```question DSL in the course tree (never app code).'},
+  synthesizing:{col:'C',y:925,cls:'synthia',title:'synthesizing',who:'synthia',desc:'Course-wide final prep: comprehensive review, notation reference, final exam (DSL) + key.'},
+  verifying:{col:'C',y:1045,cls:'vera',title:'verifying',who:'vera',desc:'Full-corpus mechanical conformance + recomputation of EVERY quantitative answer. EVIDENCE-GATED: recomputation transcripts are a required SUMMARY field.'},
+  critiquing:{col:'C',y:1190,cls:'carren',title:'critiquing',who:'carren',desc:'Learner-experience judgment against the teaching philosophy (evidence-gated: names what was examined).'},
+  fixing:{col:'Router',y:1110,cls:'skribble',title:'fixing',who:'skribble',desc:'Apply verified fixes with cross-file sync (guide↔answers, exam↔key). Always re-verifies.'},
+  complete:{col:'C',y:1370,cls:'done',title:'complete',badge:'TERM',desc:'Terminal. met=True only when verified clean AND critique APPROVEs; honest met=False on exhaustion with unresolved_violations.'},
+  error:{col:'Router',y:1370,cls:'error',title:'error',badge:'TERM',desc:'Terminal. Reached by charter_gate deny, or abort from any working state.'},
+  unknown:{col:'Louter',y:925,cls:'esc',title:'unknown',desc:'Escalation entry: UNCERTAIN / needs_clarification at any working state; stalled verify violations.'},
+  awaiting:{col:'Louter',y:1085,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes at designing once clarified (lesson progress preserved).'},
+};
+const E = [
+  {from:'intake',to:'scoping',s1:'bottom',s2:'top',kind:'fwd',label:'start_scope'},
+  {from:'intake',to:'ingesting',s1:'right',s2:'right',kind:'fwd',label:'start_ingest — caller ingest_branches',bow:120},
+  {from:'scoping',to:'ingesting',s1:'bottom',s2:'top',kind:'fwd',label:'scope_done · empty → tagged-LOAN 3-focus default'},
+  {from:'ingesting',to:'designing',s1:'bottom',s2:'top',kind:'fwd',label:'ingest_done (fan-in)'},
+  {from:'designing',to:'charter_gate',s1:'bottom',s2:'top',kind:'fwd',label:'design_done'},
+  {from:'charter_gate',to:'authoring',s1:'bottom',s2:'top',kind:'fwd',label:'approve'},
+  {from:'charter_gate',to:'designing',s1:'left',s2:'left',kind:'loop',label:'refine',bow:60},
+  {from:'charter_gate',to:'error',s1:'right',s2:'top',kind:'abort',label:'deny',c1:{dx:260,dy:30},c2:{dx:60,dy:-120}},
+  {from:'authoring',to:'authoring',s1:'right',s2:'right',kind:'loop',label:'author_next (per lesson)',c1:{dx:70,dy:-28},c2:{dx:70,dy:28}},
+  {from:'authoring',to:'assessing',s1:'bottom',s2:'top',kind:'fwd',label:'author_done'},
+  {from:'assessing',to:'assessing',s1:'right',s2:'right',kind:'loop',label:'assess_next (per lesson)',c1:{dx:70,dy:-28},c2:{dx:70,dy:28}},
+  {from:'assessing',to:'synthesizing',s1:'bottom',s2:'top',kind:'fwd',label:'assess_done'},
+  {from:'synthesizing',to:'verifying',s1:'bottom',s2:'top',kind:'fwd',label:'synth_done'},
+  {from:'verifying',to:'critiquing',s1:'bottom',s2:'top',kind:'fwd',label:'verify_clean (evidence-gated)'},
+  {from:'verifying',to:'fixing',s1:'right',s2:'top',kind:'loop',label:'verify_fix (budget)',c1:{dx:80,dy:10},c2:{dx:20,dy:-50}},
+  {from:'fixing',to:'verifying',s1:'left',s2:'right',kind:'loop',label:'fix_done — always re-verify, whole corpus',c1:{dx:-60,dy:-40},c2:{dx:60,dy:20}},
+  {from:'verifying',to:'complete',s1:'left',s2:'left',kind:'exit',label:'verify_exhausted → met=False (honest)',bow:110},
+  {from:'critiquing',to:'complete',s1:'bottom',s2:'top',kind:'exit',label:'critique_pass (APPROVE) · critique_exhausted → met=False'},
+  {from:'critiquing',to:'fixing',s1:'right',s2:'bottom',kind:'loop',label:'critique_fix (budget)',c1:{dx:60,dy:0},c2:{dx:-40,dy:60}},
+  {from:'unknown',to:'awaiting',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
+  {from:'awaiting',to:'designing',s1:'left',s2:'left',kind:'esc',label:'clarify (lesson progress preserved)',c1:{dx:-24,dy:-330},c2:{dx:-360,dy:120}},
+  {from:'synthesizing',to:'unknown',s1:'left',s2:'right',kind:'esc',label:'UNCERTAIN / stall — any working state',c1:{dx:-40,dy:0},c2:{dx:40,dy:0}},
+];
+const KIND = {fwd:getComputedStyle(document.documentElement).getPropertyValue('--fwd').trim(),
+  exit:'#3fb950',loop:'#e3a52e',esc:'#9ca3af',abort:'#f85149'};
+
+const wrap=document.getElementById('wrap'), svg=document.getElementById('edges');
+for(const id in N){const n=N[id];const w=(n.col==='C')?W.C:W.side;
+  const el=document.createElement('div');el.className='node '+n.cls;el.id='n_'+id;
+  el.style.left=COLS[n.col]+'px';el.style.top=n.y+'px';el.style.width=w+'px';
+  const who=n.who?`<span class="who">· ${n.who}</span>`:'';
+  const badge=n.badge?`<span class="badge ${n.badge==='TERM'?'term':'hitl'}">${n.badge}</span>`:'';
+  el.innerHTML=`<div class="t">${n.title}${who}${badge}</div><div class="d">${n.desc}</div>`;
+  wrap.appendChild(el);}
+const base=wrap.getBoundingClientRect();
+function rect(id){const r=document.getElementById('n_'+id).getBoundingClientRect();
+  return{left:r.left-base.left,top:r.top-base.top,width:r.width,height:r.height};}
+function anchor(r,side){switch(side){
+  case'top':return{x:r.left+r.width/2,y:r.top};
+  case'bottom':return{x:r.left+r.width/2,y:r.top+r.height};
+  case'left':return{x:r.left,y:r.top+r.height/2};
+  case'right':return{x:r.left+r.width,y:r.top+r.height/2};}}
+function ctrl(p,side,bow){const k=64,b=bow||0;switch(side){
+  case'top':return{x:p.x+b,y:p.y-k};
+  case'bottom':return{x:p.x+b,y:p.y+k};
+  case'left':return{x:p.x-k-Math.abs(b),y:p.y};
+  case'right':return{x:p.x+k+Math.abs(b),y:p.y};}}
+const SVGNS='http://www.w3.org/2000/svg';
+for(const e of E){
+  const ra=rect(e.from),rb=rect(e.to);
+  const p1=anchor(ra,e.s1),p2=anchor(rb,e.s2);
+  const c1=e.c1?{x:p1.x+e.c1.dx,y:p1.y+e.c1.dy}:ctrl(p1,e.s1,e.bow);
+  const c2=e.c2?{x:p2.x+e.c2.dx,y:p2.y+e.c2.dy}:ctrl(p2,e.s2,e.kind==='exit'?-(e.bow||0):e.bow);
+  const path=document.createElementNS(SVGNS,'path');
+  path.setAttribute('d',`M ${p1.x} ${p1.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${p2.x} ${p2.y}`);
+  path.setAttribute('fill','none');path.setAttribute('stroke',KIND[e.kind]);
+  path.setAttribute('stroke-width','2');path.setAttribute('marker-end','url(#ah)');
+  if(e.kind==='esc')path.setAttribute('stroke-dasharray','6 5');
+  svg.appendChild(path);
+  if(e.label){const t=0.5,mt=1-t;
+    const x=mt*mt*mt*p1.x+3*mt*mt*t*c1.x+3*mt*t*t*c2.x+t*t*t*p2.x;
+    const y=mt*mt*mt*p1.y+3*mt*mt*t*c1.y+3*mt*t*t*c2.y+t*t*t*p2.y;
+    const l=document.createElement('div');l.className='lbl';l.textContent=e.label;
+    l.style.left=x+'px';l.style.top=y+'px';wrap.appendChild(l);}
+}
+</script>
+</body>
+</html>

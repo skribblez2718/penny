@@ -68,8 +68,12 @@ skill({
     // Pipeline-level config (top-level of constraints, NOT inside intake):
     output_dir: "/tmp/gin-and-juice-test",
     out_of_scope: ["https://ginandjuice.shop/vulnerabilities"],
-    wave_size: 10,        // tunable Budget: findings per annie investigate wave (default 10)
-    // max_fan_width, max_iterations also honored per the engine defaults.
+    max_fan_width: 5,     // tunable Budget: how many per-class annie agents run in PARALLEL
+    //   per INVESTIGATE batch (jsa default 5). INVESTIGATE fans one agent per candidate
+    //   vuln class (fresh context), in batches of this width, iterating until ALL classes
+    //   are covered, then a trailing generalist sweep. Also the engine's fan ceiling.
+    wave_size: 10,        // informational per-class candidate-batch hint (default 10)
+    // max_iterations also honored per the engine defaults.
     // Browser-PoC VERIFY is evidence-gated (Rec 4): a verified finding must carry
     // the executed-PoC transcript or the engine rejects the verdict.
     dual_verify: false,   // Rec 5 (opt-in): a PASS runs a SECOND independent vera;
@@ -153,70 +157,22 @@ skill({
 
 ## Pipeline
 
-```mermaid
-graph TD
-    A[intake: GATE — validate goal/constraints; questionnaire for missing fields] --> B[acquire: TOOL local — katana crawl (auth, depth-bounded) + curl + recursive jsluice JS discovery]
-    B --> C[cve_research: TOOL local — Wappalyzer + source maps + OSV.dev + asset_classify + purl]
-    C --> D[sast_scan: TOOL local — semgrep + jsluice secrets/urls]
-    D --> E[normalize: TOOL local — dedup_components + dedup_vulns via purl + VEX]
-    E --> F[dedup_within_source: TOOL local — scanner fingerprint dedup]
-    F --> G[correlate_evidence: TOOL local — typed edges + agent candidates]
-    G --> H[agent_review: TOOL local heuristic — bounded evidence packets, score 0.45-0.85]
-    H --> I[sast_validate: TOOL local heuristic — confirmed/fp/needs_deeper]
-    I --> J[structure: TOOL local — build typed store + PageCard/ModuleCard]
-    J --> K[slice: TOOL local — Joern data flow + per-class candidates; seed wave plan]
-    K --> L[investigate: AGENT annie — bounded wave loop, per-lane FlowCards]
-    L -->|investigate_wave: wave &lt; total_waves| L
-    L -->|investigate_done| M[collect: TOOL local — gather from MemPalace]
-    M --> N[merge: AGENT synthia — dedup + merge]
-    N --> O[verify: AGENT vera — browser PoC, evidence oracle]
-    O --> P[report: AGENT skribble — bug bounty reports]
-    P --> Q[reflect: AGENT carren — self-improving SAST rules + jsa-learnings]
-    Q --> R[complete]
-```
+`resources/flow.mmd` is the **canonical** pipeline diagram — an edge-for-edge mirror of `JSAMachine` (guarded against drift by `apps/orchestration/tests/test_jsa_flow_diagram.py`). Read it for the exact states, events, and guards. In summary:
 
-```
-intake ─(gate)→ acquire → cve_research → sast_scan → normalize → dedup_within_source
-→ correlate_evidence → agent_review → sast_validate → structure → slice
-→ investigate ⟲(wave loop) → collect → merge → verify → report → reflect → complete
-```
+- **`intake`** is the only human gate (schema questionnaire). Seeded valid from `constraints`, it is skipped and the run auto-advances.
+- A **deterministic pass** then runs inline with no agent: `acquire → cve_research → sast_scan → normalize → dedup_within_source → correlate_evidence → agent_review → sast_validate → structure → slice`. `agent_review` and `sast_validate` are LOCAL heuristics despite the name.
+- **`investigate`** (annie) is a bounded **per-class parallel batch fan** — one annie agent per candidate vuln class (a fresh context focused on that class + its `references/<class>.md` catalog), run in batches of up to `max_fan_width` (default 5) concurrently, iterating until all classes are covered, then a trailing generalist sweep batch (novel patterns, logic/auth, cross-class chains); when the batches finish it flows straight into `collect → merge → verify` with no gate.
+- The **verify tail is evidence-gated**: `verify` (vera) → optional `reverify` (a second, independent vera — only when `constraints.dual_verify` is set and `verify` PASSed) → **`poc_capture`** (an engine-owned TOOL state that re-checks `{output_dir}/poc/<finding_id>.png` and demotes any claimed-verified finding lacking a decodable browser screenshot) → `report` (skribble) → `reflect` (carren) → `complete`.
+- Agent states escalate on `needs_clarification` / UNCERTAIN via the engine HITL seam (`unknown → awaiting_clarification`, resumed at `investigate`); any non-final state can `abort` to `error`.
 
-> **Note:** all TOOL states (`acquire` … `slice`, plus `collect`) run inline in
-> the engine with no agent. `agent_review` and `sast_validate` are LOCAL
-> deterministic heuristics despite the name — no agent runs. `intake` is the
-> only human gate; after the INVESTIGATE wave loop the pipeline flows straight
-> into `collect` with no pause. See `resources/flow.mmd` for the exact FSM.
-
-| State | Type | Run By | What Happens |
-|-------|------|--------|-------------|
-| **intake** | GATE | — | Validate target configuration. Required: `target_url`, `authenticated_testing`, `session_management`; conditionally `auth_instructions` when authenticated testing ≠ anonymous. If anything is missing, the run pauses on the `intake` engine gate; Penny answers via the `questionnaire` tool and resumes the same `run_id`. When valid (or seeded from `constraints`), the gate is skipped and the pipeline fires into ACQUIRE. |
-| **acquire** | TOOL (local) | — | Depth-bounded katana crawl (authenticated) + curl fallback + recursive jsluice JS discovery → downloads JS/HTML and builds the file manifest |
-| **cve_research** | TOOL (local) | — | Wappalyzer fingerprint engine (3,911 technologies) + source-map parsing + content regex fallback + asset classification + purl canonical IDs + initial VEX status |
-| **sast_scan** | TOOL (local) | — | semgrep (jsa preset) + jsluice secrets + jsluice urls on ALL files; produces SARIF-style fingerprints |
-| **normalize** | TOOL (local) | — | `dedup_components` (purl canonical) + `dedup_vulnerabilities` (CVE alias canonicalization) + VEX status per CVE |
-| **dedup_within_source** | TOOL (local) | — | `scanner_dedup.merge_scanner_findings()` — dedup SAST findings by SARIF fingerprints and similarity |
-| **correlate_evidence** | TOOL (local) | — | Cross-stream correlation via typed edges (component→vuln, SAST→vuln). Hard gates + positive/negative signals. `select_agent_candidates()` filters to score 0.45-0.85 |
-| **agent_review** | TOOL (local heuristic) | — | LOCAL despite the name. Reviews ambiguous correlation edges via **bounded evidence packets** (no raw code). Produces verdict + confidence_override + recommended_action |
-| **sast_validate** | TOOL (local heuristic) | — | Triage SAST findings: confirmed / false_positive / needs_deeper (first-party vs third-party awareness from correlation) |
-| **structure** | TOOL (local) | — | Build typed analysis store. Parse HTML for page context, query Caido (graceful if unavailable), build PageCard/ModuleCard |
-| **slice** | TOOL (local) | — | Per-class candidate generation + Joern CPG slices (graceful degradation). Build FlowCard. Seed the INVESTIGATE wave plan |
-| **investigate** | AGENT | annie | Bounded wave loop (`total_waves = max(1, ceil(needs_llm / 10))`). Per-lane work consuming FlowCards; general sweep for novel patterns. On `investigate_done` the pipeline flows straight to `collect` |
-| **collect** | TOOL (local) | — | Gather findings from MemPalace `{session_id}-findings` room |
-| **merge** | AGENT | synthia | Dedup + cross-card stitching + confidence promotion |
-| **verify** | AGENT | vera | Browser PoC: navigate, inject payloads, capture screenshots; enforces `out_of_scope`; attaches transcripts as `evidence` |
-| **report** | AGENT | skribble | Structured findings: title, application-context impact (exploitability + which data/users/functions are at risk + chainability), steps to reproduce, code analysis, remediation, CVSS 4.0 vector (score complements, does not replace, the impact narrative) |
-| **reflect** | AGENT | carren | Self-improving SAST: for every confirmed vuln the deterministic scanner missed, authors a new semgrep rule, `semgrep --validate`s it, and persists it to `.pi/extensions/semgrep/rules/learned/jsa/` (future runs auto-load it); also writes FP/FN learnings to jsa-learnings |
-
-Agent states escalate on `needs_clarification` / UNCERTAIN via the engine HITL
-seam (`unknown` → `awaiting_clarification`, resumed at `investigate`). Any state
-can `abort` to `error`.
+What each state actually *does* is described in the [Two-Pass](#two-pass-architecture-with-correlation-layer) and [Three-Lane](#three-lane-architecture-structure--slice--investigate) sections below; the deterministic-phase internals live in the skill modules under `scripts/`.
 
 ### Two-Pass Architecture (with Correlation Layer)
 
 **Pass 1 — Deterministic Automation (seconds):**
-- `ACQUIRE` downloads JS files
+- `ACQUIRE` downloads JS files (katana crawl + recursive jsluice discovery) **and reconstructs first-party original source from source maps** — inline base64, co-located, or external `.map` with `sourcesContent` → written to `{output_dir}/sources/` (readable pre-bundle TS/JSX; `node_modules`/bundler-internal sources skipped). Analyzers and annie review the readable source, not just minified bundles.
 - `CVE_RESEARCH` detects components via Wappalyzer + source maps + content regex
-- `SAST_SCAN` runs semgrep + jsluice on all files
+- `SAST_SCAN` runs semgrep (incl. `p/secrets`) + jsluice on all files (incl. reconstructed `sources/`), **plus optional trufflehog/gitleaks** for broad named-secret coverage with live verification (graceful if absent). All secret hits are deduped and surfaced as first-class `secret_disclosure` findings.
 
 **Correlation Layer (deterministic):**
 - `NORMALIZE` — `dedup_components` (purl canonical) + `dedup_vulnerabilities` (CVE alias canonicalization) + VEX status per CVE
@@ -239,7 +195,7 @@ The deep analysis pass is a structure-and-slice architecture with 3 phases:
 
 - **STRUCTURE** (local) — Build a typed analysis store and emit `PageCard` / `ModuleCard` records. Parses HTML, builds file manifest, AST index, runs tree-sitter queries for dangerous patterns.
 - **SLICE** (local) — Per-class candidate generation. Uses vuln-class heuristics, dangerous patterns, and (when available) Joern data flow queries. Emits `FlowCard` records with proper CWE + lane assignment.
-- **INVESTIGATE** (per-lane agent dispatch) — Three lanes with different packet types:
+- **INVESTIGATE** (per-class wave dispatch) — one wave per candidate vuln class + a generalist sweep; the class's **lane** decides which packet type its candidates carry:
 
 | Lane | Analyzers | Packet Type |
 |------|-----------|-------------|
@@ -247,7 +203,7 @@ The deep analysis pass is a structure-and-slice architecture with 3 phases:
 | `page_dom` | `dom_clobbering`, `reflected_xss`, `stored_xss` | `PageCard` + relevant `FlowCards` (HTML structure + JS correlation) |
 | `network_behavior` | `cors`, `clickjacking`, `idor`, `cache_poisoning`, `http_smuggling`, `csrf` | `PageCard` with Caido HTTP history (request/response, headers) |
 
-Each agent prompt (`assets/prompts/annie-{vuln_class}.md`) declares its lane so INVESTIGATE can route work items correctly. The `scripts/lane_router.py` module is the source of truth for the lane-to-analyzer mapping. The **22** vulnerability-class analyzers, prompts, and lane labels are **1:1:1** — `lane_router.get_all_analyzers()` returns exactly the 22 classes (13 code_static + 3 page_dom + 6 network_behavior), and a drift-guard test (`test_lane_router.py`) fails if the router, the analyzer files, and the prompts ever diverge. (`csrf` is routed to `network_behavior` because a CSRF verdict hinges on whether state-changing requests validate an anti-CSRF token — which needs HTTP history.)
+The `scripts/lane_router.py` module is the source of truth for the lane-to-analyzer mapping. The **22** vulnerability-class analyzers, reference catalogs, and lane labels are **1:1:1** — `lane_router.get_all_analyzers()` returns exactly the 22 classes (13 code_static + 3 page_dom + 6 network_behavior), and a drift-guard test (`test_lane_router.py`) fails if the router, the analyzer files (`scripts/analyzers/<class>.py`), and the reference catalogs (`assets/references/<class>.md`) ever diverge. (`csrf` is routed to `network_behavior` because a CSRF verdict hinges on whether state-changing requests validate an anti-CSRF token — which needs HTTP history.)
 
 ---
 
@@ -291,14 +247,15 @@ Each agent prompt (`assets/prompts/annie-{vuln_class}.md`) declares its lane so 
 
 ### Prompts vs References
 
-| Layer | Location | Size | Content |
-|-------|----------|------|---------|
-| **Worker prompts** | `assets/prompts/annie-{vuln_class}.md` | 3-5 KB each | Actionable analysis workflow, top sources/sinks, detection commands, false positive checks, scanner configuration |
-| **Agent protocols** | `assets/prompts/{agent_name}-base.md` | 2-3 KB each | Per-agent protocol: echo acquisition, vera verification, skribble reports, synthia merge, carren reflection |
-| **Reference catalogs** | `assets/references/{vuln_class}/` | Full detail | Complete source/sink catalogs, all payload variants, sanitizer bypasses by version, framework-specific patterns, exploitation chains |
-| **Foundational research** | `research/jsa/analyze-*.md` | 18-51 KB each | Comprehensive research documents with CVEs, historical context, academic references |
+| Layer | Location | Injected? | Content |
+|-------|----------|-----------|---------|
+| **Agent protocols (Domain Guidance)** | `assets/prompts/{agent}-base.md` | **Yes** — via `skill_context` per state: `annie-base`, `synthia-base`, `vera-base`, `skribble-base`, `carren-base` | Per-agent mission, wire protocol, non-negotiables, output contract |
+| **Per-class reference catalogs** | `assets/references/{vuln_class}.md` | No — read on demand; a per-class INVESTIGATE wave names its catalog path | Source/sink catalogs, payload variants, sanitizer bypasses by version, framework patterns, exploitation chains, scanner commands, multi-step chains, false-positive checks (agent-oriented: `read limit=30` for the ToC, then `grep`). Also feed the deterministic verifier's per-class guide (`scripts/analyzers/base.py`) |
+| **Foundational research** | `research/jsa/analyze-*.md` | No | Comprehensive research: CVEs, historical context, academic references |
 
-**Naming convention:** `<agent_name>-<role>.md` — `annie-dom_xss.md` for the DOM XSS analysis worker, `annie-cve.md` for the CVE researcher, `vera-base.md` for verification protocol.
+**How annie gets per-class guidance:** only the `*-base.md` agent protocols are injected as Domain Guidance (one per agent state, via `skill_context`). The per-class knowledge is **not** injected — each per-class INVESTIGATE wave names `assets/references/<class>.md` for its class, and annie reads that catalog before ruling. (The former per-class *worker prompts* `assets/prompts/annie-<class>.md` were retired: their content was harvested into the catalogs, which are now the single per-class knowledge source read by both annie and the deterministic verifier.)
+
+**Naming convention:** injected agent protocols are `<agent>-base.md` (e.g. `vera-base.md` for the verification protocol); `annie-cve.md` is the CVE researcher; per-class knowledge lives in `assets/references/<class>.md` (e.g. `dom_xss.md`), read on demand and loaded by the deterministic verifier via `get_analysis_guide()`.
 
 ### CVE Research — Offline Fingerprint Detection
 
@@ -329,14 +286,16 @@ The deep analysis pass uses a typed analysis store and per-class candidate gener
 - Caps at 20 candidates per vuln class to prevent card explosion
 - Emits FlowCard records with proper CWE + sink mapping + lane assignment
 
-**INVESTIGATE** (per-lane agent dispatch) consumes the cards:
-- code_static lane: receives FlowCard (source/sink/sanitizer info, ~50-200 lines of code)
-- page_dom lane: receives PageCard + relevant FlowCards (HTML structure + JS correlation)
-- network_behavior lane: receives PageCard with Caido HTTP history (request/response, headers)
+**INVESTIGATE** consumes the cards, one **vuln class** per wave; each candidate's lane decides its packet type:
+- code_static lane: FlowCard (source/sink/sanitizer info, ~50-200 lines of code)
+- page_dom lane: PageCard + relevant FlowCards (HTML structure + JS correlation)
+- network_behavior lane: PageCard with Caido HTTP history (request/response, headers)
 
-### Per-Lane Agent Dispatch
+### Per-Class Agent Dispatch (parallel, batched)
 
-Each agent operates on a single card in one of three lanes. A 500-file enterprise app with 3 analyzers produces hundreds of agents running in waves — completing in minutes. Each agent has bounded context (FlowCard/PageCard is 2-15K tokens, never the full codebase).
+INVESTIGATE is a **bounded, iterative PARALLEL batch fan dispatched by vuln class**. `slice` emits one annie branch per candidate vuln class into `dynamic_branches["investigate"]` — each a **fresh** annie context focused entirely on a single class and its `assets/references/<class>.md` catalog. The engine dispatches them in **batches of up to `max_fan_width` agents running CONCURRENTLY** (jsa default **5** — production bug-bounty targets have a lot to cover); `route_after` re-emits the next batch and self-transitions until **every** candidate class is covered, then runs **one trailing generalist sweep** batch (novel patterns, logic/auth flaws, and multi-step chains that cross vuln classes). `total_batches = ceil(len(candidate_classes) / max_fan_width) + 1`. `max_fan_width` is a tunable Budget (`constraints.max_fan_width`) and doubles as the engine's fan ceiling, so a batch never over-fans. There is **no cap/fold** — all candidate classes get a dedicated agent (the class count is inherently ≤ 22); annie always runs at least the sweep (≥ 1 batch).
+
+Per-class isolation keeps each context focused (one class's methodology, full attention) while the sweep + synthia's cross-card merge preserve cross-class chain detection; the class's lane (`code_static` / `page_dom` / `network_behavior`) still governs packet type, so context stays bounded (a FlowCard/PageCard is 2-15K tokens, never the full codebase). Batching (rather than one giant fan) bounds peak concurrency — model-API rate limits, cost, and blast radius — while still covering wide targets quickly. Lower `max_fan_width` on a rate-limited key; raise it on a fat quota.
 
 ### MemPalace-Native Communication
 
@@ -363,8 +322,8 @@ Every finding includes:
 5. **Remediation** — tech-stack-specific, actionable. No generic guidance.
 6. **CVSS 4.0** — full vector with exploitability and impact justification. The score complements, and does not replace, the application-context impact narrative.
 
-Output location: `{output_dir}/reports/jsa-{session_id}/report.md`
-Evidence: `{output_dir}/evidence/jsa-{session_id}/`
+Output location: consolidated report at `{output_dir}/report.md`; per-finding reports under `{output_dir}/findings/`
+Evidence: browser-PoC screenshots at `{output_dir}/poc/<finding_id>.png` (the deterministic path the `poc_capture` engine step re-checks)
 
 ---
 
@@ -380,12 +339,19 @@ Evidence: `{output_dir}/evidence/jsa-{session_id}/`
 
 ## Prerequisites
 
-- **semgrep** CLI — pattern-based SAST scanning
+**Required:**
+- **semgrep** CLI — pattern-based SAST scanning (includes the `p/secrets` ruleset)
 - **jsluice** CLI — URL and secret extraction from JavaScript
 - **Playwright** — browser automation (via our playwright extension)
 - **tree-sitter** + tree-sitter-javascript — AST parsing
 - **MemPalace** — inter-agent communication (already configured)
 - **Node.js / npx** — js-beautify, synchrony, webcrack (deobfuscation)
+
+**Optional (auto-detected, graceful if absent — install for deeper coverage):**
+- **trufflehog** CLI — hundreds of provider-specific secret detectors, with live key **verification** against the provider (a `Verified` hit is reported HIGH). Discovered on `PATH` or `~/go/bin`; `SAST_SCAN` runs it over the acquired tree and folds its findings into the `secret_disclosure` flow. Absent → skipped, no error.
+- **gitleaks** CLI — complementary named-secret detectors (no-git directory scan). Same graceful discovery + folding.
+
+> Secret detection is layered and degrades gracefully: `semgrep p/secrets` + `jsluice secrets` are the always-on baseline; `trufflehog`/`gitleaks` add breadth (and trufflehog adds verification) wherever the binary is installed. All secret hits are deduped and surfaced as first-class SAST findings.
 
 ---
 

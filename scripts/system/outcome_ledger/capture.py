@@ -210,6 +210,13 @@ def _bridge_writer(payload: Dict[str, str]) -> Dict[str, str]:
             "content": payload["content"],
             "added_by": payload.get("added_by", "capture"),
             "type": "outcome",
+            # Outcome drawers are deduplicated by decision_id (the ledger's
+            # identity), NOT by semantics. The palace's 0.9-similarity guard is a
+            # false-positive machine here: distinct sessions whose goals share a
+            # large IDEAL_STATE/boilerplate blob exceed 0.9 and get the SECOND
+            # rating silently rejected as a "duplicate". Skip it; true duplicates
+            # are stopped upstream via existing_ids / decision_id.
+            "skip_duplicate_check": True,
         }
     )
 

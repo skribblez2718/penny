@@ -104,7 +104,7 @@ class TestDOMXSSAnalyzer:
     
     def test_analysis_guide_loaded(self):
         guide = self.analyzer.get_analysis_guide()
-        assert len(guide) > 100  # Should load annie-dom_xss.md
+        assert len(guide) > 100  # loads assets/references/dom_xss.md (worker prompt retired)
         assert "DOM" in guide or "XSS" in guide or "dom_xss" in guide.lower()
     
     def test_extends_base_class(self):

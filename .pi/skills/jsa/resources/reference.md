@@ -55,8 +55,8 @@ Every transition, verbatim event name, with its guard.
 | `review_done` | `agent_review` → `sast_validate` | |
 | `validate_done` | `sast_validate` → `structure` | |
 | `structure_done` | `structure` → `slice` | |
-| `slice_done` | `slice` → `investigate` | wave plan seeded |
-| `investigate_wave` | `investigate` → `investigate` | `wave < total_waves` (re-dispatch annie) |
+| `slice_done` | `slice` → `investigate` | batch plan seeded; first batch fanned |
+| `investigate_wave` | `investigate` → `investigate` | `batch < total_batches` (fan the next batch) |
 | `investigate_done` | `investigate` → `collect` | waves complete — flows straight on, no human gate |
 | `collect_done` | `collect` → `merge` | |
 | `merge_done` | `merge` → `verify` | |
@@ -92,16 +92,23 @@ engine drives `to_unknown → escalate → awaiting_clarification`. The user's
 clarification resumes at `investigate` via `clarify`. No verifier gate is
 invented; VERIFY is the sole external oracle and cannot fabricate a PoC.
 
-## INVESTIGATE wave loop
+## INVESTIGATE parallel batch fan (per-class)
 
-- `WAVE_SIZE = 10` findings per wave.
-- `total_waves = max(1, ceil(needs_llm / WAVE_SIZE))`; when `needs_llm == 0`,
-  `total_waves = 1`. annie always runs at least one wave (the general sweep),
-  never silently skipped.
-- Each wave, `route_after` increments `wave` and accumulates
-  `findings`/`unverified`. While `wave < total_waves` it fires
-  `investigate_wave`; otherwise `investigate_done` straight to `collect`.
-- Findings still unverified after all waves are surfaced honestly as
+- `investigate` is a PARALLEL fan (`dynamic_branches["investigate"]`): one annie
+  branch per candidate vuln class (fresh context, focused on a single class + its
+  `assets/references/<class>.md` catalog), plus a trailing generalist-sweep branch.
+- Branches run in BATCHES of up to `max_fan_width` agents CONCURRENTLY (jsa default
+  5, `constraints["max_fan_width"]`; also the engine's fan ceiling).
+  `total_batches = ceil(len(candidate_classes) / max_fan_width) + 1`; with zero
+  candidate classes that is a single sweep batch. annie always runs at least the
+  sweep (≥ 1 batch), never silently skipped. No cap/fold — every class is covered.
+- On each batch's fan-in, `route_after` accumulates `findings`/`unverified` across
+  the batch's branches, increments `batch`, and — while `batch < total_batches` —
+  emits the next batch (`_emit_batch`) and fires `investigate_wave`; otherwise
+  `investigate_done` straight to `collect`.
+- A branch reporting UNCERTAIN makes the batch's weakest confidence UNCERTAIN and
+  escalates via the engine HITL seam (`to_unknown` → `awaiting_clarification`).
+- Findings still unverified after all batches are surfaced honestly as
   `unverified_after_waves` in the result payload.
 
 ## Completion
@@ -245,11 +252,13 @@ For findings needing LLM verification:
 
 ## Analyzers (22 vulnerability-class analyzers)
 
-The 22 vulnerability-class analyzers (`scripts/analyzers/*.py`), specialist prompts
-(`assets/prompts/annie-<class>.md`), and lane labels are **1:1:1**.
+The 22 vulnerability-class analyzers (`scripts/analyzers/*.py`), reference catalogs
+(`assets/references/<class>.md`), and lane labels are **1:1:1**.
 `lane_router.get_all_analyzers()` returns exactly the 22 classes across three lanes;
-a drift-guard test fails if the router, the analyzer files, and the prompts ever
-diverge.
+a drift-guard test fails if the router, the analyzer files, and the reference
+catalogs ever diverge. (The former per-class worker prompts were retired; their
+content was harvested into the catalogs, which annie and the deterministic verifier
+now read.)
 
 ### File-Level (code_static lane) — 13 routed
 - `dom_xss` — DOM-based XSS

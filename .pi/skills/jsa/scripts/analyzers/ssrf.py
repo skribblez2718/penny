@@ -13,7 +13,6 @@ class SSRFAnalyzer(VulnerabilityAnalyzer):
     def get_source_sink_pairs(self) -> list[SourceSink]: return [SourceSink("User URL->backend fetch",["location.search","URLSearchParams","input.value"],["fetch('/api/proxy')","/api/fetch","/api/thumbnail"],"high","CWE-918")]
     def get_semgrep_rulesets(self) -> list[str]: return ["p/javascript","p/owasp-top-ten"]
     def get_custom_scanners(self) -> list[str]: return []
-    def get_analysis_guide(self) -> str: return self._load_prompt("annie-ssrf.md")
     def get_payload_templates(self) -> list[PayloadTemplate]: return [PayloadTemplate("ssrf","AWS metadata","http://169.254.169.254/latest/meta-data/",target_context="url")]
     def get_verification_procedure(self,f:dict) -> str: return "Set URL param to internal service -> check if backend fetches it"
     def assess_exploitability(self,f:dict) -> dict: return {"exploitable":True,"difficulty":"medium","preconditions":["Backend fetches user URLs"]}

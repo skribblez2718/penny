@@ -7,7 +7,7 @@ Generates layered PRDs: narrative prose (12 sections), an atomic requirement cat
 - **Purpose**: Generate production-grade PRDs from goals and user responses
 - **Domains**: Web-app (primary), generic (fallback) — extensible via resource packs
 - **Outcome**: Four artifacts in the mempalace room `skills/prd-{session_id}`: narrative PRD, requirement catalog, verification matrix, IDEAL_STATE
-- **Downstream**: Chains with the `code` skill, which reads IDEAL_STATE from that room as a hard dependency
+- **Downstream**: Chains with the `code` skill, which reads IDEAL_STATE from that room when chained (optional — `code` also runs standalone)
 
 ## Architecture
 
@@ -17,7 +17,7 @@ Run state lives in a durable SQLite checkpointer keyed by `run_id` — there are
 
 ## State Machine
 
-The FSM (`PrdMachine`) is the source of truth; see `resources/flow.mmd` for the exact diagram and `resources/reference.md` for the full transition table.
+The FSM (`PrdMachine`) is the source of truth; see `resources/flow.html` for the exact diagram and `resources/reference.md` for the full transition table.
 
 ```
 intake ──start_generate──▶ generating ──generate_done──▶ validating ──validate_pass──▶ complete
@@ -115,7 +115,7 @@ skill({
 | `assets/prompts/synthia.md`  | PRD synthesis agent prompt (three modes)           |
 | `assets/prompts/vera.md`     | Validation agent prompt                            |
 | `resources/prd-template.md`  | 12-section PRD template (canonical)                |
-| `resources/flow.mmd`         | Mermaid state diagram (matches `PrdMachine`)       |
+| `resources/flow.html`        | Self-contained state diagram (matches `PrdMachine`) |
 | `resources/reference.md`     | Technical reference: states, schemas, contracts    |
 | `resources/frontier-evaluation.md` | Design rationale vs. frontier agent patterns |
 | `resources/web-app/`         | Domain pack (question bank, guidance, NFR checklist, example) |
