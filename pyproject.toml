@@ -5,7 +5,12 @@ description = "Penny - Personal AI assistant with MemPalace memory system"
 requires-python = ">=3.12"
 dependencies = [
     "mempalace>=3.0.0",
-    "chromadb>=1.5.9",
+    # Pinned to the 1.5.x line: the on-disk ChromaDB index/segment format can
+    # change across minor versions, and an existing palace written by one line
+    # can segfault another line's native (rust) core on read/write. A minor bump
+    # must be a deliberate, migration-aware step — not a silent `pip -U`.
+    # Recover a corrupted palace with scripts/system/bridge/repair_palace.py.
+    "chromadb>=1.5.9,<1.6",
     "semgrep>=1.160.0",           # SAST scanner — used by jsa skill
     "python-statemachine>=2.0",   # FSM library — legacy skill orchestrators + orchestration engine
     "tree-sitter>=0.21.0",        # AST parser — used by jsa splitter

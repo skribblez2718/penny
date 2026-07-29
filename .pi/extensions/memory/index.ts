@@ -15,6 +15,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type, type TSchema } from "@sinclair/typebox";
 import { spawn } from "child_process";
+import { existsSync, statSync } from "fs";
 import { WebSocket } from "ws";
 import { createLogger, setSessionId, type ErrorCode } from "../../lib/logger/logger.js";
 
@@ -242,19 +243,44 @@ async function callBridge(
   tool: string,
   params: Record<string, unknown> = {}
 ): Promise<Record<string, unknown>> {
-  return retryTransient((_attempt) => callBridgeOnce(tool, params), {
-    maxAttempts: MAX_BRIDGE_ATTEMPTS,
-    isRetryable: (err) => (err as { retryable?: boolean } | null)?.retryable === true,
-    backoffMs: bridgeRetryBackoffMs,
-    onRetry: (attempt, backoffMs, err) =>
-      logger.warn("Bridge transient failure — retrying", {
+  try {
+    return await retryTransient((_attempt) => callBridgeOnce(tool, params), {
+      maxAttempts: MAX_BRIDGE_ATTEMPTS,
+      isRetryable: (err) => (err as { retryable?: boolean } | null)?.retryable === true,
+      backoffMs: bridgeRetryBackoffMs,
+      onRetry: (attempt, backoffMs, err) =>
+        logger.warn("Bridge transient failure — retrying", {
+          tool,
+          attempt: attempt + 1,
+          maxAttempts: MAX_BRIDGE_ATTEMPTS,
+          backoffMs,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+    });
+  } catch (err) {
+    // A SIGNAL-kill (retryable) that survived every attempt is NOT transient
+    // load — it is almost always a corrupted / version-incompatible ChromaDB
+    // palace index segfaulting the native core (reproducibly, on count/get/
+    // add/query). Surface an ACTIONABLE recovery path instead of a cryptic
+    // "exited with code null (SIGSEGV)" that just re-fails forever.
+    if ((err as { retryable?: boolean } | null)?.retryable === true) {
+      logger.error("Memory bridge crashed by signal on every attempt — palace likely corrupted", {
         tool,
-        attempt: attempt + 1,
-        maxAttempts: MAX_BRIDGE_ATTEMPTS,
-        backoffMs,
+        attempts: MAX_BRIDGE_ATTEMPTS,
         error: err instanceof Error ? err.message : String(err),
-      }),
-  });
+      });
+      throw Object.assign(
+        new Error(
+          `Memory bridge crashed (signal) on '${tool}' after ${MAX_BRIDGE_ATTEMPTS} attempts — ` +
+            `the ChromaDB palace index is likely corrupted or written by an incompatible ` +
+            `chromadb version. Recover with: python scripts/system/bridge/repair_palace.py ` +
+            `(rebuilds the vector index from chroma.sqlite3; drawer content is preserved).`
+        ),
+        { code: "MEMPALACE_BRIDGE_CRASH", cause: err }
+      );
+    }
+    throw err;
+  }
 }
 
 function formatResult(result: Record<string, unknown>): string {
@@ -832,13 +858,69 @@ interface SessionShutdownEvent {
   reason?: string;
 }
 
+/**
+ * Resolve the venv python interpreter for the memory bridge, VALIDATING that it
+ * exists and is executable (F3). The bridge caches this ONCE at startup and
+ * spawns it for EVERY memory call, so a stale/misconfigured PI_VENV_PYTHON
+ * otherwise fails with an opaque per-call ENOENT (exactly the failure seen when
+ * a `.env` pointed PI_VENV_PYTHON at a non-existent home path). We try, in
+ * order: PI_VENV_PYTHON, then PROJECT_ROOT/.venv/bin/python, then
+ * cwd/.venv/bin/python, and log a loud, actionable error if none resolve
+ * (falling back to the first candidate so the eventual spawn error still names a
+ * concrete path). We return the ORIGINAL (symlink) path, not its realpath, so
+ * the venv's site-packages activate.
+ */
+export function resolveVenvPython(): string {
+  const root = process.env.PROJECT_ROOT || process.cwd();
+  const candidates = [
+    process.env.PI_VENV_PYTHON,
+    `${root}/.venv/bin/python`,
+    `${process.cwd()}/.venv/bin/python`,
+  ].filter((p): p is string => Boolean(p));
+  for (const candidate of candidates) {
+    try {
+      if (!existsSync(candidate)) continue;
+      const st = statSync(candidate); // follows the venv symlink to the base
+      if (!st.isFile()) continue;
+      if ((st.mode & 0o111) === 0) continue; // not executable
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  const fallback = candidates[0] || "python";
+  logger.error(
+    `No valid python interpreter found for the memory bridge. Tried: ${candidates.join(", ")}. ` +
+      `Memory calls will fail until PI_VENV_PYTHON points to a valid executable.`,
+    { candidates },
+    Object.assign(new Error("no valid python interpreter for memory bridge"), {
+      code: "BRIDGE_SPAWN_ERROR" as ErrorCode,
+    })
+  );
+  return fallback;
+}
+
+/** Validate the bridge script exists; log a loud, actionable error if not (F3). */
+export function validateBridgePath(bridgePath: string): void {
+  if (existsSync(bridgePath)) return;
+  logger.error(
+    `Memory bridge script not found at ${bridgePath}. ` +
+      `Set PI_MEMORY_BRIDGE to the correct path (…/scripts/system/bridge/memory_bridge.py).`,
+    { bridgePath },
+    Object.assign(new Error("memory bridge script missing"), {
+      code: "BRIDGE_SPAWN_ERROR" as ErrorCode,
+    })
+  );
+}
+
 export default function memoryExtension(pi: ExtensionAPI) {
+  const bridgePath =
+    process.env.PI_MEMORY_BRIDGE ||
+    `${process.env.PROJECT_ROOT || process.cwd()}/scripts/system/bridge/memory_bridge.py`;
+  validateBridgePath(bridgePath);
   config = {
-    venvPython:
-      process.env.PI_VENV_PYTHON || `${process.env.PROJECT_ROOT || process.cwd()}/.venv/bin/python`,
-    bridgePath:
-      process.env.PI_MEMORY_BRIDGE ||
-      `${process.env.PROJECT_ROOT || process.cwd()}/scripts/system/bridge/memory_bridge.py`,
+    venvPython: resolveVenvPython(),
+    bridgePath,
     observabilityUrl: process.env.PI_OBSERVABILITY_URL || "ws://localhost:8765/ws",
     observabilityApiKey: process.env.PI_OBSERVABILITY_API_KEY || "",
     enableObservability: process.env.PI_OBSERVABILITY_ENABLED !== "false",

@@ -523,6 +523,27 @@ export type OnUpdateCallback = (partial: {
 }) => void;
 
 /**
+ * Split a model override into an optional provider + model. A `provider/model`
+ * composite (e.g. `ollama/glm`) lets a caller route an agent to a DIFFERENT
+ * provider than its frontmatter pins; the FIRST "/" separates provider from
+ * model (so a vendor-style model id like `anthropic/claude-x` survives intact
+ * as the model half). A bare string (no "/", or an empty half) is returned as a
+ * model-only override, preserving legacy behavior. Exported for unit testing.
+ */
+export function parseModelOverride(
+  modelOverride: string | undefined
+): { model?: string; provider?: string } {
+  if (!modelOverride) return {};
+  const i = modelOverride.indexOf("/");
+  if (i > 0) {
+    const provider = modelOverride.slice(0, i).trim();
+    const model = modelOverride.slice(i + 1).trim();
+    if (provider && model) return { provider, model };
+  }
+  return { model: modelOverride };
+}
+
+/**
  * Run a single agent in an isolated pi process.
  *
  * This is the core function for agent invocation. It spawns a pi subprocess
@@ -586,16 +607,24 @@ export async function runSingleAgent(
     // so memory/observability/tool-providing extensions are always available.
     ...resolveAgentExtensionArgs(defaultCwd),
   ];
-  const model = modelOverride || agent.model;
+  // A model override may be a `provider/model` composite (e.g. `ollama/glm`) so
+  // a skill can route an agent to a DIFFERENT provider than its frontmatter
+  // pins. The explicit provider from the composite then WINS over
+  // `agent.provider`; a bare override (no "/") keeps the legacy model-only
+  // meaning.
+  const { model: overrideModel, provider: overrideProvider } = parseModelOverride(modelOverride);
+  const model = overrideModel || agent.model;
   if (model) args.push("--model", model);
   // Pass --provider so custom-provider models (e.g. Ollama :cloud models or a
   // LiteLLM proxy defined in ~/.pi/agent/models.json) resolve correctly. Without
   // it, `pi --model <id>` does cross-provider id resolution and can pick a
   // provider that does not serve the model (crash / 404 not_found at startup).
-  // Precedence: agent frontmatter `provider:` → the provider that DECLARES this
-  // model in models.json (so an Ollama-model agent gets --provider ollama even
-  // when the global defaultProvider is anthropic) → Pi's configured default.
-  const provider = agent.provider || resolveProviderForModel(model) || resolveDefaultProvider();
+  // Precedence: explicit `provider/model` override → agent frontmatter
+  // `provider:` → the provider that DECLARES this model in models.json (so an
+  // Ollama-model agent gets --provider ollama even when the global
+  // defaultProvider is anthropic) → Pi's configured default.
+  const provider =
+    overrideProvider || agent.provider || resolveProviderForModel(model) || resolveDefaultProvider();
   if (provider) args.push("--provider", provider);
   // Per-agent thinking/effort level (frontmatter `thinking:`), e.g. xhigh. The
   // spawned pi subprocess accepts `--thinking <off|minimal|low|medium|high|xhigh>`.

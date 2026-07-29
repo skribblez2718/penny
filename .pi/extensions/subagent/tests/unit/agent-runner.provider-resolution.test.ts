@@ -45,7 +45,7 @@ vi.mock("node:fs", async () => {
   };
 });
 
-import { resolveProviderForModel } from "../../agent-runner.js";
+import { resolveProviderForModel, parseModelOverride } from "../../agent-runner.js";
 
 describe("resolveProviderForModel", () => {
   it("maps an Ollama-provider model to the ollama provider", () => {
@@ -64,5 +64,37 @@ describe("resolveProviderForModel", () => {
   it("returns undefined for an empty/undefined model id", () => {
     expect(resolveProviderForModel(undefined)).toBeUndefined();
     expect(resolveProviderForModel("")).toBeUndefined();
+  });
+});
+
+describe("parseModelOverride", () => {
+  it("splits a provider/model composite so the explicit provider is carried", () => {
+    expect(parseModelOverride("ollama/glm")).toEqual({ provider: "ollama", model: "glm" });
+    expect(parseModelOverride("ollama/glm-5.2:cloud")).toEqual({
+      provider: "ollama",
+      model: "glm-5.2:cloud",
+    });
+  });
+
+  it("splits on the FIRST slash so a vendor-style model id survives as the model", () => {
+    expect(parseModelOverride("openrouter/anthropic/claude-sonnet-4")).toEqual({
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4",
+    });
+  });
+
+  it("treats a bare override (no slash) as a model-only override", () => {
+    expect(parseModelOverride("sonnet")).toEqual({ model: "sonnet" });
+    expect(parseModelOverride("glm-5.2:cloud")).toEqual({ model: "glm-5.2:cloud" });
+  });
+
+  it("returns empty for undefined/empty (agent's own model is used)", () => {
+    expect(parseModelOverride(undefined)).toEqual({});
+    expect(parseModelOverride("")).toEqual({});
+  });
+
+  it("falls back to model-only when a half is empty (leading/trailing slash)", () => {
+    expect(parseModelOverride("/glm")).toEqual({ model: "/glm" });
+    expect(parseModelOverride("ollama/")).toEqual({ model: "ollama/" });
   });
 });
