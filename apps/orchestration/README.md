@@ -112,8 +112,15 @@ and wires the seams it needs:
 | `PI_OBSERVABILITY_URL` | observability base URL | `http://localhost:8765` |
 | `PI_OBSERVABILITY_API_KEY` | Bearer token (reused) | empty ⇒ auth off |
 | `PENNY_ORCH_MAX_STEP_RETRIES` | transient step-retry budget | 2 |
-| `PENNY_RECALL` | `0` disables run-start lesson recall | on |
 | `PENNY_ABLATE_<LOAN_ID>` | `1` ablates a tagged loan (see `loans.list_loans()`) | off |
+| `PI_STALL_MODEL` | model that judges "stalled vs progressing" for the loop guards; unset ⇒ normalized-string comparison | unset |
+| `PI_STRATEGY_MODEL` | model that judges "same approach vs different" on a retry (`code` only) | unset |
+| `PI_MODEL_TIER` | `strong` / `cheap` — scales tier-aware budgets and drops the SUMMARY-restatement crutch | unset |
+
+> **Removed:** `PENNY_RECALL` and the run-start lesson-recall mechanism it gated. The
+> engine no longer injects anything retrieved from MemPalace into an agent directive —
+> it was delivering unapproved amendment proposals into prompts. See
+> `tests/test_no_memory_injection.py`.
 
 ## Tests & CI guards
 

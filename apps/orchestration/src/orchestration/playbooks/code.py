@@ -27,8 +27,26 @@ from statemachine import State, StateMachine
 
 from ..context import RunContext
 from ..engine import BasePlaybook
+from ..paths import penny_file, skill_file
 from ..primitives.spec import PrimitiveSpec
 from . import code_detection
+
+
+def _secure_coding_refs(domains: list, bullet: bool = False) -> str:
+    """ABSOLUTE paths to Penny's secure-coding docs. The agent's cwd is the TARGET
+    repo, so a repo-relative ``docs/agents/...`` reference resolves into the wrong
+    tree and is silently unreadable."""
+    names = [str(d) for d in (domains or [])] or ["AGENTS"]
+    paths = [penny_file("docs", "agents", "secure-coding", f"{n}.md") for n in names]
+    paths = [p for p in paths if p]
+    if not paths:
+        return "(secure-coding docs unavailable)"
+    return "\n".join(f"- {p}" for p in paths) if bullet else " ".join(paths)
+
+
+def _code_resource(*parts: str) -> str:
+    """ABSOLUTE path to a file under the code skill's ``resources/``."""
+    return skill_file(None, "code", "resources", *parts)
 
 # ---------------------------------------------------------------------------
 # PRD dependency (OPTIONAL) — IDEAL_STATE resolution
@@ -407,11 +425,7 @@ def _build_explore(ctx: RunContext, code: dict, ideal: dict) -> str:
 
 def _build_analyze(ctx: RunContext, code: dict, ideal: dict) -> str:
     security_domains = ideal.get("security_review", [])
-    security_docs = (
-        " ".join(f"docs/agents/secure-coding/{d}.md" for d in security_domains)
-        if security_domains
-        else "docs/agents/secure-coding/AGENTS.md"
-    )
+    security_docs = _secure_coding_refs(security_domains)
     return (
         f"Analyze security and integration risks. IDEAL STATE: {json.dumps(ideal)}. "
         f"Review: {security_docs}. "
@@ -454,7 +468,7 @@ def _server_plan_block(ideal: dict) -> str:
         f"- If the server uses CORS, a browser-origin preflight returns the correct access-control headers.\n"
         f"- At least one real happy-path flow runs end-to-end through the running server.\n"
         f"\nEntry points to cover: {entry_points if entry_points else '(auto-detect during implement)'}\n"
-        f"`.pi/skills/code/resources/server-startup-tests.md` has proven, copy-pastable patterns for each — use it as a reference, not a script. These outcomes are checked by evidence in verify; passing unit tests alone do not satisfy them."
+        f"`{_code_resource('server-startup-tests.md')}` has proven, copy-pastable patterns for each — use it as a reference, not a script. These outcomes are checked by evidence in verify; passing unit tests alone do not satisfy them."
     )
 
 
@@ -491,26 +505,22 @@ def _server_implement_block(ideal: dict) -> str:
         f"   Entry points:\n{entry_list}\n"
         f"\n- CORS PREFLIGHT CORRECT (if the server uses CORS): an OPTIONS request from a representative browser origin returns the correct access-control-allow-origin header.\n"
         f"\n- HAPPY PATH END-TO-END: at least one real business flow runs end-to-end through the running server (e.g. create → send → fetch → delete).\n"
-        f"\n`.pi/skills/code/resources/server-startup-tests.md` has copy-pastable patterns — a reference to draw on, not a checklist to satisfy mechanically. These outcomes are checked by evidence in verify."
+        f"\n`{_code_resource('server-startup-tests.md')}` has copy-pastable patterns — a reference to draw on, not a checklist to satisfy mechanically. These outcomes are checked by evidence in verify."
     )
 
 
 def _build_implement(ctx: RunContext, code: dict, ideal: dict) -> str:
     language = code.get("language", "python")
-    resource_path = f".pi/skills/code/resources/{language}.md"
+    resource_path = _code_resource(f"{language}.md")
     security_domains = ideal.get("security_review", [])
-    security_refs = (
-        "\n".join(f"- docs/agents/secure-coding/{d}.md" for d in security_domains)
-        if security_domains
-        else "docs/agents/secure-coding/AGENTS.md"
-    )
+    security_refs = _secure_coding_refs(security_domains, bullet=True)
     task = (
         f"Implement the change to satisfy the IDEAL STATE. "
         f"Iteration: {ctx.iteration + 1}. "
         f"IDEAL STATE: {json.dumps(ideal)}. "
         f"\n\nBEFORE WRITING ANY CODE, read these references: "
         f"\n1. {resource_path} - language conventions and best practices "
-        f"\n2. .pi/skills/code/resources/security-checklist.md - mandatory security review "
+        f"\n2. {_code_resource('security-checklist.md')} - mandatory security review "
         f"\n3. {security_refs} - security docs for: {', '.join(security_domains) if security_domains else 'all applicable domains'} "
         f"{code_detection.build_resource_context(ctx)}"
         f"{_server_implement_block(ideal)}"

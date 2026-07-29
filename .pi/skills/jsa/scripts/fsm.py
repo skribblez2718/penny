@@ -1506,6 +1506,47 @@ def _quick_validate_sast(finding: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _load_js_files_from_disk(state: JSAState) -> list[tuple[str, str]]:
+    """Rebuild the (path, content) JS list from the on-disk acquired tree.
+
+    STRUCTURE runs in its own subprocess (and survives checkpoint/resume), where
+    ``state.file_map`` — a live, in-memory object set by ACQUIRE in a *different*
+    subprocess — is unavailable: ``JSAState.to_dict`` and
+    ``jsa_domain._restore_state`` intentionally omit it. The acquired JS files are
+    on disk the whole time, so read them straight from ``{output_dir}/assets/js``
+    plus any reconstructed first-party ``sources/`` tree. This makes STRUCTURE
+    depend on the durable on-disk artifacts rather than fragile cross-subprocess
+    in-memory state.
+
+    Returns JS/TS source files only (HTML PageCard construction is handled
+    separately by the ACQUIRE-crawl path). Never raises.
+    """
+    files: list[tuple[str, str]] = []
+    if not state.output_dir:
+        return files
+    from pathlib import Path as _Path
+    roots = [
+        _Path(state.output_dir) / "assets" / "js",
+        _Path(state.output_dir) / "sources",
+    ]
+    seen: set[str] = set()
+    exts = ("*.js", "*.mjs", "*.cjs", "*.jsx", "*.ts", "*.tsx")
+    for root in roots:
+        if not root.exists():
+            continue
+        for ext in exts:
+            for p in sorted(root.rglob(ext)):
+                sp = str(p)
+                if sp in seen:
+                    continue
+                seen.add(sp)
+                try:
+                    files.append((sp, p.read_text(encoding="utf-8", errors="replace")))
+                except (OSError, IOError):
+                    pass
+    return files
+
+
 def structure_handler(state: JSAState, js_files: list[tuple[str, str]] | None = None) -> JSAState:
     """
     STRUCTURE phase: Build typed analysis store and emit PageCard/ModuleCard.
@@ -1548,7 +1589,15 @@ def structure_handler(state: JSAState, js_files: list[tuple[str, str]] | None = 
         PageCard, RequestSnapshot, ResponseSnapshot, ScriptFile, DOMInventory
     )
 
-    # If js_files not passed directly, try to read from state.file_map
+    # ACQUIRE stores its summary under metadata["acquire_result"] (NOT "acquire").
+    acquire_meta = state.metadata.get("acquire_result", {}) or {}
+    crawled_pages = acquire_meta.get("crawled_pages")
+
+    # If js_files not passed directly, source them from state.file_map, and fall
+    # back to reading the acquired tree from disk. The disk fallback is the
+    # normal cross-subprocess case: file_map is an in-memory object that
+    # to_dict()/_restore_state() do not persist, so at STRUCTURE time it is None
+    # even though ACQUIRE wrote the JS files to {output_dir}/assets/js.
     if not js_files:
         if state.file_map is not None and hasattr(state.file_map, "files"):
             js_files = []
@@ -1558,20 +1607,18 @@ def structure_handler(state: JSAState, js_files: list[tuple[str, str]] | None = 
                         js_files.append((f.path, fp.read()))
                 except (OSError, IOError):
                     pass
-        elif state.metadata.get("acquire", {}).get("crawled_pages"):
-            # No JS files but we have crawled pages — proceed to build PageCards
+        # file_map unavailable (or yielded nothing) — load straight from disk.
+        if not js_files:
+            js_files = _load_js_files_from_disk(state)
+
+    if not js_files:
+        # Genuinely no JS on disk. Still proceed if ACQUIRE reported crawled
+        # pages (PageCard-only path); otherwise this is a real empty run.
+        if crawled_pages:
             state.metadata["structure_warning"] = "No JS files; building PageCards from ACQUIRE only"
         else:
             state.metadata["structure_warning"] = "No JS files available"
             return state
-
-    if not js_files:
-        # If we got here via the file_map branch, that's a real empty
-        # If we got here via the ACQUIRE branch, we want to still process page cards
-        if not state.metadata.get("acquire", {}).get("crawled_pages"):
-            state.metadata["structure_warning"] = "Empty file list"
-            return state
-        state.metadata["structure_warning"] = "Empty file list; building PageCards from ACQUIRE only"
 
     # 1. Build file manifest
     manifest_entries = build_file_manifest(js_files)
@@ -1715,9 +1762,9 @@ def structure_handler(state: JSAState, js_files: list[tuple[str, str]] | None = 
         )
         state.page_cards.append(page_card)
 
-    # 6. Build PageCards from ACQUIRE's crawled page URLs
-    acquire_meta = state.metadata.get("acquire", {})
-    crawled_urls = acquire_meta.get("crawled_pages", [])
+    # 6. Build PageCards from ACQUIRE's crawled page URLs (metadata key is
+    #    "acquire_result"; crawled_pages is present only when ACQUIRE persists it).
+    crawled_urls = acquire_meta.get("crawled_pages", []) or []
     for url in crawled_urls:
         page_card = PageCard(
             page_id=str(uuid.uuid4()),
@@ -1736,6 +1783,10 @@ def structure_handler(state: JSAState, js_files: list[tuple[str, str]] | None = 
     state.metadata["structure_page_cards"] = len(state.page_cards)
     state.metadata["structure_dangerous_patterns"] = len(dangerous)
     state.metadata["structure_duration_ms"] = int((time.time() - start) * 1000)
+
+    # Success: clear any stale "no JS" warning restored from a prior partial run.
+    if state.module_cards or state.page_cards:
+        state.metadata.pop("structure_warning", None)
 
     return state
 

@@ -9,8 +9,11 @@ Hardened, stdlib-only:
   * audio persisted straight into the bundle (Voice Studio keeps audio
     ephemeral by design — the bundle is the durable store)
 
-API surface used (Voice Studio): POST /api/tts/generate → {job_id},
-GET /api/tts/jobs/{id} → {status, ...}, GET /api/tts/result/{id}.wav → bytes.
+API surface used (Voice Studio): POST /api/narrations → {id} (narration item),
+POST /api/tts/generate {narration_item_id, voice_profile_id} → {job_id},
+GET /api/tts/jobs/{job_id} → {status, errored, ...},
+GET /api/tts/result/{narration_item_id}.wav → bytes,
+DELETE /api/narrations/{id} (best-effort cleanup — audio is ephemeral server-side).
 """
 
 from __future__ import annotations
@@ -87,33 +90,56 @@ class VoiceStudioClient:
 
     def synthesize(self, text: str, voice_id: str | None, dest: Path) -> float:
         """Generate narration for ``text``, write the WAV to ``dest``, and return
-        its measured duration in seconds."""
-        payload: dict = {"text": str(text)}
+        its measured duration in seconds.
+
+        Voice Studio's TTS is narration-item based: create an item, start an
+        async generate job for it, poll the job, then fetch the result WAV by
+        ITEM id. The item is deleted afterwards (best-effort) — the bundle is
+        the durable store."""
+        item_payload: dict = {
+            "title": f"manim narration — {dest.stem}",
+            "source_text": str(text),
+        }
         if voice_id:
-            payload["voice_id"] = str(voice_id)
-        job = self._json("POST", "/api/tts/generate", payload)
-        job_id = str(job.get("job_id") or job.get("id") or "")
-        if not job_id:
-            raise VoiceStudioError("generate returned no job id")
+            item_payload["voice_profile_id"] = str(voice_id)
+        item = self._json("POST", "/api/narrations", item_payload)
+        item_id = str(item.get("id") or "")
+        if not item_id:
+            raise VoiceStudioError("narration create returned no item id")
 
-        deadline = time.time() + JOB_TIMEOUT
-        while time.time() < deadline:
-            status = self._json("GET", f"/api/tts/jobs/{urllib.parse.quote(job_id)}")
-            state = str(status.get("status", "")).lower()
-            if state in ("done", "complete", "completed", "finished"):
-                break
-            if state in ("failed", "error"):
-                raise VoiceStudioError(
-                    f"TTS job {job_id} failed: {status.get('error', 'no detail')}"
-                )
-            time.sleep(POLL_INTERVAL)
-        else:
-            raise VoiceStudioError(f"TTS job {job_id} timed out after {JOB_TIMEOUT}s")
+        try:
+            gen_payload: dict = {"narration_item_id": item_id}
+            if voice_id:
+                gen_payload["voice_profile_id"] = str(voice_id)
+            job = self._json("POST", "/api/tts/generate", gen_payload)
+            job_id = str(job.get("job_id") or job.get("id") or "")
+            if not job_id:
+                raise VoiceStudioError("generate returned no job id")
 
-        audio = self._request("GET", f"/api/tts/result/{urllib.parse.quote(job_id)}.wav")
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(audio)
-        return wav_duration(dest)
+            deadline = time.time() + JOB_TIMEOUT
+            while time.time() < deadline:
+                status = self._json("GET", f"/api/tts/jobs/{urllib.parse.quote(job_id)}")
+                state = str(status.get("status", "")).lower()
+                errored = int(status.get("errored") or 0)
+                if state in ("failed", "error", "errored") or errored > 0:
+                    raise VoiceStudioError(
+                        f"TTS job {job_id} failed: {status.get('error', f'{errored} chunk(s) errored')}"
+                    )
+                if state in ("done", "complete", "completed", "finished"):
+                    break
+                time.sleep(POLL_INTERVAL)
+            else:
+                raise VoiceStudioError(f"TTS job {job_id} timed out after {JOB_TIMEOUT}s")
+
+            audio = self._request(
+                "GET", f"/api/tts/result/{urllib.parse.quote(item_id)}.wav"
+            )
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(audio)
+            return wav_duration(dest)
+        finally:
+            with contextlib.suppress(VoiceStudioError):
+                self._request("DELETE", f"/api/narrations/{urllib.parse.quote(item_id)}")
 
 
 def wav_duration(path: Path) -> float:

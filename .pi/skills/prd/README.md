@@ -100,10 +100,11 @@ skill({
 
 ## Configuration
 
-| Constraint       | Default     | Description                                   |
-| ---------------- | ----------- | --------------------------------------------- |
-| `max_iterations` | 5           | Revision budget (validating → generating)     |
-| `domain`         | auto-detect | Override domain classification                |
+| Constraint       | Default          | Description                                                                     |
+| ---------------- | ---------------- | ------------------------------------------------------------------------------- |
+| `max_iterations` | 5 (tier-scaled)  | Revision budget (validating → generating). Base 5, scaled by `PI_MODEL_TIER`, hard ceiling 8. |
+| `domain`         | model-declared   | Fixes the guidance pack. Omit to let synthia declare the best fit — there is no keyword detection. |
+| `skill_dir`      | auto-resolved    | Absolute skill path. Honored when the caller supplies it; else resolved by repo walk-up. |
 
 ## Files
 
@@ -117,7 +118,7 @@ skill({
 | `resources/prd-template.md`  | 12-section PRD template (canonical)                |
 | `resources/flow.html`        | Self-contained state diagram (matches `PrdMachine`) |
 | `resources/reference.md`     | Technical reference: states, schemas, contracts    |
-| `resources/frontier-evaluation.md` | Design rationale vs. frontier agent patterns |
+| `resources/frontier-evaluation.md` | Dated design-rationale snapshot (2024-12 patterns) — history, not law |
 | `resources/web-app/`         | Domain pack (question bank, guidance, NFR checklist, example) |
 
 The playbook itself (`PrdPlaybook`) lives in the installed `orchestration` package, not in this skill directory.

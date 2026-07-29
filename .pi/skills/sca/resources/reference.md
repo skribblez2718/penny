@@ -10,7 +10,7 @@ FSM, no `/tmp` state file, no `--state` argv, and no `extract_state` /
 `restore_state`.
 
 The FSM is a strictly-sequential 13-phase pipeline with six human gates, two
-deterministic tool phases, and one bounded augmentation loop. See `flow.mmd`
+deterministic tool phases, and one bounded augmentation loop. See `flow.html`
 for the mermaid diagram (edge-for-edge with the playbook).
 
 ## States (custom names → legacy phase → agent)

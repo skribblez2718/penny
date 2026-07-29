@@ -52,8 +52,17 @@ from pathlib import Path
 from statemachine import State, StateMachine
 
 from ..context import RunContext
-from ..engine import BasePlaybook
+from ..contracts import VERDICT_FAIL, VERDICT_PASS
+from ..engine import BasePlaybook, tier_budget
+from ..loans import loan_enabled
+from ..paths import penny_file
+from ..paths import skill_root as _skill_root
 from ..primitives.spec import PrimitiveSpec
+
+# Sentinel: "no IDEAL_STATE was passed in" (distinct from "read it, got None"),
+# so route_after can hand its already-loaded copy to the schema floor instead of
+# paying for a second MemPalace read.
+_UNREAD = object()
 
 
 def _c(required: dict, optional: dict | None = None, evidence: list | None = None) -> dict:
@@ -70,30 +79,36 @@ def _c(required: dict, optional: dict | None = None, evidence: list | None = Non
 # ---------------------------------------------------------------------------
 
 
+def skill_root(ctx: RunContext) -> str:
+    """Absolute path to the prd skill directory, or "" when unresolvable.
+
+    Thin alias over the shared resolver (``orchestration.paths``) — agents spawn with
+    ``cwd = project_root``, which for a run against another repo is NOT this repo, so
+    every path handed to an agent must be absolute or it silently misses."""
+    return _skill_root(ctx, "prd")
+
+
+def validator_path() -> str:
+    """Absolute path to ``scripts/validate_ideal_state.py`` (the artifact oracle), or
+    "" when unresolvable. Handed to vera so the executed-evidence tier works
+    regardless of the agent's cwd."""
+    return penny_file("scripts", "validate_ideal_state.py")
+
+
 def available_domains(ctx: RunContext) -> list[str]:
     """Domain guidance packs available to synthia: the directory names under the
-    prd skill's ``resources/`` (always including ``generic``). Prefers
-    ``constraints['skill_dir']`` when the driver supplies it, else walks up to the
-    repo's ``.pi/skills/prd/resources``. Best-effort: a scan failure degrades to
-    ``['generic']`` (never raises — domain selection must not wedge a run)."""
+    prd skill's ``resources/`` (always including ``generic``). Best-effort: a scan
+    failure degrades to ``['generic']`` (never raises — domain selection must not
+    wedge a run)."""
     names: set[str] = {"generic"}
-    roots: list[Path] = []
-    skill_dir = str((ctx.constraints or {}).get("skill_dir", ""))
-    if skill_dir:
-        roots.append(Path(skill_dir) / "resources")
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        cand = parent / ".pi" / "skills" / "prd" / "resources"
-        if cand.is_dir():
-            roots.append(cand)
-            break
-    for root in roots:
+    root = skill_root(ctx)
+    if root:
         try:
-            for p in root.iterdir():
+            for p in (Path(root) / "resources").iterdir():
                 if p.is_dir():
                     names.add(p.name)
         except Exception:  # noqa: BLE001 — best-effort listing
-            continue
+            pass
     return sorted(names)
 
 
@@ -213,14 +228,28 @@ def _domain_line(prd: dict) -> str:
     )
 
 
+def _guidance_line(prd: dict) -> str:
+    """Run fact: the ABSOLUTE guidance root. Agents run with ``cwd = project_root``,
+    so a repo-relative path like ``resources/prd-template.md`` resolves against the
+    wrong tree on any run whose project_root is not this repo."""
+    root = prd.get("skill_root") or ""
+    if not root:
+        return ""
+    return (
+        f"Guidance root (ABSOLUTE — read from here, not from your cwd): {root}/resources/. "
+        f"Always read {root}/resources/prd-template.md; for a matched domain also read "
+        f"{root}/resources/<domain>/. "
+    )
+
+
 def _build_generate(pb: "PrdPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
-    """Run facts only (R3): session, goal, domain, room, mode. The artifact
-    interface lives once in synthia.md — not restated here as procedure."""
+    """Run facts only (R3): session, goal, domain, room, mode, absolute paths. The
+    artifact interface lives once in synthia.md — not restated here as procedure."""
     prd = ctx.extras.get("prd", {})
     room = _room(ctx)
     mode = _effective_mode(ctx)
     head = f"Session: {ctx.session_id}. Goal: {pb._cap(ctx.goal)}. {_domain_line(prd)}"
-    tail = f"Mempalace room: {room} (wing=penny). "
+    tail = f"Mempalace room: {room} (wing=penny). " + _guidance_line(prd)
     if mode == "clarification":
         return head + tail + "Mode: CLARIFICATION QUESTIONS."
     if mode == "revision":
@@ -236,12 +265,26 @@ def _build_validate(pb: "PrdPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> 
     """Run facts only (R3): the check obligations live once in vera.md."""
     prd = ctx.extras.get("prd", {})
     room = _room(ctx)
-    return (
+    base = (
         f"Session: {ctx.session_id}. Goal: {pb._cap(ctx.goal)}. "
         f"Domain: {prd.get('domain') or 'generic'}. "
-        f"Mempalace room: {room} (wing=penny). "
-        f"Validate the PRD artifacts and emit valid + issues + captured evidence."
+        f"Mempalace room: {room} (wing=penny). " + _guidance_line(prd)
     )
+    oracle = prd.get("validator_path") or ""
+    if oracle:
+        base += (
+            f"Artifact oracle (ABSOLUTE — invoke exactly this, your cwd is not this repo): "
+            f"`python3 {oracle} --stdin`. "
+        )
+    if prd.get("schema_checked") is False:
+        # T4 fail-loud (item 9): last round the deterministic floor could not read
+        # the IDEAL_STATE, so vera's verdict was the ONLY oracle on it. Say so.
+        base += (
+            "NOTE: the engine's deterministic schema floor could NOT read your IDEAL_STATE last "
+            "round, so your executed check is the only oracle for it — run it and paste the "
+            "captured output as evidence. "
+        )
+    return base + "Validate the PRD artifacts and emit valid + issues + captured evidence."
 
 
 _TASK_BUILDERS = {
@@ -269,9 +312,18 @@ class PrdPlaybook(BasePlaybook):
         if not (ctx.goal or "").strip():
             raise RuntimeError("prd skill requires a non-empty goal")
         if "max_iterations" not in (ctx.constraints or {}):
-            ctx.max_iterations = 5  # legacy prd default revision budget
+            # Tagged LOAN ``prd_revision_budget``: the base 5 is a human guess tuned to a
+            # past model, so it rides tier_budget (PI_MODEL_TIER) with a hard ceiling
+            # rather than sitting frozen. Ablated, the engine's generic default stands.
+            if loan_enabled("prd_revision_budget"):
+                ctx.max_iterations = tier_budget(5, ceiling=8)
         prd = ctx.extras.setdefault("prd", {})
         prd["available_domains"] = available_domains(ctx)
+        # Resolve the absolute paths ONCE and checkpoint them: agents spawn with
+        # cwd = project_root, so cwd-relative guidance/validator paths silently miss
+        # on any run targeting another repo.
+        prd["skill_root"] = skill_root(ctx)
+        prd["validator_path"] = validator_path()
         # Caller constraint wins; otherwise the domain is model-declared (captured
         # in route_after from synthia's SUMMARY). No keyword detection.
         caller_domain = str((ctx.constraints or {}).get("domain", ""))
@@ -332,7 +384,9 @@ class PrdPlaybook(BasePlaybook):
             # T4: a deterministic CODE schema-floor beneath vera's quality judgement — a
             # schema-malformed IDEAL_STATE is rejected by RULES (validate_ideal_state), never
             # on vera's say-so. Unreadable (not yet written / test) -> skipped, vera stands.
-            schema_ok, schema_errors = self._schema_check_ideal_state(ctx)
+            # Read ONCE here and share it with the floor + the learning-loop capture below.
+            ideal = self._read_ideal_state(ctx)
+            schema_ok, schema_errors = self._schema_check_ideal_state(ctx, ideal)
             if schema_ok is False:
                 ideal_ok = False
                 issues = issues + [f"schema: {e}" for e in schema_errors]
@@ -341,6 +395,17 @@ class PrdPlaybook(BasePlaybook):
             prd["valid"] = valid
             prd["ideal_state_valid"] = ideal_ok  # code schema-floor stacked on vera's verdict
             prd["issues"] = issues
+            # Learning-loop signal (item 6): the outcome ledger reads the STANDARD context
+            # fields, not ctx.extras. Without this every prd outcome landed with empty
+            # verify_gaps, no verdict, and expected_outcome "goal satisfied" — so every
+            # MISMATCH classified as failure_mode "other" and recall had nothing to
+            # distil. vera's issues and the spec's own criteria ARE the signal; publish them.
+            ctx.verify_gaps = [str(i) for i in issues]
+            ctx.verify_verdict = VERDICT_PASS if (valid and ideal_ok) else VERDICT_FAIL
+            if isinstance(ideal, dict):
+                criteria = ideal.get("success_criteria")
+                if isinstance(criteria, list) and criteria:
+                    ctx.success_criteria = [str(c) for c in criteria]
             if valid and ideal_ok:
                 self.sm.send("validate_pass")
             elif ctx.iteration + 1 < ctx.max_iterations:
@@ -372,22 +437,26 @@ class PrdPlaybook(BasePlaybook):
         except Exception:
             return None
 
-    def _schema_check_ideal_state(self, ctx: RunContext):
+    def _schema_check_ideal_state(self, ctx: RunContext, ideal: object = _UNREAD):
         """(True, []) valid / (False, [errors]) schema-malformed / (None, []) unreadable => skip.
         The rules-tier floor: validate_ideal_state.validate_json is deterministic CODE, so a
-        schema-malformed IDEAL_STATE cannot pass on vera's say-so. Never raises."""
-        ideal = self._read_ideal_state(ctx)
+        schema-malformed IDEAL_STATE cannot pass on vera's say-so. Never raises.
+
+        ``ideal`` may be supplied by a caller that already loaded it (route_after), avoiding a
+        second MemPalace read; omitted, it is read here."""
+        if ideal is _UNREAD:
+            ideal = self._read_ideal_state(ctx)
         if not isinstance(ideal, dict):
             return None, []
         try:
-            for parent in Path(__file__).resolve().parents:
-                cand = parent / "scripts" / "validate_ideal_state.py"
-                if cand.is_file():
-                    if str(cand.parent) not in sys.path:
-                        sys.path.insert(0, str(cand.parent))
-                    from validate_ideal_state import validate_json  # type: ignore[import-not-found]
-                    ok, errors = validate_json(ideal)
-                    return bool(ok), [str(e) for e in (errors or [])]
+            path = validator_path()
+            if path:
+                parent = str(Path(path).parent)
+                if parent not in sys.path:
+                    sys.path.insert(0, parent)
+                from validate_ideal_state import validate_json  # type: ignore[import-not-found]
+                ok, errors = validate_json(ideal)
+                return bool(ok), [str(e) for e in (errors or [])]
         except Exception:
             return None, []
         return None, []
@@ -404,15 +473,6 @@ class PrdPlaybook(BasePlaybook):
             if builder
             else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
         )
-        # Recall (F2): seed the FIRST agent directive with distilled lessons.
-        # This override replaces the base _task_summary, so it re-adds the
-        # advisory injection the base provides (R5.5).
-        if ctx.recall_lessons and ctx.total_steps == 0:
-            lessons = "\n".join(f"- {self._cap(lsn)}" for lsn in ctx.recall_lessons)
-            base += (
-                "\n\nLessons from prior runs (advisory — weigh against current evidence; "
-                "they never override this run's goal or constraints):\n" + lessons
-            )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {ctx.clarification_text}"
         return base
@@ -432,6 +492,11 @@ class PrdPlaybook(BasePlaybook):
                 "session_id": ctx.session_id,
                 "requires_approval": True,
             },
+            # T4 fail-loud (item 9): whether the deterministic floor actually RAN is part
+            # of the result, not a silent internal. A run whose oracle was skipped must not
+            # look identical to one where it passed.
+            "schema_checked": bool(prd.get("schema_checked", False)),
+            "schema_evidence": prd.get("schema_evidence", []),
             "session_room": _room(ctx),
             # legacy parity: the extension's chain handler injects prd_room into
             # the next chain step's constraints from session_room/room.

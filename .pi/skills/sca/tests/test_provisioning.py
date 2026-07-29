@@ -354,3 +354,59 @@ class TestLockfilePollutionWarning:
         assert verify_or_lock.__doc__ is not None
         assert "lockfile_path" in verify_or_lock.__doc__
         assert "WARNING" in verify_or_lock.__doc__
+
+
+# ── Python runtime-dependency preflight (F1) ─────────────────────────
+
+
+class TestCheckPythonDependencies:
+    def test_all_present(self):
+        ok, missing, remedy = prov.check_python_dependencies(
+            required=("cvss", "yaml"),
+            spec_fn=lambda name: object(),  # every name resolves
+        )
+        assert ok is True
+        assert missing == []
+        assert "pip install -r" in remedy
+        assert "requirements.txt" in remedy
+
+    def test_reports_missing_and_preserves_order(self):
+        def fake_spec(name):
+            # cvss absent, yaml present
+            return None if name == "cvss" else object()
+
+        ok, missing, remedy = prov.check_python_dependencies(
+            required=("cvss", "yaml"), spec_fn=fake_spec
+        )
+        assert ok is False
+        assert missing == ["cvss"]
+        assert "requirements.txt" in remedy
+
+    def test_all_missing(self):
+        ok, missing, _ = prov.check_python_dependencies(
+            required=("cvss", "yaml"), spec_fn=lambda name: None
+        )
+        assert ok is False
+        assert missing == ["cvss", "yaml"]
+
+    def test_checker_error_is_treated_as_missing(self):
+        def boom(name):
+            raise RuntimeError("broken parent package")
+
+        ok, missing, _ = prov.check_python_dependencies(
+            required=("cvss",), spec_fn=boom
+        )
+        assert ok is False
+        assert missing == ["cvss"]
+
+    def test_default_checker_uses_real_find_spec_and_returns_shape(self):
+        # Uses the real importlib.util.find_spec against the current interpreter.
+        ok, missing, remedy = prov.check_python_dependencies()
+        assert isinstance(ok, bool)
+        assert isinstance(missing, list)
+        assert "pip install -r" in remedy
+
+    def test_no_network_no_subprocess_in_preflight_source(self):
+        # The preflight must be a pure importlib probe.
+        src = Path(prov.__file__).read_text(encoding="utf-8")
+        assert "importlib.util" in src

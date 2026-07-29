@@ -4,8 +4,12 @@ For every skill, the top-level keys declared in a state's ``summary_contract``
 (required + optional) must match the top-level keys shown in the SUMMARY schema
 of the prompt file that state maps to. The engine renders the schema from the
 contract as the final agent directive; the prompt example must agree so the two
-never drift (2026-07-08 alignment). A prompt that intentionally omits the SUMMARY
-schema entirely (de-dup'd, e.g. prd) is skipped.
+never drift (2026-07-08 alignment). A prompt that omits the SUMMARY schema entirely
+is skipped by this guard — but note the cost: omitting it makes the prompt DEPEND on
+the engine directive, which is a tagged loan (``summary_schema_restatement``)
+returning "" under ``PI_MODEL_TIER=strong`` or ablation. prd's two prompts were
+de-dup'd that way and so lost their key list on exactly the strong-model path; both
+now carry their own schema and are enforced here (2026-07-28).
 
 Mapping: single-prompt skills use ``<agent>.md``; jsa/sca use ``_PROMPT_BY_STATE``.
 Comparison is at the FILE level (union across all states that map to a file), so

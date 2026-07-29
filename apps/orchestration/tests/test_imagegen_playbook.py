@@ -183,19 +183,6 @@ def test_preset_keyword_router_is_a_tagged_loan(monkeypatch):
     assert route_preset("a steampunk owl for the blog post") == "blog-flux-steampunk"
 
 
-def test_recall_lessons_render_in_first_directive(cp):
-    from orchestration.context import RunContext
-    from orchestration.primitives.spec import PrimitiveSpec
-
-    pb = ImagegenPlaybook(cp)
-    ctx = RunContext(session_id=SID, run_id=RID, playbook="imagegen", goal="a hero image")
-    ctx.recall_lessons = ["prefer wordless negatives; never bake text into the image"]
-    spec = PrimitiveSpec("X", "synthia", {"required": {}, "optional": {}}, "compose")
-    txt = pb._task_summary("_no_builder_state_", spec, ctx)
-    assert "Lessons from prior runs" in txt
-    assert "wordless negatives" in txt
-
-
 def test_invalid_caller_preset_falls_back_to_heuristic():
     assert route_preset("a steampunk owl", "not-a-preset") == "blog-flux-steampunk"
 

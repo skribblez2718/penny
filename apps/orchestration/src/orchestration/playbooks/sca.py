@@ -618,12 +618,42 @@ class ScaPlaybook(BasePlaybook):
             raise RuntimeError("; ".join(err))
         requested_output = constraints.get("output_dir", "")
         if requested_output:
-            output_dir = d.safe_output_dir(requested_output, target_path)
+            resolved_out = d.resolve_output_dir(
+                requested_output, target_path, ctx.project_root
+            )
+            output_dir = resolved_out.path
+            if resolved_out.redirected:
+                # F5: never silently override a caller path — surface the redirect
+                # so it is disclosed in the charter gate prompt.
+                meta["output_dir_redirect_note"] = resolved_out.reason
         else:
             output_dir = d.default_output_dir(target_path)
         meta["session_id"] = ctx.session_id
         meta["target_path"] = target_path
         meta["output_dir"] = output_dir
+        # F6: operator-configurable per-phase timeouts (scanners / PoC sandbox).
+        # Unset -> the modules' own defaults, so behavior is unchanged. Stored on
+        # meta so the deterministic domain helpers can read them.
+        if constraints.get("scan_timeout") is not None:
+            meta["scan_timeout"] = constraints.get("scan_timeout")
+        if constraints.get("poc_timeout") is not None:
+            meta["poc_timeout"] = constraints.get("poc_timeout")
+        # F1: early, actionable Python-dependency preflight. The scanner modules
+        # degrade gracefully if a runtime dep (cvss/PyYAML) is absent, but we
+        # disclose it up front so the operator can fix the .venv instead of
+        # discovering a silent CVSS coverage gap mid-run. A preflight hiccup must
+        # never block a run.
+        try:
+            import provisioning as _prov  # skill-dir module (on sys.path)
+
+            ok, missing, remedy = _prov.check_python_dependencies()
+            if not ok:
+                meta["py_dependency_warning"] = (
+                    f"missing Python runtime dep(s) {missing}; CVSS scoring will "
+                    f"degrade to 'unknown'. Remedy: {remedy}"
+                )
+        except Exception:  # pragma: no cover - defensive
+            pass
         meta.setdefault("cleared_gates", [])
         meta.setdefault("phase_results", {})
         meta.setdefault("mempalace_stubs", [])
@@ -710,21 +740,23 @@ class ScaPlaybook(BasePlaybook):
     # -- OVERRIDABLE tool-execution seams (tests subclass + override these so
     #    real semgrep/osv-scanner/gitleaks/docker never run) ---------------
     def _run_baseline(self, ctx: RunContext) -> dict:
-        _ensure_skill_tools(ctx.project_root, "sca")
+        d = self._domain(ctx)  # ensures skill dir on sys.path; returns sca_domain
         import baseline_scan
 
         meta = self._meta(ctx)
         return baseline_scan.execute_baseline_scan(
-            meta["target_path"], meta["output_dir"], ctx.session_id
+            meta["target_path"], meta["output_dir"], ctx.session_id,
+            timeout=d.scan_timeout(meta),  # F6: operator-configurable per-scan bound
         )
 
     def _run_targeted(self, ctx: RunContext) -> dict:
-        _ensure_skill_tools(ctx.project_root, "sca")
+        d = self._domain(ctx)  # ensures skill dir on sys.path; returns sca_domain
         import targeted_scan
 
         meta = self._meta(ctx)
         return targeted_scan.execute_targeted_scan(
-            meta["target_path"], meta["output_dir"], ctx.session_id
+            meta["target_path"], meta["output_dir"], ctx.session_id,
+            timeout=d.scan_timeout(meta),  # F6: operator-configurable per-scan bound
         )
 
     def _run_pocs(self, ctx: RunContext, summary: dict) -> dict:
@@ -763,6 +795,11 @@ class ScaPlaybook(BasePlaybook):
         phase = STATE_TO_PHASE.get(state)
         if phase:
             d.capture_phase_result(meta, phase, summary)
+            # F4: disk is the durable source of truth for rich agent-phase
+            # artifacts (P4/P6/P8). The checkpointer copy above may be truncated
+            # and mempalace is a SPOF; the full result is written to
+            # {output_dir}/phases/<phase>.json so nothing load-bearing is lost.
+            d.write_phase_artifact(meta, phase, summary)
         if state == "charter":
             self._route_gate_after(meta, "charter", "charter_gate_ev", "charter_skip")
         elif state == "census":
@@ -1016,8 +1053,13 @@ class ScaPlaybook(BasePlaybook):
         Unset → the agent's default model (reduced independence; documented)."""
         if state == "reverification":
             model = str((ctx.constraints or {}).get("reverify_model", "")).strip()
-            return model or None
-        return None
+            if model:
+                return model
+        # Env-driven per-agent override (e.g. SCA_TABITHA / SCA_DEFAULT =
+        # "ollama/glm"): route sca's agents to a non-Anthropic model+provider so
+        # security-testing prompts don't trip Anthropic (Opus) guardrails.
+        # Unset/invalid -> the agent's own configured model.
+        return self._env_model_override("SCA", state)
 
     # -- prompts + result --------------------------------------------------
     def _task_summary(self, state: str, spec: PrimitiveSpec, ctx: RunContext) -> str:  # noqa: C901
@@ -1063,14 +1105,6 @@ class ScaPlaybook(BasePlaybook):
                 "Re-verify those findings FROM SCRATCH — produce your OWN non-destructive "
                 "run_pocs batch; do NOT trust the first verifier's conclusions. A finding "
                 "only ONE pass confirms exploitable is not reliably verified."
-            )
-        # Recall (F2): seed the FIRST agent directive with distilled lessons
-        # (this override replaces the base _task_summary, so re-add it).
-        if ctx.recall_lessons and ctx.total_steps == 0:
-            lessons = "\n".join(f"- {self._cap(lsn)}" for lsn in ctx.recall_lessons)
-            task += (
-                "\n\nLessons from prior runs (advisory — weigh against current evidence; "
-                "they never override this run's goal or constraints):\n" + lessons
             )
         if ctx.clarification_text:
             task += f"\n\nUser clarification: {self._cap(ctx.clarification_text)}"

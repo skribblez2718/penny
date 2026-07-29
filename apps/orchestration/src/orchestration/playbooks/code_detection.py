@@ -21,6 +21,8 @@ import re
 import sys
 from pathlib import Path
 
+from ..paths import skill_file
+
 # Map of framework names to the dep tokens that signal their presence.
 # Used by ``_detect_server_framework`` to decide whether a project is a
 # server. Keep this list aligned with what the integration-test guidance
@@ -738,6 +740,7 @@ def _detect_multi_server(project_root: str) -> dict:  # noqa: C901
             {
                 "name": "(manager)",
                 "kind": "multi-process-manager",
+                # agent-path: target-relative (files in the TARGET repo, not this one)
                 "command": "see Makefile / Procfile / scripts/dev.sh",
                 "evidence": "explicit multi-process manager detected",
             }
@@ -832,33 +835,38 @@ def build_resource_context(ctx) -> str:
     agent should read before starting work.
     """
     code = ctx.extras.get("code", {})
-    resources: list[str] = []
+    names: list[str] = []
 
     # Security checklist is always mandatory
-    resources.append("resources/security-checklist.md")
+    names.append("security-checklist.md")
 
     # Resilience patterns are always applicable
-    resources.append("resources/resilience.md")
+    names.append("resilience.md")
 
     # Server detection — inject server-startup tests resource
     if code.get("server_info", {}).get("is_server"):
-        resources.append("resources/server-startup-tests.md")
+        names.append("server-startup-tests.md")
 
     # Multi-server detection — inject the project-structure rule so the
     # implement/plan agents know to set up a single-command dev script.
     if code.get("multi_server_info", {}).get("is_multi_server"):
-        resources.append("resources/project-structure.md")
+        names.append("project-structure.md")
 
     # AI detection — inject AI application checklist
     project_root = ctx.project_root or str(Path.cwd())
     ai_info = _detect_ai_framework(project_root)
     if ai_info.get("is_ai"):
-        resources.append("resources/ai-application.md")
+        names.append("ai-application.md")
 
     # Web UI detection — inject UI checklist
     webui_info = _detect_web_ui_framework(project_root)
     if webui_info.get("is_web_ui"):
-        resources.append("resources/web-ui.md")
+        names.append("web-ui.md")
+
+    # ABSOLUTE paths only: the agent's cwd is `project_root` (the TARGET repo), so a
+    # relative "resources/..." would resolve there and be silently unreadable — which
+    # for the MANDATORY security checklist means it just never gets read.
+    resources = [p for p in (skill_file(ctx, "code", "resources", n) for n in names) if p]
 
     if not resources:
         return ""
@@ -888,16 +896,18 @@ def build_multi_server_block(ctx) -> str:
         f"   - {s.get('name', '?')}: kind={s.get('kind', '?')}  command=`{s.get('command', '?')}`  evidence: {s.get('evidence', '?')}"
         for s in services
     )
+    structure_doc = skill_file(ctx, "code", "resources", "project-structure.md")
     return (
         "\n\nMULTI-SERVER SINGLE-COMMAND STARTUP (MANDATORY):\n"
         "This project ships more than one long-running process. Per the rule in "
-        ".pi/skills/code/resources/project-structure.md, the project MUST be "
+        f"{structure_doc}, the project MUST be "
         "set up so every server can be started with a single command. The "
         "implement phase MUST produce ALL of the following deliverables — "
         "the verify phase will fail if any are missing:\n"
         "\n"
         f"Detected services:\n{svc_lines}\n"
         "\n"
+        # agent-path: target-relative — deliverables the agent CREATES in the target repo
         "Required deliverables (in priority order):\n"
         "  1. `scripts/dev.sh` — executable bash script that starts every "
         "service in the background, traps SIGINT and SIGTERM, and tears down "

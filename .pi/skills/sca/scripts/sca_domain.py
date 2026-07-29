@@ -29,8 +29,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -40,6 +42,8 @@ try:  # PyYAML is pinned in requirements.txt; degrade gracefully if absent.
 except Exception:  # pragma: no cover - environment-dependent
     _yaml = None
 
+logger = logging.getLogger("sca.domain")
+
 # ---------------------------------------------------------------------------
 # Constants (ported verbatim)
 # ---------------------------------------------------------------------------
@@ -48,12 +52,40 @@ EVIDENCE_STANDARD = ["observed", "inferred", "assumed", "unknown"]
 MEMPALACE_WING = "wing_sca"
 DEFAULT_AUGMENT_CAP = 3
 MAX_POCS_PER_BATCH = 50
+
+# ── Per-phase timeouts (F6) ──────────────────────────────────────────────
+# The deterministic scanners and the Docker PoC sandbox already bound their own
+# subprocesses (semgrep/osv/gitleaks at SCAN_TIMEOUT_DEFAULT; the sandbox at
+# POC_TIMEOUT_DEFAULT, with a hard docker-kill). These make those bounds
+# OPERATOR-CONFIGURABLE via run constraints so a slow target can be reined in
+# without code changes. Defaults mirror the modules' own defaults, so an unset
+# constraint changes nothing.
+SCAN_TIMEOUT_DEFAULT = 600  # mirrors baseline_scan.DEFAULT_TIMEOUT (seconds)
+POC_TIMEOUT_DEFAULT = 60    # mirrors sandbox.run_in_sandbox timeout_s (seconds)
+
+
+def _coerce_timeout(value: Any, default: int) -> int:
+    """A positive int timeout, or ``default`` for any missing/invalid value."""
+    try:
+        t = int(value)
+    except (TypeError, ValueError):
+        return default
+    return t if t > 0 else default
+
+
+def scan_timeout(meta: dict) -> int:
+    """Per-scan subprocess timeout (seconds) for the P2/P7 scanners (F6)."""
+    return _coerce_timeout((meta or {}).get("scan_timeout"), SCAN_TIMEOUT_DEFAULT)
+
+
+def poc_timeout(meta: dict) -> int:
+    """Per-PoC sandbox timeout (seconds) for the P10 verification batch (F6)."""
+    return _coerce_timeout((meta or {}).get("poc_timeout"), POC_TIMEOUT_DEFAULT)
 VERIFICATION_STATUS_PENDING = "poc_executed_pending_review"
 REPORT_MD_MAX_CHARS = 100000
 SKRIBBLE_REPORT_KEY = "report_md"
 
 _SEVERITY_ORDER = ("critical", "high", "medium", "low", "unknown")
-_PROJECT_MARKERS = ("AGENTS.md", ".pi", ".git")
 
 _JS_TS_EXTENSIONS = frozenset(
     {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
@@ -101,16 +133,53 @@ def repo_basename(target_path: str) -> str:
     return safe or "unknown"
 
 
-def _is_inside_project_tree(path: str) -> bool:
-    cursor = os.path.abspath(path)
-    while True:
-        for marker in _PROJECT_MARKERS:
-            if os.path.exists(os.path.join(cursor, marker)):
-                return True
-        parent = os.path.dirname(cursor)
-        if parent == cursor:
-            return False
-        cursor = parent
+def _resolve_project_root(project_root: Optional[str] = None) -> Optional[str]:
+    """Best-effort absolute path of Penny's OWN project root.
+
+    The output-dir guard exists ONLY to keep temp artifacts out of *Penny's*
+    tree — never the user's whole $HOME. Resolution order:
+      1. explicit ``project_root`` argument (the caller-passed run root),
+      2. the ``PROJECT_ROOT`` environment variable,
+      3. a walk up from THIS file to the repo root that owns this skill
+         (…/<root>/.pi/skills/sca/scripts/sca_domain.py → <root>).
+    Returns ``None`` when none can be resolved, in which case callers HONOR the
+    requested path rather than assuming the whole filesystem is the project.
+    """
+    candidate = (project_root or os.environ.get("PROJECT_ROOT") or "").strip()
+    if candidate:
+        try:
+            return os.path.abspath(candidate)
+        except Exception:  # pragma: no cover - defensive
+            pass
+    try:
+        root = Path(__file__).resolve().parents[4]
+        if (root / ".pi").is_dir():
+            return str(root)
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return None
+
+
+def _is_inside_project_tree(path: str, project_root: Optional[str] = None) -> bool:
+    """True IFF ``path`` is inside Penny's OWN project root (PROJECT_ROOT).
+
+    Bounded containment via ``os.path.commonpath`` — NOT the old unbounded
+    ancestor marker-walk. The previous implementation walked up to ``/`` looking
+    for ``.pi`` / ``.git`` / ``AGENTS.md`` markers, so on any layout where user
+    work lives under ``$HOME`` (which contains ``~/.pi``) it declared EVERY path
+    "inside the project tree" and silently redirected the caller's ``output_dir``
+    to ``/tmp`` (F5). We now compare only against Penny's resolved project root.
+    When the root cannot be resolved we return ``False`` (honor the caller's
+    path) rather than guessing.
+    """
+    root = _resolve_project_root(project_root)
+    if not root:
+        return False
+    try:
+        resolved = os.path.abspath(path)
+        return os.path.commonpath([resolved, root]) == root
+    except (ValueError, OSError):  # different roots / bad path -> treat as outside
+        return False
 
 
 def default_output_dir(target_path: str) -> str:
@@ -128,17 +197,55 @@ def default_output_dir(target_path: str) -> str:
     return str(Path("/tmp") / f"sca-{basename}-{shorthash}")
 
 
-def safe_output_dir(requested: str, target_path: str) -> str:
+@dataclass(frozen=True)
+class ResolvedOutputDir:
+    """Outcome of resolving a caller-requested ``output_dir``.
+
+    path        the directory to actually use (resolved absolute).
+    redirected  True IFF the requested path was overridden.
+    reason      human-readable disclosure (empty unless ``redirected``).
+    """
+
+    path: str
+    redirected: bool
+    reason: str
+
+
+def resolve_output_dir(
+    requested: str, target_path: str, project_root: Optional[str] = None
+) -> ResolvedOutputDir:
+    """Resolve a caller-requested ``output_dir``, redirecting ONLY when it would
+    write INTO Penny's own project tree.
+
+    A path OUTSIDE ``PROJECT_ROOT`` (the normal case for any $HOME-based pentest
+    layout, e.g. ``/home/user/pentests/foo``) is HONORED verbatim. A path
+    genuinely INSIDE ``PROJECT_ROOT`` is redirected to the safe ``/tmp`` default,
+    and the redirect is reported via ``redirected`` / ``reason`` so the caller
+    can DISCLOSE it to the operator — never a silent stderr-only override (F5).
+    """
     resolved = os.path.abspath(requested)
-    if not _is_inside_project_tree(resolved):
-        return resolved
+    if not _is_inside_project_tree(resolved, project_root):
+        return ResolvedOutputDir(path=resolved, redirected=False, reason="")
     fallback = default_output_dir(target_path)
-    print(
-        f"[sca] output_dir {resolved!r} is inside the project tree. "
-        f"Redirecting to {fallback!r} per Penny's 'no temp files in project' rule.",
-        file=sys.stderr,
+    reason = (
+        f"requested output_dir {resolved!r} is inside Penny's own project tree "
+        f"({_resolve_project_root(project_root)!r}); redirected to {fallback!r} "
+        f"per the 'no temp files in the project tree' rule. Pass an output_dir "
+        f"OUTSIDE the project tree to control the delivery location."
     )
-    return fallback
+    # Secondary channel (logs). The structured ``reason`` above is the PRIMARY,
+    # caller-visible disclosure (surfaced in the charter gate prompt).
+    print(f"[sca] {reason}", file=sys.stderr)
+    return ResolvedOutputDir(path=fallback, redirected=True, reason=reason)
+
+
+def safe_output_dir(requested: str, target_path: str) -> str:
+    """Backward-compatible wrapper returning only the resolved path.
+
+    Prefer ``resolve_output_dir`` when you need to know WHETHER a redirect
+    happened (to disclose it to the operator).
+    """
+    return resolve_output_dir(requested, target_path).path
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +400,16 @@ def build_charter_draft(meta: dict) -> dict:
 
 def charter_questions(meta: dict) -> list:
     charter = build_charter_draft(meta)
+    # F5: if the requested output_dir was redirected (it pointed inside Penny's
+    # own project tree), DISCLOSE that in the gate prompt — never silently.
+    redirect_note = str(meta.get("output_dir_redirect_note", "") or "")
+    output_dir_line = f"- output_dir: {charter.get('output_dir')}\n"
+    if redirect_note:
+        output_dir_line += f"  ⚠ output_dir NOTE: {redirect_note}\n"
+    # F1: disclose any missing Python runtime dep (degraded CVSS scoring).
+    dep_warning = str(meta.get("py_dependency_warning", "") or "")
+    if dep_warning:
+        output_dir_line += f"  ⚠ dependency NOTE: {dep_warning}\n"
     return [
         {
             "id": "p0_charter_gate",
@@ -301,7 +418,7 @@ def charter_questions(meta: dict) -> list:
                 "Review the analysis charter draft below, then approve to "
                 "continue or choose revise and provide direction.\n"
                 f"- target_path: {charter.get('target_path')}\n"
-                f"- output_dir: {charter.get('output_dir')}\n"
+                f"{output_dir_line}"
                 f"- lockfiles: {charter.get('lockfiles')}\n"
                 f"- workspace_count: {charter.get('workspace_count')}\n"
                 f"- evidence_standard: {charter.get('evidence_standard')}"
@@ -449,6 +566,40 @@ def capture_phase_result(meta: dict, phase_name: str, result: Any) -> None:
     if oversized:
         bounded = {"_summary": _summarize_prior_result(bounded), "_truncated": True}
     meta.setdefault("phase_results", {})[phase_name] = bounded
+
+
+def write_phase_artifact(meta: dict, phase_name: str, result: Any) -> Optional[str]:
+    """Persist the FULL agent-phase result to disk as the durable source of
+    truth (F4).
+
+    ``capture_phase_result`` stores only a size-bounded copy in the checkpointer
+    (and may collapse it to a ``_truncated`` summary); mempalace holds the rich
+    content but is a single point of failure. Writing the COMPLETE result to
+    ``{output_dir}/phases/{phase}.json`` means the load-bearing P4/P6/P8 detail
+    survives even when mempalace is down. Never raises — a disk hiccup degrades
+    to a logged coverage note, never a phase crash.
+    """
+    if not isinstance(result, dict) or not result:
+        return None
+    output_dir = str(meta.get("output_dir", "") or "")
+    if not output_dir:
+        return None
+    try:
+        phases_dir = Path(output_dir) / "phases"
+        phases_dir.mkdir(parents=True, exist_ok=True)
+        safe = "".join(
+            c if (c.isalnum() or c in "-_.") else "_"
+            for c in str(phase_name).lower()
+        ) or "phase"
+        path = phases_dir / f"{safe}.json"
+        path.write_text(
+            json.dumps(result, indent=2, default=str, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return str(path)
+    except Exception as exc:  # pragma: no cover - defensive (disk full / perms)
+        logger.warning("write_phase_artifact(%s) failed: %s", phase_name, exc)
+        return None
 
 
 def get_phase_result(meta: dict, phase_name: str) -> Optional[dict]:
@@ -881,7 +1032,9 @@ def process_verification_pocs(
             continue
         finding_id = entry.get("finding_id")
         sandbox_result = sandbox_runner(
-            entry["script"], target_path, docker_available_check=docker_available_check
+            entry["script"], target_path,
+            timeout_s=poc_timeout(meta),  # F6: operator-configurable per-PoC bound
+            docker_available_check=docker_available_check,
         )
         record = {
             "name": entry["name"],
@@ -1102,8 +1255,6 @@ def _load_findings_from_path(path: Any) -> list:
 def build_report_artifacts(meta: dict) -> dict:
     """Deterministically compute + persist ALL P12 report artifacts, returning a
     concise summary dict (also stored at meta['report']). Never raises."""
-    session_id = meta.get("session_id", "")
-    target_path = meta.get("target_path", "")
     report_dir = Path(meta.get("output_dir", "")) / "report"
     try:
         report_dir.mkdir(parents=True, exist_ok=True)

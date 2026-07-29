@@ -56,7 +56,8 @@ headers only:
   `### Formal Definitions` section; never "see the definition below".
 - **Practice = graded questions, one per section, authored as `question` DSL blocks.** Each practice
   item is its OWN section with a single graded, interactive question answerable from the content that
-  PRECEDES it. NO "Quick Check" — those are just practice questions. The question is authored as a
+  PRECEDES it. Every practice set also includes **scenario-based recognize-the-tool items** (§14)
+  alongside the mechanical ones. NO "Quick Check" — those are just practice questions. The question is authored as a
   fenced ` ```question ` block under the section's `### Practice` heading (one block per question,
   never a free-text numbered list); the offline build compiles each into one graded section. Canonical
   grammar: the **target app's output contract** (caller-provided `app_contract` — the app's own
@@ -108,14 +109,23 @@ one course-wide in the charter:
   diagram-position ↔ notation-position mappings)
 - Terminology (one primary term per concept; synonyms introduced once,
   parenthetically, then never used)
+- **Hierarchy verbiage is fixed: Track → Course → Unit → Lesson → Section.** A track consists of
+  one or more courses; a course of units; a unit of lessons; a lesson of sections. These five are
+  the ONLY structural nouns in learner-facing prose and cross-references ("Lesson N", "the *Name*
+  section", "the *Name* course"). BANNED as structural nouns: "Topic", "Chapter", "Module",
+  "Part N". The same verbiage governs the target app's UI labels.
+- **Cross-notation visual anchors.** When a subject has two or more notations for the same object,
+  teach an explicit look-up rule that lets the learner see one and *picture* the other (and run
+  worked translations in BOTH directions), not just a statement that they are equivalent.
 - Track/course/lesson/section **titles are the author's own** — never a source's course/lesson
   titles, never a "Lesson N of <Source Course>" self-identification — and the spine (course
   boundaries, unit bundling, lesson order) follows the author's own pedagogical logic, not a
   source's table of contents (binding rule + rationale in §11)
-- Header grammar: topics `## N. Title` — `0` is reserved for the course's "What You Will
-  Learn" intro (§1), teaching topics number from `1` (consistent per lesson and matching the
-  answers file); phase headers at `###`; sub-parts at `####`; exams
-  `## Problem N: Title (Difficulty)`
+- Header grammar: lessons `## N. Title` — `0` is reserved for the course's "What You Will
+  Learn" intro (§1), teaching lessons number from `1` (consistent per guide and matching the
+  answers file); phase headers at `###`; sub-parts at `####`; compiled DSL exam problems use a
+  **bare `## Problem N`** heading (title/difficulty go in the block's `title:`; see §7 and the
+  app_contract) — a `: Title (Difficulty)` suffix in the heading can fail a strict exam compiler
 - Fixed section names: `Quick-Reference Flashcard Summary` (each entry an atomic one-per-section card)
   and `Unified Diagram` close every guide; gate-teaching guides add a **gate cheat sheet** giving
   each covered gate in matrix + Dirac form
@@ -188,8 +198,12 @@ quick-reference table and a common-mistakes checklist.
 - Fresh parameters — never copies of guide examples. Test transfer, not recall.
 - **Exams are authored AS graded DSL in the course tree and build like study guides — never
   hardcoded in the target app's code.** A per-course exam lives at `<course>/exam/practice_exam.md`;
-  each problem is a fenced ` ```question ` block under a `## Problem N: Title (Difficulty)` heading —
-  the SAME grammar as inline practice (§1) — so the offline build compiles it into the course's
+  each problem is a fenced ` ```question ` block under a problem heading whose exact shape is set by
+  the target app's exam contract (`app_contract`). A strict exam compiler commonly requires a **bare
+  `## Problem N`** heading (any other level-2 text fails the build); carry the human title + difficulty
+  in the block's `title:` field, ramping difficulty by ordering — do NOT bake a `: Title (Difficulty)`
+  suffix into the heading unless the app_contract explicitly allows it. The ` ```question ` block
+  grammar is the SAME as inline practice (§1), so the offline build compiles it into the course's
   graded Exam. Pick the tightest auto-gradable `qtype` (write domain-accurate distractors +
   per-option `feedback`); use `self-check` only for a genuinely open derivation. The companion
   `<course>/exam/answer_key.md` stays the author-facing worked key (Approach → Step-by-Step → Key
@@ -199,6 +213,9 @@ quick-reference table and a common-mistakes checklist.
   become graded lessons — with a per-lesson coverage balance and a self-assessment table.
 - Cross-notation translation problems appear in every exam (a known learner
   weak spot).
+- **Scenario-based items appear in every exam** (§14): a described situation, the learner picks
+  WHICH taught tool applies (then optionally applies it). Additive to — never replacing — the
+  mechanical items.
 
 ## 8. Final Prep (course-wide)
 
@@ -213,6 +230,13 @@ quick-reference table and a common-mistakes checklist.
 Every topic answers "why" twice: the forward hook (intuition phase) and the
 Why This Matters applications bridge (after worked examples). The learner
 never learns a procedure without knowing what it buys them.
+
+**And the physical WHAT comes before the mechanics.** Before any "here is how you compute it,"
+state in plain language what the operation *is* and what it *does* in the real world (what the
+symbols are modeling, and why the construction is shaped the way it is). The bar for every
+section: the learner can explain, in one plain-English sentence each, WHAT the math is doing and
+WHY — not merely execute the recipe. A section that opens with mechanics before meaning is a
+defect.
 
 ## 10. Modality-Ready Authoring
 
@@ -293,3 +317,53 @@ derivative work, and each source's license becomes moot.
   licenses), manifest, and provenance logs are **caller-provided, in the course directory** —
   not in this skill; this spec carries the *authoring* discipline, the `derivation` skill the
   *check*.
+
+## 12. Term Introduction — No Assumed Knowledge
+
+Assume zero/minimal prior knowledge, everywhere, always. Every term, symbol, and name is
+introduced before anything else uses it, in language a newcomer can say out loud and explain back.
+
+- **Pronunciation at first introduction.** Every new symbol, notation, or named term gets a
+  plain-English pronunciation the first time it appears (a phonetic gloss for names, a spoken
+  reading for symbols). A learner should never meet a symbol they cannot say out loud.
+- **All common aliases taught at first introduction.** When a concept goes by more than one name
+  in the wild, teach every common name the moment the concept is introduced — otherwise the
+  learner meets the second name elsewhere and thinks it is a new concept.
+- **No term debuts outside the prose.** A term may not appear FIRST in a sim title, sim UI text,
+  exam question, quiz option, figure caption, or app label. If any artifact uses a word, the prose
+  BEFORE that point must have introduced it.
+- **Every piece of jargon gets an everyday-language gloss at first use** — not just a formal
+  definition, a plain-English one.
+- **No cold opens.** A section may not "bring up" a concept and start manipulating it as though
+  the learner has background. Every section opens by situating its concept: what it is in plain
+  language, where it came from (backward reference), and why it is taught now (forward hook, §9).
+
+## 13. Voice and Register — Patient Mentor, Not Academic
+
+The authorial voice is a conversational, patient teacher/mentor making sure the learner
+understands every detail and every why. An academic/textbook register is a defect.
+
+- Write TO the learner ("you"), beside them — not AT them, as a lecture.
+- Never dump math: every equation is narrated — said in words before (or as) it is shown, the
+  reader told what to look at and why it matters (this also keeps text read-aloud ready, §10).
+- Prefer short sentences and everyday words; formal words arrive WITH their plain-English gloss
+  (§12).
+- Density check: a paragraph that reads like a journal abstract or a theorem statement —
+  symbol-heavy, unnarrated, no "you" — gets rewritten. Rigor lives in the formal definition that
+  closes the section (§1); the road to it is conversational.
+- Reassure at friction points: acknowledge hard steps and remind the learner what they already
+  know that makes the step doable.
+
+## 14. Scenario-Based Questions — Recognize the Tool, Not Just Run It
+
+A primary course goal: the learner can recognize WHICH concept a situation calls for — in real
+life, on any exam — not merely execute a named procedure on command.
+
+- Every practice set AND every exam includes scenario-based items alongside mechanical ones: a
+  situation is described (everyday, experimental, or story-framed) and the learner identifies
+  which taught tool applies, then optionally applies it.
+- Scenario items are auto-gradable like all practice (§1 DSL): mcq-single ("which tool does this
+  situation need?"), order (solution steps), numeric ("now compute it").
+- Distractors are other TAUGHT tools — the misconception tested is "wrong tool," so the wrong
+  options must be tools the learner knows (§7 scope rules apply).
+- Scenario items are ADDITIVE: they join, never replace, the verified mechanical items.

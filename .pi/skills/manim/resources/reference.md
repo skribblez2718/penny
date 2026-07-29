@@ -20,6 +20,30 @@ not restate it.
 - **Consistency beats novelty.** The same concept uses the same primitive,
   color, and position across every scene — this is what the canon locks.
 
+## Narrative mode (story canon)
+
+When the caller passes `constraints.story_canon` — a caller-owned narrative
+canon file (characters, arc, register, motifs, mnemonic lines) — the video is
+a **story that teaches**, and these criteria join the grammar above:
+
+- **Concept → beat anchoring.** Every concept the canon targets is carried by
+  a story beat; a beat that teaches nothing is decoration, a concept with no
+  beat is a coverage gap. The canon records the mapping explicitly.
+- **The story never falsifies the content.** Personification may simplify but
+  never mislead; where an analogy has a known failure mode, a beat addresses
+  it rather than hiding it.
+- **Character consistency is canon.** A character's design, what it
+  personifies, and its rules come from the story canon and never drift
+  scene-to-scene. Characters render via the schema's character primitives —
+  the same primitives-only contract as everything else.
+- **Storyteller narration.** Single narrator voice reading a spoken script;
+  character dialogue is narrated ("…said the gatekeeper"), not multi-voiced.
+- **Mnemonic lines repeat.** If the story canon defines a mnemonic/refrain for
+  the lesson, it appears at least twice (mid-story and closing) — chantable,
+  written for TTS (no melody).
+- **New theory never debuts in a story.** Narrative videos consolidate taught
+  material; the ingest findings bound what beats may assume.
+
 ## The canon (what designing_canon must decide)
 
 scene count + boundaries (idea per scene); primitive-to-concept mapping

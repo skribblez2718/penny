@@ -122,6 +122,12 @@ def test_list_pending_only_resumable(db_path):
     # session scoping
     assert {r.run_id for r in cp.list_pending(session_id="s")} == {"r-run", "r-wait"}
     assert cp.list_pending(session_id="nope") == []
+    # F2: opt-in ALSO surfaces errored runs (for explicit retry); default omits.
+    assert {r.run_id for r in cp.list_pending(include_errored=True)} == {
+        "r-run",
+        "r-wait",
+        "r-err",
+    }
 
 
 def test_purge_older_than_only_terminal(db_path, monkeypatch):

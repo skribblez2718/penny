@@ -349,15 +349,6 @@ def test_validate_evidence_lands_on_context(cp):
     assert cp.load(RID).context.verify_evidence
 
 
-def test_recall_lessons_render_in_first_directive(cp):
-    pb = RezPlaybook(cp)
-    ctx = RunContext(session_id=SID, run_id=RID, playbook="rez", goal="tailor for JD")
-    ctx.recall_lessons = ["quantify every bullet; never fabricate a metric"]
-    txt = pb._task_summary("analyzing", REZ_ANALYZE, ctx)
-    assert "Lessons from prior runs" in txt
-    assert "quantify every bullet" in txt
-
-
 # ---------------------------------------------------------------------------
 # SUMMARY contract enforcement
 # ---------------------------------------------------------------------------

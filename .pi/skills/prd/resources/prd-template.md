@@ -1,6 +1,6 @@
 # World-Class PRD Template
 
-Reference for piper when generating questionnaire prompts and for synthia when synthesizing PRDs. Not all sections apply to every task — scope determines depth.
+Reference for synthia when synthesizing PRDs. Not all sections apply to every task — scope determines depth: cover what the goal warrants and say which sections you covered, rather than padding to hit a count.
 
 ## 1. Overview
 One paragraph. What are we building and why now?

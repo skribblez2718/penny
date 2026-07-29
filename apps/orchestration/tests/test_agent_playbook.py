@@ -59,19 +59,6 @@ def _start(cp, goal="Build climate research agent", constraints=None):
     )
 
 
-def test_recall_lessons_render_in_first_directive(cp):
-    from orchestration.context import RunContext
-    from orchestration.primitives.spec import PrimitiveSpec
-
-    pb = AgentPlaybook(cp)
-    ctx = RunContext(session_id=SID, run_id=RID, playbook="agent", goal="build an agent")
-    ctx.recall_lessons = ["description is the routing surface; keep use/don't-use signals sharp"]
-    spec = PrimitiveSpec("X", "echo", {"required": {}, "optional": {}}, "explore")
-    txt = pb._task_summary("_no_builder_state_", spec, ctx)
-    assert "Lessons from prior runs" in txt
-    assert "routing surface" in txt
-
-
 def _step(cp, agent, result):
     return AgentPlaybook(cp).step(session_id=SID, run_id=RID, agent=agent, result=result)
 

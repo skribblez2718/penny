@@ -32,11 +32,12 @@ REQUIRED_FILES = [
     "README.md",
     "scripts/orchestrate.py",
 ]
-# A flow diagram (state machine mirror) IS required, in EITHER format: the newer
-# self-contained HTML (resources/flow.html) or the legacy mermaid
-# (resources/flow.mmd). At least one must exist. Other resource files have NO
-# mandated filename — skills name them freely.
-FLOW_DIAGRAM_ANY = ["resources/flow.html", "resources/flow.mmd"]
+# A flow diagram (state machine mirror) IS required. resources/flow.html (the
+# self-contained interactive HTML) is THE standard; the legacy mermaid
+# resources/flow.mmd is still accepted for not-yet-migrated skills but is
+# deprecated (WARN). Other resource files have NO mandated filename.
+FLOW_DIAGRAM_HTML = "resources/flow.html"
+FLOW_DIAGRAM_MMD = "resources/flow.mmd"
 
 
 def discover_skills() -> List[Path]:
@@ -84,13 +85,20 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
             elif not full_path.is_file():
                 issues.append(("ERROR", f"Not a file: {rel_file}"))
 
-        # Flow diagram: require at least one of flow.html / flow.mmd (either format).
-        if not any((skill_dir / rel).is_file() for rel in FLOW_DIAGRAM_ANY):
+        # Flow diagram: resources/flow.html is THE standard. Require a diagram; a skill
+        # still shipping only the legacy resources/flow.mmd gets a WARN to migrate.
+        has_html = (skill_dir / FLOW_DIAGRAM_HTML).is_file()
+        has_mmd = (skill_dir / FLOW_DIAGRAM_MMD).is_file()
+        if not (has_html or has_mmd):
+            issues.append(
+                ("ERROR", "Missing flow diagram: expected resources/flow.html (the standard)")
+            )
+        elif not has_html and has_mmd:
             issues.append(
                 (
-                    "ERROR",
-                    "Missing flow diagram: expected resources/flow.html (preferred) or "
-                    "resources/flow.mmd",
+                    "WARN",
+                    "Legacy resources/flow.mmd — convert to resources/flow.html (the "
+                    "standard) and delete the .mmd (see docs/agents/skills/flow-diagrams.md)",
                 )
             )
 

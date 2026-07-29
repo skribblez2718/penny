@@ -38,6 +38,7 @@ from pathlib import Path
 from statemachine import State, StateMachine
 
 from ..context import RunContext
+from ..paths import skill_file, skill_root
 from ..engine import BasePlaybook
 from ..primitives.spec import PrimitiveSpec
 
@@ -54,7 +55,9 @@ NO_JD_ERROR = (
     "job description text."
 )
 NO_RESUME_ERROR = (
-    "ERROR: No base resume found in resources/resume/. Add the base resume " "before running rez."
+    "ERROR: No base resume found in "
+    f"{skill_file(None, 'rez', 'resources', 'resume') or 'the rez skill resume directory'}. "
+    "Add the base resume before running rez."
 )
 EXPORT_ERROR = (
     "ERROR: word extension (word_generate tool) unavailable or export failed — "
@@ -220,8 +223,14 @@ def _room(ctx: RunContext) -> str:
 
 
 def _skill_dir(ctx: RunContext) -> str:
-    root = (ctx.project_root or "").rstrip("/")
-    return f"{root}/.pi/skills/rez" if root else ".pi/skills/rez"
+    """ABSOLUTE path to the rez skill dir.
+
+    Previously derived from ``ctx.project_root`` — wrong by construction: that is the
+    per-run TARGET directory, not where this skill lives, and the fallback was a bare
+    relative path resolved against the agent's cwd (also the target). Now uses the
+    shared resolver: driver-injected ``constraints['skill_dir']``, else $PROJECT_ROOT.
+    """
+    return skill_root(ctx, "rez")
 
 
 # ── T4: deterministic source-provenance ASSIST for vera (rules-tier flag, NOT a gate) ──
@@ -596,14 +605,6 @@ class RezPlaybook(BasePlaybook):
             if builder
             else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
         )
-        # Recall (F2): seed the FIRST agent directive with distilled lessons
-        # (this override replaces the base _task_summary, so re-add it).
-        if ctx.recall_lessons and ctx.total_steps == 0:
-            lessons = "\n".join(f"- {self._cap(lsn)}" for lsn in ctx.recall_lessons)
-            base += (
-                "\n\nLessons from prior runs (advisory — weigh against current evidence; "
-                "they never override this run's goal or constraints):\n" + lessons
-            )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {ctx.clarification_text}"
         return base

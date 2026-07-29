@@ -75,6 +75,13 @@ grep -rnE '^[[:space:]]*(-[[:space:]]+)?(prompt|text|feedback|explanation|reveal
 # 12. Structural validity of every ```question/```sim block (mcq-single exactly-one-correct, numeric
 #     has answer:, sim engine dir + files exist) is enforced by the target app's DSL gate — pre-check
 #     with the target app's own DSL lint (whatever the caller-provided app_contract specifies)
+
+# 13. Hierarchy-verbiage drift (pedagogy-spec §2) — banned structural nouns must return NOTHING:
+grep -rniE '\b(topic|chapter|module|part) [0-9]+' $LF
+
+# 14. Sim/exam term-debut audit (pedagogy-spec §12) — every technical term in a sim block's title
+#     or fallback text, and every named term in an exam/quiz option, must grep-hit in the guide
+#     prose BEFORE that artifact's line/file position.
 ```
 
 ## Tier 2 — Structural alignment
@@ -115,6 +122,17 @@ grep -rnE '^[[:space:]]*(-[[:space:]]+)?(prompt|text|feedback|explanation|reveal
 - [ ] Guide-required fixed sections present: Quick-Reference Flashcard Summary
       (atomic one-per-card entries) and Unified Diagram; wide math is stacked to
       fit the display column (no horizontal overflow)
+- [ ] Hierarchy verbiage: only Track/Course/Unit/Lesson/Section as structural
+      nouns in learner prose and cross-references (mech-check 13 clean)
+- [ ] Every new symbol/term carries a pronunciation at first introduction, and
+      every common alias is taught at first use (pedagogy-spec §12)
+- [ ] No cold opens: every section situates its concept (plain-language what +
+      backward ref + forward hook) before manipulating it; the physical WHAT
+      precedes the mechanics in every operation-teaching section (§9, §12)
+- [ ] Voice is conversational patient-mentor: no unnarrated equation dumps, no
+      textbook-register paragraphs (§13)
+- [ ] Every practice set and every exam contains scenario-based
+      recognize-the-tool items, additive to the mechanical ones (§14)
 - [ ] Honest manifest: when the charter records a coverage-reference source, the
       course's source manifest carries BOTH roles — `role=learn-from` (the cited
       independent sources) and `role=coverage-reference` (the restricted rebuilt

@@ -30,6 +30,15 @@ The skill **never renders** — no Manim execution, no FFmpeg.
 - Authored lesson material exists and you want a 3Blue1Brown-style video bundle.
 - The render app's primitive-library schema export is available (a JSON file).
 - You want human review of the design (canon gate) before mass generation.
+- **Narrative mode:** you want a character-driven *story that teaches* — pass
+  `constraints.story_canon`, the path to a caller-owned narrative canon file
+  (characters, arc, register, motifs, mnemonic lines). The skill treats it as
+  binding input: annie folds it into the video canon (concept → story-beat
+  mapping, characters → schema character primitives), narration is a single
+  storyteller voice, and carren judges story coherence AND concept coverage.
+  Requires the render app's schema to export character primitives; no new
+  states, no ketwise/domain assumptions — the story universe lives entirely in
+  the caller's file.
 
 ## When NOT to Use
 
@@ -52,6 +61,7 @@ skill({
     video_id: "qc-03-superposition",
     theme: "quantum-dark",
     voice_id: "narrator-en",
+    story_canon: "/path/to/story_bible.md",         // narrative mode (see below)
     voice_studio_url: "http://127.0.0.1:8001",    // loopback-only enforced
     target_duration_minutes: 8,
     max_scenes: 20,                                // budget (clamped to 60)
@@ -97,12 +107,15 @@ intake → scoping(echo) → ingesting(echo fan) → designing_canon(annie) → 
 - **SSRF-safe narration**: loopback-only host, no redirects, timeout-bounded.
 - **Compatibility seam**: the bundle manifest records the primitive-library
   version it was generated against; the app refuses mismatches.
+- **Story canon is caller-owned**: narrative mode adds zero states; a missing
+  `story_canon` file fails fast with an actionable error, and the skill never
+  hardcodes any story universe.
 
 ## Resources
 
 - `resources/reference.md` — what good math animation is; bundle contract.
 - `resources/storyboard-schema.json` — the storyboard JSON Schema.
-- `resources/flow.mmd` — state diagram mirroring the playbook machine.
+- `resources/flow.html` — state diagram mirroring the playbook machine.
 - `scripts/validate_bundle.py` — the static validator (vera's evidence).
 - `scripts/voice_client.py` — hardened loopback Voice Studio client.
 

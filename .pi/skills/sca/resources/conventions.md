@@ -133,7 +133,9 @@ impact.** They are independent axes and both are recorded.
 > dataclass in `scripts/normalize.py` (fields like `id`, `tool`, `rule_id`,
 > `title`, `description`, `file`, `line`, `severity`, `confidence`,
 > `evidence_basis`, `cwe_ids`, `asvs_references`, `api_top10_2023_mapping`,
-> `status`, `cvss_4_0_vector`, `cvss_4_0_score`). The illustrative record below is
+> `status`, `cvss_4_0_vector`, `cvss_4_0_score`, and the report-grade per-finding
+> fields `description_stakeholder`, `steps_to_reproduce`, `code_analysis`,
+> `remediation`). The illustrative record below is
 > the bundle's original shape (note `location.repo`, `dataflow`, single-string
 > `cwe`) and differs in field names/structure. Treat it as intent, not schema.
 > The **honesty rules** it states, however, ARE enforced in the real triage /
@@ -164,6 +166,24 @@ appended by deep dive (P9), updated by verification (P10/P11), read by the repor
   ]
 }
 ```
+
+**Report-grade per-finding fields (F9).** Every finding that reaches the report
+carries five populated sections so engineers can reproduce it and stakeholders
+can understand its impact (see `assets/prompts/skribble-report.md`):
+
+- `title` + `description` (the base fields) — the second written for BOTH
+  technical and non-technical readers, stating concrete impact.
+- `steps_to_reproduce` — a copy/paste-able procedure (or script) proving
+  presence/absence; names any prerequisite artifact for active exploitation.
+- `code_analysis` — an ordered source→sink walk: a list of
+  `{ "file": str, "line": int, "note": str }` hops (fed by `dataflow.path`).
+- `remediation` — application/context-specific fix guidance for THIS code, not a
+  generic CWE blurb.
+
+These are populated progressively (deep-dive P9 authors `code_analysis` +
+`steps_to_reproduce`; triage/verification supply `description_stakeholder` +
+`remediation`) and assembled by the report phase, which rejects a validated
+finding missing any section.
 
 **Honesty rules enforced by the schema:**
 

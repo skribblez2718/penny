@@ -32,7 +32,7 @@ Every Penny skill has two homes:
     │       └── echo.md (and one per other --agents)
     └── resources/
         ├── reference.md
-        └── flow.mmd
+        └── flow.html
 
 The generated playbook is a MINIMAL BUT VALID stub: intake -> one working state
 per agent (in the order given by --agents) -> complete, plus the standard
@@ -62,6 +62,90 @@ SKILLS_DIR = PROJECT_ROOT / ".pi" / "skills"
 PLAYBOOKS_DIR = PROJECT_ROOT / "apps" / "orchestration" / "src" / "orchestration" / "playbooks"
 PLAYBOOKS_INIT = PLAYBOOKS_DIR / "__init__.py"
 ORCH_TESTS_DIR = PROJECT_ROOT / "apps" / "orchestration" / "tests"
+
+# Standard self-contained flow-diagram skeleton (see docs/agents/skills/flow-diagrams.md).
+# Placeholders: __NAME__, __HEIGHT__, __N__ (node data lines), __E__ (edge data lines).
+_FLOW_HTML_TEMPLATE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>__NAME__ skill \u2014 execution flow</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2230;--border:#2a3341;--ink:#e6edf3;--muted:#8b949e;
+    --desc:#b3bdc9;--tool:#8b949e;--gate:#e3b341;--esc:#9ca3af;--done:#3fb950;--error:#f85149;
+    --fwd:#8b98a9;--exit:#3fb950;--loop:#e3a52e;--abort:#f85149;}
+  *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  header{padding:22px 28px 8px}h1{margin:0;font-size:22px}.sub{color:var(--muted);margin-top:4px;font-size:13px}
+  #wrap{position:relative;margin:8px 20px 40px;width:1240px;height:__HEIGHT__px}
+  svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+  .node{position:absolute;background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    box-shadow:0 1px 2px rgba(0,0,0,.35);padding:10px 12px}
+  .node .t{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:7px}
+  .node .t .who{font-weight:600;color:var(--muted);font-size:11.5px}
+  .node .d{color:var(--desc);font-size:12px;margin-top:5px}
+  .node::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;border-radius:10px 0 0 10px}
+  .node.tool::before{background:var(--tool)}.node.esc::before{background:var(--esc)}
+  .node.gate{background:#211d10;border-color:#4d3f1a}.node.gate::before{background:var(--gate)}
+  .node.done{background:#0f2417;border-color:#1f5136}.node.done::before{background:var(--done)}
+  .node.error{background:#2a1517;border-color:#5c2a2a}.node.error::before{background:var(--error)}
+  .node .badge{margin-left:auto;font-size:10px;font-weight:700;text-transform:uppercase;color:#0d1117;
+    padding:2px 6px;border-radius:999px}.badge.hitl{background:var(--gate)}.badge.term{background:#5b6675;color:#e6edf3}
+  .lbl{position:absolute;transform:translate(-50%,-50%);background:var(--panel2);border:1px solid #313c4a;
+    color:#c9d3df;font-size:11px;padding:1px 6px;border-radius:999px;white-space:nowrap}
+  .foot{margin:0 28px 48px;font-size:12.5px;color:#c3cdd9}code{background:#22293a;color:#cdd6e3;padding:1px 5px;border-radius:4px}
+</style></head><body>
+<header><h1>__NAME__ skill \u2014 execution flow</h1>
+<div class="sub">Validated against <code>orchestration/playbooks/__NAME__.py</code>. TODO: fill node/edge descriptions.</div></header>
+<div id="wrap"><svg id="edges"><defs>
+  <marker id="ah" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+    <path d="M0,0 L8,3 L0,6 Z" fill="context-stroke"></path></marker></defs></svg></div>
+<div class="foot">
+  <p>The uniform <code>abort \u2192 error</code> (every non-final state) and <code>escalation \u2192 unknown</code>
+  (every agent state) seams are collapsed into this note and NOT drawn, per the standard.</p>
+</div>
+<script>
+const COLS = { Louter:30, C:470, Router:960 };
+const W = { C:300, side:250 };
+const N = {
+__N__
+};
+const E = [
+__E__
+];
+const KIND = {fwd:'#8b98a9',exit:'#3fb950',loop:'#e3a52e',esc:'#9ca3af',abort:'#f85149'};
+const wrap=document.getElementById('wrap'), svg=document.getElementById('edges');
+for(const id in N){const n=N[id];const w=(n.col==='C')?W.C:W.side;
+  const el=document.createElement('div');el.className='node '+n.cls;el.id='n_'+id;
+  el.style.left=COLS[n.col]+'px';el.style.top=n.y+'px';el.style.width=w+'px';
+  const who=n.who?`<span class="who">\u00b7 ${n.who}</span>`:'';
+  const badge=n.badge?`<span class="badge ${n.badge==='TERM'?'term':'hitl'}">${n.badge}</span>`:'';
+  el.innerHTML=`<div class="t">${n.title}${who}${badge}</div><div class="d">${n.desc}</div>`;
+  wrap.appendChild(el);}
+const base=wrap.getBoundingClientRect();
+function rect(id){const r=document.getElementById('n_'+id).getBoundingClientRect();
+  return{left:r.left-base.left,top:r.top-base.top,width:r.width,height:r.height};}
+function anchor(r,s){switch(s){case'top':return{x:r.left+r.width/2,y:r.top};
+  case'bottom':return{x:r.left+r.width/2,y:r.top+r.height};case'left':return{x:r.left,y:r.top+r.height/2};
+  case'right':return{x:r.left+r.width,y:r.top+r.height/2};}}
+function ctrl(p,s,b){const k=64;b=b||0;switch(s){case'top':return{x:p.x+b,y:p.y-k};
+  case'bottom':return{x:p.x+b,y:p.y+k};case'left':return{x:p.x-k-Math.abs(b),y:p.y};
+  case'right':return{x:p.x+k+Math.abs(b),y:p.y};}}
+const SVGNS='http://www.w3.org/2000/svg';
+for(const e of E){const ra=rect(e.from),rb=rect(e.to);const p1=anchor(ra,e.s1),p2=anchor(rb,e.s2);
+  const c1=e.c1?{x:p1.x+e.c1.dx,y:p1.y+e.c1.dy}:ctrl(p1,e.s1,e.bow);
+  const c2=e.c2?{x:p2.x+e.c2.dx,y:p2.y+e.c2.dy}:ctrl(p2,e.s2,e.kind==='exit'?-(e.bow||0):e.bow);
+  const path=document.createElementNS(SVGNS,'path');
+  path.setAttribute('d',`M ${p1.x} ${p1.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${p2.x} ${p2.y}`);
+  path.setAttribute('fill','none');path.setAttribute('stroke',KIND[e.kind]);
+  path.setAttribute('stroke-width','2');path.setAttribute('marker-end','url(#ah)');
+  if(e.kind==='esc')path.setAttribute('stroke-dasharray','6 5');svg.appendChild(path);
+  if(e.label){const t=0.5,mt=1-t;
+    const x=mt*mt*mt*p1.x+3*mt*mt*t*c1.x+3*mt*t*t*c2.x+t*t*t*p2.x;
+    const y=mt*mt*mt*p1.y+3*mt*mt*t*c1.y+3*mt*t*t*c2.y+t*t*t*p2.y;
+    const l=document.createElement('div');l.className='lbl';l.textContent=e.label;
+    l.style.left=x+'px';l.style.top=y+'px';wrap.appendChild(l);}}
+</script></body></html>
+"""
 
 
 # ============================================================
@@ -579,7 +663,7 @@ Room: `skills/{self.name}-<session_id>`. TODO: document drawer headers per agent
 | `scripts/orchestrate.py` | Thin delegate to the orchestration engine |
 | `assets/prompts/*.md` | Domain guidance per agent |
 | `resources/reference.md` | State/transition/agent reference |
-| `resources/flow.mmd` | Mermaid state diagram (matches the playbook FSM) |
+| `resources/flow.html` | Interactive HTML state diagram (matches the playbook FSM) |
 
 ## Testing
 
@@ -685,28 +769,40 @@ from the checkpointer.
 TODO: document the fields in `result_payload`. Scaffold default: `met`, `iterations`.
 """
 
-    def _build_flow_mmd(self) -> str:
-        lines = ["stateDiagram-v2", "    [*] --> intake", ""]
-        lines.append(f"    intake --> {self.states[0][0]} : start_{self.states[0][0]}")
-        lines.append("")
+    def _build_flow_html(self) -> str:
+        """Generate the STANDARD self-contained interactive flow.html skeleton.
+
+        Nodes are keyed by verbatim FSM state ids and edges mirror the linear
+        default machine; the two uniform seams (abort -> error, escalation ->
+        unknown) are collapsed into the footer note per the standard. Refine it to
+        match the final machine and register the skill in
+        ``apps/orchestration/tests/test_flow_diagrams.py::CASES`` (see
+        docs/agents/skills/flow-diagrams.md).
+        """
+        first = self.states[0][0]
+        nodes = [f"  intake:{{col:'C',y:24,cls:'gate',title:'intake',badge:'HITL',desc:'TODO'}},"]
+        y = 118
+        for s, a in self.states:
+            nodes.append(f"  {s}:{{col:'C',y:{y},cls:'tool',title:'{s}',who:'{a}',desc:'TODO'}},")
+            y += 96
+        done_y = y + 24
+        nodes.append(f"  complete:{{col:'C',y:{done_y},cls:'done',title:'complete',badge:'TERM',desc:'Terminal.'}},")
+        nodes.append(f"  unknown:{{col:'Louter',y:{y // 2},cls:'esc',title:'unknown',desc:'Escalation entry (UNCERTAIN / needs_clarification).'}},")
+        nodes.append(f"  awaiting_clarification:{{col:'Louter',y:{y // 2 + 150},cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes.'}},")
+        nodes.append(f"  error:{{col:'Router',y:{done_y},cls:'error',title:'error',badge:'TERM',desc:'Terminal (abort).'}},")
+        edges = [f"  {{from:'intake',to:'{first}',s1:'bottom',s2:'top',kind:'fwd'}},"]
         for i, (s, _a) in enumerate(self.states):
             nxt = self.states[i + 1][0] if i + 1 < len(self.states) else "complete"
-            lines.append(f"    {s} --> {nxt} : {s}_done")
-        lines.append("")
-        for s, _a in self.states:
-            lines.append(f"    {s} --> unknown : to_unknown")
-        lines.append("    unknown --> awaiting_clarification : escalate")
-        lines.append(f"    awaiting_clarification --> {self.states[0][0]} : clarify")
-        lines.append("")
-        lines.append("    intake --> error : abort")
-        for s, _a in self.states:
-            lines.append(f"    {s} --> error : abort")
-        lines.append("    unknown --> error : abort")
-        lines.append("    awaiting_clarification --> error : abort")
-        lines.append("")
-        lines.append("    complete --> [*]")
-        lines.append("    error --> [*]")
-        return "\n".join(lines) + "\n"
+            kind = "exit" if nxt == "complete" else "fwd"
+            edges.append(f"  {{from:'{s}',to:'{nxt}',s1:'bottom',s2:'top',kind:'{kind}'}},")
+        edges.append("  {from:'unknown',to:'awaiting_clarification',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},")
+        edges.append(f"  {{from:'awaiting_clarification',to:'{first}',s1:'right',s2:'left',kind:'esc',label:'clarify'}},")
+        return (
+            _FLOW_HTML_TEMPLATE.replace("__NAME__", self.name)
+            .replace("__HEIGHT__", str(done_y + 120))
+            .replace("__N__", "\n".join(nodes))
+            .replace("__E__", "\n".join(edges))
+        )
 
     def _build_prompt_md(self, agent: str, agent_states: List[str]) -> str:
         contract_refs = ", ".join(f"`_{s.upper()}`" for s in agent_states)
@@ -775,8 +871,8 @@ summary.
         (skill_dir / "resources" / "reference.md").write_text(
             self._build_reference_md(), encoding="utf-8"
         )
-        (skill_dir / "resources" / "flow.mmd").write_text(
-            self._build_flow_mmd(), encoding="utf-8"
+        (skill_dir / "resources" / "flow.html").write_text(
+            self._build_flow_html(), encoding="utf-8"
         )
 
         for agent in dict.fromkeys(self.agents):  # unique, order-preserving
@@ -843,7 +939,7 @@ def main():
     print("  3. Add GATE_STATES/gate_questions/route_user or PARALLEL_BY_STATE if")
     print(f"     '{args.name}' needs a HITL gate or a parallel fan-out state.")
     print(f"  4. Write domain guidance in {skill_dir}/assets/prompts/*.md")
-    print(f"  5. Update {skill_dir}/resources/flow.mmd and resources/reference.md")
+    print(f"  5. Update {skill_dir}/resources/flow.html and resources/reference.md")
     print("     to match the real FSM once it's designed.")
     print(f"  6. Flesh out the playbook tests: {scaffolder.test_path}")
     print(

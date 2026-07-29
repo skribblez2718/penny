@@ -46,7 +46,7 @@ echo (charter/census, READ-ONLY confirmation), synthia (context/architecture/req
 - [ ] Playbook tests pass: `python3 -m pytest apps/orchestration/tests/test_sca_playbook.py`
 - [ ] `SCA_VERIFICATION` requires a `run_pocs` list (empty-with-note allowed); `evidence_basis` present on triage/deep-dive
 - [ ] Recall lessons render in the first directive
-- [ ] `resources/flow.mmd` matches `SCAMachine` transition-for-transition
+- [ ] `resources/flow.html` matches `SCAMachine` transition-for-transition
 
 ## Files
 
@@ -54,5 +54,5 @@ echo (charter/census, READ-ONLY confirmation), synthia (context/architecture/req
 |------|---------|
 | `apps/orchestration/src/orchestration/playbooks/sca.py` | `ScaPlaybook` FSM |
 | `.pi/skills/sca/assets/prompts/*.md` | Per-state domain guidance |
-| `.pi/skills/sca/resources/flow.mmd` | State diagram |
+| `.pi/skills/sca/resources/flow.html` | State diagram |
 | `research/atomic-loop-components/prds/sca-skill-revamp.md` | Compliance PRD |

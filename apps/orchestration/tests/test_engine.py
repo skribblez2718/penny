@@ -346,6 +346,45 @@ def test_step_unknown_run_errors(cp):
     assert d["action"] == "error" and "unknown run_id" in d["errors"][0]
 
 
+def test_errored_run_is_retriable_via_resume(cp):
+    # F2: drive to an error at the 'verifying' phase (unknown verdict), then an
+    # EXPLICIT resume must RETRY that phase rather than force a full restart.
+    _start(cp)
+    _step(cp, "echo", S_OBSERVE)
+    _step(cp, "annie", S_FRAME)
+    _step(cp, "piper", S_PLAN)
+    _step(cp, "skribble", S_ACT)
+    d = _step(cp, "vera", {"verdict": "MAYBE", "gaps": [], "confidence": "PROBABLE"})
+    assert d["action"] == "error"
+    rec = cp.load(RID)
+    assert rec.status == STATUS_ERROR
+    assert rec.context.extras.get("failed_state") == "verifying"
+
+    # Explicit resume re-drives the failed agent phase; the run goes live again.
+    d2 = _step(cp, "user", {"answer": "retry"})
+    assert d2["action"] == "invoke_agent"
+    assert d2["state_id"] == "verifying" and d2["agent"] == "vera"
+    assert cp.load(RID).status == "running"
+
+
+def test_errored_run_without_failed_state_is_actionable(cp):
+    # F2: an error record with no recorded failed phase yields an ACTIONABLE
+    # message, never a silent dead-end.
+    _start(cp)
+    rec = cp.load(RID)
+    cp.save(
+        run_id=RID,
+        session_id=SID,
+        playbook=rec.playbook,
+        current_state_id="error",
+        context=rec.context,
+        status=STATUS_ERROR,
+    )
+    d = _step(cp, "user", {"answer": "retry"})
+    assert d["action"] == "error"
+    assert "no recoverable phase" in d["errors"][0]
+
+
 def test_status_reports_state(cp):
     _start(cp)
     d = ReferenceCycle(cp, None).status(session_id=SID, run_id=RID)

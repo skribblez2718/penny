@@ -40,6 +40,31 @@ class TestStructureHandlerFull:
         # Should record warning, not crash
         assert "structure_warning" in state.metadata
 
+    def test_none_files_loads_from_disk_when_file_map_absent(self, tmp_path):
+        """Regression (STRUCTURE no-op bug): with js_files=None and no in-memory
+        file_map (the normal cross-subprocess / checkpoint-resume case), the
+        handler must load the acquired JS from {output_dir}/assets/js on disk and
+        build a ModuleCard per file — not silently emit 'No JS files available'.
+        """
+        js_dir = tmp_path / "assets" / "js"
+        js_dir.mkdir(parents=True)
+        (js_dir / "a.js").write_text(
+            "function render(q){ document.getElementById('o').innerHTML = q; }"
+        )
+        (js_dir / "b.js").write_text("var u = location.hash; eval(u);")
+
+        state = JSAState()
+        state.output_dir = str(tmp_path)
+        state.file_map = None  # ACQUIRE ran in another subprocess; not persisted
+        state.metadata["acquire_result"] = {"total_js_files": 2}
+
+        state = structure_handler(state, js_files=None)
+
+        assert len(state.module_cards) == 2
+        assert {mc.filename.split("/")[-1] for mc in state.module_cards} == {"a.js", "b.js"}
+        # Stale 'no JS' warning must be cleared on a successful build.
+        assert state.metadata.get("structure_warning") is None
+
     def test_builds_module_cards_for_each_file(self):
         state = JSAState()
         files = [
@@ -136,9 +161,13 @@ class TestStructureHandlerFull:
         assert "structure_duration_ms" in state.metadata
 
     def test_page_cards_from_acquire_metadata(self):
-        """PageCards are also built from ACQUIRE's crawled_pages."""
+        """PageCards are also built from ACQUIRE's crawled_pages.
+
+        ACQUIRE persists its summary under metadata['acquire_result'] (NOT
+        'acquire'); the STRUCTURE fix reads that real key.
+        """
         state = JSAState()
-        state.metadata["acquire"] = {
+        state.metadata["acquire_result"] = {
             "crawled_pages": [
                 "https://example.com/page1",
                 "https://example.com/page2",

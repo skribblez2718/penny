@@ -157,7 +157,7 @@ skill({
 
 ## Pipeline
 
-`resources/flow.mmd` is the **canonical** pipeline diagram — an edge-for-edge mirror of `JSAMachine` (guarded against drift by `apps/orchestration/tests/test_jsa_flow_diagram.py`). Read it for the exact states, events, and guards. In summary:
+`resources/flow.html` is the **canonical** pipeline diagram — an edge-for-edge mirror of `JSAMachine` (guarded against drift by `apps/orchestration/tests/test_flow_diagrams.py`). Read it for the exact states, events, and guards. In summary:
 
 - **`intake`** is the only human gate (schema questionnaire). Seeded valid from `constraints`, it is skipped and the run auto-advances.
 - A **deterministic pass** then runs inline with no agent: `acquire → cve_research → sast_scan → normalize → dedup_within_source → correlate_evidence → agent_review → sast_validate → structure → slice`. `agent_review` and `sast_validate` are LOCAL heuristics despite the name.

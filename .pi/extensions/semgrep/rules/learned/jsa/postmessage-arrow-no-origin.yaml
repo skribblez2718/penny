@@ -1,0 +1,28 @@
+rules:
+- id: jsa-learned-postmessage-arrow-no-origin
+  message: >-
+    postMessage event handler (arrow function) does not validate event.origin.
+    Without origin validation, any origin can send messages to this handler,
+    enabling cross-origin attacks.
+  metadata:
+    cwe:
+    - 'CWE-345: Insufficient Verification of Data Authenticity'
+    owasp:
+    - A08:2021 - Software and Data Integrity Failures
+    category: security
+    technology:
+    - browser
+    subcategory:
+    - audit
+    likelihood: HIGH
+    impact: HIGH
+    confidence: MEDIUM
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  patterns:
+  - pattern: |
+      $TARGET.addEventListener('message', ($EVENT) => { ... })
+  - pattern-not: |
+      $TARGET.addEventListener('message', ($EVENT) => { ... if (<... $EVENT.origin ...>) { ... } ... })

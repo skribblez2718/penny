@@ -60,7 +60,6 @@ from .context import RunContext
 from .loans import loan_enabled
 from .outcome_writer import record_outcome
 from .primitives.spec import ParallelSpec, PrimitiveSpec, parallel_spec_from_dict
-from .recall import recall_lessons
 
 
 def _autonomy_ask_reason(action_text: str) -> Optional[str]:
@@ -235,6 +234,41 @@ class BasePlaybook:
         """Optional per-state model override (e.g. jsa INVESTIGATE -> a local
         coder model). Emitted as ``model`` on the invoke_agent directive; the TS
         driver honors it. Default ``None`` -> the agent's configured model."""
+        return None
+
+    @staticmethod
+    def _is_valid_provider_model(value: str) -> bool:
+        """True iff ``value`` is a well-formed ``provider/model`` override: a
+        non-empty provider before the FIRST ``/``, a non-empty model after it,
+        and no whitespace. Anything else is treated as invalid so the caller
+        falls back (an unset var or a typo never breaks a run)."""
+        if not value or any(c.isspace() for c in value):
+            return False
+        provider, sep, model = value.partition("/")
+        return bool(sep) and bool(provider) and bool(model)
+
+    def _env_model_override(self, skill_prefix: str, state: str) -> str | None:
+        """Per-skill/per-agent model+provider override read from the environment.
+
+        Value format is ``provider/model`` (e.g. ``ollama/glm``); the agent-runner
+        splits it so the explicit provider WINS over the agent's frontmatter
+        ``provider:``. Resolution precedence for ``state``'s agent:
+        ``{SKILL}_{AGENT}`` -> ``{SKILL}_DEFAULT`` -> ``None`` (the agent's own
+        model+provider from ``.pi/agents/<agent>.md``). A value that is unset OR
+        not a valid ``provider/model`` pair falls through to the next tier, so a
+        typo can never break a run.
+        """
+        by_state = getattr(self, "PRIMITIVE_BY_STATE", {}) or {}
+        spec = by_state.get(state)
+        agent = getattr(spec, "agent", None)
+        keys: list[str] = []
+        if agent:
+            keys.append(f"{skill_prefix}_{str(agent).upper()}")
+        keys.append(f"{skill_prefix}_DEFAULT")
+        for key in keys:
+            raw = os.environ.get(key, "").strip()
+            if self._is_valid_provider_model(raw):
+                return raw
         return None
 
     def progress_check(self, state: str, ctx: RunContext, summary: dict) -> str | None:
@@ -538,10 +572,14 @@ class BasePlaybook:
         except (TypeError, ValueError):
             ctx.max_iterations = 3
         self.ctx = ctx
-        # Recall (atom F2): seed the run with distilled lessons from prior runs.
-        # Best-effort and advisory — a failure or empty result never affects the
-        # run, and no routing ever reads these (loops.md Rec 3).
-        ctx.recall_lessons = recall_lessons(ctx)
+        # NOTE: agent directives are built from the playbook's own run facts ONLY.
+        # Nothing is retrieved from MemPalace and injected here. The former "Recall
+        # (atom F2)" step read penny/system_amendments and seeded the first directive
+        # with whatever came back — which meant PENDING and even REJECTED amendment
+        # proposals reached agent prompts, bypassing the approval gate that governs
+        # amendment APPLICATION. Agent context comes from .pi/agents/<agent>.md plus
+        # skill orchestration; an amendment influences the system only by being
+        # APPLIED to a file after explicit human approval. Do not reintroduce.
         self.sm = self.machine_cls()
         try:
             entry = self.initial_transition(ctx)
@@ -791,15 +829,8 @@ class BasePlaybook:
 
     def _task_summary(self, state: str, spec: PrimitiveSpec, ctx: RunContext) -> str:
         parts = [spec.task_hint, f"Goal: {self._cap(ctx.goal)}"]
-        # Recall (F2): lessons ride ONLY the first directive of the run
-        # (total_steps is 0 until the first step() ingests a result) — advisory
-        # context for the entry agent, never a rule and never routing input.
-        if ctx.recall_lessons and ctx.total_steps == 0:
-            parts.append(
-                "Lessons from prior runs (advisory — weigh against current evidence; "
-                "they never override this run's goal or constraints):"
-            )
-            parts.extend(f"- {self._cap(lesson)}" for lesson in ctx.recall_lessons)
+        # No retrieved-memory injection here (see start()): a directive carries this
+        # run's facts, never distilled content from prior runs or pending amendments.
         parts.extend(self._cap(p) for p in self.task_context_parts(state, ctx))
         if ctx.iteration:
             parts.append(f"(retry iteration {ctx.iteration + 1}/{ctx.max_iterations})")
@@ -1113,18 +1144,25 @@ class BasePlaybook:
             run_id=self.ctx.run_id,
         )
 
-    def _enter_gate(self, state: str) -> dict:
+    def _enter_gate(self, state: str, hint: str = "") -> dict:
         """Pause the run at a planned gate: persist AWAITING_USER at the gate
         state id and surface the gate's questions. Distinct from _escalate,
-        which is only for UNCERTAIN confidence."""
+        which is only for UNCERTAIN confidence.
+
+        ``hint`` (F7): when a prior answer was unrecognized, an explanatory hint
+        is folded into the directive's ``unknown_reason`` so a re-ask is
+        distinguishable from a fresh gate prompt (the obs escalation label is
+        left unchanged so it stays a stable ``gate:<state>`` signal).
+        """
         self.ctx.previous_state = state
         questions = self.gate_questions(state, self.ctx)
         self.obs.escalation(self.ctx, f"gate:{state}", questions_count=len(questions))
         self._save(STATUS_AWAITING_USER, state)
+        unknown_reason = f"gate:{state}" if not hint else f"gate:{state} — {hint}"
         return Directives.escalate_to_user(
             questions=questions,
             previous_state=state,
-            unknown_reason=f"gate:{state}",
+            unknown_reason=unknown_reason,
             session_id=self.ctx.session_id,
             run_id=self.ctx.run_id,
         )
@@ -1137,6 +1175,10 @@ class BasePlaybook:
         )
 
     def _resume(self, state: str, result: Any) -> dict:
+        # F2: explicit retry of an ERRORED run — re-drive the phase that failed
+        # (recorded by _to_error) instead of forcing a full restart from P0.
+        if state == "error":
+            return self._retry_errored()
         # Planned gate: the user's answer selects the resume transition.
         if state in self.GATE_STATES:
             return self._resume_gate(state, result)
@@ -1166,8 +1208,18 @@ class BasePlaybook:
             return self._to_error(f"gate routing error at '{state}': {exc}")
         new_state = self.sm.current_state_value
         if new_state == state:
-            # route_user fired nothing (e.g. an unrecognized answer): re-ask.
-            return self._enter_gate(state)
+            # route_user fired nothing (e.g. an unrecognized answer): re-ask WITH
+            # a hint so a programmatic driver can tell this apart from a fresh
+            # gate and knows the exact contract (F7). Without this, an
+            # unrecognized free-text approval looks like an identical loop.
+            return self._enter_gate(
+                state,
+                hint=(
+                    "your previous answer was not recognized — reply with the "
+                    "EXACT option value (e.g. 'approve', 'deny', or 'revise'), "
+                    "not free text"
+                ),
+            )
         self.obs.transition(self.ctx, state, new_state, event="gate")
         if new_state in TERMINAL_STATES:
             return self._finish(new_state)
@@ -1195,8 +1247,44 @@ class BasePlaybook:
             result=result, session_id=self.ctx.session_id, run_id=self.ctx.run_id
         )
 
+    def _retry_errored(self) -> dict:
+        """Re-drive the phase an errored run failed on (F2).
+
+        The failed phase id was captured into ``ctx.extras['failed_state']`` by
+        ``_to_error`` before the abort transition. Tool phases are idempotent
+        (safe to re-run) and agent phases simply re-dispatch. Returns an
+        actionable error only when no recoverable phase was recorded.
+        """
+        failed_state = str(self.ctx.extras.get("failed_state") or "")
+        if not failed_state:
+            return self._plain_error(
+                self.ctx.session_id,
+                self.ctx.run_id,
+                "run is in status=error with no recoverable phase recorded; "
+                "start a new run for this target",
+            )
+        try:
+            self.sm.current_state_value = failed_state
+        except Exception as exc:
+            return self._plain_error(
+                self.ctx.session_id,
+                self.ctx.run_id,
+                f"cannot retry errored run at phase '{failed_state}': {exc}",
+            )
+        # Clear the terminal error markers so the re-driven run is live again.
+        self.ctx.errors = []
+        self.ctx.complete = False
+        self.ctx.met = False
+        return self._advance_to(failed_state)
+
     def _to_error(self, reason: str) -> dict:
         self.ctx.errors.append(reason)
+        # F2: record WHERE we failed (captured BEFORE the abort transition) so an
+        # explicit resume can retry that phase rather than restart. Additive:
+        # status/current_state_id still persist as error/"error".
+        failed_state = self.sm.current_state_value
+        if failed_state and failed_state != "error":
+            self.ctx.extras["failed_state"] = failed_state
         self._safe_send("abort")
         if self.sm.current_state_value != "error":
             try:

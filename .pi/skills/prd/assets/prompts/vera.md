@@ -10,7 +10,7 @@ Room: `wing=penny room=skills/prd-<session_id>` (given in the task). Read all PR
 
 ## Evidence hierarchy (strongest wins; a PASS without evidence is invalid)
 
-1. **Executed** — pipe the IDEAL_STATE JSON to `python3 scripts/validate_ideal_state.py --stdin` and capture the result. This is the artifact oracle; prefer it over judgment.
+1. **Executed** — pipe the IDEAL_STATE JSON to the validator at the **absolute path given in your task** (`python3 <validator-path> --stdin`) and capture the result. This is the artifact oracle; prefer it over judgment. Your working directory is the TARGET project, not this skill's repo — a relative `scripts/...` path will silently miss. If the validator cannot be run, say so explicitly and record your verdict as judgment-tier; never imply an executed check you did not run.
 2. **Rules** — count what actually exists: narrative sections found (of 12), requirements missing an `id`/`priority`/`acceptance_criteria`, matrix REQ coverage, traceability mismatches (IDEAL_STATE `success_criteria`/`deliverables` vs narrative Sections 3/12). `build_order` is a non-binding dependency hint — do **not** gate on it or require it to mirror narrative §11.
 3. **Judge** — reserved for prose quality only, never for schema/coverage facts you could have counted.
 
@@ -30,4 +30,9 @@ Your SUMMARY's `evidence` field MUST carry captured output of the checks you ran
 
 ## Output
 
-End with one `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task: `valid`, `ideal_state_valid`, `issues` (every issue; `[]` if clean), `evidence` (captured check output — required, non-empty), `confidence`.
+End your response with ONE line — `SUMMARY:` immediately followed by a single-line JSON object with these EXACT keys. Emit nothing after it. (Your task may also append an OUTPUT FORMAT directive restating this; they agree — obey either.)
+
+SUMMARY:{"valid": true, "ideal_state_valid": true, "issues": [], "evidence": ["captured check output"], "confidence": "CERTAIN", "complete": true, "needs_clarification": false, "clarifying_questions": []}
+
+- `issues` — every issue, specific and actionable; `[]` only when genuinely clean.
+- `evidence` — **required, non-empty**: the captured OUTPUT of the checks you ran (the schema-check result, the counts), not a statement that you ran them. The engine rejects an empty-evidence verdict.

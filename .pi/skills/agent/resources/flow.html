@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>agent skill — execution flow</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2230;--border:#2a3341;--ink:#e6edf3;--muted:#8b949e;--desc:#b3bdc9;
+    --echo:#22d3ee;--annie:#a78bfa;--synthia:#34d399;--vera:#60a5fa;--skribble:#f472b6;--carren:#fb7185;--piper:#fbbf24;--tabitha:#e3b341;
+    --tool:#8b949e;--gate:#e3b341;--esc:#9ca3af;--done:#3fb950;--error:#f85149;--fwd:#8b98a9;--exit:#3fb950;--loop:#e3a52e;--abort:#f85149;}
+  *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  header{padding:22px 28px 8px}h1{margin:0;font-size:22px}.sub{color:var(--muted);margin-top:4px;font-size:13px;max-width:1180px}
+  .legend{display:flex;flex-wrap:wrap;gap:12px 22px;padding:8px 28px 14px;font-size:12.5px;color:#c9d3df}
+  .chip{display:inline-flex;align-items:center;gap:6px}.dot{width:12px;height:12px;border-radius:3px;display:inline-block}
+  .aline{width:24px;height:0;border-top:3px solid var(--fwd);display:inline-block}.aline.dash{border-top-style:dashed}
+  #wrap{position:relative;margin:8px 20px 40px;width:1240px;height:670px}
+  svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+  .node{position:absolute;background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    box-shadow:0 1px 2px rgba(0,0,0,.35),0 2px 8px rgba(0,0,0,.25);padding:10px 12px}
+  .node .t{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:7px}
+  .node .t .who{font-weight:600;color:var(--muted);font-size:11.5px}
+  .node .d{color:var(--desc);font-size:12px;margin-top:5px}
+  .node::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;border-radius:10px 0 0 10px}
+  .node.echo::before{background:var(--echo)}.node.annie::before{background:var(--annie)}.node.synthia::before{background:var(--synthia)}
+  .node.vera::before{background:var(--vera)}.node.skribble::before{background:var(--skribble)}.node.carren::before{background:var(--carren)}
+  .node.piper::before{background:var(--piper)}.node.tabitha::before{background:var(--tabitha)}.node.tool::before{background:var(--tool)}.node.esc::before{background:var(--esc)}
+  .node.gate{background:#211d10;border-color:#4d3f1a}.node.gate::before{background:var(--gate)}
+  .node.done{background:#0f2417;border-color:#1f5136}.node.done::before{background:var(--done)}
+  .node.error{background:#2a1517;border-color:#5c2a2a}.node.error::before{background:var(--error)}
+  .node .badge{margin-left:auto;font-size:10px;font-weight:700;text-transform:uppercase;color:#0d1117;padding:2px 6px;border-radius:999px}
+  .badge.hitl{background:var(--gate)}.badge.term{background:#5b6675;color:#e6edf3}.badge.tool{background:var(--tool);color:#0d1117}
+  .lbl{position:absolute;transform:translate(-50%,-50%);background:var(--panel2);border:1px solid #313c4a;color:#c9d3df;
+    font-size:11px;padding:1px 6px;border-radius:999px;white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+  .foot{margin:0 28px 48px;font-size:12.5px;color:#c3cdd9}.foot p{margin:8px 0}code{background:#22293a;color:#cdd6e3;padding:1px 5px;border-radius:4px;font-size:12px}
+</style></head><body>
+<header><h1>agent skill — execution flow</h1>
+<div class="sub">Validated against <code>orchestration/playbooks/agent.py</code> (<code>AgentMachine</code>) · runs on the shared orchestration engine. Boxes are FSM states; agent states dispatch one cognitive-primitive agent, TOOL states run inline, gate states pause for the user.</div></header>
+<div class="legend">  <span class="chip"><span class="dot" style="background:var(--echo)"></span>echo</span>
+  <span class="chip"><span class="dot" style="background:var(--piper)"></span>piper</span>
+  <span class="chip"><span class="dot" style="background:var(--carren)"></span>carren</span>
+  <span class="chip"><span class="dot" style="background:var(--skribble)"></span>skribble</span>
+  <span class="chip"><span class="dot" style="background:var(--vera)"></span>vera</span>
+  <span class="chip"><span class="dot" style="background:var(--gate)"></span>HITL gate</span>
+  <span class="chip"><span class="dot" style="background:var(--esc)"></span>escalation</span>
+  <span class="chip"><span class="dot" style="background:var(--done)"></span>complete</span>
+  <span class="chip"><span class="dot" style="background:var(--error)"></span>error</span>
+  <span class="chip"><span class="aline" style="border-color:var(--fwd)"></span>forward</span>
+  <span class="chip"><span class="aline" style="border-color:var(--loop)"></span>loop</span>
+  <span class="chip"><span class="aline dash" style="border-color:var(--esc)"></span>escalation</span>
+</div>
+<div id="wrap"><svg id="edges"><defs>
+  <marker id="ah" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+    <path d="M0,0 L8,3 L0,6 Z" fill="context-stroke"></path></marker></defs></svg></div>
+<div class="foot">
+  <p><b>Escalation (dashed):</b> every agent state escalates to <code>unknown</code> on UNCERTAIN / needs_clarification; those uniform <code>→ unknown</code> edges are collapsed into this note. <b>unknown → awaiting_clarification</b> pauses for the user, then <b>awaiting_clarification</b> resumes at the pipeline.</p>
+  <p><b>Abort:</b> an <code>abort → error</code> transition exists from EVERY non-final state; those edges are collapsed here for legibility and NOT drawn. Each agent runs the model in its <code>.pi/agents/&lt;name&gt;.md</code> (or an env override); TOOL/gate states run no agent.</p>
+</div>
+<script>
+const COLS = { Louter:24, C:470, Router:980 };
+const W = { C:320, side:230 };
+const N = {
+  intake:{col:'C',y:24,cls:'tool',title:'intake',badge:'HITL',desc:'Human gate: intake questionnaire. Seeded valid from constraints → skipped.'},
+  exploring:{col:'C',y:136,cls:'echo',title:'exploring',who:'echo',desc:'echo — exploring.'},
+  designing:{col:'C',y:248,cls:'piper',title:'designing',who:'piper',desc:'piper — designing.'},
+  critiquing:{col:'C',y:360,cls:'carren',title:'critiquing',who:'carren',desc:'carren — critiquing.'},
+  scaffolding:{col:'C',y:472,cls:'skribble',title:'scaffolding',who:'skribble',desc:'skribble — scaffolding.'},
+  verifying:{col:'C',y:584,cls:'vera',title:'verifying',who:'vera',desc:'vera — verifying.'},
+  complete:{col:'C',y:696,cls:'done',title:'complete',badge:'TERM',desc:'Terminal.'},
+  unknown:{col:'Louter',y:360,cls:'esc',title:'unknown',desc:'Escalation entry (UNCERTAIN / needs_clarification).'},
+  awaiting_clarification:{col:'Louter',y:510,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes at the pipeline.'},
+  error:{col:'Router',y:696,cls:'error',title:'error',badge:'TERM',desc:'Terminal (abort from any non-final state).'},
+};
+const E = [
+  {from:'awaiting_clarification',to:'exploring',s1:'right',s2:'left',kind:'esc',label:'clarify',c1:{dx:110,dy:0},c2:{dx:-50,dy:0}},
+  {from:'critiquing',to:'complete',s1:'right',s2:'right',kind:'exit',label:'critique_exhausted',bow:120},
+  {from:'critiquing',to:'designing',s1:'left',s2:'left',kind:'loop',label:'critique_retry_design',bow:55},
+  {from:'critiquing',to:'exploring',s1:'left',s2:'left',kind:'loop',label:'critique_retry_explore',bow:70},
+  {from:'critiquing',to:'scaffolding',s1:'bottom',s2:'top',kind:'fwd',label:''},
+  {from:'designing',to:'critiquing',s1:'bottom',s2:'top',kind:'fwd',label:''},
+  {from:'exploring',to:'designing',s1:'bottom',s2:'top',kind:'fwd',label:''},
+  {from:'intake',to:'exploring',s1:'bottom',s2:'top',kind:'fwd',label:''},
+  {from:'scaffolding',to:'verifying',s1:'bottom',s2:'top',kind:'fwd',label:''},
+  {from:'unknown',to:'awaiting_clarification',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
+  {from:'verifying',to:'complete',s1:'bottom',s2:'top',kind:'exit',label:'verify_exhausted'},
+  {from:'verifying',to:'complete',s1:'bottom',s2:'top',kind:'exit',label:'verify_pass'},
+  {from:'verifying',to:'scaffolding',s1:'left',s2:'left',kind:'loop',label:'verify_retry',bow:55},
+];
+const KIND = {fwd:'#8b98a9',exit:'#3fb950',loop:'#e3a52e',esc:'#9ca3af',abort:'#f85149'};
+const wrap=document.getElementById('wrap'), svg=document.getElementById('edges');
+for(const id in N){const n=N[id];const w=(n.col==='C')?W.C:W.side;
+  const el=document.createElement('div');el.className='node '+n.cls;el.id='n_'+id;
+  el.style.left=COLS[n.col]+'px';el.style.top=n.y+'px';el.style.width=w+'px';
+  const who=n.who?`<span class="who">· ${n.who}</span>`:'';
+  const badge=n.badge?`<span class="badge ${n.badge==='TERM'?'term':(n.badge==='HITL'?'hitl':'tool')}">${n.badge}</span>`:'';
+  el.innerHTML=`<div class="t">${n.title}${who}${badge}</div><div class="d">${n.desc}</div>`;
+  wrap.appendChild(el);}
+const base=wrap.getBoundingClientRect();
+function rect(id){const r=document.getElementById('n_'+id).getBoundingClientRect();
+  return{left:r.left-base.left,top:r.top-base.top,width:r.width,height:r.height};}
+function anchor(r,s){switch(s){case'top':return{x:r.left+r.width/2,y:r.top};
+  case'bottom':return{x:r.left+r.width/2,y:r.top+r.height};case'left':return{x:r.left,y:r.top+r.height/2};
+  case'right':return{x:r.left+r.width,y:r.top+r.height/2};}}
+function ctrl(p,s,b){const k=64;b=b||0;switch(s){case'top':return{x:p.x+b,y:p.y-k};
+  case'bottom':return{x:p.x+b,y:p.y+k};case'left':return{x:p.x-k-Math.abs(b),y:p.y};
+  case'right':return{x:p.x+k+Math.abs(b),y:p.y};}}
+const SVGNS='http://www.w3.org/2000/svg';
+for(const e of E){const ra=rect(e.from),rb=rect(e.to);const p1=anchor(ra,e.s1),p2=anchor(rb,e.s2);
+  const c1=e.c1?{x:p1.x+e.c1.dx,y:p1.y+e.c1.dy}:ctrl(p1,e.s1,e.bow);
+  const c2=e.c2?{x:p2.x+e.c2.dx,y:p2.y+e.c2.dy}:ctrl(p2,e.s2,e.kind==='exit'?-(e.bow||0):e.bow);
+  const path=document.createElementNS(SVGNS,'path');
+  path.setAttribute('d',`M ${p1.x} ${p1.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${p2.x} ${p2.y}`);
+  path.setAttribute('fill','none');path.setAttribute('stroke',KIND[e.kind]);
+  path.setAttribute('stroke-width','2');path.setAttribute('marker-end','url(#ah)');
+  if(e.kind==='esc')path.setAttribute('stroke-dasharray','6 5');svg.appendChild(path);
+  if(e.label){const t=0.5,mt=1-t;
+    const x=mt*mt*mt*p1.x+3*mt*mt*t*c1.x+3*mt*t*t*c2.x+t*t*t*p2.x;
+    const y=mt*mt*mt*p1.y+3*mt*mt*t*c1.y+3*mt*t*t*c2.y+t*t*t*p2.y;
+    const l=document.createElement('div');l.className='lbl';l.textContent=e.label;
+    l.style.left=x+'px';l.style.top=y+'px';wrap.appendChild(l);}}
+</script></body></html>

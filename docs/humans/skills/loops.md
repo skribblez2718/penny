@@ -93,7 +93,7 @@ Penny's architecture is already aligned with what the research prescribes:
 
 3. **The FSM is a safety mechanism.** An FSM whose only edges are the intended loop edges cannot wander into an unintended cycle. The graph boundary defines what actions are even possible, reducing the frequency and severity of runaway loops.
 
-4. **All seven loop classes now have at least a first implementation.** L6 reflection long had only the write side (MemPalace, daily compression); the read side now ships too — the engine's `start()` seeds distilled past-run lessons into the first agent as advisory context (`recall_lessons`), closing the last write-only gap.
+4. **Six of seven loop classes have a running implementation; L6's read side is deliberately human.** L6 reflection writes continuously (MemPalace, daily compression → amendment proposals). Its read side is **not** automatic injection into agents: a 2026-07-28 audit found the engine was seeding agent prompts from the amendment room with no status filter, so proposals the operator had never approved — and some explicitly rejected — were reaching models. That path was removed. Learnings close the loop by being reviewed, approved, and then written into the actual prompt/agent files.
 
 ## Five Leverage Points the Engine Has Since Acted On
 

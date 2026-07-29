@@ -1,0 +1,30 @@
+rules:
+- id: jsa-learned-broadcast-channel-eval
+  message: >-
+    BroadcastChannel.onmessage handler calls eval() with event data.
+    BroadcastChannel is a cross-context messaging API — event data is
+    attacker-controlled. This is code injection via eval().
+  metadata:
+    cwe:
+    - "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Eval Injection')"
+    owasp:
+    - A03:2021 - Injection
+    category: security
+    technology:
+    - browser
+    subcategory:
+    - audit
+    likelihood: HIGH
+    impact: HIGH
+    confidence: HIGH
+  languages:
+  - javascript
+  - typescript
+  severity: ERROR
+  patterns:
+  - pattern-inside: |
+      $CHANNEL = new BroadcastChannel($NAME);
+      ...
+  - pattern-inside: |
+      $CHANNEL.onmessage = ($EVENT) => { ... }
+  - pattern: eval(<... $EVENT ...>)

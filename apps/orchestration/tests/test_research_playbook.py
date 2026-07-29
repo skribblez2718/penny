@@ -497,15 +497,6 @@ def test_wrong_agent_for_state_errors(cp):
     assert d["action"] == "error"
 
 
-def test_recall_lessons_render_in_first_directive(cp):
-    pb = ResearchPlaybook(cp)
-    ctx = RunContext(session_id=SID, run_id=RID, playbook="research", goal=STANDARD_GOAL)
-    ctx.recall_lessons = ["prefer primary sources; cite them"]
-    txt = pb._task_summary("planning", RESEARCH_PLAN, ctx)
-    assert "Lessons from prior runs" in txt
-    assert "prefer primary sources" in txt
-
-
 # ---------------------------------------------------------------------------
 # recovery re-presents a pending clarification
 # ---------------------------------------------------------------------------

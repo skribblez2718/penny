@@ -745,14 +745,6 @@ class LearnPlaybook(BasePlaybook):
             if builder
             else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
         )
-        # Recall (F2): seed the FIRST agent directive with distilled lessons
-        # (this override replaces the base _task_summary, so re-add it).
-        if ctx.recall_lessons and ctx.total_steps == 0:
-            lessons = "\n".join(f"- {self._cap(lsn)}" for lsn in ctx.recall_lessons)
-            base += (
-                "\n\nLessons from prior runs (advisory — weigh against current evidence; "
-                "they never override this run's goal or constraints):\n" + lessons
-            )
         if ctx.clarification_text and state == "designing":
             pass  # already folded into _build_design
         elif ctx.clarification_text:

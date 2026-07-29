@@ -124,7 +124,7 @@ const N = {
   complete:{col:'C',y:975,cls:'done',title:'complete',badge:'TERM',desc:'Terminal. Report delivered; warnings recorded if any revise budget was exhausted.'},
   error:{col:'Rmid',y:975,cls:'error',title:'error',badge:'TERM',desc:'Terminal. Reached by abort from any working phase.'},
   unknown:{col:'Louter',y:430,cls:'esc',title:'unknown',desc:'Escalation entry: UNCERTAIN confidence at any working phase.'},
-  awaiting:{col:'Louter',y:600,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes at planning once clarified.'},
+  awaiting_clarification:{col:'Louter',y:600,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes at planning once clarified.'},
 };
 const E = [
   {from:'intake',to:'planning',s1:'bottom',s2:'top',kind:'fwd',label:'standard / deep'},
@@ -141,8 +141,8 @@ const E = [
   {from:'validating',to:'report_writing',s1:'bottom',s2:'top',kind:'exit',label:'PASS / exhausted'},
   {from:'validating',to:'synthesizing',s1:'left',s2:'left',kind:'loop',label:'re-ground (revise)',bow:70},
   {from:'report_writing',to:'complete',s1:'bottom',s2:'top',kind:'fwd',label:'report_done'},
-  {from:'unknown',to:'awaiting',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
-  {from:'awaiting',to:'planning',s1:'left',s2:'left',kind:'esc',label:'clarify',c1:{dx:-18,dy:-230},c2:{dx:-18,dy:150}},
+  {from:'unknown',to:'awaiting_clarification',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
+  {from:'awaiting_clarification',to:'planning',s1:'left',s2:'left',kind:'esc',label:'clarify',c1:{dx:-18,dy:-230},c2:{dx:-18,dy:150}},
   {from:'researching',to:'unknown',s1:'left',s2:'right',kind:'esc',label:'UNCERTAIN — any working phase',c1:{dx:-40,dy:0},c2:{dx:40,dy:0}},
 ];
 const KIND = {fwd:'#8b98a9',exit:'#3fb950',loop:'#e3a52e',esc:'#9ca3af',abort:'#f85149'};

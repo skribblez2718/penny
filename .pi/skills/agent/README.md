@@ -30,7 +30,7 @@ intake → exploring → designing → critiquing → scaffolding → verifying 
 - Escalation: `needs_clarification`, `UNCERTAIN` confidence, or a stall pauses the
   run at `awaiting_clarification`; the user response resumes into `exploring`.
 
-See `resources/flow.mmd` for the exact FSM and `resources/reference.md` for the
+See `resources/flow.html` for the exact FSM and `resources/reference.md` for the
 full state/transition/gate tables.
 
 ## Agents (one per state)
@@ -58,4 +58,4 @@ full state/transition/gate tables.
 | `SKILL.md`               | Skill metadata + domain guidance         |
 | `assets/prompts/*.md`    | Per-agent domain guidance                |
 | `resources/reference.md` | State/transition/gate reference          |
-| `resources/flow.mmd`     | Mermaid FSM diagram                       |
+| `resources/flow.html`     | Interactive HTML FSM diagram                       |

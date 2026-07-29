@@ -804,12 +804,26 @@ async function executeSkill(
   const sessionId = params.session_id || `plan-${Date.now()}`;
   const projectRoot = params.project_root || cwd;
   const orchestratePath = path.join(skill.path, "scripts", "orchestrate.py");
-  const constraints =
-    typeof params.constraints === "string"
-      ? params.constraints
-      : params.constraints
-        ? JSON.stringify(params.constraints)
-        : "{}";
+  // `skill_dir` (ABSOLUTE) is injected into every run's constraints so a playbook can
+  // hand its agents absolute guidance/validator paths. This matters because an agent
+  // subprocess is spawned with `cwd = projectRoot` — the TARGET repo, which for
+  // code/jsa/sca/prd runs is NOT this repo — so a skill-relative path in a task message
+  // ("resources/foo.md", "scripts/bar.py") resolves into the wrong tree and the agent
+  // silently proceeds without the guidance. The driver is the only component that knows
+  // `skill.path` authoritatively; everything downstream was guessing via __file__ walk-ups.
+  // A caller-supplied `skill_dir` still wins (spread last).
+  const constraints = (() => {
+    if (typeof params.constraints === "string") {
+      try {
+        const parsed = JSON.parse(params.constraints) as Record<string, unknown>;
+        return JSON.stringify({ skill_dir: skill.path, ...parsed });
+      } catch {
+        // Unparseable string: pass through untouched rather than silently dropping it.
+        return params.constraints;
+      }
+    }
+    return JSON.stringify({ skill_dir: skill.path, ..._constraintsObj });
+  })();
   const agentsInvoked: string[] = [];
   const errors: string[] = [];
   let skillTimedOut = false;

@@ -44,7 +44,7 @@ annie (gap analysis, NULL-AWARE), echo (fresh NICE lookup, READ-ONLY live retrie
 - [ ] Playbook tests pass: `python3 -m pytest apps/orchestration/tests/test_rez_playbook.py`
 - [ ] `REZ_VALIDATE` rejects empty evidence; `verify_evidence` lands in ctx + ledger
 - [ ] `aligning` performs a fresh NICE lookup every run (no cache)
-- [ ] `resources/flow.mmd` matches `RezMachine` transition-for-transition
+- [ ] `resources/flow.html` matches `RezMachine` transition-for-transition
 
 ## Files
 
@@ -52,5 +52,5 @@ annie (gap analysis, NULL-AWARE), echo (fresh NICE lookup, READ-ONLY live retrie
 |------|---------|
 | `apps/orchestration/src/orchestration/playbooks/rez.py` | `RezPlaybook` FSM |
 | `.pi/skills/rez/assets/prompts/*.md` | Per-state domain guidance |
-| `.pi/skills/rez/resources/{resume/,flow.mmd}` | Base resume + state diagram |
+| `.pi/skills/rez/resources/{resume/,flow.html}` | Base resume + state diagram |
 | `research/atomic-loop-components/prds/rez-skill-revamp.md` | Compliance PRD |

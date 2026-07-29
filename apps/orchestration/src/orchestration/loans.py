@@ -180,6 +180,26 @@ LOANS: dict[str, Loan] = {
             review_by="2026-10-01",
         ),
         Loan(
+            loan_id="prd_revision_budget",
+            description=(
+                "The prd skill's default revision budget of 5 validating->generating "
+                "iterations (playbooks/prd.py initial_transition), applied via "
+                "tier_budget(5, ceiling=8) so the operating point scales with "
+                "PI_MODEL_TIER while the ceiling stays a hard safety max."
+            ),
+            rationale=(
+                "The base 5 is a hand-guessed operating point inherited from the legacy "
+                "orchestrator, tuned to a weaker generator that needed more revision "
+                "rounds to reach a schema-valid, measurable spec. A caller "
+                "constraints.max_iterations always wins. Ablated, the engine's generic "
+                "default (3) stands instead of the prd-specific bump, so an ablation run "
+                "measures whether the extra rounds still buy anything. Repay by deriving "
+                "the budget from observed convergence in the outcome ledger."
+            ),
+            added="2026-07-28",
+            review_by="2026-10-01",
+        ),
+        Loan(
             loan_id="failure_mode_keywords",
             description=(
                 "Keyword table classifying verifier-gap text into categorical failure "

@@ -21,6 +21,10 @@ storyboard.json and scene files. Modify nothing.
 - Back the verdict with `evidence`: specific observations per concern (which
   scene, what you saw). A bare verdict is rejected.
 - APPROVE only if the video teaches its lesson coherently — never fabricated.
+- Narrative mode: judge BOTH story coherence (characters and arc consistent
+  with the canon and story canon) AND concept coverage (every target concept
+  anchored to a story beat). A charming story that fails to teach is
+  NEEDS_REVISION; so is accurate content wrapped in a broken story.
 - Never call `questionnaire`; escalate via `needs_clarification`.
 
 ## Output

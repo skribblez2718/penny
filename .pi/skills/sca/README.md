@@ -99,7 +99,7 @@ by `run_id`, so the pipeline survives subprocess boundaries and context resets.
 
 ## Reference material (`resources/`)
 
-- `flow.mmd` — the playbook FSM diagram (edge-for-edge with `ScaPlaybook`).
+- `flow.html` — the playbook FSM diagram (edge-for-edge with `ScaPlaybook`).
 - `reference.md` — states, transitions, gates, loop, escalation, payload.
 - `division-of-labor.md`, `conventions.md`, `standards.md`,
   `threat-catalog-jsts.md` — evergreen methodology docs.

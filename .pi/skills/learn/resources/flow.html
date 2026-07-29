@@ -136,7 +136,7 @@ const N = {
   complete:{col:'C',y:1370,cls:'done',title:'complete',badge:'TERM',desc:'Terminal. met=True only when verified clean AND critique APPROVEs; honest met=False on exhaustion with unresolved_violations.'},
   error:{col:'Router',y:1370,cls:'error',title:'error',badge:'TERM',desc:'Terminal. Reached by charter_gate deny, or abort from any working state.'},
   unknown:{col:'Louter',y:925,cls:'esc',title:'unknown',desc:'Escalation entry: UNCERTAIN / needs_clarification at any working state; stalled verify violations.'},
-  awaiting:{col:'Louter',y:1085,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes at designing once clarified (lesson progress preserved).'},
+  awaiting_clarification:{col:'Louter',y:1085,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes at designing once clarified (lesson progress preserved).'},
 };
 const E = [
   {from:'intake',to:'scoping',s1:'bottom',s2:'top',kind:'fwd',label:'start_scope'},
@@ -158,8 +158,8 @@ const E = [
   {from:'verifying',to:'complete',s1:'left',s2:'left',kind:'exit',label:'verify_exhausted → met=False (honest)',bow:110},
   {from:'critiquing',to:'complete',s1:'bottom',s2:'top',kind:'exit',label:'critique_pass (APPROVE) · critique_exhausted → met=False'},
   {from:'critiquing',to:'fixing',s1:'right',s2:'bottom',kind:'loop',label:'critique_fix (budget)',c1:{dx:60,dy:0},c2:{dx:-40,dy:60}},
-  {from:'unknown',to:'awaiting',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
-  {from:'awaiting',to:'designing',s1:'left',s2:'left',kind:'esc',label:'clarify (lesson progress preserved)',c1:{dx:-24,dy:-330},c2:{dx:-360,dy:120}},
+  {from:'unknown',to:'awaiting_clarification',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
+  {from:'awaiting_clarification',to:'designing',s1:'left',s2:'left',kind:'esc',label:'clarify (lesson progress preserved)',c1:{dx:-24,dy:-330},c2:{dx:-360,dy:120}},
   {from:'synthesizing',to:'unknown',s1:'left',s2:'right',kind:'esc',label:'UNCERTAIN / stall — any working state',c1:{dx:-40,dy:0},c2:{dx:40,dy:0}},
 ];
 const KIND = {fwd:getComputedStyle(document.documentElement).getPropertyValue('--fwd').trim(),

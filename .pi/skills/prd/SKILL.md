@@ -60,7 +60,7 @@ skill({
 | ---------------- | -------------------------------------------------------------------------------------------------- |
 | `domain`         | Fixes the guidance pack (e.g. `"web-app"`). Omit to let synthia declare the best-fit pack from those available under `resources/` — domain selection is model-owned, not keyword-detected. |
 | `max_iterations` | Revision budget (default 5).                                                                       |
-| `skill_dir`      | Optional absolute skill path; lets the engine enumerate available domain packs from `<skill_dir>/resources/`. |
+| `skill_dir`      | Absolute skill path. Honored when a caller supplies it; otherwise auto-resolved by walking up to this repo's `.pi/skills/prd`. Lets the engine enumerate domain packs from `<skill_dir>/resources/` and hand agents ABSOLUTE guidance/validator paths (agents run with `cwd = project_root`, so relative paths would miss on an off-repo run). |
 
 **Validation is evidence-gated:** vera's PASS must carry captured evidence (the IDEAL_STATE schema-check output, section/coverage counts) — the engine rejects an empty-evidence verdict, so a PRD is never marked valid on a bare assertion.
 
@@ -104,7 +104,7 @@ After the skill completes, present the result for user approval. Do not execute,
 - Do not analyze or research the PRD's topic further.
 - Do not execute implementation steps before approval.
 - Do not modify the PRD — use "Refine" for changes.
-- Do not verify or cross-check the PRD's findings — the agents already did this.
+- Do not re-run the skill's analysis. **Do** spot-check before approving: that every success criterion carries a number or threshold (not an adjective), and that every REQ appears in the verification matrix. vera validates on the same model family as synthia (see `orchestration/independence.py` — the prd actor→verifier edge is a registered `SAME_MODEL` exception), so the approval gate is the last independent look.
 
 ## Escalation (awaiting_clarification)
 

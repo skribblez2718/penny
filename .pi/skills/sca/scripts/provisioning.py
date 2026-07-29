@@ -37,6 +37,7 @@ reads are bounded to the given paths. A corrupt lockfile is treated as
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import logging
 import os
@@ -44,12 +45,54 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from tool_manifest import get_tool, required_tools, optional_tools
 
 
 logger = logging.getLogger("sca.provisioning")
+
+# ── Python runtime-dependency preflight (F1) ─────────────────────────────
+#
+# The skill's Python runtime deps are declared in
+# .pi/skills/sca/requirements.txt, but nothing in the skill invocation path
+# installs them into the runtime .venv — so a fresh/mismatched venv would crash
+# the first scan phase with ``ModuleNotFoundError: No module named 'cvss'``.
+# The scanner modules now DEGRADE gracefully (guarded imports), and this
+# preflight turns "silent coverage gap" into an EARLY, ACTIONABLE report so the
+# operator can fix the venv up front. Keyed by IMPORT name (what actually gets
+# imported), not the pip distribution name (PyYAML -> "yaml").
+REQUIRED_PY_DEPENDENCIES: Tuple[str, ...] = ("cvss", "yaml")
+
+_PY_DEP_REMEDY = "pip install -r .pi/skills/sca/requirements.txt"
+
+
+def check_python_dependencies(
+    required: Tuple[str, ...] = REQUIRED_PY_DEPENDENCIES,
+    spec_fn: Optional[Callable[[str], Any]] = None,
+) -> Tuple[bool, List[str], str]:
+    """Report whether the skill's Python runtime deps are importable.
+
+    Returns ``(ok, missing, remedy)``:
+      ok       True iff every ``required`` IMPORT name resolves.
+      missing  the import names that do NOT resolve (input order preserved).
+      remedy   an actionable ``pip install -r …`` string.
+
+    Uses ``importlib.util.find_spec`` — no import side effects, no network, no
+    external process execution. ``spec_fn`` is injectable so tests can simulate
+    a missing dep without uninstalling anything. NEVER raises: a checker error
+    (e.g. a broken parent package) is treated as "missing" for that name
+    (conservative), so a preflight can never itself abort a run.
+    """
+    checker = spec_fn if spec_fn is not None else importlib.util.find_spec
+    missing: List[str] = []
+    for name in required:
+        try:
+            if checker(name) is None:
+                missing.append(name)
+        except Exception:  # broken/absent dep -> conservatively "missing"
+            missing.append(name)
+    return (len(missing) == 0, missing, _PY_DEP_REMEDY)
 
 # Canonical lockfile location: <skill>/tool-lock.json (checked in at real
 # provisioning time; metadata only, never binary bytes). Resolved relative to

@@ -49,6 +49,7 @@ from typing import Any
 from statemachine import State, StateMachine
 
 from ..context import RunContext
+from ..paths import skill_file
 from ..engine import BasePlaybook
 from ..loans import loan_enabled
 from ..primitives.spec import ParallelSpec, PrimitiveSpec
@@ -853,14 +854,6 @@ class ImagegenPlaybook(BasePlaybook):
             "adjusting": self._adjust_task,
         }.get(state)
         base = builder(ctx) if builder else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
-        # Recall (F2): seed the FIRST agent directive with distilled lessons
-        # (this override replaces the base _task_summary, so re-add it).
-        if ctx.recall_lessons and ctx.total_steps == 0:
-            lessons = "\n".join(f"- {self._cap(lsn)}" for lsn in ctx.recall_lessons)
-            base += (
-                "\n\nLessons from prior runs (advisory — weigh against current evidence; "
-                "they never override this run's goal or constraints):\n" + lessons
-            )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {self._cap(ctx.clarification_text)}"
         return base
@@ -890,7 +883,8 @@ class ImagegenPlaybook(BasePlaybook):
         return (
             f"Compose the prompt pair for preset '{img.get('preset')}'.\n"
             f"Brief: {self._cap(img.get('brief') or ctx.goal)}\n"
-            "Positive: subject + the preset's detail scaffold (from resources/reference.md). "
+            "Positive: subject + the preset's detail scaffold (from "
+            f"{skill_file(ctx, 'imagegen', 'resources', 'reference.md')}). "
             "Negative: wordless terms (never request text/labels in the image)."
             f"{raw_note}"
         )

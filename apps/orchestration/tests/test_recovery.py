@@ -5,6 +5,7 @@ import pytest
 from orchestration.checkpointer import (
     STATUS_AWAITING_USER,
     STATUS_COMPLETE,
+    STATUS_ERROR,
     STATUS_RUNNING,
     Checkpointer,
 )
@@ -98,6 +99,41 @@ def test_playbook_scoping_prevents_cross_skill_resume(cp):
     assert len(d) == 1 and d[0]["state_id"] == "observing" and d[0]["agent"] == "echo"
     # unscoped -> still finds it (back-compat)
     assert len(recover_pending(cp, session_id="shared")) == 1
+
+
+def test_errored_run_is_not_auto_recovered_but_opt_in_redrives_failed_phase(cp):
+    # F2: an error run carries its failed phase in ctx.extras['failed_state'].
+    ctx = _ctx("r-err")
+    ctx.extras["failed_state"] = "acting"
+    cp.save(
+        run_id="r-err",
+        session_id="s",
+        playbook="reference-cycle",
+        current_state_id="error",
+        context=ctx,
+        status=STATUS_ERROR,
+    )
+    # Default scan NEVER auto-retries an error run.
+    assert recover_pending(cp) == []
+    # Opt-in explicitly re-drives the FAILED phase (not a restart).
+    d = recover_pending(cp, include_errored=True)
+    assert len(d) == 1
+    assert d[0]["action"] == "invoke_agent"
+    assert d[0]["state_id"] == "acting" and d[0]["agent"] == "skribble"
+    assert d[0]["run_id"] == "r-err"
+
+
+def test_errored_run_without_failed_state_is_skipped_even_opt_in(cp):
+    # F2: an error run with no recoverable phase is skipped (never guessed).
+    cp.save(
+        run_id="r-err2",
+        session_id="s",
+        playbook="reference-cycle",
+        current_state_id="error",
+        context=_ctx("r-err2"),
+        status=STATUS_ERROR,
+    )
+    assert recover_pending(cp, include_errored=True) == []
 
 
 def test_session_scoping(cp):

@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>jsa skill — execution flow</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2a3341;
+    --ink:#e6edf3; --muted:#8b949e; --desc:#b3bdc9;
+    --annie:#a78bfa; --synthia:#22d3ee; --vera:#34d399; --skribble:#60a5fa; --carren:#fb7185;
+    --tool:#8b949e; --start:#94a3b8; --gate:#e3b341; --esc:#9ca3af; --done:#3fb950; --error:#f85149;
+    --fwd:#8b98a9; --exit:#3fb950; --loop:#e3a52e; --abort:#f85149;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  header{padding:22px 28px 8px}
+  h1{margin:0;font-size:22px;letter-spacing:-.01em}
+  .sub{color:var(--muted);margin-top:4px;font-size:13px;max-width:1180px}
+  .callout{margin:14px 28px;padding:12px 14px;border-left:4px solid var(--annie);
+    background:#1a1726;border-radius:6px;font-size:13px;color:#d9cff0}
+  .callout b{color:#c4b1f5}
+  .legend{display:flex;flex-wrap:wrap;gap:18px 26px;padding:10px 28px 16px;font-size:12.5px;color:#c9d3df}
+  .legend .grp{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
+  .chip{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:12px;height:12px;border-radius:3px;display:inline-block}
+  .aline{width:26px;height:0;border-top:3px solid var(--fwd);display:inline-block}
+  .aline.dash{border-top-style:dashed}
+  #wrap{position:relative;margin:8px 20px 40px;width:1300px;height:2060px}
+  svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+  .node{position:absolute;background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    box-shadow:0 1px 2px rgba(0,0,0,.35),0 2px 8px rgba(0,0,0,.25);padding:10px 12px}
+  .node .t{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:7px}
+  .node .t .who{font-weight:600;color:var(--muted);font-size:11.5px}
+  .node .d{color:var(--desc);font-size:12px;margin-top:5px}
+  .node::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;border-radius:10px 0 0 10px}
+  .node.annie::before{background:var(--annie)} .node.synthia::before{background:var(--synthia)}
+  .node.vera::before{background:var(--vera)} .node.skribble::before{background:var(--skribble)}
+  .node.carren::before{background:var(--carren)} .node.tool::before{background:var(--tool)}
+  .node.start::before{background:var(--start)} .node.esc::before{background:var(--esc)}
+  .node.gate{background:#211d10;border-color:#4d3f1a}.node.gate::before{background:var(--gate)}
+  .node.done{background:#0f2417;border-color:#1f5136}.node.done::before{background:var(--done)}
+  .node.error{background:#2a1517;border-color:#5c2a2a}.node.error::before{background:var(--error)}
+  .node .badge{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.04em;
+    text-transform:uppercase;color:#0d1117;padding:2px 6px;border-radius:999px}
+  .badge.hitl{background:var(--gate)} .badge.term{background:#5b6675;color:#e6edf3}
+  .badge.tool{background:var(--tool);color:#0d1117}
+  .lbl{position:absolute;transform:translate(-50%,-50%);background:var(--panel2);
+    border:1px solid #313c4a;color:#c9d3df;font-size:11px;padding:1px 6px;border-radius:999px;
+    white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+  .foot{margin:0 28px 48px;font-size:12.5px;color:#c3cdd9}
+  .foot h3{font-size:13px;margin:18px 0 6px;color:#e6edf3}
+  .foot ul{margin:6px 0;padding-left:18px} .foot li{margin:3px 0}
+  .foot b{color:#e6edf3}
+  code{background:#22293a;color:#cdd6e3;padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>jsa skill — execution flow</h1>
+  <div class="sub">Validated against <code>orchestration/playbooks/jsa.py</code> (<code>JSAMachine</code>) · runs on the shared orchestration engine. Boxes are FSM states; TOOL states run inline (no agent), agent states dispatch one cognitive-primitive agent. MemPalace is the blackboard; only typed per-state SUMMARYs return to the engine.</div>
+</header>
+
+<div class="callout">
+  <b>Two passes.</b> A deterministic TOOL pipeline (<code>acquire → cve_research → sast_scan → normalize → dedup_within_source → correlate_evidence → agent_review → sast_validate → structure → slice</code>) runs with no agent, then the deep pass: <code>investigate</code> is a bounded PARALLEL per-class annie fan, flowing into <code>collect → merge → verify → [reverify] → poc_capture → report → reflect</code>. <code>intake</code> is the only human gate.
+</div>
+
+<div class="legend">
+  <div class="grp">
+    <span class="chip"><span class="dot" style="background:var(--tool)"></span>TOOL · local (no agent)</span>
+    <span class="chip"><span class="dot" style="background:var(--annie)"></span>annie · investigate</span>
+    <span class="chip"><span class="dot" style="background:var(--synthia)"></span>synthia · merge</span>
+    <span class="chip"><span class="dot" style="background:var(--vera)"></span>vera · verify</span>
+    <span class="chip"><span class="dot" style="background:var(--skribble)"></span>skribble · report</span>
+    <span class="chip"><span class="dot" style="background:var(--carren)"></span>carren · reflect</span>
+  </div>
+  <div class="grp">
+    <span class="chip"><span class="dot" style="background:var(--gate)"></span>HITL gate</span>
+    <span class="chip"><span class="dot" style="background:var(--esc)"></span>escalation</span>
+    <span class="chip"><span class="dot" style="background:var(--done)"></span>complete</span>
+    <span class="chip"><span class="dot" style="background:var(--error)"></span>error</span>
+  </div>
+  <div class="grp">
+    <span class="chip"><span class="aline" style="border-color:var(--fwd)"></span>forward</span>
+    <span class="chip"><span class="aline" style="border-color:var(--exit)"></span>success / exit</span>
+    <span class="chip"><span class="aline" style="border-color:var(--loop)"></span>loop-back (bounded)</span>
+    <span class="chip"><span class="aline dash" style="border-color:var(--esc)"></span>escalation</span>
+    <span class="chip"><span class="aline" style="border-color:var(--abort)"></span>abort</span>
+  </div>
+</div>
+
+<div id="wrap">
+  <svg id="edges"><defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="context-stroke"></path>
+    </marker>
+  </defs></svg>
+</div>
+
+<div class="foot">
+  <h3>Deterministic pass (TOOL states, no agent)</h3>
+  <ul>
+    <li><b>acquire → … → slice</b> run inline via <code>run_tool_state</code>: crawl + download JS (with source-map reconstruction), fingerprint tech / CVEs, semgrep + jsluice (+ optional trufflehog/gitleaks) SAST, normalize + dedup + correlate evidence, local heuristic review + validate, then <b>structure</b> (typed store: PageCard/ModuleCard, dangerous patterns) and <b>slice</b> (per-class FlowCards; seeds the INVESTIGATE wave plan).</li>
+  </ul>
+  <h3>INVESTIGATE — bounded PARALLEL per-class fan</h3>
+  <ul>
+    <li><b>investigate ⟳ investigate</b> (<code>investigate_wave [batch &lt; total_batches]</code>): one fresh-context annie per candidate vuln class (focused on that class + its <code>assets/references/&lt;class&gt;.md</code> catalog), run in BATCHES of up to <code>max_fan_width</code> agents CONCURRENTLY; <code>route_after</code> re-emits the next batch until every class is covered, then ONE trailing generalist SWEEP batch. Candidate classes are <b>page-informed + signal-gated with a core floor</b> — SAST/SLICE hits ∪ dangerous patterns ∪ page signals ∪ dependency-exploitation classes ∪ a client-side floor — so SAST-blind classes still get an agent.</li>
+    <li><b>investigate → collect</b> (<code>investigate_done [batches complete]</code>).</li>
+  </ul>
+  <h3>Evidence-gated verify tail</h3>
+  <ul>
+    <li><b>verify → poc_capture</b> (<code>dual_verify off</code>) or <b>verify → reverify → poc_capture</b> (<code>dual_verify on + PASS</code>): a SECOND independent vera (<code>constraints.reverify_model</code>) — only findings both passes confirm are reported verified.</li>
+    <li><b>poc_capture</b> (TOOL): independently checks for a decodable browser-PoC screenshot per claimed-verified finding and DEMOTES any lacking one to <i>unconfirmed</i> — engine-owned evidence the agent cannot fabricate.</li>
+    <li><b>reflect → complete</b> (<code>met=True</code>): carren writes learned semgrep rules + FP/FN corrections.</li>
+  </ul>
+  <h3>Escalation &amp; abort</h3>
+  <ul>
+    <li><b>Escalation (dashed):</b> agent states <code>{investigate, merge, verify, reverify, report, reflect}</code> escalate to <b>unknown</b> on UNCERTAIN / needs_clarification; <b>unknown → awaiting_clarification → investigate</b> (fixed resume target) pauses for the user, then resumes.</li>
+    <li><b>Abort:</b> an <code>abort → error</code> transition exists from EVERY non-final state (intake, acquire, cve_research, sast_scan, normalize, dedup_within_source, correlate_evidence, agent_review, sast_validate, structure, slice, investigate, collect, merge, verify, reverify, poc_capture, report, reflect, unknown, awaiting_clarification). Those edges are collapsed into this note for legibility and are NOT drawn.</li>
+    <li>Each agent runs the model declared in its own <code>.pi/agents/&lt;name&gt;.md</code> (or a <code>JSA_&lt;AGENT&gt;</code>/<code>JSA_DEFAULT</code> env override); TOOL states run no agent.</li>
+  </ul>
+</div>
+
+<script>
+const COLS = { Louter:30, C:490, Rmid:850, Router:1010 };
+const W = { C:320, side:230 };
+const N = {
+  intake:{col:'C',y:24,cls:'gate',title:'intake',badge:'HITL',desc:'Human gate: schema questionnaire. Seeded valid from constraints → skipped; advances to acquire.'},
+  acquire:{col:'C',y:118,cls:'tool',title:'acquire',badge:'TOOL',desc:'Crawl + download JS; reconstruct source from source maps; build FileMap + AST index.'},
+  cve_research:{col:'C',y:210,cls:'tool',title:'cve_research',badge:'TOOL',desc:'Wappalyzer + content fingerprints → tech stack & versions (offline).'},
+  sast_scan:{col:'C',y:302,cls:'tool',title:'sast_scan',badge:'TOOL',desc:'semgrep (+p/secrets) + jsluice (+ optional trufflehog/gitleaks) over all files.'},
+  normalize:{col:'C',y:394,cls:'tool',title:'normalize',badge:'TOOL',desc:'Dedup components (purl) + vulns (CVE alias) + per-CVE VEX status.'},
+  dedup_within_source:{col:'C',y:486,cls:'tool',title:'dedup_within_source',badge:'TOOL',desc:'Merge SAST findings by SARIF fingerprint.'},
+  correlate_evidence:{col:'C',y:578,cls:'tool',title:'correlate_evidence',badge:'TOOL',desc:'Cross-stream typed edges (component→vuln, SAST→vuln) with gates + signals.'},
+  agent_review:{col:'C',y:670,cls:'tool',title:'agent_review',badge:'TOOL',desc:'Local heuristic (no agent): reviews only ambiguous correlation edges.'},
+  sast_validate:{col:'C',y:762,cls:'tool',title:'sast_validate',badge:'TOOL',desc:'Local heuristic: triage confirmed / false-positive / needs-deeper.'},
+  structure:{col:'C',y:854,cls:'tool',title:'structure',badge:'TOOL',desc:'Typed store: PageCard/ModuleCard, AST index, tree-sitter dangerous patterns.'},
+  slice:{col:'C',y:946,cls:'tool',title:'slice',badge:'TOOL',desc:'Per-class FlowCards (source/sink/CWE/lane); seeds the INVESTIGATE wave plan.'},
+  investigate:{col:'C',y:1050,cls:'annie',title:'investigate',who:'annie',desc:'PARALLEL per-class fan (batched). One fresh annie per candidate class + a generalist sweep. Self-loops per batch.'},
+  collect:{col:'C',y:1170,cls:'tool',title:'collect',badge:'TOOL',desc:'Gather per-agent findings from mempalace into the raw finding set.'},
+  merge:{col:'C',y:1262,cls:'synthia',title:'merge',who:'synthia',desc:'Deduplicate + correlate cross-card findings into merged findings.'},
+  verify:{col:'C',y:1354,cls:'vera',title:'verify',who:'vera',desc:'Browser-PoC verification (evidence oracle): verified / refuted / out-of-scope.'},
+  reverify:{col:'Rmid',y:1420,cls:'vera',title:'reverify',who:'vera',desc:'Optional 2nd independent vera (dual-verify, different model). Report only what both confirm.'},
+  poc_capture:{col:'C',y:1500,cls:'tool',title:'poc_capture',badge:'TOOL',desc:'Engine check: demote any claimed-verified finding lacking a decodable PoC screenshot.'},
+  report:{col:'C',y:1592,cls:'skribble',title:'report',who:'skribble',desc:'Per-finding + consolidated report: impact, repro, CVSS 4.0, remediation.'},
+  reflect:{col:'C',y:1684,cls:'carren',title:'reflect',who:'carren',desc:'Self-improving SAST: author + validate learned semgrep rules; FP/FN corrections.'},
+  complete:{col:'C',y:1800,cls:'done',title:'complete',badge:'TERM',desc:'Terminal. Reached after reflect (met=True).'},
+  unknown:{col:'Louter',y:1230,cls:'esc',title:'unknown',desc:'Escalation entry: UNCERTAIN / needs_clarification at any agent state.'},
+  awaiting_clarification:{col:'Louter',y:1400,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes at investigate once clarified.'},
+  error:{col:'Router',y:1800,cls:'error',title:'error',badge:'TERM',desc:'Terminal. Reached by abort from any non-final state (edges omitted; see notes).'},
+};
+const E = [
+  {from:'intake',to:'acquire',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'acquire',to:'cve_research',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'cve_research',to:'sast_scan',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'sast_scan',to:'normalize',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'normalize',to:'dedup_within_source',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'dedup_within_source',to:'correlate_evidence',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'correlate_evidence',to:'agent_review',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'agent_review',to:'sast_validate',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'sast_validate',to:'structure',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'structure',to:'slice',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'slice',to:'investigate',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'investigate',to:'investigate',s1:'right',s2:'top',kind:'loop',label:'investigate_wave [batch < total]',c1:{dx:150,dy:-6},c2:{dx:70,dy:-30}},
+  {from:'investigate',to:'collect',s1:'bottom',s2:'top',kind:'fwd',label:'investigate_done [batches complete]'},
+  {from:'collect',to:'merge',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'merge',to:'verify',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'verify',to:'poc_capture',s1:'bottom',s2:'top',kind:'fwd',label:'dual_verify off'},
+  {from:'verify',to:'reverify',s1:'right',s2:'top',kind:'loop',label:'dual_verify on + PASS',bow:40},
+  {from:'reverify',to:'poc_capture',s1:'bottom',s2:'right',kind:'loop',label:'reverify_done',c1:{dx:0,dy:60},c2:{dx:60,dy:0}},
+  {from:'poc_capture',to:'report',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'report',to:'reflect',s1:'bottom',s2:'top',kind:'fwd'},
+  {from:'reflect',to:'complete',s1:'bottom',s2:'top',kind:'exit',label:'met=True'},
+  {from:'investigate',to:'unknown',s1:'left',s2:'right',kind:'esc',label:'UNCERTAIN — any agent state',c1:{dx:-60,dy:0},c2:{dx:40,dy:0}},
+  {from:'merge',to:'unknown',s1:'left',s2:'bottom',kind:'esc',c1:{dx:-120,dy:0},c2:{dx:0,dy:60}},
+  {from:'verify',to:'unknown',s1:'left',s2:'bottom',kind:'esc',c1:{dx:-160,dy:0},c2:{dx:-20,dy:110}},
+  {from:'reverify',to:'unknown',s1:'left',s2:'bottom',kind:'esc',c1:{dx:-240,dy:0},c2:{dx:-40,dy:150}},
+  {from:'report',to:'unknown',s1:'left',s2:'bottom',kind:'esc',c1:{dx:-260,dy:0},c2:{dx:20,dy:190}},
+  {from:'reflect',to:'unknown',s1:'left',s2:'bottom',kind:'esc',c1:{dx:-300,dy:0},c2:{dx:40,dy:230}},
+  {from:'unknown',to:'awaiting_clarification',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
+  {from:'awaiting_clarification',to:'investigate',s1:'right',s2:'left',kind:'esc',label:'clarify [fixed resume]',c1:{dx:120,dy:0},c2:{dx:-60,dy:0}},
+];
+const KIND = {fwd:getComputedStyle(document.documentElement).getPropertyValue('--fwd').trim(),
+  exit:'#3fb950',loop:'#e3a52e',esc:'#9ca3af',abort:'#f85149'};
+
+const wrap=document.getElementById('wrap'), svg=document.getElementById('edges');
+for(const id in N){const n=N[id];const w=(n.col==='C')?W.C:W.side;
+  const el=document.createElement('div');el.className='node '+n.cls;el.id='n_'+id;
+  el.style.left=COLS[n.col]+'px';el.style.top=n.y+'px';el.style.width=w+'px';
+  const who=n.who?`<span class="who">· ${n.who}</span>`:'';
+  const badge=n.badge?`<span class="badge ${n.badge==='TERM'?'term':(n.badge==='HITL'?'hitl':'tool')}">${n.badge}</span>`:'';
+  el.innerHTML=`<div class="t">${n.title}${who}${badge}</div><div class="d">${n.desc}</div>`;
+  wrap.appendChild(el);}
+const base=wrap.getBoundingClientRect();
+function rect(id){const r=document.getElementById('n_'+id).getBoundingClientRect();
+  return{left:r.left-base.left,top:r.top-base.top,width:r.width,height:r.height};}
+function anchor(r,side){switch(side){
+  case'top':return{x:r.left+r.width/2,y:r.top};
+  case'bottom':return{x:r.left+r.width/2,y:r.top+r.height};
+  case'left':return{x:r.left,y:r.top+r.height/2};
+  case'right':return{x:r.left+r.width,y:r.top+r.height/2};}}
+function ctrl(p,side,bow){const k=64,b=bow||0;switch(side){
+  case'top':return{x:p.x+b,y:p.y-k};
+  case'bottom':return{x:p.x+b,y:p.y+k};
+  case'left':return{x:p.x-k-Math.abs(b),y:p.y};
+  case'right':return{x:p.x+k+Math.abs(b),y:p.y};}}
+const SVGNS='http://www.w3.org/2000/svg';
+for(const e of E){
+  const ra=rect(e.from),rb=rect(e.to);
+  const p1=anchor(ra,e.s1),p2=anchor(rb,e.s2);
+  const c1=e.c1?{x:p1.x+e.c1.dx,y:p1.y+e.c1.dy}:ctrl(p1,e.s1,e.bow);
+  const c2=e.c2?{x:p2.x+e.c2.dx,y:p2.y+e.c2.dy}:ctrl(p2,e.s2,e.kind==='exit'?-(e.bow||0):e.bow);
+  const path=document.createElementNS(SVGNS,'path');
+  path.setAttribute('d',`M ${p1.x} ${p1.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${p2.x} ${p2.y}`);
+  path.setAttribute('fill','none');path.setAttribute('stroke',KIND[e.kind]);
+  path.setAttribute('stroke-width','2');path.setAttribute('marker-end','url(#ah)');
+  if(e.kind==='esc')path.setAttribute('stroke-dasharray','6 5');
+  svg.appendChild(path);
+  if(e.label){const t=0.5,mt=1-t;
+    const x=mt*mt*mt*p1.x+3*mt*mt*t*c1.x+3*mt*t*t*c2.x+t*t*t*p2.x;
+    const y=mt*mt*mt*p1.y+3*mt*mt*t*c1.y+3*mt*t*t*c2.y+t*t*t*p2.y;
+    const l=document.createElement('div');l.className='lbl';l.textContent=e.label;
+    l.style.left=x+'px';l.style.top=y+'px';wrap.appendChild(l);}
+}
+</script>
+</body>
+</html>

@@ -15,6 +15,14 @@ from typing import Any
 
 # Explicit serialization key list. Adding a field means adding it here too — a
 # deliberate, reviewable step (fail-loud-by-omission beats silent drift).
+# Keys that older checkpoints may carry but this version no longer models. They are
+# DROPPED on load instead of raising, so a run checkpointed by previous code still
+# resumes. ``recall_lessons`` held MemPalace content injected into the first agent
+# directive; that mechanism was removed because it delivered PENDING/REJECTED
+# amendment proposals into agent prompts, bypassing the approval gate. Agent context
+# comes from .pi/agents/<agent>.md + skill orchestration only.
+_RETIRED_KEYS: frozenset[str] = frozenset({"recall_lessons"})
+
 _KEYS: tuple[str, ...] = (
     "session_id",
     "run_id",
@@ -43,7 +51,6 @@ _KEYS: tuple[str, ...] = (
     "step_retries",
     "total_steps",
     "iteration_history",
-    "recall_lessons",
     # terminal:
     "met",
     "complete",
@@ -96,11 +103,6 @@ class RunContext:
     # payloads (gaps summary, the declared strategy_change, confidence).
     iteration_history: list[dict[str, Any]] = field(default_factory=list)
 
-    # Recall (atom F2): distilled lessons retrieved at start() and injected into
-    # the FIRST agent directive as advisory context. Never read by routing —
-    # a past lesson must not hard-gate a new run (loops.md Rec 3).
-    recall_lessons: list[str] = field(default_factory=list)
-
     # terminal
     met: bool = False
     complete: bool = False
@@ -123,7 +125,7 @@ class RunContext:
         """
         if not isinstance(d, dict):
             raise TypeError(f"RunContext.from_dict expects a dict, got {type(d).__name__}")
-        unknown = set(d) - set(_KEYS)
+        unknown = set(d) - set(_KEYS) - _RETIRED_KEYS
         if unknown:
             raise ValueError(
                 f"RunContext.from_dict: unknown keys {sorted(unknown)} — checkpoint "

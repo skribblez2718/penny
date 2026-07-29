@@ -55,7 +55,7 @@ _ANNOTATION_RE = re.compile(r"(.*?)(?:\\;((?:version|confidence):[^\\;]*(?:\\;(?
 
 
 def parse_pattern(raw: str) -> tuple[str, int, int]:
-    """Parse a Wappalyzer pattern string with annotations.
+    r"""Parse a Wappalyzer pattern string with annotations.
 
     Format: "regex_pattern\;version:\1\;confidence:50"
 
@@ -74,7 +74,7 @@ def parse_pattern(raw: str) -> tuple[str, int, int]:
     clean = raw
 
     # Find annotation separator (literal backslash-semicolon)
-    anno_start = raw.find("\;")
+    anno_start = raw.find("\\;")
     if anno_start != -1:
         clean = raw[:anno_start]
         annotations = raw[anno_start + 2:]  # skip "\;"

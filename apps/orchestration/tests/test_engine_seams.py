@@ -278,6 +278,43 @@ def test_gate_approve_routes_forward(cp):
     assert d["action"] == "invoke_agent" and d["state_id"] == "applied"
 
 
+class _GateNoopPlaybook(GatePlaybook):
+    """Gate playbook whose route_user FIRES NOTHING on an unrecognized answer,
+    so the engine's re-ask path is exercised (mirrors sca's gate contract)."""
+
+    def route_user(self, state, ctx, response):
+        ans = response.get("answer") if isinstance(response, dict) else str(response)
+        if ans == "approve":
+            self.sm.send("approve")
+        elif ans == "revise":
+            self.sm.send("reject")
+        # else: unrecognized -> fire nothing -> engine re-asks (F7)
+
+
+def test_gate_reask_includes_hint_on_unrecognized_answer(cp):
+    # F7: a free-text answer the gate doesn't recognize must re-ask WITH a hint
+    # that distinguishes it from a fresh prompt (so a programmatic driver does
+    # not perceive an identical loop).
+    _GateNoopPlaybook(cp).start(session_id=SID, run_id=RID, goal="gate")
+    _GateNoopPlaybook(cp).step(
+        session_id=SID, run_id=RID, agent="skribble", result={"confidence": "CERTAIN"}
+    )
+    d = _GateNoopPlaybook(cp).step(
+        session_id=SID, run_id=RID, agent="user", result={"answer": "yeah, ship it"}
+    )
+    assert d["action"] == "escalate_to_user"
+    assert d["previous_state"] == "review"
+    assert d["unknown_reason"].startswith("gate:review")
+    assert "not recognized" in d["unknown_reason"]
+
+    # A recognized EXACT answer still advances cleanly (the normal path is
+    # unchanged: no hint noise on a fresh gate prompt).
+    d2 = _GateNoopPlaybook(cp).step(
+        session_id=SID, run_id=RID, agent="user", result={"answer": "approve"}
+    )
+    assert d2["action"] == "invoke_agent" and d2["state_id"] == "applied"
+
+
 def test_gate_reject_routes_back(cp):
     _gate_start(cp)
     _gate_step(cp, "skribble", {"confidence": "CERTAIN"})

@@ -69,14 +69,22 @@ synthesized across multiple sources and match none of them. A section that track
 one source across several dimensions is derivative even if no single dimension is
 individually damning.
 
-**House scaffolding is not a D3 signal.** The authoring standard mandates certain
-structural fixtures in every course — notably a first-unit **Introduction** containing a
-"What You Will Learn" overview (welcome, outcome list, how-to-work-it), plus fixed closers
-like a flashcard summary. The *presence and shape* of these fixtures is the author's own
-house convention: do not score them as structure copied from a source, even if a source
-also opens with objectives (course-overview openers are commonplace — scènes à faire).
-Their *content* gets the full review like any prose: outcome lists that mirror a single
-source's objective list in selection, ordering, or wording are a D2/D3/D7 finding as usual.
+**House scaffolding is not a D3 signal.** The authoring standard (the learn skill's
+pedagogy-spec) mandates structural fixtures that repeat across EVERY course the author
+produces — notably: a first-unit **Introduction** containing a "What You Will Learn"
+overview (welcome, outcome list, how-to-work-it); the per-concept **intuition → worked
+example → closing formal definition** shape; the fixed **hierarchy vocabulary**
+(Track/Course/Unit/Lesson/Section cross-referencing); **pronunciation and alias glosses**
+at a term's first introduction; the **canonical callout set** (analogy/note/remember/
+mistake/plain-terms blocks); **scenario-based recognize-the-tool practice items**; graded
+practice/exam DSL blocks; and fixed closers (flashcard summary, unified diagram, cheat
+sheets). The *presence and shape* of these fixtures is the author's own house convention:
+do not score them as structure copied from a source, even if a source also opens with
+objectives (course-overview openers are commonplace — scènes à faire), and do not read
+their course-to-course regularity as mirroring any source. Their *content* still gets the
+full review like any prose: an outcome list, pronunciation gloss, scenario setup, or
+analogy whose selection, ordering, or wording mirrors a single source's is a D2/D3/D5/D7
+finding as usual.
 
 **Quotation is separate.** A short, marked, *attributed* verbatim quote is a
 deliberate choice, not a D1 breach — route it to an attribution / fair-use

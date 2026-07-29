@@ -3,7 +3,7 @@
 Reference for the JavaScript Security Analysis skill. jsa runs on the shared
 orchestration engine as `JSAPlaybook`
 (`apps/orchestration/src/orchestration/playbooks/jsa.py`). This file describes
-that FSM. `resources/flow.mmd` is the matching state diagram.
+that FSM. `resources/flow.html` is the matching state diagram.
 
 ## States
 

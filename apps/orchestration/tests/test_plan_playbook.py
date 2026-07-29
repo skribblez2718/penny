@@ -439,15 +439,6 @@ def test_critique_evidence_lands_on_context(cp):
     assert cp.load(RID).context.verify_evidence  # captured for the outcome ledger
 
 
-def test_recall_lessons_render_in_first_directive(cp):
-    pb = PlanPlaybook(cp)
-    ctx = RunContext(session_id=SID, run_id=RID, playbook="plan", goal="add pagination")
-    ctx.recall_lessons = ["prefer reversible steps; name rollback"]
-    txt = pb._task_summary("scoping", PLAN_SCOPE, ctx)
-    assert "Lessons from prior runs" in txt
-    assert "prefer reversible steps" in txt
-
-
 # ---------------------------------------------------------------------------
 # recovery re-presents a pending verify gate
 # ---------------------------------------------------------------------------

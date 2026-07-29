@@ -1,23 +1,45 @@
-# PRD Skill — Frontier Evaluation & Design Rationale
+# PRD Skill — Design Rationale (dated snapshot: 2024-12 patterns, corrected 2026-07-28)
 
-> Companion to `flow.html` (the FSM diagram). Method: web research performed manually via the Playwright browser. Primary source fetched verbatim = Anthropic, *Building Effective Agents* (Dec 19 2024), `anthropic.com/engineering/building-effective-agents` (`CERTAIN`). Spec-driven-development practice (Amazon working-backwards / PR-FAQ; GitHub Spec Kit; requirements-engineering INVEST) cited from knowledge (`PROBABLE`).
+> **Read this as history, not as law.** This file records *why the shape of the skill is what it
+> is*, against the agent-design patterns published as of **December 2024**. It is a point-in-time
+> snapshot and is expected to age. It carries **no verdict on whether the design should change** —
+> that judgement belongs to the recurring Bitter-Lesson pass
+> (`docs/agents/architecture/bitter-lesson.md`), which reads the live code, not this file.
+>
+> Source: Anthropic, *Building Effective Agents* (Dec 19 2024),
+> `anthropic.com/engineering/building-effective-agents` (fetched verbatim, `CERTAIN`).
+> Spec-driven-development practice (Amazon working-backwards / PR-FAQ; GitHub Spec Kit;
+> requirements-engineering INVEST) cited from knowledge (`PROBABLE`).
 
-## Verdict — the design is sound; no material logic redesign warranted.
+## Why the FSM has the shape it has
 
-The prd skill is built on the exact frontier workflow patterns Anthropic documents, and it exceeds the typical bar on one axis (requirement→test traceability). This rationale is now realized directly by the engine playbook (`PrdPlaybook` / `PrdMachine`): the prompt chain, the programmatic gate, the evaluator-optimizer loop, and clarify-first HITL are all encoded as FSM states, transitions, and the engine's escalation seam.
-
-## Mapping to frontier patterns (Anthropic, `CERTAIN`)
-
-| Anthropic pattern | Definition (verbatim-derived) | prd implementation |
+| Pattern (Dec 2024) | Definition (verbatim-derived) | Where it lives in `PrdMachine` |
 |---|---|---|
-| **Prompt chaining** | "decompose a task into a sequence of steps… add programmatic **gate** checks on intermediate steps" — *example: "Writing an outline of a document, checking that the outline meets certain criteria, then writing the document."* | `intake → generating → validating` is exactly this chain; vera's `ideal_state_valid` verdict is the **gate** (the run cannot complete unless it passes). |
-| **Evaluator-optimizer** | "one LLM generates a response while another provides evaluation and feedback **in a loop**… effective when we have clear evaluation criteria." | The `validating → generating` revise loop; **vera** evaluates on a different model than the **synthia** generator. |
-| **Routing** | "classifies an input and directs it to a specialized followup." | Domain detection in `intake` (`detect_domain`) → domain-specific generation guidance. |
-| **Agents: clarify first** | "agents begin with… interactive discussion with the human user. Once the task is clear, plan and operate independently." | The clarify-first first pass: `generating` (clarification mode) → `to_unknown` → `awaiting_clarification` surfaces clarifying questions up front. |
-| **Stopping conditions** | "include stopping conditions (max iterations) to maintain control." | The revise loop is bounded by `max_iterations`; on exhaustion the run completes honestly with `met=False`. |
+| **Prompt chaining** | "decompose a task into a sequence of steps… add programmatic **gate** checks on intermediate steps" | `intake → generating → validating`. The gate is `done_predicate` = `valid && ideal_state_valid`. |
+| **Evaluator-optimizer** | "one LLM generates a response while another provides evaluation and feedback **in a loop**… effective when we have clear evaluation criteria." | The `validating → generating` revise loop. See the independence caveat below. |
+| **Routing** | "classifies an input and directs it to a specialized followup." | Domain selection in `intake`. **Note:** the original keyword `detect_domain` table this row once described was **deleted**; selection is now model-owned (`available_domains()` lists the packs, synthia declares the fit). |
+| **Agents: clarify first** | "agents begin with… interactive discussion with the human user." | The clarify-first first pass → `awaiting_clarification`. |
+| **Stopping conditions** | "include stopping conditions (max iterations) to maintain control." | `max_iterations`; on exhaustion the run completes with `met=False`. |
 
-**Beyond the baseline:** the prd skill also emits an **atomic requirement catalog** (REQ-NNN, each testable + prioritized — INVEST-style) and a **verification/traceability matrix** (REQ → test strategy). Requirement→test traceability is a requirements-engineering best practice most PRD tooling omits; it is also the literal embodiment of the "success criteria == verification criteria" spine that the `code` skill consumes.
+**Beyond the baseline:** the skill also emits an atomic requirement catalog (REQ-NNN, testable +
+prioritized) and a REQ→test traceability matrix. That traceability is the "success criteria ==
+verification criteria" spine the `code` skill consumes.
 
-## One optional enhancement (not implemented)
+## Correction (2026-07-28) — independence
 
-- **Sectioned generation** (Anthropic *Parallelization → Sectioning*: "each consideration handled by a separate LLM call, allowing focused attention"). Today `generating` is a single synthia call producing all four artifacts. The narrative, the atomic catalog, and the IDEAL_STATE could be generated as parallel sections and stitched — higher focus per artifact. **Tradeoff:** more orchestration + a stitch step for an unproven quality gain; by the Simplicity criterion, only pursue it if evals show the single call is the bottleneck. The engine supports fan-out (`PARALLEL_BY_STATE`) if this is ever warranted.
+An earlier revision of this file claimed *"vera evaluates on a different model than the synthia
+generator."* **That was false.** `.pi/agents/synthia.md` and `.pi/agents/vera.md` both declare
+`model: sonnet` / `provider: anthropic`.
+
+The authoritative, self-checking record is **`orchestration/independence.py`**, which resolves each
+agent's model *live* from its frontmatter and classifies the prd actor→verifier edge as
+`SAME_MODEL`, registered in `SAME_MODEL_EXCEPTIONS` with a rationale and a `review_by` date. Do not
+restate an independence claim here — read `independence.classify()`; `tests/test_independence.py`
+fails loud if the ledger and the fleet disagree.
+
+## Open enhancement (not implemented)
+
+- **Sectioned generation** (*Parallelization → Sectioning*): today `generating` is a single synthia
+  call producing all four artifacts; the narrative, catalog, and IDEAL_STATE could be generated as
+  parallel sections and stitched. The engine supports fan-out (`PARALLEL_BY_STATE`). Unmeasured —
+  pursue only if evals show the single call is the bottleneck.

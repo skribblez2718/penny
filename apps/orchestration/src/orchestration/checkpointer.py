@@ -187,11 +187,22 @@ class Checkpointer:
         finally:
             conn.close()
 
-    def list_pending(self, session_id: str | None = None) -> list[CheckpointRecord]:
+    def list_pending(
+        self, session_id: str | None = None, include_errored: bool = False
+    ) -> list[CheckpointRecord]:
         """Return resumable runs (status running/awaiting_user), for the
-        auto-recovery scan. Optionally scoped to one session."""
-        placeholders = ",".join("?" for _ in PENDING_STATUSES)
-        params: list[str] = list(PENDING_STATUSES)
+        auto-recovery scan. Optionally scoped to one session.
+
+        ``include_errored`` (F2): when True, ``error`` runs are ALSO returned so
+        an EXPLICIT retry path can re-drive the phase they failed on. Default
+        False keeps the automatic recovery scan unchanged (errored runs are not
+        auto-retried).
+        """
+        statuses: tuple[str, ...] = (
+            PENDING_STATUSES + (STATUS_ERROR,) if include_errored else PENDING_STATUSES
+        )
+        placeholders = ",".join("?" for _ in statuses)
+        params: list[str] = list(statuses)
         sql = f"SELECT * FROM runs WHERE status IN ({placeholders})"
         if session_id is not None:
             sql += " AND session_id = ?"

@@ -207,15 +207,6 @@ def test_verify_evidence_lands_on_context(cp):
     assert cp.load(RID).context.verify_evidence
 
 
-def test_recall_lessons_render_in_first_directive(cp):
-    pb = LearnPlaybook(cp)
-    ctx = RunContext(session_id=SID, run_id=RID, playbook="learn", goal="build a study companion")
-    ctx.recall_lessons = ["recompute every quantitative answer; never eyeball"]
-    txt = pb._task_summary("designing", LEARN_DESIGN, ctx)
-    assert "Lessons from prior runs" in txt
-    assert "recompute every quantitative answer" in txt
-
-
 def test_scoping_then_ingest_fan(cp):
     # start -> scoping (echo), then the model-emitted topology drives the fan.
     d = _to_ingesting(cp)

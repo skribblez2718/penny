@@ -133,7 +133,7 @@ const N = {
   complete:{col:'C',y:1300,cls:'done',title:'complete',badge:'TERM',desc:'Terminal. met=True only if no gap AND verify passed; honest met=False on exhaustion.'},
   error:{col:'Router',y:1300,cls:'error',title:'error',badge:'TERM',desc:'Terminal. Reached by plan_gate deny, or abort from any working phase.'},
   unknown:{col:'Louter',y:870,cls:'esc',title:'unknown',desc:'Escalation entry: UNCERTAIN at any working phase, or a learning stall / repeated strategy.'},
-  awaiting:{col:'Louter',y:1030,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes at exploring once clarified.'},
+  awaiting_clarification:{col:'Louter',y:1030,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes at exploring once clarified.'},
 };
 const E = [
   {from:'intake',to:'exploring',s1:'bottom',s2:'top',kind:'fwd'},
@@ -153,8 +153,8 @@ const E = [
   {from:'learning',to:'implementing',s1:'left',s2:'left',kind:'loop',label:'gap & within budget → retry',bow:95},
   {from:'learning',to:'verifying',s1:'right',s2:'right',kind:'loop',label:'no gap → final battery (≤3)',bow:58},
   {from:'learning',to:'complete',s1:'bottom',s2:'top',kind:'exit',label:'budget / battery spent → met=False (honest)'},
-  {from:'unknown',to:'awaiting',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
-  {from:'awaiting',to:'exploring',s1:'left',s2:'left',kind:'esc',label:'clarify',c1:{dx:-20,dy:-260},c2:{dx:-20,dy:180}},
+  {from:'unknown',to:'awaiting_clarification',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
+  {from:'awaiting_clarification',to:'exploring',s1:'left',s2:'left',kind:'esc',label:'clarify',c1:{dx:-20,dy:-260},c2:{dx:-20,dy:180}},
   {from:'implementing',to:'unknown',s1:'left',s2:'right',kind:'esc',label:'UNCERTAIN / stall — any working phase',c1:{dx:-40,dy:0},c2:{dx:40,dy:0}},
 ];
 const KIND = {fwd:getComputedStyle(document.documentElement).getPropertyValue('--fwd').trim(),

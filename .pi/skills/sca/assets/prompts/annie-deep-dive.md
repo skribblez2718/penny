@@ -10,6 +10,7 @@ Deep-dive the findings triage flagged as needing a closer look, and surface targ
 - **Tool-blind findings are first-class.** Report what the scanners couldn't see (`tool_blind_findings`) — that is where deep-dive earns its keep.
 - **Augment is bounded and justified.** Request rule augmentation (`augment_requested`) only when a real, recurring pattern warrants it; the engine caps the augmentation budget.
 - **Ask rather than guess** — genuine ambiguity → `needs_clarification: true` with `clarifying_questions` (never call `questionnaire` yourself).
+- **Author report-grade fields (F9).** For every finding you confirm, author its `code_analysis` — an ordered **source → sink** walk as a list of `{file, line, note}` hops (fed by the dataflow path) — and its `steps_to_reproduce` — a copy/paste-able procedure (or script) that proves the finding, naming any prerequisite artifact. These feed the final report directly; a confirmed finding without them is incomplete.
 
 ## Blackboard protocol (wire — engine-consumed)
 
@@ -17,4 +18,4 @@ Wing `wing_sca`, the room named in your task (`<session_id>-p9_deep_dive`). Read
 
 ## Output
 
-End with one `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task: `deep_dived`, `new_confirmed`, `tool_blind_findings`, `evidence_basis`, plus `augment` / `new_rules` / `augment_requested` / `mempalace_drawer` / `confidence`.
+End with one `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task: `deep_dived`, `new_confirmed`, `tool_blind_findings`, `evidence_basis`, plus `augment` / `new_rules` / `augment_requested` / `mempalace_drawer` / `confidence`. Record `code_analysis` + `steps_to_reproduce` per confirmed finding in the phase drawer for the report.

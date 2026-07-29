@@ -72,7 +72,7 @@ After the skill ships: store the build decisions and their failure-mode rational
 2. **Extract phases** from the proven manual workflow; write the failure-mode table (Rule 2).
 3. **Mark decisions** — pull every global decision into an early design state (Rule 3); place the gate (Rule 4).
 4. **Assign agents to states** by role semantics (echo explores, annie designs/analyzes, piper sequences, skribble produces, synthia consolidates, vera verifies with evidence, carren judges, tabitha decomposes).
-5. **Choose loop shapes and budgets** (Rules 5–6); draw `resources/flow.mmd` FIRST — review the diagram before writing code.
+5. **Choose loop shapes and budgets** (Rules 5–6); draw `resources/flow.html` FIRST — review the diagram before writing code.
 6. **Write contracts** (Rule 8), then the playbook, then register it.
 7. **Distill resources, then prompts** (Rule 7).
 8. **Build per `quick-reference.md`** (delegate, SKILL.md, room registration) and test per `testing.md` — every branch, every gate route, exhaustion, stall, escalation.
@@ -94,7 +94,7 @@ After the skill ships: store the build decisions and their failure-mode rational
 - [ ] Fix/repair edges re-enter verification; exhaustion paths emit `met=False`
 - [ ] Objective verification precedes subjective critique
 - [ ] Prompts are thin and reference `resources/`; run-specific detail lives only in task builders
-- [ ] `flow.mmd` was reviewed before the playbook was written and matches it after
+- [ ] `flow.html` was reviewed before the playbook was written and matches it after
 
 ## Files
 

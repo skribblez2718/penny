@@ -121,7 +121,7 @@ Loops are not alternatives — they **nest**. A production system layers them:
 **In Penny:** MemPalace (the blackboard), the LEARN operation, and the daily self-improvement compression loop.
 
 **Design rules:**
-- **Retrieve past-run reflections at run start.** The engine does this for every playbook: `start()` seeds distilled lessons from MemPalace into the first agent's context via `recall_lessons` (advisory, opt-out via `PENNY_RECALL=0`). This turns L6 from write-only into a closed loop.
+- **Close L6 through review, not injection.** The write side (outcome ledger → daily compression → amendment proposals) is live. The read side is the **human approval loop**: proposals are reviewed via the tune commands and, once approved, *applied to the relevant files*. The engine does **not** retrieve stored lessons into agent context — see the prohibition in `skill-standard.md` §4 and `tests/test_no_memory_injection.py`.
 - **Guard against confirmation bias and mode collapse.** Retrieve as advisory context; don't let a past lesson hard-gate a new run.
 - **The evaluator must be adapted per domain.** Reflexion used environment success for AlfWorld, self-generated unit tests for coding, exact-match for QA — the loop is not fully task-agnostic.
 
@@ -228,7 +228,7 @@ The same default-on base `progress_check` compares successive recorded iteration
 
 ### Rec 3 — Retrieve past-run reflections at run start (close the L6 loop)
 
-The engine's `start()` calls `recall_lessons` (atom F2, `orchestration/recall.py`): a best-effort MemPalace query over `penny/system_amendments` seeds up to 3 distilled lessons into the **first** agent directive as explicitly advisory context. No routing reads them — a past lesson never hard-gates a new run. Opt-out: `PENNY_RECALL=0` or `constraints={"recall": false}`.
+**Removed (2026-07-28).** The engine's `start()` used to call `recall_lessons` (atom F2, `orchestration/recall.py`): a MemPalace query over `penny/system_amendments` seeding up to 3 records into the **first** agent directive as advisory context. That room holds amendment *proposals*, and the query applied **no status filter** — so `PENDING` and operator-`REJECTED` proposals reached agent prompts, bypassing the approval gate enforced by `amendment_applier` (`status != "APPROVED"` → refuse). The module, the `RunContext.recall_lessons` field, and all 11 injection sites are deleted; `recall_lessons` is a retired serialization key dropped on load so pre-existing checkpoints still resume. Reintroduction fails `tests/test_no_memory_injection.py`.
 
 ### Rec 4 — Require externally-grounded evidence in VERIFY contracts
 

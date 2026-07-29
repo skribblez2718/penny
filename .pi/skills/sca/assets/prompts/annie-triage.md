@@ -10,6 +10,7 @@ Triage the merged scan findings against the threat model and derived requirement
 - **Redact secrets.** Never echo raw credentials/tokens into mempalace or the SUMMARY; count them in `secrets_redacted` and reference by location.
 - **Honest coverage.** Report `coverage_gaps` — what the scan couldn't reach — rather than implying completeness.
 - **Ask rather than guess** — genuine ambiguity → `needs_clarification: true` with `clarifying_questions` (never call `questionnaire` yourself).
+- **Author report-grade fields (F9).** For each confirmed finding, supply `description_stakeholder` — a dual-audience impact narrative understandable by technical AND non-technical stakeholders, stating what an attacker gains — and `remediation` — application/context-specific fix guidance for THIS code, not a generic CWE blurb. These feed the final report.
 
 ## Blackboard protocol (wire — engine-consumed)
 
@@ -17,4 +18,4 @@ Wing `wing_sca`, the room named in your task (`<session_id>-p8_triage`). Read th
 
 ## Output
 
-End with one `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task: `triaged`, `confirmed`, `needs_deep_dive`, `false_positive`, `by_severity`, `evidence_basis`, plus `secrets_redacted` / `coverage_gaps` / `mempalace_drawer` / `confidence`.
+End with one `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task: `triaged`, `confirmed`, `needs_deep_dive`, `false_positive`, `by_severity`, `evidence_basis`, plus `secrets_redacted` / `coverage_gaps` / `mempalace_drawer` / `confidence`. Record `description_stakeholder` + `remediation` per confirmed finding in the phase drawer for the report.

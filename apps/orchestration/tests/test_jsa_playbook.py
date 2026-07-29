@@ -305,16 +305,38 @@ def test_max_fan_width_batches_classes_iteratively(cp):
     assert d3["agent"] == "synthia" and d3["state_id"] == "merge"
 
 
-def test_recall_lessons_render_in_first_directive(cp):
-    from orchestration.playbooks.jsa import JSA_INVESTIGATE
-
+def test_model_for_state_env_override(cp, monkeypatch):
+    """JSA_<AGENT> / JSA_DEFAULT env vars route a state's agent to a custom
+    provider/model (overriding the agent frontmatter). Precedence:
+    per-agent -> DEFAULT -> None (the agent's own model). Unset OR malformed
+    values are invalid and fall through, so a typo never breaks a run."""
     pb = JSAPlaybook(cp)
     ctx = RunContext(session_id=SID, run_id=RID, playbook="jsa", goal="analyze https://example.com")
-    ctx.recall_lessons = ["verify DOM XSS with a live browser PoC, never by pattern alone"]
-    ctx.extras["jsa"] = {"investigate": {"batch": 0, "total_batches": 1}}
-    txt = pb._task_summary("investigate", JSA_INVESTIGATE, ctx)
-    assert "Lessons from prior runs" in txt
-    assert "live browser PoC" in txt
+    for k in ("JSA_DEFAULT", "JSA_ANNIE", "JSA_VERA"):
+        monkeypatch.delenv(k, raising=False)
+
+    # Nothing set -> the agent's own model (None).
+    assert pb.model_for_state("investigate", ctx) is None
+
+    # DEFAULT applies to every agent state (investigate=annie, report=skribble).
+    monkeypatch.setenv("JSA_DEFAULT", "ollama/glm")
+    assert pb.model_for_state("investigate", ctx) == "ollama/glm"
+    assert pb.model_for_state("report", ctx) == "ollama/glm"
+
+    # Per-agent override wins over DEFAULT for that agent only.
+    monkeypatch.setenv("JSA_ANNIE", "ollama/deepseek-pro")
+    assert pb.model_for_state("investigate", ctx) == "ollama/deepseek-pro"
+    assert pb.model_for_state("report", ctx) == "ollama/glm"
+
+    # Malformed values are invalid -> fall through to DEFAULT.
+    monkeypatch.setenv("JSA_ANNIE", "glm")  # no provider half
+    assert pb.model_for_state("investigate", ctx) == "ollama/glm"
+    monkeypatch.setenv("JSA_ANNIE", "ollama / glm")  # whitespace
+    assert pb.model_for_state("investigate", ctx) == "ollama/glm"
+
+    # The reverify_model constraint still takes precedence for reverify.
+    ctx.constraints = {"reverify_model": "anthropic/sonnet"}
+    assert pb.model_for_state("reverify", ctx) == "anthropic/sonnet"
 
 
 # ---------------------------------------------------------------------------

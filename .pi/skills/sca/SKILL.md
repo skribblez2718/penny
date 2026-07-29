@@ -24,7 +24,7 @@ sequential 13-phase pipeline from charter through report, pausing at six human
 gates for approval. Run state lives in the engine's durable checkpointer keyed
 by `run_id`; `scripts/orchestrate.py` is a thin delegate to the shared
 orchestration engine. Agents communicate via mempalace; Penny receives only
-structured summaries. See `resources/reference.md` and `resources/flow.mmd`
+structured summaries. See `resources/reference.md` and `resources/flow.html`
 for the full state/transition/gate map.
 
 ## When to Use

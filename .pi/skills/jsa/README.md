@@ -1,7 +1,7 @@
 # jsa — JavaScript Security Analysis
 
 Multi-agent JavaScript security-analysis skill for Pi/Penny. See `SKILL.md` for
-the full specification and `resources/reference.md` + `resources/flow.mmd` for
+the full specification and `resources/reference.md` + `resources/flow.html` for
 the FSM.
 
 ## Orchestration
@@ -20,8 +20,8 @@ this `scripts/` dir and are imported lazily by the playbook via `jsa_domain.py`.
 
 ## States
 
-`resources/flow.mmd` is the canonical FSM diagram (an edge-for-edge mirror of
-`JSAMachine`, drift-tested by `apps/orchestration/tests/test_jsa_flow_diagram.py`).
+`resources/flow.html` is the canonical FSM diagram (an edge-for-edge mirror of
+`JSAMachine`, drift-tested by `apps/orchestration/tests/test_flow_diagrams.py`).
 The pipeline is strictly linear with a single human gate, a bounded agent wave
 loop, and an evidence-gated agent tail:
 

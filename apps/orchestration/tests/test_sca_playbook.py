@@ -155,24 +155,6 @@ def test_start_dispatches_charter_echo(cp, target):
     assert "wing_sca" in d["task_summary"]
 
 
-def test_recall_lessons_render_in_first_directive(cp, target):
-    from orchestration.playbooks.sca import SCA_CHARTER
-
-    pb = StubSca(cp)
-    pb.start(
-        session_id=SID,
-        run_id=RID,
-        goal="analyze",
-        constraints={"target_path": target},
-        project_root=REPO_ROOT,
-    )
-    ctx = cp.load(RID).context
-    ctx.recall_lessons = ["prefer an executed PoC over an asserted severity"]
-    txt = pb._task_summary("charter", SCA_CHARTER, ctx)
-    assert "Lessons from prior runs" in txt
-    assert "executed PoC" in txt
-
-
 def test_start_rejects_url_target(cp):
     d = StubSca(cp).start(
         session_id=SID,
@@ -183,6 +165,25 @@ def test_start_rejects_url_target(cp):
     )
     assert d["action"] == "error"
     assert any("LOCAL source trees" in e for e in d["errors"])
+
+
+def test_configurable_phase_timeouts_stored_in_meta(cp, target):
+    # F6: scan_timeout / poc_timeout constraints are carried on meta so the
+    # deterministic scanners (P2/P7) and the PoC sandbox (P10) can be bounded
+    # per-run without code changes.
+    _start(cp, target, constraints={"scan_timeout": 120, "poc_timeout": 30})
+    meta = cp.load(RID).context.extras["sca"]
+    assert meta["scan_timeout"] == 120
+    assert meta["poc_timeout"] == 30
+
+
+def test_phase_timeouts_absent_when_unset(cp, target):
+    # Unset -> nothing stored -> the modules' own defaults apply (no behavior
+    # change).
+    _start(cp, target)
+    meta = cp.load(RID).context.extras["sca"]
+    assert "scan_timeout" not in meta
+    assert "poc_timeout" not in meta
 
 
 # ---------------------------------------------------------------------------

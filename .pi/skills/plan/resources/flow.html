@@ -124,7 +124,7 @@ const N = {
   complete:{col:'C',y:960,cls:'done',title:'complete',badge:'TERM',desc:'Terminal. Plan + tasks delivered; met=False on exhaustion or a BLOCKED halt.'},
   error:{col:'Rmid',y:960,cls:'error',title:'error',badge:'TERM',desc:'Terminal. Reached by abort from any working phase.'},
   unknown:{col:'Louter',y:430,cls:'esc',title:'unknown',desc:'Escalation entry: UNCERTAIN confidence at any working phase (including an exploring branch).'},
-  awaiting:{col:'Louter',y:600,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes by re-scoping once clarified.'},
+  awaiting_clarification:{col:'Louter',y:600,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes by re-scoping once clarified.'},
 };
 const E = [
   {from:'intake',to:'scoping',s1:'bottom',s2:'top',kind:'fwd'},
@@ -140,8 +140,8 @@ const E = [
   {from:'critiquing',to:'planning',s1:'left',s2:'left',kind:'loop',label:'retry: fix in plan (rounds≥2)',bow:60},
   {from:'critiquing',to:'complete',s1:'right',s2:'right',kind:'exit',label:'BLOCKED → halt (met=False)',bow:70},
   {from:'taskifying',to:'complete',s1:'bottom',s2:'top',kind:'fwd',label:'taskify_done'},
-  {from:'unknown',to:'awaiting',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
-  {from:'awaiting',to:'scoping',s1:'left',s2:'left',kind:'esc',label:'clarify → re-scope',c1:{dx:-18,dy:-330},c2:{dx:-18,dy:170}},
+  {from:'unknown',to:'awaiting_clarification',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
+  {from:'awaiting_clarification',to:'scoping',s1:'left',s2:'left',kind:'esc',label:'clarify → re-scope',c1:{dx:-18,dy:-330},c2:{dx:-18,dy:170}},
   {from:'planning',to:'unknown',s1:'left',s2:'right',kind:'esc',label:'UNCERTAIN — any working phase',c1:{dx:-40,dy:0},c2:{dx:40,dy:0}},
 ];
 const KIND = {fwd:'#8b98a9',exit:'#3fb950',loop:'#e3a52e',esc:'#9ca3af',abort:'#f85149'};

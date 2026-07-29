@@ -37,8 +37,9 @@ SKILL_REQUIRED_FILES = [
 ]
 
 # A flow diagram (state-machine mirror) is required in EITHER format — the newer
-# self-contained HTML (preferred) or the legacy mermaid. Mirrors
-# check_skill_structure.py's FLOW_DIAGRAM_ANY.
+# self-contained HTML (resources/flow.html) is THE standard; the legacy mermaid
+# resources/flow.mmd is deprecated but still accepted. Mirrors
+# check_skill_structure.py.
 SKILL_FLOW_DIAGRAM_ANY = [
     "resources/flow.html",
     "resources/flow.mmd",

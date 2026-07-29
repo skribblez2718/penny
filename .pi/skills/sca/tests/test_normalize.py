@@ -219,6 +219,12 @@ class TestSchema:
         assert f.cvss_4_0_vector is None
         assert f.cvss_4_0_score is None
         assert f.analyst_notes is None
+        # Report-grade per-finding fields (F9) default empty so tool-normalized
+        # findings are unaffected until the analysis phases populate them.
+        assert f.description_stakeholder is None
+        assert f.steps_to_reproduce is None
+        assert f.code_analysis == []
+        assert f.remediation is None
 
     def test_list_defaults_are_independent_instances(self):
         a = NormalizedFinding(

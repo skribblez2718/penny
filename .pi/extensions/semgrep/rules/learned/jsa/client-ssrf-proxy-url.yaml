@@ -1,0 +1,35 @@
+rules:
+- id: jsa-learned-client-ssrf-proxy-url
+  message: >-
+    Function parameter URL passed to fetch() as POST body JSON property.
+    If the backend proxy endpoint makes outbound requests to this URL,
+    this is Server-Side Request Forgery (SSRF).
+  metadata:
+    cwe:
+    - 'CWE-918: Server-Side Request Forgery (SSRF)'
+    owasp:
+    - A10:2021 - Server-Side Request Forgery
+    category: security
+    technology:
+    - browser
+    subcategory:
+    - audit
+    likelihood: MEDIUM
+    impact: HIGH
+    confidence: LOW
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        function $FUNC($PARAM) { ... }
+    - pattern-inside: |
+        async function $FUNC($PARAM) { ... }
+    - pattern-inside: |
+        $FUNC = ($PARAM) => { ... }
+    - pattern-inside: |
+        $FUNC = async ($PARAM) => { ... }
+  - pattern: |
+      fetch($URL, { ..., body: JSON.stringify({ ..., url: $PARAM, ... }), ... })

@@ -56,10 +56,23 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple
 
-from cvss import CVSS2, CVSS3, CVSS4  # the REAL PyPI package (installed in .venv)
+try:
+    from cvss import CVSS2, CVSS3, CVSS4  # the REAL PyPI package (installed in .venv)
+
+    _CVSS_AVAILABLE = True
+except Exception:  # ImportError etc. — degrade tiers to "unknown", never crash (F1)
+    CVSS2 = CVSS3 = CVSS4 = None  # type: ignore[assignment,misc]
+    _CVSS_AVAILABLE = False
 
 
 logger = logging.getLogger("sca.normalize")
+
+if not _CVSS_AVAILABLE:  # one-time, actionable coverage-gap disclosure (F1)
+    logger.warning(
+        "cvss library not importable; OSV CVSS-vector tiers degraded to "
+        "'unknown'. Remedy: install the skill's runtime deps into the .venv: "
+        "pip install -r .pi/skills/sca/requirements.txt"
+    )
 
 # Default confidence for freshly-parsed findings. A CONSTANT, deliberately
 # decoupled from severity — confidence is a separate analyst/heuristic axis
@@ -111,6 +124,18 @@ class NormalizedFinding:
     cvss_4_0_vector: Optional[str] = None
     cvss_4_0_score: Optional[float] = None
     analyst_notes: Optional[str] = None
+
+    # ── Report-grade, per-finding content (F9) ───────────────────────────
+    # Populated progressively by the analysis phases (deep-dive authors the
+    # code walk + repro; triage/verification supply the stakeholder impact +
+    # remediation) and assembled by the REPORT phase. All optional/defaulted so
+    # tool-normalized findings are unaffected and dedup's populated-field count
+    # is unchanged until these are actually filled in.
+    description_stakeholder: Optional[str] = None  # dual-audience impact narrative
+    steps_to_reproduce: Optional[str] = None  # copy/pasteable repro (or a script)
+    code_analysis: List[dict] = field(default_factory=list)  # ordered source→sink
+    # steps: [{"file": str, "line": int, "note": str}, …]
+    remediation: Optional[str] = None  # application/context-specific fix guidance
 
 
 # ── ID generation (deterministic, content-derived) ───────────────────────
@@ -515,6 +540,12 @@ def _cvss_score_and_band(
     ``type`` selects the CVSS version; we also fall back to the vector prefix so
     a mislabeled/absent type still parses.
     """
+    if not _CVSS_AVAILABLE:  # library absent -> tier degrades to "unknown" (F1)
+        logger.debug(
+            "_cvss_score_and_band: cvss library unavailable; vector %r not scored",
+            vector,
+        )
+        return None
     stype = (score_type or "").upper()
     try:
         if "V4" in stype or vector.startswith("CVSS:4"):

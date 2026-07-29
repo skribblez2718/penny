@@ -56,10 +56,23 @@ from __future__ import annotations
 import logging
 from typing import Dict, Optional
 
-from cvss import CVSS4  # the REAL PyPI package (installed in .venv, cvss>=3.6)
+try:
+    from cvss import CVSS4  # the REAL PyPI package (installed in .venv, cvss>=3.6)
+
+    _CVSS_AVAILABLE = True
+except Exception:  # ImportError etc. — degrade, never crash a scan at import (F1)
+    CVSS4 = None  # type: ignore[assignment,misc]
+    _CVSS_AVAILABLE = False
 
 
 logger = logging.getLogger("sca.cvss4")
+
+if not _CVSS_AVAILABLE:  # one-time, actionable coverage-gap disclosure
+    logger.warning(
+        "cvss library not importable; CVSS 4.0 SCORING degraded to None "
+        "(vector suggestion still works). Remedy: install the skill's runtime "
+        "deps into the .venv: pip install -r .pi/skills/sca/requirements.txt"
+    )
 
 # Tier -> verified CVSS 4.0 vector. These exact vectors were verified against
 # the real ``cvss`` library (base_score + severity band). tests/test_cvss.py
@@ -179,6 +192,12 @@ def compute_cvss4_score(vector: Optional[str]) -> Optional[float]:
     """
     if not isinstance(vector, str) or not vector.strip():
         logger.warning("compute_cvss4_score: empty/non-string vector")
+        return None
+    if not _CVSS_AVAILABLE:  # library absent -> honest None, never a fabricated score
+        logger.warning(
+            "compute_cvss4_score: cvss library unavailable; returning None "
+            "(coverage gap). Remedy: pip install -r .pi/skills/sca/requirements.txt"
+        )
         return None
     try:
         return float(CVSS4(vector).base_score)

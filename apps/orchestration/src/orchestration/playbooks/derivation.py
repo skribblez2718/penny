@@ -54,6 +54,7 @@ from statemachine import State, StateMachine
 
 from ..contracts import Confidence
 from ..context import RunContext
+from ..paths import skill_file
 from ..engine import BasePlaybook
 from ..primitives.spec import PrimitiveSpec
 
@@ -149,8 +150,10 @@ REVIEW = PrimitiveSpec(
     "DERIVATION_REVIEW",
     "annie",
     REVIEW_CONTRACT,
-    "Run scripts/prefilter.py over the source corpus (Tier-1) and capture the "
-    "per-source report; then score the content against resources/rubric.md "
+    # ABSOLUTE paths: the agent's cwd is the TARGET project, not this skill's repo.
+    f"Run {skill_file(None, 'derivation', 'scripts', 'prefilter.py')} over the source "
+    "corpus (Tier-1) and capture the per-source report; then score the content against "
+    f"{skill_file(None, 'derivation', 'resources', 'rubric.md')} "
     "(Abstraction–Filtration–Comparison, D1–D7) — filter out facts/math/standard "
     "notation/merger before comparing what remains. Judge expression similarity "
     "independently of license; then map each match to its source's license "

@@ -435,3 +435,65 @@ def test_needs_clarification_escalates(cp, constraints):
     assert directive["action"] == "escalate_to_user"
     rec = cp.load(RID)
     assert rec.status == STATUS_AWAITING_USER
+
+
+# ---------------------------------------------------------------------------
+# narrative mode (story_canon)
+# ---------------------------------------------------------------------------
+
+
+def _story_constraints(constraints, tmp_path):
+    story = tmp_path / "story_bible.md"
+    story.write_text("# Universe\ncharacters, arc, register, motifs")
+    return {**constraints, "story_canon": str(story)}, str(story)
+
+
+def test_story_canon_missing_file_errors(cp, constraints):
+    bad = {**constraints, "story_canon": "/nonexistent/story_bible.md"}
+    directive = _start(cp, bad)
+    assert directive["action"] == "error"
+    assert any("story canon not found" in str(e) for e in directive["errors"])
+    assert any("constraints.story_canon" in str(e) for e in directive["errors"])
+
+
+def test_story_canon_threads_into_canon_task(cp, constraints, tmp_path):
+    story_c, story_path = _story_constraints(constraints, tmp_path)
+    _start(cp, story_c)
+    _step(cp, "echo", SCOPE_OK)
+    directive = _step(cp, "__parallel__", _ingest_batch())
+    assert directive["state_id"] == "designing_canon"
+    assert "NARRATIVE MODE" in directive["task_summary"]
+    assert story_path in directive["task_summary"]
+
+
+def test_story_canon_threads_downstream_and_into_result(cp, constraints, tmp_path):
+    story_c, story_path = _story_constraints(constraints, tmp_path)
+    _start(cp, story_c)
+    _step(cp, "echo", SCOPE_OK)
+    _step(cp, "__parallel__", _ingest_batch())
+    _step(cp, "annie", CANON_OK)
+    directive = _step(cp, "user", {"user_response": "approve"})
+    assert directive["state_id"] == "storyboarding"
+    assert "NARRATIVE MODE" in directive["task_summary"]
+    _write_storyboard(story_c)
+    directive = _step(cp, "piper", STORYBOARD_OK)
+    assert directive["state_id"] == "authoring"
+    for i, sid in enumerate(STORYBOARD_OK["scene_ids"]):
+        directive = _step(cp, "skribble", AUTHOR_OK(i, sid))
+    directive = _step(cp, "vera", VERIFY_PASS)
+    assert directive["state_id"] == "critiquing"
+    assert "NARRATIVE MODE" in directive["task_summary"]
+    directive = _step(cp, "carren", CRITIQUE_OK)
+    assert directive["state_id"] == "packaging"
+    assert story_path in directive["task_summary"]
+    directive = _step(cp, "synthia", PACKAGE_OK)
+    assert directive["action"] == "complete"
+    assert directive["result"]["story_canon"] == story_path
+
+
+def test_no_story_canon_stays_expository(cp, constraints):
+    _start(cp, constraints)
+    _step(cp, "echo", SCOPE_OK)
+    directive = _step(cp, "__parallel__", _ingest_batch())
+    assert directive["state_id"] == "designing_canon"
+    assert "NARRATIVE MODE" not in directive["task_summary"]

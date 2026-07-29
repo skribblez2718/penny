@@ -22,6 +22,10 @@ Write `storyboard.json` to the bundle dir stated in your task.
 - Every visual's `primitive` and params must exist in the schema export.
 - Narration is what the voice reads verbatim — no markdown, no math markup
   that can't be spoken; use the canon's pronunciation substitutions.
+- Narrative mode (canon includes story decisions): narration is the
+  storyteller's spoken script — one narrator voice; story beats must carry the
+  canon's concept mapping, and character visuals compose the schema's
+  character primitives like any other primitive.
 - Never call `questionnaire`; escalate via `needs_clarification`.
 
 ## Output

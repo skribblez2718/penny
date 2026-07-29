@@ -27,6 +27,7 @@ import ast
 import json
 import py_compile
 import sys
+import tempfile
 from pathlib import Path
 
 DURATION_TOLERANCE = 0.75  # seconds of allowed shortfall vs narration
@@ -125,7 +126,10 @@ def check_scene_file(path: Path, schema: dict, measured: float | None) -> list[s
     v: list[str] = []
     where = f"scenes/{path.name}"
     try:
-        py_compile.compile(str(path), doraise=True, cfile="/dev/null")
+        # cfile must be a regular file path (Python >= 3.12 rejects /dev/null);
+        # compile to a throwaway temp file so no .pyc lands in the bundle.
+        with tempfile.TemporaryDirectory() as tmp:
+            py_compile.compile(str(path), doraise=True, cfile=str(Path(tmp) / "scene.pyc"))
     except py_compile.PyCompileError as exc:
         return [f"{where}: does not compile — {exc.msg}"]
     try:

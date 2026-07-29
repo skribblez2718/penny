@@ -199,17 +199,143 @@ def run_phase(phase: str, jsa: dict, constraints: dict) -> dict:
         # each class's reference catalog for annie (replaces the old, false
         # "guidance loaded alongside this prompt" claim in annie-base.md).
         inv["candidate_classes"] = _candidate_classes(st)
+        # Per-dependency CVE context so the exploitation-class annie tests the
+        # dep's REAL exploitability (reachable + unpatched) with a PoC before it
+        # is reported — same rigor as any finding; a patched/unused version is
+        # refuted, not reported on version match alone.
+        inv["dependency_cves"] = _dependency_cves(st)
 
     return jsa
 
 
+def _dependency_cves(st: Any) -> list:
+    """Compact detected-dependency context for the INVESTIGATE task: name, version,
+    and the vuln class(es) that exploit it. Drives per-class CVE verification so a
+    CVE becomes a reported finding only when its code path is actually reachable
+    and unpatched in THIS app."""
+    cve = (st.metadata or {}).get("cve_research", {}) or {}
+    names: dict = {}
+    val = cve.get("versions")
+    if isinstance(val, dict):
+        for k, v in val.items():
+            names[str(k)] = str(v) if v is not None else ""
+    val = cve.get("tech_stack")
+    if isinstance(val, dict):
+        for k, v in val.items():
+            names.setdefault(str(k), "")
+    out: list = []
+    for name, ver in names.items():
+        low = name.lower()
+        classes: set = set()
+        for lib, cls in _DEP_EXPLOIT_CLASSES.items():
+            if lib in low:
+                classes.update(cls)
+        if classes:
+            out.append({"name": name, "version": ver, "exploit_classes": sorted(classes)})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# INVESTIGATE candidate-class selection (page-informed, signal-gated + core floor)
+# ---------------------------------------------------------------------------
+#
+# INVESTIGATE dispatches one fresh-context annie per candidate vuln class. If the
+# set were only "classes SLICE flagged" it would be bounded by what SAST detects,
+# so classes SAST is blind to (reflected_xss, csti, dom_data_manipulation,
+# link_manipulation, request_override, …) would never get a dedicated agent even
+# when the target's pages clearly have that surface. Instead we take the UNION of
+# every signal, then a CORE FLOOR of client-side classes any HTML+JS target can
+# plausibly carry — signal-gated (never all 22 blindly) with a floor so a real
+# target's clusters are never missed. SLICE FlowCards still ride along as packet
+# enrichment for the classes that have them; classes without one are investigated
+# from the pages/JS directly (annie greps + browser-tests per its catalog).
+
+# Core client-side classes always worth an agent when the target has client-side
+# surface. Bounded and all in the known analyzer set (each has a references/<>.md).
+_CORE_FLOOR: tuple[str, ...] = (
+    "dom_xss",
+    "reflected_xss",
+    "csti",
+    "open_redirect",
+    "dom_data_manipulation",
+    "link_manipulation",
+    "request_override",
+    "prototype_pollution",
+)
+
+# Detected vulnerable dependency -> the vuln class(es) that EXPLOIT it. A CVE is
+# only worth reporting if its code path is actually reachable+exploitable in THIS
+# app (a vulnerable version may be present but patched/unused), so we route each
+# detected library to its exploitation class and let that class's annie verify it
+# with a browser PoC — the same rigor as any other finding. Substring-matched
+# against detected tech names (lowercased).
+_DEP_EXPLOIT_CLASSES: dict[str, tuple[str, ...]] = {
+    "angular": ("csti", "dom_xss"),
+    "jquery": ("dom_xss",),
+    "lodash": ("prototype_pollution",),
+    "handlebars": ("csti",),
+    "mustache": ("csti",),
+    "vue": ("csti", "dom_xss"),
+    "react": ("dom_xss",),
+    "underscore": ("prototype_pollution",),
+    "jquery-ui": ("dom_xss",),
+}
+
+
+def _has_client_surface(st: Any) -> bool:
+    """True when the target actually has client-side surface (any JS module or HTML
+    page acquired). Gates the core floor so a genuinely empty run stays lean."""
+    if st.module_cards or st.page_cards:
+        return True
+    acq = (st.metadata or {}).get("acquire_result", {}) or {}
+    return bool(acq.get("total_js_files") or acq.get("html_files") or acq.get("meaningful_html"))
+
+
+def _page_signal_classes(st: Any) -> set:
+    """Classes implied by acquired-page behavior (beyond the floor): forms and
+    server-reflected params imply reflected_xss/csrf; API/XHR traffic implies
+    header-injection / request-override / ssrf. Only added when the signal is
+    present — no blind inclusion."""
+    out: set = set()
+    acq = (st.metadata or {}).get("acquire_result", {}) or {}
+    if acq.get("pages_with_forms"):
+        out.update({"reflected_xss", "csrf", "dom_data_manipulation"})
+    if acq.get("pages_with_api_calls") or acq.get("endpoints_found"):
+        out.update({"http_header_injection", "request_override", "ssrf"})
+    return out
+
+
+def _cve_exploitation_classes(st: Any) -> set:
+    """Exploitation class(es) for each detected (potentially vulnerable) dependency,
+    so the CVE's real exploitability is investigated + verified — not merely
+    reported because a version string matched."""
+    out: set = set()
+    cve = (st.metadata or {}).get("cve_research", {}) or {}
+    names: set = set()
+    for key in ("tech_stack", "versions"):
+        val = cve.get(key)
+        if isinstance(val, dict):
+            names.update(str(k).lower() for k in val.keys())
+    for det in cve.get("detection_details", []) or []:
+        if isinstance(det, dict) and det.get("technology"):
+            names.add(str(det["technology"]).lower())
+    for name in names:
+        for lib, classes in _DEP_EXPLOIT_CLASSES.items():
+            if lib in name:
+                out.update(classes)
+    return out
+
+
 def _candidate_classes(st: Any) -> list:
-    """Distinct vuln classes that have SLICE candidates this run, filtered to the
-    known analyzer set (``lane_router`` is the single source of truth for that set,
-    not a table frozen here). FlowCards may be objects (fresh) or plain dicts
-    (restored from ``session.json``) — handle both. Surfaced into the lean engine
-    state so the INVESTIGATE task can name ``assets/references/<class>.md`` per
-    candidate class."""
+    """Page-informed, signal-gated INVESTIGATE class set (+ a core floor).
+
+    Union of: (1) SLICE/SAST FlowCard classes, (2) STRUCTURE dangerous-pattern
+    suggestions, (3) acquired-page behavioral signals, (4) detected-dependency
+    exploitation classes, plus (5) a CORE FLOOR when the target has client-side
+    surface. Filtered to the known analyzer set (``lane_router`` is the single
+    source of truth; each class has a ``references/<class>.md`` + verifier guide).
+    FlowCards may be objects (fresh) or dicts (restored) — handle both.
+    """
     try:
         import lane_router
 
@@ -217,6 +343,8 @@ def _candidate_classes(st: Any) -> list:
     except Exception:
         known = set()
     out: set = set()
+
+    # (1) SAST/SLICE candidates (enrich the packet; still a signal).
     for card in st.flow_cards or []:
         cls = (
             card.get("vulnerability_class")
@@ -224,9 +352,26 @@ def _candidate_classes(st: Any) -> list:
             else getattr(card, "vulnerability_class", "")
         )
         cls = str(cls or "").strip()
-        if cls and (not known or cls in known):
+        if cls:
             out.add(cls)
-    return sorted(out)
+
+    # (2) STRUCTURE dangerous-pattern suggestions (tree-sitter sinks/sources).
+    for dp in ((st.typed_store or {}).get("dangerous_patterns", []) or []):
+        if isinstance(dp, dict):
+            for cls in dp.get("suggested_vuln_classes") or []:
+                out.add(str(cls or "").strip())
+
+    # (3) acquired-page behavioral signals, (4) dependency exploitation classes.
+    out |= _page_signal_classes(st)
+    out |= _cve_exploitation_classes(st)
+
+    # (5) core floor — only when the target actually has client-side surface.
+    if _has_client_surface(st):
+        out.update(_CORE_FLOOR)
+
+    # Keep only real, catalogued analyzer classes (drops generic SAST labels like
+    # 'xss'/'code_injection' and anything without a reference catalog).
+    return sorted(c for c in out if c and (not known or c in known))
 
 
 def _compute_needs_llm(st: Any) -> int:

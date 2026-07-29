@@ -54,7 +54,6 @@ from .primitives.spec import (  # noqa: E402
     contract_from_json,
     parallel_spec_from_dict,
 )
-from .recall import recall_lessons  # noqa: E402
 from .recovery import recover_pending  # noqa: E402
 
 __all__ = [
@@ -82,7 +81,6 @@ __all__ = [
     "LOANS",
     "loan_enabled",
     "list_loans",
-    "recall_lessons",
     "PLAYBOOKS",
     "get_playbook",
     "recover_pending",

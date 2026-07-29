@@ -44,6 +44,7 @@ from typing import Any
 from statemachine import State, StateMachine
 
 from ..context import RunContext
+from ..paths import skill_file
 from ..engine import BasePlaybook
 from ..loans import loan_enabled
 from ..primitives.spec import ParallelSpec, PrimitiveSpec
@@ -400,6 +401,17 @@ class ManimPlaybook(BasePlaybook):
         mm["voice_id"] = str(constraints.get("voice_id", "")) or None
         mm["allow_estimated_durations"] = bool(constraints.get("allow_estimated_durations"))
 
+        story_canon = str(constraints.get("story_canon", "")).strip()
+        if story_canon:
+            sc_path = Path(story_canon).expanduser()
+            if not sc_path.is_file():
+                raise RuntimeError(
+                    f"story canon not found at '{sc_path}'. Pass constraints.story_canon "
+                    "as the path to a caller-owned narrative canon file (characters, "
+                    "arc, register, motifs), or omit it for standard expository mode."
+                )
+            mm["story_canon_path"] = str(sc_path)
+
         ctx.success_criteria = [
             f"bundle at {mm['bundle_dir']}",
             "storyboard schema-valid",
@@ -751,6 +763,36 @@ class ManimPlaybook(BasePlaybook):
         return f"assets/prompts/{name}.md" if name else None
 
     # -- task builders -----------------------------------------------------
+    def _story_line(self, ctx: RunContext, state: str) -> str:
+        """Narrative-mode task threading. Empty when no story canon was supplied.
+        The story canon is CALLER-OWNED content — the skill stays generic."""
+        path = ctx.extras.get("manim", {}).get("story_canon_path")
+        if not path:
+            return ""
+        by_state = {
+            "designing_canon": (
+                f" NARRATIVE MODE — story canon (BINDING caller input): {path}. Read it "
+                "fully first; it defines the narrative universe: characters, arc, "
+                "register, recurring motifs, mnemonic lines. Fold it into the canon: "
+                "map every target concept to a story beat and every character to "
+                "primitives that exist in the schema export (a character with no "
+                "primitive is an open_questions item, never an invention)."
+            ),
+            "storyboarding": (
+                f" NARRATIVE MODE — the canon folds in the story canon at {path}; "
+                "narration is the storyteller's spoken script and story beats must "
+                "carry the canon's concept mapping."
+            ),
+            "critiquing": (
+                f" NARRATIVE MODE — story canon: {path}. Judge BOTH story coherence "
+                "(characters/arc consistent with the canon) AND concept coverage: "
+                "every target concept anchored to a story beat. A charming story "
+                "that fails to teach is NEEDS_REVISION."
+            ),
+            "packaging": f" Narrative mode (story canon: {path}).",
+        }
+        return by_state.get(state, "")
+
     def _paths(self, ctx: RunContext) -> str:
         mm = ctx.extras.get("manim", {})
         return (
@@ -787,6 +829,7 @@ class ManimPlaybook(BasePlaybook):
                 f"Available themes: {', '.join(mm.get('theme_names', []))}. "
                 f"Write the full canon to wing={WING} room={room} with header: "
                 f"{ctx.session_id} Canon."
+                + self._story_line(ctx, "designing_canon")
             ),
             "storyboarding": lambda: (
                 f"Session: {ctx.session_id}. {self._paths(ctx)} Read the approved Canon "
@@ -794,6 +837,7 @@ class ManimPlaybook(BasePlaybook):
                 f"{spec.task_hint} video_id: {mm.get('video_id')}. Theme: "
                 f"{mm.get('theme') or '(from canon)'}. Scene count: {mm.get('scene_count')}. "
                 f"Emit scene_ids (kebab-case, stable, content-derived) in your SUMMARY."
+                + self._story_line(ctx, "storyboarding")
             ),
             "authoring": lambda: (
                 f"Session: {ctx.session_id}. {self._paths(ctx)} Read the Canon from "
@@ -807,7 +851,9 @@ class ManimPlaybook(BasePlaybook):
             ),
             "verifying": lambda: (
                 f"Session: {ctx.session_id}. {self._paths(ctx)} {spec.task_hint} "
-                f"Validator: $PROJECT_ROOT/.pi/skills/manim/scripts/validate_bundle.py "
+                # Resolved absolute, not "$PROJECT_ROOT/...": that only expands in a
+                # shell, so a `read`/non-shell tool call would miss it.
+                f"Validator: {skill_file(ctx, 'manim', 'scripts', 'validate_bundle.py')} "
                 f"--bundle {mm.get('bundle_dir')} --schema {mm.get('primitive_schema_path')}."
             ),
             "fixing": lambda: (
@@ -818,6 +864,7 @@ class ManimPlaybook(BasePlaybook):
             "critiquing": lambda: (
                 f"Session: {ctx.session_id}. {self._paths(ctx)} Read the Canon and "
                 f"storyboard. {spec.task_hint}"
+                + self._story_line(ctx, "critiquing")
             ),
             "packaging": lambda: (
                 f"Session: {ctx.session_id}. {self._paths(ctx)} {spec.task_hint} "
@@ -830,17 +877,11 @@ class ManimPlaybook(BasePlaybook):
                     if mm.get("exhausted")
                     else "All static checks passed."
                 )
+                + self._story_line(ctx, "packaging")
             ),
         }
         builder = builders.get(state)
         base = builder() if builder else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
-        # Recall (F2): this override replaces the base _task_summary, so re-add it.
-        if ctx.recall_lessons and ctx.total_steps == 0:
-            lessons = "\n".join(f"- {self._cap(lsn)}" for lsn in ctx.recall_lessons)
-            base += (
-                "\n\nLessons from prior runs (advisory — weigh against current evidence; "
-                "they never override this run's goal or constraints):\n" + lessons
-            )
         if ctx.clarification_text and state == "designing_canon":
             base += f"\n\nUser clarification: {self._cap(ctx.clarification_text)}"
         return base
@@ -862,6 +903,7 @@ class ManimPlaybook(BasePlaybook):
             "warnings": mm.get("warnings", []),
             "primitive_version": mm.get("primitive_version", ""),
             "report_path": mm.get("report_path", ""),
+            "story_canon": mm.get("story_canon_path", ""),
         }
         human_lines = [
             f"# manim bundle — {'READY' if ctx.met else 'DEGRADED / INCOMPLETE'}",
