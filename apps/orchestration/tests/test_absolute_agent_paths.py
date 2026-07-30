@@ -153,3 +153,38 @@ def test_code_mandatory_resources_are_absolute_on_a_foreign_project_root():
         stripped = line.strip()
         if stripped.startswith("- "):
             assert stripped[2:].startswith("/"), f"non-absolute resource path: {stripped}"
+
+
+# ---------------------------------------------------------------------------
+# every directive states the absolute skill root (prompt files are static
+# markdown and cannot interpolate a runtime path, so the engine states it)
+# ---------------------------------------------------------------------------
+
+
+def test_every_directive_states_the_absolute_skill_root(tmp_path):
+    from orchestration.checkpointer import Checkpointer
+    from orchestration.playbooks.prd import PrdPlaybook
+
+    cp = Checkpointer(db_path=tmp_path / "o.db")
+    d = PrdPlaybook(cp).start(
+        session_id="s", run_id="r", goal="build a thing",
+        project_root="/srv/some-other-repo",   # a FOREIGN target
+    )
+    task = d["task_summary"]
+    assert "Skill root (ABSOLUTE):" in task
+    root_line = next(ln for ln in task.splitlines() if ln.startswith("Skill root (ABSOLUTE):"))
+    root = root_line.split(":", 1)[1].strip()
+    assert root.startswith("/") and root.endswith("/.pi/skills/prd")
+    # and it must NOT be the target project_root
+    assert not root.startswith("/srv/some-other-repo")
+
+
+def test_skill_root_line_is_empty_when_unresolvable():
+    from orchestration.context import RunContext
+    from orchestration.engine import BasePlaybook
+
+    class _Unknown(BasePlaybook):
+        NAME = "no-such-skill-xyz"
+
+    ctx = RunContext(session_id="s", run_id="r", playbook="no-such-skill-xyz")
+    assert _Unknown(None)._skill_root_line(ctx) == ""

@@ -1107,7 +1107,7 @@ class ScaPlaybook(BasePlaybook):
                 "only ONE pass confirms exploitable is not reliably verified."
             )
         if ctx.clarification_text:
-            task += f"\n\nUser clarification: {self._cap(ctx.clarification_text)}"
+            task += f"\n\nUser clarification: {ctx.clarification_text}"
         return task
 
     def result_payload(self, ctx: RunContext) -> dict:

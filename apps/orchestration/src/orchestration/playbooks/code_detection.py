@@ -78,14 +78,15 @@ def _server_artifact(root: Path, cap: int = 6000) -> str:
         f = root / name
         if f.is_file():
             try:
-                parts.append(f"=== {name} ===\n{f.read_text(encoding='utf-8', errors='ignore')[:2000]}")
+                # FULL manifest: a clipped dependency list hides the very deps detection reads for.
+                parts.append(f"=== {name} ===\n{f.read_text(encoding='utf-8', errors='ignore')}")
             except OSError:
                 pass
     try:
         names = [
             p.name for p in sorted(root.iterdir())
             if p.is_file() and p.suffix in (".py", ".ts", ".js", ".mjs")
-        ][:20]
+        ]
         if names:
             parts.append("=== top-level source files ===\n" + ", ".join(names))
     except OSError:

@@ -72,7 +72,7 @@ _TEXT_EXT = {".md", ".txt", ".rst", ".text"}
 # merge back to ONE manifest entry. Overridable so tests can force sharding.
 _DEFAULT_SHARD_BYTES = 200_000
 # Cap embedded evidence snippets in the provenance drawer (facts, not payloads).
-_EVIDENCE_CAP = 240
+_EVIDENCE_CAP = 0  # 0 = no cap; evidence is captured in full
 
 _CONFIDENCE_RANK: dict[str, int] = {
     Confidence.CERTAIN: 0,
@@ -398,8 +398,15 @@ def _valid_conf(value: Any) -> str:
 
 
 def _one_line(text: Any, limit: int = _EVIDENCE_CAP) -> str:
+    """Collapse to a single line WITHOUT truncating.
+
+    Newlines are flattened so the value stays one line in a task message; the content
+    itself is preserved in full. ``limit`` is retained for callers that pass an explicit
+    bound, but the default (0) means no cap — clipped license/bucket evidence hid the
+    very text a derivation verdict has to be defensible on.
+    """
     s = str(text or "").replace("\n", " ").replace("\r", " ").strip()
-    return s[:limit]
+    return s if limit <= 0 else s[:limit]
 
 
 def _pick_marked(shards: list[dict], key: str, conf_key: str, ev_key: str, blank: str) -> tuple:
@@ -465,10 +472,10 @@ def _merge_dispatched(sid: str, group: list[dict], results: dict, warnings: list
         "origin": group[0].get("origin", "") or sid,
         "license": license_,
         "license_confidence": lic_conf,
-        "license_evidence": _one_line(lic_ev, 500),
+        "license_evidence": _one_line(lic_ev),
         "bucket": bucket,
         "bucket_confidence": buck_conf,
-        "bucket_evidence": _one_line(buck_ev, 500),
+        "bucket_evidence": _one_line(buck_ev),
         "outline": outline,
         "unresolved": False,
     }
@@ -927,6 +934,15 @@ class DerivationPlaybook(BasePlaybook):
                 f"Tier-1 pre-filter: run `python3 {pf} --content <content> --sources <sources>` "
                 f"and capture its JSON report as `prefilter`."
             )
+            nc = sd / "scripts" / "ncd.py"
+            if nc.is_file():  # Tier-1.5 is additive: absent script ⇒ unchanged Tier-1/2 flow
+                parts.append(
+                    f"Tier-1.5 compression distance: run `python3 {nc} --content <content> "
+                    f"--sources <sources>` (same --sources as the pre-filter) and nest its JSON "
+                    f"report under your `prefilter` artifact as `prefilter.ncd`. It is a tripwire "
+                    f"only — a LOW outlier elevates Tier-2 attention on that source; a high or "
+                    f"absent value is NEVER evidence of independence."
+                )
             parts.append(f"Tier-2 rubric — READ and APPLY this file: {rb}")
         return parts
 

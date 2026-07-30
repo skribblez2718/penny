@@ -73,12 +73,3 @@ Capture web-app *dependency constraints* as objectives, not a fixed pipeline. Re
 ## 12. Deliverables
 
 Include web-app-specific artifacts: `Dockerfile`, `docker-compose.yml`, `nginx.conf`, `robots.txt`, `sitemap.xml`, environment variable template (`.env.example`), README with setup instructions, API documentation (OpenAPI spec).
-
-## Scope Calibration for Web Apps
-
-| Task Type | Sections | Question Depth |
-|-----------|----------|----------------|
-| Landing page | 1-6, 8, 12 | 8-10 questions |
-| Full SPA feature | 1-8, 10-12 | 15-20 questions |
-| New SaaS product | All 12 sections | Full PRD questionnaire (40+ questions) |
-| API-only backend | 1-3, 5, 7-9, 11-12 | 12-15 questions |

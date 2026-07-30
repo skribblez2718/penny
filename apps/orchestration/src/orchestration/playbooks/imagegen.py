@@ -853,16 +853,16 @@ class ImagegenPlaybook(BasePlaybook):
             "critiquing": lambda c: self._critique_task(c, spec),
             "adjusting": self._adjust_task,
         }.get(state)
-        base = builder(ctx) if builder else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
+        base = builder(ctx) if builder else f"{spec.task_hint}\nGoal: {ctx.goal}"
         if ctx.clarification_text:
-            base += f"\n\nUser clarification: {self._cap(ctx.clarification_text)}"
+            base += f"\n\nUser clarification: {ctx.clarification_text}"
         return base
 
     def _frame_task(self, ctx: RunContext) -> str:
         img = ctx.extras.get("imagegen", {})
         readiness = img.get("readiness", {})
         return (
-            f"Frame this image-generation request. Goal: {self._cap(ctx.goal)}\n"
+            f"Frame this image-generation request. Goal: {ctx.goal}\n"
             f"Routed preset: {img.get('preset')} (deterministic — confirm it fits the request).\n"
             f"Candidate count: {img.get('count')} (1-10). Output dir: {img.get('output_dir')}.\n"
             f"ComfyUI version: {readiness.get('comfy_version', '?')}. "
@@ -876,13 +876,13 @@ class ImagegenPlaybook(BasePlaybook):
         raw = img.get("raw_prompt", "")
         raw_note = (
             f"\nA RAW PROMPT OVERRIDE was supplied — pass it through verbatim as the positive: "
-            f"{self._cap(raw)}"
+            f"{raw}"
             if raw
             else ""
         )
         return (
             f"Compose the prompt pair for preset '{img.get('preset')}'.\n"
-            f"Brief: {self._cap(img.get('brief') or ctx.goal)}\n"
+            f"Brief: {img.get('brief') or ctx.goal}\n"
             "Positive: subject + the preset's detail scaffold (from "
             f"{skill_file(ctx, 'imagegen', 'resources', 'reference.md')}). "
             "Negative: wordless terms (never request text/labels in the image)."
@@ -905,7 +905,7 @@ class ImagegenPlaybook(BasePlaybook):
         )
         return (
             f"Critique the generated batch for preset '{img.get('preset')}'.\n"
-            f"Brief: {self._cap(img.get('brief') or ctx.goal)}\n"
+            f"Brief: {img.get('brief') or ctx.goal}\n"
             f"Candidates:\n{listing}\n{lens}\n"
             "Back your verdict with `evidence`: one specific observation PER CANDIDATE that you "
             "actually saw (name the candidate + what you observed) — a bare verdict with no cited "

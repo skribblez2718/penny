@@ -84,10 +84,18 @@ def _delta_score(ctx: "RunContext") -> str:
     return "MATCH" if getattr(ctx, "met", False) else "MISMATCH"
 
 
-def _one_line(text: Any, limit: int = 240) -> str:
-    """Collapse a value to a single, header-safe line."""
+def _one_line(text: Any, limit: int = 0) -> str:
+    """Collapse a value to a single line. NO truncation by default.
+
+    Newlines are flattened so a value stays one line; the content is preserved in full.
+    ``limit > 0`` is only used for the header line, which is a fixed-width *summary*
+    surface (the mismatch watcher reads ~200 chars) — the body JSON below carries the
+    complete record. Body fields were previously clipped to 160-240 chars and sliced to
+    the first 3-5 items, which discarded the captured evidence and gap detail the
+    learning loop exists to distil.
+    """
     s = str(text or "").replace("\n", " ").replace("\r", " ").strip()
-    return s[:limit]
+    return s[:limit] if limit > 0 else s
 
 
 def _reason(ctx: "RunContext", delta: str) -> str:
@@ -234,16 +242,27 @@ def build_outcome_content(ctx: "RunContext", now: Optional[datetime] = None) -> 
         "confidence_at_action": confidence,
         "iteration": getattr(ctx, "iteration", 0),
         "verify_verdict": getattr(ctx, "verify_verdict", ""),
-        "verify_gaps": [_one_line(g, 160) for g in verify_gaps[:5]],
-        # Ledger records outcome+evidence (atomic-loop checklist): the capped
-        # digest of the most recent SUMMARY evidence the engine captured.
-        "verify_evidence": [
-            _one_line(e, 200) for e in list(getattr(ctx, "verify_evidence", []) or [])[:3]
-        ],
-        "errors": [_one_line(e, 200) for e in errors[:5]],
+        # Full record — every gap, every evidence item, every error.
+        "verify_gaps": [_one_line(g) for g in verify_gaps],
+        # Ledger records outcome+evidence (atomic-loop checklist).
+        "verify_evidence": [_one_line(e) for e in list(getattr(ctx, "verify_evidence", []) or [])],
+        "errors": [_one_line(e) for e in errors],
         "timestamp": ts,
     }
     return header + "\n" + json.dumps(body)
+
+
+# NOTE: there is deliberately NO size trim here. An earlier revision of this file
+# capped the record at 3,800 chars on the belief that MemPalace's 4,000-char chunk
+# threshold splits a drawer into fragments "no json-parsing reader can reassemble"
+# (the same premise ``run_compression.store_amendment`` acts on). That premise is
+# FALSE, verified 2026-07-28: chunking is an EMBEDDING-quality measure, chunks are
+# non-overlapping and carry ``drawer_key`` + ``chunk_index``, and
+# ``tool_smart_search(include_full=True)`` returns the COMPLETE document on every
+# chunk hit (measured: a 16,597-char drawer returned whole across 3 chunk hits).
+# Every reader of this room already passes ``include_full=True``. The real ceiling is
+# the bridge's ``_MAX_DRAWER_CHARS`` (200,000), which REJECTS loudly with an error
+# rather than truncating. So the record is written in full.
 
 
 def record_outcome(ctx: "RunContext") -> bool:

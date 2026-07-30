@@ -605,7 +605,7 @@ def _discover_repo_commands(project_root: str) -> list[dict]:  # noqa: C901
         for name, cmd in (scripts or {}).items():
             if _VERIFY_HINT_RE.search(f"{name} {cmd}"):
                 out.append({"source": "package.json", "name": str(name), "command": str(cmd)})
-    return out[:20]
+    return out
 
 
 def _build_verify(ctx: RunContext, code: dict, ideal: dict) -> str:
@@ -736,10 +736,8 @@ def _plan_approval_question(ctx: RunContext, code: dict) -> dict:
     for step in build_order:
         lines.append(f"  - {step}")
     lines += ["", "### Key Deliverables"]
-    for d in deliverables[:15]:
+    for d in deliverables:
         lines.append(f"  - {d}")
-    if len(deliverables) > 15:
-        lines.append(f"  ... and {len(deliverables) - 15} more")
     lines += ["", "### Success Criteria"]
     for i, c in enumerate(criteria):
         lines.append(f"  - Criterion {i + 1}: {c}")
@@ -1044,7 +1042,7 @@ class CodePlaybook(BasePlaybook):
         base = (
             builder(ctx, code, ideal)
             if builder
-            else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
+            else f"{spec.task_hint}\nGoal: {ctx.goal}"
         )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {ctx.clarification_text}"

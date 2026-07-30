@@ -1,93 +1,63 @@
-# Web App — Non-Functional Requirements Checklist
+# Web App — Deriving Non-Functional Requirements
 
-Concrete thresholds for web application NFRs. Use these as defaults unless overridden by user constraints.
+This is **not** a table of defaults to copy. It is the derivation method from
+`../generic/guidance.md`, specialised for browser-facing systems, plus a set of **dated
+starting points** you may use only when you tag their provenance.
 
-## Performance (Core Web Vitals)
+Why the change: a frozen threshold table is a snapshot of a moving world. Core Web
+Vitals themselves changed (INP replaced FID in March 2024), WCAG and ASVS revise, and
+"last 2 browser versions" means something different every six weeks. A number copied
+from a file nobody is paid to update looks authoritative and quietly goes stale.
 
-| Metric | Target | Measurement Tool |
-|--------|--------|-----------------|
-| LCP (Largest Contentful Paint) | < 2.5s (P75) | Lighthouse, Web Vitals library |
-| INP (Interaction to Next Paint) | < 200ms (P75) | Web Vitals library, Chrome UX Report |
-| CLS (Cumulative Layout Shift) | < 0.1 (P75) | Lighthouse, Web Vitals library |
-| TTFB (Time to First Byte) | < 800ms (P75) | WebPageTest, Lighthouse |
-| FCP (First Contentful Paint) | < 1.8s (P75) | Lighthouse |
-| Total bundle size (JS) | < 200KB gzipped (initial route) | webpack-bundle-analyzer |
-| Image size | < 100KB per image, WebP format | Image optimization pipeline |
+## Derive first
 
-### API Performance
+For the system in the goal, work out which of these actually bite. Ignore the rest —
+an NFR that doesn't apply is noise that hides the ones that do.
 
-| Metric | Target |
-|--------|--------|
-| P50 API latency | < 100ms |
-| P95 API latency | < 500ms |
-| P99 API latency | < 1000ms |
-| Rate limit per IP | 100 req/s (authenticated), 10 req/s (anonymous) |
+1. **What is the load-bearing failure?** For a browser-facing system this is usually
+   perceived slowness, a broken critical path on a real device, or an auth/session
+   defect. Name it, then set a number you can defend.
+2. **Who is on the other end?** A human waiting on a screen sets a latency bar. A
+   background job, a partner API, or a crawler sets a completely different one. Derive
+   the bar from the consumer, not from a table.
+3. **What is irreversible?** Payments, deletions, emails sent, credentials issued.
+   These need explicit correctness and rollback criteria; reversible UI state does not.
+4. **What is the hostile input?** For web systems: user-supplied markup, URLs, file
+   uploads, headers (`X-Forwarded-For`, `Origin`, `Referer`), and anything crossing a
+   trust boundary. Name it and state the control that contains it.
+5. **What must remain true in a year?** Usually interfaces and observability, not style.
 
-## Accessibility (WCAG 2.1 AA)
+## Sourcing a threshold (required)
 
-| Requirement | Checklist |
-|-------------|-----------|
-| Color contrast | All text ≥ 4.5:1, large text ≥ 3:1 |
-| Keyboard navigation | All interactive elements focusable and operable via keyboard |
-| Focus indicators | Visible focus ring on all focusable elements (≥ 2px, contrast ≥ 3:1) |
-| Screen reader | All images have alt text, form inputs have labels, landmarks used |
-| Skip links | "Skip to main content" link as first focusable element |
-| ARIA | Used only when HTML semantics insufficient; no aria-* misuse |
-| Reduced motion | `prefers-reduced-motion` media query respected |
-| Zoom | Content readable at 200% zoom without horizontal scrolling |
-| Forms | Error messages linked to inputs via aria-describedby |
-| Lighthouse score | ≥ 90 accessibility score |
+Every number you emit carries provenance, in this order of preference:
 
-## Security
+1. **A constraint the user stated** — always wins.
+2. **A measured property of the existing system** — current P95, current bundle size,
+   current error rate. State the measurement, then the target relative to it.
+3. **A current published standard, retrieved and cited at synthesis time** — Core Web
+   Vitals thresholds, the WCAG level the project must conform to, an ASVS level, a
+   vendor SLO. Cite the source and the date you read it. **Fetch it; do not recall it.**
+4. **An explicit project default** — permitted, but label it `(project default,
+   unverified)` so a reviewer can see it is a choice, not a finding.
 
-| Requirement | Implementation |
-|-------------|---------------|
-| XSS prevention | CSP header with strict-dynamic, no inline scripts, React auto-escaping |
-| CSRF protection | SameSite=Strict cookies, CSRF token for state-changing requests |
-| SQL injection | Parameterized queries / ORM exclusively |
-| Authentication | bcrypt/argon2 for passwords, JWT with short expiry + refresh tokens |
-| Authorization | Route-level guards, resource-level ownership checks |
-| Rate limiting | API-wide + endpoint-specific limits, 429 with Retry-After |
-| Security headers | HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy |
-| Dependency scanning | CI pipeline scans for known CVEs (Dependabot, Snyk) |
-| Secrets | Never in code; env vars or secret manager; .env in .gitignore |
-| Input validation | Server-side validation for ALL inputs (never trust client-only) |
-| OWASP ASVS | Reference ASVS Level 1 for standard web apps, Level 2 for sensitive data |
+A threshold with no provenance from this list does not belong in the PRD.
 
-## Reliability
+## Dated starting points — 2025 era, verify before use
 
-| Requirement | Target |
-|-------------|--------|
-| Uptime | 99.9% (8.76 hours downtime/year max) |
-| Error rate | < 1% of all requests return 5xx |
-| Error boundaries | Every React route wrapped in error boundary with fallback UI |
-| Graceful degradation | Core features work without JavaScript (where applicable) |
-| Retry logic | Exponential backoff with jitter for API calls (max 3 retries) |
-| Circuit breaker | For external service calls (after 5 consecutive failures, break for 30s) |
-| Health check | `/health` endpoint returning 200 + dependency statuses |
+Use these to know *what to look up*, not as answers. Each is a starting point whose
+current value must be confirmed (rule 3) or explicitly labelled (rule 4).
 
-## Maintainability
+| Dimension | Starting point (2025) | Confirm because |
+|---|---|---|
+| Core Web Vitals | LCP, INP, CLS are the current triad | The triad itself changes — INP replaced FID in 2024 |
+| Accessibility | WCAG 2.x AA is the common contractual bar | The required level is a legal/contractual fact about *this* project |
+| Security baseline | OWASP ASVS; CSP, CSRF defences, security headers | Level and header guidance both revise |
+| Availability | An uptime target expressed with its measurement window | "99.9%" is meaningless without the window and what counts as down |
+| Browser support | Derive from the project's own analytics | "Last 2 versions" is a policy, not a fact |
+| Coverage | Derive from the project's current coverage | A number with no baseline is theatre |
 
-| Requirement | Checklist |
-|-------------|-----------|
-| TypeScript | Strict mode enabled, no `any` without justification |
-| Design system / tokens | CSS variables or design tokens for colors, spacing, typography |
-| Component documentation | Storybook or similar for shared components |
-| API documentation | OpenAPI 3.0 spec, auto-generated from code |
-| Code coverage | ≥ 80% line coverage for business logic |
-| Linting | ESLint + Prettier (JS/TS), Ruff (Python) in CI |
-| Conventional commits | Semantic commit messages for automated changelog |
-| README | Setup instructions, architecture diagram, environment variables table |
-| Logging | Structured JSON logging with request IDs, log levels (DEBUG/INFO/WARN/ERROR) |
-| Monitoring | Error tracking (Sentry), performance monitoring, uptime monitoring |
+## Applicability
 
-## Browser Support
-
-| Browser | Versions |
-|---------|----------|
-| Chrome | Last 2 major versions |
-| Firefox | Last 2 major versions |
-| Safari | Last 2 major versions |
-| Edge | Last 2 major versions |
-| Mobile Safari | iOS 15+ |
-| Chrome Android | Last 2 major versions |
+If the goal has **no browser-facing surface** — an API-only service, a worker, a CLI —
+say so and do not import browser criteria. Declaring that a dimension is inapplicable,
+with the reason, is a stronger PRD than silently padding it.

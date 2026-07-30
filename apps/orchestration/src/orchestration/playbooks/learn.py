@@ -336,7 +336,7 @@ def _paths(ctx: RunContext) -> str:
 def _build_scope(pb: "LearnPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
     room = _room(ctx)
     return (
-        f"Session: {ctx.session_id}. Goal: {pb._cap(ctx.goal)}. {_paths(ctx)} "
+        f"Session: {ctx.session_id}. Goal: {ctx.goal}. {_paths(ctx)} "
         f"Do a QUICK scan of the source material and emit ingest_branches (branch_id -> focus): "
         f"the read-only echo foci the ingest pass should fan out on, shaped to THIS material. "
         f"Check room {room} for prior session results first."
@@ -346,7 +346,7 @@ def _build_scope(pb: "LearnPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> s
 def _build_ingest(pb: "LearnPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
     room = _room(ctx)
     return (
-        f"Session: {ctx.session_id}. Goal: {pb._cap(ctx.goal)}. {_paths(ctx)} "
+        f"Session: {ctx.session_id}. Goal: {ctx.goal}. {_paths(ctx)} "
         f"Focus: {spec.task_hint}. Read the source material and inventory your focus area. "
         f"Write full findings to wing=penny room={room} with header: "
         f"{ctx.session_id} Ingest — {spec.name.split('_')[-1].lower()}. "
@@ -357,7 +357,7 @@ def _build_ingest(pb: "LearnPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> 
 def _build_design(pb: "LearnPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
     room = _room(ctx)
     base = (
-        f"Session: {ctx.session_id}. Goal: {pb._cap(ctx.goal)}. {_paths(ctx)} "
+        f"Session: {ctx.session_id}. Goal: {ctx.goal}. {_paths(ctx)} "
         f"Mempalace room: {room}. Read all Ingest drawers from wing=penny room={room}. "
         f"Produce the course charter: lesson list, per-lesson topic lists in dependency order, "
         f"the conventions canon (EVERY notation/ordering/naming decision, made once, globally), "
@@ -433,7 +433,8 @@ def _build_fix(pb: "LearnPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str
     learn = ctx.extras.get("learn", {})
     violations = learn.get("violations", [])
     room = _room(ctx)
-    listing = "; ".join(str(v) for v in violations[:20]) or "see the Verify report in mempalace"
+    # EVERY violation: the agent is told to fix these — an unlisted one is never fixed.
+    listing = "; ".join(str(v) for v in violations) or "see the Verify report in mempalace"
     return (
         f"Session: {ctx.session_id}. {_paths(ctx)} Mempalace room: {room}. "
         f"Fix these verified violations, syncing every affected file (guide + answers + "
@@ -743,7 +744,7 @@ class LearnPlaybook(BasePlaybook):
         base = (
             builder(self, ctx, spec)
             if builder
-            else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
+            else f"{spec.task_hint}\nGoal: {ctx.goal}"
         )
         if ctx.clarification_text and state == "designing":
             pass  # already folded into _build_design

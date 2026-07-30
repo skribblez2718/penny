@@ -1025,9 +1025,9 @@ class JSAPlaybook(BasePlaybook):
         elif builder:
             base = builder(ctx)
         else:
-            base = f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
+            base = f"{spec.task_hint}\nGoal: {ctx.goal}"
         if ctx.clarification_text:
-            base += f"\n\nUser clarification: {self._cap(ctx.clarification_text)}"
+            base += f"\n\nUser clarification: {ctx.clarification_text}"
         return base
 
     def _investigate_task(self, ctx: RunContext, spec: PrimitiveSpec) -> str:

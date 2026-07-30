@@ -45,7 +45,9 @@ runs standalone, synthesizing criteria from the goal).
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -110,6 +112,211 @@ def available_domains(ctx: RunContext) -> list[str]:
         except Exception:  # noqa: BLE001 — best-effort listing
             pass
     return sorted(names)
+
+
+# ---------------------------------------------------------------------------
+# Item 11 — deterministic ARTIFACT FACTS: a rules-tier floor beneath vera's
+# judgement, covering the things she previously COUNTED and self-reported.
+#
+# Motivation (measured 2026-07-28): vera's evidence asserted "success_criteria map
+# 1:1 onto Narrative SM1-SM6" when it was 5 criteria vs 6 metrics. A countable fact,
+# asserted rather than computed, wrong, and unchecked. Anything derivable from the
+# artifacts should be derived by CODE and handed to the verifier as a given, leaving
+# her to judge only what cannot be counted (prose quality, measurability).
+#
+# Structure is DERIVED, never a hardcoded vocabulary: the narrative's expected
+# sections are read from prd-template.md at runtime, and the catalog/matrix checks
+# are set comparisons between the artifacts themselves, so they keep working if the
+# schema changes (which item 16 will do).
+# ---------------------------------------------------------------------------
+
+_SECTION_RE = re.compile(r"(?m)^#{2,3}\s*(\d+)\.")
+
+
+def _extract_json(text: str):
+    """First JSON array/object embedded in a drawer body, or None. Drawers carry a
+    header line before the payload, so this scans for the first bracket and parses
+    the balanced span. Never raises."""
+    if not text:
+        return None
+    # Scan from the EARLIEST bracket of either kind. Trying "[" first regardless of
+    # position makes a JSON *object* whose values contain arrays parse as the inner
+    # array (e.g. {"REQ-001": {"unit_tests": ["t"]}} -> ["t"]), silently losing the
+    # whole matrix.
+    candidates = sorted(
+        (text.find(o), o, c) for o, c in (("[", "]"), ("{", "}")) if text.find(o) != -1
+    )
+    for start, opener, closer in candidates:
+        depth, in_str, esc = 0, False, False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == opener:
+                depth += 1
+            elif ch == closer:
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start : i + 1])
+                    except Exception:  # noqa: BLE001
+                        break
+    return None
+
+
+# The drawer headers are the skill's documented output CONTRACT (SKILL.md §Mempalace
+# Output Contract), so matching them exactly is an interface check — not a heuristic.
+_ARTIFACT_MARKERS = (
+    ("narrative", "prd narrative"),
+    ("requirement catalog", "requirement catalog"),
+    ("verification matrix", "verification matrix"),
+)
+
+
+def select_artifacts(drawers) -> dict:
+    """Pick the CURRENT narrative / catalog / matrix from a room's drawers.
+
+    ``drawers`` is an iterable of ``(text, filed_at)``. A revising run leaves several
+    versions of each artifact in the room plus verifier reports and notes, so:
+
+      * match the drawer's HEADER LINE only, against the exact contract name — a loose
+        substring scan over the first 200 chars matched the ``Validate`` report (which
+        discusses the narrative) and a ``Synthia Diagnostic Note - narrative-...`` note,
+        both of which contain no sections, yielding a false "0 sections found";
+      * skip verifier reports outright — they are commentary ON the artifacts;
+      * keep the NEWEST by ``filed_at`` — otherwise an arbitrary earlier revision wins.
+    """
+    best: dict = {}
+    for text, filed in drawers:
+        if not text:
+            continue
+        header = text.split("\n", 1)[0].strip().lstrip("#").strip().lower()
+        if "validate" in header:
+            continue  # a verifier report is not an artifact
+        for name, marker in _ARTIFACT_MARKERS:
+            if marker in header:
+                prior = best.get(name)
+                if prior is None or str(filed) >= prior[1]:
+                    best[name] = (text, str(filed))
+                break
+    return {name: text for name, (text, _) in best.items()}
+
+
+def declared_sections(skill_dir: str) -> set:
+    """The section numbers prd-template.md DECLARES. Read at runtime so the count is
+    the template's, not a constant baked into code (change the template, the check
+    follows). Empty set when unreadable -> section facts are simply omitted."""
+    if not skill_dir:
+        return set()
+    try:
+        text = (Path(skill_dir) / "resources" / "prd-template.md").read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return set()
+    return {int(n) for n in _SECTION_RE.findall(text)}
+
+
+def artifact_facts(
+    narrative: str = "", catalog=None, matrix=None, ideal=None, declared: set | None = None
+) -> dict:
+    """Deterministically computed facts about one run's four artifacts. Pure.
+
+    Every value here is a COUNT or a SET COMPARISON — no judgement, no field-name
+    vocabulary beyond the id key the catalog and matrix must agree on to be joinable
+    at all. Missing/unparseable artifacts simply omit their facts.
+    """
+    facts: dict = {}
+
+    if narrative:
+        found = {int(n) for n in _SECTION_RE.findall(narrative)}
+        facts["narrative_sections_found"] = len(found)
+        if declared:
+            facts["narrative_sections_declared"] = len(declared)
+            facts["narrative_sections_missing"] = sorted(declared - found)
+
+    ids: list = []
+    if isinstance(catalog, list):
+        for item in catalog:
+            if isinstance(item, dict):
+                # The id key is discovered, not assumed: whichever key holds a
+                # REQ-like token. Keeps working if the catalog schema is renamed.
+                for key, value in item.items():
+                    if isinstance(value, str) and re.fullmatch(r"[A-Za-z]+-\d+", value.strip()):
+                        ids.append(value.strip())
+                        facts.setdefault("catalog_id_key", key)
+                        break
+        facts["requirement_count"] = len(catalog)
+        facts["catalog_ids"] = len(ids)
+        dupes = sorted({i for i in ids if ids.count(i) > 1})
+        facts["catalog_duplicate_ids"] = dupes
+        # Field-set consistency WITHOUT naming fields: the majority key-set is the
+        # de-facto declared shape; report entries that deviate from it.
+        keysets = [frozenset(i) for i in catalog if isinstance(i, dict)]
+        if keysets:
+            common = max(set(keysets), key=keysets.count)
+            facts["catalog_entries_with_odd_fields"] = sum(1 for k in keysets if k != common)
+
+    if isinstance(matrix, dict):
+        keys = {str(k) for k in matrix}
+        facts["matrix_keys"] = len(keys)
+        if ids:
+            idset = set(ids)
+            facts["matrix_missing_ids"] = sorted(idset - keys)
+            facts["matrix_unknown_ids"] = sorted(keys - idset)
+        empty = []
+        for key, value in matrix.items():
+            if isinstance(value, dict):
+                if not any(bool(v) for v in value.values()):
+                    empty.append(str(key))
+            elif not value:
+                empty.append(str(key))
+        facts["matrix_ids_without_strategy"] = sorted(empty)
+
+    if isinstance(ideal, dict):
+        criteria = ideal.get("success_criteria")
+        if isinstance(criteria, list):
+            facts["ideal_success_criteria"] = len(criteria)
+        deliverables = ideal.get("deliverables")
+        if isinstance(deliverables, list):
+            facts["ideal_deliverables"] = len(deliverables)
+
+    return facts
+
+
+def hard_contradictions(facts: dict) -> list[str]:
+    """Objective, non-negotiable inconsistencies — the rules-tier FLOOR.
+
+    Deliberately narrow: only facts that are wrong under ANY reading of the schema.
+    Section coverage is reported but NOT floored (whether every template section is
+    mandatory is still under review — a live run showed sections are used as thinking
+    prompts, not padding), and a criteria/metric count difference is reported as a
+    fact for the verifier rather than failed, since merging two metrics into one
+    criterion is defensible.
+    """
+    out: list[str] = []
+    if facts.get("catalog_duplicate_ids"):
+        out.append(f"catalog has duplicate ids: {facts['catalog_duplicate_ids']}")
+    if facts.get("matrix_missing_ids"):
+        out.append(
+            f"verification matrix omits requirement(s): {facts['matrix_missing_ids']}"
+        )
+    if facts.get("matrix_unknown_ids"):
+        out.append(
+            f"verification matrix references unknown id(s): {facts['matrix_unknown_ids']}"
+        )
+    if facts.get("matrix_ids_without_strategy"):
+        out.append(
+            "requirement(s) with no verification strategy: "
+            f"{facts['matrix_ids_without_strategy']}"
+        )
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +455,7 @@ def _build_generate(pb: "PrdPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> 
     prd = ctx.extras.get("prd", {})
     room = _room(ctx)
     mode = _effective_mode(ctx)
-    head = f"Session: {ctx.session_id}. Goal: {pb._cap(ctx.goal)}. {_domain_line(prd)}"
+    head = f"Session: {ctx.session_id}. Goal: {ctx.goal}. {_domain_line(prd)}"
     tail = f"Mempalace room: {room} (wing=penny). " + _guidance_line(prd)
     if mode == "clarification":
         return head + tail + "Mode: CLARIFICATION QUESTIONS."
@@ -256,7 +463,7 @@ def _build_generate(pb: "PrdPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> 
         issues_str = "; ".join(str(i) for i in prd.get("issues", []))
         return (
             head + tail + "Mode: REVISION. Address every issue below, and address it "
-            f"differently from the attempt that failed: {pb._cap(issues_str)}."
+            f"differently from the attempt that failed: {issues_str}."
         )
     return head + tail + "Mode: SYNTHESIS."
 
@@ -266,7 +473,7 @@ def _build_validate(pb: "PrdPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> 
     prd = ctx.extras.get("prd", {})
     room = _room(ctx)
     base = (
-        f"Session: {ctx.session_id}. Goal: {pb._cap(ctx.goal)}. "
+        f"Session: {ctx.session_id}. Goal: {ctx.goal}. "
         f"Domain: {prd.get('domain') or 'generic'}. "
         f"Mempalace room: {room} (wing=penny). " + _guidance_line(prd)
     )
@@ -275,6 +482,18 @@ def _build_validate(pb: "PrdPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> 
         base += (
             f"Artifact oracle (ABSOLUTE — invoke exactly this, your cwd is not this repo): "
             f"`python3 {oracle} --stdin`. "
+        )
+    computed = prd.get("artifact_facts") or {}
+    if computed:
+        # Item 11: hand vera the counts CODE derived, so a verdict is judged against
+        # computed truth instead of her own re-counting (a live run showed a
+        # confidently-asserted "1:1" mapping that was actually 5 vs 6).
+        rendered = "; ".join(f"{k}={v}" for k, v in sorted(computed.items()))
+        base += (
+            "Counts already computed deterministically from the artifacts (treat these as "
+            f"GIVEN — do not re-derive or contradict them without saying why): {rendered}. "
+            "Spend your judgement on what cannot be counted: prose quality, whether criteria "
+            "are genuinely measurable, and cross-artifact meaning. "
         )
     if prd.get("schema_checked") is False:
         # T4 fail-loud (item 9): last round the deterministic floor could not read
@@ -392,6 +611,17 @@ class PrdPlaybook(BasePlaybook):
                 issues = issues + [f"schema: {e}" for e in schema_errors]
                 prd["schema_evidence"] = schema_errors
             prd["schema_checked"] = schema_ok is not None
+            # Item 11: rules-tier facts + floor. Objective contradictions (duplicate ids,
+            # matrix/catalog mismatch, a requirement with no verification strategy) are
+            # decided by CODE and cannot pass on the verifier's say-so.
+            facts = self._artifact_facts(ctx, ideal)
+            if facts:
+                prd["artifact_facts"] = facts
+                contradictions = hard_contradictions(facts)
+                if contradictions:
+                    valid = False
+                    issues = issues + [f"artifact: {c}" for c in contradictions]
+                    prd["artifact_contradictions"] = contradictions
             prd["valid"] = valid
             prd["ideal_state_valid"] = ideal_ok  # code schema-floor stacked on vera's verdict
             prd["issues"] = issues
@@ -461,6 +691,92 @@ class PrdPlaybook(BasePlaybook):
             return None, []
         return None, []
 
+    def model_for_state(self, state: str, ctx: RunContext) -> str | None:
+        """Opt-in cross-model verification hook (REQ-001/REQ-002).
+
+        ``independence.py`` classifies prd's synthia->vera edge SAME_MODEL: both agents
+        run sonnet, so vera's PASS is a same-model bare judgement over synthia's own
+        work, and correlated single-model errors can slip a false PASS through. This
+        gives a caller (or ops) a hook to pull, mirroring jsa/sca.
+
+        Precedence for ``validating``: ``constraints['validate_model']`` -> the
+        ``PRD_VERA`` / ``PRD_DEFAULT`` env tier -> ``None`` (vera's own configured
+        model). The key is ``validate_model``, not jsa/sca's ``reverify_model``: prd has
+        no reverify pass, ``validating`` is its only verify state.
+
+        UNSET IS UNCHANGED: with no constraint and no env var, this returns ``None`` for
+        every state, so vera and synthia run exactly the models their own
+        ``.pi/agents/*.md`` frontmatter declares. This is an opt-in hook, never a default
+        reassignment (a default change would be a cost/latency shift needing loan
+        registration + ablation). The edge therefore stays SAME_MODEL and remains a
+        registered exception.
+        """
+        if state == "validating":
+            chosen = str((ctx.constraints or {}).get("validate_model", "")).strip()
+            if chosen:
+                return chosen
+        return self._env_model_override("PRD", state)
+
+    # -- item 11: deterministic artifact facts ----------------------------------
+    def _read_artifacts(self, ctx: RunContext) -> dict:
+        """The run's narrative / catalog / matrix drawer bodies, keyed by artifact.
+
+        Skipped under pytest (hermetic) unless a test overrides this; production reads
+        the session room and reassembles chunked drawers. Best-effort, never raises.
+        """
+        if "PYTEST_CURRENT_TEST" in os.environ:
+            return {}
+        try:
+            import chromadb
+
+            penny = os.environ.get("PROJECT_ROOT") or ctx.project_root or "."
+            client = chromadb.PersistentClient(path=str(Path(penny) / ".mempalace"))
+            drawers = client.get_collection("mempalace_drawers")
+            res = drawers.get(
+                where={"$and": [{"room": _room(ctx)}, {"wing": "penny"}]}, limit=1000
+            ) or {}
+            docs = res.get("documents") or []
+            metas = res.get("metadatas") or []
+            # Reassemble chunked drawers (non-overlapping, ordered by chunk_index).
+            groups: dict = {}
+            for i, doc in enumerate(docs):
+                if not doc:
+                    continue
+                meta = (metas[i] if i < len(metas) else None) or {}
+                key = meta.get("drawer_key") or f"__solo_{i}"
+                try:
+                    idx = int(meta.get("chunk_index", 0))
+                except (TypeError, ValueError):
+                    idx = 0
+                chunks, filed = groups.setdefault(key, ([], ""))
+                chunks.append((idx, doc))
+                groups[key] = (chunks, max(filed, str(meta.get("filed_at", ""))))
+            return select_artifacts(
+                [
+                    ("".join(t for _, t in sorted(chunks, key=lambda p: p[0])), filed)
+                    for chunks, filed in groups.values()
+                ]
+            )
+        except Exception:  # noqa: BLE001 — best-effort; facts are additive
+            return {}
+
+    def _artifact_facts(self, ctx: RunContext, ideal=None) -> dict:
+        """Compute this run's artifact facts, or {} when the artifacts are unreadable."""
+        try:
+            arts = self._read_artifacts(ctx)
+            if not arts and not isinstance(ideal, dict):
+                return {}
+            prd = ctx.extras.get("prd", {})
+            return artifact_facts(
+                narrative=arts.get("narrative", ""),
+                catalog=_extract_json(arts.get("requirement catalog", "")),
+                matrix=_extract_json(arts.get("verification matrix", "")),
+                ideal=ideal,
+                declared=declared_sections(prd.get("skill_root", "")),
+            )
+        except Exception:  # noqa: BLE001 — never break a run on a facts failure
+            return {}
+
     def done_predicate(self, ctx: RunContext) -> bool:
         prd = ctx.extras.get("prd", {})
         return bool(prd.get("valid")) and bool(prd.get("ideal_state_valid"))
@@ -471,7 +787,7 @@ class PrdPlaybook(BasePlaybook):
         base = (
             builder(self, ctx, spec)
             if builder
-            else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
+            else f"{spec.task_hint}\nGoal: {ctx.goal}"
         )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {ctx.clarification_text}"
@@ -497,6 +813,10 @@ class PrdPlaybook(BasePlaybook):
             # look identical to one where it passed.
             "schema_checked": bool(prd.get("schema_checked", False)),
             "schema_evidence": prd.get("schema_evidence", []),
+            # Item 11: the counts CODE derived (supersede the agent's self-report) and
+            # any objective contradiction the rules floor caught.
+            "artifact_facts": prd.get("artifact_facts", {}),
+            "artifact_contradictions": prd.get("artifact_contradictions", []),
             "session_room": _room(ctx),
             # legacy parity: the extension's chain handler injects prd_room into
             # the next chain step's constraints from session_room/room.

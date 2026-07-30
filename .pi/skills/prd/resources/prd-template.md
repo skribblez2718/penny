@@ -108,11 +108,3 @@ All artifacts this task produces.
 - docs/rate-limiting.md (operational docs)
 - CHANGELOG.md entry
 ```
-
-## Scope Calibration
-
-| Task Type | Sections to Cover | Question Depth |
-|-----------|------------------|----------------|
-| Targeted bug fix | 1-2, 5, 8, 10 | 3-4 questions |
-| Single feature | 1-6, 8, 10-12 | 6-8 questions |
-| New module/system | All 12 sections | Full PRD questionnaire |

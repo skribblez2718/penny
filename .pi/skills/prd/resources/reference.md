@@ -69,7 +69,7 @@ Prose document following the 12-section PRD template (`resources/prd-template.md
 
 ### Layer 2: Atomic Requirement Catalog (JSON)
 
-Each requirement is atomic (single behavior), testable, and prioritized:
+Each requirement is atomic (single behavior), testable, and prioritized. Ids are unique but **need not be gapless** — renumbering on revision churns every cross-reference:
 
 ```json
 [
@@ -89,7 +89,7 @@ Each requirement is atomic (single behavior), testable, and prioritized:
 
 ### Layer 3: Verification / Traceability Matrix (JSON)
 
-Maps every REQ to verification strategies:
+Maps every REQ to verification strategies. The kinds below are the common ones, **not a closed set** — what is enforced is that every REQ appears with at least one non-empty strategy:
 
 ```json
 {

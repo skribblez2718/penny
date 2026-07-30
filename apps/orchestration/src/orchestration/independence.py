@@ -105,10 +105,14 @@ SAME_MODEL_EXCEPTIONS: dict[str, IndependenceException] = {
     for e in (
         IndependenceException(
             "prd",
-            "synthia generates the spec and vera validates it, both on sonnet. vera's structural "
-            "checks are partly evidence-backed (the T4 validate_json IDEAL_STATE schema floor), but "
-            "the prose-quality / coverage judgement remains the verifier's bare same-model call. No "
-            "cross-model verify hook yet — repay via a model_for_state override on `validating`.",
+            "synthia generates the spec and vera validates it, both on sonnet by default. vera's "
+            "structural checks are partly evidence-backed (the T4 validate_json IDEAL_STATE schema "
+            "floor), but the prose-quality / coverage judgement remains the verifier's bare "
+            "same-model call. A cross-model hook now EXISTS (PrdPlaybook.model_for_state: "
+            "constraints['validate_model'] -> PRD_VERA/PRD_DEFAULT env -> the agent default), but it "
+            "is OPT-IN and off by default, so the default path is still same-model bare judgement "
+            "and this edge correctly stays SAME_MODEL. Repay fully by measuring same- vs cross-model "
+            "catch rate on a PRD defect corpus, then making cross-model the default.",
             "2026-10-01",
         ),
         IndependenceException(

@@ -11,7 +11,7 @@ Room: `wing=penny room=skills/prd-<session_id>` (given in the task). Read all PR
 ## Evidence hierarchy (strongest wins; a PASS without evidence is invalid)
 
 1. **Executed** — pipe the IDEAL_STATE JSON to the validator at the **absolute path given in your task** (`python3 <validator-path> --stdin`) and capture the result. This is the artifact oracle; prefer it over judgment. Your working directory is the TARGET project, not this skill's repo — a relative `scripts/...` path will silently miss. If the validator cannot be run, say so explicitly and record your verdict as judgment-tier; never imply an executed check you did not run.
-2. **Rules** — count what actually exists: narrative sections found (of 12), requirements missing an `id`/`priority`/`acceptance_criteria`, matrix REQ coverage, traceability mismatches (IDEAL_STATE `success_criteria`/`deliverables` vs narrative Sections 3/12). `build_order` is a non-binding dependency hint — do **not** gate on it or require it to mirror narrative §11.
+2. **Rules** — counts. The engine now computes the countable facts for you (requirement count, id uniqueness, matrix coverage, section coverage, criteria/deliverable counts) and states them in your task as GIVEN. Do not re-derive or contradict them without saying why; an objective contradiction (a requirement missing from the matrix, duplicate ids) is already enforced by code and cannot pass on your say-so. Report any traceability mismatch those counts reveal. `build_order` is a non-binding dependency hint — do **not** gate on it or require it to mirror narrative §11.
 3. **Judge** — reserved for prose quality only, never for schema/coverage facts you could have counted.
 
 Your SUMMARY's `evidence` field MUST carry captured output of the checks you ran (the schema-check result, the counts) — not assertions. The engine rejects an empty-evidence verdict.
@@ -19,9 +19,9 @@ Your SUMMARY's `evidence` field MUST carry captured output of the checks you ran
 ## What to check
 
 - **IDEAL_STATE** passes the canonical schema; `goal` is refined (not a stub/copy); `success_criteria` are measurable.
-- **Narrative** has all 12 template sections with real content (for a web-app pack, NFRs cite Core Web Vitals, security covers CSP/CSRF/rate-limiting, accessibility is addressed).
-- **Requirement catalog** — sequential unique ids, atomic requirements, testable binary acceptance criteria, valid priorities, count matches synthesis.
-- **Traceability** — every REQ appears in the matrix with ≥1 strategy; no contradictions across artifacts (e.g. narrative says React, IDEAL_STATE says `language: python`).
+- **Narrative** has the template's sections with real content, and satisfies whatever the run's **domain pack** requires of them. Read the pack named in your task and judge against *its* criteria — they are not restated here, so a new pack needs no edit to this prompt.
+- **Requirement catalog** — unique ids (gaps are FINE; do not require them to be gapless), atomic requirements, testable binary acceptance criteria, valid priorities. Judge whether each criterion is genuinely falsifiable — not how many there are.
+- **Traceability** — every REQ appears in the matrix with ≥1 non-empty strategy (the strategy KINDS are open — judge fitness, not conformance to a fixed four); no contradictions across artifacts (e.g. narrative says React, IDEAL_STATE says `language: python`).
 
 ## Non-negotiables
 

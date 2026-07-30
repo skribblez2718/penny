@@ -242,7 +242,7 @@ def _build_explore(pb: "AgentPlaybook", ctx: RunContext, spec: PrimitiveSpec) ->
     task = (
         f"Session: {ctx.session_id}. "
         f"{_name_part(ctx)}"
-        f"Goal: {pb._cap(ctx.goal)}. "
+        f"Goal: {ctx.goal}. "
         f"Mempalace room: {room}. "
         f"Write findings to mempalace wing=penny room={room} "
         f"with header: {ctx.session_id} Explore."
@@ -262,7 +262,7 @@ def _build_design(pb: "AgentPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> 
     task = (
         f"Session: {ctx.session_id}. "
         f"{_name_part(ctx)}"
-        f"Goal: {pb._cap(ctx.goal)}. "
+        f"Goal: {ctx.goal}. "
         f"Mempalace room: {room}. "
         f"Read prior explore findings from room {room}. "
         f"Design the agent definition. Write design spec to mempalace "
@@ -281,7 +281,7 @@ def _build_critique(pb: "AgentPlaybook", ctx: RunContext, spec: PrimitiveSpec) -
     task = (
         f"Session: {ctx.session_id}. "
         f"{_name_part(ctx)}"
-        f"Goal: {pb._cap(ctx.goal)}. "
+        f"Goal: {ctx.goal}. "
         f"Mempalace room: {room}. "
         f"Read design spec from room {room}. "
     )
@@ -311,7 +311,7 @@ def _build_scaffold(pb: "AgentPlaybook", ctx: RunContext, spec: PrimitiveSpec) -
     task = (
         f"Session: {ctx.session_id}. "
         f"{_name_part(ctx)}"
-        f"Goal: {pb._cap(ctx.goal)}. "
+        f"Goal: {ctx.goal}. "
         f"Mempalace room: {room}. "
         f"Read the design spec from room {room}. "
         f"Generate the agent definition file at {target}. "
@@ -495,7 +495,7 @@ class AgentPlaybook(BasePlaybook):
         base = (
             builder(self, ctx, spec)
             if builder
-            else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
+            else f"{spec.task_hint}\nGoal: {ctx.goal}"
         )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {ctx.clarification_text}"

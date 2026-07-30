@@ -326,7 +326,7 @@ RESEARCH_REPORT = PrimitiveSpec(
 def _build_planning(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> str:
     room = _room(ctx)
     task = (
-        f"Research planning: decompose '{pb._cap(ctx.goal)}' into sub-queries\n\n"
+        f"Research planning: decompose '{ctx.goal}' into sub-queries\n\n"
         f"Write your plan to mempalace room: {room}"
     )
     task += (
@@ -348,7 +348,7 @@ def _build_planning(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> 
 def _build_critiquing_plan(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> str:
     room = _room(ctx)
     task = (
-        f"Critique research plan for: {pb._cap(ctx.goal)}\n\n"
+        f"Critique research plan for: {ctx.goal}\n\n"
         f"Read the plan from mempalace room: {room}"
     )
     revision = research.get("plan_revision", 0)
@@ -365,8 +365,8 @@ def _build_researching(pb: "ResearchPlaybook", ctx: RunContext, research: dict) 
     room = _room(ctx)
     sub_queries = research.get("sub_queries", [])
     if research.get("mode") == "quick" or not sub_queries:
-        return f"Quick research: {pb._cap(ctx.goal)}\n\nWrite findings to mempalace room: {room}"
-    lines = [f"Research ALL of the following sub-queries for: {pb._cap(ctx.goal)}"]
+        return f"Quick research: {ctx.goal}\n\nWrite findings to mempalace room: {room}"
+    lines = [f"Research ALL of the following sub-queries for: {ctx.goal}"]
     for i, sub_query in enumerate(sub_queries, 1):
         lines.append(f"Research sub-query {i}: {sub_query}")
     lines.append("")
@@ -386,7 +386,7 @@ def _build_synthesizing(pb: "ResearchPlaybook", ctx: RunContext, research: dict)
     if report_format != "default":
         format_note = f" Use {report_format} format."
     task = (
-        f"Synthesize research report for: {pb._cap(ctx.goal)}.{format_note}\n\n"
+        f"Synthesize research report for: {ctx.goal}.{format_note}\n\n"
         f"Read findings and validation from mempalace room: {room}"
     )
     revision = research.get("report_revision", 0)
@@ -417,7 +417,7 @@ def _build_synthesizing(pb: "ResearchPlaybook", ctx: RunContext, research: dict)
 def _build_validating(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> str:
     room = _room(ctx)
     task = (
-        f"Verify the synthesized research report for: {pb._cap(ctx.goal)}\n\n"
+        f"Verify the synthesized research report for: {ctx.goal}\n\n"
         f"Read the synthesis ('{ctx.session_id} Synthesis') and the cited research findings "
         f"('{ctx.session_id}-echo-<n> Research Findings') from mempalace room: {room}\n\n"
         f"For every material claim in the synthesis, confirm it is grounded in a source cited in "
@@ -440,7 +440,7 @@ def _build_validating(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -
 def _build_critiquing_report(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> str:
     room = _room(ctx)
     task = (
-        f"Critique research report for: {pb._cap(ctx.goal)}\n\n"
+        f"Critique research report for: {ctx.goal}\n\n"
         f"Read the report from mempalace room: {room}"
     )
     revision = research.get("report_revision", 0)
@@ -456,7 +456,7 @@ def _build_critiquing_report(pb: "ResearchPlaybook", ctx: RunContext, research: 
 def _build_report_writing(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> str:
     room = _room(ctx)
     return (
-        f"Write the final research report for: {pb._cap(ctx.goal)}\n\n"
+        f"Write the final research report for: {ctx.goal}\n\n"
         f"Write all files to: {_report_dir(ctx)}\n\n"
         f"Read the synthesized report from mempalace room: {room}\n\n"
         f"Produce: report.md (main report), sources.md (bibliography), "
@@ -806,7 +806,7 @@ class ResearchPlaybook(BasePlaybook):
             room = _room(ctx)
             n = spec.name.rsplit("SQ", 1)[-1] or "1"
             base = (
-                f"Research this sub-query for: {self._cap(ctx.goal)}\n\n"
+                f"Research this sub-query for: {ctx.goal}\n\n"
                 f"Sub-query: {spec.task_hint}\n\n"
                 f"Write findings to mempalace room: {room} with header: "
                 f"{ctx.session_id}-echo-{n} Research Findings."
@@ -816,7 +816,7 @@ class ResearchPlaybook(BasePlaybook):
             base = (
                 builder(self, ctx, research)
                 if builder
-                else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
+                else f"{spec.task_hint}\nGoal: {ctx.goal}"
             )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {ctx.clarification_text}"

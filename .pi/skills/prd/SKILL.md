@@ -68,15 +68,18 @@ skill({
 
 After the skill completes, present the result for user approval. Do not execute, modify, or analyze the output further.
 
-### Procedure
+### Outcome
 
-1. Fetch all four PRD artifacts from mempalace:
-   ```
-   memory_smart_search(query="<session_id> PRD Narrative", room="skills/prd-<session_id>", limit=5, include_full=true)
-   memory_smart_search(query="<session_id> Requirement Catalog", room="skills/prd-<session_id>", limit=5, include_full=true)
-   memory_smart_search(query="<session_id> Verification Matrix", room="skills/prd-<session_id>", limit=5, include_full=true)
-   memory_smart_search(query="<session_id> IDEAL_STATE", room="skills/prd-<session_id>", limit=5, include_full=true)
-   ```
+The user must be able to approve or reject the spec on its merits. That means they see:
+the overview and success metrics, the requirement count, whether the IDEAL_STATE is
+valid, **whether the deterministic checks actually ran** (`schema_checked`), the
+code-derived `artifact_facts`, and any unresolved issues. How you retrieve and present
+that is your call — the room is `skills/prd-<session_id>` (wing `penny`), and
+`include_full=true` returns whole artifacts.
+
+A worked example follows; deviate where it serves the user better.
+
+1. Fetch the artifacts you need from the session room (`include_full=true`).
 
 2. Present key sections via questionnaire:
    ```typescript
@@ -129,7 +132,7 @@ After completion, `skills/prd-{session_id}/` contains:
 | `{sid} IDEAL_STATE` | Structured IDEAL_STATE matching canonical schema | JSON |
 | `{sid} Validate` | Vera's validation report | Markdown |
 
-Downstream skills read from this room. The `code` skill reads `IDEAL_STATE` and `PRD Narrative` during `define_specs`, and `Verification Matrix` during `verify`.
+Downstream skills read from this room. The `code` skill reads `IDEAL_STATE` (and, when present, the narrative) if a caller passes `prd_room` — an OPTIONAL dependency: `code` runs standalone and synthesises its own criteria when no PRD exists. It does **not** currently read the `Verification Matrix`; that artifact serves human review and any downstream consumer that wants it.
 
 ## Chain Contract
 

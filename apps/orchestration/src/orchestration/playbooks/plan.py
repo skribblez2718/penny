@@ -351,7 +351,7 @@ def _build_explore(pb: "PlanPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> 
     room = _room(ctx)
     parts = [
         f"Session: {ctx.session_id}.",
-        f"Goal: {pb._cap(ctx.goal)}.",
+        f"Goal: {ctx.goal}.",
         f"Focus: {focus}.",
         f"Mempalace room: {room}.",
     ]
@@ -378,7 +378,7 @@ def _build_plan(pb: "PlanPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str
     if revision:
         issues = plan.get("critique_issues", [])
         return (
-            f"Session: {ctx.session_id}. Goal: {pb._cap(ctx.goal)}. Mempalace room: {room}. "
+            f"Session: {ctx.session_id}. Goal: {ctx.goal}. Mempalace room: {room}. "
             f"This is REVISION cycle {revision}. The prior critique identified these issues: "
             f"{'; '.join(str(i) for i in issues) or 'see the critique in mempalace'}. "
             f"Read the critique and the latest exploration from mempalace. Address EVERY issue and "
@@ -386,7 +386,7 @@ def _build_plan(pb: "PlanPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str
             f"{ctx.session_id} Planner (Revision {revision}). Output a brief SUMMARY with plan steps."
         )
     return (
-        f"Session: {ctx.session_id}. Goal: {pb._cap(ctx.goal)}. Mempalace room: {room}. "
+        f"Session: {ctx.session_id}. Goal: {ctx.goal}. Mempalace room: {room}. "
         f"Read explore findings from wing=penny room={room}. Write the plan to wing=penny room={room} "
         f"with header: {ctx.session_id} Planner. Output a brief SUMMARY with plan steps and stakes."
     )
@@ -422,7 +422,7 @@ def _build_taskify(pb: "PlanPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> 
 def _build_scope(pb: "PlanPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> str:
     room = _room(ctx)
     return (
-        f"Session: {ctx.session_id}. Goal: {pb._cap(ctx.goal)}. Mempalace room: {room}. "
+        f"Session: {ctx.session_id}. Goal: {ctx.goal}. Mempalace room: {room}. "
         f"Decompose the goal into the exploration foci whose answers the plan needs, and "
         f"emit them as explore_branches (branch_id -> focus). Every branch is read-only "
         f"echo work. Check room {room} for prior session results first."
@@ -638,7 +638,7 @@ class PlanPlaybook(BasePlaybook):
         base = (
             builder(self, ctx, spec)
             if builder
-            else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
+            else f"{spec.task_hint}\nGoal: {ctx.goal}"
         )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {ctx.clarification_text}"

@@ -337,7 +337,7 @@ def _build_analyze(pb: "RezPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> s
         f"Session: {ctx.session_id}. "
         f"Mempalace room: {_room(ctx)}. "
         f"Skill dir: {_skill_dir(ctx)}. "
-        f"Job description input (URL, file path, or inline text): {pb._cap(ctx.goal)}. "
+        f"Job description input (URL, file path, or inline text): {ctx.goal}. "
         f"Ingest the JD (web_fetch a URL; read a file path; use inline text as-is). "
         f"Read the base resume from {_skill_dir(ctx)}/resources/resume/ and "
         f"accomplishments from {_skill_dir(ctx)}/resources/accomplishments/ "
@@ -416,7 +416,8 @@ def _build_validate(pb: "RezPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> 
     flags = pb._provenance_flags(ctx)
     assist = ""
     if flags:
-        shown = "; ".join(f'"{str(b)[:120]}"' for b in flags[:8])
+        # EVERY flag, in full: a clipped fabrication-suspect list hides suspects from vera.
+        shown = "; ".join(f'"{b}"' for b in flags)
         assist = (
             " PROVENANCE ASSIST (deterministic pre-scan — a HINT, not a verdict): these tailored "
             f"bullets show no source-token overlap and are fabrication SUSPECTS — trace each to the "
@@ -603,7 +604,7 @@ class RezPlaybook(BasePlaybook):
         base = (
             builder(self, ctx, spec)
             if builder
-            else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
+            else f"{spec.task_hint}\nGoal: {ctx.goal}"
         )
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {ctx.clarification_text}"

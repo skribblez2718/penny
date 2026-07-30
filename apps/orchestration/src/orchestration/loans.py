@@ -74,20 +74,6 @@ LOANS: dict[str, Loan] = {
             review_by="2026-10-01",
         ),
         Loan(
-            loan_id="task_digest_cap",
-            description=(
-                "Truncates values embedded in agent task messages to a fixed character "
-                "budget (engine.BasePlaybook._cap) so directives stay digests."
-            ),
-            rationale=(
-                "Compact (atom E2) mechanism: the *need* for context economy is durable "
-                "but this fixed-threshold mechanism is a loan tuned to current context "
-                "handling; re-measure as models handle longer contexts natively."
-            ),
-            added="2026-07-14",
-            review_by="2026-10-01",
-        ),
-        Loan(
             loan_id="plan_default_explore_topology",
             description=(
                 "The plan skill's legacy fixed 3-branch exploration fan-out "

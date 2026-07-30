@@ -181,20 +181,6 @@ def test_gate_intent_model_failure_is_safe_refine(monkeypatch):
     assert BasePlaybook.classify_gate_intent("some free text", runner=boom) == "refine"
 
 
-# ---------------------------------------------------------------------------
-# Wiring: task_digest_cap
-# ---------------------------------------------------------------------------
-
-
-def test_cap_truncates_by_default(monkeypatch):
-    monkeypatch.delenv("PENNY_ABLATE_TASK_DIGEST_CAP", raising=False)
-    out = BasePlaybook._cap("x" * 700)
-    assert len(out) < 700 and out.endswith("…[truncated]")
-
-
-def test_cap_ablated_passes_through(monkeypatch):
-    monkeypatch.setenv("PENNY_ABLATE_TASK_DIGEST_CAP", "1")
-    assert BasePlaybook._cap("x" * 700) == "x" * 700
 
 
 # ---------------------------------------------------------------------------

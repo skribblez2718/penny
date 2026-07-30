@@ -19,8 +19,8 @@ Load domain guidance before synthesizing, from the absolute guidance root in you
 
 ## Artifact interface (the contract the code skill consumes)
 
-- **Requirement catalog** — array of `{id: "REQ-NNN", priority: "P0|P1|P2", title, description, acceptance_criteria: [testable, binary]}`; atomic, sequential ids, every REQ has ≥2 criteria.
-- **Verification matrix** — object keyed by every REQ-ID → `{unit_tests, integration_tests, e2e_tests, manual_tests}` (arrays; `[]` not omitted); every REQ has ≥1 strategy.
+- **Requirement catalog** — array of `{id: "REQ-NNN", priority: "P0|P1|P2", title, description, acceptance_criteria: [testable, binary]}`. Ids are unique; **they need not be gapless** — do not renumber on revision, since renumbering churns every cross-reference in the other three artifacts. Each requirement is atomic, and carries **as many acceptance criteria as it takes to make it binary** — usually more than one, but a genuinely single-condition requirement takes one; padding to hit a count is worse than one sharp criterion.
+- **Verification matrix** — object keyed by every REQ-ID → an object of strategy-kind → list. `unit_tests` / `integration_tests` / `e2e_tests` / `manual_tests` are the common kinds, **not a closed set**: use the kind that actually fits (`property_tests`, `fuzz`, `contract_tests`, `load_tests`, `accessibility_audit`, …). What is enforced is that **every REQ-ID appears and has at least one non-empty strategy** — an empty box is a requirement nobody can check.
 - **IDEAL_STATE** — canonical schema (vera executes the validator named in her task; a schema-malformed spec is rejected by code, not opinion): `goal`, `source`, `success_criteria` (≥1, tracing to narrative Success Metrics), `anti_criteria`, `verification` (bool map), `security_review`, `edge_cases`, `language`, `impacted_files_estimate`, `dependencies`, `deliverables` (real paths), `build_order` (dependency-ordering constraints only — which deliverables block others; a non-binding hint, not a prescribed step sequence).
 
 ## Non-negotiables

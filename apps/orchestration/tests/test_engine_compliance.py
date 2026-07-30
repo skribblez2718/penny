@@ -159,13 +159,25 @@ def test_summary_evidence_lands_on_context(tmp_path):
     assert rec.context.verify_evidence == ["pytest: 12 passed", "lint: 0"]
 
 
-def test_evidence_is_capped_and_stringified(tmp_path):
+def test_evidence_is_captured_verbatim_and_stringified(tmp_path):
+    # Evidence is the artifact that makes a verdict auditable — capture it COMPLETE.
+    # This previously clipped each item to 300 chars and kept only the first 5, which
+    # discarded exactly the captured tool output the ledger exists to record.
     cp = Checkpointer(db_path=tmp_path / "orch.db")
     _start(cp)
     _step(cp, "skribble", {"confidence": "PROBABLE", "evidence": ["x" * 500, 42]})
     rec = cp.load(RID)
-    assert rec.context.verify_evidence[0].endswith("…[truncated]")
+    assert rec.context.verify_evidence[0] == "x" * 500  # verbatim, not truncated
+    assert "truncated" not in rec.context.verify_evidence[0]
     assert rec.context.verify_evidence[1] == "42"
+
+
+def test_all_evidence_items_are_kept(tmp_path):
+    cp = Checkpointer(db_path=tmp_path / "orch.db")
+    _start(cp)
+    items = [f"evidence line {i}" for i in range(12)]  # more than the old 5-item cap
+    _step(cp, "skribble", {"confidence": "PROBABLE", "evidence": items})
+    assert cp.load(RID).context.verify_evidence == items
 
 
 def test_empty_evidence_is_not_captured(tmp_path):
@@ -180,7 +192,10 @@ def test_outcome_body_records_evidence():
     ctx = RunContext(session_id=SID, run_id=RID, playbook="code")
     ctx.verify_evidence = ["pytest: 12 passed", "b", "c", "d"]
     body = json.loads(build_outcome_content(ctx).split("\n", 1)[1])
-    assert body["verify_evidence"] == ["pytest: 12 passed", "b", "c"]  # capped at 3
+    # Full record — previously sliced to the first 3, which silently dropped evidence
+    # the learning loop needs. Trimming now happens only at the drawer-size limit and
+    # is explicitly marked (see test_no_truncation.py).
+    assert body["verify_evidence"] == ["pytest: 12 passed", "b", "c", "d"]
 
 
 # ---------------------------------------------------------------------------

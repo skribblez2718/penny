@@ -806,7 +806,7 @@ class ManimPlaybook(BasePlaybook):
         room = _room(ctx)
         builders = {
             "scoping": lambda: (
-                f"Session: {ctx.session_id}. Goal: {self._cap(ctx.goal)}. {self._paths(ctx)} "
+                f"Session: {ctx.session_id}. Goal: {ctx.goal}. {self._paths(ctx)} "
                 f"{spec.task_hint} Emit ingest_branches in your SUMMARY."
             ),
             "ingesting": lambda: (
@@ -816,7 +816,7 @@ class ManimPlaybook(BasePlaybook):
                 f"{ctx.session_id} Ingest."
             ),
             "designing_canon": lambda: (
-                f"Session: {ctx.session_id}. Goal: {self._cap(ctx.goal)}. {self._paths(ctx)} "
+                f"Session: {ctx.session_id}. Goal: {ctx.goal}. {self._paths(ctx)} "
                 f"Read the ingest findings in wing={WING} room={room}. {spec.task_hint} "
                 f"Budget: at most {mm.get('max_scenes')} scenes"
                 + (f"; requested theme: {mm['theme']}" if mm.get("theme") else "")
@@ -881,9 +881,9 @@ class ManimPlaybook(BasePlaybook):
             ),
         }
         builder = builders.get(state)
-        base = builder() if builder else f"{spec.task_hint}\nGoal: {self._cap(ctx.goal)}"
+        base = builder() if builder else f"{spec.task_hint}\nGoal: {ctx.goal}"
         if ctx.clarification_text and state == "designing_canon":
-            base += f"\n\nUser clarification: {self._cap(ctx.clarification_text)}"
+            base += f"\n\nUser clarification: {ctx.clarification_text}"
         return base
 
     # -- result ------------------------------------------------------------

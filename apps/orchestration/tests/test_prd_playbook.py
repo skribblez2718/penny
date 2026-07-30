@@ -7,6 +7,8 @@ escalation, UNCERTAIN escalation from vera (a legacy dead-end, now coherent), an
 the run_id/checkpointer contract (fresh instance per step).
 """
 
+import json
+
 import pytest
 
 from orchestration.checkpointer import STATUS_AWAITING_USER, Checkpointer
@@ -597,3 +599,295 @@ def test_prompt_carries_its_own_summary_contract_without_the_loan(agent, spec, m
         f"(missing {sorted(required - prompt_keys)}) — it cannot rely on the "
         f"summary_schema_restatement loan, which is OFF for strong models."
     )
+
+
+# ---------------------------------------------------------------------------
+# item 10: opt-in cross-model verification hook (model_for_state).
+# independence.py classifies prd's synthia->vera edge SAME_MODEL; this is the
+# hook that lets a caller/ops opt into a genuinely independent validator.
+# ---------------------------------------------------------------------------
+
+
+def _ctx(constraints=None):
+    return RunContext(
+        session_id=SID, run_id=RID, playbook="prd", goal=GOAL, constraints=constraints or {}
+    )
+
+
+def test_unset_is_unchanged_no_override_for_any_state(cp, monkeypatch):
+    # SM1: the default path must be byte-identical to before the hook existed.
+    for key in ("PRD_VERA", "PRD_SYNTHIA", "PRD_DEFAULT"):
+        monkeypatch.delenv(key, raising=False)
+    pb = PrdPlaybook(cp)
+    assert pb.model_for_state("validating", _ctx()) is None
+    assert pb.model_for_state("generating", _ctx()) is None
+
+
+def test_validate_model_constraint_selects_the_validator_model(cp):
+    # SM2: the constraint drives `validating` only.
+    ctx = _ctx({"validate_model": "ollama/glm"})
+    pb = PrdPlaybook(cp)
+    assert pb.model_for_state("validating", ctx) == "ollama/glm"
+    assert pb.model_for_state("generating", ctx) is None  # scoped: never the generator
+
+
+def test_validate_model_constraint_beats_the_env_tier(cp, monkeypatch):
+    monkeypatch.setenv("PRD_VERA", "ollama/other")
+    ctx = _ctx({"validate_model": "ollama/glm"})
+    assert PrdPlaybook(cp).model_for_state("validating", ctx) == "ollama/glm"
+
+
+def test_env_tier_is_honored_when_no_constraint(cp, monkeypatch):
+    # SM3: PRD_VERA (per-agent) beats PRD_DEFAULT.
+    monkeypatch.setenv("PRD_DEFAULT", "ollama/fallback")
+    assert PrdPlaybook(cp).model_for_state("validating", _ctx()) == "ollama/fallback"
+    monkeypatch.setenv("PRD_VERA", "ollama/specific")
+    assert PrdPlaybook(cp).model_for_state("validating", _ctx()) == "ollama/specific"
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "noslash", "has space/model", "/leading", "trailing/"])
+def test_malformed_ENV_values_fall_through_and_never_raise(cp, monkeypatch, bad):
+    # SM3 (fail-safe): the ENV tier is strict — a typo in ops config must never break a
+    # run, it falls through to the agent's own model.
+    monkeypatch.setenv("PRD_VERA", bad)
+    assert PrdPlaybook(cp).model_for_state("validating", _ctx()) is None
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_constraint_falls_through_to_the_env_tier(cp, monkeypatch, blank):
+    for key in ("PRD_VERA", "PRD_DEFAULT"):
+        monkeypatch.delenv(key, raising=False)
+    assert PrdPlaybook(cp).model_for_state("validating", _ctx({"validate_model": blank})) is None
+
+
+@pytest.mark.parametrize("value", ["haiku", "ollama/glm", "anthropic/claude-sonnet-4"])
+def test_constraint_tier_is_deliberately_permissive(cp, value):
+    # The CONSTRAINT tier is intentionally NOT format-validated, unlike the env tier:
+    # agent-runner.ts (~613) documents that "a bare override (no '/') keeps the legacy
+    # model-only meaning", so a caller passing a bare model name is legitimate.
+    # Applying _is_valid_provider_model here would silently ignore that caller.
+    # Matches the jsa/sca precedent, which also only .strip()s the constraint.
+    assert PrdPlaybook(cp).model_for_state("validating", _ctx({"validate_model": value})) == value
+
+
+def test_none_constraints_are_guarded(cp):
+    ctx = RunContext(session_id=SID, run_id=RID, playbook="prd")
+    ctx.constraints = None
+    assert PrdPlaybook(cp).model_for_state("validating", ctx) is None
+
+
+def test_hook_does_not_reclassify_the_independence_edge():
+    # SM4: the hook is OPT-IN and off by default, so the default path is still
+    # same-model bare judgement — the edge must stay SAME_MODEL and registered.
+    from orchestration import independence as ind
+
+    edge = next(e for e in ind.VERIFY_EDGES if e.skill == "prd")
+    assert ind.classify(edge) == ind.SAME_MODEL
+    assert "prd" in ind.SAME_MODEL_EXCEPTIONS
+    assert ind.check_independence() == []  # invariant still holds
+
+
+# ---------------------------------------------------------------------------
+# item 11: deterministic artifact facts + the rules-tier floor.
+# The functions are PURE, so these run without MemPalace. Structure is derived
+# (template + artifact-to-artifact set comparison), never a hardcoded vocabulary.
+# ---------------------------------------------------------------------------
+
+from orchestration.playbooks.prd import (  # noqa: E402
+    _extract_json,
+    artifact_facts,
+    declared_sections,
+    hard_contradictions,
+)
+
+_CATALOG = [
+    {"id": "REQ-001", "priority": "P0", "title": "a", "acceptance_criteria": ["x", "y"]},
+    {"id": "REQ-002", "priority": "P1", "title": "b", "acceptance_criteria": ["x", "y"]},
+]
+_MATRIX = {
+    "REQ-001": {"unit_tests": ["t1"], "e2e_tests": []},
+    "REQ-002": {"unit_tests": ["t2"], "e2e_tests": []},
+}
+_NARRATIVE = "\n".join(f"## {i}. Section {i}\nbody" for i in range(1, 13))
+
+
+def test_extract_json_handles_a_drawer_header_and_nested_braces():
+    body = 'sid Requirement Catalog\n\n[{"id":"REQ-001","d":{"k":"]"}}]'
+    assert _extract_json(body) == [{"id": "REQ-001", "d": {"k": "]"}}]
+    assert _extract_json("no json here") is None
+    assert _extract_json("") is None
+
+
+def test_facts_are_counts_not_judgements():
+    f = artifact_facts(
+        narrative=_NARRATIVE, catalog=_CATALOG, matrix=_MATRIX,
+        ideal={"success_criteria": ["a", "b"], "deliverables": ["f.py"]},
+        declared=set(range(1, 13)),
+    )
+    assert f["narrative_sections_found"] == 12
+    assert f["narrative_sections_missing"] == []
+    assert f["requirement_count"] == 2 and f["catalog_ids"] == 2
+    assert f["matrix_missing_ids"] == [] and f["matrix_unknown_ids"] == []
+    assert f["ideal_success_criteria"] == 2 and f["ideal_deliverables"] == 1
+    assert hard_contradictions(f) == []
+
+
+def test_the_id_key_is_discovered_not_assumed():
+    # Structure is DERIVED: renaming the id field must not blind the check (item 16
+    # will change this schema, and this floor has to survive that).
+    renamed = [{"requirement_id": "REQ-001", "acceptance_criteria": ["x"]}]
+    f = artifact_facts(catalog=renamed, matrix={"REQ-001": {"unit_tests": ["t"]}})
+    assert f["catalog_id_key"] == "requirement_id"
+    assert f["catalog_ids"] == 1 and f["matrix_missing_ids"] == []
+
+
+def test_floor_catches_a_requirement_missing_from_the_matrix():
+    f = artifact_facts(catalog=_CATALOG, matrix={"REQ-001": {"unit_tests": ["t"]}})
+    assert f["matrix_missing_ids"] == ["REQ-002"]
+    assert any("omits requirement" in c for c in hard_contradictions(f))
+
+
+def test_floor_catches_duplicate_ids_and_unknown_matrix_keys():
+    dup = _CATALOG + [{"id": "REQ-001", "acceptance_criteria": ["z"]}]
+    f = artifact_facts(catalog=dup, matrix={**_MATRIX, "REQ-999": {"unit_tests": ["t"]}})
+    assert f["catalog_duplicate_ids"] == ["REQ-001"]
+    issues = hard_contradictions(f)
+    assert any("duplicate ids" in c for c in issues)
+    assert any("unknown id" in c for c in issues)
+
+
+def test_floor_catches_a_requirement_with_no_verification_strategy():
+    f = artifact_facts(catalog=_CATALOG, matrix={"REQ-001": {"unit_tests": ["t"]}, "REQ-002": {}})
+    assert f["matrix_ids_without_strategy"] == ["REQ-002"]
+    assert any("no verification strategy" in c for c in hard_contradictions(f))
+
+
+def test_criteria_vs_metric_count_is_REPORTED_not_floored():
+    # The live miss that motivated item 11 (5 criteria asserted "1:1" with 6 metrics).
+    # It is surfaced as a fact for the verifier, NOT failed: merging two metrics into
+    # one criterion is defensible, so this is judgement, not contradiction.
+    f = artifact_facts(catalog=_CATALOG, matrix=_MATRIX, ideal={"success_criteria": [1, 2, 3, 4, 5]})
+    assert f["ideal_success_criteria"] == 5
+    assert hard_contradictions(f) == []
+
+
+def test_section_coverage_is_reported_not_floored():
+    f = artifact_facts(narrative="## 1. Overview\n## 2. Problem", declared=set(range(1, 13)))
+    assert f["narrative_sections_missing"] == list(range(3, 13))
+    assert hard_contradictions(f) == []  # item 12 is still under review; do not harden it
+
+
+def test_declared_sections_are_read_from_the_template_not_hardcoded():
+    from orchestration.playbooks.prd import skill_root
+
+    declared = declared_sections(skill_root(RunContext(session_id="s", run_id="r", playbook="prd")))
+    assert declared == set(range(1, 13))  # whatever prd-template.md declares today
+    assert declared_sections("") == set()  # unresolvable -> facts omitted, never a crash
+
+
+def test_facts_never_raise_on_garbage():
+    assert artifact_facts(catalog="not-a-list", matrix="not-a-dict", ideal="nope") == {}
+    assert hard_contradictions({}) == []
+
+
+class _FactsPrd(PrdPlaybook):
+    """Artifacts readable, with REQ-002 missing from the matrix."""
+
+    def _read_artifacts(self, ctx):
+        return {
+            "narrative": _NARRATIVE,
+            "requirement catalog": "hdr\n\n" + json.dumps(_CATALOG),
+            "verification matrix": "hdr\n\n" + json.dumps({"REQ-001": {"unit_tests": ["t"]}}),
+        }
+
+    def _read_ideal_state(self, ctx):
+        return {"goal": "g", "success_criteria": ["c1"]}
+
+
+def test_rules_floor_overrides_a_vera_pass_on_an_objective_contradiction(cp):
+    # vera PASSes, but REQ-002 has no matrix entry — code decides, not judgement.
+    _to_validating(cp, cls=_FactsPrd)
+    d = _step(cp, "vera", VERA_PASS, cls=_FactsPrd)
+    assert d["action"] == "invoke_agent" and d["state_id"] == "generating"  # forced revise
+    prd = cp.load(RID).context.extras["prd"]
+    assert prd["valid"] is False
+    assert any("omits requirement" in c for c in prd["artifact_contradictions"])
+    assert prd["artifact_facts"]["requirement_count"] == 2
+
+
+def test_computed_counts_are_handed_to_vera_in_her_task(cp):
+    _to_validating(cp, cls=_FactsPrd)
+    _step(cp, "vera", _vera_fail(["x"]), cls=_FactsPrd)
+    _step(cp, "synthia", SYNTH_SUMMARY, cls=_FactsPrd)
+    rec = cp.load(RID)
+    task = _FactsPrd(cp)._task_summary("validating", None, rec.context)
+    assert "computed deterministically" in task
+    assert "requirement_count=2" in task
+
+
+def test_extract_json_picks_the_earliest_bracket_not_the_array_first():
+    # Regression: an object whose values contain arrays must not parse as the inner
+    # array. This silently reduced the whole verification matrix to ["t"].
+    body = 'sid Verification Matrix\n\n{"REQ-001": {"unit_tests": ["t"]}}'
+    assert _extract_json(body) == {"REQ-001": {"unit_tests": ["t"]}}
+    # and an array payload still wins when it genuinely comes first
+    assert _extract_json('hdr\n\n[{"id":"REQ-001"}]') == [{"id": "REQ-001"}]
+
+
+# ---------------------------------------------------------------------------
+# item 11 regression: artifact SELECTION. A live run reported "0/12 sections
+# found" for a narrative that had all 12, because the loose header scan matched
+# the Validate report and a diagnostic note, and no recency rule was applied.
+# vera caught it, but it cost a full revision cycle.
+# ---------------------------------------------------------------------------
+
+from orchestration.playbooks.prd import select_artifacts  # noqa: E402
+
+_NARR_V1 = "sid PRD Narrative (SYNTHESIS mode)\n\n## 1. Overview\nv1"
+_NARR_V2 = "sid PRD Narrative (REVISION mode)\n\n" + "\n".join(
+    f"## {i}. S{i}\nbody" for i in range(1, 13)
+)
+
+
+def test_selection_ignores_the_validate_report_that_mentions_the_narrative():
+    # The exact shape that produced the false 0/12.
+    validate = "## sid Validate\n\nValidator: Vera. Narrative: all 12 sections present."
+    got = select_artifacts([(validate, "2026-07-30T08:17"), (_NARR_V2, "2026-07-30T08:20")])
+    assert got["narrative"] == _NARR_V2
+
+
+def test_selection_ignores_a_diagnostic_note_naming_the_narrative():
+    note = "sid Synthia Diagnostic Note — narrative-section-count discrepancy\n\nno sections here"
+    got = select_artifacts([(note, "2026-07-30T08:35"), (_NARR_V2, "2026-07-30T08:20")])
+    assert got["narrative"] == _NARR_V2  # newer note must NOT win — it isn't an artifact
+
+
+def test_selection_keeps_the_newest_revision_of_an_artifact():
+    got = select_artifacts([(_NARR_V2, "2026-07-30T08:20"), (_NARR_V1, "2026-07-30T08:14")])
+    assert got["narrative"] == _NARR_V2
+    # order of presentation must not matter
+    got2 = select_artifacts([(_NARR_V1, "2026-07-30T08:14"), (_NARR_V2, "2026-07-30T08:20")])
+    assert got2["narrative"] == _NARR_V2
+
+
+def test_selection_end_to_end_yields_the_right_section_count():
+    validate = "## sid Validate (pass 2)\n\nNarrative: 12/12 sections found."
+    note = "sid Synthia Diagnostic Note — narrative-section-count\n\nnothing"
+    picked = select_artifacts([
+        (_NARR_V1, "2026-07-30T08:14"),
+        (validate, "2026-07-30T08:17"),
+        (_NARR_V2, "2026-07-30T08:20"),
+        (note, "2026-07-30T08:35"),
+    ])
+    f = artifact_facts(narrative=picked["narrative"], declared=set(range(1, 13)))
+    assert f["narrative_sections_found"] == 12  # was 0 in the live run
+    assert f["narrative_sections_missing"] == []
+
+
+def test_selection_picks_catalog_and_matrix_by_exact_contract_name():
+    got = select_artifacts([
+        ("sid Requirement Catalog\n\n[]", "1"),
+        ("sid Verification Matrix\n\n{}", "1"),
+        ("sid PRD Narrative\n\n## 1. A", "1"),
+    ])
+    assert set(got) == {"narrative", "requirement catalog", "verification matrix"}

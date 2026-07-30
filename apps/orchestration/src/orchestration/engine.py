@@ -59,6 +59,7 @@ from .contracts import Confidence, Directives, validate_summary_contract, weakes
 from .context import RunContext
 from .loans import loan_enabled
 from .outcome_writer import record_outcome
+from .paths import skill_root
 from .primitives.spec import ParallelSpec, PrimitiveSpec, parallel_spec_from_dict
 
 
@@ -725,15 +726,14 @@ class BasePlaybook:
             status=status,
         )
 
-    @staticmethod
-    def _cap(text: str, limit: int = 600) -> str:
-        """Bound an embedded value so the task message stays a digest, not a
-        payload dump (full data lives in MemPalace). Tagged LOAN
-        ``task_digest_cap`` (a Compact/E2 mechanism): ablated, values pass
-        through untruncated so scaffold-OFF runs can measure the mechanism."""
-        if not loan_enabled("task_digest_cap"):
-            return text
-        return text if len(text) <= limit else text[:limit] + " …[truncated]"
+    # NOTE: the former ``_cap`` helper (LOAN ``task_digest_cap``) is DELETED. It bounded
+    # every value embedded in an agent task message at 600 chars "so directives stay
+    # digests", justified by "full data lives in MemPalace". That premise was false for
+    # the most important value it truncated: ``ctx.goal``. A 1,967-char goal reached the
+    # agent as 613 chars — 69% of the specification discarded, silently, with no way for
+    # the agent to recover it. Agents must receive their FULL input; a fixed character
+    # threshold was scaffolding for smaller-context models and is not reintroduced.
+    # Guarded by tests/test_no_truncation.py.
 
     def parallel_spec(self, state: str, ctx: RunContext) -> ParallelSpec | None:
         """The fan-out topology for ``state`` — topology as DATA (assembly
@@ -763,17 +763,19 @@ class BasePlaybook:
         return spec
 
     def _capture_evidence(self, summary: dict) -> None:
-        """Stash a capped digest of a SUMMARY's non-empty ``evidence`` field on
-        the context (last-write-wins) so the outcome ledger records
-        outcome+evidence, not outcome alone (atomic-loop checklist)."""
+        """Stash a SUMMARY's non-empty ``evidence`` field on the context (last-write-wins)
+        so the outcome ledger records outcome+evidence, not outcome alone.
+
+        Captured VERBATIM and COMPLETE. This previously kept only the first 5 items,
+        each clipped to 300 chars — which discarded exactly the captured tool output
+        (schema-check results, counts, test transcripts) that makes a verdict auditable,
+        and starved the learning loop of the detail it needs to distil anything useful.
+        """
         ev = summary.get("evidence")
         if isinstance(ev, str):
             ev = [ev] if ev.strip() else []
         if isinstance(ev, (list, tuple)) and len(ev) > 0:
-            self._ctx.verify_evidence = [
-                s if len(s) <= 300 else s[:300] + " …[truncated]"
-                for s in (str(e) for e in list(ev)[:5])
-            ]
+            self._ctx.verify_evidence = [str(e) for e in ev]
 
     def _auto_record_iteration(self, pre_iteration: int, summary: dict) -> None:
         """Ledger side of the default-on loop guards: when ``route_after``
@@ -828,15 +830,37 @@ class BasePlaybook:
         return self._retry_or_fail(state, reason)
 
     def _task_summary(self, state: str, spec: PrimitiveSpec, ctx: RunContext) -> str:
-        parts = [spec.task_hint, f"Goal: {self._cap(ctx.goal)}"]
+        parts = [spec.task_hint, f"Goal: {ctx.goal}"]
         # No retrieved-memory injection here (see start()): a directive carries this
         # run's facts, never distilled content from prior runs or pending amendments.
-        parts.extend(self._cap(p) for p in self.task_context_parts(state, ctx))
+        parts.extend(p for p in self.task_context_parts(state, ctx))
         if ctx.iteration:
             parts.append(f"(retry iteration {ctx.iteration + 1}/{ctx.max_iterations})")
         if ctx.clarification_text:
-            parts.append(self._cap(f"User clarification: {ctx.clarification_text}"))
+            parts.append(f"User clarification: {ctx.clarification_text}")
         return "\n".join(parts)
+
+    def _skill_root_line(self, ctx: RunContext) -> str:
+        """One run fact appended to EVERY agent directive: the absolute skill root.
+
+        An agent is spawned with ``cwd = project_root`` — the TARGET repo — so a
+        skill-relative path mentioned in its static prompt file (``resources/x.md``,
+        ``scripts/y.py``) resolves into the wrong tree and is silently unreadable.
+        A prompt file is static markdown and cannot interpolate a runtime path, so the
+        engine states the root once here and tells the agent what to anchor to.
+        Empty when unresolvable — never emit a broken path.
+        """
+        root = skill_root(ctx, self.NAME)
+        if not root:
+            return ""
+        return (
+            f"\n\nSkill root (ABSOLUTE): {root}\n"
+            "Your working directory is the TARGET project, NOT this skill's repo. Any "
+            "skill-relative path your guidance mentions (`resources/...`, `scripts/...`) "
+            "lives under that Skill root — read it by its absolute path. A bare relative "
+            "path will silently fail to resolve; if a guidance file cannot be read, say so "
+            "rather than proceeding as though you had read it."
+        )
 
     @staticmethod
     def _summary_contract_directive(spec: PrimitiveSpec) -> str:
@@ -970,6 +994,7 @@ class BasePlaybook:
                     "branch_id": bid,
                     "agent": b.agent,
                     "task_summary": self._task_summary(state, b, self.ctx)
+                    + self._skill_root_line(self.ctx)
                     + self._summary_contract_directive(b),
                 }
                 if sc:
@@ -989,6 +1014,7 @@ class BasePlaybook:
         return Directives.invoke_agent(
             agent=spec.agent,
             task_summary=self._task_summary(state, spec, self.ctx)
+            + self._skill_root_line(self.ctx)
             + self._summary_contract_directive(spec),
             state_id=state,
             session_id=self.ctx.session_id,
