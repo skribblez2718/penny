@@ -544,3 +544,80 @@ def test_latest_ideal_state_resolves_title_wrapped_chunked_drawer():
     assert got is not None
     assert got["success_criteria"] == big["success_criteria"]
     assert got["build_order"] == ["step 1"]
+
+
+# ---------------------------------------------------------------------------
+# item 16 (cross-skill half): the verification taxonomy is OPEN.
+# Previously `enabled` filtered to six hardcoded tiers, so any other required
+# tier vanished from the agent's obligations — including multi_server, which
+# code_detection itself sets. IDEAL_STATE schema_version 2 records the intent.
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_required_tiers_are_not_silently_dropped():
+    from orchestration.context import RunContext
+    from orchestration.playbooks.code import _build_verify
+
+    ctx = RunContext(session_id="s", run_id="r", playbook="code", project_root="/tmp")
+    ideal = {
+        "verification": {
+            "lint": True,
+            "property_tests": True,
+            "fuzz_tests": True,
+            "accessibility_audit": True,
+            "e2e_tests": False,  # falsy tiers stay excluded
+        }
+    }
+    task = _build_verify(ctx, {"language": "python"}, ideal)
+    tiers = task.split("Enabled verification tiers:", 1)[1].split(".")[0]
+    for required in ("lint", "property_tests", "fuzz_tests", "accessibility_audit"):
+        assert required in tiers, f"{required} dropped from the enabled tiers"
+    assert "e2e_tests" not in tiers
+    # and they must come with an explicit obligation, not just be listed
+    assert "ADDITIONAL REQUIRED TIERS" in task
+    assert "mark it UNVERIFIED" in task
+
+
+def test_multi_server_tier_set_by_detection_survives():
+    # code_detection writes verification["multi_server"]; it used to be dropped.
+    from orchestration.context import RunContext
+    from orchestration.playbooks.code import _build_verify
+
+    ctx = RunContext(session_id="s", run_id="r", playbook="code", project_root="/tmp")
+    task = _build_verify(ctx, {"language": "python"}, {"verification": {"multi_server": True}})
+    assert "multi_server" in task.split("Enabled verification tiers:", 1)[1].split(".")[0]
+
+
+def test_known_tiers_keep_their_built_in_commands():
+    from orchestration.context import RunContext
+    from orchestration.playbooks.code import _build_verify
+
+    ctx = RunContext(session_id="s", run_id="r", playbook="code", project_root="/tmp")
+    task = _build_verify(ctx, {"language": "python"}, {"verification": {"lint": True, "unit_tests": True}})
+    assert "ruff check ." in task and "pytest" in task
+    assert "ADDITIONAL REQUIRED TIERS" not in task  # nothing unknown -> no extra block
+
+
+def test_ideal_state_schema_accepts_an_open_taxonomy_and_versions_it():
+    import subprocess, json as _json, sys as _sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[3] / "scripts" / "validate_ideal_state.py"
+    spec = {
+        "goal": "g",
+        "success_criteria": ["c"],
+        "verification": {"property_tests": True, "load_tests": True},
+    }
+    p = subprocess.run(
+        [_sys.executable, str(script), "--stdin"], input=_json.dumps(spec),
+        capture_output=True, text=True,
+    )
+    assert p.returncode == 0, p.stdout + p.stderr
+
+    # v1 documents (no schema_version) remain valid — backward compatible.
+    legacy = {"goal": "g", "success_criteria": ["c"], "verification": {"lint": True}}
+    p2 = subprocess.run(
+        [_sys.executable, str(script), "--stdin"], input=_json.dumps(legacy),
+        capture_output=True, text=True,
+    )
+    assert p2.returncode == 0, p2.stdout + p2.stderr

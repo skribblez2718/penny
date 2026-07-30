@@ -105,15 +105,21 @@ SAME_MODEL_EXCEPTIONS: dict[str, IndependenceException] = {
     for e in (
         IndependenceException(
             "prd",
-            "synthia generates the spec and vera validates it, both on sonnet by default. vera's "
-            "structural checks are partly evidence-backed (the T4 validate_json IDEAL_STATE schema "
-            "floor), but the prose-quality / coverage judgement remains the verifier's bare "
-            "same-model call. A cross-model hook now EXISTS (PrdPlaybook.model_for_state: "
-            "constraints['validate_model'] -> PRD_VERA/PRD_DEFAULT env -> the agent default), but it "
-            "is OPT-IN and off by default, so the default path is still same-model bare judgement "
-            "and this edge correctly stays SAME_MODEL. Repay fully by measuring same- vs cross-model "
-            "catch rate on a PRD defect corpus, then making cross-model the default.",
-            "2026-10-01",
+            "synthia generates the spec and vera validates it, both on sonnet by default. The "
+            "cross-model hook EXISTS (PrdPlaybook.model_for_state: constraints['validate_model'] -> "
+            "PRD_VERA/PRD_DEFAULT env -> agent default) but is OPT-IN, so the default path is still "
+            "same-model judgement and this edge correctly stays SAME_MODEL. MEASURED 2026-07-30 "
+            "against the labelled defect corpus (tests/prd_defect_corpus.py, 12 cases incl. 2 seen "
+            "in real runs): deterministic code already decides 6/12 (50%) — schema violations, "
+            "duplicate ids, matrix omissions/unknowns, uncheckable requirements — and a second "
+            "model adds NOTHING to those. The judgement residual is the other 50%. DECISION: do "
+            "NOT make cross-model the default yet. Several residual defects (unsourced threshold, "
+            "unmeasurable criterion, unrefined goal stub) are MECHANIZABLE — moving them into the "
+            "rules floor is cheaper, deterministic, and does not tax every run, whereas a second "
+            "model costs latency on every run and is still unmeasured on the residual. Next "
+            "repayment step: shrink the residual in code, then measure same- vs cross-model on "
+            "whatever genuinely remains.",
+            "2026-11-15",
         ),
         IndependenceException(
             "rez",

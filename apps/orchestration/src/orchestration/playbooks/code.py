@@ -650,12 +650,32 @@ def _build_verify(ctx: RunContext, code: dict, ideal: dict) -> str:
             f"  (c) CORS preflight from a representative browser origin returned the correct headers (if the server uses CORS).\n"
             f"\nFAIL verification for any outcome NOT demonstrated by evidence, naming the unmet outcome. Passing unit tests alone do NOT satisfy a server project — that is a false positive."
         )
-    enabled = [
-        k for k in (
-            "lint", "type_check", "unit_tests", "integration_tests",
-            "e2e_tests", "server_startup",
-        ) if verification.get(k)
+    # The verification taxonomy is OPEN (IDEAL_STATE schema_version 2). The six tiers
+    # below are the ones this playbook knows a default command for; they are NOT the
+    # set of tiers that may be required. Previously `enabled` filtered to those six, so
+    # any other required tier was silently dropped from the agent's obligations — it
+    # survived only as raw JSON in the IDEAL_STATE dump, never as something to run and
+    # evidence. That already bit the system's own detection: code_detection sets
+    # verification["multi_server"], which was not in the list. Property/fuzz/contract/
+    # load/accessibility tiers had no way to be required at all.
+    known = ("lint", "type_check", "unit_tests", "integration_tests", "e2e_tests", "server_startup")
+    enabled = [k for k in known if verification.get(k)]
+    # Any other truthy tier is a real obligation with no built-in command.
+    extra = [
+        str(k) for k, v in verification.items()
+        if v and k not in known and not str(k).startswith("server_")
     ]
+    enabled = enabled + extra
+    extra_directive = (
+        (
+            f"\n\nADDITIONAL REQUIRED TIERS (no built-in command — the IDEAL_STATE requires "
+            f"them, so you must determine the appropriate check for THIS repo, run it, and "
+            f"paste its captured output): {', '.join(extra)}. If a tier genuinely cannot be "
+            f"run here, say so explicitly and mark it UNVERIFIED — do not silently omit it."
+        )
+        if extra
+        else ""
+    )
     discovered = _discover_repo_commands(getattr(ctx, "project_root", "") or "")
     if discovered:
         disc = "; ".join(f"`{d['command']}` ({d['source']}: {d['name']})" for d in discovered)
@@ -673,7 +693,7 @@ def _build_verify(ctx: RunContext, code: dict, ideal: dict) -> str:
         )
     return (
         f"Verify implementation. IDEAL STATE: {json.dumps(ideal)}. "
-        f"Enabled verification tiers: {', '.join(enabled) if enabled else '(none)'}. "
+        f"Enabled verification tiers: {', '.join(enabled) if enabled else '(none)'}.{extra_directive} "
         f"{command_directive}"
         f"For any tier not configured in the project, explicitly state it. "
         f"Paste the ACTUAL captured output of every command you ran (the tail of "

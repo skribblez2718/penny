@@ -27,6 +27,18 @@ class IdealState(BaseModel):
 
     goal: str = Field(..., min_length=1, description="What are we building? One sentence.")
     source: str = Field(default="user_prompt", description="Origin: PRD, user_prompt, or plan")
+
+    schema_version: int = Field(
+        default=2,
+        ge=1,
+        description=(
+            "IDEAL_STATE schema version. v1: `verification` was understood as a CLOSED set of "
+            "tiers (lint/type_check/unit_tests/integration_tests/e2e_tests). v2: the taxonomy is "
+            "OPEN — any tier name may be required and consumers must honor unknown tiers rather "
+            "than dropping them. v1 documents remain valid: the field shape is unchanged, so v2 "
+            "is backward compatible and the version records INTENT for consumers."
+        ),
+    )
     
     success_criteria: list[str] = Field(
         ..., min_length=1, description="Measurable conditions that define 'done'"
@@ -44,7 +56,14 @@ class IdealState(BaseModel):
             "integration_tests": False,
             "e2e_tests": False,
         },
-        description="Verification tiers required. False = not configured in project."
+        description=(
+            "Verification tiers required. False = not configured in project. The key set is "
+            "OPEN (schema_version 2): the defaults above are common tiers, not the permitted "
+            "ones. A spec may require property_tests, fuzz_tests, contract_tests, load_tests, "
+            "accessibility_audit, or anything else that fits the work — a consumer MUST treat "
+            "an unknown truthy tier as a real obligation (determine the check, run it, evidence "
+            "it) and never silently drop it."
+        ),
     )
     
     security_review: list[str] = Field(
