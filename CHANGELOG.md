@@ -8,6 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **derivation skill — Tier-1.5 compression-distance signal (`ncd.py`).** A new
+  deterministic tier between the existing n-gram prefilter (Tier-1) and the
+  rubric-based review (Tier-2), computing Normalized Compression Distance
+  `NCD(x,y) = (C(xy) - min(C(x),C(y))) / max(C(x),C(y))` between authored content
+  and every source in the corpus, flagging outliers against the corpus's own
+  median/MAD distribution rather than an absolute threshold. Stdlib-only
+  (`lzma`/`zlib`), no network, no new dependencies. It is a **tripwire, never a
+  verdict, and never exculpatory**: an unusually low distance means "read that
+  source closely in Tier-2" and can strengthen a rubric-based DERIVATIVE_RISK
+  case but never establish one, while a high or unflagged distance is *not*
+  evidence of independence — structure, selection, and paraphrase dependence
+  survive compression distance untouched. Below a 1000-token floor (or fewer
+  than 4 corpus sources) no number-based signal is emitted at all
+  (`valid: false`), so a thin corpus cannot manufacture false confidence.
+  `SKILL.md` 1.1.0 → 1.2.0 (phase 2 becomes three tiers); `rubric.md` states D7
+  information-theoretically and records that the signal is evidence *for* the
+  originality question, not an answer *to* it. The Tier-1 `prefilter.py` is
+  deliberately byte-stable — an empty diff is a regression gate, since the two
+  tiers must stay independently interpretable. Test suite 34 → 40.
+
 - **imagegen skill (v1)** — local image generation over the self-hosted ComfyUI
   HTTP API (`127.0.0.1:8188`) as a `BasePlaybook` FSM (framing → composing →
   generating → critiquing → [adjusting → generating]\* → presenting). Routes each
