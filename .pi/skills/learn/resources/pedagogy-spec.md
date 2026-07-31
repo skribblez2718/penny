@@ -92,6 +92,13 @@ headers only:
     $\tfrac12+\tfrac14=\tfrac24+\tfrac14=\tfrac34$.
   ```
 
+- **Every concept section declares its information delta** — the one thing a learner who has
+  absorbed every preceding section could not yet produce. Deliberately redundant sections declare
+  a scaffold purpose instead. Both are authoring metadata, never learner-facing prose (§15).
+- **A concept section MAY open a prediction point** before the payload it teaches: an ungraded
+  predict → commit → reveal prompt that is *additive* to the graded practice above and never a
+  replacement for it (§16).
+
 **Meta-reference ban:** no methodology labels (crawl/walk/run or equivalents,
 ANY case), no "how to use this guide" blocks, no authoring conventions, no
 structure descriptions in learner files. The one sanctioned exception: a
@@ -156,7 +163,7 @@ translation.
 - Analogies must be drawable (future visuals) and speakable (future
   read-aloud).
 
-## 4. Canonical Callouts (exactly six, everywhere)
+## 4. Canonical Callouts (exactly seven, everywhere)
 
 | Callout | Marker | Job |
 |---|---|---|
@@ -166,6 +173,7 @@ translation.
 | Common Mistake | `> ⚠️ **Common Mistake:**` | The specific error learners make on this exact step (answers + keys) |
 | Everyday Take | `> 💡 **Everyday Take:**` | Result restated in plain language (answers + keys) |
 | Flashcard | `> **Front:** / > **Back:**` inside a 🧠 block | Spaced-repetition extraction unit (final-prep files only) |
+| Prediction point | `> 🔮 **Predict first:**` / `> 🔮 **Reveal:**` | Ungraded predict-commit-reveal pair in the markdown fallback rendering (§16) |
 
 No file invents new callout labels. Bold-labeled blockquotes that aren't these
 six are banned — use plain bold text or fold into Key Formula. Inclusive
@@ -179,8 +187,17 @@ language always ("in plain terms", never "layman's").
   synchronizes the other in the same pass.
 - Backward references ("Recall from Lesson/Section N…") only for
   already-taught content; forward references always via 📌 Note.
+- **Every reference resolves to a real target.** A 📌 Note that promises "formally introduced in
+  …" names a section or lesson that (a) exists in the corpus and (b) actually teaches the
+  promised concept; every "Recall from …" names a section that exists and precedes the reference.
+  A promise no section fulfils is a defect of the same size as a wrong answer — the learner has
+  no way to tell a forward reference from a dead end, and a later "Recall" of never-taught content
+  compounds it. Vague promises ("later", "in a future lesson") are unverifiable: name the target.
 - Basic intro concepts are taught once (first guide) and never re-taught;
   build-on relationships are made explicit.
+- Re-covering taught ground is permitted **only as declared scaffold** (§15) — analogy
+  reinforcement, spaced restatement, review, or a bridge into the next result — never as
+  accidental duplication, and never removed merely because it repeats.
 
 ## 6. Answer & Key Canon
 
@@ -216,6 +233,55 @@ quick-reference table and a common-mistakes checklist.
 - **Scenario-based items appear in every exam** (§14): a described situation, the learner picks
   WHICH taught tool applies (then optionally applies it). Additive to — never replacing — the
   mechanical items.
+- **Assessment Blueprint — the difficulty decision is made in the charter, not discovered in the
+  question bank.** Correct answers are not the bar; *fit to the target exam* is. The charter
+  carries a required **Assessment Blueprint**, approved at the charter gate alongside the
+  conventions canon, holding:
+  - **Format quotas** per exam and per practice set — the share of each `qtype` (multi-select,
+    numeric, ordering, scenario, cross-notation) and of any presentation medium the target exam
+    uses. Quotas are targets with a floor, never a ceiling on rigor.
+  - **A skill-ceiling table** — one row per skill the target exam tests, naming the level it is
+    tested at. Every row must resolve to ≥1 worked example AND ≥1 assessment item at that level;
+    a skill taught only below the level it is tested at is an unmet row, surfaced at the gate.
+  - **Exam metadata** — length, point weighting, pass mark, and timing (see the exam-metadata
+    bullet below).
+  Where the caller supplies `exam_exemplars` (sample items from the target exam, text or images),
+  the scoping/ingest pass **characterizes** them into the *difficulty profile* the blueprint is
+  built from: format mix, option counts, cognitive demand, presentation media, and how messy the
+  numbers are. **Characterize, never copy** — §11 governs exemplars exactly as it governs any
+  other source: no exemplar's wording, parameters, distractors, or figures enter the corpus, only
+  the shape of the demand it makes. With no exemplars supplied, the blueprint records that, and
+  the default format floor below binds.
+- **Default format floor — binds whenever the blueprint sets no stricter quota.** A ramp that only
+  *orders* questions is not a difficulty model: with ordering alone, a bank made entirely of the
+  easiest format satisfies "Easy → Hard" and still leaves the learner unready. So, floor: every
+  exam includes ≥1 multi-select item, ≥1 numeric item, ≥1 scenario item (§14), and ≥1
+  cross-notation item; every lesson's practice set includes ≥1 item that is NOT the single-answer
+  multiple-choice form, wherever the content allows one. Where the content genuinely allows no
+  harder format, the charter records which section and why — the floor is waived by a recorded
+  decision, never by silence. The floor counts **graded** items only (` ```question ` blocks).
+- **Assessments carry the target exam's presentation media.** If the target exam *presents*
+  artifacts pictorially (per the exemplar profile above), practice and exams MUST present the same
+  artifact classes pictorially: reading the picture is part of the skill being tested, and a prose
+  paraphrase of it quietly tests something easier. §10 mandates exhibits for inherently-visual
+  *teaching*; this is its assessment half. Resolve the figure mechanism against the
+  caller-provided `app_contract` (inline vector markup, an image field, or a figure-capable
+  prompt). If the contract cannot carry figures, report it as a **blocking gap** in the charter
+  — a decision for the human — rather than silently authoring prose descriptions of what the
+  target exam shows as a picture.
+- **Exam metadata is decided, never left unset.** The blueprint records, per exam: how many items,
+  how they are weighted (uniform weighting is a choice, and recorded as one), the pass mark, and
+  the timing — where **untimed is a legitimate decision** when the readiness model is
+  mastery-based, but it is recorded as a decision with its reason. The assessing pass writes the
+  decided values into the exam artifact's metadata fields (shape per the `app_contract`). An unset
+  or null metadata field is indistinguishable from a decision never made, so verification treats
+  it as a violation.
+- **No prediction points in exams.** Exam and final-exam files carry graded items only; ungraded
+  predict → commit → reveal prompts (§16) belong in study guides, before the content that teaches
+  the payload. The single exception is an explicit prediction-point allowance in the charter's
+  assessment blueprint, which must name the count and the artifact. Exam difficulty and surprise
+  come from fresh parameters, scenario framing, and format mix — never from an ungraded guess and
+  never from untaught content.
 
 ## 8. Final Prep (course-wide)
 
@@ -224,6 +290,16 @@ quick-reference table and a common-mistakes checklist.
 - Notation reference: same three-phase structure per notation, master
   translation tables.
 - Final exam + key covering every lesson proportionally.
+- **Cumulative mixed practice — review material is graded, not just readable.** Between
+  per-section practice (§1, which tests one section against the content just before it) and the
+  final exam (which tests the whole course under exam conditions) sits the level nothing else
+  covers: interleaved retrieval across lessons. So every course's review/final-prep material
+  carries a **mixed graded question set** — ` ```question ` blocks, drawing on all lessons
+  proportionally, format-mixed per the blueprint (§7) and at minimum to the default format floor.
+  A review unit that ships with zero graded questions is a defect, however good its prose.
+- Cumulative review material stays **pure retrieval**: no prediction points inside review or
+  final-prep practice (§16). At review time the learner is recalling taught content, and a
+  pre-answer guess prompt there displaces the retrieval instead of preparing it.
 
 ## 9. The Practical Why
 
@@ -262,6 +338,11 @@ engine: unit-circle
 config:
   angle: 45
 ```
+
+Prediction points (§16) are exhibit-class artifacts on the same footing: this spec fixes the
+pattern and its placement rules, the **target app's output contract** (caller-provided
+`app_contract`) fixes the block grammar, and the markdown fallback in §16.4 must stand alone as
+readable prose in a text-only renderer.
 
 ## 11. Clean-Room Authoring (independence by construction)
 
@@ -337,6 +418,16 @@ introduced before anything else uses it, in language a newcomer can say out loud
 - **No cold opens.** A section may not "bring up" a concept and start manipulating it as though
   the learner has background. Every section opens by situating its concept: what it is in plain
   language, where it came from (backward reference), and why it is taught now (forward hook, §9).
+- **No assumed *toolchain* either — the prerequisite inventory.** Term-level introduction is not
+  enough: a mathematical *technique* can arrive with every surrounding word glossed and still be
+  unusable, because nothing ever taught the learner to carry it out. So the charter carries a
+  **prerequisite inventory**, written at design time: every mathematical tool or technique any
+  lesson *uses* → the section that *teaches* it, or an explicit `assumed: <justification against
+  the stated audience>` row. The teaching section must precede first use. A technique used in
+  prose, a worked example, a practice item, or an exam with neither a teaching section nor a
+  justified assumption is a violation — a gloss of its symbols does not resolve it. Unresolved
+  rows surface at the charter gate, where the human decides whether to teach the tool or to state
+  the assumption, before authoring spends on either.
 
 ## 13. Voice and Register — Patient Mentor, Not Academic
 
@@ -354,6 +445,17 @@ understands every detail and every why. An academic/textbook register is a defec
 - Reassure at friction points: acknowledge hard steps and remind the learner what they already
   know that makes the step doable.
 
+> **No stock phrasing.** Learner-facing text must survive the read-aloud test: if you would not say
+> the sentence to a friend across a table, rewrite it. The following are banned in learner-facing
+> copy (prose, prompts, feedback, review sheets): "load-bearing", "delve into", "deep dive",
+> "unpack" (for explaining), "leverage" (as a verb), "utilize", "seamless(ly)", "robust" (as generic
+> praise — a domain term of art with this spelling stays), "it's worth noting that", "it is
+> important to note", "at its core", "in the realm of", "navigate the complexities", "a testament
+> to", "tapestry", "game-changer", "supercharge", "unlock the power", "harness", "foster",
+> "empower", "crucially,"/"critically," as sentence openers, and "In this section, we will…"
+> openings. Prefer the plain word: "use" not "utilize"; "look at" not "delve into"; "explain" not
+> "unpack"; show why something matters instead of calling it "crucial".
+
 ## 14. Scenario-Based Questions — Recognize the Tool, Not Just Run It
 
 A primary course goal: the learner can recognize WHICH concept a situation calls for — in real
@@ -367,3 +469,176 @@ life, on any exam — not merely execute a named procedure on command.
 - Distractors are other TAUGHT tools — the misconception tested is "wrong tool," so the wrong
   options must be tools the learner knows (§7 scope rules apply).
 - Scenario items are ADDITIVE: they join, never replace, the verified mechanical items.
+
+## 15. Information Delta — Every Section Names What It Adds
+
+A learner is a noisy channel: attention lapses, misparses, and forgetting all corrupt what
+arrives. Structured redundancy — the registered analogy that returns, the intuition → worked
+example → formal close, the deliberate restatement at a distance — is the error-correcting code
+that gets content through that channel intact; the **delta** is the signal the code carries. Both
+are required, and they are not interchangeable: strip the redundancy and nothing survives the
+trip, ship redundancy with no delta and nothing was sent.
+
+So every concept section declares its **delta**: the specific thing a learner who has absorbed
+every preceding section could not yet produce. A delta is concrete and checkable — a computation
+they can now carry out, a judgment they can now make, a distinction they can now draw. "Covers
+X" is not a delta; "can compute X from a given Y" is.
+
+- **One declared delta per concept section**, written as a capability sentence starting with a
+  verb the *learner* performs ("compute…", "decide whether…", "distinguish… from…"), naming the
+  smallest new thing that section supplies.
+- **Deltas are unique within a course.** Two sections may not declare the same delta. A section
+  whose content is genuinely predictable from what precedes it does not get a delta — it gets a
+  scaffold tag.
+- **Redundant or restating content is permitted, and only when declared.** A section that
+  intentionally re-covers taught ground carries a **scaffold tag** from this closed vocabulary,
+  plus the section(s) it reinforces:
+  - `analogy-reinforcement` — re-runs a registered analogy (§3) on new material so the mapping
+    holds.
+  - `spaced-restatement` — restates an earlier result at a deliberate distance, so it is
+    retrieved rather than re-read.
+  - `review` — consolidates several taught sections for review or final-prep material (§8).
+  - `bridge` — carries a taught result into the notation, framing, or context the next delta
+    needs.
+- **Undeclared redundancy is a defect.** A section with neither a delta nor a scaffold tag is
+  either filler (cut it) or an unnamed capability (name it). Deciding which is an authoring
+  judgment, not an automatic cut.
+- **This rule never licenses a cut on novelty grounds.** Removing content requires showing it is
+  neither a delta nor scaffold; the scaffold test comes first, always. Deleting repetition to
+  raise novelty is prohibited — repetition paired with retrieval is doing real work; it is not filler.
+- **Scope: concept sections.** One ledger row per concept section (§1). Practice-item sections,
+  the course's "What You Will Learn" intro lesson (§1), and the fixed closing sections
+  (`Quick-Reference Flashcard Summary`, `Unified Diagram`) are outside the ledger — their job is
+  fixed by their own rules.
+- **Where it lives.** Deltas and scaffold tags are **authoring metadata, never learner-facing
+  prose** (the meta-reference ban in §1 applies): they are recorded in the lesson's provenance log
+  under a `## Section Delta Ledger` table (see the file-structure spec), one row per concept
+  section, written in the same pass that authors the section. A back-filled ledger is worse than
+  none.
+
+## 16. Prediction Points (Predict → Commit → Reveal)
+
+A **prediction point** asks the learner to commit to an answer *before* they read the content
+that settles it, then reveals the answer. Committing is the whole mechanism: a reader who is
+simply told a surprising fact has merely read it, while a reader who staked a wrong answer — and
+especially a confidently wrong one — has a hook the correction can attach to. Prediction points
+are optional per section and always additive (§16.5).
+
+### 16.1 The pattern
+
+Exactly three parts, in this order:
+
+1. **Predict** — one prompt with a small set of concrete, mutually exclusive options (or a single
+   short numeric / true-false payload), answerable in one guess from what the learner already
+   has.
+2. **Commit** — the learner picks an option **and states a confidence** on a coarse scale
+   (for example: guessing / fairly sure / certain). Confidence capture is **required**, not
+   optional: a high-confidence miss is the highest-value event a prediction point can produce,
+   and it is invisible unless confidence was asked for.
+3. **Reveal** — the correct payload with per-option feedback (§16.3), placed immediately after
+   the content that teaches it, in the same section.
+
+### 16.2 Placement and payload rules
+
+Surprise is a budget, not a firehose. These rules are binding; a prediction point that breaks one
+is worse than no prediction point at all.
+
+- **Adjacency.** The prompt sits immediately before the content that answers it — same section,
+  no intervening concept, no other prediction point between them. The attention a prompt opens
+  closes the moment the answer is found, so everything it was meant to sharpen must come *before*
+  the reveal.
+- **Discrete, concrete payloads only.** One computed value, one entry of a result, one
+  valid/invalid or same/different judgment, one ordering. Never a multi-step inference, a
+  derivation, an explanation, or "what do you think this means" — open-inference prompts do not
+  produce the effect and spend attention that the content needs.
+- **Already-taught vocabulary only.** The prompt precedes the teaching, so it may use only terms,
+  symbols, and techniques already introduced in the prose before that point (§12's no-debut rule
+  applies to prediction prompts exactly as it does to practice items and exhibit text). If the
+  payload cannot be *stated* without a new term, the prediction point does not belong there.
+- **Low stakes by construction.** Never scored, never gated, never required to continue, never
+  counted in any grade, progress bar, or completion requirement. The wording carries this: invite
+  the guess, promise the answer.
+- **At most one per concept section.** Spend prediction points where the learner's expectation is
+  most likely to be wrong — the counterintuitive result, the case where the everyday analogy
+  breaks — not on every heading. A section with no counterintuitive discrete payload gets none.
+- **Never in exams** (§7), and **never inside review or final-prep practice** (§8), except under
+  an explicit allowance in the charter's assessment blueprint that names the count and the
+  artifact.
+
+### 16.3 Feedback — misconception-respecting, and it explains itself
+
+Feedback is authored per option, and it does two jobs.
+
+- **Name the misconception, per option.** Each wrong option's feedback names the specific belief
+  that makes that option attractive, then corrects it ("this is the answer if you expect … to
+  behave like …; what actually happens is …"). A generic "Not quite — see above" is a defect. The
+  correct option's feedback confirms the *reasoning*, not just the answer.
+- **Say why being wrong helped.** Every reveal carries one sentence, in the author's own words,
+  telling the learner that a wrong guess is the mechanism working — that the gap between what
+  they expected and what happened is what makes the correction stick. Learners routinely rate
+  guess-first material as less useful than re-reading even while it helps them more, and an
+  unexplained wrong guess reads as wasted effort or as evidence they cannot do this. The
+  explanation is therefore part of the pattern, not encouragement. Reusable sentence pattern
+  (vary the wording, keep the content):
+
+  > If you predicted <the tempting wrong answer>, that gap is doing the work — the surprise is
+  > what makes <the correct payload> stick.
+
+- **Confidence is acknowledged, never punished.** Feedback for a high-confidence miss speaks to
+  the learner's stated certainty directly and kindly. Nothing anywhere scores, ranks, or displays
+  a learner's confidence as a performance measure.
+- **Voice and labels.** All prediction-point text follows §13 (patient mentor, written to the
+  learner) and the callout canon in §4. No new labels.
+
+### 16.4 Rendering — resolve through the app contract, degrade cleanly
+
+A prediction point is authored like graded practice (§1) and interactive exhibits (§10): this
+spec fixes the pattern, the **target app's output contract** (caller-provided `app_contract`)
+fixes the grammar. Resolve in this order and record which branch applies in the charter:
+
+1. **The contract has a prediction primitive** (a predict/reveal block, or a practice type that
+   supports an ungraded pre-answer prompt): author to it — one block per prediction point,
+   carrying at minimum the prompt, the options with per-option feedback, a confidence field, the
+   revealed payload, and an explanation. If the primitive has no confidence field, put the
+   confidence request in the prompt text and record in the charter that no confidence signal is
+   captured.
+2. **The contract exists but has no prediction primitive:** author the markdown fallback below.
+   Never invent a fence the app's build will reject, and never re-purpose a graded-practice block
+   for a prediction — that would make the guess scored, violating §16.2.
+3. **No `app_contract` was supplied:** author the markdown fallback below.
+
+Markdown fallback — the prompt block immediately before the content, the reveal immediately
+after it:
+
+> 🔮 **Predict first:** <the discrete payload question>
+>
+> - A. <option>
+> - B. <option>
+> - C. <option>
+>
+> Pick one, and note how sure you are — guessing, fairly sure, or certain. The answer is a few
+> lines below.
+
+…then the teaching content that settles it, then:
+
+> 🔮 **Reveal:** <the correct option and payload>. <One short correction per wrong option, naming
+> the misconception behind it.> <One sentence on why a wrong prediction helped.>
+
+The fallback degrades to plain readable prose in any renderer and keeps the confidence request as
+text (the learner answers it internally); note in the charter that this mode captures no
+confidence signal.
+
+### 16.5 Additive, never a substitution
+
+- Prediction points **add to** the graded practice a section already requires (§1: one graded
+  question per section, authored as a graded-practice block). Guessing before content prepares
+  the learner for it; retrieving after content is what makes it durable, and the second is the
+  stronger of the two. Author both, in that order. **A lesson whose only assessment is prediction
+  points is a defect.**
+- Prediction points **count toward nothing**: not the per-section graded question, not the
+  practice-set format mix or format floor, not exam length, weighting, or coverage. They are not
+  assessment; they are teaching.
+- A prediction point never replaces the intuition, worked example, or formal close of a section
+  (§1). It sits inside the section, before the payload it asks about.
+- Authoring a prediction point to satisfy a quota, on a section with no counterintuitive discrete
+  payload, is a defect. A quota is a ceiling with a target, never an obligation.

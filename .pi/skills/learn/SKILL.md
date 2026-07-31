@@ -112,6 +112,11 @@ skill({
     //   corpus (≥2 vetted sources/concept, buckets+licenses) for clean-room grounding + the
     //   `derivation` handoff. Lives in the COURSE dir, not in this skill. Omit → ≥2-source target
     //   reported unmet. Same shape `derivation` consumes as its `sources`.
+    exam_exemplars: "/path/to/target-exam-sample-items", // optional; sample items from the TARGET
+    //   exam (text or images). Scoping/ingest CHARACTERIZES them (format mix, option counts,
+    //   cognitive demand, presentation media, numeric messiness) into the difficulty profile the
+    //   charter's Assessment Blueprint is built from — characterize, never copy (§11 applies).
+    //   Omit → the blueprint records that, and the spec's default format floor binds.
     app_contract: "/path/to/app/output-contract-or-docs", // optional; the TARGET APP's output
     //   conventions (section model, graded-practice + exhibit DSLs, build/lint) — lives in the app's
     //   OWN repo (this skill names + bundles no app). Omit → guides emit generic markdown practice.
@@ -165,7 +170,7 @@ Escalation & terminals:
 |-------|-------|------|
 | scoping | echo | Quick source scan; emits the ingest fan topology (`ingest_branches`) shaped to this material |
 | ingesting | echo × N (parallel) | Inventory the *idea layer* (facts / what is taught — never a source's prose or structure), source conventions, and audience/assessment style; seed the per-concept source map + provenance |
-| designing | annie | Course charter: lessons, topics in dependency order, conventions canon, analogy registry — with **original track/course/lesson/section names** and the **author's own spine** (never a source's titles or table of contents; pedagogy-spec §11) |
+| designing | annie | Course charter: lessons, topics in dependency order, conventions canon, analogy registry, **Assessment Blueprint** (format quotas + skill ceilings + exam metadata; pedagogy-spec §7) and **prerequisite inventory** (every technique → the section that teaches it; §12) — with **original track/course/lesson/section names** and the **author's own spine** (never a source's titles or table of contents; pedagogy-spec §11) |
 | **charter_gate** | *(HITL)* | **User approves the charter before any authoring — conventions locked here cannot drift later** |
 | authoring | skribble | One lesson per pass: study guide + practice answers per the pedagogy spec |
 | assessing | skribble | One lesson per pass: practice exam + answer key per the exam canon |
@@ -180,7 +185,10 @@ Authoring a full course is expensive, and the session that produced this skill
 proved that convention decisions made per-file (instead of once, globally)
 create contradictions in the most safety-critical content. The gate presents:
 lesson count, topic count, the full conventions canon, the analogy registry
-size, and the designer's open questions. The user can:
+size, the **Assessment Blueprint** (format quotas, skill ceilings, exam
+metadata — the difficulty decision, which is the goal and therefore the
+human's to make), any unresolved **prerequisite-inventory** rows, and the
+designer's open questions. The user can:
 
 - **Approve**: author the full companion to this charter
 - **Refine**: send the charter back to `designing` with a note
@@ -188,7 +196,7 @@ size, and the designer's open questions. The user can:
 
 ## Resources
 
-- `resources/pedagogy-spec.md` — the binding authoring spec: three-phase teaching, canonical callouts, analogy registry rules, conventions canon, exam canon, modality-ready authoring, and clean-room authoring (§11)
+- `resources/pedagogy-spec.md` — the binding authoring spec: three-phase teaching, canonical callouts, analogy registry rules, conventions canon, exam canon incl. the charter's Assessment Blueprint + default format floor (§7), modality-ready authoring, clean-room authoring (§11), the prerequisite inventory (§12), information delta (§15), prediction points (§16)
 - **Target-app output contract** — *caller-provided* via `constraints.app_contract` (the app's own section model, ` ```question ` graded-practice DSL, ` ```sim ` exhibit DSL, and build/lint). The skill names and bundles **no** app; it emits to whatever contract the caller passes. Omit it and guides fall back to generic markdown practice.
 - `resources/verification-checklist.md` — the mechanical check suite + math-recomputation protocol vera runs
 - `resources/file-structure.md` — required output layout and artifacts per lesson

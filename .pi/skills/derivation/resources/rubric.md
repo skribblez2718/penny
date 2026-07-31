@@ -69,6 +69,23 @@ synthesized across multiple sources and match none of them. A section that track
 one source across several dimensions is derivative even if no single dimension is
 individually damning.
 
+**D7, stated information-theoretically.** The operative question is *how much of this work is
+predictable given only source S?* A work whose expression, structure, and examples add little
+information relative to a single source is dependent on it even with low literal overlap —
+conversely, a work that a reader holding S could not have produced from S is independent of it, and
+that remains true however many facts, equations, or standard definitions the two share (those were
+filtered in step 2). Ask it per source and per section: strip what S supplies, and judge what is
+left. If almost nothing is left, D7 is a `concern` or `breach` against S no matter what D1 measured.
+
+**The Tier-1.5 compression signal is evidence for this question, not an answer to it.** A
+deterministic Normalized Compression Distance between the content and each source is available in
+the Tier-1 artifact (`prefilter.ncd`): a source whose distance is conspicuously low *relative to the
+rest of that corpus* is one the reviewer must examine closely for D2/D3/D4/D7 and may cite as
+corroboration of a finding made on the passages themselves — while a high, unflagged, or
+below-floor (`valid: false`) distance is **never** evidence of independence and must never be cited
+as such, since structure and selection copying survives compression distance exactly as it survives
+n-gram matching.
+
 **House scaffolding is not a D3 signal.** The authoring standard (the learn skill's
 pedagogy-spec) mandates structural fixtures that repeat across EVERY course the author
 produces — notably: a first-unit **Introduction** containing a "What You Will Learn"

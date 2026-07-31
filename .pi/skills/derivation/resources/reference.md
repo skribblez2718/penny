@@ -14,7 +14,7 @@ session files, no `--state` argv.
 | ------------------------ | --------- | ------- | --------------------------------------------------------------------------- |
 | `intake`                 | initial   | —       | Validate goal; route by the SHAPE of `constraints.sources` (directory ⇒ `gathering`, manifest file ⇒ `reviewing`) |
 | `gathering`              | dynamic fan | `echo` × N | Runs ONLY when `sources` is a directory. Local, read-only corpus inventory: one branch per scannable file (`.md`/`.txt`/`.rst`/`.text`, large files sharded), each reporting a grounded license/bucket call + headings-only outline. Self-loops (`gather_batch`) for corpora wider than `max_fan_width`. NOT escalatable |
-| `reviewing`              | primitive | `annie` | Tier-1 `scripts/prefilter.py` (per-source verbatim overlap) + Tier-2 `resources/rubric.md` (AFC, D1–D7) → the verdict |
+| `reviewing`              | primitive | `annie` | Tier-1 `scripts/prefilter.py` (per-source verbatim overlap) + Tier-1.5 `scripts/ncd.py` (per-source compression distance, tripwire only) + Tier-2 `resources/rubric.md` (AFC, D1–D7) → the verdict |
 | `unknown`                | transient | —       | Escalation staging (from `reviewing` only)                                  |
 | `awaiting_clarification` | HITL      | — (user)| Paused on annie's questions; `clarify` resumes at `reviewing`               |
 | `complete`               | final     | —       | Verdict rendered                                                            |
@@ -42,6 +42,8 @@ flagged dimension must name both a fix and its matched source(s)
 (`conditional_evidence`). The gather fail-safe is enforced at aggregation: a
 non-`unknown` license with no evidence snippet is downgraded to `unknown`
 (⇒ restricted); a bucket with no marker defaults to `""`.
+When Tier-1.5 ran, its report is nested in the same artifact as `prefilter.ncd`; the gate is on the
+artifact, never on the NCD table (a guardrailed-off tier must not be able to block a verdict).
 
 ## Constraints contract
 
@@ -72,6 +74,10 @@ the terminal outcome into `penny/outcomes` automatically.
 
 - `scripts/prefilter.py` — Tier-1 deterministic verbatim/n-gram pre-filter
   (`--content … --sources …`; a clean report does NOT imply independence).
+- `scripts/ncd.py` — Tier-1.5 deterministic compression-distance (NCD) signal
+  (`--content … --sources …`, same corpus shapes as prefilter.py, whose tokenizer and loader it
+  imports). Tripwire only: a corpus-relative LOW outlier elevates Tier-2 attention; a high,
+  unflagged, or below-floor result is never evidence of independence.
 - `scripts/outline.py` — headings-only structural outline extractor used by
   gather branches.
 - `scripts/orchestrate.py` — the thin delegate to `orchestration.cli`.

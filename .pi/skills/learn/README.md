@@ -56,3 +56,18 @@ the whole corpus) and a final pedagogical critique gate completion.
   dual-role manifest; DR-9 gate corpus includes the coverage-reference source;
   GV-2 restricted artifacts authoring-tree-only); flow diagram converted to
   `resources/flow.html`.
+- v4 (2026-07): exam-fitness + information-delta pass — the skill now decides
+  *difficulty*, not just correctness.
+  - target-exam difficulty profile from optional `constraints.exam_exemplars`
+    (characterized, never copied) feeding a required charter **Assessment
+    Blueprint** (format quotas, skill-ceiling table, presentation media, and
+    decided exam metadata — length/weighting/pass-mark/timing), approved at the
+    charter gate; a **default format floor** when no exemplars are supplied; a
+    toolchain-level **prerequisite inventory**; mechanical resolution of 📌
+    forward promises and "Recall from" references; pictorial assessment media
+    routed through the `app_contract`; final-prep existence + promise audits;
+    and cumulative mixed graded practice in course review.
+  - information-delta authoring rule (§15) + ungraded predict-commit-reveal
+    prediction points (§16), with a Tier-1 prediction-integrity check and a
+    Tier-2 delta audit.
+  - a human-phrasing (stock-phrase) blacklist in §13 with a Tier-1 grep.

@@ -55,7 +55,31 @@ verdict on an incomplete corpus.
    independence. A hard breach (`status: "flag"` with high overlap or a long run)
    is strong evidence toward `DERIVATIVE_RISK`.
 
-2. **Tier-2 (judgement).** `read` the rubric file and apply it. It is the courts'
+2. **Tier-1.5 (deterministic, compression distance).** Run, in the same directory as the
+   pre-filter: `python3 <ncd.py> --content <content> --sources <sources>` (same `--sources` value
+   you gave the pre-filter). Nest its JSON report inside your Tier-1 artifact as
+   `prefilter.ncd`, and render its `per_source` rows as a table in the Tier-1 section of your
+   mempalace review. It reports Normalized Compression Distance — "how much of the content is
+   predictable given only this source" — per source, under two compressors, with an outlier flag
+   computed against **this corpus's own distribution** (there is no universal threshold).
+   How to use it, exactly:
+   - A source with `outlier: true` (an unusually LOW distance) is an **instruction to look
+     harder** at that source in Tier-2 — read it against the content for D2 (close paraphrase),
+     D3 (structure/selection), D4 (examples) and D7 (single-source dependence), and record what
+     you found *either way*. It may corroborate a finding you make; it is never a finding.
+   - It **never sets or moves a verdict on its own**, and it never appears as the only evidence in
+     `flagged`, `matched_sources`, or a `fix`. Every non-`clear` dimension still stands on cited
+     passages.
+   - It is **never exculpatory.** A high distance, a `clean`/`insufficient_corpus` status, a
+     `valid: false` row, or a missing report is **not** evidence of independence and must not be
+     cited as such — structure, selection and paraphrase dependence survive compression distance,
+     exactly as they survive n-gram matching.
+   - Rows with `valid: false` (a text below the ~1000-token floor) carry **no** number and support
+     **no** inference in either direction; say so plainly if you mention them.
+   - If the script errors or is absent, say so in `notes` and proceed with Tier-1 + Tier-2. The
+     absence of this signal is not a defect in the review and never softens a finding.
+
+3. **Tier-2 (judgement).** `read` the rubric file and apply it. It is the courts'
    **Abstraction–Filtration–Comparison** method:
    - **Abstract** the content and each candidate source into idea → structure →
      expression.
@@ -68,12 +92,12 @@ verdict on an incomplete corpus.
      explanatory devices, figures, and **single-source dependence**). Score each
      `clear` / `concern` / `breach` / `n/a`, null-aware and dimension-independent.
 
-3. **Separate similarity from license.** Judge expression similarity *without*
+4. **Separate similarity from license.** Judge expression similarity *without*
    regard to license. Then, for each concern/breach, name the source it traces to
    and read that source's license from the corpus (**unknown ⇒ treat as
    restricted**). Roll up to the verdict per the rubric's Rollup section.
 
-4. **Write the full review to the mempalace room** named in your task (wing=penny)
+5. **Write the full review to the mempalace room** named in your task (wing=penny)
    — the D1–D7 analysis with citations, the prefilter report, the matched-source
    annotations with license consequence, and the fixes. Return only the SUMMARY.
 
@@ -92,7 +116,9 @@ Return a minimal SUMMARY (the full analysis stays in mempalace) carrying:
 - `confidence` — `CERTAIN` / `PROBABLE` / `POSSIBLE` / `UNCERTAIN`. Use
   `UNCERTAIN` for a genuinely borderline idea/expression call — it escalates to a
   human rather than forcing a verdict.
-- `prefilter` — the Tier-1 JSON report you captured.
+- `prefilter` — the Tier-1 JSON report you captured, with the Tier-1.5 compression-distance report
+  nested under its `ncd` key when that tier ran (`prefilter.ncd`; omit the key if the script errored
+  or was absent, and note that in `notes`).
 - `dimensions` — the per-dimension scoring, e.g. one entry per D1–D7 with its
   `id`, `verdict`, and a one-line `note`.
 - `flagged` — the ids of the dimensions that lean derivative (empty if clean).
@@ -105,4 +131,6 @@ Return a minimal SUMMARY (the full analysis stays in mempalace) carrying:
 the per-dimension `dimensions` are mandatory, and any flagged dimension must name
 both a `fix` and the `matched_sources` it traces to — a bare verdict is rejected.
 Every claim cites the passage it rests on; state what the evidence does not show
-rather than smoothing it over.
+rather than smoothing it over. The Tier-1.5 NCD table, when present, is part of that Tier-1
+artifact and is **supporting evidence only**: it may direct your attention and corroborate a cited
+finding, never substitute for one, and never argue for independence.

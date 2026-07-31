@@ -37,7 +37,7 @@ Auto-routed by the shape of `sources` (`resources/flow.html` is the diagram):
 | State | Agent | Job |
 |---|---|---|
 | `gathering` | echo (dynamic fan) | Runs ONLY when `sources` is a directory. Verify-only, local, read-only inventory: one branch per scannable source file, each reporting a grounded license/bucket call (identifier + evidence snippet + confidence) and a headings-only structural outline. Aggregates into exactly one `prefilter.py`-compatible `manifest.json` in a run-scoped `0o700` workdir — never inside `sources`. |
-| `reviewing` | annie | Tier-1 `scripts/prefilter.py` (per-source verbatim overlap) + Tier-2 `resources/rubric.md` (AFC, D1–D7) → the verdict. Escalates to the user on UNCERTAIN / needs_clarification. |
+| `reviewing` | annie | Tier-1 `scripts/prefilter.py` (per-source verbatim overlap) + Tier-1.5 `scripts/ncd.py` (per-source compression distance, tripwire only) + Tier-2 `resources/rubric.md` (AFC, D1–D7) → the verdict. Escalates to the user on UNCERTAIN / needs_clarification. |
 
 Fast path: a `manifest.json` `sources` file skips `gathering` and goes straight
 to `reviewing`.
@@ -46,6 +46,10 @@ to `reviewing`.
 
 - **Clean-room wall is on the author, not the reviewer.** annie (the "dirty"
   reviewer) legitimately sees both content and corpus.
+- **Deterministic signals may incriminate, never exculpate.** Tier-1 (n-grams) and Tier-1.5
+  (compression distance) can raise attention or corroborate a finding; a clean report from either is
+  explicitly **not** evidence of independence, and Tier-1.5 emits no number at all below its
+  ~1000-token floor.
 - **De-correlate author and reviewer.** Run the review on a different model than
   the content author's (per-state `model` override) so the independence check is
   not correlated with the author.
@@ -74,6 +78,9 @@ to `reviewing`.
 - `resources/flow.html` — state diagram mirroring the playbook FSM
   (self-contained; open in a browser).
 - `scripts/prefilter.py` — per-source verbatim-overlap pre-filter (Tier-1).
+- `scripts/ncd.py` — per-source compression-distance signal (Tier-1.5); imports `prefilter.py`'s
+  tokenizer/loader so both tiers see identical text. Advisory tripwire, never a verdict, and never
+  exculpatory.
 - `scripts/outline.py` — structural outline helper.
 - `scripts/orchestrate.py` — the thin delegate to `orchestration.cli`.
 

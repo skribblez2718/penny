@@ -3,7 +3,7 @@ name: derivation
 description: Review authored content against the corpus of source materials it was built from and render a defensible verdict on whether it is a genuinely independent work or a derivative — source-agnostic and license-aware. Use when you need to gate content for legal independence before shipping it as your own. Do not use to author or revise the content (the author's job), to review its factual accuracy or teaching quality (a critique/verify step such as carren), or when there is no source corpus to compare against.
 license: MIT
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
   penny:
     engine: orchestration
     mempalace: true
@@ -140,7 +140,7 @@ fetched), **never mutates the corpus, and never sets or influences the verdict.*
 exhausting the iteration budget before full coverage, or a zero-file corpus, is a
 **terminal error**, never a partial-corpus pass-through.
 
-### Phase 2 — `reviewing` (annie, UNCHANGED, two tiers)
+### Phase 2 — `reviewing` (annie, three tiers)
 
 When `sources` is a `manifest.json` file the run routes straight here, exactly as
 before. annie:
@@ -149,7 +149,15 @@ before. annie:
    for per-source verbatim/n-gram overlap. A hard breach may short-circuit to
    `DERIVATIVE_RISK`. (This is only the literal D1 axis; a clean report does not
    imply independence.)
-2. **Tier-2 (judgement):** applies `resources/rubric.md` — abstract → **filter out
+2. **Tier-1.5 (deterministic, information-theoretic):** runs `scripts/ncd.py --content … --sources …`
+   for per-source **Normalized Compression Distance** — "how predictable is the content given only
+   this source" — under zlib and lzma, nested into the Tier-1 artifact as `prefilter.ncd`. It is a
+   **tripwire, never a verdict, in either direction**: a source whose distance is conspicuously low
+   *relative to this corpus's own distribution* only elevates Tier-2 attention on that source (and
+   may corroborate a D2/D3/D4/D7 finding), while a high or unflagged distance is **never** evidence
+   of independence. Texts below a ~1000-token floor are reported `valid: false` with no number at
+   all, and there is no fixed universal threshold — outliers are relative to the run.
+3. **Tier-2 (judgement):** applies `resources/rubric.md` — abstract → **filter out
    the unprotectable (facts, math, standard notation, merger/scènes à faire,
    public domain)** → compare what remains across D1–D7, including **D7
    single-source dependence** (leaning on one source vs. synthesizing several).
@@ -188,4 +196,8 @@ pass-through.
 The engine validates every SUMMARY against the state's contract before advancing,
 rejecting a verdict that omits its Tier-1 artifact or per-dimension scoring, or a
 flagged dimension with no fix and no named source. State is checkpointed by
-`run_id`, so a killed run resumes via `recover`.
+`run_id`, so a killed run resumes via `recover`. The Tier-1 artifact carries the
+Tier-1.5 NCD table under `prefilter.ncd` when that tier ran; the contract gates on
+the artifact's presence, not on the NCD table, because a tier that is guardrailed
+off (short texts, a corpus too small to distribute over) must never be able to
+block a verdict — and its absence is never read as independence.

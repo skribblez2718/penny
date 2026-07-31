@@ -10,6 +10,11 @@ Author ONE lesson's study guide and its companion practice answers (the lesson i
 - **Pedagogy spec, not restated here.** Structure, depth, and the closing `## Quick-Reference Flashcard Summary` follow `.pi/skills/learn/resources/pedagogy-spec.md` and `resources/file-structure.md`; read them, apply them.
 - **Correct math.** Every worked answer is computed correctly and shows its work; a wrong number will be caught by recomputation and bounce back as a violation.
 - **Clean-room, sources-closed.** Author from the charter and your own understanding with sources closed; reopen a source only to *re-learn* a fact, then close and write. Original examples, analogies, diagrams, and quiz items — never a source's. Append each concept's provenance (source → one-line re-expression note) to the lesson's provenance log (`_authoring/provenance/<lesson_slug>.md`). Independence is verified later by the separate `derivation` gate — do not self-check. (Pedagogy spec §11; file-structure spec.)
+- **Declare each section's delta as you write it.** For every concept section, append its row to
+  the lesson's `## Section Delta Ledger` in `_authoring/provenance/<lesson_slug>.md`: either the
+  capability a learner gains there that no earlier section supplied, or a scaffold tag for
+  deliberately redundant content. Never in learner-facing prose. (Pedagogy spec §15;
+  file-structure spec.)
 - **Ask rather than guess** — if the design lacks something the lesson needs, set `needs_clarification: true` rather than inventing it (never call `questionnaire` yourself).
 
 ## Blackboard protocol (wire — engine-consumed)

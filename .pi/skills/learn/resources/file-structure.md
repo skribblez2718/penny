@@ -11,7 +11,8 @@
 │   ├── concept_skeletons/
 │   │   └── <lesson_slug>.md         # the idea layer — the non-copyrightable facts/what a lesson conveys
 │   └── provenance/
-│       └── <lesson_slug>.md         # provenance log: concept → sources that taught it → re-expression note
+│       └── <lesson_slug>.md         # provenance log: concept → sources that taught it → re-expression
+│                                    #   note; PLUS the lesson's "## Section Delta Ledger" (pedagogy-spec §15)
 └── <course_name>/
     ├── <lesson_slug>/               # one per lesson, in curriculum order
     │   ├── study_guide/
@@ -23,7 +24,8 @@
     │       │                        #   compiles it into the graded Exam; never hardcoded in app code
     │       └── answer_key.md        # author-facing: Approach / Step-by-Step / Key Formula per problem
     └── final_prep/
-        ├── comprehensive_review.md  # balanced across all lessons
+        ├── comprehensive_review.md  # balanced across all lessons; carries the CUMULATIVE mixed
+        │                            #   graded ```question set (pedagogy-spec §8)
         ├── notation_reference.md    # cross-notation translation, three-phase per notation
         ├── practice_exam.md         # course-wide, proportional coverage, self-assessment table;
         │                            #   problems are ```question DSL blocks (become graded lessons)
@@ -47,6 +49,25 @@ Rules:
   inputs the `derivation` gate reads per lesson (`skeleton` + `provenance`), alongside
   the course's source manifest (`manifest.<course>.json`). Keep one skeleton and one
   provenance log per lesson; keep the provenance log honest and current.
+- **Section Delta Ledger** (pedagogy-spec §15). Each lesson's provenance log carries a
+  `## Section Delta Ledger` table — one row per **concept** section, written in the same pass that
+  authors the section (practice-item sections, the "What You Will Learn" intro lesson, and the
+  fixed closing sections are out of scope). Every row declares EITHER a delta (a capability
+  sentence: what a learner who absorbed all prior sections could not produce before this section)
+  OR a scaffold tag from the closed vocabulary `analogy-reinforcement` / `spaced-restatement` /
+  `review` / `bridge` plus the section(s) it reinforces — never neither, never both. This is
+  author-only pedagogy metadata; it is never rendered, linked, or quoted in learner files, and the
+  `derivation` gate reads the provenance portion of the file.
+
+  ```markdown
+  ## Section Delta Ledger
+
+  | Section | Delta (capability the learner gains) | Scaffold | Reinforces |
+  |---|---|---|---|
+  | 1. <section title> | Compute <result> from a given <input> | — | — |
+  | 2. <section title> | Decide whether <condition> holds for a given <object> | — | — |
+  | 3. <section title> | — | spaced-restatement | 1 |
+  ```
 - The course's source manifest is an **honest ledger of both roles**: `role=learn-from`
   (the cited independent sources) and `role=coverage-reference` (a restricted source the
   course was rebuilt against, with license/bucket/URL + a do-not-ship note). Restricted
