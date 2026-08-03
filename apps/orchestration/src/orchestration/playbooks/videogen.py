@@ -1030,6 +1030,24 @@ class VideogenPlaybook(BasePlaybook):
                     != vg["hashes"]["narration"]
                 ):
                     raise ValueError("Carren reviewed_narration_sha256 is not current")
+                if verdict != "APPROVE":
+                    issues = summary.get("issues")
+                    if not isinstance(issues, list) or not issues:
+                        raise ValueError("a non-approve Carren verdict requires issues")
+                    for index, issue in enumerate(issues):
+                        if not isinstance(issue, Mapping):
+                            raise ValueError(
+                                f"Carren issue {index} must name a scene/beat and evidence"
+                            )
+                        located = any(
+                            issue.get(key)
+                            for key in ("scene_id", "beat_id", "affected_scene_ids")
+                        )
+                        grounded = issue.get("evidence") or issue.get("evidence_ref")
+                        if not located or not grounded:
+                            raise ValueError(
+                                f"Carren issue {index} lacks scene/beat or cited evidence"
+                            )
                 if "review_path" in summary or "review_sha256" in summary:
                     if not {"review_path", "review_sha256"} <= set(summary):
                         raise ValueError(
@@ -1075,6 +1093,7 @@ class VideogenPlaybook(BasePlaybook):
             self._artifact_pair(
                 summary, "feedback_ledger_path", "feedback_ledger_sha256"
             )
+            self._validate_feedback_ledger(ctx=self.ctx, summary=summary)
             self._artifact_pair(summary, "change_plan_path", "change_plan_sha256")
             if summary.get("earliest_route") not in REFINE_ROUTES:
                 raise ValueError(f"earliest_route must be one of {list(REFINE_ROUTES)}")
@@ -1911,7 +1930,8 @@ class VideogenPlaybook(BasePlaybook):
                 {
                     "content": intake.content_sha256,
                     "teaching": [
-                        artifacts.sha256_file(path) for path in intake.teaching_canon_paths
+                        artifacts.sha256_file(path)
+                        for path in intake.teaching_canon_paths
                     ],
                     "analogy": artifacts.sha256_file(intake.analogy_registry),
                     "pronunciation": artifacts.sha256_file(intake.pronunciation_canon),
@@ -1922,7 +1942,9 @@ class VideogenPlaybook(BasePlaybook):
                         else intake.primitive_schema_source["url"]
                     ),
                     "publish": artifacts.sha256_bytes(
-                        artifacts.canonical_json_bytes(intake.publish_target_conventions)
+                        artifacts.canonical_json_bytes(
+                            intake.publish_target_conventions
+                        )
                     ),
                     "profile": intake.profile_provenance,
                 }
@@ -3795,6 +3817,127 @@ class VideogenPlaybook(BasePlaybook):
     # ------------------------------------------------------------------
     # Small validators/parsers
     # ------------------------------------------------------------------
+    def _validate_feedback_ledger(
+        self, *, ctx: RunContext, summary: Mapping[str, Any]
+    ) -> None:
+        try:
+            value = json.loads(
+                Path(str(summary["feedback_ledger_path"])).read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"feedback ledger is unreadable JSON: {exc}") from exc
+        notes = (
+            value
+            if isinstance(value, list)
+            else value.get("notes", value.get("feedback_notes"))
+            if isinstance(value, Mapping)
+            else None
+        )
+        if not isinstance(notes, list) or not notes:
+            raise ValueError("feedback ledger must contain a nonempty notes array")
+        expected_keys = {
+            "note_id",
+            "raw_text",
+            "category",
+            "requested_outcome",
+            "scene_ids",
+            "beat_ids",
+            "mapping_basis",
+            "confidence",
+            "status",
+            "resolution_evidence",
+        }
+        categories = {
+            "storyboard",
+            "narration",
+            "pronunciation",
+            "visual",
+            "pacing",
+            "canon",
+            "caption",
+            "technical",
+            "global",
+        }
+        bases = {
+            "explicit-id",
+            "timestamp",
+            "quoted-narration",
+            "described-visual",
+            "global",
+        }
+        note_ids: list[str] = []
+        uncertain: list[str] = []
+        raw_ref = self._load_compact_ref(ctx, "current_feedback", {})
+        raw_feedback = ""
+        if isinstance(raw_ref, Mapping) and isinstance(raw_ref.get("path"), str):
+            try:
+                raw_feedback = Path(raw_ref["path"]).read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                raw_feedback = ""
+        for index, note in enumerate(notes, 1):
+            if not isinstance(note, Mapping) or set(note) != expected_keys:
+                raise ValueError(f"feedback note {index} has invalid exact keys")
+            note_id = note.get("note_id")
+            prefix = f"FB-{self._vg(ctx)['review']['iteration']}-"
+            if not isinstance(note_id, str) or not note_id.startswith(prefix):
+                raise ValueError(
+                    f"feedback note {index} has invalid iteration-bound note_id"
+                )
+            note_ids.append(note_id)
+            raw_text = note.get("raw_text")
+            if not isinstance(raw_text, str) or not raw_text:
+                raise ValueError(
+                    f"feedback note {note_id} raw_text must be verbatim text"
+                )
+            if raw_feedback and raw_text not in raw_feedback:
+                raise ValueError(
+                    f"feedback note {note_id} raw_text is not verbatim operator text"
+                )
+            if note.get("category") not in categories:
+                raise ValueError(f"feedback note {note_id} has invalid category")
+            if (
+                not isinstance(note.get("requested_outcome"), str)
+                or not note["requested_outcome"].strip()
+            ):
+                raise ValueError(f"feedback note {note_id} requested_outcome is empty")
+            for field in ("scene_ids", "beat_ids"):
+                values = note.get(field)
+                if not isinstance(values, list) or not all(
+                    isinstance(item, str) and item for item in values
+                ):
+                    raise ValueError(f"feedback note {note_id} {field} is malformed")
+            mapping_basis = note.get("mapping_basis")
+            if (
+                not isinstance(mapping_basis, list)
+                or not mapping_basis
+                or any(item not in bases for item in mapping_basis)
+            ):
+                raise ValueError(f"feedback note {note_id} mapping_basis is malformed")
+            if note.get("confidence") not in CONFIDENCES:
+                raise ValueError(f"feedback note {note_id} confidence is invalid")
+            if note.get("confidence") == "UNCERTAIN":
+                uncertain.append(note_id)
+            if note.get("status") not in {
+                "open",
+                "applied",
+                "verified",
+                "unresolved",
+            }:
+                raise ValueError(f"feedback note {note_id} status is invalid")
+            if not isinstance(note.get("resolution_evidence"), list):
+                raise ValueError(
+                    f"feedback note {note_id} resolution_evidence must be a list"
+                )
+        if len(note_ids) != len(set(note_ids)):
+            raise ValueError("feedback note IDs must be unique")
+        unresolved = summary.get("unresolved_note_ids")
+        if not isinstance(unresolved, list) or any(
+            item not in note_ids for item in unresolved
+        ):
+            raise ValueError("unresolved_note_ids must reference feedback ledger notes")
+        if uncertain and not summary.get("needs_clarification"):
+            raise ValueError("UNCERTAIN feedback mappings require clarification")
+
     def _accept_storyboard(self, ctx: RunContext, summary: Mapping[str, Any]) -> None:
         vg = self._vg(ctx)
         storyboard = _read_json(str(summary["storyboard_path"]))

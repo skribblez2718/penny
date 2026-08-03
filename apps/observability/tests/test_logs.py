@@ -3,7 +3,6 @@
 import time
 from pathlib import Path
 
-import aiosqlite
 import pytest
 import pytest_asyncio
 

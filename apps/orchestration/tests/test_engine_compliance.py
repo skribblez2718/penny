@@ -15,7 +15,6 @@
   non-reserved events.
 """
 
-import json
 
 from statemachine import State, StateMachine
 

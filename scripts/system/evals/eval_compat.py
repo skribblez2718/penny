@@ -10,7 +10,6 @@ from __future__ import annotations
 import sys
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Callable, List, Tuple
 
 from eval_lib import (
