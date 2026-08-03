@@ -38,4 +38,3 @@ T3→T4 archival runs age-based sweeps: signals expire at 7 days, outcomes at 30
 
 - Architecture: `docs/agents/architecture/tiered-memory.md`
 - Design: `plans/ai-gaps-resolution/02-designs/09-tiered-memory.md`
-- Self-update: `docs/agents/self-improving-guidance.md` (Step 7)

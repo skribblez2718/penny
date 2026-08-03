@@ -40,6 +40,7 @@ from orchestration.playbooks.prd import PrdMachine
 from orchestration.playbooks.research import ResearchMachine
 from orchestration.playbooks.rez import RezMachine
 from orchestration.playbooks.sca import SCAMachine
+from orchestration.playbooks.videogen import VideogenMachine
 
 # (skill dir name, FSM class). Every HTML-diagram skill is enforced here.
 CASES = [
@@ -52,6 +53,7 @@ CASES = [
     ("research", ResearchMachine),
     ("derivation", DerivationMachine),
     ("imagegen", ImagegenMachine),
+    ("videogen", VideogenMachine),
     ("rez", RezMachine),
 ]
 

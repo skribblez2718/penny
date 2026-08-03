@@ -1,0 +1,276 @@
+{
+  "checks": [
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "MECH-BUNDLE clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "MECH-BUNDLE",
+      "owner": "VALIDATE",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "MECH-SCENES clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "MECH-SCENES",
+      "owner": "DRAFT_RENDER",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "MECH-ASSEMBLY clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "MECH-ASSEMBLY",
+      "owner": "DRAFT_RENDER",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "MECH-DRIFT clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "MECH-DRIFT",
+      "owner": "AUTO_QA",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "MECH-CAPTIONS clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "MECH-CAPTIONS",
+      "owner": "AUTO_QA",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "MECH-CAP clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "MECH-CAP",
+      "owner": "AUTO_QA",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "MECH-PROVENANCE clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "MECH-PROVENANCE",
+      "owner": "VALIDATE",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "MECH-ACCESS clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "MECH-ACCESS",
+      "owner": "AUTO_QA",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "ALIGN-COVERAGE clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "ALIGN-COVERAGE",
+      "owner": "STORYBOARD",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "ALIGN-BOUNDARY clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "ALIGN-BOUNDARY",
+      "owner": "STORYBOARD",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "ALIGN-ARC clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "ALIGN-ARC",
+      "owner": "STORYBOARD",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "ALIGN-ANALOGY clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "ALIGN-ANALOGY",
+      "owner": "STORYBOARD",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "ALIGN-PRONUNCIATION clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "ALIGN-PRONUNCIATION",
+      "owner": "NARRATION_SCRIPT",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "ALIGN-CONVENTIONS clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "ALIGN-CONVENTIONS",
+      "owner": "STORYBOARD",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "ALIGN-MATH clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "ALIGN-MATH",
+      "owner": "STORYBOARD",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "ALIGN-TONE clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "ALIGN-TONE",
+      "owner": "NARRATION_SCRIPT",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "ALIGN-ROLES clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "ALIGN-ROLES",
+      "owner": "STORYBOARD",
+      "status": "PASS"
+    },
+    {
+      "affected_scene_ids": [],
+      "evidence": [
+        {
+          "detail": "ALIGN-MNEMONIC clean evidence",
+          "kind": "fixture",
+          "ref": "fixture:qa",
+          "sha256": null
+        }
+      ],
+      "fix_route": "NONE",
+      "id": "ALIGN-MNEMONIC",
+      "owner": "NARRATION_SCRIPT",
+      "status": "PASS"
+    }
+  ],
+  "schema_version": 1,
+  "verdict": "PASS"
+}

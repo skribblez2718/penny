@@ -242,9 +242,9 @@ def _bump_recall(ids: list) -> None:
     This is the store's ONLY usage signal — it feeds the archiver's
     recall-modulated TTL (a reused drawer lives longer) and search ranking.
     Only genuine model-initiated recall should call this (``track_recall``);
-    the system's own churning queries (session_start_checker, watchers,
-    compression) must NOT, or e.g. signals would have their TTL renewed every
-    session and never expire. Best-effort — never raises.
+    the system's own churning background queries must NOT, or a drawer would
+    have its TTL renewed every session and never expire. Best-effort — never
+    raises.
     """
     ids = [i for i in (ids or []) if i]
     if not ids:

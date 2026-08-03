@@ -1209,7 +1209,6 @@ class VideogenPlaybook(BasePlaybook):
         if stage == "AUTHOR":
             vg["paths"]["narration"] = summary["narration_path"]
             vg["hashes"]["narration"] = summary["narration_sha256"]
-            self._sync_narration_hashes(ctx)
             vg["phase_state"]["narration_stage"] = "CARREN"
             self.sm.send("narration_again")
             return
@@ -1380,6 +1379,7 @@ class VideogenPlaybook(BasePlaybook):
             )
         scenes = self._narration_scenes(ctx)
         workspace = vg["paths"]["workspace_dir"]
+        provenance_updates: dict[str, str] = {}
         for scene in scenes:
             scene_id = scene["scene_id"]
             text = scene["narration"]
@@ -1446,7 +1446,17 @@ class VideogenPlaybook(BasePlaybook):
                     "voice_job_id": result["job_id"],
                 }
             )
+            provenance_updates[f"bundle/audio/{scene_id}"] = result["audio_sha256"]
             vg["warnings"].extend(str(item) for item in result.get("warnings") or [])
+        # Reuse decisions above must compare against the prior persisted scene hashes.
+        self._sync_narration_hashes(ctx)
+        provenance_path = vg["paths"].get("provenance")
+        if (
+            provenance_updates
+            and isinstance(provenance_path, str)
+            and Path(provenance_path).is_file()
+        ):
+            self._update_provenance_checksums(ctx, provenance_updates)
         if not scenes or any(
             not row.get("audio_path") or not row.get("audio_sha256")
             for row in vg["scene_ledger"].values()
@@ -4025,7 +4035,6 @@ class VideogenPlaybook(BasePlaybook):
             path = vg["paths"].get(key)
             if isinstance(path, str) and Path(path).is_file():
                 vg["hashes"][key] = self._file_hash(path)
-        self._sync_narration_hashes(ctx)
 
     def _validate_render_result(self, result: Mapping[str, Any], quality: str) -> None:
         self._validate_exact_keys(

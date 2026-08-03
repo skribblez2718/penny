@@ -626,10 +626,9 @@ class PrdPlaybook(BasePlaybook):
             prd["ideal_state_valid"] = ideal_ok  # code schema-floor stacked on vera's verdict
             prd["issues"] = issues
             # Learning-loop signal (item 6): downstream readers use the STANDARD context
-            # fields, not ctx.extras. Without this every prd outcome landed with empty
-            # verify_gaps, no verdict, and expected_outcome "goal satisfied" — so every
-            # MISMATCH classified as failure_mode "other" and recall had nothing to
-            # distil. vera's issues and the spec's own criteria ARE the signal; publish them.
+            # fields, not ctx.extras. Without this every prd run landed with empty
+            # verify_gaps and no verdict, so a failure carried no usable signal.
+            # vera's issues and the spec's own criteria ARE the signal; publish them.
             ctx.verify_gaps = [str(i) for i in issues]
             ctx.verify_verdict = VERDICT_PASS if (valid and ideal_ok) else VERDICT_FAIL
             if isinstance(ideal, dict):

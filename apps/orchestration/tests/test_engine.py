@@ -148,8 +148,8 @@ def test_happy_path_to_complete(cp):
 # {exitCode, summary, summary_missing, error} (skill/index.ts:1012-1021), not
 # just a bare summary. A prior bug validated the WHOLE wrapper against the state
 # contract, so every required field read as "missing", every single-agent step
-# failed validation and retried to death, no run reached terminal, the runs
-# table stayed empty, and record_outcome never fired -> starved flywheel.
+# failed validation and retried to death, no run reached terminal, and the runs
+# table stayed empty.
 #
 # The rest of this suite passes bare summaries and so never exercised the real
 # production wire format, which is why the bug survived. These tests drive the

@@ -33,9 +33,6 @@ def _clear_skill_model_routing_env(monkeypatch):
     suite testing the DEFAULT (dormant) configuration; the enabled path is covered
     generically by ``test_uncertainty_retry.py``, which sets it explicitly.
 
-    ``PI_FAILURE_MODE_MODEL`` is the same live-model hazard as the guards above: set,
-    failure-mode classification spawns a model instead of
-    matching the keyword table the tests assert.
     """
     _PREFIXES = ("JSA_", "SCA_", "PENNY_ABLATE_")
     _EXACT = {
@@ -44,7 +41,6 @@ def _clear_skill_model_routing_env(monkeypatch):
         "PI_GATE_INTENT_MODEL",
         "PI_CODE_DETECT_MODEL",
         "PI_MODEL_TIER",
-        "PI_FAILURE_MODE_MODEL",
         "PENNY_UNCERTAINTY_RETRY",
     }
     for key in list(os.environ):

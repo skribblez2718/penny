@@ -6,7 +6,6 @@ scaffold-ON vs scaffold-OFF.
 
 import pytest
 
-from orchestration.context import RunContext
 from orchestration.engine import BasePlaybook
 from orchestration.loans import LOANS, list_loans, loan_enabled
 from orchestration.primitives.spec import PrimitiveSpec
@@ -180,17 +179,6 @@ def test_gate_intent_model_failure_is_safe_refine(monkeypatch):
     assert BasePlaybook.classify_gate_intent("some free text", runner=boom) == "refine"
 
 
-
-
-# ---------------------------------------------------------------------------
-# Wiring: failure_mode_keywords
-# ---------------------------------------------------------------------------
-
-
-def _mismatch_ctx(gaps):
-    ctx = RunContext(session_id="s", run_id="r", playbook="code")
-    ctx.verify_gaps = gaps
-    return ctx
 
 
 # ---------------------------------------------------------------------------
