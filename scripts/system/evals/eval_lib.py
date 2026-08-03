@@ -44,20 +44,6 @@ ERROR = "ERROR"
 DOWN_GOOD = "down_good"
 UP_GOOD = "up_good"
 
-# Fields the downstream miners actually consume from an outcome record.
-# compression: outcome/reason/domain/decision_id (compression_loop.identify_patterns,
-# run_compression._parse_outcome_record); watchers: delta_score/timestamp/decision_id
-# (signal_generators); digest: outcome/confidence_at_action (digest/generator.py).
-CONSUMED_OUTCOME_FIELDS: Tuple[str, ...] = (
-    "decision_id",
-    "outcome",
-    "domain",
-    "reason",
-    "session_id",
-    "confidence_at_action",
-    "timestamp",
-)
-
 SUBOPTIMAL = ("MISMATCH", "PARTIAL")
 HIGH_CONFIDENCE = ("CERTAIN", "PROBABLE")
 LOW_CONFIDENCE = ("POSSIBLE", "UNCERTAIN")
@@ -224,69 +210,6 @@ def newest_filed_at(drawers: List[Dict[str, Any]]) -> Optional[datetime]:
 
 
 # ── Outcome records ─────────────────────────────────────────────────────────
-
-
-def parse_outcome(text: str) -> Dict[str, Any]:
-    """Parse an outcome drawer: JSON body first, header ``key: value`` fallback.
-
-    Mirrors ``run_compression._parse_outcome_record`` semantics (including the
-    delta_score→outcome aliasing) so the eval measures what the miners see.
-    """
-    record: Dict[str, Any] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("{"):
-            try:
-                parsed = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                record = parsed
-                break
-    if not record:
-        for fieldname in CONSUMED_OUTCOME_FIELDS + ("delta_score",):
-            match = re.search(rf"{fieldname}:\s*([^|\n]*)", text, re.IGNORECASE)
-            if match:
-                record[fieldname] = match.group(1).strip()
-    if not record.get("outcome") and record.get("delta_score"):
-        record["outcome"] = record["delta_score"]
-    return record
-
-
-def load_outcomes(window_days: Optional[float] = None) -> List[Dict[str, Any]]:
-    """Load parsed outcome records; each carries ``_when`` (aware UTC or None)."""
-    outcomes: List[Dict[str, Any]] = []
-    cutoff = now_utc() - timedelta(days=window_days) if window_days else None
-    for drawer in load_room("outcomes", include_content=True):
-        record = parse_outcome(drawer.get("content") or "")
-        if not record:
-            continue
-        when = parse_when(record.get("timestamp")) or parse_when(drawer.get("filed_at"))
-        record["_when"] = when
-        if cutoff is not None and (when is None or when < cutoff):
-            continue
-        outcomes.append(record)
-    return outcomes
-
-
-def normalize_reason(record: Dict[str, Any]) -> str:
-    """Best-available failure signature for repeat-mistake detection.
-
-    Prefers the ``reason`` field (what the compression loop groups by); falls
-    back to actual_outcome / first verify gap so the metric still works while
-    the writer does not emit ``reason``.
-    """
-    for key in ("reason", "actual_outcome"):
-        value = str(record.get(key) or "").strip()
-        if value and value not in ("met", "not met"):
-            return re.sub(r"\s+", " ", value.lower())[:120]
-    gaps = record.get("verify_gaps") or []
-    if isinstance(gaps, list) and gaps:
-        return re.sub(r"\s+", " ", str(gaps[0]).lower())[:120]
-    return ""
-
-
-# ── SQLite stores ───────────────────────────────────────────────────────────
 
 
 def orch_db_path() -> Path:

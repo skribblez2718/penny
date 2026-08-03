@@ -1,4 +1,4 @@
-"""Unit tests for the behavioral-regression ratchet: fixtures, eval section, guard.
+"""Unit tests for the behavioral-regression ratchet: fixtures, eval section.
 
 Hermetic — the eval reads a monkeypatched artifact; the live pi-replay path is
 integration-lane. Fixture well-formedness is checked so a malformed fixture
@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "evals"))  # eval_l
 
 import pytest  # noqa: E402
 
-import guard  # noqa: E402
 import run_trajectory as rt  # noqa: E402
 import eval_trajectory as et  # noqa: E402
 from eval_lib import FAIL, PASS, SKIP, run_checks  # noqa: E402
@@ -137,70 +136,6 @@ def test_corrupt_artifact_skips_not_errors(tmp_path, monkeypatch):
         monkeypatch.setattr(et, "LATEST_PATH", path)
         results = {r.name: r for r in run_checks(et.CHECKS)}
         assert results["trajectory.pass_rate"].status == SKIP, bad
-
-
-# ── pre-apply guard ──────────────────────────────────────────────────────────
-
-
-def _baseline(tmp_path, regressed_count):
-    p = tmp_path / "baseline.json"
-    p.write_text(
-        json.dumps({"metrics": {"trajectory.regressed_fixtures": {"value": regressed_count}}})
-    )
-    return p
-
-
-def test_guard_allows_known_gap_at_baseline(tmp_path):
-    # 1 failing fixture, and the baseline already accepts 1 → known gap, not new drift
-    art = tmp_path / "latest.json"
-    art.write_text(
-        json.dumps({"cells": [_cell("a", "PASS"), _cell("b", "PASS"), _cell("c", "FAIL")]})
-    )
-    ok, msg = guard.check_no_regression(art, _baseline(tmp_path, 1))
-    assert ok is True
-
-
-def test_guard_blocks_on_new_drift_above_baseline(tmp_path):
-    # 2 failing but baseline accepts only 1 → NEW drift → block
-    art = tmp_path / "latest.json"
-    art.write_text(
-        json.dumps(
-            {
-                "cells": [
-                    _cell("a", "PASS"),
-                    _cell("b", "FAIL"),
-                    _cell("c", "FAIL"),
-                    _cell("d", "PASS"),
-                ]
-            }
-        )
-    )
-    ok, msg = guard.check_no_regression(art, _baseline(tmp_path, 1))
-    assert ok is False and "NEW" in msg
-
-
-def test_guard_blocks_on_catastrophic_collapse(tmp_path):
-    art = tmp_path / "latest.json"
-    art.write_text(
-        json.dumps(
-            {
-                "cells": [
-                    _cell("a", "FAIL"),
-                    _cell("b", "FAIL"),
-                    _cell("c", "FAIL"),
-                    _cell("d", "PASS"),
-                ]
-            }
-        )
-    )
-    ok, msg = guard.check_no_regression(art, _baseline(tmp_path, 3))  # even if baseline accepts 3
-    assert ok is False and "catastrophic" in msg
-
-
-def test_guard_fails_open_on_missing_artifact(tmp_path):
-    ok, _ = guard.check_no_regression(tmp_path / "nope.json", tmp_path / "no-baseline.json")
-    assert ok is True
-    assert guard.latest_regressions(tmp_path / "nope.json") == []
 
 
 # ── runner pure helpers ──────────────────────────────────────────────────────

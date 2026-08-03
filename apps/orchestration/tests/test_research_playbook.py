@@ -484,12 +484,10 @@ def test_regrounded_run_ends_with_a_clean_signal(cp):
     assert ctx.verify_verdict == "PASS" and ctx.verify_gaps == []
 
 
-def test_shipped_but_unverified_run_is_distinguishable_in_the_ledger(cp):
+def test_shipped_but_unverified_run_is_distinguishable(cp):
     """A report shipped with unverified claims must be DISTINGUISHABLE from a
-    fully grounded one in the outcome ledger. Before this signal existed, both
-    recorded an empty verify_gaps and were identical to every ledger reader."""
-    from orchestration.outcome_writer import build_outcome_content
-
+    fully grounded one. Before this signal existed, both recorded an empty
+    verify_gaps and were identical to every downstream reader."""
     _standard_to_validating(cp)
     _step(cp, "vera", _validate("FAIL", ["c1 unsupported"]))
     _step(cp, "synthia", {"synthesis_complete": True})
@@ -509,10 +507,6 @@ def test_shipped_but_unverified_run_is_distinguishable_in_the_ledger(cp):
     ctx = cp.load(RID).context
     assert ctx.verify_verdict == "FAIL"
     assert ctx.verify_gaps == ["c3 unsupported"]
-    # The ledger record itself carries the grounding failure + its evidence.
-    content = build_outcome_content(ctx)
-    assert '"verify_verdict": "FAIL"' in content
-    assert "c3 unsupported" in content
 
 
 def test_grounded_is_false_when_validation_never_ran(cp):

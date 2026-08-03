@@ -218,27 +218,6 @@ LOANS: dict[str, Loan] = {
             added="2026-08-02",
             review_by="2026-11-01",
         ),
-        Loan(
-            loan_id="failure_mode_keywords",
-            description=(
-                "Keyword table classifying verifier-gap text into categorical failure "
-                "modes for the outcome ledger (outcome_writer._FAILURE_MODE_KEYWORDS). "
-                "PARTIALLY REPAID 2026-07-31: demoted to the FALLBACK. When "
-                "PI_FAILURE_MODE_MODEL is set a model reads the gap text and picks from "
-                "the same FAILURE_MODES vocabulary; the table decides only when no model "
-                "is configured or the call fails."
-            ),
-            rationale=(
-                "Substitutes a hand-built keyword classifier for model judgment over the "
-                "gap text — it cannot see paraphrase, negation, or any failure mode nobody "
-                "enumerated, so it only degrades as models improve. Ablated it falls back "
-                "to the uncategorized bucket the compression loop already handles. FULL "
-                "repayment = delete the table once PI_FAILURE_MODE_MODEL is the measured "
-                "default; keep it until then so an unconfigured deployment still classifies."
-            ),
-            added="2026-07-14",
-            review_by="2026-10-01",
-        ),
     )
 }
 

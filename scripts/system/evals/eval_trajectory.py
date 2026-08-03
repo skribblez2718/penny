@@ -122,7 +122,7 @@ def check_results_fresh() -> EvalResult:
         value=round(age, 2),
         direction=DOWN_GOOD,
         unit="days",
-        detail="age of the trajectory run; re-run weekly / before adopting an amendment",
+        detail="age of the trajectory run; re-run weekly",
     )
 
 

@@ -9,7 +9,6 @@ All 23 MemPalace tools are available:
 - Knowledge Graph: kg_query, kg_add, kg_invalidate, kg_timeline, kg_stats
 - Navigation: traverse, find_tunnels, graph_stats
 - Agent Diary: diary_write, diary_read
-- Signals: acknowledge_signal
 
 Configuration:
     MEMPALACE_PATH: Override default palace path (default: ~/.mempalace/palace)
@@ -1043,32 +1042,6 @@ def tool_diary_read(params: dict) -> dict:
         return {"error": str(e)}
 
 
-# ==================== SIGNAL LIFECYCLE ====================
-
-
-def tool_acknowledge_signal(params: dict) -> dict:
-    """Acknowledge a pending signal so it stops re-surfacing every session.
-
-    Gives PENDING signals a real exit (they previously had none — no non-test
-    caller of acknowledge_signal existed). Imports the watcher lazily to avoid
-    a circular import (signal_generators imports this bridge).
-    """
-    signal_id = params.get("signal_id")
-    if not signal_id:
-        return {"error": "signal_id is required"}
-    session_id = params.get("session_id", "")
-    try:
-        watchers_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "watchers")
-        if watchers_dir not in sys.path:
-            sys.path.insert(0, watchers_dir)
-        from signal_generators import acknowledge_signal  # lazy: avoid circular import
-
-        ok = acknowledge_signal(signal_id, session_id)
-        return {"success": bool(ok), "signal_id": signal_id, "acknowledged": bool(ok)}
-    except Exception as e:
-        return {"error": str(e)}
-
-
 # ==================== DISPATCH ====================
 
 TOOL_HANDLERS = {
@@ -1094,7 +1067,6 @@ TOOL_HANDLERS = {
     "graph_stats": tool_graph_stats,
     "diary_write": tool_diary_write,
     "diary_read": tool_diary_read,
-    "acknowledge_signal": tool_acknowledge_signal,
 }
 
 

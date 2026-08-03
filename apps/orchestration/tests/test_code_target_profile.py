@@ -281,3 +281,107 @@ def test_pre_edit_baseline_records_a_failing_target_honestly(tmp_path):
     assert validate_eval_baseline(baseline) == []
     result = baseline["normalized_outcomes"]["results"][0]
     assert result["status"] == "fail" and result["exit_status"] != 0
+
+
+def test_pre_edit_baseline_tolerates_caches_created_by_the_eval_command(tmp_path):
+    """A verification command that writes __pycache__ must not invalidate its own baseline.
+
+    pytest creates __pycache__ the moment it imports anything, so counting untracked
+    caches as source identity made the comparator reject every Python target with
+    "full-eval baseline command changed source/worktree identity" — the baseline could
+    never be established.
+    """
+    from orchestration.code_artifacts import validate_eval_baseline
+    from orchestration.playbooks.code import (
+        _capture_pre_edit_eval_baseline,
+        _target_verification_manifest,
+        _target_scope_manifest,
+    )
+
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='app'\n")
+    # A command that creates exactly the kind of cache pytest would.
+    (tmp_path / "Makefile").write_text("test:\n\t@mkdir -p __pycache__ && touch __pycache__/x.pyc\n")
+    _git_init(tmp_path)
+
+    profile = detect_target_profile(str(tmp_path))
+    manifest = _target_verification_manifest(profile, 1)
+    scope = _target_scope_manifest(profile, "run-cache")
+    drift = {"schema_version": 1, "matrix_id": "m", "version": 1}
+    baseline = _capture_pre_edit_eval_baseline(str(tmp_path), manifest, scope, drift)
+    assert baseline.get("status") != "unverified", baseline.get("reason")
+    assert validate_eval_baseline(baseline) == []
+    # The cache must not appear in the frozen source identity at all.
+    paths = [r["path"] for r in baseline["source_identity"]["worktree_records"]]
+    assert not any("__pycache__" in p for p in paths), paths
+
+
+def test_real_source_mutation_still_invalidates_the_baseline(tmp_path):
+    """Tolerating caches must NOT tolerate a command that edits tracked source."""
+    from orchestration.playbooks.code import (
+        _capture_pre_edit_eval_baseline,
+        _target_verification_manifest,
+        _target_scope_manifest,
+    )
+
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='app'\n")
+    (tmp_path / "src.py").write_text("original\n")
+    (tmp_path / "Makefile").write_text("test:\n\t@echo mutated > src.py\n")
+    _git_init(tmp_path)
+
+    profile = detect_target_profile(str(tmp_path))
+    manifest = _target_verification_manifest(profile, 1)
+    scope = _target_scope_manifest(profile, "run-mutate")
+    drift = {"schema_version": 1, "matrix_id": "m", "version": 1}
+    baseline = _capture_pre_edit_eval_baseline(str(tmp_path), manifest, scope, drift)
+    assert baseline["status"] == "unverified"
+    assert "changed source/worktree identity" in baseline["reason"]
+
+
+def test_agent_tasks_render_enumerations_from_the_canonical_constants():
+    """The finding/disposition vocabulary must come FROM the Python constants.
+
+    Agents emitted invented states ('resolved', 'infrastructure_error') because only
+    Python held the exact values while the prompt paraphrased them. If FINDING_STATES or
+    EVIDENCE_CLASSES ever changes, the task text changes with it and this still passes;
+    a hardcoded copy would drift and fail here.
+    """
+    from orchestration.code_artifacts import EVIDENCE_CLASSES, FINDING_STATES
+    from orchestration.context import RunContext
+    from orchestration.playbooks.code import _build_analyze, _build_learn
+
+    ctx = RunContext(session_id="s", run_id="r", playbook="code", goal="g")
+    analyze = _build_analyze(ctx, {}, {"success_criteria": ["c"]})
+    for state in FINDING_STATES:
+        assert state in analyze, f"analyze task omits canonical finding state {state}"
+    for klass in EVIDENCE_CLASSES:
+        assert klass in analyze, f"analyze task omits canonical evidence class {klass}"
+
+    learn = _build_learn(ctx, {}, {"success_criteria": ["c"]})
+    assert "obligation_id" in learn and "evidence_refs" in learn and "rationale" in learn
+    for state in FINDING_STATES:
+        assert state in learn
+
+
+def test_enumerations_survive_the_strong_model_path():
+    """Vocabulary must NOT depend on the loan-gated SUMMARY restatement.
+
+    `_summary_contract_directive` returns "" under ablation or PI_MODEL_TIER=strong, so
+    putting the enumerations there would drop them on exactly the strong-model path.
+    """
+    import os
+    from orchestration.playbooks.code import CODE_ANALYZE, CodePlaybook
+    from orchestration.context import RunContext
+
+    previous = os.environ.get("PI_MODEL_TIER")
+    os.environ["PI_MODEL_TIER"] = "strong"
+    try:
+        assert CodePlaybook._summary_contract_directive(CODE_ANALYZE) == ""
+        ctx = RunContext(session_id="s", run_id="r", playbook="code", goal="g")
+        from orchestration.playbooks.code import _build_analyze
+
+        assert "not_applicable" in _build_analyze(ctx, {}, {"success_criteria": ["c"]})
+    finally:
+        if previous is None:
+            os.environ.pop("PI_MODEL_TIER", None)
+        else:
+            os.environ["PI_MODEL_TIER"] = previous

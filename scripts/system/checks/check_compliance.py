@@ -16,10 +16,6 @@ from pathlib import Path
 
 MODULES = {
     "plan_skill": ".pi/skills/plan/scripts",
-    "watchers": "scripts/system/watchers",
-    "self_improve": "scripts/system/self_improve",
-    "digest": "scripts/system/digest",
-    "outcome_ledger": "scripts/system/outcome_ledger",
     "tiered_memory": "scripts/system/tiered_memory",
     "register_artifact": "scripts/system/tests",
 }
@@ -85,11 +81,7 @@ def check_tests() -> bool:
         if name == "plan_skill":
             extra["PYTHONPATH"] += ":.pi/skills/plan/scripts"
         elif name in (
-            "watchers",
-            "outcome_ledger",
             "tiered_memory",
-            "self_improve",
-            "digest",
             "register_artifact",
         ):
             extra["PYTHONPATH"] += ":scripts/system"

@@ -2,34 +2,7 @@
 
 from pathlib import Path
 
-from eval_compat import find_dead_tests, missing_consumed_fields
-
-
-class TestMissingConsumedFields:
-    def test_complete_record_passes(self):
-        record = {
-            "decision_id": "r1",
-            "outcome": "MISMATCH",
-            "domain": "coding",
-            "reason": "timeout",
-            "session_id": "s1",
-            "confidence_at_action": "PROBABLE",
-            "timestamp": "2026-07-05T00:00:00+00:00",
-        }
-        assert missing_consumed_fields(record) == []
-
-    def test_missing_and_blank_fields_reported(self):
-        record = {
-            "decision_id": "r1",
-            "outcome": "MISMATCH",
-            "domain": "coding",
-            "reason": "",
-            "session_id": "s1",
-            "timestamp": "2026-07-05T00:00:00+00:00",
-        }
-        missing = missing_consumed_fields(record)
-        assert "reason" in missing
-        assert "confidence_at_action" in missing
+from eval_compat import find_dead_tests
 
 
 class TestFindDeadTests:

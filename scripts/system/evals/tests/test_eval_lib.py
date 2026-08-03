@@ -18,8 +18,6 @@ from eval_lib import (
     EvalResult,
     EvalSkip,
     compare,
-    normalize_reason,
-    parse_outcome,
     parse_when,
     run_checks,
     update_baseline,
@@ -53,43 +51,6 @@ class TestParseWhen:
         assert parse_when("not a date") is None
         assert parse_when("") is None
         assert parse_when(None) is None
-
-
-class TestParseOutcome:
-    def test_header_plus_json_body(self):
-        text = (
-            "decision_id: r1 | delta_score: MISMATCH | domain: coding\n"
-            '{"decision_id": "r1", "delta_score": "MISMATCH", "domain": "coding"}'
-        )
-        record = parse_outcome(text)
-        assert record["decision_id"] == "r1"
-        assert record["outcome"] == "MISMATCH"  # delta_score aliased
-
-    def test_header_only_fallback(self):
-        text = "decision_id: d7 | delta_score: MATCH | domain: research | reason: flaky"
-        record = parse_outcome(text)
-        assert record["decision_id"] == "d7"
-        assert record["outcome"] == "MATCH"
-        assert record["reason"] == "flaky"
-
-    def test_garbage_returns_empty(self):
-        assert parse_outcome("just some prose with no fields") == {}
-
-
-class TestNormalizeReason:
-    def test_prefers_reason(self):
-        assert normalize_reason({"reason": "  Timeout  In\nTests "}) == "timeout in tests"
-
-    def test_falls_back_to_actual_outcome(self):
-        record = {"reason": "", "actual_outcome": "ImportError: no module"}
-        assert normalize_reason(record) == "importerror: no module"
-
-    def test_skips_generic_actual_outcome(self):
-        record = {"actual_outcome": "not met", "verify_gaps": ["missing pagination test"]}
-        assert normalize_reason(record) == "missing pagination test"
-
-    def test_empty_when_nothing_usable(self):
-        assert normalize_reason({"actual_outcome": "met"}) == ""
 
 
 class TestRunChecks:

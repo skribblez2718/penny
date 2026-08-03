@@ -9,7 +9,6 @@ import pytest
 from orchestration.context import RunContext
 from orchestration.engine import BasePlaybook
 from orchestration.loans import LOANS, list_loans, loan_enabled
-from orchestration.outcome_writer import _failure_mode
 from orchestration.primitives.spec import PrimitiveSpec
 
 # ---------------------------------------------------------------------------
@@ -192,18 +191,6 @@ def _mismatch_ctx(gaps):
     ctx = RunContext(session_id="s", run_id="r", playbook="code")
     ctx.verify_gaps = gaps
     return ctx
-
-
-def test_failure_mode_keywords_on_by_default(monkeypatch):
-    monkeypatch.delenv("PENNY_ABLATE_FAILURE_MODE_KEYWORDS", raising=False)
-    assert _failure_mode(_mismatch_ctx(["missing constraint on auth"]), "MISMATCH") == (
-        "missing_constraint"
-    )
-
-
-def test_failure_mode_keywords_ablated_falls_back(monkeypatch):
-    monkeypatch.setenv("PENNY_ABLATE_FAILURE_MODE_KEYWORDS", "1")
-    assert _failure_mode(_mismatch_ctx(["missing constraint on auth"]), "MISMATCH") == "incomplete"
 
 
 # ---------------------------------------------------------------------------

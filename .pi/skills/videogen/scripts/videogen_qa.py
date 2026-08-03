@@ -7,6 +7,7 @@ import re
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from os import PathLike
+from pathlib import PurePath
 from typing import Any, Literal, TypeAlias, TypedDict, cast
 
 JSONScalar: TypeAlias = None | bool | int | float | str
@@ -28,6 +29,50 @@ _PROVENANCE_KEYS = frozenset(
         "voice_binding",
         "approval_record",
         "checksums",
+    }
+)
+_INPUT_BINDING_KEYS = frozenset(
+    {
+        "section_snapshot",
+        "teaching_canon_snapshots",
+        "analogy_registry_snapshot",
+        "pronunciation_canon_snapshot",
+        "universe_canon_snapshot",
+        "primitive_schema_snapshot",
+        "publish_convention_snapshot",
+    }
+)
+_RENDERER_BINDING_KEYS = frozenset(
+    {
+        "bundle_version",
+        "primitive_library_version",
+        "primitive_schema_sha256",
+        "theme",
+        "theme_sha256",
+    }
+)
+_VOICE_BINDING_KEYS = frozenset({"voice_id", "voice_id_sha256"})
+_REQUIRED_PROVENANCE_CHECKSUM_KEYS = frozenset(
+    {
+        "input/section",
+        "input/teaching-canon/000",
+        "input/analogy-registry",
+        "input/pronunciation-canon",
+        "input/universe-canon-ledger",
+        "input/primitive-schema",
+        "input/publish-convention",
+    }
+)
+_APPROVAL_KEYS = frozenset(
+    {
+        "gate",
+        "run_id",
+        "iteration",
+        "action",
+        "draft_video_sha256",
+        "content_sha256",
+        "reviewed_at",
+        "response",
     }
 )
 _EVIDENCE_KEYS = frozenset({"kind", "ref", "sha256", "detail"})
@@ -225,6 +270,15 @@ def _observation_status(observation: Mapping[str, Any]) -> Literal["PASS", "FAIL
         value = observation.get(key)
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and len(value) > 0:
             return "FAIL"
+    nested_results = [
+        observation.get(key) for key in ("import_result", "validation_result") if key in observation
+    ]
+    if nested_results:
+        if any(isinstance(value, Mapping) and value.get("ok") is False for value in nested_results):
+            return "FAIL"
+        if all(isinstance(value, Mapping) and value.get("ok") is True for value in nested_results):
+            return "PASS"
+        return "UNKNOWN"
     if observation.get("ok") is True or observation.get("valid") is True:
         return "PASS"
     return "UNKNOWN"
@@ -575,12 +629,39 @@ def check_mech_captions(  # noqa: C901
             route="DRAFT_RENDER",
         )
 
-    missing = set(observation.get("missing_scene_ids", []))
-    mismatch = set(observation.get("text_mismatch_scene_ids", []))
+    missing_value = observation.get("missing_scene_ids", [])
+    mismatch_value = observation.get("text_mismatch_scene_ids", [])
     out_of_range = observation.get("out_of_range_cue_indices", [])
     errors = observation.get("errors", [])
     cue_count = observation.get("cue_count")
     cue_text = observation.get("cue_text_by_scene")
+    sequence_values = (missing_value, mismatch_value, out_of_range, errors)
+    malformed_observation = any(
+        isinstance(value, (str, bytes)) or not isinstance(value, Sequence)
+        for value in sequence_values
+    )
+    if not malformed_observation:
+        malformed_observation = not all(isinstance(item, str) for item in missing_value) or not all(
+            isinstance(item, str) for item in mismatch_value
+        )
+    if cue_text is not None and not isinstance(cue_text, Mapping):
+        malformed_observation = True
+    if malformed_observation:
+        evidence = [
+            _evidence(
+                ref="caption-coverage",
+                detail={"observation": "malformed", "probe": dict(observation)},
+            )
+        ]
+        return _row(
+            "MECH-CAPTIONS",
+            "UNCERTAIN",
+            evidence,
+            affected=sorted(normalized_narration),
+            route="DRAFT_RENDER",
+        )
+    missing = set(cast(Sequence[str], missing_value))
+    mismatch = set(cast(Sequence[str], mismatch_value))
     if isinstance(cue_text, Mapping):
         for scene_id, narration in normalized_narration.items():
             candidate = cue_text.get(scene_id)
@@ -715,6 +796,62 @@ def check_mech_provenance(  # noqa: C901
             defects.append("provenance section identity disagrees with intake")
         if provenance.get("content_sha256") != expected_content_sha256:
             defects.append("provenance content hash disagrees with intake")
+        profile = provenance.get("profile_provenance")
+        profile_valid = isinstance(profile, Mapping) and (
+            (profile.get("mode") == "direct" and set(profile) == {"mode"})
+            or (
+                profile.get("mode") == "profile"
+                and set(profile) == {"mode", "name", "resolved_path", "sha256"}
+                and isinstance(profile.get("name"), str)
+                and bool(profile.get("name"))
+                and isinstance(profile.get("resolved_path"), str)
+                and PurePath(cast(str, profile.get("resolved_path"))).is_absolute()
+                and isinstance(profile.get("sha256"), str)
+                and bool(_SHA256_RE.fullmatch(cast(str, profile.get("sha256"))))
+            )
+        )
+        if not profile_valid:
+            defects.append("profile provenance shape is invalid")
+        input_bindings = provenance.get("input_bindings")
+        if not isinstance(input_bindings, Mapping) or set(input_bindings) != _INPUT_BINDING_KEYS:
+            defects.append("input bindings shape is invalid")
+        else:
+            teaching = input_bindings.get("teaching_canon_snapshots")
+            if not isinstance(teaching, list) or not teaching:
+                defects.append("teaching canon input bindings are absent")
+        renderer = provenance.get("renderer_binding")
+        if not isinstance(renderer, Mapping) or set(renderer) != _RENDERER_BINDING_KEYS:
+            defects.append("renderer binding shape is invalid")
+        else:
+            if isinstance(manifest, Mapping) and any(
+                renderer.get(binding_key) != manifest.get(manifest_key)
+                for binding_key, manifest_key in (
+                    ("bundle_version", "bundle_version"),
+                    ("primitive_library_version", "primitive_library_version"),
+                    ("theme", "theme"),
+                )
+            ):
+                defects.append("renderer binding disagrees with manifest")
+            for digest_key in ("primitive_schema_sha256", "theme_sha256"):
+                digest_value = renderer.get(digest_key)
+                if not isinstance(digest_value, str) or not _SHA256_RE.fullmatch(digest_value):
+                    defects.append(f"renderer binding {digest_key} is invalid")
+        voice = provenance.get("voice_binding")
+        if not isinstance(voice, Mapping) or set(voice) != _VOICE_BINDING_KEYS:
+            defects.append("voice binding shape is invalid")
+        elif (
+            not isinstance(voice.get("voice_id"), str)
+            or not voice.get("voice_id")
+            or not isinstance(voice.get("voice_id_sha256"), str)
+            or not _SHA256_RE.fullmatch(cast(str, voice.get("voice_id_sha256")))
+        ):
+            defects.append("voice binding values are invalid")
+        approval = provenance.get("approval_record")
+        if approval is not None:
+            if not isinstance(approval, Mapping) or set(approval) != _APPROVAL_KEYS:
+                defects.append("approval record shape is invalid")
+            elif approval.get("content_sha256") != expected_content_sha256:
+                defects.append("approval record content hash disagrees with intake")
         checksums_value = provenance.get("checksums")
         if not isinstance(checksums_value, Mapping) or not checksums_value:
             defects.append("provenance checksums are absent")
@@ -727,12 +864,17 @@ def check_mech_provenance(  # noqa: C901
             checksums = None
         else:
             checksums = cast(Mapping[str, str], checksums_value)
+            if _REQUIRED_PROVENANCE_CHECKSUM_KEYS - set(checksums):
+                defects.append("provenance required input checksums are absent")
             if checksums.get("input/section") != expected_content_sha256:
                 defects.append("provenance input/section checksum disagrees")
     evidence: list[EvidenceRef] = [
         _evidence(
             ref="manifest-provenance-structure",
-            detail={"defects": defects, "manifest_keys": sorted(manifest)},
+            detail={
+                "defects": defects,
+                "manifest_keys": sorted(manifest) if isinstance(manifest, Mapping) else [],
+            },
         )
     ]
     if checksums is not None:

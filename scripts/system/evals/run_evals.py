@@ -9,7 +9,6 @@ Usage:
     run_evals.py                         # all sections, gate on regressions
     run_evals.py --sections compat       # deterministic checks only (make test)
     run_evals.py --update-baseline       # absorb current reality into the ratchet
-    run_evals.py --signal-on-regression  # also write a CRITICAL penny/signals drawer
     run_evals.py --json                  # machine-readable output
 
 Baseline semantics (baseline.json):
@@ -56,11 +55,7 @@ HISTORY_PATH = eval_lib.REPO_ROOT / ".penny" / "evals" / "history.jsonl"
 SECTION_ORDER = (
     "compat",
     "invariants",
-    "flywheel",
-    "quality",
     "retrieval",
-    "prompt_efficacy",
-    "judgment",
     "trajectory",
 )
 
@@ -123,38 +118,10 @@ def append_history(verdicts: List[Verdict]) -> None:
         fh.write(json.dumps(entry) + "\n")
 
 
-def emit_regression_signal(regressions: List[Verdict]) -> None:
-    """Surface regressions through Penny's own signal → session-brief pipeline."""
-    try:
-        watchers_dir = str(eval_lib.REPO_ROOT / "scripts" / "system" / "watchers")
-        if watchers_dir not in sys.path:
-            sys.path.insert(0, watchers_dir)
-        from signal_generators import write_signal  # type: ignore[import-not-found]
-
-        names = ", ".join(v.result.name for v in regressions[:5])
-        stamp = datetime.now(timezone.utc)
-        signal = {
-            "signal_id": f"eval_regression_{stamp.strftime('%Y%m%d')}",
-            "signal_type": "METRIC",
-            "source": "eval_runner",
-            "priority": "CRITICAL",
-            "title": f"Eval regression: {len(regressions)} check(s) got worse",
-            "context": names,
-            "suggested_action": "Run `make evals` and inspect the regressions before "
-            "trusting recent changes.",
-            "timestamp": stamp.isoformat(),
-            "status": "PENDING",
-        }
-        write_signal(signal, session_id="eval_runner")
-    except Exception as exc:  # noqa: BLE001 — surfacing is best-effort
-        print(f"(could not write regression signal: {type(exc).__name__}: {exc})")
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sections", default=",".join(SECTION_ORDER))
     parser.add_argument("--update-baseline", action="store_true")
-    parser.add_argument("--signal-on-regression", action="store_true")
     parser.add_argument("--json", action="store_true", dest="as_json")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--no-history", action="store_true")
@@ -202,8 +169,6 @@ def main() -> int:
         return 0
 
     if regressions:
-        if args.signal_on_regression:
-            emit_regression_signal(regressions)
         if not args.as_json:
             print("\nREGRESSIONS (worse than baseline):")
             for verdict in regressions:

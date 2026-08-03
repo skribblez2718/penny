@@ -119,35 +119,3 @@ def test_evidence_is_captured_complete(tmp_path):
     ev = pb.ctx.verify_evidence
     assert len(ev) == 10, "every evidence item must be kept"
     assert ev[0] == long_item, "evidence must be verbatim"
-
-
-def test_outcome_body_keeps_full_gaps_and_evidence():
-    import json
-
-    from orchestration.context import RunContext
-    from orchestration.outcome_writer import build_outcome_content
-
-    ctx = RunContext(session_id="s", run_id="r", playbook="prd")
-    ctx.verify_gaps = [f"gap number {i} with detail" for i in range(8)]
-    ctx.verify_evidence = [f"evidence {i}" for i in range(8)]
-    body = json.loads(build_outcome_content(ctx).split("\n", 1)[1])
-    assert len(body["verify_gaps"]) == 8  # was sliced to 5
-    assert len(body["verify_evidence"]) == 8  # was sliced to 3
-    assert body["verify_gaps"][7].endswith("detail")
-
-
-
-def test_outcome_record_is_written_in_full_with_no_size_trim():
-    """No trim at all: chunking is lossless and every reader uses include_full=True."""
-    import json
-
-    from orchestration.context import RunContext
-    from orchestration.outcome_writer import build_outcome_content
-
-    ctx = RunContext(session_id="s", run_id="r", playbook="prd")
-    ctx.verify_evidence = ["e" * 900 for _ in range(20)]  # ~18k chars, far over 4k chunking
-    content = build_outcome_content(ctx)
-    body = json.loads(content.split("\n", 1)[1])
-    assert len(body["verify_evidence"]) == 20, "every evidence item must be recorded"
-    assert all(len(e) == 900 for e in body["verify_evidence"]), "verbatim, untrimmed"
-    assert "omitted" not in content and "truncated" not in content

@@ -416,8 +416,8 @@ def safe_join(root: Pathish, *components: str) -> str:
 def normalize_base_url(value: str, *, field: str) -> str:
     if not isinstance(value, str) or not value or value != value.strip():
         raise PathSafetyError(f"{field}: expected a nonempty URL without surrounding whitespace")
-    if _CONTROL_RE.search(value):
-        raise PathSafetyError(f"{field}: control characters are forbidden")
+    if any(character.isspace() for character in value) or _CONTROL_RE.search(value):
+        raise PathSafetyError(f"{field}: whitespace/control characters are forbidden")
     try:
         parsed = urlsplit(value)
         port = parsed.port
@@ -940,7 +940,7 @@ def validate_and_normalize_constraints(  # noqa: C901
         for key in sorted(_IDENTITY_KEYS):
             try:
                 identity[key] = validate_safe_component(
-                    identity_value.get(key), field=f"section_identity.{key}"
+                    cast(str, identity_value.get(key)), field=f"section_identity.{key}"
                 )
             except PathSafetyError as exc:
                 _field_error(errors, f"section_identity.{key}", exc)
@@ -986,7 +986,7 @@ def validate_and_normalize_constraints(  # noqa: C901
 
     def file_field(field: str) -> str:
         try:
-            return validate_absolute_file(constraints.get(field), field=field)
+            return validate_absolute_file(cast(Pathish, constraints.get(field)), field=field)
         except PathSafetyError as exc:
             _field_error(errors, field, exc)
             return ""
@@ -995,20 +995,23 @@ def validate_and_normalize_constraints(  # noqa: C901
     pronunciation_canon = file_field("pronunciation_canon")
     try:
         universe_canon_dir = validate_absolute_directory(
-            constraints.get("universe_canon_dir"), field="universe_canon_dir"
+            cast(Pathish, constraints.get("universe_canon_dir")),
+            field="universe_canon_dir",
         )
     except PathSafetyError as exc:
         _field_error(errors, "universe_canon_dir", exc)
         universe_canon_dir = ""
 
     try:
-        superpose_url = normalize_base_url(constraints.get("superpose_url"), field="superpose_url")
+        superpose_url = normalize_base_url(
+            cast(str, constraints.get("superpose_url")), field="superpose_url"
+        )
     except PathSafetyError as exc:
         _field_error(errors, "superpose_url", exc)
         superpose_url = ""
     try:
         voice_studio_url = normalize_base_url(
-            constraints.get("voice_studio_url"), field="voice_studio_url"
+            cast(str, constraints.get("voice_studio_url")), field="voice_studio_url"
         )
     except PathSafetyError as exc:
         _field_error(errors, "voice_studio_url", exc)
@@ -1026,7 +1029,8 @@ def validate_and_normalize_constraints(  # noqa: C901
         try:
             primitive_source = {
                 "url": normalize_base_url(
-                    primitive_value.get("url"), field="primitive_schema_source.url"
+                    cast(str, primitive_value.get("url")),
+                    field="primitive_schema_source.url",
                 )
             }
         except PathSafetyError as exc:
@@ -1035,19 +1039,24 @@ def validate_and_normalize_constraints(  # noqa: C901
         try:
             primitive_source = {
                 "path": validate_absolute_file(
-                    primitive_value.get("path"), field="primitive_schema_source.path"
+                    cast(Pathish, primitive_value.get("path")),
+                    field="primitive_schema_source.path",
                 )
             }
         except PathSafetyError as exc:
             _field_error(errors, "primitive_schema_source.path", exc)
 
     try:
-        workspace_dir = validate_write_root(constraints.get("workspace_dir"), field="workspace_dir")
+        workspace_dir = validate_write_root(
+            cast(Pathish, constraints.get("workspace_dir")), field="workspace_dir"
+        )
     except PathSafetyError as exc:
         _field_error(errors, "workspace_dir", exc)
         workspace_dir = ""
     try:
-        output_dir = validate_write_root(constraints.get("output_dir"), field="output_dir")
+        output_dir = validate_write_root(
+            cast(Pathish, constraints.get("output_dir")), field="output_dir"
+        )
     except PathSafetyError as exc:
         _field_error(errors, "output_dir", exc)
         output_dir = ""
@@ -1127,13 +1136,15 @@ def validate_and_normalize_constraints(  # noqa: C901
             normalized_existing = copy.deepcopy(dict(existing_value))
             try:
                 normalized_existing["video_path"] = validate_absolute_file(
-                    existing_value.get("video_path"), field="existing_video.video_path"
+                    cast(Pathish, existing_value.get("video_path")),
+                    field="existing_video.video_path",
                 )
             except PathSafetyError as exc:
                 _field_error(errors, "existing_video.video_path", exc)
             try:
                 normalized_existing["bundle_dir"] = validate_absolute_directory(
-                    existing_value.get("bundle_dir"), field="existing_video.bundle_dir"
+                    cast(Pathish, existing_value.get("bundle_dir")),
+                    field="existing_video.bundle_dir",
                 )
             except PathSafetyError as exc:
                 _field_error(errors, "existing_video.bundle_dir", exc)

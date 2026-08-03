@@ -29,7 +29,7 @@ import tempfile
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, cast
 
 from statemachine import State, StateMachine
@@ -39,6 +39,8 @@ from ..code_artifacts import (
     ArtifactRef,
     ArtifactRegistry,
     ArtifactValidationError,
+    EVIDENCE_CLASSES,
+    FINDING_STATES,
     P0_VERIFICATION_MANIFEST_SCHEMA_VERSION,
     QUALITY_DIMENSION_IDS,
     VERIFICATION_COMMAND_HINT_RE,
@@ -310,8 +312,38 @@ def _target_verification_manifest(profile: dict, criteria_count: int) -> dict:
     }
 
 
+#: Directory names whose contents are EPHEMERAL RUNTIME OUTPUT, not source identity.
+#: A verification command legitimately creates these (pytest writes ``__pycache__`` the
+#: moment it imports anything), so counting them made the pre-edit comparator reject its
+#: own baseline with "full-eval baseline command changed source/worktree identity" — the
+#: baseline could never be established for any Python target.
+_EPHEMERAL_PATH_SEGMENTS = frozenset(
+    {
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".tox",
+        "node_modules",
+        ".penny",
+        ".run-logs",
+    }
+)
+
+
+def _is_ephemeral_runtime_path(relative: str) -> bool:
+    parts = PurePosixPath(relative.rstrip("/")).parts
+    return bool(_EPHEMERAL_PATH_SEGMENTS.intersection(parts)) or relative.endswith(
+        (".pyc", ".pyo")
+    )
+
+
 def _capture_source_identity(root: Path) -> dict[str, Any] | None:
-    """Complete dirty/index/path/mode identity against one HEAD, or None if not a repo."""
+    """Complete dirty/index/path/mode identity against one HEAD, or None if not a repo.
+
+    Ephemeral runtime output is excluded: it is not source identity, and including it
+    makes any verification command that touches a cache look like a source mutation.
+    """
     import stat as stat_module
 
     def _git(args: list[str], text: bool = True) -> subprocess.CompletedProcess:
@@ -332,6 +364,8 @@ def _capture_source_identity(root: Path) -> dict[str, Any] | None:
         if not raw:
             continue
         relative = raw[3:].decode("utf-8", "surrogateescape")
+        if _is_ephemeral_runtime_path(relative):
+            continue
         status_value = raw[:2].decode("ascii", "replace")
         path = root / relative
         exists = path.exists() or path.is_symlink()
@@ -1373,6 +1407,33 @@ def _build_explore(ctx: RunContext, code: dict, ideal: dict) -> str:
     )
 
 
+def _finding_vocabulary_block() -> str:
+    """Render the finding vocabulary FROM the canonical Python constants.
+
+    Single source of truth. Prose paraphrases of these enumerations drifted in practice:
+    agents emitted states like 'resolved', 'resolved_in_implementation_contract', and
+    'infrastructure_error', each rejected by ``FINDING_STATES``, because the prompt
+    described the concepts while only Python held the exact values.
+
+    Deliberately emitted as part of the TASK, not via the engine's
+    ``_summary_contract_directive``: that restatement is a tagged loan and returns ""
+    under ablation or ``PI_MODEL_TIER=strong``, which would silently drop the vocabulary
+    on exactly the strong-model path.
+    """
+    return (
+        "\n\nFINDING VOCABULARY (exact values; anything else is REJECTED by the engine):\n"
+        f"- state: one of {sorted(FINDING_STATES)}\n"
+        f"- evidence_class: one of {sorted(EVIDENCE_CLASSES)}\n"
+        "- id: a stable, unique, non-empty string reused verbatim by every later stage\n"
+        "Do not invent a state such as 'resolved' or 'infrastructure_error'. A finding you "
+        "cannot yet resolve is 'unresolved'. A finding that does not apply is "
+        "'not_applicable' WITH a rationale. Report only findings about the code under "
+        "change: tooling or infrastructure problems you hit belong in your prose analysis, "
+        "not in the findings list, because every finding must be carried by the plan and "
+        "discharged with evidence."
+    )
+
+
 def _build_analyze(ctx: RunContext, code: dict, ideal: dict) -> str:
     security_domains = ideal.get("security_review", [])
     security_docs = _secure_coding_refs(security_domains)
@@ -1381,6 +1442,7 @@ def _build_analyze(ctx: RunContext, code: dict, ideal: dict) -> str:
         f"Review: {security_docs}. "
         f"Identify: vulnerability patterns, integration risks, dependency conflicts, "
         f"edge cases not in IDEAL STATE. Session: {ctx.session_id}"
+        f"{_finding_vocabulary_block()}"
     )
 
 
@@ -1718,6 +1780,25 @@ def _build_verify(  # noqa: C901 - legacy and P0 verification dispatch
     )
 
 
+def _disposition_shape_block() -> str:
+    """Exact required fields for an independent disposition, from the validator itself.
+
+    ``_trusted_disposition_from_draft`` rejects a draft missing any of these; the prompt
+    previously described them in prose and agents omitted ``obligation_id``.
+    """
+    return (
+        "\n\nDISPOSITION SHAPE (each item of `dispositions`; a draft missing any field is "
+        "REJECTED):\n"
+        '  {"obligation_id": "<exact id, e.g. criterion:1 or the Annie finding id>", '
+        '"finding_id": "<id or null>", "evidence_refs": ["<at least one non-empty ref>"], '
+        '"rationale": "<non-empty>", "final_disposition": "<your judgment>"}\n'
+        "Reviewer/model/timestamp/authority fields are injected by the engine — do NOT "
+        "author them; agent-supplied authority fields are ignored."
+        f"\nFinding states remain exactly {sorted(FINDING_STATES)}; "
+        f"evidence classes exactly {sorted(EVIDENCE_CLASSES)}."
+    )
+
+
 def _build_learn(ctx: RunContext, code: dict, ideal: dict) -> str:
     return (
         f"Evaluate implementation against IDEAL STATE. IDEAL STATE: {json.dumps(ideal)}. "
@@ -1731,6 +1812,7 @@ def _build_learn(ctx: RunContext, code: dict, ideal: dict) -> str:
         f"\nIf gap=true, the skill loops back to implement. "
         f"\nIf gap=false, the skill runs a final verification, then completes. "
         f"\nSession: {ctx.session_id}"
+        f"{_disposition_shape_block()}"
     )
 
 

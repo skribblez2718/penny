@@ -22,7 +22,6 @@ from statemachine import State, StateMachine
 from orchestration.checkpointer import Checkpointer
 from orchestration.context import RunContext
 from orchestration.engine import BasePlaybook
-from orchestration.outcome_writer import build_outcome_content
 from orchestration.primitives.spec import PrimitiveSpec
 
 SID, RID = "sess-comp", "run-comp"
@@ -186,16 +185,6 @@ def test_empty_evidence_is_not_captured(tmp_path):
     _step(cp, "skribble", {"confidence": "PROBABLE", "evidence": []})
     rec = cp.load(RID)
     assert rec.context.verify_evidence == []
-
-
-def test_outcome_body_records_evidence():
-    ctx = RunContext(session_id=SID, run_id=RID, playbook="code")
-    ctx.verify_evidence = ["pytest: 12 passed", "b", "c", "d"]
-    body = json.loads(build_outcome_content(ctx).split("\n", 1)[1])
-    # Full record — previously sliced to the first 3, which silently dropped evidence
-    # the learning loop needs. Trimming now happens only at the drawer-size limit and
-    # is explicitly marked (see test_no_truncation.py).
-    assert body["verify_evidence"] == ["pytest: 12 passed", "b", "c", "d"]
 
 
 # ---------------------------------------------------------------------------

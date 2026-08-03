@@ -96,14 +96,40 @@ def _provenance() -> tuple[dict[str, Any], dict[str, str], str]:
         "lesson_slug": "sample-lesson",
         "stable_key": "sample-section",
     }
-    checksums = {"input/section": content, "design/storyboard": _digest("b")}
+    checksums = {
+        "input/section": content,
+        "input/teaching-canon/000": _digest("b"),
+        "input/analogy-registry": _digest("c"),
+        "input/pronunciation-canon": _digest("d"),
+        "input/universe-canon-ledger": _digest("e"),
+        "input/primitive-schema": _digest("f"),
+        "input/publish-convention": _digest("0"),
+        "design/storyboard": _digest("1"),
+    }
     provenance = {
         "section_identity": identity,
         "content_sha256": content,
         "profile_provenance": {"mode": "direct"},
-        "input_bindings": {},
-        "renderer_binding": {},
-        "voice_binding": {},
+        "input_bindings": {
+            "section_snapshot": "source/section.md",
+            "teaching_canon_snapshots": ["source/canon/teaching/000"],
+            "analogy_registry_snapshot": "source/canon/analogy",
+            "pronunciation_canon_snapshot": "source/canon/pronunciation",
+            "universe_canon_snapshot": "source/canon/universe",
+            "primitive_schema_snapshot": "source/schema/primitive-schema.json",
+            "publish_convention_snapshot": "source/publish/convention.json",
+        },
+        "renderer_binding": {
+            "bundle_version": 1,
+            "primitive_library_version": "1.2.3",
+            "primitive_schema_sha256": _digest("d"),
+            "theme": "caller-theme",
+            "theme_sha256": _digest("e"),
+        },
+        "voice_binding": {
+            "voice_id": "caller-voice",
+            "voice_id_sha256": _digest("f"),
+        },
         "approval_record": None,
         "checksums": checksums,
     }
@@ -114,7 +140,11 @@ def test_mech_bundle_pass_fail_and_probe_uncertainty() -> None:
     passed = check_mech_bundle(
         bundle_dir="/generic/bundle",
         local_probe=lambda _: {"ok": True, "violations": []},
-        service_probe=lambda _: {"ok": True, "violations": []},
+        service_probe=lambda _: {
+            "import_result": {"ok": True},
+            "validation_result": {"ok": True},
+            "violations": [],
+        },
     )
     failed = check_mech_bundle(
         bundle_dir="/generic/bundle",
@@ -281,6 +311,21 @@ def test_mech_captions_preserves_case_and_punctuation_in_exact_collapsed_compari
     assert passed["status"] == "PASS"
     assert punctuation_changed["status"] == "FAIL"
     assert case_changed["status"] == "FAIL"
+
+
+def test_malformed_caption_probe_observation_is_uncertain() -> None:
+    result = check_mech_captions(
+        captions_path="/generic/captions.vtt",
+        narration_by_scene={"scene-one": "Narration."},
+        scene_windows={"scene-one": (0.0, 1.0)},
+        video_duration_seconds=1.0,
+        caption_probe=lambda *_args, **_kwargs: {
+            "ok": True,
+            "cue_count": 1,
+            "missing_scene_ids": None,
+        },
+    )
+    assert result["status"] == "UNCERTAIN"
 
 
 def test_mech_caption_probe_exception_is_uncertain() -> None:

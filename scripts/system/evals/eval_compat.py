@@ -14,12 +14,10 @@ from types import SimpleNamespace
 from typing import Callable, List, Tuple
 
 from eval_lib import (
-    CONSUMED_OUTCOME_FIELDS,
     FAIL,
     PASS,
     REPO_ROOT,
     EvalResult,
-    parse_outcome,
     run_checks,
 )
 
@@ -36,60 +34,6 @@ COLLECTED_TEST_GLOBS: Tuple[str, ...] = (
 
 SCAN_ROOTS: Tuple[str, ...] = ("scripts", "apps", ".pi/skills")
 EXCLUDED_PARTS = {"__pycache__", "node_modules", ".venv"}
-
-
-def missing_consumed_fields(record: dict) -> List[str]:
-    """Fields the miners consume that are absent or empty in a parsed outcome."""
-    return [f for f in CONSUMED_OUTCOME_FIELDS if not str(record.get(f, "") or "").strip()]
-
-
-def check_outcome_pipeline_contract() -> EvalResult:
-    """The engine's outcome writer must emit every field the miners consume.
-
-    This is the seam that severs the learning loop: compression groups
-    patterns by ``reason`` (compression_loop.identify_patterns) — a field the
-    writer never emits — so nightly compression finds zero patterns forever.
-    """
-    src = str(REPO_ROOT / "apps" / "orchestration" / "src")
-    if src not in sys.path:
-        sys.path.insert(0, src)
-    from orchestration.outcome_writer import build_outcome_content  # type: ignore
-
-    ctx = SimpleNamespace(
-        playbook="code",
-        run_id="eval-contract-run",
-        session_id="eval-contract-session",
-        met=False,
-        iteration=2,
-        goal="synthetic goal",
-        success_criteria=["criterion"],
-        errors=["synthetic error"],
-        verify_gaps=["synthetic gap"],
-        verify_verdict="fail",
-        last_confidence="PROBABLE",
-    )
-    content = build_outcome_content(ctx)
-    header = content.split("\n", 1)[0]
-    record = parse_outcome(content)
-
-    problems: List[str] = []
-    missing = missing_consumed_fields(record)
-    if missing:
-        problems.append(f"writer omits/blanks fields the miners consume: {', '.join(missing)}")
-    if "delta_score: MISMATCH" not in header[:200]:
-        problems.append("delta_score not within the 200-char summary the mismatch watcher reads")
-
-    if problems:
-        return EvalResult(
-            name="compat.outcome_pipeline_contract",
-            status=FAIL,
-            detail="; ".join(problems),
-        )
-    return EvalResult(
-        name="compat.outcome_pipeline_contract",
-        status=PASS,
-        detail="writer emits every consumed field",
-    )
 
 
 def find_dead_tests(root: Path) -> List[str]:
@@ -177,7 +121,6 @@ def check_archiver_archive_callable() -> EvalResult:
 
 
 CHECKS: List[Tuple[str, Callable[[], EvalResult]]] = [
-    ("compat.outcome_pipeline_contract", check_outcome_pipeline_contract),
     ("compat.dead_tests", check_dead_tests),
     ("compat.archiver_archive_callable", check_archiver_archive_callable),
 ]

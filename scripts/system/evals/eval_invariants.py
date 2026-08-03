@@ -167,57 +167,12 @@ def check_honest_exhaustion() -> EvalResult:
     )
 
 
-def check_model_scaling_self_improve() -> EvalResult:
-    """(checklist #23) Self-improvement text is never template-generated.
-
-    Gates on the CAPABILITY, not an implementation: no module-level template
-    renderer may exist in the compression loop. The former
-    ``build_guidance_text`` machine-authored prompt text by interpolating ledger
-    ids and raw free-text reasons into a git-tracked agent prompt; it was
-    removed. An amendment now exists only when a model drafts a real anchored
-    diff that a human approves verbatim.
-
-    Checked by absence so a reintroduced template — under any name matching
-    ``*guidance_text*`` — trips this invariant rather than passing silently.
-    """
-    import sys
-    from pathlib import Path
-
-    # scripts/system/evals/eval_invariants.py -> scripts/system/self_improve
-    self_improve = Path(__file__).resolve().parents[1] / "self_improve"
-    if str(self_improve) not in sys.path:
-        sys.path.insert(0, str(self_improve))
-    try:
-        import compression_loop  # noqa: PLC0415
-    except Exception as exc:  # noqa: BLE001 - an unimportable loop is the finding
-        return EvalResult(
-            name="invariants.model_scaling_self_improve",
-            status=FAIL,
-            informational=True,
-            detail=f"compression_loop not importable: {exc}",
-        )
-
-    templates = [n for n in dir(compression_loop) if "guidance_text" in n]
-    return EvalResult(
-        name="invariants.model_scaling_self_improve",
-        status=PASS if not templates else FAIL,
-        informational=True,
-        detail=(
-            "improvement text is model-drafted or human-authored; no template "
-            "renderer in compression_loop"
-            if not templates
-            else f"template renderer(s) reintroduced: {templates}"
-        ),
-    )
-
-
 CHECKS: List[Tuple[str, Callable[[], EvalResult]]] = [
     ("invariants.grounded_verification", check_grounded_verification),
     ("invariants.independent_verification", check_independent_verification),
     ("invariants.hitl_gates_present", check_hitl_gates_present),
     ("invariants.checkpoint_resume", check_checkpoint_resume),
     ("invariants.honest_exhaustion", check_honest_exhaustion),
-    ("invariants.model_scaling_self_improve", check_model_scaling_self_improve),
 ]
 
 

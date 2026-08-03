@@ -63,6 +63,17 @@ _RENDERER_BINDING_KEYS = frozenset(
     }
 )
 _VOICE_BINDING_KEYS = frozenset({"voice_id", "voice_id_sha256"})
+_REQUIRED_PROVENANCE_CHECKSUM_KEYS = frozenset(
+    {
+        "input/section",
+        "input/teaching-canon/000",
+        "input/analogy-registry",
+        "input/pronunciation-canon",
+        "input/universe-canon-ledger",
+        "input/primitive-schema",
+        "input/publish-convention",
+    }
+)
 _APPROVAL_KEYS = frozenset(
     {
         "gate",
@@ -475,7 +486,9 @@ def _iter_tree_files(  # noqa: C901
                 _validate_logical_key(relative, context="tree path")
                 entries.append((relative, file_path))
         return sorted(entries)
-    except (ChecksumMismatchError, error_type):
+    except ChecksumMismatchError as exc:
+        raise error_type(str(exc)) from exc
+    except error_type:
         raise
     except (OSError, RuntimeError) as exc:
         raise error_type(f"cannot inspect tree {root}: {exc}") from exc
@@ -496,7 +509,10 @@ def build_checksum_ledger(files: Mapping[str, Pathish]) -> dict[str, str]:
 
 def build_tree_ledger(root_dir: Pathish) -> dict[str, str]:
     try:
-        root = Path(os.fspath(root_dir)).resolve(strict=True)
+        candidate = Path(os.fspath(root_dir))
+        if candidate.is_symlink():
+            raise ChecksumMismatchError("tree root symlink is forbidden")
+        root = candidate.resolve(strict=True)
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         raise ChecksumMismatchError(f"tree root is unreadable: {exc}") from exc
     entries = _iter_tree_files(root, error_type=ChecksumMismatchError)
@@ -567,7 +583,7 @@ def _remove_owned_tree(path: Path, *, error_type: type[Exception]) -> None:
         raise error_type(f"cannot remove transaction directory {path}: {exc}") from exc
 
 
-def snapshot_tree(
+def snapshot_tree(  # noqa: C901
     source_dir: Pathish,
     destination_dir: Pathish,
     *,
@@ -575,7 +591,10 @@ def snapshot_tree(
 ) -> DirectoryRef:
     temporary: Path | None = None
     try:
-        source = Path(os.fspath(source_dir)).resolve(strict=True)
+        source_candidate = Path(os.fspath(source_dir))
+        if source_candidate.is_symlink():
+            raise ImmutableSnapshotError("tree snapshot source symlink is forbidden")
+        source = source_candidate.resolve(strict=True)
         source_entries = _iter_tree_files(source, error_type=ImmutableSnapshotError)
         root = Path(validate_write_root(workspace_root, field="workspace_root"))
         destination = Path(assert_confined_path(root, destination_dir))
@@ -626,7 +645,16 @@ def _read_json_object(
     try:
         _, data = _read_regular_file(path, context=context)
         text = data.decode("utf-8")
-        value = json.loads(text)
+
+        def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, item in pairs:
+                if key in result:
+                    raise ValueError(f"duplicate key {key!r}")
+                result[key] = item
+            return result
+
+        value = json.loads(text, object_pairs_hook=reject_duplicates)
         if not isinstance(value, dict):
             raise error_type(f"{context}: JSON must be an object")
         return cast(dict[str, Any], value)
@@ -878,8 +906,13 @@ def _validate_provenance(value: Mapping[str, Any]) -> dict[str, JSONValue]:  # n
         checksums = _validate_ledger(cast(Mapping[str, str], checksums_value), context="checksums")
     except (ChecksumMismatchError, TypeError) as exc:
         raise ProvenanceValidationError(str(exc)) from exc
-    if not checksums:
-        raise ProvenanceValidationError("checksums must be nonempty")
+    missing_checksums = _REQUIRED_PROVENANCE_CHECKSUM_KEYS - set(checksums)
+    teaching_checksums = {f"input/teaching-canon/{index:03d}" for index in range(len(teaching))}
+    missing_checksums |= teaching_checksums - set(checksums)
+    if missing_checksums:
+        raise ProvenanceValidationError(
+            f"checksums missing required input bindings: {sorted(missing_checksums)}"
+        )
     if checksums.get("input/section") != content_digest:
         raise ProvenanceValidationError("checksums.input/section must equal content_sha256")
     return cast(
@@ -1014,6 +1047,8 @@ def _recover_directory_transaction(
 ) -> None:
     if target.is_symlink() or backup.is_symlink():
         raise error_type("transaction target/backup symlink is forbidden")
+    for stale_temporary in target.parent.glob(f".{target.name}.videogen-tmp-*"):
+        _remove_owned_tree(stale_temporary, error_type=error_type)
     if backup.exists() and not target.exists():
         try:
             os.replace(backup, target)
@@ -1227,17 +1262,23 @@ def compare_staleness(  # noqa: C901
 
     reasons: list[str] = []
     content_status: Literal["CURRENT", "STALE", "DIFFERENT_IDENTITY", "UNKNOWN"]
-    prior_identity: Any = (
-        None if prior_provenance is None else prior_provenance.get("section_identity")
-    )
-    prior_content: Any = (
-        None if prior_provenance is None else prior_provenance.get("content_sha256")
-    )
+    prior = prior_provenance if isinstance(prior_provenance, Mapping) else None
+    prior_identity: Any = None if prior is None else prior.get("section_identity")
+    prior_content: Any = None if prior is None else prior.get("content_sha256")
     identity_valid = (
         isinstance(prior_identity, Mapping)
         and set(prior_identity) == _IDENTITY_KEYS
         and all(isinstance(prior_identity.get(key), str) for key in _IDENTITY_KEYS)
     )
+    if identity_valid:
+        try:
+            for key in _IDENTITY_KEYS:
+                validate_safe_component(
+                    cast(str, prior_identity.get(key)),
+                    field=f"prior.section_identity.{key}",
+                )
+        except PathSafetyError:
+            identity_valid = False
     content_valid = isinstance(prior_content, str) and bool(_SHA256_RE.fullmatch(prior_content))
     if not identity_valid or not content_valid:
         content_status = "UNKNOWN"
@@ -1251,7 +1292,7 @@ def compare_staleness(  # noqa: C901
     else:
         content_status = "CURRENT"
 
-    prior_checksums: Any = None if prior_provenance is None else prior_provenance.get("checksums")
+    prior_checksums: Any = None if prior is None else prior.get("checksums")
     changed: list[str] = []
     missing: list[str] = []
     prior_bindings_valid = isinstance(prior_checksums, Mapping)
@@ -1397,6 +1438,8 @@ def _validate_handoff_receipt(receipt: Mapping[str, Any]) -> dict[str, JSONValue
     unresolved = receipt.get("unresolved_issues")
     if not isinstance(unresolved, list) or not _is_json_value(unresolved):
         raise OutputStagingError("unresolved_issues must be a JSON array")
+    if unresolved:
+        raise OutputStagingError("HANDOFF_READY requires no unresolved issues")
 
     checksums = cast(dict[str, str], repeated["checksums"])
     for logical_key, artifact_key in (
@@ -1426,7 +1469,10 @@ def _stage_relative_destination(release: Path, expected_path: str, *, field: str
 
 def _copy_tree_into(source: Pathish, destination: Path) -> DirectoryRef:
     try:
-        source_path = Path(os.fspath(source)).resolve(strict=True)
+        source_candidate = Path(os.fspath(source))
+        if source_candidate.is_symlink():
+            raise OutputStagingError("bundle source symlink is forbidden")
+        source_path = source_candidate.resolve(strict=True)
         entries = _iter_tree_files(source_path, error_type=OutputStagingError)
         destination.mkdir(parents=True, exist_ok=False, mode=_DIRECTORY_MODE)
         for relative, source_file in entries:

@@ -61,31 +61,8 @@ from .contracts import Confidence, Directives, validate_summary_contract, weakes
 from .context import RunContext
 from .execution_receipts import receipt_signing_key, sign_receipt
 from .loans import loan_enabled
-from .outcome_writer import record_outcome
 from .paths import skill_root
 from .primitives.spec import ParallelSpec, PrimitiveSpec, parallel_spec_from_dict
-
-
-def _autonomy_ask_reason(action_text: str) -> Optional[str]:
-    """Graduated-autonomy gate for an about-to-run action state. Returns a reason
-    to ASK a human, or None to proceed. Opt-in via ``PENNY_AUTONOMY_GATE`` — when
-    unset (the default) this is dormant, so it can never change existing runs.
-    Best-effort: any failure loading the autonomy module means no gating.
-
-    Reversibility + earned per-domain trust decide act-vs-ask; irreversible /
-    destructive goals and untrusted domains ASK (see scripts/system/autonomy/)."""
-    if not os.environ.get("PENNY_AUTONOMY_GATE"):
-        return None
-    try:
-        autonomy = str(Path(__file__).resolve().parents[4] / "scripts" / "system" / "autonomy")
-        if autonomy not in sys.path:
-            sys.path.insert(0, autonomy)
-        from gate import ASK, decide_live
-
-        decision = decide_live(action_text)
-        return decision.reason if decision.action == ASK else None
-    except Exception:  # noqa: BLE001 — no autonomy module ⇒ no gating
-        return None
 
 
 TERMINAL_STATES: frozenset[str] = frozenset({"complete", "error"})
@@ -295,11 +272,6 @@ class BasePlaybook:
     TOOL_STATES: frozenset[str] = frozenset()  # deterministic in-process states (no agent)
     GATE_STATES: frozenset[str] = frozenset()  # planned HITL pause states
     ESCALATABLE_STATES: frozenset[str] = frozenset()
-    # Action-taking states gated by graduated autonomy: before dispatching, the
-    # engine asks act-vs-ask (reversibility + earned trust) and escalates to the
-    # human when the answer is ASK. MUST be a subset of ESCALATABLE_STATES.
-    # Only consulted when PENNY_AUTONOMY_GATE is set (dormant by default).
-    AUTONOMY_STATES: frozenset[str] = frozenset()
     STEP_CAP: int = _DEFAULT_STEP_CAP
     # Default-on loop-quality guards (loops.md Recs 1 & 2). A subclass that
     # cannot use the generic base ``progress_check`` sets this False (playbooks
@@ -1151,30 +1123,9 @@ class BasePlaybook:
         spec = self.PRIMITIVE_BY_STATE.get(state)
         if spec is None:
             return self._to_error(f"no primitive registered for state '{state}'")
-        # Graduated-autonomy gate (opt-in, dormant unless PENNY_AUTONOMY_GATE):
-        # before taking an action, ask act-vs-ask. ASK → escalate to the human via
-        # the existing HITL path. Placed in _advance_to (forward transitions only),
-        # NOT _directive_for_state, so recovery re-issues never re-trigger it.
-        # ONE-SHOT per state per run (checkpointed in extras): after the human
-        # answers the escalation, re-entry proceeds — the trust score is unchanged,
-        # so re-asking would loop forever. Human approval overrides the gate once.
-        if state in self.AUTONOMY_STATES and state in self.ESCALATABLE_STATES:
-            gated = self.ctx.extras.setdefault("autonomy_gated", [])
-            if state not in gated:
-                gated.append(state)
-                ask_reason = _autonomy_ask_reason(self.autonomy_action(state, self.ctx))
-                if ask_reason:
-                    return self._escalate(
-                        state, spec, {"unknown_reason": f"Autonomy: {ask_reason}"}
-                    )
         self.obs.step_start(self.ctx, spec.name, spec.agent, state)
         self._save(STATUS_RUNNING, state)
         return self._directive_for_state(state)
-
-    def autonomy_action(self, state: str, ctx: RunContext) -> str:
-        """The action text the autonomy gate classifies for ``state``. Default: the
-        run's goal (the action being taken). Subclasses may refine per state."""
-        return ctx.goal
 
     def _directive_for_state(self, state: str) -> dict:
         """Pure directive builder (no emission, no checkpoint) — safe for the
@@ -1523,19 +1474,6 @@ class BasePlaybook:
         self.ctx.met = self.done_predicate(self.ctx)
         self.ctx.complete = True
         result = self.result_payload(self.ctx)
-        outcome_persisted = record_outcome(self.ctx, self.cp)
-        code_state = self.ctx.extras.get("code", {})
-        if (
-            self.ctx.met
-            and isinstance(code_state, dict)
-            and code_state.get("p0_enabled") is True
-            and not outcome_persisted
-        ):
-            self.ctx.met = False
-            code_state.setdefault("p0_completion_errors", []).append(
-                "canonical terminal outcome could not be persisted before publication"
-            )
-            result = self.result_payload(self.ctx)
         self._save(STATUS_COMPLETE, "complete")
         self.obs.run_end(self.ctx, STATUS_COMPLETE, self.ctx.met, self.ctx.iteration)
         exhausted_reason = self._ctx.extras.get("engine_exhausted")
@@ -1592,7 +1530,6 @@ class BasePlaybook:
         self.ctx.complete = True
         self.ctx.met = False
         self._save(STATUS_ERROR, "error")
-        record_outcome(self.ctx, self.cp)  # best-effort for non-success terminal paths
         self.obs.run_end(self.ctx, STATUS_ERROR, False, self.ctx.iteration)
         return Directives.error(
             errors=self.ctx.errors, session_id=self.ctx.session_id, run_id=self.ctx.run_id

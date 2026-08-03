@@ -1,4 +1,4 @@
-"""Tests for run_prompt_efficacy.probe_provider credential precedence.
+"""Tests for harness_util.probe_provider credential precedence.
 
 Precedence is subscription-first: a stored credential in Pi's auth.json
 (OAuth/subscription or key) is the PRIMARY check; an ``*_API_KEY`` environment
@@ -7,8 +7,12 @@ default, rarely an API-key env var.
 """
 
 import json
+import sys
+from pathlib import Path
 
-import run_prompt_efficacy as rpe
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import harness_util as rpe  # noqa: E402
 
 
 def _auth_dir(tmp_path, providers):

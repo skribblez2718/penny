@@ -16,7 +16,7 @@ Two-part split like prompt-efficacy: this EXPENSIVE runner writes
 ``.penny/evals/trajectory/latest.json``; the cheap ``eval_trajectory`` section
 ratchets it in every ``make evals``. A fixture Oracle passed that the current
 system fails is a behavioral regression — it rides the signal pipeline into the
-session brief. Run weekly / before adopting an amendment, not per-eval.
+Run weekly, not per-eval.
 """
 
 from __future__ import annotations
@@ -34,17 +34,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 _HERE = Path(__file__).resolve().parent
-_EVALS = _HERE.parent / "evals"
-_JUDGMENT = _HERE.parent / "judgment"
-for _p in (_EVALS, _JUDGMENT):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
 
-from run_judge_agreement import parse_verdict  # noqa: E402
-from run_prompt_efficacy import (  # noqa: E402
+from harness_util import (  # noqa: E402
     contaminating_global_prompts,
     parse_assistant_stream,
     parse_model_spec,
+    parse_verdict,
     probe_provider,
 )
 

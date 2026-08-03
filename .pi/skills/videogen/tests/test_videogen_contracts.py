@@ -268,7 +268,9 @@ def test_two_generic_profiles_use_one_normalization_path(tmp_path: Path) -> None
     assert all(set(item) == {"mode", "name", "resolved_path", "sha256"} for item in provenances)
 
 
-@pytest.mark.parametrize("failure", ["unknown", "unreadable", "invalid-json", "forbidden"])
+@pytest.mark.parametrize(
+    "failure", ["unknown", "unreadable", "invalid-json", "schema-invalid", "forbidden"]
+)
 def test_profile_resolution_failures_have_no_workspace_or_output_effect(
     tmp_path: Path, failure: str
 ) -> None:
@@ -279,6 +281,8 @@ def test_profile_resolution_failures_have_no_workspace_or_output_effect(
         profile_path.mkdir()
     elif failure == "invalid-json":
         profile_path.write_text("{not-json", encoding="utf-8")
+    elif failure == "schema-invalid":
+        profile_path.write_text('{"max_refine_iterations":"unbounded"}\n', encoding="utf-8")
     elif failure == "forbidden":
         profile_path.write_text('{"section_content":{"text":"forbidden"}}\n', encoding="utf-8")
     elif failure == "unknown":
