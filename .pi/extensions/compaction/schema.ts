@@ -46,7 +46,6 @@ export const PendingStateEnum = z.enum([
   "awaiting_clarification",
   "verification_required",
 ]);
-export const ConfidenceEnum = z.enum(["CERTAIN", "PROBABLE", "POSSIBLE", "UNCERTAIN"]);
 
 // ============================================================
 // Sub-Schemas
@@ -58,13 +57,6 @@ export const PendingStateSchema = z.object({
   mempalace_drawer_id: z.string().min(1),
   question_summary: z.string().max(300),
   turn_id: z.string().min(1),
-});
-
-export const DecisionRefSchema = z.object({
-  decision_id: z.string().min(1),
-  summary: z.string().max(200),
-  outcome_room: z.string().min(1),
-  confidence: ConfidenceEnum,
 });
 
 export const ErrorRefSchema = z.object({
@@ -195,8 +187,7 @@ export const PennyCompactArtifactSchema = z.object({
   current_work: z.string().min(1).max(1000).optional(),
   next_steps: z.array(z.string().min(1).max(300)).max(10).optional(),
 
-  // DECISIONS & OUTCOMES
-  decisions: z.array(DecisionRefSchema).max(20),
+  // ERRORS
   errors: z.array(ErrorRefSchema).max(10),
 
   // ENGINE ORCHESTRATION (checkpointer is the source of truth)
@@ -243,7 +234,6 @@ export const PennyCompactArtifactSchema = z.object({
 
 export type PennyCompactArtifact = z.infer<typeof PennyCompactArtifactSchema>;
 export type PendingState = z.infer<typeof PendingStateSchema>;
-export type DecisionRef = z.infer<typeof DecisionRefSchema>;
 export type ErrorRef = z.infer<typeof ErrorRefSchema>;
 export type EngineRunRef = z.infer<typeof EngineRunRefSchema>;
 export type SkillInvocationRef = z.infer<typeof SkillInvocationRefSchema>;

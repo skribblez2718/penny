@@ -719,13 +719,11 @@ class BasePlaybook:
             ctx.max_iterations = 3
         self.ctx = ctx
         # NOTE: agent directives are built from the playbook's own run facts ONLY.
-        # Nothing is retrieved from MemPalace and injected here. The former "Recall
-        # (atom F2)" step read penny/system_amendments and seeded the first directive
-        # with whatever came back — which meant PENDING and even REJECTED amendment
-        # proposals reached agent prompts, bypassing the approval gate that governs
-        # amendment APPLICATION. Agent context comes from .pi/agents/<agent>.md plus
-        # skill orchestration; an amendment influences the system only by being
-        # APPLIED to a file after explicit human approval. Do not reintroduce.
+        # Nothing is retrieved from MemPalace and injected here. A former run-start
+        # "recall" step seeded the first directive with whatever a MemPalace query
+        # returned, which put unreviewed stored text into agent prompts through a
+        # path with no approval gate on it. Agent context comes from
+        # .pi/agents/<agent>.md plus skill orchestration. Do not reintroduce.
         self.sm = self.machine_cls()
         try:
             entry = self.initial_transition(ctx)

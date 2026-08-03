@@ -633,7 +633,7 @@ def load_ideal_state(constraints: dict, project_root: str) -> dict | None:
             # Mempalace is Penny-global: it ALWAYS anchors to the constant
             # $PROJECT_ROOT (.env), never the per-run target project_root a skill
             # operates on (that points at the work repo, e.g. a downstream app).
-            # Mirrors checkpointer/outcome_writer/recall. Deriving the path from the
+            # Mirrors the checkpointer/recall anchoring. Deriving the path from the
             # passed project_root looks in the wrong (or a nonexistent) .mempalace.
             penny_root = os.environ.get("PROJECT_ROOT") or project_root or "."
             client = chromadb.PersistentClient(path=str(Path(penny_root) / ".mempalace"))
@@ -2080,11 +2080,6 @@ class CodePlaybook(BasePlaybook):
             "learning",  # stall / repeated-strategy escalation (Recs 1 & 2)
         }
     )
-    # Graduated autonomy: before writing/changing code (the action), ask
-    # act-vs-ask (reversibility of the goal + earned coding-domain trust) and
-    # escalate to the human when untrusted. Dormant unless PENNY_AUTONOMY_GATE.
-    AUTONOMY_STATES = frozenset({"implementing"})
-
     def model_for_state(self, state: str, ctx: RunContext) -> str | None:
         """Route P0 judgment dispositions through a model independent of the author."""
         if state != "learning" or ctx.extras.get("code", {}).get("p0_enabled") is not True:

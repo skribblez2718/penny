@@ -5,7 +5,6 @@ import {
   queryMempalaceSkillRooms,
   queryMempalaceSkillRoomsForSession,
   queryKGEntitiesForScope,
-  queryOutcomeLedgerDecisions,
 } from "../../bridge.js";
 
 // Substitute the bridge caller so no Python process is spawned. These tests
@@ -190,72 +189,6 @@ describe("queryKGEntitiesForScope", () => {
     expect(mockCall).not.toHaveBeenCalled();
   });
 
-  it("returns empty array on kg_query failure", async () => {
-    mockCall.mockResolvedValue({ success: false });
-    const entities = await queryKGEntitiesForScope(["plan-1"]);
-    expect(entities).toEqual([]);
-  });
-});
 
-// ============================================================
-// Outcome Ledger Decisions
-// ============================================================
 
-describe("queryOutcomeLedgerDecisions", () => {
-  it("uses real drawer ids as decision ids when available", async () => {
-    mockCall.mockImplementation(async (tool: string) => {
-      if (tool === "search") {
-        return {
-          success: true,
-          data: {
-            results: [
-              { id: "outcome-8842", text: "session_id: plan-7 | Approved plan for compaction" },
-              { text: "session_id: plan-7 | Rejected observability augmentation" },
-            ],
-          },
-        };
-      }
-      return { success: false };
-    });
-
-    // Scope matches both drawers' text (they carry the scoped id).
-    const decisions = await queryOutcomeLedgerDecisions(["plan-7"], 20);
-    expect(decisions).toHaveLength(2);
-    expect(decisions[0].decision_id).toBe("outcome-8842"); // real pointer
-    expect(decisions[1].decision_id).toBe("outcome-1"); // index fallback
-    expect(decisions[0].summary).toContain("Approved");
-    expect(decisions[0].outcome_room).toBe("penny/outcomes");
-  });
-
-  it("keeps ONLY drawers matching a scoped id (no cross-session bleed)", async () => {
-    mockCall.mockImplementation(async (tool: string) => {
-      if (tool === "search") {
-        return {
-          success: true,
-          data: {
-            results: [
-              { id: "o-1", text: "session_id: plan-111 | decided X" },
-              { id: "o-2", text: "session_id: other-999 | decided Y" },
-            ],
-          },
-        };
-      }
-      return { success: false };
-    });
-    const decisions = await queryOutcomeLedgerDecisions(["plan-111"], 20);
-    expect(decisions).toHaveLength(1);
-    expect(decisions[0].decision_id).toBe("o-1");
-  });
-
-  it("returns [] for an empty scope (no global bleed)", async () => {
-    const decisions = await queryOutcomeLedgerDecisions([], 20);
-    expect(decisions).toEqual([]);
-    expect(mockCall).not.toHaveBeenCalled();
-  });
-
-  it("returns empty array on search failure", async () => {
-    mockCall.mockResolvedValue({ success: false });
-    const decisions = await queryOutcomeLedgerDecisions(["plan-1"]);
-    expect(decisions).toEqual([]);
-  });
 });

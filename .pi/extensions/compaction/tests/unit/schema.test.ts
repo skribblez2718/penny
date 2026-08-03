@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   PennyCompactArtifactSchema,
   PendingStateSchema,
-  DecisionRefSchema,
   EngineRunRefSchema,
   FileContextSchema,
   ArtifactMetadataSchema,
@@ -23,7 +22,6 @@ const validArtifact = {
   constraints: ["No Pi fork", "Use session_before_compact hook"],
   preferences: [],
   pending: null,
-  decisions: [],
   errors: [],
   engine_runs: [],
   mempalace_rooms: [],
@@ -298,28 +296,6 @@ describe("SkillInvocationRefSchema", () => {
   });
 });
 
-describe("DecisionRefSchema", () => {
-  it("accepts valid decision ref", () => {
-    const result = DecisionRefSchema.safeParse({
-      decision_id: "d1",
-      summary: "A decision",
-      outcome_room: "penny/outcomes",
-      confidence: "CERTAIN",
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects invalid confidence", () => {
-    const result = DecisionRefSchema.safeParse({
-      decision_id: "d1",
-      summary: "A decision",
-      outcome_room: "penny/outcomes",
-      confidence: "MAYBE",
-    });
-    expect(result.success).toBe(false);
-  });
-});
-
 describe("FileContextSchema", () => {
   it("accepts valid file context", () => {
     const result = FileContextSchema.safeParse({
@@ -343,7 +319,7 @@ describe("ArtifactMetadataSchema", () => {
     const result = ArtifactMetadataSchema.safeParse({
       eviction_log: [
         {
-          field: "decisions",
+          field: "errors",
           evicted_count: 2,
           strategy: "lowest_confidence_first",
           timestamp: "2026-05-01T12:00:00.000Z",

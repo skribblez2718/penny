@@ -175,8 +175,7 @@ before. annie:
 After completion, `skills/derivation-{session_id}/` holds annie's full review
 (the D1–D7 analysis, per-source prefilter report, matched-source annotations with
 license consequence, and fixes). The `SUMMARY` is the wire format; the drawer is
-the durable record. The engine records the terminal outcome into `penny/outcomes`
-automatically — do not write session-learning drawers manually.
+the durable record. Do not write session-learning drawers manually.
 
 ## Escalation (awaiting_clarification)
 

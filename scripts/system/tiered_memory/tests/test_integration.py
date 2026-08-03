@@ -24,13 +24,13 @@ class TestArchiveOperation:
             DrawerMeta(
                 "s1",
                 "penny",
-                "signals",
+                "audit",
                 (datetime.now(timezone.utc) - timedelta(days=10)).isoformat(),
             ),
             DrawerMeta(
                 "s2",
                 "penny",
-                "signals",
+                "audit",
                 (datetime.now(timezone.utc) - timedelta(days=10)).isoformat(),
             ),
         ]
@@ -58,7 +58,7 @@ class TestArchiveOperation:
             DrawerMeta(
                 "o1",
                 "penny",
-                "outcomes",
+                "diary",
                 (datetime.now(timezone.utc) - timedelta(days=31)).isoformat(),
             )
         ]
@@ -77,7 +77,7 @@ class TestArchiveOperation:
             DrawerMeta(
                 "x1",
                 "penny",
-                "signals",
+                "audit",
                 (datetime.now(timezone.utc) - timedelta(days=10)).isoformat(),
             )
         ]
@@ -90,9 +90,9 @@ class TestSweepArchival:
     def test_full_lifecycle(self):
         now = datetime(2026, 5, 1, tzinfo=timezone.utc)
         drawers = [
-            DrawerMeta("s1", "penny", "signals", (now - timedelta(days=10)).isoformat()),
-            DrawerMeta("s2", "penny", "signals", (now - timedelta(days=5)).isoformat()),
-            DrawerMeta("o1", "penny", "outcomes", (now - timedelta(days=31)).isoformat()),
+            DrawerMeta("s1", "penny", "audit", (now - timedelta(days=40)).isoformat()),
+            DrawerMeta("s2", "penny", "audit", (now - timedelta(days=5)).isoformat()),
+            DrawerMeta("o1", "penny", "diary", (now - timedelta(days=120)).isoformat()),
         ]
 
         # First, sweep to identify what to archive

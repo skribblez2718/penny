@@ -12,7 +12,6 @@ function baseArtifact(overrides: Partial<PennyCompactArtifact> = {}): PennyCompa
     constraints: [],
     preferences: [],
     pending: null,
-    decisions: [],
     errors: [],
     engine_runs: [],
     mempalace_rooms: [],
@@ -45,7 +44,7 @@ describe("buildResumeRefs", () => {
     expect(refs).toContain("awaiting-user: Keep the StandardCycle fixture?");
   });
 
-  it("renders mempalace room/drawer pointers and decision/kg ids", () => {
+  it("renders mempalace room/drawer pointers and kg ids", () => {
     const refs = buildResumeRefs(
       baseArtifact({
         mempalace_rooms: [
@@ -55,14 +54,6 @@ describe("buildResumeRefs", () => {
             drawer_ids: ["d-101", "d-104"],
             last_updated: "2026-07-05T12:00:00.000Z",
             dominant_for_session: true,
-          },
-        ],
-        decisions: [
-          {
-            decision_id: "outcome-8842",
-            summary: "Chose BasePlaybook subclass",
-            outcome_room: "penny/outcomes",
-            confidence: "CERTAIN",
           },
         ],
         kg_entities: [
@@ -77,7 +68,6 @@ describe("buildResumeRefs", () => {
     expect(refs).toContain(
       "room: penny/skills/code-1751700000000 drawers=d-101,d-104 (active session)"
     );
-    expect(refs).toContain("decision: outcome-8842 (CERTAIN) Chose BasePlaybook subclass");
     expect(refs).toContain("kg: Session:code-1751700000000 [uses]");
   });
 

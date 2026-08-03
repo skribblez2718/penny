@@ -4,10 +4,10 @@
  * Goal: when Pi compacts, Penny resumes with no work lost. The summary
  * spliced into context has two parts:
  *
- *   1. A prose brief — goal, in-flight runs, pending state, decisions —
+ *   1. A prose brief — goal, in-flight runs, pending state —
  *      so Penny re-orients by reading, not parsing.
  *   2. A [RESUME-REFS] appendix — run_id + engine state, mempalace
- *      room/drawer IDs, decision IDs, KG entities, verbatim tool-call
+ *      room/drawer IDs, KG entities, verbatim tool-call
  *      examples — so any detail that didn't fit the token budget can be
  *      dereferenced from durable memory instead of being lost.
  *
@@ -31,7 +31,6 @@ import { PennyCompactArtifactSchema, SCHEMA_VERSION, type PennyCompactArtifact }
 import type {
   MempalaceRoomRef,
   KGEntityRef,
-  DecisionRef,
   ErrorRef,
   EngineRunRef,
   EvictionRecord,
@@ -45,7 +44,6 @@ import {
   queryMempalaceSkillRooms,
   queryMempalaceSkillRoomsForSession,
   queryKGEntitiesForScope,
-  queryOutcomeLedgerDecisions,
 } from "./bridge.js";
 import { generateModelSummary, renderGroundedDigest, type SummarizerCtx } from "./summarizer.js";
 import { loanEnabled } from "./loans.js";
@@ -677,25 +675,6 @@ function evictionPriority<T>(
 
   if (isError && rec.resolved === false) {
     priority = 1;
-  } else if (field === "decisions") {
-    switch (rec.confidence) {
-      case "CERTAIN":
-        priority = 3;
-        confidenceOrdinal = 4;
-        break;
-      case "PROBABLE":
-        priority = 4;
-        confidenceOrdinal = 3;
-        break;
-      case "POSSIBLE":
-        priority = 5;
-        confidenceOrdinal = 2;
-        break;
-      case "UNCERTAIN":
-        priority = 6;
-        confidenceOrdinal = 1;
-        break;
-    }
   } else if (field === "kg_entities") {
     priority = 9;
   } else if (field === "metadata.pi_boundary") {
@@ -780,7 +759,6 @@ export function applyEviction(
 
   artifact.constraints = apply("constraints", artifact.constraints, cap(20));
   artifact.preferences = apply("preferences", artifact.preferences, cap(10));
-  artifact.decisions = apply("decisions", artifact.decisions, cap(20));
   artifact.errors = apply("errors", artifact.errors, cap(10), true);
   artifact.engine_runs = apply("engine_runs", artifact.engine_runs, cap(5));
   artifact.mempalace_rooms = apply("mempalace_rooms", artifact.mempalace_rooms, cap(10));
@@ -844,10 +822,6 @@ export function buildResumeRefs(artifact: PennyCompactArtifact): string {
     lines.push(
       `room: ${r.wing}/${r.room}${drawers.length ? ` drawers=${drawers.join(",")}` : ""}${marker}`
     );
-  }
-
-  for (const d of artifact.decisions) {
-    lines.push(`decision: ${d.decision_id} (${d.confidence}) ${d.summary.slice(0, 80)}`);
   }
 
   for (const e of artifact.kg_entities) {
@@ -960,15 +934,6 @@ export function createProseSummary(artifact: PennyCompactArtifact): string {
     lines.push(`## Preferences`);
     for (const p of artifact.preferences.slice(0, 5)) {
       lines.push(`- ${p}`);
-    }
-    lines.push("");
-  }
-
-  // Decisions
-  if (artifact.decisions.length > 0) {
-    lines.push(`## Key Decisions`);
-    for (const d of artifact.decisions.slice(0, 5)) {
-      lines.push(`- **${d.confidence}**: ${d.summary} (${d.outcome_room})`);
     }
     lines.push("");
   }
@@ -1188,8 +1153,8 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
   const protectedSessionIds = scopedSessionIds;
 
   // Step 3: everything else is independent — query in parallel, all SCOPED so
-  // no other session's rooms/decisions/kg bleed into this summary.
-  const [pending, mempalaceRooms, kgEntities, decisions] = await Promise.all([
+  // no other session's rooms/kg bleed into this summary.
+  const [pending, mempalaceRooms, kgEntities] = await Promise.all([
     detectPendingState(input.messages, input.sessionId).catch((err) => {
       logger.warn("Pending state detection failed", { error: String(err) });
       return null;
@@ -1214,16 +1179,6 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
         Object.assign(new Error("KG query failed"), { code: "COMPACTION_KG_QUERY_FAILED" })
       );
       return [] as KGEntityRef[];
-    }),
-    queryOutcomeLedgerDecisions(scopedSessionIds, 20).catch((err) => {
-      logger.error(
-        "Outcome ledger query failed during compaction",
-        { error: err instanceof Error ? err.message : String(err) },
-        Object.assign(new Error("Outcome ledger query failed"), {
-          code: "COMPACTION_OUTCOME_QUERY_FAILED",
-        })
-      );
-      return [] as DecisionRef[];
     }),
   ]);
 
@@ -1284,7 +1239,6 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
         }
       : undefined,
 
-    decisions,
     // RC5: unresolved errors survive compaction (fallback prose + archive).
     errors: deriveErrorRefs(input.messages),
 
@@ -1327,7 +1281,6 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
     scopedRuns: engineRuns,
     otherSessionRuns,
     rooms: mempalaceRooms,
-    decisions,
     kgEntities,
     pending,
     readFiles,

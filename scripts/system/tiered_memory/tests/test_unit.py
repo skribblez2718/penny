@@ -35,17 +35,17 @@ class TestAgeDays:
 
 
 class TestClassifyDrawer:
-    def test_signals_is_t2_7d(self):
-        d = DrawerMeta("d1", "penny", "signals", "2026-04-01T00:00:00Z")
-        tier, ttl = classify_drawer(d)
-        assert tier == "T2"
-        assert ttl == 7
-
-    def test_outcomes_is_t2_30d(self):
-        d = DrawerMeta("d1", "penny", "outcomes", "2026-04-01T00:00:00Z")
+    def test_audit_is_t2_30d(self):
+        d = DrawerMeta("d1", "penny", "audit", "2026-04-01T00:00:00Z")
         tier, ttl = classify_drawer(d)
         assert tier == "T2"
         assert ttl == 30
+
+    def test_diary_is_t2_90d(self):
+        d = DrawerMeta("d1", "penny", "diary", "2026-04-01T00:00:00Z")
+        tier, ttl = classify_drawer(d)
+        assert tier == "T2"
+        assert ttl == 90
 
     def test_skills_is_t3_permanent(self):
         d = DrawerMeta("d1", "penny", "skills", "2026-04-01T00:00:00Z")
@@ -98,16 +98,16 @@ class TestClassifyDrawer:
 
 
 class TestShouldArchive:
-    def test_signal_older_than_7_days(self):
-        old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
-        d = DrawerMeta("d1", "penny", "signals", old)
+    def test_diary_older_than_90_days(self):
+        old = (datetime.now(timezone.utc) - timedelta(days=91)).isoformat()
+        d = DrawerMeta("d1", "penny", "diary", old)
         should, reason = should_archive(d)
         assert should is True
-        assert "7" in reason
+        assert "90" in reason
 
-    def test_signal_younger_than_7_days(self):
+    def test_diary_younger_than_90_days(self):
         recent = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
-        d = DrawerMeta("d1", "penny", "signals", recent)
+        d = DrawerMeta("d1", "penny", "diary", recent)
         should, reason = should_archive(d)
         assert should is False
         assert "T2" in reason
@@ -119,115 +119,50 @@ class TestShouldArchive:
         assert should is False
         assert "permanent" in reason
 
-    def test_outcome_at_exactly_30_days(self):
+    def test_audit_at_exactly_30_days(self):
         now = datetime(2026, 5, 1, tzinfo=timezone.utc)
         ts = (now - timedelta(days=30)).isoformat()
-        d = DrawerMeta("d1", "penny", "outcomes", ts)
+        d = DrawerMeta("d1", "penny", "audit", ts)
         # At exactly 30 days, should NOT archive (30d <= 30d TTL)
         should, _ = should_archive(d, now=now)
         assert should is False
 
-    def test_outcome_at_31_days(self):
+    def test_audit_at_31_days(self):
         now = datetime(2026, 5, 1, tzinfo=timezone.utc)
         ts = (now - timedelta(days=31)).isoformat()
-        d = DrawerMeta("d1", "penny", "outcomes", ts)
+        d = DrawerMeta("d1", "penny", "audit", ts)
         should, _ = should_archive(d, now=now)
         assert should is True
-
-
-class TestAmendmentArchival:
-    """Status-aware archival for penny/system_amendments (fixes the keep-forever
-    accumulation of resolved amendments)."""
-
-    NOW = datetime(2026, 6, 1, tzinfo=timezone.utc)
-
-    def _days_ago(self, n):
-        return (self.NOW - timedelta(days=n)).isoformat()
-
-    def _amendment(self, did, status, applied_date="", reviewed_date="", filed="2026-01-01T00:00:00Z"):
-        body = {"amendment_id": did, "status": status}
-        if applied_date:
-            body["applied_date"] = applied_date
-        if reviewed_date:
-            body["reviewed_date"] = reviewed_date
-        content = f"amendment_id: {did}\n" + json.dumps(body, indent=2)
-        return DrawerMeta(did, "penny", "system_amendments", filed, content=content)
-
-    def test_pending_kept_even_when_ancient(self):
-        d = self._amendment("a1", "PENDING", filed=self._days_ago(400))
-        should, reason = should_archive(d, self.NOW)
-        assert should is False and "PENDING" in reason
-
-    def test_approved_kept(self):
-        d = self._amendment("a1", "APPROVED", reviewed_date=self._days_ago(400))
-        assert should_archive(d, self.NOW)[0] is False
-
-    def test_applied_within_efficacy_window_kept(self):
-        d = self._amendment("a1", "APPLIED", applied_date=self._days_ago(30))
-        should, reason = should_archive(d, self.NOW)
-        assert should is False and "efficacy window" in reason
-
-    def test_applied_past_efficacy_window_archived(self):
-        d = self._amendment("a1", "APPLIED", applied_date=self._days_ago(90))
-        should, reason = should_archive(d, self.NOW)
-        assert should is True and "efficacy window" in reason
-
-    def test_applied_undated_kept(self):
-        d = self._amendment("a1", "APPLIED")  # no applied_date
-        assert should_archive(d, self.NOW)[0] is False
-
-    def test_rejected_within_grace_kept(self):
-        d = self._amendment("a1", "REJECTED", reviewed_date=self._days_ago(5))
-        assert should_archive(d, self.NOW)[0] is False
-
-    def test_rejected_past_grace_archived(self):
-        d = self._amendment("a1", "REJECTED", reviewed_date=self._days_ago(30))
-        should, reason = should_archive(d, self.NOW)
-        assert should is True and "grace" in reason
-
-    def test_unparseable_amendment_kept(self):
-        d = DrawerMeta("a1", "penny", "system_amendments", "2026-01-01T00:00:00Z", content="not json")
-        assert should_archive(d, self.NOW)[0] is False
-
-    def test_sweep_routes_amendments_past_the_keep_forever_shortcircuit(self):
-        # The whole point: an APPLIED-past-window amendment must be archived even
-        # though the room classifies as permanent (T4/-1) — the old default that
-        # let resolved amendments accumulate forever.
-        old_applied = self._amendment("a1", "APPLIED", applied_date=self._days_ago(90))
-        pending = self._amendment("a2", "PENDING")
-        sweep = sweep_for_archival([old_applied, pending], self.NOW)
-        assert {d.drawer_id for d in sweep["archive"]} == {"a1"}
-        assert "a2" in {d.drawer_id for d in sweep["keep"]}
 
 
 class TestSweepForArchival:
     def test_mixed_drawers(self):
         now = datetime(2026, 5, 1, tzinfo=timezone.utc)
         drawers = [
-            DrawerMeta("s1", "penny", "signals", (now - timedelta(days=10)).isoformat()),
-            DrawerMeta("o1", "penny", "outcomes", (now - timedelta(days=25)).isoformat()),
+            DrawerMeta("a1", "penny", "audit", (now - timedelta(days=31)).isoformat()),
+            DrawerMeta("a2", "penny", "audit", (now - timedelta(days=25)).isoformat()),
             DrawerMeta("sk1", "penny", "skills", (now - timedelta(days=100)).isoformat()),
             DrawerMeta("d1", "penny", "diary", (now - timedelta(days=80)).isoformat()),
             DrawerMeta("uk1", "penny", "unknown", (now - timedelta(days=95)).isoformat()),
         ]
         result = sweep_for_archival(drawers, now=now)
         # unknown room is now kept-by-default (decay is opt-in per room).
-        assert len(result["archive"]) == 1  # signals (10d > 7d)
-        assert len(result["keep"]) == 4  # outcomes + skills (permanent) + diary + unknown
+        assert len(result["archive"]) == 1  # audit (31d > 30d)
+        assert len(result["keep"]) == 4  # audit(25d) + skills (permanent) + diary + unknown
         assert len(result["unknown"]) == 0
 
     def test_undated_drawer_is_unknown(self):
         # A drawer whose filed_at is missing/unparseable must be kept, never
         # silently aged to 0 (the old bug that stopped all archival).
-        result = sweep_for_archival([DrawerMeta("x", "penny", "signals", "")])
+        result = sweep_for_archival([DrawerMeta("x", "penny", "audit", "")])
         assert len(result["unknown"]) == 1
         assert len(result["archive"]) == 0
 
     def test_recall_extends_ttl(self):
         now = datetime(2026, 5, 1, tzinfo=timezone.utc)
-        ts = (now - timedelta(days=20)).isoformat()  # 20d old signals (base TTL 7d)
-        cold = DrawerMeta("c", "penny", "signals", ts, recall_count=0)
-        hot = DrawerMeta("h", "penny", "signals", ts, recall_count=3)  # 7*4 = 28d TTL
+        ts = (now - timedelta(days=40)).isoformat()  # 40d old audit (base TTL 30d)
+        cold = DrawerMeta("c", "penny", "audit", ts, recall_count=0)
+        hot = DrawerMeta("h", "penny", "audit", ts, recall_count=3)  # 30*4 = 120d TTL
         assert should_archive(cold, now=now)[0] is True
         assert should_archive(hot, now=now)[0] is False
 
@@ -240,14 +175,14 @@ class TestWeeklyReport:
     def test_produces_markdown(self):
         now = datetime(2026, 5, 1, tzinfo=timezone.utc)
         drawers = [
-            DrawerMeta("s1", "penny", "signals", (now - timedelta(days=10)).isoformat()),
+            DrawerMeta("s1", "penny", "audit", (now - timedelta(days=40)).isoformat()),
             DrawerMeta("sk1", "penny", "skills", (now - timedelta(days=100)).isoformat()),
         ]
         report = weekly_archival_report(drawers, now=now)
         assert "# Weekly Archival Report" in report
         assert "**Archive:** 1 drawers" in report
         assert "**Keep:** 1 drawers" in report
-        assert "signal" in report.lower() or "s1" in report
+        assert "audit" in report.lower() or "s1" in report
 
 
 class TestMainCLI:
@@ -266,7 +201,7 @@ def tool_list_drawers(params):
     recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     return {
         "drawers": [
-            {"id": "d1", "wing": "penny", "room": "signals", "filed_at": recent, "content": "x"},
+            {"id": "d1", "wing": "penny", "room": "audit", "filed_at": recent, "content": "x"},
         ]
     }
 
@@ -305,7 +240,7 @@ def tool_list_drawers(params):
     old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     return {
         "drawers": [
-            {"id": "d1", "wing": "penny", "room": "signals", "filed_at": old, "content": "x"},
+            {"id": "d1", "wing": "penny", "room": "audit", "filed_at": old, "content": "x"},
             {"id": "d2", "wing": "penny", "room": "skills", "filed_at": old, "content": "y"},
         ]
     }

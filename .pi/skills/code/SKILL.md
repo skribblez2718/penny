@@ -213,11 +213,11 @@ Criteria refinement is fail-closed. The playbook deep-copies the selected payloa
 
 Fresh runs carry v1 after detection. Legacy checkpoints with no ledger are wrapped lazily only when a valid refinement commits, preserving the exact prior payload as v1. Malformed or future-version ledgers are diagnosed and never overwritten.
 
-## Outcome Capture
+## Run State and Notes
 
-The engine records the run outcome automatically — no manual mempalace writes.
-On completion it captures `met`, the resolved `success_criteria` (surfaced from the
-IDEAL_STATE at `start()`), iteration count, and the per-state summaries against the
-run's `run_id`. Agents write their working notes to the mempalace room
-`skills/code-{session_id}` during the run; the engine's checkpointer is the source
-of truth for run state.
+The engine's durable checkpointer is the source of truth for run state: current node,
+iteration count, per-state summaries, and the P0 artifact registry, all keyed by
+`run_id`. The structured terminal result (`met`, resolved `success_criteria`,
+iteration count, selected artifacts) is returned in the completion directive.
+Agents write their working notes to the mempalace room `skills/code-{session_id}`
+during the run.

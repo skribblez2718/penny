@@ -62,8 +62,7 @@ artifact, never on the NCD table (a guardrailed-off tier must not be able to blo
 Room `skills/derivation-{session_id}` (penny-wing convention). Drawers: one
 consolidated `<session_id> Gather Provenance` (when gather ran; best-effort,
 non-fatal) and annie's full review (D1–D7 analysis, prefilter report,
-matched-source annotations with license consequence, fixes). The engine records
-the terminal outcome into `penny/outcomes` automatically.
+matched-source annotations with license consequence, fixes).
 
 ## Per-state prompts
 

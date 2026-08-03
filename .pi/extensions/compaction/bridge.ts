@@ -12,7 +12,7 @@
 
 import { spawn } from "child_process";
 import { createLogger } from "../../lib/logger/logger.js";
-import type { EngineRunRef, MempalaceRoomRef, KGEntityRef, DecisionRef } from "./schema.js";
+import type { EngineRunRef, MempalaceRoomRef, KGEntityRef } from "./schema.js";
 import { asRecord, asString, asArray } from "./pi-messages.js";
 
 /** A recent diary entry — only the text is consumed by escalation detection. */
@@ -405,45 +405,3 @@ function inferEntityType(predicate: string): string {
   return "Entity";
 }
 
-// ============================================================
-// Outcome Ledger Decisions
-// ============================================================
-
-/**
- * Query outcome ledger (penny/outcomes room) for recent decisions SCOPED to
- * this run's sessions.
- *
- * Each outcome drawer's header carries `decision_id: <run_id> | ... |
- * session_id: <session_id> | ...` (written by outcome_writer.py), so a scoped
- * id appears verbatim in the drawer text. We fetch recent outcomes then keep
- * only those matching a scoped id — global decisions from OTHER sessions never
- * bleed into the summary (the reported staleness symptom). Empty scope → [].
- */
-export async function queryOutcomeLedgerDecisions(
-  scopedIds: string[],
-  limit: number = 20
-): Promise<DecisionRef[]> {
-  const ids = scopedIds.filter((s) => s && s.length > 0);
-  if (ids.length === 0) return [];
-  const result = await _internals.call("search", {
-    wing: "penny",
-    room: "outcomes",
-    limit,
-  });
-  if (!result.success) return [];
-
-  const drawers = asArray(asRecord(result.data).results).filter((d) => {
-    const text = asString(asRecord(d).text || asRecord(d).content);
-    return ids.some((id) => text.includes(id));
-  });
-  return drawers.map((d, i): DecisionRef => {
-    const dr = asRecord(d);
-    const summary = asString(dr.text || dr.content) || "Outcome record";
-    return {
-      decision_id: asString(dr.id || dr.drawer_id) || `outcome-${i}`,
-      summary: summary.slice(0, 200),
-      outcome_room: "penny/outcomes",
-      confidence: "PROBABLE",
-    };
-  });
-}

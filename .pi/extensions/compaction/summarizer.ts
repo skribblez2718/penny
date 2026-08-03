@@ -5,7 +5,7 @@
  * resumption brief — the same mechanism Pi's default compaction uses, so it
  * improves automatically as models improve (bitter-lesson LEVERAGE). We augment
  * it with two things Pi can't provide: the previous brief as iterative context,
- * and a session-scoped GROUNDED STATE digest (real run/room/decision ids). The
+ * and a session-scoped GROUNDED STATE digest (real run/room ids). The
  * deterministic pointer appendix and the LOAN fallback live in index.ts.
  *
  * The `complete` / `serializeConversation` calls sit behind `_summaryInternals`
@@ -14,7 +14,6 @@
  */
 
 import type {
-  DecisionRef,
   EngineRunRef,
   KGEntityRef,
   MempalaceRoomRef,
@@ -57,7 +56,6 @@ export interface GroundedDigestInput {
   scopedRuns: EngineRunRef[];
   otherSessionRuns: EngineRunRef[];
   rooms: MempalaceRoomRef[];
-  decisions: DecisionRef[];
   kgEntities: KGEntityRef[];
   pending: PendingState | null;
   readFiles: string[];
@@ -99,12 +97,6 @@ export function renderGroundedDigest(input: GroundedDigestInput): string {
     for (const room of input.rooms.slice(0, 10)) {
       const drawers = (room.drawer_ids || []).slice(0, 5).join(",");
       lines.push(`  - ${room.wing}/${room.room}${drawers ? ` [${drawers}]` : ""}`);
-    }
-  }
-  if (input.decisions.length > 0) {
-    lines.push("recent decisions (this session):");
-    for (const d of input.decisions.slice(0, 10)) {
-      lines.push(`  - ${d.decision_id}: ${d.summary.slice(0, 120)}`);
     }
   }
   if (input.kgEntities.length > 0) {
@@ -173,7 +165,7 @@ export function buildSummarizerMessages(input: BuildPromptInput): SummarizerMess
       "goal named in an older skill call or an in-flight run must NOT override a " +
       "newer user pivot.\n" +
       "- Carry unresolved errors and blockers forward with enough detail to act on.\n" +
-      "- You may cite facts from GROUNDED STATE (run ids, rooms, decisions) but " +
+      "- You may cite facts from GROUNDED STATE (run ids, rooms) but " +
       "NEVER invent identifiers or addresses — exact pointers are appended " +
       "separately, so do not emit a [RESUME-REFS] block yourself.\n" +
       `- Be concise; target about ${input.proseTokenTarget} tokens. No preamble.`

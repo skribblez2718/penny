@@ -270,21 +270,11 @@ describe("eviction", () => {
     expect(kept[0].error_type).toBe("E2");
   });
 
-  it("keeps CERTAIN decisions over UNCERTAIN", () => {
-    const decisions = [
-      { decision_id: "d1", summary: "A", outcome_room: "r", confidence: "UNCERTAIN" },
-      { decision_id: "d2", summary: "B", outcome_room: "r", confidence: "CERTAIN" },
-      { decision_id: "d3", summary: "C", outcome_room: "r", confidence: "POSSIBLE" },
-    ];
-    const { kept } = evictArray("decisions", decisions, 2);
-    expect(kept.map((d: any) => d.decision_id)).toEqual(["d2", "d3"]);
-  });
 
   it("scale tightens caps but floors at 1 (degrade never empties a field)", () => {
     const artifact: any = {
       constraints: Array.from({ length: 20 }, (_, i) => `c${i}`),
       preferences: [],
-      decisions: [],
       errors: [],
       engine_runs: [],
       mempalace_rooms: [],

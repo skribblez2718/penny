@@ -2,24 +2,19 @@
 
 WHY THIS EXISTS
 ---------------
-The engine used to run a "Recall (atom F2)" step at ``start()``: it searched
-``penny/system_amendments`` and seeded the FIRST agent directive with whatever came
-back, labelled "Lessons from prior runs (advisory…)".
+The engine used to run a "Recall (atom F2)" step at ``start()``: it searched a
+MemPalace room and seeded the FIRST agent directive with whatever came back,
+labelled "Lessons from prior runs (advisory…)".
 
-That room does not hold distilled lessons — ``run_compression.store_amendment``
-shows it holds **amendment proposals**, each with a ``status`` of ``PENDING`` /
-``APPROVED`` / ``REJECTED`` / ``INVALID``. The retrieval applied no status filter, so
-proposals the operator had never approved — and proposals the operator had explicitly
-**REJECTED** — were being rendered into agent prompts verbatim.
-
-That silently bypassed the approval gate. ``amendment_applier`` correctly refuses to
-touch a file unless ``status == "APPROVED"``, but the recall path reached the model
-through a different door with no gate on it at all.
+The room it read held unreviewed stored proposals, not distilled lessons, and the
+retrieval applied no status filter — so text the operator had never approved, and
+text the operator had explicitly rejected, was rendered into agent prompts verbatim.
+Stored text reached the model through a door with no gate on it at all.
 
 THE RULE (operator-set, not negotiable by a future refactor):
   * An agent's context comes from ``.pi/agents/<agent>.md`` + skill orchestration.
   * A playbook directive carries THIS run's facts only.
-  * An amendment influences the system exactly one way: a human approves it and the
+  * Stored text influences the system exactly one way: a human approves it and the
     relevant file is edited. Never by being fed to a model as "context".
 
 These tests are the ratchet. They are deliberately source-level as well as

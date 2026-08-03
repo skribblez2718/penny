@@ -147,9 +147,9 @@ skill({
 
 When chaining, the code skill reads IDEAL_STATE and verification matrix from `skills/prd-{session_id}/` automatically.
 
-## Outcome Capture
+## Session Drawers
 
-Do not write session-learning drawers manually. The orchestration engine records every terminal run's outcome into `penny/outcomes` automatically when the run reaches `complete` or `error`. The prd PRD artifacts themselves live in the session room `skills/prd-{session_id}` (see the Mempalace Output Contract above).
+Do not write session-learning drawers manually. The prd PRD artifacts live in the session room `skills/prd-{session_id}` (see the Mempalace Output Contract above).
 
 ## Resilience
 

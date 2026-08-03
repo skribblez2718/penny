@@ -8,13 +8,10 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 # Tier definitions: wing/room pattern → (tier, ttl_days)
 TIER_CONFIG: Dict[str, Tuple[str, int]] = {
-    "penny/signals": ("T2", 7),
-    "penny/outcomes": ("T2", 30),
     "penny/audit": ("T2", 30),
     "penny/diary": ("T2", 90),
     "penny/skills": ("T3", -1),  # permanent
     "penny/architecture": ("T3", -1),  # permanent
-    "penny/digests": ("T3", -1),  # permanent
     "penny/decisions": ("T3", -1),  # permanent
 }
 
@@ -23,19 +20,6 @@ TIER_CONFIG: Dict[str, Tuple[str, int]] = {
 # can never be silently mass-archived on a cron run.
 DEFAULT_ARCHIVE_TIER = "T4"
 DEFAULT_ARCHIVE_TTL_DAYS = -1
-
-# Amendments are status-aware, not age-only: penny/system_amendments would
-# otherwise fall through to the keep-forever default and accumulate every
-# resolved proposal permanently. PENDING/APPROVED are awaiting the human and are
-# always kept. APPLIED is kept through its efficacy window so
-# quality.amendment_efficacy can still measure it — 60 days covers the 30d-after
-# window plus the 30d TTL of the outcomes that window is measured against, after
-# which those outcomes are gone and the amendment is no longer measurable.
-# REJECTED gets a short grace period, then ages out. Resolved amendments go to
-# cold JSONL (never deletion), and the review list already hides them.
-AMENDMENTS_ROOM = "penny/system_amendments"
-_APPLIED_EFFICACY_KEEP_DAYS = 60
-_REJECTED_GRACE_DAYS = 14
 
 # Longest-prefix room patterns for session-scoped scratch that should decay
 # even though the exact room name is unique per run. Checked after the exact
@@ -168,59 +152,11 @@ def effective_ttl_days(drawer: DrawerMeta, base_ttl: int) -> int:
     return base_ttl * multiplier
 
 
-def _parse_amendment(content: str) -> Optional[dict]:
-    """Parse an amendment drawer's JSON body (``amendment_id:`` header + JSON,
-    per run_compression.store_amendment). None if unparseable."""
-    if not content:
-        return None
-    parts = content.split("\n", 1)
-    raw = parts[1] if len(parts) > 1 and parts[0].startswith("amendment_id:") else content
-    try:
-        rec = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        return None
-    return rec if isinstance(rec, dict) else None
-
-
-def _amendment_archive_decision(
-    drawer: DrawerMeta, now: Optional[datetime] = None
-) -> Tuple[bool, str]:
-    """Status-aware archival for penny/system_amendments (see AMENDMENTS_ROOM).
-
-    Keep PENDING/APPROVED (awaiting the human) and any unparseable/undated
-    record. Archive APPLIED past its efficacy window and REJECTED past its grace.
-    """
-    rec = _parse_amendment(drawer.content)
-    status = str((rec or {}).get("status", "")).upper()
-    if status in ("PENDING", "APPROVED"):
-        return False, f"amendment: {status} (kept — awaiting action)"
-    if not rec or not status:
-        return False, "amendment: unparsed/statusless (kept)"
-    if status == "APPLIED":
-        days = age_days(str(rec.get("applied_date", "")), now)
-        if days is None:
-            return False, "amendment: APPLIED undated (kept)"
-        if days > _APPLIED_EFFICACY_KEEP_DAYS:
-            return True, f"amendment: APPLIED {days:.0f}d > {_APPLIED_EFFICACY_KEEP_DAYS}d efficacy window"
-        return False, f"amendment: APPLIED {days:.0f}d <= {_APPLIED_EFFICACY_KEEP_DAYS}d (efficacy window)"
-    if status == "REJECTED":
-        days = age_days(str(rec.get("reviewed_date", "")), now)
-        if days is None:
-            return False, "amendment: REJECTED undated (kept)"
-        if days > _REJECTED_GRACE_DAYS:
-            return True, f"amendment: REJECTED {days:.0f}d > {_REJECTED_GRACE_DAYS}d grace"
-        return False, f"amendment: REJECTED {days:.0f}d <= {_REJECTED_GRACE_DAYS}d grace"
-    return False, f"amendment: unknown status {status!r} (kept)"
-
-
 def should_archive(drawer: DrawerMeta, now: Optional[datetime] = None) -> Tuple[bool, str]:
     """Return (should_archive, reason) for a drawer.
 
-    The amendments room is status-aware; otherwise permanent tiers (ttl < 0)
-    never archive and undated drawers are kept.
+    Permanent tiers (ttl < 0) never archive and undated drawers are kept.
     """
-    if f"{drawer.wing}/{drawer.room}" == AMENDMENTS_ROOM:
-        return _amendment_archive_decision(drawer, now)
     tier, base_ttl = classify_drawer(drawer)
     if base_ttl < 0:
         return False, f"{tier}: permanent"
@@ -248,12 +184,6 @@ def sweep_for_archival(
         "unknown": [],
     }
     for drawer in drawer_list:
-        # Amendments are status-aware, not age-only, so they bypass the
-        # base_ttl<0 keep-forever short-circuit and consult should_archive.
-        if f"{drawer.wing}/{drawer.room}" == AMENDMENTS_ROOM:
-            should, _ = should_archive(drawer, now)
-            (result["archive"] if should else result["keep"]).append(drawer)
-            continue
         tier, base_ttl = classify_drawer(drawer)
         if tier == "T3" or base_ttl < 0:
             result["keep"].append(drawer)
