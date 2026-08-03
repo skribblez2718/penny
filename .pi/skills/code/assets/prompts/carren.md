@@ -109,5 +109,5 @@ SUMMARY:{"gap":true|false,"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","fi
 **`learning`** — judging the gap between the implementation and the IDEAL STATE. `gap=true` loops back to implement; `gap=false` triggers one final verification. Required: `gap` (bool). Optional: `findings` (list), `confidence` (str), `strategy_change` (str), `dispositions` (list), `quality_floor` (object), `coverage_map` (object). When `gap=true`, `strategy_change` MUST state **what the next implement iteration will do differently** from the last one — a concrete change of approach, not a restatement of the same gap. The engine escalates to the user if two consecutive retries declare the same strategy (or none), so this is not optional in practice on a retry:
 
 ```
-SUMMARY:{"gap":true|false,"findings":["<...>"],"strategy_change":"<what to do differently this iteration>","confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>","dispositions":[],"quality_floor":{},"coverage_map":{}}
+SUMMARY:{"gap":true|false,"findings":["<...>"],"strategy_change":"<what to do differently this iteration>","confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>","dispositions":[],"coverage_map":{}}
 ```

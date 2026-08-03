@@ -1296,8 +1296,10 @@ CODE_IMPLEMENT = PrimitiveSpec(
             "expected_failure_details": list,
             "receipts": list,
             "receipt_claims": list,
-            "dispositions": list,
-            "quality_floor": dict,
+            # NOT offered to the execution actor: dispositions are the independent
+            # reviewer's to author, and the quality floor is an immutable engine-owned
+            # artifact. Advertising them here made the agent emit invalid copies that
+            # completion then rejected.
             "coverage_map": dict,
             "findings": list,
             "needs_clarification": bool,
@@ -1321,8 +1323,10 @@ CODE_VERIFY = PrimitiveSpec(
             "e2e_passed": bool,
             "receipts": list,
             "receipt_claims": list,
-            "dispositions": list,
-            "quality_floor": dict,
+            # NOT offered to the execution actor: dispositions are the independent
+            # reviewer's to author, and the quality floor is an immutable engine-owned
+            # artifact. Advertising them here made the agent emit invalid copies that
+            # completion then rejected.
             "coverage_map": dict,
             "findings": list,
         },
@@ -1344,7 +1348,8 @@ CODE_LEARN = PrimitiveSpec(
             "mempalace_drawer": str,
             "strategy_change": str,
             "dispositions": list,
-            "quality_floor": dict,
+            # Floor satisfaction is reported through coverage_map; the floor artifact
+            # itself is engine-owned and immutable.
             "coverage_map": dict,
         },
     ),

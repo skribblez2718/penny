@@ -1640,3 +1640,47 @@ def test_plan_spill_is_reused_across_gate_reasks():
     first = _spill_plan_artifact(code, _FakeRef(), "plan body")
     second = _spill_plan_artifact(code, _FakeRef(), "plan body")
     assert first == second
+
+
+def test_execution_actor_is_never_offered_reviewer_or_engine_owned_fields():
+    """The execution actor must not be OFFERED fields it is forbidden to author.
+
+    skribble's SUMMARY template listed `dispositions` and `quality_floor`, and both
+    specs advertised them, so the engine's auto-rendered contract directive invited the
+    agent to emit exactly what completion then rejected:
+      - "the implementation/execution actor cannot author an independent disposition"
+      - "quality floor must contain exactly schema_version and dimensions"
+    The quality floor is an immutable engine-owned artifact (new_quality_floor); floor
+    SATISFACTION is reported through coverage_map instead.
+    """
+    from orchestration.playbooks.code import CODE_IMPLEMENT, CODE_VERIFY, CODE_LEARN
+
+    for spec in (CODE_IMPLEMENT, CODE_VERIFY):
+        offered = set(spec.summary_contract.get("required", {})) | set(
+            spec.summary_contract.get("optional", {})
+        )
+        assert "dispositions" not in offered, f"{spec.name} still offers dispositions"
+        assert "quality_floor" not in offered, f"{spec.name} still offers quality_floor"
+        assert "coverage_map" in offered, f"{spec.name} must still report coverage"
+
+    learn_offered = set(CODE_LEARN.summary_contract.get("required", {})) | set(
+        CODE_LEARN.summary_contract.get("optional", {})
+    )
+    # carren IS the independent reviewer, so it keeps dispositions ...
+    assert "dispositions" in learn_offered
+    # ... but nobody retypes the engine-owned floor.
+    assert "quality_floor" not in learn_offered
+
+
+def test_execution_actor_prompt_does_not_advertise_forbidden_fields():
+    """Prompt and contract must agree (test_contract_prompt_drift enforces keys both
+    ways; this pins the specific fields whose presence caused the P0 failures)."""
+    from orchestration.paths import skill_file
+
+    skribble = Path(skill_file(None, "code", "assets", "prompts", "skribble.md")).read_text()
+    summary_lines = [ln for ln in skribble.splitlines() if ln.startswith("SUMMARY:")]
+    assert summary_lines, "skribble prompt must still show its SUMMARY templates"
+    for line in summary_lines:
+        assert '"dispositions"' not in line
+        assert '"quality_floor"' not in line
+        assert '"coverage_map"' in line
