@@ -23,12 +23,6 @@ import { homedir } from "os";
 const ENV_PATH = ".env";
 const AGENTS_PATH = "AGENTS.md";
 const SYSTEM_PATH = ".pi/SYSTEM.md";
-// Session-memory brief, written each session start by session_start_checker.py.
-// Injected as trusted system content just before the boundary marker so
-// recalled memory (diary, pending signals/amendments, recent MISMATCHes, digest)
-// actually reaches the model — the notify/TUI path never did.
-const SESSION_BRIEF_PATH = ".penny/SESSION_BRIEF.md";
-
 // System boundary marker — appended at the end of the system prompt
 // to create a clear delineation between system instructions and user input.
 // This is a prompt injection defense measure.
@@ -242,14 +236,6 @@ export default async function (pi: ExtensionAPI) {
     if (agentsContent) {
       const substituted = substituteEnvVars(agentsContent, envConfig);
       systemPrompt = systemPrompt.replace(agentsContent, substituted);
-    }
-
-    // Inject the session-memory brief (recalled context from prior sessions) as
-    // trusted system content, just before the boundary marker. Read fresh each
-    // turn so a brief written after the first agent start is still picked up.
-    const brief = await readFileOrNull(join(process.cwd(), SESSION_BRIEF_PATH));
-    if (brief && brief.trim()) {
-      systemPrompt += "\n\n" + brief.trim() + "\n";
     }
 
     // Append system boundary marker at the very end of the system prompt

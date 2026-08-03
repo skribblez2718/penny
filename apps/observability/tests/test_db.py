@@ -200,15 +200,6 @@ async def _ins_logs(db, n: int, base: int) -> None:
         )
 
 
-async def _ins_watcher_logs(db, n: int, base: int) -> None:
-    for i in range(n):
-        await db._execute(
-            "INSERT INTO watcher_logs(timestamp, level, source, event, session_id, data, created_at) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (1, "INFO", "src", "e", "s", _JSON_BLOB, base + i),
-        )
-
-
 async def _ins_orch_events(db, n: int, base: int) -> None:
     for i in range(n):
         await db._execute(
@@ -266,7 +257,6 @@ async def test_c4_rotate_deletes_oldest_across_all_tables(db):
         _ins_entries,
         _ins_compactions,
         _ins_logs,
-        _ins_watcher_logs,
         _ins_orch_events,
         _ins_orch_runs,
     ):
@@ -287,7 +277,6 @@ async def test_c4_rotate_deletes_oldest_across_all_tables(db):
         ("entries", "created_at", 1, newest),
         ("compactions", "created_at", 1, newest),
         ("logs", "created_at", 1, newest),
-        ("watcher_logs", "created_at", 1, newest),
         ("orchestration_events", "timestamp", f"{1:020d}", f"{newest:020d}"),
         ("orchestration_runs", "created_at", f"{1:020d}", f"{newest:020d}"),
     ]

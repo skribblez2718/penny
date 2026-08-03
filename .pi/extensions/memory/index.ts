@@ -726,27 +726,6 @@ const toolDiaryRead = createTool(
 );
 
 // ============================================
-// SIGNAL LIFECYCLE
-// ============================================
-
-const toolAcknowledgeSignal = createTool(
-  "acknowledge_signal",
-  "Acknowledge a pending ambient signal so it stops re-surfacing at session start. Call this once you have addressed (or consciously dismissed) a signal shown in the session-memory brief.",
-  "Acknowledge a pending signal to retire it",
-  [
-    "When you have addressed a pending signal, call memory_acknowledge_signal with its signal_id so it is not shown again.",
-    "signal_ids look like 'signal_YYYY-MM-DD_NNN_source'.",
-  ],
-  {
-    signal_id: Type.String({
-      description: "The signal_id to acknowledge (from the session brief)",
-    }),
-    session_id: Type.Optional(Type.String({ description: "Current session id (optional)" })),
-  },
-  async (params) => callBridge("acknowledge_signal", params)
-);
-
-// ============================================
 // AUTO-DIARY HELPERS
 // ============================================
 
@@ -956,7 +935,6 @@ export default function memoryExtension(pi: ExtensionAPI) {
   pi.registerTool(toolGraphStats);
   pi.registerTool(toolDiaryWrite);
   pi.registerTool(toolDiaryRead);
-  pi.registerTool(toolAcknowledgeSignal);
 
   // Commands
   pi.registerCommand("memory-init", {

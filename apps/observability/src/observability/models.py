@@ -63,50 +63,6 @@ class LogStatsResponse(BaseModel):
     newest_timestamp: int | None = None
 
 
-class WatcherLogEntry(BaseModel):
-    """A single ambient watcher log row."""
-
-    id: int
-    timestamp: int = Field(description="Unix timestamp in milliseconds")
-    level: str = Field(description="Log severity: DEBUG, INFO, WARN, ERROR")
-    source: str = Field(description="Watcher source name (e.g. mismatch_rate_watcher)")
-    event: str = Field(description="Short event identifier / message")
-    session_id: str | None = None
-    data: Any | None = None
-    created_at: int = Field(description="Unix timestamp in seconds")
-
-
-class WatcherLogListResponse(BaseModel):
-    """Paginated list of ambient watcher log entries."""
-
-    items: list[WatcherLogEntry]
-    total: int
-    limit: int
-    offset: int
-
-
-class SourceCount(BaseModel):
-    """Count of watcher logs from a specific source."""
-
-    source: str
-    count: int
-
-
-class WatcherLogStatsResponse(BaseModel):
-    """Aggregated statistics over the watcher_logs table."""
-
-    total: int
-    by_level: list[LevelCount]
-    by_source: list[SourceCount]
-    oldest_timestamp: int | None = None
-    newest_timestamp: int | None = None
-
-
-# ---------------------------------------------------------------------------
-# Orchestration runs / events (v5) — the correlated timeline
-# ---------------------------------------------------------------------------
-
-
 class CreateOrchestrationRunRequest(BaseModel):
     """Payload for creating/updating an orchestration run (run_start/run_end)."""
 

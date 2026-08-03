@@ -29,15 +29,11 @@ _EXPECTED_HTTP_ROUTES = {
     (frozenset({"GET"}), "/sessions/{session_id}/entries"),
     (frozenset({"GET"}), "/sessions/{session_id}/orchestration"),
     (frozenset({"GET"}), "/sessions/{session_id}/search"),
-    (frozenset({"GET"}), "/watcher_logs"),
-    (frozenset({"GET"}), "/watcher_logs/stats"),
-    (frozenset({"GET"}), "/watcher_logs/{log_id}"),
     (frozenset({"POST"}), "/admin/cleanup"),
     (frozenset({"POST"}), "/compactions"),
     (frozenset({"POST"}), "/logs"),
     (frozenset({"POST"}), "/orchestration/events"),
     (frozenset({"POST"}), "/orchestration/runs"),
-    (frozenset({"POST"}), "/watcher_logs"),
 }
 
 
@@ -60,11 +56,15 @@ def test_c14_websocket_route_present():
     assert any(getattr(r, "path", None) == "/ws" for r in app.routes)
 
 
-def test_c14_no_new_schema_migration():
-    """C14: schema version is unchanged at 5 (no migration introduced)."""
+def test_schema_version_current():
+    """Schema version is 6: v5->v6 dropped the removed watcher-log table.
+
+    (Supersedes the old C14 'no new migration' pin, which froze the version at
+    5 for a past change's acceptance criteria.)
+    """
     from observability.db import SCHEMA_VERSION
 
-    assert SCHEMA_VERSION == 5
+    assert SCHEMA_VERSION == 6
 
 
 def test_c15_observability_is_python_only_no_docker():
@@ -107,5 +107,4 @@ def test_c17_env_example_documents_cap_and_floor():
     assert "PI_OBSERVABILITY_DB_SIZE_FLOOR_GB" in env_example
     assert "PI_OBSERVABILITY_RETENTION_RAW_DAYS" not in env_example
     assert "PI_OBSERVABILITY_RETENTION_LOG_DAYS" not in env_example
-    assert "PI_OBSERVABILITY_RETENTION_WATCHER_LOG_DAYS" not in env_example
     assert "PI_OBSERVABILITY_RETENTION_COMPACTION_DAYS" not in env_example

@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>videogen skill — execution flow</title>
+<style>
+  :root{
+    --bg:#0b1020;--panel:#141c2f;--panel2:#1a2540;--border:#2d3a59;
+    --ink:#e8eefb;--muted:#9eabc4;--desc:#c0cbe0;
+    --analysis:#9b8afb;--author:#ef7cc4;--review:#ff7b89;--tool:#55b8ff;
+    --qa:#52d58a;--gate:#efbd4f;--control:#a7b0c2;--done:#43cc7b;--error:#ff5f68;
+    --forward:#8190aa;--repair:#e7a93d;--stale:#b78cff;--resume:#aab4c8;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  header{padding:24px 28px 8px;max-width:1320px}
+  h1{margin:0;font-size:23px;letter-spacing:-.02em}
+  .sub{margin-top:6px;color:var(--muted);max-width:1180px}
+  code{background:#202b48;color:#dce5f6;padding:1px 5px;border-radius:4px}
+  .callout{margin:14px 28px;padding:12px 14px;border-left:4px solid var(--gate);background:#241f13;border-radius:7px;max-width:1260px;color:#eadcb5}
+  .legend{display:flex;flex-wrap:wrap;gap:12px 22px;padding:8px 28px 14px;color:#c8d2e5;font-size:12px;max-width:1320px}
+  .chip{display:inline-flex;align-items:center;gap:6px}.dot{width:11px;height:11px;border-radius:3px}.line{width:26px;height:0;border-top:3px solid var(--forward)}.dash{border-top-style:dashed}
+  #wrap{position:relative;margin:8px 20px 34px;width:1360px;height:2180px}
+  #edges{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
+  .node{position:absolute;width:330px;min-height:76px;padding:10px 12px 11px 16px;background:var(--panel);border:1px solid var(--border);border-radius:10px;box-shadow:0 3px 12px rgba(0,0,0,.28)}
+  .node::before{content:"";position:absolute;inset:0 auto 0 0;width:5px;border-radius:10px 0 0 10px;background:var(--control)}
+  .node .title{display:flex;align-items:center;gap:7px;font-size:13.5px;font-weight:750}.node .who{font-size:11px;color:var(--muted);font-weight:600}.node .desc{margin-top:5px;color:var(--desc);font-size:11.5px}
+  .node .badge{margin-left:auto;border-radius:999px;padding:2px 6px;font-size:9.5px;font-weight:800;letter-spacing:.05em;background:#46536c}
+  .node.analysis::before{background:var(--analysis)}.node.author::before{background:var(--author)}.node.review::before{background:var(--review)}.node.tool::before{background:var(--tool)}.node.qa::before{background:var(--qa)}
+  .node.gate{background:#241f13;border-color:#5d4a1e}.node.gate::before{background:var(--gate)}.node.control::before{background:var(--control)}
+  .node.done{background:#10291d;border-color:#286444}.node.done::before{background:var(--done)}.node.error{background:#30171b;border-color:#693038}.node.error::before{background:var(--error)}
+  .edge-label{position:absolute;z-index:5;max-width:210px;transform:translate(-50%,-50%);padding:2px 6px;background:rgba(24,34,57,.96);border:1px solid #354361;border-radius:999px;color:#cbd5e8;font-size:9.5px;line-height:1.25;text-align:center;pointer-events:none}
+  .notes{margin:0 28px 48px;max-width:1260px;color:#c7d1e4}.notes h2{font-size:15px;margin:18px 0 6px;color:var(--ink)}.notes ul{margin:5px 0;padding-left:20px}.notes li{margin:4px 0}
+  @media(max-width:900px){#wrap{transform:scale(.68);transform-origin:top left;margin-bottom:-680px}.callout,.legend,.notes{max-width:860px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>videogen skill — execution flow</h1>
+  <div class="sub">Wave-0 design mirror for <code>VideogenMachine</code>: twelve domain phases plus the five engine control states. The engine terminal remains <code>complete</code>; the result maps it to domain <code>HANDOFF_READY</code> or honest <code>EXHAUSTED</code>.</div>
+</header>
+<div class="callout"><b>Hard boundary:</b> Carren approves the exact storyboard/narration hashes before the first voice mutation. Deterministic evidence and Vera's independent 18-row PASS precede the durable <code>OPERATOR_REVIEW</code> pause. Only exact structured approve/refine/abort input resumes that gate.</div>
+<div class="legend">
+  <span class="chip"><span class="dot" style="background:var(--analysis)"></span>analysis</span>
+  <span class="chip"><span class="dot" style="background:var(--author)"></span>authoring</span>
+  <span class="chip"><span class="dot" style="background:var(--review)"></span>independent review</span>
+  <span class="chip"><span class="dot" style="background:var(--tool)"></span>deterministic tool state</span>
+  <span class="chip"><span class="dot" style="background:var(--gate)"></span>human gate</span>
+  <span class="chip"><span class="line"></span>forward</span>
+  <span class="chip"><span class="line" style="border-color:var(--repair)"></span>repair/refine</span>
+  <span class="chip"><span class="line dash" style="border-color:var(--stale)"></span>protected-input recheck</span>
+  <span class="chip"><span class="line dash" style="border-color:var(--resume)"></span>clarification resume</span>
+</div>
+<div id="wrap"><svg id="edges"><defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="context-stroke"></path></marker></defs></svg></div>
+<div class="notes">
+  <h2>Bounded loops and terminal meaning</h2>
+  <ul>
+    <li><code>NARRATION_SCRIPT</code> self-transitions from authoring to the sequential Carren gate; revision stays pre-synthesis. Its repair budget is separate from operator refinement.</li>
+    <li><code>REFINE</code> stores raw feedback, maps it to stable scene/beat IDs, and routes only to the earliest affected existing phase. Every route reconverges on full validation, full AUTO_QA, and the hard review gate.</li>
+    <li>Any exhaustion edge reaches engine <code>complete</code> with <code>lifecycle_state=EXHAUSTED</code>, <code>met=false</code>, the latest complete candidate, passed checks, unresolved items, and reasons. Only <code>PUBLISH_HANDOFF → complete</code> may yield <code>HANDOFF_READY</code>.</li>
+  </ul>
+  <h2>Collapsed uniform seams</h2>
+  <ul>
+    <li><b>Escalation:</b> every escalatable agent phase can transition to <code>unknown</code> on <code>UNCERTAIN</code> or <code>needs_clarification</code>. Those repeated edges are omitted; <code>unknown → awaiting_clarification</code> and all legal resume targets are drawn.</li>
+    <li><b>Abort:</b> every non-final state has the uniform abort edge to <code>error</code>; repeated abort arrows are omitted. The distinct structured operator <code>abort</code> edge is drawn.</li>
+  </ul>
+  <h2>Protected-input rechecks</h2>
+  <ul>
+    <li>Before an external mutation, finalization, or handoff, exact source and canon/schema/theme/voice/current hashes are rechecked. Exact-source drift returns to <code>INGEST</code>; changed material bindings return to <code>STORYBOARD</code>. Approval and dependent artifacts are invalidated before reuse.</li>
+    <li>Known external job IDs reconcile without duplicate submission. Unknown mutation disposition pauses; it never becomes success or an automatic retry.</li>
+  </ul>
+</div>
+<script>
+const N = {
+  intake:{x:470,y:10,cls:'control',title:'intake',badge:'CONTROL',desc:'Resolve direct/profile inputs and validate the complete contract before any snapshot, service call, or output write.'},
+  INGEST:{x:470,y:135,cls:'analysis',title:'INGEST',who:'annie + preflight',desc:'Snapshot exact source/canon/schema inputs, hash bindings, check readiness, retrieve generic craft hypotheses, and inventory source concepts.'},
+  STORYBOARD:{x:470,y:275,cls:'author',title:'STORYBOARD',who:'synthia',desc:'Build stable concept → beat → scene coverage, source maps, timing plan, and schema-grounded visual intent.'},
+  NARRATION_SCRIPT:{x:470,y:425,cls:'review',title:'NARRATION_SCRIPT',who:'synthia → carren',desc:'Author exact narration, then independently critique the exact storyboard/script hashes before any voice mutation.'},
+  VOICE_SYNTH:{x:470,y:590,cls:'tool',title:'VOICE_SYNTH',badge:'TOOL',desc:'Create, synthesize, poll, store, measure, hash, and best-effort clean up per-scene audio; reuse only hash-identical audio.'},
+  CODEGEN:{x:470,y:725,cls:'author',title:'CODEGEN',who:'skribble',desc:'Generate one scene source per storyboard scene against the immutable run-time primitive schema snapshot.'},
+  VALIDATE:{x:470,y:860,cls:'tool',title:'VALIDATE',badge:'TOOL',desc:'Atomically materialize the exact bundle/provenance, run local checks, import it, and require zero project violations.'},
+  DRAFT_RENDER:{x:470,y:1005,cls:'tool',title:'DRAFT_RENDER',badge:'TOOL',desc:'Reconcile or submit draft scene jobs, assemble MP4/captions, and persist media/job/cache evidence.'},
+  AUTO_QA:{x:470,y:1150,cls:'qa',title:'AUTO_QA',who:'deterministic checks → vera',desc:'Produce all 18 evidence rows, then independently verify mechanical and source/canon alignment. Unweighted PASS only.'},
+  OPERATOR_REVIEW:{x:470,y:1300,cls:'gate',title:'OPERATOR_REVIEW',badge:'HITL',desc:'Durable QA-passed draft pause. Accept only exact approve, refine with feedback, or abort; approval binds current hashes.'},
+  REFINE:{x:960,y:1425,cls:'author',title:'REFINE',who:'synthia / skribble / carren',desc:'Persist verbatim feedback, map stable IDs, apply the minimal delta, and route to the earliest affected phase under budget.'},
+  FINALIZE:{x:470,y:1580,cls:'tool',title:'FINALIZE',badge:'TOOL',desc:'After exact-draft approval, render final quality, assemble/probe MP4/VTT, and extract scene 1 first-frame poster evidence.'},
+  PUBLISH_HANDOFF:{x:470,y:1750,cls:'tool',title:'PUBLISH_HANDOFF',badge:'TOOL',desc:'Atomically stage the complete release and receipt under caller output; emit instructions without target mutation.'},
+  unknown:{x:20,y:790,cls:'control',title:'unknown',badge:'CONTROL',desc:'Escalation staging for evidence-backed uncertainty or clarification need; no work is approved here.'},
+  awaiting_clarification:{x:20,y:970,cls:'control',title:'awaiting_clarification',badge:'PAUSED',desc:'Durable user pause; valid clarification resumes the protected agent phase without discarding run evidence.'},
+  complete:{x:470,y:1980,cls:'done',title:'complete',badge:'ENGINE TERMINAL',desc:'Result lifecycle is HANDOFF_READY with met=true, or EXHAUSTED with met=false. The state ID itself never overclaims.'},
+  error:{x:960,y:1980,cls:'error',title:'error',badge:'TERMINAL',desc:'Explicit abort or unrecoverable refusal. No finalization, handoff, or target-app side effect is claimed.'},
+};
+const E = [
+  {from:'intake',to:'INGEST',kind:'forward',label:'validated intake'},
+  {from:'intake',to:'unknown',kind:'resume',label:'genuine ambiguity',bend:-80},
+  {from:'intake',to:'error',kind:'abort',label:'invalid hard contract',bend:180},
+  {from:'INGEST',to:'STORYBOARD',kind:'forward',label:'ingest evidence complete'},
+  {from:'INGEST',to:'REFINE',kind:'repair',label:'compatible refine_existing + feedback',bend:170},
+  {from:'STORYBOARD',to:'NARRATION_SCRIPT',kind:'forward',label:'coverage complete'},
+  {from:'NARRATION_SCRIPT',to:'NARRATION_SCRIPT',kind:'repair',label:'author → Carren · narration revision',loop:true},
+  {from:'NARRATION_SCRIPT',to:'STORYBOARD',kind:'repair',label:'Carren storyboard revision',bend:-105},
+  {from:'NARRATION_SCRIPT',to:'VOICE_SYNTH',kind:'forward',label:'hash-matching Carren APPROVE'},
+  {from:'NARRATION_SCRIPT',to:'complete',kind:'exhaust',label:'Carren repair budget exhausted',bend:-250},
+  {from:'VOICE_SYNTH',to:'CODEGEN',kind:'forward',label:'all narration audio measured'},
+  {from:'VOICE_SYNTH',to:'INGEST',kind:'stale',label:'exact source changed',bend:-165},
+  {from:'VOICE_SYNTH',to:'STORYBOARD',kind:'stale',label:'material binding changed',bend:-120},
+  {from:'CODEGEN',to:'VALIDATE',kind:'forward',label:'scene set + schema evidence complete'},
+  {from:'VALIDATE',to:'DRAFT_RENDER',kind:'forward',label:'local + service validation clean'},
+  {from:'VALIDATE',to:'STORYBOARD',kind:'repair',label:'storyboard defect',bend:-150},
+  {from:'VALIDATE',to:'NARRATION_SCRIPT',kind:'repair',label:'script defect',bend:-125},
+  {from:'VALIDATE',to:'VOICE_SYNTH',kind:'repair',label:'audio defect',bend:105},
+  {from:'VALIDATE',to:'CODEGEN',kind:'repair',label:'code/bundle defect',bend:80},
+  {from:'VALIDATE',to:'INGEST',kind:'stale',label:'exact source changed',bend:-205},
+  {from:'VALIDATE',to:'complete',kind:'exhaust',label:'automatic repair exhausted',bend:-220},
+  {from:'DRAFT_RENDER',to:'AUTO_QA',kind:'forward',label:'draft MP4/VTT + probes complete'},
+  {from:'DRAFT_RENDER',to:'INGEST',kind:'stale',label:'exact source changed',bend:-230},
+  {from:'DRAFT_RENDER',to:'STORYBOARD',kind:'stale',label:'material binding changed',bend:-190},
+  {from:'AUTO_QA',to:'OPERATOR_REVIEW',kind:'forward',label:'all rows roll up PASS'},
+  {from:'AUTO_QA',to:'STORYBOARD',kind:'repair',label:'coverage/arc/analogy/access defect',bend:-210},
+  {from:'AUTO_QA',to:'NARRATION_SCRIPT',kind:'repair',label:'boundary/tone/pronunciation/timing defect',bend:-185},
+  {from:'AUTO_QA',to:'VOICE_SYNTH',kind:'repair',label:'audio evidence defect',bend:160},
+  {from:'AUTO_QA',to:'CODEGEN',kind:'repair',label:'schema/visual defect',bend:135},
+  {from:'AUTO_QA',to:'VALIDATE',kind:'repair',label:'bundle/provenance defect',bend:105},
+  {from:'AUTO_QA',to:'DRAFT_RENDER',kind:'repair',label:'assembly/caption/render defect',bend:80},
+  {from:'AUTO_QA',to:'INGEST',kind:'stale',label:'exact source changed',bend:-250},
+  {from:'AUTO_QA',to:'complete',kind:'exhaust',label:'automatic repair exhausted',bend:-195},
+  {from:'OPERATOR_REVIEW',to:'FINALIZE',kind:'forward',label:'approve exact draft hash'},
+  {from:'OPERATOR_REVIEW',to:'REFINE',kind:'repair',label:'refine + nonempty feedback'},
+  {from:'OPERATOR_REVIEW',to:'complete',kind:'exhaust',label:'refine requested without budget',bend:-125},
+  {from:'OPERATOR_REVIEW',to:'error',kind:'abort',label:'structured abort',bend:120},
+  {from:'REFINE',to:'STORYBOARD',kind:'repair',label:'earliest route: STORYBOARD',bend:220},
+  {from:'REFINE',to:'NARRATION_SCRIPT',kind:'repair',label:'earliest route: NARRATION_SCRIPT',bend:190},
+  {from:'REFINE',to:'VOICE_SYNTH',kind:'repair',label:'earliest route: VOICE_SYNTH',bend:160},
+  {from:'REFINE',to:'CODEGEN',kind:'repair',label:'earliest route: CODEGEN',bend:130},
+  {from:'REFINE',to:'VALIDATE',kind:'repair',label:'earliest route: VALIDATE',bend:100},
+  {from:'REFINE',to:'DRAFT_RENDER',kind:'repair',label:'earliest route: DRAFT_RENDER',bend:70},
+  {from:'REFINE',to:'complete',kind:'exhaust',label:'resolved refine budget exhausted',bend:105},
+  {from:'FINALIZE',to:'PUBLISH_HANDOFF',kind:'forward',label:'final artifacts + recheck clean'},
+  {from:'FINALIZE',to:'REFINE',kind:'repair',label:'semantic/final evidence mismatch',bend:95},
+  {from:'FINALIZE',to:'INGEST',kind:'stale',label:'exact source changed',bend:-280},
+  {from:'FINALIZE',to:'STORYBOARD',kind:'stale',label:'material binding changed',bend:-245},
+  {from:'PUBLISH_HANDOFF',to:'complete',kind:'success',label:'HANDOFF_READY receipt complete'},
+  {from:'PUBLISH_HANDOFF',to:'INGEST',kind:'stale',label:'exact source changed',bend:-300},
+  {from:'PUBLISH_HANDOFF',to:'STORYBOARD',kind:'stale',label:'material binding changed',bend:-265},
+  {from:'unknown',to:'awaiting_clarification',kind:'resume',label:'persist clarification packet'},
+  {from:'awaiting_clarification',to:'INGEST',kind:'resume',label:'resume INGEST',bend:-95},
+  {from:'awaiting_clarification',to:'STORYBOARD',kind:'resume',label:'resume STORYBOARD',bend:-70},
+  {from:'awaiting_clarification',to:'NARRATION_SCRIPT',kind:'resume',label:'resume NARRATION_SCRIPT',bend:-45},
+  {from:'awaiting_clarification',to:'CODEGEN',kind:'resume',label:'resume CODEGEN',bend:40},
+  {from:'awaiting_clarification',to:'AUTO_QA',kind:'resume',label:'resume AUTO_QA',bend:70},
+  {from:'awaiting_clarification',to:'REFINE',kind:'resume',label:'resume REFINE',bend:115},
+];
+const COLORS={forward:'#8190aa',repair:'#e7a93d',stale:'#b78cff',resume:'#aab4c8',success:'#43cc7b',exhaust:'#ef8e46',abort:'#ff5f68'};
+const wrap=document.getElementById('wrap');const svg=document.getElementById('edges');
+for(const [id,n] of Object.entries(N)){const el=document.createElement('div');el.id='node_'+id;el.className='node '+n.cls;el.style.left=n.x+'px';el.style.top=n.y+'px';const who=n.who?`<span class="who">· ${n.who}</span>`:'';const badge=n.badge?`<span class="badge">${n.badge}</span>`:'';el.innerHTML=`<div class="title">${n.title}${who}${badge}</div><div class="desc">${n.desc}</div>`;wrap.appendChild(el)}
+const NS=svg.namespaceURI;
+function box(id){const w=wrap.getBoundingClientRect(),r=document.getElementById('node_'+id).getBoundingClientRect();return{x:r.left-w.left,y:r.top-w.top,w:r.width,h:r.height}}
+function pt(b,side){if(side==='left')return{x:b.x,y:b.y+b.h/2};if(side==='right')return{x:b.x+b.w,y:b.y+b.h/2};if(side==='top')return{x:b.x+b.w/2,y:b.y};return{x:b.x+b.w/2,y:b.y+b.h}}
+function bez(p0,p1,p2,p3,t){const m=1-t;return{x:m*m*m*p0.x+3*m*m*t*p1.x+3*m*t*t*p2.x+t*t*t*p3.x,y:m*m*m*p0.y+3*m*m*t*p1.y+3*m*t*t*p2.y+t*t*t*p3.y}}
+for(const e of E){const a=box(e.from),b=box(e.to);let p0,p3,c1,c2;if(e.loop){p0=pt(a,'right');p3={x:p0.x,y:p0.y+28};c1={x:p0.x+105,y:p0.y-45};c2={x:p3.x+105,y:p3.y+45}}else{const horizontal=Math.abs((b.x+b.w/2)-(a.x+a.w/2))>370;if(horizontal){const right=b.x>a.x;p0=pt(a,right?'right':'left');p3=pt(b,right?'left':'right');const d=95+Math.abs(e.bend||0)*.28;c1={x:p0.x+(right?d:-d),y:p0.y+(e.bend||0)};c2={x:p3.x+(right?-d:d),y:p3.y-(e.bend||0)}}else{const down=b.y>a.y;p0=pt(a,down?'bottom':'top');p3=pt(b,down?'top':'bottom');const d=75+Math.abs(e.bend||0)*.22;c1={x:p0.x+(e.bend||0),y:p0.y+(down?d:-d)};c2={x:p3.x+(e.bend||0),y:p3.y+(down?-d:d)}}}const path=document.createElementNS(NS,'path');path.setAttribute('d',`M ${p0.x} ${p0.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${p3.x} ${p3.y}`);path.setAttribute('fill','none');path.setAttribute('stroke',COLORS[e.kind]);path.setAttribute('stroke-width',e.kind==='forward'||e.kind==='success'?'2.4':'1.65');path.setAttribute('marker-end','url(#arrow)');path.setAttribute('opacity',e.kind==='stale'||e.kind==='resume'?'.72':'.82');if(e.kind==='stale'||e.kind==='resume')path.setAttribute('stroke-dasharray','6 5');svg.appendChild(path);if(e.label){const q=bez(p0,c1,c2,p3,e.loop ? .58 : .5);const lab=document.createElement('div');lab.className='edge-label';lab.textContent=e.label;lab.style.left=q.x+'px';lab.style.top=q.y+'px';wrap.appendChild(lab)}}
+</script>
+</body>
+</html>

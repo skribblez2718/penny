@@ -15,7 +15,7 @@ from observability import logger as _logger
 from observability.config import Config
 
 # SQL Schema — versioned for future migrations
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA_SQL = """
 -- Sessions: one row per Pi session
@@ -68,28 +68,11 @@ CREATE TABLE IF NOT EXISTS logs (
     created_at INTEGER DEFAULT (cast(strftime('%s', 'now') as integer))
 );
 
--- Watcher logs: structured operational events from ambient watcher scripts
-CREATE TABLE IF NOT EXISTS watcher_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp INTEGER NOT NULL,
-    level TEXT NOT NULL DEFAULT 'INFO',
-    source TEXT NOT NULL,
-    event TEXT NOT NULL,
-    session_id TEXT,
-    data JSON,
-    created_at INTEGER DEFAULT (cast(strftime('%s', 'now') as integer))
-);
-
 -- Indexes for fast look-ups
 CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_logs_level ON logs(level);
 CREATE INDEX IF NOT EXISTS idx_logs_component ON logs(component);
 CREATE INDEX IF NOT EXISTS idx_logs_session ON logs(session_id);
-
-CREATE INDEX IF NOT EXISTS idx_watcher_logs_timestamp ON watcher_logs(timestamp);
-CREATE INDEX IF NOT EXISTS idx_watcher_logs_level ON watcher_logs(level);
-CREATE INDEX IF NOT EXISTS idx_watcher_logs_source ON watcher_logs(source);
-CREATE INDEX IF NOT EXISTS idx_watcher_logs_session ON watcher_logs(session_id);
 
 CREATE INDEX IF NOT EXISTS idx_entries_session ON entries(session_id, entry_idx);
 CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON entries(session_id, timestamp);
@@ -170,7 +153,6 @@ _ROTATION_TABLES: tuple[tuple[str, str], ...] = (
     ("entries", "created_at"),
     ("compactions", "created_at"),
     ("logs", "created_at"),
-    ("watcher_logs", "created_at"),
     ("orchestration_events", "timestamp"),
     ("orchestration_runs", "created_at"),
 )
@@ -385,6 +367,11 @@ class Database:
                 # correlated timeline). Idempotent CREATE ... IF NOT EXISTS; same
                 # DDL as fresh-init. Existing data untouched.
                 await self._db.executescript(ORCH_SCHEMA_SQL)
+            if from_version < 6:
+                # v5 -> v6: the ambient-watcher feature was removed; drop its
+                # log table (and implicitly its indexes). Existing databases
+                # migrate forward cleanly; the base schema no longer creates it.
+                await self._db.execute("DROP TABLE IF EXISTS watcher_logs")
             await self._execute(
                 "UPDATE meta SET value = ? WHERE key = 'schema_version'",
                 (str(SCHEMA_VERSION),),
@@ -835,123 +822,6 @@ class Database:
         finally:
             await cursor.close()
 
-    async def insert_watcher_log(
-        self,
-        level: str,
-        source: str,
-        event: str,
-        session_id: str | None = None,
-        data: dict[str, Any] | None = None,
-    ) -> int:
-        """Insert an ambient watcher log row. Returns the row id."""
-        cursor = await self._execute(
-            """
-            INSERT INTO watcher_logs(timestamp, level, source, event, session_id, data)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                int(__import__("time").time() * 1000),
-                level,
-                source,
-                event,
-                session_id,
-                json.dumps(data) if data else None,
-            ),
-        )
-        await self._db.commit()
-        return cursor.lastrowid
-
-    async def get_watcher_logs(
-        self,
-        limit: int = 50,
-        offset: int = 0,
-        level: str | None = None,
-        source: str | None = None,
-        session_id: str | None = None,
-        from_ts: int | None = None,
-        to_ts: int | None = None,
-    ) -> tuple[list[dict[str, Any]], int]:
-        """Return paginated watcher log entries with optional filters and total count."""
-        clauses: list[str] = []
-        params: list[Any] = []
-        if level:
-            clauses.append("level = ?")
-            params.append(level)
-        if source:
-            clauses.append("source = ?")
-            params.append(source)
-        if session_id:
-            clauses.append("session_id = ?")
-            params.append(session_id)
-        if from_ts is not None:
-            clauses.append("timestamp >= ?")
-            params.append(from_ts)
-        if to_ts is not None:
-            clauses.append("timestamp <= ?")
-            params.append(to_ts)
-
-        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        count_sql = f"SELECT COUNT(*) FROM watcher_logs {where_sql}"
-        total_row = await self._fetchone(count_sql, tuple(params))
-        total = total_row[0] if total_row else 0
-
-        select_sql = f"""
-            SELECT id, timestamp, level, source, event, session_id, data, created_at
-            FROM watcher_logs {where_sql}
-            ORDER BY timestamp DESC
-            LIMIT ? OFFSET ?
-        """
-        rows = await self._fetchall(select_sql, tuple(params + [limit, offset]))
-        items = [
-            {
-                "id": row[0],
-                "timestamp": row[1],
-                "level": row[2],
-                "source": row[3],
-                "event": row[4],
-                "session_id": row[5],
-                "data": json.loads(row[6]) if row[6] else None,
-                "created_at": row[7],
-            }
-            for row in rows
-        ]
-        return items, total
-
-    async def get_watcher_log_stats(self) -> dict[str, Any]:
-        """Return watcher log counts grouped by level and source, plus timestamp bounds."""
-        by_level = await self._fetchall(
-            "SELECT level, COUNT(*) FROM watcher_logs GROUP BY level ORDER BY COUNT(*) DESC"
-        )
-        by_source = await self._fetchall(
-            "SELECT source, COUNT(*) FROM watcher_logs GROUP BY source ORDER BY COUNT(*) DESC"
-        )
-        total_row = await self._fetchone("SELECT COUNT(*) FROM watcher_logs")
-        oldest = await self._fetchone("SELECT MIN(timestamp) FROM watcher_logs")
-        newest = await self._fetchone("SELECT MAX(timestamp) FROM watcher_logs")
-
-        return {
-            "total": total_row[0] if total_row else 0,
-            "by_level": [{"level": r[0], "count": r[1]} for r in by_level],
-            "by_source": [{"source": r[0], "count": r[1]} for r in by_source],
-            "oldest_timestamp": oldest[0] if oldest and oldest[0] else None,
-            "newest_timestamp": newest[0] if newest and newest[0] else None,
-        }
-
-    async def cleanup_watcher_logs(self, watcher_log_retention_days: int = 14) -> int:
-        """Delete old ambient watcher logs. Returns count deleted."""
-        import time
-        cutoff = int(time.time()) - (watcher_log_retention_days * 86400)
-        cursor = await self._execute("DELETE FROM watcher_logs WHERE created_at < ?", (cutoff,))
-        try:
-            await self._db.commit()
-            return cursor.rowcount
-        finally:
-            await cursor.close()
-
-    # ------------------------------------------------------------------
-    # Orchestration runs / events (v5) — the correlated timeline
-    # ------------------------------------------------------------------
-
     async def upsert_orchestration_run(
         self,
         run_id: str,
@@ -1268,7 +1138,6 @@ class Database:
         entries_row = await self._fetchone("SELECT COUNT(*) FROM entries")
         compactions_row = await self._fetchone("SELECT COUNT(*) FROM compactions")
         logs_row = await self._fetchone("SELECT COUNT(*) FROM logs")
-        watcher_logs_row = await self._fetchone("SELECT COUNT(*) FROM watcher_logs")
         oldest_raw = await self._fetchone(
             "SELECT MIN(created_at) FROM entries"
         )
@@ -1277,9 +1146,6 @@ class Database:
         )
         oldest_log = await self._fetchone(
             "SELECT MIN(created_at) FROM logs"
-        )
-        oldest_watcher_log = await self._fetchone(
-            "SELECT MIN(created_at) FROM watcher_logs"
         )
         db_size = self.db_path.stat().st_size if self.db_path.exists() else 0
         page_count, freelist, page_size = await self._page_metrics()
@@ -1296,9 +1162,7 @@ class Database:
             "entry_count": entries_row[0] if entries_row else 0,
             "compaction_count": compactions_row[0] if compactions_row else 0,
             "log_count": logs_row[0] if logs_row else 0,
-            "watcher_log_count": watcher_logs_row[0] if watcher_logs_row else 0,
             "oldest_raw_entry_unix": oldest_raw[0] if oldest_raw and oldest_raw[0] else None,
             "oldest_compaction_unix": oldest_comp[0] if oldest_comp and oldest_comp[0] else None,
             "oldest_log_unix": oldest_log[0] if oldest_log and oldest_log[0] else None,
-            "oldest_watcher_log_unix": oldest_watcher_log[0] if oldest_watcher_log and oldest_watcher_log[0] else None,
         }

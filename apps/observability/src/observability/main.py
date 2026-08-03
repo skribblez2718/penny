@@ -25,9 +25,6 @@ from observability.models import (
     LogEntry,
     LogListResponse,
     LogStatsResponse,
-    WatcherLogEntry,
-    WatcherLogListResponse,
-    WatcherLogStatsResponse,
 )
 
 # ---------------------------------------------------------------------------
@@ -657,84 +654,6 @@ async def get_log(
         if item["id"] == log_id:
             return LogEntry(**item)
     raise HTTPException(status_code=404, detail="Log not found")
-
-
-# ---------------------------------------------------------------------------
-# Watcher log endpoints
-# ---------------------------------------------------------------------------
-
-@app.post("/watcher_logs")
-async def create_watcher_log(
-    request_body: dict[str, Any],
-    _token: str | None = Depends(require_auth),
-) -> dict[str, Any]:
-    """Ingest a structured ambient watcher log entry."""
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database not connected")
-    source = request_body.get("source")
-    event = request_body.get("event")
-    if not source or not event:
-        raise HTTPException(status_code=422, detail="source and event are required")
-    log_id = await db.insert_watcher_log(
-        level=request_body.get("level", "INFO"),
-        source=source,
-        event=event,
-        session_id=request_body.get("session_id"),
-        data=request_body.get("data"),
-    )
-    return {"status": "ok", "id": log_id}
-
-
-@app.get("/watcher_logs")
-async def list_watcher_logs(
-    level: str | None = Query(None),
-    source: str | None = Query(None),
-    session_id: str | None = Query(None),
-    from_ts: int | None = Query(None, ge=0),
-    to_ts: int | None = Query(None, ge=0),
-    limit: int = Query(50, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-    _token: str | None = Depends(require_auth),
-) -> WatcherLogListResponse:
-    """List ambient watcher logs with optional filters and pagination."""
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database not connected")
-    items, total = await db.get_watcher_logs(
-        limit=limit,
-        offset=offset,
-        level=level,
-        source=source,
-        session_id=session_id,
-        from_ts=from_ts,
-        to_ts=to_ts,
-    )
-    return WatcherLogListResponse(items=items, total=total, limit=limit, offset=offset)
-
-
-@app.get("/watcher_logs/stats")
-async def watcher_log_stats(
-    _token: str | None = Depends(require_auth),
-) -> WatcherLogStatsResponse:
-    """Return aggregated statistics over the watcher_logs table."""
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database not connected")
-    stats = await db.get_watcher_log_stats()
-    return WatcherLogStatsResponse(**stats)
-
-
-@app.get("/watcher_logs/{log_id}")
-async def get_watcher_log(
-    log_id: int,
-    _token: str | None = Depends(require_auth),
-) -> WatcherLogEntry:
-    """Get a single ambient watcher log entry by ID."""
-    if db is None:
-        raise HTTPException(status_code=503, detail="Database not connected")
-    items, _ = await db.get_watcher_logs(limit=1, offset=0)
-    for item in items:
-        if item["id"] == log_id:
-            return WatcherLogEntry(**item)
-    raise HTTPException(status_code=404, detail="Watcher log not found")
 
 
 # Set start time when module loads

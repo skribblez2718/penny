@@ -55,7 +55,6 @@ def test_retention_day_knobs_removed():
         "RETENTION_RAW_DAYS",
         "RETENTION_COMPACTION_DAYS",
         "RETENTION_LOG_DAYS",
-        "RETENTION_WATCHER_LOG_DAYS",
     ):
         assert not hasattr(cfg.Config, attr), f"Config.{attr} should be removed"
 

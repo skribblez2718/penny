@@ -111,19 +111,6 @@ interface SkillConfig {
 
 let config: SkillConfig;
 
-// Module-level dedup flag: prevents checkAndEmitSignals from running twice per session
-let _signalsSurfacedThisSession = false;
-
-/** Test-only setter for _signalsSurfacedThisSession */
-export function _setSignalsSurfacedThisSession(value: boolean): void {
-  _signalsSurfacedThisSession = value;
-}
-
-/** Test-only getter for _signalsSurfacedThisSession */
-export function _getSignalsSurfacedThisSession(): boolean {
-  return _signalsSurfacedThisSession;
-}
-
 // ============================================================
 // Types
 // ============================================================
@@ -576,58 +563,6 @@ async function callPython(args: string[], cwd: string, timeoutMs: number): Promi
   });
 }
 
-async function checkAndEmitSignals(
-  sessionId: string,
-  emitProgress: (msg: string) => void
-): Promise<void> {
-  if (_signalsSurfacedThisSession) return;
-  try {
-    const { spawn } = await import("child_process");
-    const checkerPath = path.join(
-      process.env.PROJECT_ROOT || process.cwd(),
-      "scripts",
-      "system",
-      "watchers",
-      "session_start_checker.py"
-    );
-    const venvPython =
-      process.env.PI_VENV_PYTHON ||
-      path.join(process.env.PROJECT_ROOT || process.cwd(), ".venv", "bin", "python");
-
-    const proc = spawn(venvPython, [checkerPath, sessionId], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    proc.stdout?.on("data", (data) => {
-      stdout += data.toString();
-    });
-    proc.stderr?.on("data", () => {
-      // stderr intentionally discarded for signal checker
-    });
-
-    await new Promise<void>((resolve) => {
-      proc.on("close", () => resolve());
-      proc.on("error", () => resolve());
-      // Failsafe timeout — don't let signal checking block skill start
-      setTimeout(resolve, 5000);
-    });
-
-    const parsed = JSON.parse(stdout);
-    const criticalCount = parsed?.pending?.critical_count ?? 0;
-    const infoCount = parsed?.pending?.info_count ?? 0;
-    const presentation = parsed?.presentation ?? "";
-
-    if (criticalCount > 0 || infoCount > 0) {
-      emitProgress("📡 Pending signals detected:");
-      emitProgress(presentation);
-    }
-  } catch (e) {
-    logger.debug("Signal check failed", { error: e instanceof Error ? e.message : String(e) });
-  }
-  _signalsSurfacedThisSession = true;
-}
-
 async function pythonStart(
   orchestratePath: string,
   sessionId: string,
@@ -894,12 +829,6 @@ async function executeSkill(
   }, config.skillTimeout);
 
   try {
-    // ── Ambient Watchers: Check for pending signals before starting skill ──
-    if (!_signalsSurfacedThisSession) {
-      await checkAndEmitSignals(sessionId, emitProgress);
-      _signalsSurfacedThisSession = true;
-    }
-
     // Step 1: Call Python START — or, when the user has answered a prior
     // escalate_to_user, RESUME that session via `step --agent user` so the
     // orchestrator consumes the answer (process_user_clarification →
@@ -1581,7 +1510,7 @@ const SkillParams = Type.Object({
 type SkillToolParams = Static<typeof SkillParams>;
 
 // Re-export internals for unit testing
-export { createTimeoutResult, withAgentTimeout, checkAndEmitSignals };
+export { createTimeoutResult, withAgentTimeout };
 export { detectSkillMode } from "./skill-utils.js";
 
 // ============================================================
@@ -2154,15 +2083,6 @@ export default function skillExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event: unknown, ctx: ExtensionCommandContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     setSessionId(sessionId);
-
-    // Reset dedup flag for new session
-    _signalsSurfacedThisSession = false;
-
-    // Check for pending signals proactively
-    await checkAndEmitSignals(sessionId, (msg: string) => {
-      ctx.ui.notify(msg, "info");
-    });
-    _signalsSurfacedThisSession = true;
   });
 
   pi.registerTool({

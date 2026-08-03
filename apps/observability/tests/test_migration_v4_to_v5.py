@@ -78,9 +78,12 @@ async def test_v4_to_v5_migration():
         assert con.execute("SELECT COUNT(*) FROM entries").fetchone()[0] == 2
         assert con.execute("SELECT COUNT(*) FROM logs").fetchone()[0] == 1
 
-        # Version bumped.
+        # Version bumped to the current head of the migration chain.
         ver = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-        assert int(ver) == SCHEMA_VERSION == 5
+        assert int(ver) == SCHEMA_VERSION
+
+        # v6 dropped the removed ambient-watcher log table on the way through.
+        assert "watcher_logs" not in tables_after
 
         # Orchestration indexes present.
         indexes = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='index'")}

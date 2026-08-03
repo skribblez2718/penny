@@ -218,16 +218,6 @@ interface QueryLogsParams {
   offset?: number;
 }
 
-interface QueryWatcherLogsParams {
-  level?: string;
-  source?: string;
-  session_id?: string;
-  from_ts?: number;
-  to_ts?: number;
-  limit?: number;
-  offset?: number;
-}
-
 interface QueryHistoryParams {
   session_id?: string;
   limit?: number;
@@ -851,74 +841,6 @@ export default async function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
-    name: "observability_query_watcher_logs",
-    label: "Query Ambient Watcher Logs",
-    description:
-      "Query structured ambient watcher log entries from the observability server. These logs are kept logically separate from general operational logs and capture the internal execution of Penny's ambient watcher scripts (mismatch_rate_watcher, confidence_trend_watcher, mempalace_growth_watcher, task_staleness_watcher, etc.). Use this to investigate watcher behavior, signal generation decisions, or why a particular signal was or wasn't raised.",
-    promptSnippet: "Query ambient watcher execution logs",
-    promptGuidelines: [
-      "Use observability_query_watcher_logs when diagnosing signal generation issues or understanding watcher behavior.",
-      "Filter by source (e.g., mismatch_rate_watcher, confidence_trend_watcher) to focus on a specific watcher.",
-      "Filter by level (ERROR, WARN) to find watcher failures or anomalies.",
-      "Watcher logs are logically separated from general operational logs — do NOT use observability_query_logs for watcher-specific queries.",
-    ],
-    parameters: Type.Object({
-      level: Type.Optional(
-        Type.String({ description: "Filter by log level: DEBUG, INFO, WARN, ERROR" })
-      ),
-      source: Type.Optional(
-        Type.String({
-          description:
-            "Filter by watcher source name (e.g., mismatch_rate_watcher, ambient_watchers, session_start_checker)",
-        })
-      ),
-      session_id: Type.Optional(Type.String({ description: "Filter by session ID" })),
-      from_ts: Type.Optional(
-        Type.Number({ description: "Start timestamp (milliseconds since epoch)" })
-      ),
-      to_ts: Type.Optional(
-        Type.Number({ description: "End timestamp (milliseconds since epoch)" })
-      ),
-      limit: Type.Optional(
-        Type.Number({ description: "Max results (default 50, max 500)", minimum: 1, maximum: 500 })
-      ),
-      offset: Type.Optional(
-        Type.Number({ description: "Pagination offset (default 0)", minimum: 0 })
-      ),
-    }),
-    async execute(_toolCallId: string, params: QueryWatcherLogsParams) {
-      try {
-        const query = new URLSearchParams();
-        if (params.level) query.set("level", params.level);
-        if (params.source) query.set("source", params.source);
-        if (params.session_id) query.set("session_id", params.session_id);
-        if (params.from_ts != null) query.set("from_ts", String(params.from_ts));
-        if (params.to_ts != null) query.set("to_ts", String(params.to_ts));
-        if (params.limit != null) query.set("limit", String(params.limit));
-        if (params.offset != null) query.set("offset", String(params.offset));
-        const qs = query.toString();
-        const data = await observabilityFetch(`/watcher_logs${qs ? `?${qs}` : ""}`);
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-          details: data,
-        };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.error(
-          "observability_query_watcher_logs failed",
-          { error: msg },
-          Object.assign(err instanceof Error ? err : new Error(msg), {
-            code: "OBSERVABILITY_QUERY_WATCHER_LOGS_FAILED" as ErrorCode,
-          })
-        );
-        return {
-          content: [{ type: "text" as const, text: `Error querying watcher logs: ${msg}` }],
-          isError: true,
-        };
-      }
-    },
-  });
 
   pi.registerTool({
     name: "observability_query_history",
