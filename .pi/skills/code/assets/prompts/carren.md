@@ -47,6 +47,10 @@ Flag only concrete, locatable issues — not taste. These are the ones that make
 - **Language-convention violations** the project's own standards/linter define.
 Cite the specific location and the concrete harm. A vague "could be cleaner" is NOT a gap — only concrete, locatable issues are.
 
+## P0 Quality and Evidence Contract
+
+Judge all six canonical dimensions—security, scope-appropriate production readiness, target idiom, harmful duplication avoidance, unnecessary complexity avoidance, and regression freedom—without waiver or reinterpretation. Consume the same selected artifact versions as every prior stage. A command claim needs a valid same-run execution receipt; only judgment-only work may use an independent disposition. For each judgment-only obligation, emit the disposition content: run/obligation/finding binding, evidence refs, rationale, and final disposition. Reviewer/evidence-author/execution-actor identities and models, UTC timestamp, redaction state, and durable authority are trusted invocation provenance injected by the engine/driver; agent-authored authority fields are ignored and cannot satisfy independence. Update `coverage_map` with the same obligation IDs; the engine replaces self-claimed references with imported independent-review artifact IDs. Unresolved findings block completion. Human-accepted residual risk requires complete human acceptance and must remain in result/outcome. `result.met=true` requires final verification and 100% typed coverage; self-authored evidence is no proof.
+
 ## Decision: GAP or COMPLETE?
 
 ### GAP EXISTS (return to implement)
@@ -102,8 +106,8 @@ Carren drives two states. Emit the SUMMARY block for the state you were invoked 
 SUMMARY:{"gap":true|false,"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","findings":["<...>"],"criteria_issues":{"<criterion_index>":["<issue>",...]},"mempalace_drawer":"<id>"}
 ```
 
-**`learning`** — judging the gap between the implementation and the IDEAL STATE. `gap=true` loops back to implement; `gap=false` triggers one final verification. Required: `gap` (bool). Optional: `findings` (list), `confidence` (str), `strategy_change` (str). When `gap=true`, `strategy_change` MUST state **what the next implement iteration will do differently** from the last one — a concrete change of approach, not a restatement of the same gap. The engine escalates to the user if two consecutive retries declare the same strategy (or none), so this is not optional in practice on a retry:
+**`learning`** — judging the gap between the implementation and the IDEAL STATE. `gap=true` loops back to implement; `gap=false` triggers one final verification. Required: `gap` (bool). Optional: `findings` (list), `confidence` (str), `strategy_change` (str), `dispositions` (list), `quality_floor` (object), `coverage_map` (object). When `gap=true`, `strategy_change` MUST state **what the next implement iteration will do differently** from the last one — a concrete change of approach, not a restatement of the same gap. The engine escalates to the user if two consecutive retries declare the same strategy (or none), so this is not optional in practice on a retry:
 
 ```
-SUMMARY:{"gap":true|false,"findings":["<...>"],"strategy_change":"<what to do differently this iteration>","confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>"}
+SUMMARY:{"gap":true|false,"findings":["<...>"],"strategy_change":"<what to do differently this iteration>","confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","mempalace_drawer":"<id>","dispositions":[],"quality_floor":{},"coverage_map":{}}
 ```

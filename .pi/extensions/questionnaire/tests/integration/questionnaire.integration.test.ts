@@ -44,6 +44,11 @@ vi.mock("@mariozechner/pi-coding-agent", () => ({
 }));
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import {
+  registerTrustedQuestionnaireTransport,
+  renderedQuestionsDigest,
+  verifyOwnerReceiptForTest,
+} from "../../../skill/execution-receipts.js";
 
 interface RegisteredTool {
   name: string;
@@ -94,10 +99,25 @@ describe("Questionnaire Integration — Tool Registration", () => {
     expect(registeredTool.name).toBe("questionnaire");
   });
 
-  it("should have a TypeBox parameter schema", () => {
+  it("should expose a FLAT object schema with both mutually-exclusive params", () => {
+    // Regression guard: a top-level anyOf/union cannot cross the pi
+    // tool-schema bridge — it degrades to an empty properties schema and the
+    // harness stringifies structured args, breaking every call. The schema
+    // must stay a flat object; exactly-one-of is enforced at runtime in
+    // execute().
     expect(registeredTool.parameters).toBeDefined();
-    expect(registeredTool.parameters).toHaveProperty("type", "object");
-    expect(registeredTool.parameters).toHaveProperty("properties");
+    const parameters = registeredTool.parameters as {
+      type?: string;
+      anyOf?: Record<string, unknown>[];
+      properties?: Record<string, unknown>;
+      additionalProperties?: boolean;
+    };
+    expect(parameters.anyOf).toBeUndefined();
+    expect(parameters.type).toBe("object");
+    expect(parameters.properties).toBeDefined();
+    expect(parameters.properties).toHaveProperty("questions");
+    expect(parameters.properties).toHaveProperty("trustedTransportCapability");
+    expect(parameters.additionalProperties).toBe(false);
   });
 
   it("should have renderCall method", () => {
@@ -182,6 +202,123 @@ describe("Questionnaire Integration — Non-Interactive Execute", () => {
 
     expect(result.details.needsUserInput).toBe(true);
     expect(result.details.cancelled).toBe(false);
+  });
+
+  it("signs a gate event only for owner-registered content shown to an interactive human", async () => {
+    const questions = [
+      {
+        id: "criteria",
+        label: "Criteria",
+        prompt: "Approve exact artifact?",
+        options: [{ value: "approve", label: "Approve" }],
+        allowOther: true,
+      },
+    ];
+    const capability = registerTrustedQuestionnaireTransport(questions, {
+      runId: "run-1",
+      gateId: "criteria_gate",
+      challenge: "challenge-1",
+      artifactRef: {
+        artifact_id: "artifact-1",
+        kind: "ideal_state_revision",
+        version: 1,
+        digest: "a".repeat(64),
+      },
+      transportRef: {
+        artifact_id: "transport-1",
+        kind: "questionnaire_transport",
+        version: 1,
+        digest: "b".repeat(64),
+      },
+      renderedQuestionsDigest: renderedQuestionsDigest(questions),
+    });
+    expect(capability).toBeTruthy();
+    const result = (await execute(
+      "call-gate",
+      { trustedTransportCapability: capability },
+      undefined,
+      undefined,
+      {
+        hasUI: true,
+        ui: {
+          custom: vi.fn().mockResolvedValue({
+            questions: [],
+            answers: [
+              {
+                id: "criteria",
+                value: "approve",
+                label: "Approve",
+                wasCustom: false,
+                index: 1,
+              },
+            ],
+            cancelled: false,
+          }),
+          notify: vi.fn(),
+        },
+      }
+    )) as {
+      content: { type: string; text: string }[];
+      details: { trustedHumanEvents: Record<string, unknown>[] };
+    };
+
+    const event = result.details.trustedHumanEvents[0];
+    expect(event).toMatchObject({
+      schema_version: 2,
+      origin: "trusted-human-ui",
+      run_id: "run-1",
+      gate_id: "criteria_gate",
+      decision: "approve",
+      response: "approve",
+      actor: "human:interactive-questionnaire",
+      rendered_questions_digest: renderedQuestionsDigest(questions),
+      questionnaire_transport_ref: {
+        artifact_id: "transport-1",
+        kind: "questionnaire_transport",
+      },
+    });
+    expect(verifyOwnerReceiptForTest(event)).toBe(true);
+    expect(result.content[0].text).toContain("TRUSTED_HUMAN_EVENT:");
+  });
+
+  it("rejects caller-substituted questions instead of signing altered gate content", async () => {
+    const questions = [
+      {
+        id: "plan",
+        label: "Plan",
+        prompt: "Canonical plan content",
+        options: [{ value: "approve", label: "Approve" }],
+        allowOther: false,
+      },
+    ];
+    const capability = registerTrustedQuestionnaireTransport(questions, {
+      runId: "run-adversarial",
+      gateId: "plan_gate",
+      challenge: "challenge-adversarial",
+      artifactRef: { artifact_id: "plan-1" },
+      transportRef: { artifact_id: "transport-adversarial" },
+      renderedQuestionsDigest: renderedQuestionsDigest(questions),
+    });
+    const result = (await execute(
+      "call-altered-gate",
+      {
+        trustedTransportCapability: capability,
+        questions: [
+          {
+            id: "plan",
+            prompt: "Altered content",
+            options: [{ value: "approve", label: "Approve" }],
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      { hasUI: true, ui: { custom: vi.fn(), notify: vi.fn() } }
+    )) as { content: { text: string }[]; details: Record<string, unknown> };
+
+    expect(result.content[0].text).toContain("exactly one");
+    expect(result.content[0].text).not.toContain("TRUSTED_HUMAN_EVENT:");
+    expect(result.details.trustedHumanEvents).toBeUndefined();
   });
 
   it("should auto-number options correctly across multiple questions", async () => {

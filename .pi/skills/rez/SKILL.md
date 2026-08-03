@@ -65,8 +65,8 @@ yields no usable JD content aborts the run with
 |---|---|---|
 | `analyzing` | annie | Ingest JD (fetch/read/inline), load `resources/resume/` + `resources/accomplishments/` read-only, gap analysis: matches / misses / transferables |
 | `aligning` | echo | **Fresh NIST NICE lookup every run** — current components version from the NICE Current Versions page + TKS verbiage for the 1–3 JD-relevant work roles. Never cached data |
-| `tailoring` | synthia | XYZ achievement bullets (see `reference.md` → Bullet Craft), ATS keywords, NICE canonical verbiage, zero fabrication; full resume markdown → mempalace |
-| `validating` | vera | Anti-fabrication trace of every bullet against sources + XYZ-bullet-craft/ATS/NICE compliance; bounded revise loop (default budget 3). **Evidence-gated** (Rec 4): the verdict must carry captured per-bullet traceability + compliance checks, or the engine rejects it. |
+| `tailoring` | synthia | XYZ achievement bullets (**`reference.md` → Bullet Craft is the binding spec**), target-lane spine, verb-ladder discipline, one voice-marker bullet, anti-AI-tell constraints, ATS keywords, NICE canonical verbiage, zero fabrication; full resume markdown → mempalace |
+| `validating` | vera | Anti-fabrication trace of every bullet against sources, plus XYZ bullet-craft, verb-ladder/truthfulness preconditions, anti-AI-tell audit (counts, not impressions), spine check, ATS and NICE compliance; bounded revise loop (default budget 3). **Evidence-gated** (Rec 4): the verdict must carry captured per-bullet traceability + compliance checks, or the engine rejects it. |
 | `exporting` | skribble | Render validated markdown → `.docx` in `/tmp/resumes/` via the word extension's `word_generate` tool; verify on disk |
 
 Hard guarantees enforced by the playbook
@@ -155,6 +155,8 @@ durable in the `run_id`-keyed checkpointer, so a killed run is resumable via
 
 - [resources/reference.md](resources/reference.md) — NICE orientation
   (structure + lookup entry points only, never a data source), **Bullet Craft**
-  (canonical XYZ bullet spec) + ATS guidance, .docx export spec
+  (canonical XYZ bullet spec: eleven rules, anti-AI-tell audit, voice-marker
+  bullet, verb ladder + truthfulness preconditions, target-lane/pivot framing,
+  bullets-per-role) + ATS guidance, .docx export spec
 - `resources/resume/` — base resume (source of truth, read-only)
 - `resources/accomplishments/` — accomplishment evidence (optional, read-only)

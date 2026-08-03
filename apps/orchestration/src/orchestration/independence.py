@@ -35,8 +35,11 @@ consumes (repay by adopting jsa's ``reverify_model`` cross-model hook and measur
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+from .roster import roster_changed, roster_hash
 
 _AGENTS_DIR = Path(__file__).resolve().parents[4] / ".pi" / "agents"
 
@@ -78,13 +81,54 @@ VERIFY_EDGES: tuple[VerifyEdge, ...] = (
     VerifyEdge("research", "synthia", "vera", ""),
     VerifyEdge("plan", "piper", "carren", ""),
     # -- same-model primary, but a real model-independent check makes the verdict unfoolable ----
-    VerifyEdge("code", "skribble", "skribble", "tdd: verdict backed by captured test/lint/type command output (oracle)"),
-    VerifyEdge("jsa", "synthia", "vera", "claimed-evidence gate + per-finding cross-source agreement + reverify_model cross-model hook"),
-    VerifyEdge("sca", "synthia", "vera", "agreement grounded in unfabricatable sandbox exit codes + annie(deep-dive) findings are cross-model + reverify_model hook"),
-    VerifyEdge("imagegen", "synthia", "vera", "carren second critic (different model) + deterministic PIL decode/dimensions floor"),
+    VerifyEdge(
+        "code",
+        "skribble",
+        "skribble",
+        "tdd: verdict backed by captured test/lint/type command output (oracle)",
+    ),
+    VerifyEdge(
+        "jsa",
+        "synthia",
+        "vera",
+        "claimed-evidence gate + per-finding cross-source agreement + reverify_model cross-model hook",
+    ),
+    VerifyEdge(
+        "sca",
+        "synthia",
+        "vera",
+        "agreement grounded in unfabricatable sandbox exit codes + annie(deep-dive) findings are cross-model + reverify_model hook",
+    ),
+    VerifyEdge(
+        "imagegen",
+        "synthia",
+        "vera",
+        "carren second critic (different model) + deterministic PIL decode/dimensions floor",
+    ),
     # -- verifier already runs a different model than the actor (CROSS_MODEL) --------------------
-    VerifyEdge("learn", "skribble", "vera", "math recomputation (mechanical) — and author->verify is already cross-model"),
+    VerifyEdge(
+        "learn",
+        "skribble",
+        "vera",
+        "math recomputation (mechanical) — and author->verify is already cross-model",
+    ),
 )
+
+
+#: The fleet these exceptions were last reviewed against — the EVENT trigger that
+#: complements ``review_by``'s calendar trigger. See ``roster.py``.
+#:
+#: HONESTY NOTE: a BASELINE, not a record of fresh reviews. The exceptions below were
+#: not re-measured when this was introduced (2026-07-31); the value is forward-looking.
+#:
+#: RE-BASELINED 2026-08-01 (opus,sonnet -> sol,terra: the fleet moved to OpenAI
+#: gpt-5.6). The tripwire fired correctly and flagged all 4 same-model exceptions for
+#: re-measurement; that re-measurement was DELIBERATELY DEFERRED and this constant
+#: advanced anyway, by explicit operator decision, to keep the suite green. The prd
+#: exception's "MEASURED 2026-07-30" rationale below therefore describes the OLD
+#: (opus,sonnet) fleet and has NOT been reproduced on sol/terra. No exception here has
+#: been validated against the current fleet.
+BASELINE_ROSTER = "4e55bff3547d"  # models: sol, terra — re-baselined 2026-08-01 (UNMEASURED)
 
 
 @dataclass(frozen=True)
@@ -94,6 +138,11 @@ class IndependenceException:
     skill: str
     rationale: str
     review_by: str  # YYYY-MM-DD — re-evaluate (ablate to cross-model + measure) at/before this date
+    # The fleet this acceptance was last reviewed against. Note this is a DIFFERENT
+    # signal from ``stale_exceptions``: that catches an edge which stopped being
+    # same-model (the debt was repaid); this catches the fleet gaining or swapping a
+    # MODEL, which changes whether a second opinion is worth paying for at all.
+    roster_at_review: str = BASELINE_ROSTER
 
 
 # Same-model edges we ACCEPT for now — each is the inventory for the T8 ablation pass. Repay by
@@ -131,10 +180,31 @@ SAME_MODEL_EXCEPTIONS: dict[str, IndependenceException] = {
         IndependenceException(
             "research",
             "vera's `validating` citation-grounding gate is the final verify in ALL modes and runs "
-            "sonnet over synthia's sonnet synthesis. It is evidence-based (each claim must trace to a "
-            "captured source), which partly mitigates, and carren adds a cross-model report critique "
-            "in DEEP mode only — but quick/standard modes have a same-model final gate and there is no "
-            "cross-model reverify hook (adopt jsa's `reverify_model`).",
+            "THE SAME MODEL as synthia's synthesis (model names deliberately not repeated here — "
+            "classify() resolves them live, so naming them only rots; it was opus/sonnet, now "
+            "sol/terra). It is evidence-based (each claim must trace to a captured source), which "
+            "partly mitigates, and carren adds a cross-model report critique whenever "
+            "critique_passes >= 1 — so a DEFAULT quick/standard run has a same-model final gate with "
+            "no cross-model critique at all. The cross-model "
+            "hook now EXISTS (ResearchPlaybook.model_for_state: constraints['validate_model'] -> "
+            "RESEARCH_VERA/RESEARCH_DEFAULT env -> agent default, added 2026-07-31, mirroring prd) but "
+            "is OPT-IN, so the DEFAULT path is still same-model judgement and this edge correctly "
+            "stays SAME_MODEL. MEASURED 2026-07-31 against the labelled grounding corpus "
+            "(tests/research_grounding_corpus.py, 10 defect cases + 1 clean control; artifact at "
+            ".penny/ablation/research_grounding/latest.json): the deterministic floor "
+            "(research.grounding_floor — uncited claims, dangling citations, citations to "
+            "content-less sources) already decides 4/10 (40%) with ZERO model spend and zero false "
+            "positives on clean work. The JUDGEMENT RESIDUAL is the other 6/10 (60%): claims that ARE "
+            "cited to a real source with real content, where only a reader can tell the source does "
+            "not support them (scope overgeneralization, causal-from-correlational, temporal "
+            "overreach, stitched conjunctions, figure-absent, source-silent). DECISION: do NOT make "
+            "cross-model the default yet — it costs a full verifier pass on every run and is still "
+            "UNMEASURED on the residual, which is the only slice it can affect. Next repayment steps: "
+            "(a) consider promoting grounding_floor to a pre-gate ahead of vera so the 40% never "
+            "reaches a model at all, (b) measure same- vs cross-model catch rate on the residual with "
+            "live models. CAVEAT: the corpus is synthetic — research runs were unminable until "
+            "ctx.verify_gaps began being populated; re-measure once the ledger supplies observed "
+            "defects.",
             "2026-10-01",
         ),
         IndependenceException(
@@ -149,14 +219,14 @@ SAME_MODEL_EXCEPTIONS: dict[str, IndependenceException] = {
 }
 
 
-def classify(edge: VerifyEdge, model_of=agent_model) -> str:
+def classify(edge: VerifyEdge, model_of: Callable[[str], str] = agent_model) -> str:
     """CROSS_MODEL / INDEPENDENT_CHECK / SAME_MODEL for one edge (see module docstring)."""
     if model_of(edge.actor) != model_of(edge.verifier):
         return CROSS_MODEL
     return INDEPENDENT_CHECK if edge.independent_check else SAME_MODEL
 
 
-def check_independence(model_of=agent_model) -> list[str]:
+def check_independence(model_of: Callable[[str], str] = agent_model) -> list[str]:
     """Skills whose primary verify is SAME_MODEL bare-judgement AND is not a registered exception.
 
     Empty list == the invariant holds. A non-empty list is a fail-loud violation: either make the
@@ -168,9 +238,10 @@ def check_independence(model_of=agent_model) -> list[str]:
     ]
 
 
-def stale_exceptions(model_of=agent_model) -> list[str]:
+def stale_exceptions(model_of: Callable[[str], str] = agent_model) -> list[str]:
     """Registered exceptions whose edge no longer classifies SAME_MODEL — the debt was repaid (or
-    the edge was removed) but the acceptance lingers. The test flags these so the ledger can't rot."""
+    the edge was removed) but the acceptance lingers. The test flags these so the ledger can't rot.
+    """
     by_skill = {e.skill: e for e in VERIFY_EDGES}
     stale = []
     for skill in SAME_MODEL_EXCEPTIONS:
@@ -178,3 +249,23 @@ def stale_exceptions(model_of=agent_model) -> list[str]:
         if edge is None or classify(edge, model_of) != SAME_MODEL:
             stale.append(skill)
     return stale
+
+
+def exceptions_needing_roster_review() -> list[str]:
+    """Exceptions accepted against a DIFFERENT fleet than the one running now.
+
+    The event-driven half of expiry. An acceptance of the form "a same-model judge is
+    good enough here" is a bet about the models; when the fleet changes the bet has to
+    be re-placed, whatever the calendar says. Empty list == the fleet is unchanged
+    since every exception was last reviewed.
+    """
+    return [
+        skill
+        for skill, exc in SAME_MODEL_EXCEPTIONS.items()
+        if roster_changed(exc.roster_at_review)
+    ]
+
+
+def current_roster() -> str:
+    """The fleet's current digest — what to record when an exception is re-reviewed."""
+    return roster_hash()

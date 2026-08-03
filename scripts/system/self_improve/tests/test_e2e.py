@@ -13,7 +13,7 @@ from amendment_applier import apply_amendment  # noqa: E402
 class TestFullSelfImprovementFlow:
     """Complete lifecycle from outcomes to applied or rejected amendments."""
 
-    def test_single_domain_pattern_produces_amendment_ready_for_review(self):
+    def test_single_domain_pattern_produces_amendment_ready_for_review(self, drafting_enabled):
         outcomes = [
             {
                 "decision_id": "d1",
@@ -45,7 +45,7 @@ class TestFullSelfImprovementFlow:
         assert result["success"] is False
         assert "not approved" in result["error"]
 
-    def test_universal_learning_blocked_at_every_stage(self):
+    def test_universal_learning_blocked_at_every_stage(self, drafting_enabled):
         outcomes = [
             {
                 "decision_id": "d1",
@@ -74,7 +74,7 @@ class TestFullSelfImprovementFlow:
         assert result["success"] is False
         assert "REJECTED_UNIVERSAL" in result["error"]
 
-    def test_dedup_prevents_duplicate_proposals(self):
+    def test_dedup_prevents_duplicate_proposals(self, drafting_enabled):
         outcomes = [
             {
                 "decision_id": "d1",
@@ -98,7 +98,7 @@ class TestFullSelfImprovementFlow:
         result2 = run_compression_loop(outcomes, previous_amendments=result1)
         assert len(result2) == 0
 
-    def test_multiple_patterns_produce_multiple_amendments(self):
+    def test_multiple_patterns_produce_multiple_amendments(self, drafting_enabled):
         outcomes = [
             {
                 "decision_id": "d1",

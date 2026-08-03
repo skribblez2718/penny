@@ -98,3 +98,45 @@ def test_brief_labels_amendment_next_action():
     )
     assert "a1** [review]" in brief  # pending → review
     assert "a2** [apply]" in brief   # approved → apply
+
+
+def test_brief_never_leaks_amendment_free_text():
+    """Regression guard: the brief is injected into the agent's context as
+    trusted session memory at every session start, with NO approval gate. So it
+    must render amendment IDENTIFIERS ONLY — never the trigger, rationale, or
+    proposed diff text, which are unapproved and were leaking ledger ids,
+    mid-word-truncated reasons, and downstream-project specifics into a live
+    agent prompt."""
+    brief = ssc.build_session_brief(
+        pending={"critical": [], "info": []},
+        amendments=[
+            {
+                "amendment_id": "amend_2026-08-02_230002_8162",
+                "target_file": ".pi/skills/plan/assets/prompts/piper.md",
+                "risk": "HIGH",
+                "status": "PENDING",
+                "trigger": "step failed: SENTINEL_TRIGGER_TEXT execution-owner invo",
+                "changes": [
+                    {
+                        "action": "ADD",
+                        "old_text": "",
+                        "new_text": "\n\n### Learned: SENTINEL_NEWTEXT\n",
+                        "rationale": "SENTINEL_RATIONALE_TEXT",
+                    }
+                ],
+            }
+        ],
+        digest=None,
+        diary=[],
+        mismatches=[],
+    )
+    # The identifier and routing metadata ARE useful and must survive.
+    assert "amend_2026-08-02_230002_8162" in brief
+    assert "piper.md" in brief
+    assert "HIGH" in brief
+    # None of the amendment-authored free text may appear.
+    assert "SENTINEL_TRIGGER_TEXT" not in brief
+    assert "SENTINEL_RATIONALE_TEXT" not in brief
+    assert "SENTINEL_NEWTEXT" not in brief
+    assert "Trigger:" not in brief
+    assert "Rationale:" not in brief

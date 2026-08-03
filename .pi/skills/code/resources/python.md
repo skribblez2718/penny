@@ -1,6 +1,6 @@
 # Python Coding Standards
 
-Reference for skribble. Always read before writing Python code.
+Reference for skribble when implementing Penny itself in Python. For a target project, the selected target profile and its source evidence are authoritative; never replace project-native tooling with this resource.
 
 ## Project Conventions (Detect First)
 Before writing, check these files. If they exist, follow their conventions:
@@ -9,8 +9,8 @@ Before writing, check these files. If they exist, follow their conventions:
 - `.venv/` — virtual environment (always activate: `. .venv/bin/activate`)
 
 ## Package Management (CRITICAL)
-- **ALWAYS** use `uv` for package management. NEVER use bare `pip`.
-- **ALWAYS** use `.venv/` — activate it first. NEVER install globally.
+- In Penny, use the established `uv` lock/workspace tooling; in another target, use only the package manager evidenced by its selected target profile.
+- In Penny, activate `.venv/`; never install globally.
 - Add dependencies: `uv pip install <package>`
 - Sync lockfile: `uv pip sync uv.lock`
 

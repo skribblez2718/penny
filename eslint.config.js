@@ -26,9 +26,14 @@ export default tseslint.config(
       //   - semgrep's rule library / pattern fixtures (data for semgrep, not TS)
       //   - CVE proof-of-concept research
       //   - the jsa vulnerable-app test fixtures
+      //   - ablation harness case fixtures (sample projects a detector reads;
+      //     they intentionally carry no tsconfig.json, which type-aware linting
+      //     requires — note this path is NOT under a `tests/` dir, so the
+      //     `**/tests/fixtures/**` glob above does not cover it)
       ".pi/extensions/semgrep/rules/**",
       "research/**",
       "**/tests/fixtures/**",
+      "scripts/system/ablation/fixtures/**",
     ],
   },
   {

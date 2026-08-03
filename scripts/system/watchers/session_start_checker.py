@@ -261,7 +261,19 @@ def format_signal_presentation(  # noqa: C901 (pre-existing; section-by-section 
         for sig in info:
             lines.append(f"- {sig['title']}")
 
-    # Amendments section
+    # Amendments section — IDENTIFIERS AND METADATA ONLY.
+    #
+    # Never render amendment-authored free text (trigger, rationale, or the
+    # proposed diff) here. This brief is injected into the agent's context as
+    # trusted session memory at every session start, with NO approval gate — so
+    # any amendment prose rendered here becomes unapproved prompt text inside a
+    # live agent prompt, which is exactly what the human-in-the-loop is meant to
+    # prevent. It also leaked ledger ids and mid-word-truncated reasons carrying
+    # downstream-project specifics into agent context.
+    #
+    # Mirrors digest/renderer.py, which reports counts only. The full proposed
+    # diff stays available to the human on explicit pull:
+    #     scripts/system/self_improve/review_amendments.py show <amendment_id>
     if amendments:
         lines.append("\n## 📝 Amendments Awaiting Action")
         lines.append("Self-improvement proposals that need a step from you (review, or apply):")
@@ -272,13 +284,9 @@ def format_signal_presentation(  # noqa: C901 (pre-existing; section-by-section 
                 f"\n- **{a['amendment_id']}** [{action}] → "
                 f"`{a['target_file'].split('/')[-1]}` (Risk: {a.get('risk', '?')})"
             )
-            lines.append(f"  Trigger: {a.get('trigger', 'N/A')}")
-            if a.get("changes"):
-                change = a["changes"][0]
-                rationale = change.get("rationale", "")
-                if len(rationale) > 120:
-                    rationale = rationale[:117] + "..."
-                lines.append(f"  Rationale: {rationale}")
+        lines.append(
+            "\nRun `review_amendments.py show <id>` to read the proposed diff."
+        )
 
     # Weekly digest teaser
     if digest:

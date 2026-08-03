@@ -129,7 +129,7 @@ class TestGeneratorToApplierPipeline:
 class TestCompressionToPipeline:
     """Full compression loop output integrates with downstream modules."""
 
-    def test_compression_output_valid_for_all_modules(self):
+    def test_compression_output_valid_for_all_modules(self, drafting_enabled):
         outcomes = [
             {
                 "decision_id": "d1",
@@ -163,7 +163,7 @@ class TestCompressionToPipeline:
             "REJECTED_UNIVERSAL",
         )
 
-    def test_compression_with_universal_pattern_rejected_at_applier(self):
+    def test_compression_with_universal_pattern_rejected_at_applier(self, drafting_enabled):
         outcomes = [
             {
                 "decision_id": "d1",

@@ -26,14 +26,14 @@ def test_no_stale_exceptions():
 def test_every_referenced_agent_resolves_to_a_model():
     for edge in ind.VERIFY_EDGES:
         for agent in (edge.actor, edge.verifier):
-            assert ind.agent_model(agent) in {"opus", "sonnet"}, agent
+            assert ind.agent_model(agent) in {"sol", "terra"}, agent
 
 
 def test_agent_model_reads_frontmatter_live():
-    assert ind.agent_model("vera") == "sonnet"
-    assert ind.agent_model("synthia") == "sonnet"
-    assert ind.agent_model("skribble") == "opus"
-    assert ind.agent_model("carren") == "opus"
+    assert ind.agent_model("vera") == "terra"
+    assert ind.agent_model("synthia") == "terra"
+    assert ind.agent_model("skribble") == "sol"
+    assert ind.agent_model("carren") == "sol"
 
 
 def test_agent_model_is_fail_loud_on_unknown_agent():

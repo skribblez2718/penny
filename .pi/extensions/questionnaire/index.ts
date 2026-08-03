@@ -28,6 +28,12 @@ import {
   truncateToWidth,
 } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
+import {
+  consumeTrustedQuestionnaireTransport,
+  resolveTrustedQuestionnaireTransport,
+  signTrustedHumanEvent,
+  type TrustedQuestionnaireBinding,
+} from "../skill/execution-receipts.js";
 
 // ============================================================
 // Types
@@ -50,6 +56,11 @@ interface Question {
   type?: QuestionType;
 }
 
+interface QuestionnaireParamsInput {
+  questions?: Question[];
+  trustedTransportCapability?: string;
+}
+
 interface Answer {
   id: string;
   value: string;
@@ -62,6 +73,7 @@ interface QuestionnaireResult {
   questions: Question[];
   answers: Answer[];
   cancelled: boolean;
+  trustedHumanEvents?: Record<string, unknown>[];
 }
 
 type DisplayOption = QuestionOption & { isOther?: boolean; isSelected?: boolean };
@@ -223,9 +235,32 @@ const QuestionSchema = Type.Object({
   ),
 });
 
-const QuestionnaireParams = Type.Object({
-  questions: Type.Array(QuestionSchema, { description: "Questions to ask the user" }),
-});
+// NOTE: deliberately a FLAT object, not a top-level Type.Union. The pi
+// tool-schema bridge cannot expose a top-level union to the model — it
+// degrades to an empty `properties: {}` schema, the harness then stringifies
+// structured args, and validation rejects every call ("must match a schema in
+// anyOf"). Exactly-one-of semantics are enforced at runtime in execute()
+// (`hasQuestions === hasCapability` guard), which was already the effective
+// enforcement path.
+const QuestionnaireParams = Type.Object(
+  {
+    questions: Type.Optional(
+      Type.Array(QuestionSchema, {
+        description:
+          "Questions to ask the user. Provide EITHER this OR trustedTransportCapability — exactly one, never both.",
+      })
+    ),
+    trustedTransportCapability: Type.Optional(
+      Type.String({
+        minLength: 43,
+        maxLength: 43,
+        description:
+          "Opaque one-time capability emitted by the trusted skill driver for an approval gate. Mutually exclusive with questions.",
+      })
+    ),
+  },
+  { additionalProperties: false }
+);
 
 // ============================================================
 // Interactive mode rendering
@@ -444,7 +479,7 @@ export function createQuestionnaireUI(
 
     // Select / toggle option
     // Multi-select toggle (Space to check/uncheck)
-    if (q && q.type === "multi" && matchesKey(data, Key.space)) {
+    if (q && q.type === "multi" && data === " ") {
       const selection = multiSelections.get(q.id) || new Set<number>();
       if (selection.has(optionIndex)) {
         selection.delete(optionIndex);
@@ -646,12 +681,45 @@ export default function questionnaire(pi: ExtensionAPI): void {
 
     async execute(
       _toolCallId: string,
-      params: { questions: Question[] },
+      params: QuestionnaireParamsInput,
       _signal: AbortSignal | undefined,
       _onUpdate: AgentToolUpdateCallback<QuestionnaireDetails>,
       ctx: QuestionnaireExecuteContext
     ) {
-      const questions: Question[] = params.questions.map((q, i) => ({
+      const hasQuestions = Array.isArray(params.questions);
+      const capability =
+        typeof params.trustedTransportCapability === "string"
+          ? params.trustedTransportCapability
+          : undefined;
+      const hasCapability = capability !== undefined;
+      if (hasQuestions === hasCapability) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Questionnaire requires exactly one of questions or trustedTransportCapability",
+            },
+          ],
+          details: { questions: [], answers: [], cancelled: true },
+        };
+      }
+
+      let trustedBinding: TrustedQuestionnaireBinding | undefined;
+      let sourceQuestions = params.questions ?? [];
+      if (capability) {
+        const trustedTransport = resolveTrustedQuestionnaireTransport(capability);
+        if (!trustedTransport) {
+          return {
+            content: [
+              { type: "text", text: "Trusted questionnaire capability is invalid or stale" },
+            ],
+            details: { questions: [], answers: [], cancelled: true },
+          };
+        }
+        sourceQuestions = trustedTransport.questions;
+        trustedBinding = trustedTransport.binding;
+      }
+      const questions: Question[] = sourceQuestions.map((q, i) => ({
         ...q,
         label: q.label || `Q${i + 1}`,
         allowOther: q.allowOther !== false,
@@ -711,6 +779,26 @@ export default function questionnaire(pi: ExtensionAPI): void {
         };
       }
 
+      let trustedHumanEvents: Record<string, unknown>[] = [];
+      if (capability && trustedBinding) {
+        const consumed = consumeTrustedQuestionnaireTransport(capability);
+        if (!consumed) {
+          return {
+            content: [
+              { type: "text", text: "Trusted questionnaire capability was already consumed" },
+            ],
+            details: { ...result, trustedHumanEvents: [] },
+          };
+        }
+        trustedHumanEvents = result.answers.map((answer) =>
+          signTrustedHumanEvent({
+            ...consumed.binding,
+            response: answer.value,
+          })
+        );
+      }
+      result.trustedHumanEvents = trustedHumanEvents;
+
       const answerLines = result.answers.map((a: Answer) => {
         const qLabel = questions.find((q) => q.id === a.id)?.label || a.id;
         if (a.wasCustom) {
@@ -726,14 +814,20 @@ export default function questionnaire(pi: ExtensionAPI): void {
         return `${qLabel}: user selected: ${a.label}`;
       });
 
+      const trustedMarkers = trustedHumanEvents.map(
+        (event) => `TRUSTED_HUMAN_EVENT:${JSON.stringify(event)}`
+      );
       return {
-        content: [{ type: "text", text: answerLines.join("\n") }],
+        content: [{ type: "text", text: [...answerLines, ...trustedMarkers].join("\n") }],
         details: result,
       };
     },
 
-    renderCall(args: { questions?: Question[] }, theme: ThemeFn) {
-      const qs = args.questions ?? [];
+    renderCall(args: QuestionnaireParamsInput, theme: ThemeFn) {
+      const trusted = args.trustedTransportCapability
+        ? resolveTrustedQuestionnaireTransport(args.trustedTransportCapability)
+        : undefined;
+      const qs = args.questions ?? trusted?.questions ?? [];
       const count = qs.length;
       const labels = qs.map((q) => q.label || q.id).join(", ");
       let text = theme("toolTitle", theme("bold", "questionnaire "));

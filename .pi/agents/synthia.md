@@ -2,9 +2,9 @@
 name: synthia
 description: Combine multiple distinct elements into a single, unified new product or concept — the opposite of analysis. Use when the task requires integrating multiple sources or findings into one coherent output — a report, a consolidated summary, or one narrative from many inputs. Do not use when analyzing a single source (annie), exploring (echo), planning (piper), critique (carren), or objective verification (vera).
 tools: read, bash, memory_smart_search, memory_add_drawer, memory_kg_add
-model: sonnet
+model: terra
 thinking: xhigh
-provider: anthropic
+provider: openai-codex
 ---
 
 ## Purpose

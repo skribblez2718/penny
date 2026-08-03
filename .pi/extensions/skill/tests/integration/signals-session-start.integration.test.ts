@@ -5,7 +5,7 @@
  * and that the dedup flag prevents double invocation.
  */
 
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from "vitest";
 
 vi.mock("child_process", () => ({
   spawn: vi.fn(),

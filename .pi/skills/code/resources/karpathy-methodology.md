@@ -135,8 +135,8 @@ lands in the real graph.
 | Concern | Where it lands in `flow.html` / `CodeMachine` |
 |---|---|
 | Unit of orchestration | one `CodePlaybook` (a `BasePlaybook` subclass) on the shared engine |
-| States | custom domain phases: `exploring`/`analyzing`/`checking_criteria`/`planning`/`implementing`/`verifying`/`learning` |
-| Think Before Coding | `checking_criteria` (carren judges criteria quality) + the `criteria_gate` HITL, both before any code |
+| States | custom domain phases: `exploring`/`analyzing`/`checking_criteria`/`refining_criteria`/`planning`/`implementing`/`verifying`/`learning` |
+| Think Before Coding | `checking_criteria` (Carren judgment only) + `criteria_gate` HITL + Piper's separate `refining_criteria` authoring state, all before any code |
 | Simplicity First / Surgical Changes | carren's `learning` gap check (DRY, self-documenting, no orthogonal edits) |
 | Goal-Driven / criteria == verification | IDEAL_STATE `success_criteria` (from the prd skill) drive the `verifying` battery |
 | Naive-correct then optimize | `implementing` (write the simplest code + tests that satisfy the battery; authoring rhythm is the model's call) → `verifying`; there is no separate `optimizing` state |

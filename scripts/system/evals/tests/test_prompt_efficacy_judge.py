@@ -59,23 +59,64 @@ def test_is_judge_check():
         assert J.is_judge_check({"type": t}) is False
 
 
-def test_judge_model_is_fixed_haiku():
-    assert J.JUDGE_MODEL == "anthropic/claude-haiku-4-5"
-    assert J.JUDGE_PROVIDER == "anthropic" and J.JUDGE_MODEL_ID == "claude-haiku-4-5"
+def test_judge_model_is_a_fixed_concrete_id_not_a_tier_alias():
+    """REQ-003: pinned to a CONCRETE id so eval artifacts stay reproducible. The bare
+    tier alias (`luna`) is deliberately NOT used — it would let the measuring
+    instrument change silently, and family_of() cannot classify it."""
+    assert J.JUDGE_MODEL == "openai-codex/gpt-5.6-luna"
+    assert J.JUDGE_PROVIDER == "openai-codex" and J.JUDGE_MODEL_ID == "gpt-5.6-luna"
+    assert J.JUDGE_MODEL_ID != "luna", "judge must pin the concrete id, not the alias"
 
 
 def test_resolve_judge_model_default_and_env_override(monkeypatch):
-    # default (no env) -> the fixed, reproducible haiku judge
+    # default (no env) -> the fixed, reproducible luna judge
     monkeypatch.delenv(J.JUDGE_MODEL_ENV, raising=False)
     assert J.resolve_judge_model() == (
-        "anthropic/claude-haiku-4-5", "anthropic", "claude-haiku-4-5")
-    # #6: multi-family setups pick a DIFFERENT-family judge via env var
+        "openai-codex/gpt-5.6-luna", "openai-codex", "gpt-5.6-luna")
+    # the env var re-points the judge (e.g. to dodge a self-grading collision)
     monkeypatch.setenv(J.JUDGE_MODEL_ENV, "ollama/minimax-m3:cloud")
     assert J.resolve_judge_model() == (
         "ollama/minimax-m3:cloud", "ollama", "minimax-m3:cloud")
     # malformed override falls back to the default (graceful; never crashes a run)
     monkeypatch.setenv(J.JUDGE_MODEL_ENV, "no-slash-here")
-    assert J.resolve_judge_model()[1:] == ("anthropic", "claude-haiku-4-5")
+    assert J.resolve_judge_model()[1:] == ("openai-codex", "gpt-5.6-luna")
+
+
+# ----- #6 revised: judge != subject MODEL (family overlap is allowed) -------
+
+
+def test_same_family_subject_is_NOT_a_conflict(monkeypatch):
+    """The whole point of the revision: cross-family judging is usually impossible,
+    so a same-family (different model) subject must be allowed."""
+    monkeypatch.delenv(J.JUDGE_MODEL_ENV, raising=False)
+    assert J.judge_self_grading_conflicts(
+        ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-5.6-terra"]) == []
+
+
+def test_identical_model_is_a_conflict(monkeypatch):
+    monkeypatch.delenv(J.JUDGE_MODEL_ENV, raising=False)
+    assert J.judge_self_grading_conflicts(
+        ["openai-codex/gpt-5.6-luna"]) == ["openai-codex/gpt-5.6-luna"]
+
+
+def test_conflict_is_provider_agnostic_and_alias_aware(monkeypatch):
+    """Same model reached by another provider route, or named by its tier alias,
+    is still the same model grading itself."""
+    monkeypatch.delenv(J.JUDGE_MODEL_ENV, raising=False)
+    # different provider route + different casing -> still the same model
+    assert J.judge_self_grading_conflicts(["openai/GPT-5.6-Luna"]) == ["openai/GPT-5.6-Luna"]
+    # the bare tier alias names the same model -> conflict
+    assert J.judge_self_grading_conflicts(["openai-codex/luna"]) == ["openai-codex/luna"]
+    # a genuinely different model that merely shares the prefix -> no conflict
+    assert J.judge_self_grading_conflicts(["openai-codex/gpt-5.6-sol"]) == []
+
+
+def test_conflicts_follow_the_env_override(monkeypatch):
+    """Re-pointing the judge moves the conflict set with it — the guard reads the
+    RESOLVED judge, not the compiled-in default."""
+    monkeypatch.setenv(J.JUDGE_MODEL_ENV, "ollama/minimax-m3:cloud")
+    subjects = ["openai-codex/gpt-5.6-luna", "ollama/minimax-m3:cloud"]
+    assert J.judge_self_grading_conflicts(subjects) == ["ollama/minimax-m3:cloud"]
 
 
 def test_call_judge_honors_env_override(monkeypatch):
@@ -85,7 +126,7 @@ def test_call_judge_honors_env_override(monkeypatch):
     assert v is True
     cmd = runner.calls[0]
     assert "minimax-m3:cloud" in cmd and "ollama" in cmd
-    assert "claude-haiku-4-5" not in cmd
+    assert "gpt-5.6-luna" not in cmd
 
 
 def test_build_judge_prompt_includes_all_rubric_fields():
@@ -152,7 +193,7 @@ def test_call_judge_uses_fixed_model_never_models_arg():
     verdict, _ = J.call_judge("prompt", cwd="/tmp", runner=runner)
     assert verdict is True
     cmd = runner.calls[0]
-    assert "claude-haiku-4-5" in cmd and "anthropic" in cmd
+    assert "gpt-5.6-luna" in cmd and "openai-codex" in cmd
     # the grader system prompt must be passed (non-empty -> avoids OAuth 400)
     assert "--system-prompt" in cmd
 

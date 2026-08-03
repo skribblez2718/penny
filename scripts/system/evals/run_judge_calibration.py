@@ -2,15 +2,21 @@
 """Judge-calibration runner — validate the hybrid grader's judge BEFORE it gates.
 
 Grades each hand-labeled response in ``judge_calibration_corpus.jsonl`` with the
-fixed judge (``claude-haiku-4-5``) against the matching rubric in
+fixed judge (``gpt-5.6-luna``) against the matching rubric in
 ``pilot_rubrics.draft.json``, then reports AGREEMENT with the gold labels and the
-FALSE-PASS rate (overall and for the claude-family slice). Mirrors the discipline
-of ``scripts/system/judgment/eval_judgment.py``.
+FALSE-PASS rate (overall and for the JUDGE'S OWN family slice). Mirrors the
+discipline of ``scripts/system/judgment/eval_judgment.py``.
 
 Gate (PRD success criteria): the judge may only enable hybrid grading in a default
 ratchet-gating efficacy run once agreement >= 0.80 AND false-pass <= 0.20 (overall
-and claude slice) AND a human has approved the rubrics + corpus gold labels
+and judge-family slice) AND a human has approved the rubrics + corpus gold labels
 (decision #4). This runner PRODUCES that evidence; the human APPROVES it.
+
+The family slice TRACKS THE JUDGE rather than being frozen to one vendor: under the
+revised #6 policy (judge != subject MODEL, not != FAMILY) the judge may legitimately
+share a family with its subjects, and that shared family is exactly where correlated
+blindness would surface. Changing the judge therefore re-aims the slice automatically
+— but it also INVALIDATES the existing calibration, so re-run this before gating.
 
 Usage::
 
@@ -30,7 +36,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from prompt_efficacy_judge import make_judge_fn  # noqa: E402
+from prompt_efficacy_judge import make_judge_fn, resolve_judge_model  # noqa: E402
+from run_prompt_efficacy import family_of  # noqa: E402
 
 EVALS_DIR = Path(__file__).resolve().parent
 CORPUS_PATH = EVALS_DIR / "judge_calibration_corpus.jsonl"
@@ -134,9 +141,14 @@ def gate_verdict(
     *,
     agreement_floor: float = AGREEMENT_FLOOR,
     false_pass_ceiling: float = FALSE_PASS_CEILING,
+    judge_family: Optional[str] = None,
 ) -> Tuple[bool, List[str]]:
-    """Judge-quality gate: agreement >= floor AND false-pass <= ceiling (overall
-    and for the claude slice, when it has any FAIL records)."""
+    """Judge-quality gate: agreement >= floor AND false-pass <= ceiling (overall AND
+    for the JUDGE'S OWN family slice, when that slice has any FAIL records).
+
+    ``judge_family`` defaults to the family of the currently-resolved judge, so the
+    self-grading-risk slice follows the judge instead of naming a vendor that may no
+    longer be involved. Pass it explicitly in tests."""
     reasons: List[str] = []
     ok = True
     if metrics["agreement"] < agreement_floor:
@@ -147,11 +159,12 @@ def gate_verdict(
         reasons.append(
             f"false-pass {metrics['false_pass_overall']:.0%} > ceiling {false_pass_ceiling:.0%}"
         )
-    claude = metrics["false_pass_by_family"].get("claude")
-    if claude and claude["n_fail"] and claude["false_pass"] > false_pass_ceiling:
+    fam_name = judge_family or family_of(resolve_judge_model()[2])
+    fam = metrics["false_pass_by_family"].get(fam_name)
+    if fam and fam["n_fail"] and fam["false_pass"] > false_pass_ceiling:
         ok = False
         reasons.append(
-            f"claude-slice false-pass {claude['false_pass']:.0%} > ceiling {false_pass_ceiling:.0%}"
+            f"{fam_name}-slice false-pass {fam['false_pass']:.0%} > ceiling {false_pass_ceiling:.0%}"
         )
     if ok:
         reasons.append("agreement and false-pass within thresholds")
@@ -187,10 +200,31 @@ def run(*, repeats: int = 1, corpus_path: Path = CORPUS_PATH, rubrics_path: Path
     return ok, {**metrics, "gate_pass": ok, "gate_reasons": reasons}, scored
 
 
-def write_artifact(metrics: Dict[str, Any], scored: List[Dict[str, Any]], approvals: Dict[str, bool]) -> Path:
+def write_artifact(
+    metrics: Dict[str, Any],
+    scored: List[Dict[str, Any]],
+    approvals: Dict[str, bool],
+    *,
+    repeats: int = 1,
+) -> Path:
+    """Write self-contained calibration evidence.
+
+    The judge identity is evidence, not incidental metadata: without it, a perfect
+    score cannot prove WHICH measuring instrument produced it, and changing the
+    configured judge makes two artifacts indistinguishable. Record the resolved
+    concrete id, provider, family, and repeat count on every run.
+    """
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    judge_spec, judge_provider, judge_model = resolve_judge_model()
     artifact = {
         "ts": datetime.now(timezone.utc).isoformat(),
+        "judge": {
+            "spec": judge_spec,
+            "provider": judge_provider,
+            "model": judge_model,
+            "family": family_of(judge_model),
+            "repeats": max(1, repeats),
+        },
         "agreement_floor": AGREEMENT_FLOOR,
         "false_pass_ceiling": FALSE_PASS_CEILING,
         "approvals": approvals,
@@ -212,8 +246,10 @@ def main() -> int:
         "rubrics_approved": rubrics_approved(json.loads(RUBRICS_PATH.read_text(encoding="utf-8"))),
         "corpus_approved": corpus_approved(load_corpus_meta()),
     }
-    path = write_artifact(metrics, scored, approvals)
+    path = write_artifact(metrics, scored, approvals, repeats=args.repeats)
 
+    judge_spec, _, judge_model = resolve_judge_model()
+    print(f"judge: {judge_spec} (family={family_of(judge_model)}, repeats={max(1, args.repeats)})")
     print(f"scored {metrics['n_scored']} record(s), {metrics['n_excluded']} excluded")
     print(f"agreement:  {metrics['agreement']:.0%}  (floor {AGREEMENT_FLOOR:.0%})")
     print(f"false-pass: {metrics['false_pass_overall']:.0%}  (ceiling {FALSE_PASS_CEILING:.0%}, over {metrics['n_fail']} FAIL records)")

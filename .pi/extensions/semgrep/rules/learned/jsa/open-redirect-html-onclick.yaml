@@ -1,0 +1,18 @@
+rules:
+- id: jsa-learned-html-onclick-urlparams-location
+  message: >
+    HTML onclick handler assigns URLSearchParams.get() result to location
+    without scheme validation. This is an open redirect / javascript: URI XSS.
+  metadata:
+    cwe:
+    - "CWE-601: URL Redirection to Untrusted Site"
+    category: security
+    technology:
+    - browser
+    likelihood: HIGH
+    impact: HIGH
+    confidence: HIGH
+  languages:
+  - generic
+  severity: ERROR
+  pattern: 'location = new URLSearchParams(location.search).get('

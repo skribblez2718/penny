@@ -58,6 +58,23 @@ from capture import load_recent_outcomes  # noqa: E402
 _DEFAULT_WINDOW_DAYS = 7
 _DEFAULT_QUERY_LIMIT = 100
 
+# Amendment CREATION is OFF by default.
+#
+# Creation is the only part of the pipeline that authors change proposals; with
+# it disabled the loop is inert and the feature can later be removed by simple
+# excision. Review tooling is deliberately NOT gated by this flag —
+# review_amendments.py list/show/approve/reject/apply keeps working so any
+# residual queue can still be drained.
+#
+# Enable explicitly:  PI_SELFIMPROVE_AMENDMENTS=1
+_CREATION_ENABLED_ENV = "PI_SELFIMPROVE_AMENDMENTS"
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def creation_enabled() -> bool:
+    """True only when amendment creation is explicitly enabled (default: off)."""
+    return os.environ.get(_CREATION_ENABLED_ENV, "").strip().lower() in _TRUTHY
+
 
 def _try_parse_json(text: str) -> Optional[Dict[str, Any]]:
     """Best-effort parse of a drawer text that may be JSON or JSON-with-header."""
@@ -239,6 +256,25 @@ def main() -> int:
         else f"compression_{datetime.now(timezone.utc).isoformat()}"
     )
     info("compression_runner", "Compression runner started", session_id=session_id)
+
+    # Default-off kill switch: exit cleanly (never error) when creation is disabled.
+    if not creation_enabled():
+        info(
+            "compression_runner",
+            "Amendment creation is disabled by default; set "
+            f"{_CREATION_ENABLED_ENV}=1 to enable. Exiting cleanly.",
+            session_id=session_id,
+        )
+        print(
+            json.dumps(
+                {
+                    "amendments_created": 0,
+                    "creation_enabled": False,
+                    "session_id": session_id,
+                }
+            )
+        )
+        return 0
 
     try:
         outcomes = fetch_recent_outcomes(session_id)

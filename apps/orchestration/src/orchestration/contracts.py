@@ -16,6 +16,7 @@ what retires the legacy state-on-argv transport). See
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -34,11 +35,13 @@ class Confidence:
 
     @classmethod
     def is_valid(cls, value: Any) -> bool:
-        return isinstance(value, str) and value in cls.ALL
+        if not isinstance(value, str):
+            return False
+        return bool(value in cls.ALL)
 
     @classmethod
     def is_uncertain(cls, value: Any) -> bool:
-        return value == cls.UNCERTAIN
+        return bool(value == cls.UNCERTAIN)
 
 
 _CONFIDENCE_RANK: dict[str, int] = {
@@ -49,14 +52,14 @@ _CONFIDENCE_RANK: dict[str, int] = {
 }
 
 
-def weakest_confidence(values: Any) -> str:
+def weakest_confidence(values: Iterable[Any]) -> str:
     """Fan-in aggregation for a parallel state: the weakest branch confidence
     wins. Unknown or missing values rank as UNCERTAIN so a silent branch cannot
     fake certainty. Empty input -> "" (no branches reported)."""
     vals = list(values)
     if not vals:
         return ""
-    return max(vals, key=lambda v: _CONFIDENCE_RANK.get(v, 3))
+    return str(max(vals, key=lambda value: _CONFIDENCE_RANK.get(value, 3)))
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +148,9 @@ def _is_nonempty(value: Any) -> bool:
     return bool(value)
 
 
-def validate_summary_contract(name: str, contract: dict, summary: Any) -> tuple[bool, str]:  # noqa: C901
+def validate_summary_contract(  # noqa: C901 - recursive typed contract validation
+    name: str, contract: dict, summary: Any
+) -> tuple[bool, str]:  # noqa: C901
     """Validate a SUMMARY against an explicit contract dict.
 
     ``contract`` is a ``{"required": {...}, "optional": {...}}`` mapping —
@@ -188,7 +193,9 @@ def validate_summary_contract(name: str, contract: dict, summary: Any) -> tuple[
     # e.g. verified_count, is 0 -> nothing enforced) while refusing a self-claimed
     # positive that carries no artifact (verified_count > 0 -> evidence must be present).
     for evidence_field, condition_field in contract.get("conditional_evidence", ()):
-        if _is_nonempty(summary.get(condition_field)) and not _is_nonempty(summary.get(evidence_field)):
+        if _is_nonempty(summary.get(condition_field)) and not _is_nonempty(
+            summary.get(evidence_field)
+        ):
             return False, (
                 f"{name}: '{evidence_field}' must be non-empty when '{condition_field}' is "
                 "positive (a claimed positive must carry its artifact, not a bare count)"
@@ -232,6 +239,7 @@ class Directives:
         logical_step: bool = True,
         skill_context: str | None = None,
         model: str | None = None,
+        project_root: str = "",
     ) -> dict[str, Any]:
         # By default the TS skill driver injects domain guidance from
         # assets/prompts/{agent}.md against skill.path. A playbook whose states map
@@ -253,6 +261,16 @@ class Directives:
             directive["skillContext"] = skill_context
         if model:
             directive["model"] = model
+        # The TARGET root, stated authoritatively by the side that owns durable run
+        # state. The driver otherwise re-derives it per invocation from its own
+        # params and silently falls back to its cwd when a caller omits it — which is
+        # exactly what a resume does (the printed resume contract carries no
+        # project_root). That fallback pointed the agent's cwd, its filesystem
+        # sandbox root, and every execution receipt at the WRONG repository after the
+        # first HITL gate. The checkpointer knows the right answer on every step, so
+        # it says so rather than letting the driver guess.
+        if project_root:
+            directive["project_root"] = project_root
         return directive
 
     @staticmethod
@@ -262,14 +280,20 @@ class Directives:
         state_id: str,
         session_id: str,
         run_id: str,
+        project_root: str = "",
     ) -> dict[str, Any]:
-        return {
+        directive: dict[str, Any] = {
             "action": "invoke_agents_parallel",
             "tasks": tasks,
             "state_id": state_id,
             "session_id": session_id,
             "run_id": run_id,
         }
+        # Same authority rule as invoke_agent: every branch agent must land in the
+        # selected target, not wherever the driver happens to be running.
+        if project_root:
+            directive["project_root"] = project_root
+        return directive
 
     @staticmethod
     def escalate_to_user(
@@ -293,6 +317,16 @@ class Directives:
     def complete(*, result: dict[str, Any], session_id: str, run_id: str) -> dict[str, Any]:
         return {
             "action": "complete",
+            "result": result,
+            "session_id": session_id,
+            "run_id": run_id,
+        }
+
+    @staticmethod
+    def incomplete(*, result: dict[str, Any], session_id: str, run_id: str) -> dict[str, Any]:
+        """Terminal non-success: work stopped honestly without emitting complete/success."""
+        return {
+            "action": "incomplete",
             "result": result,
             "session_id": session_id,
             "run_id": run_id,

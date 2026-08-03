@@ -58,9 +58,12 @@ from eval_prompt_efficacy import (  # noqa: E402
     family_rates,
 )
 from prompt_efficacy_judge import (  # noqa: E402
+    JUDGE_MODEL_ENV,
     grade_cell,
     is_judge_check,
+    judge_self_grading_conflicts,
     make_judge_fn,
+    resolve_judge_model,
 )
 
 
@@ -701,9 +704,29 @@ def main() -> int:
             + (f" + 1 model × {ablate_arms} ablations" if ablate_arms else "")
             + f"] = {len(matrix)} cells (thinking={args.thinking}, workers={args.workers})"
         )
+        judge_present = any(task_has_judge(t) for t in tasks)
+        # #6 (judge != subject MODEL): a model may not grade itself. Checked BEFORE the
+        # --dry-run return so the misconfiguration surfaces without spending a run, and
+        # NOT waivable by --experimental — a self-graded number is invalid, not merely
+        # unapproved, so an exploratory run would only produce a misleading figure.
+        # Sharing a model FAMILY is fine; being the same MODEL is not.
+        if judge_present:
+            conflicts = judge_self_grading_conflicts(
+                [f"{provider}/{model}" for provider, model in models]
+            )
+            if conflicts:
+                judge_spec = resolve_judge_model()[0]
+                print(
+                    f"REFUSING: judge {judge_spec} would grade ITSELF on: "
+                    + ", ".join(conflicts)
+                    + "\nA model grading its own output cannot catch its own errors."
+                    + f"\nFix: set {JUDGE_MODEL_ENV} to a different model, or drop "
+                    "those subjects from --models. (Sharing a model FAMILY is allowed; "
+                    "being the same MODEL is not.)"
+                )
+                return 2
         if args.dry_run:
             return 0
-        judge_present = any(task_has_judge(t) for t in tasks)
         if judge_present and not args.experimental:
             unapproved = unapproved_judge_tasks(tasks)
             if unapproved:

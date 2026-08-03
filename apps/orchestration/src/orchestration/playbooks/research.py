@@ -61,6 +61,7 @@ mempalace room ``skills/research-{session_id}`` and the drawer conventions
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -89,6 +90,41 @@ def _c(required: dict, optional: dict | None = None, evidence: list | None = Non
 MODES = ("quick", "standard", "deep")
 DEFAULT_MAX_SUB_QUERIES = 4
 
+# ---------------------------------------------------------------------------
+# Mode as a BUDGET PRESET, not a set of hard-wired edges.
+#
+# Mode used to gate FSM edges directly (``if mode == "deep": critique``), which made
+# rigor an author-time, three-valued quantization of a continuous question ("how much
+# verification does THIS query need?") that could never change once the run started —
+# a quick run that turned up contradictory sources was structurally forbidden from
+# earning an adversarial read. Mode now expands to a BUDGET the routing spends, so:
+#   * rigor is decoupled from the label (a caller can set ``critique_passes`` directly);
+#   * rigor can be EARNED mid-run (see the rigor escalation in route_after);
+#   * adding a rigor level is a table entry, not new routing code.
+#
+# ``critique_passes`` is a monotonic ladder, deliberately allocating the scarcer
+# budget to the MORE valuable critique first:
+#   >= 1  -> report critique (carren reads the actual output)
+#   >= 2  -> plan critique as well (carren reads the plan)
+#
+# NOTE: ``max_sub_queries`` is deliberately ABSENT from this table. A per-mode
+# sub-query count was deleted as a Bitter-Lesson violation and must not return:
+# breadth is ONE budget the model spends within, not a number the mode dictates.
+# Mode governs how much VERIFICATION is paid for, not how the model decomposes.
+# ---------------------------------------------------------------------------
+
+MODE_BUDGETS: dict[str, dict[str, int]] = {
+    "quick": {"critique_passes": 0, "max_research_rounds": 2},
+    "standard": {"critique_passes": 0, "max_research_rounds": 2},
+    "deep": {"critique_passes": 2, "max_research_rounds": 3},
+}
+DEFAULT_MODE = "standard"
+# Total research passes allowed per run: the initial fan plus evidence-seeking
+# re-research rounds. A CEILING (code caps, the model spends), not a target — a run
+# that never needs more evidence never spends a second round. Set to 1 to disable
+# evidence-seeking entirely and restore the single-round pipeline.
+DEFAULT_MAX_RESEARCH_ROUNDS = 2
+
 # JSON-safe echo branch contract (type NAMES) for the runtime research fan —
 # mirrors RESEARCH_EXPLORE so a dynamic branch validates identically.
 _RESEARCH_EXPLORE_C_JSON = {
@@ -104,33 +140,129 @@ _RESEARCH_EXPLORE_C_JSON = {
 }
 
 
-def _research_branches(sub_queries: list) -> dict | None:
+def _research_branches(sub_queries: list, *, start: int = 1, evidence: bool = False) -> dict | None:
     """One read-only echo branch per sub-query (arrangement 4). Returns ``None``
     when there are no usable sub-queries (the quick fast-path stays single-agent
-    via PRIMITIVE_BY_STATE)."""
+    via PRIMITIVE_BY_STATE).
+
+    ``start`` continues the branch numbering across research ROUNDS so a second,
+    evidence-seeking round writes NEW drawers (``-echo-4``, ``-echo-5``) instead of
+    overwriting round one's findings — one flat drawer namespace the synthesizer
+    already knows how to read.
+
+    ``evidence=True`` marks the branch as filling a NAMED evidence gap the verifier
+    diagnosed, rather than researching a fresh sub-query; ``_task_summary`` renders
+    the two differently.
+    """
+    prefix = "RESEARCH_EVIDENCE_SQ" if evidence else "RESEARCH_EXPLORE_SQ"
     branches: dict = {}
-    for i, sq in enumerate(sub_queries, 1):
+    for offset, sq in enumerate(sub_queries):
         text = str(sq).strip()
         if not text:
             continue
+        i = start + offset
         branches[f"sq{i}"] = {
             "agent": "echo",
-            "name": f"RESEARCH_EXPLORE_SQ{i}",
+            "name": f"{prefix}{i}",
             "task_hint": text,
             "summary_contract": _RESEARCH_EXPLORE_C_JSON,
         }
     return branches or None
 
 
+# ---------------------------------------------------------------------------
+# Deterministic grounding floor — the MEASUREMENT instrument for the cross-model
+# question (independence.py's registered research exception).
+# ---------------------------------------------------------------------------
+
+
+def grounding_floor(claims: list, sources: list) -> list[str]:
+    """Grounding defects decidable WITHOUT a model. Returns one reason per defect.
+
+    These are ORACLES, not heuristics: a claim that cites nothing is unsupported no
+    matter how capable the reader is, and a citation pointing at a source that is not
+    in the findings is dangling by arithmetic. They therefore do NOT age as models
+    improve — the Bitter-Lesson distinction between a meter (keep) and a hand-built
+    knowledge table (prune).
+
+    Why this exists: ``independence.py`` registers research's synthia->vera edge as a
+    SAME_MODEL exception whose repayment is to *measure* same- vs cross-model catch
+    rate. prd's measured prior art showed a deterministic floor already decided 50%
+    of its defect corpus — and a second model adds NOTHING to a defect the floor
+    already caught. So the population that could ever justify paying for a second
+    model on every run is the JUDGEMENT RESIDUAL: claims that ARE cited, to a source
+    that DOES exist and DOES have content, where only a reader can tell whether the
+    source actually supports the claim.
+
+    ``claims``: ``[{"id", "text", "cites": [source_id, ...]}, ...]``
+    ``sources``: ``[{"id", "content"}, ...]``
+
+    NOT WIRED INTO THE FSM. This is currently a measurement instrument only;
+    promoting it to a pre-gate that runs before vera is a decision the measurement
+    informs, not one taken in advance of it.
+    """
+    reasons: list[str] = []
+    by_id = {str(s.get("id", "")): s for s in sources}
+    for claim in claims:
+        cid = str(claim.get("id", "?"))
+        cites = [str(c).strip() for c in (claim.get("cites") or []) if str(c).strip()]
+        if not cites:
+            reasons.append(f"{cid}: no citation at all")
+            continue
+        for ref in cites:
+            source = by_id.get(ref)
+            if source is None:
+                reasons.append(f"{cid}: dangling citation to unknown source '{ref}'")
+            elif not str(source.get("content", "")).strip():
+                reasons.append(
+                    f"{cid}: cites '{ref}', which has no captured content to verify against"
+                )
+    return reasons
+
+
 def _sanitize_topic(query: str) -> str:
-    """Sanitize a research query into a filesystem-safe directory name."""
+    """A filesystem-safe, COLLISION-FREE directory name for a research query.
+
+    The readable slug is truncated, so two long related queries sharing a prefix
+    ("compare postgres and mysql replication strategies for production deployments
+    **on aws**" vs "… **on gcp**") produced the SAME directory and the second run
+    silently overwrote the first run's report.md — destroying the only durable
+    artifact the run exists to produce, which is also the thing ``done_predicate``
+    measures.
+
+    A short digest of the FULL query disambiguates them. It is deterministic, so
+    re-running the same query is still idempotent (same directory, refreshed
+    report) rather than accumulating near-duplicate directories.
+    """
     sanitized = re.sub(r"[^\w\s-]", "", query.lower())
     sanitized = re.sub(r"[-\s]+", "-", sanitized)
-    return sanitized.strip("-")[:80]
+    slug = sanitized.strip("-")[:71]
+    digest = hashlib.sha256(query.strip().encode("utf-8")).hexdigest()[:8]
+    return f"{slug}-{digest}" if slug else digest
 
 
 def _room(ctx: RunContext) -> str:
     return f"skills/research-{ctx.session_id}"
+
+
+def _apply_mode_budget(research: dict, mode: str, constraints: dict) -> None:
+    """Expand a mode label into the run's rigor budget.
+
+    An EXPLICIT caller constraint always wins over the preset, so rigor can be set
+    independently of the label (``constraints={"critique_passes": 1}`` gives a standard
+    run an adversarial report read without paying for deep's plan critique).
+    """
+    preset = MODE_BUDGETS.get(mode, MODE_BUDGETS[DEFAULT_MODE])
+    for key, value in preset.items():
+        raw = constraints.get(key)
+        if raw is None:
+            research[key] = value
+            continue
+        try:
+            research[key] = max(0, int(raw))
+        except (TypeError, ValueError):
+            research[key] = value
+    research["max_research_rounds"] = max(1, int(research.get("max_research_rounds", 2)))
 
 
 def _report_dir(ctx: RunContext) -> str:
@@ -147,7 +279,31 @@ def _report_dir(ctx: RunContext) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Where a clarification RESUMES, keyed by the state that escalated.
+#
+# Producer-oriented, not position-oriented: resume at the agent that can actually ACT
+# on the user's answer. A stalled critique is the clearest case — re-running carren on
+# the same unchanged artifact cannot use the clarification, so the answer belongs to
+# the producer (piper / synthia) that can change the artifact.
+#
+# The previous behaviour re-entered ``planning`` from EVERYWHERE, which discarded the
+# plan, its critique cycles, and every completed research branch on any clarification
+# — in deep mode that is a full re-plan plus up to max_iterations critique rounds
+# thrown away to answer one scoping question.
+_RESUME_TARGET_BY_STATE: dict[str, str] = {
+    "planning": "planning",
+    "critiquing_plan": "planning",  # the plan must change; re-critiquing it cannot help
+    "researching": "researching",  # keep the plan, re-research WITH the clarification
+    "synthesizing": "synthesizing",
+    "critiquing_report": "synthesizing",  # the report must change
+    "validating": "synthesizing",  # the synthesis must change
+}
+
+
 class ResearchMachine(StateMachine):
+    # Set by the playbook before firing ``clarify``; read by the rt_* guards below.
+    resume_target: str = ""
+
     intake = State(initial=True)
     planning = State()  # piper — standard/deep (quick skips straight to researching)
     critiquing_plan = State()  # carren — deep only
@@ -176,6 +332,7 @@ class ResearchMachine(StateMachine):
     report_critique_exhausted = critiquing_report.to(validating)  # budget spent
     validate_pass = validating.to(report_writing)
     validate_revise = validating.to(synthesizing)  # bounded re-grounding loop
+    validate_research = validating.to(researching)  # bounded EVIDENCE-SEEKING loop
     validate_exhausted = validating.to(report_writing)  # budget spent
     report_done = report_writing.to(complete)
 
@@ -188,7 +345,20 @@ class ResearchMachine(StateMachine):
         | validating.to(unknown)
     )
     escalate = unknown.to(awaiting_clarification)
-    clarify = awaiting_clarification.to(planning)
+    # Conditional multi-target resume (mirrors the sca playbook): back to whichever
+    # producer can act on the answer, with planning as the conservative fallback.
+    clarify = (
+        awaiting_clarification.to(researching, cond="rt_researching")
+        | awaiting_clarification.to(synthesizing, cond="rt_synthesizing")
+        | awaiting_clarification.to(planning)  # fallback / explicit planning target
+    )
+    # -- clarify guards (read resume_target) -------------------------------
+    def rt_researching(self, *a, **k) -> bool:
+        return self.resume_target == "researching"
+
+    def rt_synthesizing(self, *a, **k) -> bool:
+        return self.resume_target == "synthesizing"
+
     abort = (
         intake.to(error)
         | planning.to(error)
@@ -207,6 +377,22 @@ class ResearchMachine(StateMachine):
 # Per-state SUMMARY contracts (matched to the assets/prompts SUMMARY blocks —
 # confidence is optional everywhere; piper does not even emit one, so agent-side
 # escalation rides needs_clarification / an UNCERTAIN confidence when present)
+#
+# NOTE on ``task_hint``: this playbook overrides ``_task_summary`` and routes every
+# registered state through ``_TASK_BUILDERS``, so these hints are DESCRIPTIVE ONLY —
+# they are not delivered to any agent. They are kept (rather than emptied) so that
+# removing a builder degrades gracefully to a sane generic task instead of an empty
+# one. The ONE place a ``task_hint`` is live is the dynamic research fan, where
+# ``_research_branches`` puts the SUB-QUERY TEXT in the branch spec's hint and
+# ``_task_summary`` renders it — there it is data, not instruction.
+#
+# Do NOT restore procedural mandates here. A hint that named a required tool
+# sequence ("including a YouTube-targeted search and youtube_transcript pull")
+# was removed: mandating a modality sweep on every run is knowledge-constraint
+# scaffolding that spends calls where they may be noise. Tool AVAILABILITY is
+# conveyed in the agent's domain guidance (assets/prompts/echo.md) as an
+# affordance the model spends when applicable — capability disclosure scales,
+# mandated procedure does not.
 # ---------------------------------------------------------------------------
 
 RESEARCH_PLAN = PrimitiveSpec(
@@ -264,7 +450,7 @@ RESEARCH_EXPLORE = PrimitiveSpec(
             "clarifying_questions": list,
         },
     ),
-    "Research the sub-queries with web_search + web_fetch, including a YouTube-targeted search and youtube_transcript pull for relevant video sources; write tiered, cited findings to mempalace.",
+    "Research the assigned sub-query and write tiered, cited findings to mempalace.",
 )
 RESEARCH_SYNTHESIZE = PrimitiveSpec(
     "RESEARCH_SYNTHESIZE",
@@ -291,6 +477,10 @@ RESEARCH_VALIDATE = PrimitiveSpec(
         # captured claim->source checks (quotes, fetched spot-checks).
         {"verdict": str, "unsupported_claims": list, "evidence": list},
         {
+            # What is MISSING, phrased as researchable questions. The verifier
+            # DIAGNOSES the gap; echo fills it. A verifier that sourced its own
+            # evidence would be judging material it authored.
+            "evidence_needed": list,
             "mempalace_drawer": str,
             "confidence": str,
             "needs_clarification": bool,
@@ -329,9 +519,20 @@ def _build_planning(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> 
         f"Research planning: decompose '{ctx.goal}' into sub-queries\n\n"
         f"Write your plan to mempalace room: {room}"
     )
+    # An empty mode means the CALLER did not fix one, so piper declares it. Saying
+    # "Mode: ." (the previous rendering) told the model nothing and silently dropped
+    # the instruction that it owns the decision.
+    mode = research.get("mode") or ""
+    mode_line = (
+        f"\nMode: {mode}."
+        if mode
+        else "\nMode: NOT fixed by the caller — YOU declare it (quick / standard / deep) "
+        "in your SUMMARY, chosen by what the query actually needs."
+    )
     task += (
-        f"\nMode: {research.get('mode', 'standard')}. "
-        f"Produce at most {research.get('max_sub_queries', 3)} sub-queries."
+        f"{mode_line} "
+        f"Produce at most {research.get('max_sub_queries', DEFAULT_MAX_SUB_QUERIES)} "
+        f"sub-queries."
     )
     revision = research.get("plan_revision", 0)
     if revision:
@@ -362,21 +563,21 @@ def _build_critiquing_plan(pb: "ResearchPlaybook", ctx: RunContext, research: di
 
 
 def _build_researching(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> str:
+    """The SINGLE-AGENT research task (the explicit-quick fast path).
+
+    Any run whose plan yielded usable sub-queries is dispatched as a dynamic FAN
+    (one echo branch per sub-query, rendered by ``_task_summary``), so this builder
+    only ever serves the single-agent path. ``route_after('planning')`` stores only
+    non-blank sub-queries, which is what makes that guarantee hold: a plan of
+    whitespace-only steps yields no branches AND an empty ``sub_queries``, so it
+    lands here rather than emitting a task that lists blank sub-queries.
+
+    A legacy "Research ALL of the following sub-queries" multi-sub-query variant
+    lived here from the pre-fan topology; it was removed once the two functions'
+    notions of a usable sub-query were reconciled.
+    """
     room = _room(ctx)
-    sub_queries = research.get("sub_queries", [])
-    if research.get("mode") == "quick" or not sub_queries:
-        return f"Quick research: {ctx.goal}\n\nWrite findings to mempalace room: {room}"
-    lines = [f"Research ALL of the following sub-queries for: {ctx.goal}"]
-    for i, sub_query in enumerate(sub_queries, 1):
-        lines.append(f"Research sub-query {i}: {sub_query}")
-    lines.append("")
-    lines.append(f"Write findings to mempalace room: {room}")
-    lines.append(
-        f"Write ONE findings drawer per sub-query with header: "
-        f"{ctx.session_id}-echo-<n> Research Findings "
-        f"(e.g. '## {ctx.session_id}-echo-1 Research Findings' for sub-query 1)."
-    )
-    return "\n".join(lines)
+    return f"Quick research: {ctx.goal}\n\nWrite findings to mempalace room: {room}"
 
 
 def _build_synthesizing(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> str:
@@ -410,6 +611,14 @@ def _build_synthesizing(pb: "ResearchPlaybook", ctx: RunContext, research: dict)
             f"Read the validation report from mempalace room: {room}. Re-ground or REMOVE every "
             f"flagged claim — cite a supporting source or drop the claim. Do not introduce new "
             f"unsupported claims."
+        )
+    if research.get("research_round", 1) > 1:
+        task += (
+            f"\n\nAn EVIDENCE-SEEKING research round ran since your last synthesis: new findings "
+            f"drawers were added to room {room} to close the gaps the verifier flagged. Read ALL "
+            f"findings drawers again (including the new ones) and re-ground the flagged claims "
+            f"against them. Where a researcher reported that NO adequate source exists, DROP the "
+            f"claim rather than softening it into something the sources still do not support."
         )
     return task
 
@@ -533,6 +742,11 @@ class ResearchPlaybook(BasePlaybook):
             1, min(max_sub_queries or DEFAULT_MAX_SUB_QUERIES, fan_width)
         )
         research["report_format"] = str(ctx.constraints.get("report_format", "default"))
+        research["research_round"] = 1
+        # Rigor budget. When the caller fixed the mode we can expand it now; otherwise
+        # piper declares the mode at planning and route_after expands it there. A
+        # provisional default keeps the budget defined if planning never runs.
+        _apply_mode_budget(research, caller_mode or DEFAULT_MODE, ctx.constraints)
         # Only an EXPLICIT caller quick mode takes the single-agent fast-path; a
         # model-declared quick still transits planning (it decomposes there).
         if caller_mode == "quick":
@@ -627,9 +841,19 @@ class ResearchPlaybook(BasePlaybook):
             # already fixed it; an unknown declaration falls back to standard.
             if not research.get("mode"):
                 declared = str(summary.get("mode") or "")
-                research["mode"] = declared if declared in MODES else "standard"
+                research["mode"] = declared if declared in MODES else DEFAULT_MODE
                 mode = research["mode"]
+                # The model just chose the rigor level: expand it into the budget
+                # (an explicit caller constraint still wins inside the helper).
+                _apply_mode_budget(research, mode, ctx.constraints)
             steps = summary.get("plan_steps") or summary.get("sub_queries") or []
+            # Normalize at the boundary: only NON-BLANK sub-queries are usable.
+            # ``_research_branches`` already skips blank entries, so without this
+            # filter a whitespace-only plan produced an empty fan while leaving a
+            # truthy ``sub_queries`` list — the one path that could dispatch a
+            # single agent a task listing blank sub-queries. Filtering here makes
+            # both functions agree by construction.
+            steps = [s for s in steps if str(s).strip()]
             cap = int(research.get("max_sub_queries", 0)) or len(steps)
             over = len(steps) > cap
             research["sub_queries"] = list(steps)[:cap]  # budget enforced at dispatch
@@ -644,9 +868,12 @@ class ResearchPlaybook(BasePlaybook):
             dyn = ctx.extras.setdefault("dynamic_branches", {})
             if branches:
                 dyn["researching"] = branches
+                research["echo_branches_dispatched"] = len(branches)
             else:
                 dyn.pop("researching", None)
-            if mode == "deep":
+                research["echo_branches_dispatched"] = 0
+            # Budget-driven, not mode-driven: a plan critique costs the 2nd pass.
+            if int(research.get("critique_passes", 0)) >= 2:
                 self.sm.send("plan_to_critique")
             else:
                 self.sm.send("plan_to_research")
@@ -684,22 +911,26 @@ class ResearchPlaybook(BasePlaybook):
                 research["research_complete"] = all(
                     b.get("explore_complete") for b in bmap.values()
                 )
-                research["research_drawers"] = [
+                research["research_drawers"] = list(research.get("research_drawers", [])) + [
                     b.get("mempalace_drawer", "") for b in bmap.values()
                 ]
                 research["research_branch_count"] = len(bmap)
             else:
                 research["research_complete"] = True
                 research["research_drawer"] = summary.get("mempalace_drawer", "")
+            # An evidence-seeking round is over once its findings are in; the next
+            # synthesis re-grounds against them and returns to the gate.
+            research.pop("evidence_needed", None)
             self.sm.send("research_done")
         elif state == "synthesizing":
             research["synthesis_complete"] = True  # synthesis_complete gated in progress_check
             research["report_word_count"] = summary.get("report_word_count", 0)
             research["synthesis_drawer"] = summary.get("mempalace_drawer", "")
-            # Deep mode runs carren's subjective report critique BEFORE the
-            # validation gate; once that loop closes (phase="validation") a
-            # validation-driven re-synthesis routes straight back to vera.
-            if mode == "deep" and research.get("phase") != "validation":
+            # A report critique costs the 1st critique pass — so a run that EARNED a
+            # pass mid-run (rigor escalation) gets carren's adversarial read even
+            # though its mode label never said "deep". Once the critique loop closes
+            # (phase="validation") a validation-driven re-synthesis goes back to vera.
+            if int(research.get("critique_passes", 0)) >= 1 and research.get("phase") != "validation":
                 self.sm.send("synth_to_critique")
             else:
                 self.sm.send("synth_to_validate")
@@ -732,12 +963,78 @@ class ResearchPlaybook(BasePlaybook):
             issues = summary.get("unsupported_claims", [])
             research["validation_verdict"] = verdict
             research["validation_issues"] = issues
+            # The run's REAL quality signal, surfaced on the CONTEXT so the outcome
+            # ledger records GROUNDING and not merely delivery. Without this the
+            # ledger saw an empty ``verify_gaps`` for every research run, so
+            # ``outcome_writer._failure_mode`` fell through to "other" and a report
+            # shipped with unsupported claims was indistinguishable from a fully
+            # grounded one — the learning loop had no signal to learn from.
+            # ``verify_evidence`` is already captured by the engine
+            # (``_capture_evidence``); verdict + gaps were the missing half.
+            # Last-write-wins across re-validation cycles, so the values reflect
+            # the FINAL verdict: [] on a PASS, the surviving claims on exhaustion.
+            ctx.verify_verdict = str(verdict)
+            ctx.verify_gaps = list(issues)
+            needed = [
+                str(n).strip() for n in (summary.get("evidence_needed") or []) if str(n).strip()
+            ]
             if verdict == "PASS":
                 self._end_validation_loop(ctx, research)
                 self.sm.send("validate_pass")
             elif ctx.iteration + 1 < ctx.max_iterations:
                 self.record_iteration(ctx, gaps=issues)
                 ctx.iteration += 1
+                rounds_used = int(research.get("research_round", 1))
+                max_rounds = int(
+                    research.get("max_research_rounds", DEFAULT_MAX_RESEARCH_ROUNDS)
+                )
+                if needed and rounds_used < max_rounds:
+                    # EVIDENCE-SEEKING (the iterative research loop): the verifier
+                    # named what is missing and a research round remains, so spend
+                    # more SEARCH on the gap rather than only re-writing the report.
+                    # Without this edge the only remedy for an unsupported claim is
+                    # to DROP it (the synthesizer has no web tools by design), so the
+                    # gate could only ever make the report thinner, never better
+                    # grounded.
+                    cap = int(research.get("max_sub_queries", DEFAULT_MAX_SUB_QUERIES))
+                    start = int(research.get("echo_branches_dispatched", 0)) + 1
+                    branches = _research_branches(needed[:cap], start=start, evidence=True)
+                    if branches:
+                        research["research_round"] = rounds_used + 1
+                        research["evidence_needed"] = needed[:cap]
+                        research["echo_branches_dispatched"] = start - 1 + len(branches)
+                        research.pop("validation_revision", None)
+                        ctx.extras.setdefault("dynamic_branches", {})["researching"] = branches
+                        self.sm.send("validate_research")
+                        return
+                # RIGOR ESCALATION (OPT-IN, once per run): the gate keeps failing, no
+                # research round can help, and this run was never budgeted an adversarial
+                # read. Rather than let a low mode label permanently forbid deeper
+                # scrutiny of a run that is visibly struggling, grant ONE report-critique
+                # pass — rigor EARNED by evidence of difficulty rather than fixed at
+                # intake by a three-valued label.
+                #
+                # DEFAULT OFF, deliberately. Enabling it by default rewrites the
+                # published quick/standard validation loop (validating -> synthesizing ->
+                # validating becomes validating -> synthesizing -> critiquing_report),
+                # and no measurement yet shows the extra pass recovers runs that the
+                # re-grounding loop would not. Same discipline as the cross-model verify
+                # hook: ship the mechanism, measure, then argue about the default.
+                if (
+                    ctx.constraints.get("rigor_escalation")
+                    and int(research.get("critique_passes", 0)) < 1
+                    and not research.get("rigor_escalated")
+                    and research.get("phase") != "validation"
+                ):
+                    research["critique_passes"] = 1
+                    research["rigor_escalated"] = True
+                    research.setdefault("warnings", []).append(
+                        "validation failed with no researchable gap; escalated rigor to grant "
+                        "one report-critique pass (mode "
+                        f"'{research.get('mode', DEFAULT_MODE)}' had none budgeted)"
+                    )
+                # No researchable gap named (or the round budget is spent): fall back
+                # to re-grounding from the findings already gathered.
                 research["validation_revision"] = ctx.iteration
                 self.sm.send("validate_revise")
             else:
@@ -767,34 +1064,77 @@ class ResearchPlaybook(BasePlaybook):
 
     # -- HITL resume -------------------------------------------------------
     def _resume(self, state: str, result) -> dict:
-        """Reset the shared bounded-loop counters before resuming from a HITL
-        pause. The escalation path (to_unknown -> escalate) never closes the
-        active critique loop via _end_plan_loop/_end_report_loop, so ``ctx.iteration``
-        and ``ctx.iteration_history`` are left mid-loop. ``clarify`` re-enters at
-        ``planning`` and re-runs the full deep pipeline from scratch, so each
-        bounded loop must start clean — otherwise a stale ``ctx.iteration`` makes
-        ``route_after`` fire ``plan_critique_exhausted`` on the FIRST visit (a
-        false "budget exhausted" warning with zero cycles run) and the stale
-        ``iteration_history`` poisons ``is_stalled``."""
+        """Reset the bounded-loop counters and choose WHERE to resume.
+
+        The escalation path (to_unknown -> escalate) never closes the active loop via
+        ``_end_*_loop``, so ``ctx.iteration`` / ``ctx.iteration_history`` are left
+        mid-loop. They are always reset: the user's answer is new information, so the
+        loop earns a fresh budget. Without this a stale ``ctx.iteration`` makes
+        ``route_after`` fire ``*_exhausted`` on the FIRST visit (a false "budget
+        exhausted" warning with zero cycles run) and stale history poisons
+        ``is_stalled``.
+
+        Resume TARGET is producer-oriented (``_RESUME_TARGET_BY_STATE``): the run
+        returns to the agent that can act on the answer instead of restarting from
+        ``planning`` and discarding the plan, its critique cycles and every completed
+        research branch.
+        """
         if state == "awaiting_clarification":
             self.ctx.iteration = 0
             self.ctx.iteration_history = []
-            # clarify re-enters planning and re-runs the pipeline from scratch, so
-            # phase / revision / exhaustion markers from the interrupted run must
-            # not leak into the fresh pass (a stale phase="validation" would make
-            # deep synthesis skip its report critique).
             research = self.ctx.extras.get("research", {})
-            for _k in (
-                "phase",
-                "plan_revision",
-                "report_revision",
-                "validation_revision",
-                "plan_critique_exhausted",
-                "report_critique_exhausted",
-                "validation_exhausted",
-            ):
+            target = _RESUME_TARGET_BY_STATE.get(str(self.ctx.previous_state or ""), "planning")
+            self.sm.resume_target = target
+            # An interrupted revision loop restarts, so its counters go either way.
+            for _k in ("plan_revision", "report_revision", "validation_revision"):
                 research.pop(_k, None)
+            if target == "planning":
+                # A full restart of the pipeline: phase and exhaustion markers from the
+                # abandoned pass must not leak into the fresh one (a stale
+                # phase="validation" would make deep synthesis skip its report critique).
+                for _k in (
+                    "phase",
+                    "plan_critique_exhausted",
+                    "report_critique_exhausted",
+                    "validation_exhausted",
+                ):
+                    research.pop(_k, None)
+            # Resuming mid-pipeline CONTINUES the same run, so `phase` and the
+            # exhaustion flags are preserved: they are historical facts the result
+            # must still report honestly, not state belonging to an abandoned pass.
         return super()._resume(state, result)
+
+    # -- cross-model verification hook -------------------------------------
+    def model_for_state(self, state: str, ctx: RunContext) -> str | None:
+        """Opt-in cross-model verification hook for the citation gate.
+
+        ``independence.py`` classifies research's synthia->vera edge SAME_MODEL: both
+        agents run sonnet by default, so vera's PASS is a same-model judgement over
+        synthia's own synthesis and correlated single-model errors can slip a false
+        PASS through. The gate is evidence-based (every claim must trace to a captured
+        source), which partly mitigates, and carren adds a cross-model (opus) critique
+        — but only in DEEP mode, so quick and standard have a same-model FINAL gate.
+        This is the hook a caller (or ops) pulls to make the judge a different model,
+        mirroring prd/jsa/sca.
+
+        Precedence for ``validating``: ``constraints['validate_model']`` -> the
+        ``RESEARCH_VERA`` / ``RESEARCH_DEFAULT`` env tier -> ``None`` (vera's own
+        configured model). The key mirrors prd's ``validate_model`` rather than
+        jsa/sca's ``reverify_model``: research has no second reverify pass —
+        ``validating`` is its only verify state.
+
+        UNSET IS UNCHANGED: with no constraint and no env var this returns ``None`` for
+        every state, so every agent runs the model its own ``.pi/agents/*.md``
+        frontmatter declares. An opt-in hook, never a default reassignment (changing the
+        default is a cost/latency shift that needs loan registration + ablation), so the
+        edge correctly stays SAME_MODEL and remains a registered, dated exception until
+        cross-model is measured to be worth making the default.
+        """
+        if state == "validating":
+            chosen = str((ctx.constraints or {}).get("validate_model", "")).strip()
+            if chosen:
+                return chosen
+        return self._env_model_override("RESEARCH", state)
 
     # -- prompts + result --------------------------------------------------
     def _task_summary(self, state: str, spec: PrimitiveSpec, ctx: RunContext) -> str:
@@ -802,9 +1142,29 @@ class ResearchPlaybook(BasePlaybook):
         # A dynamic research FAN branch (name RESEARCH_EXPLORE_SQ<n>) researches
         # its OWN sub-query (spec.task_hint) and writes a branch-tagged drawer;
         # the single-agent fast path uses the "research ALL" builder.
-        if state == "researching" and getattr(spec, "name", "").startswith("RESEARCH_EXPLORE_SQ"):
+        spec_name = getattr(spec, "name", "")
+        if state == "researching" and spec_name.startswith("RESEARCH_EVIDENCE_SQ"):
+            # Evidence-seeking round: fill a gap the VERIFIER diagnosed. Framed as a
+            # falsifiable errand (find a source that settles it, or report that none
+            # exists) so a fruitless search returns an honest negative instead of a
+            # weak source dragged in to make the claim survive.
             room = _room(ctx)
-            n = spec.name.rsplit("SQ", 1)[-1] or "1"
+            n = spec_name.rsplit("SQ", 1)[-1] or "1"
+            base = (
+                f"EVIDENCE-SEEKING round for: {ctx.goal}\n\n"
+                f"The citation gate found a claim in the draft report that no cited source "
+                f"supports. Your job is to settle it with evidence.\n\n"
+                f"Evidence needed: {spec.task_hint}\n\n"
+                f"Find a source that directly supports or refutes it, and cite it. If after a "
+                f"genuine search NO adequate source exists, say so plainly \u2014 'no supporting "
+                f"source found' is a USEFUL result that lets the claim be dropped honestly. Do "
+                f"NOT stretch a weak or tangential source to make the claim survive.\n\n"
+                f"Write findings to mempalace room: {room} with header: "
+                f"{ctx.session_id}-echo-{n} Research Findings."
+            )
+        elif state == "researching" and spec_name.startswith("RESEARCH_EXPLORE_SQ"):
+            room = _room(ctx)
+            n = spec_name.rsplit("SQ", 1)[-1] or "1"
             base = (
                 f"Research this sub-query for: {ctx.goal}\n\n"
                 f"Sub-query: {spec.task_hint}\n\n"
@@ -833,6 +1193,15 @@ class ResearchPlaybook(BasePlaybook):
             unresolved.extend(research.get("validation_issues", []))
         return {
             "met": ctx.met,
+            "research_rounds": research.get("research_round", 1),
+            "critique_passes": research.get("critique_passes", 0),
+            "rigor_escalated": bool(research.get("rigor_escalated", False)),
+            # ``met`` reports DELIVERY (the report was written); ``grounded`` reports
+            # VERIFICATION (vera's citation gate passed). They are different
+            # questions and an honest run answers both: a validation-exhausted run
+            # is met=True, grounded=False — delivered, with its unverified claims
+            # named in ``unresolved_issues``.
+            "grounded": research.get("validation_verdict") == "PASS",
             "iterations": (
                 research.get("plan_revisions", 0)
                 + research.get("report_revisions", 0)

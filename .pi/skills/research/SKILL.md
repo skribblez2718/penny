@@ -61,13 +61,27 @@ skill({
 | Constraint        | Type   | Default        | Description                                                        |
 | ----------------- | ------ | -------------- | ------------------------------------------------------------------ |
 | `mode`            | string | (unset)        | `"quick"`, `"standard"`, `"deep"`. Omit to let piper declare the mode from the query — mode is model-owned, not keyword-detected. Only an explicit `"quick"` skips planning. |
-| `report_format`   | string | `"default"`    | `"default"`, `"brief"`, `"academic"`, `"executive"`                |
+| `report_format`   | string | `"default"`    | Free-form shaping instruction passed to the synthesizer — **not an enum**. Anything other than `"default"` is forwarded verbatim (`"brief"`, `"academic"`, `"executive"` are common examples, not the permitted set). |
 | `max_sub_queries` | int    | `4`            | The one sub-query budget (replaces the per-mode table). Clamped to `max_fan_width`. |
 | `max_fan_width`   | int    | `8`            | Cap on parallel research branches.                                 |
+| `validate_model`  | string | (unset)        | **Cross-model verification.** Runs the `validating` citation gate (vera) on a DIFFERENT model than the synthesizer, e.g. `"ollama/glm"`. Scoped to `validating` only — never re-points the generator. Unset = vera's own configured model (same-model gate). |
+| `critique_passes` | int    | by mode        | Rigor budget, decoupled from the mode label. `>=1` buys carren's report critique; `>=2` adds the plan critique. Overrides the mode preset. |
+| `max_research_rounds` | int | by mode      | Total research passes (initial + evidence-seeking). `1` disables evidence-seeking. |
+| `rigor_escalation` | bool  | `false`        | Allow a struggling run to EARN one report-critique pass when validation fails with no researchable gap. Off by default (it changes the quick/standard validation loop). |
 
 ### Modes
 
-Mode is a rigor/budget preset chosen by the caller (`constraints.mode`) or declared by piper in its plan SUMMARY. `quick` = a single narrow question (no critique passes); `standard` = a handful of sub-queries + the validation gate; `deep` = adversarial critique of the plan and the report. There is no per-mode sub-query table — `max_sub_queries` is one budget the model spends within.
+Mode is a rigor/budget preset chosen by the caller (`constraints.mode`) or declared by piper in its plan SUMMARY. It **expands into a budget** rather than gating FSM edges directly, so rigor can be set independently of the label and earned mid-run:
+
+| Mode | `critique_passes` | `max_research_rounds` |
+| ---- | ----------------- | --------------------- |
+| `quick` | 0 | 2 |
+| `standard` | 0 | 2 |
+| `deep` | 2 | 3 |
+
+`critique_passes` is a ladder that spends the scarcer budget on the more valuable critique first: `>=1` buys the **report** critique (carren reads the actual output), `>=2` adds the **plan** critique. An explicit `constraints.critique_passes` always wins over the preset.
+
+There is deliberately **no per-mode sub-query count** — mode governs how much *verification* is paid for, never how the model decomposes. `max_sub_queries` stays one budget the model spends within.
 
 ## Agent Flow
 
@@ -86,6 +100,23 @@ own only verifier.
 
 **Deep:** intake → planning (Piper) → critiquing_plan (Carren) → researching (Echo) → synthesizing (Synthia) → critiquing_report (Carren) → validating (Vera) → report_writing (Skribble) → complete, with two bounded critique loops plus the validation gate
 
+## Verification independence
+
+By default synthia (synthesis) and vera (the citation gate) both run `terra`, so
+the final gate is a **same-model** judgement over the generator's own work — the
+evidence requirement mitigates it (every claim must trace to a captured source)
+but correlated single-model errors can still slip a PASS through. carren adds a
+cross-model critique only when `critique_passes >= 1` (the deep preset, or a caller/escalation-granted pass).
+
+Pass `constraints.validate_model` (or set `RESEARCH_VERA` / `RESEARCH_DEFAULT` as
+`provider/model`) to put a different model on the gate. Precedence:
+`validate_model` → `RESEARCH_VERA` → `RESEARCH_DEFAULT` → vera's own model. An
+unset or malformed value falls through, so a typo can never break a run.
+
+This edge is a registered, dated exception in `orchestration/independence.py`;
+making cross-model the default is a cost/latency change that needs measurement
+first, not a flag flip.
+
 ## Post-Completion
 
 After the skill completes, present the research report. Do not execute recommendations — the skill's job ends at delivery.
@@ -97,7 +128,9 @@ After the skill completes, present the research report. Do not execute recommend
    memory_smart_search(query="<session_id> Synthesis", room="skills/research-<session_id>", limit=5, include_full=true)
    ```
 
-2. Present the report with metadata: executive summary, key findings with confidence levels, source count and quality distribution (T1-T4), actionable recommendations, and limitations.
+2. Present the report with metadata: executive summary, key findings with confidence levels, source count and how the sources rank (primary / reputable secondary / weak), actionable recommendations, and limitations.
+
+3. Report the run's honest status from the result payload: `met` (the report was written) AND `grounded` (vera's citation gate passed). A `grounded: false` run shipped with the claims listed in `unresolved_issues` unverified — surface them, do not present the report as fully sourced.
 
 ## Escalation (awaiting_clarification)
 

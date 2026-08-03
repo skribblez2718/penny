@@ -54,8 +54,14 @@ FRAME_PATH = REPO_ROOT / ".pi" / "SYSTEM.md"
 RESULTS_DIR = REPO_ROOT / ".penny" / "evals" / "trajectory"
 LATEST_PATH = RESULTS_DIR / "latest.json"
 
-DEFAULT_DRIVER = "ollama/glm-5.2:cloud"  # the production orchestration driver
-DEFAULT_JUDGE = "ollama/minimax-m3:cloud"  # the calibrated verifier (= vera)
+# PINNED CONCRETE (not tier aliases) on purpose: trajectory artifacts must stay
+# comparable across runs, so an upgrade behind an alias must never silently change
+# what was measured. Override per-run with --driver-model / --judge-model.
+DEFAULT_DRIVER = "ollama/glm-5.2:cloud"  # cheap-driver arm under test, NOT Penny's own model
+DEFAULT_JUDGE = "ollama/minimax-m3:cloud"  # the model this harness calibrated its judge on
+#   NOTE: DEFAULT_JUDGE is NOT vera's model. An older comment claimed "(= vera)"; that was
+#   already false (vera ran `sonnet`) and is more so now (vera runs `terra`/openai-codex
+#   since 2026-08-01). Re-point this only together with a fresh judge calibration.
 
 _JUDGE_SYSTEM = """You judge whether a REPLAY of a task still meets a fixed quality bar.
 

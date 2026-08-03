@@ -2,7 +2,7 @@
 
 Deterministic checks (``eval_prompt_efficacy.check_text``) grade structural/exact
 cases (json_fields, exact regex/numeric); a FIXED independent judge
-(``anthropic/claude-haiku-4-5``) grades semantic ``type:"judge"`` checks. A task
+(``openai-codex/gpt-5.6-luna``) grades semantic ``type:"judge"`` checks. A task
 passes iff ALL its checks pass (``grade_cell``). Determinism comes from a strict,
 behavior-blind rubric + a structured ``VERDICT: PASS/FAIL`` contract (LAST verdict
 wins) — NOT temperature (Pi exposes no temperature flag). Mirrors the proven
@@ -10,7 +10,8 @@ headless-pi judge pattern in ``scripts/system/judgment/run_judge_agreement.py``.
 
 Design invariants (PRD REQ-001..009):
   * The judge model is a hardcoded constant; it is NEVER derived from the matrix
-    ``--models`` list (no self-grading by a subject family).
+    ``--models`` list, and the runner REFUSES any run where the judge is also a
+    subject (no self-grading — see ``judge_self_grading_conflicts``).
   * A judge call that fails is retried ONCE, then the cell is EXCLUDED — never
     silently counted PASS, never downgraded to legacy keyword grading in-run.
   * This module is import-only for the EXPENSIVE runner; the cheap
@@ -25,18 +26,29 @@ import os
 import re
 import subprocess
 import threading
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from eval_prompt_efficacy import check_text  # deterministic grader (unchanged)
 
 # REQ-003: fixed independent judge — one named constant, never a --models entry.
 # The default is a CONCRETE model id on purpose: eval artifacts must stay
-# reproducible across model upgrades (unlike agents, which use tier aliases).
-# #6 (judge != subject FAMILY): a setup with MULTIPLE model families can point the
-# judge at a different-family model via the PI_EVAL_JUDGE_MODEL env var so the judge
-# never shares a family with the subject under grade. A single-family setup needs no
-# config — it simply keeps this default (graceful; the policy never blocks a run).
-JUDGE_MODEL = "anthropic/claude-haiku-4-5"
+# reproducible across model upgrades (unlike agents, which use tier aliases). Note it
+# pins `gpt-5.6-luna`, NOT the `luna` tier alias — an alias would let the measuring
+# instrument change silently between runs, and `family_of()` only classifies real
+# model ids (it would read a bare `luna` as its own family).
+#
+# #6 REVISED 2026-08-01 — judge != subject MODEL  (was: judge != subject FAMILY).
+# The old rule demanded a cross-FAMILY judge. That is unachievable in most setups
+# (typically only one vendor has credentials), so it was aspirational and never
+# enforced — a rule nothing checks is documentation, not a control. The narrower rule
+# is always achievable and carries the actual weight: a model must never grade
+# ITSELF. Self-grading is precisely the correlated-error case a second opinion exists
+# to break — a confidently-wrong model rates its own wrong answer a PASS. Sharing a
+# FAMILY is now explicitly ACCEPTABLE (cross-family is a bonus, not a requirement).
+# This rule IS enforced: `judge_self_grading_conflicts()` is checked by the runner,
+# which REFUSES the run. Resolve it by pointing PI_EVAL_JUDGE_MODEL at another model
+# or dropping the colliding subject from --models.
+JUDGE_MODEL = "openai-codex/gpt-5.6-luna"
 JUDGE_PROVIDER, JUDGE_MODEL_ID = JUDGE_MODEL.split("/", 1)
 JUDGE_MODEL_ENV = "PI_EVAL_JUDGE_MODEL"
 JUDGE_THINKING = "low"
@@ -56,6 +68,39 @@ def resolve_judge_model() -> Tuple[str, str, str]:
         spec = JUDGE_MODEL  # malformed override -> graceful fallback
     provider, model_id = spec.split("/", 1)
     return spec, provider, model_id
+
+
+def _model_key(model_id: str) -> str:
+    """Normalize a model id for identity comparison (provider-agnostic)."""
+    return model_id.strip().lower()
+
+
+def judge_self_grading_conflicts(subject_specs: Iterable[str]) -> List[str]:
+    """(#6) Subject specs that the resolved judge would be grading ITSELF on.
+
+    Policy: sharing a model FAMILY is fine; being the SAME MODEL is not. Matching is
+    on the model id only, so the same model reached via a different provider route
+    still collides, and a bare tier alias collides with the concrete id it names
+    (``luna`` vs ``gpt-5.6-luna``) via a suffix check.
+
+    The suffix check is a heuristic, deliberately biased toward FALSE POSITIVES: its
+    only consequence is a refusal with an actionable message, whereas a false negative
+    would silently ship a self-graded number. Returns [] when there is no conflict.
+    """
+    judge_key = _model_key(resolve_judge_model()[2])
+    conflicts: List[str] = []
+    for spec in subject_specs:
+        subject_key = _model_key(spec.split("/", 1)[1] if "/" in spec else spec)
+        if not subject_key:
+            continue
+        same = (
+            subject_key == judge_key
+            or judge_key.endswith("-" + subject_key)
+            or subject_key.endswith("-" + judge_key)
+        )
+        if same:
+            conflicts.append(spec)
+    return conflicts
 
 
 # Hermetic flags mirror the matrix runner; a NON-EMPTY --system-prompt is required

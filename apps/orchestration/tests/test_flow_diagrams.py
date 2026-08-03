@@ -30,13 +30,11 @@ from pathlib import Path
 
 import pytest
 
-from orchestration.playbooks.agent import AgentMachine
 from orchestration.playbooks.code import CodeMachine
 from orchestration.playbooks.derivation import DerivationMachine
 from orchestration.playbooks.imagegen import ImagegenMachine
 from orchestration.playbooks.jsa import JSAMachine
 from orchestration.playbooks.learn import LearnMachine
-from orchestration.playbooks.manim import ManimMachine
 from orchestration.playbooks.plan import PlanMachine
 from orchestration.playbooks.prd import PrdMachine
 from orchestration.playbooks.research import ResearchMachine
@@ -53,9 +51,7 @@ CASES = [
     ("learn", LearnMachine),
     ("research", ResearchMachine),
     ("derivation", DerivationMachine),
-    ("agent", AgentMachine),
     ("imagegen", ImagegenMachine),
-    ("manim", ManimMachine),
     ("rez", RezMachine),
 ]
 

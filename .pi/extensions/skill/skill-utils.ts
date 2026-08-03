@@ -1,3 +1,9 @@
+import {
+  registerTrustedQuestionnaireTransport,
+  type TrustedQuestionnaireBinding,
+  type TrustedQuestionnaireQuestion,
+} from "./execution-receipts.js";
+
 /**
  * Result shape returned by executeSkill to the skill extension.
  * Pure data — no UI or extension types.
@@ -14,6 +20,8 @@ export interface SkillResult {
   steps_total: number;
   agents_invoked: string[];
   errors: string[];
+  /** Complete Python engine terminal result, preserved without reconstruction. */
+  result?: Record<string, unknown>;
 
   // ── Multi-mode fields (all optional — default 'single' backward compat) ──
 
@@ -65,6 +73,13 @@ export interface EscalationQuestion {
   prompt: string;
   options?: EscalationQuestionOption[];
   allowOther?: boolean;
+  type?: "single" | "multi";
+  artifact_ref?: Record<string, unknown>;
+  approval_challenge?: string;
+  approval_run_id?: string;
+  approval_gate_id?: string;
+  questionnaire_transport_ref?: Record<string, unknown>;
+  rendered_questions_digest?: string;
 }
 
 /**
@@ -80,15 +95,10 @@ export interface EscalationQuestion {
  */
 export function normalizeEscalationQuestions(
   questions: EscalationQuestion[] | undefined | null
-): Array<
-  Required<Pick<EscalationQuestion, "id" | "label" | "prompt">> & {
-    options: EscalationQuestionOption[];
-    allowOther: boolean;
-  }
-> {
-  return (questions ?? []).map((q) => ({
+): TrustedQuestionnaireQuestion[] {
+  return (questions ?? []).map((q, index) => ({
     id: q.id,
-    label: q.label,
+    label: q.label || `Q${index + 1}`,
     prompt: q.prompt,
     options: (q.options ?? []).map((o) => ({
       value: o.value,
@@ -96,7 +106,91 @@ export function normalizeEscalationQuestions(
       ...(o.description ? { description: o.description } : {}),
     })),
     allowOther: q.allowOther ?? true,
+    ...(q.type ? { type: q.type } : {}),
   }));
+}
+
+function trustedQuestionnaireBinding(
+  questions: EscalationQuestion[]
+): TrustedQuestionnaireBinding | undefined {
+  if (questions.length !== 1) return undefined;
+  const question = questions[0];
+  if (
+    !question.approval_run_id ||
+    !question.approval_gate_id ||
+    !question.approval_challenge ||
+    !question.artifact_ref ||
+    !question.questionnaire_transport_ref ||
+    !question.rendered_questions_digest
+  ) {
+    return undefined;
+  }
+  return {
+    runId: question.approval_run_id,
+    gateId: question.approval_gate_id,
+    challenge: question.approval_challenge,
+    artifactRef: question.artifact_ref,
+    transportRef: question.questionnaire_transport_ref,
+    renderedQuestionsDigest: question.rendered_questions_digest,
+  };
+}
+
+export function prepareQuestionnairePayload(
+  questions: EscalationQuestion[]
+): { questions: TrustedQuestionnaireQuestion[] } | { trustedTransportCapability: string } {
+  const normalized = normalizeEscalationQuestions(questions);
+  const binding = trustedQuestionnaireBinding(questions);
+  const capability = binding
+    ? registerTrustedQuestionnaireTransport(normalized, binding)
+    : undefined;
+  return capability ? { trustedTransportCapability: capability } : { questions: normalized };
+}
+
+const JSON_LITERAL_TERMINAL_CONTROL_OR_BIDI =
+  /[\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+
+function isTerminalControlOrBidi(codePoint: number): boolean {
+  return (
+    codePoint <= 0x1f ||
+    (codePoint >= 0x7f && codePoint <= 0x9f) ||
+    codePoint === 0x061c ||
+    codePoint === 0x200e ||
+    codePoint === 0x200f ||
+    codePoint === 0x2028 ||
+    codePoint === 0x2029 ||
+    (codePoint >= 0x202a && codePoint <= 0x202e) ||
+    (codePoint >= 0x2066 && codePoint <= 0x2069)
+  );
+}
+
+function escapeTerminalDisplayText(value: string): string {
+  return Array.from(value, (character) => {
+    const codePoint = character.codePointAt(0);
+    if (codePoint === undefined || !isTerminalControlOrBidi(codePoint)) return character;
+    return `\\u${codePoint.toString(16).padStart(4, "0")}`;
+  }).join("");
+}
+
+/**
+ * Serialize the complete questionnaire payload as one lossless JSON literal.
+ *
+ * JSON.stringify already escapes C0 controls, quotes, and backslashes. JavaScript
+ * leaves DEL/C1, line separators, and bidi controls literal, though, so escape
+ * those code points as `\\uXXXX` too. JSON.parse reverses every escape and therefore
+ * reconstructs the normalized payload exactly while the displayed call remains
+ * safe for terminals and copy/paste.
+ */
+function serializeQuestionnairePayload(
+  payload: { questions: TrustedQuestionnaireQuestion[] } | { trustedTransportCapability: string }
+): string {
+  return JSON.stringify(payload, null, 2).replace(
+    JSON_LITERAL_TERMINAL_CONTROL_OR_BIDI,
+    (character) => {
+      const codePoint = character.codePointAt(0);
+      if (codePoint === undefined) return character;
+      return `\\u${codePoint.toString(16).padStart(4, "0")}`;
+    }
+  );
 }
 
 /**
@@ -344,7 +438,9 @@ export function formatResult(
     lines.push(`  Agents invoked: ${result.agents_invoked.join(" → ") || "none"}`);
     lines.push("");
     if (esc.unknown_reason) {
-      lines.push(theme("text", `  Reason: ${esc.unknown_reason}`));
+      lines.push(
+        theme("text", `  Reason: ${escapeTerminalDisplayText(String(esc.unknown_reason))}`)
+      );
     }
     if (esc.previous_state) {
       lines.push(theme("muted", `  Previous state: ${esc.previous_state}`));
@@ -355,32 +451,15 @@ export function formatResult(
     // The Apr 17 lesson: behavior must be enforced in tool output format,
     // not just in SKILL.md. Penny sees this text and must copy-paste it.
     lines.push(theme("toolTitle", "  Invoke this questionnaire tool call:"));
-    lines.push(theme("accent", "  questionnaire({"));
-    lines.push(theme("accent", "    questions: ["));
-
-    for (const q of esc.questions || []) {
-      lines.push(theme("accent", "      {"));
-      lines.push(theme("accent", `        id: "${q.id}",`));
-      lines.push(theme("accent", `        label: "${q.label}",`));
-      lines.push(
-        theme("accent", `        prompt: "${(q.prompt || "").replace(/\\n/g, " ").slice(0, 300)}",`)
-      );
-      lines.push(theme("accent", "        options: ["));
-      for (const opt of q.options || []) {
-        const desc = opt.description ? `, description: "${opt.description}"` : "";
-        lines.push(
-          theme("accent", `          { value: "${opt.value}", label: "${opt.label}"${desc} },`)
-        );
-      }
-      lines.push(theme("accent", "        ],"));
-      if (q.allowOther !== false) {
-        lines.push(theme("accent", "        allowOther: true,"));
-      }
-      lines.push(theme("accent", "      },"));
+    const questionnaireLiteral = serializeQuestionnairePayload(
+      prepareQuestionnairePayload(esc.questions)
+    );
+    const literalLines = questionnaireLiteral.split("\n");
+    lines.push(theme("accent", `  questionnaire(${literalLines[0]}`));
+    for (const line of literalLines.slice(1)) {
+      lines.push(theme("accent", `  ${line}`));
     }
-
-    lines.push(theme("accent", "    ]"));
-    lines.push(theme("accent", "  })"));
+    lines.push(theme("accent", "  )"));
     lines.push("");
     // NOTE: no orchestrator_state to carry — the engine's durable checkpointer
     // owns all FSM state, keyed by session_id/run_id. Re-invoking with the SAME
@@ -413,7 +492,13 @@ export function formatResult(
       lines.push(theme("muted", "  })"));
     }
   } else {
-    lines.push(theme("error", `✗ ${result.skill_name} failed`));
+    const incomplete = result.result && result.result["met"] === false;
+    lines.push(
+      theme(
+        incomplete ? "warning" : "error",
+        `${incomplete ? "⏹" : "✗"} ${result.skill_name} ${incomplete ? "incomplete" : "failed"}`
+      )
+    );
     lines.push(`  State: ${result.state}`);
     lines.push(`  Agents invoked: ${result.agents_invoked.join(" → ") || "none"}`);
     for (const error of result.errors) {

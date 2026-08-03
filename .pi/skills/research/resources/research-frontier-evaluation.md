@@ -1,5 +1,15 @@
 # Research Skill — Frontier Evaluation & Design Rationale
 
+> ## ⚠️ HISTORICAL DOCUMENT — superseded in part
+>
+> **This is a point-in-time evaluation, not a description of the skill today.**
+> Its §1–§2 source analysis and §4 reasoning remain the durable design argument
+> and are still worth reading. Its **§3 scorecard and §5 gap list are OUT OF
+> DATE** — three of the gaps they call MISSING or REGRESSION have since shipped.
+> **See §7 (Status) at the end of this file for what is actually true now.**
+> The live, enforced description of the skill is `resources/reference.md` and
+> `resources/flow.html`; where this file disagrees with those, they win.
+
 > Purpose: the durable justification behind the `research` skill's design. The
 > `ResearchPlaybook` on the shared orchestration engine realizes this rationale; the
 > patterns below informed which states, critique loops, and escalation seams it carries,
@@ -82,3 +92,30 @@
 - **Every loop is bounded**: the plan and report critique loops by `max_iterations`; no unbounded cycles.
 - **Mode gates** are guards on transitions (`[quick]`/`[standard]`/`[deep]`), so one FSM serves all three modes — the engine picks edges by the detected mode.
 - If the independent-verify / citation passes in §5 are added, they must run on a different model than `synthesizing` (anti-gaming; uncorrelated errors).
+
+---
+
+## 7. Status — what actually shipped (supersedes §3 and §5)
+
+The §3 scorecard and §5 "open future work" list were written before the port
+completed. Corrections:
+
+### SHIPPED since this document was written
+
+| §3/§5 item | Status now | Where |
+|---|---|---|
+| "**Vera `validating` state was REMOVED** … **REGRESSION** — the generator now self-validates" (§3) / §5.1 Independent VERIFY step | **SHIPPED.** `validating` (vera) is the final gate before `report_writing` in ALL three modes, evidence-gated, with a bounded re-grounding loop, honest exhaustion and stall escalation. | `playbooks/research.py` `validating` state + `validate_*` transitions; `resources/reference.md` |
+| §5.3 Dedicated citation/grounding pass — "no claim→source verification" | **SHIPPED.** That is exactly what the `validating` gate does; `assets/prompts/vera.md` ranks *executed* re-fetch of cited sources above rules above judgement. | `assets/prompts/vera.md` |
+| "`researching` is a single echo researching all sub-queries … no per-sub-query fan-out" (§3, §6) | **SHIPPED.** `researching` is a dynamic fan — one read-only echo branch per sub-query (arrangement 4), bounded by `max_fan_width`; only the explicit-quick fast-path is single-agent. | `_research_branches`, `route_after("planning")` |
+| "quick/standard modes have zero verification" (§4) | **FIXED.** The validation gate runs in every mode, including quick. | as above |
+| Per-mode `max_sub_queries` 1/3/4 (§5) | **REPLACED** by one budget the model spends within (default 4, clamped to fan width). The keyword `detect_mode` router was likewise deleted; mode is caller- or model-declared. | `initial_transition`, `MODES` |
+
+### STILL OPEN (the live backlog)
+
+| Item | Why it still matters |
+|---|---|
+| **§5.2 Iterative research loop (gap → more search)** — *the biggest remaining gap.* The FSM still does exactly one research round: `research_done` is unconditional, and a validation FAIL loops to `synthesizing`, never back to `researching`. Since synthia has no web tools, the only available remedy for an unsupported claim is to DROP it. | The system cannot spend more search where the evidence is actually thin — it can only shrink the report. |
+| **§5.4 Proactive scoping/clarification** up front (OpenAI pattern) | Clarification is still reactive (mid-run `needs_clarification`), and a clarify resume re-enters `planning` and re-runs the pipeline from scratch. |
+| **§5.5 Optional plan approval** (Gemini pattern) | No human plan gate; self-critique only (`GATE_STATES` is empty for research). |
+| **Cross-model verification** — §5.1's "driven by a different model than the synthesizer" was only HALF delivered: the independent *state* shipped, but synthia and vera both run the same tier (`sonnet` at evaluation time; `terra` since the 2026-08-01 fleet move) and the playbook exposes no `model_for_state` hook. | Registered as a dated `SAME_MODEL` exception in `orchestration/independence.py`. |
+| §5 LLM-as-judge rubric as an explicit gate (factual / citation / completeness / source quality / efficiency) | Still implicit in prompts; only citation-grounding is a hard gate. |

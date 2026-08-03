@@ -3,9 +3,6 @@
  "penny_wing_scratch_prefix": "penny/skills/",
  "penny_wing_scratch_ttl_days": 30,
  "skills": {
-  "agent": {
-   "convention": "penny-wing"
-  },
   "code": {
    "convention": "penny-wing"
   },
@@ -54,9 +51,6 @@
     "sca-learnings"
    ],
    "ttl_days": 30
-  },
-  "manim": {
-   "convention": "penny-wing"
   }
  }
 }

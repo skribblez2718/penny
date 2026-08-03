@@ -1,6 +1,5 @@
 # Capabilities Feature Index
 
-- [Agent Skill](agent-skill/AGENTS.md): Generate validated Penny agent definitions from a goal using a 7-state FSM
 - [Ambient Watchers](ambient-watchers/AGENTS.md): Signal generation, session-start checks, proactive awareness
 - [Behavioral Ratchet](behavioral-ratchet/AGENTS.md): Oracle-authored trajectory fixtures replayed + judged; anti-drift gate on amendments
 - [Error Logging](error-logging/AGENTS.md): Structured error codes from logger.ts; human-readable cross-reference

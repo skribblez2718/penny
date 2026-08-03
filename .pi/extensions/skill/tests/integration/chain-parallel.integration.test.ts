@@ -176,7 +176,7 @@ describe("parallel result aggregation (integration simulation)", () => {
       {
         success: true,
         session_id: "p2",
-        skill_name: "agent",
+        skill_name: "research",
         state: "complete",
         requires_approval: false,
         steps_total: 3,
@@ -285,7 +285,7 @@ describe("resume from checkpoint (integration simulation)", () => {
       pending_steps: [
         {
           index: 2,
-          skill_name: "agent",
+          skill_name: "research",
           goal: "Scaffold from {previous}",
         },
       ],

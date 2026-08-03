@@ -177,9 +177,12 @@ def draft_change(  # noqa: C901 - linear draft -> parse -> validate -> security 
 
     Replaces the boilerplate template block with a concrete, verbatim-anchored
     edit the model authors from the actual file content. Returns a validated
-    change dict, or None (=> caller falls back to the template guidance) when: the
-    diff model is not enabled (PI_SELFIMPROVE_DIFF_MODEL unset), the target is not
-    a readable file, the model fails, or the draft is invalid/unsafe.
+    change dict, or None when: the diff model is not enabled
+    (PI_SELFIMPROVE_DIFF_MODEL unset), the target is not a readable file, the
+    model fails, or the draft is invalid/unsafe.
+
+    None means NO AMENDMENT — there is no template fallback. The caller skips
+    the cluster entirely rather than machine-authoring prompt text.
 
     DRAFT-ONLY: the amendment stays PENDING and is written only after human
     approval through the #22-hardened apply gate — which independently re-checks

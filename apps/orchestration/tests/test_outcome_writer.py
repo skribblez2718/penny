@@ -2,11 +2,15 @@
 
 import json
 
+from orchestration import outcome_writer as ow
+from orchestration.checkpointer import Checkpointer
+from orchestration.code_artifacts import ArtifactRegistry
 from orchestration.context import RunContext
 from orchestration.outcome_writer import (
     build_outcome_content,
     record_outcome,
     _delta_score,
+    _failure_mode,
 )
 
 
@@ -30,6 +34,65 @@ class TestDeltaScore:
         assert _delta_score(_ctx(met=False, iteration=2)) == "MISMATCH"
 
 
+class TestFailureModeClassification:
+    """Model judgment primary, keyword table as the fallback it should be."""
+
+    def _ctx_with_gaps(self, gaps):
+        ctx = _ctx(met=False)
+        ctx.verify_gaps = list(gaps)
+        return ctx
+
+    def test_keyword_table_decides_when_no_model_is_configured(self, monkeypatch):
+        monkeypatch.delenv("PI_FAILURE_MODE_MODEL", raising=False)
+        ctx = self._ctx_with_gaps(["claim 3 is unsupported by any cited source"])
+        assert _failure_mode(ctx, "MISMATCH") == "unverified_claim"
+
+    def test_model_judgment_wins_when_configured(self, monkeypatch):
+        monkeypatch.setenv("PI_FAILURE_MODE_MODEL", "ollama/fake")
+        monkeypatch.setattr(
+            ow,
+            "_load_detect",
+            lambda: (lambda *a, **k: {"ok": True, "answer": "wrong_result"}),
+        )
+        # Gap text whose KEYWORDS say 'missing_constraint'; the model says otherwise.
+        ctx = self._ctx_with_gaps(["the requirement was missing from the output"])
+        assert _failure_mode(ctx, "MISMATCH") == "wrong_result"
+
+    def test_model_failure_falls_back_to_keywords(self, monkeypatch):
+        monkeypatch.setenv("PI_FAILURE_MODE_MODEL", "ollama/fake")
+        monkeypatch.setattr(ow, "_load_detect", lambda: (lambda *a, **k: {"ok": False}))
+        ctx = self._ctx_with_gaps(["no citation for the 40% figure"])
+        assert _failure_mode(ctx, "MISMATCH") == "unverified_claim"
+
+    def test_model_returning_garbage_falls_back_to_keywords(self, monkeypatch):
+        monkeypatch.setenv("PI_FAILURE_MODE_MODEL", "ollama/fake")
+        monkeypatch.setattr(
+            ow,
+            "_load_detect",
+            lambda: (lambda *a, **k: {"ok": True, "answer": "not_a_real_mode"}),
+        )
+        ctx = self._ctx_with_gaps(["no citation for the 40% figure"])
+        assert _failure_mode(ctx, "MISMATCH") == "unverified_claim"
+
+    def test_a_raising_detector_never_breaks_capture(self, monkeypatch):
+        monkeypatch.setenv("PI_FAILURE_MODE_MODEL", "ollama/fake")
+
+        def _boom(*a, **k):
+            raise RuntimeError("model down")
+
+        monkeypatch.setattr(ow, "_load_detect", lambda: _boom)
+        ctx = self._ctx_with_gaps(["the output is incorrect"])
+        assert _failure_mode(ctx, "MISMATCH") == "wrong_result"
+
+    def test_vocabulary_is_the_single_source_for_both_classifiers(self):
+        """The model prompt and the keyword table must not drift apart."""
+        table_modes = {m for m, _ in ow._FAILURE_MODE_KEYWORDS}
+        assert table_modes <= set(ow.FAILURE_MODES)
+
+    def test_match_runs_have_no_failure_mode(self):
+        assert _failure_mode(_ctx(met=True), "MATCH") == ""
+
+
 class TestBuildContent:
     def test_header_carries_unquoted_delta_score(self):
         # The mismatch watcher reads a truncated summary and matches an UNQUOTED
@@ -38,6 +101,36 @@ class TestBuildContent:
         header = content.splitlines()[0]
         assert "delta_score: MISMATCH" in header
         assert header.index("delta_score") < 200
+
+    def test_header_carries_verify_verdict_when_a_gate_ran(self):
+        """DELIVERY and VERIFICATION are different questions. A run can be MATCH
+        (artifact produced) while its verification gate FAILED — research ships a
+        report with unverified claims exactly this way, honestly. Header-reading
+        watchers must be able to see both, or such runs are invisible to the
+        improvement loop."""
+        ctx = _ctx(met=True)
+        ctx.verify_verdict = "FAIL"
+        header = build_outcome_content(ctx).splitlines()[0]
+        assert "delta_score: MATCH" in header
+        assert "verify_verdict: FAIL" in header
+        # must survive the 200-char summary truncation the watchers read
+        assert header.index("verify_verdict") < 200
+
+    def test_header_omits_verify_verdict_when_no_gate_ran(self):
+        """Playbooks without a verify signal keep a clean header; absence means
+        'no gate', which is distinguishable from a recorded PASS/FAIL."""
+        header = build_outcome_content(_ctx(met=True)).splitlines()[0]
+        assert "verify_verdict" not in header
+
+    def test_verify_verdict_in_header_does_not_disturb_delta_parsing(self):
+        """The digest/watcher parsers regex on field NAMES, so an inserted field is
+        safe — pinned here because the header is a shared contract."""
+        import re
+
+        ctx = _ctx(met=False)
+        ctx.verify_verdict = "FAIL"
+        header = build_outcome_content(ctx).splitlines()[0]
+        assert re.search(r"delta_score:\s*(\S+)", header).group(1) == "MISMATCH"
 
     def test_body_is_valid_json_with_outcome_and_delta(self):
         content = build_outcome_content(_ctx(met=True, iteration=1))
@@ -106,7 +199,10 @@ class TestBuildContent:
     def test_failure_mode_defaults_incomplete_for_unspecific_gaps(self):
         # Verifier found gaps but nothing keyword-matched → still didn't meet the
         # bar, so "incomplete" (not "other") — it clusters with other verify fails.
-        assert self._body(met=False, verify_gaps=["something felt off"])["failure_mode"] == "incomplete"
+        assert (
+            self._body(met=False, verify_gaps=["something felt off"])["failure_mode"]
+            == "incomplete"
+        )
 
     def test_failure_mode_other_for_hard_error_without_gaps(self):
         # A process/orchestration error is NOT a work-quality category; it stays
@@ -149,6 +245,29 @@ class TestBuildContent:
 
 
 class TestRecordOutcomeSafety:
+    def test_p0_registry_outcome_is_durable_even_when_mempalace_capture_is_disabled(self, tmp_path):
+        cp = Checkpointer(db_path=tmp_path / "orch.db")
+        registry = ArtifactRegistry(cp, "run-1")
+        registry.create_and_register(
+            kind="terminal_result",
+            payload={"met": True, "residual_risks": []},
+            producer="test",
+            authority="completion-predicate",
+        )
+        ctx = _ctx(
+            met=True,
+            extras={
+                "code": {
+                    "p0_enabled": True,
+                    "terminal_result": {"met": True, "residual_risks": []},
+                }
+            },
+        )
+        assert record_outcome(ctx, cp) is True
+        selected = registry.selected("outcome")
+        assert selected is not None
+        assert registry.get(selected).payload["terminal_result"]["met"] is True
+
     def test_no_write_under_pytest(self):
         # Capture is skipped under pytest so the suite never pollutes the real store.
         assert record_outcome(_ctx(met=True)) is False

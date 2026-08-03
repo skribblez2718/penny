@@ -17,8 +17,20 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@mariozechner/pi-ai";
+import {
+  buildIsolatedAgentInvocation,
+  isolatedAgentEnvironment,
+  type AgentProcessIsolation,
+} from "./process-isolation.js";
+
+export {
+  buildIsolatedAgentInvocation,
+  isolatedAgentEnvironment,
+  type AgentProcessIsolation,
+} from "./process-isolation.js";
 import { withFileMutationQueue } from "@mariozechner/pi-coding-agent";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
+import { captureToolResultForExecutionOwner } from "./execution-owner-capture.js";
 import { createLogger } from "../../lib/logger/logger.js";
 
 const logger = createLogger("agent-runner");
@@ -530,9 +542,10 @@ export type OnUpdateCallback = (partial: {
  * as the model half). A bare string (no "/", or an empty half) is returned as a
  * model-only override, preserving legacy behavior. Exported for unit testing.
  */
-export function parseModelOverride(
-  modelOverride: string | undefined
-): { model?: string; provider?: string } {
+export function parseModelOverride(modelOverride: string | undefined): {
+  model?: string;
+  provider?: string;
+} {
   if (!modelOverride) return {};
   const i = modelOverride.indexOf("/");
   if (i > 0) {
@@ -561,7 +574,8 @@ export async function runSingleAgent(
   makeDetails: (results: SingleResult[]) => SubagentDetails,
   skillContextContent: string | undefined = undefined,
   progressEmitter?: ProgressEmitter,
-  modelOverride?: string
+  modelOverride?: string,
+  processIsolation?: AgentProcessIsolation
 ): Promise<SingleResult> {
   const agent = agents.find((a) => a.name === agentName);
 
@@ -624,7 +638,10 @@ export async function runSingleAgent(
   // Ollama-model agent gets --provider ollama even when the global
   // defaultProvider is anthropic) → Pi's configured default.
   const provider =
-    overrideProvider || agent.provider || resolveProviderForModel(model) || resolveDefaultProvider();
+    overrideProvider ||
+    agent.provider ||
+    resolveProviderForModel(model) ||
+    resolveDefaultProvider();
   if (provider) args.push("--provider", provider);
   // Per-agent thinking/effort level (frontmatter `thinking:`), e.g. xhigh. The
   // spawned pi subprocess accepts `--thinking <off|minimal|low|medium|high|xhigh>`.
@@ -721,7 +738,10 @@ export async function runSingleAgent(
         resolve(code);
       };
 
-      const invocation = getPiInvocation(args);
+      const baseInvocation = getPiInvocation(args);
+      const invocation = processIsolation
+        ? buildIsolatedAgentInvocation(baseInvocation, cwd ?? defaultCwd, processIsolation)
+        : baseInvocation;
       // stdin = "ignore" so Pi reads /dev/null (immediate EOF).
       // Using "pipe" would keep a writable stream handle in the parent's
       // event loop, preventing Pi's process from exiting cleanly.
@@ -735,6 +755,7 @@ export async function runSingleAgent(
       // The abort signal handles user-initiated cancellation.
       const proc = spawn(invocation.command, invocation.args, {
         cwd: cwd ?? defaultCwd,
+        env: isolatedAgentEnvironment(),
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -813,7 +834,10 @@ export async function runSingleAgent(
         }
 
         if (event.type === "tool_result_end" && event.message) {
-          currentResult.messages.push(event.message as Message);
+          const captured = captureToolResultForExecutionOwner(
+            event.message as Record<string, unknown>
+          );
+          currentResult.messages.push(captured as unknown as Message);
           emitUpdate();
         }
       };

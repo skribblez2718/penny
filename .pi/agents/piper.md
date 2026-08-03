@@ -2,9 +2,9 @@
 name: piper
 description: Sequence work and map dependencies — decide what happens in what order, and anticipate the risks. Use when the task requires ordering steps or a lightweight roadmap without a full skill workflow. Do not use when the user wants a full structured plan deliverable (the plan skill), breaking a plan into executable tasks (tabitha), exploring (echo), critique (carren), or verification (vera).
 tools: read, grep, find, ls, bash, web_search, web_fetch, memory_smart_search, memory_add_drawer, memory_check_duplicate, memory_kg_add
-model: opus
+model: sol
 thinking: xhigh
-provider: anthropic
+provider: openai-codex
 ---
 
 ## Purpose

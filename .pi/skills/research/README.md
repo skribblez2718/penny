@@ -29,12 +29,12 @@ caller `quick` skips planning.
 
 | State | Agent | Role |
 |-------|-------|------|
-| `intake` | — | Validate goal, seed `max_sub_queries` budget, route (caller-quick → researching, else planning) |
+| `intake` | — | Validate goal, expand the mode into a rigor budget, seed `max_sub_queries`, route (caller-quick → researching, else planning) |
 | `planning` | piper | Decompose query into sub-queries (standard/deep) |
-| `critiquing_plan` | carren | Critique the plan (deep only) |
+| `critiquing_plan` | carren | Critique the plan (`critique_passes >= 2`) |
 | `researching` | echo × N | Dynamic fan: one read-only branch per sub-query (single-agent on the quick fast-path) |
 | `synthesizing` | synthia | Synthesize findings into one report |
-| `critiquing_report` | carren | Critique the report (deep only) |
+| `critiquing_report` | carren | Critique the report (`critique_passes >= 1`) |
 | `validating` | vera | Independent citation-grounding gate (all modes) |
 | `report_writing` | skribble | Write report.md, sources.md, README.md |
 | `unknown` / `awaiting_clarification` | — | HITL escalation staging / pause |
@@ -61,8 +61,10 @@ escalates).
   synthesizing → critiquing_report (carren) → validating (vera) → report_writing
   → complete`, with two bounded critique loops plus the validation gate.
 
-`max_sub_queries` defaults to 1 (quick) / 3 (standard) / 4 (deep) and is
-enforced at dispatch.
+There is **no per-mode sub-query table**. `max_sub_queries` is ONE budget
+(default 4, tier-scaled via `PI_MODEL_TIER`, clamped to `max_fan_width`) that the
+model spends within, enforced at dispatch — code caps, the model spends. An
+over-budget plan is truncated with a recorded warning.
 
 ## Loops
 
@@ -112,13 +114,20 @@ does not escalate.
 `done_predicate` returns false and the result reports `met: false` rather than
 fabricating success.
 
-## Credibility Framework
+## Credibility
 
-Embedded in Echo's domain guidance (`assets/prompts/echo.md`):
+Echo's domain guidance (`assets/prompts/echo.md`) states the standard
+*relationally* rather than as a fixed taxonomy: every claim is cited, and each
+source is ranked **primary > reputable secondary > weak** with uncertainty
+flagged as uncertainty. There is deliberately no hard-coded tier enum — source
+credibility is contextual (a vendor's own docs are the primary source for their
+product; an unreviewed preprint is not authoritative merely for being on arXiv),
+so the judgement belongs to the model reading the source, with the citation
+gate (vera) as the check.
 
-- **Source Tiers:** T1 Primary/Authoritative (docs, RFCs, arXiv) · T2
-  Expert/Established · T3 Community/Practitioner · T4 Unverified/Commercial.
-- **Confidence Markers:** High · Medium · Low · Conflicting.
+Confidence rides the engine's canonical taxonomy —
+`CERTAIN | PROBABLE | POSSIBLE | UNCERTAIN` (`orchestration/contracts.py`) —
+where `UNCERTAIN` on an escalatable state routes to the HITL seam.
 
 ## Reference
 

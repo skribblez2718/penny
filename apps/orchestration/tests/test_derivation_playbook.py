@@ -14,6 +14,7 @@ The directory-path tests use REAL ``tmp_path`` corpora (migration mandate).
 
 import json
 import os
+import random
 import stat
 import subprocess
 import sys
@@ -690,3 +691,159 @@ def test_outline_cli_emits_json(tmp_path):
     assert report["status"] == "ok"
     assert report["section_count"] == 2
     assert [s["title"] for s in report["sections"]] == ["One", "Two"]
+
+
+# ---------------------------------------------------------------------------
+# ncd.py — the Tier-1.5 compression-distance signal (its own unit tests).
+# ---------------------------------------------------------------------------
+
+
+def _ncd_mod():
+    sd = Path(__file__).resolve().parents[3] / ".pi" / "skills" / "derivation" / "scripts"
+    sys.path.insert(0, str(sd))
+    import ncd  # type: ignore
+
+    return ncd
+
+
+_TOPIC_A = (
+    "gradient tensor lattice threshold measure operator estimate sample boundary channel "
+    "encode decode signal capacity noise redundancy structure sequence selection expression"
+)
+_TOPIC_B = (
+    "harbor cargo vessel tide crane freight anchor voyage berth captain compass rigging "
+    "sailor storm lantern rope dock quay ballast keel"
+)
+
+
+def _prose(vocab: str, n_words: int = 1400, seed: int = 0) -> str:
+    """Deterministic filler prose from one topic vocabulary (>= the token floor)."""
+    words = vocab.split()
+    rnd = random.Random(seed)
+    lines, i = [], 0
+    while i < n_words:
+        k = rnd.randint(9, 18)
+        lines.append(" ".join(rnd.choice(words) for _ in range(k)).capitalize() + ".")
+        i += k
+    return "\n\n".join(lines)
+
+
+def _paraphrase(text: str, seed: int = 5) -> str:
+    """A light reword: ~35% of tokens swapped for synonyms, structure untouched."""
+    rnd = random.Random(seed)
+    swaps = {
+        "gradient": "slope",
+        "tensor": "array",
+        "lattice": "grid",
+        "threshold": "cutoff",
+        "measure": "metric",
+        "operator": "map",
+        "estimate": "approximation",
+        "sample": "draw",
+        "boundary": "edge",
+        "channel": "link",
+    }
+    return " ".join(
+        swaps.get(w.lower().strip("."), w) if rnd.random() < 0.35 else w for w in text.split()
+    )
+
+
+def _ncd_report(content: Path, sources: Path) -> dict:
+    ncd = _ncd_mod()
+    out = subprocess.run(
+        [
+            sys.executable,
+            str(Path(ncd.__file__)),
+            "--content",
+            str(content),
+            "--sources",
+            str(sources),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(out.stdout)
+
+
+def _row(report: dict, sid: str) -> dict:
+    return next(r for r in report["per_source"] if r["source_id"] == sid)
+
+
+def _ncd_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    body = _prose(_TOPIC_A, seed=1)
+    content = tmp_path / "ncd_content.md"
+    content.write_text("# Content\n\n" + body, encoding="utf-8")
+    sources = Path(
+        _corpus(  # existing helper: writes tmp_path/corpus, returns constraints
+            tmp_path,
+            {
+                "identical.md": "Copy\n====\n\n" + body,  # (i) same text, other formatting
+                "paraphrase.md": "# P\n\n" + _paraphrase(body),  # (iii) light reword
+                "unrelated_1.md": "# U1\n\n" + _prose(_TOPIC_B, seed=2),
+                "unrelated_2.md": "# U2\n\n" + _prose(_TOPIC_B, seed=3),
+                "unrelated_3.md": "# U3\n\n" + _prose(_TOPIC_B, seed=4),
+                "too_short.md": "# S\n\n"
+                + _prose(_TOPIC_A, n_words=200, seed=9),  # (iv) below floor
+            },
+        )["sources"]
+    )
+    return content, sources
+
+
+def test_ncd_identical_content_is_near_zero_and_flags(tmp_path):
+    rep = _ncd_report(*_ncd_fixture(tmp_path))
+    row = _row(rep, "identical.md")
+    assert row["valid"] is True
+    assert row["ncd_lzma"] < 0.2 and row["ncd_zlib"] < 0.35
+    assert row["outlier"] is True and rep["status"] == "flag"
+
+
+def test_ncd_unrelated_text_is_near_one_and_does_not_flag(tmp_path):
+    rep = _ncd_report(*_ncd_fixture(tmp_path))
+    for sid in ("unrelated_1.md", "unrelated_2.md", "unrelated_3.md"):
+        row = _row(rep, sid)
+        assert row["valid"] is True
+        assert row["ncd_lzma"] > 0.75
+        assert row["outlier"] is False
+
+
+def test_ncd_light_paraphrase_is_intermediate_and_flags(tmp_path):
+    rep = _ncd_report(*_ncd_fixture(tmp_path))
+    row = _row(rep, "paraphrase.md")
+    unrelated = min(
+        _row(rep, s)["ncd_lzma"] for s in ("unrelated_1.md", "unrelated_2.md", "unrelated_3.md")
+    )
+    assert _row(rep, "identical.md")["ncd_lzma"] < row["ncd_lzma"] < unrelated
+    assert row["outlier"] is True
+
+
+def test_ncd_short_source_is_invalid_with_no_numbers(tmp_path):
+    rep = _ncd_report(*_ncd_fixture(tmp_path))
+    row = _row(rep, "too_short.md")
+    assert row["valid"] is False
+    assert row["ncd_zlib"] is None and row["ncd_lzma"] is None
+    assert row["outlier"] is False and row["outlier_by"] == []
+
+
+def test_ncd_no_outlier_flags_below_min_sources(tmp_path):
+    body = _prose(_TOPIC_A, seed=1)
+    content = tmp_path / "ncd_content.md"
+    content.write_text(body, encoding="utf-8")
+    sources = Path(
+        _corpus(tmp_path, {"identical.md": body, "unrelated.md": _prose(_TOPIC_B, seed=2)})[
+            "sources"
+        ]
+    )
+    rep = _ncd_report(content, sources)
+    assert rep["status"] == "insufficient_corpus"
+    assert all(r["outlier"] is False for r in rep["per_source"])
+    assert _row(rep, "identical.md")["ncd_lzma"] < 0.2  # value still reported, just not flagged
+
+
+def test_ncd_normalization_matches_prefilter_tokenizer(tmp_path):
+    ncd = _ncd_mod()
+    pf = ncd.load_prefilter()
+    assert pf is not None
+    text = "# Heading\n\n**Bold** words,   spaced\tout!\n"
+    assert ncd.normalize(pf, text) == " ".join(pf.tokenize(text)) == "heading bold words spaced out"

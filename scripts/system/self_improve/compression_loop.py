@@ -197,33 +197,19 @@ def _one_line(text: str, cap: int = 160) -> str:
     return " ".join(str(text).split())[:cap]
 
 
-def build_guidance_text(pattern: str, evidence: List[str], occurrences: int) -> str:
-    """Render an appendable '### Learned:' block from a recurring failure.
-
-    This is the real proposed text (replacing the old TODO placeholder that
-    made every generated amendment a no-op). Leading blank lines make a raw
-    EOF append (the applier's ADD action inserts no separator) heading-safe in
-    the frontmatter-free prompt markdown. Kept compact so the amendment drawer
-    stays well under the bridge's 4,000-char chunking threshold — chunked
-    drawers break every JSON reader of penny/system_amendments.
-    """
-    lines = [
-        "",
-        "",
-        f"### Learned: {_one_line(pattern, 120)}",
-        "",
-        f"This failure recurred {occurrences}x in recent outcomes:",
-    ]
-    for ev in evidence[:3]:
-        lines.append(f"- {_one_line(ev)}")
-    lines.extend(
-        [
-            "",
-            "Before finalizing work in this area, explicitly check for this failure "
-            f"mode and address it up front: {_one_line(pattern, 120)}.",
-        ]
-    )
-    return "\n".join(lines) + "\n"
+# NOTE: there is deliberately NO template renderer for amendment prompt text.
+#
+# A former ``build_guidance_text()`` helper machine-authored a '### Learned:'
+# block by interpolating the evidence list — "<decision_id> (MISMATCH): <raw
+# operator reason>" — into markdown destined for a git-tracked agent prompt.
+# That put unresolvable ledger ids, mid-word-truncated free text, and
+# downstream-project specifics into a live prompt, and the instruction it
+# generated merely restated the trigger. It was removed rather than improved:
+# prompt text is authored by a human (or a model drafting a real anchored diff
+# that a human approves verbatim), never by a string template.
+#
+# Evidence still lives on the amendment RECORD for audit; only prompt-bound
+# text is forbidden.
 
 
 def _map_domain_to_target_file(domain: str) -> str:
@@ -295,27 +281,22 @@ def run_compression_loop(
         else:
             target_file = "REJECTED_UNIVERSAL"
 
-        # #23: prefer a model-drafted real old->new diff; fall back to the
-        # template guidance block when the diff model is off or can't draft one.
+        # #23: an amendment exists ONLY when the model drafts a real, verbatim-
+        # anchored old->new diff. There is no template fallback by design — see
+        # the note above _map_domain_to_target_file. When drafting is off or
+        # fails, emit NO amendment for this cluster rather than a machine-
+        # authored block of prompt text.
         drafted = draft_change(learning, evidence, target_file, runner=runner)
-        if drafted:
-            amendment = generate_amendment(
-                learning=learning,
-                evidence=evidence[:5],
-                target_layer=target.value,
-                target_file=target_file,
-                changes=[drafted],
-                domain=domain,
-            )
-        else:
-            amendment = generate_amendment(
-                learning=learning,
-                evidence=evidence[:5],
-                target_layer=target.value,
-                target_file=target_file,
-                proposed_text=build_guidance_text(learning, evidence, len(matched)),
-                domain=domain,
-            )
+        if not drafted:
+            continue
+        amendment = generate_amendment(
+            learning=learning,
+            evidence=evidence[:5],
+            target_layer=target.value,
+            target_file=target_file,
+            changes=[drafted],
+            domain=domain,
+        )
         amendments.append(amendment)
 
     return _deduplicate(amendments, previous_amendments)

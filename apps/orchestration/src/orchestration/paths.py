@@ -5,7 +5,7 @@ WHY THIS EXISTS
 An agent subprocess is spawned with ``cwd = project_root`` — the TARGET repo a skill
 is operating on (``.pi/extensions/skill/index.ts`` passes ``projectRoot`` as the agent
 cwd; ``agent-runner.ts`` spawns with ``cwd: cwd ?? defaultCwd``). For ``code`` /
-``sca`` / ``jsa`` / ``learn`` / ``manim`` runs that directory is NOT this repo.
+``sca`` / ``jsa`` / ``learn`` runs that directory is NOT this repo.
 
 So any repo-relative path written into a task message — ``resources/rubric.md``,
 ``.pi/skills/code/resources/security-checklist.md``, ``docs/agents/secure-coding/…`` —

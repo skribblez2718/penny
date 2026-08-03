@@ -164,6 +164,21 @@ def test_start_dispatches_scoping(cp):
     assert d["action"] == "invoke_agent" and d["agent"] == "echo" and d["state_id"] == "scoping"
 
 
+def test_exam_exemplars_reach_the_ingest_task_as_characterize_never_copy(cp):
+    """The target exam's difficulty profile is an INPUT (pedagogy spec §7): the
+    caller's exemplar path reaches the scanning agent, with the clean-room
+    characterize-never-copy instruction attached."""
+    d = _start(cp, constraints={**_CONSTRAINTS, "exam_exemplars": "/tmp/target-exam/samples"})
+    task = d["task_summary"]
+    assert "/tmp/target-exam/samples" in task
+    assert "CHARACTERIZE" in task and "NEVER copy" in task
+
+
+def test_exam_exemplars_absent_leaves_the_task_unchanged(cp):
+    d = _start(cp)
+    assert "exemplar" not in d["task_summary"].lower()
+
+
 def test_scoping_emits_the_ingest_fan_topology(cp):
     _start(cp)
     d = _step(cp, "echo", SCOPE_SUMMARY)
@@ -255,6 +270,32 @@ def test_charter_gate_pauses_for_user(cp):
     assert d["action"] == "escalate_to_user"
     rec = cp.load(RID)
     assert rec.status == STATUS_AWAITING_USER and rec.current_state_id == "charter_gate"
+
+
+def test_charter_gate_surfaces_the_difficulty_and_prerequisite_decisions(cp):
+    """Exam difficulty and assumed knowledge are the human's calls, so both reach
+    the gate prompt rather than being discovered after a course is authored."""
+    _to_ingesting(cp)
+    _step(cp, "__parallel__", _ingest_batch())
+    d = _step(
+        cp,
+        "annie",
+        {
+            **_DESIGN_OK,
+            "assessment_blueprint": ["30% multi-select", "pass mark 70%", "untimed (mastery)"],
+            "unresolved_prerequisites": ["series expansion used in lesson 2, taught nowhere"],
+        },
+    )
+    prompt = d["questions"][0]["prompt"]
+    assert "Assessment blueprint" in prompt and "pass mark 70%" in prompt
+    assert "Unresolved prerequisites" in prompt and "series expansion" in prompt
+
+
+def test_charter_gate_flags_an_absent_blueprint_as_a_concern(cp):
+    d = _to_gate(cp)  # _DESIGN_OK carries no blueprint
+    prompt = d["questions"][0]["prompt"]
+    assert "none recorded" in prompt
+    assert "Unresolved prerequisites" not in prompt
 
 
 def test_charter_gate_refine_returns_to_designing(cp):

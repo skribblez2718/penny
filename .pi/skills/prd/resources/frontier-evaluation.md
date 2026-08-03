@@ -28,8 +28,12 @@ verification criteria" spine the `code` skill consumes.
 ## Correction (2026-07-28) — independence
 
 An earlier revision of this file claimed *"vera evaluates on a different model than the synthia
-generator."* **That was false.** `.pi/agents/synthia.md` and `.pi/agents/vera.md` both declare
-`model: sonnet` / `provider: anthropic`.
+generator."* **That was false.** `.pi/agents/synthia.md` and `.pi/agents/vera.md` both declared
+`model: sonnet` / `provider: anthropic` at the time of this correction.
+
+> **Fleet update (2026-08-01):** both agents now declare `model: terra` /
+> `provider: openai-codex` (OpenAI `gpt-5.6-terra`). The edge is still SAME_MODEL, so the
+> correction's conclusion is unchanged — only the model names moved.
 
 The authoritative, self-checking record is **`orchestration/independence.py`**, which resolves each
 agent's model *live* from its frontmatter and classifies the prd actor→verifier edge as

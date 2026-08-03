@@ -1,5 +1,6 @@
-"""Tests for the amendment-loop closure: real guidance text, collision-proof
-ids, repo-root git commits, and the review CLI's drawer-rewrite mechanics."""
+"""Tests for the amendment-loop closure: no machine-authored prompt text,
+collision-proof ids, repo-root git commits, and the review CLI's drawer-rewrite
+mechanics."""
 
 import json
 import subprocess
@@ -10,47 +11,92 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import compression_loop  # noqa: E402
 from amendment_generator import _next_id, generate_amendment  # noqa: E402
 from amendment_applier import apply_amendment  # noqa: E402
-from compression_loop import build_guidance_text, run_compression_loop  # noqa: E402
+from compression_loop import run_compression_loop  # noqa: E402
+
+_OUTCOMES = [
+    {"decision_id": "d1", "outcome": "MISMATCH", "reason": "timeout", "domain": "coding"},
+    {"decision_id": "d2", "outcome": "MISMATCH", "reason": "timeout", "domain": "coding"},
+]
 
 
-class TestGuidanceText:
-    def test_no_todo_placeholder(self):
-        text = build_guidance_text("Timeout in tests", ["d1 (MISMATCH): timeout"], 2)
-        assert "TODO" not in text
-        assert "<!--" not in text
+def _fake_draft(monkeypatch, change=None):
+    """Stand in for the diff model so the loop can produce an amendment."""
+    change = change or {
+        "action": "ADD",
+        "old_text": "",
+        "new_text": "\n\nPrefer an explicit timeout over the default.\n",
+        "rationale": "model-drafted",
+    }
+    monkeypatch.setattr(compression_loop, "draft_change", lambda *a, **k: change)
+    return change
 
-    def test_append_safe_prefix_and_heading(self):
-        text = build_guidance_text("Timeout in tests", ["d1 (MISMATCH): timeout"], 2)
-        # ADD is a raw EOF append with no separator — leading blank lines keep
-        # the heading intact when appended to a file ending mid-line.
-        assert text.startswith("\n\n### Learned:")
-        assert text.endswith("\n")
 
-    def test_contains_pattern_evidence_and_count(self):
-        text = build_guidance_text("Flaky auth", ["d1 (MISMATCH): flaky auth", "d2"], 3)
-        assert "Flaky auth" in text
-        assert "3x" in text
-        assert "d1 (MISMATCH)" in text
+class TestNoMachineAuthoredPromptText:
+    """The defect: a template renderer interpolated ledger ids and raw free-text
+    reasons into markdown destined for a git-tracked agent prompt."""
 
-    def test_bounded_size(self):
-        huge = ["x" * 5000] * 10
-        text = build_guidance_text("p" * 5000, huge, 10)
-        assert len(text) < 1500  # amendment drawer must stay far below 4000 chars
+    def test_no_template_renderer_exists(self):
+        assert not [n for n in dir(compression_loop) if "guidance_text" in n]
 
-    def test_compression_loop_emits_real_text_and_domain(self):
+    def test_no_amendment_when_model_cannot_draft(self, monkeypatch):
+        """No template fallback: drafting unavailable must yield NO amendment,
+        never a machine-authored block of prompt text."""
+        monkeypatch.setattr(compression_loop, "draft_change", lambda *a, **k: None)
+        assert run_compression_loop(_OUTCOMES) == []
+
+    def test_amendment_text_is_exactly_the_model_draft(self, monkeypatch):
+        """The only text on the record is the drafted diff — no appended
+        template, no evidence prose, no '### Learned:' block."""
+        change = _fake_draft(monkeypatch)
+        amendments = run_compression_loop(_OUTCOMES)
+        assert len(amendments) == 1
+        new_text = amendments[0]["changes"][0]["new_text"]
+        assert new_text == change["new_text"]
+        assert "### Learned:" not in new_text
+        assert "recurred" not in new_text
+
+    def test_ledger_ids_and_reasons_never_reach_prompt_text(self, monkeypatch):
+        """Regression guard for the exact defect: decision ids and raw reason
+        text must not appear in any prompt-bound text on the amendment."""
+        _fake_draft(monkeypatch)
         outcomes = [
-            {"decision_id": "d1", "outcome": "MISMATCH", "reason": "timeout", "domain": "coding"},
-            {"decision_id": "d2", "outcome": "MISMATCH", "reason": "timeout", "domain": "coding"},
+            {
+                "decision_id": "decision_deadbeef01",
+                "outcome": "MISMATCH",
+                "reason": "p0 driver result has no signed execution-owner invocation",
+                "domain": "coding",
+            },
+            {
+                "decision_id": "decision_deadbeef02",
+                "outcome": "MISMATCH",
+                "reason": "p0 driver result has no signed execution-owner invocation",
+                "domain": "coding",
+            },
         ]
         amendments = run_compression_loop(outcomes)
         assert len(amendments) == 1
-        amendment = amendments[0]
-        new_text = amendment["changes"][0]["new_text"]
-        assert "TODO" not in new_text
-        assert "### Learned:" in new_text
-        assert amendment["domain"] == "coding"
+        prompt_text = "".join(
+            c.get("old_text", "") + c.get("new_text", "")
+            for c in amendments[0]["changes"]
+        )
+        assert "decision_deadbeef01" not in prompt_text
+        assert "decision_deadbeef02" not in prompt_text
+        assert "execution-owner" not in prompt_text
+
+    def test_evidence_survives_on_the_record_for_audit(self, monkeypatch):
+        """Only prompt-bound text is forbidden — the audit trail must remain."""
+        _fake_draft(monkeypatch)
+        amendments = run_compression_loop(_OUTCOMES)
+        evidence = amendments[0]["evidence"]
+        assert evidence
+        assert any("d1" in e for e in evidence)
+
+    def test_domain_is_carried(self, monkeypatch):
+        _fake_draft(monkeypatch)
+        assert run_compression_loop(_OUTCOMES)[0]["domain"] == "coding"
 
 
 class TestAmendmentIds:
@@ -80,9 +126,9 @@ class TestAmendmentIds:
 class TestAmendmentRecordBounded:
     def test_verbose_reasons_stay_under_chunk_threshold(self):
         """Model-written outcome reasons run 500+ chars and land in the record
-        7+ times (trigger, evidence x5, rationale, inside new_text). Uncapped,
-        a few recurrences render past the bridge's 4,000-char chunking
-        threshold and the stored drawer becomes unparseable fragments."""
+        several times (trigger, evidence x5, rationale). Uncapped, a few
+        recurrences render past the bridge's 4,000-char chunking threshold and
+        the stored drawer becomes unparseable fragments."""
         reason = "the integration test timed out because " + "x" * 550
         evidence = [f"run_{i} (MISMATCH): {reason}" for i in range(5)]
         record = generate_amendment(
@@ -90,7 +136,7 @@ class TestAmendmentRecordBounded:
             evidence=evidence,
             target_layer="DOMAIN_GUIDANCE",
             target_file=".pi/skills/plan/assets/prompts/piper.md",
-            proposed_text=build_guidance_text(reason, evidence, 5),
+            proposed_text="\n\nSet an explicit timeout on the integration suite.\n",
             domain="coding",
         )
         rendered = f"amendment_id: {record['amendment_id']}\n" + json.dumps(record, indent=2)
@@ -111,9 +157,10 @@ class TestAmendmentRecordBounded:
         assert record["changes"][0]["old_text"] == old
         assert record["changes"][0]["new_text"] == "n" * 1000
 
-    def test_compression_domain_fallback_is_other_not_general(self):
+    def test_compression_domain_fallback_is_other_not_general(self, monkeypatch):
         """'general' is not in the outcome writer's domain enum, so a
         'general' amendment could never have its efficacy measured."""
+        _fake_draft(monkeypatch)
         outcomes = [
             {"decision_id": "d1", "outcome": "MISMATCH", "reason": "timeout"},
             {"decision_id": "d2", "outcome": "MISMATCH", "reason": "timeout"},

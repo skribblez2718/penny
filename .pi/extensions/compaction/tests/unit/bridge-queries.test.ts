@@ -36,7 +36,7 @@ describe("queryMempalaceSkillRooms", () => {
             rooms: [
               { name: "skills/plan-abc123" },
               { name: "general" },
-              { name: "skills/agent-xyz789" },
+              { name: "skills/research-xyz789" },
             ],
           },
         };
@@ -51,7 +51,7 @@ describe("queryMempalaceSkillRooms", () => {
     expect(rooms).toHaveLength(2);
     expect(rooms[0].room).toBe("skills/plan-abc123");
     expect(rooms[0].drawer_ids).toEqual(["d1", "d2"]);
-    expect(rooms[1].room).toBe("skills/agent-xyz789");
+    expect(rooms[1].room).toBe("skills/research-xyz789");
   });
 
   it("handles the dict-shaped list_rooms response", async () => {
@@ -88,7 +88,7 @@ describe("queryMempalaceSkillRoomsForSession", () => {
       rooms: [
         { name: "skills/code-1751700000000" },
         { name: "skills/plan-other", last_updated: new Date(Date.now() - 3000).toISOString() },
-        { name: "skills/agent-ancient", last_updated: "2020-01-01T00:00:00.000Z" },
+        { name: "skills/research-ancient", last_updated: "2020-01-01T00:00:00.000Z" },
       ],
     },
   };
@@ -105,7 +105,7 @@ describe("queryMempalaceSkillRoomsForSession", () => {
     const rooms = await queryMempalaceSkillRoomsForSession(["code-1751700000000"], 1);
     const names = rooms.map((r: any) => r.room);
     expect(names).toContain("skills/code-1751700000000");
-    expect(names).not.toContain("skills/agent-ancient");
+    expect(names).not.toContain("skills/research-ancient");
     const dominant = rooms.find((r: any) => r.room === "skills/code-1751700000000");
     expect(dominant.dominant_for_session).toBe(true);
   });
@@ -122,7 +122,7 @@ describe("queryMempalaceSkillRoomsForSession", () => {
     const rooms = await queryMempalaceSkillRoomsForSession(["nomatch"], 86_400_000);
     const names = rooms.map((r: any) => r.room);
     expect(names).toContain("skills/plan-other"); // recent
-    expect(names).not.toContain("skills/agent-ancient"); // old, no match
+    expect(names).not.toContain("skills/research-ancient"); // old, no match
   });
 
   it("issues exactly one list_drawers call per matched room (no redundant searches)", async () => {

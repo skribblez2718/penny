@@ -20,7 +20,9 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Any, Callable, cast
 
+from ..context import RunContext
 from ..paths import skill_file
 
 # Map of framework names to the dep tokens that signal their presence.
@@ -52,11 +54,16 @@ _TS_SERVER_DEPS: dict[str, list[str]] = {
 # catches unlisted ones); unset OR any failure -> the tables below. Output contract
 # unchanged; never raises.
 _PY_FRAMEWORKS = set(_PYTHON_SERVER_DEPS) | {
-    "quart", "sanic", "tornado", "aiohttp", "bottle", "falcon",
+    "quart",
+    "sanic",
+    "tornado",
+    "aiohttp",
+    "bottle",
+    "falcon",
 }
 
 
-def _load_detect():
+def _load_detect() -> Callable[..., dict[str, Any]] | None:
     """Lazy-import the shared detect() primitive (scripts/system/lib), or None."""
     try:
         for parent in Path(__file__).resolve().parents:
@@ -64,8 +71,9 @@ def _load_detect():
             if lib.is_dir():
                 if str(lib) not in sys.path:
                     sys.path.insert(0, str(lib))
-                from detect import detect as _detect  # type: ignore[import-not-found]
-                return _detect
+                from detect import detect as _detect
+
+                return cast(Callable[..., dict[str, Any]], _detect)
     except Exception:
         return None
     return None
@@ -84,7 +92,8 @@ def _server_artifact(root: Path, cap: int = 6000) -> str:
                 pass
     try:
         names = [
-            p.name for p in sorted(root.iterdir())
+            p.name
+            for p in sorted(root.iterdir())
             if p.is_file() and p.suffix in (".py", ".ts", ".js", ".mjs")
         ]
         if names:
@@ -104,7 +113,7 @@ def _language_for_framework(framework: str, root: Path) -> str:
     return "typescript"
 
 
-def _detect_server_via_model(root: Path, spec: str, runner=None):
+def _detect_server_via_model(root: Path, spec: str, runner: Any = None) -> dict[str, str] | None:
     """Model-first server detection. Returns {framework, language, evidence} when the
     model names a server framework, else None (=> fall back to the tables)."""
     detect = _load_detect()
@@ -119,7 +128,8 @@ def _detect_server_via_model(root: Path, spec: str, runner=None):
         "framework does it use? Answer with the framework name in lowercase "
         "(e.g. fastapi, express, hono), or 'none' if it is not a server/backend "
         "web application.",
-        model_spec=spec, runner=runner,
+        model_spec=spec,
+        runner=runner,
     )
     if not result.get("ok"):
         return None
@@ -134,7 +144,9 @@ def _detect_server_via_model(root: Path, spec: str, runner=None):
     }
 
 
-def _detect_server_framework(project_root: str, *, runner=None) -> dict:  # noqa: C901
+def _detect_server_framework(  # noqa: C901 - evidence-first open framework detection
+    project_root: str, *, runner: Any = None
+) -> dict[str, Any]:
     """Inspect the project to detect whether it is a server project.
 
     Returns a dict describing the server (or ``{"is_server": False}`` if
@@ -370,20 +382,59 @@ _WEB_UI_DEPS: dict[str, list[str]] = {
 }
 
 
-def _detect_ai_framework(project_root: str) -> dict:  # noqa: C901
+def _detect_ai_via_model(root: Path, spec: str, runner: Any = None) -> dict | None:
+    """Model-first AI-integration detection (open vocabulary).
+
+    Returns ``{frameworks, evidence}`` when the model names an AI/ML integration,
+    else None (=> fall back to the ``_AI_DEPS`` tables). Mirrors
+    ``_detect_server_via_model``: the tables can only see libraries someone
+    enumerated, so a project on an unlisted runtime reads as non-AI and never gets
+    the AI guidance injected. Never raises.
+    """
+    detect = _load_detect()
+    if detect is None:
+        return None
+    artifact = _server_artifact(root)
+    if not artifact.strip():
+        return None
+    result = detect(
+        artifact,
+        "Does this project integrate an AI/ML model or LLM API (local inference, a "
+        "hosted model API, or an orchestration framework around one)? Answer with "
+        "the primary library or provider name in lowercase (e.g. transformers, "
+        "openai, anthropic, langchain, ollama, vllm, mlx), or 'none' if it does not.",
+        model_spec=spec,
+        runner=runner,
+    )
+    if not result.get("ok"):
+        return None
+    answer = str(result.get("answer", "")).strip().lower()
+    if not answer or answer in ("none", "other", "n/a", "na", "unknown"):
+        return None
+    ev = "; ".join(result.get("evidence") or []) or f"model named {answer}"
+    return {"frameworks": [answer], "evidence": f"model: {ev}"}
+
+
+def _detect_ai_framework(project_root: str, *, runner: Any = None) -> dict:  # noqa: C901
     """Detect whether a project integrates an AI/ML model.
 
-    Inspects pyproject.toml / requirements.txt for known AI framework
-    imports. Returns a dict with the same shape as
-    ``_detect_server_framework`` so the orchestrator can inject
-    AI-specific guidance (generation params, streaming, prompt design)
-    into the plan/implement phases.
+    Model-first when ``PI_CODE_DETECT_MODEL`` is set (open vocabulary, so it catches
+    runtimes no table lists); otherwise, or on any model failure, inspects
+    pyproject.toml / requirements.txt for known AI framework imports. Returns a dict
+    with the same shape as ``_detect_server_framework`` so the orchestrator can
+    inject AI-specific guidance into the plan/implement phases.
     """
     if not project_root:
         return {"is_ai": False}
     root = Path(project_root)
     if not root.is_dir():
         return {"is_ai": False}
+
+    _spec = os.environ.get("PI_CODE_DETECT_MODEL", "").strip()
+    if _spec:
+        _m = _detect_ai_via_model(root, _spec, runner=runner)
+        if _m:
+            return {"is_ai": True, "frameworks": _m["frameworks"], "evidence": _m["evidence"]}
 
     found: list[str] = []
 
@@ -429,17 +480,58 @@ def _detect_ai_framework(project_root: str) -> dict:  # noqa: C901
     }
 
 
-def _detect_web_ui_framework(project_root: str) -> dict:  # noqa: C901
+def _detect_web_ui_via_model(root: Path, spec: str, runner: Any = None) -> dict | None:
+    """Model-first web-UI detection (open vocabulary).
+
+    Returns ``{frameworks, evidence}`` when the model names a frontend framework,
+    else None (=> fall back to the ``_WEB_UI_DEPS`` tables + import scan). Never
+    raises.
+    """
+    detect = _load_detect()
+    if detect is None:
+        return None
+    artifact = _server_artifact(root)
+    if not artifact.strip():
+        return None
+    result = detect(
+        artifact,
+        "Does this project include a web frontend UI? Answer with the primary UI "
+        "framework name in lowercase (e.g. react, vue, svelte, lit, htmx, solid, "
+        "qwik, angular, gradio), or 'none' if it has no web frontend.",
+        model_spec=spec,
+        runner=runner,
+    )
+    if not result.get("ok"):
+        return None
+    answer = str(result.get("answer", "")).strip().lower()
+    if not answer or answer in ("none", "other", "n/a", "na", "unknown"):
+        return None
+    ev = "; ".join(result.get("evidence") or []) or f"model named {answer}"
+    return {"frameworks": [answer], "evidence": f"model: {ev}"}
+
+
+def _detect_web_ui_framework(project_root: str, *, runner: Any = None) -> dict:  # noqa: C901
     """Detect whether a project includes a web frontend UI.
 
-    Same detection pattern as ``_detect_server_framework`` but looks for
-    frontend frameworks. Returns ``is_web_ui`` + detected frameworks.
+    Model-first when ``PI_CODE_DETECT_MODEL`` is set (open vocabulary); otherwise, or
+    on any model failure, the dependency tables and import scan below decide.
+    Returns ``is_web_ui`` + detected frameworks.
     """
     if not project_root:
         return {"is_web_ui": False}
     root = Path(project_root)
     if not root.is_dir():
         return {"is_web_ui": False}
+
+    _spec = os.environ.get("PI_CODE_DETECT_MODEL", "").strip()
+    if _spec:
+        _m = _detect_web_ui_via_model(root, _spec, runner=runner)
+        if _m:
+            return {
+                "is_web_ui": True,
+                "frameworks": _m["frameworks"],
+                "evidence": _m["evidence"],
+            }
 
     # Check frontend-specific config files first (strong signals)
     for config_file in ("package.json", "tsconfig.json"):
@@ -787,7 +879,7 @@ def _script_looks_like_dev_server(script_body: str) -> bool:
 # ``server_info`` (dict), ``multi_server_info`` (dict).
 
 
-def apply_server_detection(ctx) -> None:
+def apply_server_detection(ctx: RunContext) -> None:
     """Detect a server framework in the project and update ``ctx.extras["code"]``.
 
     Port of the legacy ``_apply_server_detection``. Called after the ideal
@@ -827,7 +919,7 @@ def apply_server_detection(ctx) -> None:
         verification.setdefault("multi_server_evidence", ms_info.get("evidence", ""))
 
 
-def build_resource_context(ctx) -> str:
+def build_resource_context(ctx: RunContext) -> str:
     """Return a string of resource-file paths to inject into agent tasks.
 
     Adapts the legacy ``_build_resource_context``: reads ``server_info`` /
@@ -877,7 +969,7 @@ def build_resource_context(ctx) -> str:
     )
 
 
-def build_multi_server_block(ctx) -> str:
+def build_multi_server_block(ctx: RunContext) -> str:
     """Return an inject-able task block enforcing the single-command dev rule.
 
     Adapts the legacy ``_build_multi_server_block``: fires only when
@@ -899,48 +991,41 @@ def build_multi_server_block(ctx) -> str:
     )
     structure_doc = skill_file(ctx, "code", "resources", "project-structure.md")
     return (
-        "\n\nMULTI-SERVER SINGLE-COMMAND STARTUP (MANDATORY):\n"
-        "This project ships more than one long-running process. Per the rule in "
-        f"{structure_doc}, the project MUST be "
-        "set up so every server can be started with a single command. The "
-        "implement phase MUST produce ALL of the following deliverables — "
-        "the verify phase will fail if any are missing:\n"
+        "\n\nMULTI-SERVER SINGLE-COMMAND STARTUP (REQUIRED OUTCOMES):\n"
+        "This project ships more than one long-running process, so it MUST end up "
+        "startable with a SINGLE command. What is enforced is the set of OUTCOMES "
+        "below, demonstrated by captured evidence — not a particular file layout.\n"
         "\n"
         f"Detected services:\n{svc_lines}\n"
         "\n"
-        # agent-path: target-relative — deliverables the agent CREATES in the target repo
-        "Required deliverables (in priority order):\n"
-        "  1. `scripts/dev.sh` — executable bash script that starts every "
-        "service in the background, traps SIGINT and SIGTERM, and tears down "
-        "every child PID on exit. Must wait for the backend to respond to "
-        "`/api/health` (or equivalent) before tailing logs. Per-service logs go "
-        "to `$LOG_DIR/<service>.log`. Must support a `--check` mode that exits "
-        "0 if all services are healthy, 1 otherwise.\n"
-        "  2. `scripts/test.sh` — runs all test suites (backend unit + "
-        "integration + frontend vitest + tsc), exits non-zero on any failure.\n"
-        "  3. `Makefile` — thin wrappers: `make dev`, `make check`, `make test`, "
-        "`make install`, `make stop`, `make clean`. The `dev` target invokes "
-        "`scripts/dev.sh`; the README documents `./scripts/dev.sh` as the "
-        "no-make fallback.\n"
-        "  4. `.gitignore` — add `.run-logs/` (the dev script's log dir) and "
-        "any `*.pid` files it creates.\n"
-        "  5. `README.md` — replace any 'open two terminals' instructions with "
-        "`make dev` (or `./scripts/dev.sh`). Document the make targets.\n"
+        "Required outcomes:\n"
+        "  1. ONE documented command starts every service listed above.\n"
+        "  2. That command does not report readiness until each service passes a "
+        "HEALTH probe polled with a deadline; if a service never becomes healthy "
+        "it fails loudly with the last log lines. This is what surfaces 'port "
+        "already in use' and 'dependency not installed' early.\n"
+        "  3. A `--check`-equivalent mode exits 0 when all services are healthy "
+        "and non-zero otherwise (used by CI and by this run's verify phase).\n"
+        "  4. SIGINT and SIGTERM tear down EVERY child process — no orphans, no "
+        "occupied ports — within ~5s. Track children individually; signaling your "
+        "own process group re-fires your own trap.\n"
+        "  5. Re-running the command is safe (idempotent): it either refuses with "
+        "a clear port-in-use message or cleanly restarts the previous run.\n"
+        "  6. Per-service logs are readable without garbling the console, and any "
+        "runtime log/PID artifacts the command creates are git-ignored.\n"
+        "  7. ONE command runs the full test battery across all services.\n"
+        "  8. The README documents the single command; no 'open two terminals' "
+        "instructions remain.\n"
         "\n"
-        "The dev script MUST:\n"
-        "  - Track every child PID in an array; do NOT rely on process groups "
-        "(signaling your own PGID re-fires your own trap).\n"
-        "  - Trap SIGINT and SIGTERM; on either, kill each tracked PID, "
-        "sleep 0.7s, then SIGKILL any survivors.\n"
-        "  - Health-probe each service after start with a deadline; fail the "
-        "script (with the last log lines) if any service doesn't respond in "
-        "time. This is the only reliable way to surface 'port already in use' "
-        "or 'dependency not installed' early.\n"
-        "  - Forward logs to per-service files (not stdout) and tail them in a "
-        "background `tail -F` so the user sees activity.\n"
-        "  - Use `set -euo pipefail` and fail fast on any error.\n"
+        "HOW you achieve these is your call — use whatever is idiomatic for this "
+        "project's ecosystem (a shell script plus a task runner, `concurrently`, "
+        "`honcho`/`foreman`, `docker compose`, etc.). "
+        f"{structure_doc} collects patterns for each, including a dev-script "
+        "skeleton handling PID tracking, signal traps, and health probes — draw on "
+        "it as a reference, not as a mandated shape.\n"
         "\n"
-        "The verify phase will run `scripts/dev.sh --check` and assert exit 0, "
-        "then send SIGTERM and assert both ports are free within 5s. If either "
-        "fails, the project is incomplete.\n"
+        "Verification runs the single command, polls health, requires the "
+        "`--check` equivalent to exit 0, sends SIGTERM and requires the ports free "
+        "within 5s, then re-runs to confirm idempotency. Any outcome without "
+        "captured evidence fails verification.\n"
     )

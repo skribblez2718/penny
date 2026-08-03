@@ -27,10 +27,23 @@ FIELDS: List[str] = ["is_server", "language", "framework"]
 
 
 def heuristic_detector(root: Path) -> Dict[str, Any]:
-    """The current hand-coded, table-based detector (the scaffold under test)."""
+    """The current hand-coded, table-based detector (the scaffold under test).
+
+    This arm is the ablation's CONTROL and must exercise the hand-coded tables ONLY.
+    ``_detect_server_framework`` became model-first behind ``PI_CODE_DETECT_MODEL``
+    (#9), so an ambient value of that variable makes this arm shell out to a LIVE
+    model — silently turning the control into a second model arm, invalidating the
+    comparison, and breaking the harness's documented ``--arms heuristic`` =
+    "no model call" contract. Pin the gate off for the duration of the call.
+    """
     from orchestration.playbooks.code_detection import _detect_server_framework
 
-    result = _detect_server_framework(str(root))
+    _saved = os.environ.pop("PI_CODE_DETECT_MODEL", None)
+    try:
+        result = _detect_server_framework(str(root))
+    finally:
+        if _saved is not None:
+            os.environ["PI_CODE_DETECT_MODEL"] = _saved
     return {
         "is_server": bool(result.get("is_server")),
         "language": result.get("language"),

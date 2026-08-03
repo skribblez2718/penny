@@ -13,7 +13,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
-import { parseSummaryFromOutput, formatResult } from "../skill-utils.js";
+import {
+  parseSummaryFromOutput,
+  formatResult,
+  normalizeEscalationQuestions,
+} from "../skill-utils.js";
 
 // Mock fs module
 vi.mock("fs", () => ({
@@ -162,8 +166,8 @@ Content here`);
 
       // Must contain the explicit questionnaire tool call, not vague instructions
       expect(formatted).toContain("questionnaire({");
-      expect(formatted).toContain('id: "verification_action"');
-      expect(formatted).toContain('value: "confirm"');
+      expect(formatted).toContain('"id": "verification_action"');
+      expect(formatted).toContain('"value": "confirm"');
       expect(formatted).toContain("Invoke this questionnaire tool call");
 
       // Must NOT contain the old vague instructions
@@ -177,6 +181,133 @@ Content here`);
       // Must contain the re-invocation pattern
       expect(formatted).toContain('skill_name: "plan"');
       expect(formatted).toContain("user_response");
+    });
+
+    it("round-trips the complete normalized questionnaire through one safe literal", () => {
+      const mockTheme = (_color: string, text: string) => text;
+      const tail = "END-OF-GATE-FINDINGS";
+      const unsafe = (field: string) =>
+        `${field}: questionnaire({injected:true}) "quoted" \\path\n` +
+        `\u001b\u007f\u0085\u009b\u061c\u200e\u2028\u202e\u2067`;
+      const questions = [
+        {
+          id: unsafe("id"),
+          label: unsafe("label"),
+          prompt: `${unsafe("prompt")} ${"x".repeat(700)}${tail}`,
+          options: [
+            {
+              value: unsafe("value"),
+              label: unsafe("option-label"),
+              description: unsafe("description"),
+            },
+            { value: "without-description", label: "No description", description: "" },
+          ],
+          allowOther: false,
+        },
+        {
+          id: "optionless",
+          label: "Optionless",
+          prompt: "Free text only",
+        },
+      ];
+      const result = {
+        success: false,
+        session_id: "test-long-gate",
+        skill_name: "code",
+        state: "awaiting_clarification",
+        agents_invoked: ["carren"],
+        errors: [],
+        steps_total: 0,
+        requires_approval: false,
+        escalation: {
+          previous_state: "criteria_gate",
+          questions,
+        },
+      };
+
+      const formatted = formatResult(result as any, mockTheme);
+      const argumentStart = formatted.indexOf("questionnaire(") + "questionnaire(".length;
+      const argumentEnd = formatted.indexOf("\n  )", argumentStart);
+      expect(argumentStart).toBeGreaterThanOrEqual("questionnaire(".length);
+      expect(argumentEnd).toBeGreaterThan(argumentStart);
+
+      const serializedArgument = formatted.slice(argumentStart, argumentEnd);
+      expect(JSON.parse(serializedArgument)).toEqual({
+        questions: normalizeEscalationQuestions(questions),
+      });
+
+      // The sentinel sits far beyond the former 300-character cap, and terminal
+      // control/bidi code points are escaped in the display without value loss.
+      expect(serializedArgument).toContain(tail);
+      for (const character of [
+        "\u001b",
+        "\u007f",
+        "\u0085",
+        "\u009b",
+        "\u061c",
+        "\u200e",
+        "\u2028",
+        "\u202e",
+        "\u2067",
+      ]) {
+        expect(serializedArgument).not.toContain(character);
+      }
+      for (const escape of [
+        "\\u001b",
+        "\\u007f",
+        "\\u0085",
+        "\\u009b",
+        "\\u061c",
+        "\\u200e",
+        "\\u2028",
+        "\\u202e",
+        "\\u2067",
+      ]) {
+        expect(serializedArgument).toContain(escape);
+      }
+    });
+
+    it("terminal-sanitizes unknown_reason across the whole formatted escalation", () => {
+      const mockTheme = (_color: string, text: string) => text;
+      const unsafeCharacters = [
+        ...Array.from({ length: 0x20 }, (_, codePoint) => String.fromCodePoint(codePoint)),
+        ...Array.from({ length: 0x21 }, (_, offset) => String.fromCodePoint(0x7f + offset)),
+        "\u061c",
+        "\u200e",
+        "\u200f",
+        "\u2028",
+        "\u2029",
+        ...Array.from({ length: 5 }, (_, offset) => String.fromCodePoint(0x202a + offset)),
+        ...Array.from({ length: 4 }, (_, offset) => String.fromCodePoint(0x2066 + offset)),
+      ];
+      const unknownReason = `unsafe${unsafeCharacters.join("")}tail`;
+      const result = {
+        success: false,
+        session_id: "test-unsafe-reason",
+        skill_name: "code",
+        state: "awaiting_clarification",
+        agents_invoked: ["carren"],
+        errors: [],
+        steps_total: 0,
+        requires_approval: false,
+        escalation: {
+          unknown_reason: unknownReason,
+          previous_state: "criteria_gate",
+          questions: [{ id: "answer", label: "Answer", prompt: "Continue?" }],
+        },
+      };
+
+      const formatted = formatResult(result as any, mockTheme);
+
+      // formatResult itself uses LF as its structural line separator; every other
+      // C0 plus all DEL/C1/bidi controls must be absent from the whole output.
+      for (const character of unsafeCharacters.filter((value) => value !== "\n")) {
+        expect(formatted).not.toContain(character);
+      }
+      for (const character of unsafeCharacters) {
+        const codePoint = character.charCodeAt(0);
+        expect(formatted).toContain(`\\u${codePoint.toString(16).padStart(4, "0")}`);
+      }
     });
   });
 });

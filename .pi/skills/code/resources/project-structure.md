@@ -183,14 +183,42 @@ The `verify` phase of the code skill should:
 If any of these fail, the project is **not done**, regardless of how
 many unit tests pass.
 
-## Reference Implementation
+## Reference Implementation Pattern
 
-The `simple_rag` project (built by the code skill on 2026-06-09) has
-a working reference implementation at:
-- `simple_rag/Makefile`
-- `simple_rag/scripts/dev.sh`
-- `simple_rag/scripts/test.sh`
+A minimal dev-script skeleton covering the rough edges every multi-service
+launcher has to get right (PID tracking, signal traps, health probes, log
+paths):
 
-Read these before writing your own — they handle the rough edges
-(PID tracking, signal traps, health probes, log file paths) that
-every dev script needs to get right.
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+LOG_DIR="${LOG_DIR:-.run-logs}"; mkdir -p "$LOG_DIR"
+ALL_CHILD_PIDS=()
+
+cleanup() {                 # per-PID, never per-process-group
+  local sig="${1:-TERM}"
+  for pid in "${ALL_CHILD_PIDS[@]:-}"; do kill -"$sig" "$pid" 2>/dev/null || true; done
+  sleep 0.7
+  for pid in "${ALL_CHILD_PIDS[@]:-}"; do kill -KILL "$pid" 2>/dev/null || true; done
+}
+trap 'cleanup INT; exit 0' INT
+trap 'cleanup TERM; exit 0' TERM
+
+start_service() {           # start_service <name> <command...>
+  local name="$1"; shift
+  "$@" >"$LOG_DIR/$name.log" 2>&1 &
+  ALL_CHILD_PIDS+=("$!")
+}
+
+wait_healthy() {            # wait_healthy <url> <deadline_seconds>
+  local url="$1" deadline=$(( SECONDS + ${2:-30} ))
+  until curl -fsS "$url" >/dev/null 2>&1; do
+    (( SECONDS < deadline )) || { echo "unhealthy: $url"; cleanup TERM; exit 1; }
+    sleep 0.3
+  done
+}
+```
+
+Adapt it to the project's own services and ecosystem. The requirement is the
+**outcome** (single command, health-gated, clean teardown, idempotent re-run),
+not this exact script.

@@ -59,7 +59,7 @@ describe("detectSkillMode", () => {
     const result = detectSkillMode({
       skill_name: "plan",
       goal: "test",
-      skills: [{ skill_name: "agent", goal: "test2" }],
+      skills: [{ skill_name: "research", goal: "test2" }],
     });
     expect(result.error).toBeDefined();
     expect(result.error).toContain("Ambiguous");
@@ -69,7 +69,7 @@ describe("detectSkillMode", () => {
     const result = detectSkillMode({
       skill_name: "plan",
       goal: "test",
-      chain: [{ skill_name: "agent", goal: "test2" }],
+      chain: [{ skill_name: "research", goal: "test2" }],
     });
     expect(result.error).toBeDefined();
     expect(result.error).toContain("Ambiguous");
@@ -89,7 +89,7 @@ describe("detectSkillMode", () => {
     const result = detectSkillMode({
       skill_name: "plan",
       goal: "test",
-      skills: [{ skill_name: "agent", goal: "test2" }],
+      skills: [{ skill_name: "research", goal: "test2" }],
       chain: [{ skill_name: "research", goal: "test3" }],
       resume_chain: "chain-123",
     });

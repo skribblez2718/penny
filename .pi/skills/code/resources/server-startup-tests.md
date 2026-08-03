@@ -1,9 +1,14 @@
-# Server-Startup Integration Tests — Mandatory Checklist
+# Server-Startup Testing — Outcomes and Reference Patterns
 
 This reference is for any code-skill iteration that produces a server-based
-project (FastAPI, Flask, Django, Express, Fastify, Next, Koa, etc.). The
-code-skill orchestrator enforces these checks at the verify phase, and
-**the orchestrator will fail verification if any of them are missing**.
+project (FastAPI, Flask, Django, Express, Fastify, Next, Koa, etc.).
+
+**What the orchestrator actually enforces:** the verify phase requires the four
+OUTCOMES below to be **demonstrated by captured evidence**, and fails any
+outcome not proven. It does **not** check for tests by name, and it mandates no
+particular test-suite shape — how you structure the tests is your call. The
+patterns below are proven starting points to draw on, not a checklist to
+satisfy mechanically.
 
 ## Why this exists
 
@@ -29,13 +34,13 @@ script's own directory, not the project root. A test that runs the entry
 point as a subprocess from its own directory would catch it on the first
 verify pass.
 
-## The mandatory four-category test suite
+## The four required outcomes (each proven by evidence)
 
-For a server project, the implement phase MUST produce tests in all four
-of these categories. The verify phase explicitly checks for them by name
-and fails if any are absent.
+For a server project, verification requires evidence that all four outcomes
+below hold. Which tests prove them, and how they are organized, is yours to
+choose; each section gives a proven pattern to draw on.
 
-### Category 1 — Real server, real HTTP
+### Outcome 1 — The real server serves real HTTP
 
 Start the actual server (uvicorn / Flask dev server / node http) in a
 background thread or subprocess, with **heavy dependencies mocked** but
@@ -136,7 +141,7 @@ def test_real_server_health(real_backend_server):
     assert resp.status_code == 200
 ```
 
-### Category 2 — Entry-point script from its own directory
+### Outcome 2 — Entry-point import chain holds from its own directory
 
 This is a recurring bug class. For every entry point (anything the user
 actually runs — `uvicorn X:app`, `python X.py`, a bundler dev server,
@@ -188,7 +193,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 ```
 
-### Category 3 — CORS preflight from a real browser origin
+### Outcome 3 — CORS preflight from a real browser origin is correct
 
 If the server uses CORS, the unit tests with `TestClient` will pass even
 if the allow-list is misconfigured. Hit it from a real HTTP client and
@@ -208,7 +213,7 @@ def test_cors_preflight(real_backend_server):
     assert resp.headers.get("access-control-allow-origin") == "http://localhost:5173"
 ```
 
-### Category 4 — End-to-end happy path
+### Outcome 4 — End-to-end happy path runs through the live server
 
 At least one test exercises the **main business flow** through the live
 server, end-to-end. This is the test that catches "the routes are
@@ -272,10 +277,12 @@ When patching the tokenizer, the test must also patch the chained calls
 the production code uses (`tokenizer(text, return_tensors="pt").to(device)`,
 `tokenizer.apply_chat_template(...)`, `tokenizer.decode(...)`).
 
-## Performance
+## Performance (guidance, not a gate)
 
-The full server-startup test suite should run in **under 30 seconds**
-end-to-end. If yours takes longer:
+A fast verify loop is worth optimizing for — the implement⇄verify cycle runs
+the battery every iteration, so a slow suite taxes every retry. No orchestrator
+check enforces a specific duration; treat a few tens of seconds as a healthy
+target rather than a threshold. If yours is slower than you'd like:
 
 - Use `scope="module"` or `scope="session"` fixtures so the server boots
   once and is reused across tests.
@@ -283,22 +290,22 @@ end-to-end. If yours takes longer:
 - Use `log_level="warning"` and `access_log=False` on the uvicorn config
   to keep stdout clean.
 
-## Quick checklist for the implement phase
+## Self-check before reporting the iteration complete
 
-Before reporting the iteration as complete, run through this in your head:
+Ask what EVIDENCE you can cite for each outcome — captured command/test output,
+not an assertion that it works:
 
-- [ ] **Category 1 (real server, real HTTP)** — at least one test starts the
-      server in a thread and hits it with `requests`.
-- [ ] **Category 2 (entry-point from its own dir)** — for every entry point
-      the user runs, a test simulates the production runner's cwd and
-      confirms the import chain works.
-- [ ] **Category 3 (CORS preflight)** — if CORS is used, an OPTIONS request
-      from a real browser origin returns the right `access-control-allow-origin`.
-- [ ] **Category 4 (E2E happy path)** — at least one test exercises the
-      main business flow through the live server.
-- [ ] **Mocked at the right boundary** — heavy deps are mocked, the
-      framework is real.
-- [ ] **Under 30s** — full suite finishes quickly.
+- **Outcome 1 (real server, real HTTP)** — what output shows the real server
+  booted and returned the expected status/body over HTTP?
+- **Outcome 2 (entry-point import chain from its own cwd)** — for every entry
+  point the user actually runs, what output shows its import chain held when
+  run from its own directory?
+- **Outcome 3 (CORS preflight)** — if the server uses CORS, what output shows
+  the correct `access-control-allow-origin` for a browser origin?
+- **Outcome 4 (E2E happy path)** — what output shows a real business flow
+  completing through the running server?
+- **Mocked at the right boundary** — heavy deps mocked, framework real.
 
-If any checkbox is missing, the verify phase will report a gap and the
-Ralph Wiggum Loop will cycle back to implement.
+Any outcome you cannot evidence is a gap: verify will fail it by name, and the
+loop cycles back to implement. Passing unit tests alone never satisfy a server
+project.

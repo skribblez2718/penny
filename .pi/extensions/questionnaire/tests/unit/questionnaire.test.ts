@@ -202,9 +202,16 @@ const QuestionSchema = Type.Object({
   ),
 });
 
-const QuestionnaireParams = Type.Object({
-  questions: Type.Array(QuestionSchema, { description: "Questions to ask the user" }),
-});
+const QuestionnaireParams = Type.Union([
+  Type.Object(
+    { questions: Type.Array(QuestionSchema, { description: "Questions to ask the user" }) },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    { trustedTransportCapability: Type.String({ minLength: 43, maxLength: 43 }) },
+    { additionalProperties: false }
+  ),
+]);
 
 // ============================================================
 // Tests
@@ -704,9 +711,24 @@ describe("Schema Validation", () => {
       expect(Value.Check(QuestionnaireParams, params)).toBe(true);
     });
 
-    it("should reject missing questions field", () => {
+    it("should reject missing questions and capability fields", () => {
       const params = {};
       expect(Value.Check(QuestionnaireParams, params)).toBe(false);
+    });
+
+    it("accepts only an opaque fixed-length trusted transport capability", () => {
+      expect(Value.Check(QuestionnaireParams, { trustedTransportCapability: "a".repeat(43) })).toBe(
+        true
+      );
+      expect(
+        Value.Check(QuestionnaireParams, {
+          trustedTransportCapability: "a".repeat(43),
+          questions: [],
+        })
+      ).toBe(false);
+      expect(Value.Check(QuestionnaireParams, { trustedTransportCapability: "too-short" })).toBe(
+        false
+      );
     });
 
     it("should validate multiple questions", () => {

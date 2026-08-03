@@ -14,8 +14,8 @@ Implement production-grade, secure, performant code that ships **with passing te
 ### 2. SECURITY ALWAYS
 Before writing ANY code, read these documents in order:
 1. `resources/security-checklist.md` — mandatory security review
-2. `docs/agents/secure-coding/AGENTS.md` — task-to-security-doc mapping
-3. Applicable secure-coding docs based on your task's security domains (injection, xss, auth, etc.)
+2. `docs/agents/coding/security/AGENTS.md` — the real generic security index
+3. Applicable documents resolved from that index based on the task's security domains (injection, XSS, auth, etc.); task-specific labels are not filenames
 
 ### 3. LANGUAGE STANDARDS ALWAYS
 Before writing ANY code, read the language-specific resource:
@@ -24,9 +24,9 @@ Before writing ANY code, read the language-specific resource:
 Apply all conventions and anti-pattern rules from that document.
 
 ### 4. DEPENDENCY MANAGEMENT — CRITICAL
-- **Match the project's established package manager.** Detect it from the repo's lockfile/manifest (`uv.lock` / `poetry.lock` / `requirements.txt`; `bun.lockb` / `pnpm-lock.yaml` / `package-lock.json` / `yarn.lock`) and use that tool — do not switch a project's package manager.
-- **Greenfield / no established tooling → default to the preferred stack:** `uv` for Python, `bun` for JS/TS.
-- **Always:** activate `.venv/` first for Python; **never install globally.**
+- **Consume the selected target profile.** Use only its project-native package manager, environment, build, lint, type-check, and test evidence; do not reconstruct commands from a lockfile list or switch tooling.
+- **Greenfield or missing profile evidence → clarification:** never infer a language, framework, package manager, virtual-environment layout, or verification recipe.
+- **For Penny itself only:** its selected profile uses the existing `uv` workspace, `bun` workspace, and `.venv/`. Other targets follow their own selected profile. Never install globally.
 
 ### 5. DRY METHODOLOGY
 - Don't Repeat Yourself. Extract repeated logic into functions/methods.
@@ -44,6 +44,12 @@ Apply all conventions and anti-pattern rules from that document.
 - Add docstrings/comments for non-obvious logic.
 - Keep functions small and single-purpose.
 - Handle errors explicitly — no bare except/pass.
+
+## P0 Evidence and Completion Contract
+
+Consume the exact selected schema-versioned IDEAL STATE, target profile, Piper plan, Annie findings, and six-dimension floor references. Do not reconstruct or replace project-native commands. Register implementation/verification artifacts and every execution receipt. Command-verifiable obligations require a valid same-run execution receipt with safe argv/cwd, owner/executor, timestamps, successful exit, intact safely redacted output artifact digest/reference, and same-run binding. In `receipt_claims`, map each obligation ID to the exact command string you actually invoked; the trusted wrapper independently matches it to observed successful tool execution and ignores unmatched claims. Judgment-only obligations require an independent disposition. Self-authored evidence strings satisfy nothing.
+
+Update the complete coverage map for every criterion, finding, selected verification-manifest tier (`verification:<tier-name>`), and all six dimensions: security, scope-appropriate production readiness, target idiom, harmful duplication avoidance, unnecessary complexity avoidance, and regression freedom. Unresolved findings or missing evidence force `result.met=false`; human-accepted residual risk requires complete human acceptance and remains in result/outcome. Public success/complete is forbidden unless final verification passes and coverage is 100%.
 
 ## Implementation
 
@@ -86,11 +92,11 @@ Skribble drives two states. Emit the SUMMARY block for the state you were invoke
 **`implementing`** — writing the code and its tests (sequencing is yours; the required outcome is passing tests at the configured tiers). Required: `confidence` (str). Optional: `files_created` (list), `files_modified` (list), `tests_written` (int), `tests_passing` (int), `tests_failing` (int), `expected_failure_details` (list), `needs_clarification` (bool):
 
 ```
-SUMMARY:{"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","files_created":[],"files_modified":[],"tests_written":<int>,"tests_passing":<int>,"tests_failing":<int>,"expected_failure_details":["<test>: <reason>"],"needs_clarification":false}
+SUMMARY:{"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","files_created":[],"files_modified":[],"tests_written":<int>,"tests_passing":<int>,"tests_failing":<int>,"expected_failure_details":["<test>: <reason>"],"receipts":[],"receipt_claims":[{"obligation_id":"criterion:1","command":"<exact invoked command>"}],"dispositions":[],"quality_floor":{},"coverage_map":{},"findings":[],"needs_clarification":false}
 ```
 
 **`verifying`** — running every configured verification tier and reporting pass/fail honestly. Required: `passed` (bool), `confidence` (str), `evidence` (list). Optional: `failures` (list), `lint_passed`, `typecheck_passed`, `unit_passed`, `integration_passed`, `e2e_passed` (bools). `evidence` MUST be the **captured output of the verification commands you actually ran** (e.g. the tail of `pytest`, `ruff`, `tsc`, the server-startup test) — one entry per tier. It must be non-empty; the engine rejects a `passed` verdict with no evidence, because a pass has to be backed by an external oracle, not asserted:
 
 ```
-SUMMARY:{"passed":true|false,"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","evidence":["ruff: clean","pytest: 12 passed, 0 failed","tsc: 0 errors"],"failures":["<...>"],"lint_passed":true|false,"typecheck_passed":true|false,"unit_passed":true|false,"integration_passed":true|false,"e2e_passed":true|false}
+SUMMARY:{"passed":true|false,"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","evidence":["ruff: clean","pytest: 12 passed, 0 failed","tsc: 0 errors"],"failures":["<...>"],"lint_passed":true|false,"typecheck_passed":true|false,"unit_passed":true|false,"integration_passed":true|false,"e2e_passed":true|false,"receipts":[],"receipt_claims":[{"obligation_id":"criterion:1","command":"<exact invoked command>"}],"dispositions":[],"quality_floor":{},"coverage_map":{},"findings":[]}
 ```

@@ -4,7 +4,6 @@ This index lists the Penny capabilities that have human-readable documentation. 
 
 | Capability | What it does |
 | --- | --- |
-| [Agent Skill](agent-skill/agent-skill.md) | Generates validated Penny agent definitions through explore, design, critique, scaffold, and verify stages. |
 | [Ambient Watchers](ambient-watchers/ambient-watchers.md) | Surfaces signals before you ask, by checking outcomes, staleness, and mempalace growth at session start. |
 | [Behavioral Ratchet](behavioral-ratchet/behavioral-ratchet.md) | Replays Oracle-authored fixtures through the current system and blocks drift below the accepted baseline — the anti-drift floor under quality. |
 | [Error Logging](error-logging/error-logging.md) | Streams structured, coded log entries from extensions to the observability server for querying and correlation. |

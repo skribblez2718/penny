@@ -1,0 +1,25 @@
+rules:
+- id: jsa-learned-deparam-config-to-script-src
+  message: >
+    Property accessed on a config object constructed from deparam() query
+    string parser is assigned to script.src. If the property is not an own
+    property of the config object, it is inherited from Object.prototype
+    (prototype pollution gadget). This enables arbitrary script injection.
+  metadata:
+    cwe:
+    - "CWE-79: Improper Neutralization of Input During Web Page Generation"
+    category: security
+    technology:
+    - browser
+    likelihood: HIGH
+    impact: HIGH
+    confidence: MEDIUM
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  patterns:
+  - pattern-inside: |
+      $CONFIG = { ..., params: deparam(...), ... };
+      ...
+  - pattern: 'script.src = $CONFIG.$PROP'

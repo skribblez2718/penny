@@ -22,4 +22,12 @@ Room: `wing=penny room=skills/research-<session_id>` (in the task). Write the pl
 
 ## Output
 
-End with one `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task: `plan_steps` (or `sub_queries`), `plan_complete`, and `mode` (unless caller-fixed).
+End your response with ONE `SUMMARY:` line — exactly this shape, with your real values substituted. Emit nothing after it.
+
+- **Required:** `plan_steps` (your sub-queries), `plan_complete`.
+- `mode` — declare it unless the caller fixed it (`quick` / `standard` / `deep`).
+- `sub_queries` is an accepted alias read only when `plan_steps` is absent — prefer `plan_steps` and leave this `[]`.
+
+```
+SUMMARY:{"plan_steps": ["first sub-query", "second sub-query"], "plan_complete": true, "mode": "standard", "sub_queries": [], "confidence": "PROBABLE", "mempalace_drawer": "<session_id> Planner", "needs_clarification": false, "clarifying_questions": []}
+```

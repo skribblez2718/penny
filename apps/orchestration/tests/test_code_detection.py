@@ -379,9 +379,13 @@ def test_build_resource_context_injects_multi_server_resource(tmp_path: Path) ->
     assert "resources/project-structure.md" in resource_ctx
 
 
-def test_build_multi_server_block_lists_required_deliverables(tmp_path: Path) -> None:
-    """The injected block must mention scripts/dev.sh, Makefile, README,
-    and the SIGINT/SIGTERM traps so the implement agent knows what to ship."""
+def test_build_multi_server_block_states_required_outcomes(tmp_path: Path) -> None:
+    """The injected block must state the single-command startup OUTCOMES and name
+    the detected services, so the implement agent knows what must be true.
+
+    Deliberately asserts capability, not implementation (BL-4 / doctrine: the
+    ratchet protects outcomes, never a mandated file recipe). See
+    ``test_build_multi_server_block_does_not_mandate_a_file_recipe``."""
     ctx = _ctx(tmp_path)
     ctx.extras["code"]["multi_server_info"] = {
         "is_multi_server": True,
@@ -396,14 +400,37 @@ def test_build_multi_server_block_lists_required_deliverables(tmp_path: Path) ->
         ],
     }
     block = code_detection.build_multi_server_block(ctx)
-    assert "scripts/dev.sh" in block
-    assert "Makefile" in block
+    # Outcomes the verify phase actually checks by evidence.
+    assert "SINGLE command" in block
+    assert "HEALTH" in block
     assert "SIGINT" in block and "SIGTERM" in block
-    assert "/api/health" in block
     assert "--check" in block
-    assert "README.md" in block
+    assert "idempotent" in block
+    assert "README" in block
+    # The detected services must be named so the agent knows the surface.
     assert "backend" in block
     assert "frontend" in block
+
+
+def test_build_multi_server_block_does_not_mandate_a_file_recipe(tmp_path: Path) -> None:
+    """Guard against re-introducing BL-4: the block must NOT mandate a fixed set of
+    deliverable filenames. Ecosystem-native answers (compose, honcho, concurrently,
+    a task runner) satisfy the same outcomes, and stronger models should be free to
+    choose them. The reference-pattern doc may still be cited by path."""
+    ctx = _ctx(tmp_path)
+    ctx.extras["code"]["multi_server_info"] = {
+        "is_multi_server": True,
+        "services": [
+            {"name": "backend", "kind": "python-fastapi", "command": "x", "evidence": "x"},
+            {"name": "frontend", "kind": "vite-dev-server", "command": "y", "evidence": "y"},
+        ],
+    }
+    block = code_detection.build_multi_server_block(ctx)
+    assert "MUST produce ALL of the following deliverables" not in block
+    assert "Required deliverables" not in block
+    assert "scripts/test.sh" not in block
+    # Ecosystem freedom is stated explicitly.
+    assert "idiomatic" in block
 
 
 def test_build_multi_server_block_empty_when_not_multi(tmp_path: Path) -> None:
@@ -481,14 +508,21 @@ def test_detect_web_ui_lit_not_falsely_triggered(tmp_path: Path) -> None:
 
 
 def _mstream(text: str) -> str:
-    msg = {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop",
-           "content": [{"type": "text", "text": text}]}}
+    msg = {
+        "type": "message_end",
+        "message": {
+            "role": "assistant",
+            "stopReason": "stop",
+            "content": [{"type": "text", "text": text}],
+        },
+    }
     return json.dumps({"type": "agent_start"}) + "\n" + json.dumps(msg)
 
 
 def _mrunner(stdout: str):
     def run(cmd, **kwargs):
         return types.SimpleNamespace(stdout=stdout, stderr="", returncode=0)
+
     return run
 
 
@@ -503,9 +537,12 @@ def test_detect_server_model_catches_unlisted_framework(tmp_path: Path, monkeypa
     # hono is NOT in _TS_SERVER_DEPS -- the tables miss it; the model catches it.
     monkeypatch.setenv("PI_CODE_DETECT_MODEL", "anthropic/haiku")
     (tmp_path / "package.json").write_text(json.dumps({"dependencies": {"hono": "^4"}}))
-    payload = json.dumps({"answer": "hono", "evidence": ["hono in package.json"],
-                          "confidence": "CERTAIN"})
-    info = code_detection._detect_server_framework(str(tmp_path), runner=_mrunner(_mstream(payload)))
+    payload = json.dumps(
+        {"answer": "hono", "evidence": ["hono in package.json"], "confidence": "CERTAIN"}
+    )
+    info = code_detection._detect_server_framework(
+        str(tmp_path), runner=_mrunner(_mstream(payload))
+    )
     assert info["is_server"] is True
     assert info["framework"] == "hono"
     assert info["language"] == "typescript"
@@ -516,8 +553,65 @@ def test_detect_server_model_none_falls_back_to_tables(tmp_path: Path, monkeypat
     monkeypatch.setenv("PI_CODE_DETECT_MODEL", "anthropic/haiku")
     (tmp_path / "pyproject.toml").write_text('[project]\ndependencies = ["fastapi"]\n')
     payload = json.dumps({"answer": "none", "confidence": "POSSIBLE"})
-    info = code_detection._detect_server_framework(str(tmp_path), runner=_mrunner(_mstream(payload)))
+    info = code_detection._detect_server_framework(
+        str(tmp_path), runner=_mrunner(_mstream(payload))
+    )
     assert info["is_server"] is True and info["framework"] == "fastapi"
+
+
+def test_detect_ai_model_catches_unlisted_runtime(tmp_path: Path, monkeypatch) -> None:
+    """PLAN-1 stage 2: vllm is NOT in _AI_DEPS -- tables miss it, the model catches it."""
+    monkeypatch.setenv("PI_CODE_DETECT_MODEL", "anthropic/haiku")
+    (tmp_path / "pyproject.toml").write_text('[project]\ndependencies = ["vllm"]\n')
+    payload = json.dumps(
+        {"answer": "vllm", "evidence": ["vllm in pyproject.toml"], "confidence": "CERTAIN"}
+    )
+    info = code_detection._detect_ai_framework(
+        str(tmp_path), runner=_mrunner(_mstream(payload))
+    )
+    assert info["is_ai"] is True and info["frameworks"] == ["vllm"]
+
+
+def test_detect_ai_model_failure_falls_back_to_tables(tmp_path: Path, monkeypatch) -> None:
+    """A model outage degrades to today's table behaviour, never below it."""
+    monkeypatch.setenv("PI_CODE_DETECT_MODEL", "anthropic/haiku")
+    (tmp_path / "pyproject.toml").write_text('[project]\ndependencies = ["transformers"]\n')
+
+    def boom(cmd, **kwargs):
+        raise OSError("spawn failed")
+
+    info = code_detection._detect_ai_framework(str(tmp_path), runner=boom)
+    assert info["is_ai"] is True and "huggingface" in info["frameworks"]
+
+
+def test_detect_ai_gate_off_uses_tables(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("PI_CODE_DETECT_MODEL", raising=False)
+    (tmp_path / "pyproject.toml").write_text('[project]\ndependencies = ["openai"]\n')
+    assert code_detection._detect_ai_framework(str(tmp_path))["is_ai"] is True
+
+
+def test_detect_web_ui_model_catches_unlisted_framework(tmp_path: Path, monkeypatch) -> None:
+    """PLAN-1 stage 2: solid is NOT in _WEB_UI_DEPS -- the model catches it."""
+    monkeypatch.setenv("PI_CODE_DETECT_MODEL", "anthropic/haiku")
+    (tmp_path / "package.json").write_text(json.dumps({"dependencies": {"solid-js": "^1"}}))
+    payload = json.dumps(
+        {"answer": "solid", "evidence": ["solid-js in package.json"], "confidence": "CERTAIN"}
+    )
+    info = code_detection._detect_web_ui_framework(
+        str(tmp_path), runner=_mrunner(_mstream(payload))
+    )
+    assert info["is_web_ui"] is True and info["frameworks"] == ["solid"]
+
+
+def test_detect_web_ui_model_none_falls_back_to_tables(tmp_path: Path, monkeypatch) -> None:
+    """Model says 'none'; the react table still catches the UI."""
+    monkeypatch.setenv("PI_CODE_DETECT_MODEL", "anthropic/haiku")
+    (tmp_path / "package.json").write_text(json.dumps({"dependencies": {"react": "^18"}}))
+    payload = json.dumps({"answer": "none", "confidence": "POSSIBLE"})
+    info = code_detection._detect_web_ui_framework(
+        str(tmp_path), runner=_mrunner(_mstream(payload))
+    )
+    assert info["is_web_ui"] is True and info["frameworks"] == ["react"]
 
 
 def test_detect_server_model_failure_falls_back_to_tables(tmp_path: Path, monkeypatch) -> None:

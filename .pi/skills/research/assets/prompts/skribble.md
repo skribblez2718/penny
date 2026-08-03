@@ -22,4 +22,11 @@ Room: `wing=penny room=skills/research-<session_id>` (in the task). Read the syn
 
 ## Output
 
-End with one `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task: `write_complete` and `files_written` (the paths you wrote).
+End your response with ONE `SUMMARY:` line — exactly this shape, with your real values substituted. Emit nothing after it.
+
+- **Required:** `write_complete`, `files_written` (the paths you actually wrote).
+- If a write failed, report `write_complete: false` honestly — the run completes as not-met rather than claiming a report that is not on disk.
+
+```
+SUMMARY:{"write_complete": true, "files_written": ["<report_dir>/report.md", "<report_dir>/sources.md", "<report_dir>/README.md"], "word_count": 2100, "confidence": "CERTAIN", "mempalace_drawer": "<session_id> Report Files", "needs_clarification": false, "clarifying_questions": []}
+```

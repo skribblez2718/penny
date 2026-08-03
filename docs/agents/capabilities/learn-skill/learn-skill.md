@@ -17,7 +17,7 @@ skill({ skill_name: "learn", goal: "Build a study companion for the quantum cour
         constraints: { source_dir: "/path/to/material" } })
 ```
 
-`constraints.source_dir` is required (`start()` raises without it). Optional: `output_dir` (default `<source_dir>/../study_materials`), `source_registry` (the license-vetted corpus grounding the ≥2-sources clean-room discipline), `app_contract` (the target app's output contract), `spec_docs`, `audience`, `ingest_branches`, `max_fan_width`, `max_iterations`.
+`constraints.source_dir` is required (`start()` raises without it). Optional: `output_dir` (default `<source_dir>/../study_materials`), `source_registry` (the license-vetted corpus grounding the ≥2-sources clean-room discipline), `app_contract` (the target app's output contract), `exam_exemplars` (sample items from the target exam, characterized — never copied — into the difficulty profile behind the charter's Assessment Blueprint), `spec_docs`, `audience`, `ingest_branches`, `max_fan_width`, `max_iterations`.
 
 ### Engine states (`LearnMachine`)
 
@@ -29,7 +29,7 @@ skill({ skill_name: "learn", goal: "Build a study companion for the quantum cour
 - **Verification is evidence-gated** (Rec 4): `LEARN_VERIFY` is an executed oracle (mechanical conformance + recomputation of every quantitative answer); its contract requires a non-empty `evidence` field carrying the recomputation transcripts, so `verified: true` on a bare assertion is rejected. `LEARN_CRITIQUE` likewise requires `evidence` (what carren examined). Both flow to `ctx.verify_evidence` and the outcome ledger.
 - **Honest exhaustion.** The verify⇄fix and critique loops are bounded by `max_iterations`; on budget exhaustion the run completes with `met=False` and the unresolved violations/issues, never a fabricated pass; a stalled loop escalates.
 - **Recall.** `_task_summary` seeds the first agent directive with distilled lessons from prior runs (advisory).
-- **HITL.** `charter_gate` pauses for human approval of the design before mass authoring.
+- **HITL.** `charter_gate` pauses for human approval of the design before mass authoring — including the **Assessment Blueprint** (format quotas, skill ceilings, exam metadata) and any unresolved **prerequisite-inventory** rows, so the difficulty decision and the assumed-knowledge decision are the human's, not a by-product of authoring.
 
 ### Agents
 

@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "matrix_id": "penny-code-skill-p0-contract-drift",
+  "version": 2,
+  "topics": {
+    "versioned-artifacts": {
+      "surface_contracts": {
+        ".pi/skills/code/SKILL.md": {
+          "required_tokens": ["schema-versioned", "selected", "artifact"],
+          "forbidden_tokens": []
+        },
+        ".pi/skills/code/README.md": {
+          "required_tokens": ["schema-versioned", "selected", "artifact"],
+          "forbidden_tokens": []
+        },
+        ".pi/skills/code/resources/reference.md": {
+          "required_tokens": ["schema-versioned", "selected", "artifact"],
+          "forbidden_tokens": []
+        },
+        "apps/orchestration/src/orchestration/playbooks/code.py": {
+          "required_tokens": ["P0 artifact/runtime contract", "ArtifactRegistry", "selected_refs"],
+          "forbidden_tokens": []
+        }
+      }
+    },
+    "six-dimension-floor": {
+      "surface_contracts": {
+        ".pi/skills/code/SKILL.md": {
+          "required_tokens": ["security", "production readiness", "target idiom", "harmful duplication", "unnecessary complexity", "regression freedom"],
+          "forbidden_tokens": []
+        },
+        ".pi/skills/code/README.md": {
+          "required_tokens": ["security", "production readiness", "target idiom", "harmful duplication", "unnecessary complexity", "regression freedom"],
+          "forbidden_tokens": []
+        },
+        ".pi/skills/code/assets/prompts/carren.md": {
+          "required_tokens": ["security", "production readiness", "target idiom", "harmful duplication", "unnecessary complexity", "regression freedom"],
+          "forbidden_tokens": []
+        },
+        ".pi/skills/code/assets/prompts/skribble.md": {
+          "required_tokens": ["security", "production readiness", "target idiom", "harmful duplication", "unnecessary complexity", "regression freedom"],
+          "forbidden_tokens": []
+        }
+      }
+    },
+    "receipt-backed-completion": {
+      "surface_contracts": {
+        ".pi/skills/code/SKILL.md": {
+          "required_tokens": ["execution receipt", "same-run", "met=true"],
+          "forbidden_tokens": ["self-authored evidence counts"]
+        },
+        ".pi/skills/code/README.md": {
+          "required_tokens": ["execution receipt", "same-run", "result.met=true"],
+          "forbidden_tokens": ["bare passed verdict is evidence"]
+        },
+        ".pi/skills/code/assets/prompts/skribble.md": {
+          "required_tokens": ["execution receipt", "same-run", "result.met=false"],
+          "forbidden_tokens": []
+        },
+        "apps/orchestration/src/orchestration/playbooks/code.py": {
+          "required_tokens": ["validate_execution_receipt", "p0_receipt", "p0_completion_errors"],
+          "forbidden_tokens": []
+        }
+      }
+    },
+    "finding-risk-disposition": {
+      "surface_contracts": {
+        ".pi/skills/code/README.md": {
+          "required_tokens": ["unresolved", "human-accepted residual risk", "human acceptance"],
+          "forbidden_tokens": []
+        },
+        ".pi/skills/code/assets/prompts/annie.md": {
+          "required_tokens": ["unresolved", "human-accepted residual risk", "human acceptance"],
+          "forbidden_tokens": []
+        },
+        ".pi/skills/code/assets/prompts/carren.md": {
+          "required_tokens": ["unresolved", "human-accepted residual risk", "human acceptance"],
+          "forbidden_tokens": []
+        },
+        "apps/orchestration/src/orchestration/playbooks/code.py": {
+          "required_tokens": ["validate_independent_disposition", "p0_disposition", "human_accepted_residual_risk"],
+          "forbidden_tokens": []
+        }
+      }
+    },
+    "full-content-human-gates": {
+      "surface_contracts": {
+        ".pi/skills/code/SKILL.md": {
+          "required_tokens": ["complete, non-truncated", "selected artifact", "questionnaire"],
+          "forbidden_tokens": ["first 300"]
+        },
+        ".pi/skills/code/README.md": {
+          "required_tokens": ["complete, non-truncated", "selected artifact", "questionnaire"],
+          "forbidden_tokens": ["first 300"]
+        },
+        ".pi/skills/code/resources/reference.md": {
+          "required_tokens": ["complete, non-truncated", "selected artifact", "questionnaire"],
+          "forbidden_tokens": ["first 300"]
+        },
+        ".pi/extensions/skill/skill-utils.ts": {
+          "required_tokens": ["complete questionnaire payload", "JSON.stringify", "trustedTransportCapability"],
+          "forbidden_tokens": ["slice(0, 300)"]
+        }
+      }
+    },
+    "target-profiles": {
+      "surface_contracts": {
+        ".pi/skills/code/SKILL.md": {
+          "required_tokens": ["target-profile", "project-native", "clarification"],
+          "forbidden_tokens": ["default to the preferred stack"]
+        },
+        ".pi/skills/code/README.md": {
+          "required_tokens": ["target profile", "project-native", "clarification"],
+          "forbidden_tokens": ["default to the preferred stack"]
+        },
+        ".pi/skills/code/assets/prompts/echo.md": {
+          "required_tokens": ["target profile", "project-native", "clarification"],
+          "forbidden_tokens": ["Lit [default UI]", "default to the preferred stack"]
+        },
+        ".pi/skills/code/assets/prompts/skribble.md": {
+          "required_tokens": ["selected target profile", "project-native", "clarification"],
+          "forbidden_tokens": ["Greenfield / no established tooling → default", "Always: activate `.venv/` first"]
+        },
+        "apps/orchestration/src/orchestration/playbooks/code.py": {
+          "required_tokens": ["selected target profile", "project-native", "clarification"],
+          "forbidden_tokens": ["Always activate .venv/ first for Python"]
+        }
+      }
+    },
+    "legacy-release": {
+      "surface_contracts": {
+        ".pi/skills/code/README.md": {
+          "required_tokens": ["legacy", "fresh-process", "full-eval baseline"],
+          "forbidden_tokens": ["silently default"]
+        },
+        ".pi/skills/code/resources/reference.md": {
+          "required_tokens": ["legacy", "fresh-process", "full-eval baseline"],
+          "forbidden_tokens": ["silently default"]
+        },
+        "apps/orchestration/src/orchestration/playbooks/code.py": {
+          "required_tokens": ["legacy", "prepare_recovery", "eval_baseline"],
+          "forbidden_tokens": ["fabricated proof"]
+        }
+      }
+    },
+    "terminal-result": {
+      "surface_contracts": {
+        ".pi/skills/code/SKILL.md": {
+          "required_tokens": ["result.met", "structured result", "public success"],
+          "forbidden_tokens": ["action name implies success"]
+        },
+        ".pi/skills/code/README.md": {
+          "required_tokens": ["result.met", "public success", "Completion is fail-closed"],
+          "forbidden_tokens": ["action name implies success"]
+        },
+        ".pi/extensions/skill/index.ts": {
+          "required_tokens": ["result.met", "structured terminal result", "public success"],
+          "forbidden_tokens": ["const success = action.action === \"complete\""]
+        },
+        "apps/orchestration/src/orchestration/playbooks/code.py": {
+          "required_tokens": ["validate_p0_completion", "p0_completion_errors", "Directives.incomplete"],
+          "forbidden_tokens": []
+        }
+      }
+    }
+  }
+}

@@ -65,7 +65,7 @@
 </header>
 
 <div class="callout">
-  <b>Mode selection is data, not keywords:</b> caller <code>constraints.mode</code> wins; otherwise piper declares the mode in its plan SUMMARY. <b>quick</b> skips planning &amp; both critiques (straight to researching). <b>standard</b> runs the backbone. <b>deep</b> adds the two <span style="color:#c9a7fb">critique detours</span> (plan &amp; report) with bounded revise loops.
+  <b>Mode is data, and it buys a BUDGET — it does not wire the graph:</b> caller <code>constraints.mode</code> wins; otherwise piper declares it in its plan SUMMARY (no keyword detection). The mode expands into <code>critique_passes</code> + <code>max_research_rounds</code>, and the <span style="color:#c9a7fb">critique detours</span> fire on the BUDGET, not the label — <code>&ge;1</code> buys the report critique, <code>&ge;2</code> adds the plan critique. A <b>standard</b> run given <code>critique_passes: 1</code> therefore gets an adversarial report read, and opt-in <b>rigor escalation</b> can earn one mid-run. Presets: quick <code>0/2</code> · standard <code>0/2</code> · deep <code>2/3</code>. Breadth (<code>max_sub_queries</code>) is deliberately NOT a mode value — mode governs verification spend, never decomposition.
 </div>
 
 <div class="legend">
@@ -98,13 +98,19 @@
 <div class="foot">
   <h3>Bounded revise loops &amp; honest exit</h3>
   <ul>
-    <li><b>critiquing_plan ⇄ planning</b> and <b>critiquing_report ⇄ synthesizing</b> (deep only) and <b>validating ⇄ synthesizing</b> (all modes) each loop on <code>NEEDS_REVISION</code>/<code>FAIL</code>, bounded by <code>max_iterations</code>. Budget spent → the "exhausted" edge proceeds forward with a warning recorded (never a faked pass).</li>
-    <li><b>validating</b> (vera) is the evidence-based citation-grounding gate in <b>every</b> mode — the report is written only after claims are grounded (or the ground-loop budget is spent).</li>
+    <li><b>critiquing_plan ⇄ planning</b> (<code>critique_passes ≥ 2</code>), <b>critiquing_report ⇄ synthesizing</b> (<code>≥ 1</code>) and <b>validating ⇄ synthesizing</b> (every mode) each loop on <code>NEEDS_REVISION</code>/<code>FAIL</code>, bounded by <code>max_iterations</code>. Budget spent → the "exhausted" edge proceeds forward with a warning recorded and the unresolved issues surfaced (never a faked pass).</li>
+    <li><b>validating</b> (vera) is the evidence-based citation-grounding gate in <b>every</b> mode — the report is written only after claims are grounded, or the budget is spent and the survivors are reported as unverified.</li>
+  </ul>
+  <h3>Evidence-seeking — the iterative research loop</h3>
+  <ul>
+    <li><b>validating → researching</b> fires when vera FAILS a claim <i>and</i> names <code>evidence_needed</code> <i>and</i> a research round remains (<code>max_research_rounds</code>, default 2 / deep 3; set <code>1</code> to disable). The gate's answer to "this claim has no support" becomes <b>go find out</b>, not merely <b>delete the claim</b> — which matters because synthia has no web tools, so re-grounding alone can only ever make the report thinner.</li>
+    <li><b>The verifier names what is missing; it does not supply it.</b> vera diagnoses the gap, echo (read-only, full search toolset) fills it, synthia integrates, vera re-checks. A verifier that sourced its own evidence would be grading material it authored.</li>
+    <li>Researchers are told that <b>"no supporting source found" is a useful result</b> — without that, dispatching an agent to find support for a claim is an incentive to manufacture it.</li>
   </ul>
   <h3>Fan-out &amp; escalation</h3>
   <ul>
-    <li><b>researching</b> (echo) fans out one branch per planned sub-query (<code>dynamic_branches</code>, bounded by <code>max_fan_width</code>); quick mode with no sub-queries stays a single echo agent.</li>
-    <li>Any working phase escalates to <b>unknown</b> on <b>UNCERTAIN</b>; <b>unknown → awaiting_clarification → planning</b> resumes after the user answers.</li>
+    <li><b>researching</b> (echo) fans out one branch per planned sub-query (<code>dynamic_branches</code>, bounded by <code>max_fan_width</code>); only the explicit-quick fast path stays a single echo agent. Fan-in aggregates by <b>weakest</b> branch confidence.</li>
+    <li>Any working phase escalates to <b>unknown</b> on <b>UNCERTAIN</b>, a false <code>*_complete</code> flag, <code>needs_clarification</code>, or a stalled loop. Resume is <b>producer-oriented</b>: <b>→ planning</b> (from planning / critiquing_plan), <b>→ researching</b> (from researching — the plan is kept), <b>→ synthesizing</b> (from synthesizing / critiquing_report / validating).</li>
     <li><b>Abort:</b> every working phase can <code>abort → error</code> (arrows omitted for legibility).</li>
   </ul>
 </div>
@@ -113,36 +119,39 @@
 const COLS = { Louter:30, C:430, Rmid:800 };
 const W = { C:300, side:245 };
 const N = {
-  intake:{col:'C',y:30,cls:'start',title:'intake',desc:'Requires a non-empty goal (the query). Resolves mode (caller constraint or piper-declared), then advances.'},
-  planning:{col:'C',y:150,cls:'piper',title:'planning',who:'piper',desc:'Decompose the query into sub-queries + declare the mode. (Skipped in quick mode.)'},
-  critiquing_plan:{col:'Rmid',y:205,cls:'carren',title:'critiquing_plan',badge:'DEEP',desc:'Critique the research plan before spending the fan-out. Deep mode only.'},
-  researching:{col:'C',y:345,cls:'echo',title:'researching',who:'echo',desc:'Gather evidence — one fan-out branch per sub-query (bounded by max_fan_width).'},
-  synthesizing:{col:'C',y:475,cls:'synthia',title:'synthesizing',who:'synthia',desc:'Synthesize findings into a grounded draft with citations.'},
-  critiquing_report:{col:'Rmid',y:545,cls:'carren',title:'critiquing_report',badge:'DEEP',desc:'Critique the draft for gaps / balance. Deep mode only.'},
-  validating:{col:'C',y:695,cls:'vera',title:'validating',who:'vera',desc:'Evidence gate (all modes): are the claims citation-grounded? PASS / revise / exhausted.'},
-  report_writing:{col:'C',y:825,cls:'skribble',title:'report_writing',who:'skribble',desc:'Write the final report + README from the validated synthesis.'},
-  complete:{col:'C',y:975,cls:'done',title:'complete',badge:'TERM',desc:'Terminal. Report delivered; warnings recorded if any revise budget was exhausted.'},
+  intake:{col:'C',y:30,cls:'start',title:'intake',desc:'Requires a non-empty goal (the query). Resolves the mode (caller constraint, else deferred to piper) and expands it into the rigor budget; seeds max_sub_queries.'},
+  planning:{col:'C',y:150,cls:'piper',title:'planning',who:'piper',desc:'Decompose the query into sub-queries; declare the mode unless the caller fixed it. Skipped ONLY on an explicit caller quick.'},
+  critiquing_plan:{col:'Rmid',y:205,cls:'carren',title:'critiquing_plan',badge:'BUDGET',desc:'Critique the plan before spending the fan-out. Runs when critique_passes \u2265 2 (deep preset) \u2014 budget-gated, not mode-gated. Evidence-gated verdict.'},
+  researching:{col:'C',y:345,cls:'echo',title:'researching',who:'echo',desc:'Gather evidence \u2014 one read-only fan branch per sub-query (bounded by max_fan_width). Re-entered for EVIDENCE-SEEKING rounds; branch numbering continues so new findings never overwrite earlier ones.'},
+  synthesizing:{col:'C',y:475,cls:'synthia',title:'synthesizing',who:'synthia',desc:'Synthesize findings into a grounded, cited draft. No web tools by design \u2014 it integrates evidence, it does not gather it.'},
+  critiquing_report:{col:'Rmid',y:545,cls:'carren',title:'critiquing_report',badge:'BUDGET',desc:'Critique the draft for overclaiming / bias / uncertainty-honesty. Runs when critique_passes \u2265 1 \u2014 so a non-deep run that EARNED a pass via rigor escalation gets it too.'},
+  validating:{col:'C',y:695,cls:'vera',title:'validating',who:'vera',desc:'Independent citation gate, EVERY mode: is each material claim grounded in a cited source that supports it? PASS \u2192 report; FAIL \u2192 seek evidence, re-ground, or exhaust honestly.'},
+  report_writing:{col:'C',y:825,cls:'skribble',title:'report_writing',who:'skribble',desc:'Write report.md / sources.md / README.md from the validated synthesis. Adds no claims. Not escalatable.'},
+  complete:{col:'C',y:975,cls:'done',title:'complete',badge:'TERM',desc:'Terminal. met = the report was WRITTEN; grounded = the citation gate PASSED. A run can be met=true, grounded=false \u2014 delivered with its unverified claims named.'},
   error:{col:'Rmid',y:975,cls:'error',title:'error',badge:'TERM',desc:'Terminal. Reached by abort from any working phase.'},
-  unknown:{col:'Louter',y:430,cls:'esc',title:'unknown',desc:'Escalation entry: UNCERTAIN confidence at any working phase.'},
-  awaiting_clarification:{col:'Louter',y:600,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes at planning once clarified.'},
+  unknown:{col:'Louter',y:430,cls:'esc',title:'unknown',desc:'Escalation staging: UNCERTAIN confidence, a false *_complete flag, needs_clarification, or a stalled loop at any working phase.'},
+  awaiting_clarification:{col:'Louter',y:600,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user. Resumes PRODUCER-oriented \u2014 at the agent that can act on the answer (planning / researching / synthesizing), not at the position where it stopped.'},
 };
 const E = [
-  {from:'intake',to:'planning',s1:'bottom',s2:'top',kind:'fwd',label:'standard / deep'},
-  {from:'intake',to:'researching',s1:'left',s2:'left',kind:'fwd',label:'quick → skip planning',c1:{dx:-70,dy:60},c2:{dx:-70,dy:-40}},
-  {from:'planning',to:'critiquing_plan',s1:'right',s2:'left',kind:'fwd',label:'deep'},
-  {from:'planning',to:'researching',s1:'bottom',s2:'top',kind:'fwd',label:'quick / standard'},
+  {from:'intake',to:'planning',s1:'bottom',s2:'top',kind:'fwd',label:'default (piper may declare the mode)'},
+  {from:'intake',to:'researching',s1:'left',s2:'left',kind:'fwd',label:'explicit caller quick → skip planning',c1:{dx:-70,dy:60},c2:{dx:-70,dy:-40}},
+  {from:'planning',to:'critiquing_plan',s1:'right',s2:'left',kind:'fwd',label:'critique_passes ≥ 2'},
+  {from:'planning',to:'researching',s1:'bottom',s2:'top',kind:'fwd',label:'critique_passes < 2'},
   {from:'critiquing_plan',to:'researching',s1:'bottom',s2:'right',kind:'exit',label:'APPROVE / exhausted',c1:{dx:0,dy:60},c2:{dx:70,dy:0}},
   {from:'critiquing_plan',to:'planning',s1:'top',s2:'right',kind:'loop',label:'revise',c1:{dx:0,dy:-50},c2:{dx:70,dy:-10}},
   {from:'researching',to:'synthesizing',s1:'bottom',s2:'top',kind:'fwd',label:'research_done'},
-  {from:'synthesizing',to:'validating',s1:'bottom',s2:'top',kind:'fwd',label:'quick / standard'},
-  {from:'synthesizing',to:'critiquing_report',s1:'right',s2:'left',kind:'fwd',label:'deep'},
+  {from:'synthesizing',to:'validating',s1:'bottom',s2:'top',kind:'fwd',label:'no critique budget / critique closed'},
+  {from:'synthesizing',to:'critiquing_report',s1:'right',s2:'left',kind:'fwd',label:'critique_passes ≥ 1'},
   {from:'critiquing_report',to:'validating',s1:'bottom',s2:'right',kind:'exit',label:'APPROVE / exhausted',c1:{dx:0,dy:60},c2:{dx:70,dy:0}},
   {from:'critiquing_report',to:'synthesizing',s1:'top',s2:'right',kind:'loop',label:'revise',c1:{dx:0,dy:-50},c2:{dx:70,dy:-10}},
   {from:'validating',to:'report_writing',s1:'bottom',s2:'top',kind:'exit',label:'PASS / exhausted'},
   {from:'validating',to:'synthesizing',s1:'left',s2:'left',kind:'loop',label:'re-ground (revise)',bow:70},
+  {from:'validating',to:'researching',s1:'right',s2:'right',kind:'loop',label:'evidence-seeking (FAIL + evidence_needed)',bow:-120},
   {from:'report_writing',to:'complete',s1:'bottom',s2:'top',kind:'fwd',label:'report_done'},
   {from:'unknown',to:'awaiting_clarification',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
-  {from:'awaiting_clarification',to:'planning',s1:'left',s2:'left',kind:'esc',label:'clarify',c1:{dx:-18,dy:-230},c2:{dx:-18,dy:150}},
+  {from:'awaiting_clarification',to:'planning',s1:'left',s2:'left',kind:'esc',label:'clarify → planner (plan must change)',c1:{dx:-18,dy:-230},c2:{dx:-18,dy:150}},
+  {from:'awaiting_clarification',to:'researching',s1:'right',s2:'left',kind:'esc',label:'clarify → researchers (plan kept)',c1:{dx:40,dy:-60},c2:{dx:-40,dy:40}},
+  {from:'awaiting_clarification',to:'synthesizing',s1:'right',s2:'right',kind:'esc',label:'clarify → synthesizer (report must change)',c1:{dx:60,dy:-30},c2:{dx:60,dy:30}},
   {from:'researching',to:'unknown',s1:'left',s2:'right',kind:'esc',label:'UNCERTAIN — any working phase',c1:{dx:-40,dy:0},c2:{dx:40,dy:0}},
 ];
 const KIND = {fwd:'#8b98a9',exit:'#3fb950',loop:'#e3a52e',esc:'#9ca3af',abort:'#f85149'};
@@ -152,7 +161,7 @@ for(const id in N){const n=N[id];const w=(n.col==='C')?W.C:W.side;
   const el=document.createElement('div');el.className='node '+n.cls;el.id='n_'+id;
   el.style.left=COLS[n.col]+'px';el.style.top=n.y+'px';el.style.width=w+'px';
   const who=n.who?`<span class="who">· ${n.who}</span>`:'';
-  const bc=n.badge==='TERM'?'term':(n.badge==='DEEP'?'deep':'hitl');
+  const bc=n.badge==='TERM'?'term':((n.badge==='DEEP'||n.badge==='BUDGET')?'deep':'hitl');
   const badge=n.badge?`<span class="badge ${bc}">${n.badge}</span>`:'';
   el.innerHTML=`<div class="t">${n.title}${who}${badge}</div><div class="d">${n.desc}</div>`;
   wrap.appendChild(el);}

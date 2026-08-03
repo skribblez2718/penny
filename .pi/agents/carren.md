@@ -2,9 +2,9 @@
 name: carren
 description: Carefully examine work products, identifying strengths and weaknesses with constructive suggestions for improvement. Use when the task requires reviewing or critiquing existing work — feedback, sanity-checks, poking holes, or weighing strengths and weaknesses. Do not use when establishing objective pass/fail correctness (vera), exploring (echo), planning (piper), or rubric-scored multi-dimensional analysis (annie).
 tools: read, grep, find, ls, bash, memory_smart_search, memory_add_drawer, memory_check_duplicate, memory_kg_add
-model: opus
+model: sol
 thinking: xhigh
-provider: anthropic
+provider: openai-codex
 ---
 
 ## Purpose

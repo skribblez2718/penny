@@ -40,10 +40,38 @@ class TestInvariantsHoldToday:
             assert r.status == PASS, f"{name} should hold today: {r.detail}"
             assert r.informational is False, f"{name} must gate (not informational)"
 
-    def test_aspirational_is_informational_and_nongating(self):
+    def test_model_scaling_self_improve_holds_and_stays_nongating(self):
+        """The capability now holds: improvement text is model-drafted or
+        human-authored, never rendered by a string template. Still
+        informational — it tracks a behavioural property and must not gate."""
         r = ei.check_model_scaling_self_improve()
-        assert r.status == FAIL
-        assert r.informational is True  # tracked, never gates until #23 lands
+        assert r.status == PASS, r.detail
+        assert r.informational is True
+
+    def test_model_scaling_self_improve_regresses_if_template_reintroduced(self):
+        """Ratchet direction: reintroducing a template renderer under ANY name
+        matching *guidance_text* must turn the invariant RED, not pass silently.
+
+        Guards the actual defect — a template that interpolated ledger ids and
+        raw free-text reasons into a git-tracked agent prompt.
+        """
+        import sys
+        from pathlib import Path
+
+        self_improve = (
+            Path(ei.__file__).resolve().parents[1] / "self_improve"
+        )
+        if str(self_improve) not in sys.path:
+            sys.path.insert(0, str(self_improve))
+        import compression_loop
+
+        compression_loop.build_guidance_text = lambda *a, **k: ""
+        try:
+            r = ei.check_model_scaling_self_improve()
+            assert r.status == FAIL
+            assert "build_guidance_text" in r.detail
+        finally:
+            del compression_loop.build_guidance_text
 
     def test_honest_exhaustion_tracked_informational(self):
         r = ei.check_honest_exhaustion()

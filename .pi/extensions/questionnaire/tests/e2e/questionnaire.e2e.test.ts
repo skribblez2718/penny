@@ -9,6 +9,9 @@ import { describe, it, expect } from "vitest";
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "node:url";
+
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../..");
 
 describe("Questionnaire E2E — Extension Discovery", () => {
   it("should have pi available on PATH", () => {
@@ -16,8 +19,8 @@ describe("Questionnaire E2E — Extension Discovery", () => {
     expect(result).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  it("should have the questionnaire extension directory structure", () => {
-    const extDir = path.join(process.cwd(), ".pi/extensions/questionnaire");
+  it("should have the questionnaire extension directory structure from any runner cwd", () => {
+    const extDir = path.join(PROJECT_ROOT, ".pi/extensions/questionnaire");
     expect(fs.existsSync(path.join(extDir, "index.ts"))).toBe(true);
     expect(fs.existsSync(path.join(extDir, "package.json"))).toBe(true);
     expect(fs.existsSync(path.join(extDir, "tsconfig.json"))).toBe(true);

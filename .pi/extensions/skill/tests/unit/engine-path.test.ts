@@ -218,6 +218,87 @@ describe("skill engine path", () => {
     expect(parsed.summary).not.toHaveProperty("findings_count");
   });
 
+  it("preserves the complete Python result and never maps met=false to public success", async () => {
+    const structuredResult = {
+      schema_version: 1,
+      met: false,
+      terminal_reason: "incomplete-unresolved-obligations",
+      selected_artifacts: { quality_floor: { artifact_id: "floor-1", version: 1 } },
+      residual_risks: [{ finding_id: "ANNIE-H1", accepter: "human:reviewer" }],
+      completion_failures: ["criterion:7 uncovered"],
+    };
+    mockSpawn.mockImplementation(
+      buildPythonSpawner([
+        { action: "status", state: "unknown", complete: false, session_id: "s", run_id: "" },
+        {
+          action: "invoke_agent",
+          state_id: "verifying",
+          session_id: "s",
+          run_id: "R",
+          agent: "echo",
+          task_summary: "verify",
+        },
+        {
+          action: "incomplete",
+          state_id: "complete",
+          session_id: "s",
+          run_id: "R",
+          result: structuredResult,
+        },
+      ])
+    );
+    const response = await run();
+    expect(response.details.success).toBe(false);
+    expect(response.details.result).toEqual(structuredResult);
+    expect(response.details.errors).toContain("criterion:7 uncovered");
+  });
+
+  it("treats complete without structured result.met as unverified, not success", async () => {
+    mockSpawn.mockImplementation(
+      buildPythonSpawner([
+        { action: "status", state: "unknown", complete: false, session_id: "s", run_id: "" },
+        {
+          action: "invoke_agent",
+          state_id: "verifying",
+          session_id: "s",
+          run_id: "R",
+          agent: "echo",
+          task_summary: "verify",
+        },
+        { action: "complete", state_id: "complete", session_id: "s", run_id: "R" },
+      ])
+    );
+    const response = await run();
+    expect(response.details.success).toBe(false);
+  });
+
+  it("maps complete to public success only when structured result.met is true", async () => {
+    const structuredResult = { schema_version: 1, met: true, terminal_reason: "verified-complete" };
+    mockSpawn.mockImplementation(
+      buildPythonSpawner([
+        { action: "status", state: "unknown", complete: false, session_id: "s", run_id: "" },
+        {
+          action: "invoke_agent",
+          state_id: "verifying",
+          session_id: "s",
+          run_id: "R",
+          agent: "echo",
+          task_summary: "verify",
+        },
+        {
+          action: "complete",
+          state_id: "complete",
+          session_id: "s",
+          run_id: "R",
+          result: structuredResult,
+        },
+      ])
+    );
+    const response = await run();
+    expect(response.details.success).toBe(true);
+    expect(response.details.result).toEqual(structuredResult);
+  });
+
   it("skill without orchestrate.py (matching rez): hits the hasOrchestrate guard, never spawns Python", async () => {
     // rez is a content-only skill with no scripts/orchestrate.py. The legacy
     // per-skill execution path has been removed entirely — there is no

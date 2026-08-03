@@ -23,7 +23,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { tmpdir } from "os";
+import { homedir, tmpdir } from "os";
 import { randomUUID } from "crypto";
 import type {
   ExtensionAPI,
@@ -41,13 +41,38 @@ import {
   truncateForPrevious,
   getFinalOutputFromSkillResult,
   detectSkillMode,
-  normalizeEscalationQuestions,
   reconstructResumeChain,
   isClarificationEscalation,
 } from "./skill-utils.js";
+import {
+  buildAgentExecutionReceipt,
+  buildObservedCommandReceipts,
+  parseTrustedHumanEventMarker,
+  signTrustedInvocation,
+  withExecutionOwnerEnvironment,
+} from "./execution-receipts.js";
 import { createLogger, setSessionId, type ErrorCode } from "../../lib/logger/logger.js";
 
 const logger = createLogger("skill");
+
+function executionOwnerIsolation(targetRoot: string) {
+  const pennyRoot = process.env.PROJECT_ROOT || targetRoot;
+  return {
+    protectedPaths: [path.join(path.resolve(pennyRoot), ".penny")],
+    // The agent runtime's own state directory stays WRITABLE inside the sandbox.
+    // `--ro-bind / /` otherwise makes it read-only, and an OAuth provider
+    // (openai-codex) refreshes its token by rewriting ~/.pi/agent/auth.json — a
+    // write that fails silently and surfaces as "No API key found", killing the
+    // agent right after its session event. This is the agent's own runtime
+    // state, which it could already READ; the orchestration authority boundary
+    // (.penny) remains tmpfs-shadowed above, and the owner HMAC keys are still
+    // stripped from the environment by isolatedAgentEnvironment().
+    // Narrow further to <home>/.pi/agent if only credential refresh is needed.
+    writablePaths: [path.join(homedir(), ".pi")],
+    requireSandbox: true,
+  };
+}
+
 import {
   discoverAgents,
   getFinalOutput,
@@ -144,6 +169,8 @@ interface Action {
   model?: string;
   agent_config?: Record<string, unknown>;
   plan_summary?: Record<string, unknown>;
+  /** Structured terminal result from Python; never reconstruct or drop fields. */
+  result?: Record<string, unknown>;
   session_room?: string;
   errors?: string[];
   // UNKNOWN_STATE escalation fields
@@ -159,6 +186,13 @@ interface Action {
   unknown_reason?: string;
   previous_state?: string;
   agent_timeout_ms?: number;
+  /**
+   * AUTHORITATIVE target root for this run, supplied by the engine (which owns the
+   * durable checkpoint). Prefer this over any locally re-derived value: the driver's
+   * own `params.project_root || cwd` silently resolves to the DRIVER's cwd on a
+   * resume, because the printed resume contract carries no project_root.
+   */
+  project_root?: string;
   // When true, this response represents a logical step boundary
   // (e.g., job analysis complete, phase transition). The iteration
   // counter only advances on logical_step boundaries, allowing
@@ -469,6 +503,7 @@ async function callPython(args: string[], cwd: string, timeoutMs: number): Promi
     const proc = spawn(config.venvPython, args, {
       cwd: safeCwd,
       stdio: ["ignore", "pipe", "pipe"],
+      env: withExecutionOwnerEnvironment(process.env),
     });
 
     let stdout = "";
@@ -881,10 +916,12 @@ async function executeSkill(
     if (isClarificationResume) {
       runId = recoveredRunId || randomUUID();
       emitProgress(`Resuming ${skillName} with user clarification...`);
+      const trustedHumanEvent = parseTrustedHumanEventMarker(clarificationResponse || "");
       const resumeResult = JSON.stringify({
         answer: clarificationResponse,
         clarification: clarificationResponse,
         user_response: clarificationResponse,
+        ...(trustedHumanEvent ? { trusted_human_event: trustedHumanEvent } : {}),
       });
       action = await pythonStep(
         orchestratePath,
@@ -931,6 +968,7 @@ async function executeSkill(
 
     while (
       action.action !== "complete" &&
+      action.action !== "incomplete" &&
       action.action !== "error" &&
       iterations < maxIterations &&
       !skillTimedOut
@@ -1003,21 +1041,38 @@ async function executeSkill(
         const agentConfigModel =
           typeof rawAgentConfigModel === "string" ? rawAgentConfigModel : undefined;
 
+        const receiptStartedAt = new Date().toISOString();
+        const receiptId = `${runId}:receipt:${randomUUID()}`;
         const progressEmitter = new ProgressEmitter();
+        // AUTHORITATIVE target root, stated by the engine on every directive.
+        //
+        // `projectRoot` is re-derived per invocation from `params.project_root || cwd`,
+        // and the printed resume contract carries NO project_root -- so after the first
+        // HITL gate every resumed invocation silently fell back to the DRIVER's cwd.
+        // That pointed the agent's cwd, its bubblewrap writable root, and every
+        // execution receipt at the wrong repository; Python then rejected all of them
+        // with "execution receipt working directory is outside the selected target".
+        // The checkpointer owns the run's target, so the directive is authoritative and
+        // the local fallback is only for pre-existing playbooks that omit it.
+        const targetRoot =
+          typeof action.project_root === "string" && action.project_root
+            ? action.project_root
+            : projectRoot;
         const agentResult = await withAgentTimeout(
           runSingleAgent(
             cwd,
             agents,
             action.agent,
             taskText,
-            projectRoot,
+            targetRoot,
             undefined,
             agentAbortController.signal,
             agentOnUpdate,
             makeDetails,
             resolveSkillContext(skillContextPath, cwd),
             progressEmitter,
-            action.model || agentConfigModel
+            action.model || agentConfigModel,
+            executionOwnerIsolation(targetRoot)
           ),
           action.agent,
           agentAbortController.signal,
@@ -1036,6 +1091,37 @@ async function executeSkill(
 
         const summary = parseSummaryFromOutput(output);
         const summaryMissing = Object.keys(summary).length === 0;
+        const configuredSecrets = Array.isArray(_constraintsObj.secret_values)
+          ? _constraintsObj.secret_values.filter(
+              (value): value is string => typeof value === "string"
+            )
+          : [];
+        const receiptEndedAt = new Date().toISOString();
+        const executionReceipt = buildAgentExecutionReceipt({
+          receiptId,
+          runId,
+          stateId: action.state_id || "unknown",
+          agent: action.agent,
+          // The receipt's working_directory MUST be the selected target: Python
+          // validates it against ctx.project_root and rejects anything outside it.
+          projectRoot: targetRoot,
+          startedAt: receiptStartedAt,
+          endedAt: receiptEndedAt,
+          exitStatus: isError ? 1 : 0,
+          output,
+          secretValues: configuredSecrets,
+        });
+        const observedCommandReceipts = buildObservedCommandReceipts({
+          messages: agentResult.messages,
+          claims: summary.receipt_claims,
+          runId,
+          stateId: action.state_id || "unknown",
+          agent: action.agent,
+          projectRoot: targetRoot,
+          startedAt: receiptStartedAt,
+          endedAt: receiptEndedAt,
+          secretValues: configuredSecrets,
+        });
         // NO domain-shaped synthesis. Each state's summary_contract in the
         // playbook is the sole validator, so pass the raw (possibly empty)
         // summary through and flag the omission — the engine fails loud rather
@@ -1044,6 +1130,16 @@ async function executeSkill(
           exitCode: isError ? 1 : 0,
           summary,
           summary_missing: summaryMissing,
+          receipts: [executionReceipt, ...observedCommandReceipts],
+          trusted_invocation: signTrustedInvocation({
+            invocationId: receiptId,
+            runId,
+            stateId: action.state_id || "unknown",
+            agentIdentity: `agent:${action.agent}`,
+            model: agentResult.model || action.model || agentConfigModel || "",
+            startedAt: receiptStartedAt,
+            endedAt: receiptEndedAt,
+          }),
           error: isError
             ? agentResult.errorMessage || agentResult.stderr || "Agent failed"
             : summaryMissing
@@ -1110,7 +1206,8 @@ async function executeSkill(
               makeDetails,
               resolveSkillContext(t.skillContext, cwd),
               progressEmitter,
-              t.model
+              t.model,
+              executionOwnerIsolation(t.cwd || cwd)
             ),
             t.agent,
             agentAbortController.signal,
@@ -1182,11 +1279,25 @@ async function executeSkill(
         // response back to orchestrate.py as a "user" agent step.
         emitProgress(`Escalating to user for clarification (state: ${action.state_id})...`);
 
-        // Build questionnaire from orchestrate.py's escalation questions.
-        // Use the defensive normalizer: free-text gate questions (e.g. the sca
-        // charter gate's out_of_scope/scope prompts) omit `options`, and a bare
-        // `q.options.map(...)` crashes with "reading 'map' of undefined".
-        const questionnaireQuestions = normalizeEscalationQuestions(action.questions);
+        // Carry the escalation questions through UNNORMALIZED.
+        //
+        // normalizeEscalationQuestions() keeps only id/label/prompt/options/
+        // allowOther/type and therefore DROPS the six trusted-approval binding
+        // fields the Python gate attaches (approval_run_id, approval_gate_id,
+        // approval_challenge, artifact_ref, questionnaire_transport_ref,
+        // rendered_questions_digest). Without them prepareQuestionnairePayload()
+        // cannot mint a trustedTransportCapability, the questionnaire tool cannot
+        // emit a signed trusted_human_event, and route_user rejects every answer
+        // -> a P0 gate re-asks forever and is literally unsatisfiable.
+        //
+        // Normalization is NOT lost: prepareQuestionnairePayload() calls
+        // normalizeEscalationQuestions() itself when building the questions
+        // payload, so the defensive `options ?? []` handling still applies (the
+        // original reason this normalizer existed: sca charter-gate questions omit
+        // `options`, and a bare `q.options.map(...)` throws). Keeping the binding
+        // out of that payload also matters because the questionnaire tool's
+        // question schema is additionalProperties:false.
+        const questionnaireQuestions = action.questions ?? [];
 
         // Use the questionnaire extension to get user input.
         // ctx.tools.callTool is not available, but the questionnaire tool
@@ -1244,7 +1355,7 @@ async function executeSkill(
       errors.push(
         `Skill timed out after ${config.skillTimeout / 1000}s — last state was ${action.state_id || "unknown"}`
       );
-    } else if (action.action === "complete") {
+    } else if (action.action === "complete" && action.result?.["met"] === true) {
       emitProgress(`Skill completed successfully`);
 
       // Issue 1 fix: send report email AFTER the skill loop completes,
@@ -1288,6 +1399,12 @@ async function executeSkill(
           errors.push(`Email error: ${errorMessage(emailErr)}`);
         }
       }
+    } else if (action.action === "incomplete" || action.result?.["met"] === false) {
+      emitProgress(`Skill stopped incomplete — completion predicate was not met`);
+      const completionFailures = action.result?.["completion_failures"];
+      if (Array.isArray(completionFailures)) {
+        errors.push(...completionFailures.map((failure) => String(failure)));
+      }
     } else if (iterations >= maxIterations) {
       emitProgress(`Skill reached max iterations (${maxIterations})`);
       errors.push(
@@ -1295,7 +1412,9 @@ async function executeSkill(
       );
     }
 
-    const isSuccess = action.action === "complete";
+    // A public success signal derives from the complete structured result. A
+    // missing result.met is unverified and therefore cannot be promoted to success.
+    const isSuccess = action.action === "complete" && action.result?.["met"] === true;
     const planSummary = action.plan_summary as Record<string, unknown> | undefined;
     const result: SkillResult = {
       success: isSuccess,
@@ -1310,6 +1429,7 @@ async function executeSkill(
         (planSummary?.steps as unknown[])?.length || (planSummary?.step_count as number) || 0,
       agents_invoked: agentsInvoked,
       errors: [...errors, ...(action.errors || [])],
+      result: action.result,
     };
 
     return result;
@@ -1860,7 +1980,8 @@ async function executeSkillsChain(
       // surface the STEP's actual questions so the user answers them, and route
       // the answer back to THIS step (constraints.user_response) on resume,
       // instead of the generic retry/skip/diagnose recovery prompt.
-      if (isClarificationEscalation(result)) {
+      const escalation = result.escalation;
+      if (isClarificationEscalation(result) && escalation) {
         return {
           success: false,
           session_id: chainSessionId,
@@ -1879,11 +2000,11 @@ async function executeSkillsChain(
           chain_results: results.slice(0, -1),
           resumable: true,
           escalation: {
-            questions: result.escalation!.questions,
+            questions: escalation.questions,
             unknown_reason:
               `Step ${stepIndex + 1}/${checkpoint.total_steps} (${step.skill_name}) needs clarification before the chain can continue.` +
-              (result.escalation!.unknown_reason ? ` ${result.escalation!.unknown_reason}` : ""),
-            previous_state: result.escalation!.previous_state,
+              (escalation.unknown_reason ? ` ${escalation.unknown_reason}` : ""),
+            previous_state: escalation.previous_state,
           },
         };
       }

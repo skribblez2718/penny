@@ -164,7 +164,7 @@ class TestRunCompressionLoop:
         result = run_compression_loop(outcomes)
         assert result == []
 
-    def test_patterns_generate_amendments(self):
+    def test_patterns_generate_amendments(self, drafting_enabled):
         outcomes = [
             {
                 "decision_id": "d1",
@@ -192,7 +192,7 @@ class TestRunCompressionLoop:
         assert "amendment_id" in amendment
         assert amendment["target_layer"] == "DOMAIN_GUIDANCE"
 
-    def test_universal_learnings_get_rejected(self):
+    def test_universal_learnings_get_rejected(self, drafting_enabled):
         outcomes = [
             {
                 "decision_id": "d1",
@@ -292,7 +292,7 @@ class TestSemanticClustering:
         # spawn raises -> fallback -> exact-string (all differ) -> no cluster
         assert cluster_outcomes(self._FAILS, runner=_fake_runner(raise_exc=OSError("x"))) == []
 
-    def test_run_loop_uses_semantic_clusters(self, monkeypatch):
+    def test_run_loop_uses_semantic_clusters(self, monkeypatch, drafting_enabled):
         monkeypatch.setenv("PI_SELFIMPROVE_CLUSTER_MODEL", "anthropic/haiku")
         payload = json.dumps({"clusters": [{"label": "wrong toolchain", "members": [0, 2]}]})
         result = run_compression_loop(self._FAILS, runner=_fake_runner(_cluster_stream(payload)))
@@ -317,3 +317,44 @@ def test_run_loop_prefers_drafted_diff(monkeypatch):
     assert len(result) == 1
     assert result[0]["changes"][0]["new_text"] == "Y"
     assert result[0]["changes"][0]["action"] == "MODIFY"
+
+
+class TestAmendmentCreationKillSwitch:
+    """Amendment CREATION is off by default; review tooling is never gated."""
+
+    def _runner(self):
+        import importlib
+        import run_compression
+
+        return importlib.reload(run_compression)
+
+    def test_creation_disabled_by_default(self, monkeypatch):
+        monkeypatch.delenv("PI_SELFIMPROVE_AMENDMENTS", raising=False)
+        assert self._runner().creation_enabled() is False
+
+    def test_creation_enabled_only_by_explicit_truthy_flag(self, monkeypatch):
+        rc = self._runner()
+        for value in ("1", "true", "TRUE", "yes", "on"):
+            monkeypatch.setenv("PI_SELFIMPROVE_AMENDMENTS", value)
+            assert rc.creation_enabled() is True, value
+        for value in ("0", "false", "no", "off", "", "maybe"):
+            monkeypatch.setenv("PI_SELFIMPROVE_AMENDMENTS", value)
+            assert rc.creation_enabled() is False, value
+
+    def test_disabled_run_exits_cleanly_without_creating(self, monkeypatch, capsys):
+        """Must exit 0 and report creation_enabled=False — never error, and
+        never reach outcome loading."""
+        import json as _json
+
+        rc = self._runner()
+        monkeypatch.delenv("PI_SELFIMPROVE_AMENDMENTS", raising=False)
+
+        def _boom(*a, **k):  # pragma: no cover - must never be called
+            raise AssertionError("must not load outcomes when creation is disabled")
+
+        monkeypatch.setattr(rc, "fetch_recent_outcomes", _boom)
+        monkeypatch.setattr(sys, "argv", ["run_compression.py", "sess_test"])
+        assert rc.main() == 0
+        payload = _json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert payload["creation_enabled"] is False
+        assert payload["amendments_created"] == 0

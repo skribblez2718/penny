@@ -5,7 +5,7 @@ WHY THIS EXISTS
 An agent subprocess is spawned with ``cwd = project_root`` — the TARGET repo the skill
 operates on (``skill/index.ts`` passes ``projectRoot`` as the agent cwd;
 ``agent-runner.ts`` spawns with ``cwd: cwd ?? defaultCwd``). For ``code`` / ``sca`` /
-``jsa`` / ``learn`` / ``manim`` / ``prd`` runs, that is NOT this repo.
+``jsa`` / ``learn`` / ``prd`` runs, that is NOT this repo.
 
 A repo-relative path in a task message therefore resolves against the wrong tree — and
 it does not fail loudly. The agent simply cannot read the file and continues without

@@ -46,6 +46,18 @@ Generic shape; exact schema per Domain Guidance.
 <agent_boundary>
 ```
 
+## Frontmatter Field Constraints
+
+The four frontmatter fields have hard limits and selection guidance. Violations break
+prompt assembly or tool access silently.
+
+| Field | Constraint | Guidance |
+|-------|-----------|----------|
+| `name` | Lowercase, alphanumeric + hyphens, 1–64 chars. Must match the filename (`.pi/agents/<name>.md`) and the containing directory if one exists. | Single word preferred; the name is what callers pass to `subagent({ agent })`. |
+| `description` | 1–1024 chars. Must follow the canonical description pattern in Rule 2. | Describes what the agent IS and DOES, plus trigger/signal phrases — this is the string the orchestrator routes on. |
+| `tools` | **Comma-delimited** list drawn from the available tool set. All four memory tools are mandatory. | Match tools to the role — grant no more than the role needs. A read-only reviewer must not carry `write`/`edit`; unnecessary `bash` widens the blast radius. |
+| `model` | A model name the runtime resolves. | Weigh cost against generative load: cheaper/faster models suit narrow, mechanical, or read-only roles; stronger models suit open-ended generative and judgment-heavy roles. This is guidance, not a rule — a read-only role doing hard reasoning still warrants a strong model. |
+
 ## Constraints
 
 - **No Cognitive Frame repeats.** Reference, don't restate. The retired "Alignment with System Rules" restatement pattern must not be reintroduced.
@@ -74,6 +86,9 @@ Agent-specific terms. Rows marked in the SUMMARY JSON are **engine-parsed wire f
 ## Verification
 
 - [ ] YAML frontmatter with `tools:` field
+- [ ] `name` is lowercase/alphanumeric+hyphens, 1–64 chars, and matches the filename
+- [ ] `description` is 1–1024 chars and follows the canonical description pattern
+- [ ] `tools` is comma-delimited and scoped to the role — no surplus write/exec capability
 - [ ] All four memory tools in tools list
 - [ ] Working Discipline present with exact wire formats (confidence vocab, `needs_clarification`, SUMMARY)
 - [ ] Non-Negotiables are outcomes/constraints only — no how-to-work procedure

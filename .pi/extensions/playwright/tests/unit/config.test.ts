@@ -154,17 +154,18 @@ describe("Config", () => {
       expect(Object.isFrozen(config.proxy)).toBe(true);
     });
 
-    it("should auto-derive proxy from CAIDO_URL when PLAYWRIGHT_PROXY_SERVER is unset", () => {
-      // Simulates the typical jsa STRUCTURE setup: Caido is configured,
-      // user wants Playwright to route through it without separate env var.
+    it("should NOT derive a proxy from CAIDO_URL (Playwright defaults to DIRECT)", () => {
+      // Deliberate design decision (config.ts): Playwright must never be hard-wired
+      // to Caido, because that breaks ALL browser activity whenever Caido is down
+      // (ERR_PROXY_CONNECTION_FAILED). Routing through Caido is opt-in only, via an
+      // explicit PLAYWRIGHT_PROXY_SERVER or the `playwright_set_proxy` tool.
       process.env.CAIDO_URL = "http://localhost:8080";
       const config = loadConfig("/tmp/test");
-      expect(config.proxy).toBeDefined();
-      expect(config.proxy!.server).toBe("http://localhost:8080");
+      expect(config.proxy).toBeUndefined();
     });
 
-    it("should prefer explicit PLAYWRIGHT_PROXY_SERVER over auto-derivation", () => {
-      // When both are set, explicit wins (so a user can override Caido).
+    it("should use explicit PLAYWRIGHT_PROXY_SERVER even when CAIDO_URL is set", () => {
+      // The explicit opt-in is the ONLY env path to a configured proxy.
       process.env.CAIDO_URL = "http://localhost:8080";
       process.env.PLAYWRIGHT_PROXY_SERVER = "http://custom-proxy:9090";
       const config = loadConfig("/tmp/test");

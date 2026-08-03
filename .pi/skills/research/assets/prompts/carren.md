@@ -20,4 +20,11 @@ Room: `wing=penny room=skills/research-<session_id>` (in the task). Read the pla
 
 ## Output
 
-End with one `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task: `verdict` (APPROVE / NEEDS_REVISION), `issues` (`[]` if clean), `evidence` (what you examined — required, non-empty), and `confidence` when you emit it.
+End your response with ONE `SUMMARY:` line — exactly this shape, with your real values substituted. Emit nothing after it.
+
+- **Required:** `verdict` (`APPROVE` / `NEEDS_REVISION`), `issues` (`[]` if clean), `evidence`.
+- **`evidence` must be non-empty** — the engine REJECTS a verdict without it. State what you actually examined, concretely.
+
+```
+SUMMARY:{"verdict": "NEEDS_REVISION", "issues": ["no sub-query covers the cost dimension"], "evidence": ["compared the 3 sub-queries against the query's stated scope"], "mempalace_drawer": "<session_id> Critique", "confidence": "PROBABLE", "needs_clarification": false, "clarifying_questions": []}
+```

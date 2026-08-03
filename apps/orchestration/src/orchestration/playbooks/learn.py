@@ -218,11 +218,17 @@ LEARN_DESIGN = PrimitiveSpec(
             "conventions": list,
             "analogy_count": int,
             "open_questions": list,
+            # The difficulty decision (pedagogy spec §7) and the toolchain-level
+            # prerequisite resolution (§12) — surfaced at the charter gate, where
+            # the human owns them, rather than discovered in the question bank.
+            "assessment_blueprint": list,
+            "unresolved_prerequisites": list,
             **_COMMON_OPT,
         },
     ),
     "Design the curriculum: lessons, per-lesson topic lists in dependency order, "
-    "the conventions canon, and the analogy registry. Emit lesson_count.",
+    "the conventions canon, the analogy registry, and the Assessment Blueprint "
+    "(format quotas, skill ceilings, exam metadata). Emit lesson_count.",
 )
 
 LEARN_AUTHOR = PrimitiveSpec(
@@ -330,6 +336,15 @@ def _paths(ctx: RunContext) -> str:
             f"Target-app output contract (caller-provided, in the app's own repo): {contract} "
             f"— emit graded practice and interactive exhibits to that app's DSL/format."
         )
+    exemplars = learn.get("exam_exemplars", "")
+    if exemplars:
+        parts.append(
+            f"Target-exam exemplars (caller-provided sample items, text or images): {exemplars} "
+            f"— CHARACTERIZE them into a difficulty profile (format mix, option counts, cognitive "
+            f"demand, presentation media, numeric messiness) for the charter's Assessment "
+            f"Blueprint. Characterize, NEVER copy: no exemplar's wording, parameters, distractors, "
+            f"or figures enter the corpus (pedagogy spec §7 + §11)."
+        )
     return " ".join(parts)
 
 
@@ -361,7 +376,12 @@ def _build_design(pb: "LearnPlaybook", ctx: RunContext, spec: PrimitiveSpec) -> 
         f"Mempalace room: {room}. Read all Ingest drawers from wing=penny room={room}. "
         f"Produce the course charter: lesson list, per-lesson topic lists in dependency order, "
         f"the conventions canon (EVERY notation/ordering/naming decision, made once, globally), "
-        f"and the analogy registry (one everyday analogy per concept). "
+        f"the analogy registry (one everyday analogy per concept), and the Assessment Blueprint "
+        f"(per-exam format quotas, the skill-ceiling table, presentation media, and the decided "
+        f"exam metadata — length, weighting, pass mark, timing; untimed is a decision, never an "
+        f"unset value), plus the prerequisite inventory (every mathematical tool/technique a "
+        f"lesson uses -> the section that teaches it, or an explicit justified assumption; carry "
+        f"unresolved rows to the gate, never into authoring). "
         f"Write it to wing=penny room={room} with header: {ctx.session_id} Charter. "
         f"Emit lesson_count in your SUMMARY."
     )
@@ -531,7 +551,9 @@ class LearnPlaybook(BasePlaybook):
                 "Optionally pass constraints.output_dir (default: <source_dir>/../study_materials), "
                 "constraints.source_registry (the license-vetted source corpus/manifest for "
                 "clean-room grounding + the derivation handoff), constraints.app_contract (the "
-                "target app's output conventions), and constraints.spec_docs (teaching-approach "
+                "target app's output conventions), constraints.exam_exemplars (sample items from "
+                "the target exam, characterized into the charter's Assessment Blueprint), and "
+                "constraints.spec_docs (teaching-approach "
                 "docs to reuse). All are caller-provided EXTERNAL paths; the skill hardcodes none."
             )
         output_dir = str(ctx.constraints.get("output_dir", "")).strip() or (
@@ -542,11 +564,15 @@ class LearnPlaybook(BasePlaybook):
         #     (clean-room grounding + the `derivation` handoff), in the course dir.
         #   app_contract    — the target app's output conventions (DSL/sims/build), in the
         #     app's OWN repo. Omitted → inert (guides fall back to generic markdown practice).
+        #   exam_exemplars  — sample items from the TARGET exam (text or images), characterized
+        #     (never copied) into the difficulty profile behind the charter's Assessment
+        #     Blueprint. Omitted → the spec's default format floor binds (pedagogy spec §7).
         ctx.extras["learn"] = {
             "source_dir": source_dir,
             "output_dir": output_dir,
             "source_registry": str(ctx.constraints.get("source_registry", "")).strip(),
             "app_contract": str(ctx.constraints.get("app_contract", "")).strip(),
+            "exam_exemplars": str(ctx.constraints.get("exam_exemplars", "")).strip(),
             "authored": 0,
             "assessed": 0,
         }
@@ -608,6 +634,8 @@ class LearnPlaybook(BasePlaybook):
             learn["conventions"] = summary.get("conventions", [])
             learn["analogy_count"] = int(summary.get("analogy_count", 0))
             learn["open_questions"] = summary.get("open_questions", [])
+            learn["assessment_blueprint"] = summary.get("assessment_blueprint", [])
+            learn["unresolved_prerequisites"] = summary.get("unresolved_prerequisites", [])
             learn["design_complete"] = bool(summary.get("design_complete", False))
             self.sm.send("design_done")
         elif state == "authoring":
@@ -679,10 +707,22 @@ class LearnPlaybook(BasePlaybook):
     def gate_questions(self, state: str, ctx: RunContext) -> list[dict]:
         learn = ctx.extras.setdefault("learn", {})
         conventions = learn.get("conventions") or ["(none listed — that is itself a concern)"]
+        blueprint = learn.get("assessment_blueprint") or [
+            "(none recorded — the difficulty decision was never made; that is itself a concern)"
+        ]
         open_qs = learn.get("open_questions") or []
         open_block = (
             "\n\n**Open questions from the designer:** " + "; ".join(str(q) for q in open_qs)
             if open_qs
+            else ""
+        )
+        # Unresolved prerequisite rows are a human decision (teach the tool, or state the
+        # assumption) — they must not be discovered after a course has been authored.
+        prereqs = learn.get("unresolved_prerequisites") or []
+        prereq_block = (
+            "\n\n**Unresolved prerequisites (teach it, or justify assuming it):** "
+            + "; ".join(str(p) for p in prereqs)
+            if prereqs
             else ""
         )
         return [
@@ -695,8 +735,10 @@ class LearnPlaybook(BasePlaybook):
                     f"**Lessons:** {learn.get('lesson_count', '?')} — "
                     f"**Topics:** {learn.get('topic_count', '?')} — "
                     f"**Registered analogies:** {learn.get('analogy_count', '?')}\n\n"
-                    f"**Conventions canon:** {'; '.join(str(c) for c in conventions)}"
-                    f"{open_block}\n\n"
+                    f"**Conventions canon:** {'; '.join(str(c) for c in conventions)}\n\n"
+                    f"**Assessment blueprint (the difficulty decision — yours to make):** "
+                    f"{'; '.join(str(b) for b in blueprint)}"
+                    f"{prereq_block}{open_block}\n\n"
                     "Full charter is in mempalace room "
                     f"skills/learn-{ctx.session_id}."
                 ),

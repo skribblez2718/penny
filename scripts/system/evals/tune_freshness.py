@@ -88,11 +88,14 @@ MIN_GAP_DAYS = 3
 #: Relative paths from project root to each ablation artifact directory.
 ABLATION_DIRS: Dict[str, str] = {
     "code_detection": ".penny/ablation/code_detection",
+    "research_grounding": ".penny/ablation/research_grounding",
 }
 
 #: Re-run command per ablation (surfaced, not auto-run — it makes model calls).
 ABLATION_COMMANDS: Dict[str, str] = {
     "code_detection": "scripts/system/ablation/run_code_detection_ablation.py",
+    # Hermetic (no model calls) — cheap to re-run whenever its invalidators change.
+    "research_grounding": "scripts/system/ablation/run_research_grounding_ablation.py",
 }
 
 #: A very old ablation is stale even if the scaffold is unchanged.

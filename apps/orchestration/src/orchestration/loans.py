@@ -24,6 +24,27 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from .roster import roster_changed, roster_hash
+
+#: The fleet these loans were last reviewed against — the EVENT trigger that
+#: complements ``review_by``'s calendar trigger (see ``roster.py`` for why a date is
+#: the weaker of the two).
+#:
+#: HONESTY NOTE: every loan below predates this mechanism (added 2026-07-31). This
+#: constant is a BASELINE, not a record of a fresh review — the loans were not
+#: re-measured when it was introduced. Its value is forward-looking: from now on, a
+#: declared fleet change flags them all for re-ablation. A loan re-reviewed
+#: individually should record its own roster and drop back to the default only when
+#: the two agree.
+#:
+#: RE-BASELINED 2026-08-01 (opus,sonnet -> sol,terra: the fleet moved to OpenAI
+#: gpt-5.6). The tripwire fired correctly and flagged all 8 loans for re-ablation;
+#: the re-ablation was DELIBERATELY DEFERRED and this constant advanced anyway, by
+#: explicit operator decision, to keep the suite green. NONE of the loans below have
+#: been measured on the current fleet — treat every `review_by` date here as the only
+#: remaining trigger, and do not read a matching roster as evidence of a real review.
+BASELINE_ROSTER = "4e55bff3547d"  # models: sol, terra — re-baselined 2026-08-01 (UNMEASURED)
+
 
 @dataclass(frozen=True)
 class Loan:
@@ -34,11 +55,21 @@ class Loan:
     rationale: str  # the model weakness this compensates for (why it was borrowed)
     added: str  # YYYY-MM-DD the loan was taken
     review_by: str  # YYYY-MM-DD expiry review (re-ablate at/before this date)
+    # The fleet this loan was last reviewed against. A loan exists because the CURRENT
+    # models are weak in some way, so the honest trigger to re-measure it is the models
+    # changing — not a date passing.
+    roster_at_review: str = BASELINE_ROSTER
 
     @property
     def toggle_env(self) -> str:
         """The Ablate hook: setting this env var to '1' disables the mechanism."""
         return f"PENNY_ABLATE_{self.loan_id.upper()}"
+
+    @property
+    def fleet_changed(self) -> bool:
+        """True when the fleet has changed since this loan was last reviewed — i.e.
+        the moment its justification is most likely to have evaporated."""
+        return roster_changed(self.roster_at_review)
 
 
 LOANS: dict[str, Loan] = {
@@ -88,24 +119,6 @@ LOANS: dict[str, Loan] = {
                 "using the default (arrangement 4 should be the model's output)."
             ),
             added="2026-07-14",
-            review_by="2026-10-01",
-        ),
-        Loan(
-            loan_id="manim_default_ingest_topology",
-            description=(
-                "The manim skill's fixed 3-branch ingest fan-out "
-                "(concepts / equations / code) used as the FALLBACK when the "
-                "model-emitted scoping step returns no valid ingest topology "
-                "(playbooks/manim.py MANIM_INGEST_DEFAULT / PARALLEL_BY_STATE)."
-            ),
-            rationale=(
-                "Ingest topology is model-emitted by the `scoping` state; this "
-                "fixed split is only the fallback when scoping emits nothing. "
-                "Ablated, an empty scoping output fails loud instead of using "
-                "the default — the model's topology (arrangement 4) is "
-                "authoritative. Delete when models reliably scope ingest."
-            ),
-            added="2026-07-18",
             review_by="2026-10-01",
         ),
         Loan(
@@ -186,15 +199,42 @@ LOANS: dict[str, Loan] = {
             review_by="2026-10-01",
         ),
         Loan(
+            loan_id="code_iteration_budget",
+            description=(
+                "The code skill's default implement<->verify iteration budget of 3 "
+                "(playbooks/code.py initial_transition), applied via "
+                "tier_budget(3, ceiling=6) so the operating point scales with "
+                "PI_MODEL_TIER while the ceiling stays a hard safety max."
+            ),
+            rationale=(
+                "The base 3 is the engine's generic hand-guessed default, previously "
+                "frozen as BOTH operating point and ceiling — so falling compute cost "
+                "never converted into more verified search (Bitter-Lesson audit BL-6). "
+                "A caller constraints.max_iterations always wins. Ablated, the engine's "
+                "generic default (3) stands, so an ablation run measures whether the "
+                "extra rounds buy anything. Repay by deriving the budget from observed "
+                "convergence in the outcome ledger rather than a tier multiplier."
+            ),
+            added="2026-08-02",
+            review_by="2026-11-01",
+        ),
+        Loan(
             loan_id="failure_mode_keywords",
             description=(
                 "Keyword table classifying verifier-gap text into categorical failure "
-                "modes for the outcome ledger (outcome_writer._FAILURE_MODE_KEYWORDS)."
+                "modes for the outcome ledger (outcome_writer._FAILURE_MODE_KEYWORDS). "
+                "PARTIALLY REPAID 2026-07-31: demoted to the FALLBACK. When "
+                "PI_FAILURE_MODE_MODEL is set a model reads the gap text and picks from "
+                "the same FAILURE_MODES vocabulary; the table decides only when no model "
+                "is configured or the call fails."
             ),
             rationale=(
                 "Substitutes a hand-built keyword classifier for model judgment over the "
-                "gap text; ablated it falls back to the uncategorized bucket the "
-                "compression loop already handles."
+                "gap text — it cannot see paraphrase, negation, or any failure mode nobody "
+                "enumerated, so it only degrades as models improve. Ablated it falls back "
+                "to the uncategorized bucket the compression loop already handles. FULL "
+                "repayment = delete the table once PI_FAILURE_MODE_MODEL is the measured "
+                "default; keep it until then so an unconfigured deployment still classifies."
             ),
             added="2026-07-14",
             review_by="2026-10-01",
@@ -216,3 +256,19 @@ def loan_enabled(loan_id: str) -> bool:
 def list_loans() -> list[Loan]:
     """The loan inventory, for the recurring Bitter-Lesson pass."""
     return list(LOANS.values())
+
+
+def loans_needing_review() -> list[Loan]:
+    """Loans whose justification may have evaporated because the FLEET changed.
+
+    This is the event-driven half of loan expiry, complementing ``review_by``'s
+    calendar half: a scaffold borrowed against a weakness of the old models earns
+    re-ablation the moment the models change, whether that is a week or a year later.
+    Empty list == the fleet is unchanged since every loan was last reviewed.
+    """
+    return [loan for loan in LOANS.values() if loan.fleet_changed]
+
+
+def current_roster() -> str:
+    """The fleet's current digest — what to record when a loan is re-reviewed."""
+    return roster_hash()

@@ -15,7 +15,7 @@ from .checkpointer import STATUS_AWAITING_USER, STATUS_ERROR, Checkpointer
 from .playbooks import get_playbook
 
 
-def recover_pending(
+def recover_pending(  # noqa: C901 - legacy/P0 recovery compatibility
     checkpointer: Checkpointer,
     obs: Any = None,
     session_id: str | None = None,
@@ -60,6 +60,19 @@ def recover_pending(
             pb.sm.current_state_value = resume_state
         except Exception:
             continue
+        try:
+            migrated = pb.prepare_recovery(pb.ctx)
+        except Exception:
+            continue
+        if migrated:
+            checkpointer.save(
+                run_id=pb.ctx.run_id,
+                session_id=pb.ctx.session_id,
+                playbook=pb.NAME,
+                current_state_id=rec.current_state_id,
+                context=pb.ctx,
+                status=rec.status,
+            )
         if rec.status == STATUS_ERROR:
             # Explicit retry: re-drive the failed phase (tools are idempotent;
             # agent phases re-dispatch). Clear the terminal error markers.

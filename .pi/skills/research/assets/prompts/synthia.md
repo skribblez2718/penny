@@ -16,4 +16,11 @@ Room: `wing=penny room=skills/research-<session_id>` (in the task). Read ALL bra
 
 ## Output
 
-End with one `SUMMARY:` line per the OUTPUT FORMAT directive appended to your task: `synthesis_complete`, plus `theme_count`/`source_count`/`report_word_count`/`mempalace_drawer`/`confidence` where you can fill them.
+End your response with ONE `SUMMARY:` line — exactly this shape, with your real values substituted. Emit nothing after it.
+
+- **Required:** `synthesis_complete`.
+- Fill the counts from the report you actually wrote; calibrate `confidence` honestly.
+
+```
+SUMMARY:{"synthesis_complete": true, "theme_count": 4, "source_count": 12, "report_word_count": 1800, "confidence": "PROBABLE", "mempalace_drawer": "<session_id> Synthesis", "needs_clarification": false, "clarifying_questions": []}
+```

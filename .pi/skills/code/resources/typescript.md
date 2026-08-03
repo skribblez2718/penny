@@ -1,6 +1,6 @@
 # TypeScript Coding Standards
 
-Reference for skribble. Always read before writing TypeScript code.
+Reference for skribble when implementing Penny itself in TypeScript. For a target project, the selected target profile and its source evidence are authoritative; never replace project-native tooling with this resource.
 
 ## Project Conventions (Detect First)
 Before writing, check these files. If they exist, follow their conventions:
@@ -10,8 +10,8 @@ Before writing, check these files. If they exist, follow their conventions:
 - `.prettierrc` — formatting rules
 
 ## Package Management (CRITICAL)
-- **ALWAYS** use `bun` for package management. NEVER use `npm` or `yarn`.
-- **NEVER** install globally.
+- In Penny, use the established `bun` workspace/lock tooling; in another target, use only the package manager evidenced by its selected target profile.
+- Never install globally.
 - Add dependencies: `bun add <package>`
 - Dev dependencies: `bun add -d <package>`
 

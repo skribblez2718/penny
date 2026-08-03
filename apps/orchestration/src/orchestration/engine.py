@@ -43,10 +43,12 @@ playbook-owned; the base never hardcodes them.
 
 from __future__ import annotations
 
+import hmac
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 from .checkpointer import (
     STATUS_AWAITING_USER,
@@ -57,6 +59,7 @@ from .checkpointer import (
 )
 from .contracts import Confidence, Directives, validate_summary_contract, weakest_confidence
 from .context import RunContext
+from .execution_receipts import receipt_signing_key, sign_receipt
 from .loans import loan_enabled
 from .outcome_writer import record_outcome
 from .paths import skill_root
@@ -77,7 +80,7 @@ def _autonomy_ask_reason(action_text: str) -> Optional[str]:
         autonomy = str(Path(__file__).resolve().parents[4] / "scripts" / "system" / "autonomy")
         if autonomy not in sys.path:
             sys.path.insert(0, autonomy)
-        from gate import ASK, decide_live  # type: ignore[import-not-found]
+        from gate import ASK, decide_live
 
         decision = decide_live(action_text)
         return decision.reason if decision.action == ASK else None
@@ -87,6 +90,82 @@ def _autonomy_ask_reason(action_text: str) -> Optional[str]:
 
 TERMINAL_STATES: frozenset[str] = frozenset({"complete", "error"})
 _DEFAULT_STEP_CAP = 50
+_TRUSTED_INVOCATION_KEYS = frozenset(
+    {
+        "schema_version",
+        "invocation_id",
+        "run_id",
+        "state_id",
+        "agent_identity",
+        "model",
+        "execution_owner_identity",
+        "started_at",
+        "ended_at",
+        "signature_algorithm",
+        "signature",
+    }
+)
+
+
+def _has_valid_owner_signature(value: dict[str, Any]) -> bool:
+    key = receipt_signing_key()
+    signature = value.get("signature")
+    return bool(
+        key is not None
+        and isinstance(signature, str)
+        and len(signature) == 64
+        and hmac.compare_digest(signature, sign_receipt(value, key))
+    )
+
+
+def _missing_invocation_field(value: dict[str, Any]) -> str | None:
+    for field in (
+        "invocation_id",
+        "model",
+        "execution_owner_identity",
+        "started_at",
+        "ended_at",
+    ):
+        if not isinstance(value.get(field), str) or not value[field]:
+            return field
+    return None
+
+
+def _ordered_invocation_timestamps(value: dict[str, Any]) -> bool:
+    started_at = value.get("started_at")
+    ended_at = value.get("ended_at")
+    if not isinstance(started_at, str) or not isinstance(ended_at, str):
+        return False
+    try:
+        started = datetime.fromisoformat(started_at)
+        ended = datetime.fromisoformat(ended_at)
+    except ValueError:
+        return False
+    return bool(started.tzinfo is not None and ended.tzinfo is not None and ended >= started)
+
+
+def _validate_trusted_invocation(
+    value: Any, *, run_id: str, state_id: str, agent: str
+) -> tuple[dict[str, Any] | None, str]:
+    """Validate driver-owned invocation provenance carried beside agent output."""
+    if not isinstance(value, dict) or frozenset(value) != _TRUSTED_INVOCATION_KEYS:
+        return None, "trusted invocation provenance has missing, unknown, or stale fields"
+    if value.get("schema_version") != 1:
+        return None, "trusted invocation provenance schema version is unsupported"
+    if value.get("run_id") != run_id or value.get("state_id") != state_id:
+        return None, "trusted invocation provenance is bound to the wrong run or state"
+    if value.get("agent_identity") != f"agent:{agent}":
+        return None, "trusted invocation provenance is bound to the wrong agent"
+    if value.get("signature_algorithm") != "hmac-sha256":
+        return None, "trusted invocation provenance signature algorithm is unsupported"
+    if not _has_valid_owner_signature(value):
+        return None, "trusted invocation provenance signature is missing or invalid"
+    missing_field = _missing_invocation_field(value)
+    if missing_field is not None:
+        return None, f"trusted invocation provenance {missing_field} must be non-empty"
+    if not _ordered_invocation_timestamps(value):
+        return None, "trusted invocation provenance timestamps are missing or reordered"
+    return dict(value), ""
 
 
 # ── #33: shared HITL gate-answer intent classifier ───────────────────────────
@@ -97,20 +176,62 @@ _DEFAULT_STEP_CAP = 50
 # genuinely free-text answers. Approval requires model confidence; any ambiguity or
 # failure yields "refine" (re-ask), so the seam never silently approves or denies.
 _GATE_INTENT_MODEL_ENV = "PI_GATE_INTENT_MODEL"
-_GATE_APPROVE = frozenset({
-    "approve", "approved", "confirm", "confirmed", "proceed", "yes", "y",
-    "accept", "accepted", "ok", "okay", "skip",
-})
-_GATE_DENY = frozenset({
-    "deny", "denied", "no", "n", "abort", "cancel", "discard", "stop",
-    "reject", "rejected",
-})
+_GATE_APPROVE = frozenset(
+    {
+        "approve",
+        "approved",
+        "confirm",
+        "confirmed",
+        "proceed",
+        "yes",
+        "y",
+        "accept",
+        "accepted",
+        "ok",
+        "okay",
+        "skip",
+    }
+)
+_GATE_DENY = frozenset(
+    {
+        "deny",
+        "denied",
+        "no",
+        "n",
+        "abort",
+        "cancel",
+        "discard",
+        "stop",
+        "reject",
+        "rejected",
+    }
+)
 # #26/#27: model-judged loop guards (gated; the string checks stay as the fallback).
 _STALL_MODEL_ENV = "PI_STALL_MODEL"
 _STRATEGY_MODEL_ENV = "PI_STRATEGY_MODEL"
 
+# Spend COMPUTE before spending HUMAN ATTENTION on an UNCERTAIN confidence.
+#
+# The engine's only answer to uncertainty was to stop and ask a person. Human
+# attention is the one resource that does not scale with compute, and an agent that
+# honestly reports UNCERTAIN is the one being punished with an interrupt — a tax on
+# exactly the calibration the system depends on. One bounded re-attempt, with the
+# uncertainty named, converts many of those interrupts into compute.
+#
+# DORMANT by default (opt-in via the env var), so it can never change an existing
+# deployment's behaviour until someone turns it on.
+#
+# DELIBERATELY NARROW. It fires ONLY on an UNCERTAIN confidence. It never touches:
+#   * ``needs_clarification`` — a genuine question only the user can answer;
+#   * planned GATE_STATES — human approval seams (safety, not capability);
+#   * ``progress_check`` stalls — the run is stuck, so re-running it is the one thing
+#     already known not to work;
+#   * the autonomy gate — safety.
+# Uncertainty is not the same thing as high stakes; only the latter warrants a human.
+_UNCERTAINTY_RETRY_ENV = "PENNY_UNCERTAINTY_RETRY"
 
-def _load_detect():
+
+def _load_detect() -> Callable[..., dict[str, Any]] | None:
     """Lazy-import the shared detect() primitive (scripts/system/lib, #8), or None."""
     try:
         for parent in Path(__file__).resolve().parents:
@@ -118,8 +239,9 @@ def _load_detect():
             if lib.is_dir():
                 if str(lib) not in sys.path:
                     sys.path.insert(0, str(lib))
-                from detect import detect as _detect  # type: ignore[import-not-found]
-                return _detect
+                from detect import detect as _detect
+
+                return cast(Callable[..., dict[str, Any]], _detect)
     except Exception:
         return None
     return None
@@ -167,7 +289,7 @@ class _NullObs:
 class BasePlaybook:
     # -- subclass provides -------------------------------------------------
     NAME: str = ""
-    machine_cls: type = None  # a statemachine.StateMachine subclass
+    machine_cls: type[Any]  # a statemachine.StateMachine subclass
     PRIMITIVE_BY_STATE: dict[str, PrimitiveSpec] = {}
     PARALLEL_BY_STATE: dict[str, ParallelSpec] = {}  # fan-out states
     TOOL_STATES: frozenset[str] = frozenset()  # deterministic in-process states (no agent)
@@ -218,9 +340,19 @@ class BasePlaybook:
         return []
 
     def result_payload(self, ctx: RunContext) -> dict:
-        """The ``result`` object of the terminal ``complete`` directive.
-        Cycle-neutral default; subclasses add their domain fields."""
+        """The structured terminal result. Subclasses add their domain fields."""
         return {"met": ctx.met, "iterations": ctx.iteration}
+
+    def terminal_directive(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Build the public terminal directive.
+
+        The compatibility default retains the historic ``complete`` action even
+        for an honest met=False exhaustion. Security-sensitive playbooks may
+        override this to emit ``incomplete`` so no public complete signal exists.
+        """
+        return Directives.complete(
+            result=result, session_id=self._ctx.session_id, run_id=self._ctx.run_id
+        )
 
     def skill_context(self, state: str, ctx: RunContext) -> str | None:
         """Skill-relative path to the domain-guidance prompt for this state's
@@ -272,6 +404,14 @@ class BasePlaybook:
                 return raw
         return None
 
+    def prepare_recovery(self, ctx: RunContext) -> bool:
+        """Additive migration hook before a pending directive is re-issued.
+
+        Return True when durable context changed and must be checkpointed. The
+        default is a pure no-op.
+        """
+        return False
+
     def progress_check(self, state: str, ctx: RunContext, summary: dict) -> str | None:
         """Meta-cognitive progress gate (research/loop-research Recs 1 & 2) —
         DEFAULT-ON.
@@ -322,7 +462,9 @@ class BasePlaybook:
         raise NotImplementedError
 
     @staticmethod
-    def classify_gate_intent(answer: Any, *, runner: Optional[Callable] = None) -> str:  # noqa: C901
+    def classify_gate_intent(  # noqa: C901 - explicit fail-closed gate grammar
+        answer: Any, *, runner: Optional[Callable] = None
+    ) -> str:
         """Map a HITL gate answer to 'approve' | 'deny' | 'refine' (#33).
 
         Exact keyword answers (the option values a click produces) route instantly and
@@ -349,7 +491,9 @@ class BasePlaybook:
                 text,
                 "Does this answer APPROVE the proposed action, DENY/stop it, or ask to "
                 "REFINE/change it?",
-                model_spec=spec, labels=("approve", "deny", "refine"), runner=runner,
+                model_spec=spec,
+                labels=("approve", "deny", "refine"),
+                runner=runner,
             )
         except Exception:  # noqa: BLE001 - gate parsing must never raise
             return "refine"
@@ -444,7 +588,11 @@ class BasePlaybook:
         return self._safe_send(event)
 
     def is_stalled(
-        self, ctx: RunContext, gaps: list | None = None, *, window: int = 2,
+        self,
+        ctx: RunContext,
+        gaps: list | None = None,
+        *,
+        window: int = 2,
         runner: Optional[Callable] = None,
     ) -> bool:
         """Stall / progress-assessment (Rec 2): True when the last ``window`` recorded
@@ -468,7 +616,15 @@ class BasePlaybook:
             frozenset(prev.get("gaps", [])) == current for prev in ctx.iteration_history[-window:]
         )
 
-    def _stall_via_model(self, ctx, gaps, window, spec, *, runner=None):
+    def _stall_via_model(
+        self,
+        ctx: RunContext,
+        gaps: list[Any],
+        window: int,
+        spec: str,
+        *,
+        runner: Optional[Callable[..., Any]] = None,
+    ) -> bool | None:
         """#26: does the recent history show NO progress on the gaps? True (stalled) /
         False (progressing) / None on any failure (=> the string fallback decides)."""
         detect = _load_detect()
@@ -490,7 +646,9 @@ class BasePlaybook:
                 "Across these iterations, is the work STALLED (the same gaps keep "
                 "recurring, no measurable progress) or PROGRESSING (the gaps are being "
                 "reduced or resolved)?",
-                model_spec=spec, labels=("stalled", "progressing"), runner=runner,
+                model_spec=spec,
+                labels=("stalled", "progressing"),
+                runner=runner,
             )
         except Exception:  # noqa: BLE001 - a guard must never raise
             return None
@@ -503,7 +661,14 @@ class BasePlaybook:
             return False
         return None
 
-    def _strategy_same_via_model(self, proposed, prior, spec, *, runner=None):
+    def _strategy_same_via_model(
+        self,
+        proposed: str,
+        prior: str,
+        spec: str,
+        *,
+        runner: Optional[Callable[..., Any]] = None,
+    ) -> bool | None:
         """#27: is the proposed retry strategy the SAME approach as the prior one? True
         (repeat) / False (different) / None on any failure (=> the string fallback)."""
         detect = _load_detect()
@@ -516,7 +681,9 @@ class BasePlaybook:
                 "Is the PROPOSED strategy essentially the SAME approach as the PRIOR one "
                 "(repeating it would likely fail the same way), or a genuinely DIFFERENT "
                 "approach?",
-                model_spec=spec, labels=("same", "different"), runner=runner,
+                model_spec=spec,
+                labels=("same", "different"),
+                runner=runner,
             )
         except Exception:  # noqa: BLE001 - a guard must never raise
             return None
@@ -536,18 +703,24 @@ class BasePlaybook:
         self.cp = checkpointer
         self.obs = obs if obs is not None else _NullObs()
         self.max_step_retries = max_step_retries
-        self.ctx: RunContext | None = None
+        self._context: RunContext | None = None
         self.sm: Any = None
 
     @property
-    def _ctx(self) -> RunContext:
-        """The active run context, type-narrowed. ``start``/``step`` set
-        ``self.ctx`` before any internal helper runs; a None here is a protocol
-        violation, not a recoverable state."""
-        ctx = self.ctx
-        if ctx is None:  # pragma: no cover — engine misuse
+    def ctx(self) -> RunContext:
+        """Return the active context or fail on engine protocol misuse."""
+        if self._context is None:  # pragma: no cover — engine misuse
             raise RuntimeError("engine used before start()/step() set the run context")
-        return ctx
+        return self._context
+
+    @ctx.setter
+    def ctx(self, value: RunContext) -> None:
+        self._context = value
+
+    @property
+    def _ctx(self) -> RunContext:
+        """Compatibility alias for call sites that explicitly request narrowing."""
+        return self.ctx
 
     # -- public protocol ---------------------------------------------------
     def start(
@@ -652,7 +825,30 @@ class BasePlaybook:
                     state, result.get("error") or "no parseable SUMMARY emitted"
                 )
             inner = result.get("summary")
-            summary = inner if isinstance(inner, dict) else {}
+            summary = dict(inner) if isinstance(inner, dict) else {}
+            # Receipts are execution-owner data carried beside the untrusted
+            # agent SUMMARY. Merge them only from the typed driver wrapper; an
+            # agent-authored `receipts` key inside SUMMARY never gains trust by
+            # itself and still must pass signature/same-run validation downstream.
+            owner_receipts = result.get("receipts")
+            if isinstance(owner_receipts, list):
+                summary["receipts"] = owner_receipts
+            owner_invocation = result.get("trusted_invocation")
+            p0_enabled = self.ctx.extras.get("code", {}).get("p0_enabled") is True
+            if owner_invocation is None and p0_enabled:
+                return self._retry_or_fail(
+                    state, "P0 driver result has no signed execution-owner invocation provenance"
+                )
+            if owner_invocation is not None:
+                trusted_invocation, invocation_error = _validate_trusted_invocation(
+                    owner_invocation,
+                    run_id=self.ctx.run_id,
+                    state_id=state,
+                    agent=agent,
+                )
+                if trusted_invocation is None:
+                    return self._retry_or_fail(state, invocation_error)
+                self.ctx.extras.setdefault("trusted_invocations", {})[state] = trusted_invocation
         else:
             summary = result if isinstance(result, dict) else {}
         ok, err = validate_summary_contract(spec.name, spec.summary_contract, summary)
@@ -665,8 +861,12 @@ class BasePlaybook:
         self._capture_evidence(summary)
         confidence = summary.get("confidence", "")
 
-        # Escalation: UNCERTAIN on an escalatable state -> single HITL path.
+        # Escalation: UNCERTAIN on an escalatable state -> single HITL path, unless a
+        # bounded compute retry is available (opt-in; see _UNCERTAINTY_RETRY_ENV).
         if Confidence.is_uncertain(confidence) and state in self.ESCALATABLE_STATES:
+            retry = self._maybe_retry_uncertain(state, summary)
+            if retry is not None:
+                return retry
             return self._escalate(state, spec, summary)
 
         # Progress-assessment gate (Recs 1 & 2): a playbook may force escalation
@@ -1007,6 +1207,7 @@ class BasePlaybook:
                 state_id=state,
                 session_id=self.ctx.session_id,
                 run_id=self.ctx.run_id,
+                project_root=self.ctx.project_root,
             )
         spec = self.PRIMITIVE_BY_STATE.get(state)
         if spec is None:
@@ -1015,12 +1216,14 @@ class BasePlaybook:
             agent=spec.agent,
             task_summary=self._task_summary(state, spec, self.ctx)
             + self._skill_root_line(self.ctx)
+            + self._uncertainty_retry_line(self.ctx, state)
             + self._summary_contract_directive(spec),
             state_id=state,
             session_id=self.ctx.session_id,
             run_id=self.ctx.run_id,
             skill_context=sc,
             model=model,
+            project_root=self.ctx.project_root,
         )
 
     def _retry_or_fail(self, state: str, reason: str) -> dict:
@@ -1115,6 +1318,65 @@ class BasePlaybook:
         if self._ctx.iteration > self._ctx.max_iterations:
             return self._force_exhausted(new_state)
         return self._advance_to(new_state)
+
+    def _maybe_retry_uncertain(self, state: str, summary: dict) -> Optional[dict]:
+        """One bounded re-attempt of an UNCERTAIN step before spending a human.
+
+        Returns a re-dispatch directive, or ``None`` to escalate as before. Opt-in and
+        conservative by construction:
+
+        * OFF unless ``PENNY_UNCERTAINTY_RETRY`` is set;
+        * never when the agent asked a question (``needs_clarification``) — that is a
+          decision only the user can make, and re-running cannot produce it;
+        * at most ONCE per state per run (checkpointed in ``extras``), so a state that
+          is genuinely uncertain still reaches the human on its second report;
+        * PARALLEL states are excluded (see ``_step_parallel``): re-dispatching a fan
+          re-runs every branch to resolve one, and the fan protocol has no
+          single-branch re-dispatch. Named limitation, not an oversight.
+
+        The retry must never become pressure to fake confidence — a false CERTAIN is
+        far more expensive than an interrupt — so the directive it builds says
+        explicitly that reporting UNCERTAIN again is the correct answer when the
+        uncertainty is real (see ``_uncertainty_retry_line``).
+        """
+        if not os.environ.get(_UNCERTAINTY_RETRY_ENV):
+            return None
+        if summary.get("needs_clarification"):
+            return None
+        ctx = self._ctx
+        tried = ctx.extras.setdefault("uncertainty_retried", [])
+        if state in tried:
+            return None
+        tried.append(state)
+        ctx.extras["uncertainty_retry"] = {
+            "state": state,
+            "reason": str(summary.get("unknown_reason") or ""),
+        }
+        return self._advance_to(state)
+
+    def _uncertainty_retry_line(self, ctx: RunContext, state: str) -> str:
+        """The directive appended when a step is re-issued after reporting UNCERTAIN.
+
+        Appended in ``_directive_for_state`` rather than ``_task_summary`` because
+        almost every playbook overrides the latter — a base-class addition there would
+        silently reach nobody.
+        """
+        retry = (ctx.extras.get("uncertainty_retry") or {}) if ctx else {}
+        if not retry or retry.get("state") != state:
+            return ""
+        reason = str(retry.get("reason") or "").strip()
+        detail = f"\nWhat you reported: {reason}" if reason else ""
+        return (
+            "\n\nRETRY AFTER UNCERTAINTY — your previous attempt at this step reported "
+            f"UNCERTAIN confidence.{detail}\n"
+            "Spend this attempt on the specific thing you were unsure about: gather the "
+            "missing evidence, check the source, or narrow the question. You have the "
+            "tools; use them on the uncertainty itself rather than redoing what you "
+            "already did.\n"
+            "If it is still genuinely unresolvable, report UNCERTAIN again — that is the "
+            "CORRECT answer and it goes to a human next. Do NOT upgrade your confidence "
+            "to end this loop: an unfounded CERTAIN is far more costly than asking."
+        )
 
     def _escalate(self, state: str, spec: PrimitiveSpec, summary: dict) -> dict:
         self.ctx.previous_state = state
@@ -1260,18 +1522,28 @@ class BasePlaybook:
             return self._to_error("routed to error state")
         self.ctx.met = self.done_predicate(self.ctx)
         self.ctx.complete = True
-        self._save(STATUS_COMPLETE, "complete")
-        record_outcome(self.ctx)  # best-effort capture into penny/outcomes
-        self.obs.run_end(self.ctx, STATUS_COMPLETE, self.ctx.met, self.ctx.iteration)
         result = self.result_payload(self.ctx)
+        outcome_persisted = record_outcome(self.ctx, self.cp)
+        code_state = self.ctx.extras.get("code", {})
+        if (
+            self.ctx.met
+            and isinstance(code_state, dict)
+            and code_state.get("p0_enabled") is True
+            and not outcome_persisted
+        ):
+            self.ctx.met = False
+            code_state.setdefault("p0_completion_errors", []).append(
+                "canonical terminal outcome could not be persisted before publication"
+            )
+            result = self.result_payload(self.ctx)
+        self._save(STATUS_COMPLETE, "complete")
+        self.obs.run_end(self.ctx, STATUS_COMPLETE, self.ctx.met, self.ctx.iteration)
         exhausted_reason = self._ctx.extras.get("engine_exhausted")
         if exhausted_reason:
             # Honest exhaustion is reported, never dressed as a pass.
             result.setdefault("exhausted", True)
             result.setdefault("exhausted_reason", exhausted_reason)
-        return Directives.complete(
-            result=result, session_id=self.ctx.session_id, run_id=self.ctx.run_id
-        )
+        return self.terminal_directive(result)
 
     def _retry_errored(self) -> dict:
         """Re-drive the phase an errored run failed on (F2).
@@ -1320,7 +1592,7 @@ class BasePlaybook:
         self.ctx.complete = True
         self.ctx.met = False
         self._save(STATUS_ERROR, "error")
-        record_outcome(self.ctx)  # best-effort capture into penny/outcomes
+        record_outcome(self.ctx, self.cp)  # best-effort for non-success terminal paths
         self.obs.run_end(self.ctx, STATUS_ERROR, False, self.ctx.iteration)
         return Directives.error(
             errors=self.ctx.errors, session_id=self.ctx.session_id, run_id=self.ctx.run_id

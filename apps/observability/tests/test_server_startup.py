@@ -32,15 +32,13 @@ import json
 PROJECT_SRC = Path(__file__).resolve().parents[1] / "src"
 PACKAGE_DIR = PROJECT_SRC / "observability"
 TEST_HOST = "127.0.0.1"
-TEST_PORT = 18771
-BASE_URL = f"http://{TEST_HOST}:{TEST_PORT}"
 
 pytestmark = pytest.mark.integration
 
 
-def _post(path: str, payload: dict) -> tuple[int, dict]:
+def _post(base_url: str, path: str, payload: dict) -> tuple[int, dict]:
     req = urllib.request.Request(
-        f"{BASE_URL}{path}",
+        f"{base_url}{path}",
         data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -52,9 +50,9 @@ def _post(path: str, payload: dict) -> tuple[int, dict]:
         return exc.code, json.loads(exc.read() or b"{}")
 
 
-def _get(path: str) -> tuple[int, dict]:
+def _get(base_url: str, path: str) -> tuple[int, dict]:
     try:
-        with urllib.request.urlopen(f"{BASE_URL}{path}", timeout=5) as resp:
+        with urllib.request.urlopen(f"{base_url}{path}", timeout=5) as resp:
             return resp.status, json.loads(resp.read() or b"{}")
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read() or b"{}")
@@ -75,10 +73,14 @@ def live_server(tmp_path_factory):
 
     from observability.main import app
 
+    with socket.socket() as probe:
+        probe.bind((TEST_HOST, 0))
+        test_port = int(probe.getsockname()[1])
+    base_url = f"http://{TEST_HOST}:{test_port}"
     config = uvicorn.Config(
         app=app,
         host=TEST_HOST,
-        port=TEST_PORT,
+        port=test_port,
         log_level="warning",
         access_log=False,
     )
@@ -89,8 +91,8 @@ def live_server(tmp_path_factory):
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         try:
-            with socket.create_connection((TEST_HOST, TEST_PORT), timeout=0.2):
-                status, _ = _get("/health")
+            with socket.create_connection((TEST_HOST, test_port), timeout=0.2):
+                status, _ = _get(base_url, "/health")
                 if status == 200:
                     break
         except OSError:
@@ -101,7 +103,7 @@ def live_server(tmp_path_factory):
         thread.join(timeout=5)
         raise RuntimeError("observability server did not start within 15s")
 
-    yield BASE_URL
+    yield base_url
 
     server.should_exit = True
     thread.join(timeout=5)
@@ -114,7 +116,7 @@ def live_server(tmp_path_factory):
 
 def test_health_endpoint_live(live_server):
     """/health responds 200 with size stats from the live server."""
-    status, data = _get("/health")
+    status, data = _get(live_server, "/health")
     assert status == 200
     assert data["status"] == "healthy"
     # Rotation stats are surfaced by the running server (proves get_stats path).
@@ -124,7 +126,7 @@ def test_health_endpoint_live(live_server):
 
 def test_admin_stats_exposes_rotation_config_live(live_server):
     """/admin/stats exposes the cap + floor (not the retired retention days)."""
-    status, data = _get("/admin/stats")
+    status, data = _get(live_server, "/admin/stats")
     assert status == 200
     assert "db_size_max_gb" in data
     assert "db_size_floor_gb" in data
@@ -187,12 +189,14 @@ def test_full_orchestration_flow_live(live_server):
     session_id = "startup-session"
 
     status, _ = _post(
+        live_server,
         "/orchestration/runs",
         {"run_id": run_id, "session_id": session_id, "status": "running"},
     )
     assert status == 200
 
     status, body = _post(
+        live_server,
         "/orchestration/events",
         {
             "events": [
@@ -208,18 +212,18 @@ def test_full_orchestration_flow_live(live_server):
     assert status == 200
     assert body["count"] == 1
 
-    status, run = _get(f"/orchestration/runs/{run_id}")
+    status, run = _get(live_server, f"/orchestration/runs/{run_id}")
     assert status == 200
     assert run["run_id"] == run_id
 
-    status, events = _get(f"/orchestration/runs/{run_id}/events")
+    status, events = _get(live_server, f"/orchestration/runs/{run_id}/events")
     assert status == 200
     assert events["total"] == 1
 
 
 def test_admin_cleanup_runs_rotation_live(live_server):
     """POST /admin/cleanup triggers the rotation routine (no error, returns ok)."""
-    status, data = _post("/admin/cleanup", {})
+    status, data = _post(live_server, "/admin/cleanup", {})
     assert status == 200
     assert data["status"] == "ok"
     # Under cap on a fresh temp DB -> rotation is a no-op.

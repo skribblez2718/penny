@@ -1,0 +1,314 @@
+{
+  "schema_version": 2,
+  "manifest_id": "penny-code-skill-p0-verification",
+  "version": 4,
+  "selected": true,
+  "checks": {
+    "public-boundary": [".venv/bin/python", "scripts/system/checks/check_public_boundary.py"],
+    "artifact-contracts": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "apps/orchestration/tests/test_code_artifact_schemas.py",
+      "-q"
+    ],
+    "artifact-handoff-recovery": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "apps/orchestration/tests/test_code_artifact_handoff.py",
+      "apps/orchestration/tests/test_code_migration.py",
+      "-q"
+    ],
+    "quality-coverage-completion": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "apps/orchestration/tests/test_code_quality_floor.py",
+      "apps/orchestration/tests/test_code_coverage_map.py",
+      "-q"
+    ],
+    "receipts-and-redaction": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "apps/orchestration/tests/test_execution_receipts.py",
+      "-q"
+    ],
+    "findings-and-risk": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "apps/orchestration/tests/test_code_security_disposition.py",
+      "-q"
+    ],
+    "questionnaire-and-revisions": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "apps/orchestration/tests/test_code_ideal_state_revision.py",
+      "-q"
+    ],
+    "target-profiles": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "apps/orchestration/tests/test_code_target_profile.py",
+      "-q"
+    ],
+    "scope-preservation": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "apps/orchestration/tests/test_code_scope_preservation.py",
+      "apps/orchestration/tests/test_code_scope_cleanup.py",
+      "-q"
+    ],
+    "python-typescript-contract": ["bun", "run", "--cwd", ".pi/extensions/skill", "test:unit"],
+    "skill-e2e": ["bun", "run", "--cwd", ".pi/extensions/skill", "test:e2e"],
+    "questionnaire-e2e": ["bun", "run", "--cwd", ".pi/extensions/questionnaire", "test:e2e"],
+    "root-integration-failure-propagation": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "apps/orchestration/tests/test_code_p0_release.py",
+      "-q"
+    ],
+    "contract-drift": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "apps/orchestration/tests/test_contract_prompt_drift.py",
+      "-q"
+    ],
+    "real-server-startup": [
+      ".venv/bin/python",
+      "-m",
+      "pytest",
+      "apps/observability/tests/test_server_startup.py",
+      "-q"
+    ],
+    "full-evals": [
+      ".venv/bin/python",
+      "scripts/system/evals/run_evals.py",
+      "--json",
+      "--no-history"
+    ],
+    "python-format": [
+      ".venv/bin/black",
+      "--check",
+      "apps/orchestration/src/orchestration/checkpointer.py",
+      "apps/orchestration/src/orchestration/code_artifacts.py",
+      "apps/orchestration/src/orchestration/context.py",
+      "apps/orchestration/src/orchestration/contracts.py",
+      "apps/orchestration/src/orchestration/engine.py",
+      "apps/orchestration/src/orchestration/execution_receipts.py",
+      "apps/orchestration/src/orchestration/independence.py",
+      "apps/orchestration/src/orchestration/outcome_writer.py",
+      "apps/orchestration/src/orchestration/playbooks/code.py",
+      "apps/orchestration/src/orchestration/playbooks/code_detection.py",
+      "apps/orchestration/src/orchestration/recovery.py",
+      "apps/orchestration/src/orchestration/scope_preservation.py",
+      "scripts/system/checks/check_public_boundary.py",
+      "scripts/system/checks/check_code_p0_release.py"
+    ],
+    "python-lint": [
+      ".venv/bin/flake8",
+      "apps/orchestration/src/orchestration/checkpointer.py",
+      "apps/orchestration/src/orchestration/code_artifacts.py",
+      "apps/orchestration/src/orchestration/context.py",
+      "apps/orchestration/src/orchestration/contracts.py",
+      "apps/orchestration/src/orchestration/engine.py",
+      "apps/orchestration/src/orchestration/execution_receipts.py",
+      "apps/orchestration/src/orchestration/independence.py",
+      "apps/orchestration/src/orchestration/outcome_writer.py",
+      "apps/orchestration/src/orchestration/playbooks/code.py",
+      "apps/orchestration/src/orchestration/playbooks/code_detection.py",
+      "apps/orchestration/src/orchestration/recovery.py",
+      "apps/orchestration/src/orchestration/scope_preservation.py",
+      "scripts/system/checks/check_public_boundary.py",
+      "scripts/system/checks/check_code_p0_release.py",
+      "--config",
+      ".flake8"
+    ],
+    "orchestration-suite": [".venv/bin/python", "-m", "pytest", "apps/orchestration/tests", "-q"],
+    "python-typecheck": [
+      ".venv/bin/mypy",
+      "apps/orchestration/src/orchestration/checkpointer.py",
+      "apps/orchestration/src/orchestration/code_artifacts.py",
+      "apps/orchestration/src/orchestration/context.py",
+      "apps/orchestration/src/orchestration/contracts.py",
+      "apps/orchestration/src/orchestration/engine.py",
+      "apps/orchestration/src/orchestration/execution_receipts.py",
+      "apps/orchestration/src/orchestration/independence.py",
+      "apps/orchestration/src/orchestration/outcome_writer.py",
+      "apps/orchestration/src/orchestration/playbooks/code.py",
+      "apps/orchestration/src/orchestration/playbooks/code_detection.py",
+      "apps/orchestration/src/orchestration/recovery.py",
+      "apps/orchestration/src/orchestration/scope_preservation.py",
+      "scripts/system/checks/check_public_boundary.py",
+      "scripts/system/checks/check_code_p0_release.py",
+      "--config-file",
+      "pyproject.toml"
+    ],
+    "skill-typecheck": [
+      "bunx",
+      "tsc",
+      "--noEmit",
+      "--project",
+      ".pi/extensions/skill/tsconfig.json"
+    ],
+    "questionnaire-contract": ["bun", "run", "--cwd", ".pi/extensions/questionnaire", "test:all"],
+    "questionnaire-typecheck": [
+      "bunx",
+      "tsc",
+      "--noEmit",
+      "--project",
+      ".pi/extensions/questionnaire/tsconfig.json"
+    ],
+    "semgrep-tests": [
+      "bunx",
+      "vitest",
+      "run",
+      "--root",
+      ".pi/extensions/semgrep",
+      "--config",
+      "tests/vitest.config.ts"
+    ],
+    "code-p0-release": [".venv/bin/python", "scripts/system/checks/check_code_p0_release.py"],
+    "skill-integration": ["bun", "run", "--cwd", ".pi/extensions/skill", "test:integration"],
+    "skill-lint": [
+      "bunx",
+      "eslint",
+      ".pi/extensions/skill",
+      ".pi/extensions/subagent/agent-runner.ts",
+      ".pi/extensions/subagent/execution-owner-capture.ts",
+      ".pi/extensions/subagent/process-isolation.ts",
+      "--ext",
+      ".ts"
+    ],
+    "skill-format": [
+      "bunx",
+      "prettier",
+      "--check",
+      ".pi/extensions/skill/index.ts",
+      ".pi/extensions/skill/skill-utils.ts",
+      ".pi/extensions/skill/execution-receipts.ts",
+      ".pi/extensions/subagent/agent-runner.ts",
+      ".pi/extensions/subagent/execution-owner-capture.ts",
+      ".pi/extensions/subagent/process-isolation.ts",
+      ".pi/extensions/skill/tests/unit/engine-path.test.ts",
+      ".pi/extensions/skill/tests/unit/escalation-questions.test.ts",
+      ".pi/extensions/skill/tests/integration/engine-receipts.integration.test.ts",
+      ".pi/extensions/skill/tests/integration/signals-session-start.integration.test.ts",
+      ".pi/extensions/skill/tests/skill.test.ts"
+    ]
+  },
+  "criterion_map": {
+    "criterion:1": ["public-boundary", "scope-preservation"],
+    "criterion:2": ["quality-coverage-completion", "contract-drift", "orchestration-suite"],
+    "criterion:3": [
+      "receipts-and-redaction",
+      "quality-coverage-completion",
+      "python-typescript-contract",
+      "orchestration-suite",
+      "skill-typecheck",
+      "skill-integration",
+      "skill-e2e",
+      "skill-lint",
+      "skill-format"
+    ],
+    "criterion:4": ["artifact-contracts", "artifact-handoff-recovery", "findings-and-risk"],
+    "criterion:5": ["findings-and-risk"],
+    "criterion:6": [
+      "questionnaire-and-revisions",
+      "artifact-handoff-recovery",
+      "orchestration-suite",
+      "questionnaire-contract",
+      "questionnaire-e2e",
+      "questionnaire-typecheck"
+    ],
+    "criterion:7": [
+      "questionnaire-and-revisions",
+      "python-typescript-contract",
+      "orchestration-suite",
+      "questionnaire-contract",
+      "questionnaire-e2e",
+      "skill-integration",
+      "skill-e2e",
+      "skill-lint",
+      "skill-format"
+    ],
+    "criterion:8": ["target-profiles"],
+    "criterion:9": ["artifact-handoff-recovery"],
+    "criterion:10": [
+      "full-evals",
+      "quality-coverage-completion",
+      "orchestration-suite",
+      "root-integration-failure-propagation",
+      "code-p0-release"
+    ],
+    "criterion:11": [
+      "contract-drift",
+      "python-typescript-contract",
+      "orchestration-suite",
+      "python-format",
+      "python-lint",
+      "python-typecheck",
+      "root-integration-failure-propagation",
+      "skill-integration",
+      "skill-e2e",
+      "skill-lint",
+      "skill-format"
+    ]
+  },
+  "quality_dimension_map": {
+    "security": ["receipts-and-redaction", "findings-and-risk", "public-boundary", "semgrep-tests"],
+    "production_readiness": [
+      "real-server-startup",
+      "artifact-handoff-recovery",
+      "orchestration-suite"
+    ],
+    "target_idiom": [
+      "target-profiles",
+      "python-typescript-contract",
+      "python-typecheck",
+      "skill-typecheck",
+      "questionnaire-typecheck",
+      "skill-lint",
+      "skill-format"
+    ],
+    "harmful_duplication_avoidance": ["contract-drift"],
+    "unnecessary_complexity_avoidance": ["contract-drift"],
+    "regression_freedom": [
+      "full-evals",
+      "quality-coverage-completion",
+      "code-p0-release",
+      "root-integration-failure-propagation",
+      "skill-integration",
+      "skill-e2e",
+      "questionnaire-e2e"
+    ]
+  },
+  "evidence_class_map": {
+    "criterion:1": "command-verifiable",
+    "criterion:2": "command-verifiable",
+    "criterion:3": "command-verifiable",
+    "criterion:4": "command-verifiable",
+    "criterion:5": "command-verifiable",
+    "criterion:6": "command-verifiable",
+    "criterion:7": "command-verifiable",
+    "criterion:8": "command-verifiable",
+    "criterion:9": "command-verifiable",
+    "criterion:10": "command-verifiable",
+    "criterion:11": "command-verifiable",
+    "quality:security": "command-verifiable",
+    "quality:production_readiness": "command-verifiable",
+    "quality:target_idiom": "command-verifiable",
+    "quality:harmful_duplication_avoidance": "judgment-only",
+    "quality:unnecessary_complexity_avoidance": "judgment-only",
+    "quality:regression_freedom": "command-verifiable"
+  },
+  "annie_obligation_source": "selected:annie_findings",
+  "annie_obligation_checks": ["findings-and-risk", "quality-coverage-completion"]
+}
