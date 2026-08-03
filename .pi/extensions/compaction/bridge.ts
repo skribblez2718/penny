@@ -2,7 +2,7 @@
  * Typed Bridge Client for Penny Memory Bridge + Engine Checkpointer
  *
  * Two data sources feed the compact artifact:
- *   1. memory_bridge.py (mempalace / KG / outcome ledger) — JSON-RPC style
+ *   1. memory_bridge.py (mempalace / KG) — JSON-RPC style
  *      { tool, params } → JSON response, via a spawned venv Python process.
  *   2. The orchestration engine's durable run_id checkpointer
  *      (.penny/orchestration.db) — the SOURCE OF TRUTH for in-flight run

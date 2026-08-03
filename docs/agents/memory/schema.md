@@ -11,7 +11,7 @@ lifecycle, and new skills inherit both automatically.
 | **Lightweight skill scratch** | `penny` / `skills/<skill>-<session_id>` | agent, code, learn, plan, prd, research, rez — each agent writes its phase output here |
 | **Dedicated-wing skill scratch** | `wing_<skill>` / `<session_id>-<phase>` (e.g. `wing_jsa/plan-<ts>-findings`) | security skills (jsa, sca) that isolate untrusted target-scan data from general memory |
 | **Curated knowledge** | `<skill>-learnings`, `decisions`, `architecture`, `bug_bounty_methodology`, … | distilled, cross-session knowledge that must survive the scratch sweep |
-| **System / operational** | `penny/` `outcomes`, `diary`, `signals`, `digests`, `system_amendments`, `compactions` | the flywheel, watchers, digest, compaction |
+| **System / operational** | `penny/` `diary`, `compactions` | diary and compaction |
 
 **Rule of thumb:** per-session run output is **scratch** (decays); anything meant
 to inform a *future* session is **curated** (persists) and lives in a stable,
@@ -24,18 +24,16 @@ new or mislabelled room is never silently mass-archived.
 
 | Tier | Meaning | TTL |
 |------|---------|-----|
-| **T2** | warm scratch — decays, recall-extended up to 4× | 30d (`signals` 7d, `diary` 90d, `compactions` 90d) |
+| **T2** | warm scratch — decays, recall-extended up to 4× | 30d (`diary` 90d, `compactions` 90d) |
 | **T3** | curated / permanent | −1 (never) |
 | **T4** | cold archive — aged-out drawers written to grep-able JSONL under `.mempalace/archive/` **before** deletion (never lost) | — |
 
 Policy lives in `scripts/system/tiered_memory/archiver.py`:
 
 - Base rules (hardcoded): `penny/skills/` and `penny/plan-` → T2 30d; the system
-  rooms above; the permanent `penny/{decisions,architecture,digests,skills}`.
+  rooms above; the permanent `penny/{decisions,architecture,skills}`.
 - Per-skill rules (**loaded from the manifest**, see below): each dedicated-wing
   skill's scratch prefixes → T2, its curated rooms → T3.
-
-The archiver runs nightly via `scripts/system/watchers/ambient_cron.sh`.
 
 ## Single source of truth: `skill_rooms.json`
 

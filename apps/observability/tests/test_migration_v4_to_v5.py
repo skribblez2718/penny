@@ -82,7 +82,7 @@ async def test_v4_to_v5_migration():
         ver = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
         assert int(ver) == SCHEMA_VERSION
 
-        # v6 dropped the removed ambient-watcher log table on the way through.
+        # v6 dropped the retired watcher_logs table on the way through.
         assert "watcher_logs" not in tables_after
 
         # Orchestration indexes present.

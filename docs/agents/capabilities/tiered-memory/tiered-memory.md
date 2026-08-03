@@ -21,15 +21,15 @@ Without tiering, every memory competes for the same context window. Tiering ensu
 |------|---------|-----------|---------|
 | T0 | SYSTEM.md | Always | Pi session start |
 | T1 | Current conversation, FSM state | Always | In context |
-| T2 | Recent outcomes, diary, signals | Pre-turn | `memory_smart_search` every message |
-| T3 | Architecture docs, decisions, KG | On-demand | Agent `read` or `memory_smart_search` |
-| T4 | Old sessions, expired outcomes | Search only | Explicit broad query |
+| T2 | `penny/audit` (30d), `penny/diary` (90d) | Pre-turn | `memory_smart_search` every message |
+| T3 | `penny/skills`, `penny/architecture`, `penny/decisions` (permanent); KG | On-demand | Agent `read` or `memory_smart_search` |
+| T4 | Old sessions | Search only | Explicit broad query |
 
 ## Injection Protocol
 
 | Tier | Query |
 |------|-------|
-| T2 | `memory_smart_search(query="outcome ledger recent MISMATCH", wing="penny", room="outcomes", limit=5)` |
+| T2 | `memory_smart_search(query="<current task>", wing="penny", room="diary", limit=5)` |
 | T3 | `memory_smart_search` + `memory_kg_query` + AGENTS.md traversal |
 | T4 | `memory_smart_search` with broad queries |
 
@@ -38,10 +38,9 @@ Without tiering, every memory competes for the same context window. Tiering ensu
 | Transition | Trigger | Action |
 |-----------|---------|--------|
 | T1 → T2 | Session end | `memory_diary_write` |
-| T2 → T3 | 30 days (default) | Age out of pre-turn window |
-| T3 → T4 | 90 days (default) / completed | `scripts/system/tiered_memory/archiver.py` |
+| T2 → T4 | Per-room TTL | `scripts/system/tiered_memory/archiver.py` |
 
-TTLs are **per-room defaults** configured in `scripts/system/tiered_memory/skill_rooms.json` (the archiver reads `ttl_days`, default 30), not global law — tune per room there rather than treating the cadence as fixed.
+Core room TTLs are configured in `scripts/system/tiered_memory/archiver.py`; per-skill scratch defaults come from `scripts/system/tiered_memory/skill_rooms.json`. They are not global law — tune the relevant rule rather than treating the cadence as fixed.
 
 ## Constraints
 
@@ -61,4 +60,4 @@ TTLs are **per-room defaults** configured in `scripts/system/tiered_memory/skill
 | File | Purpose |
 |------|---------|
 | `docs/agents/architecture/tiered-memory.md` | Full architecture |
-| `scripts/system/tiered_memory/archiver.py` | T3→T4 archival |
+| `scripts/system/tiered_memory/archiver.py` | T2→T4 archival |

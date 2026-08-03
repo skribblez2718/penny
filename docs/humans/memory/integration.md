@@ -169,13 +169,6 @@ await memory_delete_drawer({
 List drawers in a wing/room. Used for bulk operations, auditing, and cleanup.
 
 ```typescript
-// List all drawers in a specific room
-const result = await memory_list_drawers({
-  wing: "penny",
-  room: "outcomes",
-});
-// Returns: { success, count, drawers: [{ id, wing, room, source_file, created_at }] }
-
 // List all drawers in a wing (no room filter)
 const result = await memory_list_drawers({
   wing: "penny",
@@ -471,7 +464,6 @@ async def write_session_diary(self, topic: str, key_points: List[str], importanc
 | Sessions       | `penny` | `skills`       | Skill execution records                        |
 | Technical      | `penny` | `technical`    | Patterns, learnings                            |
 | User Prefs     | `user`  | `preferences`  | Preferences, settings                          |
-| Outcome Ledger | `penny` | `outcomes`     | Consequential action outcomes and delta scores |
 | Diary          | `penny` | `diary`        | Agent session diary entries (AAAK format)      |
 | Backlog        | `penny` | `backlog`      | Triage items and deferred work                 |
 | Audit          | `penny` | `audit`        | Post-hoc review logs                           |
@@ -545,7 +537,6 @@ Standard predicates for relationships:
 | `completed`   | Completion           | `Session:001 completed Skill:TDD`                                            |
 | `produced`    | Output               | `Session:001 produced File:auth.py`                                          |
 | `implemented` | Implementation       | `Session:001 implemented Feature:Login`                                      |
-| `evaluated`   | Outcome evaluation   | `Penny evaluated Decision:decision_2026-04-19_001` (post-action delta score) |
 
 ## AAAK Diary Format
 

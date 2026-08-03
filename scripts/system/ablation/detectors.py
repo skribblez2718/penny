@@ -6,7 +6,7 @@
 - ``model_detector_factory`` builds a detector that shells to headless pi and asks
   the model to read the project files and report the same fields as JSON. The pi
   invocation mirrors the proven pattern in
-  ``scripts/system/evals/prompt_efficacy_judge.py`` (``runner`` injectable for tests,
+  the shared headless-pi call (``runner`` injectable for tests,
   so no live model call happens under unit test).
 """
 from __future__ import annotations

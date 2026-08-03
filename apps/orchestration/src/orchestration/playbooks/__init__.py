@@ -9,6 +9,7 @@ from ..engine import BasePlaybook
 from .code import CodePlaybook
 from .derivation import DerivationPlaybook
 from .imagegen import ImagegenPlaybook
+from .videogen import VideogenPlaybook
 from .jsa import JSAPlaybook
 from .learn import LearnPlaybook
 from .plan import PlanPlaybook
@@ -28,6 +29,7 @@ PLAYBOOKS: dict[str, type[BasePlaybook]] = {
     RezPlaybook.NAME: RezPlaybook,  # domain skill (resume tailoring)
     LearnPlaybook.NAME: LearnPlaybook,  # domain skill (study-material generation)
     ImagegenPlaybook.NAME: ImagegenPlaybook,  # domain skill (local image generation)
+    VideogenPlaybook.NAME: VideogenPlaybook,  # domain skill (instructional video generation)
     DerivationPlaybook.NAME: DerivationPlaybook,  # domain skill (derivation/independence gate)
     ReferenceCycle.NAME: ReferenceCycle,  # engine smoke-test fixture only
 }
@@ -49,6 +51,7 @@ __all__ = [
     "LearnPlaybook",
     "RezPlaybook",
     "ImagegenPlaybook",
+    "VideogenPlaybook",
     "DerivationPlaybook",
     "ReferenceCycle",
     "ReferenceCycleMachine",

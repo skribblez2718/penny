@@ -451,7 +451,7 @@ def test_deep_reaches_validation_after_report_critique_approve(cp):
 
 # ---------------------------------------------------------------------------
 # the validation verdict is the run's QUALITY signal on the context
-# (the outcome ledger reads ctx.verify_verdict / ctx.verify_gaps)
+# (readers use ctx.verify_verdict / ctx.verify_gaps)
 # ---------------------------------------------------------------------------
 
 

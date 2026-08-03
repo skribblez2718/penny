@@ -146,9 +146,7 @@ tokens — and what actually governs adherence is structure and position
 [Evidence Base](../../humans/prompts/evidence.md). The 1,500-token cap is
 therefore an engineering **forcing-function**, not a model limit: it keeps the
 always-on layer lean and pushes non-universal content out, rather than a claim
-about where a model breaks. Whether each section of the frame *earns* its share
-of the budget is measured by section ablation
-(`run_prompt_efficacy.py --ablate`), not asserted.
+about where a model breaks.
 
 **Staying under budget:** keep only universal, always-needed cognitive content in
 `<system_context>`. Move conditionally-needed or Penny-operational content into
@@ -180,7 +178,6 @@ The canonical section-by-section checklist lives in [Cognitive Frame Standards](
 - [ ] Ask vs. Act present: clarification condition + mid-work escalation, protocol named by trigger
 - [ ] No domain-specific content (no CREST tables, no agent roles, no checklists)
 - [ ] No file paths in `<system_context>`; security directives block untouched
-- [ ] Change shipped through the prompt-efficacy gate (`frame_on_pass_rate` no-regress, `frame_regressed_families` empty)
 
 ### Role Definition (Agent Definitions)
 

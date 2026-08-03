@@ -6,6 +6,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- **Self-Improvement Loop, Ambient Watchers, Weekly Digest, Prompt Efficacy, and
+  Judgment Calibration — removed in full.** Penny's improvement work is driven by
+  the `.pi/prompts/*-audit` prompt family from here on: simpler, more reliable, and
+  fully under operator control. Removed, with all code, tests, config, cron wiring,
+  and documentation:
+  - **Self-Improvement Loop** — the outcome ledger (`scripts/system/outcome_ledger/`,
+    `penny/outcomes`, `make rate`, judge-backed auto-capture), the compression loop
+    (`scripts/system/self_improve/`), the amendment lifecycle (propose / review /
+    approve / apply, `penny/system_amendments`, `make review`), the trust and
+    graduated-autonomy gate (`scripts/system/autonomy/`, `PENNY_AUTONOMY_GATE`,
+    `BasePlaybook.AUTONOMY_STATES`), the orchestration outcome writer
+    (`orchestration/outcome_writer.py`), and the `/tune` prompt with `make tune`
+    and `make tune-deep`.
+  - **Ambient Watchers** — `scripts/system/watchers/`, signal generation and the
+    `penny/signals` room, the session-start checker and the `.penny/SESSION_BRIEF.md`
+    session-memory injection, the `memory_acknowledge_signal` and
+    `observability_query_watcher_logs` tools, watcher logs (endpoints, models, and
+    the `watcher_logs` table — dropped by a new observability **v5 → v6** migration,
+    so existing databases migrate forward cleanly), and the ambient cron. The
+    tiered-memory archiver, previously scheduled by that cron, keeps its schedule
+    via `scripts/system/tiered_memory/archiver_cron.sh`.
+  - **Weekly Digest** — `scripts/system/digest/` and the `penny/digests` room.
+  - **Prompt Efficacy** — the frame-on/frame-off A/B matrix and its runner, golden
+    prompt tasks, the hybrid grader and judge calibration, and
+    `make evals-prompt-efficacy`.
+  - **Judgment Calibration** — `scripts/system/judgment/`, the judge-agreement
+    harness, rubrics, calibration corpus, and `make judge-agreement`.
+
+  The four MemPalace rooms these features owned (`penny/outcomes`, `penny/signals`,
+  `penny/digests`, `penny/system_amendments`) were purged, and every agent- and
+  skill-facing directive that instructed writes to them was removed.
+
+  **Behavior changes worth noting:** the orchestration engine no longer writes a
+  terminal outcome record per run, so the code skill's P0 completion contract no
+  longer includes the "canonical terminal outcome persisted before publication"
+  condition; and no session-memory brief is injected at session start (the diary
+  itself and its tools are unaffected). Retained and unchanged: the behavioral
+  ratchet / trajectory eval, the remaining eval sections (compat, invariants,
+  retrieval, trajectory), tiered memory, MemPalace and the knowledge graph, the
+  observability server, and all skills and agents.
+
 ### Added
 
 - **derivation skill — Tier-1.5 compression-distance signal (`ncd.py`).** A new

@@ -42,7 +42,7 @@ The authored Cognitive Frame. Every subsection is lean, universal reasoning and 
 | **Deliver**                            | Answer-first structure; a response must add information or progress                                                |
 | **On-Demand Protocols**                | Trigger→action for KG linking and compaction resume (names each; paths resolve via the index)                      |
 
-Sections consolidate over time — the invariant is not a fixed list but that every subsection is universal reasoning with no reference paths. Structural changes ship through the prompt-efficacy gate (see Change Protocol below), so this table describes the canonical structure as of its last update; the frame file is authoritative.
+Sections consolidate over time — the invariant is not a fixed list but that every subsection is universal reasoning with no reference paths. This table describes the canonical structure as of its last update; the frame file is authoritative.
 
 ### 3. Tools and guidelines (Authored)
 
@@ -106,8 +106,6 @@ Every rule must define a thinking step, not a desired output quality:
 
 The frame's process-shaped rules are **single lightweight directives** ("surface constraints and success criteria before work", "verify before delivering"), never mandated multi-step reasoning scripts. This distinction matters for reasoning models (Claude extended thinking, DeepSeek reasoner, GLM/Kimi/MiniMax thinking modes): prescriptive process scaffolds are the technique class that goes neutral-to-negative on reasoning-native models — chain-of-thought prompting adds ~+12–14 points on math/symbolic but +0.7 points elsewhere and can be negative on thinking models (Sprague et al., ICLR 2025, arXiv:2409.12183; vendor guidance uniformly says don't CoT-prompt thinking models; see [Evidence Base](../../humans/prompts/evidence.md)). This is why the six-step RESTATE/IDENTIFY/LIST/LIST/SURFACE/FLAG sequence lives in the *on-demand* clarification protocol rather than the always-on frame (see Rule 7): the directive stays, the script loads only when its trigger fires.
 
-**Monitoring (live, not aspirational):** degradation is measured, not awaited. The prompt-efficacy harness (`make evals-prompt-efficacy`; `scripts/system/evals/README.md` north star N6) runs the golden task set frame-on vs frame-off per model family. When a family's frame-on pass rate falls below frame-off beyond the noise margin, `prompt_efficacy.frame_regressed_families` fails the ratchet and the runner writes a CRITICAL `prompt_degradation_<family>_<date>` signal into penny/signals, which the session-start brief surfaces. On that signal: run the harness with `--ablate` to find the costly section, then simplify the process-shaped steps for that family (per-model variant per `plans/per-model-optimization/`) or — if the cost shows across families — simplify the frame itself through the human-gated change protocol below. Do not preemptively remove steps without a degradation measurement.
-
 ### Rule 6: Concrete verbs, not abstract nominalizations
 
 ❌ **Don't**: "Perform verification of the result before delivery."
@@ -122,10 +120,9 @@ Frame text states **what must be true** (goals, constraints, consequence boundar
 ❌ **Don't**: "Step 1: restate the goal. Step 2: identify the category. Step 3: …"
 ✅ **Do**: "Surface constraints and success criteria before work" (a constraint on outcomes, not a script).
 
-Two consequences:
+A consequence:
 
-1. **Every frame line is a loan unless it is a consequence boundary, a conduit (verification, memory, escalation, delegation), or an engine-consumed wire format.** Before adding a line, ask the add-side gate question: *does this line gain or lose value as models improve?* If it loses — it compensates for a current-model weakness — it may ship only as a deliberate, temporary loan, and it is first in line for ablation at the next model upgrade.
-2. **Ablate at model boundaries.** A model release is exactly when frame scaffolding becomes newly obsolete. Re-run the section ablation (`run_prompt_efficacy.py --ablate`) and delete sections that no longer earn their tokens. Deletion on measurement, not on taste — and never delete consequence boundaries (the security directives, the project-tree rule, HITL conditions), which are capability-invariant.
+**Every frame line is a loan unless it is a consequence boundary, a conduit (verification, memory, escalation, delegation), or an engine-consumed wire format.** Before adding a line, ask the add-side gate question: *does this line gain or lose value as models improve?* If it loses — it compensates for a current-model weakness — it may ship only as a deliberate, temporary loan, and it is first in line for review at the next model upgrade.
 
 This rule reconciles with Rule 5 (process-shaped): a *single executable directive* ("verify before delivering") is process-shaped and compliant; a *mandated multi-step script* is procedure and is not. The line between them is whether the model retains freedom to choose its path. Full rationale: `research/atomic-loop-components/` (esp. 06-compliance.md).
 
@@ -205,7 +202,7 @@ Cognitive Frame changes affect every interaction. Follow this protocol:
 - Changing the Who You Are identity
 - Any change to The Operating Bet (it encodes the ratchet doctrine)
 
-Every audited change also runs the prompt-efficacy harness (`make evals`): `frame_on_pass_rate` must not regress and `frame_regressed_families` must stay empty. FR-19 auto-invalidates the eval on any SYSTEM.md hash change, so skipping this step leaves a red ratchet.
+Every audited change also runs `make evals`.
 
 ### Enforcement: Carren Critique + Vera Verification
 

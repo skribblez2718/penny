@@ -39,4 +39,4 @@ No commands and no modes — the ` -i` suffix is the sole trigger.
 
 ## Measurement
 
-Whether enhanced Invocation Context earns its latency is an empirical question for the prompt-efficacy harness (`scripts/system/evals/README.md`, north star N6) — extend `golden_prompt_tasks.json` with raw-vs-enhanced arms before treating enhancement as a default reflex.
+Whether enhanced Invocation Context earns its latency is an empirical question — measure raw-vs-enhanced arms before treating enhancement as a default reflex.

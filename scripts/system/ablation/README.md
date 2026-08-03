@@ -26,7 +26,7 @@ Runs two detector *arms* over labeled fixtures, scoring each against ground trut
 
 Detector-agnostic; the model arm's pi call is injectable (`runner`), so the whole
 harness is unit-tested with a fake — **no live model call under `pytest`** (mirrors
-the two-part `prompt_efficacy` design).
+the two-part expensive-runner / cheap-reader design).
 
 ## Run
 
@@ -55,18 +55,18 @@ the hand-coded tables call "not a server," which a model reading `package.json` 
 ## Staleness & auto-invalidation (item #4)
 
 The artifact records `invalidators` — the SHA-256 of the scaffold under test
-(`code_detection.py`). `tune_freshness.check_ablations_stale()` re-hashes it and
-reports the ablation **`invalidated (scaffold changed)`** the moment
-`code_detection.py` is edited (or retired), plus **`stale (age)`** after 30 days.
-`make tune-deep` surfaces this (it does **not** auto-re-run — the model arm costs
-calls). This is the non-frame analogue of the frame's FR-19 (`SYSTEM.md`-hash)
-invalidation: the artifact self-declares *what changes it*, so the checker stays
-generic.
+(`code_detection.py`) — and a `ts` timestamp, so any consumer can re-hash the
+scaffold and treat the ablation as invalidated the moment `code_detection.py` is
+edited (or retired), or as stale on age. The artifact self-declares *what changes
+it*, so a checker never has to hard-code a path.
+
+> Note: no automated checker currently reads these fields; they are recorded for
+> manual inspection and for any future consumer.
 
 ## Files
 
 - `ablate_lib.py` — detector-agnostic harness (cases, scoring, report, artifact)
-- `detectors.py` — heuristic + model detector arms (pi call mirrors `prompt_efficacy_judge`)
+- `detectors.py` — heuristic + model detector arms
 - `run_code_detection_ablation.py` — CLI runner (expensive/manual; never in `make evals`)
 - `fixtures/code_detection/` — labeled project fixtures + `truth.json`
 

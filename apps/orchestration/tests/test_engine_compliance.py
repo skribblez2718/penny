@@ -6,7 +6,7 @@
   exhaustion (complete + ``met=False`` + ``exhausted`` reason), never a fake
   pass and never a silent loop-past to the step cap;
 * evidence capture — a SUMMARY ``evidence`` field lands on
-  ``ctx.verify_evidence`` and in the outcome-ledger body;
+  ``ctx.verify_evidence``;
 * default-on loop guards — a playbook with NO ``progress_check`` override gets
   strategy-repeat + stall escalation via engine auto-recorded iteration
   digests; ``LOOP_GUARDS = False`` opts out; playbook-recorded iterations are
@@ -146,7 +146,7 @@ def test_normal_completion_carries_no_exhaustion_flag(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# R5 — evidence capture into ctx + outcome ledger
+# R5 — evidence capture into ctx
 # ---------------------------------------------------------------------------
 
 

@@ -22,7 +22,7 @@ Every loop component must pass one test:
 
 A component whose value *decreases* as the model improves is a **KNOWLEDGE-CONSTRAINT** (doctrine term): permitted only as an explicitly-tagged, instrumented, deletable **loan**.
 
-## The atom catalog (18 atoms, 7 families)
+## The atom catalog (16 atoms, 7 families)
 
 Each atom is classified by **Kind** (`SEARCH-CONDUIT` · `LEARNING-CONDUIT` · `BOUNDARY` · `PLUMBING` · `INTELLIGENCE`), **Durability** (`DURABLE` vs `LOAN`), and **Decision owner** (`CODE` vs `MODEL`).
 
@@ -41,9 +41,7 @@ Each atom is classified by **Kind** (`SEARCH-CONDUIT` · `LEARNING-CONDUIT` · `
 | D4 | **Escalate** — human contact as a first-class Intent (`AskHuman`) | Control | boundary / search | durable | model asks, code transports |
 | E1 | **Fan** — parallelism: sectioning, voting/best-of-N, spawn (isolated sub-context) | Scale | **search-conduit (purest)** | durable | model topology, code mechanics |
 | E2 | **Compact** — context economy; trim stale results, summarize resolved errors | Scale | search-conduit | need durable, mechanisms = loans | model preferred |
-| F1 | **Ledger** — record outcome + evidence per run | Learning | learning-conduit | durable | code |
-| F2 | **Recall** — retrieve distilled lessons into `Decide` context at run start | Learning | learning-conduit | durable | code retrieves, model applies |
-| F3 | **Distill** — compress ledger into reusable lessons/skills, gated by ratchet + human | Learning | learning-conduit | durable | model drafts, ratchet gates |
+| F1 | **Recall** — retrieve relevant stored context into `Decide` | Learning | learning-conduit | durable | code retrieves, model applies |
 | G1 | **Observe** — structured traces; audit + measurement substrate | Meta | plumbing / boundary | durable | code |
 | G2 | **Ablate** — scaffold ON vs OFF measurement; the deletion mechanism | Meta | **meta-method** | **permanent** | code measures, human disposes |
 
@@ -58,7 +56,7 @@ Each atom is classified by **Kind** (`SEARCH-CONDUIT` · `LEARNING-CONDUIT` · `
 Every loop is the same three-line kernel; everything else is which atoms decorate it and who owns the `while`.
 
 ```
-context = Recall(Thread)            # F2 → A1: seed with lessons + history
+context = Recall(Thread)            # F1 → A1: seed with relevant stored context
 while Budget.ok():                  # D2: the only unconditional bound
     intent = Decide(render(Thread)) # B1: the ONE intelligent step
     Thread.append(intent)
@@ -68,7 +66,6 @@ while Budget.ok():                  # D2: the only unconditional bound
         ask    → Checkpoint; break                     # D4/A2: pause for human
         act    → gated = Gate(intent)                   # D3: consequence boundary
                  Thread.append(Act(gated, Toolspace))   # C1/C2
-Ledger.record(Thread)               # F1: outcome → learning substrate
 ```
 
 The kernel is universal because it contains **no task knowledge** — no steps, no decomposition, no routing. All of that is `Decide`'s runtime output. Chasing a universal loop means over-specifying this kernel; the compliant move is to keep it empty of task-content and vary the *arrangement* around it.
@@ -119,10 +116,9 @@ They nest: a tick (6) resumes an orchestrator (4) whose workers are evaluator-op
 Loans (KNOWLEDGE-CONSTRAINT scaffolding a current model still needs) must be repaid or they become the *BLE-hobbled system* — scaffolding aged past usefulness, now making the system worse. Triggered at every model upgrade (when scaffolding becomes newly obsolete) and periodically:
 
 1. **Inventory** all LOAN-tagged components (they're tagged per invariant 6).
-2. **Ablate** each: task set scaffold-ON vs OFF, behavior-blind grader (`G2`); record pass-rate + cost deltas.
+2. **Ablate** each: task set scaffold-ON vs OFF; record pass-rate + cost deltas.
 3. **Dispose:** OFF ≥ ON → delete the loan (the common upgrade outcome). OFF materially worse → keep, re-tag with new expiry. OFF slightly worse but far simpler → usually delete (thin wins on distribution shift).
 4. **Ratchet:** confirm every protected capability (grounded `Verify`, honest exhaustion, durable memory, resume, HITL gates) still measures green. Removing a constraint while keeping capabilities green **passes**; weakening a capability **fails** — regardless of any single benchmark.
-5. **Distill & record.**
 
 Proposes; measurement disposes. No loan deleted on taste, none kept on sentiment.
 
@@ -171,7 +167,7 @@ CONSEQUENCE & CONTINUITY
 
 SCALING & LEARNING
 [ ] Improving output = turning a knob (iterations/samples/Fan/verifier), not editing control flow
-[ ] Ledger records outcome+evidence; Recall seeds lessons at start (dated, overridable)
+[ ] Recall seeds relevant stored context (dated, overridable)
 
 COMPLIANCE HYGIENE
 [ ] Every component passed the add-side gate; every LOAN is tagged + has an Ablate hook + expiry
@@ -189,15 +185,13 @@ The atoms are not a rewrite target — they are a **lens** for reading and evolv
 | Decide / Critique | `invoke_agent` (pi subagent) / Vera (objective) + Carren (subjective) |
 | Verify / Budget / Gate / Escalate | `done_predicate` + evidence `summary_contract` / `max_iterations` + `learn_exhausted` / `GATE_STATES` / UNCERTAIN → `awaiting_clarification` |
 | Fan / Compact | parallel fan-out with weakest-confidence fan-in / context discipline |
-| Ledger / Distill / Review | outcome ledger (now outcome+evidence) / daily compression loop → amendment proposals / **human approval → file application** (`amendment_applier` refuses `status != "APPROVED"`). There is deliberately no run-start retrieval of stored lessons into agent context — that atom (F2 "Recall") was removed 2026-07-28 because it delivered unapproved proposals into prompts; see `skill-standard.md` §4. |
-| Observe / Ablate | observability events / `run_prompt_efficacy.py --ablate` + the eval ratchet |
+| Observe / Ablate | observability events / the eval ratchet |
 
-Of the five gaps this framing sharpened (see [loops.md](../skills/loops.md)), four are now closed at the engine level (2026-07-14): strategy-delta enforcement and stall detection are **default-on** (the base `progress_check` + engine-recorded iteration digests, opt-out via `LOOP_GUARDS = False`), run-start reflection retrieval is live (`recall.py`), and evidence-grounded verify contracts are enforced (`contracts.py` + ledger capture). The engine also carries a LOAN registry with Ablate toggles (`loans.py`, invariant 6), an honest-exhaustion backstop on the iteration budget, runtime-emitted fan topology (`parallel_spec` seam), and model-owned routing as a small edit (`fire_model_route`). The remaining open gap is **verifier-gaming hardening** (dual-verifier agreement at high-stakes gates).
+Of the four gaps this framing sharpened (see [loops.md](../skills/loops.md)), three are now closed at the engine level (2026-07-14): strategy-delta enforcement and stall detection are **default-on** (the base `progress_check` + engine-recorded iteration digests, opt-out via `LOOP_GUARDS = False`), and evidence-grounded verify contracts are enforced (`contracts.py`). The engine also carries a LOAN registry with Ablate toggles (`loans.py`, invariant 6), an honest-exhaustion backstop on the iteration budget, runtime-emitted fan topology (`parallel_spec` seam), and model-owned routing as a small edit (`fire_model_route`). The remaining open gap is **verifier-gaming hardening** (dual-verifier agreement at high-stakes gates).
 
 ## Related
 
 - [Bitter-Lesson Doctrine](bitter-lesson.md) — the LEVERAGE/SAFETY/KNOWLEDGE-CONSTRAINT triage and the ratchet this framework operationalizes
 - [Agentic Loops — Reference](../skills/loops.md) — the L1–L7 loop classes (arrangements of these atoms) and per-class design rules
-- [Outcome Ledger](outcome-ledger.md) — the ratchet substrate the LOAN lifecycle measures against
 - [Atomic Loop Components (Human)](../../humans/architecture/atomic-loop-components.md) — conceptual overview and rationale
 - Full research pack: `research/atomic-loop-components/` (essay reading, compliance rules, reference Python, prompt-rewrite change map)

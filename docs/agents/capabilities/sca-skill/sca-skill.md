@@ -25,7 +25,7 @@ Strictly-sequential 13-phase pipeline: `charter (P0) → census (P1) → baselin
 
 ### Bitter-Lesson / atomic-loops compliance
 
-- **Grounded verification** (Rec 4, already on the leverage spine): `SCA_VERIFICATION` requires a `run_pocs` batch (executed, non-destructive; legitimately empty with a coverage note when nothing is safely exploitable); `SCA_TRIAGE`/`SCA_DEEP_DIVE` carry an `evidence_basis`. Evidence flows to `ctx.verify_evidence` and the outcome ledger. Verifiers prefer executed-over-asserted (the vera prompts state the evidence-tier hierarchy).
+- **Grounded verification** (Rec 4, already on the leverage spine): `SCA_VERIFICATION` requires a `run_pocs` batch (executed, non-destructive; legitimately empty with a coverage note when nothing is safely exploitable); `SCA_TRIAGE`/`SCA_DEEP_DIVE` carry an `evidence_basis`. Evidence flows to `ctx.verify_evidence`. Verifiers prefer executed-over-asserted (the vera prompts state the evidence-tier hierarchy).
 - **Budget, not magic number.** `augment_cap` (`constraints.augment_cap`, default 3) bounds the deep-dive rule-augmentation loop — a tunable Budget, honestly exhausted.
 - **Recall.** `_task_summary` seeds the first agent directive with distilled lessons from prior runs (advisory).
 - **HITL.** Six deny-by-default human gates guard the irreversible/consequential transitions.

@@ -966,7 +966,7 @@ class ResearchPlaybook(BasePlaybook):
             # The run's REAL quality signal, surfaced on the CONTEXT so the outcome
             # ledger records GROUNDING and not merely delivery. Without this the
             # ledger saw an empty ``verify_gaps`` for every research run, so
-            # ``outcome_writer._failure_mode`` fell through to "other" and a report
+            # the failure mode fell through to "other" and a report
             # shipped with unsupported claims was indistinguishable from a fully
             # grounded one — the learning loop had no signal to learn from.
             # ``verify_evidence`` is already captured by the engine

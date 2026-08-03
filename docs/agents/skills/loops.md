@@ -16,7 +16,7 @@ This shape is a **methodology** documented in SYSTEM.md, not a base class. Each 
 
 ## The Parts Beneath the Loop Classes (Atomic Components)
 
-The seven loop classes below are not primitive — they are **arrangements of a smaller set of atomic components**. Before designing a loop, read [Atomic Loop Components](../architecture/atomic-loop-components.md): 18 atoms in 7 families, with the one structural law that keeps every loop [Bitter-Lesson](../architecture/bitter-lesson.md)-compliant:
+The seven loop classes below are not primitive — they are **arrangements of a smaller set of atomic components**. Before designing a loop, read [Atomic Loop Components](../architecture/atomic-loop-components.md): 16 atoms in 7 families, with the one structural law that keeps every loop [Bitter-Lesson](../architecture/bitter-lesson.md)-compliant:
 
 > **Intelligence is confined to exactly two atoms (`Decide`, `Critique`). Every other atom is deterministic, model-agnostic Python.** The procedure for solving a task is never coded — it is `Decide`'s runtime output.
 
@@ -29,7 +29,7 @@ The loop classes map directly onto the atoms and the six canonical *arrangements
 | L3 Retry/repair | `Budget` (D2) + strategy-changing `Decide` | evaluator-optimizer |
 | L4 HITL gate | `Gate` (D3) + `Escalate` (D4) | any + consequence boundary |
 | L5 Orchestration FSM | `Thread`/`Checkpoint`/`Fan` + the engine | orchestrator-workers |
-| L6 Reflection/memory | `Ledger`/`Recall`/`Distill` (F1–F3) | learning conduit |
+| L6 Reflection/memory | `Recall` (F1) | learning conduit |
 | L7 Background/scheduled | scheduled `Checkpoint` resume | background tick |
 
 The practical consequence for playbook authors: you are not choosing an architecture, you are **arranging atoms**, and you move between arrangements by re-wiring, not re-building. The [add-side gate](../architecture/atomic-loop-components.md#the-add-side-gate) and [LOAN lifecycle](../architecture/atomic-loop-components.md#the-loan-lifecycle-how-loops-stay-compliant-over-time) govern what you may bake into a loop and when to delete it.
@@ -39,7 +39,7 @@ The practical consequence for playbook authors: you are not choosing an architec
 Loops are not alternatives — they **nest**. A production system layers them:
 
 ```
-┌─ L7 Background/scheduled loops (cron, watchers, digests) ────────────┐
+┌─ L7 Background/scheduled loops ──────────────────────────────────────┐
 │ ┌─ L6 Reflection / memory-learning loop (across runs) ─────────────┐ │
 │ │ ┌─ L5 Orchestration loop (FSM / graph, checkpointed) ──────────┐ │ │
 │ │ │ ┌─ L4 Human-in-the-loop gates (approve / refine / deny) ───┐ │ │ │
@@ -118,18 +118,17 @@ Loops are not alternatives — they **nest**. A production system layers them:
 
 **What:** Learning between runs without weight updates. Verbally reflect on task feedback signals, maintain reflective text in an episodic memory buffer, improve subsequent trials.
 
-**In Penny:** MemPalace (the blackboard), the LEARN operation, and the daily self-improvement compression loop.
+**In Penny:** MemPalace (the blackboard) and the LEARN operation.
 
 **Design rules:**
-- **Close L6 through review, not injection.** The write side (outcome ledger → daily compression → amendment proposals) is live. The read side is the **human approval loop**: proposals are reviewed via the tune commands and, once approved, *applied to the relevant files*. The engine does **not** retrieve stored lessons into agent context — see the prohibition in `skill-standard.md` §4 and `tests/test_no_memory_injection.py`.
 - **Guard against confirmation bias and mode collapse.** Retrieve as advisory context; don't let a past lesson hard-gate a new run.
 - **The evaluator must be adapted per domain.** Reflexion used environment success for AlfWorld, self-generated unit tests for coding, exact-match for QA — the loop is not fully task-agnostic.
 
 ### L7 — Background / Scheduled Loops
 
-**What:** Time- or event-triggered outer loops: polling, monitoring, digests, recurring maintenance.
+**What:** Time- or event-triggered outer loops: polling, monitoring, recurring maintenance.
 
-**In Penny:** Ambient watchers, weekly digests, progress heartbeats, the daily compression loop's schedule.
+**In Penny:** Progress heartbeats.
 
 **Design rules:**
 - Bounded work per tick
@@ -209,14 +208,14 @@ Match the loop stack to the task's verifiability and step-predictability:
 | Coding | L2+L3 (+L4 gates) | High (tests/lint) | Premature "done" | `code` (engine) |
 | Security | L5+L4 (+bounded L3) | High on PoC, low on triage | Verifier gaming | `sca`, `jsa` |
 | Research | L5+L1 fan-out+L2+L6 | Low (source grounding) | Shallow/premature report | `research` |
-| Scheduling/automation | L7+L5 (+L4 before side effects) | High but narrow | Double-execution, silent retry | Watchers/digests |
+| Scheduling/automation | L7+L5 (+L4 before side effects) | High but narrow | Double-execution, silent retry | — |
 | Long-horizon | L5+L6, engine owns continuity | Mixed, drifting | Lost loop state across sessions | Engine + MemPalace |
 
 **Principle:** Tasks with crisp external oracles (code: tests; security: PoC execution) can lean hard on tight verifier-gated retry loops. Fuzzy-oracle tasks (research quality, writing) must lean on HITL gates and structured criteria because the verifier is weak.
 
 ## Loop-Quality Recommendations
 
-Five concrete recommendations from the research, ordered by leverage. Current engine implementation status is tracked in [Atomic Loop Components](../architecture/atomic-loop-components.md) (“How this maps onto Penny today”), not duplicated here — a frozen status list rots the moment a gap closes.
+Four concrete recommendations from the research, ordered by leverage. Current engine implementation status is tracked in [Atomic Loop Components](../architecture/atomic-loop-components.md) (“How this maps onto Penny today”), not duplicated here — a frozen status list rots the moment a gap closes.
 
 ### Rec 1 — Enforce a strategy delta between retries (anti-paralysis)
 
@@ -226,17 +225,13 @@ Five concrete recommendations from the research, ordered by leverage. Current en
 
 The same default-on base `progress_check` compares successive recorded iterations' `gaps`: identical non-empty gaps across the window mean no measurable progress, and the run escalates to the human (L4) rather than burning the remaining budget. Backing it up, the engine's iteration-budget backstop forces **honest exhaustion** (complete, `met=False`, `exhausted` reason in the result) on any playbook that routes past its `max_iterations` — never a fake pass, never a silent spin to `STEP_CAP`.
 
-### Rec 3 — Retrieve past-run reflections at run start (close the L6 loop)
+### Rec 3 — Require externally-grounded evidence in VERIFY contracts
 
-**Removed (2026-07-28).** The engine's `start()` used to call `recall_lessons` (atom F2, `orchestration/recall.py`): a MemPalace query over `penny/system_amendments` seeding up to 3 records into the **first** agent directive as advisory context. That room holds amendment *proposals*, and the query applied **no status filter** — so `PENDING` and operator-`REJECTED` proposals reached agent prompts, bypassing the approval gate enforced by `amendment_applier` (`status != "APPROVED"` → refuse). The module, the `RunContext.recall_lessons` field, and all 11 injection sites are deleted; `recall_lessons` is a retired serialization key dropped on load so pre-existing checkpoints still resume. Reintroduction fails `tests/test_no_memory_injection.py`.
-
-### Rec 4 — Require externally-grounded evidence in VERIFY contracts
-
-A state contract may declare `evidence` fields; the validator fails loud when they are empty (a PASS on a bare claim is a contract violation). The engine additionally captures any non-empty SUMMARY `evidence` into `ctx.verify_evidence`, and the outcome ledger records it — outcome+evidence, not outcome alone.
+A state contract may declare `evidence` fields; the validator fails loud when they are empty (a PASS on a bare claim is a contract violation). The engine additionally captures any non-empty SUMMARY `evidence` into `ctx.verify_evidence`.
 
 **The contract check is non-emptiness only, not authenticity.** The validator cannot tell a captured transcript from a plausible-but-fabricated string — a model that invents non-empty `evidence` still clears the contract. Authenticity is closed per-skill, downstream of the contract: jsa's *conditional* evidence gate (a `verdict: PASS` with `verified_count>0` and empty `evidence` is rejected — T7b, making the jsa `vera-base.md` claim true in code) and sca grounding its per-finding agreement in **sandbox-recorded exit codes** the actor cannot forge. Contract non-emptiness is the floor; unfabricatable evidence is the real defense.
 
-### Rec 5 — Harden verifiers against gaming (highest-incentive: security skills)
+### Rec 4 — Harden verifiers against gaming (highest-incentive: security skills)
 
 Cross-model discipline is now an **enforced invariant**, not a convention: `orchestration/independence.py` classifies every skill's primary actor→verify edge (resolving each agent's model live from frontmatter), and a same-model *bare-judgement* verify must be a registered, review-dated exception (prd, rez, research, plan) — a fail-loud test rejects any new unregistered one.
 
@@ -246,7 +241,7 @@ Second-verifier **agreement** ships in both security skills: jsa requires per-fi
 
 ## Related Documents
 
-- [Atomic Loop Components](../architecture/atomic-loop-components.md) — the parts beneath these loop classes: the 18-atom catalog, assembly invariants, control-flow dial, and pre-ship checklist
+- [Atomic Loop Components](../architecture/atomic-loop-components.md) — the parts beneath these loop classes: the 16-atom catalog, assembly invariants, control-flow dial, and pre-ship checklist
 - [Bitter-Lesson Doctrine](../architecture/bitter-lesson.md) — the ratchet these loops must comply with (protect capabilities, prune constraints)
 - [Resilience](resilience.md) — Error handling and recovery on the engine
 - [Orchestration](orchestration.md) — Engine-backed skill protocol

@@ -42,5 +42,3 @@ You may also have project-specific custom tools; the runtime surfaces them.
 - Self-healing documentation updates (e.g. the concept→URL tables in
   `docs/agents/coding/*/`) are **working-tree edits only** — left staged for the
   user's review, never auto-committed.
-- The self-improving-guidance amendment pipeline commits *only* after the user
-  approves the exact diff — that approval **is** the gate; do not bypass it.

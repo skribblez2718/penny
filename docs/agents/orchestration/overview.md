@@ -33,7 +33,7 @@ A domain skill subclasses `BasePlaybook` directly (no shared "standard cycle" ba
 ## Rules
 
 1. **The directive contract is unchanged** (`invoke_agent`, `invoke_agents_parallel`, `escalate_to_user`, `complete`, `error`, `status`); every directive carries `run_id`; no `orchestrator_state` blob.
-2. **The engine imports no agent-side capability** (e.g. not `outcome_ledger`). The agent subprocess does the real work; the engine only sequences.
+2. **The engine imports no agent-side capability.** The agent subprocess does the real work; the engine only sequences.
 3. **Rehydrate FSM position with `sm.current_state_value = <id>`** — never `_force_state`, never `start_value` for restore.
 4. **Observability is best-effort** — a down server never blocks or breaks a run.
 5. **Installed into `.venv`** via the uv workspace, so spawned skills `import orchestration` with no path hacks.

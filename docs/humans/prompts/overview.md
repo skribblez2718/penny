@@ -19,12 +19,9 @@ The prompt architecture was designed as part of a broader response to these gaps
 
 The original ambition — one universal prompt that raises benchmark performance single-to-double percentage points on any model — is not what the 2024–2026 evidence supports. Prompts are model-specific artifacts: the best format for one family barely overlaps the best format for another, optimized prompts lose ~6–11 absolute points when ported across models, and the generic techniques with big historical effect sizes either apply narrowly (chain-of-thought: math/symbolic only) or failed replication on frontier models entirely (personas-for-accuracy, emotional appeals). See the [Evidence Base](evidence.md) for the numbers and citations.
 
-So the architecture's claim is now two separate claims, each with its own mechanism:
+So the architecture's claim is now narrower:
 
-1. **The universal layer raises the floor and cuts variance.** The Cognitive Frame carries the cross-model survivors — completeness, explicitness, non-contradiction, front-loaded critical rules, structural hygiene, and task-specification discipline. Its job is preventing losses (fabrication, silently-guessed ambiguity, skipped verification), not adding benchmark points.
-2. **Measurable points come from per-model work.** Per-model variants of the swappable layers (Role Definition, Domain Guidance) optimized against a golden task set, plus per-family invocation parameters. The implementation plan lives in `plans/per-model-optimization/`.
-
-Neither claim is taken on faith: the prompt-efficacy eval (north star N6, `scripts/system/evals/README.md`) measures frame-on vs frame-off per model family, ablates the frame section by section, and fires a CRITICAL signal when the frame measurably hurts a family. The frame pays rent or it gets simplified.
+**The universal layer raises the floor and cuts variance.** The Cognitive Frame carries the cross-model survivors — completeness, explicitness, non-contradiction, front-loaded critical rules, structural hygiene, and task-specification discipline. Its job is preventing losses (fabrication, silently-guessed ambiguity, skipped verification), not adding benchmark points.
 
 ## What the Prompt Architecture Is
 
@@ -76,10 +73,6 @@ XML boundary markers create a security architecture that prevents prompt injecti
 
 Content between `<agent_boundary>` and `<system_boundary>` is user-role — it cannot override system instructions. The `skillContext` injection respects this by inserting before `<agent_boundary>`, keeping skill prompts as system-role content.
 
-### 6. Self-Improving Guidance
-
-A behavioral learning loop allows Penny to propose improvements based on patterns in the outcome ledger. The loop *auto-proposes* only Domain Guidance and preference changes (universal-frame learnings are logged for a human, not auto-proposed). Once a human approves an amendment's exact diff, Penny *applies* it to any target — including SYSTEM.md — since approving the diff is the human-in-the-loop; the sole exception is the immutable security-directives block, which is never machine-editable. Every change requires evidence (outcome drawer IDs), Carren review, human approval, and a git commit.
-
 ## The Token Budget Constraint
 
 The Cognitive Frame is injected into every Penny turn and every subagent, so it is the most-multiplied text in the system — we keep it the leanest and cap it as a forcing-function. Our budgets:
@@ -108,9 +101,8 @@ The migration to `.pi/SYSTEM.md` (replacing Pi's default prompt entirely) and th
 
 ## Related Documents
 
-- [Evidence Base](evidence.md) — What the literature supports, what it debunks, and which principles are hypotheses awaiting our own measurement
+- [Evidence Base](evidence.md) — What the literature supports, what it debunks, and which principles are hypotheses
 - [Layer Architecture](layer-architecture.md) — Deep dive on each layer
 - [Assembly Pipeline](assembly-pipeline.md) — How prompts are assembled at runtime
 - [Design Principles](design-principles.md) — Core design principles with rationale
 - [Security Architecture](security-architecture.md) — Boundary markers and injection defense
-- [Self-Improving Guidance](self-improving-guidance.md) — Behavioral learning loop

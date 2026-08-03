@@ -95,8 +95,8 @@ def run() -> Dict[str, Any]:
     }
     keep = summary["floor_on"]["rate"] >= summary["floor_off"]["rate"]
     return {
-        # tune_freshness._check_ablation reads `ts` to age the artifact; without it the
-        # artifact is permanently "stale (no ts)" and the freshness signal is useless.
+        # `ts` ages the artifact for any freshness consumer; without it the
+        # artifact can never be judged fresh.
         "ts": datetime.now(timezone.utc).isoformat(),
         "knob": "research_grounding_floor",
         "toggle_env": None,  # not a registered LOAN: an oracle, not a knowledge table

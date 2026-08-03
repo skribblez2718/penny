@@ -34,7 +34,7 @@ States: `intake` (initial), `generating`, `validating`, `unknown`, `awaiting_cla
 
 The legacy `classify` state is gone. Domain selection is **model-owned** (the keyword `detect_domain` table was deleted per the Bitter-Lesson gate): `initial_transition` enumerates the guidance packs under the skill's `resources/` (via `available_domains`), synthia declares the best-fit `domain` in its SUMMARY, and `route_after` stores it (`constraints["domain"]` wins; an unknown declaration falls back to `generic`). Stashed in `ctx.extras["prd"]["domain"]`.
 
-`validating` is **evidence-gated** (Rec 4): `PRD_VALIDATE` declares an `evidence` field the engine's contract requires non-empty, so vera cannot PASS a PRD on a bare assertion — the captured check output flows to `ctx.verify_evidence` and the outcome ledger.
+`validating` is **evidence-gated** (Rec 4): `PRD_VALIDATE` declares an `evidence` field the engine's contract requires non-empty, so vera cannot PASS a PRD on a bare assertion — the captured check output flows to `ctx.verify_evidence`.
 
 ### Transitions
 

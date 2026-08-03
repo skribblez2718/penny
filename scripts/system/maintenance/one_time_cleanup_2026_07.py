@@ -2,7 +2,7 @@
 """One-time MemPalace cleanup (2026-07).
 
 Heals the accreted store audited in July 2026: it canonicalizes the
-``wing_penny`` / ``penny`` split, purges test-junk wings and signals, backfills
+``wing_penny`` / ``penny`` split, purges test-junk wings, backfills
 the new lifecycle metadata (``recall_count`` / ``last_recalled_at`` / ``type``)
 onto legacy drawers so decay and telemetry work uniformly, drops the three
 orphan ChromaDB collections, removes the dead shadow stores, and VACUUMs.
@@ -38,10 +38,6 @@ _BATCH = 1000
 
 # Infer a drawer `type` from its room / id when the metadata lacks one.
 _ROOM_TYPE = {
-    "signals": "signal",
-    "outcomes": "outcome",
-    "system_amendments": "amendment",
-    "digests": "digest",
     "diary": "diary_entry",
 }
 

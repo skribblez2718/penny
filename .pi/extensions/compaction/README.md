@@ -5,7 +5,7 @@ Enhances Pi's default compaction into a **resumability checkpoint**: when the se
 The summary spliced into context has two parts:
 
 1. **A model-written prose brief** — the session model reads the ACTUAL evicted conversation (the same leverage mechanism Pi's default uses, so it improves as models improve) and writes the brief under a fixed section contract: goal, active skill, current work, in-flight orchestration runs, pending, next steps, key decisions, unresolved errors, critical context. It is given the previous brief (iterative context) and a **session-scoped grounded-state digest** (real run/room/decision ids it may cite but never invent). Penny re-orients by reading.
-2. **A `[RESUME-REFS v2]` appendix** — built **deterministically by code**, never the model: real, dereferenceable addresses — `run_id` + engine state with a concrete `resume=skill(...)` call, mempalace room/drawer IDs, outcome-ledger decision IDs, KG entities, verbatim tool-call examples. Anything the token budget couldn't carry is recoverable through these pointers instead of being lost.
+2. **A `[RESUME-REFS v2]` appendix** — built **deterministically by code**, never the model: real, dereferenceable addresses — `run_id` + engine state with a concrete `resume=skill(...)` call, mempalace room/drawer IDs, KG entities, verbatim tool-call examples. Anything the token budget couldn't carry is recoverable through these pointers instead of being lost.
 
 When no summarization model is reachable, a **tagged LOAN fallback** (`compaction_deterministic_summary`) assembles the prose deterministically instead; when that loan is ablated too, the extension yields to Pi's default. It never abandons the summary silently.
 
@@ -13,7 +13,7 @@ Penny's consumer-side instructions live in `docs/penny/compaction-protocol.md` (
 
 ## Session Scoping (why old context stopped leaking)
 
-Grounded state is scoped to THIS conversation's work: the session ids named by `skill` tool results in the window **plus** ids carried in prior compaction refs. Pending engine runs, mempalace rooms, outcome-ledger decisions, and KG entities are all filtered to that scope. A wedged run or a decision from a **different, older session** (checkpointer rows persist indefinitely) is therefore never treated as the current goal/work — it surfaces only under an explicit `other pending runs (other sessions — verify before resuming)` label in the refs. This is what fixed the "compaction produced context from a previous session" symptom.
+Grounded state is scoped to THIS conversation's work: the session ids named by `skill` tool results in the window **plus** ids carried in prior compaction refs. Pending engine runs, mempalace rooms, and KG entities are all filtered to that scope. A wedged run from a **different, older session** (checkpointer rows persist indefinitely) is therefore never treated as the current goal/work — it surfaces only under an explicit `other pending runs (other sessions — verify before resuming)` label in the refs. This is what fixed the "compaction produced context from a previous session" symptom.
 
 ## Goal Recency (schema 2.3.0)
 
@@ -37,7 +37,6 @@ Supersession: a **completed** skill whose goal is displaced by a later ad-hoc us
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
 | In-flight run state | The orchestration engine's durable run_id checkpointer (`.penny/orchestration.db`, or `PENNY_ORCH_DB`), read read-only via the venv Python | Reconstructed from mempalace drawer text                                |
 | What agents wrote   | Mempalace room/drawer **pointers** via `memory_bridge.py`, scoped to real session IDs (skill results + checkpointer rows)                  | Regex-inferred agent/phase/completion state                             |
-| Decisions           | Outcome-ledger drawers (real drawer IDs as `decision_id` when available)                                                                   | —                                                                       |
 | Session IDs         | Skill tool results and checkpointer rows only                                                                                              | Fabricated (`skill-${Date.now()}`) — a fake ID silently matches nothing |
 
 ## Failure Policy: Degrade, Never Abandon
@@ -60,7 +59,6 @@ compactionExtension handler
     ├──► computeScopedSessionIds (skill-result ids ∪ prior-refs ids) — the scope
     ├──► queryEngineRuns (all pending) → partitionRunsByScope (scoped vs other-session)
     ├──► in parallel, ALL scoped: detectPendingState · mempalace rooms · KG entities
-    │                 · outcome-ledger decisions
     ├──► buildArtifact (zod-validated PennyCompactArtifact 2.3.0) + grounded digest
     ├──► generateModelSummary (model reads the evicted conversation + prev brief + digest)
     │        └─ null → deterministic LOAN fallback → (ablated) yield to Pi default

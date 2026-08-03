@@ -10,10 +10,6 @@ A personal AI assistant built on [Pi](https://github.com/mariozechner/pi-coding-
 
 - [Overview](#overview)
 - [Architecture](#architecture)
-- [Self-Improvement Loop](#self-improvement-loop)
-- [Prompt Efficacy](#prompt-efficacy--does-the-frame-pay-rent)
-- [Ambient Watchers](#ambient-watchers)
-- [Weekly Digest](#weekly-digest)
 - [Progress Heartbeats](#progress-heartbeats)
 - [Confidence & Vocabulary](#confidence--vocabulary)
 - [AGENTS.md Indexing](#agentsmd-indexing)
@@ -32,9 +28,6 @@ Penny is not a single prompt or a single model call. She is a layered reasoning 
 - **Composes the right instructions** for the current moment via five separated prompt layers
 - **Delegates complex work** to specialized agents with isolated context windows
 - **Remembers across sessions** through [MemPalace](https://github.com/milla-jovovich/mempalace) — persistent memory powered by ChromaDB
-- **Learns from mistakes** via a self-improvement loop that clusters failed predictions by root cause and drafts concrete amendments for review
-- **Surfaces problems proactively** through ambient watchers that run in the background
-- **Reports accountability** through weekly digests that aggregate outcomes, signals, and trends
 
 ## Architecture
 
@@ -50,52 +43,6 @@ Penny's prompt system uses five **named layers** each with a single responsibili
 
 Skills are Python state machines that dispatch agents, process results, and produce structured output. All workflow skills run on a shared `orchestration` engine — each a `BasePlaybook` subclass with durable, checkpointed run state (`run_id`-keyed SQLite), so a crashed run resumes automatically. Agents communicate exclusively through MemPalace — Penny's context stays clean.
 
-## Self-Improvement Loop
-
-Penny learns from her own mistakes. The self-improvement loop runs automatically:
-
-1. **Outcome Ledger** — Before consequential actions, Penny records predictions. Afterward, actual results are compared (MATCH / PARTIAL / MISMATCH), tagged with a domain and — on a miss — an open-vocabulary failure signature, and stored in MemPalace.
-2. **Compression Loop** — A daily cron job queries recent outcomes, clusters recurring failures by root cause, has a model judge which layer each learning targets (domain guidance, preferences, config, or rejected universal), and drafts a concrete `old → new` diff with a rationale for each.
-3. **Amendment Review** — Proposed amendments are stored as PENDING in MemPalace. A human or Penny reviews, approves, or rejects them.
-4. **Amendment Application** — Approving the exact diff _is_ the human-in-the-loop, so an approved amendment is applied to its target file — any file, **including SYSTEM.md**. Two guardrails keep this safe: the diff must be concrete (empty diffs are refused at approve and apply), and the immutable security-directives block (`<system_directives>` / `<system_boundary>`) is never machine-editable, even with approval. The conservatism lives in what the loop _proposes_, not in what an approval may _touch_: the auto-generator only emits applicable diffs for Domain Guidance, preferences, and config, and a learning that would touch SYSTEM.md's Cognitive Frame is classified `REJECTED_UNIVERSAL` and logged for a human to author (its auto-generated target is a placeholder, never an applicable file). Once a human writes that SYSTEM.md diff, approving it applies like any other — the blast radius of an *unreviewed* universal edit is what stays off-limits, not universal edits as such.
-
-This creates a feedback loop where prediction errors become actionable improvements to skill prompts and system configuration.
-
-**Running it interactively** — The `/tune` prompt walks through the entire cycle in-conversation: rate recent unrated sessions (MATCH / PARTIAL / MISMATCH, with a failure category on misses), generate amendments from the clustered failures, review/approve/apply them (application is gated by the trajectory ratchet), then run evals and the trust dashboard. The user's judgment is authoritative on every rating and approval — Penny presents faithfully and records, never deciding a rating itself.
-
-## Prompt Efficacy
-
-Penny's core claim is that her universal Cognitive Frame (`.pi/SYSTEM.md`) makes models *measurably* better — not just differently-worded. That claim is A/B tested, never asserted. A curated golden task set (extraction, code reasoning, ambiguity-handling, fabrication-resistance, risk-surfacing, calibration, tradeoff-naming, synthesis) is replayed through headless Pi in **matched arms** — **frame-on** (SYSTEM.md) vs **frame-off** (a *bare model* — a *near-empty* system prompt with no instructions, deliberately *not* Pi's own default) — per model family, from a hermetic sandbox with sessions, tools, skills, and context files disabled so the system prompt is the *only* variable. Measuring against the bare model rather than Pi's pre-baked default means a positive delta shows the frame improved the *model itself*, not merely that it beat the platform's built-in prompt. Graders are **behavior-blind**: they score task **success** (right answer, right structure, right caution), never frame vocabulary — a grader that rewarded the word "assumptions" would measure compliance, not value.
-
-The per-family **frame-on − frame-off** pass-rate delta feeds the regression ratchet (north star: *"the frame pays rent"*): overall gain has a hard floor at −2pp, and any family the frame measurably *hurts* — a deficit beyond a `max(5pp, 2/n)` noise margin — fires a CRITICAL degradation signal into the next session brief. The expensive matrix runs on demand (`make evals-prompt-efficacy`) or automatically via `/tune deep` when the artifact has gone stale **or been invalidated by a frame edit**; `make evals` and the nightly cron only *read* the artifact, so routine runs never make a model call.
-
-Concretely, one task asks what version 3.2.1 of the `penny-sca-toolkit` PyPI package changed — a package that does not exist. Frame-off, the bare model *invents* a plausible changelog; frame-on, the same model answers that it can't verify any such release and refuses to guess. That single flip — confident hallucination → a calibrated "I cannot verify X" — is the whole system in miniature: **truth over helpfulness**, measured on the same model with the frame as the only change. The set exercises the same discipline across the other families too — surfacing a destructive `/dev/sdb` wipe as irreversible, catching *two* bugs where a bare model fixes one, and refusing to answer a nondeterministic program's "exact" output.
-
-## Ambient Watchers
-
-Background watchers that generate signals before you ask:
-
-| Watcher              | What It Monitors                               | Signal Trigger                           |
-| -------------------- | ---------------------------------------------- | ---------------------------------------- |
-| **Mismatch Rate**    | Outcome ledger MISMATCH count                  | >N mismatches in 7 days                  |
-| **Confidence Trend** | Confidence level distribution                  | >50% low-confidence (POSSIBLE/UNCERTAIN) |
-| **Mempalace Growth** | Total drawer count in Penny wing               | >500 drawers                             |
-| **Task Staleness**   | Decisions stuck in PARTIAL with no newer MATCH | Stale >7 days                            |
-
-Watchers run via cron twice daily and on skill invocation. Signals are stored in MemPalace and surfaced at session start. The tiered memory archiver runs alongside the watchers to age out T2 scratch — per-skill retention is declared once in `scripts/system/tiered_memory/skill_rooms.json` (the single source of truth new skills register into) — while keeping curated T3 knowledge, cold-archiving each expired drawer to JSONL before deletion.
-
-## Weekly Digest
-
-Every Monday, a digest is generated and stored in MemPalace:
-
-- **Outcome tallies** — MATCH / PARTIAL / MISMATCH counts with domain breakdowns
-- **Confidence distribution** — CERTAIN / PROBABLE / POSSIBLE / UNCERTAIN
-- **Attention flags** — 2+ MISMATCHes in the same domain, critical pending signals
-- **Amendment summary** — proposed / approved / rejected / pending counts
-- **Recommendations** — actionable items derived from the metrics
-
-The digest is rendered to markdown, stored in MemPalace (`penny/digests`), and printed to stdout for cron capture.
-
 ## Progress Heartbeats
 
 Long-running agents are monitored with staleness-based progress tracking instead of fixed kill-timers:
@@ -109,7 +56,7 @@ Long-running agents are monitored with staleness-based progress tracking instead
 
 Penny signals **calibrated certainty where it matters** — keeping "I verified this" distinct from "this is likely" and "I'd need to check," and flagging assumptions, unverified claims, and what would change the answer. Uncertainty is surfaced where it changes a decision rather than stamped on every sentence.
 
-Four confidence levels — **CERTAIN → PROBABLE → POSSIBLE → UNCERTAIN** — are the controlled vocabulary the machinery reasons over: the outcome ledger records a `confidence_at_action` on each prediction, the weekly digest tallies their distribution, and the confidence-trend watcher fires when low-confidence work (POSSIBLE / UNCERTAIN) dominates.
+Four confidence levels — **CERTAIN → PROBABLE → POSSIBLE → UNCERTAIN** — are the controlled vocabulary Penny and her agents reason and report in.
 
 An **instruction hierarchy** — Truth > Clarity > User intent > Thoroughness — resolves rule conflicts: accuracy outranks helpfulness, ambiguity is resolved before work begins, and verification is never skipped. Specialized documents — coding standards, agent and skill definitions — define their own domain terms where precision earns it.
 
@@ -133,7 +80,7 @@ Penny's system prompt includes immutable security directives:
 Three trigger-gated protocols in `docs/penny/` that activate on specific conditions:
 
 - **Clarification Protocol** — activates when a task is under-specified, irreversible, high-stakes, or confidence ≤ POSSIBLE. Five steps: identify knowns, surface assumptions, flag unknowns, classify (BLOCKER / NAVIGABLE / IRRELEVANT), irreversibility check.
-- **Compaction Resume Protocol** — activates when a compaction summary with a `[RESUME-REFS v2]` block appears in context. Penny reorients from the prose brief, resumes in-flight orchestration runs from the engine checkpointer refs, and dereferences mempalace/KG/outcome-ledger pointers on demand.
+- **Compaction Resume Protocol** — activates when a compaction summary with a `[RESUME-REFS v2]` block appears in context. Penny reorients from the prose brief, resumes in-flight orchestration runs from the engine checkpointer refs, and dereferences mempalace/KG pointers on demand.
 - **Agent Escalation** — agents cannot use the questionnaire tool directly. When they need user clarification, they escalate to Penny with `needs_clarification: true`.
 
 ## Observability
@@ -142,8 +89,7 @@ A FastAPI + SQLite backend that ingests real-time events and structured logs fro
 
 - **Events** — session lifecycle, messages, tool results, agent boundaries, model changes (14-day retention)
 - **Operational logs** — structured JSON log entries from all extensions via the shared logger
-- **Watcher logs** — ambient watcher execution logs, kept logically separate for diagnostics
-- **Query API** — REST endpoints for querying logs, session history, and watcher logs
+- **Query API** — REST endpoints for querying logs and session history
 
 Runs as a plain Python process (`python -m observability`), auto-started by the Pi observability extension when Pi launches. The server bounds its own database size in-process (size-based rotation) — no Docker, no systemd timer required.
 
@@ -189,7 +135,7 @@ This runs:
    - **MemPalace initialization** — palace directory, wing config, memory bridge test
    - **Observability backend** — Python server (auto-started by the Pi extension), in-process DB size rotation
    - **External tools** — semgrep, jsluice, and other CLI tools
-   - **Cron jobs** — ambient watchers (twice daily), self-improvement compression (daily), weekly digest (Mondays)
+   - **Cron jobs** — tiered-memory archiver
 
 Then copy `.env.example` to `.env` and fill in your values:
 

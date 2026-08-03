@@ -37,14 +37,6 @@ rooms:
     description: Session summaries and end-of-session notes
   - name: diary
     description: Agent diary entries (AAAK format)
-  - name: outcomes
-    description: Outcome ledger — MATCH/MISMATCH ratings and rationale
-  - name: signals
-    description: Ambient watcher signals
-  - name: system_amendments
-    description: Self-improvement proposals and amendments
-  - name: digests
-    description: Weekly digests
   - name: projects
     description: Per-project working memory and context
   - name: user

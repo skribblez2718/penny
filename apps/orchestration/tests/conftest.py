@@ -34,7 +34,7 @@ def _clear_skill_model_routing_env(monkeypatch):
     generically by ``test_uncertainty_retry.py``, which sets it explicitly.
 
     ``PI_FAILURE_MODE_MODEL`` is the same live-model hazard as the guards above: set,
-    the outcome ledger's failure-mode classification spawns a model instead of
+    failure-mode classification spawns a model instead of
     matching the keyword table the tests assert.
     """
     _PREFIXES = ("JSA_", "SCA_", "PENNY_ABLATE_")

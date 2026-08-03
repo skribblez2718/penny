@@ -53,7 +53,7 @@ Before any feature or fix can be called complete, it must pass ten checks. This 
 | 9 | Prompt architecture | Token budgets are respected and domain content stays out of the Cognitive Frame |
 | 10 | False claims audit | No inflated test counts or overstated coverage |
 
-If any check fails, the change is rolled back, fixed, and all checks are re-run. Claiming completion with a failed check is itself recorded as a `MISMATCH` in the outcome ledger.
+If any check fails, the change is rolled back, fixed, and all checks are re-run.
 
 ## What This Means for Contributors
 

@@ -58,8 +58,7 @@ read-only `echo` branch per sub-query — bounded by `constraints["max_fan_width
 (default 8). The per-mode `MAX_SUB_QUERIES_BY_MODE` table is replaced by one
 `max_sub_queries` budget (default 4, clamped to the fan width). **Critique and
 validation are evidence-gated** (Rec 4): `_CRITIQUE_C` and `RESEARCH_VALIDATE`
-require a non-empty `evidence` field, which flows to `ctx.verify_evidence` and
-the outcome ledger.
+require a non-empty `evidence` field, which flows to `ctx.verify_evidence`.
 
 ### State phases
 

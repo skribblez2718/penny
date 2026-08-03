@@ -124,7 +124,7 @@ CONTRACTS: dict[str, dict[str, dict[str, type]]] = {
     },
     LEARN: {
         "required": {"learn_complete": bool},
-        "optional": {"ledger_id": str, "amendments": list},
+        "optional": {},
     },
 }
 

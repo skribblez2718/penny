@@ -44,7 +44,6 @@ Never reconstruct run state from memory searches — the checkpointer already ho
 When you need detail the prose didn't carry:
 
 - `room:` → `memory_smart_search(query=<topic>, room=<room>)` or read the listed drawers directly. Rooms marked `(active session)` belong to in-flight work.
-- `decision:` → the outcome-ledger drawer holding the full decision record.
 - `kg:` → `memory_kg_query(entity)` or `memory_kg_timeline(entity)`.
 - `tool-ok:` / `tool-fix:` → verbatim tool-call examples from before compaction. Follow the `tool-ok` shapes; avoid repeating the `tool-fix` failures.
 

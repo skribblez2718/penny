@@ -203,7 +203,6 @@ _STRATEGY_MODEL_ENV = "PI_STRATEGY_MODEL"
 #   * planned GATE_STATES — human approval seams (safety, not capability);
 #   * ``progress_check`` stalls — the run is stuck, so re-running it is the one thing
 #     already known not to work;
-#   * the autonomy gate — safety.
 # Uncertainty is not the same thing as high stakes; only the latter warrants a human.
 _UNCERTAINTY_RETRY_ENV = "PENNY_UNCERTAINTY_RETRY"
 
@@ -934,7 +933,7 @@ class BasePlaybook:
 
     def _capture_evidence(self, summary: dict) -> None:
         """Stash a SUMMARY's non-empty ``evidence`` field on the context (last-write-wins)
-        so the outcome ledger records outcome+evidence, not outcome alone.
+        so a run records outcome+evidence, not outcome alone.
 
         Captured VERBATIM and COMPLETE. This previously kept only the first 5 items,
         each clipped to 300 chars — which discarded exactly the captured tool output
@@ -1002,7 +1001,7 @@ class BasePlaybook:
     def _task_summary(self, state: str, spec: PrimitiveSpec, ctx: RunContext) -> str:
         parts = [spec.task_hint, f"Goal: {ctx.goal}"]
         # No retrieved-memory injection here (see start()): a directive carries this
-        # run's facts, never distilled content from prior runs or pending amendments.
+        # run's facts, never distilled content from prior runs.
         parts.extend(p for p in self.task_context_parts(state, ctx))
         if ctx.iteration:
             parts.append(f"(retry iteration {ctx.iteration + 1}/{ctx.max_iterations})")

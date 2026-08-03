@@ -26,7 +26,7 @@ skill({ skill_name: "learn", goal: "Build a study companion for the quantum cour
 ### Bitter-Lesson / atomic-loops compliance
 
 - **Ingest topology is model-emitted** (arrangement 4). The `scoping` state (echo) quickly scans the source and emits `ingest_branches`; `route_after` turns them into `ctx.extras["dynamic_branches"]["ingesting"]` and the engine fans out one read-only `echo` branch per focus, bounded by `max_fan_width`. A caller `constraints.ingest_branches` supplies the topology directly and skips `scoping`. The legacy 3-focus split (content / conventions / assessment) survives only as the **tagged LOAN** `learn_default_ingest_topology` (`LEARN_INGEST_DEFAULT`), used when scoping emits nothing; ablated, an empty scoping output escalates to the user rather than baking the fixed decomposition.
-- **Verification is evidence-gated** (Rec 4): `LEARN_VERIFY` is an executed oracle (mechanical conformance + recomputation of every quantitative answer); its contract requires a non-empty `evidence` field carrying the recomputation transcripts, so `verified: true` on a bare assertion is rejected. `LEARN_CRITIQUE` likewise requires `evidence` (what carren examined). Both flow to `ctx.verify_evidence` and the outcome ledger.
+- **Verification is evidence-gated** (Rec 4): `LEARN_VERIFY` is an executed oracle (mechanical conformance + recomputation of every quantitative answer); its contract requires a non-empty `evidence` field carrying the recomputation transcripts, so `verified: true` on a bare assertion is rejected. `LEARN_CRITIQUE` likewise requires `evidence` (what carren examined). Both flow to `ctx.verify_evidence`.
 - **Honest exhaustion.** The verify⇄fix and critique loops are bounded by `max_iterations`; on budget exhaustion the run completes with `met=False` and the unresolved violations/issues, never a fabricated pass; a stalled loop escalates.
 - **Recall.** `_task_summary` seeds the first agent directive with distilled lessons from prior runs (advisory).
 - **HITL.** `charter_gate` pauses for human approval of the design before mass authoring — including the **Assessment Blueprint** (format quotas, skill ceilings, exam metadata) and any unresolved **prerequisite-inventory** rows, so the difficulty decision and the assumed-knowledge decision are the human's, not a by-product of authoring.
@@ -44,7 +44,7 @@ echo (ingest, READ-ONLY), annie (curriculum design + conventions canon), skribbl
 ## Verification
 
 - [ ] Playbook tests pass: `python3 -m pytest apps/orchestration/tests/test_learn_playbook.py`
-- [ ] `LEARN_VERIFY`/`LEARN_CRITIQUE` reject empty evidence; `verify_evidence` lands in ctx + ledger
+- [ ] `LEARN_VERIFY`/`LEARN_CRITIQUE` reject empty evidence; `verify_evidence` lands in ctx
 - [ ] Ingest topology: caller override drives the fan; loan-ablated + no caller topology fails loud
 - [ ] `resources/flow.html` matches `LearnMachine` transition-for-transition
 

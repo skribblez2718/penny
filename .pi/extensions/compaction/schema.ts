@@ -3,7 +3,7 @@
  *
  * v2.1.0: the artifact is a resumability checkpoint — a prose brief plus
  * pointers into durable stores (engine checkpointer, mempalace, KG,
- * outcome ledger). These schemas are the single source of truth for
+ * knowledge graph). These schemas are the single source of truth for
  * TypeScript types AND runtime validators.
  *
  * 2.3.0 is an ADDITIVE bump: model-owned-prose provenance (`summary_source`,

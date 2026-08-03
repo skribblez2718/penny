@@ -40,7 +40,7 @@ intake ──start_generate──▶ generating ──generate_done──▶ val
 
 Domain selection is **model-owned**: `intake` lists the guidance packs under `resources/`, and synthia declares the best-fit `domain` in its SUMMARY (a caller `constraints.domain` short-circuits the choice). The legacy keyword `detect_domain` table is deleted; the `classify`/echo state was already gone.
 
-- **Evidence-gated validation** (Rec 4): vera's `PRD_VALIDATE` contract requires a non-empty `evidence` field — captured check output (IDEAL_STATE schema result, section/coverage counts). The engine rejects an empty-evidence PASS, so a PRD is never marked valid on a bare assertion; the evidence rides to the outcome ledger.
+- **Evidence-gated validation** (Rec 4): vera's `PRD_VALIDATE` contract requires a non-empty `evidence` field — captured check output (IDEAL_STATE schema result, section/coverage counts). The engine rejects an empty-evidence PASS, so a PRD is never marked valid on a bare assertion.
 
 ### Key flows
 

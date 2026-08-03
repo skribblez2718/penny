@@ -64,7 +64,6 @@ and is never delegated to.)
 |---|---|
 | `engine.py` (`BasePlaybook`) | FSM engine: start/step/status, summary gatekeeper, escalate, planned gates, parallel fan-out (static or runtime-emitted), resume, checkpoint, emit, budgets + honest-exhaustion backstop, retry, default-on loop guards, model-owned routing helper |
 | `loans.py` | LOAN registry + Ablate hooks: every piece of "current model is weak" scaffolding is tagged (rationale, dates) and toggleable via `PENNY_ABLATE_<LOAN_ID>=1` for scaffold-ON/OFF ablation runs |
-| `recall.py` | Recall (atom F2): best-effort run-start retrieval of distilled lessons from MemPalace `penny/system_amendments`, seeded into the FIRST agent directive as advisory context |
 | `primitives/` (`PrimitiveSpec` / `ParallelSpec`) | Reusable operation descriptors — name, default agent, per-state SUMMARY contract, task hint; a playbook binds them to its own states (and fan-out branches) via `PRIMITIVE_BY_STATE` / `PARALLEL_BY_STATE` |
 | `playbooks/` | One `BasePlaybook` subclass per domain skill (e.g. `code.py`) — each defines its own states, `PRIMITIVE_BY_STATE`, `route_after`, `done_predicate` — plus `reference_cycle.py` (`ReferenceCycle`, the engine test fixture) and the registry |
 | `checkpointer.py` | Durable SQLite persistence by `run_id` (replaces `--state`/`_force_state`) |
@@ -119,7 +118,7 @@ and wires the seams it needs:
 
 > **Removed:** `PENNY_RECALL` and the run-start lesson-recall mechanism it gated. The
 > engine no longer injects anything retrieved from MemPalace into an agent directive —
-> it was delivering unapproved amendment proposals into prompts. See
+> it was delivering unreviewed stored text into prompts. See
 > `tests/test_no_memory_injection.py`.
 
 ## Tests & CI guards

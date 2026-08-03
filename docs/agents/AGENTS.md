@@ -6,7 +6,7 @@
 - [Prompts](prompts/AGENTS.md): Layer Reference, standards, cognitive frame, role definitions
 - [Memory](memory/AGENTS.md): wing/room schema & retention, integration patterns (incl. large-content & dedup), and knowledge-graph predicate conventions
 - [Orchestration](orchestration/AGENTS.md): The shared FSM engine — `BasePlaybook` subclasses, per-state contracts, durable checkpointer, self-recovery
-- [Capabilities](capabilities/AGENTS.md): Outcome ledger, ambient watchers, skills, tiered memory, self-improvement, digest, unknown/verification states
+- [Capabilities](capabilities/AGENTS.md): Skills, tiered memory, behavioral ratchet, observability, unknown/verification states
 - [State Management](state-management/AGENTS.md): python-statemachine reference, orchestration integration, and skill patterns
 - [Architecture](architecture/AGENTS.md): Canonical implementations, Pi alignment deviations, case studies, and coding standards
 - [Documentation](documentation/AGENTS.md): Rules for AGENTS.md files — indexes only, never content

@@ -30,7 +30,7 @@ ON ``observed``
 ---------------
 Every case here is currently SYNTHETIC and that is stated honestly rather than papered
 over. research runs could not previously be mined for real failures: the playbook never
-populated ``ctx.verify_gaps``, so the outcome ledger recorded an empty gap list for
+populated ``ctx.verify_gaps``, so the run recorded an empty gap list for
 every run and a report shipped with unsupported claims was indistinguishable from a
 fully grounded one. P1 fixed that. As real runs accumulate, replace synthetic cases with
 observed ones and set ``observed=True`` — a corpus grounded in real failure modes is

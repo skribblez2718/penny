@@ -37,11 +37,11 @@ Loops are not alternatives — they **nest**. A production system layers seven c
 | **L3** | Retry / repair (bounded) | On failure, repair and retry under a budget | `max_iterations`, `learn_retry`/`learn_exhausted` |
 | **L4** | Human-in-the-loop gates | Planned checkpoints for approval or escalation | Planned gates, UNCERTAIN → `awaiting_clarification` |
 | **L5** | Orchestration FSM | Explicit states, typed transitions, checkpointing, resume | `BasePlaybook` engine + durable checkpointer |
-| **L6** | Reflection / memory | Learning between runs without weight updates | MemPalace, LEARN, daily compression loop |
-| **L7** | Background / scheduled | Time-triggered polling, monitoring, maintenance | Watchers, digests, heartbeats |
+| **L6** | Reflection / memory | Learning between runs without weight updates | MemPalace, LEARN |
+| **L7** | Background / scheduled | Time-triggered polling, monitoring, maintenance | Heartbeats |
 
 ```
-┌─ L7 Background loops (cron, watchers, digests) ────────────────────┐
+┌─ L7 Background loops ─────────────────────────────────────────────┐
 │ ┌─ L6 Reflection loop (learning across runs) ───────────────────┐ │
 │ │ ┌─ L5 Orchestration loop (FSM, checkpointed) ───────────────┐ │ │
 │ │ │ ┌─ L4 HITL gates (approve / refine / deny) ────────────┐ │ │ │
@@ -92,8 +92,6 @@ Penny's architecture is already aligned with what the research prescribes:
 2. **The engine owns continuity, not the model.** Sessions are memoryless. The durable `run_id` checkpointer persists state after every step. `recover_pending` auto-resumes interrupted runs. Everything routing-relevant lives in `RunContext`, never in an agent's context window.
 
 3. **The FSM is a safety mechanism.** An FSM whose only edges are the intended loop edges cannot wander into an unintended cycle. The graph boundary defines what actions are even possible, reducing the frequency and severity of runaway loops.
-
-4. **Six of seven loop classes have a running implementation; L6's read side is deliberately human.** L6 reflection writes continuously (MemPalace, daily compression → amendment proposals). Its read side is **not** automatic injection into agents: a 2026-07-28 audit found the engine was seeding agent prompts from the amendment room with no status filter, so proposals the operator had never approved — and some explicitly rejected — were reaching models. That path was removed. Learnings close the loop by being reviewed, approved, and then written into the actual prompt/agent files.
 
 ## Five Leverage Points the Engine Has Since Acted On
 

@@ -368,9 +368,9 @@ class Database:
                 # DDL as fresh-init. Existing data untouched.
                 await self._db.executescript(ORCH_SCHEMA_SQL)
             if from_version < 6:
-                # v5 -> v6: the ambient-watcher feature was removed; drop its
-                # log table (and implicitly its indexes). Existing databases
-                # migrate forward cleanly; the base schema no longer creates it.
+                # v5 -> v6: drop the retired watcher_logs table (and implicitly
+                # its indexes). Existing databases migrate forward cleanly; the
+                # base schema no longer creates it.
                 await self._db.execute("DROP TABLE IF EXISTS watcher_logs")
             await self._execute(
                 "UPDATE meta SET value = ? WHERE key = 'schema_version'",

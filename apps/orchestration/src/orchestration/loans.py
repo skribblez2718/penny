@@ -193,7 +193,7 @@ LOANS: dict[str, Loan] = {
                 "constraints.max_iterations always wins. Ablated, the engine's generic "
                 "default (3) stands instead of the prd-specific bump, so an ablation run "
                 "measures whether the extra rounds still buy anything. Repay by deriving "
-                "the budget from observed convergence in the outcome ledger."
+                "the budget from observed convergence across runs."
             ),
             added="2026-07-28",
             review_by="2026-10-01",
@@ -213,7 +213,7 @@ LOANS: dict[str, Loan] = {
                 "A caller constraints.max_iterations always wins. Ablated, the engine's "
                 "generic default (3) stands, so an ablation run measures whether the "
                 "extra rounds buy anything. Repay by deriving the budget from observed "
-                "convergence in the outcome ledger rather than a tier multiplier."
+                "convergence across runs rather than a tier multiplier."
             ),
             added="2026-08-02",
             review_by="2026-11-01",

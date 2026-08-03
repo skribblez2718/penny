@@ -19,7 +19,7 @@ from typing import Any
 # DROPPED on load instead of raising, so a run checkpointed by previous code still
 # resumes. ``recall_lessons`` held MemPalace content injected into the first agent
 # directive; that mechanism was removed because it delivered PENDING/REJECTED
-# amendment proposals into agent prompts, bypassing the approval gate. Agent context
+# unreviewed stored text into agent prompts, bypassing review. Agent context
 # comes from .pi/agents/<agent>.md + skill orchestration only.
 _RETIRED_KEYS: frozenset[str] = frozenset({"recall_lessons"})
 
@@ -80,7 +80,7 @@ class RunContext:
     verify_gaps: list[Any] = field(default_factory=list)
     # Capped digest of the most recent non-empty SUMMARY `evidence` field the
     # engine saw (single or parallel step). Written by the engine, read by the
-    # outcome ledger — "Ledger records outcome+evidence" (atomic-loop checklist).
+    # Verification evidence captured for the run.
     verify_evidence: list[Any] = field(default_factory=list)
     iteration: int = 0
     max_iterations: int = 3

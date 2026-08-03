@@ -1,8 +1,7 @@
 """Shared model-detect primitive (Bitter-Lesson #8).
 
 One place for the headless-pi call that every model-participation site was
-hand-rolling (prompt_efficacy_judge, capture, compression_loop, target_classifier,
-amendment_generator), plus a generic ``detect(artifact, question) ->
+hand-rolling, plus a generic ``detect(artifact, question) ->
 {answer, evidence, confidence}`` classifier the skill ontology-kills
 (#9/#13/#15/#16) build on instead of hand-coded keyword tables.
 

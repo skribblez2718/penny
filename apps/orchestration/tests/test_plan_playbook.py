@@ -436,7 +436,7 @@ def test_critique_rejects_empty_evidence(cp):
 def test_critique_evidence_lands_on_context(cp):
     _to_critiquing(cp)
     _step(cp, "carren", _critique("NEEDS_REVISION", ["missing rollback"]))
-    assert cp.load(RID).context.verify_evidence  # captured for the outcome ledger
+    assert cp.load(RID).context.verify_evidence  # captured on the run
 
 
 # ---------------------------------------------------------------------------

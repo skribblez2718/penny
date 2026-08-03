@@ -682,7 +682,7 @@ def tool_add_drawer(params: dict) -> dict:
         }
 
     # Duplicate guard on the whole document (before any chunking). System
-    # rewrites of an existing drawer (e.g. an amendment status flip, which is
+    # rewrites of an existing drawer (e.g. a status flip, which is
     # delete-then-re-add of near-identical JSON) pass skip_duplicate_check —
     # otherwise the guard can reject the re-add AFTER the delete and lose the
     # record. Model-initiated adds must never set it.

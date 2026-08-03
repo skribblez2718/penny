@@ -144,75 +144,8 @@ showing it, so two runs stop being comparable. Pinning is the correct choice the
 
 | Literal | Location | Why pinned |
 | --- | --- | --- |
-| `JUDGE_MODEL = "openai-codex/gpt-5.6-luna"` | `evals/prompt_efficacy_judge.py` | PRD **REQ-003**: *"a CONCRETE model id on purpose: eval artifacts must stay reproducible across model upgrades (unlike agents, which use tier aliases)."* Note it pins `gpt-5.6-luna`, **not** the `luna` alias — see below. Enforced by `test_prompt_efficacy_judge.py`. Override per-run via `PI_EVAL_JUDGE_MODEL`. |
-| `default_models` (6 entries) | `evals/golden_prompt_tasks.json` | The eval comparison roster. Aliasing breaks longitudinal comparability of `.penny/evals/prompt_efficacy/run-*.json`. |
 | `DEFAULT_DRIVER` / `DEFAULT_JUDGE` | `trajectory/run_trajectory.py` | Trajectory artifacts must stay comparable across runs. Both are Ollama, not Anthropic. Override with `--driver-model` / `--judge-model`. |
 | `anthropic/claude-haiku-4-5` | `ablation/detectors.py`, `ablation/run_code_detection_ablation.py` | The cheap **model arm** of a manual ablation experiment; the arm must be a fixed, nameable model or the ablation means nothing. Override with `--model`. |
 
-### Not pinned at all (no action needed)
-
-`PI_SELFIMPROVE_CLUSTER_MODEL`, `PI_SELFIMPROVE_TARGET_MODEL`, `PI_SELFIMPROVE_DIFF_MODEL`
-and `PI_LEDGER_DOMAIN_MODEL` have **no hardcoded default** — each reads `os.environ.get(..., "")`
-and stays keyword/offline when unset. The `anthropic/claude-haiku-4-5` strings near them are
-illustrative comments, not defaults.
-
 The live model env vars that *are* set (`.env`) are all Ollama and unaffected by the fleet
 move: `PENNY_ENHANCE_MODEL`, `PI_CODE_DETECT_MODEL`, `PI_STALL_MODEL`.
-
-### Invariant #6, revised 2026-08-01: judge != subject MODEL (not FAMILY)
-
-The judge used to be `anthropic/claude-haiku-4-5`; it is now `openai-codex/gpt-5.6-luna`.
-
-The old rule demanded a **cross-family** judge. That is unachievable in most setups —
-typically only one vendor has credentials — so it was aspirational and **nothing enforced
-it**. A rule nothing checks is documentation, not a control. It has been replaced with a
-narrower rule that is always achievable and carries the actual weight:
-
-> A model must never grade **itself**. Sharing a model **family** is explicitly fine;
-> being the **same model** is not.
-
-Self-grading is the correlated-error case a second opinion exists to break — a
-confidently-wrong model rates its own wrong answer a PASS. Family overlap does not have
-that property, so paying for cross-family judging is a bonus, not a requirement.
-
-**This rule is enforced, not advised.** `judge_self_grading_conflicts()` compares the
-resolved judge against every subject and `run_prompt_efficacy.py` **refuses the run**
-(exit 2). The check sits *before* the `--dry-run` return, so a misconfiguration surfaces
-without spending a run, and it is **not** waivable by `--experimental` — a self-graded
-number is invalid, not merely unapproved.
-
-Matching is on model id, provider-agnostic, and alias-aware:
-
-| Subject vs judge `gpt-5.6-luna` | Result |
-| --- | --- |
-| `openai-codex/gpt-5.6-luna` | **REFUSED** — identical |
-| `openai-codex/luna` | **REFUSED** — the alias names the same model |
-| `openai-codex/gpt-5.6-sol` / `-terra` | allowed — same family, different model |
-| `ollama/glm-5.2:cloud` | allowed — unrelated |
-
-The suffix heuristic that catches the alias case is deliberately biased toward **false
-positives**: a false positive costs one clear, actionable refusal, while a false negative
-would silently ship a self-graded number.
-
-#### Why the judge pins the concrete id and not `luna`
-
-Two independent reasons, either sufficient:
-
-1. **Reproducibility (REQ-003).** An alias lets the measuring instrument change silently
-   between runs, making artifacts incomparable.
-2. **`family_of()` cannot classify an alias.** `family_of("gpt-5.6-luna") == "openai"`, but
-   `family_of("luna") == "luna"` — a bare alias would defeat the family slice below.
-
-#### The calibration slice now tracks the judge
-
-`run_judge_calibration.py` used to gate on a hardcoded `"claude"` false-pass slice — correct
-only while the judge happened to be a Claude model. It now derives the slice from the
-*resolved judge's* family, so re-pointing the judge re-aims the bias check automatically.
-Under the revised policy the judge may legitimately share a family with its subjects, and
-that shared family is exactly where correlated blindness would surface.
-
-**Changing the judge invalidates the existing calibration.** Re-run
-`run_judge_calibration.py` (agreement ≥ 0.80, false-pass ≤ 0.20 overall *and* on the
-judge-family slice) and re-approve the evidence before the judge may gate. The current
-corpus contains no `openai`-family records, so that slice is currently empty and simply
-does not apply.

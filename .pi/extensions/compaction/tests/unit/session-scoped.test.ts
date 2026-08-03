@@ -212,7 +212,7 @@ describe("extractSessionState", () => {
 
   it("does NOT supersede a completed skill when no later user pivot exists", () => {
     const messages = [
-      { role: "user", content: "Please design a scoring system for the outcome ledger" },
+      { role: "user", content: "Please design a scoring system for the review queue" },
       skillCall("Design a scoring system", { id: "tc-1" }),
       skillResult("plan-1", true, "tc-1"),
     ];

@@ -1,4 +1,4 @@
-.PHONY: setup venv install-py install-js init sca-tools clean test test-integration check-public lint format evals evals-update-baseline rate auto-capture trust trajectory review tune tune-deep
+.PHONY: setup venv install-py install-js init sca-tools clean test test-integration check-public lint format evals evals-update-baseline trajectory
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 

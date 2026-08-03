@@ -12,7 +12,7 @@ byte-identity (open models phrase differently).
     ... --dry-run                    # list fixtures, no calls
     ... --driver-model ollama/glm-5.2:cloud --judge-model ollama/minimax-m3:cloud
 
-Two-part split like prompt-efficacy: this EXPENSIVE runner writes
+Two-part split: this EXPENSIVE runner writes
 ``.penny/evals/trajectory/latest.json``; the cheap ``eval_trajectory`` section
 ratchets it in every ``make evals``. A fixture Oracle passed that the current
 system fails is a behavioral regression — it rides the signal pipeline into the

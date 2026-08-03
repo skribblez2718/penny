@@ -2,7 +2,7 @@
 """Run the code_detection ablation: heuristic tables vs model-inferred detection.
 
 Expensive/manual (the model arm makes one pi call per fixture) — like
-``run_prompt_efficacy.py`` it is never part of ``make evals``. Produces the
+the trajectory runner it is never part of ``make evals``. Produces the
 ship/no-ship evidence for Bitter-Lesson item #9 (retire code_detection.py's
 hand-coded framework/dep tables in favour of model-inferred detection with a
 cheap-tier fallback).

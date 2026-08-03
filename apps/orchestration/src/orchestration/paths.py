@@ -39,7 +39,7 @@ def penny_root() -> str:
     """Absolute path to Penny's own repo root, or ``""``.
 
     ``$PROJECT_ROOT`` (.env) wins — it is the Penny-global anchor, the same constant
-    the checkpointer and outcome ledger use. Never the per-run target ``project_root``.
+    the checkpointer uses. Never the per-run target ``project_root``.
     Falls back to walking up from this module to a directory carrying Penny's markers.
     """
     env = os.environ.get("PROJECT_ROOT", "").strip()

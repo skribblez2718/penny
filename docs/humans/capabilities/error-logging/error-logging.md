@@ -87,5 +87,4 @@ The cost is lowest when the code is chosen at the time the error is introduced. 
 ## Relationship to Other Capabilities
 
 - [Observability Server](../observability-server/observability-server.md) — the server that receives, stores, and serves log entries.
-- [Outcome Ledger](../outcome-ledger/outcome-ledger.md) — captures the results of consequential actions; error logs often help explain why an action failed.
 - Agent reference: `docs/agents/capabilities/error-logging/error-codes.md` — the machine-readable code catalog.

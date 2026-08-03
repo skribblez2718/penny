@@ -10,7 +10,7 @@ Without tiering, every memory competes for the same context window. Tiering ensu
 
 ## Rules
 
-1. **T0 is immutable without review gate.** SYSTEM.md changes require amendment pipeline → user approval.
+1. **T0 is immutable without review gate.** SYSTEM.md changes require user approval.
 2. **T2 injection is bounded.** Pre-turn smart search returns ≤5 results, ≤4,000 tokens.
 3. **T3 is never pre-injected.** Reference material loads only on explicit agent request.
 4. **T4 is never injected.** Archive is search-only.
@@ -22,27 +22,27 @@ Without tiering, every memory competes for the same context window. Tiering ensu
 |------|---------|----------|-----------|
 | **T0** | SYSTEM.md — identity, rules, vocabulary | Permanent | Always (Pi system prompt) |
 | **T1** | Current conversation, FSM state, active task | Session (hours) | Always (in context) |
-| **T2** | Recent outcomes, diary, pending signals | 7–30 days | Pre-turn smart search |
+| **T2** | Recent diary and working memory | 7–30 days | Pre-turn smart search |
 | **T3** | Architecture docs, decisions, KG facts | Permanent | On-demand RAG |
-| **T4** | Old sessions, expired outcomes, old versions | 90+ days | Search only |
+| **T4** | Old sessions and old versions | 90+ days | Search only |
 
 ## Room → Tier Convention
 
 Per-room tier/TTL policy is declared in **one** place — `scripts/system/tiered_memory/skill_rooms.json` (three consumers read it, so they can never drift; see [memory/schema.md](../memory/schema.md)). Consult that manifest for the authoritative per-room mapping rather than a table here that would drift as rooms are added.
 
-Rule of thumb (not the source of truth): recent working memory (outcomes, diary, signals) → T2; permanent reference (architecture, decisions, completed skill summaries) → T3; archives (system_versions, audit) → T4.
+Rule of thumb (not the source of truth): recent working memory and diary → T2; permanent reference (architecture, decisions, completed skill summaries) → T3; archives (system_versions, audit) → T4.
 
 ## Distillation Pipeline
 
 | Transition | Trigger | Action |
 |-----------|---------|--------|
-| T1 → T2 | Session end | Write diary entry, outcome records |
+| T1 → T2 | Session end | Write diary entry |
 | T2 → T3 | 30 days / pattern detected | Age out of pre-turn window; extract KG patterns |
 | T3 → T4 | 90 days / explicit completion | Mark superseded; move to archive rooms |
 
 ## Constraints
 
-- **T0 size ceiling:** 2,500 tokens. Net delta ≤ 0 per amendment cycle.
+- **T0 size ceiling:** 2,500 tokens. Net delta ≤ 0 per change.
 - **T2 injection budget:** ≤4,000 tokens per pre-turn query.
 - **T3 is never pre-injected.** Violating this bloats context with stale reference material.
 - **Pi native compaction is T4.** Do not duplicate it — supplement it by storing critical information in mempalace.

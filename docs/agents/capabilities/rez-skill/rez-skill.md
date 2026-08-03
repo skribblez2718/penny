@@ -25,7 +25,7 @@ The goal is the job description (URL, file path, or pasted text). The base resum
 ### Bitter-Lesson / atomic-loops compliance
 
 - **Live retrieval over baked snapshots.** `aligning` always performs a fresh NIST NICE lookup — never a cached snapshot — the doctrine's fresh-retrieval pattern. When NICE is unavailable the run degrades honestly (`[UNALIGNED]` bullets), never fabricated alignment.
-- **Evidence-gated validation** (Rec 4): `REZ_VALIDATE` requires a non-empty `evidence` field — captured per-bullet source traceability plus STAR/ATS/NICE checks — so a resume is never marked `valid`/`fabrication_free` on a bare assertion. Evidence flows to `ctx.verify_evidence` and the outcome ledger. An unverified resume is never exported; on budget exhaustion the run completes `met=False`.
+- **Evidence-gated validation** (Rec 4): `REZ_VALIDATE` requires a non-empty `evidence` field — captured per-bullet source traceability plus STAR/ATS/NICE checks — so a resume is never marked `valid`/`fabrication_free` on a bare assertion. Evidence flows to `ctx.verify_evidence`. An unverified resume is never exported; on budget exhaustion the run completes `met=False`.
 - **Anti-fabrication is the core boundary.** Every tailored bullet traces to the source materials; a JD keyword is applied only where the candidate's evidence supports it.
 - **Recall.** `_task_summary` seeds the first agent directive with distilled lessons from prior runs (advisory).
 
@@ -42,7 +42,7 @@ annie (gap analysis, NULL-AWARE), echo (fresh NICE lookup, READ-ONLY live retrie
 ## Verification
 
 - [ ] Playbook tests pass: `python3 -m pytest apps/orchestration/tests/test_rez_playbook.py`
-- [ ] `REZ_VALIDATE` rejects empty evidence; `verify_evidence` lands in ctx + ledger
+- [ ] `REZ_VALIDATE` rejects empty evidence; `verify_evidence` lands in ctx
 - [ ] `aligning` performs a fresh NICE lookup every run (no cache)
 - [ ] `resources/flow.html` matches `RezMachine` transition-for-transition
 

@@ -1,13 +1,13 @@
 # Prompt Architecture Evidence Base
 
-What the 2024–2026 empirical literature actually supports, what it debunks, and which of Penny's design principles are evidence-backed versus house hypotheses awaiting our own measurement. Compiled 2026-07 from the sources in [References](#references). Local measurement lives in the prompt-efficacy eval (`scripts/system/evals/README.md`, north star N6).
+What the 2024–2026 empirical literature actually supports, what it debunks, and which of Penny's design principles are evidence-backed versus house hypotheses. Compiled 2026-07 from the sources in [References](#references).
 
 ## Evidence tiers used across the prompt docs
 
 | Tag | Meaning |
 |-----|---------|
 | **[EVIDENCE]** | Replicated, cross-model published results support it |
-| **[HYPOTHESIS]** | Plausible, internally consistent, but not established in the literature — must earn its place through the prompt-efficacy eval (section ablation) |
+| **[HYPOTHESIS]** | Plausible and internally consistent, but not established in the literature |
 | **[DEBUNKED-ADJACENT]** | The nearby popular claim failed replication; our usage survives only in a narrower form |
 
 ## Per-technique verdicts (the short version)
@@ -31,22 +31,20 @@ What the 2024–2026 empirical literature actually supports, what it debunks, an
 The strong form of "one universal prompt that adds points on any model" is **not supported** — prompts are model-specific artifacts. The defensible reframe, which the architecture now adopts ([Overview](overview.md)):
 
 1. **The universal layer raises the floor and cuts variance.** Completeness, explicitness, non-contradiction, position, and structural hygiene are the cross-model survivors. They mostly prevent losses; they are not where double-digit gains live.
-2. **Points come from per-model work**: per-model variants of the swappable layers (Role Definition, Domain Guidance) optimized against the golden task set, plus invocation-parameter tuning. See `plans/per-model-optimization/`.
-3. **Task-specification quality is the best-evidenced universal lever** — which is what the Enhance extension targets (Invocation Context enhancement).
-4. **Every claim gets measured here.** Single-to-double-digit gains claimed for any universal technique should be presumed to be (a) measured on pre-2024 base models, (b) cherry-picked from the best variant, or (c) per-question variance masquerading as signal — until shown otherwise on our own task set across ≥3 model families.
+2. **Task-specification quality is the best-evidenced universal lever** — which is what the Enhance extension targets (Invocation Context enhancement).
 
 ## Status of Penny's design principles
 
 | Principle ([Design Principles](design-principles.md)) | Status | Basis |
 |---|---|---|
-| §1 Process-shaped, not output-shaped | **[HYPOTHESIS]** | Consistent with instruction-following findings (specific instructions beat aspirations), but "process-shaped beats output-shaped" as stated has no direct published test. Section ablation target. |
-| §1 Before Responding protocol (mandatory cognitive steps) | **[DEBUNKED-ADJACENT]** | Prescriptive step scaffolds are the technique class that goes neutral-to-negative on reasoning-native models. Resolution: the six-step sequence was moved out of the always-on frame entirely — it survives as the *on-demand* clarification protocol, loaded only when the Ask vs. Act trigger fires; the frame keeps single lightweight directives. Monitored per family by the degradation gate (`prompt_efficacy.frame_regressed_families`). |
+| §1 Process-shaped, not output-shaped | **[HYPOTHESIS]** | Consistent with instruction-following findings (specific instructions beat aspirations), but "process-shaped beats output-shaped" as stated has no direct published test. |
+| §1 Before Responding protocol (mandatory cognitive steps) | **[DEBUNKED-ADJACENT]** | Prescriptive step scaffolds are the technique class that goes neutral-to-negative on reasoning-native models. Resolution: the six-step sequence was moved out of the always-on frame entirely — it survives as the *on-demand* clarification protocol, loaded only when the Ask vs. Act trigger fires; the frame keeps single lightweight directives. |
 | §2 Domain-agnostic agents (constraints, tools, output contracts) | **[EVIDENCE]** for the constraints; **[DEBUNKED-ADJACENT]** for any accuracy expectation from identity itself | Personas-for-accuracy is debunked; functional role *constraints* are engineering, not persona magic. Do not expect "You are Carren" to add points. |
 | §5 No repetition across layers / no contradiction | **[EVIDENCE]** (contradiction harms); token thrift is engineering |
-| §6 Canonical vocabulary | **[HYPOTHESIS]** | Related to format-sensitivity findings (models are sensitive to surface variation), but the specific claim (synonym drift degrades performance) is untested. Ablation target. |
+| §6 Canonical vocabulary | **[HYPOTHESIS]** | Related to format-sensitivity findings (models are sensitive to surface variation), but the specific claim (synonym drift degrades performance) is untested. |
 | §7 Declarative rules, not narrative | **[HYPOTHESIS]** | Same family as §1. |
 | §9 Self-verification as structured attention, NOT a correctness audit | **[EVIDENCE]** for the framing | Intrinsic self-correction is debunked (models are poor at catching their own errors) — which is exactly why the frame demands *external anchors* (evidence-backed completion, honest exhaustion, the one-line Deliver check) instead of self-critique, and why correctness review routes to a different model (Carren/Vera). |
-| §10 Concrete verbs, not nominalizations | **[HYPOTHESIS]** | No direct literature. Cheap to keep; not a claimed performance lever until measured. |
+| §10 Concrete verbs, not nominalizations | **[HYPOTHESIS]** | No direct literature. Cheap to keep as editorial hygiene. |
 | Token budgets as forcing function (not a model limit) | **[EVIDENCE]** for the honest framing | No hard adherence cliff at small counts; long-context degradation is positional and much higher-scale ("lost in the middle", context-rot reports). |
 | Sandwich defense / boundary markers | Security engineering | Defense-in-depth; instruction-hierarchy adherence is imperfect in all models (IHEval) — the docs already say markers are structural, not psychological. |
 
@@ -68,4 +66,4 @@ The strong form of "one universal prompt that adds points on any model" is **not
 
 ## Keeping this honest
 
-When a claim in any prompt doc is upgraded from [HYPOTHESIS] to [EVIDENCE], the upgrade must cite either a published replication or our own prompt-efficacy result (artifact path + date). The reverse also applies: if section ablation shows a principle's text is dead weight across families, the principle loses its budget allocation — the eval decides, not the doc.
+When a claim in any prompt doc is upgraded from [HYPOTHESIS] to [EVIDENCE], the upgrade must cite a published replication.

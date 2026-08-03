@@ -1,6 +1,6 @@
 # Bitter-Lesson Doctrine
 
-How Penny stays flexible to future model improvements: what the self-improvement ratchet must protect, what it must never protect, and the recurring pass that keeps the two straight. This is the mechanism behind the Cognitive Frame's **"How This System Improves"** disposition. The source audit and the *disposable* mechanism inventory live in `research/bitter-lesson/`.
+How Penny stays flexible to future model improvements: what the behavioral-regression ratchet must protect, what it must never protect, and the recurring pass that keeps the two straight. This is the mechanism behind the Cognitive Frame's **"How This System Improves"** disposition. The source audit and the *disposable* mechanism inventory live in `research/bitter-lesson/`.
 
 ## The principle
 
@@ -32,11 +32,10 @@ The leverage/safety spine expressed as capabilities the ratchet must never let r
 | **Checkpoint / resume** — long runs are durable and resumable | Test-time durability | checkpointer tests | Enforced |
 | **Safety guards** — sandbox / SSRF / scope allow-lists; the immutable security-directives block | Human value / safety | tool guards; path allowlist; frame boundary | Enforced |
 | **Live retrieval over baked snapshots** — fetch current information where freshness matters rather than relying on a frozen copy | Rides the world's change, not a stale table | fresh-retrieval pattern (e.g. rez NICE) | Partial |
-| **Model-scaling self-improvement** — improvements are drafted by a model reasoning over real outcomes, gated by human approval + the ratchet | Learning; compounds with model quality | learning loop (checklist #23) | Aspirational |
 
 Adding a capability to this set is done by the recurring pass (below); *removing* an invariant is itself a high-stakes change that must be justified, not done casually.
 
-> **Wiring note.** This doc is the *specification* of the protected set. Some invariants are already enforced by existing tests/contracts; others (notably model-scaling self-improvement, and organizing the eval ratchet explicitly around these named invariants) are follow-on engineering. Treat "Aspirational/Partial" rows as a backlog, not a claim.
+> **Wiring note.** This doc is the *specification* of the protected set. Some invariants are already enforced by existing tests/contracts; organizing the eval ratchet explicitly around these named invariants is follow-on engineering. Treat "Partial" rows as a backlog, not a claim.
 
 ## What is NOT protected
 
@@ -44,9 +43,9 @@ KNOWLEDGE-CONSTRAINT scaffolding is deliberately *absent* from the invariant lis
 
 ## The recurring Bitter-Lesson pass
 
-A periodic ritual (in the spirit of the `tune` cycle) that keeps this doctrine *live* rather than frozen. It is the meta-method — the only genuinely rot-proof thing to make permanent. (Sutton: build in the method that discovers, not the discoveries themselves.)
+A periodic ritual that keeps this doctrine *live* rather than frozen. It is the meta-method — the only genuinely rot-proof thing to make permanent. (Sutton: build in the method that discovers, not the discoveries themselves.)
 
-**Cadence:** periodically (target ~quarterly) **and** event-driven on a major model upgrade — a stronger model is precisely when scaffolding becomes newly obsolete (this mirrors the eval system's model-roster / frame-hash invalidation).
+**Cadence:** periodically (target ~quarterly) **and** event-driven on a major model upgrade — a stronger model is precisely when scaffolding becomes newly obsolete.
 
 **Steps:**
 
@@ -66,7 +65,6 @@ The specific mechanisms, thresholds, and file references — *what is LEVERAGE v
 
 - [Atomic Loop Components](atomic-loop-components.md) — the construction companion: this doctrine's LEVERAGE/SAFETY/KNOWLEDGE-CONSTRAINT triage expressed as a catalog of loop atoms plus assembly rules, so the doctrine is buildable, not just auditable.
 - [Agentic Loops](../skills/loops.md) — the seven loop classes (arrangements of those atoms) and per-class design rules.
-- [Outcome Ledger](outcome-ledger.md) — the ratchet / eval substrate within which these capabilities are protected.
 - [Project Standards](project-standards.md) — home of the add-side Bitter-Lesson Gate.
 - [Tiered Memory](tiered-memory.md) — one of the protected leverage capabilities (durable memory).
 - [Bitter-Lesson Doctrine (Human)](../../humans/architecture/bitter-lesson.md) — the conceptual WHAT/WHY companion to this operational doctrine.

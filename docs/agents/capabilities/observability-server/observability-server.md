@@ -8,20 +8,19 @@ The Penny Observability Server is a FastAPI + SQLite backend that ingests two da
 |-------|-----------------|-----------|----------|
 | **Message plane** | `session_start`, `message_end`, `tool_execution_start`, `tool_result`, `agent_start`, `agent_end`, `model_select`, `session_shutdown` | `entries` + `sessions` tables | Reconstruct a conversation timeline |
 | **Log plane** | `event: "log"` | `logs` table | Query structured operational logs by level, component, session |
-| **Watcher log plane** | `event: "watcher_log"` (or POST `/watcher_logs`) | `watcher_logs` table | Diagnose ambient watcher behavior and signal generation |
 
-Penny does not query the database directly. The observability extension registers three tools that hit the REST API and return JSON.
+Penny does not query the database directly. The observability extension registers two tools that hit the REST API and return JSON.
 
 ## Why
 
-Persistent, structured telemetry lets an agent diagnose failures after the fact, correlate errors with conversation events, and verify watcher behavior without asking the user to paste logs.
+Persistent, structured telemetry lets an agent diagnose failures after the fact and correlate errors with conversation events without asking the user to paste logs.
 
 ## Rules
 
-1. **Always prefer the registered tools.** Use `observability_query_logs`, `observability_query_history`, and `observability_query_watcher_logs` instead of raw `curl` or DB access.
+1. **Always prefer the registered tools.** Use `observability_query_logs` and `observability_query_history` instead of raw `curl` or DB access.
 2. **Query narrow, then widen.** Filter by `session_id` and/or `level` first; remove filters only if you need broader context.
 3. **Combine planes for diagnosis.** A failure in `logs` is usually easier to interpret when correlated with the `history` timeline for the same `session_id`.
-4. **Respect retention.** Operational logs and entries are retained for **14 days** by default; watcher logs for **14 days**. Older data is removed by the scheduled cleanup job.
+4. **Respect retention.** Operational logs and entries are retained for **14 days** by default. Older data is removed by the scheduled cleanup job.
 5. **Timestamps are milliseconds.** Both `from_ts` and `to_ts` are inclusive millisecond UNIX timestamps.
 6. **No auth token = open API.** When `PI_OBSERVABILITY_API_KEY` is set, all tools send a `Bearer` token; otherwise the endpoints are open.
 7. **Do not write observability data to the project tree.** Query results are ephemeral analysis inputs, not deliverables.
@@ -122,34 +121,7 @@ curl -H "Authorization: Bearer $PI_OBSERVABILITY_API_KEY" \
   "http://localhost:8765/sessions/sess-abc-123/entries?limit=100"
 ```
 
-### 4. Query ambient watcher logs
-
-Tool: `observability_query_watcher_logs`
-
-REST endpoint: `GET /watcher_logs`
-
-| Query param | Type | Match |
-|-------------|------|-------|
-| `level` | string | exact: `DEBUG`, `INFO`, `WARN`, `ERROR` |
-| `source` | string | exact watcher name (`mismatch_rate_watcher`, `confidence_trend_watcher`, `task_staleness_watcher`, ...) |
-| `session_id` | string | exact session UUID |
-| `from_ts` / `to_ts` | int | inclusive ms bounds |
-| `limit` / `offset` | int | pagination |
-
-Stats endpoint: `GET /watcher_logs/stats`  
-Single watcher log: `GET /watcher_logs/{log_id}`
-
-Example tool call:
-
-```typescript
-observability_query_watcher_logs({
-  source: "mismatch_rate_watcher",
-  level: "WARN",
-  limit: 50,
-})
-```
-
-### 5. WebSocket event types
+### 4. WebSocket event types
 
 Events the server expects on `ws://host:port/ws`:
 
@@ -172,26 +144,17 @@ Events the server expects on `ws://host:port/ws`:
   "context": { "tool": "mempalace_search" },
   "error": { "name": "Error", "message": "...", "code": "BRIDGE_TIMEOUT" }
 }}
-
-// Watcher log plane
-{ "event": "watcher_log", "sessionId": "...", "timestamp": ..., "data": {
-  "level": 1,
-  "source": "mismatch_rate_watcher",
-  "message": "...",
-  "context": { ... }
-}}
 ```
 
-### 6. When to query observability
+### 5. When to query observability
 
 | Symptom | Tool(s) to use |
 |---------|----------------|
 | An agent returned an error | `observability_query_logs` with `level=ERROR` and the agent's `session_id` |
 | Need to reconstruct what happened in a session | `observability_query_history` |
-| A signal was expected but not raised | `observability_query_watcher_logs` for the relevant `source` |
-| Want overall error trends | `/logs/stats` or `/watcher_logs/stats` |
+| Want overall error trends | `/logs/stats` |
 
-### 7. Compaction and orchestration endpoints
+### 6. Compaction and orchestration endpoints
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -209,16 +172,15 @@ There is no `/checkpoints` endpoint: the engine's durable checkpointer is a sepa
 
 ## Constraints
 
-- `GET /logs`, `/logs/stats`, `/watcher_logs`, `/watcher_logs/stats`, `/sessions`, `/sessions/{id}/entries`, and `/sessions/{id}/search` require Bearer auth when `PI_OBSERVABILITY_API_KEY` is configured.
-- `POST /logs`, `POST /watcher_logs`, `POST /compactions`, and the `POST /orchestration/*` endpoints are ingestion endpoints used by extensions and the engine; agents do not call them directly.
-- Default retention: `RETENTION_LOG_DAYS=14`, `RETENTION_WATCHER_LOG_DAYS=14`.
+- `GET /logs`, `/logs/stats`, `/sessions`, `/sessions/{id}/entries`, and `/sessions/{id}/search` require Bearer auth when `PI_OBSERVABILITY_API_KEY` is configured.
+- `POST /logs`, `POST /compactions`, and the `POST /orchestration/*` endpoints are ingestion endpoints used by extensions and the engine; agents do not call them directly.
+- Default retention: `RETENTION_LOG_DAYS=14`.
 - Pagination maximum: 500 rows per request.
 
 ## Verification
 
 - [ ] `observability_query_logs` returns JSON with `items`, `total`, `limit`, `offset`.
 - [ ] `observability_query_history({ session_id: "..." })` returns chronological entries.
-- [ ] `observability_query_watcher_logs` uses `/watcher_logs`, not `/logs`.
 - [ ] Timestamps passed to query params are in milliseconds.
 - [ ] Combined `logs` + `history` queries share the same `session_id`.
 

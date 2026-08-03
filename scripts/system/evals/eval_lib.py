@@ -3,7 +3,7 @@
 The suite measures what actually matters (see README.md — "what better means"),
 reading the LIVE stores directly:
 
-  * mempalace (via the memory bridge)   — outcomes, diary, signals, amendments
+  * mempalace (via the memory bridge)   — diary and curated rooms
   * the engine checkpointer             — .penny/orchestration.db
   * the observability database          — sessions, logs, orchestration ingest
 

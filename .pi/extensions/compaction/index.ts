@@ -15,7 +15,7 @@
  *   - Orchestration run state comes from the engine's durable run_id
  *     checkpointer (.penny/orchestration.db) — never reconstructed from
  *     mempalace drawer text.
- *   - Mempalace/KG/outcome-ledger queries provide POINTERS to what agents
+ *   - Mempalace/KG queries provide POINTERS to what agents
  *     wrote, not reconstructed state.
  *
  * Failure policy: degrade, never abandon. Budget overflow triggers

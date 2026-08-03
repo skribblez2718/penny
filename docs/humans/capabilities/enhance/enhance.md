@@ -21,7 +21,7 @@ Prompts **without** the ` -i` suffix are processed normally and untouched.
 
 ## Honest Costs
 
-Enhancement blocks prompt submission for one LLM call (tens of seconds on the current Ollama-cloud models). That is why it is opt-in per prompt via the ` -i` flag rather than always-on, and why headless runs (subagents, print mode) strip the flag and run the raw prompt without enhancing. Point it at a fast model with `PENNY_ENHANCE_MODEL=ollama/deepseek-v4-flash:cloud`. Whether the rewrite earns its latency is a prompt-efficacy eval question (north star N6), not an article of faith.
+Enhancement blocks prompt submission for one LLM call (tens of seconds on the current Ollama-cloud models). That is why it is opt-in per prompt via the ` -i` flag rather than always-on, and why headless runs (subagents, print mode) strip the flag and run the raw prompt without enhancing. Point it at a fast model with `PENNY_ENHANCE_MODEL=ollama/deepseek-v4-flash:cloud`. Whether the rewrite earns its latency is an empirical question, not an article of faith.
 
 ## Learn More
 

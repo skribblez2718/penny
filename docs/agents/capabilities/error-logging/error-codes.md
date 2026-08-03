@@ -30,7 +30,6 @@ Without a shared taxonomy, error logs are inconsistent strings. With it, observa
 | `COMPACTION_ENGINE_QUERY_FAILED` | ERROR | compaction | Engine checkpointer read failed (runs omitted from summary) |
 | `COMPACTION_MEMPALACE_QUERY_FAILED` | ERROR | compaction | Mempalace query failed |
 | `COMPACTION_KG_QUERY_FAILED` | ERROR | compaction | KG query failed |
-| `COMPACTION_OUTCOME_QUERY_FAILED` | ERROR | compaction | Outcome ledger query failed |
 | `COMPACTION_VALIDATION_FAILED` | ERROR | compaction | Artifact failed zod validation (summary still emitted) |
 | `COMPACTION_BUDGET_OVERFLOW` | ERROR | compaction | Summary truncated after degrade loop hit its floor |
 | `COMPACTION_POST_FAILED` | ERROR | compaction | Artifact archive POST to observability failed |

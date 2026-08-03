@@ -379,7 +379,7 @@ def test_validate_rejects_empty_evidence_then_accepts_grounded(cp):
 def test_validate_evidence_lands_on_context(cp):
     _to_validating(cp)
     _step(cp, "vera", VERA_PASS)
-    assert cp.load(RID).context.verify_evidence  # captured for the outcome ledger
+    assert cp.load(RID).context.verify_evidence  # captured on the run
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +474,7 @@ def test_validate_task_warns_when_schema_floor_was_skipped(cp):
 
 
 # ---------------------------------------------------------------------------
-# item 6: the learning-loop signal (outcome ledger reads the STANDARD ctx fields)
+# item 6: the learning-loop signal (readers use the STANDARD ctx fields)
 # ---------------------------------------------------------------------------
 
 
@@ -494,7 +494,7 @@ def test_passing_validation_records_pass_verdict_and_no_gaps(cp):
 
 
 def test_success_criteria_from_ideal_state_land_on_context(cp):
-    # expected_outcome in the outcome ledger comes from ctx.success_criteria; empty
+    # the expected outcome comes from ctx.success_criteria; empty
     # meant every prd run recorded the placeholder "goal satisfied".
     _to_validating(cp, cls=_ValidIdealPrd)
     _step(cp, "vera", VERA_PASS, cls=_ValidIdealPrd)

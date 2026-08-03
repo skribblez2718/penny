@@ -2,11 +2,11 @@
 
 The core concepts and rationale behind Penny's prompt architecture. These principles emerged from sessions in April 2026 as we migrated from a monolithic `APPEND_SYSTEM.md` to a layered, standards-based architecture.
 
-**Evidence status.** Each principle below carries a tag from the [Evidence Base](evidence.md): **[EVIDENCE]** (replicated published support), **[HYPOTHESIS]** (house position — plausible, internally consistent, and queued for section ablation in the prompt-efficacy eval), or **[DEBUNKED-ADJACENT]** (the nearby popular claim failed replication; ours survives only in a narrower form). A principle keeps its always-on token budget by earning it, not by sounding right — the eval decides (`scripts/system/evals/README.md`, north star N6).
+**Evidence status.** Each principle below carries a tag from the [Evidence Base](evidence.md): **[EVIDENCE]** (replicated published support), **[HYPOTHESIS]** (house position — plausible and internally consistent), or **[DEBUNKED-ADJACENT]** (the nearby popular claim failed replication; ours survives only in a narrower form).
 
 ## 1. Process-Shaped, Not Output-Shaped
 
-**Status: [HYPOTHESIS]** — consistent with the robust finding that specific, complete instructions beat vague aspirations, but "process-shaped beats output-shaped" as a general rule has no direct published test. The Before Responding protocol specifically is **[DEBUNKED-ADJACENT]**: prescriptive step scaffolds are the technique class that goes neutral-to-negative on reasoning-native models (Sprague et al. 2024; vendor guidance against CoT-prompting thinking models) — which is why the six-step sequence was moved out of the always-on frame into the on-demand clarification protocol (see below), and why the degradation gate (`prompt_efficacy.frame_regressed_families`) watches the frame per family.
+**Status: [HYPOTHESIS]** — consistent with the robust finding that specific, complete instructions beat vague aspirations, but "process-shaped beats output-shaped" as a general rule has no direct published test. The Before Responding protocol specifically is **[DEBUNKED-ADJACENT]**: prescriptive step scaffolds are the technique class that goes neutral-to-negative on reasoning-native models (Sprague et al. 2024; vendor guidance against CoT-prompting thinking models) — which is why the six-step sequence was moved out of the always-on frame into the on-demand clarification protocol (see below).
 
 ### The Concept
 
@@ -186,11 +186,11 @@ One term per concept, across every layer — enforced through two different mech
 
 ### Why the frame no longer carries the table
 
-An earlier frame carried a six-term inline vocabulary table, accepted as an intentional budget deviation. It was trimmed in the Bitter-Lesson frame passes: an always-on table is a standing token cost whose adherence value was never demonstrated by ablation, and a capable model does not need definitions of ordinary words — it needs the terms *used consistently*, which is an authoring discipline, not frame content. The principle (consistency) outlived the mechanism (the inline table) — exactly the "ratchet on capabilities, never implementations" pattern.
+An earlier frame carried a six-term inline vocabulary table, accepted as an intentional budget deviation. It was trimmed in the Bitter-Lesson frame passes: an always-on table is a standing token cost whose adherence value was never demonstrated, and a capable model does not need definitions of ordinary words — it needs the terms *used consistently*, which is an authoring discipline, not frame content. The principle (consistency) outlived the mechanism (the inline table) — exactly the "ratchet on capabilities, never implementations" pattern.
 
 ## 7. Declarative Rules, Not Narrative
 
-**Status: [HYPOTHESIS]** — same family as §1. The sentence "the model follows instructions more reliably than aspirations" is a house claim, not a cited result; it is queued for section ablation.
+**Status: [HYPOTHESIS]** — same family as §1. The sentence "the model follows instructions more reliably than aspirations" is a house claim, not a cited result.
 
 ### The Concept
 
@@ -235,7 +235,7 @@ This is the safety net, and it is deliberately **not** self-critique. Intrinsic 
 
 ## 10. Concrete Verbs, Not Abstract Nominalizations
 
-**Status: [HYPOTHESIS]** — no direct literature exists for nominalization effects on instruction-following. Cheap to keep as editorial hygiene; not a claimed performance lever until the eval says otherwise. The routing rationale below (signal-verb matching for auto-invocation) is an engineering argument and stands on its own.
+**Status: [HYPOTHESIS]** — no direct literature exists for nominalization effects on instruction-following. Cheap to keep as editorial hygiene. The routing rationale below (signal-verb matching for auto-invocation) is an engineering argument and stands on its own.
 
 ### The Concept
 
@@ -269,7 +269,7 @@ Applies to every authored layer: Cognitive Frame (`SYSTEM.md`), Role Definition 
 
 ## 11. Goals, Constraints, Capabilities — Never Procedure (The Bitter-Lesson Rule)
 
-**Status: [EVIDENCE] for the direction, [HYPOTHESIS] for each specific trim.** The 2024–2026 record is consistent: prompt scaffolding that compensates for a current model's weaknesses (step scripts, format nagging, reasoning recipes) is wiped out or turned harmful by the next model release, while goals, constraints, consequence boundaries, and verification contracts survive. Each specific trim still proves itself through section ablation — the direction is evidenced, the individual deletions are measured.
+**Status: [EVIDENCE] for the direction, [HYPOTHESIS] for each specific trim.** The 2024–2026 record is consistent: prompt scaffolding that compensates for a current model's weaknesses (step scripts, format nagging, reasoning recipes) is wiped out or turned harmful by the next model release, while goals, constraints, consequence boundaries, and verification contracts survive.
 
 ### The Concept
 
@@ -280,7 +280,7 @@ Every line of prompt text is classified before it ships:
 | **Consequence boundary** | Security directives, READ-ONLY, no-output-to-project-tree, HITL conditions | Permanent — kept or strengthened, never trimmed |
 | **Conduit** | Evidence-backed completion, honest exhaustion, escalation, delegation, memory discipline | Durable — these scale *with* model improvement |
 | **Wire format** | Confidence vocabulary, `needs_clarification`, SUMMARY structure | Plumbing — an API; stated once, never renamed casually |
-| **Procedure / ceremony** | Step scripts, per-agent restatements of frame rules, "think step by step", workarounds for a past model's quirks | A **loan** — permitted only deliberately, tagged, and first in line for ablation at the next model upgrade |
+| **Procedure / ceremony** | Step scripts, per-agent restatements of frame rules, "think step by step", workarounds for a past model's quirks | A **loan** — permitted only deliberately and tagged |
 
 The add-side gate (from the frame's Operating Bet): *does this line gain or lose value as models improve?* If it loses, don't hard-code it — give the model the artifact and verify the output with evidence.
 
@@ -288,14 +288,9 @@ The add-side gate (from the frame's Operating Bet): *does this line gain or lose
 
 Sutton's Bitter Lesson, applied to the prompt layer: methods that leverage computation (search, verification, learning, memory) beat baked-in human knowledge as compute grows — and prompt procedure *is* baked-in human knowledge about how the model should think. It helps the current model, plateaus, then actively fights the next one. The concrete house application: the always-on Before Responding Protocol became the on-demand clarification protocol (§1); the per-agent "Alignment with System Rules" restatements became the compact Working Discipline wire-format block; the inline vocabulary table became an authoring discipline (§6). In each case the *capability* was kept and the *implementation* was replaced — the ratchet protects outcomes, never mechanisms.
 
-### The Lifecycle
-
-Prompt scaffolding is re-measured at every model upgrade — precisely the moment it becomes newly obsolete. The section-ablation harness (`run_prompt_efficacy.py --ablate`) provides the evidence; deletion happens on measurement, not on taste. Full rationale and the component-level framework: `research/atomic-loop-components/` (the essay reading, the compliance rules, and the prompt-rewrite change map in 08-prompt-rewrites.md).
-
 ## Related Documents
 
 - [Evidence Base](evidence.md) — Full per-technique verdicts, citations, and the rule for upgrading a [HYPOTHESIS] to [EVIDENCE]
 - [Layer Architecture](layer-architecture.md) — How these principles manifest in the five layers
 - [Assembly Pipeline](assembly-pipeline.md) — How principles are enforced at assembly time
 - [Security Architecture](security-architecture.md) — How boundary markers protect these principles
-- [Self-Improving Guidance](self-improving-guidance.md) — Behavioral learning loop for Domain Guidance

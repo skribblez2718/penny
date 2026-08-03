@@ -9,7 +9,7 @@ the doctrine's "build the meter, measure, then cut".
 Detector-agnostic by design: an *arm* is any ``DetectorFn`` (Path -> prediction
 dict). The heuristic arm wraps the existing detector; the model arm shells to
 headless pi. Tests inject fakes, so the harness is fully verifiable without a
-live model call (mirrors the two-part prompt_efficacy design).
+live model call (mirrors the two-part expensive-runner / cheap-reader design).
 
 Scope note: this is a per-scaffold instrument, NOT a general toggle framework —
 speculative generality would itself be the KNOWLEDGE-CONSTRAINT scaffolding the
@@ -137,10 +137,9 @@ def _sha256_file(path: Path) -> str:
 
 def fingerprint_files(paths: List[Path], repo_root: Path) -> List[Dict[str, str]]:
     """Self-describing invalidators for an artifact: for each file, its repo-
-    relative path + sha256. A consumer (tune_freshness) re-hashes the current
-    file and compares; any change invalidates the artifact. Generalizes FR-19's
-    frame-SHA so an artifact declares *what changes it* (here: the scaffold under
-    test), rather than the checker hard-coding a path."""
+    relative path + sha256. A consumer re-hashes the current file and compares;
+    any change invalidates the artifact. An artifact declares *what changes it*
+    (here: the scaffold under test), rather than a checker hard-coding a path."""
     out: List[Dict[str, str]] = []
     for p in paths:
         try:

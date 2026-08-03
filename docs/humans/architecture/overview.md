@@ -40,11 +40,11 @@ Penny skills declare states, transitions, guards, and callbacks as a state machi
 
 Penny cannot remember anything just by being told it in a conversation. The model's context window resets. Important facts must be written to a persistent store and retrieved when relevant.
 
-Mempalace is that store. It holds structured drawers, a knowledge graph for relationships, and semantic search for retrieval. Skills write their results there, agents read context from there, and the outcome ledger records predictions and results there.
+Mempalace is that store. It holds structured drawers, a knowledge graph for relationships, and semantic search for retrieval. Skills write their results there, and agents read context from there.
 
 ### Tiered memory
 
-Not everything deserves the same attention. `SYSTEM.md` is always loaded because it defines identity. The current session stays in context because it is what Penny is doing right now. Recent outcomes are searched before each turn because they might prevent a repeated mistake. Reference material is fetched only when needed. Old sessions are archived and searchable but never injected.
+Not everything deserves the same attention. `SYSTEM.md` is always loaded because it defines identity. The current session stays in context because it is what Penny is doing right now. Reference material is fetched only when needed. Old sessions are archived and searchable but never injected.
 
 This five-tier design is described in detail in the [tiered memory](tiered-memory.md) document.
 
@@ -52,7 +52,6 @@ This five-tier design is described in detail in the [tiered memory](tiered-memor
 
 - Penny acts differently in normal chat than when running a skill, because the prompt assembly is different.
 - Penny can hand off work to agents without losing her own context, because agents write full results to mempalace and return only a summary.
-- Penny can learn from mistakes, because the outcome ledger captures what was predicted versus what happened.
 - Penny can remember things across sessions, but only if they are stored in the right tier.
 
 ## Related Documents
@@ -60,5 +59,4 @@ This five-tier design is described in detail in the [tiered memory](tiered-memor
 - [Project Standards](project-standards.md) — the canonical implementations that keep the architecture consistent
 - [Tiered Memory](tiered-memory.md) — how the five memory tiers work
 - [Skill Tool Modes](skill-tool-modes.md) — how skills are invoked
-- [Outcome Ledger](outcome-ledger.md) — how Penny learns from results
 - [Prompt Architecture Overview](../prompts/overview.md) — deeper dive into the five prompt layers

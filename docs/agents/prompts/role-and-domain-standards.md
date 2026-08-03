@@ -159,42 +159,15 @@ DO NOT create a new agent file when:
 
 In the DO NOT cases, the skill's Domain Guidance prompt provides the specificity. The agent adapts because its instructions come from the context.
 
-### Example: Carren in Three Contexts
+### Example: Carren in a Skill Context
 
 | Context                                     | Agent Definition       | Domain Guidance                                        | Invocation Context                                                   |
 | ------------------------------------------- | ---------------------- | ------------------------------------------------------ | -------------------------------------------------------------------- |
 | Plan skill, planning phase                  | `.pi/agents/carren.md` | `.pi/skills/plan/assets/prompts/carren.md`             | Task: "Review session plan-001's explore findings"                   |
-| Amendment review, one-off                   | `.pi/agents/carren.md` | **None** (no skill invoked)                            | Task message includes review criteria inline                         |
-| Amendment review, batch mode (future skill) | `.pi/agents/carren.md` | `.pi/skills/amendment-review/assets/prompts/carren.md` | Task: "Review these 3 amendments against amendment quality criteria" |
 
 ### Task-Embedded Domain Guidance (Ad-Hoc Agent Use)
 
 When an agent is invoked **without a skill context** (standalone script, direct subagent call), there is no `--append-system-prompt` Domain Guidance file. The caller provides domain-specific instructions in the **task message** (Invocation Context).
-
-**Example — Amendment review via standalone script:**
-
-```python
-# Standalone script invokes Carren without skillContext
-subagent(
-    agent="carren",
-    task="""
-    Review the following proposed amendment to the Piper skill prompt.
-    Apply these AMENDMENT QUALITY CRITERIA:
-    1. Evidence linkage: does this cite specific outcome draws?
-    2. Target correctness: does this belong in Domain Guidance or is it universal?
-    3. Specificity: is the proposed text actionable?
-    4. Safety: could this cause regressions in other domains?
-
-    PROPOSED AMENDMENT:
-    <amendment text>
-
-    EVIDENCE:
-    <outcomes and diary entries>
-
-    Return your verdict as structured JSON: {"verdict": "...", "issues": [...]}
-    """
-)
-```
 
 The task message IS the Domain Guidance for this invocation. The agent's Role Definition (who Carren IS) remains unchanged. The agent's Domain Guidance (WHAT to evaluate and HOW) is entirely in the task message.
 

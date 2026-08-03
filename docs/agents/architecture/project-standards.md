@@ -55,7 +55,6 @@ Before claiming any feature complete, verify all 10 checks:
 
 - **Deprecation warnings are pre-breakage errors.** Fix immediately.
 - **E2E tests are mandatory.** Not optional. Stubs are not acceptable.
-- **False completion claims → outcome ledger MISMATCH entry.**
 - **Rollback on any check failure.** Fix, re-run all checks, claim only when all pass.
 - **No new KNOWLEDGE-CONSTRAINT debt.** New tables, thresholds, keyword routers, or mandated process steps must pass the Bitter-Lesson Gate (see `bitter-lesson.md`).
 

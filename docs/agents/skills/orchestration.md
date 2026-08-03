@@ -48,7 +48,7 @@ A concrete `BasePlaybook` subclass provides: `NAME`, `machine_cls` (its `python-
 
 - **No stdout except JSON directives.**
 - **States must be safe to re-run** (crash-resume re-issues the pending step). An `ACT`-style state must be idempotent or split author/apply.
-- **The engine imports no agent-side capability** (e.g. not `outcome_ledger`) — that work happens in the agent subprocess.
+- **The engine imports no agent-side capability** — that work happens in the agent subprocess.
 
 ## Verification
 

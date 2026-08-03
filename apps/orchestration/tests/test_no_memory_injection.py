@@ -79,7 +79,7 @@ def test_no_source_file_reintroduces_memory_injection(path):
     hits = [m for m in _FORBIDDEN if m in text]
     assert not hits, (
         f"{path.relative_to(_SRC)} reintroduces retrieved-memory injection {hits}. "
-        "Agent directives carry this run's facts only; amendments reach the system "
+        "Agent directives carry this run's facts only; stored text reaches the system "
         "by human-approved file edits, never by injection into a prompt."
     )
 

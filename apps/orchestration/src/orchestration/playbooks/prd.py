@@ -625,7 +625,7 @@ class PrdPlaybook(BasePlaybook):
             prd["valid"] = valid
             prd["ideal_state_valid"] = ideal_ok  # code schema-floor stacked on vera's verdict
             prd["issues"] = issues
-            # Learning-loop signal (item 6): the outcome ledger reads the STANDARD context
+            # Learning-loop signal (item 6): downstream readers use the STANDARD context
             # fields, not ctx.extras. Without this every prd outcome landed with empty
             # verify_gaps, no verdict, and expected_outcome "goal satisfied" — so every
             # MISMATCH classified as failure_mode "other" and recall had nothing to

@@ -2080,6 +2080,7 @@ class CodePlaybook(BasePlaybook):
             "learning",  # stall / repeated-strategy escalation (Recs 1 & 2)
         }
     )
+
     def model_for_state(self, state: str, ctx: RunContext) -> str | None:
         """Route P0 judgment dispositions through a model independent of the author."""
         if state != "learning" or ctx.extras.get("code", {}).get("p0_enabled") is not True:

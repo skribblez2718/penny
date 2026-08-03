@@ -294,5 +294,4 @@ The result payload reports:
 `met` and `grounded` answer different questions: a validation-exhausted run is
 `met=True, grounded=False` — delivered, with its unverified claims named. The
 validation verdict is also mirrored onto the run context (`ctx.verify_verdict` /
-`ctx.verify_gaps`) and into the outcome-ledger **header**, so the improvement loop
-records grounding rather than merely delivery.
+`ctx.verify_gaps`), so a run records grounding rather than merely delivery.
