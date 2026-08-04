@@ -46,10 +46,22 @@ function capturePi(): CapturedPi {
   };
 }
 
+/** A session manager exposing the compaction-aware active entry list. */
+function fakeSession(texts: string[]) {
+  return {
+    buildContextEntries: () =>
+      texts.map((text) => ({
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text }] },
+      })),
+  };
+}
+
 function fakeCtx(overrides: Record<string, unknown> = {}) {
   return {
     hasUI: true,
     ui: { notify: vi.fn() },
+    sessionManager: fakeSession([]),
     model: { provider: "ollama", id: "glm-5.2:cloud" },
     modelRegistry: {
       find: vi.fn(() => undefined),
@@ -115,6 +127,20 @@ describe("acceptableRewrite / buildEnhancerInput", () => {
     expect(input).toContain("<raw_prompt>\ndo the thing\n</raw_prompt>");
     expect(input).toContain("world-class"); // methodology.md marker
   });
+
+  it("embeds the transcript and places the raw prompt LAST", () => {
+    const input = buildEnhancerInput("fix that bug", "### User\nlook at auth.ts");
+    expect(input).toContain("<session_context>\n### User\nlook at auth.ts\n</session_context>");
+    // methodology.md mentions both tags in prose, so match the real delimited
+    // blocks (tag followed by a newline), not the first textual occurrence.
+    expect(input.indexOf("<session_context>\n")).toBeLessThan(input.indexOf("<raw_prompt>\n"));
+    expect(input.trimEnd().endsWith("</raw_prompt>")).toBe(true);
+  });
+
+  it("states explicitly when there is no prior conversation", () => {
+    const input = buildEnhancerInput("do the thing");
+    expect(input).toContain("No prior conversation");
+  });
 });
 
 // ── Input handler ───────────────────────────────────────────────────────────
@@ -127,7 +153,7 @@ describe("input handler", () => {
     const ctx = fakeCtx();
     const result = await cap.inputHandler()(
       { type: "input", text: FLAGGED, source: "interactive" },
-      ctx,
+      ctx
     );
     expect(result).toEqual({
       action: "transform",
@@ -140,7 +166,9 @@ describe("input handler", () => {
     expect(cap.entries[0].data.enhanced).toContain("Goal: refactor");
     // The raw prompt the model saw must NOT contain the flag.
     expect((completeFn.mock.calls[0][1] as any).messages[0].content[0].text).toContain(RAW);
-    expect((completeFn.mock.calls[0][1] as any).messages[0].content[0].text).not.toMatch(/-i\s*<\/raw_prompt>/);
+    expect((completeFn.mock.calls[0][1] as any).messages[0].content[0].text).not.toMatch(
+      /-i\s*<\/raw_prompt>/
+    );
   });
 
   it("passes an unflagged prompt through untouched", async () => {
@@ -149,7 +177,7 @@ describe("input handler", () => {
     enhance(cap.pi, { completeFn });
     const result = await cap.inputHandler()(
       { type: "input", text: RAW, source: "interactive" },
-      fakeCtx(),
+      fakeCtx()
     );
     expect(result).toEqual({ action: "continue" });
     expect(completeFn).not.toHaveBeenCalled();
@@ -161,7 +189,7 @@ describe("input handler", () => {
     enhance(cap.pi, { completeFn });
     const result = await cap.inputHandler()(
       { type: "input", text: FLAGGED, source: "rpc" },
-      fakeCtx(),
+      fakeCtx()
     );
     expect(result).toEqual({ action: "continue" });
     expect(completeFn).not.toHaveBeenCalled();
@@ -173,7 +201,7 @@ describe("input handler", () => {
     enhance(cap.pi, { completeFn });
     const result = await cap.inputHandler()(
       { type: "input", text: FLAGGED, source: "interactive", streamingBehavior: "steer" },
-      fakeCtx(),
+      fakeCtx()
     );
     expect(result).toEqual({ action: "continue" });
     expect(completeFn).not.toHaveBeenCalled();
@@ -185,7 +213,7 @@ describe("input handler", () => {
     enhance(cap.pi, { completeFn });
     const result = await cap.inputHandler()(
       { type: "input", text: FLAGGED, source: "interactive" },
-      fakeCtx({ hasUI: false }),
+      fakeCtx({ hasUI: false })
     );
     // Flag stripped, raw prompt runs un-enhanced.
     expect(result).toEqual({ action: "transform", text: RAW });
@@ -200,7 +228,7 @@ describe("input handler", () => {
     enhance(cap.pi, { completeFn: completeFn as any });
     const result = await cap.inputHandler()(
       { type: "input", text: FLAGGED, source: "interactive" },
-      fakeCtx(),
+      fakeCtx()
     );
     expect(result).toEqual({ action: "transform", text: RAW });
     expect(cap.entries).toHaveLength(0);
@@ -212,7 +240,7 @@ describe("input handler", () => {
     enhance(cap.pi, { completeFn });
     const result = await cap.inputHandler()(
       { type: "input", text: FLAGGED, source: "interactive" },
-      fakeCtx(),
+      fakeCtx()
     );
     expect(result).toEqual({ action: "transform", text: RAW });
     expect(cap.entries).toHaveLength(0);
@@ -223,7 +251,7 @@ describe("input handler", () => {
     enhance(cap.pi, { completeFn: fakeComplete("x".repeat(MAX_ENHANCED_CHARS + 1)) });
     const result = await cap.inputHandler()(
       { type: "input", text: FLAGGED, source: "interactive" },
-      fakeCtx(),
+      fakeCtx()
     );
     expect(result).toEqual({ action: "transform", text: RAW });
     expect(cap.entries).toHaveLength(0);
@@ -236,7 +264,7 @@ describe("input handler", () => {
     ctx.modelRegistry.getApiKeyAndHeaders = vi.fn(async () => ({ ok: true, headers: {}, env: {} }));
     const result = await cap.inputHandler()(
       { type: "input", text: FLAGGED, source: "interactive" },
-      ctx,
+      ctx
     );
     expect(result).toEqual({ action: "transform", text: "Goal: enhanced" });
   });
@@ -249,10 +277,70 @@ describe("input handler", () => {
     ctx.modelRegistry.getApiKeyAndHeaders = vi.fn(async () => ({ ok: false, error: "nope" }));
     const result = await cap.inputHandler()(
       { type: "input", text: FLAGGED, source: "interactive" },
-      ctx,
+      ctx
     );
     expect(result).toEqual({ action: "transform", text: RAW });
     expect(completeFn).not.toHaveBeenCalled();
+  });
+
+  it("injects the full session transcript into the enhancer call", async () => {
+    const cap = capturePi();
+    const completeFn = fakeComplete("Goal: fix the null deref in auth.ts");
+    enhance(cap.pi, { completeFn });
+    const ctx = fakeCtx({
+      sessionManager: fakeSession(["look at auth.ts", "there is a null deref on line 40"]),
+    });
+    await cap.inputHandler()(
+      { type: "input", text: "fix that bug -i", source: "interactive" },
+      ctx
+    );
+    const sent = (completeFn.mock.calls[0][1] as any).messages[0].content[0].text as string;
+    expect(sent).toContain("look at auth.ts");
+    expect(sent).toContain("there is a null deref on line 40");
+    expect(sent).toContain("<raw_prompt>\nfix that bug\n</raw_prompt>");
+  });
+
+  it("records context stats on the audit entry", async () => {
+    const cap = capturePi();
+    enhance(cap.pi, { completeFn: fakeComplete("Goal: enhanced") });
+    const ctx = fakeCtx({ sessionManager: fakeSession(["turn one", "turn two"]) });
+    await cap.inputHandler()({ type: "input", text: FLAGGED, source: "interactive" }, ctx);
+    expect(cap.entries[0].data.contextEntries).toBe(2);
+    expect(cap.entries[0].data.contextChars).toBeGreaterThan(0);
+    expect(cap.entries[0].data.contextTruncated).toBe(false);
+  });
+
+  it("still enhances when the session manager is missing or throws", async () => {
+    const cap = capturePi();
+    const completeFn = fakeComplete("Goal: enhanced");
+    enhance(cap.pi, { completeFn });
+    const ctx = fakeCtx({
+      sessionManager: {
+        buildContextEntries: () => {
+          throw new Error("corrupt session");
+        },
+      },
+    });
+    const result = await cap.inputHandler()(
+      { type: "input", text: FLAGGED, source: "interactive" },
+      ctx
+    );
+    expect(result).toEqual({ action: "transform", text: "Goal: enhanced" });
+    expect(cap.entries[0].data.contextEntries).toBe(0);
+  });
+
+  it("never reads the session in headless mode", async () => {
+    const cap = capturePi();
+    const buildContextEntries = vi.fn(() => []);
+    const result = await (() => {
+      enhance(cap.pi, { completeFn: fakeComplete("nope") });
+      return cap.inputHandler()(
+        { type: "input", text: FLAGGED, source: "interactive" },
+        fakeCtx({ hasUI: false, sessionManager: { buildContextEntries } })
+      );
+    })();
+    expect(result).toEqual({ action: "transform", text: RAW });
+    expect(buildContextEntries).not.toHaveBeenCalled();
   });
 
   it("honors PENNY_ENHANCE_MODEL when the registry resolves it", async () => {
@@ -262,10 +350,7 @@ describe("input handler", () => {
     const ctx = fakeCtx();
     const flash = { provider: "ollama", id: "deepseek-v4-flash:cloud" };
     ctx.modelRegistry.find = vi.fn(() => flash);
-    await cap.inputHandler()(
-      { type: "input", text: FLAGGED, source: "interactive" },
-      ctx,
-    );
+    await cap.inputHandler()({ type: "input", text: FLAGGED, source: "interactive" }, ctx);
     expect(ctx.modelRegistry.find).toHaveBeenCalledWith("ollama", "deepseek-v4-flash:cloud");
     expect(ctx.modelRegistry.getApiKeyAndHeaders).toHaveBeenCalledWith(flash);
   });

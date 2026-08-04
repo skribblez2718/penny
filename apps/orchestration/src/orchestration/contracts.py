@@ -135,6 +135,10 @@ def _type_ok(value: Any, expected: type) -> bool:
     otherwise satisfy an ``int`` field like ``findings_count``)."""
     if expected is int and isinstance(value, bool):
         return False
+    if expected is float and isinstance(value, int) and not isinstance(value, bool):
+        # JSON does not distinguish 180 from 180.0: an integer satisfies a
+        # declared float field (bool remains rejected above via int subclassing).
+        return True
     return isinstance(value, expected)
 
 

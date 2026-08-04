@@ -68,7 +68,31 @@ function executionOwnerIsolation(targetRoot: string) {
     // (.penny) remains tmpfs-shadowed above, and the owner HMAC keys are still
     // stripped from the environment by isolatedAgentEnvironment().
     // Narrow further to <home>/.pi/agent if only credential refresh is needed.
-    writablePaths: [path.join(homedir(), ".pi")],
+    //
+    // `.mempalace` is agent MEMORY — every agent prompt mandates reading prior context
+    // and persisting its findings there. Under `--ro-bind / /` it was read-only, so the
+    // bridge died at import with `sqlite3.OperationalError: unable to open database
+    // file` (KnowledgeGraph._init_db runs CREATE TABLE IF NOT EXISTS; SQLite needs write
+    // access even to open). Agents then ran blind to each other's durable context, and
+    // one honestly filed the outage as a security finding that no plan could discharge —
+    // turning an infrastructure fault into a permanent completion blocker.
+    //
+    // This is NOT the authority boundary: `.penny` (orchestration state, receipts,
+    // approvals) remains tmpfs-shadowed via protectedPaths above, and the owner HMAC
+    // keys are still stripped by isolatedAgentEnvironment(). Mempalace is a directory
+    // whose entire purpose is agent-written memory.
+    // BOTH mempalace stores are needed. They are NOT the same directory:
+    //   - <pennyRoot>/.mempalace          drawers / chroma (the palace_path)
+    //   - <home>/.mempalace               knowledge graph (mempalace's DEFAULT_KG_PATH,
+    //                                     ~/.mempalace/knowledge_graph.sqlite3)
+    // memory_bridge.py constructs KnowledgeGraph() at IMPORT time, so a read-only HOME
+    // store kills the bridge before any tool runs — which is the actual
+    // `unable to open database file` seen in runs.
+    writablePaths: [
+      path.join(homedir(), ".pi"),
+      path.join(homedir(), ".mempalace"),
+      path.join(path.resolve(pennyRoot), ".mempalace"),
+    ],
     requireSandbox: true,
   };
 }

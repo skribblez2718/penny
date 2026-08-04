@@ -50,9 +50,44 @@ except ImportError as e:
     )
     sys.exit(1)
 
-# Initialize config and knowledge graph
+# Initialize config. Cheap and dependency-free: reads ~/.mempalace/config.json if
+# present, otherwise falls back to defaults. Safe at import.
 _config = MempalaceConfig()
-_kg = KnowledgeGraph()
+
+# The knowledge graph is initialized LAZILY, on first KG-tool use — never at import.
+#
+# Why: KnowledgeGraph() opens a SQLite DB at mempalace's DEFAULT_KG_PATH
+# (~/.mempalace/knowledge_graph.sqlite3) and runs CREATE TABLE IF NOT EXISTS, which
+# SQLite needs WRITE access even to open. That path is HOME-based and is NOT the
+# project palace_path, so it can be unavailable independently of the drawer store
+# (e.g. a sandboxed agent under `--ro-bind / /` with a read-only HOME).
+#
+# Constructing it at import made every one of the 23 bridge tools die before dispatch:
+# a KG-only fault took down plain drawer reads/writes, diary_write, and search too.
+# Observed impact: 337 bridge deaths across 38 sessions (2026-08-02/03), dropping 136
+# write calls (71 kg_add, 37 diary_write, 28 add_drawer) that had nothing to do with
+# the KG. Lazy init confines a KG fault to the five KG tools, which already return
+# {"error": ...} from their own try/except.
+#
+# _kg stays None on failure so a transient fault retries on the next call rather than
+# poisoning the process.
+_kg = None
+
+
+def _get_kg() -> KnowledgeGraph:
+    """Return the process-wide KnowledgeGraph, constructing it on first use.
+
+    Raises:
+        Exception: whatever KnowledgeGraph() raises (typically
+            sqlite3.OperationalError when the KG path is unwritable). Callers are
+            the five KG tools, each of which already wraps this in try/except and
+            converts it to an {"error": ...} response for that tool alone.
+    """
+    global _kg
+    if _kg is None:
+        _kg = KnowledgeGraph()
+    return _kg
+
 
 # Chunk reassembly (read-side inverse of _chunk_text) — regroup sibling chunks
 # into whole logical drawers so readers never see fragments. Sibling-module
@@ -791,7 +826,7 @@ def tool_kg_query(params: dict) -> dict:
     direction = params.get("direction", "both")
 
     try:
-        results = _kg.query_entity(entity, as_of=as_of, direction=direction)
+        results = _get_kg().query_entity(entity, as_of=as_of, direction=direction)
         return {
             "success": True,
             "entity": entity,
@@ -816,7 +851,7 @@ def tool_kg_add(params: dict) -> dict:
     source_closet = params.get("source_closet")
 
     try:
-        triple_id = _kg.add_triple(
+        triple_id = _get_kg().add_triple(
             subject, predicate, obj, valid_from=valid_from, source_closet=source_closet
         )
         return {
@@ -840,7 +875,7 @@ def tool_kg_invalidate(params: dict) -> dict:
     ended = params.get("ended")
 
     try:
-        _kg.invalidate(subject, predicate, obj, ended=ended)
+        _get_kg().invalidate(subject, predicate, obj, ended=ended)
         return {
             "success": True,
             "fact": f"{subject} → {predicate} → {obj}",
@@ -855,7 +890,7 @@ def tool_kg_timeline(params: dict) -> dict:
     entity = params.get("entity")
 
     try:
-        results = _kg.timeline(entity)
+        results = _get_kg().timeline(entity)
         return {
             "success": True,
             "entity": entity or "all",
@@ -869,7 +904,7 @@ def tool_kg_timeline(params: dict) -> dict:
 def tool_kg_stats(params: dict) -> dict:
     """Knowledge graph statistics."""
     try:
-        stats = _kg.stats()
+        stats = _get_kg().stats()
         return {"success": True, "stats": stats}
     except Exception as e:
         return {"error": str(e)}

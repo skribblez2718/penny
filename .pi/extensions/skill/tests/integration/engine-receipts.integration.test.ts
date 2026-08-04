@@ -238,6 +238,58 @@ describe("trusted execution-owner receipt seam", () => {
     }
   });
 
+  it("keeps agent memory writable while shadowing orchestration state under the SAME root", () => {
+    // The real topology: <pennyRoot>/.mempalace (agent memory, must be WRITABLE) and
+    // <pennyRoot>/.penny (orchestration authority, must stay SHADOWED) are siblings.
+    // Under `--ro-bind / /` mempalace was read-only, so the memory bridge died with
+    // sqlite3.OperationalError and every agent ran blind to durable context.
+    const pennyRoot = mkdtempSync(path.join(os.tmpdir(), "penny-root-"));
+    const targetRoot = mkdtempSync(path.join(os.tmpdir(), "penny-target-"));
+    const mempalace = path.join(pennyRoot, ".mempalace");
+    const orchestration = path.join(pennyRoot, ".penny");
+    mkdirSync(mempalace);
+    mkdirSync(orchestration);
+    writeFileSync(path.join(orchestration, "orchestration.db"), "owner-state", { mode: 0o600 });
+    try {
+      const invocation = buildIsolatedAgentInvocation(
+        {
+          command: "/bin/sh",
+          args: [
+            "-c",
+            // Write agent memory (must succeed), then confirm the owner store is
+            // invisible inside the namespace (tmpfs shadow).
+            'printf remembered > "$1/kg.db" || exit 3; ' +
+              '[ -e "$2/orchestration.db" ] && exit 4; exit 0',
+            "sh",
+            mempalace,
+            orchestration,
+          ],
+        },
+        targetRoot,
+        {
+          protectedPaths: [orchestration],
+          writablePaths: [mempalace],
+          requireSandbox: true,
+        }
+      );
+      const result = spawnSync(invocation.command, invocation.args, {
+        cwd: targetRoot,
+        env: isolatedAgentEnvironment({ ...process.env }),
+        encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      // Agent memory really persisted ...
+      expect(readFileSync(path.join(mempalace, "kg.db"), "utf8")).toBe("remembered");
+      // ... and the authority boundary under the same root is untouched.
+      expect(readFileSync(path.join(orchestration, "orchestration.db"), "utf8")).toBe(
+        "owner-state"
+      );
+    } finally {
+      rmSync(pennyRoot, { recursive: true, force: true });
+      rmSync(targetRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a writable agent path that is a symlink", () => {
     const base = mkdtempSync(path.join(os.tmpdir(), "penny-agent-symlink-"));
     const real = path.join(base, "real");

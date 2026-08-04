@@ -465,11 +465,18 @@ def _is_json_value(value: Any) -> bool:
 
 def _validate_profile_schema(profile: Mapping[str, Any]) -> None:  # noqa: C901
     errors: list[str] = []
+    # JSON-convention annotation keys ($schema, $comment, $schema_note, ...) are
+    # documentation, not contract values: ignored for validation and resolution.
+    annotation_keys = {key for key in profile if key.startswith("$")}
     forbidden = sorted(set(profile) & _FORBIDDEN_PROFILE_FIELDS)
     errors.extend(f"{field}: forbidden per-work-item profile field" for field in forbidden)
-    unknown = sorted(set(profile) - _PROFILE_ALLOWED_FIELDS - _FORBIDDEN_PROFILE_FIELDS)
+    unknown = sorted(
+        set(profile) - _PROFILE_ALLOWED_FIELDS - _FORBIDDEN_PROFILE_FIELDS - annotation_keys
+    )
     errors.extend(f"{field}: unknown profile field" for field in unknown)
     for field, value in profile.items():
+        if field in annotation_keys:
+            continue
         if field in _PROFILE_LIST_PATH_FIELDS:
             if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
                 errors.append(f"{field}: expected an array of path strings")
@@ -594,6 +601,9 @@ def resolve_profile(  # noqa: C901
     except ValueError as exc:
         raise ProfileResolutionError(str(exc)) from exc
     _validate_profile_schema(profile)
+    # Strip JSON-convention annotation keys before resolution/merge so they never
+    # surface as contract constraints downstream.
+    profile = {key: value for key, value in profile.items() if not key.startswith("$")}
     resolved_profile = _resolve_profile_owned_paths(profile, profile_path.parent)
     merged: dict[str, Any] = dict(resolved_profile)
     merged.update(dict(constraints))

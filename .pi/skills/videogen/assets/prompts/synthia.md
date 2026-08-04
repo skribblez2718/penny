@@ -15,6 +15,26 @@ At the caller-selected phase, turn Annie's evidence-grounded inventory into a so
 
 Create the storyboard and concept-to-beat-to-scene coverage matrix from Annie's inventory. Every concept must map to at least one beat and every beat to a scene, with source-span, analogy/convention, and intended-primitive evidence.
 
+Authoring consistency rules (the independent reviewer rejects violations):
+- **Narration promises only what visuals stage.** A location, character, setting, or universe identity may be spoken ONLY when a visual parameter in that scene actually carries it. No atmospheric name-dropping over generic primitives.
+- **Ordered-reveal primitives match spoken order.** When a primitive reveals content in a fixed order (left-then-right comparisons, sequential lists/bars), arrange its content so the reveal order equals the order the narration introduces things.
+- **Demonstrations are animated, not captioned.** A source-backed action or
+  sequence (a flip, a covering, a step-by-step construction) must be staged
+  with structural/animated primitives that show the action unfolding — a
+  Callout or text panel restating the narration is recitation, not a
+  demonstration, and will be rejected.
+- **Pace narration for adult listening.** Target roughly 130–150 spoken words
+  per minute per beat including natural pauses; when a cue's word count
+  exceeds what its beat duration supports, split the beat or extend the
+  duration hint rather than compressing delivery.
+- **Arithmetic self-consistency is computed, never eyeballed.** Before emitting
+  any SUMMARY, verify with a real computation (python/bash) that every scene's
+  `duration_hint` equals the sum of its visuals' `duration` values and that the
+  total estimated duration equals the sum of scene durations. Fix any drift in
+  the same pass; a storyboard that is internally inconsistent by even a second
+  is a rejection.
+- **Revisions refresh every cross-reference in the same pass.** If you revise the storyboard, update the coverage matrix's (and any other artifact's) embedded storyboard hash and re-verify every cross-artifact hash you cite before emitting your SUMMARY. A stale embedded hash is a rejection.
+
 For every concept, author the mandatory **unlabeled** learner-facing progression: a source-backed intuition hook, a worked example that visibly performs every atomic source-backed step in order, and a formal close that maps the same concrete objects and steps back to the section's notation. Do not display methodology labels to learners. If a registered section analogy exists, use that exact analogy with its evidenced key property and orientation. If none exists, use only a source-backed intuition hook; never invent an everyday analogy. If the section cannot support the complete source-backed progression, block with an upstream-content report rather than weaken it.
 
 Plan visuals to teach rather than decorate. Preserve convention, accessibility, mathematical-honesty, mnemonic, pronunciation, and caller-authorized concept-embodiment requirements. Estimate natural scene and total duration without padding; honor a supplied hard cap and record any supplied guide overage as a flag.
@@ -22,6 +42,8 @@ Plan visuals to teach rather than decorate. Preserve convention, accessibility, 
 ## `NARRATION_SCRIPT` authoring
 
 From the structurally complete storyboard, write concise adult, quasi-formal spoken narration for each scene. It must teach rather than recite section text; every visual action needs a teaching purpose. Map every claim to the finalized section, synchronize first appearance of each new symbol or term with its caller-canon pronunciation and notation, and retain any inventoried mnemonic at its concept landing point. Do not introduce an untaught premise, skipped worked step, new analogy, or plot lane.
+
+The storyboard's per-scene `narration` fields are the bundle authority for spoken text: when your narration work updates them, rewrite the storyboard file too, keep the scene set and scene IDs byte-identical in structure (structural edits belong to the storyboard phase), and report the refreshed `storyboard_path` and `storyboard_sha256` as optional fields in your SUMMARY so the orchestrator's ledger stays current. If you do not touch the storyboard file, omit those fields.
 
 Write the pronunciation table and claim/source map as separate caller-owned artifacts. The script remains subject to independent pre-synthesis review; do not treat authorship as approval.
 
@@ -43,6 +65,21 @@ Write the smallest owner-specific change plan. Preserve unaffected scene IDs and
 ## Blackboard protocol
 
 Use the task's session identifier and room `skills/videogen-{session_id}`. Store compact references, hashes, and evidence only. Use drawer title `{session_id} Storyboard i{n}` for `STORYBOARD`, `{session_id} Narration i{n}` for `NARRATION_SCRIPT`, and `{session_id} Refine i{n}` for `REFINE`, where `n` is the task's iteration. Earlier-iteration drawers are immutable.
+
+## Artifact production — file artifacts are written with bash
+
+Every `*_path` artifact in your wire format is a **durable workspace file**
+written by you with your `bash` tool — mempalace drawers hold only compact
+evidence references. Procedure for every file artifact:
+
+1. Compose the complete document.
+2. `mkdir -p` the destination directory and write with a bash heredoc
+   (`cat > <path> <<'EOF' ... EOF`) at exactly the destination the task
+   supplies — never a path from the free-form goal text.
+3. Compute `sha256sum <path>` and copy the exact 64-character lowercase hex
+   value (no prefix, no truncation) into the matching `*_sha256` field.
+4. Verify the file exists and parses (`ls -l`, `head`) before emitting your
+   SUMMARY. Never cite a path or hash you have not verified on disk.
 
 ## Wire format
 
@@ -70,7 +107,9 @@ narration_path, narration_sha256, pronunciation_table_path, pronunciation_table_
 claim_source_map_path, claim_source_map_sha256, scene_count, evidence_refs, issues
 ```
 
-Only optional fields: `clarifying_questions`, `warnings`. `scene_count` is an integer, `needs_clarification` is a boolean, and every named path/hash is a string.
+Only optional fields: `clarifying_questions`, `warnings`, `storyboard_path`, `storyboard_sha256`. `scene_count` is an integer, `needs_clarification` is a boolean, and every named path/hash is a string.
+
+**When your narration work rewrites the storyboard file's per-scene `narration` fields (it normally does — the storyboard is the bundle's spoken-text authority), you MUST include `storyboard_path` and `storyboard_sha256` with the refreshed file's exact current lowercase SHA-256.** Omitting them leaves the orchestrator's ledger stale and the independent reviewer will be rejected through no fault of hers. Keep the scene set/IDs structurally unchanged; structural edits route back through the storyboard phase.
 
 ### `REFINE`
 

@@ -14,7 +14,7 @@ import json
 import re
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,7 +32,7 @@ from ..primitives.spec import ParallelSpec, PrimitiveSpec
 OPEN_CANON_CHANGE_POLICY: str = "restart_storyboard"
 
 # Separate finite repair budgets.  Neither consumes the operator refine budget.
-MAX_CARREN_REPAIRS: int = 3
+MAX_CARREN_REPAIRS: int = 5  # OPEN constant (skill spec §15): pre-synthesis revision bound; raised 3→5 after live-pilot evidence of near-converged exhaustion
 MAX_AUTOMATIC_REPAIRS: int = 3
 
 CONFIDENCES = frozenset({"CERTAIN", "PROBABLE", "POSSIBLE", "UNCERTAIN"})
@@ -152,7 +152,15 @@ VG_SYNTHIA_NARRATION_CONTRACT = _contract(
         "evidence_refs": list,
         "issues": list,
     },
-    {"clarifying_questions": list, "warnings": list},
+    {
+        "clarifying_questions": list,
+        "warnings": list,
+        # Narration text lives in the storyboard's scene entries (the bundle
+        # authority); when authoring updates those fields, the summary reports
+        # the refreshed storyboard artifact so the ledger stays current.
+        "storyboard_path": str,
+        "storyboard_sha256": str,
+    },
     evidence=("evidence_refs",),
     conditional_evidence=(("clarifying_questions", "needs_clarification"),),
 )
@@ -528,8 +536,28 @@ def _extract_nonempty(value: Any, *keys: str) -> str | None:
     return None
 
 
+# Keys the skill extension injects into every run's constraints at invocation
+# time (runtime plumbing, not caller contract data). They are consumed by the
+# playbook and stripped before contract validation.
+_ENGINE_RUNTIME_KEYS = frozenset({"skill_dir"})
+
+
+def _caller_constraints(ctx: RunContext) -> dict[str, Any]:
+    """The caller's contract constraints with engine-runtime keys removed."""
+    return {
+        key: value
+        for key, value in dict(ctx.constraints or {}).items()
+        if key not in _ENGINE_RUNTIME_KEYS
+    }
+
+
 def _skill_scripts(ctx: RunContext) -> str:
     candidates: list[Path] = []
+    injected = (ctx.constraints or {}).get("skill_dir")
+    if isinstance(injected, str) and injected:
+        injected_path = Path(injected)
+        if injected_path.is_absolute():
+            candidates.append(injected_path / "scripts")
     if ctx.project_root:
         candidates.append(
             Path(ctx.project_root) / ".pi" / "skills" / "videogen" / "scripts"
@@ -572,7 +600,7 @@ class VideogenPlaybook(BasePlaybook):
         """Normalize the whole caller contract before the first side effect."""
         contracts = self._contracts(ctx)
         try:
-            resolution = contracts.resolve_profile(ctx.constraints or {})
+            resolution = contracts.resolve_profile(_caller_constraints(ctx))
             intake = contracts.validate_and_normalize_constraints(resolution)
         except contracts.ConstraintValidationError as exc:
             raise RuntimeError(
@@ -952,9 +980,12 @@ class VideogenPlaybook(BasePlaybook):
         if contract is None:
             raise ValueError(f"no semantic contract for {state}")
         allowed = set(contract["required"]) | set(contract.get("optional", {}))
-        if set(summary) != allowed and not set(summary).issubset(allowed):
-            unknown = sorted(set(summary) - allowed)
-            raise ValueError(f"unknown SUMMARY fields {unknown}")
+        unknown = sorted(set(summary) - allowed)
+        if unknown:
+            # Benign extra fields (agent-supplied receipts, notes, etc.) are
+            # ignored, not fatal: contracts validate what matters — required
+            # fields, formats, and evidence — and tolerate agent variance.
+            summary = {key: value for key, value in summary.items() if key in allowed}
         missing = sorted(set(contract["required"]) - set(summary))
         if missing:
             raise ValueError(f"missing SUMMARY fields {missing}")
@@ -979,6 +1010,17 @@ class VideogenPlaybook(BasePlaybook):
         for field in ("evidence_refs", "cited_evidence"):
             if field in summary:
                 self._validate_evidence_refs(summary[field], field)
+        if status == "BLOCKED":
+            # An honest block report must not be masked by artifact format
+            # validation: the artifacts legitimately may not exist yet. The
+            # route handler surfaces the block; issues carry the reason.
+            if not summary.get("issues"):
+                raise ValueError("BLOCKED status requires nonempty issues")
+            return
+        if status == "UNCERTAIN":
+            # Uncertainty pauses via the existing pause semantics; artifacts may
+            # not exist yet, so skip artifact-pair validation only.
+            return
         if state == "INGEST":
             self._artifact_pair(summary, "inventory_path", "inventory_sha256")
             self._nonnegative_int(summary["concept_count"], "concept_count")
@@ -989,12 +1031,14 @@ class VideogenPlaybook(BasePlaybook):
             )
             if self._nonnegative_int(summary["scene_count"], "scene_count") <= 0:
                 raise ValueError("scene_count must be positive")
+            duration_estimate = summary["estimated_duration_seconds"]
             if (
-                not isinstance(summary["estimated_duration_seconds"], float)
-                or summary["estimated_duration_seconds"] < 0
+                isinstance(duration_estimate, bool)
+                or not isinstance(duration_estimate, (int, float))
+                or duration_estimate < 0
             ):
                 raise ValueError(
-                    "estimated_duration_seconds must be a nonnegative float"
+                    "estimated_duration_seconds must be a nonnegative number"
                 )
         elif state == "NARRATION_SCRIPT":
             stage = self._vg(self.ctx)["phase_state"]["narration_stage"]
@@ -1005,6 +1049,8 @@ class VideogenPlaybook(BasePlaybook):
                     ("claim_source_map_path", "claim_source_map_sha256"),
                 ):
                     self._artifact_pair(summary, p, h)
+                if "storyboard_path" in summary or "storyboard_sha256" in summary:
+                    self._artifact_pair(summary, "storyboard_path", "storyboard_sha256")
                 if self._nonnegative_int(summary["scene_count"], "scene_count") <= 0:
                     raise ValueError("scene_count must be positive")
             else:
@@ -1130,8 +1176,31 @@ class VideogenPlaybook(BasePlaybook):
                 raise ValueError("NARRATION_SCRIPT requires exactly one staged branch")
             summary = dict(next(iter(branches.values())))
         self._validate_summary_semantics(state, summary)
-        ref_key = self._summary_ref_key(state, summary)
-        self._persist_summary_ref(ctx, ref_key, summary)
+        auto_qa_report: dict[str, Any] | None = None
+        disagreement_ids: list[str] = []
+        if state == "AUTO_QA":
+            auto_qa_report, disagreement_ids = self._auto_qa_gate_report(
+                ctx, summary["check_results"]
+            )
+        if disagreement_ids:
+            self._persist_summary_ref(
+                ctx,
+                "AUTO_QA:rejected",
+                {
+                    "schema_version": 1,
+                    "reason": "Vera PASS disagrees with persisted deterministic evidence",
+                    "disagreement_ids": disagreement_ids,
+                    "deterministic_qa": copy.deepcopy(
+                        self._vg(ctx)["phase_state"]["latest_summary_refs"].get(
+                            "deterministic_qa"
+                        )
+                    ),
+                    "submitted_summary": copy.deepcopy(summary),
+                },
+            )
+        else:
+            ref_key = self._summary_ref_key(state, summary)
+            self._persist_summary_ref(ctx, ref_key, summary)
         self._vg(ctx)["warnings"].extend(
             str(item) for item in summary.get("warnings") or []
         )
@@ -1141,6 +1210,27 @@ class VideogenPlaybook(BasePlaybook):
             self._pause_route(ctx, state, pause_reason)
             return
         if summary.get("status") == "BLOCKED":
+            # A narration-author block whose issues route to STORYBOARD is a
+            # bounded in-run repair (the author correctly refused to make
+            # structural edits mid-narration), not a terminal condition.
+            vg = self._vg(ctx)
+            if (
+                state == "NARRATION_SCRIPT"
+                and vg["phase_state"]["narration_stage"] == "AUTHOR"
+                and any(
+                    str(item.get("owner") or item.get("earliest_route") or "")
+                    == "STORYBOARD"
+                    for item in summary.get("issues") or []
+                    if isinstance(item, Mapping)
+                )
+                and vg["budget"]["carren_repairs_used"] < MAX_CARREN_REPAIRS
+            ):
+                vg["budget"]["carren_repairs_used"] += 1
+                vg["lifecycle_state"] = "STORYBOARD"
+                vg["phase_state"]["narration_stage"] = "AUTHOR"
+                self._persist_summary_ref(ctx, "storyboard_repair_request", summary)
+                self.sm.send("narration_storyboard")
+                return
             raise RuntimeError(
                 f"{state} blocked: {summary.get('issues') or 'no issue detail'}"
             )
@@ -1173,7 +1263,14 @@ class VideogenPlaybook(BasePlaybook):
             vg["lifecycle_state"] = "VALIDATE"
             self.sm.send("code_done")
         elif state == "AUTO_QA":
-            self._route_auto_qa(ctx, summary)
+            if auto_qa_report is None:
+                raise RuntimeError("AUTO_QA gate report was not computed")
+            self._route_auto_qa(
+                ctx,
+                summary,
+                report=auto_qa_report,
+                disagreement_ids=disagreement_ids,
+            )
         elif state == "REFINE":
             self._route_refine(ctx, summary)
         else:
@@ -1209,6 +1306,35 @@ class VideogenPlaybook(BasePlaybook):
         if stage == "AUTHOR":
             vg["paths"]["narration"] = summary["narration_path"]
             vg["hashes"]["narration"] = summary["narration_sha256"]
+            if summary.get("storyboard_sha256"):
+                # Authoring may update the storyboard's per-scene narration text
+                # (the bundle authority). Accept the refreshed artifact only when
+                # the scene set is unchanged — structural edits belong to
+                # STORYBOARD, not narration authoring.
+                try:
+                    updated = json.loads(
+                        Path(str(summary["storyboard_path"])).read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise RuntimeError(
+                        f"updated storyboard is unreadable JSON: {exc}"
+                    ) from exc
+                updated_ids = [
+                    scene.get("scene_id")
+                    for scene in (updated.get("scenes") or [])
+                    if isinstance(scene, Mapping)
+                ]
+                if set(updated_ids) != set(vg["scene_ledger"]) or len(
+                    updated_ids
+                ) != len(set(updated_ids)):
+                    raise RuntimeError(
+                        "narration authoring changed the storyboard scene set; "
+                        "structural edits must route through STORYBOARD"
+                    )
+                vg["paths"]["storyboard"] = summary["storyboard_path"]
+                vg["hashes"]["storyboard"] = summary["storyboard_sha256"]
             vg["phase_state"]["narration_stage"] = "CARREN"
             self.sm.send("narration_again")
             return
@@ -1243,34 +1369,54 @@ class VideogenPlaybook(BasePlaybook):
             vg["phase_state"]["narration_stage"] = "AUTHOR"
             self.sm.send("narration_again")
 
-    def _route_auto_qa(self, ctx: RunContext, summary: Mapping[str, Any]) -> None:
+    def _route_auto_qa(
+        self,
+        ctx: RunContext,
+        summary: Mapping[str, Any],
+        *,
+        report: Mapping[str, Any],
+        disagreement_ids: Sequence[str],
+    ) -> None:
         vg = self._vg(ctx)
-        report = self._qa(ctx).roll_up_report(summary["check_results"])
-        vg["paths"]["qa_report"] = summary["qa_report_path"]
-        vg["hashes"]["qa_report"] = summary["qa_report_sha256"]
+        gate_ref = self._artifacts(ctx).atomic_write_json(
+            str(
+                Path(vg["paths"]["workspace_dir"])
+                / "evidence"
+                / "qa"
+                / f"gate-{vg['review']['iteration']:03d}.json"
+            ),
+            dict(report),
+            root=vg["paths"]["workspace_dir"],
+        )
+        vg["phase_state"]["latest_summary_refs"]["AUTO_QA:gate"] = gate_ref
+        vg["paths"]["qa_report"] = gate_ref["path"]
+        vg["hashes"]["qa_report"] = gate_ref["sha256"]
         vg["qa"] = {
             "verdict": report["verdict"],
-            "report_path": summary["qa_report_path"],
-            "report_sha256": summary["qa_report_sha256"],
+            "report_path": gate_ref["path"],
+            "report_sha256": gate_ref["sha256"],
             "blocking_ids": list(report["blocking_ids"]),
             "uncertain_ids": list(report["uncertain_ids"]),
         }
-        if summary["verdict"] == "PASS":
+        if report["verdict"] == "PASS":
+            if disagreement_ids:
+                raise RuntimeError("an AUTO_QA disagreement cannot produce PASS")
             self._create_gate_packet(ctx)
             vg["lifecycle_state"] = "OPERATOR_REVIEW"
             self.sm.send("qa_pass")
             return
-        if summary["verdict"] == "UNCERTAIN":
+        if report["verdict"] == "UNCERTAIN":
             self._pause_route(
                 ctx, "AUTO_QA", "AUTO_QA has one or more uncertain checks"
             )
             return
-        if not self._consume_automatic_repair(
-            ctx, summary.get("unresolved_issues") or []
-        ):
+        unresolved = list(summary.get("unresolved_issues") or [])
+        if not unresolved:
+            unresolved = list(report["blocking_ids"])
+        if not self._consume_automatic_repair(ctx, unresolved):
             self.sm.send("qa_exhausted")
             return
-        route = self._earliest_qa_route(summary["check_results"])
+        route = self._earliest_qa_route(report["checks"])
         self._route_qa_event(ctx, route)
 
     def _route_refine(self, ctx: RunContext, summary: Mapping[str, Any]) -> None:
@@ -1465,6 +1611,40 @@ class VideogenPlaybook(BasePlaybook):
             raise RuntimeError(
                 "VOICE_SYNTH did not produce every narration-bearing scene audio"
             )
+        # Measured-audio-first timing: the deterministic engine — not an agent —
+        # writes measured WAV durations into the storyboard's measured_duration
+        # fields and emits a hash-bound audio manifest so downstream codegen has
+        # attested timing authority (architecture rule 2).
+        storyboard_path = vg["paths"]["storyboard"]
+        storyboard_doc = _read_json(storyboard_path)
+        manifest_rows: dict[str, dict[str, Any]] = {}
+        for scene in storyboard_doc.get("scenes") or []:
+            if not isinstance(scene, MutableMapping):
+                continue
+            row = vg["scene_ledger"].get(str(scene.get("scene_id")))
+            if row and row.get("audio_duration_seconds"):
+                scene["measured_duration"] = float(row["audio_duration_seconds"])
+                manifest_rows[str(scene.get("scene_id"))] = {
+                    "audio_path": row["audio_path"],
+                    "audio_sha256": row["audio_sha256"],
+                    "duration_seconds": float(row["audio_duration_seconds"]),
+                    "narration_sha256": row["narration_sha256"],
+                }
+        artifacts = self._artifacts(ctx)
+        artifacts.atomic_write_json(
+            storyboard_path, storyboard_doc, root=vg["paths"]["workspace_dir"]
+        )
+        vg["hashes"]["storyboard"] = self._file_hash(storyboard_path)
+        manifest_path = str(
+            Path(storyboard_path).parent / "audio-manifest-current.json"
+        )
+        artifacts.atomic_write_json(
+            manifest_path,
+            {"scenes": manifest_rows, "storyboard_sha256": vg["hashes"]["storyboard"]},
+            root=vg["paths"]["workspace_dir"],
+        )
+        vg["paths"]["audio_manifest"] = manifest_path
+        vg["hashes"]["audio_manifest"] = self._file_hash(manifest_path)
         vg["lifecycle_state"] = "CODEGEN"
 
     def _run_validate(self, ctx: RunContext) -> None:  # noqa: C901
@@ -1651,6 +1831,7 @@ class VideogenPlaybook(BasePlaybook):
                 "height",
                 "source_path",
                 "command",
+                "result",
                 "elapsed_ms",
             },
             "_extract_poster",
@@ -1667,12 +1848,34 @@ class VideogenPlaybook(BasePlaybook):
         vg["hashes"]["final_captions"] = self._file_hash(final_captions)
         vg["hashes"]["final_poster"] = poster["sha256"]
         vg["service_ledger"]["final_video_id"] = result["video_id"]
+        finalize_ref = self._artifacts(ctx).atomic_write_json(
+            str(
+                Path(vg["paths"]["workspace_dir"])
+                / "evidence"
+                / "finalize"
+                / f"poster-extraction-i{vg['review']['iteration']:03d}.json"
+            ),
+            {
+                "schema_version": 1,
+                "phase": "FINALIZE",
+                "poster_command": copy.deepcopy(poster["command"]),
+                "poster_result": copy.deepcopy(poster["result"]),
+                "poster_path": poster["path"],
+                "poster_sha256": poster["sha256"],
+                "source_path": poster["source_path"],
+                "width": poster["width"],
+                "height": poster["height"],
+            },
+            root=vg["paths"]["workspace_dir"],
+        )
+        vg["phase_state"]["latest_summary_refs"]["FINALIZE"] = finalize_ref
         self._update_provenance_checksums(
             ctx,
             {
                 "final/video": vg["hashes"]["final_video"],
                 "final/captions": vg["hashes"]["final_captions"],
                 "final/poster": vg["hashes"]["final_poster"],
+                "evidence/finalize/poster-extraction": finalize_ref["sha256"],
             },
         )
         # Updating provenance changes the bundle tree digest.
@@ -2761,6 +2964,13 @@ class VideogenPlaybook(BasePlaybook):
             "height": stream["height"],
             "source_path": scene1_final_video_path,
             "command": list(command.command),
+            "result": {
+                "ok": command.ok,
+                "returncode": command.returncode,
+                "stdout": command.stdout,
+                "stderr": command.stderr,
+                "elapsed_ms": command.elapsed_ms,
+            },
             "elapsed_ms": command.elapsed_ms,
         }
 
@@ -2777,9 +2987,9 @@ class VideogenPlaybook(BasePlaybook):
                 {
                     "query": "videogen_learning instructional video craft "
                     + json.dumps(dict(query), sort_keys=True),
-                    "context": "Prior generic videogen outcomes; current caller canon always wins.",
+                    "context": "Prior generic videogen craft records; current caller canon always wins.",
                     "wing": "penny",
-                    "room": "outcomes",
+                    "room": "videogen-learning",
                     "limit": 5,
                     "include_full": False,
                     "track_recall": True,
@@ -2815,7 +3025,7 @@ class VideogenPlaybook(BasePlaybook):
                 {
                     "query": f"videogen_learning {ctx.run_id}",
                     "wing": "penny",
-                    "room": "outcomes",
+                    "room": "videogen-learning",
                     "limit": 5,
                     "include_full": True,
                 }
@@ -2832,7 +3042,7 @@ class VideogenPlaybook(BasePlaybook):
             result = tool_add_drawer(
                 {
                     "wing": "penny",
-                    "room": "outcomes",
+                    "room": "videogen-learning",
                     "content": content,
                     "source_file": "apps/orchestration/src/orchestration/playbooks/videogen.py",
                     "added_by": "engine:videogen",
@@ -3489,6 +3699,67 @@ class VideogenPlaybook(BasePlaybook):
     # ------------------------------------------------------------------
     # QA, gate packet, budgets, and result
     # ------------------------------------------------------------------
+    def _deterministic_qa_rows(self, ctx: RunContext) -> list[dict[str, Any]]:
+        vg = self._vg(ctx)
+        ref = vg["phase_state"]["latest_summary_refs"].get("deterministic_qa")
+        if not isinstance(ref, Mapping):
+            raise ValueError("AUTO_QA requires persisted deterministic evidence")
+        path = ref.get("path")
+        expected = ref.get("sha256")
+        if not isinstance(path, str) or self._file_hash_or_none(path) != expected:
+            raise ValueError("persisted deterministic QA evidence is missing or stale")
+        payload = _read_json(path)
+        if (
+            set(payload) != {"schema_version", "checks"}
+            or payload.get("schema_version") != 1
+        ):
+            raise ValueError("persisted deterministic QA report has an invalid shape")
+        rows = payload.get("checks")
+        if not isinstance(rows, list):
+            raise ValueError("persisted deterministic QA checks must be a list")
+        qa = self._qa(ctx)
+        validated = [qa.validate_qa_result(row) for row in rows]
+        by_id = {row["id"]: row for row in validated}
+        mechanical_ids = tuple(qa.MECHANICAL_CHECK_IDS)
+        if len(validated) != len(mechanical_ids) or set(by_id) != set(mechanical_ids):
+            raise ValueError(
+                "persisted deterministic QA requires every mechanical row exactly once"
+            )
+        return [copy.deepcopy(by_id[check_id]) for check_id in mechanical_ids]
+
+    def _auto_qa_gate_report(
+        self, ctx: RunContext, vera_rows: Sequence[Mapping[str, Any]]
+    ) -> tuple[dict[str, Any], list[str]]:
+        qa = self._qa(ctx)
+        vera_report = qa.roll_up_report(vera_rows)
+        deterministic = self._deterministic_qa_rows(ctx)
+        deterministic_by_id = {row["id"]: row for row in deterministic}
+        disagreement_ids: list[str] = []
+        combined: list[dict[str, Any]] = []
+        status_rank = {"PASS": 0, "n/a": 0, "UNCERTAIN": 1, "FAIL": 2}
+        for vera_row in vera_report["checks"]:
+            deterministic_row = deterministic_by_id.get(vera_row["id"])
+            if deterministic_row is None:
+                combined.append(copy.deepcopy(vera_row))
+                continue
+            if (
+                deterministic_row["status"] in {"FAIL", "UNCERTAIN"}
+                and vera_row["status"] == "PASS"
+            ):
+                disagreement_ids.append(vera_row["id"])
+            selected = (
+                deterministic_row
+                if status_rank[deterministic_row["status"]]
+                > status_rank[vera_row["status"]]
+                else vera_row
+            )
+            combined_row = copy.deepcopy(selected)
+            combined_row["evidence"] = copy.deepcopy(
+                deterministic_row["evidence"] + vera_row["evidence"]
+            )
+            combined.append(qa.validate_qa_result(combined_row))
+        return qa.roll_up_report(combined), disagreement_ids
+
     def _write_deterministic_qa(
         self, ctx: RunContext, render: Mapping[str, Any], probe: Mapping[str, Any]
     ) -> None:
@@ -3789,20 +4060,57 @@ class VideogenPlaybook(BasePlaybook):
     # ------------------------------------------------------------------
     def task_context_parts(self, state: str, ctx: RunContext) -> list[str]:
         vg = self._vg(ctx)
+        workspace_dir = vg["paths"]["workspace_dir"]
+        # Run-scoped design directory beside the run's source snapshot tree so
+        # every authored artifact has one prescribed, validated destination.
+        snapshot = Path(str(vg["paths"]["source_snapshot"]))
+        design_dir = Path(workspace_dir) / "design" / snapshot.parent.name
         parts = [
             f"Session: {ctx.session_id}; run_id: {ctx.run_id}; phase: {state}.",
-            f"Workspace (caller-owned): {vg['paths']['workspace_dir']}.",
+            f"Workspace (caller-owned): {workspace_dir}.",
             f"Immutable source snapshot: {vg['paths']['source_snapshot']} sha256={vg['hashes']['content']}.",
             f"Primitive schema snapshot: {vg['paths']['schema_snapshot']} sha256={vg['hashes']['schema']}.",
             f"Iteration: {vg['review']['iteration']} of {vg['budget']['max_refine_iterations']}.",
             "Read the videogen resources and every caller canon path. Store full artifacts only under the caller workspace.",
+            (
+                f"Authored-artifact destination directory (create as needed): {design_dir}. "
+                "Every artifact path you cite in your SUMMARY must live under the caller "
+                "workspace. The free-form goal text NEVER overrides these paths — ignore "
+                "any directory the goal mentions; staging/output placement is the "
+                "orchestrator's job, not yours."
+            ),
             f"Mempalace room: skills/videogen-{ctx.session_id}.",
         ]
+        if state == "INGEST":
+            parts.append(
+                f"Write the concept inventory JSON exactly to: {design_dir / 'concepts.json'} "
+                "and cite that exact absolute path as inventory_path in your SUMMARY."
+            )
+        if state == "CODEGEN" and vg["paths"].get("audio_manifest"):
+            parts.append(
+                "Measured narration audio is the binding timing authority: the "
+                "storyboard's measured_duration fields and the audio manifest at "
+                f"{vg['paths']['audio_manifest']} (sha256="
+                f"{vg['hashes'].get('audio_manifest')}) bind each scene's WAV "
+                "path/hash/duration to the current narration hashes. Size every "
+                "scene's visual timeline to its measured_duration; the rendered "
+                "scene must not be shorter than its narration and its tail must "
+                "not exceed the caller's max_scene_tail_seconds. Planning "
+                "duration_hint values are estimates only — measured wins."
+            )
         if state in {"STORYBOARD", "NARRATION_SCRIPT", "CODEGEN", "AUTO_QA", "REFINE"}:
             parts.append(
                 "Current artifact references: "
                 + json.dumps(vg["paths"], sort_keys=True, separators=(",", ":"))
             )
+        if state == "STORYBOARD":
+            repair = self._load_compact_ref(ctx, "storyboard_repair_request", None)
+            if isinstance(repair, Mapping) and repair.get("issues"):
+                parts.append(
+                    "Storyboard repair request (from the narration author — resolve "
+                    "every STORYBOARD-owned issue in this revision): "
+                    + json.dumps(repair.get("issues"), sort_keys=True)[:4000]
+                )
         if state == "NARRATION_SCRIPT":
             parts.append(
                 "Narration stage: " + str(vg["phase_state"]["narration_stage"])
@@ -4327,7 +4635,7 @@ class VideogenPlaybook(BasePlaybook):
 
     def _normalized_intake(self, ctx: RunContext) -> Any:
         contracts = self._contracts(ctx)
-        resolution = contracts.resolve_profile(ctx.constraints or {})
+        resolution = contracts.resolve_profile(_caller_constraints(ctx))
         return contracts.validate_and_normalize_constraints(resolution)
 
     def _contracts(self, ctx: RunContext) -> Any:

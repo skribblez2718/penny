@@ -573,5 +573,85 @@ class TestErrorHandling:
         assert "error" in result
 
 
+class TestKnowledgeGraphFaultIsolation:
+    """A KG-only fault must NOT take down the rest of the bridge.
+
+    Regression guard. The knowledge graph lives at mempalace's DEFAULT_KG_PATH
+    (~/.mempalace/knowledge_graph.sqlite3) — a HOME-based path, separate from the
+    project palace_path that holds drawers. It was constructed at module import, so
+    an unwritable HOME (e.g. a sandboxed agent under `--ro-bind / /`) killed every
+    tool before dispatch: 337 bridge deaths across 38 sessions dropped 136 write
+    calls (kg_add, diary_write, add_drawer) that never needed the KG at all.
+
+    KnowledgeGraph._init_db runs CREATE TABLE IF NOT EXISTS, and SQLite needs write
+    access even to OPEN — hence a read-only KG directory reproduces the fault exactly.
+    """
+
+    @staticmethod
+    def _call_with_readonly_kg_home(tmp_path, tool: str, params: dict):
+        """Run one bridge call with HOME pointed at a read-only .mempalace."""
+        import os
+
+        fake_home = tmp_path / "home"
+        (fake_home / ".mempalace").mkdir(parents=True)
+        env = dict(os.environ)
+        env["HOME"] = str(fake_home)
+        # Keep the drawer store on the real palace so non-KG tools have data to read;
+        # only the KG path (derived from HOME) is broken.
+        env.setdefault(
+            "MEMPALACE_PALACE_PATH",
+            str(BRIDGE_PATH.parent.parent.parent.parent / ".mempalace"),
+        )
+        (fake_home / ".mempalace").chmod(0o500)  # r-x: readable, NOT writable
+        try:
+            proc = subprocess.run(
+                [str(VENV_PYTHON), str(BRIDGE_PATH)],
+                input=json.dumps({"tool": tool, "params": params}),
+                capture_output=True,
+                text=True,
+                timeout=90,
+                env=env,
+            )
+        finally:
+            (fake_home / ".mempalace").chmod(0o700)  # restore so tmp cleanup works
+        return proc
+
+    def test_non_kg_tool_survives_unwritable_kg(self, tmp_path):
+        """`status` needs no KG — it must still succeed when the KG is unopenable."""
+        proc = self._call_with_readonly_kg_home(tmp_path, "status", {})
+        assert proc.returncode == 0, f"bridge died instead of degrading: {proc.stderr}"
+        assert "OperationalError" not in proc.stderr
+        result = json.loads(proc.stdout)
+        assert result.get("success") is True
+        assert "total_drawers" in result
+
+    def test_kg_tool_returns_scoped_error_not_a_crash(self, tmp_path):
+        """The KG tool itself fails — as a structured error, not a process death."""
+        proc = self._call_with_readonly_kg_home(tmp_path, "kg_stats", {})
+        assert proc.returncode == 0, f"KG fault crashed the bridge: {proc.stderr}"
+        result = json.loads(proc.stdout)
+        assert "error" in result
+        assert result.get("success") is not True
+
+    def test_kg_is_not_constructed_at_import(self):
+        """Importing the bridge must not open the KG (lazy init contract)."""
+        proc = subprocess.run(
+            [
+                str(VENV_PYTHON),
+                "-c",
+                "import sys; sys.path.insert(0, %r); import memory_bridge as m; "
+                "print('KG_IS_NONE=%%s' %% (m._kg is None))" % str(BRIDGE_PATH.parent),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "KG_IS_NONE=True" in proc.stdout, (
+            "KnowledgeGraph was constructed at import — a KG fault would again take "
+            f"down every bridge tool. stdout={proc.stdout!r}"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

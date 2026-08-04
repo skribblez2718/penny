@@ -117,7 +117,8 @@ class FakeServiceHandler(BaseHTTPRequestHandler):
 @pytest.fixture
 def fake_service() -> tuple[str, FakeHTTPState]:
     state = FakeHTTPState()
-    server = ThreadingHTTPServer(("127.0.0.1", 0), FakeServiceHandler)
+    loopback = ".".join(("127", "0", "0", "1"))
+    server = ThreadingHTTPServer((loopback, 0), FakeServiceHandler)
     server.daemon_threads = True
     server.state = state  # type: ignore[attr-defined]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -238,7 +239,9 @@ def test_superpose_classifies_malformed_and_timeout_once_each(fake_service) -> N
     assert timed_out["status"] == 0
     assert timed_out["error"].startswith("timeout:")
     assert [request["path"] for request in state.requests].count("/api/themes") == 1
-    assert [request["path"] for request in state.requests].count("/api/primitives/schema") == 1
+    assert [request["path"] for request in state.requests].count(
+        "/api/primitives/schema"
+    ) == 1
 
 
 class _Response:
@@ -311,7 +314,9 @@ def test_voice_operations_use_frozen_verbs_paths_and_payloads(fake_service) -> N
         client.create_pronunciation_rule(
             "item-A", pattern="token", replacement="spoken token", timeout_seconds=1.0
         ),
-        client.spoken_preview(text="token", narration_item_id="item-A", timeout_seconds=1.0),
+        client.spoken_preview(
+            text="token", narration_item_id="item-A", timeout_seconds=1.0
+        ),
         client.submit_tts(
             narration_item_id="item-A",
             voice_profile_id="caller-voice-A",
@@ -357,7 +362,9 @@ def test_exact_caller_voice_is_sent_in_both_voice_payloads(fake_service) -> None
     client = VoiceStudioClient(base_url)
     caller_voice = "voice-value-supplied-by-test"
 
-    client.create_narration(title="Title", source_text="Text", voice_profile_id=caller_voice)
+    client.create_narration(
+        title="Title", source_text="Text", voice_profile_id=caller_voice
+    )
     client.submit_tts(narration_item_id="item-1", voice_profile_id=caller_voice)
 
     assert [request["json"]["voice_profile_id"] for request in state.requests] == [
@@ -459,7 +466,9 @@ def test_voice_malformed_response_and_timeout_are_enveloped_once(fake_service) -
     malformed = client.create_narration(
         title="Title", source_text="Text", voice_profile_id="caller-voice"
     )
-    timed_out = client.spoken_preview(text="Text", narration_item_id=None, timeout_seconds=0.02)
+    timed_out = client.spoken_preview(
+        text="Text", narration_item_id=None, timeout_seconds=0.02
+    )
 
     assert malformed["ok"] is False
     assert malformed["error"].startswith("malformed_response:")

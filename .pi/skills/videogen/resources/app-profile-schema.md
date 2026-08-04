@@ -143,6 +143,11 @@ before output until a producer and schema are explicitly pinned.
 9. Record profile provenance exactly as `mode`, `name`, canonical
    `resolved_path`, and exact-byte `sha256`.
 
+Top-level keys beginning with `$` (for example `$schema`, `$comment`,
+`$schema_note`) are JSON-convention annotation keys: they are ignored by
+validation, stripped before resolution and merge, and never surface as
+contract constraints. All other unknown keys fail closed.
+
 An unknown name, missing root, unreadable file, invalid UTF-8/JSON, non-object,
 forbidden key, unsafe path, or invalid merged contract fails before any service
 or output side effect. Resolver errors never leak raw filesystem or JSON

@@ -11,6 +11,26 @@ Analyze the finalized caller-supplied section and its caller-supplied canon. Pro
 3. Caller canon and the finalized section control concrete content. Never infer a concrete value from an omitted canon entry. When inputs conflict or an obligation cannot be resolved from evidence, pause for clarification rather than choose one.
 4. Use caller-owned absolute artifact paths. Record paths and lowercase SHA-256 hashes; do not put full source, canon, media, schema, or generated-artifact contents in a drawer or `SUMMARY`.
 
+## Artifact production — this skill's Domain Guidance overrides mempalace-first output
+
+In this skill the concept inventory is a **durable workspace file**, not a
+mempalace drawer. Your general mempalace-first discipline applies only to the
+compact evidence drawer described under Blackboard protocol; the full inventory
+MUST be written to the filesystem with your `bash` tool. Follow this exact
+procedure:
+
+1. Compose the complete inventory as one JSON document.
+2. Create the destination directory and write the file with bash, e.g.:
+   `mkdir -p <destination-dir> && cat > <destination-path> <<'EOF' ... EOF`
+   using exactly the destination path the task supplies (the task names it
+   explicitly; never substitute a path from the free-form goal text).
+3. Compute the digest with `sha256sum <destination-path>` and copy the exact
+   64-character lowercase hex value (no `sha256:` prefix, no truncation) into
+   `inventory_sha256`.
+4. Re-read the file (`ls -l`, `head`) to confirm it exists and parses before
+   emitting your SUMMARY. Never emit a path or hash you have not verified
+   against the real file.
+
 ## Required inventory
 
 Write the inventory to the caller-designated artifact path. For each teachable concept, give a stable concept ID and locatable finalized-section source spans. Include:
@@ -25,6 +45,8 @@ Write the inventory to the caller-designated artifact path. For each teachable c
 - prerequisites or source gaps that prevent a complete source-backed teaching arc.
 
 Do not fill a gap with a new analogy, a new mnemonic, an unstated convention, prerequisite theory, or a character behavior. An evidenced absence is a finding, not permission to invent.
+
+**Blocking scope.** Block (status `BLOCKED`) ONLY when the section itself cannot support the three-phase arc: (a) no source-backed intuition entry, (b) a demonstration whose worked steps are missing or skipped in the source, or (c) no source-backed formal close mapping back to the demonstration. Canon obligations that bind upstream *content authoring* — forward-relevance hooks, applications / "why this matters" tie-backs, analogies, mnemonics, prerequisite coverage, cross-section motivation — are NOT blocking conditions for video production: sibling sections in the same lesson may carry them. Record such gaps as issues with owner `UPSTREAM_CONTENT` and proceed. The video mirrors what the section teaches — nothing more is demanded of it.
 
 ## Blackboard protocol
 

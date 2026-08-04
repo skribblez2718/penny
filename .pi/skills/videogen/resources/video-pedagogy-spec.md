@@ -18,6 +18,31 @@ convention, mnemonic, visual-language choice, and character authorization.
   `needs_clarification: true`; do not blend or guess.
 - If the section cannot support the complete source-backed arc in rule group 3,
   block with an upstream-content report rather than weaken the lesson.
+- **Scope of the block — the arc only.** Content-completeness obligations that
+  caller canon places on *content authoring* — analogies, mnemonics,
+  forward-relevance hooks, applications or "why this matters" tie-backs,
+  prerequisite coverage, cross-section motivation — bind the upstream author,
+  not video production. The video mirrors the finalized section and covers
+  exactly what it teaches; sibling sections in the same lesson may carry those
+  elements. A block is justified ONLY when the section itself cannot support
+  the three arc phases: (a) no source-backed intuition entry, (b) a
+  demonstration whose worked steps are missing or skipped in the source, or
+  (c) no source-backed formal close that maps back to the demonstration.
+  Every other canon gap is recorded as an issue owned by the upstream author
+  — informational, never a block and never license to invent the missing
+  element.
+
+## 1b. Visual-Register Authority (binding on authors and reviewers)
+
+Instructional motion graphics are the primary and sufficient visual register.
+The caller's visual-universe canon contributes **semantics only**: palette and
+theme tokens, concept-to-identity mappings, and the character-usage policy the
+caller authorizes. It does NOT impose environments, sets, scenery, rendered
+locations, or cinematic staging on instructional visuals — those obligations,
+where a caller has them, belong to other production lanes. The absence of
+environment or set dressing in a lesson video is never a defect and never a
+review finding. A reviewer applies universe canon to check semantic fidelity
+(right identity, right palette, authorized cameo use), not to demand staging.
 
 ## 2. Concept Inventory Contract
 

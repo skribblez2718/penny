@@ -23,6 +23,21 @@ For `REFINE`, perform this gate when pedagogy, canon, analogy, theory, narration
 
 Use the task's session identifier and room `skills/videogen-{session_id}`. Store compact review references, hashes, and cited evidence only. Use drawer title `{session_id} Carren Gate i{n}`, where `n` is the task's iteration. Earlier-iteration drawers are immutable.
 
+## Artifact production — file artifacts are written with bash
+
+Every `*_path` artifact in your wire format is a **durable workspace file**
+written by you with your `bash` tool — mempalace drawers hold only compact
+evidence references. Procedure for every file artifact:
+
+1. Compose the complete document.
+2. `mkdir -p` the destination directory and write with a bash heredoc
+   (`cat > <path> <<'EOF' ... EOF`) at exactly the destination the task
+   supplies — never a path from the free-form goal text.
+3. Compute `sha256sum <path>` and copy the exact 64-character lowercase hex
+   value (no prefix, no truncation) into the matching `*_sha256` field.
+4. Verify the file exists and parses (`ls -l`, `head`) before emitting your
+   SUMMARY. Never cite a path or hash you have not verified on disk.
+
 ## Wire format
 
 End with exactly one `SUMMARY:` line containing one JSON object for the selected phase and no unapproved keys. `status` is exactly `COMPLETE`, `BLOCKED`, or `UNCERTAIN`; `confidence` is exactly `CERTAIN`, `PROBABLE`, `POSSIBLE`, or `UNCERTAIN`; `verdict` is exactly `APPROVE`, `NEEDS_REVISION`, or `UNCERTAIN`; and `met` is true if and only if `verdict` is `APPROVE`.
@@ -51,6 +66,8 @@ cited_evidence, issues
 
 Only optional fields: `clarifying_questions`, `review_path`, `review_sha256`.
 
-For either gate, `needs_clarification` and `met` are booleans; reviewed hashes are strings; `cited_evidence` and `issues` are lists; and `resolved_note_ids` is a list when required. The two reviewed hashes are the frozen current artifact hashes. `cited_evidence` is nonempty even for `APPROVE`; each item is a compact, locatable object with exactly `kind`, `ref`, `sha256`, and `detail`. `issues` is itemized and every non-approve item has a scene or beat and supporting evidence. Optional review artifacts use absolute caller-owned paths and lowercase SHA-256 hashes.
+For either gate, `needs_clarification` and `met` are booleans; reviewed hashes are strings; `cited_evidence` and `issues` are lists; and `resolved_note_ids` is a list when required. The two reviewed hashes are the frozen current artifact hashes. `cited_evidence` is nonempty even for `APPROVE`; each item is a compact, locatable object with exactly `kind`, `ref`, `sha256`, and `detail`. Optional review artifacts use absolute caller-owned paths and lowercase SHA-256 hashes.
+
+For any non-`APPROVE` verdict, `issues` is nonempty and **every issue is a JSON object carrying at least**: one location key — `scene_id` (string), `beat_id` (string), or `affected_scene_ids` (nonempty list) — AND one grounding key — `evidence` or `evidence_ref` (nonempty) — plus a free-form `detail` explaining the defect and, where known, the earliest owning phase. Issues using any other key names for location or evidence are invalid and will be rejected.
 
 When ambiguity requires caller input, set `needs_clarification` to `true`, `status` and `confidence` to `UNCERTAIN`, and include nonempty `clarifying_questions`. A verdict of `UNCERTAIN` always pauses the run.

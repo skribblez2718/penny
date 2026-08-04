@@ -13,6 +13,10 @@
  * Trigger: a trailing ` -i` on interactive (human-typed) input only. Prompts
  * without the flag pass through unchanged.
  *
+ * Session context: the enhancer receives the FULL active conversation (see
+ * transcript.ts) so mid-session referential prompts ("fix that bug", "same for
+ * the other file") resolve instead of being enhanced into invented specifics.
+ *
  * Failure honesty: every failure path (model missing, auth missing, timeout,
  * empty or runaway rewrite) degrades to the *flag-stripped* raw prompt so the
  * user's request still runs — just un-enhanced. Enhancement is one LLM call on
@@ -28,6 +32,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { createLogger } from "../../lib/logger/logger.js";
+import { type SessionLike, type TranscriptResult, transcriptFromSession } from "./transcript.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const logger = createLogger("enhance");
@@ -63,8 +68,16 @@ export function methodology(): string {
   return methodologyCache;
 }
 
-export function buildEnhancerInput(raw: string): string {
-  return `${methodology()}\n\n<raw_prompt>\n${raw}\n</raw_prompt>`;
+/**
+ * Assemble the enhancer input: methodology, then the session transcript, then
+ * the raw prompt LAST so the text being rewritten sits closest to the
+ * generation point rather than behind a large history block.
+ */
+export function buildEnhancerInput(raw: string, transcript = ""): string {
+  const context = transcript.trim()
+    ? `\n\n<session_context>\n${transcript}\n</session_context>`
+    : "\n\n<session_context>\n(No prior conversation — this is the first prompt of the session.)\n</session_context>";
+  return `${methodology()}${context}\n\n<raw_prompt>\n${raw}\n</raw_prompt>`;
 }
 
 /** Accept a rewrite only when it is plausibly an enhanced prompt, not garbage.
@@ -86,7 +99,7 @@ export function acceptableRewrite(enhanced: string): boolean {
 export type CompleteFn = (
   model: unknown,
   request: { messages: unknown[] },
-  options: Record<string, unknown>,
+  options: Record<string, unknown>
 ) => Promise<{
   content: Array<{ type: string; text?: string }>;
   stopReason?: string;
@@ -110,6 +123,7 @@ async function enhanceText(
   raw: string,
   ctx: ExtensionContext,
   deps: EnhanceDeps,
+  transcript: TranscriptResult
 ): Promise<{ enhanced: string; modelId: string } | null> {
   let model = ctx.model;
   const spec = (process.env.PENNY_ENHANCE_MODEL || "").trim();
@@ -150,7 +164,7 @@ async function enhanceText(
         messages: [
           {
             role: "user" as const,
-            content: [{ type: "text" as const, text: buildEnhancerInput(raw) }],
+            content: [{ type: "text" as const, text: buildEnhancerInput(raw, transcript.text) }],
             timestamp: Date.now(),
           },
         ],
@@ -161,7 +175,7 @@ async function enhanceText(
         env: auth.env,
         reasoningEffort: "low",
         signal: controller.signal,
-      },
+      }
     );
     // complete() resolves (not rejects) on timeout/provider error, handing back
     // a TRUNCATED message — never accept that as an enhanced prompt.
@@ -209,9 +223,17 @@ export default function enhance(pi: ExtensionAPI, deps: EnhanceDeps = {}): void 
       return { action: "transform" as const, text: prompt };
     }
 
-    ctx.ui.notify("Enhancing prompt…", "info");
+    // Full active conversation so referential prompts resolve. Failure to read
+    // the session yields an empty transcript — never blocks the input path.
+    const transcript = transcriptFromSession(ctx.sessionManager as SessionLike | undefined);
+    ctx.ui.notify(
+      transcript.entryCount > 0
+        ? `Enhancing prompt (${transcript.entryCount} session entries)…`
+        : "Enhancing prompt…",
+      "info"
+    );
     const started = Date.now();
-    const result = await enhanceText(prompt, ctx, deps);
+    const result = await enhanceText(prompt, ctx, deps, transcript);
     if (!result) {
       // Enhancement failed — run the un-enhanced request (flag stripped).
       return { action: "transform" as const, text: prompt };
@@ -222,10 +244,15 @@ export default function enhance(pi: ExtensionAPI, deps: EnhanceDeps = {}): void 
       enhanced: result.enhanced,
       model: result.modelId,
       latencyMs: Date.now() - started,
+      contextEntries: transcript.entryCount,
+      contextChars: transcript.text.length,
+      contextTruncated: transcript.truncated,
     });
     logger.info(
       `enhanced prompt (${prompt.length} → ${result.enhanced.length} chars, ` +
-        `${Date.now() - started}ms, ${result.modelId})`,
+        `${Date.now() - started}ms, ${result.modelId}, ` +
+        `context: ${transcript.entryCount} entries / ${transcript.text.length} chars` +
+        `${transcript.truncated ? " (truncated)" : ""})`
     );
     return { action: "transform" as const, text: result.enhanced };
   });

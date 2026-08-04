@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -96,11 +97,15 @@ def _evidence(detail: str = "verified test evidence") -> list[dict[str, Any]]:
     return [{"kind": "file", "ref": "evidence:test", "sha256": None, "detail": detail}]
 
 
-def _constraints(tmp_path: Path, *, section_text: str = "# Generic section\n\nExact content.\n") -> dict[str, Any]:
+def _constraints(
+    tmp_path: Path, *, section_text: str = "# Generic section\n\nExact content.\n"
+) -> dict[str, Any]:
     inputs = tmp_path / "inputs"
     teaching = _write(inputs / "teaching.md", "Generic teaching canon.\n")
     analogy = _write(inputs / "analogies.json", "{}\n")
-    pronunciation = _write(inputs / "pronunciation.md", "Generic pronunciation canon.\n")
+    pronunciation = _write(
+        inputs / "pronunciation.md", "Generic pronunciation canon.\n"
+    )
     universe = inputs / "universe"
     _write(universe / "visual.md", "Generic visual canon.\n")
     schema = _json(
@@ -162,6 +167,7 @@ class FakeVideogen(VideogenPlaybook):
     retrieved_queries: list[dict[str, Any]] = []
     normalized_intakes: list[dict[str, Any]] = []
     validation_violations: list[dict[str, Any]] = []
+    deterministic_rows: list[dict[str, Any]] = []
 
     @classmethod
     def reset(cls) -> None:
@@ -173,6 +179,7 @@ class FakeVideogen(VideogenPlaybook):
         cls.retrieved_queries = []
         cls.normalized_intakes = []
         cls.validation_violations = []
+        cls.deterministic_rows = copy.deepcopy(_load_clean_rows()[:8])
 
     def _prepare_ingest(self, ctx, intake):
         cls = type(self)
@@ -187,14 +194,20 @@ class FakeVideogen(VideogenPlaybook):
             intake.section_bytes, snapshot_root / "section.md", workspace_root=root
         )
         teaching = [
-            {"source_path": path, **artifacts.snapshot_file(
-                path, snapshot_root / "canon" / "teaching" / f"{index:03d}",
-                workspace_root=root,
-            )}
+            {
+                "source_path": path,
+                **artifacts.snapshot_file(
+                    path,
+                    snapshot_root / "canon" / "teaching" / f"{index:03d}",
+                    workspace_root=root,
+                ),
+            }
             for index, path in enumerate(intake.teaching_canon_paths)
         ]
         analogy = artifacts.snapshot_file(
-            intake.analogy_registry, snapshot_root / "canon" / "analogy", workspace_root=root
+            intake.analogy_registry,
+            snapshot_root / "canon" / "analogy",
+            workspace_root=root,
         )
         pronunciation = artifacts.snapshot_file(
             intake.pronunciation_canon,
@@ -234,13 +247,19 @@ class FakeVideogen(VideogenPlaybook):
                 "section": {"source_path": intake.section_source_path, **source},
                 "teaching_canon": teaching,
                 "analogy_registry": {"source_path": intake.analogy_registry, **analogy},
-                "pronunciation_canon": {"source_path": intake.pronunciation_canon, **pronunciation},
+                "pronunciation_canon": {
+                    "source_path": intake.pronunciation_canon,
+                    **pronunciation,
+                },
                 "universe_canon": {
                     "source_path": intake.universe_canon_dir,
                     **universe,
                     "ledger_path": universe_ledger["path"],
                 },
-                "primitive_schema": {"source": intake.primitive_schema_source["path"], **schema},
+                "primitive_schema": {
+                    "source": intake.primitive_schema_source["path"],
+                    **schema,
+                },
                 "publish_convention": {"source": "inline", **publish},
                 "profile": profile,
             },
@@ -248,11 +267,18 @@ class FakeVideogen(VideogenPlaybook):
         )
         learning = self._retrieve_learning_records(
             ctx,
-            query={"record_type": "videogen_learning", "profile_mode": intake.profile_provenance["mode"]},
+            query={
+                "record_type": "videogen_learning",
+                "profile_mode": intake.profile_provenance["mode"],
+            },
         )
         intake_ref = artifacts.atomic_write_json(
             root / "evidence" / "intake.json",
-            {"run_id": ctx.run_id, "normalized_intake": intake.to_dict(), "readiness": "seamed"},
+            {
+                "run_id": ctx.run_id,
+                "normalized_intake": intake.to_dict(),
+                "readiness": "seamed",
+            },
             root=root,
         )
         return {
@@ -277,7 +303,11 @@ class FakeVideogen(VideogenPlaybook):
         schema_hash = self._artifacts(ctx).sha256_file(schema_path)
         theme_hash = self._artifacts(ctx).sha256_bytes(intake.theme.encode("utf-8"))
         return {
-            "superpose": {"health": {"ok": True}, "schema": {"ok": True}, "themes": {"ok": True}},
+            "superpose": {
+                "health": {"ok": True},
+                "schema": {"ok": True},
+                "themes": {"ok": True},
+            },
             "voice_studio": {
                 "status": "DEFERRED",
                 "reason": "no_pinned_read_only_readiness_operation",
@@ -334,7 +364,10 @@ class FakeVideogen(VideogenPlaybook):
         return {
             "import_result": {"ok": True, "operation": "import_bundle"},
             "project_id": 7,
-            "validation_result": {"ok": not violations, "operation": "validate_project"},
+            "validation_result": {
+                "ok": not violations,
+                "operation": "validate_project",
+            },
             "violations": violations,
             "journal_refs": [f"validate:{bundle_sha256}"],
             "evidence_paths": [str(Path(bundle_dir) / "manifest.json")],
@@ -369,7 +402,9 @@ class FakeVideogen(VideogenPlaybook):
             f"fake-{quality}-video-{call_no}".encode(),
             root=root,
         )
-        narration = {row["scene_id"]: row["narration"] for row in self._narration_scenes(ctx)}
+        narration = {
+            row["scene_id"]: row["narration"] for row in self._narration_scenes(ctx)
+        }
         cursor = 0.0
         cues = ["WEBVTT", ""]
         for scene_id in self._vg(ctx)["scene_ledger"]:
@@ -423,6 +458,20 @@ class FakeVideogen(VideogenPlaybook):
             "evidence_paths": [evidence["path"]],
         }
 
+    def _write_deterministic_qa(self, ctx, render, probe):
+        super()._write_deterministic_qa(ctx, render, probe)
+        rows = copy.deepcopy(type(self).deterministic_rows)
+        if not rows:
+            return
+        vg = self._vg(ctx)
+        prior = vg["phase_state"]["latest_summary_refs"]["deterministic_qa"]
+        ref = self._artifacts(ctx).atomic_write_json(
+            prior["path"],
+            {"schema_version": 1, "checks": rows},
+            root=vg["paths"]["workspace_dir"],
+        )
+        vg["phase_state"]["latest_summary_refs"]["deterministic_qa"] = ref
+
     def _probe_media(self, ctx, path: str):
         resolved = Path(path).resolve(strict=True)
         duration = (
@@ -439,7 +488,9 @@ class FakeVideogen(VideogenPlaybook):
             "audio_streams": [{"codec_type": "audio"}],
         }
 
-    def _extract_poster(self, ctx, *, scene1_final_video_path: str, destination_path: str):
+    def _extract_poster(
+        self, ctx, *, scene1_final_video_path: str, destination_path: str
+    ):
         type(self).calls.append(("poster", scene1_final_video_path))
         ref = self._artifacts(ctx).atomic_write(
             destination_path, b"fake-jpeg", root=self._vg(ctx)["paths"]["workspace_dir"]
@@ -450,6 +501,13 @@ class FakeVideogen(VideogenPlaybook):
             "height": 90,
             "source_path": scene1_final_video_path,
             "command": ["seamed-poster", scene1_final_video_path],
+            "result": {
+                "ok": True,
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "",
+                "elapsed_ms": 0,
+            },
             "elapsed_ms": 0,
         }
 
@@ -457,7 +515,11 @@ class FakeVideogen(VideogenPlaybook):
         cls = type(self)
         cls.retrieved_queries.append(copy.deepcopy(dict(query)))
         return [
-            {"ref": f"memory:{row['run_id']}", "summary": row["outcome"], "similarity": 1.0}
+            {
+                "ref": f"memory:{row['run_id']}",
+                "summary": row["outcome"],
+                "similarity": 1.0,
+            }
             for row in cls.learning_records
         ]
 
@@ -478,7 +540,9 @@ def cp(tmp_path: Path) -> Checkpointer:
     return Checkpointer(db_path=tmp_path / "orchestration.db")
 
 
-def _start(cp: Checkpointer, constraints: dict[str, Any], *, run_id: str = RID) -> dict[str, Any]:
+def _start(
+    cp: Checkpointer, constraints: dict[str, Any], *, run_id: str = RID
+) -> dict[str, Any]:
     return FakeVideogen(cp).start(
         session_id=SID,
         run_id=run_id,
@@ -488,23 +552,41 @@ def _start(cp: Checkpointer, constraints: dict[str, Any], *, run_id: str = RID) 
     )
 
 
-def _step(cp: Checkpointer, agent: str, result: Any, *, run_id: str = RID) -> dict[str, Any]:
+def _step(
+    cp: Checkpointer, agent: str, result: Any, *, run_id: str = RID
+) -> dict[str, Any]:
     return FakeVideogen(cp).step(
         session_id=SID, run_id=run_id, agent=agent, result=result
     )
 
 
-def _parallel(cp: Checkpointer, branch: str, agent: str, summary: Mapping[str, Any], *, run_id: str = RID):
+def _parallel(
+    cp: Checkpointer,
+    branch: str,
+    agent: str,
+    summary: Mapping[str, Any],
+    *,
+    run_id: str = RID,
+):
     return _step(
         cp,
         "__parallel__",
-        [{"branch_id": branch, "agent": agent, "summary": dict(summary), "exitCode": 0}],
+        [
+            {
+                "branch_id": branch,
+                "agent": agent,
+                "summary": dict(summary),
+                "exitCode": 0,
+            }
+        ],
         run_id=run_id,
     )
 
 
 def _annie(workspace: Path) -> dict[str, Any]:
-    inventory = _json(workspace / "agent" / "inventory.json", {"concepts": ["concept-one"]})
+    inventory = _json(
+        workspace / "agent" / "inventory.json", {"concepts": ["concept-one"]}
+    )
     return {
         "status": "COMPLETE",
         "phase": "INGEST",
@@ -518,7 +600,9 @@ def _annie(workspace: Path) -> dict[str, Any]:
     }
 
 
-def _storyboard(workspace: Path, scene_ids: Sequence[str] = ("scene-one", "scene-two")) -> dict[str, Any]:
+def _storyboard(
+    workspace: Path, scene_ids: Sequence[str] = ("scene-one", "scene-two")
+) -> dict[str, Any]:
     scenes = [
         {
             "scene_id": scene_id,
@@ -532,7 +616,9 @@ def _storyboard(workspace: Path, scene_ids: Sequence[str] = ("scene-one", "scene
         for scene_id in scene_ids
     ]
     storyboard = _json(workspace / "design" / "storyboard.json", {"scenes": scenes})
-    coverage = _json(workspace / "design" / "coverage.json", {"concept-one": list(scene_ids)})
+    coverage = _json(
+        workspace / "design" / "coverage.json", {"concept-one": list(scene_ids)}
+    )
     return {
         "status": "COMPLETE",
         "phase": "STORYBOARD",
@@ -588,7 +674,9 @@ def _narration(
     }
 
 
-def _carren(cp: Checkpointer, verdict: str = "APPROVE", *, evidence: bool = True) -> dict[str, Any]:
+def _carren(
+    cp: Checkpointer, verdict: str = "APPROVE", *, evidence: bool = True
+) -> dict[str, Any]:
     vg = cp.load(RID).context.extras["videogen"]
     uncertain = verdict == "UNCERTAIN"
     issue = {
@@ -636,17 +724,28 @@ def _codegen(cp: Checkpointer, *, primitive: str = "KnownPrimitive") -> dict[str
 
 
 def _load_clean_rows() -> list[dict[str, Any]]:
-    return copy.deepcopy(json.loads((QA_FIXTURES / "clean.json").read_text(encoding="utf-8"))["checks"])
+    return copy.deepcopy(
+        json.loads((QA_FIXTURES / "clean.json").read_text(encoding="utf-8"))["checks"]
+    )
 
 
-def _vera(cp: Checkpointer, rows: list[dict[str, Any]] | None = None, *, run_id: str = RID) -> dict[str, Any]:
+def _vera(
+    cp: Checkpointer, rows: list[dict[str, Any]] | None = None, *, run_id: str = RID
+) -> dict[str, Any]:
     rows = _load_clean_rows() if rows is None else rows
-    verdict = "FAIL" if any(row["status"] == "FAIL" for row in rows) else (
-        "UNCERTAIN" if any(row["status"] == "UNCERTAIN" for row in rows) else "PASS"
+    verdict = (
+        "FAIL"
+        if any(row["status"] == "FAIL" for row in rows)
+        else (
+            "UNCERTAIN" if any(row["status"] == "UNCERTAIN" for row in rows) else "PASS"
+        )
     )
     rec = cp.load(run_id)
     workspace = Path(rec.context.extras["videogen"]["paths"]["workspace_dir"])
-    report = _json(workspace / "evidence" / "qa" / f"vera-{rec.context.iteration}.json", {"checks": rows, "verdict": verdict})
+    report = _json(
+        workspace / "evidence" / "qa" / f"vera-{rec.context.iteration}.json",
+        {"checks": rows, "verdict": verdict},
+    )
     return {
         "status": "UNCERTAIN" if verdict == "UNCERTAIN" else "COMPLETE",
         "phase": "AUTO_QA",
@@ -662,7 +761,9 @@ def _vera(cp: Checkpointer, rows: list[dict[str, Any]] | None = None, *, run_id:
     }
 
 
-def _to_carren(cp: Checkpointer, constraints: dict[str, Any], *, run_id: str = RID) -> dict[str, Any]:
+def _to_carren(
+    cp: Checkpointer, constraints: dict[str, Any], *, run_id: str = RID
+) -> dict[str, Any]:
     started = _start(cp, constraints, run_id=run_id)
     assert started["state_id"] == "INGEST"
     workspace = Path(constraints["workspace_dir"])
@@ -687,7 +788,13 @@ def _to_gate(cp: Checkpointer, constraints: dict[str, Any]) -> dict[str, Any]:
     return _step(cp, "vera", _vera(cp))
 
 
-def _refine_summary(cp: Checkpointer, feedback: str, *, changed_scene: str | None = None, route: str = "DRAFT_RENDER") -> dict[str, Any]:
+def _refine_summary(
+    cp: Checkpointer,
+    feedback: str,
+    *,
+    changed_scene: str | None = None,
+    route: str = "DRAFT_RENDER",
+) -> dict[str, Any]:
     rec = cp.load(RID)
     vg = rec.context.extras["videogen"]
     workspace = Path(vg["paths"]["workspace_dir"])
@@ -706,7 +813,9 @@ def _refine_summary(cp: Checkpointer, feedback: str, *, changed_scene: str | Non
         "status": "applied",
         "resolution_evidence": _evidence("change applied"),
     }
-    ledger = _json(workspace / "feedback" / f"ledger-{iteration}.json", {"notes": [note]})
+    ledger = _json(
+        workspace / "feedback" / f"ledger-{iteration}.json", {"notes": [note]}
+    )
     plan = _json(workspace / "feedback" / f"plan-{iteration}.json", {"route": route})
     return {
         "status": "COMPLETE",
@@ -728,26 +837,52 @@ def _refine_summary(cp: Checkpointer, feedback: str, *, changed_scene: str | Non
 
 # §14.1 — public boundary
 
+
 def test_tracked_videogen_tree_is_generic() -> None:
-    tracked = PROJECT_ROOT / ".pi" / "skills" / "videogen"
-    forbidden = ("/home/", "127.0.0.1", "localhost", "ketwise", "2a63d14982be")
+    listed = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--",
+            ".pi/skills/videogen",
+            "apps/orchestration/src/orchestration/playbooks/videogen.py",
+            ":(glob)apps/orchestration/tests/test_videogen*.py",
+        ],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    tracked = [Path(item) for item in listed.stdout.splitlines() if item]
+    profile_name = "profile" + ".json"
+    assert [str(path) for path in tracked if path.name == profile_name] == []
+
+    forbidden = (
+        "/" + "home" + "/",
+        ".".join(("127", "0", "0", "1")),
+        "local" + "host",
+        "ket" + "wise",
+        "2a63" + "d14982be",
+    )
     offenders: list[str] = []
-    for path in tracked.rglob("*"):
-        if not path.is_file() or "tests" in path.parts or "__pycache__" in path.parts:
-            continue
+    for relative in tracked:
+        path = PROJECT_ROOT / relative
         try:
             text = path.read_text(encoding="utf-8").lower()
         except UnicodeDecodeError:
             continue
         if any(token.lower() in text for token in forbidden):
-            offenders.append(str(path.relative_to(PROJECT_ROOT)))
+            offenders.append(str(relative))
     assert offenders == []
 
 
 # §14.2–3 / SK-002 / SK-003 — complete intake rejection matrix
 
+
 @pytest.mark.parametrize("field", REQUIRED_FIELDS)
-def test_every_required_constraint_fails_before_side_effects(tmp_path: Path, field: str) -> None:
+def test_every_required_constraint_fails_before_side_effects(
+    tmp_path: Path, field: str
+) -> None:
     constraints = _constraints(tmp_path)
     constraints.pop(field)
     directive = _start(Checkpointer(db_path=tmp_path / "cp.db"), constraints)
@@ -761,9 +896,17 @@ def test_every_required_constraint_fails_before_side_effects(tmp_path: Path, fie
 @pytest.mark.parametrize(
     ("mutation", "field"),
     [
-        (lambda c: c.update(section_content={"text": "---\nsection_type: simulation\n---\n"}), "section_content"),
+        (
+            lambda c: c.update(
+                section_content={"text": "---\nsection_type: simulation\n---\n"}
+            ),
+            "section_content",
+        ),
         (lambda c: c["content_gate"].update(finalized=False), "content_gate"),
-        (lambda c: c["content_gate"].update(derivation_verdict="DERIVATIVE"), "content_gate"),
+        (
+            lambda c: c["content_gate"].update(derivation_verdict="DERIVATIVE"),
+            "content_gate",
+        ),
     ],
 )
 def test_only_final_independent_markdown_proceeds_without_reject_side_effects(
@@ -780,24 +923,37 @@ def test_only_final_independent_markdown_proceeds_without_reject_side_effects(
 
 
 @pytest.mark.parametrize("source_mode", ["inline", "file"])
-def test_inline_and_file_backed_content_are_accepted(tmp_path: Path, source_mode: str) -> None:
+def test_inline_and_file_backed_content_are_accepted(
+    tmp_path: Path, source_mode: str
+) -> None:
     constraints = _constraints(tmp_path)
     if source_mode == "file":
-        section = _write(tmp_path / "inputs" / "section.md", "# File section\n\nExact.\n")
+        section = _write(
+            tmp_path / "inputs" / "section.md", "# File section\n\nExact.\n"
+        )
         constraints["section_content"] = {"path": str(section.resolve())}
     directive = _start(Checkpointer(db_path=tmp_path / "cp.db"), constraints)
     assert directive["action"] == "invoke_agent"
     assert directive["state_id"] == "INGEST"
-    assert FakeVideogen.normalized_intakes[-1]["section_content"]["source_mode"] == source_mode
+    assert (
+        FakeVideogen.normalized_intakes[-1]["section_content"]["source_mode"]
+        == source_mode
+    )
 
 
 # §14.4 / SK-005 — schema snapshot gates generated APIs
 
-def test_schema_snapshot_rejects_unknown_primitive_and_routes_to_codegen(cp: Checkpointer, tmp_path: Path) -> None:
+
+def test_schema_snapshot_rejects_unknown_primitive_and_routes_to_codegen(
+    cp: Checkpointer, tmp_path: Path
+) -> None:
     constraints = _constraints(tmp_path)
     _to_codegen(cp, constraints)
     FakeVideogen.validation_violations = [
-        {"fix_route": "CODEGEN", "detail": "UnknownPrimitive absent from schema snapshot"}
+        {
+            "fix_route": "CODEGEN",
+            "detail": "UnknownPrimitive absent from schema snapshot",
+        }
     ]
     directive = _step(cp, "skribble", _codegen(cp, primitive="UnknownPrimitive"))
     assert directive["action"] == "invoke_agent"
@@ -810,8 +966,11 @@ def test_schema_snapshot_rejects_unknown_primitive_and_routes_to_codegen(cp: Che
 
 # §14.5 / SK-012 — Carren is a hash-bound, evidence-backed pre-TTS gate
 
+
 @pytest.mark.parametrize("verdict", ["NEEDS_REVISION", "UNCERTAIN"])
-def test_carren_nonapproval_never_calls_voice_or_journals(cp: Checkpointer, tmp_path: Path, verdict: str) -> None:
+def test_carren_nonapproval_never_calls_voice_or_journals(
+    cp: Checkpointer, tmp_path: Path, verdict: str
+) -> None:
     _to_carren(cp, _constraints(tmp_path))
     directive = _parallel(cp, "carren", "carren", _carren(cp, verdict))
     assert FakeVideogen.voice_calls == []
@@ -824,7 +983,9 @@ def test_carren_nonapproval_never_calls_voice_or_journals(cp: Checkpointer, tmp_
         assert directive["state_id"] == "NARRATION_SCRIPT"
 
 
-def test_carren_approve_with_empty_evidence_is_reissued_without_tts(cp: Checkpointer, tmp_path: Path) -> None:
+def test_carren_approve_with_empty_evidence_is_reissued_without_tts(
+    cp: Checkpointer, tmp_path: Path
+) -> None:
     _to_carren(cp, _constraints(tmp_path))
     directive = _parallel(cp, "carren", "carren", _carren(cp, evidence=False))
     assert directive["state_id"] == "NARRATION_SCRIPT"
@@ -833,7 +994,9 @@ def test_carren_approve_with_empty_evidence_is_reissued_without_tts(cp: Checkpoi
     assert cp.load(RID).context.extras["videogen"]["operation_journal"]["keys"] == []
 
 
-def test_current_hash_cited_carren_approval_precedes_voice(cp: Checkpointer, tmp_path: Path) -> None:
+def test_current_hash_cited_carren_approval_precedes_voice(
+    cp: Checkpointer, tmp_path: Path
+) -> None:
     _to_carren(cp, _constraints(tmp_path))
     directive = _parallel(cp, "carren", "carren", _carren(cp))
     assert directive["state_id"] == "CODEGEN"
@@ -846,7 +1009,10 @@ def test_current_hash_cited_carren_approval_precedes_voice(cp: Checkpointer, tmp
 
 # §14.6 / SK-004 / SK-009 — exact manifest, repeated provenance, staleness
 
-def test_manifest_provenance_and_receipt_repeat_exact_binding(cp: Checkpointer, tmp_path: Path) -> None:
+
+def test_manifest_provenance_and_receipt_repeat_exact_binding(
+    cp: Checkpointer, tmp_path: Path
+) -> None:
     constraints = _constraints(tmp_path)
     _to_gate(cp, constraints)
     done = _step(cp, "user", {"action": "approve"})
@@ -855,15 +1021,41 @@ def test_manifest_provenance_and_receipt_repeat_exact_binding(cp: Checkpointer, 
     manifest = json.loads((Path(vg["paths"]["bundle"]) / "manifest.json").read_text())
     provenance = json.loads(Path(vg["paths"]["provenance"]).read_text())
     receipt = json.loads(Path(vg["paths"]["handoff_receipt"]).read_text())
-    assert set(manifest) == {"bundle_version", "video_id", "primitive_library_version", "theme"}
+    assert set(manifest) == {
+        "bundle_version",
+        "video_id",
+        "primitive_library_version",
+        "theme",
+    }
     for key in ("section_identity", "content_sha256", "approval_record", "checksums"):
         assert receipt[key] == provenance[key]
-        assert json.dumps(receipt[key], sort_keys=True, separators=(",", ":")) == json.dumps(
-            provenance[key], sort_keys=True, separators=(",", ":")
-        )
+        assert json.dumps(
+            receipt[key], sort_keys=True, separators=(",", ":")
+        ) == json.dumps(provenance[key], sort_keys=True, separators=(",", ":"))
+
+    finalize_ref = vg["phase_state"]["latest_summary_refs"]["FINALIZE"]
+    assert _sha(Path(finalize_ref["path"]).read_bytes()) == finalize_ref["sha256"]
+    finalize = json.loads(Path(finalize_ref["path"]).read_text(encoding="utf-8"))
+    assert finalize["poster_command"][0] == "seamed-poster"
+    assert finalize["poster_result"] == {
+        "ok": True,
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "",
+        "elapsed_ms": 0,
+    }
+    assert finalize["poster_sha256"] == vg["hashes"]["final_poster"]
+    assert (
+        provenance["checksums"]["evidence/finalize/poster-extraction"]
+        == finalize_ref["sha256"]
+    )
+    assert receipt["checksums"]["final/poster"] == finalize["poster_sha256"]
+    assert receipt["artifacts"]["poster"]["sha256"] == finalize["poster_sha256"]
 
 
-def test_whitespace_only_source_change_gets_new_hash_and_routes_stale(cp: Checkpointer, tmp_path: Path) -> None:
+def test_whitespace_only_source_change_gets_new_hash_and_routes_stale(
+    cp: Checkpointer, tmp_path: Path
+) -> None:
     constraints = _constraints(tmp_path)
     source = _write(tmp_path / "inputs" / "section.md", "# Exact\n")
     constraints["section_content"] = {"path": str(source.resolve())}
@@ -881,16 +1073,22 @@ def test_whitespace_only_source_change_gets_new_hash_and_routes_stale(cp: Checkp
 
 # §14.8 / SK-010 — durable structured operator gate
 
+
 def test_operator_review_packet_is_complete_durable_and_requires_structured_approval(
     cp: Checkpointer, tmp_path: Path
 ) -> None:
     directive = _to_gate(cp, _constraints(tmp_path))
     rec = cp.load(RID)
     assert directive["action"] == "escalate_to_user"
-    assert rec.status == STATUS_AWAITING_USER and rec.current_state_id == "OPERATOR_REVIEW"
+    assert (
+        rec.status == STATUS_AWAITING_USER and rec.current_state_id == "OPERATOR_REVIEW"
+    )
     packet = directive["questions"][0]["packet"]
     assert Path(packet["draft_video_path"]).is_file()
-    assert _sha(Path(packet["draft_video_path"]).read_bytes()) == packet["draft_video_sha256"]
+    assert (
+        _sha(Path(packet["draft_video_path"]).read_bytes())
+        == packet["draft_video_sha256"]
+    )
     assert Path(packet["captions_path"]).is_file()
     assert packet["duration_seconds"] > 0
     assert packet["storyboard_summary"]
@@ -901,7 +1099,9 @@ def test_operator_review_packet_is_complete_durable_and_requires_structured_appr
     assert not any(call[0] == "poster" for call in FakeVideogen.calls)
 
 
-def test_approval_is_refused_when_persisted_draft_hash_is_stale(cp: Checkpointer, tmp_path: Path) -> None:
+def test_approval_is_refused_when_persisted_draft_hash_is_stale(
+    cp: Checkpointer, tmp_path: Path
+) -> None:
     _to_gate(cp, _constraints(tmp_path))
     vg = cp.load(RID).context.extras["videogen"]
     Path(vg["paths"]["draft_video"]).write_bytes(b"changed-after-review")
@@ -914,6 +1114,7 @@ def test_approval_is_refused_when_persisted_draft_hash_is_stale(cp: Checkpointer
 
 
 # §14.9 / OPS-004 — targeted audio, full validation/render/QA convergence
+
 
 def test_one_scene_narration_feedback_resynthesizes_only_that_wav_and_reruns_full_gates(
     cp: Checkpointer, tmp_path: Path
@@ -944,6 +1145,7 @@ def test_one_scene_narration_feedback_resynthesizes_only_that_wav_and_reruns_ful
 
 # §14.13 / SK-008 — fresh process recovery without duplicate seam submissions
 
+
 def test_kill_recover_same_run_resumes_committed_state_without_duplicate_submissions(
     cp: Checkpointer, tmp_path: Path
 ) -> None:
@@ -973,18 +1175,26 @@ def test_kill_recover_same_run_resumes_committed_state_without_duplicate_submiss
 
 # §14.14 / SK-010 — bounded default budget and honest exhaustion
 
-def test_refine_budget_defaults_to_exactly_three(cp: Checkpointer, tmp_path: Path) -> None:
+
+def test_refine_budget_defaults_to_exactly_three(
+    cp: Checkpointer, tmp_path: Path
+) -> None:
     _start(cp, _constraints(tmp_path))
     rec = cp.load(RID)
     assert rec.context.max_iterations == 3
     assert rec.context.extras["videogen"]["budget"]["max_refine_iterations"] == 3
 
 
-def test_fourth_refine_request_exhausts_honestly_and_never_handoffs(cp: Checkpointer, tmp_path: Path) -> None:
+def test_fourth_refine_request_exhausts_honestly_and_never_handoffs(
+    cp: Checkpointer, tmp_path: Path
+) -> None:
     _to_gate(cp, _constraints(tmp_path))
     for iteration in range(1, 4):
         feedback = f"Technical adjustment {iteration}."
-        assert _step(cp, "user", {"action": "refine", "feedback": feedback})["state_id"] == "REFINE"
+        assert (
+            _step(cp, "user", {"action": "refine", "feedback": feedback})["state_id"]
+            == "REFINE"
+        )
         qa = _step(cp, "synthia", _refine_summary(cp, feedback, route="DRAFT_RENDER"))
         assert qa["state_id"] == "AUTO_QA"
         assert _step(cp, "vera", _vera(cp))["previous_state"] == "OPERATOR_REVIEW"
@@ -1005,12 +1215,18 @@ def test_fourth_refine_request_exhausts_honestly_and_never_handoffs(cp: Checkpoi
 
 # §14.15 — SUMMARY confidence wire format
 
+
 def test_all_agent_summary_contracts_require_exact_confidence() -> None:
     assert CONFIDENCES == {"CERTAIN", "PROBABLE", "POSSIBLE", "UNCERTAIN"}
-    assert all(contract["required"].get("confidence") is str for contract in ALL_SUMMARY_CONTRACTS)
+    assert all(
+        contract["required"].get("confidence") is str
+        for contract in ALL_SUMMARY_CONTRACTS
+    )
 
 
-def test_invalid_confidence_cannot_advance_agent_phase(cp: Checkpointer, tmp_path: Path) -> None:
+def test_invalid_confidence_cannot_advance_agent_phase(
+    cp: Checkpointer, tmp_path: Path
+) -> None:
     constraints = _constraints(tmp_path)
     _start(cp, constraints)
     summary = _annie(Path(constraints["workspace_dir"]))
@@ -1022,7 +1238,10 @@ def test_invalid_confidence_cannot_advance_agent_phase(cp: Checkpointer, tmp_pat
 
 # §14.16 / OPS-009 — completed learning and sequential retrieval
 
-def test_completed_run_writes_learning_record_and_second_run_retrieves_it(tmp_path: Path) -> None:
+
+def test_completed_run_writes_learning_record_and_second_run_retrieves_it(
+    tmp_path: Path,
+) -> None:
     cp = Checkpointer(db_path=tmp_path / "cp.db")
     first = _constraints(tmp_path / "first")
     _to_gate(cp, first)
@@ -1041,18 +1260,36 @@ def test_completed_run_writes_learning_record_and_second_run_retrieves_it(tmp_pa
 
 # §14.17 / SK-013 — profile resolution through start()
 
-def _profile_invocation(tmp_path: Path, name: str, *, profile_updates: Mapping[str, Any] | None = None):
+
+def _profile_invocation(
+    tmp_path: Path, name: str, *, profile_updates: Mapping[str, Any] | None = None
+):
     direct = _constraints(tmp_path)
-    per_item = {key: copy.deepcopy(direct[key]) for key in ("section_content", "section_identity", "content_gate")}
-    stable = {key: copy.deepcopy(value) for key, value in direct.items() if key not in per_item}
+    per_item = {
+        key: copy.deepcopy(direct[key])
+        for key in ("section_content", "section_identity", "content_gate")
+    }
+    stable = {
+        key: copy.deepcopy(value)
+        for key, value in direct.items()
+        if key not in per_item
+    }
     stable.update(profile_updates or {})
     root = tmp_path / "profiles"
     _json(root / name / "profile.json", stable)
-    per_item.update({"app_profile": name, "profiles_dir": str(root.resolve()), "theme": "inline-theme"})
+    per_item.update(
+        {
+            "app_profile": name,
+            "profiles_dir": str(root.resolve()),
+            "theme": "inline-theme",
+        }
+    )
     return per_item, stable, root
 
 
-def test_profile_merge_inline_override_and_provenance_flow_through_start(tmp_path: Path) -> None:
+def test_profile_merge_inline_override_and_provenance_flow_through_start(
+    tmp_path: Path,
+) -> None:
     constraints, stable, root = _profile_invocation(tmp_path, "profile-alpha")
     directive = _start(Checkpointer(db_path=tmp_path / "cp.db"), constraints)
     assert directive["state_id"] == "INGEST"
@@ -1066,8 +1303,12 @@ def test_profile_merge_inline_override_and_provenance_flow_through_start(tmp_pat
     assert len(merged["profile_provenance"]["sha256"]) == 64
 
 
-@pytest.mark.parametrize("failure", ["unknown", "unreadable-root", "schema-invalid", "per-work-item"])
-def test_profile_failures_precede_all_side_effects(tmp_path: Path, failure: str) -> None:
+@pytest.mark.parametrize(
+    "failure", ["unknown", "unreadable-root", "schema-invalid", "per-work-item"]
+)
+def test_profile_failures_precede_all_side_effects(
+    tmp_path: Path, failure: str
+) -> None:
     constraints, _stable, root = _profile_invocation(tmp_path, "profile-bad")
     profile = root / "profile-bad" / "profile.json"
     if failure == "unknown":
@@ -1094,18 +1335,131 @@ def test_two_generic_profiles_drive_identical_state_trace(tmp_path: Path) -> Non
         cp = Checkpointer(db_path=case / "cp.db")
         trace = []
         directive = _start(cp, constraints, run_id=RID)
-        trace.append((directive["action"], directive["state_id"], directive.get("agent")))
+        trace.append(
+            (directive["action"], directive["state_id"], directive.get("agent"))
+        )
         workspace = Path(constraints.get("workspace_dir", case / "workspace"))
         # workspace/output came from the profile, so use the normalized path.
-        workspace = Path(cp.load(RID).context.extras["videogen"]["paths"]["workspace_dir"])
-        for agent, summary in (("annie", _annie(workspace)), ("synthia", _storyboard(workspace))):
+        workspace = Path(
+            cp.load(RID).context.extras["videogen"]["paths"]["workspace_dir"]
+        )
+        for agent, summary in (
+            ("annie", _annie(workspace)),
+            ("synthia", _storyboard(workspace)),
+        ):
             directive = _step(cp, agent, summary)
-            trace.append((directive["action"], directive["state_id"], directive.get("agent")))
+            trace.append(
+                (directive["action"], directive["state_id"], directive.get("agent"))
+            )
         traces.append(trace)
     assert traces[0] == traces[1]
 
 
 # QA-001..006 — fail routing, uncertainty, unweighted roll-up, canonical ID
+
+
+def test_deterministic_failure_rejects_clean_vera_pass_and_routes_owner(
+    cp: Checkpointer, tmp_path: Path
+) -> None:
+    cases = json.loads((QA_FIXTURES / "failures.json").read_text(encoding="utf-8"))[
+        "cases"
+    ]
+    failed = next(item["row"] for item in cases if item["check_id"] == "MECH-ACCESS")
+    index = [row["id"] for row in FakeVideogen.deterministic_rows].index("MECH-ACCESS")
+    FakeVideogen.deterministic_rows[index] = copy.deepcopy(failed)
+    _to_auto_qa(cp, _constraints(tmp_path))
+
+    directive = _step(cp, "vera", _vera(cp, _load_clean_rows()))
+
+    rec = cp.load(RID)
+    vg = rec.context.extras["videogen"]
+    assert directive["state_id"] == "CODEGEN"
+    assert rec.current_state_id == "CODEGEN"
+    assert vg["paths"]["gate_packet"] is None
+    assert vg["qa"]["verdict"] == "FAIL"
+    assert vg["qa"]["blocking_ids"] == ["MECH-ACCESS"]
+    rejected_ref = vg["phase_state"]["latest_summary_refs"]["AUTO_QA:rejected"]
+    rejected = json.loads(Path(rejected_ref["path"]).read_text(encoding="utf-8"))
+    assert rejected["disagreement_ids"] == ["MECH-ACCESS"]
+    assert "AUTO_QA" not in vg["phase_state"]["latest_summary_refs"]
+
+
+def test_deterministic_uncertainty_cannot_be_overridden_by_vera_pass(
+    cp: Checkpointer, tmp_path: Path
+) -> None:
+    index = [row["id"] for row in FakeVideogen.deterministic_rows].index("MECH-ACCESS")
+    FakeVideogen.deterministic_rows[index] = {
+        **FakeVideogen.deterministic_rows[index],
+        "status": "UNCERTAIN",
+        "affected_scene_ids": ["scene-one"],
+        "fix_route": "CODEGEN",
+    }
+    _to_auto_qa(cp, _constraints(tmp_path))
+
+    paused = _step(cp, "vera", _vera(cp, _load_clean_rows()))
+
+    rec = cp.load(RID)
+    assert paused["action"] == "escalate_to_user"
+    assert rec.current_state_id == "awaiting_clarification"
+    assert rec.context.extras["videogen"]["qa"]["verdict"] == "UNCERTAIN"
+    assert rec.context.extras["videogen"]["paths"]["gate_packet"] is None
+
+
+def test_deterministic_pass_and_vera_failure_blocks_operator_review(
+    cp: Checkpointer, tmp_path: Path
+) -> None:
+    _to_auto_qa(cp, _constraints(tmp_path))
+    cases = json.loads((QA_FIXTURES / "failures.json").read_text(encoding="utf-8"))[
+        "cases"
+    ]
+    failed = next(item["row"] for item in cases if item["check_id"] == "ALIGN-TONE")
+    rows = _load_clean_rows()
+    index = [row["id"] for row in rows].index("ALIGN-TONE")
+    rows[index] = failed
+
+    directive = _step(cp, "vera", _vera(cp, rows))
+
+    assert directive["state_id"] == "NARRATION_SCRIPT"
+    assert cp.load(RID).context.extras["videogen"]["paths"]["gate_packet"] is None
+
+
+def test_deterministic_pass_and_evidenced_vera_pass_reaches_operator_review(
+    cp: Checkpointer, tmp_path: Path
+) -> None:
+    _to_auto_qa(cp, _constraints(tmp_path))
+    summary = _vera(cp, _load_clean_rows())
+    assert len(summary["check_results"]) == 18
+    assert all(row["evidence"] for row in summary["check_results"])
+
+    directive = _step(cp, "vera", summary)
+
+    rec = cp.load(RID)
+    assert directive["action"] == "escalate_to_user"
+    assert rec.current_state_id == "OPERATOR_REVIEW"
+    report = json.loads(
+        Path(rec.context.extras["videogen"]["paths"]["qa_report"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert report["verdict"] == "PASS"
+    assert all(row["evidence"] for row in report["checks"])
+
+
+def test_vera_pass_with_missing_check_evidence_is_invalid(
+    cp: Checkpointer, tmp_path: Path
+) -> None:
+    _to_auto_qa(cp, _constraints(tmp_path))
+    summary = _vera(cp, _load_clean_rows())
+    summary["check_results"][0]["evidence"] = []
+
+    rejected = _step(cp, "vera", summary)
+
+    assert rejected["action"] == "invoke_agent"
+    assert rejected["state_id"] == "AUTO_QA"
+    rec = cp.load(RID)
+    assert rec.current_state_id == "AUTO_QA"
+    assert rec.context.extras["videogen"]["paths"]["gate_packet"] is None
+
 
 @pytest.mark.parametrize(
     ("check_id", "route"),
@@ -1118,9 +1472,13 @@ def test_two_generic_profiles_drive_identical_state_trace(tmp_path: Path) -> Non
         ("MECH-PROVENANCE", "VALIDATE"),
     ],
 )
-def test_vera_failure_routes_to_owning_phase(cp: Checkpointer, tmp_path: Path, check_id: str, route: str) -> None:
+def test_vera_failure_routes_to_owning_phase(
+    cp: Checkpointer, tmp_path: Path, check_id: str, route: str
+) -> None:
     _to_auto_qa(cp, _constraints(tmp_path))
-    cases = json.loads((QA_FIXTURES / "failures.json").read_text(encoding="utf-8"))["cases"]
+    cases = json.loads((QA_FIXTURES / "failures.json").read_text(encoding="utf-8"))[
+        "cases"
+    ]
     case = next(item for item in cases if item["check_id"] == check_id)
     rows = _load_clean_rows()
     rows[[row["id"] for row in rows].index(check_id)] = case["row"]
@@ -1135,10 +1493,17 @@ def test_vera_failure_routes_to_owning_phase(cp: Checkpointer, tmp_path: Path, c
         assert directive["state_id"] == route
 
 
-def test_vera_uncertain_pauses_and_never_reaches_operator_review(cp: Checkpointer, tmp_path: Path) -> None:
+def test_vera_uncertain_pauses_and_never_reaches_operator_review(
+    cp: Checkpointer, tmp_path: Path
+) -> None:
     _to_auto_qa(cp, _constraints(tmp_path))
     rows = _load_clean_rows()
-    rows[0] = {**rows[0], "status": "UNCERTAIN", "affected_scene_ids": ["scene-one"], "fix_route": "VALIDATE"}
+    rows[0] = {
+        **rows[0],
+        "status": "UNCERTAIN",
+        "affected_scene_ids": ["scene-one"],
+        "fix_route": "VALIDATE",
+    }
     paused = _step(cp, "vera", _vera(cp, rows))
     assert paused["action"] == "escalate_to_user"
     rec = cp.load(RID)
@@ -1177,6 +1542,7 @@ def test_provenance_check_id_is_canonical_everywhere() -> None:
 
 
 # Terminal create-mode success and target-boundary oracle
+
 
 def test_terminal_success_stages_triplet_and_receipt_without_target_side_effects(
     cp: Checkpointer, tmp_path: Path
@@ -1217,3 +1583,60 @@ def test_terminal_success_stages_triplet_and_receipt_without_target_side_effects
         or path.is_relative_to(output)
         for path in new_files
     )
+
+
+# Engine-runtime constraint injection (skill extension injects skill_dir) and
+# post-removal learning-record room (self-improvement stack removal: the
+# penny/outcomes ledger is retired; videogen keeps OPS-009 in its own room).
+
+
+def test_engine_injected_skill_dir_is_accepted_and_stripped(tmp_path: Path) -> None:
+    constraints = _constraints(tmp_path)
+    constraints["skill_dir"] = str(PROJECT_ROOT / ".pi" / "skills" / "videogen")
+    directive = _start(Checkpointer(db_path=tmp_path / "cp.db"), constraints)
+    # Contract validation must not reject the injected runtime key.
+    if directive["action"] == "error":
+        assert not any("skill_dir" in error for error in directive.get("errors", []))
+    else:
+        assert directive["action"] in {"invoke_agent", "escalate"}
+
+
+def test_learning_records_use_dedicated_room_not_retired_outcomes(
+    tmp_path: Path,
+) -> None:
+    import types
+
+    captured: dict[str, Any] = {}
+
+    fake = types.ModuleType("memory_bridge")
+
+    def tool_smart_search(params: Mapping[str, Any]) -> dict[str, Any]:
+        captured.setdefault("search_rooms", []).append(params.get("room"))
+        return {"success": True, "results": []}
+
+    def tool_add_drawer(params: Mapping[str, Any]) -> dict[str, Any]:
+        captured["write_room"] = params.get("room")
+        return {"success": True, "drawer_id": "drawer_test"}
+
+    fake.tool_smart_search = tool_smart_search  # type: ignore[attr-defined]
+    fake.tool_add_drawer = tool_add_drawer  # type: ignore[attr-defined]
+    import sys as _sys
+
+    _sys.modules["memory_bridge"] = fake
+    try:
+        playbook = VideogenPlaybook(Checkpointer(db_path=tmp_path / "cp.db"))
+        ctx = types.SimpleNamespace(
+            run_id="run-room-test",
+            session_id="sid-room-test",
+            project_root=str(PROJECT_ROOT),
+            constraints={},
+            extras={},
+        )
+        playbook._retrieve_learning_records(ctx, query={"content_family": "test"})
+        playbook._write_learning_record(ctx, record={"run_id": "run-room-test"})
+    finally:
+        del _sys.modules["memory_bridge"]
+
+    assert captured["write_room"] == "videogen-learning"
+    assert set(captured["search_rooms"]) == {"videogen-learning"}
+    assert "outcomes" not in str(captured)

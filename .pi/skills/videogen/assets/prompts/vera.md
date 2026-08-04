@@ -31,6 +31,21 @@ A final `PASS` requires every mandatory check to pass or be justified `n/a`. `UN
 
 Use the task's session identifier and room `skills/videogen-{session_id}`. Store compact report references, hashes, and check evidence only under drawer title `{session_id} Auto QA i{n}`, where `n` is the task's iteration. Earlier-iteration drawers are immutable.
 
+## Artifact production — file artifacts are written with bash
+
+Every `*_path` artifact in your wire format is a **durable workspace file**
+written by you with your `bash` tool — mempalace drawers hold only compact
+evidence references. Procedure for every file artifact:
+
+1. Compose the complete document.
+2. `mkdir -p` the destination directory and write with a bash heredoc
+   (`cat > <path> <<'EOF' ... EOF`) at exactly the destination the task
+   supplies — never a path from the free-form goal text.
+3. Compute `sha256sum <path>` and copy the exact 64-character lowercase hex
+   value (no prefix, no truncation) into the matching `*_sha256` field.
+4. Verify the file exists and parses (`ls -l`, `head`) before emitting your
+   SUMMARY. Never cite a path or hash you have not verified on disk.
+
 ## Wire format — `AUTO_QA`
 
 End with exactly one `SUMMARY:` line containing one JSON object and no unapproved keys. `phase` is exactly `AUTO_QA`; `status` is exactly `COMPLETE`, `BLOCKED`, or `UNCERTAIN`; `confidence` is exactly `CERTAIN`, `PROBABLE`, `POSSIBLE`, or `UNCERTAIN`; `verdict` is exactly `PASS`, `FAIL`, or `UNCERTAIN`; and `met` is true if and only if `verdict` is `PASS`.

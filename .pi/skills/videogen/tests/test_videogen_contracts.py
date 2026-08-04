@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import json
-import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -37,7 +36,6 @@ from videogen_contracts import (  # noqa: E402
     validate_and_normalize_constraints,
 )
 
-FIXTURE_PROFILES = Path(__file__).resolve().parent / "fixtures" / "profiles"
 REQUIRED_FIELDS = (
     "section_content",
     "section_identity",
@@ -154,7 +152,10 @@ def test_every_required_constraint_reports_field_before_side_effects(
         ("teaching_canon_paths", []),
         ("superpose_url", "https://name:secret@renderer.example.test"),
         ("voice_id", "   "),
-        ("primitive_schema_source", {"url": "https://schema.example.test", "path": "/x"}),
+        (
+            "primitive_schema_source",
+            {"url": "https://schema.example.test", "path": "/x"},
+        ),
         ("workspace_dir", "relative/workspace"),
         (
             "publish_target_conventions",
@@ -200,7 +201,9 @@ def test_unknown_constraint_is_rejected(tmp_path: Path) -> None:
 
 def test_exact_utf8_hash_is_whitespace_and_newline_sensitive(tmp_path: Path) -> None:
     hashes = {
-        _normalize(_constraints(tmp_path / f"case-{index}", section_text=text)).content_sha256
+        _normalize(
+            _constraints(tmp_path / f"case-{index}", section_text=text)
+        ).content_sha256
         for index, text in enumerate(("same", "same ", "same\n", "same\r\n"))
     }
     assert len(hashes) == 4
@@ -247,7 +250,16 @@ def test_word_timing_requirement_fails_closed(tmp_path: Path) -> None:
 
 def test_two_generic_profiles_use_one_normalization_path(tmp_path: Path) -> None:
     profiles_root = tmp_path / "profiles"
-    shutil.copytree(FIXTURE_PROFILES, profiles_root)
+    generic_profile = {
+        "character_usage_policy": {"mode": "canon-authorized-only"},
+        "max_refine_iterations": 3,
+        "max_scene_tail_seconds": 2.0,
+    }
+    for name in ("profile-one", "profile-two"):
+        _write(
+            profiles_root / name / "profile.json",
+            json.dumps(generic_profile, sort_keys=True, separators=(",", ":")) + "\n",
+        )
     normalized: list[dict[str, Any]] = []
     provenances: list[dict[str, Any]] = []
     shared_constraints = _constraints(tmp_path / "shared-inputs")
@@ -265,7 +277,42 @@ def test_two_generic_profiles_use_one_normalization_path(tmp_path: Path) -> None
 
     assert normalized[0] == normalized[1]
     assert {item["name"] for item in provenances} == {"profile-one", "profile-two"}
-    assert all(set(item) == {"mode", "name", "resolved_path", "sha256"} for item in provenances)
+    assert all(
+        set(item) == {"mode", "name", "resolved_path", "sha256"} for item in provenances
+    )
+
+
+def test_profile_annotation_keys_are_ignored_not_rejected(tmp_path: Path) -> None:
+    """$-prefixed JSON-convention annotation keys are documentation, not contract data."""
+    profiles_root = tmp_path / "profiles"
+    profile = {
+        "$schema_note": "human documentation string — must be ignored",
+        "$comment": "also ignored",
+        "max_refine_iterations": 3,
+        "max_scene_tail_seconds": 2.0,
+    }
+    _write(
+        profiles_root / "annotated" / "profile.json",
+        json.dumps(profile, sort_keys=True, separators=(",", ":")) + "\n",
+    )
+    constraints = _constraints(tmp_path / "inputs")
+    constraints.update({"app_profile": "annotated", "profiles_dir": str(profiles_root)})
+    resolution = resolve_profile(constraints, environ={})
+    assert not any(key.startswith("$") for key in resolution.merged_constraints)
+    intake = validate_and_normalize_constraints(resolution)
+    assert intake.to_dict()["profile_provenance"]["name"] == "annotated"
+
+    # A non-annotation unknown key still fails closed.
+    bad = dict(profile)
+    bad["surprise_field"] = True
+    _write(
+        profiles_root / "bad" / "profile.json",
+        json.dumps(bad, sort_keys=True, separators=(",", ":")) + "\n",
+    )
+    bad_constraints = _constraints(tmp_path / "inputs-bad")
+    bad_constraints.update({"app_profile": "bad", "profiles_dir": str(profiles_root)})
+    with pytest.raises(ProfileResolutionError, match="surprise_field: unknown profile field"):
+        resolve_profile(bad_constraints, environ={})
 
 
 @pytest.mark.parametrize(
@@ -282,13 +329,19 @@ def test_profile_resolution_failures_have_no_workspace_or_output_effect(
     elif failure == "invalid-json":
         profile_path.write_text("{not-json", encoding="utf-8")
     elif failure == "schema-invalid":
-        profile_path.write_text('{"max_refine_iterations":"unbounded"}\n', encoding="utf-8")
+        profile_path.write_text(
+            '{"max_refine_iterations":"unbounded"}\n', encoding="utf-8"
+        )
     elif failure == "forbidden":
-        profile_path.write_text('{"section_content":{"text":"forbidden"}}\n', encoding="utf-8")
+        profile_path.write_text(
+            '{"section_content":{"text":"forbidden"}}\n', encoding="utf-8"
+        )
     elif failure == "unknown":
         profile_path.parent.rmdir()
     constraints = _constraints(tmp_path)
-    constraints.update({"app_profile": "sample-profile", "profiles_dir": str(profiles_root)})
+    constraints.update(
+        {"app_profile": "sample-profile", "profiles_dir": str(profiles_root)}
+    )
 
     with pytest.raises(ProfileResolutionError):
         resolve_profile(constraints, environ={})
@@ -423,7 +476,9 @@ def test_bundle_provenance_receipt_are_byte_consistent(tmp_path: Path) -> None:
     audio.write_bytes(b"generic-audio-bytes")
     video = source / "final.mp4"
     video.write_bytes(b"generic-video-bytes")
-    captions = _write(source / "final.vtt", "WEBVTT\n\n00:00.000 --> 00:01.000\nGeneric.\n")
+    captions = _write(
+        source / "final.vtt", "WEBVTT\n\n00:00.000 --> 00:01.000\nGeneric.\n"
+    )
     poster = source / "final.jpg"
     poster.write_bytes(b"generic-poster-bytes")
     qa_report = _write(source / "auto-qa.json", '{"verdict":"PASS"}\n')
@@ -464,7 +519,9 @@ def test_bundle_provenance_receipt_are_byte_consistent(tmp_path: Path) -> None:
     )
     persisted_provenance = read_provenance(bundle.provenance["path"])
     approval_file = source / "approval.json"
-    approval_file.write_bytes(canonical_json_bytes(persisted_provenance["approval_record"]))
+    approval_file.write_bytes(
+        canonical_json_bytes(persisted_provenance["approval_record"])
+    )
 
     release = output / "release-sample"
     artifacts = {
@@ -541,7 +598,9 @@ def test_bundle_provenance_receipt_are_byte_consistent(tmp_path: Path) -> None:
         "approval_record",
         "checksums",
     ):
-        assert canonical_json_bytes(receipt[key]) == canonical_json_bytes(persisted_provenance[key])
+        assert canonical_json_bytes(receipt[key]) == canonical_json_bytes(
+            persisted_provenance[key]
+        )
 
     result = stage_outputs(
         output_root=output,
@@ -558,10 +617,13 @@ def test_bundle_provenance_receipt_are_byte_consistent(tmp_path: Path) -> None:
         receipt=receipt,
     )
     assert result.release_dir["path"] == str(release.resolve())
-    staged_receipt = json.loads((release / "handoff-receipt.json").read_text(encoding="utf-8"))
+    staged_receipt = json.loads(
+        (release / "handoff-receipt.json").read_text(encoding="utf-8")
+    )
     assert staged_receipt == receipt
     assert (
-        read_provenance(release / "bundle" / "provenance.json")["checksums"] == receipt["checksums"]
+        read_provenance(release / "bundle" / "provenance.json")["checksums"]
+        == receipt["checksums"]
     )
     assert ledger_sha256(build_tree_ledger(release)) == result.release_dir["sha256"]
 
@@ -615,7 +677,10 @@ def test_staleness_matrix(
     elif prior_change == "identity":
         prior["section_identity"]["stable_key"] = "different-section"
     elif prior_change == "malformed":
-        prior = {"section_identity": {"stable_key": "sample-section"}, "content_sha256": "bad"}
+        prior = {
+            "section_identity": {"stable_key": "sample-section"},
+            "content_sha256": "bad",
+        }
     elif prior_change == "binding":
         prior["checksums"]["binding/current"] = _digest("changed-binding")
 
