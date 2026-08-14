@@ -15,6 +15,12 @@ dependencies = [
     "python-statemachine>=2.0",   # FSM library — legacy skill orchestrators + orchestration engine
     "tree-sitter>=0.21.0",        # AST parser — used by jsa splitter
     "tree-sitter-javascript>=0.21.0",
+    # PowerPoint extension runtime. These direct imports are first-class locked
+    # dependencies so an exact `uv sync` preserves presentation generation.
+    "python-pptx>=1.0,<2",
+    "markdown-it-py>=4,<5",
+    "lxml>=6,<7",
+    "pillow>=12,<13",
     # Workspace packages (installed editable via uv workspace). Their own deps
     # (fastapi, uvicorn, aiosqlite, python-dotenv, pydantic, apscheduler, …)
     # arrive transitively — do NOT duplicate them here.

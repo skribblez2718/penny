@@ -8,10 +8,12 @@
  * run with the project venv and fed a JSON spec over stdin.
  */
 
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { createLogger, setSessionId } from "../../lib/logger/logger.js";
@@ -31,15 +33,44 @@ export const SLIDE_LAYOUTS = [
 ] as const;
 
 const DEFAULT_TIMEOUT_MS = 90_000;
+const MAX_STDERR_CHARS = 16_000;
+const MAX_STAGING_ATTEMPTS = 10;
+const EXTENSION_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DISCOVERED_PROJECT_ROOT = path.resolve(EXTENSION_DIR, "../../..");
 
 // ── Path helpers (exported for unit tests) ───────────────────────────────────
 
-export function getProjectRoot(): string {
-  return process.env.PROJECT_ROOT || process.cwd();
+export function getExtensionDir(): string {
+  return EXTENSION_DIR;
 }
 
-export function getVenvPython(): string {
-  return process.env.PI_VENV_PYTHON || path.join(getProjectRoot(), ".venv", "bin", "python");
+export function getGeneratorScript(): string {
+  return path.join(EXTENSION_DIR, "generate_pptx.py");
+}
+
+export function getProjectRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.PROJECT_ROOT?.trim();
+  return configured ? path.resolve(configured) : DISCOVERED_PROJECT_ROOT;
+}
+
+export function venvPythonCandidates(
+  root: string,
+  platform: NodeJS.Platform = process.platform
+): string[] {
+  const unix = path.join(root, ".venv", "bin", "python");
+  const windows = path.join(root, ".venv", "Scripts", "python.exe");
+  return platform === "win32" ? [windows, unix] : [unix, windows];
+}
+
+export function getVenvPython(
+  root = getProjectRoot(),
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): string {
+  const override = env.PI_VENV_PYTHON?.trim();
+  if (override) return path.resolve(override);
+  const candidates = venvPythonCandidates(root, platform);
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
 }
 
 /** Lowercase, alphanumeric-and-dash slug for filenames; never empty. */
@@ -55,7 +86,11 @@ export function slugify(input: string, fallback = "presentation"): string {
 
 /** Default output path when the caller gives none: a per-run temp file under the
  *  OS temp dir (…/penny/powerpoint/) — never the project tree. */
-export function defaultOutputPath(title: string | undefined, now: Date = new Date()): string {
+export function defaultOutputPath(
+  title: string | undefined,
+  now: Date = new Date(),
+  invocationId: () => string = randomUUID
+): string {
   const stamp = [
     now.getFullYear(),
     String(now.getMonth() + 1).padStart(2, "0"),
@@ -66,11 +101,9 @@ export function defaultOutputPath(title: string | undefined, now: Date = new Dat
     String(now.getMinutes()).padStart(2, "0"),
     String(now.getSeconds()).padStart(2, "0"),
   ].join("");
-  // Millisecond + random suffix: sibling tool calls run concurrently in pi, so a
-  // 1-second timestamp alone can collide and silently overwrite a sibling's output.
-  const uniq = `${String(now.getMilliseconds()).padStart(3, "0")}${Math.random()
-    .toString(36)
-    .slice(2, 6)}`;
+  // A full invocation UUID prevents concurrent sibling calls from deriving the
+  // same final destination; staging already receives a separate UUID below.
+  const uniq = `${String(now.getMilliseconds()).padStart(3, "0")}-${invocationId()}`;
   const name = `${slugify(title || "presentation")}_${stamp}_${time}_${uniq}.pptx`;
   return path.join(os.tmpdir(), "penny", "powerpoint", name);
 }
@@ -88,85 +121,184 @@ export function resolveOutputPath(
   return resolved.toLowerCase().endsWith(".pptx") ? resolved : `${resolved}.pptx`;
 }
 
+/** Reserve a parent-owned same-directory staging path for one invocation. */
+export function reserveStagingPath(outputPath: string): string {
+  const target = path.resolve(outputPath);
+  const directory = path.dirname(target);
+  fs.mkdirSync(directory, { recursive: true });
+  for (let attempt = 0; attempt < MAX_STAGING_ATTEMPTS; attempt += 1) {
+    const candidate = path.join(
+      directory,
+      `.${path.basename(target, ".pptx")}.${randomUUID()}.tmp.pptx`
+    );
+    try {
+      const descriptor = fs.openSync(candidate, "wx", 0o600);
+      fs.closeSync(descriptor);
+      return candidate;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") throw error;
+    }
+  }
+  throw new Error(`Unable to reserve a unique PowerPoint staging file beside ${target}`);
+}
+
 // ── Generator invocation ─────────────────────────────────────────────────────
 
-interface GeneratorOutcome {
+export interface GeneratorOutcome {
   cancelled: boolean;
   result?: Record<string, unknown>;
 }
 
-function generatorTimeoutMs(): number {
-  const raw = Number(process.env.PENNY_DOCGEN_TIMEOUT_MS);
+export interface GeneratorRunOptions {
+  pythonPath?: string;
+  timeoutMs?: number;
+}
+
+function generatorTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.PENNY_DOCGEN_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
 }
 
-function runGenerator(
+function boundedAppend(current: string, chunk: Buffer, limit: number): string {
+  const appended = current + chunk.toString();
+  return appended.length <= limit ? appended : appended.slice(-limit);
+}
+
+export function runGenerator(
   scriptPath: string,
   spec: Record<string, unknown>,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  options: GeneratorRunOptions = {}
 ): Promise<GeneratorOutcome> {
-  const python = getVenvPython();
+  if (signal?.aborted) return Promise.resolve({ cancelled: true });
+
+  const projectRoot = getProjectRoot();
+  const configuredOverride = process.env.PI_VENV_PYTHON?.trim();
+  const attempted = options.pythonPath
+    ? [path.resolve(options.pythonPath)]
+    : configuredOverride
+      ? [path.resolve(configuredOverride)]
+      : venvPythonCandidates(projectRoot);
+  const python = options.pythonPath ? path.resolve(options.pythonPath) : getVenvPython(projectRoot);
+
   if (!fs.existsSync(python)) {
     throw new Error(
-      `Python venv not found at ${python}. Run scripts/setup/init-external-tools.sh (or make setup) first.`
+      `Python interpreter not found. Attempted: ${attempted.join(", ")}. ` +
+        "Run `uv sync --extra dev --frozen` or set PI_VENV_PYTHON."
     );
   }
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error(`PowerPoint generator script not found: ${scriptPath}`);
+  }
+
+  const outputPath = spec.output_path;
+  if (typeof outputPath !== "string" || outputPath.length === 0) {
+    throw new Error("Presentation generator spec requires output_path");
+  }
+  const stagingPath = reserveStagingPath(outputPath);
+  const preparedSpec = { ...spec, staging_path: stagingPath };
+  const timeoutMs = options.timeoutMs ?? generatorTimeoutMs();
 
   return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
     const proc = spawn(python, [scriptPath], { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let aborted = false;
+    let timedOut = false;
+    let settled = false;
+    const lifecycle: { timer?: ReturnType<typeof setTimeout> } = {};
 
-    const timer = setTimeout(() => {
-      proc.kill("SIGKILL");
-      reject(new Error(`Presentation generator timed out after ${generatorTimeoutMs()}ms`));
-    }, generatorTimeoutMs());
+    const cleanup = () => {
+      if (lifecycle.timer !== undefined) clearTimeout(lifecycle.timer);
+      signal?.removeEventListener("abort", onAbort);
+      fs.rmSync(stagingPath, { force: true });
+    };
+    const settleResolve = (outcome: GeneratorOutcome) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(outcome);
+    };
+    const settleReject = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
 
     const onAbort = () => {
       aborted = true;
-      proc.kill("SIGKILL");
+      if (!proc.kill("SIGKILL")) settleResolve({ cancelled: true });
     };
     signal?.addEventListener("abort", onAbort, { once: true });
+
+    lifecycle.timer = setTimeout(() => {
+      timedOut = true;
+      if (!proc.kill("SIGKILL")) {
+        settleReject(new Error(`Presentation generator timed out after ${timeoutMs}ms`));
+      }
+    }, timeoutMs);
 
     proc.stdout.on("data", (data: Buffer) => {
       stdout += data.toString();
     });
     proc.stderr.on("data", (data: Buffer) => {
-      stderr += data.toString();
+      stderr = boundedAppend(stderr, data, MAX_STDERR_CHARS);
     });
 
     proc.on("close", (code) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
+      const durationMs = Date.now() - startedAt;
+      if (timedOut) {
+        settleReject(
+          new Error(
+            `Presentation generator timed out after ${timeoutMs}ms ` +
+              `(python=${python}, script=${scriptPath}, durationMs=${durationMs})`
+          )
+        );
+        return;
+      }
       if (aborted) {
-        resolve({ cancelled: true });
+        settleResolve({ cancelled: true });
         return;
       }
       if (code !== 0) {
-        reject(new Error(stderr.trim() || `Presentation generator exited with code ${code}`));
+        const diagnostic = stderr.trim() || `Presentation generator exited with code ${code}`;
+        settleReject(
+          new Error(
+            `${diagnostic}\n` +
+              `(python=${python}, script=${scriptPath}, exitCode=${String(code)}, durationMs=${durationMs})`
+          )
+        );
         return;
       }
       try {
-        resolve({ cancelled: false, result: JSON.parse(stdout) });
+        settleResolve({
+          cancelled: false,
+          result: JSON.parse(stdout) as Record<string, unknown>,
+        });
       } catch {
-        reject(new Error(`Presentation generator returned invalid JSON: ${stdout.slice(0, 500)}`));
+        settleReject(
+          new Error(
+            `Presentation generator returned invalid JSON: ${stdout.slice(0, 500)} ` +
+              `(python=${python}, script=${scriptPath}, durationMs=${durationMs})`
+          )
+        );
       }
     });
 
-    proc.on("error", (err) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      reject(err);
+    proc.on("error", (error) => {
+      settleReject(
+        new Error(
+          `Unable to start presentation generator: ${error.message} ` +
+            `(python=${python}, script=${scriptPath})`
+        )
+      );
     });
 
-    // If the child dies before draining stdin (broken venv, abort/timeout SIGKILL),
-    // the pending write fails with EPIPE. Without this listener that surfaces as an
-    // unhandled 'error' event on the Socket and kills the whole pi process; the
-    // 'close' handler above already settles the promise with the real failure.
     proc.stdin.on("error", () => {});
-
-    proc.stdin.write(JSON.stringify(spec));
+    proc.stdin.write(JSON.stringify(preparedSpec));
     proc.stdin.end();
   });
 }
@@ -243,8 +375,8 @@ const powerpointGenerateParams = Type.Object({
         "become bullets (nesting capped at 2), '### H3' becomes a bold bullet, fenced code " +
         "renders as a shaded code panel, a table becomes a table slide, a blockquote becomes " +
         "a quote slide (trailing '— name' line becomes the attribution), each image becomes " +
-        "an image slide; mixed content under one heading splits into consecutive slides so " +
-        "nothing is dropped, and slides with more than 7 bullets split into '(cont.)' slides.",
+        "an image slide; content is split into continuation slides by conservative height " +
+        "estimation so table rows, code lines, paragraphs, and bullet items are never truncated.",
     })
   ),
   title: Type.Optional(
@@ -267,6 +399,15 @@ const powerpointGenerateParams = Type.Object({
   accent_color: Type.Optional(
     Type.String({
       description: "Hex accent color override for the theme, e.g. '0E7490' ('#' optional).",
+    })
+  ),
+  line_break_mode: Type.Optional(
+    Type.String({
+      enum: ["preserve", "commonmark"],
+      default: "preserve",
+      description:
+        "Single-newline policy. 'preserve' (default) emits a PowerPoint line break; " +
+        "'commonmark' folds a soft break to a space. Hard breaks and <br> are always preserved.",
     })
   ),
   footer_text: Type.Optional(
@@ -296,6 +437,7 @@ interface PowerpointGenerateParams {
   date?: string;
   theme?: string;
   accent_color?: string;
+  line_break_mode?: "preserve" | "commonmark";
   footer_text?: string;
   slide_numbers?: boolean;
   output_path?: string;
@@ -345,8 +487,11 @@ export default function powerpointExtension(pi: ExtensionAPI): void {
       "quote, image (auto-fit with caption), and closing. Alternatively pass 'markdown' for " +
       "convenience (see the parameter description for the exact slide-splitting rules). Five " +
       "built-in themes (executive/modern/minimal/editorial/tech) control fonts and accent " +
-      "colors; speaker notes, footer text, and slide numbers are supported. When output_path is " +
-      "omitted, output is written to the OS temp dir (…/penny/powerpoint/).",
+      "colors; speaker notes, footer text, and slide numbers are supported. Content is " +
+      "conservatively paginated without truncating table rows or code lines, custom palettes " +
+      "are contrast-safe, and every deck is structurally validated before atomic publication. " +
+      "When output_path is omitted, output is written to the OS temp dir " +
+      "(…/penny/powerpoint/).",
     promptSnippet:
       "powerpoint_generate: render structured slides or markdown into a professionally styled PowerPoint (.pptx)",
     parameters: powerpointGenerateParams,
@@ -357,19 +502,17 @@ export default function powerpointExtension(pi: ExtensionAPI): void {
       _onUpdate: unknown,
       _ctx: unknown
     ) {
-      if (signal?.aborted) {
-        return {
-          content: [{ type: "text" as const, text: "Cancelled" }],
-          details: { cancelled: true },
-        };
-      }
-      const projectRoot = getProjectRoot();
-      const spec = buildSpec(params, projectRoot);
-      fs.mkdirSync(path.dirname(spec.output_path as string), { recursive: true });
-
-      const script = path.join(projectRoot, ".pi", "extensions", "powerpoint", "generate_pptx.py");
       try {
-        const outcome = await runGenerator(script, spec, signal);
+        if (signal?.aborted) {
+          return {
+            content: [{ type: "text" as const, text: "Cancelled" }],
+            details: { cancelled: true },
+          };
+        }
+        const projectRoot = getProjectRoot();
+        const spec = buildSpec(params, projectRoot);
+        fs.mkdirSync(path.dirname(spec.output_path as string), { recursive: true });
+        const outcome = await runGenerator(getGeneratorScript(), spec, signal);
         if (outcome.cancelled) {
           return {
             content: [{ type: "text" as const, text: "Cancelled" }],

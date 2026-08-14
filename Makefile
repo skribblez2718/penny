@@ -56,7 +56,7 @@ test:
 	@echo ""
 	@bash -c 'set -uo pipefail; source .venv/bin/activate; \
 	  export PYTEST_TIMEOUT=$(PYTEST_TIMEOUT); rc=0; \
-	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests apps/orchestration/tests apps/observability/tests apps/observability/src/observability/tests .pi/extensions/memory/tests; do \
+	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests apps/orchestration/tests apps/observability/tests apps/observability/src/observability/tests .pi/extensions/memory/tests .pi/extensions/powerpoint/tests/python; do \
 	    [ -d "$$d" ] || continue; \
 	    echo "==================== pytest $$d ===================="; \
 	    python -m pytest "$$d" -p no:cacheprovider -m "$(PYTEST_MARKERS)" --tb=short -q || rc=1; \
@@ -67,9 +67,10 @@ test:
 # These auto-skip when their external dependency (network, Ollama, Joern, ...) is
 # absent, so this stays green on machines without those services.
 test-integration:
+	bun run test:integration
 	@bash -c 'set -uo pipefail; source .venv/bin/activate; \
 	  export PYTEST_TIMEOUT=$(PYTEST_TIMEOUT); rc=0; \
-	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests .pi/extensions/memory/tests; do \
+	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests .pi/extensions/memory/tests .pi/extensions/powerpoint/tests/python; do \
 	    [ -d "$$d" ] || continue; \
 	    echo "==================== pytest $$d ===================="; \
 	    python -m pytest "$$d" -p no:cacheprovider --tb=short -q || rc=1; \

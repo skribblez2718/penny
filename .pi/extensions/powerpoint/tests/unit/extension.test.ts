@@ -1,15 +1,29 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import extension, {
   buildSpec,
   defaultOutputPath,
+  getGeneratorScript,
+  getProjectRoot,
+  getVenvPython,
+  reserveStagingPath,
   resolveOutputPath,
   slugify,
+  venvPythonCandidates,
   POWERPOINT_THEMES,
   SLIDE_LAYOUTS,
 } from "../../index.js";
+
+const cleanup: string[] = [];
+
+afterEach(() => {
+  for (const target of cleanup.splice(0)) {
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+});
 
 interface RegisteredTool {
   name: string;
@@ -56,9 +70,54 @@ describe("powerpoint extension registration", () => {
   it("exposes the expected top-level parameters", () => {
     extension(mockPi);
     const props = registeredTools[0].parameters.properties;
-    for (const key of ["slides", "markdown", "title", "theme", "footer_text", "output_path"]) {
+    for (const key of [
+      "slides",
+      "markdown",
+      "title",
+      "theme",
+      "line_break_mode",
+      "footer_text",
+      "output_path",
+    ]) {
       expect(props[key], `missing parameter: ${key}`).toBeDefined();
     }
+  });
+});
+
+describe("runtime paths and staging", () => {
+  it("resolves the generator relative to the extension rather than cwd", () => {
+    expect(fs.existsSync(getGeneratorScript())).toBe(true);
+    expect(getGeneratorScript()).toMatch(
+      /[\\/]\.pi[\\/]extensions[\\/]powerpoint[\\/]generate_pptx\.py$/
+    );
+    expect(getProjectRoot({})).not.toBe(process.cwd() + path.sep + "unrelated");
+  });
+
+  it("orders Unix and Windows venv candidates by platform", () => {
+    expect(venvPythonCandidates("/project", "linux")[0]).toBe(
+      path.join("/project", ".venv", "bin", "python")
+    );
+    expect(venvPythonCandidates("C:\\project", "win32")[0]).toBe(
+      path.join("C:\\project", ".venv", "Scripts", "python.exe")
+    );
+  });
+
+  it("honors interpreter and project-root overrides", () => {
+    expect(getProjectRoot({ PROJECT_ROOT: "relative-root" })).toBe(path.resolve("relative-root"));
+    expect(getVenvPython("/project", { PI_VENV_PYTHON: "custom/python" })).toBe(
+      path.resolve("custom/python")
+    );
+  });
+
+  it("reserves unique same-directory staging paths", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "penny-powerpoint-unit-"));
+    cleanup.push(directory);
+    const output = path.join(directory, "deck.pptx");
+    const first = reserveStagingPath(output);
+    const second = reserveStagingPath(output);
+    expect(path.dirname(first)).toBe(directory);
+    expect(first).not.toBe(second);
+    expect(fs.statSync(first).mode & 0o777).toBe(0o600);
   });
 });
 
@@ -73,15 +132,22 @@ describe("slugify", () => {
 });
 
 describe("output paths", () => {
-  it("builds a default temp path (…/penny/powerpoint/) with a timestamp and uniquifier, never the project tree", () => {
-    const p = defaultOutputPath("My Deck", new Date(2026, 6, 5, 9, 30, 15, 42));
-    expect(p).toMatch(/[\\/]penny[\\/]powerpoint[\\/]my-deck_20260705_093015_042[a-z0-9]*\.pptx$/);
+  it("builds a default temp path with a full invocation UUID, never the project tree", () => {
+    const invocationId = "123e4567-e89b-12d3-a456-426614174000";
+    const p = defaultOutputPath("My Deck", new Date(2026, 6, 5, 9, 30, 15, 42), () => invocationId);
+    expect(p).toMatch(
+      /[\\/]penny[\\/]powerpoint[\\/]my-deck_20260705_093015_042-123e4567-e89b-12d3-a456-426614174000\.pptx$/
+    );
     expect(p.startsWith(os.tmpdir())).toBe(true);
   });
 
-  it("produces distinct default paths for same-second calls", () => {
+  it("uses the invocation identifier rather than a short probabilistic suffix", () => {
     const now = new Date(2026, 6, 5, 9, 30, 15, 42);
-    expect(defaultOutputPath("t", now)).not.toBe(defaultOutputPath("t", now));
+    const first = defaultOutputPath("t", now, () => "invocation-a");
+    const second = defaultOutputPath("t", now, () => "invocation-b");
+    expect(first).not.toBe(second);
+    expect(first).toContain("invocation-a");
+    expect(second).toContain("invocation-b");
   });
 
   it("appends .pptx to explicit paths when missing", () => {
@@ -109,14 +175,15 @@ describe("buildSpec", () => {
     );
     expect(Array.isArray(spec.slides)).toBe(true);
     expect(String(spec.output_path)).toMatch(
-      /[\\/]penny[\\/]powerpoint[\\/]deck_\d{8}_\d{6}_\d{3}[a-z0-9]*\.pptx$/
+      /[\\/]penny[\\/]powerpoint[\\/]deck_\d{8}_\d{6}_\d{3}-[0-9a-f-]{36}\.pptx$/
     );
     expect(spec.project_root).toBe("/proj");
   });
 
-  it("accepts markdown-only input", () => {
-    const spec = buildSpec({ markdown: "# Deck" }, "/proj");
+  it("accepts markdown-only input and forwards line-break policy", () => {
+    const spec = buildSpec({ markdown: "# Deck", line_break_mode: "commonmark" }, "/proj");
     expect(spec.markdown).toBe("# Deck");
+    expect(spec.line_break_mode).toBe("commonmark");
   });
 });
 
