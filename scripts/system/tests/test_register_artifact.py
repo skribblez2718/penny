@@ -1,298 +1,140 @@
-"""Tests for register_artifact.py."""
+"""Tests for artifact/document registration under the catalog architecture."""
 
-import os
+from __future__ import annotations
+
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import register_artifact as ra
+import register_artifact as ra  # noqa: E402
 
 
-class TestAgentsMdUpdater:
-    """Unit tests for AgentsMdUpdater."""
-
-    def test_update_structure_table_agent(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agents_md = Path(tmpdir) / "AGENTS.md"
-            agents_md.write_text("""# Penny Index
-
-## Structure
-
-| Location | Description |
-|----------|-------------|
-| `.pi/agents/` | Agent definitions (runtime) — `carren.md`, `echo.md` |
-
-## Feature Index
-
-| Feature | Human Docs | Agent Docs | Design | Implementation |
-|---------|-----------|------------|--------|----------------|
-| Tiered Memory | `docs/humans/tiered-memory.md` | `docs/agents/tiered-memory.md` | `plans/design.md` | `scripts/system/tiered_memory/` |
-""")
-
-            updater = ra.AgentsMdUpdater(agents_md)
-            spec = ra.ArtifactSpec(
-                artifact_type="agent",
-                name="vera",
-                description="Verification agent",
-            )
-
-            ok, msg = updater.update_structure_table(spec)
-            assert ok, msg
-            assert "vera.md" in updater.content
-            updater.write()
-
-            updated = agents_md.read_text()
-            assert "`carren.md`, `echo.md`, `vera.md`" in updated
-
-    def test_update_structure_table_skipped_for_skill(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agents_md = Path(tmpdir) / "AGENTS.md"
-            agents_md.write_text("""# Penny Index
-
-## Structure
-
-| `.pi/agents/` | Agent definitions — `echo.md` |
-""")
-
-            updater = ra.AgentsMdUpdater(agents_md)
-            spec = ra.ArtifactSpec(
-                artifact_type="skill",
-                name="weather",
-                description="Weather analysis skill",
-            )
-
-            ok, msg = updater.update_structure_table(spec)
-            assert ok  # Should succeed with skip message
-            assert "skipped" in msg.lower()
-
-    def test_update_feature_index_agent(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agents_md = Path(tmpdir) / "AGENTS.md"
-            agents_md.write_text("""# Penny Index
-
-## Feature Index
-
-| Feature | Human Docs | Agent Docs | Design | Implementation |
-|---------|-----------|------------|--------|----------------|
-| Tiered Memory | `docs/humans/tiered-memory.md` | `docs/agents/tiered-memory.md` | `plans/design.md` | `scripts/system/tiered_memory/` |
-""")
-
-            updater = ra.AgentsMdUpdater(agents_md)
-            spec = ra.ArtifactSpec(
-                artifact_type="agent",
-                name="vera",
-                description="Verify agent definitions",
-            )
-
-            ok, msg = updater.update_feature_index(spec)
-            assert ok, msg
-            assert "Vera" in updater.content
-            assert ".pi/agents/vera.md" in updater.content
-
-    def test_rollback(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agents_md = Path(tmpdir) / "AGENTS.md"
-            original = "# Original\n"
-            agents_md.write_text(original)
-
-            updater = ra.AgentsMdUpdater(agents_md)
-            spec = ra.ArtifactSpec(
-                artifact_type="agent",
-                name="test",
-                description="Test agent",
-            )
-            updater.update_structure_table(spec)
-            updater.rollback()
-
-            assert agents_md.read_text() == original
+def _tree(tmp_path: Path) -> tuple[Path, Path]:
+    agents = tmp_path / "docs" / "agents" / "capabilities" / "AGENTS.md"
+    humans = tmp_path / "docs" / "humans" / "capabilities" / "index.md"
+    agents.parent.mkdir(parents=True)
+    humans.parent.mkdir(parents=True)
+    agents.write_text(
+        "# Capabilities Feature Index\n\n"
+        "- [Existing](existing/AGENTS.md): Existing capability\n",
+        encoding="utf-8",
+    )
+    humans.write_text(
+        "# Penny Capabilities\n\n"
+        "| Capability | What it does |\n"
+        "| --- | --- |\n"
+        "| [Existing](existing/existing.md) | Existing capability. |\n\n"
+        "## How This Index Is Organized\n\nText.\n",
+        encoding="utf-8",
+    )
+    (agents.parent / "existing").mkdir()
+    (agents.parent / "existing" / "AGENTS.md").write_text(
+        "# Existing Feature Index\n\n- [Existing](existing.md): Reference\n",
+        encoding="utf-8",
+    )
+    (agents.parent / "existing" / "existing.md").write_text("# Existing\n", encoding="utf-8")
+    (humans.parent / "existing").mkdir()
+    (humans.parent / "existing" / "existing.md").write_text("# Existing\n", encoding="utf-8")
+    return agents, humans
 
 
-class TestDocScaffolder:
-    """Unit tests for DocScaffolder."""
+def test_index_updater_keeps_agents_md_as_list_only(tmp_path: Path) -> None:
+    agents, humans = _tree(tmp_path)
+    updater = ra.CapabilityIndexUpdater(agents, humans)
+    ok, message = updater.update(
+        ra.ArtifactSpec("agent", "vera-two", "Verify a supplied product against a standard")
+    )
+    assert ok, message
+    updater.write()
 
-    def test_scaffold_human_doc_agent(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            scaffolder = ra.DocScaffolder()
-            scaffolder.humans_dir = Path(tmpdir)
-
-            spec = ra.ArtifactSpec(
-                artifact_type="agent",
-                name="vera",
-                description="Verify agent definitions",
-                purpose="Validate generated files",
-                rules="READ-ONLY: Never modify files",
-            )
-
-            ok, path, msg = scaffolder.scaffold_human_doc(spec)
-            assert ok
-            assert path.exists()
-            content = path.read_text()
-            assert "Vera Agent" in content
-            assert "READ-ONLY" in content
-
-    def test_scaffold_agent_doc_skill(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            scaffolder = ra.DocScaffolder()
-            scaffolder.agents_dir = Path(tmpdir)
-
-            spec = ra.ArtifactSpec(
-                artifact_type="skill",
-                name="weather-analysis",
-                description="Analyze weather patterns",
-            )
-
-            ok, path, msg = scaffolder.scaffold_agent_doc(spec)
-            assert ok
-            assert path.exists()
-            content = path.read_text()
-            assert "Weather Analysis Skill" in content
-            assert "orchestrate.py" in content
+    agent_text = agents.read_text(encoding="utf-8")
+    assert "- [Vera Two](vera-two/AGENTS.md): Agent role" in agent_text
+    assert "| Feature" not in agent_text
+    assert "[Vera Two](vera-two/vera-two.md)" in humans.read_text(encoding="utf-8")
 
 
-class TestLinkValidator:
-    """Unit tests for LinkValidator."""
+def test_agent_scaffold_states_catalog_and_remote_registry_boundary(tmp_path: Path) -> None:
+    scaffolder = ra.DocScaffolder()
+    scaffolder.humans_dir = tmp_path / "humans"
+    scaffolder.agents_dir = tmp_path / "agents"
+    spec = ra.ArtifactSpec(
+        "agent",
+        "reviewer",
+        "Review supplied products",
+        purpose="Provide evidence-based review",
+        rules="READ-ONLY",
+    )
 
-    def test_validate_all_valid(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            agents_md = root / "AGENTS.md"
-            agents_md.write_text("""# Index
-| `docs/humans/test.md` | Description |
-""")
-            (root / "docs" / "humans").mkdir(parents=True)
-            (root / "docs" / "humans" / "test.md").write_text("test")
-
-            validator = ra.LinkValidator(agents_md)
-            valid, errors = validator.validate()
-            assert valid
-            assert errors == []
-
-    def test_validate_missing_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            agents_md = root / "AGENTS.md"
-            agents_md.write_text("""# Index
-| `docs/humans/missing.md` | Description |
-""")
-
-            validator = ra.LinkValidator(agents_md)
-            valid, errors = validator.validate()
-            assert not valid
-            assert any("missing.md" in e for e in errors)
+    assert scaffolder.scaffold_human_doc(spec)[0]
+    assert scaffolder.scaffold_agent_doc(spec)[0]
+    text = (scaffolder.agents_dir / "reviewer" / "reviewer.md").read_text(encoding="utf-8")
+    assert ".pi/agents/reviewer.md" in text
+    assert "harness/service registry" in text
+    assert "artifact_read" in text
+    assert "memory_*" not in text
+    index = scaffolder.agents_dir / "reviewer" / "AGENTS.md"
+    assert index.read_text(encoding="utf-8").splitlines()[2].startswith("- [Reviewer]")
 
 
-class TestRegisterArtifactIntegration:
-    """Integration tests for the full registration workflow."""
+def test_skill_scaffold_is_artifact_first_and_memory_optional(tmp_path: Path) -> None:
+    scaffolder = ra.DocScaffolder()
+    scaffolder.humans_dir = tmp_path / "humans"
+    scaffolder.agents_dir = tmp_path / "agents"
+    spec = ra.ArtifactSpec("skill", "weather-analysis", "Analyze supplied weather data")
 
-    def test_register_agent_success(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            agents_md = root / "AGENTS.md"
-            agents_md.write_text("""# Penny Index
-
-## Structure
-
-| Location | Description |
-|----------|-------------|
-| `.pi/agents/` | Agent definitions (runtime) — `echo.md` |
-
-## Feature Index
-
-| Feature | Human Docs | Agent Docs | Design | Implementation |
-|---------|-----------|------------|--------|----------------|
-| Tiered Memory | `docs/humans/capabilities/tiered-memory/tiered-memory.md` | `docs/agents/capabilities/tiered-memory/tiered-memory.md` | `plans/design.md` | `scripts/system/tiered_memory/` |
-""")
-
-            # Create the referenced paths so link validation passes
-            (root / "docs" / "humans" / "capabilities" / "tiered-memory").mkdir(parents=True)
-            (
-                root / "docs" / "humans" / "capabilities" / "tiered-memory" / "tiered-memory.md"
-            ).write_text("test")
-            (root / "docs" / "agents" / "capabilities" / "tiered-memory").mkdir(parents=True)
-            (
-                root / "docs" / "agents" / "capabilities" / "tiered-memory" / "tiered-memory.md"
-            ).write_text("test")
-            (root / "plans").mkdir()
-            (root / "plans" / "design.md").write_text("test")
-            (root / "scripts" / "system" / "tiered_memory").mkdir(parents=True)
-            (root / ".pi" / "agents").mkdir(parents=True)
-            (root / ".pi" / "agents" / "vera.md").write_text("test")
-
-            # Patch global paths
-            ra.AGENTS_MD = agents_md
-            ra.DOCS_HUMANS = root / "docs" / "humans" / "capabilities"
-            ra.DOCS_AGENTS = root / "docs" / "agents" / "capabilities"
-
-            registrar = ra.RegisterArtifact()
-            spec = ra.ArtifactSpec(
-                artifact_type="agent",
-                name="vera",
-                description="Verify agent definitions against standards",
-                purpose="Validate generated files for schema, security, and completeness",
-                rules="READ-ONLY: Never modify files; EVIDENCE-BASED: Every verdict cites specific evidence",
-            )
-
-            result = registrar.register(spec)
-            assert result.success, result.errors
-            assert result.agents_md_updated
-            assert result.human_doc_created
-            assert result.agent_doc_created
-            assert result.links_valid
-
-            updated = agents_md.read_text()
-            assert "vera.md" in updated
-            assert "Vera" in updated
-
-    def test_register_skill_success(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            agents_md = root / "AGENTS.md"
-            agents_md.write_text("""# Penny Index
-
-## Feature Index
-
-| Feature | Human Docs | Agent Docs | Design | Implementation |
-|---------|-----------|------------|--------|----------------|
-| Tiered Memory | `docs/humans/capabilities/tiered-memory/tiered-memory.md` | `docs/agents/capabilities/tiered-memory/tiered-memory.md` | `plans/design.md` | `scripts/system/tiered_memory/` |
-""")
-
-            # Create referenced paths
-            (root / "docs" / "humans" / "capabilities" / "tiered-memory").mkdir(parents=True)
-            (
-                root / "docs" / "humans" / "capabilities" / "tiered-memory" / "tiered-memory.md"
-            ).write_text("test")
-            (root / "docs" / "agents" / "capabilities" / "tiered-memory").mkdir(parents=True)
-            (
-                root / "docs" / "agents" / "capabilities" / "tiered-memory" / "tiered-memory.md"
-            ).write_text("test")
-            (root / "plans").mkdir()
-            (root / "plans" / "design.md").write_text("test")
-            (root / "scripts" / "system" / "tiered_memory").mkdir(parents=True)
-            (root / ".pi" / "skills" / "weather-analysis").mkdir(parents=True)
-            (root / ".pi" / "skills" / "weather-analysis" / "README.md").write_text("test")
-
-            ra.AGENTS_MD = agents_md
-            ra.DOCS_HUMANS = root / "docs" / "humans" / "capabilities"
-            ra.DOCS_AGENTS = root / "docs" / "agents" / "capabilities"
-
-            registrar = ra.RegisterArtifact()
-            spec = ra.ArtifactSpec(
-                artifact_type="skill",
-                name="weather-analysis",
-                description="Analyze weather data patterns",
-            )
-
-            result = registrar.register(spec)
-            assert result.success, result.errors
-            assert result.agents_md_updated
-            assert result.human_doc_created
-            assert result.agent_doc_created
-            assert result.links_valid
+    assert scaffolder.scaffold_human_doc(spec)[0]
+    assert scaffolder.scaffold_agent_doc(spec)[0]
+    texts = [
+        (scaffolder.humans_dir / "weather-analysis" / "weather-analysis.md").read_text(
+            encoding="utf-8"
+        ),
+        (scaffolder.agents_dir / "weather-analysis" / "weather-analysis.md").read_text(
+            encoding="utf-8"
+        ),
+    ]
+    combined = "\n".join(texts)
+    assert "input_artifacts" in combined
+    assert "artifact_read" in combined
+    assert "Durable memory is optional" in combined
+    assert "session room" not in combined.lower()
 
 
-if __name__ == "__main__":
-    import pytest
+def test_link_validator_checks_markdown_links(tmp_path: Path) -> None:
+    agents, _ = _tree(tmp_path)
+    validator = ra.LinkValidator([agents], project_root=tmp_path)
+    assert validator.validate() == (True, [])
+    agents.write_text(agents.read_text(encoding="utf-8") + "- [Missing](missing/AGENTS.md): x\n")
+    valid, errors = validator.validate()
+    assert not valid
+    assert any("missing/AGENTS.md" in error for error in errors)
 
-    pytest.main([__file__, "-v"])
+
+def test_register_skill_updates_docs_only(tmp_path: Path) -> None:
+    agents, humans = _tree(tmp_path)
+    registrar = ra.RegisterArtifact(agents, humans)
+    registrar.scaffolder.humans_dir = humans.parent
+    registrar.scaffolder.agents_dir = agents.parent
+    spec = ra.ArtifactSpec("skill", "weather-analysis", "Analyze supplied weather data")
+
+    result = registrar.register(spec)
+
+    assert result.success, result.errors
+    assert result.agents_md_updated
+    assert result.human_doc_created and result.agent_doc_created and result.links_valid
+    assert (agents.parent / "weather-analysis" / "AGENTS.md").exists()
+    assert (humans.parent / "weather-analysis" / "weather-analysis.md").exists()
+
+
+def test_invalid_name_fails_without_writes(tmp_path: Path) -> None:
+    agents, humans = _tree(tmp_path)
+    before = (agents.read_text(encoding="utf-8"), humans.read_text(encoding="utf-8"))
+    registrar = ra.RegisterArtifact(agents, humans)
+    registrar.scaffolder.humans_dir = humans.parent
+    registrar.scaffolder.agents_dir = agents.parent
+
+    result = registrar.register(ra.ArtifactSpec("agent", "Not Valid", "bad"))
+
+    assert not result.success
+    assert "kebab-case" in result.errors[0]
+    assert before == (agents.read_text(encoding="utf-8"), humans.read_text(encoding="utf-8"))

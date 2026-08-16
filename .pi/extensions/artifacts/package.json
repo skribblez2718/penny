@@ -1,0 +1,26 @@
+{
+  "name": "@penny/artifacts-extension",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "description": "Constrained read-only access to exact owner-granted immutable artifacts",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint . --ext .ts",
+    "lint:fix": "eslint . --ext .ts --fix",
+    "format": "prettier --write \"**/*.{ts,js,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
+    "test": "bunx vitest run --config tests/vitest.config.ts",
+    "test:unit": "bunx vitest run --config tests/vitest.config.ts",
+    "test:integration": "bunx vitest run --config tests/vitest.integration.config.ts",
+    "test:all": "bun run lint && bun run format:check && bun run typecheck && bun run test:unit && bun run test:integration",
+    "test:watch": "bunx vitest --config tests/vitest.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.49"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vitest": "^2.1.0"
+  }
+}

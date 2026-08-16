@@ -1,0 +1,44 @@
+{
+  "protocol_version": 2,
+  "run_id": "run-1",
+  "phase": "observing",
+  "branch_id": null,
+  "producer": "agent:echo",
+  "operation_id": "observe-1",
+  "output_artifact_ref": {
+    "schema_version": 1,
+    "artifact_id": "art_aecc9e8a5d7e711c58ae2dda9d5b7a8673ba77bc93414d65f48ad17c8d85e927",
+    "run_id": "run-1",
+    "phase": "observing",
+    "branch_id": null,
+    "kind": "agent-output",
+    "operation_id": "observe-1",
+    "version": 1,
+    "producer": "agent:echo",
+    "consumer_scope": ["state:synthesizing"],
+    "media_type": "text/markdown; charset=utf-8",
+    "byte_length": 25,
+    "content_digest": "ffa37b1d5689c333201d810e76707c38fbabbe8f1a616a5e16e94ae78db50c14",
+    "store_ref": "artifact://sha256/ffa37b1d5689c333201d810e76707c38fbabbe8f1a616a5e16e94ae78db50c14"
+  },
+  "execution_receipt": {
+    "schema_version": 1,
+    "receipt_id": "receipt-1"
+  },
+  "exitCode": 0,
+  "summary": {
+    "observe_complete": true,
+    "confidence": "CERTAIN"
+  },
+  "summary_missing": false,
+  "receipts": [
+    {
+      "schema_version": 1,
+      "receipt_id": "receipt-1"
+    }
+  ],
+  "trusted_invocation": {
+    "schema_version": 1,
+    "invocation_id": "receipt-1"
+  }
+}

@@ -41,8 +41,8 @@ linear — replace the routing, add gates/parallel fan-out, and flesh out the
 SUMMARY contracts as the skill's real domain logic is designed. Look for the
 ``# TODO`` markers.
 
-After scaffolding, invoke the plan skill to design the real states/routing, then
-edit the generated playbook directly.
+After scaffolding, design the real states/routing for the new skill, then edit
+the generated playbook directly.
 
 MAINTENANCE: When Penny skill conventions change, update the templates in this
 file. This file is the single source of truth for skill scaffolding — see
@@ -51,7 +51,6 @@ quick-reference.md for the authoring standard it must stay consistent with.
 """
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -170,8 +169,8 @@ def _pascal_case(s: str) -> str:
 
 
 def _or_chain(parts: List[str], indent: str = "        ") -> str:
-    """Render a python-statemachine ``a.to(x) | b.to(x) | ...`` chain, matching
-    the wrapped-parens style used in playbooks/code.py and playbooks/plan.py."""
+    """Render a python-statemachine ``a.to(x) | b.to(x) | ...`` chain using
+    the wrapped-parens style used by retained playbooks."""
     lines = [f"{indent}{parts[0]}"]
     for p in parts[1:]:
         lines.append(f"{indent}| {p}")
@@ -227,24 +226,6 @@ def register_playbook(Name: str, module_name: str) -> bool:
 
     PLAYBOOKS_INIT.write_text(text, encoding="utf-8")
     return True
-
-
-def register_skill_rooms(name: str) -> None:
-    """Register a new skill's MemPalace footprint in the retention manifest so its
-    scratch auto-decays from day one. Scaffolded skills use the penny-wing
-    convention (``skills/<name>-<session_id>``), already covered by the archiver's
-    ``penny/skills/`` base rule. A skill that instead needs a DEDICATED wing must
-    edit its manifest entry to ``convention: dedicated-wing`` (see the manifest
-    _comment for the shape). Idempotent; best-effort."""
-    manifest = PROJECT_ROOT / "scripts" / "system" / "tiered_memory" / "skill_rooms.json"
-    try:
-        data = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
-    skills = data.setdefault("skills", {})
-    if name not in skills:
-        skills[name] = {"convention": "penny-wing"}
-        manifest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 # ============================================================
@@ -318,12 +299,12 @@ class SkillScaffolder:
         )
 
         primitive_specs_src = "\n\n".join(
-            f'_{s.upper()} = PrimitiveSpec(\n'
+            f"_{s.upper()} = PrimitiveSpec(\n"
             f'    "{self.NAME_UPPER}_{s.upper()}",\n'
             f'    "{a}",\n'
             f'    _c({{"confidence": str}}),\n'
             f'    "TODO: one-line instruction for {a} at this state. Always emit confidence.",\n'
-            f')'
+            f")"
             for s, a in states
         )
 
@@ -362,11 +343,11 @@ class SkillScaffolder:
             f"    # -- routing -------------------------------------------------------------\n"
             f"    def route_after(self, state: str, ctx: RunContext, summary: dict) -> None:\n"
             f"        # TODO: replace this linear chain with real domain routing (retries,\n"
-            f"        # gates, parallel fan-out, etc.) as {self.name} needs. See code.py /\n"
-            f"        # plan.py in this package for real patterns.\n"
+            f"        # gates, parallel fan-out, etc.) as {self.name} needs. See research.py\n"
+            f"        # in this package for retained routing patterns.\n"
             f"{route_after_body}\n"
             f"        else:\n"
-            f'            raise ValueError(f"route_after: unexpected state \'{{state}}\'")\n'
+            f"            raise ValueError(f\"route_after: unexpected state '{{state}}'\")\n"
             f"\n"
             f"    def done_predicate(self, ctx: RunContext) -> bool:\n"
             f'        # TODO: define what "done" means for {self.name} (default: always met).\n'
@@ -380,11 +361,11 @@ class SkillScaffolder:
 
         return (
             f'"""{self.Name}Playbook — TODO: one-line description of what the {self.name} '
-            f'skill does on the shared engine.\n'
+            f"skill does on the shared engine.\n"
             f"\n"
             f"TODO: expand this docstring per skill-standard.md — states, any HITL gates or\n"
-            f"parallel fan-out, and deliberate design notes. Model the shape on\n"
-            f"``apps/orchestration/src/orchestration/playbooks/code.py`` and ``plan.py``.\n"
+            f"parallel fan-out, and deliberate design notes. Model the shape on retained\n"
+            f"``apps/orchestration/src/orchestration/playbooks/research.py`` patterns.\n"
             f'"""\n'
             f"\n"
             f"from __future__ import annotations\n"
@@ -440,11 +421,11 @@ class SkillScaffolder:
 
         return (
             f'"""Tests for {self.Name}Playbook (scaffolded stub — expand as the playbook '
-            f'grows).\n'
+            f"grows).\n"
             f"\n"
             f"Each step() constructs a FRESH playbook instance pointed at the same\n"
             f"checkpointer (subprocess-per-invocation reality), mirroring the\n"
-            f'run_id/checkpointer contract — NO --state and NO /tmp.\n'
+            f"run_id/checkpointer contract — NO --state and NO /tmp.\n"
             f'"""\n'
             f"\n"
             f"import pytest\n"
@@ -498,7 +479,7 @@ metadata:
   version: "1.0.0"
   penny:
     engine: orchestration
-    mempalace: true
+    mempalace: false
     subagents:
 {subagents_list}
 ---
@@ -531,7 +512,7 @@ checkpointer keyed by `run_id` — there is no `--state`.
 skill({{
   skill_name: "{self.name}",
   goal: "Your goal here",
-  project_root: "/path/to/project"
+  project_root: "$PROJECT_ROOT"
 }})
 ```
 
@@ -545,24 +526,28 @@ skill({{
 | `project_root` | No | Project root directory (defaults to cwd) |
 | `constraints` | No | JSON object of constraints |
 
+## Exact Artifact Handoff
+
+Every cognitive directive carries execution-owner `input_artifacts` and an
+`output_artifact` contract. Workers read every granted predecessor with
+`artifact_read`, follow continuation until complete, return the complete stage
+content, and append only the routing `SUMMARY` required by the active state.
+The execution owner persists and verifies exact bytes before advancing the
+playbook. Durable memory is optional and is never workflow transport or
+persistence proof.
+
 ## Output
 
-Agents write full results to the mempalace room `skills/{self.name}-<session_id>`;
-Penny only sees per-state structured SUMMARYs. TODO: document the terminal
-`result` payload shape once `result_payload` is filled in.
+TODO: document the terminal `result` payload and selected
+`output_artifact_ref` once `result_payload` is filled in. User-facing files,
+when any, remain explicit products; owner-captured artifacts carry exact
+cross-stage handoff.
 
 ## Post-Completion
 
-After the skill completes, present the result for user approval — do not execute,
-modify, or analyze the output further.
-
-1. Fetch the full result from mempalace:
-   ```
-   memory_smart_search(query="<session_id>", room="skills/{self.name}-<session_id>", limit=5, include_full=true)
-   ```
-2. Present it via `questionnaire` with approve / refine / discard options.
-3. On **approve**: use the result. On **refine**: re-invoke with refinement notes
-   in `constraints`. On **discard**: stop.
+Present the terminal result, exact product reference, warnings, and unresolved
+issues. Do not execute recommendations unless the user separately requests and
+authorizes that work.
 
 ## Escalation
 
@@ -579,10 +564,12 @@ skill({{
 }})
 ```
 
-## Post-Completion Storage
+## Durable Memory
 
-The engine records the run outcome automatically on completion — do not write
-session drawers or knowledge-graph edges by hand.
+Memory is optional. The unmarked primary runtime may retrieve durable context
+when it could materially affect the work and may curate a reusable result after
+completion. Workers never read or write memory, and routine runs create no
+session drawers or knowledge-graph edges.
 """
 
     def _build_readme_md(self) -> str:
@@ -619,11 +606,14 @@ agents.
   `step` / `status` / `recover`. No FSM logic, no state serialization, no `/tmp`
   checkpoints.
 - Run state lives in a durable **SQLite checkpointer keyed by `run_id`**.
-- Agents run in fresh context and communicate through the **mempalace** room
-  `skills/{self.name}-<session_id>`. Only a structured SUMMARY is returned to the
-  engine per step; Penny never sees full agent output.
+- Agents run in fresh context. The execution owner grants exact current-run
+  inputs, captures each complete response as an immutable artifact, and advances
+  only after verifying its canonical reference.
+- `RunContext` stores compact routing data and selected refs, never artifact
+  payload bytes. Oversized inputs are read through typed continuation.
+- Durable memory is optional and is not a workflow bus.
 
-**Key principle: Penny's context stays clean.**
+**Key principle: exact artifacts carry handoff while Penny's context stays bounded.**
 
 ## States
 
@@ -650,9 +640,11 @@ Every working state is escalatable: `UNCERTAIN` confidence (or a TODO'd
 `progress_check`) triggers `to_unknown -> unknown -> awaiting_clarification`. The
 user's clarification resumes at `{self.states[0][0]}` (`clarify`).
 
-## Mempalace Room
+## Artifact Handoff
 
-Room: `skills/{self.name}-<session_id>`. TODO: document drawer headers per agent.
+TODO: document each state's selected input slots and terminal product ref.
+Workers use `artifact_read` only for execution-owner grants and continue until
+`truncated` is false.
 
 ## Files
 
@@ -684,9 +676,7 @@ cd apps/orchestration && pytest tests/test_{self.module_name}_playbook.py -v
             f"| `{s}` | working | `{a}` | TODO: describe what {a} does + which fields it emits |"
             for s, a in self.states
         )
-        escalatable_literal = (
-            "{" + ", ".join(f'"{s}"' for s, _ in self.states) + "}"
-        )
+        escalatable_literal = "{" + ", ".join(f'"{s}"' for s, _ in self.states) + "}"
         transition_rows = [
             f"| `start_{self.states[0][0]}` | `intake` | `{self.states[0][0]}` | non-empty goal (else `intake` raises) |"
         ]
@@ -754,9 +744,11 @@ real required/optional fields for that agent's output.
 |-------|-------|-------------|
 {agent_rows}
 
-## Mempalace Integration
+## Artifact Integration
 
-Room: `skills/{self.name}-<session_id>`. TODO: document per-agent drawer headers.
+Each state receives exact execution-owner input refs and an output contract.
+The owner captures exact bytes before `SUMMARY` routing; selected refs persist in
+the checkpointer and payload bytes do not enter `RunContext`.
 
 ## Resume
 
@@ -780,23 +772,35 @@ TODO: document the fields in `result_payload`. Scaffold default: `met`, `iterati
         docs/agents/skills/flow-diagrams.md).
         """
         first = self.states[0][0]
-        nodes = [f"  intake:{{col:'C',y:24,cls:'gate',title:'intake',badge:'HITL',desc:'TODO'}},"]
+        nodes = ["  intake:{col:'C',y:24,cls:'gate',title:'intake',badge:'HITL',desc:'TODO'},"]
         y = 118
         for s, a in self.states:
             nodes.append(f"  {s}:{{col:'C',y:{y},cls:'tool',title:'{s}',who:'{a}',desc:'TODO'}},")
             y += 96
         done_y = y + 24
-        nodes.append(f"  complete:{{col:'C',y:{done_y},cls:'done',title:'complete',badge:'TERM',desc:'Terminal.'}},")
-        nodes.append(f"  unknown:{{col:'Louter',y:{y // 2},cls:'esc',title:'unknown',desc:'Escalation entry (UNCERTAIN / needs_clarification).'}},")
-        nodes.append(f"  awaiting_clarification:{{col:'Louter',y:{y // 2 + 150},cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes.'}},")
-        nodes.append(f"  error:{{col:'Router',y:{done_y},cls:'error',title:'error',badge:'TERM',desc:'Terminal (abort).'}},")
+        nodes.append(
+            f"  complete:{{col:'C',y:{done_y},cls:'done',title:'complete',badge:'TERM',desc:'Terminal.'}},"
+        )
+        nodes.append(
+            f"  unknown:{{col:'Louter',y:{y // 2},cls:'esc',title:'unknown',desc:'Escalation entry (UNCERTAIN / needs_clarification).'}},"
+        )
+        nodes.append(
+            f"  awaiting_clarification:{{col:'Louter',y:{y // 2 + 150},cls:'esc',title:'awaiting_clarification',desc:'Paused for the user; resumes.'}},"
+        )
+        nodes.append(
+            f"  error:{{col:'Router',y:{done_y},cls:'error',title:'error',badge:'TERM',desc:'Terminal (abort).'}},"
+        )
         edges = [f"  {{from:'intake',to:'{first}',s1:'bottom',s2:'top',kind:'fwd'}},"]
         for i, (s, _a) in enumerate(self.states):
             nxt = self.states[i + 1][0] if i + 1 < len(self.states) else "complete"
             kind = "exit" if nxt == "complete" else "fwd"
             edges.append(f"  {{from:'{s}',to:'{nxt}',s1:'bottom',s2:'top',kind:'{kind}'}},")
-        edges.append("  {from:'unknown',to:'awaiting_clarification',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},")
-        edges.append(f"  {{from:'awaiting_clarification',to:'{first}',s1:'right',s2:'left',kind:'esc',label:'clarify'}},")
+        edges.append(
+            "  {from:'unknown',to:'awaiting_clarification',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},"
+        )
+        edges.append(
+            f"  {{from:'awaiting_clarification',to:'{first}',s1:'right',s2:'left',kind:'esc',label:'clarify'}},"
+        )
         return (
             _FLOW_HTML_TEMPLATE.replace("__NAME__", self.name)
             .replace("__HEIGHT__", str(done_y + 120))
@@ -812,17 +816,16 @@ TODO: document the fields in `result_payload`. Scaffold default: `met`, `iterati
 
 TODO: describe {agent}'s role in the {self.name} skill context (state(s): {", ".join(f"`{s}`" for s in agent_states)}).
 
-## Mempalace-First Communication
+## Exact Artifact Handoff
 
-Before starting, check for prior results:
+The task supplies `input_artifacts`. Read every granted reference with
+`artifact_read`, following continuation until `truncated` is false. Use those
+refs as the exact predecessor set; do not discover predecessor workflow output
+through another channel.
 
-`memory_smart_search(query="<session_id>", room="skills/{self.name}-<session_id>", limit=5)`
-
-After completing your work, write full findings to mempalace:
-
-`memory_add_drawer(wing="penny", room="skills/{self.name}-<session_id>", content="## <session_id> {agent}\\n\\n<your full findings>")`
-
-Your task includes the session ID and mempalace room. Use them.
+Return the complete stage content in your response. The execution owner captures
+and verifies it before routing. Do not claim artifact persistence or
+registration; `SUMMARY` is routing data only.
 
 ## Domain Guide
 
@@ -838,8 +841,7 @@ required/optional fields declared on {contract_refs} in
 
 `SUMMARY:{{"confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN"}}`
 
-Keep your SUMMARY minimal — detailed findings belong in mempalace, not in the
-summary.
+Keep the SUMMARY minimal and place the complete stage content before it.
 """
 
     def _orchestrate_py(self) -> str:
@@ -888,7 +890,6 @@ summary.
         self.test_path.write_text(self._build_test_playbook_source(), encoding="utf-8")
 
         register_playbook(self.Name, self.module_name)
-        register_skill_rooms(self.name)
 
         return skill_dir
 
@@ -933,7 +934,7 @@ def main():
     print()
     print("Next steps:")
     print(f"  1. Design the real states/routing/gates for '{args.name}' in")
-    print(f"     {scaffolder.playbook_path} (model it on playbooks/code.py and playbooks/plan.py).")
+    print(f"     {scaffolder.playbook_path} (model it on retained playbooks/research.py patterns).")
     print("  2. Fill in the per-state SUMMARY contracts (PrimitiveSpec) and replace")
     print("     the linear route_after chain with real domain routing.")
     print("  3. Add GATE_STATES/gate_questions/route_user or PARALLEL_BY_STATE if")

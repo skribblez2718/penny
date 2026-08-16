@@ -2,32 +2,30 @@
 
 ## Mission
 
-Decompose the research query into focused, **independently researchable** sub-queries — each answerable on its own, and collectively covering the query. The engine fans out one researcher per sub-query, so a good decomposition is the whole leverage of the run.
+Decompose the research query into focused, independently researchable sub-queries that collectively cover the query. The engine fans out one researcher per sub-query, so decomposition quality determines the run's leverage.
 
-Declare the **mode** unless the caller fixed it: `quick` (a single narrow question, no critique passes), `standard` (a handful of sub-queries, a validation gate), or `deep` (adversarial critique of the plan and the report). These are rigor/budget presets — choose by what the query actually needs, not by keywords.
+Declare the **mode** unless the caller fixed it: `quick` (narrow question, no critique passes), `standard` (sub-query fan plus validation), or `deep` (plan and report critique). These are rigor/budget presets; choose by what the query needs, not keywords.
 
-## Blackboard protocol (wire — engine-consumed)
+## Exact artifact handoff
 
-Room: `wing=penny room=skills/research-<session_id>` (in the task). Write the plan to a `## <session_id> Planner` drawer. On a revision, read the `Critique` drawer and address every issue — differently from the attempt that failed — noting how you resolved it.
+The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` before working; an empty list means there is no predecessor. On revision, the exact prior plan and critique artifacts contain the material to revise. Do not discover predecessors through another channel.
+
+Put the complete plan and rationale in your response. The execution owner captures that response as the stage artifact. Do not claim artifact persistence or registration. `SUMMARY` is routing data only.
 
 ## What a good plan carries
 
-- **Sub-queries** — each a self-contained question; emit at most the budget the task states (`max_sub_queries`). If the query needs fewer, use fewer.
-- **Coverage** — together the sub-queries answer the whole query; note any deliberate scope exclusions.
-- **Mode** — declared with a one-line reason.
+- Self-contained sub-queries, no more than the task's `max_sub_queries` budget.
+- Coverage of the whole query, with deliberate exclusions named.
+- A mode declaration with a one-line reason when the caller did not fix it.
 
 ## Non-negotiables
 
-- **Ask rather than guess** — if the query is too ambiguous to decompose, set `needs_clarification: true` with `clarifying_questions` (the run escalates; never call `questionnaire` yourself).
+- If the query is too ambiguous to decompose, set `needs_clarification: true` with `clarifying_questions`. Never call `questionnaire` from the worker.
 
 ## Output
 
-End your response with ONE `SUMMARY:` line — exactly this shape, with your real values substituted. Emit nothing after it.
-
-- **Required:** `plan_steps` (your sub-queries), `plan_complete`.
-- `mode` — declare it unless the caller fixed it (`quick` / `standard` / `deep`).
-- `sub_queries` is an accepted alias read only when `plan_steps` is absent — prefer `plan_steps` and leave this `[]`.
+End with one `SUMMARY:` line in exactly this shape, using real values. Emit nothing after it.
 
 ```
-SUMMARY:{"plan_steps": ["first sub-query", "second sub-query"], "plan_complete": true, "mode": "standard", "sub_queries": [], "confidence": "PROBABLE", "mempalace_drawer": "<session_id> Planner", "needs_clarification": false, "clarifying_questions": []}
+SUMMARY:{"plan_steps": ["first sub-query", "second sub-query"], "plan_complete": true, "mode": "standard", "confidence": "PROBABLE", "needs_clarification": false, "clarifying_questions": []}
 ```

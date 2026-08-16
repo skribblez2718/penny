@@ -1,54 +1,48 @@
-# Skill Tool — Four-mode skill invocation for agents
-
-## What
-
-The `skill` tool supports single, parallel, chain, and resume modes. Penny routes; skills execute. Agents communicate via mempalace.
-
-## Why
-
-Different tasks need different execution patterns. Single for one skill. Parallel for concurrent work. Chain for sequential handoff. Resume for recovery.
-
-## Rules
-
-1. **Exactly one mode per invocation.** Ambiguous → error.
-2. **Parallel max: 3.** Chain max: 10.
-3. **`{previous}` truncates at 2,000 chars.** Word boundary.
-4. **Chain stops on first error.** Resumable via checkpoint in `/tmp/skill-checkpoints/`.
+# Skill Tool — Artifact-first invocation modes
 
 ## Modes
 
-| Mode | Syntax | Use When |
-|------|--------|----------|
-| Single | `skill({ skill_name, goal })` | One skill, one goal |
-| Parallel | `skill({ skills: [{skill_name, goal}] })` | Independent concurrent work |
-| Chain | `skill({ chain: [{skill_name, goal}] })` | Sequential with `{previous}` handoff |
-| Resume | `skill({ resume_chain: "id" })` | Recover failed chain |
+| Mode     | Use                                                                |
+| -------- | ------------------------------------------------------------------ |
+| Single   | One workflow goal.                                                 |
+| Parallel | Independent workflow goals.                                        |
+| Chain    | Ordered goals whose next step consumes the prior verified product. |
+| Resume   | Continue a persisted failed/pending chain.                         |
 
-## Mode Detection
+## Handoff contract
 
-```
-resume_chain > chain > skills > single
-```
+Each skill run exposes an engine-selected terminal `output_artifact_ref`. Chain
+mode verifies those exact bytes, registers a chain-run handoff artifact, and
+grants only that ref to the next skill's first worker. `{previous}` is a bounded
+instruction pointing to the grant, never an authoritative inline payload.
+Workers use `artifact_read` and follow typed continuation until complete.
 
-## Constraints
+Checkpoints persist exact terminal/handoff refs under the caller-selected or
+platform state root. They are owner-only and atomically replaced. Resume skips
+only steps whose checkpoint/ref bindings verify; corrupt or missing refs fail
+closed.
 
-| Limit | Value |
-|-------|-------|
-| MAX_PARALLEL_SKILLS | 3 |
-| MAX_CHAIN_STEPS | 10 |
-| `{previous}` truncation | 2,000 chars |
-| Skill timeout | 90 min |
-| Agent timeout | 30 min |
+Durable memory and historical skill rooms are not handoff or resume authority. Track-A recovery is forward-only: owner `PENNY_ARTIFACT_DISPATCH_MODE=paused` stops new dispatch, returns a non-success/retriable result, and leaves chain/run checkpoints plus exact refs pending. Unknown values fail closed. After `active`, resume reuses those refs; semantic memory is never a fallback.
+
+## Limits
+
+- Parallel and chain width/length limits are enforced by the extension schema.
+- One mode per invocation; ambiguous input errors.
+- Parallel branches are isolated and report independently.
+- Chain stops on first worker, artifact, or checkpoint error.
 
 ## Verification
 
-- [ ] Checkpoint written before each chain step
-- [ ] Failed chain returns resumable result
-- [ ] Stale checkpoints (>24h) warn but allow resume
+- [ ] Successful steps persist before chain advancement.
+- [ ] Next consumer receives only the verified prior ref.
+- [ ] Restart uses durable checkpoint refs.
+- [ ] Memory absence does not change behavior.
+- [ ] Paused single/parallel/chain execution dispatches no worker and remains retriable from the same refs.
+- [ ] Terminal details expose authoritative output refs.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `.pi/extensions/skill/index.ts` | Implementation |
-| `docs/agents/architecture/skill-tool-modes.md` | Architecture reference |
+| File                                           | Purpose                 |
+| ---------------------------------------------- | ----------------------- |
+| `.pi/extensions/skill/README.md`               | Implementation contract |
+| `docs/agents/architecture/skill-tool-modes.md` | Architecture            |

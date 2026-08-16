@@ -97,11 +97,11 @@ def test_extras_round_trip():
             "session_id": "s",
             "run_id": "r",
             "playbook": "p",
-            "extras": {"code": {"language": "python", "iteration": 2}},
+            "extras": {"research": {"mode": "standard", "iteration": 2}},
         }
     )
-    assert ctx.extras == {"code": {"language": "python", "iteration": 2}}
-    assert ctx.to_dict()["extras"]["code"]["iteration"] == 2
+    assert ctx.extras == {"research": {"mode": "standard", "iteration": 2}}
+    assert ctx.to_dict()["extras"]["research"]["iteration"] == 2
 
 
 def test_from_dict_missing_required_raises():

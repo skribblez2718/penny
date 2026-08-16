@@ -39,7 +39,6 @@ describe("Config", () => {
       "PLAYWRIGHT_PROXY_PASSWORD",
       "PLAYWRIGHT_PROXY_BYPASS",
       "PLAYWRIGHT_IGNORE_HTTPS_ERRORS",
-      "CAIDO_URL",
     ];
     for (const v of vars) {
       savedEnv[v] = process.env[v];
@@ -152,24 +151,6 @@ describe("Config", () => {
       process.env.PLAYWRIGHT_PROXY_SERVER = "http://127.0.0.1:8080";
       const config = loadConfig("/tmp/test");
       expect(Object.isFrozen(config.proxy)).toBe(true);
-    });
-
-    it("should NOT derive a proxy from CAIDO_URL (Playwright defaults to DIRECT)", () => {
-      // Deliberate design decision (config.ts): Playwright must never be hard-wired
-      // to Caido, because that breaks ALL browser activity whenever Caido is down
-      // (ERR_PROXY_CONNECTION_FAILED). Routing through Caido is opt-in only, via an
-      // explicit PLAYWRIGHT_PROXY_SERVER or the `playwright_set_proxy` tool.
-      process.env.CAIDO_URL = "http://localhost:8080";
-      const config = loadConfig("/tmp/test");
-      expect(config.proxy).toBeUndefined();
-    });
-
-    it("should use explicit PLAYWRIGHT_PROXY_SERVER even when CAIDO_URL is set", () => {
-      // The explicit opt-in is the ONLY env path to a configured proxy.
-      process.env.CAIDO_URL = "http://localhost:8080";
-      process.env.PLAYWRIGHT_PROXY_SERVER = "http://custom-proxy:9090";
-      const config = loadConfig("/tmp/test");
-      expect(config.proxy!.server).toBe("http://custom-proxy:9090");
     });
 
     it("should default ignoreHTTPSErrors to false", () => {

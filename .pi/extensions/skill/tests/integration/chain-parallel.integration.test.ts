@@ -9,8 +9,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as fs from "fs";
 import type { SkillResult } from "../../skill-utils.js";
 import {
-  truncateForPrevious,
-  getFinalOutputFromSkillResult,
   reconstructResumeChain,
   isClarificationEscalation,
   formatResult,
@@ -28,62 +26,6 @@ const mockReaddirSync = vi.mocked(fs.readdirSync);
 const mockReadFileSync = vi.mocked(fs.readFileSync);
 const mockWriteFileSync = vi.mocked(fs.writeFileSync);
 const mockMkdirSync = vi.mocked(fs.mkdirSync);
-
-// ============================================================
-// Integration: truncated {previous} handoff simulation
-// ============================================================
-
-describe("chain {previous} handoff (integration simulation)", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("step 2 receives truncated step 1 output", () => {
-    // Simulate: step 1 produces a long output, gets truncated for step 2
-    const step1Output: SkillResult = {
-      success: true,
-      session_id: "plan-001",
-      skill_name: "plan",
-      state: "complete",
-      requires_approval: false,
-      steps_total: 3,
-      agents_invoked: ["echo", "piper", "carren"],
-      errors: [],
-      plan: {
-        plan_summary:
-          "Found " +
-          "entry ".repeat(500) + // ~2500 chars of repeated content
-          "points in the codebase.",
-      },
-    };
-
-    const raw = getFinalOutputFromSkillResult(step1Output);
-    expect(raw.length).toBeGreaterThan(2000); // Should exceed limit
-
-    const truncated = truncateForPrevious(raw, 2000);
-    expect(truncated.length).toBeLessThanOrEqual(2001);
-    expect(truncated.endsWith("…")).toBe(true);
-
-    // Step 2's goal uses {previous}
-    const step2Goal = "Research {previous} and plan approach";
-    const resolved = step2Goal.replaceAll("{previous}", truncated);
-    expect(resolved).toContain("Research ");
-    expect(resolved).toContain(" and plan approach");
-    expect(resolved).not.toContain("{previous}");
-  });
-
-  it("step 1 with no prior output gets empty {previous}", () => {
-    const step1Goal = "Plan {previous}";
-    const resolved = step1Goal.replaceAll("{previous}", "");
-    expect(resolved).toBe("Plan ");
-  });
-
-  it("goal without {previous} passes through unchanged on substitution", () => {
-    const goal = "Analyze the codebase";
-    const resolved = goal.replaceAll("{previous}", "some output");
-    expect(resolved).toBe("Analyze the codebase");
-  });
-});
 
 // ============================================================
 // Integration: chain error aggregation
@@ -268,7 +210,7 @@ describe("resume from checkpoint (integration simulation)", () => {
           goal: "Research auth patterns",
           session_id: "research-001",
           status: "complete" as const,
-          result_summary: "Found JWT, OAuth patterns",
+          result_preview: "Found JWT, OAuth patterns",
         },
         {
           index: 1,
@@ -304,9 +246,9 @@ describe("resume from checkpoint (integration simulation)", () => {
     const retryGoal = overrides[1]?.goal ?? failedStep!.goal;
     expect(retryGoal).toBe("Plan with longer timeout for {previous}");
 
-    // Previous output from completed steps
-    const previousOutput = completedSteps[0].result_summary;
-    expect(previousOutput).toBe("Found JWT, OAuth patterns");
+    // Optional display preview survives, but exact handoff authority is tested separately.
+    const displayPreview = completedSteps[0].result_preview;
+    expect(displayPreview).toBe("Found JWT, OAuth patterns");
   });
 
   it("detects complete chain — no resume needed", () => {
@@ -345,6 +287,7 @@ describe("reconstructResumeChain (resume bug regression)", () => {
         goal: "spec it",
         session_id: "prd-100",
         status: "failed" as const,
+        model: "provider/planner",
       },
       {
         index: 1,
@@ -352,9 +295,17 @@ describe("reconstructResumeChain (resume bug regression)", () => {
         goal: "build {previous}",
         session_id: "code-101",
         status: "pending" as const,
+        model: "provider/coder",
       },
     ],
-    pending_steps: [{ index: 1, skill_name: "code", goal: "build {previous}" }],
+    pending_steps: [
+      {
+        index: 1,
+        skill_name: "code",
+        goal: "build {previous}",
+        model: "provider/coder",
+      },
+    ],
   };
 
   it("does NOT duplicate pending steps (fixes prd → code → code)", () => {
@@ -368,6 +319,11 @@ describe("reconstructResumeChain (resume bug regression)", () => {
     expect(startStep).toBe(0);
     expect(chain[0].session_id).toBe("prd-100"); // paused/failed step keeps its session
     expect(chain[1].session_id).toBe("code-101");
+  });
+
+  it("preserves caller model overrides across checkpoint reconstruction", () => {
+    const { chain } = reconstructResumeChain(failedTwoStep);
+    expect(chain.map((step) => step.model)).toEqual(["provider/planner", "provider/coder"]);
   });
 
   it("applies overrides only to the failed step", () => {
@@ -388,7 +344,7 @@ describe("reconstructResumeChain (resume bug regression)", () => {
           goal: "r",
           session_id: "r-1",
           status: "complete" as const,
-          result_summary: "found X",
+          result_preview: "found X",
         },
         {
           index: 1,
@@ -409,7 +365,7 @@ describe("reconstructResumeChain (resume bug regression)", () => {
     };
     const { chain, completed, startStep } = reconstructResumeChain(cp);
     expect(completed.map((c) => c.skill_name)).toEqual(["research"]);
-    expect(completed[0].result_summary).toBe("found X");
+    expect(completed[0].result_preview).toBe("found X");
     expect(chain.map((s) => s.skill_name)).toEqual(["plan", "code"]);
     expect(startStep).toBe(1);
   });

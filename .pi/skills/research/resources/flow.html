@@ -61,7 +61,7 @@
 <body>
 <header>
   <h1>research skill — execution flow</h1>
-  <div class="sub">Validated against <code>orchestration/playbooks/research.py</code> (<code>ResearchMachine</code>). Three modes — <b>quick</b>, <b>standard</b>, <b>deep</b> — share one FSM. Boxes are states dispatching cognitive-primitive agents; MemPalace is the blackboard.</div>
+  <div class="sub">Validated against <code>orchestration/playbooks/research.py</code> (<code>ResearchMachine</code>). Three modes — <b>quick</b>, <b>standard</b>, <b>deep</b> — share one FSM. Boxes dispatch cognitive agents; exact owner-captured artifacts carry every handoff.</div>
 </header>
 
 <div class="callout">
@@ -126,8 +126,8 @@ const N = {
   synthesizing:{col:'C',y:475,cls:'synthia',title:'synthesizing',who:'synthia',desc:'Synthesize findings into a grounded, cited draft. No web tools by design \u2014 it integrates evidence, it does not gather it.'},
   critiquing_report:{col:'Rmid',y:545,cls:'carren',title:'critiquing_report',badge:'BUDGET',desc:'Critique the draft for overclaiming / bias / uncertainty-honesty. Runs when critique_passes \u2265 1 \u2014 so a non-deep run that EARNED a pass via rigor escalation gets it too.'},
   validating:{col:'C',y:695,cls:'vera',title:'validating',who:'vera',desc:'Independent citation gate, EVERY mode: is each material claim grounded in a cited source that supports it? PASS \u2192 report; FAIL \u2192 seek evidence, re-ground, or exhaust honestly.'},
-  report_writing:{col:'C',y:825,cls:'skribble',title:'report_writing',who:'skribble',desc:'Write report.md / sources.md / README.md from the validated synthesis. Adds no claims. Not escalatable.'},
-  complete:{col:'C',y:975,cls:'done',title:'complete',badge:'TERM',desc:'Terminal. met = the report was WRITTEN; grounded = the citation gate PASSED. A run can be met=true, grounded=false \u2014 delivered with its unverified claims named.'},
+  report_writing:{col:'C',y:825,cls:'skribble',title:'report_writing',who:'skribble',desc:'Write report.md / sources.md / README.md and return their complete contents for owner capture as the product artifact. Adds no claims. Not escalatable.'},
+  complete:{col:'C',y:975,cls:'done',title:'complete',badge:'TERM',desc:'Terminal. Exposes the exact selected report_writing artifact ref. met = report delivered; grounded = citation gate passed. met=true, grounded=false remains possible with unverified claims named.'},
   error:{col:'Rmid',y:975,cls:'error',title:'error',badge:'TERM',desc:'Terminal. Reached by abort from any working phase.'},
   unknown:{col:'Louter',y:430,cls:'esc',title:'unknown',desc:'Escalation staging: UNCERTAIN confidence, a false *_complete flag, needs_clarification, or a stalled loop at any working phase.'},
   awaiting_clarification:{col:'Louter',y:600,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user. Resumes PRODUCER-oriented \u2014 at the agent that can act on the answer (planning / researching / synthesizing), not at the position where it stopped.'},

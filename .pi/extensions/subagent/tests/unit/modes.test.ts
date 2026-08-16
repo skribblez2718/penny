@@ -332,29 +332,6 @@ describe("Parameter Validation", () => {
   });
 });
 
-describe("Placeholder Replacement", () => {
-  function replacePlaceholder(content: string, previous: string): string {
-    return content.replace(/{previous}/g, previous);
-  }
-
-  it("should replace {previous} placeholder", () => {
-    const result = replacePlaceholder("Based on {previous}, analyze further", "file1.ts, file2.ts");
-    expect(result).toBe("Based on file1.ts, file2.ts, analyze further");
-  });
-  it("should handle multiple placeholders", () => {
-    const result = replacePlaceholder("From {previous} to {previous}", "output");
-    expect(result).toBe("From output to output");
-  });
-  it("should handle no placeholder", () => {
-    const result = replacePlaceholder("No placeholder here", "previous output");
-    expect(result).toBe("No placeholder here");
-  });
-  it("should handle empty previous", () => {
-    const result = replacePlaceholder("Using {previous}", "");
-    expect(result).toBe("Using ");
-  });
-});
-
 describe("Process Spawning", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -479,7 +456,7 @@ describe("resolveSkillContext", () => {
     const mockExists = vi.fn().mockReturnValue(true);
     const mockRead = vi.fn().mockReturnValue("skill prompt content");
     const result = resolveSkillContext(
-      ".pi/skills/plan/assets/prompts/echo.md",
+      ".pi/skills/example-skill/assets/prompts/echo.md",
       "/project",
       mockExists,
       mockRead
@@ -491,11 +468,11 @@ describe("resolveSkillContext", () => {
 
   it("resolves relative paths against cwd", () => {
     const mockExists = vi.fn(
-      (p: string) => p === "/project/.pi/skills/plan/assets/prompts/echo.md"
+      (p: string) => p === "/project/.pi/skills/example-skill/assets/prompts/echo.md"
     );
     const mockRead = vi.fn().mockReturnValue("explored content");
     const result = resolveSkillContext(
-      ".pi/skills/plan/assets/prompts/echo.md",
+      ".pi/skills/example-skill/assets/prompts/echo.md",
       "/project",
       mockExists,
       mockRead
@@ -562,11 +539,11 @@ describe("combineAgentPromptWithSkillContext", () => {
 
   it("preserves <agent_boundary> content after skill context", () => {
     const agentPrompt =
-      "Agent body\n\n<agent_boundary>\nSECURITY REINFORCEMENT\n1. Rule one\n</agent_boundary>";
+      "Agent body\n\n<agent_boundary>\nTASK AUTHORITY REMINDER\n1. Rule one\n</agent_boundary>";
     const skillContent = "Skill guidance";
     const result = combineAgentPromptWithSkillContext(agentPrompt, skillContent);
 
-    expect(result).toContain("SECURITY REINFORCEMENT");
+    expect(result).toContain("TASK AUTHORITY REMINDER");
     expect(result).toContain("1. Rule one");
     expect(result).toMatch(/<\/skill_context>\s*\n<agent_boundary>/);
   });

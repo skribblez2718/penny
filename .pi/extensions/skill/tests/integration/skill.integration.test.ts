@@ -19,19 +19,19 @@ import { fileURLToPath } from "node:url";
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../..");
 
 describe("Skill Integration — Skill Discovery", () => {
-  it("should find the plan skill in .pi/skills/", () => {
+  it("should find the research skill in .pi/skills/", () => {
     const skillsDir = path.join(PROJECT_ROOT, ".pi/skills");
     expect(fs.existsSync(skillsDir)).toBe(true);
 
-    const planDir = path.join(skillsDir, "plan");
-    expect(fs.existsSync(planDir)).toBe(true);
+    const researchDir = path.join(skillsDir, "research");
+    expect(fs.existsSync(researchDir)).toBe(true);
 
-    const skillFile = path.join(planDir, "SKILL.md");
+    const skillFile = path.join(researchDir, "SKILL.md");
     expect(fs.existsSync(skillFile)).toBe(true);
   });
 
-  it("should have orchestrate.py in the plan skill", () => {
-    const scriptPath = path.join(PROJECT_ROOT, ".pi/skills/plan/scripts/orchestrate.py");
+  it("should have orchestrate.py in the research skill", () => {
+    const scriptPath = path.join(PROJECT_ROOT, ".pi/skills/research/scripts/orchestrate.py");
     expect(fs.existsSync(scriptPath)).toBe(true);
   });
 
@@ -43,10 +43,10 @@ describe("Skill Integration — Skill Discovery", () => {
 
 describe("Skill Integration — Orchestrate Script Validation", () => {
   it("should have valid Python syntax in orchestrate.py", () => {
-    const scriptPath = path.join(PROJECT_ROOT, ".pi/skills/plan/scripts/orchestrate.py");
+    const scriptPath = path.join(PROJECT_ROOT, ".pi/skills/research/scripts/orchestrate.py");
     const content = fs.readFileSync(scriptPath, "utf-8");
 
-    // Post-migration: orchestrate.py is a ~5-line delegate into the shared
+    // Post-migration: orchestrate.py is a thin delegate into the shared
     // orchestration engine — it imports and routes to the engine CLI, with no
     // local `def`/`class`/FSM.
     expect(content).toContain("import ");
@@ -55,10 +55,10 @@ describe("Skill Integration — Orchestrate Script Validation", () => {
   });
 
   it("should route to the shared orchestration engine's playbook", () => {
-    const scriptPath = path.join(PROJECT_ROOT, ".pi/skills/plan/scripts/orchestrate.py");
+    const scriptPath = path.join(PROJECT_ROOT, ".pi/skills/research/scripts/orchestrate.py");
     const content = fs.readFileSync(scriptPath, "utf-8");
 
-    // The FSM now lives in the installed `orchestration` package (PlanPlaybook);
+    // The FSM lives in the installed `orchestration` package (ResearchPlaybook);
     // the delegate just wires start/step/status/recover to it.
     expect(content).toContain("orchestration.cli");
     expect(content).toContain("default_playbook");
@@ -67,7 +67,7 @@ describe("Skill Integration — Orchestrate Script Validation", () => {
 
 describe("Skill Integration — SKILL.md Validation", () => {
   it("should have valid SKILL.md format", () => {
-    const skillPath = path.join(PROJECT_ROOT, ".pi/skills/plan/SKILL.md");
+    const skillPath = path.join(PROJECT_ROOT, ".pi/skills/research/SKILL.md");
     const content = fs.readFileSync(skillPath, "utf-8");
 
     // SKILL.md should have YAML frontmatter

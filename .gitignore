@@ -46,7 +46,6 @@ yarn-error.log*
 # Virtual environment
 .venv/
 venv/
-.venv-sca-tools/
 env/
 ENV/
 
@@ -113,11 +112,16 @@ cython_debug/
 # Penny / MemPalace
 # ===========================================
 
-# Memory palace storage (user data) — live dir AND dated backup dirs
-# (e.g. .mempalace.bak.2026-07-06/). These hold conversation/personal data.
+# Memory palace storage (user data) — the live dir AND every artifact the
+# repair/migration tooling drops beside it. These hold conversation/personal
+# data and must never reach this PUBLIC repo.
+#
+# repair_palace.py creates: .mempalace.rebuild_tmp/ (staging),
+# .mempalace.corrupt_bak-<ts>/ (pre-swap palace), .mempalace.backup-<ts>.tgz.
+# The single leading-prefix glob covers those plus any future sibling, rather
+# than enumerating names that drift out of sync with the tooling.
 .mempalace/
-.mempalace.bak*/
-.mempalace.bak*
+.mempalace.*
 
 # Entities file (generated)
 entities.json
@@ -247,21 +251,8 @@ secrets/
 # Orchestration durable checkpointer (PENNY_ORCH_DB)
 .penny/
 
-# Generated documents (word/powerpoint extensions)
-/output/
-
 # Harness alignment audit reports (/audit) — local run artifacts, never committed
 /audits/
-
-# rez resume skill — committed for portability, but personal data stays LOCAL.
-# The FSM reads resources/{resume,accomplishments}/ read-only, so those
-# directories are committed (via their README placeholders) while the personal
-# resume/accomplishment files inside them are never committed.
-.pi/skills/rez/resources/resume/*
-!.pi/skills/rez/resources/resume/README.md
-.pi/skills/rez/resources/accomplishments/*
-!.pi/skills/rez/resources/accomplishments/README.md
-.pi/skills/rez/output/
 
 # ===========================================
 # Pi agent credentials & config (defensive)

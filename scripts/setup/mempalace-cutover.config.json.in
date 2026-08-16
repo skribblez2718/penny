@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "cutover_id": "@CUTOVER_ID@",
+  "source_config": "@SOURCE_HUB_CONFIG@",
+  "candidate_config": "@CANDIDATE_HUB_CONFIG@",
+  "state_path": "@STATE_PATH@",
+  "journal_path": "@JOURNAL_PATH@",
+  "approval_ledger_path": "@APPROVAL_LEDGER_PATH@",
+  "control_lock_path": "@CONTROL_LOCK_PATH@",
+  "shadow_fixtures_path": "@SHADOW_FIXTURES_PATH@",
+  "canary_client_ids": ["@CANARY_CLIENT_ID@"],
+  "approved_client_ids": ["@CANARY_CLIENT_ID@", "@PRIMARY_CLIENT_ID@"],
+  "no_fallback": true,
+  "post_ack_read_required": true,
+  "operation_specs": {
+    "drawer": {
+      "write_tool": "mempalace_add_drawer",
+      "operation_id_argument": "source_file",
+      "resulting_ids_path": ["drawer_id"],
+      "resulting_ids_mode": "scalar",
+      "read_tool": "mempalace_get_drawer",
+      "read_ids_argument": "drawer_id",
+      "read_ids_argument_mode": "scalar",
+      "read_items_path": [],
+      "read_items_mode": "single",
+      "read_item_id_field": "drawer_id",
+      "read_projection_fields": ["drawer_id", "content", "wing", "room", "metadata"]
+    }
+  }
+}

@@ -16,42 +16,39 @@
 `Verified`: `✓ <date>` = confirmed live that date · `seed` = curated, confirm on
 first use (a failed fetch self-heals and dates the row).
 
-| Concept | URL | Verified |
-|---|---|---|
-| Getting started | https://lit.dev/docs/getting-started/ | seed |
-| Components overview | https://lit.dev/docs/components/overview/ | ✓ 2026-07-10 |
-| Defining a component | https://lit.dev/docs/components/defining/ | seed |
-| Rendering | https://lit.dev/docs/components/rendering/ | seed |
-| Reactive properties | https://lit.dev/docs/components/properties/ | seed |
-| Styles (scoped, static styles) | https://lit.dev/docs/components/styles/ | seed |
-| Lifecycle | https://lit.dev/docs/components/lifecycle/ | seed |
-| Shadow DOM | https://lit.dev/docs/components/shadow-dom/ | seed |
-| Events | https://lit.dev/docs/components/events/ | seed |
-| Decorators | https://lit.dev/docs/components/decorators/ | seed |
-| Templates overview | https://lit.dev/docs/templates/overview/ | ✓ 2026-07-10 |
-| Template expressions | https://lit.dev/docs/templates/expressions/ | seed |
-| Conditionals | https://lit.dev/docs/templates/conditionals/ | seed |
-| Lists | https://lit.dev/docs/templates/lists/ | seed |
-| Built-in directives | https://lit.dev/docs/templates/directives/ | seed |
-| Reactive controllers | https://lit.dev/docs/composition/controllers/ | seed |
-| Mixins | https://lit.dev/docs/composition/mixins/ | seed |
-| Context (shared data) | https://lit.dev/docs/data/context/ | seed |
-| React integration | https://lit.dev/docs/frameworks/react/ | seed |
-| Server rendering (SSR) | https://lit.dev/docs/ssr/overview/ | seed |
-| Testing | https://lit.dev/docs/tools/testing/ | seed |
-| Building for production | https://lit.dev/docs/tools/production/ | seed |
-| API: LitElement | https://lit.dev/docs/api/LitElement/ | seed |
-| API: Styles (adoptStyles, css, unsafeCSS) | https://lit.dev/docs/api/styles/ | ✓ 2026-07-10 |
-| API: Decorators | https://lit.dev/docs/api/decorators/ | seed |
+| Concept                                   | URL                                           | Verified     |
+| ----------------------------------------- | --------------------------------------------- | ------------ |
+| Getting started                           | https://lit.dev/docs/getting-started/         | seed         |
+| Components overview                       | https://lit.dev/docs/components/overview/     | ✓ 2026-07-10 |
+| Defining a component                      | https://lit.dev/docs/components/defining/     | seed         |
+| Rendering                                 | https://lit.dev/docs/components/rendering/    | seed         |
+| Reactive properties                       | https://lit.dev/docs/components/properties/   | seed         |
+| Styles (scoped, static styles)            | https://lit.dev/docs/components/styles/       | seed         |
+| Lifecycle                                 | https://lit.dev/docs/components/lifecycle/    | seed         |
+| Shadow DOM                                | https://lit.dev/docs/components/shadow-dom/   | seed         |
+| Events                                    | https://lit.dev/docs/components/events/       | seed         |
+| Decorators                                | https://lit.dev/docs/components/decorators/   | seed         |
+| Templates overview                        | https://lit.dev/docs/templates/overview/      | ✓ 2026-07-10 |
+| Template expressions                      | https://lit.dev/docs/templates/expressions/   | seed         |
+| Conditionals                              | https://lit.dev/docs/templates/conditionals/  | seed         |
+| Lists                                     | https://lit.dev/docs/templates/lists/         | seed         |
+| Built-in directives                       | https://lit.dev/docs/templates/directives/    | seed         |
+| Reactive controllers                      | https://lit.dev/docs/composition/controllers/ | seed         |
+| Mixins                                    | https://lit.dev/docs/composition/mixins/      | seed         |
+| Context (shared data)                     | https://lit.dev/docs/data/context/            | seed         |
+| React integration                         | https://lit.dev/docs/frameworks/react/        | seed         |
+| Server rendering (SSR)                    | https://lit.dev/docs/ssr/overview/            | seed         |
+| Testing                                   | https://lit.dev/docs/tools/testing/           | seed         |
+| Building for production                   | https://lit.dev/docs/tools/production/        | seed         |
+| API: LitElement                           | https://lit.dev/docs/api/LitElement/          | seed         |
+| API: Styles (adoptStyles, css, unsafeCSS) | https://lit.dev/docs/api/styles/              | ✓ 2026-07-10 |
+| API: Decorators                           | https://lit.dev/docs/api/decorators/          | seed         |
 
 ## Styling (Tailwind integration)
 
 Tailwind CSS is this project's default styling layer. Because Lit renders into
 shadow DOM, a global Tailwind stylesheet does not reach component internals —
-compile Tailwind and `adoptStyles()` it into each component's shadow root. See
-the [Tailwind documentation map](../tailwind/AGENTS.md) and the required
-integration pattern (Vite `?inline` + `unsafeCSS()` + a `TW` mixin) in
-`.pi/skills/code/resources/web-ui.md`.
+compile Tailwind and adopt the trusted compiled sheet into each component's shadow root. See the [Tailwind documentation map](../tailwind/AGENTS.md) and fetch the current Lit styles API before implementing the `?inline` + `unsafeCSS()` integration.
 
 ## Secure Coding (project standards)
 

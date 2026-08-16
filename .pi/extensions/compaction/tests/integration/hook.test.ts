@@ -1,7 +1,7 @@
 /**
  * Integration tests for the session_before_compact hook handler.
  *
- * These mock the Pi ExtensionAPI and the bridge layer, and verify:
+ * These mock the Pi ExtensionAPI and exact checkpointer reader, and verify:
  * - Handler registers on session_before_compact
  * - A prose summary with [RESUME-REFS] is emitted
  * - Engine checkpointer runs land in the summary and refs
@@ -11,15 +11,9 @@
 import { describe, it, expect, vi } from "vitest";
 import compactionExtension from "../../index.js";
 
-// Mock bridge calls to avoid spawning Python in tests
-const engineRunsMock = vi.fn(async () => [] as any[]);
-vi.mock("../../bridge.js", () => ({
-  queryEngineRuns: (...args: any[]) => engineRunsMock(...args),
-  queryMempalaceSkillRooms: vi.fn(async () => []),
-  queryMempalaceSkillRoomsForSession: vi.fn(async () => []),
-  queryKGEntitiesForScope: vi.fn(async () => []),
-  queryOutcomeLedgerDecisions: vi.fn(async () => []),
-  queryDiaryEscalation: vi.fn(async () => []),
+const engineRunsMock = vi.fn(() => ({ runs: [], artifactRefs: [], issues: [] }));
+vi.mock("../../checkpointer.js", () => ({
+  readExactCheckpoints: (...args: any[]) => engineRunsMock(...args),
 }));
 
 vi.mock("../../pending.js", () => ({
@@ -82,12 +76,14 @@ function skillCall(goal: string, id: string, skill = "plan") {
   };
 }
 
-function skillResult(sessionId: string, toolCallId: string, success = true) {
+function skillResult(sessionId: string, toolCallId: string, success = true, runId?: string) {
+  const details = { success, session_id: sessionId, ...(runId ? { run_id: runId } : {}) };
   return {
     role: "toolResult",
     toolName: "skill",
     toolCallId,
-    content: JSON.stringify({ success, session_id: sessionId }),
+    content: JSON.stringify(details),
+    details,
   };
 }
 
@@ -100,7 +96,7 @@ describe("compactionExtension", () => {
   });
 
   it("emits a valid v2 artifact on a clean session", async () => {
-    engineRunsMock.mockResolvedValueOnce([]);
+    engineRunsMock.mockReturnValueOnce({ runs: [], artifactRefs: [], issues: [] });
     const pi = createMockPi() as any;
     compactionExtension(pi);
 
@@ -114,7 +110,7 @@ describe("compactionExtension", () => {
     expect(result.compaction.firstKeptEntryId).toBe("fkid-1");
     expect(result.compaction.tokensBefore).toBe(15000);
     expect(result.compaction.details).toBeDefined();
-    expect(result.compaction.details.schema_version).toBe("2.3.0");
+    expect(result.compaction.details.schema_version).toBe("3.0.0");
     expect(result.compaction.details.files.read).toContain("/tmp/read.md");
     expect(result.compaction.details.files.modified).toContain("/tmp/written.md");
     expect(result.compaction.details.files.modified).toContain("/tmp/edited.md");
@@ -122,21 +118,24 @@ describe("compactionExtension", () => {
     expect(result.compaction.details.constraints).toEqual([]);
   });
 
-  it("surfaces a SCOPED engine run in prose and RESUME-REFS", async () => {
-    // The run's session is bound to THIS conversation by a skill call/result in
-    // the window, so it is scoped (not a stale cross-session run).
-    engineRunsMock.mockResolvedValueOnce([
-      {
-        run_id: "code-a1b2c3",
-        session_id: "code-1751700000000",
-        playbook: "code",
-        current_state_id: "VERIFY",
-        status: "awaiting_user",
-        goal: "Migrate research skill onto engine",
-        clarification_text: "Keep the fixture?",
-        updated_at: "2026-07-05T12:00:00.000Z",
-      },
-    ]);
+  it("surfaces an explicitly named run in prose and RESUME-REFS", async () => {
+    // The trusted skill result supplies the exact checkpointer key.
+    engineRunsMock.mockReturnValueOnce({
+      runs: [
+        {
+          run_id: "code-a1b2c3",
+          session_id: "code-1751700000000",
+          playbook: "code",
+          current_state_id: "VERIFY",
+          status: "awaiting_user",
+          goal: "Migrate research skill onto engine",
+          clarification_text: "Keep the fixture?",
+          updated_at: "2026-07-05T12:00:00.000Z",
+        },
+      ],
+      artifactRefs: [],
+      issues: [],
+    });
     const pi = createMockPi() as any;
     compactionExtension(pi);
 
@@ -147,7 +146,7 @@ describe("compactionExtension", () => {
         fileOps: { read: new Set(), written: new Set(), edited: new Set() },
         messagesToSummarize: [
           skillCall("Migrate research skill onto engine", "tc-1", "code"),
-          skillResult("code-1751700000000", "tc-1"),
+          skillResult("code-1751700000000", "tc-1", true, "code-a1b2c3"),
         ],
       },
     });
@@ -155,27 +154,14 @@ describe("compactionExtension", () => {
 
     expect(result.compaction.summary).toContain("## In-Flight Orchestration Runs");
     expect(result.compaction.summary).toContain("[RESUME-REFS v2]");
-    expect(result.compaction.summary).toContain(
-      'resume=skill(skill_name="code", resumeFrom="code-1751700000000")'
-    );
+    expect(result.compaction.summary).toContain("run:code-a1b2c3");
     expect(result.compaction.details.engine_runs).toHaveLength(1);
     expect(result.compaction.details.goal).toBe("Migrate research skill onto engine");
   });
 
-  it("excludes a STALE cross-session run from prose, surfacing it only in refs", async () => {
-    // A pending run whose session is NOT referenced by this conversation (no
-    // skill call/result, no prior refs) is the reported staleness symptom.
-    engineRunsMock.mockResolvedValueOnce([
-      {
-        run_id: "old-x",
-        session_id: "plan-9999999999999",
-        playbook: "plan",
-        current_state_id: "critiquing",
-        status: "awaiting_user",
-        goal: "An OLD goal from a previous session",
-        updated_at: "2026-07-01T00:00:00.000Z",
-      },
-    ]);
+  it("does not request or surface an unreferenced pending run", async () => {
+    // With no explicit run ID there is no checkpointer lookup or stale-run scan.
+    engineRunsMock.mockReturnValueOnce({ runs: [], artifactRefs: [], issues: [] });
     const pi = createMockPi() as any;
     compactionExtension(pi);
 
@@ -196,13 +182,53 @@ describe("compactionExtension", () => {
       "Please help me refactor the token estimator module"
     );
     expect(result.compaction.details.engine_runs).toHaveLength(0);
-    expect(result.compaction.details.other_session_runs).toHaveLength(1);
+    expect(engineRunsMock).toHaveBeenCalledWith([]);
     // Prose never mentions the stale goal.
     expect(result.compaction.summary).not.toContain("An OLD goal from a previous session");
   });
 
+  it("recovers exact refs when durable memory is unavailable", async () => {
+    const previousMemoryBridge = process.env.PI_MEMORY_BRIDGE;
+    process.env.PI_MEMORY_BRIDGE = "/definitely/unavailable";
+    engineRunsMock.mockReturnValueOnce({
+      runs: [
+        {
+          run_id: "run-fresh-process",
+          session_id: "session-fresh",
+          playbook: "research",
+          current_state_id: "framing",
+          status: "running",
+          updated_at: "2026-08-15T12:00:00.000Z",
+        },
+      ],
+      artifactRefs: [],
+      issues: [],
+    });
+    const pi = createMockPi() as any;
+    compactionExtension(pi);
+    const event = createMockEvent({
+      preparation: {
+        firstKeptEntryId: "fkid-1",
+        tokensBefore: 15000,
+        fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+        previousSummary: [
+          "## Goal",
+          "Continue exact run",
+          "[RESUME-REFS v2]",
+          "run:run-fresh-process",
+          "[/RESUME-REFS]",
+        ].join("\n"),
+      },
+    });
+    const result = await pi.emit("session_before_compact", event);
+    expect(engineRunsMock).toHaveBeenCalledWith(["run-fresh-process"]);
+    expect(result.compaction.summary).toContain("run:run-fresh-process");
+    if (previousMemoryBridge === undefined) delete process.env.PI_MEMORY_BRIDGE;
+    else process.env.PI_MEMORY_BRIDGE = previousMemoryBridge;
+  });
+
   it("increments compaction_seq for second compaction", async () => {
-    engineRunsMock.mockResolvedValueOnce([]);
+    engineRunsMock.mockReturnValueOnce({ runs: [], artifactRefs: [], issues: [] });
     const pi = createMockPi() as any;
     compactionExtension(pi);
 
@@ -218,7 +244,7 @@ describe("compactionExtension", () => {
   });
 
   it("captures event.reason and customInstructions into the named metadata sink", async () => {
-    engineRunsMock.mockResolvedValueOnce([]);
+    engineRunsMock.mockReturnValueOnce({ runs: [], artifactRefs: [], issues: [] });
     const pi = createMockPi() as any;
     compactionExtension(pi);
 
@@ -240,7 +266,7 @@ describe("compactionExtension", () => {
   });
 
   it("populates metadata.pi_boundary.boundary_shift on compactions after the first", async () => {
-    engineRunsMock.mockResolvedValueOnce([]);
+    engineRunsMock.mockReturnValueOnce({ runs: [], artifactRefs: [], issues: [] });
     const pi = createMockPi() as any;
     compactionExtension(pi);
 
@@ -257,7 +283,7 @@ describe("compactionExtension", () => {
   });
 
   it("omits boundary_shift on a session's first compaction", async () => {
-    engineRunsMock.mockResolvedValueOnce([]);
+    engineRunsMock.mockReturnValueOnce({ runs: [], artifactRefs: [], issues: [] });
     const pi = createMockPi() as any;
     compactionExtension(pi);
 
@@ -266,7 +292,7 @@ describe("compactionExtension", () => {
   });
 
   it("supersedes a completed skill goal with a later ad-hoc user message", async () => {
-    engineRunsMock.mockResolvedValueOnce([]);
+    engineRunsMock.mockReturnValueOnce({ runs: [], artifactRefs: [], issues: [] });
     const pi = createMockPi() as any;
     compactionExtension(pi);
 
@@ -294,7 +320,7 @@ describe("compactionExtension", () => {
   });
 
   it("derives a non-default goal from a split-turn window (turnPrefixMessages only)", async () => {
-    engineRunsMock.mockResolvedValueOnce([]);
+    engineRunsMock.mockReturnValueOnce({ runs: [], artifactRefs: [], issues: [] });
     const pi = createMockPi() as any;
     compactionExtension(pi);
 
@@ -319,7 +345,7 @@ describe("compactionExtension", () => {
   });
 
   it("degrades instead of abandoning when the summary overflows the budget", async () => {
-    engineRunsMock.mockResolvedValueOnce([]);
+    engineRunsMock.mockReturnValueOnce({ runs: [], artifactRefs: [], issues: [] });
     const pi = createMockPi() as any;
     compactionExtension(pi);
 

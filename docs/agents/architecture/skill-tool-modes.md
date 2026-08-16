@@ -1,79 +1,52 @@
-# Skill Tool Modes — Single, parallel, chain, and resume invocation
-
-## What
-
-The `skill` tool supports four invocation modes. Penny decides when to invoke; skills decide how to execute. Agents communicate via mempalace — Penny's context stays clean.
-
-## Why
-
-Different tasks need different execution patterns. Single mode for one skill. Parallel for independent concurrent work. Chain for sequential handoff. Resume for recovery from failure.
+# Skill Tool Modes — Single, parallel, chain, and resume
 
 ## Rules
 
-1. **Exactly one mode per invocation.** Ambiguous parameters → error.
-2. **Parallel max is 3.** Each skill spawns 3–8 agents internally.
-3. **Chain max is 10 steps.** Stops on first error. Resumable via checkpoint.
-4. **`{previous}` truncates at 2,000 chars.** Word boundary; `…` appended on truncation.
-5. **Checkpoints live in `/tmp/skill-checkpoints/`.** Not the project tree. OS-managed, may be cleared on reboot.
+1. Exactly one invocation mode is selected.
+2. Single/parallel skill stages use owner-selected exact artifact contracts.
+3. Chain handoff is the prior skill's verified terminal `output_artifact_ref`,
+   never an inline `{previous}` payload or memory room.
+4. Chain checkpoints persist under the caller-supplied state root or platform
+   state directory with owner-only permissions and atomic replacement.
+5. Resume verifies checkpoint identity and every terminal/handoff ref before
+   advancing. Missing, corrupt, wrong-run, or ungranted refs fail closed.
+6. Workers read grants with `artifact_read` and typed continuation.
 
 ## Modes
 
-### Single
-```
-skill({ skill_name: "plan", goal: "Design auth refactor" })
-```
+| Mode     | Input                                    | Failure behavior                                          |
+| -------- | ---------------------------------------- | --------------------------------------------------------- |
+| Single   | One skill and goal                       | Return typed terminal result/error.                       |
+| Parallel | Independent skill goals                  | Branch failures do not cancel accepted siblings.          |
+| Chain    | Ordered dependent skill goals            | Stop on first failure; persist exact refs.                |
+| Resume   | Existing chain ID plus allowed overrides | Skip verified completed steps; retry failed/pending step. |
 
-### Parallel (max 3)
-```
-skill({ skills: [
-  { skill_name: "plan", goal: "Design auth refactor" },
-  { skill_name: "research", goal: "Research OAuth 2.1" }
-]})
-```
-One failure does not abort others.
+Mode detection remains `resume_chain > chain > skills > single`; ambiguous mixed
+parameters fail rather than guess.
 
-### Chain (max 10)
-```
-skill({ chain: [
-  { skill_name: "research", goal: "Research auth patterns" },
-  { skill_name: "plan", goal: "Plan based on: {previous}" }
-]})
-```
-Stops on first error. Resumable.
+## Chain handoff
 
-### Resume
-```
-skill({ resume_chain: "chain-1768176000000" })
-```
-Reads checkpoint, skips completed steps, resumes from failed step.
+The previous step's terminal ref is read and verified by the owner, then wrapped
+as an immutable chain-run handoff ref for the next skill. The first fresh worker
+in that skill receives only that grant. `{previous}` may remain in goal text as a
+bounded instruction pointing to the grant, but never contains authoritative
+payload bytes. Large or multibyte content is consumed through continuation.
 
-## Mode Detection Priority
-
-```
-resume_chain > chain > skills > single
-```
-
-## Constraints
-
-| Limit | Value |
-|-------|-------|
-| MAX_PARALLEL_SKILLS | 3 |
-| MAX_CHAIN_STEPS | 10 |
-| `{previous}` truncation | 2,000 chars |
-| Skill timeout | 90 min |
-| Agent timeout | 30 min |
+Durable memory is optional and not chain authority. A memory outage cannot alter
+single, parallel, chain, or resume correctness.
 
 ## Verification
 
-- [ ] Checkpoint written before each chain step
-- [ ] Checkpoint updated on step completion
-- [ ] Failed chain returns resumable result with `chain_error_step`
-- [ ] Stale checkpoints (>24h) warn but allow resume
+- [ ] Every successful step has a verified exact terminal ref.
+- [ ] Checkpoint writes are owner-only and atomic.
+- [ ] Restart reconstructs handoff from refs, not previews or memory.
+- [ ] Parallel branches remain grant-isolated.
+- [ ] Final result exposes authoritative product refs.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `.pi/extensions/skill/index.ts` | Skill tool implementation |
-| `.pi/extensions/skill/skill-utils.ts` | Mode detection, result types |
-| `docs/agents/capabilities/skill-tool/skill-tool.md` | Agent operational guide |
+| File                                            | Purpose                          |
+| ----------------------------------------------- | -------------------------------- |
+| `.pi/extensions/skill/README.md`                | Skill owner loop and chain state |
+| `.pi/extensions/skill/skill-chain-artifacts.ts` | Chain artifact handoff           |
+| `.pi/extensions/skill/chain-checkpoint.ts`      | Durable chain checkpoint         |

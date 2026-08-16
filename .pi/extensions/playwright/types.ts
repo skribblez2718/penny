@@ -29,7 +29,7 @@ export interface BrowserState {
 
 /**
  * HTTP/SOCKS proxy configuration for Playwright browser traffic.
- * Use this to route browser requests through a proxy like Caido for capture.
+ * Use this to route browser requests through an HTTP or SOCKS proxy.
  *
  * Set via env vars:
  *   PLAYWRIGHT_PROXY_SERVER=http://127.0.0.1:8080
@@ -60,14 +60,12 @@ export interface PlaywrightConfig {
   enableNetwork: boolean;
   enableStorage: boolean;
   allowUnsafe: boolean;
-  /** Optional proxy for all browser traffic (e.g., route through Caido). */
+  /** Optional proxy for all browser traffic. */
   proxy?: ProxyConfig;
   /**
-   * Ignore HTTPS certificate errors. Useful for security testing where
-   * targets may have self-signed/expired certs. Defaults to false for
-   * production safety. Set to true via PLAYWRIGHT_IGNORE_HTTPS_ERRORS=1
-   * for jsa STRUCTURE phase (which often navigates to test environments
-   * with non-public certs). Cannot be enabled by accident — explicit opt-in.
+   * Ignore HTTPS certificate errors. Useful only in explicitly authorized test
+   * environments with self-signed or expired certificates. Defaults to false.
+   * Set via PLAYWRIGHT_IGNORE_HTTPS_ERRORS=1; explicit opt-in is required.
    */
   ignoreHTTPSErrors: boolean;
 }

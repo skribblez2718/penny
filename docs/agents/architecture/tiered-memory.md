@@ -1,63 +1,59 @@
-# Tiered Memory — Five-tier context management across session lifetime
+# Tiered Memory — Primary durable recall with artifact-first workflow state
 
-## What
+## Tier map
 
-Memory is organized into five tiers by lifetime and injection priority. T0 (identity) is always injected. T1 (active session) is in conversation context. T2 (working memory) is pre-turn injected. T3 (reference) is on-demand RAG. T4 (archive) is search-only.
+| Tier | Content                                                                       | Access                                                 |
+| ---- | ----------------------------------------------------------------------------- | ------------------------------------------------------ |
+| T0   | Cognitive Frame and stable identity                                           | Always in prompt.                                      |
+| T1   | Current conversation, compact run state, selected artifact refs               | Active context/checkpointer.                           |
+| T2   | Recent primary diary and explicitly classified warm data                      | Bounded primary recall when relevant.                  |
+| T3   | Curated architecture, decisions, preferences, reusable knowledge, temporal KG | Explicit primary retrieval.                            |
+| T4   | Cold archived legacy/scratch corpus                                           | Offline/manual recovery; never automatic prompt input. |
 
-## Why
-
-Without tiering, every memory competes for the same context window. Tiering ensures recent, high-signal memories get priority injection while reference material stays out of the way until needed.
+Exact workflow stage bytes are not a memory tier. They live in the immutable
+artifact plane; `RunContext` stores only compact refs and routing state.
 
 ## Rules
 
-1. **T0 is immutable without review gate.** SYSTEM.md changes require user approval.
-2. **T2 injection is bounded.** Pre-turn smart search returns ≤5 results, ≤4,000 tokens.
-3. **T3 is never pre-injected.** Reference material loads only on explicit agent request.
-4. **T4 is never injected.** Archive is search-only.
-5. **Store before you lose it.** If information would be lost on compaction, write it to mempalace first.
+1. Only the unmarked primary runtime has memory tools and lifecycle hooks.
+2. Primary T2/T3 recall is value-triggered, bounded, provenance-aware, and advisory.
+3. Workers and skill drivers have no memory tools or instructions.
+4. Active workflow handoff uses owner grants plus `artifact_read`; large reads use
+   typed continuation until complete.
+5. Curated writes preserve stable reusable knowledge only. The write path enforces
+   duplicate rejection; no routine precheck is required.
+6. The primary diary may retain one bounded session entry. Workers never write diaries.
+7. Temporal KG writes are allowlisted and value-gated; changed facts are
+   invalidated/superseded, not deleted.
+8. T4 is never prompt-injected.
 
-## Tier Map
+## Retention and legacy corpus
 
-| Tier | Content | Lifetime | Injection |
-|------|---------|----------|-----------|
-| **T0** | SYSTEM.md — identity, rules, vocabulary | Permanent | Always (Pi system prompt) |
-| **T1** | Current conversation, FSM state, active task | Session (hours) | Always (in context) |
-| **T2** | Recent diary and working memory | 7–30 days | Pre-turn smart search |
-| **T3** | Architecture docs, decisions, KG facts | Permanent | On-demand RAG |
-| **T4** | Old sessions and old versions | 90+ days | Search only |
+Historical `skills/<skill>-<session_id>` rooms and retired dedicated skill wings
+are legacy corpus, not active handoff. `skill_rooms.json` is classification input
+to a dry-run planner, not a live registry or deletion authority. Unknown data is
+kept. Apply requires a reviewed immutable manifest, archive-first behavior, and
+an operation journal through the supervised HTTP hub.
 
-## Room → Tier Convention
+## Service boundary
 
-Per-room tier/TTL policy is declared in **one** place — `scripts/system/tiered_memory/skill_rooms.json` (three consumers read it, so they can never drift; see [memory/schema.md](../memory/schema.md)). Consult that manifest for the authoritative per-room mapping rather than a table here that would drift as rooms are added.
+One authenticated supervised MemPalace 3.7.1 HTTP hub owns normal writable
+access. Production, admin, eval, and retention paths have no raw/direct fallback.
+Offline raw access is limited to a drained, stopped, receipt-bound copied target.
+Setup, cutover, and uninstall preserve caller-owned data; deletion is separate.
 
-Rule of thumb (not the source of truth): recent working memory and diary → T2; permanent reference (architecture, decisions, completed skill summaries) → T3; archives (system_versions, audit) → T4.
+## Compaction
 
-## Distillation Pipeline
-
-| Transition | Trigger | Action |
-|-----------|---------|--------|
-| T1 → T2 | Session end | Write diary entry |
-| T2 → T3 | 30 days / pattern detected | Age out of pre-turn window; extract KG patterns |
-| T3 → T4 | 90 days / explicit completion | Mark superseded; move to archive rooms |
-
-## Constraints
-
-- **T0 size ceiling:** 2,500 tokens. Net delta ≤ 0 per change.
-- **T2 injection budget:** ≤4,000 tokens per pre-turn query.
-- **T3 is never pre-injected.** Violating this bloats context with stale reference material.
-- **Pi native compaction is T4.** Do not duplicate it — supplement it by storing critical information in mempalace.
+Conversation compaction is not T4. The compaction summary carries a concise prose
+orientation and optional code-owned exact run/artifact refs. Resume from the run
+checkpoint and granted artifacts; memory absence does not block continuation.
 
 ## Verification
 
-- [ ] T0 ≤ 2,500 tokens
-- [ ] T2 pre-turn injection returns ≤5 results
-- [ ] No T3 content in pre-turn injection
-- [ ] Distillation pipeline runs at session end
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `docs/agents/capabilities/tiered-memory/tiered-memory.md` | Agent operational guide |
-| `scripts/system/tiered_memory/archiver.py` | T3→T4 archival |
-| `plans/ai-gaps-resolution/02-designs/09-tiered-memory.md` | Design doc |
+- [ ] Workers expose no memory tools.
+- [ ] Workflow handoff/recovery is exact-artifact based.
+- [ ] Primary recall and writes pass durable-value gates.
+- [ ] Diary and KG writes are primary-only and governed.
+- [ ] Legacy corpus labels cannot authorize deletion.
+- [ ] One supervised 3.7.1 HTTP hub; no raw fallback.
+- [ ] Uninstall preserves data.

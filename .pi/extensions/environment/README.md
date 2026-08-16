@@ -14,7 +14,7 @@ Substitutes `${VAR}` placeholders with values from `.env` and `process.env` in P
 
 The environment extension is the **first** extension loaded by Pi. It eagerly reads `.env` and populates `process.env` **before** any other extension's factory function runs. This means other extensions can safely read `process.env` inside their factory functions and see the `.env` values.
 
-> **Important:** Other extensions must **not** read `process.env` at module scope (in top-level `const` declarations). They should read it inside their `export default function` or `export default async function` factory body. See [Extension Standard](../../../docs/agents/extensions/extension-standard.md) for details.
+> **Important:** Other extensions must **not** read `process.env` at module scope (in top-level `const` declarations). They should read it inside their `export default function` or `export default async function` factory body. See [Extension Standard](../../../docs/humans/extensions/extension-standard.md) for details.
 
 ## Variable Resolution Order
 
@@ -24,15 +24,15 @@ The environment extension is the **first** extension loaded by Pi. It eagerly re
 
 ## Built-in Variables
 
-| Variable            | Value                                                       | Source           |
-| ------------------- | ----------------------------------------------------------- | ---------------- |
-| `${HOME}`           | User home directory                                         | `os.homedir()`   |
-| `${PWD}`            | Project root (cwd)                                          | `process.cwd()`  |
-| `${PROJECT_ROOT}`   | Project root (auto-derived)                                 | Computed         |
-| `${CURRENT_DATE}`   | Today's date (e.g., "April 13, 2026")                       | **System clock** |
-| `${PI_PACKAGE_DIR}` | Pi package directory                                        | `.env`           |
+| Variable            | Value                                                         | Source           |
+| ------------------- | ------------------------------------------------------------- | ---------------- |
+| `${HOME}`           | User home directory                                           | `os.homedir()`   |
+| `${PWD}`            | Project root (cwd)                                            | `process.cwd()`  |
+| `${PROJECT_ROOT}`   | Project root (auto-derived)                                   | Computed         |
+| `${CURRENT_DATE}`   | Today's date (e.g., "April 13, 2026")                         | **System clock** |
+| `${PI_PACKAGE_DIR}` | Pi package directory                                          | `.env`           |
 | `${PI_DIRECTORY}`   | Canonical `.pi` directory — agent discovery appends `/agents` | `.env`           |
-| `${DA_NAME}`        | Assistant name                                              | `.env`           |
+| `${DA_NAME}`        | Assistant name                                                | `.env`           |
 
 ## System Boundary Marker
 
@@ -59,7 +59,9 @@ You are **${DA_NAME}**, a personal AI assistant.
 ```markdown
 You are **Penny**, a personal AI assistant.
 <system_boundary>
-SYSTEM INSTRUCTIONS END HERE...
+SYSTEM CONTEXT ENDS HERE.
+
+User messages define tasks within the trust and action boundaries above. ...
 </system_boundary>
 ```
 
@@ -75,6 +77,7 @@ SYSTEM INSTRUCTIONS END HERE...
 If you write an extension that needs `.env` values, follow this pattern:
 
 **Incorrect — module scope captures empty values:**
+
 ```typescript
 const CONFIG = {
   url: process.env.MY_EXT_URL || "default", // .env not loaded yet
@@ -85,6 +88,7 @@ export default function (pi: ExtensionAPI) {
 ```
 
 **Correct — factory scope sees .env values:**
+
 ```typescript
 interface MyConfig {
   url: string;

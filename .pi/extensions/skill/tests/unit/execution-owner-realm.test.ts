@@ -35,7 +35,9 @@ const MODULE_PATH = "../../execution-receipts.js";
  * each of these would carry its own key and its own registry.
  */
 async function freshInstance(tag: string) {
-  return (await import(/* @vite-ignore */ `${MODULE_PATH}?realm-instance=${tag}`)) as typeof import("../../execution-receipts.js");
+  return (await import(
+    /* @vite-ignore */ `${MODULE_PATH}?realm-instance=${tag}`
+  )) as typeof import("../../execution-receipts.js");
 }
 
 describe("execution-owner realm singleton", () => {
@@ -123,7 +125,10 @@ describe("execution-owner realm singleton", () => {
       renderedQuestionsDigest: registrar.renderedQuestionsDigest(questions),
     };
 
-    const capability = registrar.registerTrustedQuestionnaireTransport(questions, binding) as string;
+    const capability = registrar.registerTrustedQuestionnaireTransport(
+      questions,
+      binding
+    ) as string;
     expect(consumer.resolveTrustedQuestionnaireTransport(capability)).toBeDefined();
 
     consumer.consumeTrustedQuestionnaireTransport(capability);

@@ -1,45 +1,50 @@
-# Skill Overview — What skills are and how they work
+# Skill Overview — Artifact-first engine workflows
 
 ## What
 
-A skill is a multi-step workflow that runs on the **shared orchestration engine** at `apps/orchestration/`. Each skill is a bespoke `BasePlaybook` subclass (in `apps/orchestration/src/orchestration/playbooks/<skill>.py`) with custom-named states, per-state SUMMARY contracts, routing, and a done predicate. The engine dispatches agents, persists run state, and produces structured output. Penny invokes skills via the `skill` tool.
-
-## Why
-
-Skills encapsulate complex multi-agent workflows behind a single invocation, all on ONE engine substrate. Penny doesn't need to know the internal state graph — she routes actions and presents the per-state summaries. Sharing one engine means crash-resume, escalation, gates, and parallel fan-out are implemented once, not re-invented per skill.
+A skill is an established workflow whose durable state, gates, retries, fan-out,
+or recovery behavior earns orchestration overhead. Each workflow is a bespoke
+`BasePlaybook` subclass in `apps/orchestration/`; `.pi/skills/<name>/` contains
+the discoverable manifest, thin delegate, Domain Guidance, and resources.
 
 ## Rules
 
-1. **Skills are discovered by Pi** from `.pi/skills/*/SKILL.md` frontmatter.
-2. **The playbook lives in the engine package**, not in the skill directory. `.pi/skills/<skill>/scripts/orchestrate.py` is a ~5-line delegate to `orchestration.cli:main`.
-3. **Skills use the `skill` tool** for invocation, not direct subagent calls.
-4. **Skill output goes to mempalace.** Agents write full results; Penny receives structured SUMMARY per state.
-5. **Skills are resumable automatically.** Run state lives in the engine's durable SQLite checkpointer keyed by `run_id`; an interrupted run re-issues its last step on the next `step`/`recover`.
+1. Pi discovers manifests from `.pi/skills/*/SKILL.md`.
+2. The registered playbook owns states, contracts, routing, and terminal truth.
+3. `scripts/orchestrate.py` is only the engine delegate.
+4. Every cognitive stage receives exact execution-owner `input_artifacts` and an
+   `output_artifact` contract. Workers read grants with `artifact_read` and
+   return complete stage content before the routing `SUMMARY`.
+5. The checkpointer stores compact run state and selected refs; artifact payload
+   bytes never enter `RunContext`.
+6. Durable memory is optional. It may support primary cross-session recall and
+   curated knowledge, but workers have no memory tools and memory is never
+   active handoff, run state, or persistence proof.
+7. Recovery reissues pending work from checkpointed refs. Large artifact reads
+   use typed, byte-exact continuation.
 
-## Skill vs. Agent vs. Direct
+## Skill vs. agent vs. direct
 
-| Mechanism | Use When |
-|-----------|----------|
-| **Direct** | Single tool call, trivial verification |
-| **Agent** | Single-domain task, benefits from role constraints |
-| **Skill** | Multi-agent orchestration on the engine |
-
-## Constraints
-
-- **Skills are not for simple tasks.** Don't wrap a single agent call in a skill.
-- **Skills must have tests.** Playbook tests live in `apps/orchestration/tests/`.
+| Path   | Use when                                                                     |
+| ------ | ---------------------------------------------------------------------------- |
+| Direct | Current context and tools are sufficient.                                    |
+| Agent  | A separate role/context or independent judgment pays.                        |
+| Skill  | Established durable state, gates, retries, fan-out, or resume semantics pay. |
 
 ## Verification
 
-- [ ] SKILL.md has valid frontmatter with `metadata.penny.engine: orchestration`
-- [ ] A `BasePlaybook` subclass exists and is registered in `playbooks/__init__.py`
-- [ ] `scripts/orchestrate.py` delegates to the engine
-- [ ] Tests pass
+- [ ] Manifest sets `metadata.penny.engine: orchestration`.
+- [ ] Playbook is registered and tested.
+- [ ] Delegate contains no FSM logic.
+- [ ] Stage directives use exact artifact contracts.
+- [ ] Workers receive no memory tools or room instructions.
+- [ ] Terminal result exposes the selected exact product ref and honest warnings.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `docs/agents/skills/skill-standard.md` | Full skill standard |
-| `docs/agents/skills/skill-md-format.md` | SKILL.md specification |
-| `docs/agents/skills/testing.md` | Playbook test requirements |
+| File                                    | Purpose                     |
+| --------------------------------------- | --------------------------- |
+| `docs/agents/skills/skill-standard.md`  | Full standard               |
+| `docs/agents/skills/orchestration.md`   | Engine and handoff protocol |
+| `docs/agents/skills/skill-md-format.md` | Manifest format             |
+| `docs/agents/skills/testing.md`         | Tests                       |

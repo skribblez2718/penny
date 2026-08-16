@@ -6,50 +6,54 @@
  *
  *   1. A prose brief — goal, in-flight runs, pending state —
  *      so Penny re-orients by reading, not parsing.
- *   2. A [RESUME-REFS] appendix — run_id + engine state, mempalace
- *      room/drawer IDs, KG entities, verbatim tool-call
- *      examples — so any detail that didn't fit the token budget can be
- *      dereferenced from durable memory instead of being lost.
+ *   2. A versioned [RESUME-REFS] appendix — exact run IDs and immutable
+ *      artifact ID/digest pairs selected by orchestration checkpoints.
  *
- * Sources of truth:
- *   - Orchestration run state comes from the engine's durable run_id
- *     checkpointer (.penny/orchestration.db) — never reconstructed from
- *     mempalace drawer text.
- *   - Mempalace/KG queries provide POINTERS to what agents
- *     wrote, not reconstructed state.
+ * Orchestration state is read only by exact run ID from the durable SQLite
+ * checkpointer. Compaction never searches session rooms, durable memory, or a
+ * semantic "active run" index, and recovery never depends on memory service
+ * availability.
  *
- * Failure policy: degrade, never abandon. Budget overflow triggers
- * progressively tighter eviction; validation failure logs loudly but the
- * prose summary is still emitted. Pi's default summary is never the
- * fallback on a path this extension controls.
+ * Failure policy: degrade, never abandon. The shared result budget fits prose
+ * at UTF-8 boundaries and removes refs only as complete lines; validation
+ * failures log loudly while the prose summary is still emitted.
  *
  * The FULL structured artifact is archived to observability
  * (POST /compactions); the prose + refs is what enters model context.
  */
 
-import { PennyCompactArtifactSchema, SCHEMA_VERSION, type PennyCompactArtifact } from "./schema.js";
+import {
+  PennyCompactArtifactSchema,
+  RESUME_REFS_VERSION,
+  ResumeRefSetSchema,
+  SCHEMA_VERSION,
+  type PennyCompactArtifact,
+} from "./schema.js";
 import type {
-  MempalaceRoomRef,
-  KGEntityRef,
+  ArtifactRef,
   ErrorRef,
-  EngineRunRef,
   EvictionRecord,
   CompactionReason,
   BoundaryShiftRecord,
+  ResumeRef,
 } from "./schema.js";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { detectPendingState } from "./pending.js";
-import {
-  queryEngineRuns,
-  queryMempalaceSkillRooms,
-  queryMempalaceSkillRoomsForSession,
-  queryKGEntitiesForScope,
-} from "./bridge.js";
+import { readExactCheckpoints } from "./checkpointer.js";
 import { generateModelSummary, renderGroundedDigest, type SummarizerCtx } from "./summarizer.js";
 import { loanEnabled } from "./loans.js";
 import type { SessionMessage } from "./pi-messages.js";
 import { asRecord, asString } from "./pi-messages.js";
-import { createLogger, setSessionId } from "../../lib/logger/logger.js";
+import { createLogger, setSessionId, type ErrorCode } from "../../lib/logger/logger.js";
+import {
+  DEFAULT_TOOL_RESULT_BUDGET,
+  ToolResultBudgetConfigError,
+  assessReleaseHeadroom,
+  createTextToolResult,
+  fitUtf8ToolResult,
+  measureToolResult,
+  resolveToolResultBudget,
+  type ToolResultBudget,
+} from "../lib/tool-result-budget.js";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -108,7 +112,6 @@ function getEnvVar(key: string): string | undefined {
 
 const CONFIG = {
   schemaVersion: SCHEMA_VERSION,
-  maxArtifactTokens: 6000,
   /** Consecutive byte-identical Goal count at which the canary logs. */
   goalStagnationThreshold: 3,
 };
@@ -129,9 +132,8 @@ export interface SkillInvocation {
  * Scan messages (newest first) for the most recent `skill` tool call.
  *
  * The session_id comes ONLY from the paired tool result — it is never
- * fabricated. A fabricated ID poisons session scoping downstream (it can
- * never match a real mempalace room or checkpointer row), so "empty" is
- * the honest value when the result carries none.
+ * fabricated. An absent owner-supplied ID stays absent; compaction never
+ * guesses an address from naming conventions.
  */
 export function detectDominantSkill(messages: SessionMessage[]): SkillInvocation | null {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -265,7 +267,7 @@ function latestSkillCallIndex(messages: SessionMessage[]): number {
  *
  *   1. INCOMPLETE active skill goal (genuinely current work)
  *   2. newest substantive user message in the merged window (latest intent)
- *   3. scoped engine-run goal
+ *   3. exact checkpoint run goal
  *   4. previousSummary carry-forward (never overrides a fresh user pivot)
  *   5. system message
  *   6. default (caller supplies)
@@ -320,15 +322,15 @@ export function extractSessionState(
   }
 
   // Precedence #2: newest substantive user message. Recency beats stale
-  // durable state (RC3 fix): a fresh user pivot must outrank a scoped engine
-  // run's goal and any carry-forward. An INCOMPLETE active skill (above) is
+  // durable state (RC3 fix): a fresh user pivot must outrank an exact run's
+  // older goal and any carry-forward. An INCOMPLETE active skill (above) is
   // genuinely current, so it still wins; everything downstream is staler than
   // the user's latest word.
   if (!goal && newestUser) {
     goal = newestUser.text.slice(0, 500);
   }
 
-  // Precedence #3: scoped engine-run goal.
+  // Precedence #3: exact checkpoint run goal.
   if (!goal && engineRunGoal) {
     goal = engineRunGoal.slice(0, 500);
   }
@@ -650,33 +652,16 @@ interface EvictableItem<T> {
   timestamp: number;
 }
 
-function evictionPriority<T>(
-  field: string,
-  item: T,
-  isError: boolean = false,
-  protectedSessionIds: string[] = []
-): EvictableItem<T> {
+function evictionPriority<T>(field: string, item: T, isError: boolean = false): EvictableItem<T> {
   let priority = 7;
-  let confidenceOrdinal = 2;
+  const confidenceOrdinal = 2;
   let ts = Date.now();
 
   const rec = asRecord(item);
-  const room = asString(rec.room);
   const lastUpdated = asString(rec.last_updated);
-
-  // Rooms belonging to a live session are NEVER evicted. protectedSessionIds
-  // are real IDs (skill results / checkpointer rows), so includes() matches.
-  if (field === "mempalace_rooms" && room) {
-    const roomText = room.toLowerCase();
-    if (protectedSessionIds.some((id) => id && roomText.includes(id.toLowerCase()))) {
-      return { value: item, priority: 0, confidenceOrdinal: 5, recencyBand: 3, timestamp: ts };
-    }
-  }
 
   if (isError && rec.resolved === false) {
     priority = 1;
-  } else if (field === "kg_entities") {
-    priority = 9;
   } else if (field === "metadata.pi_boundary") {
     priority = 10;
   }
@@ -699,14 +684,13 @@ export function evictArray<T>(
   field: string,
   items: T[],
   maxCount: number,
-  isError: boolean = false,
-  protectedSessionIds: string[] = []
+  isError: boolean = false
 ): { kept: T[]; evicted: number; log: EvictionRecord[] } {
   if (items.length <= maxCount) {
     return { kept: items, evicted: 0, log: [] };
   }
 
-  const scored = items.map((item) => evictionPriority(field, item, isError, protectedSessionIds));
+  const scored = items.map((item) => evictionPriority(field, item, isError));
   scored.sort((a, b) => {
     if (a.priority !== b.priority) return a.priority - b.priority;
     if (a.recencyBand !== b.recencyBand) return b.recencyBand - a.recencyBand;
@@ -742,7 +726,6 @@ export function evictArray<T>(
  */
 export function applyEviction(
   artifact: PennyCompactArtifact,
-  protectedSessionIds: string[] = [],
   scale: number = 1
 ): PennyCompactArtifact {
   const evictionLog: EvictionRecord[] = [];
@@ -750,7 +733,7 @@ export function applyEviction(
 
   const apply = <T>(field: string, items: T[], max: number, isErr = false): T[] => {
     if (items.length > max) {
-      const r = evictArray(field, items, max, isErr, protectedSessionIds);
+      const r = evictArray(field, items, max, isErr);
       evictionLog.push(...r.log);
       return r.kept;
     }
@@ -760,9 +743,8 @@ export function applyEviction(
   artifact.constraints = apply("constraints", artifact.constraints, cap(20));
   artifact.preferences = apply("preferences", artifact.preferences, cap(10));
   artifact.errors = apply("errors", artifact.errors, cap(10), true);
-  artifact.engine_runs = apply("engine_runs", artifact.engine_runs, cap(5));
-  artifact.mempalace_rooms = apply("mempalace_rooms", artifact.mempalace_rooms, cap(10));
-  artifact.kg_entities = apply("kg_entities", artifact.kg_entities, cap(20));
+  artifact.engine_runs = apply("engine_runs", artifact.engine_runs, cap(20));
+  artifact.artifact_refs = apply("artifact_refs", artifact.artifact_refs, cap(200));
   artifact.files.read = apply("files.read", artifact.files.read, cap(30));
   artifact.files.modified = apply("files.modified", artifact.files.modified, cap(30));
   artifact.tool_calls = apply("tool_calls", artifact.tool_calls, cap(15));
@@ -782,75 +764,83 @@ export function applyEviction(
 // Prose Summary + RESUME-REFS Builder
 // ============================================================
 
-function compactJson(value: unknown, maxLen: number): string {
-  let s: string;
-  try {
-    s = JSON.stringify(value);
-  } catch {
-    s = String(value);
+export function createResumeRefSet(
+  runs: PennyCompactArtifact["engine_runs"],
+  artifacts: ArtifactRef[],
+  memoryIds: string[] = []
+): PennyCompactArtifact["resume_refs"] {
+  const runRefs: ResumeRef[] = runs.map((run) => ({ type: "run", run_id: run.run_id }));
+  const artifactRefs: ResumeRef[] = artifacts.map((artifact) => ({
+    type: "artifact",
+    artifact_id: artifact.artifact_id,
+    digest: artifact.content_digest,
+  }));
+  // Durable-memory IDs are optional and are accepted only when an owner has
+  // already supplied the exact ID. They never displace exact run/artifact refs.
+  const memoryCapacity = Math.max(0, 250 - runRefs.length - artifactRefs.length);
+  const memoryRefs: ResumeRef[] = memoryIds
+    .slice(0, memoryCapacity)
+    .map((memoryId) => ({ type: "memory", memory_id: memoryId }));
+  const refs: ResumeRef[] = [...runRefs, ...artifactRefs, ...memoryRefs];
+  return ResumeRefSetSchema.parse({ version: RESUME_REFS_VERSION, refs });
+}
+
+/** Parse one exact, versioned refs block. Unknown versions/lines fail closed. */
+export function parseResumeRefs(summary: string | undefined): PennyCompactArtifact["resume_refs"] {
+  if (!summary) return { version: RESUME_REFS_VERSION, refs: [] };
+  const openers = Array.from(summary.matchAll(/\[RESUME-REFS v(\d+)\]/g));
+  if (openers.length === 0) return { version: RESUME_REFS_VERSION, refs: [] };
+  const opener = openers.at(-1);
+  if (!opener || Number(opener[1]) !== RESUME_REFS_VERSION || opener.index === undefined) {
+    throw new Error("unsupported RESUME-REFS version");
   }
-  return s.length > maxLen ? s.slice(0, maxLen - 1) + "…" : s;
-}
+  const bodyStart = opener.index + opener[0].length;
+  const bodyEnd = summary.indexOf("[/RESUME-REFS]", bodyStart);
+  if (bodyEnd < 0) throw new Error("unterminated RESUME-REFS block");
 
-function isRealDrawerId(id: string | undefined): boolean {
-  return Boolean(id && id !== "unknown" && !id.startsWith("pending-"));
-}
-
-/**
- * The pointer appendix. Every line is a REAL, dereferenceable address —
- * placeholder IDs are skipped rather than rendered, because a fake
- * pointer is worse than no pointer. Post-compaction Penny resumes runs
- * with skill(skill_name=<playbook>, goal=..., resumeFrom=<session_id>)
- * and reads rooms/drawers/entities with her memory tools.
- */
-export function buildResumeRefs(artifact: PennyCompactArtifact): string {
-  const lines: string[] = [];
-
-  for (const run of artifact.engine_runs) {
-    lines.push(
-      `run: run_id=${run.run_id} playbook=${run.playbook} state=${run.current_state_id} ` +
-        `status=${run.status} resume=skill(skill_name="${run.playbook}", resumeFrom="${run.session_id}")`
-    );
-    if (run.clarification_text) {
-      lines.push(`  awaiting-user: ${run.clarification_text}`);
+  const refs: ResumeRef[] = [];
+  for (const rawLine of summary.slice(bodyStart, bodyEnd).split("\n")) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (line.startsWith("run:")) {
+      refs.push({ type: "run", run_id: line.slice("run:".length) });
+      continue;
     }
+    const artifact = /^artifact:(art_[0-9a-f]{64})@sha256:([0-9a-f]{64})$/.exec(line);
+    if (artifact) {
+      refs.push({ type: "artifact", artifact_id: artifact[1], digest: artifact[2] });
+      continue;
+    }
+    if (line.startsWith("memory:")) {
+      refs.push({ type: "memory", memory_id: line.slice("memory:".length) });
+      continue;
+    }
+    throw new Error("invalid RESUME-REFS line");
   }
+  const parsed = ResumeRefSetSchema.parse({ version: RESUME_REFS_VERSION, refs });
+  const keys = parsed.refs.map((ref) =>
+    ref.type === "run"
+      ? `run:${ref.run_id}`
+      : ref.type === "artifact"
+        ? `artifact:${ref.artifact_id}@${ref.digest}`
+        : `memory:${ref.memory_id}`
+  );
+  if (new Set(keys).size !== keys.length) throw new Error("duplicate RESUME-REFS entry");
+  return parsed;
+}
 
-  for (const r of artifact.mempalace_rooms) {
-    const drawers = (r.drawer_ids || []).filter(isRealDrawerId);
-    const marker = r.dominant_for_session ? " (active session)" : "";
-    lines.push(
-      `room: ${r.wing}/${r.room}${drawers.length ? ` drawers=${drawers.join(",")}` : ""}${marker}`
-    );
-  }
-
-  for (const e of artifact.kg_entities) {
-    lines.push(`kg: ${e.entity_id} [${e.relevant_predicates.join(", ")}]`);
-  }
-
-  if (artifact.pending && isRealDrawerId(artifact.pending.mempalace_drawer_id)) {
-    lines.push(`pending-drawer: ${artifact.pending.mempalace_drawer_id}`);
-  }
-
-  // Verbatim tool examples: successful calls (one per tool) teach the
-  // schema; error→correction pairs teach what NOT to do.
-  const seenTools = new Set<string>();
-  let exampleCount = 0;
-  for (const t of artifact.tool_calls) {
-    if (!t.successful || seenTools.has(t.tool) || exampleCount >= 6) continue;
-    seenTools.add(t.tool);
-    exampleCount++;
-    lines.push(`tool-ok: ${t.tool} ${compactJson(t.params, 140)}`);
-  }
-  for (const rec of artifact.tool_error_recovery) {
-    lines.push(
-      `tool-fix: ${rec.tool} failed=${compactJson(rec.failed_params, 100)} ` +
-        `error="${rec.error_message.slice(0, 80)}" fixed=${compactJson(rec.corrected_params, 100)}`
-    );
-  }
-
-  if (lines.length === 0) return "";
-  return ["[RESUME-REFS v2]", ...lines, "[/RESUME-REFS]"].join("\n");
+/** Render only exact, schema-validated addresses. */
+export function buildResumeRefs(artifact: PennyCompactArtifact): string {
+  const refSet = ResumeRefSetSchema.parse(artifact.resume_refs);
+  if (refSet.refs.length === 0) return "";
+  const lines = refSet.refs.map((ref) => {
+    if (ref.type === "run") return `run:${ref.run_id}`;
+    if (ref.type === "artifact") {
+      return `artifact:${ref.artifact_id}@sha256:${ref.digest}`;
+    }
+    return `memory:${ref.memory_id}`;
+  });
+  return [`[RESUME-REFS v${RESUME_REFS_VERSION}]`, ...lines, "[/RESUME-REFS]"].join("\n");
 }
 
 /**
@@ -1004,59 +994,82 @@ interface BuildArtifactInput {
 }
 
 // ============================================================
-// Session scoping (RC2 fix) — bind grounded state to THIS conversation's work
+// Exact run-id collection — no active-run or session-room discovery
 // ============================================================
 
-/** Every session id named by a `skill` tool RESULT in the window (real ids
- *  only — a skill result carries the true session_id). */
-export function collectSkillSessionIds(messages: SessionMessage[]): string[] {
+function addCanonicalRunId(ids: Set<string>, value: unknown): void {
+  const parsed = ResumeRefSetSchema.safeParse({
+    version: RESUME_REFS_VERSION,
+    refs: [{ type: "run", run_id: value }],
+  });
+  const ref = parsed.success ? parsed.data.refs[0] : undefined;
+  if (ref?.type === "run") ids.add(ref.run_id);
+}
+
+/** Inspect only named, owner-produced skill result fields. */
+function collectRunIdsFromSkillResult(value: unknown, ids: Set<string>, depth = 0): void {
+  if (depth > 4) return;
+  const result = asRecord(value);
+  addCanonicalRunId(ids, result.run_id);
+  addCanonicalRunId(ids, result.approval_run_id);
+
+  for (const key of ["output_artifact_ref", "artifact_ref"] as const) {
+    const ref = asRecord(result[key]);
+    addCanonicalRunId(ids, ref.run_id);
+  }
+  for (const key of ["result", "escalation"] as const) {
+    if (result[key] !== undefined) collectRunIdsFromSkillResult(result[key], ids, depth + 1);
+  }
+  for (const key of ["questions", "parallel_results", "chain_results"] as const) {
+    const values = result[key];
+    if (!Array.isArray(values)) continue;
+    for (const entry of values) collectRunIdsFromSkillResult(entry, ids, depth + 1);
+  }
+}
+
+/** Exact run IDs already supplied by trusted skill tool-result metadata. */
+export function collectExplicitRunIds(messages: SessionMessage[]): string[] {
   const ids = new Set<string>();
-  for (const msg of messages) {
-    if (msg.role !== "toolResult" || msg.toolName !== "skill") continue;
-    const parsed = asRecord(safeJsonParse(extractTextContent(msg)));
-    const sid = asString(parsed.session_id);
-    if (sid) ids.add(sid);
+  for (const message of messages) {
+    if (message.role !== "toolResult" || message.toolName !== "skill") continue;
+    collectRunIdsFromSkillResult(message.details, ids);
+    collectRunIdsFromSkillResult(safeJsonParse(extractTextContent(message)), ids);
   }
   return Array.from(ids);
 }
 
-/** Session/run ids carried forward from THIS conversation's earlier compaction
- *  refs (our own `resume=skill(..., resumeFrom="<id>")` format). Lets scope
- *  survive across compactions even after the originating skill call is evicted. */
-export function parseRefsSessionIds(previousSummary: string | undefined): string[] {
-  if (!previousSummary) return [];
-  const ids = new Set<string>();
-  const re = /resumeFrom="([^"]+)"/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(previousSummary)) !== null) {
-    if (m[1]) ids.add(m[1]);
+/** Exact run IDs carried through this conversation's prior v2 refs block. */
+export function parsePriorRunIds(previousSummary: string | undefined): string[] {
+  try {
+    return parseResumeRefs(previousSummary).refs.flatMap((ref) =>
+      ref.type === "run" ? [ref.run_id] : []
+    );
+  } catch (error) {
+    logger.warn("Prior resume refs rejected", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
   }
-  return Array.from(ids);
 }
 
-/** The session ids grounded state is scoped to: skill-result ids ∪ prior-refs
- *  ids. A stale run from a DIFFERENT past conversation has neither, so it is
- *  never treated as current (the reported staleness symptom). */
-export function computeScopedSessionIds(
+export function collectExactRunIds(
   messages: SessionMessage[],
   previousSummary: string | undefined
 ): string[] {
   return Array.from(
-    new Set([...collectSkillSessionIds(messages), ...parseRefsSessionIds(previousSummary)])
+    new Set([...collectExplicitRunIds(messages), ...parsePriorRunIds(previousSummary)])
   );
 }
 
-/** Partition pending runs into those belonging to this conversation's scope
- *  and those from other sessions (surfaced only in refs, never the prose). */
-export function partitionRunsByScope(
-  runs: EngineRunRef[],
-  scopedIds: string[]
-): { scoped: EngineRunRef[]; other: EngineRunRef[] } {
-  const set = new Set(scopedIds);
-  const scoped: EngineRunRef[] = [];
-  const other: EngineRunRef[] = [];
-  for (const r of runs) (set.has(r.session_id) ? scoped : other).push(r);
-  return { scoped, other };
+/** Carry optional durable-memory IDs only when a prior exact block supplied them. */
+export function parsePriorMemoryIds(previousSummary: string | undefined): string[] {
+  try {
+    return parseResumeRefs(previousSummary).refs.flatMap((ref) =>
+      ref.type === "memory" ? [ref.memory_id] : []
+    );
+  } catch {
+    return [];
+  }
 }
 
 function safeJsonParse(text: string | null): unknown {
@@ -1071,8 +1084,7 @@ function safeJsonParse(text: string | null): unknown {
 /**
  * Derive unresolved-error refs from the conversation (RC5, fallback path). A
  * tool result flagged as an error is unresolved unless a LATER result from the
- * same tool succeeded. turn_id/drawer are placeholders (`unknown`), so
- * buildResumeRefs skips them — never a fabricated pointer. The MODEL path
+ * same tool succeeded. The MODEL path
  * carries errors in prose instead; this feeds the deterministic fallback's
  * `## Unresolved Errors` and the archive.
  */
@@ -1096,7 +1108,6 @@ export function deriveErrorRefs(messages: SessionMessage[]): ErrorRef[] {
       error_type: tool,
       message: err.message,
       turn_id: "unknown",
-      mempalace_drawer_id: "unknown",
       resolved: recovered,
     });
     if (refs.length >= 10) break;
@@ -1106,97 +1117,36 @@ export function deriveErrorRefs(messages: SessionMessage[]): ErrorRef[] {
 
 async function buildArtifact(input: BuildArtifactInput): Promise<{
   artifact: PennyCompactArtifact;
-  protectedSessionIds: string[];
-  scopedSessionIds: string[];
   digest: string;
 }> {
   const now = new Date().toISOString();
-  const seq = input.compactionSeq;
-
   const readFiles = Array.from(input.preparation.fileOps.read);
   const modifiedFiles = [
     ...Array.from(input.preparation.fileOps.written),
     ...Array.from(input.preparation.fileOps.edited),
   ];
-
-  // Step 1: dominant skill from the message log (sync).
   const dominant = detectDominantSkill(input.messages);
 
-  // Session scoping (RC2): bind grounded state to THIS conversation's work —
-  // skill-result ids ∪ prior-refs ids. A wedged run from a DIFFERENT past
-  // session has neither, so it never drives the goal/work/rooms (the reported
-  // "old context from a previous session" symptom).
-  const scopedSessionIds = computeScopedSessionIds(
-    input.messages,
-    input.preparation.previousSummary
-  );
+  // The query key is an exact run ID from owner-produced tool metadata or the
+  // prior v2 appendix. No pending-run list or session correlation exists here.
+  const exactRunIds = collectExactRunIds(input.messages, input.preparation.previousSummary);
+  const explicitMemoryIds = parsePriorMemoryIds(input.preparation.previousSummary);
+  const checkpoint = readExactCheckpoints(exactRunIds);
+  const engineRuns = checkpoint.runs;
+  const artifactRefs = checkpoint.artifactRefs.slice(0, 200);
+  const pending = await detectPendingState(input.messages).catch((error) => {
+    logger.warn("Pending state detection failed", { error: String(error) });
+    return null;
+  });
 
-  // Step 2: ALL pending runs from the checkpointer, then partitioned by scope.
-  let allRuns: EngineRunRef[] = [];
-  try {
-    allRuns = await queryEngineRuns();
-  } catch (err) {
-    logger.error(
-      "Engine checkpointer query failed during compaction",
-      { error: err instanceof Error ? err.message : String(err) },
-      Object.assign(new Error("Engine checkpointer query failed"), {
-        code: "COMPACTION_ENGINE_QUERY_FAILED",
-      })
-    );
-  }
-  const { scoped: engineRuns, other: otherSessionRuns } = partitionRunsByScope(
-    allRuns,
-    scopedSessionIds
-  );
-
-  // Room eviction protection = the scope (real ids from results/refs).
-  const protectedSessionIds = scopedSessionIds;
-
-  // Step 3: everything else is independent — query in parallel, all SCOPED so
-  // no other session's rooms/kg bleed into this summary.
-  const [pending, mempalaceRooms, kgEntities] = await Promise.all([
-    detectPendingState(input.messages, input.sessionId).catch((err) => {
-      logger.warn("Pending state detection failed", { error: String(err) });
-      return null;
-    }),
-    (scopedSessionIds.length > 0
-      ? queryMempalaceSkillRoomsForSession(scopedSessionIds)
-      : queryMempalaceSkillRooms()
-    ).catch((err) => {
-      logger.error(
-        "Mempalace query failed during compaction",
-        { error: err instanceof Error ? err.message : String(err) },
-        Object.assign(new Error("Mempalace query failed"), {
-          code: "COMPACTION_MEMPALACE_QUERY_FAILED",
-        })
-      );
-      return [] as MempalaceRoomRef[];
-    }),
-    queryKGEntitiesForScope(scopedSessionIds).catch((err) => {
-      logger.error(
-        "KG query failed during compaction",
-        { error: err instanceof Error ? err.message : String(err) },
-        Object.assign(new Error("KG query failed"), { code: "COMPACTION_KG_QUERY_FAILED" })
-      );
-      return [] as KGEntityRef[];
-    }),
-  ]);
-
-  // Fix A: carry the prior Goal forward when the current window yields no
-  // fresher substantive signal. Parsed defensively from the prior summary
-  // (may be Pi's own format or hand-edited) — null when unparseable.
   const previousSummaryGoal = parseGoalFromSummary(input.preparation.previousSummary);
-
   const extracted = extractSessionState(
     input.messages,
     dominant,
     engineRuns[0]?.goal,
     previousSummaryGoal ?? undefined
   );
-
   const goal = extracted.goal || "Active session - goal not yet extracted";
-
-  // Goal-stagnation canary (P2, observational only — never alters the goal).
   const previousStreak = parseGoalStreak(input.preparation.previousSummary);
   const goalStreak = computeGoalStreak(goal, previousSummaryGoal, previousStreak);
   if (goalStagnationCanary(goalStreak)) {
@@ -1214,82 +1164,72 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
     goal,
     customInstructions: input.customInstructions,
   });
-
   let artifact: PennyCompactArtifact = {
     schema_version: CONFIG.schemaVersion,
     session_id: input.sessionId,
-    compaction_seq: seq,
+    compaction_seq: input.compactionSeq,
     compaction_timestamp: now,
-
     goal,
     constraints: extracted.constraints,
     preferences: [],
     pending,
     ...(work.current_work ? { current_work: work.current_work } : {}),
     ...(work.next_steps ? { next_steps: work.next_steps } : {}),
-
-    dominant_skill: dominant
+    ...(dominant
       ? {
-          skill_name: dominant.skill_name,
-          session_id: dominant.session_id || "unknown",
-          goal: dominant.goal,
-          completed: dominant.completed,
-          // Only flag supersession for a completed skill displaced by a pivot.
-          ...(extracted.superseded ? { superseded: true } : {}),
+          dominant_skill: {
+            skill_name: dominant.skill_name,
+            ...(dominant.session_id ? { session_id: dominant.session_id } : {}),
+            goal: dominant.goal,
+            completed: dominant.completed,
+            ...(extracted.superseded ? { superseded: true } : {}),
+          },
         }
-      : undefined,
-
-    // RC5: unresolved errors survive compaction (fallback prose + archive).
+      : {}),
     errors: deriveErrorRefs(input.messages),
-
     engine_runs: engineRuns,
-
-    mempalace_rooms: mempalaceRooms,
-    kg_entities: kgEntities,
-    files: {
-      read: readFiles,
-      modified: modifiedFiles,
-    },
-
+    artifact_refs: artifactRefs,
+    resume_refs: createResumeRefSet(engineRuns, artifactRefs, explicitMemoryIds),
+    files: { read: readFiles, modified: modifiedFiles },
     tool_calls: extractToolCalls(input.messages),
     tool_error_recovery: extractToolErrorRecovery(input.messages),
-
     metadata: {
       eviction_log: [],
       pi_boundary: {
         first_kept_entry_id: input.preparation.firstKeptEntryId,
         tokens_before: input.preparation.tokensBefore,
-        // Populated on every compaction after a session's first (seq >= 1).
         ...(input.boundaryShift ? { boundary_shift: input.boundaryShift } : {}),
       },
-      // C8 named sink: additive, optional, threaded without a reason code fork.
       ...(input.reason ? { compaction_reason: input.reason } : {}),
       ...(input.customInstructions ? { custom_instructions: input.customInstructions } : {}),
       goal_streak: goalStreak,
+      compaction_correlation: {
+        status: "not_evaluated",
+        keys: [`session:${input.sessionId}`, ...exactRunIds.map((runId) => `run:${runId}`)].slice(
+          0,
+          21
+        ),
+      },
+      ...(checkpoint.issues.length > 0
+        ? { checkpoint_issues: checkpoint.issues.slice(0, 20).map((issue) => issue.slice(0, 300)) }
+        : {}),
     },
-
-    // 2.3.0: cross-session run bucket + scope transparency (summary_source /
-    // summary_model / prose_summary are set by the handler after the model
-    // path resolves).
-    ...(otherSessionRuns.length > 0 ? { other_session_runs: otherSessionRuns } : {}),
-    ...(scopedSessionIds.length > 0 ? { scoped_session_ids: scopedSessionIds } : {}),
   };
 
-  // Grounded digest for the model path — computed from the FULL scoped state
-  // (before eviction, which only trims the final summary's token budget).
   const digest = renderGroundedDigest({
-    scopedRuns: engineRuns,
-    otherSessionRuns,
-    rooms: mempalaceRooms,
-    kgEntities,
+    runs: engineRuns,
+    artifacts: artifactRefs,
     pending,
     readFiles,
     modifiedFiles,
   });
-
-  artifact = applyEviction(artifact, protectedSessionIds);
-
-  return { artifact, protectedSessionIds, scopedSessionIds, digest };
+  artifact = applyEviction(artifact);
+  artifact.resume_refs = createResumeRefSet(
+    artifact.engine_runs,
+    artifact.artifact_refs,
+    explicitMemoryIds
+  );
+  return { artifact, digest };
 }
 
 // ============================================================
@@ -1306,34 +1246,76 @@ function validateArtifact(artifact: unknown): { valid: boolean; errors: string[]
 }
 
 // ============================================================
-// Token Estimation (tiktoken; chars/4 heuristic fallback)
+// Shared final model-visible result budget
 // ============================================================
 
-interface TokenEncoder {
-  encode(text: string): ArrayLike<number>;
+export function compactionResultBudget(): ToolResultBudget {
+  try {
+    return resolveToolResultBudget(process.env);
+  } catch (error) {
+    if (error instanceof ToolResultBudgetConfigError) {
+      logger.warn("Invalid compaction result budget; enforcing shared hard defaults", {
+        error: error.message,
+      });
+      return DEFAULT_TOOL_RESULT_BUDGET;
+    }
+    throw error;
+  }
 }
 
-let tiktokenEncoder: TokenEncoder | null = null;
+function renderRefSet(refSet: PennyCompactArtifact["resume_refs"]): string {
+  if (refSet.refs.length === 0) return "";
+  const lines = refSet.refs.map((ref) => {
+    if (ref.type === "run") return `run:${ref.run_id}`;
+    if (ref.type === "artifact") {
+      return `artifact:${ref.artifact_id}@sha256:${ref.digest}`;
+    }
+    return `memory:${ref.memory_id}`;
+  });
+  return [`[RESUME-REFS v${RESUME_REFS_VERSION}]`, ...lines, "[/RESUME-REFS]"].join("\n");
+}
 
-function getEncoder(): TokenEncoder | null {
-  if (!tiktokenEncoder) {
+export function fitCompactionSummary(
+  prose: string,
+  resumeRefs: PennyCompactArtifact["resume_refs"],
+  budget: ToolResultBudget
+): { summary: string; resumeRefs: PennyCompactArtifact["resume_refs"] } {
+  const originalCount = resumeRefs.refs.length;
+  const refs = [...resumeRefs.refs];
+
+  while (true) {
+    const fittedRefs = ResumeRefSetSchema.parse({ version: RESUME_REFS_VERSION, refs });
+    const renderedRefs = renderRefSet(fittedRefs);
+    const omitted = originalCount - refs.length;
+    const suffix =
+      (renderedRefs ? `\n\n---\n${renderedRefs}` : "") +
+      (omitted > 0 ? `\n\n[${omitted} resume refs omitted by the shared result budget]` : "");
+    const source = Buffer.from(prose.trim(), "utf8");
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const tiktoken = require("tiktoken");
-      tiktokenEncoder = tiktoken.encoding_for_model("gpt-4o");
+      const fitted = fitUtf8ToolResult({
+        source,
+        start: 0,
+        end: source.length,
+        budget,
+        build: (_end, text, truncated) => {
+          const marker = truncated ? "\n\n[prose truncated to fit the shared result budget]" : "";
+          return createTextToolResult({ summary: `${text}${marker}${suffix}`.trim() });
+        },
+      });
+      const marker = fitted.truncated
+        ? "\n\n[prose truncated to fit the shared result budget]"
+        : "";
+      return {
+        summary: `${fitted.text}${marker}${suffix}`.trim(),
+        resumeRefs: fittedRefs,
+      };
     } catch {
-      return null;
+      if (refs.length === 0)
+        throw new Error("Compaction metadata cannot fit the shared result budget");
+      // Artifact refs are appended after run refs, so they are discarded first.
+      refs.pop();
     }
   }
-  return tiktokenEncoder;
-}
-
-function estimateTokens(text: string): number {
-  const enc = getEncoder();
-  if (enc) {
-    return enc.encode(text).length;
-  }
-  return Math.ceil(text.length / 4);
 }
 
 // ============================================================
@@ -1404,7 +1386,7 @@ function failLoudly(
   context?: Record<string, unknown>,
   error?: Error & { code?: string }
 ): void {
-  logger.error(message, context, error as Error & { code?: string });
+  logger.error(message, context, error as Error & { code?: ErrorCode });
 }
 
 /**
@@ -1494,7 +1476,14 @@ function computeBoundaryShift(
   return { previous: prev, current: currentFirstKeptEntryId, compaction_seq: compactionSeq };
 }
 
-export default function compactionExtension(pi: ExtensionAPI) {
+interface CompactionExtensionAPI {
+  on(
+    event: "session_before_compact",
+    handler: (event: SessionBeforeCompactEvent, context: unknown) => Promise<unknown>
+  ): void;
+}
+
+export default function compactionExtension(pi: CompactionExtensionAPI) {
   observabilityConfig = {
     baseUrl: getEnvVar("PI_OBSERVABILITY_REST_URL") || "http://localhost:8765",
     apiKey: getEnvVar("PI_OBSERVABILITY_API_KEY") || "",
@@ -1536,15 +1525,15 @@ export default function compactionExtension(pi: ExtensionAPI) {
       boundaryShift,
       signal: event.signal,
     });
-    let artifact = build.artifact;
-    const protectedSessionIds = build.protectedSessionIds;
+    const artifact = build.artifact;
+    const resultBudget = compactionResultBudget();
 
     // Model-owned prose (the leverage path): the session model summarizes the
-    // ACTUAL evicted conversation, given the previous brief + the session-scoped
-    // grounded digest. Returns null on ANY failure (no model/auth, timeout,
-    // abort, empty) → the deterministic LOAN fallback, or Pi's default when
-    // that loan is ablated.
-    const proseTokenTarget = Math.floor(CONFIG.maxArtifactTokens * 0.66);
+    // ACTUAL evicted conversation, given the previous brief + exact checkpoint
+    // digest. Returns null on ANY failure (no model/auth, timeout, abort,
+    // empty) → the deterministic LOAN fallback, or Pi's default when that loan
+    // is ablated.
+    const proseTokenTarget = Math.floor(resultBudget.maxEstimatedTokens * 0.66);
     const modelResult = await generateModelSummary(
       {
         messages,
@@ -1561,7 +1550,7 @@ export default function compactionExtension(pi: ExtensionAPI) {
     if (modelResult) {
       artifact.summary_source = "model";
       artifact.summary_model = modelResult.model;
-      artifact.prose_summary = modelResult.prose;
+      artifact.prose_summary = modelResult.prose.slice(0, 20_000);
       // Keep artifact.goal (archive + stagnation canary) consistent with the
       // brief the model actually wrote.
       const modelGoal = parseGoalFromSummary(modelResult.prose);
@@ -1583,9 +1572,36 @@ export default function compactionExtension(pi: ExtensionAPI) {
       return;
     }
 
-    // Validation failure is loud but NOT fatal: the prose summary is still
-    // our best checkpoint — falling back to Pi's default prose would lose
-    // strictly more. The invalid artifact is still archived for debugging.
+    // Build prose without an appendix, then fit the final model-visible output
+    // with the shared hard budget. Exact refs are removed only at line
+    // boundaries (artifacts first) and the resulting set is persisted in
+    // details, so the versioned block is never byte-truncated or malformed.
+    const proseOnly =
+      modelProse !== null
+        ? modelProse
+        : createProseSummary({
+            ...artifact,
+            resume_refs: { version: RESUME_REFS_VERSION, refs: [] },
+          });
+    const proseWithCanary = appendGoalStreakMarker(proseOnly, artifact.metadata.goal_streak ?? 0);
+    const fitted = fitCompactionSummary(proseWithCanary, artifact.resume_refs, resultBudget);
+    const proseSummary = fitted.summary;
+    artifact.resume_refs = fitted.resumeRefs;
+    const summaryMeasurement = measureToolResult(createTextToolResult({ summary: proseSummary }));
+    const releaseHeadroom = assessReleaseHeadroom(summaryMeasurement.estimatedTokens);
+    artifact.metadata.result_budget = {
+      serialized_bytes: summaryMeasurement.bytes,
+      serialized_characters: summaryMeasurement.characters,
+      estimated_tokens: summaryMeasurement.estimatedTokens,
+      release_minimum_context_headroom_tokens: releaseHeadroom.releaseMinimumContextHeadroomTokens,
+      required_reserved_after_result_tokens: releaseHeadroom.requiredReservedAfterResultTokens,
+      estimated_reserved_after_result_tokens: releaseHeadroom.estimatedReservedAfterResultTokens,
+      reserve_invariant_preserved: releaseHeadroom.invariantPreserved,
+    };
+
+    // Strict schema/version/ref validation happens after final-budget fitting.
+    // A failure is loud but the prose recovery brief is still preferable to
+    // dropping compaction entirely.
     const validation = validateArtifact(artifact);
     if (!validation.valid) {
       failLoudly(
@@ -1595,42 +1611,6 @@ export default function compactionExtension(pi: ExtensionAPI) {
           code: "COMPACTION_VALIDATION_FAILED",
         })
       );
-    }
-
-    // Assemble the spliced summary: prose brief + code-owned RESUME-REFS. The
-    // model path pairs the model prose with refs; the fallback's
-    // createProseSummary already appends refs itself. Addresses always come
-    // from the artifact, never the model (which is told not to emit refs).
-    const assemble = (a: PennyCompactArtifact): string =>
-      modelProse !== null ? withResumeRefs(modelProse, a) : createProseSummary(a);
-
-    // Degrade, never abandon: on budget overflow, tighten every cardinality
-    // cap and rebuild until the summary fits (or we hit the floor). On the
-    // model path this trims the refs; the prose is truncated only as a last
-    // resort below.
-    let proseSummary = assemble(artifact);
-    let summaryTokens = estimateTokens(proseSummary);
-    let scale = 1;
-    while (summaryTokens > CONFIG.maxArtifactTokens && scale > 0.15) {
-      scale /= 2;
-      artifact = applyEviction(artifact, protectedSessionIds, scale);
-      proseSummary = assemble(artifact);
-      summaryTokens = estimateTokens(proseSummary);
-    }
-    if (summaryTokens > CONFIG.maxArtifactTokens) {
-      // Floor reached and still over budget — hard-truncate as the last
-      // resort. Truncation cuts from the end (file lists / tool examples);
-      // the goal, runs, and pending state at the top always survive.
-      failLoudly(
-        "Compaction summary truncated to fit budget",
-        { budget: CONFIG.maxArtifactTokens, actual: summaryTokens },
-        Object.assign(new Error(`Token budget ${summaryTokens} > ${CONFIG.maxArtifactTokens}`), {
-          code: "COMPACTION_BUDGET_OVERFLOW",
-        })
-      );
-      proseSummary =
-        proseSummary.slice(0, CONFIG.maxArtifactTokens * 4) +
-        "\n\n[summary truncated to fit compaction budget]";
     }
 
     // Fire-and-forget: send FULL artifact to observability backend.
@@ -1647,11 +1627,6 @@ export default function compactionExtension(pi: ExtensionAPI) {
         );
       }
     );
-
-    // Carry the goal-stagnation streak forward as an invisible marker so the
-    // next compaction can compute "N consecutive identical goals" without
-    // reading the observability archive. Renders to nothing in the TUI.
-    proseSummary = appendGoalStreakMarker(proseSummary, artifact.metadata.goal_streak ?? 0);
 
     return {
       compaction: {

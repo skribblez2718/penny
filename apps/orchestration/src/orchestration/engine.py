@@ -43,13 +43,30 @@ playbook-owned; the base never hardcodes them.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
+import json
 import os
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional, cast
 
+from .artifacts import (
+    INPUT_ARTIFACTS_SCHEMA_VERSION,
+    KIND_AGENT_OUTPUT,
+    OUTPUT_ARTIFACT_SCHEMA_VERSION,
+    ArtifactEnvelope,
+    ArtifactError,
+    ArtifactRef,
+    ArtifactStore,
+    ArtifactValidationError,
+    InputArtifactBinding,
+    InputArtifactsV1,
+    OutputArtifactMetadata,
+    ResultProtocolV2,
+    canonical_json,
+)
 from .checkpointer import (
     STATUS_AWAITING_USER,
     STATUS_COMPLETE,
@@ -57,16 +74,33 @@ from .checkpointer import (
     STATUS_RUNNING,
     Checkpointer,
 )
-from .contracts import Confidence, Directives, validate_summary_contract, weakest_confidence
+from .contracts import (
+    Confidence,
+    Directives,
+    artifact_dispatch_control,
+    validate_summary_contract,
+    weakest_confidence,
+)
 from .context import RunContext
-from .execution_receipts import receipt_signing_key, sign_receipt
+from .execution_receipts import (
+    receipt_signing_key,
+    sign_receipt,
+    validate_execution_receipt,
+)
 from .loans import loan_enabled
 from .paths import skill_root
 from .primitives.spec import ParallelSpec, PrimitiveSpec, parallel_spec_from_dict
 
-
 TERMINAL_STATES: frozenset[str] = frozenset({"complete", "error"})
+# States/events that route control but never receive artifact payload grants.
+_ARTIFACT_CONTROL_STATES: frozenset[str] = frozenset(
+    {"intake", "unknown", "awaiting_clarification", "error"}
+)
 _DEFAULT_STEP_CAP = 50
+_ARTIFACT_CONTEXT_KEY = "artifact_protocol"
+_ARTIFACT_CONTEXT_SCHEMA_VERSION = 2
+_PROGRAMMATIC_RESULT_ENV = "PENNY_ORCH_TEST_ALLOW_PROGRAMMATIC_RESULTS"
+_AGENT_OUTPUT_MEDIA_TYPE = "text/markdown; charset=utf-8"
 _TRUSTED_INVOCATION_KEYS = frozenset(
     {
         "schema_version",
@@ -121,12 +155,49 @@ def _ordered_invocation_timestamps(value: dict[str, Any]) -> bool:
     return bool(started.tzinfo is not None and ended.tzinfo is not None and ended >= started)
 
 
+def _artifact_receipt_id(metadata: OutputArtifactMetadata) -> str:
+    identity = {
+        "branch_id": metadata.branch_id,
+        "kind": metadata.kind,
+        "operation_id": metadata.operation_id,
+        "phase": metadata.phase,
+        "run_id": metadata.run_id,
+        "version": metadata.version,
+    }
+    return f"artifact-receipt:{hashlib.sha256(canonical_json(identity)).hexdigest()}"
+
+
+def _extract_artifact_summary(content: bytes) -> dict[str, Any]:
+    """Parse the final exact ``SUMMARY:{...}`` line from owner-captured bytes."""
+    try:
+        output = content.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ArtifactValidationError("agent output artifact is not valid UTF-8") from exc
+    marker = "SUMMARY:"
+    position = output.rfind(marker)
+    if position < 0:
+        raise ArtifactValidationError("agent output artifact has no SUMMARY marker")
+    raw = output[position + len(marker) :].lstrip()
+    try:
+        parsed, end = json.JSONDecoder().raw_decode(raw)
+    except json.JSONDecodeError as exc:
+        raise ArtifactValidationError("agent output artifact SUMMARY is invalid JSON") from exc
+    if raw[end:].strip():
+        raise ArtifactValidationError("agent output artifact has content after SUMMARY")
+    if not isinstance(parsed, dict):
+        raise ArtifactValidationError("agent output artifact SUMMARY must be an object")
+    return dict(parsed)
+
+
 def _validate_trusted_invocation(
     value: Any, *, run_id: str, state_id: str, agent: str
 ) -> tuple[dict[str, Any] | None, str]:
     """Validate driver-owned invocation provenance carried beside agent output."""
     if not isinstance(value, dict) or frozenset(value) != _TRUSTED_INVOCATION_KEYS:
-        return None, "trusted invocation provenance has missing, unknown, or stale fields"
+        return (
+            None,
+            "trusted invocation provenance has missing, unknown, or stale fields",
+        )
     if value.get("schema_version") != 1:
         return None, "trusted invocation provenance schema version is unsupported"
     if value.get("run_id") != run_id or value.get("state_id") != state_id:
@@ -310,6 +381,17 @@ class BasePlaybook:
         no state names."""
         return []
 
+    def artifact_input_phases(self, ctx: RunContext) -> dict[str, tuple[str, ...]]:
+        """Declare retained artifact phases consumed by later states.
+
+        Direct FSM successors and same-state retry/fan-in consumers are derived
+        by the engine. A playbook uses this seam only when a later state must
+        inspect selected artifacts older than the immediately preceding output.
+        The engine validates every declared producer and consumer against the
+        actual FSM graph and fails closed on unknown or unreachable pairs.
+        """
+        return {}
+
     def result_payload(self, ctx: RunContext) -> dict:
         """The structured terminal result. Subclasses add their domain fields."""
         return {"met": ctx.met, "iterations": ctx.iteration}
@@ -330,14 +412,16 @@ class BasePlaybook:
         agent (e.g. ``"assets/prompts/echo-charter.md"``). Emitted as
         ``skillContext`` on the invoke_agent directive; the TS driver resolves it
         against the skill dir and injects it as ``<skill_context>``. Default
-        ``None`` -> the driver falls back to ``assets/prompts/{agent}.md``. Needed
-        by skills whose states map to per-state prompt files (sca, jsa)."""
+        ``None`` -> the driver falls back to ``assets/prompts/{agent}.md``. Useful
+        when states map to distinct per-state prompt files."""
         return None
 
     def model_for_state(self, state: str, ctx: RunContext) -> str | None:
-        """Optional per-state model override (e.g. jsa INVESTIGATE -> a local
-        coder model). Emitted as ``model`` on the invoke_agent directive; the TS
-        driver honors it. Default ``None`` -> the agent's configured model."""
+        """Optional per-state model override.
+
+        Emitted as ``model`` on the invoke-agent directive; the TypeScript driver
+        honors it. Default ``None`` uses the agent's configured model.
+        """
         return None
 
     @staticmethod
@@ -376,12 +460,10 @@ class BasePlaybook:
         return None
 
     def prepare_recovery(self, ctx: RunContext) -> bool:
-        """Additive migration hook before a pending directive is re-issued.
-
-        Return True when durable context changed and must be checkpointed. The
-        default is a pure no-op.
-        """
-        return False
+        """Apply the additive artifact-checkpoint v2 migration on recovery."""
+        existed = _ARTIFACT_CONTEXT_KEY in ctx.extras
+        self._artifact_state(ctx)
+        return not existed
 
     def progress_check(self, state: str, ctx: RunContext, summary: dict) -> str | None:
         """Meta-cognitive progress gate (research/loop-research Recs 1 & 2) —
@@ -508,7 +590,11 @@ class BasePlaybook:
         )
 
     def strategy_repeated(
-        self, ctx: RunContext, strategy_change: Any, *, runner: Optional[Callable] = None
+        self,
+        ctx: RunContext,
+        strategy_change: Any,
+        *,
+        runner: Optional[Callable] = None,
     ) -> bool:
         """Anti-paralysis (Rec 1): a retry must change strategy. True when the proposed
         ``strategy_change`` is empty, or the SAME approach as the most recent recorded
@@ -669,12 +755,23 @@ class BasePlaybook:
 
     # -- lifecycle ---------------------------------------------------------
     def __init__(
-        self, checkpointer: Checkpointer, obs: Any = None, max_step_retries: int = 2
+        self,
+        checkpointer: Checkpointer,
+        obs: Any = None,
+        max_step_retries: int = 2,
+        *,
+        allow_programmatic_results: bool | None = None,
     ) -> None:
         self.cp = checkpointer
         self.obs = obs if obs is not None else _NullObs()
         self.max_step_retries = max_step_retries
+        self.allow_programmatic_results = (
+            bool(os.environ.get(_PROGRAMMATIC_RESULT_ENV))
+            if allow_programmatic_results is None
+            else allow_programmatic_results
+        )
         self._context: RunContext | None = None
+        self._artifact_store_instance: ArtifactStore | None = None
         self.sm: Any = None
 
     @property
@@ -692,6 +789,396 @@ class BasePlaybook:
     def _ctx(self) -> RunContext:
         """Compatibility alias for call sites that explicitly request narrowing."""
         return self.ctx
+
+    @staticmethod
+    def _selection_key(value: ArtifactRef | OutputArtifactMetadata) -> tuple[str, str, str]:
+        return (value.phase, value.branch_id or "", value.kind)
+
+    def _artifact_state(  # noqa: C901 - strict checkpoint migration/validation
+        self, ctx: RunContext | None = None
+    ) -> dict[str, Any]:
+        """Return strict checkpoint metadata; v1 contexts migrate additively to v2."""
+        active = ctx or self.ctx
+        raw = active.extras.get(_ARTIFACT_CONTEXT_KEY)
+        if raw is None:
+            raw = {
+                "schema_version": _ARTIFACT_CONTEXT_SCHEMA_VERSION,
+                "selected_refs": [],
+                "state_inputs": {},
+                "parallel_fan_in": {},
+            }
+            active.extras[_ARTIFACT_CONTEXT_KEY] = raw
+        if not isinstance(raw, dict):
+            raise ArtifactValidationError("artifact checkpoint state must be an object")
+        expected_fields = {
+            "schema_version",
+            "selected_refs",
+            "state_inputs",
+            "parallel_fan_in",
+        }
+        if set(raw) != expected_fields:
+            raise ArtifactValidationError(
+                "artifact checkpoint state has missing, unknown, or stale fields"
+            )
+        if type(raw["schema_version"]) is not int or raw["schema_version"] != 2:
+            raise ArtifactValidationError(
+                f"unsupported artifact checkpoint schema version: {raw['schema_version']}"
+            )
+
+        selected_values = raw["selected_refs"]
+        state_inputs = raw["state_inputs"]
+        fan_in = raw["parallel_fan_in"]
+        if not isinstance(selected_values, list):
+            raise ArtifactValidationError("artifact checkpoint selected_refs must be an array")
+        if not isinstance(state_inputs, dict) or not isinstance(fan_in, dict):
+            raise ArtifactValidationError("artifact checkpoint maps must be objects")
+
+        selected = [ArtifactRef.from_dict(value) for value in selected_values]
+        if any(ref.run_id != active.run_id for ref in selected):
+            raise ArtifactValidationError("selected artifact ref is bound to a different run")
+        if len({self._selection_key(ref) for ref in selected}) != len(selected):
+            raise ArtifactValidationError("selected artifact refs contain duplicate selection keys")
+
+        for state, values in state_inputs.items():
+            if not isinstance(state, str) or not state or not isinstance(values, list):
+                raise ArtifactValidationError("artifact state_inputs entries are malformed")
+            refs = [ArtifactRef.from_dict(value) for value in values]
+            if any(ref.run_id != active.run_id for ref in refs):
+                raise ArtifactValidationError("artifact state input is bound to a different run")
+            if len({ref.artifact_id for ref in refs}) != len(refs):
+                raise ArtifactValidationError("artifact state inputs contain duplicate refs")
+
+        for state, branches in fan_in.items():
+            if not isinstance(state, str) or not state or not isinstance(branches, dict):
+                raise ArtifactValidationError("parallel artifact fan-in is malformed")
+            for branch_id, value in branches.items():
+                if not isinstance(branch_id, str) or not branch_id:
+                    raise ArtifactValidationError("parallel artifact branch_id is malformed")
+                ref = ArtifactRef.from_dict(value)
+                if ref.run_id != active.run_id or ref.phase != state or ref.branch_id != branch_id:
+                    raise ArtifactValidationError("parallel artifact fan-in ref identity is stale")
+        return raw
+
+    @property
+    def _artifact_store(self) -> ArtifactStore:
+        if self._artifact_store_instance is None:
+            self._artifact_store_instance = ArtifactStore()
+        return self._artifact_store_instance
+
+    def _selected_ref(
+        self, state: str, branch_id: str | None, kind: str = KIND_AGENT_OUTPUT
+    ) -> ArtifactRef | None:
+        key = (state, branch_id or "", kind)
+        for value in self._artifact_state()["selected_refs"]:
+            ref = ArtifactRef.from_dict(value)
+            if self._selection_key(ref) == key:
+                return ref
+        return None
+
+    def _set_selected_ref(self, ref: ArtifactRef) -> None:
+        artifact_state = self._artifact_state()
+        values = [ArtifactRef.from_dict(value) for value in artifact_state["selected_refs"]]
+        values = [
+            value for value in values if self._selection_key(value) != self._selection_key(ref)
+        ]
+        values.append(ref)
+        values.sort(key=self._selection_key)
+        artifact_state["selected_refs"] = [value.to_dict() for value in values]
+
+    def _state_input_refs(self, state: str) -> tuple[ArtifactRef, ...]:
+        values = self._artifact_state()["state_inputs"].get(state, [])
+        return tuple(ArtifactRef.from_dict(value) for value in values)
+
+    def _machine_state_ids(self) -> frozenset[str]:
+        try:
+            return frozenset(str(state.id) for state in self.sm.states)
+        except Exception as exc:  # pragma: no cover - invalid machine implementation
+            raise ArtifactValidationError("artifact scope cannot inspect FSM states") from exc
+
+    def _artifact_transition_graph(self) -> dict[str, frozenset[str]]:
+        """Return domain transitions only; control/error edges never grant bytes."""
+        graph: dict[str, set[str]] = {state: set() for state in self._machine_state_ids()}
+        try:
+            for source in self.sm.states:
+                source_id = str(source.id)
+                for transition in source.transitions:
+                    event = str(transition.event)
+                    target_id = str(transition.target.id)
+                    if event in self.RESERVED_EVENTS or target_id in _ARTIFACT_CONTROL_STATES:
+                        continue
+                    graph[source_id].add(target_id)
+        except Exception as exc:  # pragma: no cover - invalid machine implementation
+            raise ArtifactValidationError("artifact scope cannot inspect FSM transitions") from exc
+        return {state: frozenset(targets) for state, targets in graph.items()}
+
+    @staticmethod
+    def _artifact_reachable(graph: dict[str, frozenset[str]], producer: str, consumer: str) -> bool:
+        if producer == consumer:
+            return True
+        pending = list(graph.get(producer, ()))
+        visited: set[str] = set()
+        while pending:
+            state = pending.pop()
+            if state == consumer:
+                return True
+            if state in visited:
+                continue
+            visited.add(state)
+            pending.extend(graph.get(state, ()))
+        return False
+
+    def _validated_artifact_input_phases(  # noqa: C901 - explicit fail-closed seam validation
+        self,
+    ) -> dict[str, tuple[str, ...]]:
+        """Validate the explicit retained-input seam against this machine."""
+        declared = self.artifact_input_phases(self.ctx)
+        if not isinstance(declared, dict):
+            raise ArtifactValidationError("artifact_input_phases must return a mapping")
+        state_ids = self._machine_state_ids()
+        graph = self._artifact_transition_graph()
+        validated: dict[str, tuple[str, ...]] = {}
+        for consumer, phases in declared.items():
+            if not isinstance(consumer, str) or consumer not in state_ids:
+                raise ArtifactValidationError(
+                    "artifact_input_phases contains an unknown consumer state"
+                )
+            if consumer in _ARTIFACT_CONTROL_STATES:
+                raise ArtifactValidationError(
+                    "artifact_input_phases cannot grant a control consumer state"
+                )
+            if not isinstance(phases, tuple):
+                raise ArtifactValidationError(
+                    "artifact_input_phases values must be immutable tuples"
+                )
+            if len(phases) != len(set(phases)):
+                raise ArtifactValidationError(
+                    "artifact_input_phases must not contain duplicate producer phases"
+                )
+            for producer in phases:
+                if not isinstance(producer, str) or producer not in state_ids:
+                    raise ArtifactValidationError(
+                        "artifact_input_phases contains an unknown producer state"
+                    )
+                if producer in _ARTIFACT_CONTROL_STATES or producer == "complete":
+                    raise ArtifactValidationError(
+                        "artifact_input_phases contains a non-producing phase"
+                    )
+                if not self._artifact_reachable(graph, producer, consumer):
+                    raise ArtifactValidationError(
+                        f"artifact phase '{producer}' cannot legally reach consumer '{consumer}'"
+                    )
+            validated[consumer] = phases
+        return validated
+
+    def _set_state_inputs(self, state: str, refs: tuple[ArtifactRef, ...]) -> None:
+        declared = self._validated_artifact_input_phases()
+        retained_phases = declared.get(state, ())
+        retained: tuple[ArtifactRef, ...] = ()
+        if retained_phases:
+            selected = [
+                ArtifactRef.from_dict(value) for value in self._artifact_state()["selected_refs"]
+            ]
+            retained = tuple(
+                ref for phase in retained_phases for ref in selected if ref.phase == phase
+            )
+        unique: dict[str, ArtifactRef] = {ref.artifact_id: ref for ref in (*retained, *refs)}
+        self._artifact_state()["state_inputs"][state] = [ref.to_dict() for ref in unique.values()]
+
+    def _consumer_scope(self, state: str) -> tuple[str, ...]:
+        """Bind output to truthful retry/fan-in, FSM-successor, and retained consumers."""
+        graph = self._artifact_transition_graph()
+        if state not in graph or state in _ARTIFACT_CONTROL_STATES or state == "complete":
+            raise ArtifactValidationError(f"artifact producer state '{state}' is not legal")
+
+        # The producing state is a legal immediate consumer only for a bounded
+        # retry or parallel fan-in. Domain successors come from the real FSM;
+        # unknown/clarification/error control edges were removed above.
+        consumers = {state, *graph[state]}
+        for consumer, phases in self._validated_artifact_input_phases().items():
+            if state in phases:
+                consumers.add(consumer)
+        return tuple(sorted(f"state:{consumer}" for consumer in consumers))
+
+    def _operation_id(self, state: str, branch_id: str | None) -> str:
+        identity = {
+            "branch_id": branch_id,
+            "kind": KIND_AGENT_OUTPUT,
+            "run_id": self.ctx.run_id,
+            "state": state,
+        }
+        digest = hashlib.sha256(canonical_json(identity)).hexdigest()
+        return f"agent-operation:{digest}"
+
+    def _output_metadata(
+        self, state: str, agent: str, branch_id: str | None
+    ) -> OutputArtifactMetadata:
+        selected = self._selected_ref(state, branch_id)
+        operation_id = self._operation_id(state, branch_id)
+        if selected is not None and selected.operation_id != operation_id:
+            raise ArtifactValidationError("selected artifact operation identity is stale")
+        return OutputArtifactMetadata(
+            schema_version=OUTPUT_ARTIFACT_SCHEMA_VERSION,
+            run_id=self.ctx.run_id,
+            phase=state,
+            branch_id=branch_id,
+            kind=KIND_AGENT_OUTPUT,
+            operation_id=operation_id,
+            version=(selected.version + 1) if selected else 1,
+            producer=f"agent:{agent}",
+            consumer_scope=self._consumer_scope(state),
+            media_type=_AGENT_OUTPUT_MEDIA_TYPE,
+            parent_ref=selected,
+            upstream_refs=self._state_input_refs(state),
+        )
+
+    def _input_artifacts(self, state: str) -> InputArtifactsV1:
+        refs = self._state_input_refs(state)
+        return InputArtifactsV1(
+            schema_version=INPUT_ARTIFACTS_SCHEMA_VERSION,
+            run_id=self.ctx.run_id,
+            consumer=f"state:{state}",
+            artifacts=tuple(
+                InputArtifactBinding(slot=f"upstream-{index:04d}", ref=ref)
+                for index, ref in enumerate(refs)
+            ),
+        )
+
+    def _accept_protocol_result(  # noqa: C901 - trust, receipt, store, and CAS checks
+        self,
+        *,
+        state: str,
+        agent: str,
+        expected: OutputArtifactMetadata,
+        wrapper: ResultProtocolV2,
+    ) -> tuple[ArtifactRef, dict[str, Any]]:
+        """Validate, CAS-select, and checkpoint one real execution-owner output."""
+        ref = wrapper.output_artifact_ref
+        expected_identity = (
+            expected.run_id,
+            expected.phase,
+            expected.branch_id,
+            expected.kind,
+            expected.operation_id,
+            expected.version,
+            expected.producer,
+            expected.consumer_scope,
+            expected.media_type,
+        )
+        actual_identity = (
+            ref.run_id,
+            ref.phase,
+            ref.branch_id,
+            ref.kind,
+            ref.operation_id,
+            ref.version,
+            ref.producer,
+            ref.consumer_scope,
+            ref.media_type,
+        )
+        if actual_identity != expected_identity:
+            raise ArtifactValidationError("output artifact ref does not match its directive")
+
+        invocation, invocation_error = _validate_trusted_invocation(
+            wrapper.trusted_invocation,
+            run_id=self.ctx.run_id,
+            state_id=state,
+            agent=agent,
+        )
+        if invocation is None:
+            raise ArtifactValidationError(invocation_error)
+        if wrapper.exit_code != 0:
+            raise ArtifactValidationError(wrapper.error or f"agent '{agent}' failed")
+
+        key = receipt_signing_key()
+        valid_receipt, receipt_error = validate_execution_receipt(
+            wrapper.execution_receipt,
+            run_id=self.ctx.run_id,
+            obligation_id=f"state:{state}",
+            key=key,
+            allowed_working_root=self.ctx.project_root or None,
+        )
+        if not valid_receipt:
+            raise ArtifactValidationError(receipt_error)
+        receipt = wrapper.execution_receipt
+        canonical_ref = canonical_json(ref.to_dict()).decode("utf-8")
+        expected_receipt_id = _artifact_receipt_id(expected)
+        if receipt.get("output_artifact_ref") != canonical_ref:
+            raise ArtifactValidationError("execution receipt is not bound to the canonical ref")
+        if receipt.get("receipt_id") != expected_receipt_id:
+            raise ArtifactValidationError("execution receipt identity does not match the operation")
+        if receipt.get("state_id") != state:
+            raise ArtifactValidationError("execution receipt is bound to the wrong state")
+        if receipt.get("argv") != ["pi-agent", "--agent", agent]:
+            raise ArtifactValidationError("execution receipt argv does not match the agent")
+        if receipt.get("executor_identity") != f"agent:{agent}":
+            raise ArtifactValidationError("execution receipt executor does not match the agent")
+        if receipt.get("execution_owner_identity") != "skill-extension-execution-owner":
+            raise ArtifactValidationError("execution receipt owner identity is unsupported")
+        if invocation.get("invocation_id") != expected_receipt_id:
+            raise ArtifactValidationError("trusted invocation identity does not match the receipt")
+        if invocation.get("execution_owner_identity") != receipt.get("execution_owner_identity"):
+            raise ArtifactValidationError("trusted invocation and receipt owners differ")
+        if invocation.get("started_at") != receipt.get("started_at") or invocation.get(
+            "ended_at"
+        ) != receipt.get("ended_at"):
+            raise ArtifactValidationError("trusted invocation and receipt timestamps differ")
+
+        envelope: ArtifactEnvelope = self._artifact_store.validate(
+            ref,
+            expected_run_id=self.ctx.run_id,
+            expected_phase=state,
+            expected_branch_id=expected.branch_id,
+            expected_producer=f"agent:{agent}",
+        )
+        if (
+            envelope.ref != ref
+            or envelope.parent_ref != expected.parent_ref
+            or envelope.upstream_refs != expected.upstream_refs
+            or envelope.consumer_scope != expected.consumer_scope
+            or envelope.media_type != expected.media_type
+        ):
+            raise ArtifactValidationError(
+                "stored artifact envelope violates the directive contract"
+            )
+
+        self._artifact_store.select(ref, expected=expected.parent_ref)
+        self._set_selected_ref(ref)
+        invocation_key = state if expected.branch_id is None else f"{state}:{expected.branch_id}"
+        self.ctx.extras.setdefault("trusted_invocations", {})[invocation_key] = invocation
+        # Load-bearing ordering: exact selected ref is durable in the FSM checkpoint
+        # before model SUMMARY data can route, escalate, or trigger a retry.
+        self._save(STATUS_RUNNING, state)
+
+        content = self._artifact_store.read_bytes(
+            ref,
+            expected_run_id=self.ctx.run_id,
+            expected_phase=state,
+            expected_branch_id=expected.branch_id,
+            expected_producer=f"agent:{agent}",
+            require_selected=True,
+        )
+        captured_summary = {} if wrapper.summary_missing else _extract_artifact_summary(content)
+        if captured_summary != wrapper.summary:
+            raise ArtifactValidationError(
+                "driver summary does not match the exact owner-captured artifact"
+            )
+        return ref, captured_summary
+
+    def _artifact_protocol_failure(self, state: str, exc: ArtifactError) -> dict:
+        message = str(exc)
+        if "unsupported" in message or "compare-and-swap" in message or "stale" in message:
+            return self._to_error(f"artifact protocol failure at '{state}': {message}")
+        return self._retry_or_fail(state, f"artifact protocol failure: {message}")
+
+    def _parallel_fan_in(self, state: str) -> dict[str, dict[str, object]]:
+        fan_in = self._artifact_state()["parallel_fan_in"]
+        value = fan_in.setdefault(state, {})
+        if not isinstance(value, dict):  # validated above; narrows for type checkers
+            raise ArtifactValidationError("parallel artifact fan-in is malformed")
+        return value
+
+    def _clear_parallel_progress(self, state: str) -> None:
+        self._artifact_state()["parallel_fan_in"].pop(state, None)
 
     # -- public protocol ---------------------------------------------------
     def start(
@@ -717,6 +1204,7 @@ class BasePlaybook:
         except (TypeError, ValueError):
             ctx.max_iterations = 3
         self.ctx = ctx
+        self._artifact_state(ctx)
         # NOTE: agent directives are built from the playbook's own run facts ONLY.
         # Nothing is retrieved from MemPalace and injected here. A former run-start
         # "recall" step seeded the first directive with whatever a MemPalace query
@@ -739,15 +1227,33 @@ class BasePlaybook:
         rec = self.cp.load(run_id)
         if rec is None:
             return self._plain_error(session_id, run_id, f"unknown run_id '{run_id}'")
+        paused = self._dispatch_pause_directive(
+            state=rec.current_state_id,
+            run_status=rec.status,
+            session_id=rec.session_id,
+            run_id=rec.run_id,
+        )
+        if paused is not None:
+            # Ignore even a well-formed owner result while paused. In particular,
+            # do not validate/select its artifact, advance counters, route the FSM,
+            # or rewrite the checkpoint. A later fresh-process recover rebuilds the
+            # pending directive from the unchanged record.
+            return paused
         self.ctx = rec.context
         self.sm = self.machine_cls()
         try:
             self.sm.current_state_value = rec.current_state_id
         except Exception as exc:
             return self._plain_error(
-                session_id, run_id, f"cannot rehydrate state '{rec.current_state_id}': {exc}"
+                session_id,
+                run_id,
+                f"cannot rehydrate state '{rec.current_state_id}': {exc}",
             )
         state = rec.current_state_id
+        try:
+            self._artifact_state()
+        except ArtifactError as exc:
+            return self._to_error(f"artifact checkpoint validation failed: {exc}")
 
         # Resume from a HITL pause.
         if agent == "user":
@@ -778,48 +1284,51 @@ class BasePlaybook:
                 f"agent '{agent}' does not match state '{state}' (expected '{spec.agent}')"
             )
 
-        # The TS driver wraps every single-agent result as
-        # {exitCode, summary, summary_missing, error} (skill/index.ts:1012-1021).
-        # Unwrap it and honor the driver's flags, mirroring the parallel fan-in
-        # path (_step_parallel reads entry["summary"] and checks entry["exitCode"]
-        # at engine.py:489-492). A bare summary dict from a direct/programmatic
-        # caller (unit tests) is accepted as-is. The triple-key signature is the
-        # driver wrapper's and never collides with a playbook summary contract,
-        # whose fields are domain-named (findings_count, verdict, ...).
-        if isinstance(result, dict) and {"exitCode", "summary", "summary_missing"} <= result.keys():
-            if result.get("exitCode", 0) not in (0, None):
-                return self._retry_or_fail(state, result.get("error") or f"agent '{agent}' failed")
-            if result.get("summary_missing"):
-                return self._retry_malformed(
-                    state, result.get("error") or "no parseable SUMMARY emitted"
-                )
-            inner = result.get("summary")
-            summary = dict(inner) if isinstance(inner, dict) else {}
-            # Receipts are execution-owner data carried beside the untrusted
-            # agent SUMMARY. Merge them only from the typed driver wrapper; an
-            # agent-authored `receipts` key inside SUMMARY never gains trust by
-            # itself and still must pass signature/same-run validation downstream.
-            owner_receipts = result.get("receipts")
-            if isinstance(owner_receipts, list):
-                summary["receipts"] = owner_receipts
-            owner_invocation = result.get("trusted_invocation")
-            p0_enabled = self.ctx.extras.get("code", {}).get("p0_enabled") is True
-            if owner_invocation is None and p0_enabled:
-                return self._retry_or_fail(
-                    state, "P0 driver result has no signed execution-owner invocation provenance"
-                )
-            if owner_invocation is not None:
-                trusted_invocation, invocation_error = _validate_trusted_invocation(
-                    owner_invocation,
-                    run_id=self.ctx.run_id,
-                    state_id=state,
+        selected_output: ArtifactRef | None = None
+        owner_fields = {
+            "protocol_version",
+            "output_artifact_ref",
+            "execution_receipt",
+            "trusted_invocation",
+        }
+        is_owner_result = isinstance(result, dict) and bool(owner_fields & set(result))
+        if is_owner_result:
+            try:
+                wrapper = ResultProtocolV2.from_dict(result)
+                expected = self._output_metadata(state, agent, None)
+                selected_output, summary = self._accept_protocol_result(
+                    state=state,
                     agent=agent,
+                    expected=expected,
+                    wrapper=wrapper,
                 )
-                if trusted_invocation is None:
-                    return self._retry_or_fail(state, invocation_error)
-                self.ctx.extras.setdefault("trusted_invocations", {})[state] = trusted_invocation
+            except ArtifactError as exc:
+                return self._artifact_protocol_failure(state, exc)
+            if wrapper.summary_missing:
+                return self._retry_malformed(state, wrapper.error or "no parseable SUMMARY emitted")
+            # Receipts are validated owner transport, not model SUMMARY data. Keep
+            # their output excerpts out of RunContext/checkpoints.
+        elif self.allow_programmatic_results:
+            # Explicit test/programmatic compatibility only. The production CLI
+            # never sets PENNY_ORCH_TEST_ALLOW_PROGRAMMATIC_RESULTS.
+            if (
+                isinstance(result, dict)
+                and {"exitCode", "summary", "summary_missing"} <= result.keys()
+            ):
+                if result.get("exitCode", 0) not in (0, None):
+                    return self._retry_or_fail(
+                        state, result.get("error") or f"agent '{agent}' failed"
+                    )
+                if result.get("summary_missing"):
+                    return self._retry_malformed(
+                        state, result.get("error") or "no parseable SUMMARY emitted"
+                    )
+                inner = result.get("summary")
+                summary = dict(inner) if isinstance(inner, dict) else {}
+            else:
+                summary = result if isinstance(result, dict) else {}
         else:
-            summary = result if isinstance(result, dict) else {}
+            return self._retry_or_fail(state, "result-protocol-v2 owner wrapper is required")
         ok, err = validate_summary_contract(spec.name, spec.summary_contract, summary)
         if not ok:
             # Transient: a malformed SUMMARY is retried (bounded) before failing.
@@ -863,6 +1372,8 @@ class BasePlaybook:
         self._auto_record_iteration(pre_iteration, summary)
 
         new_state = self.sm.current_state_value
+        if selected_output is not None:
+            self._set_state_inputs(new_state, (selected_output,))
         self.obs.transition(self.ctx, state, new_state, event="route")
 
         if new_state in TERMINAL_STATES:
@@ -885,6 +1396,26 @@ class BasePlaybook:
         )
 
     # -- internals ---------------------------------------------------------
+    @staticmethod
+    def _dispatch_pause_directive(
+        *,
+        state: str,
+        run_status: str,
+        session_id: str,
+        run_id: str,
+    ) -> dict[str, Any] | None:
+        """Return a typed non-terminal pause, or ``None`` when dispatch is active."""
+        control = artifact_dispatch_control()
+        if control.dispatch_allowed:
+            return None
+        return Directives.paused(
+            state_id=state,
+            run_status=run_status,
+            session_id=session_id,
+            run_id=run_id,
+            control=control,
+        )
+
     def _save(self, status: str, state_id: str) -> None:
         self.cp.save(
             run_id=self.ctx.run_id,
@@ -1055,7 +1586,12 @@ class BasePlaybook:
         optional = contract.get("optional", {}) or {}
         if not required and not optional:
             return ""
-        placeholder = {bool: "<true|false>", int: "<int>", str: "<string>", list: "<[...]>"}
+        placeholder = {
+            bool: "<true|false>",
+            int: "<int>",
+            str: "<string>",
+            list: "<[...]>",
+        }
 
         def _render(fields: dict) -> str:
             return ", ".join(
@@ -1080,6 +1616,18 @@ class BasePlaybook:
         seq survives the start/step subprocess boundary, then return the
         directive. This ordering (persist AFTER emission) is what keeps the
         observability seq globally monotonic across subprocesses."""
+        paused = self._dispatch_pause_directive(
+            state=state,
+            run_status=STATUS_RUNNING,
+            session_id=self.ctx.session_id,
+            run_id=self.ctx.run_id,
+        )
+        if paused is not None:
+            # This guard is deliberately before tool execution, fan specification,
+            # observability step_start, artifact metadata construction, and every
+            # checkpoint write in this method.
+            return paused
+
         # Deterministic tool states run in-process with NO agent dispatch. Loop
         # through any run of consecutive tool states, executing + advancing each,
         # until an agent/gate/parallel/terminal state (mirrors the legacy inline
@@ -1098,12 +1646,19 @@ class BasePlaybook:
             if new_state == state:
                 return self._to_error(f"tool state '{state}' did not advance")
             self.obs.step_end(self.ctx, state, {"tool": True}, "")
+            self._set_state_inputs(new_state, self._state_input_refs(state))
             self.obs.transition(self.ctx, state, new_state, event="tool")
             if new_state in TERMINAL_STATES:
                 return self._finish(new_state)
             state = new_state
         else:
             return self._to_error(f"tool-state loop exceeded budget at '{state}'")
+        # A deterministic tool may route through unknown into the uniform
+        # clarification pause. Handle that control state before primitive lookup;
+        # it is never an agent-dispatch state.
+        if state == "awaiting_clarification":
+            self._save(STATUS_AWAITING_USER, state)
+            return self.escalation_directive()
         # A planned gate pauses the run for the user — no agent dispatch.
         if state in self.GATE_STATES:
             return self._enter_gate(state)
@@ -1113,22 +1668,39 @@ class BasePlaybook:
         except Exception as exc:
             return self._to_error(f"fan-out spec error at '{state}': {exc}")
         if pspec is not None:
-            for b in pspec.branches.values():
-                self.obs.step_start(self.ctx, b.name, b.agent, state)
+            accepted = self._parallel_fan_in(state)
+            for branch_id, branch in pspec.branches.items():
+                if branch_id not in accepted:
+                    self.obs.step_start(self.ctx, branch.name, branch.agent, state)
+            directive = self._directive_for_state(state)
+            if directive.get("action") in {"error", "paused"}:
+                return directive
             self._save(STATUS_RUNNING, state)
-            return self._directive_for_state(state)
+            return directive
         spec = self.PRIMITIVE_BY_STATE.get(state)
         if spec is None:
             return self._to_error(f"no primitive registered for state '{state}'")
         self.obs.step_start(self.ctx, spec.name, spec.agent, state)
+        directive = self._directive_for_state(state)
+        if directive.get("action") in {"error", "paused"}:
+            return directive
         self._save(STATUS_RUNNING, state)
-        return self._directive_for_state(state)
+        return directive
 
-    def _directive_for_state(self, state: str) -> dict:
-        """Pure directive builder (no emission, no checkpoint) — safe for the
-        auto-recovery scan to re-issue a pending step. For a parallel state it
-        re-issues the whole fan-out (all branches), so a kill-and-resume re-runs
-        every branch (branch agents must be idempotent)."""
+    def _directive_for_state(self, state: str) -> dict:  # noqa: C901
+        """Build the exact owner contract for a pending single step or fan branch.
+
+        Parallel recovery omits already accepted branch refs, so restart is keyed
+        by ``branch_id`` and independent of result-array order.
+        """
+        paused = self._dispatch_pause_directive(
+            state=state,
+            run_status=STATUS_RUNNING,
+            session_id=self.ctx.session_id,
+            run_id=self.ctx.run_id,
+        )
+        if paused is not None:
+            return paused
         sc = self.skill_context(state, self.ctx)
         model = self.model_for_state(state, self.ctx)
         try:
@@ -1136,30 +1708,44 @@ class BasePlaybook:
         except Exception as exc:
             return self._to_error(f"fan-out spec error at '{state}': {exc}")
         if pspec is not None:
-            tasks = []
-            for bid, b in pspec.branches.items():
-                task = {
-                    "branch_id": bid,
-                    "agent": b.agent,
-                    "task_summary": self._task_summary(state, b, self.ctx)
-                    + self._skill_root_line(self.ctx)
-                    + self._summary_contract_directive(b),
-                }
-                if sc:
-                    task["skillContext"] = sc
-                if model:
-                    task["model"] = model
-                tasks.append(task)
+            try:
+                accepted = self._parallel_fan_in(state)
+                input_artifacts = self._input_artifacts(state).to_dict()
+                tasks = []
+                for bid, b in pspec.branches.items():
+                    if bid in accepted:
+                        continue
+                    task = {
+                        "branch_id": bid,
+                        "agent": b.agent,
+                        "task_summary": self._task_summary(state, b, self.ctx)
+                        + self._skill_root_line(self.ctx)
+                        + self._summary_contract_directive(b),
+                        "output_artifact": self._output_metadata(state, b.agent, bid).to_dict(),
+                    }
+                    if sc:
+                        task["skillContext"] = sc
+                    if model:
+                        task["model"] = model
+                    tasks.append(task)
+            except ArtifactError as exc:
+                return self._to_error(f"artifact directive error at '{state}': {exc}")
             return Directives.invoke_agents_parallel(
                 tasks=tasks,
                 state_id=state,
                 session_id=self.ctx.session_id,
                 run_id=self.ctx.run_id,
                 project_root=self.ctx.project_root,
+                input_artifacts=input_artifacts,
             )
         spec = self.PRIMITIVE_BY_STATE.get(state)
         if spec is None:
             return self._to_error(f"no primitive registered for state '{state}'")
+        try:
+            output_artifact = self._output_metadata(state, spec.agent, None).to_dict()
+            input_artifacts = self._input_artifacts(state).to_dict()
+        except ArtifactError as exc:
+            return self._to_error(f"artifact directive error at '{state}': {exc}")
         return Directives.invoke_agent(
             agent=spec.agent,
             task_summary=self._task_summary(state, spec, self.ctx)
@@ -1172,6 +1758,8 @@ class BasePlaybook:
             skill_context=sc,
             model=model,
             project_root=self.ctx.project_root,
+            output_artifact=output_artifact,
+            input_artifacts=input_artifacts,
         )
 
     def _retry_or_fail(self, state: str, reason: str) -> dict:
@@ -1183,76 +1771,203 @@ class BasePlaybook:
     def _step_parallel(  # noqa: C901
         self, state: str, pspec: ParallelSpec, agent: str, result: Any
     ) -> dict:
-        """Ingest the BATCH of branch SUMMARYs for a parallel fan-out state.
-
-        The driver spawns one agent per branch, then feeds ALL results back in a
-        single step: ``agent="__parallel__"`` and ``result`` a list of
-        ``{branch_id, agent, summary, exitCode}`` entries. Each branch is
-        validated against its OWN contract; the branch SUMMARYs are aggregated
-        into ``{"branches": {branch_id: SUMMARY}, "confidence": <weakest>}`` and
-        routed exactly once — just like a single-primitive state. A whole
-        kill-and-resume re-issues the fan-out (branch agents must be idempotent)."""
+        """Validate and checkpoint branch-safe fan-in keyed only by ``branch_id``."""
         if agent != "__parallel__":
             return self._to_error(
                 f"parallel state '{state}' expects the fan-in agent '__parallel__', got '{agent}'"
             )
-        entries = result if isinstance(result, list) else []
-        if not entries:
+        if not isinstance(result, list):
             return self._retry_or_fail(
-                state, f"parallel state '{state}' received no branch results"
+                state, f"parallel state '{state}' received a non-array result"
+            )
+        entries = result
+        owner_fields = {
+            "protocol_version",
+            "output_artifact_ref",
+            "execution_receipt",
+            "trusted_invocation",
+        }
+        if (
+            self.allow_programmatic_results
+            and entries
+            and all(
+                isinstance(entry, dict) and not (owner_fields & set(entry)) for entry in entries
+            )
+        ):
+            return self._step_parallel_programmatic(state, pspec, entries)
+
+        accepted = self._parallel_fan_in(state)
+        pending_ids = set(pspec.branches) - set(accepted)
+        if not entries and pending_ids:
+            return self._retry_or_fail(
+                state, f"parallel state '{state}' received no pending branch results"
             )
 
-        branches: dict[str, dict] = {}
+        by_branch: dict[str, dict[str, Any]] = {}
         for entry in entries:
             if not isinstance(entry, dict):
                 return self._retry_or_fail(state, f"parallel '{state}': malformed branch entry")
-            bid = str(entry.get("branch_id", ""))
-            branch = pspec.branches.get(bid)
-            if branch is None:
-                return self._retry_or_fail(state, f"parallel '{state}': unknown branch_id '{bid}'")
-            if entry.get("exitCode", 0) not in (0, None):
-                return self._retry_or_fail(state, f"parallel '{state}': branch '{bid}' failed")
+            branch_id = entry.get("branch_id")
+            if not isinstance(branch_id, str) or not branch_id:
+                return self._retry_or_fail(
+                    state, f"parallel '{state}': branch_id must be a non-empty string"
+                )
+            if branch_id in by_branch:
+                return self._retry_or_fail(
+                    state, f"parallel '{state}': duplicate branch_id '{branch_id}'"
+                )
+            if branch_id not in pspec.branches:
+                return self._retry_or_fail(
+                    state, f"parallel '{state}': unknown branch_id '{branch_id}'"
+                )
+            if branch_id not in pending_ids:
+                return self._retry_or_fail(
+                    state, f"parallel '{state}': stale branch_id '{branch_id}'"
+                )
+            by_branch[branch_id] = entry
+
+        failures: list[str] = []
+        accepted_this_call = False
+        for branch_id, branch in pspec.branches.items():
+            entry = by_branch.get(branch_id)
+            if entry is None:
+                continue
+            try:
+                wrapper = ResultProtocolV2.from_parallel_dict(entry)
+                if wrapper.branch_id != branch_id or wrapper.agent != branch.agent:
+                    raise ArtifactValidationError(
+                        "parallel wrapper branch or agent does not match the directive"
+                    )
+                expected = self._output_metadata(state, branch.agent, branch_id)
+                ref, summary = self._accept_protocol_result(
+                    state=state,
+                    agent=branch.agent,
+                    expected=expected,
+                    wrapper=wrapper,
+                )
+            except ArtifactError as exc:
+                if "unsupported" in str(exc) or "stale" in str(exc):
+                    return self._artifact_protocol_failure(state, exc)
+                failures.append(f"branch '{branch_id}': {exc}")
+                continue
+            if wrapper.summary_missing:
+                failures.append(
+                    f"branch '{branch_id}': {wrapper.error or 'no parseable SUMMARY emitted'}"
+                )
+                continue
+            ok, err = validate_summary_contract(branch.name, branch.summary_contract, summary)
+            if not ok:
+                failures.append(f"branch '{branch_id}': invalid SUMMARY: {err}")
+                continue
+            accepted[branch_id] = ref.to_dict()
+            accepted_this_call = True
+            self.obs.step_end(
+                self.ctx,
+                branch.name,
+                {"branch_id": branch_id},
+                summary.get("confidence", ""),
+            )
+            self._save(STATUS_RUNNING, state)
+
+        still_pending = set(pspec.branches) - set(accepted)
+        missing = pending_ids - set(by_branch)
+        if still_pending:
+            if accepted_this_call:
+                self.ctx.step_retries = 0
+            details = failures
+            if missing:
+                details.append(f"missing branches {sorted(missing)}")
+            return self._retry_or_fail(
+                state, f"parallel '{state}' incomplete: {'; '.join(details)}"
+            )
+
+        branches: dict[str, dict[str, Any]] = {}
+        refs: list[ArtifactRef] = []
+        try:
+            for branch_id, branch in pspec.branches.items():
+                ref = ArtifactRef.from_dict(accepted[branch_id])
+                content = self._artifact_store.read_bytes(
+                    ref,
+                    expected_run_id=self.ctx.run_id,
+                    expected_phase=state,
+                    expected_branch_id=branch_id,
+                    expected_producer=f"agent:{branch.agent}",
+                    require_selected=True,
+                )
+                summary = _extract_artifact_summary(content)
+                ok, err = validate_summary_contract(branch.name, branch.summary_contract, summary)
+                if not ok:
+                    raise ArtifactValidationError(
+                        f"recovered branch '{branch_id}' SUMMARY is invalid: {err}"
+                    )
+                branches[branch_id] = summary
+                refs.append(ref)
+        except ArtifactError as exc:
+            return self._artifact_protocol_failure(state, exc)
+        return self._route_parallel_summaries(state, pspec, branches, tuple(refs))
+
+    def _step_parallel_programmatic(
+        self, state: str, pspec: ParallelSpec, entries: list[Any]
+    ) -> dict:
+        """Explicit test-only compatibility for pre-v2 in-process callers."""
+        branches: dict[str, dict[str, Any]] = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                return self._retry_or_fail(state, "programmatic parallel entry is malformed")
+            branch_id = entry.get("branch_id")
+            if not isinstance(branch_id, str) or branch_id in branches:
+                return self._retry_or_fail(state, "programmatic parallel branch_id is invalid")
+            branch = pspec.branches.get(branch_id)
+            if branch is None or entry.get("agent") != branch.agent:
+                return self._retry_or_fail(state, "programmatic parallel branch is unknown")
+            if entry.get("exitCode") not in (0, None):
+                return self._retry_or_fail(state, f"parallel branch '{branch_id}' failed")
             summary = entry.get("summary")
-            summary = summary if isinstance(summary, dict) else {}
+            summary = dict(summary) if isinstance(summary, dict) else {}
             ok, err = validate_summary_contract(branch.name, branch.summary_contract, summary)
             if not ok:
                 return self._retry_malformed(
-                    state, f"parallel '{state}': invalid SUMMARY on branch '{bid}': {err}"
+                    state, f"parallel branch '{branch_id}' invalid SUMMARY: {err}"
                 )
-            branches[bid] = summary
-
+            branches[branch_id] = summary
         missing = set(pspec.branches) - set(branches)
         if missing:
-            return self._retry_or_fail(
-                state, f"parallel '{state}': missing branches {sorted(missing)}"
-            )
+            return self._retry_or_fail(state, f"parallel missing branches {sorted(missing)}")
+        return self._route_parallel_summaries(state, pspec, branches, ())
 
+    def _route_parallel_summaries(  # noqa: C901 - fan-in aggregation and routing
+        self,
+        state: str,
+        pspec: ParallelSpec,
+        branches: dict[str, dict[str, Any]],
+        refs: tuple[ArtifactRef, ...],
+    ) -> dict:
         self.ctx.step_retries = 0
         merged_evidence: list[Any] = []
-        for s in branches.values():
-            ev = s.get("evidence")
-            if isinstance(ev, str) and ev.strip():
-                merged_evidence.append(ev)
-            elif isinstance(ev, (list, tuple)):
-                merged_evidence.extend(str(e) for e in ev)
+        for summary in branches.values():
+            evidence = summary.get("evidence")
+            if isinstance(evidence, str) and evidence.strip():
+                merged_evidence.append(evidence)
+            elif isinstance(evidence, (list, tuple)):
+                merged_evidence.extend(str(item) for item in evidence)
         if merged_evidence:
             self._capture_evidence({"evidence": merged_evidence})
-        for bid, s in branches.items():
-            self.obs.step_end(
-                self.ctx, pspec.branches[bid].name, {"branch_id": bid}, s.get("confidence", "")
-            )
         aggregated = {
             "branches": branches,
-            "confidence": weakest_confidence(s.get("confidence", "") for s in branches.values()),
+            "confidence": weakest_confidence(
+                summary.get("confidence", "") for summary in branches.values()
+            ),
         }
         if Confidence.is_uncertain(aggregated["confidence"]) and state in self.ESCALATABLE_STATES:
             weak = next(
-                b
-                for b, s in branches.items()
-                if not Confidence.is_valid(s.get("confidence"))
-                or Confidence.is_uncertain(s.get("confidence"))
+                branch_id
+                for branch_id, summary in branches.items()
+                if not Confidence.is_valid(summary.get("confidence"))
+                or Confidence.is_uncertain(summary.get("confidence"))
             )
+            self._clear_parallel_progress(state)
             return self._escalate(state, pspec.branches[weak], aggregated)
+
         pre_iteration = self._ctx.iteration
         try:
             self.route_after(state, self._ctx, aggregated)
@@ -1260,6 +1975,9 @@ class BasePlaybook:
             return self._to_error(f"routing error at '{state}': {exc}")
         self._auto_record_iteration(pre_iteration, aggregated)
         new_state = self.sm.current_state_value
+        self._clear_parallel_progress(state)
+        if refs:
+            self._set_state_inputs(new_state, refs)
         self.obs.transition(self.ctx, state, new_state, event="route")
         if new_state in TERMINAL_STATES:
             return self._finish(new_state)
@@ -1411,8 +2129,8 @@ class BasePlaybook:
         )
 
     def _resume(self, state: str, result: Any) -> dict:
-        # F2: explicit retry of an ERRORED run — re-drive the phase that failed
-        # (recorded by _to_error) instead of forcing a full restart from P0.
+        # Explicit retry of an errored run re-drives the recorded failed phase
+        # instead of forcing a full restart.
         if state == "error":
             return self._retry_errored()
         # Planned gate: the user's answer selects the resume transition.
@@ -1456,6 +2174,7 @@ class BasePlaybook:
                     "not free text"
                 ),
             )
+        self._set_state_inputs(new_state, self._state_input_refs(state))
         self.obs.transition(self.ctx, state, new_state, event="gate")
         if new_state in TERMINAL_STATES:
             return self._finish(new_state)
@@ -1529,7 +2248,9 @@ class BasePlaybook:
         self._save(STATUS_ERROR, "error")
         self.obs.run_end(self.ctx, STATUS_ERROR, False, self.ctx.iteration)
         return Directives.error(
-            errors=self.ctx.errors, session_id=self.ctx.session_id, run_id=self.ctx.run_id
+            errors=self.ctx.errors,
+            session_id=self.ctx.session_id,
+            run_id=self.ctx.run_id,
         )
 
     def _safe_send(self, event: str) -> bool:

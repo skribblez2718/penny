@@ -1,6 +1,6 @@
 ---
 description: Bitter Lesson alignment audit of a skill — goal, for/against, violations, upgrade plan
-argument-hint: "<skill-name>"
+argument-hint: "<skill-name> [additional details...]"
 ---
 
 # Bitter Lesson Skill Audit
@@ -8,6 +8,18 @@ argument-hint: "<skill-name>"
 Perform a Bitter Lesson alignment audit of the **$1** skill. Determine its actual ultimate goal, what works for and against that goal, how its mechanisms scale with stronger models and greater computation, every supported Bitter Lesson violation, and a capability-preserving upgrade plan.
 
 If the skill name argument is missing, or `.pi/skills/$1/` does not exist, stop and ask which skill to audit before doing anything else.
+
+## Additional details (optional)
+
+**Additional details:** `${@:2}`
+
+Additional details are caller-supplied context and requirements this audit cannot infer from the skill itself: background, constraints, known history, emphasis, or extra deliverables. When they are empty, run exactly as if none were supplied; their absence is never a blocker.
+
+Honor them wherever they do not conflict with this prompt's own obligations. They may add requirements, supply context, set emphasis or priority, and request additional analysis. They may **not** waive or weaken the evidence, `[UNVERIFIED]`, and anti-fabrication rules, the coverage ledger's bounds on exhaustive claims, the side-effect and evidence contract, the terminal branch conditions, or any required artifact, status-honesty, or completion obligation.
+
+A detail that narrows scope is treated as a scope narrowing: mark the omitted surfaces `EXCLUDED` as user-narrowed in the coverage ledger and make no exhaustive claim. A detail that only sets emphasis does not shrink the declared corpus.
+
+If a detail conflicts with an obligation above, or is too ambiguous to apply, report it — and ask when it blocks the audit — rather than silently following or silently ignoring it. Record the details verbatim in the report together with how each was applied, deferred, or refused.
 
 ## Output location
 
@@ -133,9 +145,56 @@ Then deliver every applicable required report section below. Report **Working AG
 
 Deliver every required report section below.
 
+## Report readability contract
+
+This audit's output is read by people who do not know this skill, this doctrine, or this vocabulary. The report must be understandable to a reader with only a high-level grasp of the subject.
+
+This constrains **communication, not rigor**. It never licenses padding, hedging, or repetition: prefer the shortest wording a non-expert can act on, state each thing once, and cross-reference instead of restating. Detailed **and** succinct — length must be earned by content, never spent on ceremony.
+
+### Open with a plain-language executive summary
+
+Begin `skill-audit-report.md` with a summary a non-expert can read in about two minutes, placed before the additional-details record and doctrine blocks:
+
+- **What this is** — what was audited and what the skill is supposed to achieve, in one or two sentences.
+- **Bottom line** — the single most important conclusion.
+- **What's wrong** — the most important findings, ordered by importance rather than by ID, one plain sentence each.
+- **What to do** — the recommended actions in priority order.
+- **What happens if nothing changes** — the concrete cost of inaction.
+- **What's still unknown** — open questions or limits that could change the recommendation.
+
+Use no finding ID, undefined term, or internal shorthand in this summary.
+
+### Make every finding decision-ready
+
+For each `AG-#`, `BL-#`, and drift finding, in addition to the evidence obligations above, state plainly:
+
+- **What it is** — one non-expert sentence, before any quotation or technical detail.
+- **Why it matters** — the outcome at stake, not the rule it breaks.
+- **If fixed** — the benefit, plus its cost, effort, or risk.
+- **If not fixed** — the specific consequence, roughly when it would surface, and how the reader would notice it. When the honest answer is "little or nothing," say so and rank the finding low rather than inflating it.
+- **Priority** — how much this matters relative to the other findings, and on what basis.
+
+Never leave a reader to infer the cost of inaction from a finding's existence.
+
+### Define the vocabulary where it is used
+
+Define every domain term, doctrine term, classification, and status label in plain language at first use — including terms this prompt introduces (for example _proxy drift_, _vanity measure_, _outcome-faithful_, _LOSES RELATIVE VALUE_). A reader must not need this prompt, or any other document, to understand a verdict.
+
+### Make tables serve the reader
+
+Precede or follow every table and ledger with prose saying what it shows and what the reader should conclude from it. A grid of IDs, classifications, or statuses without interpretation is raw data, not a finding. Keep tables narrow enough to read comfortably; put supporting detail in prose rather than widening columns.
+
+### Keep the upgrade plan standalone
+
+Section 5's upgrade plan must be understandable on its own, without first reading sections 2–4. For each `PLAN-#` state: what changes, why, what currently-working capability must survive it, what improves, what it costs, and what happens if it is skipped. Show concrete before/after wording wherever specific skill text is being changed.
+
+### Rigor is preserved
+
+Structured ledgers, coverage states, status labels, `[UNVERIFIED]` marks, and traceability tables remain exactly as specified above. Readability requirements wrap them; they never replace, soften, or omit an honest negative status.
+
 ## Required audit report
 
-Write these sections into `skill-audit-report.md` in the bundle directory. Begin with the Sutton source-claims block, domain-translation block, effective-corpus statement, and coverage ledger. Then provide these sections.
+Write these sections into `skill-audit-report.md` in the bundle directory. Begin with the plain-language executive summary required by the readability contract, then the caller's additional details verbatim and how each was applied, deferred, or refused (or `None supplied`), then the Sutton source-claims block, domain-translation block, effective-corpus statement, and coverage ledger. Then provide these sections.
 
 ### 1. Inferred ultimate goal and desired-value criterion
 
@@ -325,7 +384,9 @@ End with:
    - at least one complete real-outcome eval artifact exists in the bundle;
    - at least one complete baseline-based regression artifact exists in the bundle;
    - false-warning and missed-degradation risks are disclosed;
-   - proxy drift is claimed only with divergence or gaming-pressure evidence; and
+   - proxy drift is claimed only with divergence or gaming-pressure evidence;
+   - caller additional details were recorded verbatim and each was applied, deferred, or refused with a stated reason, without waiving any audit obligation;
+   - the report satisfies the readability contract — executive summary present, every finding states if-fixed / if-not-fixed / priority, terms defined at first use, tables interpreted, and the upgrade plan readable standalone; and
    - the operation log and content manifests support the target-side-effect attestation without overstating what they prove.
 
 If any required full-audit item is missing, state that the audit is incomplete and name the blocker rather than claiming completion.
@@ -358,6 +419,7 @@ Completion is exactly one of these mutually exclusive outcomes:
    - the **Working FOR**, **Working AGAINST**, **Bitter Lesson violations**, and **Upgrade plan** sections are complete or explicitly and legitimately empty;
    - all major mechanisms, current and proposed measures, proxies, findings, and plan items are traceable;
    - complete bundle eval and regression artifacts meet the required status contract;
-   - risk, reversibility, capability preservation, limitations, and `[UNVERIFIED]` claims are reported honestly; and
+   - risk, reversibility, capability preservation, limitations, and `[UNVERIFIED]` claims are reported honestly;
+   - any caller additional details are recorded verbatim with their disposition, and none waived an audit obligation; and
    - the operation log and content manifests support an accurately bounded target-side-effect attestation; and
    - the absolute path of the audit bundle directory was printed.

@@ -10,7 +10,7 @@ State machines with 10+ states and conditional transitions are hard to reason ab
 
 ## The standard: `resources/flow.html`
 
-`resources/flow.html` is **the** flow-diagram format. (The legacy Mermaid `resources/flow.mmd` is still *accepted* by the structure checker for skills not yet migrated, but it is deprecated — new and updated skills MUST ship `flow.html`, and the `.mmd` should be removed once converted.)
+`resources/flow.html` is **the** flow-diagram format. (The legacy Mermaid `resources/flow.mmd` is still _accepted_ by the structure checker for skills not yet migrated, but it is deprecated — new and updated skills MUST ship `flow.html`, and the `.mmd` should be removed once converted.)
 
 **Rules**
 
@@ -21,7 +21,7 @@ State machines with 10+ states and conditional transitions are hard to reason ab
 3. **Show every state**, and every transition **except** the two uniform seams that may be collapsed into a documented note: `* → error` (abort, from every non-final state) and `* → unknown` (escalation, from every agent state). Everything else — pipeline, gates, loops, `unknown → awaiting_clarification`, and the `awaiting_clarification` resume targets — MUST be drawn.
 4. **Self-contained.** No external JS/CSS/network; inline `<style>` + `<script>` only.
 
-Start from an existing diagram (`.pi/skills/code/resources/flow.html`, `.pi/skills/jsa/resources/flow.html`, or `.pi/skills/sca/resources/flow.html`) and swap the header/legend/`N`/`E`/footer — the CSS + SVG rendering script are shared verbatim.
+Start from the retained research diagram at `.pi/skills/research/resources/flow.html`, then replace the header, legend, `N`, `E`, and footer while preserving the self-contained rendering pattern.
 
 ## Enforcement (validation scripts)
 
@@ -42,9 +42,9 @@ Start from an existing diagram (`.pi/skills/code/resources/flow.html`, `.pi/skil
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `.pi/skills/<skill>/resources/flow.html` | The skill's flow diagram (standard) |
-| `apps/orchestration/tests/test_flow_diagrams.py` | Drift guard (HTML ↔ FSM) |
-| `apps/orchestration/src/orchestration/playbooks/<skill>.py` | The playbook (`<Skill>Machine`) |
-| `docs/agents/skills/orchestration.md` | Engine-backed skill protocol |
+| File                                                        | Purpose                             |
+| ----------------------------------------------------------- | ----------------------------------- |
+| `.pi/skills/<skill>/resources/flow.html`                    | The skill's flow diagram (standard) |
+| `apps/orchestration/tests/test_flow_diagrams.py`            | Drift guard (HTML ↔ FSM)            |
+| `apps/orchestration/src/orchestration/playbooks/<skill>.py` | The playbook (`<Skill>Machine`)     |
+| `docs/agents/skills/orchestration.md`                       | Engine-backed skill protocol        |

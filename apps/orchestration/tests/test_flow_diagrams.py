@@ -30,32 +30,10 @@ from pathlib import Path
 
 import pytest
 
-from orchestration.playbooks.code import CodeMachine
-from orchestration.playbooks.derivation import DerivationMachine
-from orchestration.playbooks.imagegen import ImagegenMachine
-from orchestration.playbooks.jsa import JSAMachine
-from orchestration.playbooks.learn import LearnMachine
-from orchestration.playbooks.plan import PlanMachine
-from orchestration.playbooks.prd import PrdMachine
 from orchestration.playbooks.research import ResearchMachine
-from orchestration.playbooks.rez import RezMachine
-from orchestration.playbooks.sca import SCAMachine
-from orchestration.playbooks.videogen import VideogenMachine
 
-# (skill dir name, FSM class). Every HTML-diagram skill is enforced here.
-CASES = [
-    ("jsa", JSAMachine),
-    ("sca", SCAMachine),
-    ("code", CodeMachine),
-    ("plan", PlanMachine),
-    ("prd", PrdMachine),
-    ("learn", LearnMachine),
-    ("research", ResearchMachine),
-    ("derivation", DerivationMachine),
-    ("imagegen", ImagegenMachine),
-    ("videogen", VideogenMachine),
-    ("rez", RezMachine),
-]
+# (skill directory name, FSM class). Every retained HTML diagram is enforced.
+CASES = [("research", ResearchMachine)]
 
 
 def _skill_resources(skill: str) -> Path:

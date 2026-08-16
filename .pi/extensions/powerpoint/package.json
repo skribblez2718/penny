@@ -1,6 +1,6 @@
 {
   "name": "@penny/powerpoint-extension",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "main": "index.ts",
   "description": "PowerPoint tools for Penny — generate modern, well-designed .pptx presentations from structured slides or markdown with themed styling",
   "type": "module",

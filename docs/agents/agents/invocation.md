@@ -1,57 +1,68 @@
-# Agent Invocation — How agents are dispatched and executed
+# Agent Invocation — Dispatch, exact inputs, and capture
 
 ## What
 
-Agents are invoked via the `subagent` tool. The subagent extension assembles the system prompt from agent definition + skill context, spawns a Pi subprocess, and returns the agent's SUMMARY.
+`subagent` invokes one, parallel, or chained workers. Engine-backed skills use
+that same runner. Every worker starts with fresh model context and sees only its
+assembled prompt, task, allowlisted tools, and any exact owner grants.
 
-## Why
+## Assembly
 
-Understanding the invocation pipeline is essential for debugging agent behavior, timeout issues, and context injection problems.
+1. Read the requested entry from the `.pi/agents` local catalog.
+2. Inject optional static Domain Guidance before `<agent_boundary>`.
+3. Add Project Index and runtime context.
+4. Set the worker runtime role and strip approval/receipt secrets.
+5. Expose `artifact_read` only when trusted invocation metadata grants exact refs.
+6. Spawn the worker process.
 
-## Rules
+## Task contract
 
-1. **`subagent({ agent, task })` for direct invocation.** Penny calls this directly for ad-hoc delegation.
-2. **`subagent({ agent, task, skillContext })` for skill invocation.** The skill orchestrator provides the skill context path.
-3. **Task message includes goal, session ID, mempalace room.** Format: `Goal: <goal> | Session: <id> | Room: <room>`
-4. **Agents have no conversation history.** Pass all needed context in the task message or via mempalace pointers.
+A task contains:
 
-## Assembly Pipeline
+- the current goal and request-specific constraints;
+- current-run identifiers needed by the execution owner;
+- `input_artifacts` metadata for exact predecessors, when any;
+- an `output_artifact` contract when the owner must persist stage output.
 
-```
-1. Subagent extension reads agent file (.pi/agents/<name>.md)
-2. If skillContext provided, reads skill prompt and injects as <skill_context>
-3. Combines: agent body + <skill_context> + <agent_boundary>
-4. Writes to temp file → passes via --append-system-prompt
-5. Pi assembles: SYSTEM.md + temp file + AGENTS.md + date/cwd + <system_boundary>
-6. Task message becomes user message after <system_boundary>
-```
+Do not put predecessor payload bytes, durable-memory room pointers, or
+model-authored persistence claims in the task. If a granted artifact is larger
+than one result page, call `artifact_read` with the returned opaque continuation
+until `truncated` is false. Verify the canonical ref and digest supplied by the
+tool result.
 
-## Task Message Template
+## Completion
 
-```
-Goal: <one-sentence goal>
-Session: <session_id>
-Room: <mempalace_room>
-Constraints: <hard limits, if any>
-Context: <mempalace pointers, if any>
-```
+The worker returns complete task content. If Domain Guidance defines a
+`SUMMARY`, it appears at the end as compact routing data. For owner-managed
+workflows, the owner persists and verifies the exact final response before
+parsing that SUMMARY; persistence failure prevents the next state from running.
 
-## Constraints
+A direct single invocation may return the complete worker result to Penny. A
+chain persists every step and grants only the preceding canonical ref to the next
+worker. `{previous}` is a bounded instruction identifying that ref, never an
+inline payload substitute. Parallel branches receive no sibling grants.
 
-- **Task message ≤100 tokens for `task_summary`.** Full context in mempalace.
-- **No Cognitive Frame or Role Definition repeats in task message.**
-- **No template variables in task message.** Dynamic values only.
+## Recovery and compaction
+
+Selected run/artifact refs remain in durable owner checkpoints. A compaction
+summary may include a code-owned `[RESUME-REFS v2]` appendix with exact run and
+artifact addresses. Resume control state from the run checkpoint and read only
+currently granted artifacts; do not replace absent refs with semantic memory
+search. Typed continuation keeps large reads bounded and byte-exact.
 
 ## Verification
 
-- [ ] Task message includes goal, session ID, mempalace room
-- [ ] Agent SUMMARY returned to caller, full output in mempalace
-- [ ] No conversation history leaked to agent
+- [ ] Worker task includes exact refs, not workflow payload bytes.
+- [ ] Every granted ref is read with `artifact_read` through complete continuation.
+- [ ] Owner persistence and ref verification happen before SUMMARY routing.
+- [ ] Workers receive no durable-memory tools or room instructions.
+- [ ] Chain handoff is canonical-ref based and restart-safe.
+- [ ] Parallel branches remain isolated.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `.pi/extensions/subagent/index.ts` | Subagent extension implementation |
-| `.pi/extensions/subagent/agent-runner.ts` | Agent process management |
-| `docs/agents/agents/overview.md` | Agent architecture overview |
+| File                                 | Purpose                                    |
+| ------------------------------------ | ------------------------------------------ |
+| `.pi/extensions/subagent/README.md`  | Invocation modes and chain handoff         |
+| `.pi/extensions/artifacts/README.md` | Artifact read/grant protocol               |
+| `docs/penny/compaction-protocol.md`  | Context-safe continuation after compaction |

@@ -2,61 +2,69 @@
 
 ## What
 
-Agents are specialized subprocesses with isolated context. Each agent has a defined role, tool set, and constraints. Penny delegates to agents via the `subagent` tool; skills orchestrate them via state machines.
+Agents are specialized worker subprocesses with isolated model context, a
+project-local role definition, and a scoped tool set. Penny may work directly or
+delegate through `subagent`; engine-backed skills use the same worker path.
 
-## Why
+## Catalog and presence
 
-Agents provide domain expertise (specialized reasoning) and context preservation (offloading work from Penny's context window). Delegation keeps Penny's context bounded for orchestration and user interaction.
+`.pi/agents/*.md` frontmatter is the **project-local agent catalog**. Discovery
+reads that catalog only; it does not query durable memory, scan `PATH`, or infer
+availability from prior runs. Reload the Pi session after the catalog changes so
+the registered schema and execution snapshot agree.
+
+Remote harness or service presence belongs to the separate harness/service
+registry. Never duplicate or infer remote presence in `.pi/agents`.
 
 ## Rules
 
-1. **Penny routes; agents execute.** Penny decides which agent to invoke. The agent performs the work and returns a SUMMARY.
-2. **Full output stays in mempalace.** Agents write complete results to mempalace. Penny only receives the structured SUMMARY.
-3. **Agents are context-adaptive.** The same agent works across domains because domain-specific guidance comes from skill prompts, not the agent definition.
-4. **No agent variants.** Don't create `echo-weather.md`. Add Domain Guidance to the skill instead.
-
-## Agent Roster
-
-| Agent | Role | Key Constraint |
-|-------|------|---------------|
-| **echo** | Gather context, investigate | READ-ONLY |
-| **piper** | Create execution plans | DOMAIN-AGNOSTIC |
-| **carren** | Critique, review | READ-ONLY, NO REWRITING |
-| **tabitha** | Convert plans to tasks | ATOMIC tasks |
-| **skribble** | Scaffold files | Write from specs only |
-| **vera** | Validate compliance | Assertions only |
-| **synthia** | Synthesize findings | Read + mempalace only |
-| **annie** | Deep analysis | Domain-specific |
+1. **Use the lowest-complexity sufficient path.** Delegate only when role
+   specialization, separate context, parallel work, or separate judgment earns
+   the handoff.
+2. **Workers have no durable-memory tools.** Durable recall, curated writes, the
+   primary diary, and governed temporal KG operations belong to the unmarked
+   primary runtime.
+3. **Exact current-run inputs use artifacts.** When the execution owner grants
+   `input_artifacts`, the worker reads each with `artifact_read` and follows
+   typed continuation until complete. Workers cannot list, search, guess, or
+   self-grant artifacts.
+4. **Return complete work.** The execution owner captures exact response bytes
+   before a routing `SUMMARY` may advance a workflow. `SUMMARY` is routing data,
+   not the stage artifact.
+5. **Keep roles domain-adaptive.** Domain-specific criteria come from injected
+   Domain Guidance; do not create domain variants of an existing role.
 
 ## Lifecycle
 
-1. **Invocation:** Penny or skill orchestrator calls `subagent({ agent, task, skillContext })`
-2. **Assembly:** Subagent extension combines agent body + skill context + agent_boundary
-3. **Execution:** Pi spawns agent subprocess with assembled system prompt + task message
-4. **Completion:** Agent writes full output to mempalace, returns SUMMARY to caller
+1. Discover the requested role from the `.pi/agents` catalog.
+2. Assemble Cognitive Frame + Role Definition + optional Domain Guidance.
+3. Construct a current-run task with constraints and exact artifact grants.
+4. Spawn a fresh worker process with the role's tool allowlist; expose
+   `artifact_read` only when an owner grant exists.
+5. Capture the worker's complete final response, persist and verify it when an
+   owner output contract exists, then parse any required routing `SUMMARY`.
 
-## Three-Tier Routing
+## Isolation
 
-1. **Direct** — Penny does it (single tool call, trivial)
-2. **Agent** — `subagent({ agent, task })` (matches specialty, >1 step)
-3. **Skill** — `skill({ skill_name, goal })` (multi-agent orchestration)
-
-## Constraints
-
-- **Never ingest full agent output into Penny's context.** Read SUMMARY only.
-- **Never create agent variants for different domains.** Use Domain Guidance.
-- **All agents must have the four memory tools.**
+Separate context is not filesystem isolation. Direct and skill-invoked workers
+run in separate Pi processes with tool allowlists but with the invoking user's OS
+permissions. Approval and receipt secrets are stripped from worker environments.
+Use an external container or VM for untrusted or unattended work.
 
 ## Verification
 
-- [ ] Agent definitions follow `definition-format.md`
-- [ ] No agent variants exist (one file per role)
-- [ ] All agents have memory tools
+- [ ] Every local agent is represented by one `.pi/agents/<name>.md` catalog file.
+- [ ] No worker frontmatter contains a `memory_*` tool.
+- [ ] Every worker frontmatter declares `artifact_read`; the runner suppresses it
+      when no exact grant exists.
+- [ ] Remote presence is represented only in the harness/service registry.
+- [ ] Owner-captured output precedes SUMMARY routing.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `docs/agents/agents/definition-format.md` | Agent file structure |
-| `docs/agents/agents/invocation.md` | Invocation patterns |
-| `docs/agents/agents/discovery-and-tools.md` | Tool discovery |
+| File                                           | Purpose                             |
+| ---------------------------------------------- | ----------------------------------- |
+| `docs/agents/agents/definition-format.md`      | Agent catalog entry format          |
+| `docs/agents/agents/discovery-and-tools.md`    | Catalog discovery and tool exposure |
+| `docs/agents/agents/invocation.md`             | Invocation and exact handoff        |
+| `docs/agents/agents/system-prompt-security.md` | Trust and runtime controls          |

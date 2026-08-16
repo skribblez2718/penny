@@ -74,19 +74,14 @@ When creating a new extension, add it to the root `package.json` workspaces **im
 ```json
 {
   "workspaces": [
-    ".pi/extensions/caido",
     ".pi/extensions/compaction",
-    ".pi/extensions/cve-lookup",
     ".pi/extensions/environment",
-    ".pi/extensions/javascript",
-    ".pi/extensions/jsluice",
     ".pi/extensions/memory",
     ".pi/extensions/observability",
-    ".pi/extensions/pdf2markdown",
     ".pi/extensions/playwright",
     ".pi/extensions/powerpoint",
     ".pi/extensions/questionnaire",
-    ".pi/extensions/semgrep",
+    ".pi/extensions/search",
     ".pi/extensions/skill",
     ".pi/extensions/statusline",
     ".pi/extensions/subagent",
@@ -185,6 +180,7 @@ Key settings:
 Pi loads and evaluates all extension **module code** before calling any extension's factory function. If an extension reads `process.env` at module scope (top level), it captures values **before** the `environment` extension has a chance to load `.env` into `process.env`.
 
 This creates a silent race condition that happens to work when extensions load in alphabetical order (`environment` → `observability`), but breaks if:
+
 - Pi ever parallelizes extension loading
 - Directory ordering changes on a different filesystem
 - A new extension reads env vars before `environment` loads
@@ -194,6 +190,7 @@ This creates a silent race condition that happens to work when extensions load i
 **Never** read `process.env` at module scope. **Always** read environment variables inside the factory function body.
 
 **Incorrect (fragile):**
+
 ```typescript
 // BAD — evaluated at module import time, before .env is loaded
 const CONFIG = {
@@ -207,6 +204,7 @@ export default function (pi: ExtensionAPI) {
 ```
 
 **Correct (robust):**
+
 ```typescript
 // GOOD — evaluated inside factory, after .env is loaded
 interface MyExtConfig {
@@ -239,7 +237,7 @@ Hardcoded constants that do **not** read `process.env` can stay at module scope:
 
 ```typescript
 const DEFAULT_TIMEOUT_MS = 30000; // OK — no env read
-const MAX_RETRIES = 5;            // OK — no env read
+const MAX_RETRIES = 5; // OK — no env read
 ```
 
 ### Verification Checklist Addition
@@ -709,13 +707,13 @@ logger.error("Operation failed", { target }, err);
 
 ### Severity Guidelines
 
-| Level | Use When |
-|-------|----------|
-| `debug` | Internal state transitions, fine-grained diagnostics |
-| `info` | Normal lifecycle events (extension loaded, tool succeeded) |
-| `warn` | Degraded but functional (binary not found, deprecated usage) |
-| `error` | Operation failed, recoverable (retry needed, fallback used) |
-| `critical` | Data loss risk, unrecoverable state |
+| Level      | Use When                                                     |
+| ---------- | ------------------------------------------------------------ |
+| `debug`    | Internal state transitions, fine-grained diagnostics         |
+| `info`     | Normal lifecycle events (extension loaded, tool succeeded)   |
+| `warn`     | Degraded but functional (binary not found, deprecated usage) |
+| `error`    | Operation failed, recoverable (retry needed, fallback used)  |
+| `critical` | Data loss risk, unrecoverable state                          |
 
 ### Verification Checklist Addition
 

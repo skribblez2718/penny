@@ -6,43 +6,31 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _clear_skill_model_routing_env(monkeypatch):
-    """Keep playbook tests hermetic against the operator's ``.env``.
+def _clear_model_routing_env(monkeypatch, tmp_path):
+    """Keep tests hermetic against operator model-routing and ablation settings.
 
-    The jsa/sca skills support env-driven per-agent model routing
-    (``JSA_<AGENT>`` / ``JSA_DEFAULT`` / ``SCA_*`` = ``provider/model``), read by
-    ``model_for_state``. A developer's ambient ``.env`` (e.g.
-    ``JSA_DEFAULT=ollama/glm``) would otherwise flip ``model_for_state`` and break
-    tests that assert the *code's* default (no model override). Clear those keys
-    before every test; tests that exercise routing set them explicitly via
-    ``monkeypatch.setenv`` (which applies after this autouse fixture).
-
-    The same hazard applies to the model-JUDGMENT and loan-ablation switches. With
-    ``PI_STALL_MODEL`` / ``PI_STRATEGY_MODEL`` / ``PI_GATE_INTENT_MODEL`` set, the loop
-    guards and gate parser stop comparing strings and SPAWN A LIVE MODEL mid-test —
-    slow, flaky, and it inverts the very behaviour the guard tests assert.
-    ``PI_MODEL_TIER`` rescales budgets, and ``PENNY_ABLATE_*`` disables tagged loans.
-    All are cleared so the suite tests the CODE's defaults; tests that exercise them
-    set them explicitly via ``monkeypatch.setenv``.
-
-    ``PENNY_UNCERTAINTY_RETRY`` belongs here for a sharper reason than the rest: it
-    changes WHEN the HITL seam fires for every skill (an UNCERTAIN step gets one
-    bounded compute retry before reaching a human), so with it ambient in the
-    environment, every "UNCERTAIN escalates" test in the suite asserts the wrong thing.
-    Measured: 10 such tests across 5 skills fail with it set. Clearing it keeps the
-    suite testing the DEFAULT (dormant) configuration; the enabled path is covered
-    generically by ``test_uncertainty_retry.py``, which sets it explicitly.
-
+    Research supports environment-driven model selection. Generic loop-judgment,
+    capability-tier, uncertainty-retry, and loan-ablation switches can also alter
+    control flow or spawn a live model. Tests set these variables explicitly when
+    exercising those paths; ambient values are removed before every test.
     """
-    _PREFIXES = ("JSA_", "SCA_", "PENNY_ABLATE_")
-    _EXACT = {
+    prefixes = ("RESEARCH_", "PENNY_ABLATE_", "MEMPALACE_", "PENNY_MEMORY_")
+    exact = {
         "PI_STALL_MODEL",
         "PI_STRATEGY_MODEL",
         "PI_GATE_INTENT_MODEL",
-        "PI_CODE_DETECT_MODEL",
         "PI_MODEL_TIER",
         "PENNY_UNCERTAINTY_RETRY",
+        "PI_MEMORY_BRIDGE",
+        "PENNY_RECEIPT_HMAC_KEY",
+        "PENNY_ARTIFACT_DISPATCH_MODE",
     }
     for key in list(os.environ):
-        if key.startswith(_PREFIXES) or key in _EXACT:
+        if key.startswith(prefixes) or key in exact:
             monkeypatch.delenv(key, raising=False)
+    # Every test gets a private artifact plane and no ambient memory service.
+    # Bare SUMMARYs remain available only through this explicitly test-named seam;
+    # the production CLI does not set it and therefore requires protocol v2.
+    monkeypatch.setenv("PENNY_ARTIFACT_ROOT", str((tmp_path / "artifacts").resolve()))
+    monkeypatch.setenv("PENNY_RECEIPT_HMAC_KEY", "5a" * 32)
+    monkeypatch.setenv("PENNY_ORCH_TEST_ALLOW_PROGRAMMATIC_RESULTS", "1")

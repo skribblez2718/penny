@@ -5,6 +5,9 @@ import json
 import pytest
 
 from orchestration import cli
+from orchestration.playbooks import PLAYBOOKS, get_playbook
+from orchestration.playbooks.reference_cycle import ReferenceCycle
+from orchestration.playbooks.research import ResearchPlaybook
 
 
 @pytest.fixture(autouse=True)
@@ -18,10 +21,19 @@ def _isolate(tmp_path, monkeypatch):
     yield
 
 
-def _run(capsys, argv) -> dict:
+def _run(capsys, argv) -> tuple[dict, int]:
     rc = cli.main(default_playbook="reference-cycle", argv=argv)
     out = capsys.readouterr().out.strip()
     return json.loads(out), rc
+
+
+def test_registry_contains_exactly_research_and_internal_reference_cycle():
+    assert PLAYBOOKS == {
+        "research": ResearchPlaybook,
+        "reference-cycle": ReferenceCycle,
+    }
+    assert get_playbook("research") is ResearchPlaybook
+    assert get_playbook("reference-cycle") is ReferenceCycle
 
 
 def test_start_emits_first_directive(capsys):

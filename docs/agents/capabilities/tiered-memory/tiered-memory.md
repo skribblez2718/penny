@@ -1,63 +1,45 @@
-# Tiered Memory — Five-tier context management for agents
+# Tiered Memory — Operational capability
 
-## What
+## Runtime ownership
 
-Memory is organized into five tiers. T0 (identity) is always injected. T1 (active session) is in conversation. T2 (working) is pre-turn injected. T3 (reference) is on-demand. T4 (archive) is search-only.
+The unmarked primary runtime alone exposes durable-memory tools. Worker and
+skill-driver processes expose none. Active workflow handoff uses immutable
+owner artifacts, and orchestration state uses the checkpointer.
 
-## Why
+## Tiers
 
-Without tiering, every memory competes for the same context window. Tiering ensures recent, high-signal memories get priority.
+| Tier | Content                                   | Retrieval                        |
+| ---- | ----------------------------------------- | -------------------------------- |
+| T0   | Stable frame/identity                     | Always present.                  |
+| T1   | Conversation + compact run state/refs     | Current context/checkpointer.    |
+| T2   | Primary diary and warm classified data    | Bounded relevant primary recall. |
+| T3   | Curated durable knowledge and temporal KG | Explicit primary recall.         |
+| T4   | Cold archive / legacy corpus              | Manual offline recovery only.    |
 
-## Rules
+## Operational rules
 
-1. **T2 injection is bounded.** Pre-turn smart search: ≤5 results, ≤4,000 tokens.
-2. **T3 is never pre-injected.** Load reference material only on explicit request.
-3. **T4 is never injected.** Archive is search-only.
-4. **Store before compaction.** If information would be lost when Pi compacts conversation, write it to mempalace first.
-
-## Tier Map
-
-| Tier | Content | Injection | Trigger |
-|------|---------|-----------|---------|
-| T0 | SYSTEM.md | Always | Pi session start |
-| T1 | Current conversation, FSM state | Always | In context |
-| T2 | `penny/audit` (30d), `penny/diary` (90d) | Pre-turn | `memory_smart_search` every message |
-| T3 | `penny/skills`, `penny/architecture`, `penny/decisions` (permanent); KG | On-demand | Agent `read` or `memory_smart_search` |
-| T4 | Old sessions | Search only | Explicit broad query |
-
-## Injection Protocol
-
-| Tier | Query |
-|------|-------|
-| T2 | `memory_smart_search(query="<current task>", wing="penny", room="diary", limit=5)` |
-| T3 | `memory_smart_search` + `memory_kg_query` + AGENTS.md traversal |
-| T4 | `memory_smart_search` with broad queries |
-
-## Distillation
-
-| Transition | Trigger | Action |
-|-----------|---------|--------|
-| T1 → T2 | Session end | `memory_diary_write` |
-| T2 → T4 | Per-room TTL | `scripts/system/tiered_memory/archiver.py` |
-
-Core room TTLs are configured in `scripts/system/tiered_memory/archiver.py`; per-skill scratch defaults come from `scripts/system/tiered_memory/skill_rooms.json`. They are not global law — tune the relevant rule rather than treating the cadence as fixed.
-
-## Constraints
-
-- **T0 ceiling:** 2,500 tokens
-- **T2 budget:** ≤4,000 tokens per injection
-- **T3 is never pre-injected**
-- **Pi native compaction is T4** — supplement, don't duplicate
+- Search only when prior context could materially affect the task.
+- Start with bounded summaries; use exact reads and typed continuation only when needed.
+- Curate stable reusable results; skip routine/transient output.
+- Rely on write-path duplicate enforcement rather than a routine duplicate precheck.
+- Write the primary diary only from the primary runtime.
+- Add KG facts only when future traversal/invalidation value justifies them.
+- Treat old skill rooms as legacy corpus, never active handoff or deletion authority.
+- Use one authenticated supervised MemPalace 3.7.1 HTTP hub; no production/admin raw fallback.
+- Keep uninstall data-preserving.
 
 ## Verification
 
-- [ ] T2 injection returns ≤5 results
-- [ ] No T3 content in pre-turn injection
-- [ ] Diary written at session end
+- [ ] No retrieved memory appears in worker directives.
+- [ ] No worker memory tool or lifecycle hook exists.
+- [ ] Artifact continuation is complete and exact for workflow inputs.
+- [ ] Retention apply is reviewed, manifest-bound, archive-first, and journaled.
+- [ ] Offline byte access is receipt-bound to a copied target.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `docs/agents/architecture/tiered-memory.md` | Full architecture |
-| `scripts/system/tiered_memory/archiver.py` | T2→T4 archival |
+| File                                        | Purpose                     |
+| ------------------------------------------- | --------------------------- |
+| `docs/agents/architecture/tiered-memory.md` | Full architecture           |
+| `docs/agents/memory/integration.md`         | HTTP and primary policy     |
+| `docs/agents/memory/schema.md`              | Retention and legacy corpus |

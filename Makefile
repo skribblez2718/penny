@@ -1,4 +1,4 @@
-.PHONY: setup venv install-py install-js init sca-tools clean test test-integration check-public lint format evals evals-update-baseline trajectory
+.PHONY: setup venv install-py install-js init clean test test-integration check-public lint format evals evals-update-baseline trajectory
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 
@@ -21,13 +21,6 @@ install-js:
 
 init:
 	bash scripts/setup/setup.sh
-
-# Provision the external tools the `sca` skill needs (osv-scanner, gitleaks,
-# trivy, trufflehog, njsscan[isolated venv], retire.js, eslint-security, codeql).
-# Already invoked as part of `make setup` (via init -> setup.sh init-*.sh glob);
-# this target lets you re-run just the sca tool provisioning.
-sca-tools:
-	bash scripts/setup/init-sca-tools.sh
 
 # ── Development ─────────────────────────────────────────────────────────────
 
@@ -56,7 +49,7 @@ test:
 	@echo ""
 	@bash -c 'set -uo pipefail; source .venv/bin/activate; \
 	  export PYTEST_TIMEOUT=$(PYTEST_TIMEOUT); rc=0; \
-	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests apps/orchestration/tests apps/observability/tests apps/observability/src/observability/tests .pi/extensions/memory/tests .pi/extensions/powerpoint/tests/python; do \
+	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests apps/orchestration/tests apps/observability/tests apps/observability/src/observability/tests .pi/extensions/powerpoint/tests/python .pi/extensions/word/tests/python; do \
 	    [ -d "$$d" ] || continue; \
 	    echo "==================== pytest $$d ===================="; \
 	    python -m pytest "$$d" -p no:cacheprovider -m "$(PYTEST_MARKERS)" --tb=short -q || rc=1; \
@@ -64,13 +57,13 @@ test:
 	  exit $$rc'
 
 # Full suite including heavy/external tests (network, integration, slow, e2e).
-# These auto-skip when their external dependency (network, Ollama, Joern, ...) is
-# absent, so this stays green on machines without those services.
+# These auto-skip when their external dependency (for example network or Ollama)
+# is absent, so this stays green on machines without those services.
 test-integration:
 	bun run test:integration
 	@bash -c 'set -uo pipefail; source .venv/bin/activate; \
 	  export PYTEST_TIMEOUT=$(PYTEST_TIMEOUT); rc=0; \
-	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests .pi/extensions/memory/tests .pi/extensions/powerpoint/tests/python; do \
+	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests .pi/extensions/powerpoint/tests/python .pi/extensions/word/tests/python; do \
 	    [ -d "$$d" ] || continue; \
 	    echo "==================== pytest $$d ===================="; \
 	    python -m pytest "$$d" -p no:cacheprovider --tb=short -q || rc=1; \
@@ -111,5 +104,5 @@ format:
 # ── Cleanup ─────────────────────────────────────────────────────────────────
 
 clean:
-	rm -rf .venv node_modules .mempalace
-	@echo "Cleaned. Run 'make setup' to rebuild."
+	rm -rf .venv node_modules
+	@echo "Cleaned code dependencies; memory data was preserved. Run 'make setup' to rebuild."

@@ -1,5 +1,4 @@
-"""Bitter-Lesson / atomic-loop compliance seams on the engine (PRD
-/tmp/prd-orch-bitter-lesson — R3/R4/R5/R6/R8):
+"""Bitter-Lesson and atomic-loop compliance seams on the engine:
 
 * safe completion default — base ``done_predicate`` is False (invariant 3);
 * iteration-budget backstop — routing past ``max_iterations`` forces HONEST

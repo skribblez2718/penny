@@ -19,17 +19,17 @@ Most Penny skills follow one of a few workflow shapes. Starting from a shape kee
 
 ### Pattern selection guide
 
-| Workflow shape | Pattern | Engine features |
-| --- | --- | --- |
-| Red-green-refactor with retry loop | TDD cycle | `route_after` loopback + `ctx.max_iterations` |
-| Gather → analyze → synthesize | Research flow | Conditional routing; optional `PARALLEL_BY_STATE` gather |
-| Frame → explore → evaluate → decide | Decision flow | Routing on criteria/option counts; optional `GATE_STATES` |
-| Improve → evaluate until threshold | Iterative refinement | Bounded loop + honest exhaustion edge |
-| Wait for user / external input | Event / HITL | `GATE_STATES` (planned) or `awaiting_clarification` (escalation) |
+| Workflow shape                      | Pattern              | Engine features                                                  |
+| ----------------------------------- | -------------------- | ---------------------------------------------------------------- |
+| Red-green-refactor with retry loop  | TDD cycle            | `route_after` loopback + `ctx.max_iterations`                    |
+| Gather → analyze → synthesize       | Research flow        | Conditional routing; optional `PARALLEL_BY_STATE` gather         |
+| Frame → explore → evaluate → decide | Decision flow        | Routing on criteria/option counts; optional `GATE_STATES`        |
+| Improve → evaluate until threshold  | Iterative refinement | Bounded loop + honest exhaustion edge                            |
+| Wait for user / external input      | Event / HITL         | `GATE_STATES` (planned) or `awaiting_clarification` (escalation) |
 
 ## Procedure/Constraints
 
-Each pattern below shows the `StateMachine` and the playbook hooks. `PrimitiveSpec`/`ParallelSpec` definitions and per-state task prompts are elided for brevity — see `orchestration/playbooks/code.py` and `plan.py` for full examples.
+Each pattern below shows the `StateMachine` and playbook hooks. `PrimitiveSpec`/`ParallelSpec` definitions and per-state task prompts are elided for brevity; see `orchestration/playbooks/research.py` for the current complete example.
 
 ### Pattern 1: TDD cycle (red → green → refactor, bounded retry)
 
@@ -196,10 +196,10 @@ Use a planned gate when the pause is expected at a fixed point (plan approval, d
 
 ### Simple vs. parallel states
 
-| Use simple sequential states when... | Use `PARALLEL_BY_STATE` when... |
-| --- | --- |
-| The workflow is a straight sequence or a bounded loop | One phase fans out into N independent branch agents that all report before routing |
-| Routing is easy to scan in `route_after` | The engine aggregates the branch SUMMARYs before `route_after` runs (see `plan.py`) |
+| Use simple sequential states when...                  | Use `PARALLEL_BY_STATE` when...                                                     |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| The workflow is a straight sequence or a bounded loop | One phase fans out into N independent branch agents that all report before routing  |
+| Routing is easy to scan in `route_after`              | The engine aggregates branch SUMMARYs before `route_after` runs (see `research.py`) |
 
 ## Verification
 
@@ -212,11 +212,9 @@ Use a planned gate when the pause is expected at a fixed point (plan approval, d
 
 ## Files
 
-| File | Purpose |
-| --- | --- |
-| `docs/agents/state-management/skill-patterns.md` | This pattern catalog |
-| `docs/agents/state-management/state-machine-reference.md` | FSM + playbook API details |
-| `docs/agents/state-management/orchestration-integration.md` | How the engine drives a playbook |
-| `apps/orchestration/src/orchestration/playbooks/code.py` | TDD-cycle reference (loop + two gates) |
-| `apps/orchestration/src/orchestration/playbooks/plan.py` | Parallel-fan-out reference |
-</content>
+| File                                                         | Purpose                                                                           |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `docs/agents/state-management/skill-patterns.md`             | This pattern catalog                                                              |
+| `docs/agents/state-management/state-machine-reference.md`    | FSM + playbook API details                                                        |
+| `docs/agents/state-management/orchestration-integration.md`  | How the engine drives a playbook                                                  |
+| `apps/orchestration/src/orchestration/playbooks/research.py` | Current reference for dynamic fan-out, critique loops, validation, and escalation |

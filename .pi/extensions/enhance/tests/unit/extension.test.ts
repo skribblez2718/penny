@@ -57,6 +57,16 @@ function fakeSession(texts: string[]) {
   };
 }
 
+/** Auth resolution result shape; fields are optional so keyless-provider and
+ *  failure overrides stay assignable to the same mock type (Mock<T> is invariant). */
+interface FakeAuth {
+  ok: boolean;
+  apiKey?: string;
+  headers?: Record<string, string>;
+  env?: Record<string, string>;
+  error?: string;
+}
+
 function fakeCtx(overrides: Record<string, unknown> = {}) {
   return {
     hasUI: true,
@@ -64,20 +74,26 @@ function fakeCtx(overrides: Record<string, unknown> = {}) {
     sessionManager: fakeSession([]),
     model: { provider: "ollama", id: "glm-5.2:cloud" },
     modelRegistry: {
-      find: vi.fn(() => undefined),
-      getApiKeyAndHeaders: vi.fn(async () => ({
-        ok: true,
-        apiKey: "ollama",
-        headers: {},
-        env: {},
-      })),
+      find: vi.fn((): { provider: string; id: string } | undefined => undefined),
+      getApiKeyAndHeaders: vi.fn(
+        async (): Promise<FakeAuth> => ({
+          ok: true,
+          apiKey: "ollama",
+          headers: {},
+          env: {},
+        })
+      ),
     },
     ...overrides,
   };
 }
 
+// Three declared params so `.mock.calls[n][1]` (the request) is typed.
 function fakeComplete(text: string, stopReason = "stop") {
-  return vi.fn(async () => ({ content: [{ type: "text", text }], stopReason }));
+  return vi.fn(async (_model: unknown, _request: unknown, _options: unknown) => ({
+    content: [{ type: "text", text }],
+    stopReason,
+  }));
 }
 
 beforeEach(() => {
@@ -261,7 +277,9 @@ describe("input handler", () => {
     const cap = capturePi();
     enhance(cap.pi, { completeFn: fakeComplete("Goal: enhanced") });
     const ctx = fakeCtx();
-    ctx.modelRegistry.getApiKeyAndHeaders = vi.fn(async () => ({ ok: true, headers: {}, env: {} }));
+    ctx.modelRegistry.getApiKeyAndHeaders = vi.fn(
+      async (): Promise<FakeAuth> => ({ ok: true, headers: {}, env: {} })
+    );
     const result = await cap.inputHandler()(
       { type: "input", text: FLAGGED, source: "interactive" },
       ctx
@@ -274,7 +292,9 @@ describe("input handler", () => {
     const completeFn = fakeComplete("never");
     enhance(cap.pi, { completeFn });
     const ctx = fakeCtx();
-    ctx.modelRegistry.getApiKeyAndHeaders = vi.fn(async () => ({ ok: false, error: "nope" }));
+    ctx.modelRegistry.getApiKeyAndHeaders = vi.fn(
+      async (): Promise<FakeAuth> => ({ ok: false, error: "nope" })
+    );
     const result = await cap.inputHandler()(
       { type: "input", text: FLAGGED, source: "interactive" },
       ctx
@@ -349,7 +369,7 @@ describe("input handler", () => {
     enhance(cap.pi, { completeFn: fakeComplete("Goal: enhanced") });
     const ctx = fakeCtx();
     const flash = { provider: "ollama", id: "deepseek-v4-flash:cloud" };
-    ctx.modelRegistry.find = vi.fn(() => flash);
+    ctx.modelRegistry.find = vi.fn((): { provider: string; id: string } | undefined => flash);
     await cap.inputHandler()({ type: "input", text: FLAGGED, source: "interactive" }, ctx);
     expect(ctx.modelRegistry.find).toHaveBeenCalledWith("ollama", "deepseek-v4-flash:cloud");
     expect(ctx.modelRegistry.getApiKeyAndHeaders).toHaveBeenCalledWith(flash);

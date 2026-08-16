@@ -1,7 +1,7 @@
 """obs_client — best-effort emission of orchestration digests to the server.
 
 Design invariants (pack §7):
-  * **Digests only** — never full agent output (that lives in MemPalace).
+  * **Digests only** — never full agent output (exact bytes live in the artifact plane).
   * **Fail silent** — a down/slow server NEVER raises, NEVER blocks a run, and
     adds no latency beyond the first-attempt timeout. A process-lifetime circuit
     breaker trips after the first failure so later emissions are instant no-ops.

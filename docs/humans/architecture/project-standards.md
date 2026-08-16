@@ -4,15 +4,16 @@
 
 Project standards are the approved implementations for common concerns in Penny's codebase. For each concern — state management, memory, agent tooling, extensions, user input, TypeScript, package management — there is exactly one approved choice. Custom alternatives are not allowed.
 
-| Concern | The Approved Choice |
-| --- | --- |
+| Concern          | The Approved Choice                                                                                                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | State management | Shared orchestration engine (`apps/orchestration/`) — durable SQLite checkpointer keyed by `run_id`; each skill is a `BasePlaybook` subclass with a ~5-line delegate `orchestrate.py` |
-| Memory | Mempalace (`memory_*` tools) |
-| Agent tooling | YAML frontmatter `tools:` field |
-| Extensions | Always loaded; `--no-extensions` is never used |
-| User input | The `questionnaire` extension |
-| TypeScript | A `tsconfig.json` per extension with `noEmit: true` |
-| Package manager | `bun` |
+| Workflow handoff | Execution-owner immutable artifacts with grant-bound `artifact_read` and typed continuation                                                                                           |
+| Memory           | Primary-only durable recall/curation through one supervised MemPalace 3.7.1 HTTP hub; no raw fallback                                                                                 |
+| Agent tooling    | `.pi/agents` local catalog frontmatter; remote presence in the harness/service registry                                                                                               |
+| Extensions       | Always loaded; `--no-extensions` is never used                                                                                                                                        |
+| User input       | The `questionnaire` extension                                                                                                                                                         |
+| TypeScript       | A `tsconfig.json` per extension with `noEmit: true`                                                                                                                                   |
+| Package manager  | `bun`                                                                                                                                                                                 |
 
 These choices are not preferences. They are constraints. If a skill or extension needs to do one of these things, it uses the standard implementation.
 
@@ -40,18 +41,18 @@ The goal is not bureaucracy. It is to make the right choice the easy choice.
 
 Before any feature or fix can be called complete, it must pass ten checks. This protocol exists because "it works on my machine" is not enough for a system that other agents and humans rely on.
 
-| # | Check | What It Means |
-| --- | --- | --- |
-| 1 | Lint clean | The code passes `flake8` or `bun run lint` |
-| 2 | Unit tests | Every public function has tests |
-| 3 | Integration tests | Multi-module interactions are tested |
-| 4 | E2E tests | The full lifecycle is exercised. This is mandatory, not optional |
-| 5 | Regression tests | Existing test suites still pass |
-| 6 | Human docs | `docs/humans/` is accurate and up to date |
-| 7 | Agent docs | `docs/agents/` is accurate and up to date |
-| 8 | `AGENTS.md` index | The feature is indexed in the right place |
-| 9 | Prompt architecture | Token budgets are respected and domain content stays out of the Cognitive Frame |
-| 10 | False claims audit | No inflated test counts or overstated coverage |
+| #   | Check               | What It Means                                                                   |
+| --- | ------------------- | ------------------------------------------------------------------------------- |
+| 1   | Lint clean          | The code passes `flake8` or `bun run lint`                                      |
+| 2   | Unit tests          | Every public function has tests                                                 |
+| 3   | Integration tests   | Multi-module interactions are tested                                            |
+| 4   | E2E tests           | The full lifecycle is exercised. This is mandatory, not optional                |
+| 5   | Regression tests    | Existing test suites still pass                                                 |
+| 6   | Human docs          | `docs/humans/` is accurate and up to date                                       |
+| 7   | Agent docs          | `docs/agents/` is accurate and up to date                                       |
+| 8   | `AGENTS.md` index   | The feature is indexed in the right place                                       |
+| 9   | Prompt architecture | Token budgets are respected and domain content stays out of the Cognitive Frame |
+| 10  | False claims audit  | No inflated test counts or overstated coverage                                  |
 
 If any check fails, the change is rolled back, fixed, and all checks are re-run.
 

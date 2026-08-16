@@ -20,20 +20,9 @@ export default tseslint.config(
       "plans/**",
       "docs/**",
       "ideas/**",
-      // Non-production sources — deliberately-vulnerable examples and research
-      // artifacts, not runtime code we ship. Linting them is meaningless (their
-      // whole purpose is to contain the anti-patterns eslint flags):
-      //   - semgrep's rule library / pattern fixtures (data for semgrep, not TS)
-      //   - CVE proof-of-concept research
-      //   - the jsa vulnerable-app test fixtures
-      //   - ablation harness case fixtures (sample projects a detector reads;
-      //     they intentionally carry no tsconfig.json, which type-aware linting
-      //     requires — note this path is NOT under a `tests/` dir, so the
-      //     `**/tests/fixtures/**` glob above does not cover it)
-      ".pi/extensions/semgrep/rules/**",
+      // Non-production research artifacts and test fixtures are not runtime code.
       "research/**",
       "**/tests/fixtures/**",
-      "scripts/system/ablation/fixtures/**",
     ],
   },
   {

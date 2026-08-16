@@ -9,13 +9,13 @@ describe("compaction extension structured logging", () => {
     setSessionId("compact-session-002");
   });
 
-  it("emits structured ERROR log for mempalace query failure with COMPACTION_MEMPALACE_QUERY_FAILED code", () => {
-    const err = Object.assign(new Error("Query rejected"), {
-      code: "COMPACTION_MEMPALACE_QUERY_FAILED",
+  it("emits a structured checkpointer read failure", () => {
+    const err = Object.assign(new Error("Read rejected"), {
+      code: "COMPACTION_ENGINE_QUERY_FAILED",
     });
-    logger.error("Mempalace query failed during compaction", { error: "Query rejected" }, err);
+    logger.error("Exact checkpointer read failed", { error: "Read rejected" }, err);
     expect(buffer).toHaveLength(1);
-    expect(buffer[0].error?.code).toBe("COMPACTION_MEMPALACE_QUERY_FAILED");
+    expect(buffer[0].error?.code).toBe("COMPACTION_ENGINE_QUERY_FAILED");
   });
 
   it("emits structured ERROR log for validation failure with COMPACTION_VALIDATION_FAILED code", () => {
@@ -25,9 +25,9 @@ describe("compaction extension structured logging", () => {
     expect(buffer[0].error?.code).toBe("COMPACTION_VALIDATION_FAILED");
   });
 
-  it("emits structured WARN log for token budget overflow with COMPACTION_BUDGET_OVERFLOW code", () => {
+  it("emits a structured shared result-budget overflow", () => {
     const err = Object.assign(new Error("Budget exceeded"), { code: "COMPACTION_BUDGET_OVERFLOW" });
-    logger.warn("Compaction token budget exceeded", { budget: 10000, actual: 12000 }, err);
+    logger.warn("Compaction result budget exceeded", { budget: 10000, actual: 12000 }, err);
     expect(buffer).toHaveLength(1);
     expect(buffer[0].error?.code).toBe("COMPACTION_BUDGET_OVERFLOW");
   });

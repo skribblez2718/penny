@@ -15,16 +15,16 @@ will not resolve.
   "providers": {
     "anthropic": {
       "modelOverrides": {
-        "claude-opus-4-8":  { "name": "opus" },
-        "claude-sonnet-5":  { "name": "sonnet" },
+        "claude-opus-4-8": { "name": "opus" },
+        "claude-sonnet-5": { "name": "sonnet" },
         "claude-haiku-4-5": { "name": "haiku" }
       }
     },
     "openai-codex": {
       "modelOverrides": {
-        "gpt-5.6-sol":   { "name": "sol",   "contextWindow": 272000, "maxTokens": 128000 },
+        "gpt-5.6-sol": { "name": "sol", "contextWindow": 272000, "maxTokens": 128000 },
         "gpt-5.6-terra": { "name": "terra", "contextWindow": 272000, "maxTokens": 128000 },
-        "gpt-5.6-luna":  { "name": "luna",  "contextWindow": 272000, "maxTokens": 128000 }
+        "gpt-5.6-luna": { "name": "luna", "contextWindow": 272000, "maxTokens": 128000 }
       }
     }
   }
@@ -53,11 +53,11 @@ limits are bound together in one override.
 Anthropic one. Both alias sets stay defined so the fleet can be swapped back by editing
 frontmatter alone.
 
-| Tier      | OpenAI (current fleet) | Anthropic (dormant) |
-| --------- | ---------------------- | ------------------- |
-| Heavy     | `sol` → `gpt-5.6-sol`     | `opus`   |
-| Mid       | `terra` → `gpt-5.6-terra` | `sonnet` |
-| Light     | `luna` → `gpt-5.6-luna`   | `haiku`  |
+| Tier  | OpenAI (current fleet)    | Anthropic (dormant) |
+| ----- | ------------------------- | ------------------- |
+| Heavy | `sol` → `gpt-5.6-sol`     | `opus`              |
+| Mid   | `terra` → `gpt-5.6-terra` | `sonnet`            |
+| Light | `luna` → `gpt-5.6-luna`   | `haiku`             |
 
 `luna` is defined but **no agent currently uses it** — it exists so a light tier is one
 frontmatter edit away.
@@ -66,11 +66,11 @@ frontmatter edit away.
 
 The subagent runner passes the frontmatter `model:` value verbatim to `pi --model <value>`,
 which pattern-matches against model **id and `name`**. An exact `name` alias wins over
-models that merely *contain* the alias mid-id.
+models that merely _contain_ the alias mid-id.
 
 ## Naming rule (verified by test)
 
-An alias is **unsafe if another model's id *begins with* the alias word** — that competitor
+An alias is **unsafe if another model's id _begins with_ the alias word** — that competitor
 can win by list order.
 
 - Safe: `sol`, `terra`, `luna` — every OpenAI id starts with `gpt-`, so a bare tier word is
@@ -111,7 +111,7 @@ in `~/.pi/agent/models.json`. The 8 agent files never change.
 ```
 
 **Caveat — the roster tripwire cannot see this.** `apps/orchestration/src/orchestration/roster.py`
-hashes the *alias* set read from agent frontmatter. Upgrading the model behind an unchanged
+hashes the _alias_ set read from agent frontmatter. Upgrading the model behind an unchanged
 alias does **not** move that hash, so the independence/loan review triggers will not fire.
 Swapping tiers or providers in frontmatter does move it. See "Roster baseline" below.
 
@@ -122,8 +122,8 @@ the live fleet hash by `tests/test_roster.py::test_recorded_baseline_matches_the
 Changing any agent's `model:` will fail that test **by design** — the failure means every
 same-model exception and borrowed-scaffolding loan is due for re-measurement.
 
-Per that test's own docstring: *re-measure, then update the constant. **Do NOT just re-type
-the new hash.***
+Per that test's own docstring: \*re-measure, then update the constant. **Do NOT just re-type
+the new hash.\***
 
 | Fleet          | Hash           |
 | -------------- | -------------- |
@@ -134,18 +134,17 @@ the new hash.***
 
 An earlier revision of this file listed the measurement-harness model literals as
 "not yet aliased ... tracked as the remaining half of the capability-tier-alias work."
-**That framing was wrong and is retracted (2026-08-01).** Those literals are pinned *on
-purpose*, and aliasing them would be a regression, not a completion.
+**That framing was wrong and is retracted (2026-08-01).** Those literals are pinned _on
+purpose_, and aliasing them would be a regression, not a completion.
 
 The rule: **agents use aliases; measurement harnesses pin concrete ids.** An alias makes
 an agent upgrade-proof, which is what you want. The same alias makes a recorded
-measurement *irreproducible* — the model behind it can change without the artifact
+measurement _irreproducible_ — the model behind it can change without the artifact
 showing it, so two runs stop being comparable. Pinning is the correct choice there.
 
-| Literal | Location | Why pinned |
-| --- | --- | --- |
-| `DEFAULT_DRIVER` / `DEFAULT_JUDGE` | `trajectory/run_trajectory.py` | Trajectory artifacts must stay comparable across runs. Both are Ollama, not Anthropic. Override with `--driver-model` / `--judge-model`. |
-| `anthropic/claude-haiku-4-5` | `ablation/detectors.py`, `ablation/run_code_detection_ablation.py` | The cheap **model arm** of a manual ablation experiment; the arm must be a fixed, nameable model or the ablation means nothing. Override with `--model`. |
+| Literal                            | Location                                                           | Why pinned                                                                                                                                               |
+| ---------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEFAULT_DRIVER` / `DEFAULT_JUDGE` | `trajectory/run_trajectory.py`                                     | Trajectory artifacts must stay comparable across runs. Both are Ollama, not Anthropic. Override with `--driver-model` / `--judge-model`.                 |
+| `anthropic/claude-haiku-4-5`       | `ablation/detectors.py`, `ablation/run_code_detection_ablation.py` | The cheap **model arm** of a manual ablation experiment; the arm must be a fixed, nameable model or the ablation means nothing. Override with `--model`. |
 
-The live model env vars that *are* set (`.env`) are all Ollama and unaffected by the fleet
-move: `PENNY_ENHANCE_MODEL`, `PI_CODE_DETECT_MODEL`, `PI_STALL_MODEL`.
+Component-specific runtime model overrides are separate from the agent-fleet aliases described here. Because the active component set changes independently, inspect the current component documentation and local configuration rather than treating an enumerated environment-variable list in this page as the capability catalog.

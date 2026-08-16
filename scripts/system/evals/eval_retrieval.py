@@ -2,19 +2,19 @@
 
 4,000+ drawers accumulated is worth nothing if recall does not surface the
 right one. This eval replays a GOLDEN SET of (query → expected drawer) pairs
-through the same smart_search path the model uses and scores hit@5.
+through the same supervised HTTP hub the model uses and scores hit@5.
 
 The golden set (golden_recall.json) is curated, not generated: whenever recall
 fails you in real use — you knew Penny stored something and she could not find
 it — add that query and its target drawer as a case. The eval then guards it
-forever. Searches pass track_recall=False: measuring recall must not fabricate
-the reuse signal the archiver keys retention on.
+forever. The eval uses the hub's read-only search tool; measuring recall must
+not fabricate the reuse signal the archiver keys retention on.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple, cast
 
 from eval_lib import (
     EVALS_DIR,
@@ -23,14 +23,13 @@ from eval_lib import (
     UP_GOOD,
     EvalResult,
     EvalSkip,
-    bridge,
+    memory_call,
     run_checks,
 )
 
 GOLDEN_PATH = EVALS_DIR / "golden_recall.json"
 HIT_AT = 5
 ABSOLUTE_FLOOR = 0.5  # below this, retrieval is failing outright, baseline or not
-MIN_SIMILARITY = 0.15
 
 
 def load_golden_cases() -> List[Dict[str, Any]]:
@@ -63,18 +62,19 @@ def check_golden_recall() -> EvalResult:
         raise EvalSkip("golden_recall.json has no cases")
     misses: List[str] = []
     for case in cases:
-        result = bridge().tool_smart_search(
+        result = memory_call(
+            "mempalace_search",
             {
                 "query": case["query"],
                 "limit": HIT_AT,
-                "min_similarity": MIN_SIMILARITY,
-                "include_full": False,
-                "track_recall": False,
-            }
+            },
         )
-        if result.get("error"):
-            raise EvalSkip(f"smart_search unavailable: {result['error']}")
-        if not case_hit(case, result.get("results", [])):
+        raw_results = result.get("results", [])
+        if isinstance(raw_results, dict):
+            raw_results = raw_results.get("results", [])
+        if not isinstance(raw_results, list):
+            raise EvalSkip("memory search returned an invalid result list")
+        if not case_hit(case, raw_results):
             misses.append(case.get("id", case["query"][:40]))
     rate = 1.0 - len(misses) / len(cases)
     detail = f"hit@{HIT_AT} over {len(cases)} curated cases"
@@ -96,4 +96,4 @@ CHECKS: List[Tuple[str, Callable[[], EvalResult]]] = [
 
 
 def collect() -> List[EvalResult]:
-    return run_checks(CHECKS)
+    return cast(List[EvalResult], run_checks(CHECKS))

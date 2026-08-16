@@ -9,16 +9,19 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
 import re
+import stat
 import sys
 import tempfile
 import unicodedata
+import warnings
 import zipfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Sequence, cast
 
 from lxml import etree
 from markdown_it import MarkdownIt
@@ -63,6 +66,89 @@ class Palette:
     surface: str
     border: str
     code_background: str
+    surface_alt: str
+    code_text: str
+    canvas_text: str
+    canvas_text_muted: str
+
+
+@dataclass(frozen=True)
+class PalettePatch:
+    canvas: str | None = None
+    surface: str | None = None
+    accent: str | None = None
+    text: str | None = None
+    muted_text: str | None = None
+
+
+@dataclass(frozen=True)
+class FocalPoint:
+    x: float = 0.5
+    y: float = 0.5
+
+
+@dataclass(frozen=True)
+class Overlay:
+    color: str
+    opacity: float
+
+
+@dataclass(frozen=True)
+class PreparedAsset:
+    payload: bytes
+    width_px: int
+    height_px: int
+    image_format: str
+
+
+@dataclass(frozen=True)
+class MediaSpec:
+    path: str
+    fit: str
+    focal_point: FocalPoint
+    overlay: Overlay | None
+    asset: PreparedAsset | None = None
+
+
+@dataclass(frozen=True)
+class PlacedImage:
+    path: str
+    x: float
+    y: float
+    width: float
+    height: float
+    fit: str
+    focal_point: FocalPoint
+    asset: PreparedAsset | None = None
+
+
+@dataclass(frozen=True)
+class DesignDefaults:
+    palette: PalettePatch
+    background: MediaSpec | None
+    mark: PlacedImage | None
+    supplied: bool
+
+
+@dataclass(frozen=True)
+class SlideDesignPatch:
+    palette: PalettePatch
+    background_is_set: bool
+    background: MediaSpec | None
+    mark_is_set: bool
+    mark: PlacedImage | None
+    supplied: bool
+
+
+@dataclass(frozen=True)
+class ResolvedDesign:
+    palette: Palette
+    background: MediaSpec | None
+    mark: PlacedImage | None
+    active: bool
+    requested_palette: PalettePatch
+    corrections: tuple[dict[str, Any], ...]
+    background_replaced_by_media: bool = False
 
 
 @dataclass(frozen=True)
@@ -103,6 +189,8 @@ class Options:
     output_path: str
     staging_path: str | None
     project_root: str
+    design: DesignDefaults
+    allowed_image_roots: tuple[str, ...]
 
 
 THEMES: dict[str, Theme] = {
@@ -117,7 +205,18 @@ THEMES: dict[str, Theme] = {
 
 BAND_FILL = "F5F7FA"
 
-LAYOUTS = ["title", "section", "content", "two_column", "table", "quote", "image", "closing"]
+LEGACY_LAYOUTS = [
+    "title",
+    "section",
+    "content",
+    "two_column",
+    "table",
+    "quote",
+    "image",
+    "closing",
+]
+COMPOSED_LAYOUTS = ["image_left", "image_right", "full_bleed"]
+LAYOUTS = [*LEGACY_LAYOUTS, *COMPOSED_LAYOUTS]
 
 # Slide geometry (inches, 16:9)
 SLIDE_W = 13.333
@@ -150,6 +249,10 @@ BULLET_GAP_FACTOR = 0.45
 MIN_EFFECTIVE_PPI = 96.0
 POINTS_PER_INCH = 72.0
 PIXELS_PER_INCH = 96.0
+NEW_ASSET_MAX_BYTES = 25 * 1024 * 1024
+NEW_ASSET_MAX_PIXELS = 40_000_000
+COMPOSED_MEDIA_W = 5.05
+FULL_BLEED_PANEL = (0.70, 1.15, 6.15, 5.50)
 
 _MD_INLINE = MarkdownIt("commonmark").enable(["strikethrough"])
 
@@ -222,6 +325,52 @@ def _ensure_contrast(foreground: str, background: str, minimum: float = 4.5) -> 
     return direction
 
 
+def _ensure_contrast_all(
+    foreground: str,
+    backgrounds: Sequence[str],
+    minimum: float = 4.5,
+) -> str:
+    if all(_contrast_ratio(foreground, background) >= minimum for background in backgrounds):
+        return foreground
+    directions = sorted(
+        ("000000", "FFFFFF"),
+        key=lambda color: min(_contrast_ratio(color, background) for background in backgrounds),
+        reverse=True,
+    )
+    for direction in directions:
+        for step in range(1, 101):
+            candidate = _mix(foreground, direction, step / 100.0)
+            if all(_contrast_ratio(candidate, background) >= minimum for background in backgrounds):
+                return candidate
+    raise ValueError("no foreground color can satisfy the required contrast on every surface")
+
+
+def _contrast_safe_surface_variant(
+    surface: str,
+    foregrounds: Sequence[str],
+    factor: float,
+    minimum: float = 4.5,
+) -> str:
+    """Return the strongest requested surface variant that preserves every role."""
+
+    for step in range(round(factor * 100), -1, -1):
+        amount = step / 100.0
+        candidates = {_mix(surface, direction, amount) for direction in ("000000", "FFFFFF")}
+        valid = [
+            candidate
+            for candidate in candidates
+            if all(_contrast_ratio(foreground, candidate) >= minimum for foreground in foregrounds)
+        ]
+        if valid:
+            return max(
+                valid,
+                key=lambda candidate: min(
+                    _contrast_ratio(foreground, candidate) for foreground in foregrounds
+                ),
+            )
+    raise ValueError("could not derive a contrast-safe semantic surface")
+
+
 def _derive_palette(theme: Theme) -> Palette:
     accent = theme.accent
     on_accent = (
@@ -243,7 +392,109 @@ def _derive_palette(theme: Theme) -> Palette:
         surface="FFFFFF",
         border=_mix(theme.text_dark, "FFFFFF", 0.85),
         code_background=_mix(theme.text_dark, "FFFFFF", 0.95),
+        surface_alt=BAND_FILL,
+        code_text=_ensure_contrast(theme.text_dark, _mix(theme.text_dark, "FFFFFF", 0.95)),
+        canvas_text=_ensure_contrast(theme.text_dark, "FFFFFF"),
+        canvas_text_muted=_ensure_contrast(theme.text_muted, "FFFFFF"),
     )
+
+
+def _merge_palette_patch(base: PalettePatch, patch: PalettePatch) -> PalettePatch:
+    return PalettePatch(
+        **{
+            field: getattr(patch, field) or getattr(base, field)
+            for field in ("canvas", "surface", "accent", "text", "muted_text")
+        }
+    )
+
+
+def _derive_design_palette(
+    legacy: Palette,
+    patch: PalettePatch,
+) -> tuple[Palette, tuple[dict[str, Any], ...]]:
+    canvas = patch.canvas or legacy.background
+    surface = patch.surface or legacy.surface
+    accent = patch.accent or legacy.accent
+    text_preference = patch.text or legacy.text
+    muted_preference = patch.muted_text or legacy.text_muted
+
+    # Resolve the semantic foregrounds against the exact caller-requested surface first.
+    # Then derive alternate/code surfaces only in directions that preserve those roles.
+    text = _ensure_contrast(text_preference, surface)
+    muted_text = _ensure_contrast(muted_preference, surface)
+    accent_text = _ensure_contrast(accent, surface)
+    semantic_foregrounds = (text, muted_text, accent_text)
+    surface_alt = _contrast_safe_surface_variant(surface, semantic_foregrounds, 0.07)
+    code_background = _contrast_safe_surface_variant(surface, semantic_foregrounds, 0.11)
+    surface_backgrounds = (surface, surface_alt, code_background)
+    text = _ensure_contrast_all(text, surface_backgrounds)
+    muted_text = _ensure_contrast_all(muted_text, surface_backgrounds)
+    accent_text = _ensure_contrast_all(accent_text, surface_backgrounds)
+    canvas_text = _ensure_contrast(text_preference, canvas)
+    canvas_text_muted = _ensure_contrast(muted_preference, canvas)
+    on_accent = (
+        "000000"
+        if _contrast_ratio("000000", accent) >= _contrast_ratio("FFFFFF", accent)
+        else "FFFFFF"
+    )
+    palette = Palette(
+        text=text,
+        text_muted=muted_text,
+        heading=text,
+        accent=accent,
+        accent_text=accent_text,
+        accent_soft=_mix(accent, surface, 0.82),
+        on_accent=on_accent,
+        link=accent_text,
+        link_on_accent=on_accent,
+        background=canvas,
+        surface=surface,
+        border=_mix(surface, text, 0.20),
+        code_background=code_background,
+        surface_alt=surface_alt,
+        code_text=text,
+        canvas_text=canvas_text,
+        canvas_text_muted=canvas_text_muted,
+    )
+    corrections: list[dict[str, Any]] = []
+    for requested_role, requested, actuals in (
+        (
+            "text",
+            patch.text,
+            (("surface_text", text, surface), ("canvas_text", canvas_text, canvas)),
+        ),
+        (
+            "muted_text",
+            patch.muted_text,
+            (
+                ("surface_muted_text", muted_text, surface),
+                ("canvas_muted_text", canvas_text_muted, canvas),
+            ),
+        ),
+        (
+            "accent",
+            patch.accent,
+            (
+                ("accent_text", accent_text, surface),
+                ("link", accent_text, surface),
+            ),
+        ),
+    ):
+        if requested is None:
+            continue
+        for actual_role, actual, background in actuals:
+            if actual != requested:
+                corrections.append(
+                    {
+                        "requested_role": requested_role,
+                        "actual_role": actual_role,
+                        "requested": requested,
+                        "actual": actual,
+                        "background": background,
+                        "decorative_value_preserved": requested_role == "accent",
+                    }
+                )
+    return palette, tuple(corrections)
 
 
 # ============================================================
@@ -263,6 +514,187 @@ def _opt_enum(spec: dict[str, Any], key: str, allowed: list[str], default: str) 
     if value not in allowed:
         raise ValueError(f"{key} must be one of {allowed}, got {value!r}")
     return value
+
+
+def _strict_object(value: Any, label: str, allowed: set[str]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be an object")
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ValueError(f"{label} contains unknown keys: {unknown}")
+    return value
+
+
+def _strict_hex(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"#?[0-9A-Fa-f]{6}", value):
+        raise ValueError(f"{label} must be a strict 6-digit hex color")
+    return value.lstrip("#").upper()
+
+
+def _strict_number(value: Any, label: str, minimum: float, maximum: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} must be a number")
+    number = float(value)
+    if not math.isfinite(number) or not minimum <= number <= maximum:
+        raise ValueError(f"{label} must be in [{minimum}, {maximum}]")
+    return number
+
+
+def _strict_path(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip() or "\x00" in value:
+        raise ValueError(f"{label} must be a non-empty local path string")
+    return value
+
+
+def _parse_focal_point(value: Any, label: str) -> FocalPoint:
+    raw = _strict_object(value, label, {"x", "y"})
+    if set(raw) != {"x", "y"}:
+        raise ValueError(f"{label} requires x and y")
+    return FocalPoint(
+        x=_strict_number(raw["x"], f"{label}.x", 0.0, 1.0),
+        y=_strict_number(raw["y"], f"{label}.y", 0.0, 1.0),
+    )
+
+
+def _parse_overlay(value: Any, label: str) -> Overlay:
+    raw = _strict_object(value, label, {"color", "opacity"})
+    if "opacity" not in raw:
+        raise ValueError(f"{label}.opacity is required")
+    return Overlay(
+        color=_strict_hex(raw.get("color", "000000"), f"{label}.color"),
+        opacity=_strict_number(raw["opacity"], f"{label}.opacity", 0.0, 1.0),
+    )
+
+
+def _parse_fit(value: Any, label: str) -> str:
+    if not isinstance(value, str) or value not in {"crop", "contain"}:
+        raise ValueError(f"{label} must be 'crop' or 'contain'")
+    return value
+
+
+def _parse_media(value: Any, label: str, default_fit: str) -> MediaSpec:
+    raw = _strict_object(value, label, {"path", "fit", "focal_point", "overlay"})
+    if "path" not in raw:
+        raise ValueError(f"{label}.path is required")
+    return MediaSpec(
+        path=_strict_path(raw["path"], f"{label}.path"),
+        fit=(_parse_fit(raw["fit"], f"{label}.fit") if "fit" in raw else default_fit),
+        focal_point=(
+            _parse_focal_point(raw["focal_point"], f"{label}.focal_point")
+            if "focal_point" in raw
+            else FocalPoint()
+        ),
+        overlay=(_parse_overlay(raw["overlay"], f"{label}.overlay") if "overlay" in raw else None),
+    )
+
+
+def _parse_placed_image(value: Any, label: str) -> PlacedImage:
+    raw = _strict_object(
+        value,
+        label,
+        {"path", "x", "y", "width", "height", "fit", "focal_point"},
+    )
+    required = {"path", "x", "y", "width", "height"}
+    missing = sorted(required - set(raw))
+    if missing:
+        raise ValueError(f"{label} is missing required keys: {missing}")
+    x = _strict_number(raw["x"], f"{label}.x", 0.0, 1.0)
+    y = _strict_number(raw["y"], f"{label}.y", 0.0, 1.0)
+    width = _strict_number(raw["width"], f"{label}.width", 0.0, 1.0)
+    height = _strict_number(raw["height"], f"{label}.height", 0.0, 1.0)
+    if width <= 0.0 or height <= 0.0:
+        raise ValueError(f"{label}.width and height must be positive")
+    if x + width > 1.0 or y + height > 1.0:
+        raise ValueError(f"{label} must remain inside normalized slide bounds")
+    return PlacedImage(
+        path=_strict_path(raw["path"], f"{label}.path"),
+        x=x,
+        y=y,
+        width=width,
+        height=height,
+        fit=_parse_fit(raw["fit"], f"{label}.fit") if "fit" in raw else "contain",
+        focal_point=(
+            _parse_focal_point(raw["focal_point"], f"{label}.focal_point")
+            if "focal_point" in raw
+            else FocalPoint()
+        ),
+    )
+
+
+def _parse_palette_patch(value: Any, label: str) -> PalettePatch:
+    raw = _strict_object(
+        value,
+        label,
+        {"canvas", "surface", "accent", "text", "muted_text"},
+    )
+    return PalettePatch(
+        **{
+            field: _strict_hex(raw[field], f"{label}.{field}") if field in raw else None
+            for field in ("canvas", "surface", "accent", "text", "muted_text")
+        }
+    )
+
+
+def _parse_deck_design(spec: dict[str, Any]) -> DesignDefaults:
+    if "design" not in spec:
+        return DesignDefaults(PalettePatch(), None, None, False)
+    raw = _strict_object(spec["design"], "design", {"palette", "background", "mark"})
+    palette = (
+        _parse_palette_patch(raw["palette"], "design.palette")
+        if "palette" in raw
+        else PalettePatch()
+    )
+    background = (
+        _parse_media(raw["background"], "design.background", "crop")
+        if "background" in raw
+        else None
+    )
+    mark = _parse_placed_image(raw["mark"], "design.mark") if "mark" in raw else None
+    return DesignDefaults(palette, background, mark, True)
+
+
+def _parse_slide_design(raw_slide: dict[str, Any]) -> SlideDesignPatch:
+    if "design" not in raw_slide:
+        return SlideDesignPatch(PalettePatch(), False, None, False, None, False)
+    raw = _strict_object(
+        raw_slide["design"],
+        "slide.design",
+        {"palette", "background", "mark"},
+    )
+    palette = (
+        _parse_palette_patch(raw["palette"], "slide.design.palette")
+        if "palette" in raw
+        else PalettePatch()
+    )
+    background_is_set = "background" in raw
+    background = (
+        None
+        if raw.get("background") is None
+        else _parse_media(raw["background"], "slide.design.background", "crop")
+    )
+    mark_is_set = "mark" in raw
+    mark = (
+        None if raw.get("mark") is None else _parse_placed_image(raw["mark"], "slide.design.mark")
+    )
+    return SlideDesignPatch(
+        palette,
+        background_is_set,
+        background,
+        mark_is_set,
+        mark,
+        True,
+    )
+
+
+def _parse_allowed_image_roots(spec: dict[str, Any]) -> tuple[str, ...]:
+    if "allowed_image_roots" not in spec:
+        return ()
+    roots = spec["allowed_image_roots"]
+    if not isinstance(roots, list) or not roots:
+        raise ValueError("allowed_image_roots must be a non-empty array of local directory paths")
+    return tuple(
+        _strict_path(root, f"allowed_image_roots[{index}]") for index, root in enumerate(roots)
+    )
 
 
 def _resolve_theme(spec: dict[str, Any]) -> tuple[str, Theme]:
@@ -464,6 +896,9 @@ def _resolve_font(
 
 
 def parse_options(spec: dict[str, Any]) -> Options:
+    design = _parse_deck_design(spec)
+    if _opt_str(spec, "accent_color") and design.palette.accent is not None:
+        raise ValueError("accent_color cannot be combined with design.palette.accent")
     theme_name, theme = _resolve_theme(spec)
     output_path = _opt_str(spec, "output_path")
     if not output_path:
@@ -498,6 +933,8 @@ def parse_options(spec: dict[str, Any]) -> Options:
         output_path=output_path,
         staging_path=staging,
         project_root=_opt_str(spec, "project_root") or os.getcwd(),
+        design=design,
+        allowed_image_roots=_parse_allowed_image_roots(spec),
     )
 
 
@@ -542,8 +979,32 @@ def normalize_slide(raw: Any) -> dict[str, Any]:
     layout = str(raw.get("layout") or "content")
     if layout not in LAYOUTS:
         raise ValueError(f"layout must be one of {LAYOUTS}, got {layout!r}")
+    if layout in COMPOSED_LAYOUTS:
+        allowed = {
+            "layout",
+            "title",
+            "kicker",
+            "body",
+            "bullets",
+            "notes",
+            "caption",
+            "design",
+            "media",
+        }
+        unknown = sorted(set(raw) - allowed)
+        if unknown:
+            raise ValueError(f"{layout} contains incompatible or unknown content fields: {unknown}")
+        if "media" not in raw or raw.get("media") is None:
+            raise ValueError(f"{layout} requires media")
+    elif "media" in raw:
+        raise ValueError("slide.media is supported only by composed image layouts")
+
     slide = dict(raw)
     slide["layout"] = layout
+    slide["_design_patch"] = _parse_slide_design(raw)
+    if layout in COMPOSED_LAYOUTS:
+        default_fit = "crop" if layout == "full_bleed" else "contain"
+        slide["_media"] = _parse_media(raw["media"], "slide.media", default_fit)
     if "body_parts" not in slide and slide.get("body") is not None:
         slide["body_parts"] = _body_parts(slide.get("body"))
     slide["body"] = str(slide["body"]) if slide.get("body") is not None else None
@@ -552,6 +1013,392 @@ def normalize_slide(raw: Any) -> dict[str, Any]:
         slide["left"] = _normalize_column(raw.get("left"))
         slide["right"] = _normalize_column(raw.get("right"))
     return slide
+
+
+# ============================================================
+# Custom-design and asset preflight
+# ============================================================
+
+
+def _has_path_traversal(value: str) -> bool:
+    return ".." in value.replace("\\", "/").split("/")
+
+
+def _reject_nonlocal_asset_path(value: str, label: str) -> None:
+    stripped = value.strip()
+    is_drive_path = bool(re.match(r"^[A-Za-z]:[\\/]", stripped))
+    if is_drive_path and os.name != "nt":
+        raise ValueError(f"{label} must be a local path, not a URI or drive path")
+    if not is_drive_path and re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", stripped):
+        raise ValueError(f"{label} must be a local path, not a URI or drive path")
+    if stripped.startswith(("//", "\\\\")):
+        raise ValueError(f"{label} must not be a network path")
+    if _has_path_traversal(stripped):
+        raise ValueError(f"{label} must not contain path traversal")
+
+
+def _canonical_allowed_roots(opts: Options) -> tuple[Path, ...]:
+    root_values = (opts.project_root, *opts.allowed_image_roots)
+    roots: list[Path] = []
+    for index, value in enumerate(root_values):
+        _reject_nonlocal_asset_path(value, f"allowed image root {index}")
+        candidate = Path(value).expanduser()
+        if not candidate.is_absolute() and index != 0:
+            candidate = Path(opts.project_root).expanduser() / candidate
+        try:
+            canonical = candidate.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError(f"allowed image root {index} does not exist") from exc
+        if not canonical.is_dir():
+            raise ValueError(f"allowed image root {index} must be a directory")
+        if canonical not in roots:
+            roots.append(canonical)
+    return tuple(roots)
+
+
+def _is_within(path: Path, roots: Sequence[Path]) -> bool:
+    for root in roots:
+        try:
+            if os.path.commonpath((str(path), str(root))) == str(root):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _read_asset_snapshot(path: Path, label: str) -> bytes:  # noqa: C901
+    try:
+        before = path.stat()
+    except OSError as exc:
+        raise ValueError(f"{label} asset is missing or unreadable") from exc
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"{label} asset must be a regular file")
+    if before.st_size > NEW_ASSET_MAX_BYTES:
+        raise ValueError(f"{label} asset exceeds the 25 MiB source limit")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError(f"{label} asset is missing or unreadable") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ValueError(f"{label} asset must be a regular file")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, min(1024 * 1024, NEW_ASSET_MAX_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > NEW_ASSET_MAX_BYTES:
+                raise ValueError(f"{label} asset exceeds the 25 MiB source limit")
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    identity_before = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    identity_opened = (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+    identity_after = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+    if identity_before != identity_opened or identity_opened != identity_after:
+        raise ValueError(f"{label} asset changed during preflight")
+    payload = b"".join(chunks)
+    if len(payload) != after.st_size:
+        raise ValueError(f"{label} asset changed during preflight")
+    return payload
+
+
+def _decode_asset_snapshot(payload: bytes, label: str) -> PreparedAsset:  # noqa: C901
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(payload)) as source:
+                image_format = str(source.format or "").upper()
+                if image_format not in {"PNG", "JPEG"}:
+                    raise ValueError(f"{label} asset must be a static PNG or JPEG")
+                if (
+                    bool(getattr(source, "is_animated", False))
+                    or int(getattr(source, "n_frames", 1)) != 1
+                ):
+                    raise ValueError(f"{label} animated assets are not supported")
+                width_px, height_px = source.size
+                if width_px <= 0 or height_px <= 0:
+                    raise ValueError(f"{label} asset dimensions must be positive")
+                if width_px * height_px > NEW_ASSET_MAX_PIXELS:
+                    raise ValueError(f"{label} asset exceeds the 40,000,000 pixel limit")
+                source.load()
+                normalized = ImageOps.exif_transpose(source)
+                normalized.load()
+                width_px, height_px = normalized.size
+                output = io.BytesIO()
+                if image_format == "JPEG":
+                    if normalized.mode not in {"RGB", "L"}:
+                        normalized = normalized.convert("RGB")
+                    normalized.save(
+                        output,
+                        format="JPEG",
+                        quality=95,
+                        subsampling=0,
+                    )
+                else:
+                    normalized.save(output, format="PNG")
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        raise ValueError(f"{label} asset exceeds the decoded pixel safety limit") from exc
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"{label} asset is missing, corrupt, or unsupported") from exc
+    return PreparedAsset(output.getvalue(), width_px, height_px, image_format)
+
+
+def _prepare_asset(
+    path_value: str,
+    label: str,
+    opts: Options,
+    roots: Sequence[Path],
+    cache: dict[Path, PreparedAsset],
+) -> PreparedAsset:
+    _reject_nonlocal_asset_path(path_value, label)
+    suffix = Path(path_value).suffix.casefold()
+    if suffix not in {".png", ".jpg", ".jpeg"}:
+        raise ValueError(f"{label} asset must use a .png, .jpg, or .jpeg extension")
+    candidate = Path(path_value).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path(opts.project_root).expanduser() / candidate
+    try:
+        canonical = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(f"{label} asset is missing or unreadable") from exc
+    if not _is_within(canonical, roots):
+        raise ValueError(f"{label} asset escapes the allowed image roots")
+    if canonical not in cache:
+        cache[canonical] = _decode_asset_snapshot(
+            _read_asset_snapshot(canonical, label),
+            label,
+        )
+    return cache[canonical]
+
+
+def _prepare_media(
+    media: MediaSpec | None,
+    label: str,
+    opts: Options,
+    roots: Sequence[Path],
+    cache: dict[Path, PreparedAsset],
+) -> MediaSpec | None:
+    if media is None:
+        return None
+    return replace(
+        media,
+        asset=_prepare_asset(media.path, label, opts, roots, cache),
+    )
+
+
+def _prepare_mark(
+    mark: PlacedImage | None,
+    label: str,
+    opts: Options,
+    roots: Sequence[Path],
+    cache: dict[Path, PreparedAsset],
+) -> PlacedImage | None:
+    if mark is None:
+        return None
+    return replace(
+        mark,
+        asset=_prepare_asset(mark.path, label, opts, roots, cache),
+    )
+
+
+def _preflight_new_assets(
+    opts: Options,
+    slides: list[dict[str, Any]],
+) -> tuple[Options, list[dict[str, Any]]]:
+    if not (
+        opts.design.supplied
+        or opts.allowed_image_roots
+        or any(
+            slide.get("layout") in COMPOSED_LAYOUTS
+            or cast(SlideDesignPatch, slide["_design_patch"]).supplied
+            for slide in slides
+        )
+    ):
+        return opts, slides
+    roots = _canonical_allowed_roots(opts)
+    cache: dict[Path, PreparedAsset] = {}
+    deck_design = replace(
+        opts.design,
+        background=_prepare_media(
+            opts.design.background,
+            "deck background",
+            opts,
+            roots,
+            cache,
+        ),
+        mark=_prepare_mark(opts.design.mark, "deck mark", opts, roots, cache),
+    )
+    prepared_slides: list[dict[str, Any]] = []
+    for index, slide in enumerate(slides):
+        prepared = dict(slide)
+        patch = cast(SlideDesignPatch, prepared["_design_patch"])
+        prepared["_design_patch"] = replace(
+            patch,
+            background=_prepare_media(
+                patch.background,
+                f"slide {index + 1} background",
+                opts,
+                roots,
+                cache,
+            ),
+            mark=_prepare_mark(
+                patch.mark,
+                f"slide {index + 1} mark",
+                opts,
+                roots,
+                cache,
+            ),
+        )
+        if prepared.get("_media") is not None:
+            prepared["_media"] = _prepare_media(
+                cast(MediaSpec, prepared["_media"]),
+                f"slide {index + 1} media",
+                opts,
+                roots,
+                cache,
+            )
+        prepared_slides.append(prepared)
+    return replace(opts, design=deck_design), prepared_slides
+
+
+def _resolve_design(opts: Options, page: dict[str, Any]) -> ResolvedDesign:
+    patch = cast(
+        SlideDesignPatch,
+        page.get("_design_patch")
+        or SlideDesignPatch(PalettePatch(), False, None, False, None, False),
+    )
+    requested = _merge_palette_patch(opts.design.palette, patch.palette)
+    active = opts.design.supplied or patch.supplied or page["layout"] in COMPOSED_LAYOUTS
+    palette, corrections = (
+        _derive_design_palette(opts.palette, requested) if active else (opts.palette, tuple())
+    )
+    background = opts.design.background
+    if patch.background_is_set:
+        background = patch.background
+    mark = opts.design.mark
+    if patch.mark_is_set:
+        mark = patch.mark
+    replaced = page["layout"] == "full_bleed" and background is not None
+    if page["layout"] == "full_bleed":
+        background = None
+    return ResolvedDesign(
+        palette=palette,
+        background=background,
+        mark=mark,
+        active=active,
+        requested_palette=requested,
+        corrections=corrections,
+        background_replaced_by_media=replaced,
+    )
+
+
+def _contrast_record(foreground: str, background: str) -> dict[str, Any]:
+    return {
+        "foreground": foreground,
+        "background": background,
+        "ratio": round(_contrast_ratio(foreground, background), 4),
+    }
+
+
+def _semantic_palette_record(palette: Palette) -> dict[str, str]:
+    return {
+        "canvas": palette.background,
+        "surface": palette.surface,
+        "surface_alt": palette.surface_alt,
+        "accent": palette.accent,
+        "text": palette.text,
+        "muted_text": palette.text_muted,
+        "heading": palette.heading,
+        "accent_text": palette.accent_text,
+        "accent_soft": palette.accent_soft,
+        "on_accent": palette.on_accent,
+        "link": palette.link,
+        "link_on_accent": palette.link_on_accent,
+        "border": palette.border,
+        "code_background": palette.code_background,
+        "code_text": palette.code_text,
+        "canvas_text": palette.canvas_text,
+        "canvas_muted_text": palette.canvas_text_muted,
+    }
+
+
+def _resolved_design_record(
+    design: ResolvedDesign,
+    page: dict[str, Any] | None = None,
+    output_slide_index: int | None = None,
+) -> dict[str, Any]:
+    palette = design.palette
+    contrast_roles = {
+        "surface_text": _contrast_record(palette.text, palette.surface),
+        "surface_muted_text": _contrast_record(palette.text_muted, palette.surface),
+        "surface_heading": _contrast_record(palette.heading, palette.surface),
+        "surface_link": _contrast_record(palette.link, palette.surface),
+        "surface_accent_text": _contrast_record(palette.accent_text, palette.surface),
+        "alternate_surface_text": _contrast_record(palette.text, palette.surface_alt),
+        "alternate_surface_muted_text": _contrast_record(
+            palette.text_muted,
+            palette.surface_alt,
+        ),
+        "alternate_surface_link": _contrast_record(palette.link, palette.surface_alt),
+        "code_text": _contrast_record(palette.code_text, palette.code_background),
+        "canvas_text": _contrast_record(palette.canvas_text, palette.background),
+        "canvas_muted_text": _contrast_record(
+            palette.canvas_text_muted,
+            palette.background,
+        ),
+        "on_accent": _contrast_record(palette.on_accent, palette.accent),
+        "link_on_accent": _contrast_record(palette.link_on_accent, palette.accent),
+    }
+    record: dict[str, Any] = {
+        "active": design.active,
+        "palette": _semantic_palette_record(palette),
+        "contrast_roles": contrast_roles,
+        "background": {
+            "present": design.background is not None,
+            "fit": design.background.fit if design.background is not None else None,
+            "overlay_present": bool(
+                design.background is not None and design.background.overlay is not None
+            ),
+        },
+        "mark": {
+            "present": design.mark is not None,
+            "fit": design.mark.fit if design.mark is not None else None,
+        },
+        "corrections": [dict(correction) for correction in design.corrections],
+        "requested_palette": {
+            key: value
+            for key, value in asdict(design.requested_palette).items()
+            if value is not None
+        },
+        "background_replaced_by_media": design.background_replaced_by_media,
+    }
+    if page is not None:
+        media = cast(MediaSpec | None, page.get("_media"))
+        record.update(
+            {
+                "output_slide_index": output_slide_index,
+                "source_slide_index": int(page.get("_origin_index", 0)) + 1,
+                "source_layout": page.get("_source_layout", page.get("layout")),
+                "layout": page.get("layout"),
+                "continuation_index": int(page.get("_continuation_index", 0)),
+                "media": {
+                    "present": media is not None,
+                    "fit": media.fit if media is not None else None,
+                    "overlay_present": bool(media is not None and media.overlay is not None),
+                },
+            }
+        )
+    return record
 
 
 # ============================================================
@@ -1256,6 +2103,10 @@ def _paginate_content(  # noqa: C901
     line_break_mode: str,
     body_font_path: FontMetricSource,
     mono_font_path: FontMetricSource,
+    *,
+    output_layout: str = "content",
+    content_width: float = CONTENT_W,
+    content_height: float = CONTENT_HEIGHT,
 ) -> list[dict[str, Any]]:
     code_lines = [line.rstrip("\r") for block in code_parts for line in block.split("\n")]
     if code_lines and code_lines[-1] == "" and any(block.endswith("\n") for block in code_parts):
@@ -1264,7 +2115,7 @@ def _paginate_content(  # noqa: C901
     if not body_parts and not bullets and not code_lines:
         return [
             {
-                "layout": "content",
+                "layout": output_layout,
                 "title": title,
                 "kicker": kicker,
                 "body_parts": [],
@@ -1301,10 +2152,11 @@ def _paginate_content(  # noqa: C901
                 line_break_mode,
                 body_font_path,
                 mono_font_path,
+                width_in=content_width,
             )
-            if paragraph_height > CONTENT_HEIGHT:
+            if paragraph_height > content_height:
                 raise ValueError("single paragraph exceeds content area")
-            if used_height + paragraph_height > CONTENT_HEIGHT:
+            if used_height + paragraph_height > content_height:
                 active_class_blocked = True
                 break
             page_body.append(paragraph)
@@ -1316,9 +2168,9 @@ def _paginate_content(  # noqa: C901
                 line = code_lines[code_cursor]
                 line_height = _code_source_line_height(line, mono_font_path)
                 panel_padding = CODE_PANEL_PADDING_IN if not page_code else 0.0
-                if line_height + CODE_PANEL_PADDING_IN > CONTENT_HEIGHT:
+                if line_height + CODE_PANEL_PADDING_IN > content_height:
                     raise ValueError("single code line exceeds content area")
-                if used_height + panel_padding + line_height > CONTENT_HEIGHT:
+                if used_height + panel_padding + line_height > content_height:
                     active_class_blocked = True
                     break
                 page_code.append(line)
@@ -1336,8 +2188,9 @@ def _paginate_content(  # noqa: C901
                     line_break_mode,
                     body_font_path,
                     mono_font_path,
+                    width_in=content_width * 0.95,
                 )
-                <= CONTENT_HEIGHT - used_height
+                <= content_height - used_height
             ]
             if not fitting_tiers:
                 fits_clean_page = any(
@@ -1347,8 +2200,9 @@ def _paginate_content(  # noqa: C901
                         line_break_mode,
                         body_font_path,
                         mono_font_path,
+                        width_in=content_width * 0.95,
                     )
-                    <= CONTENT_HEIGHT
+                    <= content_height
                     for sizes in BULLET_FONT_TIERS
                 )
                 if fits_clean_page and (page_body or page_code):
@@ -1367,8 +2221,9 @@ def _paginate_content(  # noqa: C901
                     line_break_mode,
                     body_font_path,
                     mono_font_path,
+                    width_in=content_width * 0.95,
                 )
-                if used_height + item_height > CONTENT_HEIGHT:
+                if used_height + item_height > content_height:
                     break
                 page_bullets.append(bullet)
                 used_height += item_height
@@ -1381,7 +2236,7 @@ def _paginate_content(  # noqa: C901
         page_title = title if page_index == 0 else (f"{title} (cont.)" if title else None)
         pages.append(
             {
-                "layout": "content",
+                "layout": output_layout,
                 "title": page_title,
                 "kicker": kicker,
                 "body_parts": page_body,
@@ -1680,7 +2535,16 @@ class PptxBuilder:
     def __init__(self, opts: Options) -> None:
         self.opts = opts
         self.theme = opts.theme
-        self.palette = opts.palette
+        self._current_design: ResolvedDesign | None = None
+        self._current_layout: str | None = None
+        self.resolved_design_slides: list[dict[str, Any]] = []
+        self.deck_default_design = _resolve_design(
+            opts,
+            {
+                "layout": "content",
+                "_design_patch": SlideDesignPatch(PalettePatch(), False, None, False, None, False),
+            },
+        )
         self.prs = Presentation()
         self.prs.slide_width = Inches(SLIDE_W)
         self.prs.slide_height = Inches(SLIDE_H)
@@ -1714,11 +2578,61 @@ class PptxBuilder:
 
     # ---- shared primitives ----
 
+    @property
+    def palette(self) -> Palette:
+        if self._current_design is None:
+            return self.opts.palette
+        return self._current_design.palette
+
+    @property
+    def design_active(self) -> bool:
+        return bool(self._current_design and self._current_design.active)
+
     def _new_slide(self, layout: str) -> Any:
         self.layouts_used[layout] = self.layouts_used.get(layout, 0) + 1
-        return self.prs.slides.add_slide(self.blank)
+        slide = self.prs.slides.add_slide(self.blank)
+        if self.design_active:
+            canvas = self._rect(
+                slide,
+                0,
+                0,
+                SLIDE_W,
+                SLIDE_H,
+                self.palette.background,
+                name="Penny Canvas",
+            )
+            canvas.name = "Penny Canvas"
+            assert self._current_design is not None
+            if self._current_design.background is not None:
+                frame = self._add_media_picture(
+                    slide,
+                    self._current_design.background,
+                    0,
+                    0,
+                    SLIDE_W,
+                    SLIDE_H,
+                    "Penny Background",
+                    "background",
+                )
+                self._add_overlay(
+                    slide,
+                    frame,
+                    self._current_design.background.overlay,
+                    "Penny Background Overlay",
+                )
+        return slide
 
-    def _rect(self, slide: Any, x: float, y: float, w: float, h: float, color: str) -> Any:
+    def _rect(
+        self,
+        slide: Any,
+        x: float,
+        y: float,
+        w: float,
+        h: float,
+        color: str,
+        *,
+        name: str | None = None,
+    ) -> Any:
         shape = slide.shapes.add_shape(
             MSO_SHAPE.RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h)
         )
@@ -1726,7 +2640,188 @@ class PptxBuilder:
         shape.fill.fore_color.rgb = RGBColor.from_string(color)
         shape.line.fill.background()
         shape.shadow.inherit = False
+        if name:
+            shape.name = name
         return shape
+
+    def _add_overlay(
+        self,
+        slide: Any,
+        frame: tuple[float, float, float, float],
+        overlay: Overlay | None,
+        name: str,
+    ) -> Any | None:
+        if overlay is None:
+            return None
+        x, y, width, height = frame
+        shape = self._rect(slide, x, y, width, height, overlay.color, name=name)
+        solid_fill = shape._element.spPr.solidFill
+        srgb = solid_fill.find(qn("a:srgbClr"))
+        if srgb is None:
+            raise ValueError("could not encode media overlay color")
+        etree.SubElement(
+            srgb,
+            qn("a:alpha"),
+            {"val": str(round(overlay.opacity * 100_000))},
+        )
+        return shape
+
+    def _add_media_picture(
+        self,
+        slide: Any,
+        media: MediaSpec,
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+        name: str,
+        warning_label: str,
+    ) -> tuple[float, float, float, float]:
+        asset = media.asset
+        if asset is None:
+            raise ValueError(f"{warning_label} asset was not preflighted")
+        image_ratio = asset.width_px / asset.height_px
+        frame_ratio = width / height
+        if media.fit == "contain":
+            rendered_width = min(width, height * image_ratio)
+            rendered_height = rendered_width / image_ratio
+            left = x + (width - rendered_width) / 2
+            top = y + (height - rendered_height) / 2
+            picture = slide.shapes.add_picture(
+                io.BytesIO(asset.payload),
+                Inches(left),
+                Inches(top),
+                Inches(rendered_width),
+                Inches(rendered_height),
+            )
+            visible_width_fraction = 1.0
+            visible_height_fraction = 1.0
+        else:
+            left, top = x, y
+            rendered_width, rendered_height = width, height
+            picture = slide.shapes.add_picture(
+                io.BytesIO(asset.payload),
+                Inches(left),
+                Inches(top),
+                Inches(rendered_width),
+                Inches(rendered_height),
+            )
+            focal = media.focal_point
+            if image_ratio > frame_ratio:
+                visible_width_fraction = frame_ratio / image_ratio
+                crop_left = min(
+                    max(focal.x - visible_width_fraction / 2, 0.0),
+                    1.0 - visible_width_fraction,
+                )
+                picture.crop_left = crop_left
+                picture.crop_right = 1.0 - crop_left - visible_width_fraction
+                visible_height_fraction = 1.0
+            else:
+                visible_height_fraction = image_ratio / frame_ratio
+                crop_top = min(
+                    max(focal.y - visible_height_fraction / 2, 0.0),
+                    1.0 - visible_height_fraction,
+                )
+                picture.crop_top = crop_top
+                picture.crop_bottom = 1.0 - crop_top - visible_height_fraction
+                visible_width_fraction = 1.0
+        picture.name = name
+        ppi_x = asset.width_px * visible_width_fraction / rendered_width
+        ppi_y = asset.height_px * visible_height_fraction / rendered_height
+        if ppi_x < MIN_EFFECTIVE_PPI:
+            self.warnings.append(f"low effective horizontal PPI for {warning_label}: {ppi_x:.1f}")
+        if ppi_y < MIN_EFFECTIVE_PPI:
+            self.warnings.append(f"low effective vertical PPI for {warning_label}: {ppi_y:.1f}")
+        return left, top, rendered_width, rendered_height
+
+    def _add_mark(self, slide: Any) -> None:
+        if not self.design_active or self._current_design is None:
+            return
+        mark = self._current_design.mark
+        if mark is None:
+            return
+        media = MediaSpec(
+            path=mark.path,
+            fit=mark.fit,
+            focal_point=mark.focal_point,
+            overlay=None,
+            asset=mark.asset,
+        )
+        self._add_media_picture(
+            slide,
+            media,
+            mark.x * SLIDE_W,
+            mark.y * SLIDE_H,
+            mark.width * SLIDE_W,
+            mark.height * SLIDE_H,
+            "Penny Mark",
+            "mark",
+        )
+
+    def _add_standard_design_layers(self, slide: Any, layout: str, spec: dict[str, Any]) -> None:
+        if not self.design_active:
+            return
+        if layout == "title":
+            self._rect(
+                slide,
+                0.42,
+                2.15,
+                12.49,
+                4.85,
+                self.palette.surface,
+                name="Penny Title Surface",
+            )
+        elif layout in {"content", "two_column", "table", "quote"}:
+            self._rect(
+                slide,
+                0.42,
+                0.32,
+                12.49,
+                7.06,
+                self.palette.surface,
+                name="Penny Content Surface",
+            )
+        elif layout == "image":
+            if spec.get("title") or spec.get("kicker"):
+                self._rect(
+                    slide,
+                    0.42,
+                    0.32,
+                    12.49,
+                    1.48,
+                    self.palette.surface,
+                    name="Penny Image Header Surface",
+                )
+            if spec.get("caption"):
+                self._rect(
+                    slide,
+                    0.42,
+                    6.45,
+                    12.49,
+                    0.52,
+                    self.palette.surface,
+                    name="Penny Caption Surface",
+                )
+            if spec.get("_image_missing"):
+                self._rect(
+                    slide,
+                    0.42,
+                    3.05,
+                    12.49,
+                    0.90,
+                    self.palette.surface,
+                    name="Penny Image Placeholder Surface",
+                )
+            self._rect(
+                slide,
+                0.42,
+                7.02,
+                12.49,
+                0.36,
+                self.palette.surface,
+                name="Penny Footer Surface",
+            )
+        self._add_mark(slide)
 
     def _textbox(self, slide: Any, x: float, y: float, w: float, h: float) -> Any:
         box = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
@@ -1818,12 +2913,21 @@ class PptxBuilder:
         return box
 
     def _footer(self, slide: Any, number: int) -> None:
+        footer_x = MARGIN
+        footer_width = 6.0
+        number_x = SLIDE_W - MARGIN - 0.6
+        if self._current_layout == "image_left":
+            footer_x = COMPOSED_MEDIA_W + 0.60
+            footer_width = 4.5
+        elif self._current_layout == "image_right":
+            footer_width = 4.5
+            number_x = SLIDE_W - COMPOSED_MEDIA_W - 1.20
         if self.opts.footer_text:
             self._text(
                 slide,
-                MARGIN,
+                footer_x,
                 7.08,
-                6.0,
+                footer_width,
                 0.3,
                 self.opts.footer_text,
                 self.theme.body_font,
@@ -1833,7 +2937,7 @@ class PptxBuilder:
         if self.opts.slide_numbers:
             self._text(
                 slide,
-                SLIDE_W - MARGIN - 0.6,
+                number_x,
                 7.08,
                 0.6,
                 0.3,
@@ -1916,6 +3020,53 @@ class PptxBuilder:
 
     # ---- pages ----
 
+    def _composed_geometry(self, layout: str) -> dict[str, tuple[float, float, float, float]]:
+        if layout == "image_left":
+            pane_x = COMPOSED_MEDIA_W
+            pane_width = SLIDE_W - COMPOSED_MEDIA_W
+            return {
+                "media": (0.0, 0.0, COMPOSED_MEDIA_W, SLIDE_H),
+                "panel": (pane_x, 0.0, pane_width, SLIDE_H),
+                "title": (pane_x + 0.60, 0.78, pane_width - 1.20, 0.92),
+                "content": (pane_x + 0.60, 1.92, pane_width - 1.20, 4.95),
+            }
+        if layout == "image_right":
+            pane_width = SLIDE_W - COMPOSED_MEDIA_W
+            return {
+                "media": (pane_width, 0.0, COMPOSED_MEDIA_W, SLIDE_H),
+                "panel": (0.0, 0.0, pane_width, SLIDE_H),
+                "title": (0.60, 0.78, pane_width - 1.20, 0.92),
+                "content": (0.60, 1.92, pane_width - 1.20, 4.95),
+            }
+        panel_x, panel_y, panel_width, panel_height = FULL_BLEED_PANEL
+        return {
+            "media": (0.0, 0.0, SLIDE_W, SLIDE_H),
+            "panel": FULL_BLEED_PANEL,
+            "title": (panel_x + 0.45, panel_y + 0.38, panel_width - 0.90, 0.90),
+            "content": (
+                panel_x + 0.45,
+                panel_y + 1.52,
+                panel_width - 0.90,
+                panel_height - 1.87,
+            ),
+        }
+
+    def _carry_page_metadata(
+        self,
+        spec: dict[str, Any],
+        pages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        for index, page in enumerate(pages):
+            page["_origin_index"] = spec.get("_origin_index", 0)
+            page["_source_layout"] = spec.get("_source_layout", spec["layout"])
+            page["_continuation_index"] = index
+            page["_design_patch"] = spec.get("_design_patch")
+            if spec.get("_media") is not None:
+                page["_media"] = spec["_media"]
+            if index == 0 and spec.get("caption") is not None:
+                page["caption"] = spec["caption"]
+        return pages
+
     def _content_pages_for_spec(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         title = spec.get("title")
         kicker = spec.get("kicker")
@@ -1929,6 +3080,13 @@ class PptxBuilder:
         else:
             code_parts = [str(code) for code in (spec.get("code") or spec.get("code_parts") or [])]
 
+        layout = spec["layout"]
+        content_width = CONTENT_W
+        content_height = CONTENT_HEIGHT
+        if layout in COMPOSED_LAYOUTS:
+            geometry = self._composed_geometry(layout)
+            content_width = geometry["content"][2]
+            content_height = geometry["content"][3]
         pages = _paginate_content(
             title=title,
             kicker=kicker,
@@ -1938,10 +3096,13 @@ class PptxBuilder:
             line_break_mode=self.opts.line_break_mode,
             body_font_path=self.font_paths.get("body"),
             mono_font_path=self.font_paths.get("mono"),
+            output_layout=layout,
+            content_width=content_width,
+            content_height=content_height,
         )
         if spec.get("notes") and pages:
             pages[0]["notes"] = spec["notes"]
-        return pages
+        return self._carry_page_metadata(spec, pages)
 
     def _table_pages_for_spec(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         table = spec.get("table") or {}
@@ -1963,25 +3124,41 @@ class PptxBuilder:
         )
         if spec.get("notes") and pages:
             pages[0]["notes"] = spec["notes"]
-        return pages
+        return self._carry_page_metadata(spec, pages)
 
     def _pages_from(self, spec: dict[str, Any]) -> list[dict[str, Any]]:
         layout = spec["layout"]
-        if layout == "content":
+        if layout == "content" or layout in COMPOSED_LAYOUTS:
             return self._content_pages_for_spec(spec)
         if layout == "table":
             return self._table_pages_for_spec(spec)
-        return [spec]
+        return self._carry_page_metadata(spec, [dict(spec)])
 
     def build(self, spec: dict[str, Any], number: int) -> int:
         pages = self._pages_from(spec)
         for page in pages:
             layout = page["layout"]
+            self._current_layout = layout
+            self._current_design = _resolve_design(self.opts, page)
             builder = getattr(self, f"_build_{layout}")
             slide = builder(page)
-            if layout in ("content", "two_column", "table", "quote", "image"):
+            if layout in (
+                "content",
+                "two_column",
+                "table",
+                "quote",
+                "image",
+                *COMPOSED_LAYOUTS,
+            ):
                 self._footer(slide, number)
             self._notes(slide, page.get("notes"))
+            self.resolved_design_slides.append(
+                _resolved_design_record(
+                    self._current_design,
+                    page,
+                    number,
+                )
+            )
             number += 1
         return len(pages)
 
@@ -1989,6 +3166,7 @@ class PptxBuilder:
 
     def _build_title(self, spec: dict[str, Any]) -> Any:
         slide = self._new_slide("title")
+        self._add_standard_design_layers(slide, "title", spec)
         self._rect(slide, MARGIN, 2.35, 1.6, 0.055, self.palette.accent)
         self._text(
             slide,
@@ -2040,6 +3218,7 @@ class PptxBuilder:
         slide = self._new_slide("section")
         self.section_index += 1
         self._rect(slide, 0, 0, SLIDE_W, SLIDE_H, self.palette.accent)
+        self._add_mark(slide)
         self._text(
             slide,
             10.4,
@@ -2049,7 +3228,11 @@ class PptxBuilder:
             f"{self.section_index:02d}",
             self.theme.heading_font,
             96,
-            _mix(self.palette.accent, self.palette.on_accent, 0.25),
+            (
+                self.palette.on_accent
+                if self.design_active
+                else _mix(self.palette.accent, self.palette.on_accent, 0.25)
+            ),
             bold=True,
             align=PP_ALIGN.RIGHT,
         )
@@ -2071,6 +3254,7 @@ class PptxBuilder:
 
     def _build_content(self, spec: dict[str, Any]) -> Any:
         slide = self._new_slide("content")
+        self._add_standard_design_layers(slide, "content", spec)
         self._content_header(slide, spec.get("title"), spec.get("kicker"))
         y = CONTENT_TOP
 
@@ -2110,6 +3294,7 @@ class PptxBuilder:
         width: float = CONTENT_W,
         font_pt: float = BODY_FONT_PT,
         line_height_in: float = BODY_LINE_HEIGHT_IN,
+        bottom: float = CONTENT_BOTTOM,
     ) -> float:
         height = sum(
             _body_paragraph_height(
@@ -2123,7 +3308,7 @@ class PptxBuilder:
             )
             for part in body_parts
         )
-        if y + height > CONTENT_BOTTOM + 1e-6:
+        if y + height > bottom + 1e-6:
             raise ValueError("body content overflows the planned content area")
         box = self._textbox(slide, x, y, width, height)
         first = True
@@ -2172,11 +3357,12 @@ class PptxBuilder:
             run.text = str(line) if line else " "
             run.font.name = self.theme.mono_font
             run.font.size = Pt(CODE_FONT_PT)
-            run.font.color.rgb = RGBColor.from_string(self.palette.text)
+            run.font.color.rgb = RGBColor.from_string(self.palette.code_text)
         return y + height
 
     def _build_two_column(self, spec: dict[str, Any]) -> Any:
         slide = self._new_slide("two_column")
+        self._add_standard_design_layers(slide, "two_column", spec)
         self._content_header(slide, spec.get("title"), spec.get("kicker"))
         column_w = (CONTENT_W - 0.6) / 2
         body_font_pt = 13.0
@@ -2239,6 +3425,7 @@ class PptxBuilder:
 
     def _build_table(self, spec: dict[str, Any]) -> Any:
         slide = self._new_slide("table")
+        self._add_standard_design_layers(slide, "table", spec)
         self._content_header(slide, spec.get("title"), spec.get("kicker"))
         y = CONTENT_TOP
         body_parts = [str(part) for part in (spec.get("body_parts") or [])]
@@ -2324,7 +3511,10 @@ class PptxBuilder:
                 link_color=self.palette.link_on_accent,
             )
             for r, row in enumerate(rows):
-                fill = BAND_FILL if r % 2 == 1 else "FFFFFF"
+                if self.design_active:
+                    fill = self.palette.surface_alt if r % 2 == 1 else self.palette.surface
+                else:
+                    fill = BAND_FILL if r % 2 == 1 else "FFFFFF"
                 value = row[c] if c < len(row) else ""
                 self._style_cell(
                     table.cell(r + 1, c),
@@ -2347,6 +3537,20 @@ class PptxBuilder:
     ) -> None:
         cell.fill.solid()
         cell.fill.fore_color.rgb = RGBColor.from_string(fill)
+        if self.design_active:
+            properties = cell._tc.get_or_add_tcPr()
+            for edge_name in ("lnL", "lnR", "lnT", "lnB"):
+                existing = properties.find(qn(f"a:{edge_name}"))
+                if existing is not None:
+                    properties.remove(existing)
+                edge = etree.SubElement(
+                    properties,
+                    qn(f"a:{edge_name}"),
+                    {"w": "12700"},
+                )
+                solid = etree.SubElement(edge, qn("a:solidFill"))
+                etree.SubElement(solid, qn("a:srgbClr"), {"val": self.palette.border})
+                etree.SubElement(edge, qn("a:prstDash"), {"val": "solid"})
         cell.margin_left = Inches(0.12)
         cell.margin_right = Inches(0.12)
         cell.margin_top = Inches(TABLE_CELL_VERTICAL_PADDING_IN / 2)
@@ -2367,6 +3571,7 @@ class PptxBuilder:
 
     def _build_quote(self, spec: dict[str, Any]) -> Any:
         slide = self._new_slide("quote")
+        self._add_standard_design_layers(slide, "quote", spec)
         has_header = bool(spec.get("title") or spec.get("kicker"))
         if has_header:
             self._content_header(slide, spec.get("title"), spec.get("kicker"))
@@ -2412,9 +3617,147 @@ class PptxBuilder:
             )
         return slide
 
+    def _build_composed(self, spec: dict[str, Any]) -> Any:  # noqa: C901
+        layout = spec["layout"]
+        slide = self._new_slide(layout)
+        geometry = self._composed_geometry(layout)
+        media = cast(MediaSpec | None, spec.get("_media"))
+        if media is None:
+            raise ValueError(f"{layout} requires preflighted media")
+        media_frame = self._add_media_picture(
+            slide,
+            media,
+            *geometry["media"],
+            "Penny Media",
+            "composed media",
+        )
+        self._add_overlay(slide, media_frame, media.overlay, "Penny Media Overlay")
+        self._rect(
+            slide,
+            *geometry["panel"],
+            self.palette.surface,
+            name="Penny Full Bleed Text Panel" if layout == "full_bleed" else "Penny Text Pane",
+        )
+        if layout == "full_bleed":
+            self._rect(
+                slide,
+                0.42,
+                7.02,
+                12.49,
+                0.36,
+                self.palette.surface,
+                name="Penny Footer Surface",
+            )
+        caption_frame: tuple[float, float, float, float] | None = None
+        if spec.get("caption"):
+            media_x, _media_y, media_width, _media_height = geometry["media"]
+            if layout == "full_bleed":
+                caption_frame = (7.20, 6.48, 5.40, 0.48)
+            else:
+                caption_frame = (media_x + 0.20, 6.48, media_width - 0.40, 0.48)
+            self._rect(
+                slide,
+                *caption_frame,
+                self.palette.surface,
+                name="Penny Media Caption Surface",
+            )
+        self._add_mark(slide)
+
+        title_x, title_y, title_width, title_height = geometry["title"]
+        if spec.get("kicker"):
+            self._text(
+                slide,
+                title_x,
+                title_y - 0.34,
+                title_width,
+                0.26,
+                str(spec["kicker"]).upper(),
+                self.theme.body_font,
+                11,
+                self.palette.accent_text,
+                bold=True,
+            )
+        if spec.get("title"):
+            self._text(
+                slide,
+                title_x,
+                title_y,
+                title_width,
+                title_height,
+                str(spec["title"]),
+                self.theme.heading_font,
+                24,
+                self.palette.heading,
+                bold=True,
+            )
+            self._rect(
+                slide,
+                title_x,
+                title_y + title_height + 0.03,
+                min(1.1, title_width),
+                0.045,
+                self.palette.accent,
+            )
+
+        content_x, content_y, content_width, content_height = geometry["content"]
+        cursor = content_y
+        body_parts = [str(part) for part in (spec.get("body_parts") or [])]
+        if body_parts:
+            cursor = self._body_text(
+                slide,
+                cursor,
+                body_parts,
+                x=content_x,
+                width=content_width,
+                bottom=content_y + content_height,
+            )
+        bullets = [dict(item) for item in (spec.get("bullets") or [])]
+        if bullets:
+            sizes = tuple(spec.get("_bullet_sizes") or BULLET_FONT_TIERS[0])
+            bullet_height = sum(
+                _bullet_height(
+                    bullet,
+                    sizes,
+                    self.opts.line_break_mode,
+                    self.font_paths.get("body"),
+                    self.font_paths.get("mono"),
+                    width_in=content_width * 0.95,
+                )
+                for bullet in bullets
+            )
+            if cursor + bullet_height > content_y + content_height + 1e-6:
+                raise ValueError("composed bullet content overflows its planned text frame")
+            box = self._textbox(slide, content_x, cursor, content_width, bullet_height)
+            self._bullets_into(box.text_frame, bullets, sizes)
+        if caption_frame is not None:
+            caption_x, caption_y, caption_width, caption_height = caption_frame
+            self._text(
+                slide,
+                caption_x + 0.10,
+                caption_y + 0.08,
+                caption_width - 0.20,
+                caption_height - 0.12,
+                str(spec["caption"]),
+                self.theme.body_font,
+                10,
+                self.palette.text_muted,
+                align=PP_ALIGN.CENTER,
+            )
+        return slide
+
+    def _build_image_left(self, spec: dict[str, Any]) -> Any:
+        return self._build_composed(spec)
+
+    def _build_image_right(self, spec: dict[str, Any]) -> Any:
+        return self._build_composed(spec)
+
+    def _build_full_bleed(self, spec: dict[str, Any]) -> Any:
+        return self._build_composed(spec)
+
     def _build_image(self, spec: dict[str, Any]) -> Any:
         slide = self._new_slide("image")
-        self._content_header(slide, spec.get("title"), spec.get("kicker"))
+        if not self.design_active:
+            self._content_header(slide, spec.get("title"), spec.get("kicker"))
         src = str(spec.get("image_path") or "")
         path = src if os.path.isabs(src) else os.path.join(self.opts.project_root, src)
         caption = spec.get("caption")
@@ -2423,6 +3766,11 @@ class PptxBuilder:
 
         if not os.path.isfile(path):
             self.warnings.append(f"image not found: {src}")
+            if self.design_active:
+                missing_spec = dict(spec)
+                missing_spec["_image_missing"] = True
+                self._add_standard_design_layers(slide, "image", missing_spec)
+                self._content_header(slide, spec.get("title"), spec.get("kicker"))
             self._text(
                 slide,
                 MARGIN,
@@ -2454,6 +3802,9 @@ class PptxBuilder:
             Inches(width),
             Inches(height),
         )
+        if self.design_active:
+            self._add_standard_design_layers(slide, "image", spec)
+            self._content_header(slide, spec.get("title"), spec.get("kicker"))
         if caption:
             self._text(
                 slide,
@@ -2509,6 +3860,7 @@ class PptxBuilder:
     def _build_closing(self, spec: dict[str, Any]) -> Any:
         slide = self._new_slide("closing")
         self._rect(slide, 0, 0, SLIDE_W, SLIDE_H, self.palette.accent)
+        self._add_mark(slide)
         self._text(
             slide,
             1.17,
@@ -2662,6 +4014,10 @@ def _atomic_save(
 def generate(spec: dict[str, Any]) -> dict[str, Any]:
     opts = parse_options(spec)
     slides, md_warnings = _load_slides(spec, opts)
+    for index, slide in enumerate(slides):
+        slide["_origin_index"] = index
+        slide["_source_layout"] = slide["layout"]
+    opts, slides = _preflight_new_assets(opts, slides)
 
     builder = PptxBuilder(opts)
     builder.warnings.extend(md_warnings)
@@ -2691,7 +4047,11 @@ def generate(spec: dict[str, Any]) -> dict[str, Any]:
         "theme": opts.theme_name,
         "warnings": builder.warnings,
         "validation": validation,
-        "resolved_palette": asdict(opts.palette),
+        "resolved_palette": asdict(builder.deck_default_design.palette),
+        "resolved_design": {
+            "deck_default": _resolved_design_record(builder.deck_default_design),
+            "slides": builder.resolved_design_slides,
+        },
         "fonts": font_records,
         "font_plan": font_records,
         "line_break_mode": opts.line_break_mode,

@@ -110,12 +110,8 @@ export function loadConfig(cwd?: string): PlaywrightConfig {
     // Explicit opt-in only — defaults to false for production safety.
     // Set PLAYWRIGHT_IGNORE_HTTPS_ERRORS=1 for security testing.
     ignoreHTTPSErrors: getEnvBool("PLAYWRIGHT_IGNORE_HTTPS_ERRORS", dotEnv, false),
-    // Default is DIRECT (no proxy). We deliberately do NOT auto-derive from
-    // CAIDO_URL: Playwright must never be hard-wired to Caido, because that
-    // breaks ALL browser activity whenever Caido is down (ERR_PROXY_CONNECTION_FAILED).
-    // To capture browser traffic in Caido, either set PLAYWRIGHT_PROXY_SERVER
-    // explicitly, or toggle at runtime with the `playwright_set_proxy` tool
-    // (action: "caido" | "custom" | "off").
+    // Default is DIRECT (no proxy). Configure PLAYWRIGHT_PROXY_SERVER explicitly,
+    // or toggle at runtime with playwright_set_proxy (action: "custom" | "off").
     proxy: (() => {
       const server = getEnvVar("PLAYWRIGHT_PROXY_SERVER", dotEnv, "").trim();
       if (!server) return undefined;

@@ -1,4 +1,4 @@
-"""Dynamic fan topology (PRD R7 — arrangement 4, orchestrator-workers): the
+"""Dynamic fan topology (arrangement 4, orchestrator-workers): the
 fan-out of a parallel state is DATA emitted at runtime (a model's PLAN output
 stashed in ``ctx.extras["dynamic_branches"]``), rebuilt from the checkpoint on
 every process, validated per-branch, bounded by the ``max_fan_width`` budget,

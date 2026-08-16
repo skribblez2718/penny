@@ -1,15 +1,9 @@
 #!/usr/bin/env python3
-"""Generate a professionally styled Word (.docx) document from markdown.
+"""Generate a professionally styled Word (.docx) document from Markdown.
 
-Reads a JSON spec from stdin, renders the markdown through python-docx with a
-themed design system, writes the document, and prints a JSON result to stdout.
-Called by the word extension's word_generate tool.
-
-Design choices:
-- Markdown is parsed with markdown-it-py (CommonMark + tables + strikethrough),
-  never regexes, so nesting and inline emphasis are handled correctly.
-- Ordered lists are numbered manually with hanging indents instead of Word's
-  "List Number" style, which never restarts across separate lists.
+The TypeScript Word extension sends a JSON specification on stdin. This module
+parses Markdown, renders a style-driven Word document, validates the resulting
+OOXML package, atomically publishes it, and prints a JSON result on stdout.
 """
 
 from __future__ import annotations
@@ -18,12 +12,21 @@ import json
 import os
 import re
 import sys
-from dataclasses import dataclass
+import tempfile
+import traceback
+import xml.etree.ElementTree as ET
+import zipfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from docx import Document
-from docx.enum.section import WD_ORIENT
+from docx.enum.section import WD_ORIENT, WD_SECTION
+from docx.enum.style import WD_STYLE_TYPE
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
 from docx.opc.constants import RELATIONSHIP_TYPE
 from docx.oxml import parse_xml
@@ -33,14 +36,13 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 # ============================================================
-# Theme system (shared vocabulary with the powerpoint extension)
+# Theme, color, and typography systems
 # ============================================================
 
 
 @dataclass(frozen=True)
 class Theme:
     accent: str
-    accent_light: str
     text_dark: str
     text_muted: str
     heading_font: str
@@ -48,26 +50,174 @@ class Theme:
     mono_font: str
 
 
+@dataclass(frozen=True)
+class ColorTokens:
+    text: str
+    text_muted: str
+    heading: str
+    accent: str
+    accent_soft: str
+    on_accent: str
+    link: str
+    link_on_accent: str
+    background: str
+    surface: str
+    surface_alt: str
+    border: str
+    code_background: str
+
+
+@dataclass(frozen=True)
+class TypeScale:
+    title: float
+    cover_title: float
+    subtitle: float
+    h1: float
+    h2: float
+    h3: float
+    h4: float
+    h5: float
+    h6: float
+    body: float
+    table: float
+    caption: float
+    code: float
+    header_footer: float
+
+
 THEMES: dict[str, Theme] = {
-    "executive": Theme(
-        "1F3A5F", "D9E2F3", "1F2937", "6B7280", "Calibri Light", "Calibri", "Consolas"
-    ),
-    "modern": Theme("4F46E5", "E0E7FF", "111827", "6B7280", "Segoe UI", "Segoe UI", "Consolas"),
-    "minimal": Theme("111827", "E5E7EB", "111827", "6B7280", "Arial", "Arial", "Consolas"),
-    "editorial": Theme("7C2D12", "EFDFD3", "1F2937", "6B7280", "Georgia", "Georgia", "Consolas"),
-    "tech": Theme("0F766E", "CCFBF1", "111827", "6B7280", "Segoe UI", "Calibri", "Consolas"),
+    "executive": Theme("1F3A5F", "1F2937", "6B7280", "Calibri Light", "Calibri", "Consolas"),
+    "modern": Theme("4F46E5", "111827", "6B7280", "Segoe UI", "Segoe UI", "Consolas"),
+    "minimal": Theme("111827", "111827", "6B7280", "Arial", "Arial", "Consolas"),
+    "editorial": Theme("7C2D12", "1F2937", "6B7280", "Georgia", "Georgia", "Consolas"),
+    "tech": Theme("0F766E", "111827", "6B7280", "Segoe UI", "Calibri", "Consolas"),
 }
-
-NEUTRAL_BORDER = "D1D5DB"
-CODE_BG = "F3F4F6"
-BAND_FILL = "F5F7FA"
-
-_HEX_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
 
 PAGE_SIZES: dict[str, tuple[float, float]] = {
     "letter": (8.5, 11.0),
     "a4": (8.27, 11.69),
 }
+
+WHITE = "FFFFFF"
+BLACK = "000000"
+_HEX_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
+_BR_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_REQUIRED_DOCX_PARTS = {
+    "[Content_Types].xml",
+    "_rels/.rels",
+    "word/document.xml",
+}
+
+PENNY_BODY = "Penny Body"
+PENNY_QUOTE = "Penny Quote"
+PENNY_TABLE_HEADER = "Penny Table Header"
+PENNY_TABLE_HEADER_ACCENT = "Penny Table Header On Accent"
+PENNY_TABLE_BODY = "Penny Table Body"
+PENNY_CAPTION = "Penny Caption"
+PENNY_CODE_BLOCK = "Penny Code Block"
+PENNY_LIST_CONTINUE = "Penny List Continue"
+PENNY_DOCUMENT_TITLE = "Penny Document Title"
+PENNY_COVER_TITLE = "Penny Cover Title"
+PENNY_SUBTITLE = "Penny Subtitle"
+PENNY_METADATA = "Penny Metadata"
+PENNY_HEADER_FOOTER = "Penny Header Footer"
+PENNY_HYPERLINK = "Penny Hyperlink"
+PENNY_HYPERLINK_ACCENT = "Penny Hyperlink On Accent"
+PENNY_INLINE_CODE = "Penny Inline Code"
+PENNY_INLINE_CODE_ACCENT = "Penny Inline Code On Accent"
+
+_BULLET_STYLES = ["List Bullet", "List Bullet 2", "List Bullet 3"]
+
+
+def _hex_tuple(hex_color: str) -> tuple[int, int, int]:
+    return tuple(int(hex_color[index : index + 2], 16) for index in (0, 2, 4))  # type: ignore[return-value]
+
+
+def _tuple_hex(rgb: tuple[float, float, float]) -> str:
+    return "".join(f"{max(0, min(255, round(channel))):02X}" for channel in rgb)
+
+
+def _mix(first: str, second: str, second_amount: float) -> str:
+    """Mix two hex colors, where ``second_amount`` is the share of ``second``."""
+    first_rgb = _hex_tuple(first)
+    second_rgb = _hex_tuple(second)
+    mixed = tuple(
+        first_channel * (1.0 - second_amount) + second_channel * second_amount
+        for first_channel, second_channel in zip(first_rgb, second_rgb, strict=True)
+    )
+    return _tuple_hex((mixed[0], mixed[1], mixed[2]))
+
+
+def _relative_luminance(hex_color: str) -> float:
+    channels = []
+    for value in _hex_tuple(hex_color):
+        normalized = value / 255.0
+        channels.append(
+            normalized / 12.92 if normalized <= 0.04045 else ((normalized + 0.055) / 1.055) ** 2.4
+        )
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+
+def contrast_ratio(foreground: str, background: str) -> float:
+    lighter = max(_relative_luminance(foreground), _relative_luminance(background))
+    darker = min(_relative_luminance(foreground), _relative_luminance(background))
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _ensure_contrast(color: str, background: str, minimum: float = 4.5) -> str:
+    if contrast_ratio(color, background) >= minimum:
+        return color
+    target = (
+        BLACK if contrast_ratio(BLACK, background) >= contrast_ratio(WHITE, background) else WHITE
+    )
+    for step in range(1, 21):
+        candidate = _mix(color, target, step / 20.0)
+        if contrast_ratio(candidate, background) >= minimum:
+            return candidate
+    return target
+
+
+def derive_palette(theme: Theme, accent_override: str | None = None) -> ColorTokens:
+    accent = (accent_override or theme.accent).upper()
+    on_accent = WHITE if contrast_ratio(WHITE, accent) >= contrast_ratio(BLACK, accent) else BLACK
+    text = _ensure_contrast(theme.text_dark, WHITE)
+    text_muted = _ensure_contrast(theme.text_muted, WHITE)
+    link = _ensure_contrast(accent, WHITE)
+    return ColorTokens(
+        text=text,
+        text_muted=text_muted,
+        heading=link,
+        accent=accent,
+        accent_soft=_mix(accent, WHITE, 0.86),
+        on_accent=on_accent,
+        link=link,
+        link_on_accent=on_accent,
+        background=WHITE,
+        surface=WHITE,
+        surface_alt=_mix(accent, WHITE, 0.95),
+        border=_mix(text, WHITE, 0.80),
+        code_background=_mix(text, WHITE, 0.95),
+    )
+
+
+def type_scale(body_pt: float) -> TypeScale:
+    """Return a monotonic, body-relative scale for all document typography."""
+    return TypeScale(
+        title=max(24.0, body_pt * 2.2),
+        cover_title=max(30.0, body_pt * 2.8),
+        subtitle=max(12.0, body_pt * 1.18),
+        h1=max(body_pt + 5.0, body_pt * 1.55),
+        h2=max(body_pt + 3.0, body_pt * 1.30),
+        h3=max(body_pt + 1.5, body_pt * 1.15),
+        h4=body_pt,
+        h5=max(body_pt - 0.5, 8.0),
+        h6=max(body_pt - 1.0, 8.0),
+        body=body_pt,
+        table=max(body_pt - 0.5, 8.0),
+        caption=max(body_pt - 1.0, 8.0),
+        code=max(body_pt - 1.5, 8.0),
+        header_footer=max(body_pt - 2.0, 8.0),
+    )
 
 
 # ============================================================
@@ -75,7 +225,7 @@ PAGE_SIZES: dict[str, tuple[float, float]] = {
 # ============================================================
 
 
-@dataclass
+@dataclass(frozen=True)
 class Options:
     title: str | None
     subtitle: str | None
@@ -83,25 +233,36 @@ class Options:
     date: str | None
     theme_name: str
     theme: Theme
+    colors: ColorTokens
+    scale: TypeScale
     font_size_pt: float
     line_spacing: float
+    line_break_mode: str
     margin_inches: float
     orientation: str
     page_size: str
-    cover_page: bool
+    title_mode: str
     include_toc: bool
     include_page_numbers: bool
     header_text: str | None
     footer_text: str | None
     table_style: str
-    output_path: str
-    project_root: str
+    table_layout: str
+    output_path: Path
+    staging_path: Path | None
+    project_root: Path
 
     @property
     def content_width_in(self) -> float:
-        w, h = PAGE_SIZES[self.page_size]
-        page_w = h if self.orientation == "landscape" else w
-        return page_w - 2 * self.margin_inches
+        width, height = PAGE_SIZES[self.page_size]
+        page_width = height if self.orientation == "landscape" else width
+        return page_width - 2 * self.margin_inches
+
+    @property
+    def content_height_in(self) -> float:
+        width, height = PAGE_SIZES[self.page_size]
+        page_height = width if self.orientation == "landscape" else height
+        return page_height - 2 * self.margin_inches
 
 
 def _opt_str(spec: dict[str, Any], key: str) -> str | None:
@@ -118,43 +279,38 @@ def _enum(spec: dict[str, Any], key: str, allowed: list[str], default: str) -> s
     return value
 
 
-def _number(spec: dict[str, Any], key: str, default: float, lo: float, hi: float) -> float:
-    value = float(spec.get(key) or default)
-    if not lo <= value <= hi:
-        raise ValueError(f"{key} must be between {lo} and {hi}, got {value}")
+def _number(spec: dict[str, Any], key: str, default: float, low: float, high: float) -> float:
+    raw = spec.get(key)
+    value = float(default if raw is None else raw)
+    if not low <= value <= high:
+        raise ValueError(f"{key} must be between {low} and {high}, got {value}")
     return value
 
 
-def _resolve_theme(spec: dict[str, Any]) -> tuple[str, Theme]:
-    name = _enum(spec, "theme", list(THEMES.keys()), "executive")
-    theme = THEMES[name]
+def parse_options(spec: dict[str, Any]) -> Options:
+    theme_name = _enum(spec, "theme", list(THEMES), "executive")
+    theme = THEMES[theme_name]
     accent = _opt_str(spec, "accent_color")
     if accent:
         accent = accent.lstrip("#").upper()
-        if not _HEX_RE.match(accent):
+        if not _HEX_RE.fullmatch(accent):
             raise ValueError(f"accent_color must be a 6-digit hex color, got {accent!r}")
-        theme = Theme(
-            accent,
-            theme.accent_light,
-            theme.text_dark,
-            theme.text_muted,
-            theme.heading_font,
-            theme.body_font,
-            theme.mono_font,
-        )
-    return name, theme
 
-
-def parse_options(spec: dict[str, Any]) -> Options:
-    theme_name, theme = _resolve_theme(spec)
     author = _opt_str(spec, "author")
-    cover_page = bool(spec.get("cover_page", False))
+    legacy_cover = bool(spec.get("cover_page", False))
+    title_mode = _enum(spec, "title_mode", ["auto", "none", "inline", "cover"], "auto")
+    if title_mode == "auto":
+        title_mode = "cover" if legacy_cover else "inline"
+
     date = _opt_str(spec, "date")
-    if date is None and (author or cover_page):
+    if date is None and (author or title_mode == "cover"):
         date = datetime.now().strftime("%Y-%m-%d")
+
     output_path = _opt_str(spec, "output_path")
     if not output_path:
         raise ValueError("output_path is required in the generator spec")
+
+    body_size = _number(spec, "font_size_pt", 11.0, 8.0, 14.0)
     return Options(
         title=_opt_str(spec, "title"),
         subtitle=_opt_str(spec, "subtitle"),
@@ -162,19 +318,28 @@ def parse_options(spec: dict[str, Any]) -> Options:
         date=date,
         theme_name=theme_name,
         theme=theme,
-        font_size_pt=_number(spec, "font_size_pt", 11.0, 8.0, 14.0),
+        colors=derive_palette(theme, accent),
+        scale=type_scale(body_size),
+        font_size_pt=body_size,
         line_spacing=_number(spec, "line_spacing", 1.15, 1.0, 2.0),
+        line_break_mode=_enum(spec, "line_break_mode", ["preserve", "commonmark"], "preserve"),
         margin_inches=_number(spec, "margin_inches", 1.0, 0.4, 2.0),
         orientation=_enum(spec, "orientation", ["portrait", "landscape"], "portrait"),
         page_size=_enum(spec, "page_size", ["letter", "a4"], "letter"),
-        cover_page=cover_page,
+        title_mode=title_mode,
         include_toc=bool(spec.get("include_toc", False)),
         include_page_numbers=bool(spec.get("include_page_numbers", True)),
         header_text=_opt_str(spec, "header_text"),
         footer_text=_opt_str(spec, "footer_text"),
         table_style=_enum(spec, "table_style", ["banded", "minimal", "grid", "none"], "banded"),
-        output_path=output_path,
-        project_root=_opt_str(spec, "project_root") or os.getcwd(),
+        table_layout=_enum(spec, "table_layout", ["content", "equal"], "content"),
+        output_path=Path(output_path).expanduser(),
+        staging_path=(
+            Path(staging_path).expanduser()
+            if (staging_path := _opt_str(spec, "staging_path"))
+            else None
+        ),
+        project_root=Path(_opt_str(spec, "project_root") or Path.cwd()).expanduser().resolve(),
     )
 
 
@@ -187,6 +352,15 @@ def _rgb(hex_color: str) -> RGBColor:
     return RGBColor.from_string(hex_color)
 
 
+def _set_font_slots(rpr: Any, name: str) -> None:
+    rfonts = rpr.find(qn("w:rFonts"))
+    if rfonts is None:
+        rfonts = parse_xml(f'<w:rFonts {nsdecls("w")}/>')
+        rpr.insert(0, rfonts)
+    for slot in ("ascii", "hAnsi", "eastAsia", "cs"):
+        rfonts.set(qn(f"w:{slot}"), name)
+
+
 def _set_run_font(
     run: Any,
     name: str | None = None,
@@ -195,40 +369,49 @@ def _set_run_font(
 ) -> None:
     if name:
         run.font.name = name
-        rpr = run._element.get_or_add_rPr()
-        rfonts = rpr.find(qn("w:rFonts"))
-        if rfonts is None:
-            rfonts = parse_xml(f'<w:rFonts {nsdecls("w")}/>')
-            rpr.insert(0, rfonts)
-        rfonts.set(qn("w:eastAsia"), name)
+        _set_font_slots(run._element.get_or_add_rPr(), name)
     if size_pt is not None:
         run.font.size = Pt(size_pt)
     if color:
         run.font.color.rgb = _rgb(color)
 
 
+def _set_style_font(
+    style: Any,
+    name: str,
+    size_pt: float,
+    color: str,
+    *,
+    bold: bool | None = None,
+    italic: bool | None = None,
+) -> None:
+    style.font.name = name
+    style.font.size = Pt(size_pt)
+    style.font.color.rgb = _rgb(color)
+    style.font.bold = bold
+    style.font.italic = italic
+    _set_font_slots(style._element.get_or_add_rPr(), name)
+
+
 def _shade_paragraph(paragraph: Any, fill: str) -> None:
-    ppr = paragraph._p.get_or_add_pPr()
-    ppr.append(parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:fill="{fill}"/>'))
+    paragraph._p.get_or_add_pPr().append(
+        parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:fill="{fill}"/>')
+    )
 
 
-def _shade_run(run: Any, fill: str) -> None:
-    rpr = run._element.get_or_add_rPr()
+def _shade_run_properties(rpr: Any, fill: str) -> None:
     rpr.append(parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:fill="{fill}"/>'))
 
 
 def _paragraph_borders(paragraph: Any, edges: dict[str, tuple[str, int]]) -> None:
-    """Apply borders to a paragraph. edges maps edge name -> (hex color, size in 1/8 pt)."""
     parts = "".join(
         f'<w:{edge} w:val="single" w:sz="{size}" w:space="4" w:color="{color}"/>'
         for edge, (color, size) in edges.items()
     )
-    ppr = paragraph._p.get_or_add_pPr()
-    ppr.append(parse_xml(f'<w:pBdr {nsdecls("w")}>{parts}</w:pBdr>'))
+    paragraph._p.get_or_add_pPr().append(parse_xml(f'<w:pBdr {nsdecls("w")}>{parts}</w:pBdr>'))
 
 
 def _add_field(paragraph: Any, instruction: str, placeholder: str | None = None) -> None:
-    """Insert a Word field code (e.g. PAGE, TOC) into a paragraph."""
     begin = paragraph.add_run()
     begin._element.append(parse_xml(f'<w:fldChar {nsdecls("w")} w:fldCharType="begin"/>'))
     instr = paragraph.add_run()
@@ -236,31 +419,31 @@ def _add_field(paragraph: Any, instruction: str, placeholder: str | None = None)
         parse_xml(f'<w:instrText {nsdecls("w")} xml:space="preserve"> {instruction} </w:instrText>')
     )
     if placeholder is not None:
-        sep = paragraph.add_run()
-        sep._element.append(parse_xml(f'<w:fldChar {nsdecls("w")} w:fldCharType="separate"/>'))
-        text = paragraph.add_run(placeholder)
-        text.italic = True
-        _set_run_font(text, size_pt=10, color="808080")
+        separator = paragraph.add_run()
+        separator._element.append(
+            parse_xml(f'<w:fldChar {nsdecls("w")} w:fldCharType="separate"/>')
+        )
+        placeholder_run = paragraph.add_run(placeholder)
+        placeholder_run.italic = True
     end = paragraph.add_run()
     end._element.append(parse_xml(f'<w:fldChar {nsdecls("w")} w:fldCharType="end"/>'))
 
 
 def _add_hyperlink_container(paragraph: Any, url: str) -> Any:
-    """Create a real w:hyperlink element in the paragraph; caller moves runs into it."""
-    r_id = paragraph.part.relate_to(url, RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
-    hyperlink = parse_xml(f'<w:hyperlink {nsdecls("w", "r")} r:id="{r_id}"/>')
+    relationship_id = paragraph.part.relate_to(url, RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
+    hyperlink = parse_xml(f'<w:hyperlink {nsdecls("w", "r")} r:id="{relationship_id}"/>')
     paragraph._p.append(hyperlink)
     return hyperlink
 
 
 def _set_cell_fill(cell: Any, fill: str) -> None:
-    tcpr = cell._tc.get_or_add_tcPr()
-    tcpr.append(parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:fill="{fill}"/>'))
+    cell._tc.get_or_add_tcPr().append(
+        parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:fill="{fill}"/>')
+    )
 
 
 def _set_cell_border_bottom(cell: Any, color: str, size: int) -> None:
-    tcpr = cell._tc.get_or_add_tcPr()
-    tcpr.append(
+    cell._tc.get_or_add_tcPr().append(
         parse_xml(
             f'<w:tcBorders {nsdecls("w")}>'
             f'<w:bottom w:val="single" w:sz="{size}" w:space="0" w:color="{color}"/>'
@@ -281,15 +464,42 @@ def _set_table_cell_margins(table: Any) -> None:
     table._tbl.tblPr.append(
         parse_xml(
             f'<w:tblCellMar {nsdecls("w")}>'
-            f'<w:top w:w="80" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/>'
-            f'<w:start w:w="110" w:type="dxa"/><w:end w:w="110" w:type="dxa"/>'
+            f'<w:top w:w="70" w:type="dxa"/><w:bottom w:w="70" w:type="dxa"/>'
+            f'<w:start w:w="100" w:type="dxa"/><w:end w:w="100" w:type="dxa"/>'
             f"</w:tblCellMar>"
         )
     )
 
 
+def _set_row_policy(row: Any, *, repeat_header: bool) -> None:
+    trpr = row._tr.get_or_add_trPr()
+    trpr.append(parse_xml(f'<w:cantSplit {nsdecls("w")}/>'))
+    if repeat_header:
+        trpr.append(parse_xml(f'<w:tblHeader {nsdecls("w")} w:val="true"/>'))
+
+
+def _set_cell_width(cell: Any, width_inches: float) -> None:
+    cell.width = Inches(width_inches)
+    cell._tc.get_or_add_tcPr().get_or_add_tcW().width = Inches(width_inches)
+
+
+def _set_page_number_start(section: Any, number: int) -> None:
+    section_properties = section._sectPr
+    existing = section_properties.find(qn("w:pgNumType"))
+    if existing is not None:
+        section_properties.remove(existing)
+    section_properties.append(parse_xml(f'<w:pgNumType {nsdecls("w")} w:start="{number}"/>'))
+
+
+def _request_field_update(doc: Any) -> None:
+    settings = doc.settings._element
+    current = settings.find(qn("w:updateFields"))
+    if current is not None:
+        settings.remove(current)
+    settings.append(parse_xml(f'<w:updateFields {nsdecls("w")} w:val="true"/>'))
+
+
 def _style(doc: Any, name: str, fallback: str = "Normal") -> str:
-    """Return a style name that exists in the document, falling back gracefully."""
     try:
         doc.styles[name]
         return name
@@ -298,19 +508,14 @@ def _style(doc: Any, name: str, fallback: str = "Normal") -> str:
 
 
 # ============================================================
-# Inline rendering (runs within a paragraph)
+# Inline rendering
 # ============================================================
 
 
-@dataclass
+@dataclass(frozen=True)
 class RunProfile:
-    """Default run formatting for a rendering context (body, heading, quote, cell)."""
-
-    font: str | None
-    size_pt: float | None
-    color: str | None
-    mono_font: str
-    accent: str
+    link_style: str = PENNY_HYPERLINK
+    code_style: str = PENNY_INLINE_CODE
     italic: bool = False
 
 
@@ -319,7 +524,7 @@ class _InlineState:
     bold: bool = False
     italic: bool = False
     strike: bool = False
-    link: Any = None  # active w:hyperlink element or None
+    link: Any = None
 
 
 _INLINE_TOGGLES: dict[str, tuple[str, bool]] = {
@@ -331,331 +536,427 @@ _INLINE_TOGGLES: dict[str, tuple[str, bool]] = {
     "s_close": ("strike", False),
 }
 
+InlineImageHandler = Callable[[Any, str, str], None]
+
 
 class InlineRenderer:
-    """Renders markdown-it inline token children into docx runs."""
+    """Render markdown-it inline children into style-inheriting Word runs."""
 
-    def __init__(self, profile: RunProfile) -> None:
+    def __init__(
+        self,
+        profile: RunProfile,
+        line_break_mode: str,
+        image_handler: InlineImageHandler | None = None,
+    ) -> None:
         self.profile = profile
-        self.images: list[tuple[str, str]] = []
+        self.line_break_mode = line_break_mode
+        self.image_handler = image_handler
 
-    def render(self, paragraph: Any, children: list[Token]) -> list[tuple[str, str]]:
+    def render(self, paragraph: Any, children: list[Token]) -> None:
         state = _InlineState()
         for token in children:
             self._render_token(paragraph, token, state)
-        return self.images
+
+    def _new_run(
+        self,
+        paragraph: Any,
+        state: _InlineState,
+        text: str = "",
+        *,
+        style: str | None = None,
+    ) -> Any:
+        run = paragraph.add_run(text)
+        run.bold = state.bold or None
+        run.italic = state.italic or self.profile.italic or None
+        run.font.strike = state.strike or None
+        if style:
+            run.style = style
+        elif state.link is not None:
+            run.style = self.profile.link_style
+        if state.link is not None:
+            state.link.append(run._element)
+        return run
+
+    def _emit_break(self, paragraph: Any, state: _InlineState) -> None:
+        self._new_run(paragraph, state).add_break()
 
     def _render_token(self, paragraph: Any, token: Token, state: _InlineState) -> None:
         toggle = _INLINE_TOGGLES.get(token.type)
         if toggle is not None:
             setattr(state, toggle[0], toggle[1])
         elif token.type == "text":
-            self._emit(paragraph, token.content, state)
+            self._new_run(paragraph, state, token.content)
         elif token.type == "code_inline":
-            self._emit(paragraph, token.content, state, mono=True)
+            style = self.profile.link_style if state.link is not None else self.profile.code_style
+            self._new_run(paragraph, state, token.content, style=style)
         elif token.type == "link_open":
             state.link = _add_hyperlink_container(paragraph, str(token.attrs.get("href", "")))
         elif token.type == "link_close":
             state.link = None
-        elif token.type == "softbreak":
-            self._emit(paragraph, " ", state)
-        elif token.type == "hardbreak":
-            paragraph.add_run().add_break()
-        elif token.type == "image":
+        elif token.type in ("softbreak", "hardbreak", "html_inline"):
+            self._render_break_token(paragraph, token, state)
+        elif token.type == "image" and self.image_handler is not None:
             alt = token.content or str(token.attrs.get("alt", ""))
-            self.images.append((str(token.attrs.get("src", "")), alt))
+            run = self._new_run(paragraph, state)
+            self.image_handler(run, str(token.attrs.get("src", "")), alt)
 
-    def _emit(self, paragraph: Any, text: str, state: _InlineState, mono: bool = False) -> None:
-        run = paragraph.add_run(text)
-        run.bold = state.bold or None
-        run.italic = state.italic or self.profile.italic or None
-        run.font.strike = state.strike or None
-        if mono:
-            size = (self.profile.size_pt or 11.0) - 0.5
-            _set_run_font(run, self.profile.mono_font, size, self.profile.color)
-            _shade_run(run, CODE_BG)
-        else:
-            _set_run_font(run, self.profile.font, self.profile.size_pt, self.profile.color)
-        if state.link is not None:
-            run.font.color.rgb = _rgb(self.profile.accent)
-            run.underline = True
-            state.link.append(run._element)
+    def _render_break_token(self, paragraph: Any, token: Token, state: _InlineState) -> None:
+        if token.type == "softbreak" and self.line_break_mode != "preserve":
+            self._new_run(paragraph, state, " ")
+        elif token.type != "html_inline" or _BR_TAG_RE.fullmatch(token.content.strip()):
+            self._emit_break(paragraph, state)
 
 
 # ============================================================
 # Block rendering
 # ============================================================
 
-_BULLET_STYLES = ["List Bullet", "List Bullet 2", "List Bullet 3"]
+
+@dataclass(frozen=True)
+class TableCellSpec:
+    children: list[Token]
+    alignment: str | None
 
 
 class DocxRenderer:
-    """Walks the markdown-it block token stream and emits styled docx content."""
+    """Walk the markdown-it block token stream and emit styled Word content."""
 
     def __init__(self, doc: Any, opts: Options) -> None:
         self.doc = doc
         self.opts = opts
         self.theme = opts.theme
+        self.colors = opts.colors
         self.warnings: list[str] = []
         self.stats = {"headings": 0, "tables": 0, "code_blocks": 0, "images": 0}
 
-    # ---- profiles ----
-
-    def _body_profile(self) -> RunProfile:
-        t = self.theme
-        return RunProfile(t.body_font, self.opts.font_size_pt, t.text_dark, t.mono_font, t.accent)
-
-    def _heading_profile(self) -> RunProfile:
-        t = self.theme
-        return RunProfile(None, None, None, t.mono_font, t.accent)
-
-    # ---- top-level walk ----
+    def _inline_renderer(self, profile: RunProfile | None = None) -> InlineRenderer:
+        return InlineRenderer(
+            profile or RunProfile(),
+            self.opts.line_break_mode,
+            self._render_inline_image,
+        )
 
     def render(self, tokens: list[Token]) -> None:
-        i = 0
-        while i < len(tokens):
-            i = self._render_block(tokens, i)
+        index = 0
+        while index < len(tokens):
+            index = self._render_block(tokens, index)
 
-    def _render_block(self, tokens: list[Token], i: int) -> int:
-        token = tokens[i]
+    def _render_block(self, tokens: list[Token], index: int) -> int:
+        token = tokens[index]
         if token.type == "heading_open":
-            return self._render_heading(tokens, i)
+            return self._render_heading(tokens, index)
         if token.type == "paragraph_open":
-            return self._render_paragraph(tokens, i, self._body_profile())
+            return self._render_paragraph(tokens, index)
         if token.type in ("bullet_list_open", "ordered_list_open"):
-            return self._render_list(tokens, i, 0)
+            return self._render_list(tokens, index, 0)
         if token.type == "blockquote_open":
-            return self._render_blockquote(tokens, i)
+            return self._render_blockquote(tokens, index)
         if token.type in ("fence", "code_block"):
             self._render_code(token)
-            return i + 1
+            return index + 1
         if token.type == "hr":
             self._render_hr()
-            return i + 1
+            return index + 1
         if token.type == "table_open":
-            return self._render_table(tokens, i)
-        return i + 1
+            return self._render_table(tokens, index)
+        return index + 1
 
-    # ---- blocks ----
-
-    def _render_heading(self, tokens: list[Token], i: int) -> int:
-        level = int(tokens[i].tag[1])
-        inline = tokens[i + 1]
+    def _render_heading(self, tokens: list[Token], index: int) -> int:
+        level = int(tokens[index].tag[1])
+        inline = tokens[index + 1]
         paragraph = self.doc.add_paragraph(style=_style(self.doc, f"Heading {min(level, 6)}"))
-        InlineRenderer(self._heading_profile()).render(paragraph, inline.children or [])
+        self._inline_renderer().render(paragraph, inline.children or [])
         if level == 1:
-            _paragraph_borders(paragraph, {"bottom": (self.theme.accent_light, 6)})
+            _paragraph_borders(paragraph, {"bottom": (self.colors.accent_soft, 6)})
         self.stats["headings"] += 1
-        return i + 3
+        return index + 3
 
-    def _render_paragraph(self, tokens: list[Token], i: int, profile: RunProfile) -> int:
-        inline = tokens[i + 1]
+    def _render_paragraph(self, tokens: list[Token], index: int) -> int:
+        inline = tokens[index + 1]
         children = inline.children or []
         only_image = len(children) == 1 and children[0].type == "image"
         if only_image:
-            self._render_image(
+            self._render_block_image(
                 str(children[0].attrs.get("src", "")),
                 children[0].content or str(children[0].attrs.get("alt", "")),
             )
-            return i + 3
-        paragraph = self.doc.add_paragraph()
-        images = InlineRenderer(profile).render(paragraph, children)
-        for src, alt in images:
-            self._render_image(src, alt)
-        return i + 3
+            return index + 3
+        paragraph = self.doc.add_paragraph(style=PENNY_BODY)
+        self._inline_renderer().render(paragraph, children)
+        return index + 3
 
-    def _render_list(self, tokens: list[Token], i: int, depth: int) -> int:
-        ordered = tokens[i].type == "ordered_list_open"
-        close = tokens[i].type.replace("_open", "_close")
-        number = int(str(tokens[i].attrs.get("start", 1) or 1))
-        i += 1
-        while tokens[i].type != close:
-            if tokens[i].type == "list_item_open":
-                i = self._render_list_item(tokens, i, depth, number if ordered else None)
+    def _render_list(self, tokens: list[Token], index: int, depth: int) -> int:
+        ordered = tokens[index].type == "ordered_list_open"
+        close_type = tokens[index].type.replace("_open", "_close")
+        number = int(str(tokens[index].attrs.get("start", 1) or 1))
+        index += 1
+        while tokens[index].type != close_type:
+            if tokens[index].type == "list_item_open":
+                index = self._render_list_item(tokens, index, depth, ordered, number)
                 number += 1
             else:
-                i += 1
-        return i + 1
+                index += 1
+        return index + 1
 
-    def _render_list_item(self, tokens: list[Token], i: int, depth: int, number: int | None) -> int:
-        i += 1  # past list_item_open
-        while tokens[i].type != "list_item_close":
-            if tokens[i].type == "paragraph_open":
-                i = self._render_list_paragraph(tokens, i, depth, number)
-                number = None  # only the first paragraph carries the marker
-            elif tokens[i].type in ("bullet_list_open", "ordered_list_open"):
-                i = self._render_list(tokens, i, min(depth + 1, 2))
+    def _render_list_item(
+        self,
+        tokens: list[Token],
+        index: int,
+        depth: int,
+        ordered: bool,
+        number: int,
+    ) -> int:
+        index += 1
+        first_paragraph = True
+        while tokens[index].type != "list_item_close":
+            if tokens[index].type == "paragraph_open":
+                index = self._render_list_paragraph(
+                    tokens,
+                    index,
+                    depth,
+                    ordered=ordered,
+                    number=number if ordered and first_paragraph else None,
+                    continuation=not first_paragraph,
+                )
+                first_paragraph = False
+            elif tokens[index].type in ("bullet_list_open", "ordered_list_open"):
+                index = self._render_list(tokens, index, depth + 1)
             else:
-                # Fences, headings, tables, blockquotes inside a list item render
-                # through the normal block dispatcher instead of being dropped.
-                i = self._render_block(tokens, i)
-        return i + 1
+                index = self._render_block(tokens, index)
+        return index + 1
 
     def _render_list_paragraph(
-        self, tokens: list[Token], i: int, depth: int, number: int | None
+        self,
+        tokens: list[Token],
+        index: int,
+        depth: int,
+        *,
+        ordered: bool,
+        number: int | None,
+        continuation: bool,
     ) -> int:
-        if number is None:
-            paragraph = self.doc.add_paragraph(style=_style(self.doc, _BULLET_STYLES[depth]))
+        if continuation:
+            paragraph = self.doc.add_paragraph(style=PENNY_LIST_CONTINUE)
+            paragraph.paragraph_format.left_indent = Inches(0.25 * min(depth, 5) + 0.25)
+        elif ordered:
+            paragraph = self.doc.add_paragraph(style=PENNY_BODY)
+            left = 0.25 * min(depth, 5) + 0.25
+            paragraph.paragraph_format.left_indent = Inches(left)
+            paragraph.paragraph_format.first_line_indent = Inches(-0.25)
+            paragraph.paragraph_format.tab_stops.add_tab_stop(Inches(left), WD_TAB_ALIGNMENT.LEFT)
+            paragraph.add_run(f"{number}.\t")
         else:
-            # Manual numbering with a hanging indent: Word's List Number style never
-            # restarts across separate lists, so literal numbers are more correct.
-            paragraph = self.doc.add_paragraph()
-            fmt = paragraph.paragraph_format
-            left = 0.25 * depth + 0.25
-            fmt.left_indent = Inches(left)
-            fmt.first_line_indent = Inches(-0.25)
-            fmt.tab_stops.add_tab_stop(Inches(left), WD_TAB_ALIGNMENT.LEFT)
-            marker = paragraph.add_run(f"{number}.\t")
-            _set_run_font(
-                marker, self.theme.body_font, self.opts.font_size_pt, self.theme.text_dark
+            paragraph = self.doc.add_paragraph(
+                style=_style(self.doc, _BULLET_STYLES[min(depth, len(_BULLET_STYLES) - 1)])
             )
         paragraph.paragraph_format.space_after = Pt(2)
-        images = InlineRenderer(self._body_profile()).render(
-            paragraph, tokens[i + 1].children or []
-        )
-        for src, alt in images:
-            self._render_image(src, alt)
-        return i + 3
+        self._inline_renderer().render(paragraph, tokens[index + 1].children or [])
+        return index + 3
 
-    def _render_blockquote(self, tokens: list[Token], i: int) -> int:
-        t = self.theme
-        profile = RunProfile(
-            t.body_font, self.opts.font_size_pt, t.text_muted, t.mono_font, t.accent, italic=True
-        )
-        i += 1
+    def _render_blockquote(self, tokens: list[Token], index: int) -> int:
+        index += 1
         first = True
-        while tokens[i].type != "blockquote_close":
-            if tokens[i].type == "paragraph_open":
-                paragraph_index = len(self.doc.paragraphs)
-                i = self._render_paragraph(tokens, i, profile)
-                for paragraph in self.doc.paragraphs[paragraph_index:]:
-                    fmt = paragraph.paragraph_format
-                    fmt.left_indent = Inches(0.25)
-                    fmt.space_before = Pt(6 if first else 2)
-                    fmt.space_after = Pt(2)
-                    _paragraph_borders(paragraph, {"left": (t.accent, 18)})
-                    first = False
+        while tokens[index].type != "blockquote_close":
+            if tokens[index].type == "paragraph_open":
+                inline = tokens[index + 1]
+                paragraph = self.doc.add_paragraph(style=PENNY_QUOTE)
+                paragraph.paragraph_format.space_before = Pt(6 if first else 2)
+                _paragraph_borders(paragraph, {"left": (self.colors.accent, 18)})
+                self._inline_renderer(RunProfile(italic=True)).render(
+                    paragraph, inline.children or []
+                )
+                first = False
+                index += 3
             else:
-                i = self._render_block(tokens, i)
+                index = self._render_block(tokens, index)
         if self.doc.paragraphs:
             self.doc.paragraphs[-1].paragraph_format.space_after = Pt(6)
-        return i + 1
+        return index + 1
 
     def _render_code(self, token: Token) -> None:
         lines = token.content.rstrip("\n").split("\n")
-        t = self.theme
-        for index, line in enumerate(lines):
-            paragraph = self.doc.add_paragraph()
-            fmt = paragraph.paragraph_format
-            fmt.left_indent = Inches(0.15)
-            fmt.right_indent = Inches(0.15)
-            fmt.line_spacing = 1.0
-            fmt.space_before = Pt(6) if index == 0 else Pt(0)
-            fmt.space_after = Pt(6) if index == len(lines) - 1 else Pt(0)
-            run = paragraph.add_run(line)
-            _set_run_font(run, t.mono_font, 9.0, t.text_dark)
-            _shade_paragraph(paragraph, CODE_BG)
-            # Identical box borders on consecutive paragraphs merge into one frame.
-            _paragraph_borders(
-                paragraph,
-                {
-                    "top": (NEUTRAL_BORDER, 4),
-                    "bottom": (NEUTRAL_BORDER, 4),
-                    "left": (NEUTRAL_BORDER, 4),
-                    "right": (NEUTRAL_BORDER, 4),
-                },
-            )
+        paragraph = self.doc.add_paragraph(style=PENNY_CODE_BLOCK)
+        for line_index, line in enumerate(lines):
+            paragraph.add_run(line)
+            if line_index < len(lines) - 1:
+                paragraph.add_run().add_break()
+        _shade_paragraph(paragraph, self.colors.code_background)
+        _paragraph_borders(
+            paragraph,
+            {
+                "top": (self.colors.border, 4),
+                "bottom": (self.colors.border, 4),
+                "left": (self.colors.border, 4),
+                "right": (self.colors.border, 4),
+            },
+        )
         self.stats["code_blocks"] += 1
 
     def _render_hr(self) -> None:
-        paragraph = self.doc.add_paragraph()
-        fmt = paragraph.paragraph_format
-        fmt.space_before = Pt(10)
-        fmt.space_after = Pt(10)
-        _paragraph_borders(paragraph, {"bottom": (NEUTRAL_BORDER, 4)})
+        paragraph = self.doc.add_paragraph(style=PENNY_BODY)
+        paragraph.paragraph_format.space_before = Pt(10)
+        paragraph.paragraph_format.space_after = Pt(10)
+        _paragraph_borders(paragraph, {"bottom": (self.colors.border, 4)})
 
-    def _render_image(self, src: str, alt: str) -> None:
-        path = src if os.path.isabs(src) else os.path.join(self.opts.project_root, src)
-        if not os.path.isfile(path):
-            self.warnings.append(f"image not found: {src}")
-            paragraph = self.doc.add_paragraph()
-            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = paragraph.add_run(f"[image unavailable: {alt or src}]")
-            _set_run_font(run, self.theme.body_font, 9.0, self.theme.text_muted)
-            return
-        width = self._image_width_inches(path)
-        paragraph = self.doc.add_paragraph()
-        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        paragraph.add_run().add_picture(path, width=Inches(width))
-        if alt:
-            caption = self.doc.add_paragraph()
-            caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            caption.paragraph_format.space_after = Pt(8)
-            run = caption.add_run(alt)
-            _set_run_font(run, self.theme.body_font, 9.0, self.theme.text_muted)
-        self.stats["images"] += 1
+    def _resolve_image_path(self, source: str) -> Path:
+        path = Path(source).expanduser()
+        return path if path.is_absolute() else self.opts.project_root / path
 
-    def _image_width_inches(self, path: str) -> float:
+    def _image_dimensions_inches(self, path: Path) -> tuple[float, float]:
         max_width = self.opts.content_width_in
+        max_height = max(1.0, self.opts.content_height_in - 0.75)
         try:
-            from PIL import Image
+            from PIL import Image, ImageOps
 
-            with Image.open(path) as img:
-                natural = img.width / 96.0  # assume 96 dpi
-            return min(natural, max_width)
+            with Image.open(path) as image:
+                transposed = ImageOps.exif_transpose(image)
+                dpi = transposed.info.get("dpi", (96.0, 96.0))
+                dpi_x = float(dpi[0] or 96.0)
+                dpi_y = float(dpi[1] or 96.0)
+                natural_width = transposed.width / dpi_x
+                natural_height = transposed.height / dpi_y
+            scale = min(1.0, max_width / natural_width, max_height / natural_height)
+            return natural_width * scale, natural_height * scale
         except Exception:
-            return max_width
+            return max_width, min(max_height, max_width * 0.65)
 
-    # ---- tables ----
+    def _add_picture(self, run: Any, source: str, alt: str) -> bool:
+        path = self._resolve_image_path(source)
+        if not path.is_file():
+            self.warnings.append(f"image not found: {source}")
+            run.add_text(f"[image unavailable: {alt or source}]")
+            _set_run_font(
+                run,
+                self.theme.body_font,
+                self.opts.scale.caption,
+                self.colors.text_muted,
+            )
+            return False
+        width, height = self._image_dimensions_inches(path)
+        inline_shape = run.add_picture(str(path), width=Inches(width), height=Inches(height))
+        if alt:
+            inline_shape._inline.docPr.set("descr", alt)
+            inline_shape._inline.docPr.set("title", alt)
+        self.stats["images"] += 1
+        return True
 
-    def _render_table(self, tokens: list[Token], i: int) -> int:
-        rows: list[tuple[list[list[Token]], bool]] = []
-        while tokens[i].type != "table_close":
-            if tokens[i].type == "tr_open":
-                i, cells, is_header = self._collect_row(tokens, i)
+    def _render_inline_image(self, run: Any, source: str, alt: str) -> None:
+        self._add_picture(run, source, alt)
+
+    def _render_block_image(self, source: str, alt: str) -> None:
+        paragraph = self.doc.add_paragraph(style=PENNY_BODY)
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        if not self._add_picture(paragraph.add_run(), source, alt):
+            return
+        if alt:
+            paragraph.paragraph_format.keep_with_next = True
+            caption = self.doc.add_paragraph(style=PENNY_CAPTION)
+            caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            caption.paragraph_format.keep_with_next = False
+            caption.add_run(alt)
+
+    def _render_table(self, tokens: list[Token], index: int) -> int:
+        rows: list[tuple[list[TableCellSpec], bool]] = []
+        while tokens[index].type != "table_close":
+            if tokens[index].type == "tr_open":
+                index, cells, is_header = self._collect_row(tokens, index)
                 rows.append((cells, is_header))
             else:
-                i += 1
+                index += 1
         self._emit_table(rows)
         self.stats["tables"] += 1
-        return i + 1
+        return index + 1
 
-    def _collect_row(self, tokens: list[Token], i: int) -> tuple[int, list[list[Token]], bool]:
-        cells: list[list[Token]] = []
+    def _collect_row(
+        self, tokens: list[Token], index: int
+    ) -> tuple[int, list[TableCellSpec], bool]:
+        cells: list[TableCellSpec] = []
         is_header = False
-        i += 1
-        while tokens[i].type != "tr_close":
-            if tokens[i].type in ("th_open", "td_open"):
-                is_header = is_header or tokens[i].type == "th_open"
-                cells.append(tokens[i + 1].children or [])
-                i += 3
+        index += 1
+        while tokens[index].type != "tr_close":
+            if tokens[index].type in ("th_open", "td_open"):
+                cell_token = tokens[index]
+                is_header = is_header or cell_token.type == "th_open"
+                style = str(cell_token.attrs.get("style", ""))
+                alignment_match = re.search(r"text-align\s*:\s*(left|center|right)", style)
+                cells.append(
+                    TableCellSpec(
+                        tokens[index + 1].children or [],
+                        alignment_match.group(1) if alignment_match else None,
+                    )
+                )
+                index += 3
             else:
-                i += 1
-        return i + 1, cells, is_header
+                index += 1
+        return index + 1, cells, is_header
 
-    def _emit_table(self, rows: list[tuple[list[list[Token]], bool]]) -> None:
+    @staticmethod
+    def _visible_cell_text(children: list[Token]) -> str:
+        parts: list[str] = []
+        for token in children:
+            if token.type in ("text", "code_inline"):
+                parts.append(token.content)
+            elif token.type == "image":
+                parts.append(token.content or str(token.attrs.get("alt", "")))
+            elif token.type in ("softbreak", "hardbreak"):
+                parts.append(" ")
+        return "".join(parts).strip()
+
+    def _column_widths(
+        self, rows: list[tuple[list[TableCellSpec], bool]], columns: int
+    ) -> list[float]:
+        if self.opts.table_layout == "equal":
+            return [self.opts.content_width_in / columns] * columns
+
+        weights: list[float] = []
+        for column_index in range(columns):
+            lengths = sorted(
+                len(self._visible_cell_text(cells[column_index].children))
+                for cells, _ in rows
+                if column_index < len(cells)
+            )
+            if not lengths:
+                weights.append(6.0)
+                continue
+            percentile_index = round((len(lengths) - 1) * 0.75)
+            weighted_length = 0.7 * lengths[percentile_index] + 0.3 * lengths[-1]
+            weights.append(max(6.0, min(50.0, weighted_length)))
+
+        base_width = self.opts.content_width_in * 0.35 / columns
+        flexible_width = self.opts.content_width_in - base_width * columns
+        total_weight = sum(weights)
+        return [base_width + flexible_width * weight / total_weight for weight in weights]
+
+    def _emit_table(self, rows: list[tuple[list[TableCellSpec], bool]]) -> None:
         if not rows:
             return
-        cols = max(len(cells) for cells, _ in rows)
-        table = self.doc.add_table(rows=len(rows), cols=cols)
+        columns = max(len(cells) for cells, _ in rows)
+        table = self.doc.add_table(rows=len(rows), cols=columns)
         table.autofit = False
         _set_table_cell_margins(table)
         self._apply_table_borders(table)
-        col_width = Inches(self.opts.content_width_in / cols)
-        for r, (cells, is_header) in enumerate(rows):
-            band = self.opts.table_style == "banded" and not is_header and r % 2 == 0
-            for c in range(cols):
-                cell = table.cell(r, c)
-                cell.width = col_width
-                children = cells[c] if c < len(cells) else []
-                self._fill_cell(cell, children, is_header, band)
+        widths = self._column_widths(rows, columns)
+
+        for column_index, width in enumerate(widths):
+            table.columns[column_index].width = Inches(width)
+            table._tbl.tblGrid.gridCol_lst[column_index].w = Inches(width)
+
+        for row_index, (cells, is_header) in enumerate(rows):
+            row = table.rows[row_index]
+            _set_row_policy(row, repeat_header=is_header)
+            band = self.opts.table_style == "banded" and not is_header and row_index % 2 == 0
+            for column_index in range(columns):
+                cell = row.cells[column_index]
+                _set_cell_width(cell, widths[column_index])
+                cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+                spec = cells[column_index] if column_index < len(cells) else TableCellSpec([], None)
+                self._fill_cell(cell, spec, is_header, band)
 
     def _apply_table_borders(self, table: Any) -> None:
-        style = self.opts.table_style
-        hairline = (NEUTRAL_BORDER, 4)
-        if style == "banded":
+        hairline = (self.colors.border, 4)
+        if self.opts.table_style == "banded":
             _set_table_borders(table, {"top": hairline, "bottom": hairline, "insideH": hairline})
-        elif style == "grid":
+        elif self.opts.table_style == "grid":
             _set_table_borders(
                 table,
                 {
@@ -664,132 +965,310 @@ class DocxRenderer:
                 },
             )
 
-    def _fill_cell(self, cell: Any, children: list[Token], is_header: bool, band: bool) -> None:
-        t = self.theme
-        style = self.opts.table_style
-        paragraph = cell.paragraphs[0]
-        if is_header:
-            header_color = t.accent if style in ("minimal", "none") else "FFFFFF"
-            profile = RunProfile(t.body_font, 10.0, header_color, t.mono_font, t.accent)
-            if style in ("banded", "grid"):
-                _set_cell_fill(cell, t.accent)
-            if style == "minimal":
-                _set_cell_border_bottom(cell, t.accent, 12)
+    def _fill_cell(self, cell: Any, spec: TableCellSpec, is_header: bool, band: bool) -> None:
+        filled_header = is_header and self.opts.table_style in ("banded", "grid")
+        if filled_header:
+            paragraph_style = PENNY_TABLE_HEADER_ACCENT
+            profile = RunProfile(PENNY_HYPERLINK_ACCENT, PENNY_INLINE_CODE_ACCENT)
+            _set_cell_fill(cell, self.colors.accent)
+        elif is_header:
+            paragraph_style = PENNY_TABLE_HEADER
+            profile = RunProfile()
+            if self.opts.table_style == "minimal":
+                _set_cell_border_bottom(cell, self.colors.accent, 12)
         else:
-            profile = RunProfile(t.body_font, 10.0, t.text_dark, t.mono_font, t.accent)
+            paragraph_style = PENNY_TABLE_BODY
+            profile = RunProfile()
             if band:
-                _set_cell_fill(cell, BAND_FILL)
-        renderer = InlineRenderer(profile)
-        renderer.render(paragraph, children)
-        if is_header:
-            for run in paragraph.runs:
-                run.bold = True
+                _set_cell_fill(cell, self.colors.surface_alt)
+
+        paragraph = cell.paragraphs[0]
+        paragraph.style = paragraph_style
+        paragraph.paragraph_format.space_before = Pt(0)
+        paragraph.paragraph_format.space_after = Pt(0)
+        paragraph.paragraph_format.line_spacing = 1.0
+        alignment = (
+            {
+                "left": WD_ALIGN_PARAGRAPH.LEFT,
+                "center": WD_ALIGN_PARAGRAPH.CENTER,
+                "right": WD_ALIGN_PARAGRAPH.RIGHT,
+            }.get(spec.alignment)
+            if spec.alignment is not None
+            else None
+        )
+        if alignment is not None:
+            paragraph.alignment = alignment
+        self._inline_renderer(profile).render(paragraph, spec.children)
 
 
 # ============================================================
-# Document setup (styles, page, header/footer, front matter)
+# Document setup
 # ============================================================
 
 
-def _override_text_style(
-    doc: Any,
-    name: str,
-    font: str,
-    size_pt: float,
-    color: str,
-    bold: bool = False,
-    italic: bool = False,
-    space_before: float | None = None,
-    space_after: float | None = None,
-    line_spacing: float | None = None,
-    keep_with_next: bool = False,
-) -> None:
+def _get_or_add_style(doc: Any, name: str, style_type: Any, base: str | None = None) -> Any:
     try:
         style = doc.styles[name]
     except KeyError:
-        return
-    style.font.name = font
-    style.font.size = Pt(size_pt)
+        style = doc.styles.add_style(name, style_type)
+    if base:
+        style.base_style = doc.styles[base]
+    style.hidden = False
+    return style
+
+
+def _configure_paragraph_style(
+    doc: Any,
+    name: str,
+    *,
+    base: str,
+    font: str,
+    size: float,
+    color: str,
+    bold: bool | None = None,
+    italic: bool | None = None,
+    space_before: float = 0,
+    space_after: float = 0,
+    line_spacing: float | None = None,
+    keep_with_next: bool = False,
+) -> Any:
+    style = _get_or_add_style(doc, name, WD_STYLE_TYPE.PARAGRAPH, base)
+    _set_style_font(style, font, size, color, bold=bold, italic=italic)
+    formatting = style.paragraph_format
+    formatting.space_before = Pt(space_before)
+    formatting.space_after = Pt(space_after)
+    formatting.line_spacing = line_spacing
+    formatting.keep_with_next = keep_with_next
+    return style
+
+
+def _configure_character_style(
+    doc: Any,
+    name: str,
+    *,
+    color: str,
+    font: str | None = None,
+    size: float | None = None,
+    underline: bool = False,
+    shading: str | None = None,
+) -> Any:
+    style = _get_or_add_style(doc, name, WD_STYLE_TYPE.CHARACTER)
+    if font is not None:
+        style.font.name = font
+        _set_font_slots(style._element.get_or_add_rPr(), font)
+    if size is not None:
+        style.font.size = Pt(size)
     style.font.color.rgb = _rgb(color)
-    style.font.bold = bold
-    style.font.italic = italic
-    fmt = style.paragraph_format
-    if space_before is not None:
-        fmt.space_before = Pt(space_before)
-    if space_after is not None:
-        fmt.space_after = Pt(space_after)
-    if line_spacing is not None:
-        fmt.line_spacing = line_spacing
-    if keep_with_next:
-        fmt.keep_with_next = True
+    style.font.underline = underline
+    if shading:
+        _shade_run_properties(style._element.get_or_add_rPr(), shading)
+    return style
 
 
 def _setup_styles(doc: Any, opts: Options) -> None:
-    t = opts.theme
-    body = opts.font_size_pt
-    _override_text_style(
-        doc, "Normal", t.body_font, body, t.text_dark, space_after=6, line_spacing=opts.line_spacing
-    )
-    _override_text_style(
+    theme = opts.theme
+    colors = opts.colors
+    scale = opts.scale
+
+    _set_style_font(doc.styles["Normal"], theme.body_font, scale.body, colors.text)
+    normal_format = doc.styles["Normal"].paragraph_format
+    normal_format.space_after = Pt(6)
+    normal_format.line_spacing = opts.line_spacing
+
+    heading_specs = {
+        "Heading 1": (scale.h1, colors.heading, True, False, 16, 6),
+        "Heading 2": (scale.h2, colors.text, True, False, 12, 4),
+        "Heading 3": (scale.h3, colors.heading, True, False, 10, 3),
+        "Heading 4": (scale.h4, colors.text, True, False, 9, 3),
+        "Heading 5": (scale.h5, colors.text_muted, True, False, 8, 2),
+        "Heading 6": (scale.h6, colors.text_muted, False, True, 7, 2),
+    }
+    for name, (size, color, bold, italic, before, after) in heading_specs.items():
+        style = doc.styles[name]
+        _set_style_font(
+            style,
+            theme.heading_font,
+            size,
+            color,
+            bold=bold,
+            italic=italic,
+        )
+        formatting = style.paragraph_format
+        formatting.space_before = Pt(before)
+        formatting.space_after = Pt(after)
+        formatting.keep_with_next = True
+
+    for name in _BULLET_STYLES:
+        _set_style_font(doc.styles[name], theme.body_font, scale.body, colors.text)
+        doc.styles[name].paragraph_format.space_after = Pt(2)
+        doc.styles[name].paragraph_format.line_spacing = opts.line_spacing
+
+    _configure_paragraph_style(
         doc,
-        "Heading 1",
-        t.heading_font,
-        17,
-        t.accent,
+        PENNY_BODY,
+        base="Normal",
+        font=theme.body_font,
+        size=scale.body,
+        color=colors.text,
+        space_after=6,
+        line_spacing=opts.line_spacing,
+    )
+    quote = _configure_paragraph_style(
+        doc,
+        PENNY_QUOTE,
+        base=PENNY_BODY,
+        font=theme.body_font,
+        size=scale.body,
+        color=colors.text_muted,
+        italic=True,
+        space_after=2,
+        line_spacing=opts.line_spacing,
+    )
+    quote.paragraph_format.left_indent = Inches(0.25)
+    _configure_paragraph_style(
+        doc,
+        PENNY_TABLE_HEADER,
+        base=PENNY_BODY,
+        font=theme.body_font,
+        size=scale.table,
+        color=colors.heading,
         bold=True,
-        space_before=16,
+    )
+    _configure_paragraph_style(
+        doc,
+        PENNY_TABLE_HEADER_ACCENT,
+        base=PENNY_BODY,
+        font=theme.body_font,
+        size=scale.table,
+        color=colors.on_accent,
+        bold=True,
+    )
+    _configure_paragraph_style(
+        doc,
+        PENNY_TABLE_BODY,
+        base=PENNY_BODY,
+        font=theme.body_font,
+        size=scale.table,
+        color=colors.text,
+    )
+    _configure_paragraph_style(
+        doc,
+        PENNY_CAPTION,
+        base=PENNY_BODY,
+        font=theme.body_font,
+        size=scale.caption,
+        color=colors.text_muted,
+        italic=True,
+        space_after=8,
+        keep_with_next=False,
+    )
+    code_style = _configure_paragraph_style(
+        doc,
+        PENNY_CODE_BLOCK,
+        base="Normal",
+        font=theme.mono_font,
+        size=scale.code,
+        color=colors.text,
+        space_before=6,
+        space_after=6,
+        line_spacing=1.0,
+    )
+    code_style.paragraph_format.left_indent = Inches(0.15)
+    code_style.paragraph_format.right_indent = Inches(0.15)
+    _configure_paragraph_style(
+        doc,
+        PENNY_LIST_CONTINUE,
+        base=PENNY_BODY,
+        font=theme.body_font,
+        size=scale.body,
+        color=colors.text,
+        space_after=2,
+        line_spacing=opts.line_spacing,
+    )
+    _configure_paragraph_style(
+        doc,
+        PENNY_DOCUMENT_TITLE,
+        base="Normal",
+        font=theme.heading_font,
+        size=scale.title,
+        color=colors.heading,
+        bold=True,
+        space_after=2,
+        keep_with_next=True,
+    )
+    _configure_paragraph_style(
+        doc,
+        PENNY_COVER_TITLE,
+        base="Normal",
+        font=theme.heading_font,
+        size=scale.cover_title,
+        color=colors.heading,
+        bold=True,
         space_after=6,
         keep_with_next=True,
     )
-    _override_text_style(
+    _configure_paragraph_style(
         doc,
-        "Heading 2",
-        t.heading_font,
-        13.5,
-        t.text_dark,
-        bold=True,
-        space_before=12,
-        space_after=4,
+        PENNY_SUBTITLE,
+        base="Normal",
+        font=theme.body_font,
+        size=scale.subtitle,
+        color=colors.text_muted,
+        space_after=2,
         keep_with_next=True,
     )
-    _override_text_style(
+    _configure_paragraph_style(
         doc,
-        "Heading 3",
-        t.heading_font,
-        11.5,
-        t.accent,
-        bold=True,
-        space_before=10,
-        space_after=3,
-        keep_with_next=True,
+        PENNY_METADATA,
+        base="Normal",
+        font=theme.body_font,
+        size=scale.caption,
+        color=colors.text_muted,
+        space_after=2,
     )
-    for name in ("Heading 4", "Heading 5", "Heading 6"):
-        _override_text_style(
-            doc,
-            name,
-            t.heading_font,
-            11,
-            t.text_muted,
-            bold=True,
-            italic=True,
-            space_before=8,
-            space_after=3,
-            keep_with_next=True,
-        )
-    for name in _BULLET_STYLES:
-        _override_text_style(
-            doc, name, t.body_font, body, t.text_dark, space_after=2, line_spacing=opts.line_spacing
-        )
+    _configure_paragraph_style(
+        doc,
+        PENNY_HEADER_FOOTER,
+        base="Normal",
+        font=theme.body_font,
+        size=scale.header_footer,
+        color=colors.text_muted,
+    )
+
+    _configure_character_style(
+        doc,
+        PENNY_HYPERLINK,
+        color=colors.link,
+        underline=True,
+    )
+    _configure_character_style(
+        doc,
+        PENNY_HYPERLINK_ACCENT,
+        color=colors.link_on_accent,
+        underline=True,
+    )
+    _configure_character_style(
+        doc,
+        PENNY_INLINE_CODE,
+        font=theme.mono_font,
+        color=colors.text,
+        shading=colors.code_background,
+    )
+    _configure_character_style(
+        doc,
+        PENNY_INLINE_CODE_ACCENT,
+        font=theme.mono_font,
+        color=colors.on_accent,
+    )
 
 
-def _setup_page(doc: Any, opts: Options) -> None:
-    section = doc.sections[0]
-    w, h = PAGE_SIZES[opts.page_size]
+def _setup_page(section: Any, opts: Options) -> None:
+    width, height = PAGE_SIZES[opts.page_size]
     if opts.orientation == "landscape":
         section.orientation = WD_ORIENT.LANDSCAPE
-        w, h = h, w
-    section.page_width = Inches(w)
-    section.page_height = Inches(h)
+        width, height = height, width
+    section.page_width = Inches(width)
+    section.page_height = Inches(height)
     margin = Inches(opts.margin_inches)
     section.top_margin = margin
     section.bottom_margin = margin
@@ -797,24 +1276,23 @@ def _setup_page(doc: Any, opts: Options) -> None:
     section.right_margin = margin
 
 
-def _setup_header_footer(doc: Any, opts: Options) -> None:
-    t = opts.theme
-    section = doc.sections[0]
+def _setup_header_footer(section: Any, opts: Options) -> None:
     if opts.header_text:
         header = section.header
         header.is_linked_to_previous = False
         paragraph = header.paragraphs[0]
+        paragraph.style = PENNY_HEADER_FOOTER
         paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        run = paragraph.add_run(opts.header_text)
-        _set_run_font(run, t.body_font, 9.0, t.text_muted)
+        paragraph.add_run(opts.header_text)
+
     if not opts.footer_text and not opts.include_page_numbers:
         return
     footer = section.footer
     footer.is_linked_to_previous = False
     paragraph = footer.paragraphs[0]
+    paragraph.style = PENNY_HEADER_FOOTER
     if opts.footer_text:
-        run = paragraph.add_run(opts.footer_text)
-        _set_run_font(run, t.body_font, 9.0, t.text_muted)
+        paragraph.add_run(opts.footer_text)
         if opts.include_page_numbers:
             paragraph.paragraph_format.tab_stops.add_tab_stop(
                 Inches(opts.content_width_in), WD_TAB_ALIGNMENT.RIGHT
@@ -823,88 +1301,75 @@ def _setup_header_footer(doc: Any, opts: Options) -> None:
     else:
         paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     if opts.include_page_numbers:
-        before = len(paragraph.runs)
         _add_field(paragraph, "PAGE")
-        for run in paragraph.runs[before:]:
-            _set_run_font(run, t.body_font, 9.0, t.text_muted)
 
 
 def _meta_line(opts: Options) -> str | None:
-    parts = [p for p in (opts.author, opts.date) if p]
+    parts = [part for part in (opts.author, opts.date) if part]
     return "  ·  ".join(parts) if parts else None
 
 
-def _add_front_matter(doc: Any, opts: Options, title: str) -> None:
-    if opts.cover_page:
-        _add_cover_page(doc, opts, title)
-    else:
-        _add_title_block(doc, opts, title)
-    if opts.include_toc:
-        _add_toc(doc, opts)
-
-
 def _add_title_block(doc: Any, opts: Options, title: str) -> None:
-    t = opts.theme
-    paragraph = doc.add_paragraph()
-    paragraph.paragraph_format.space_after = Pt(2)
-    run = paragraph.add_run(title)
-    run.bold = True
-    _set_run_font(run, t.heading_font, 26, t.accent)
+    paragraph = doc.add_paragraph(style=PENNY_DOCUMENT_TITLE)
+    paragraph.add_run(title)
     if opts.subtitle:
-        paragraph = doc.add_paragraph()
-        paragraph.paragraph_format.space_after = Pt(2)
-        _set_run_font(paragraph.add_run(opts.subtitle), t.body_font, 12, t.text_muted)
-    meta = _meta_line(opts)
-    if meta:
-        paragraph = doc.add_paragraph()
-        paragraph.paragraph_format.space_after = Pt(2)
-        _set_run_font(paragraph.add_run(meta), t.body_font, 9.5, t.text_muted)
-    rule = doc.add_paragraph()
+        doc.add_paragraph(opts.subtitle, style=PENNY_SUBTITLE)
+    metadata = _meta_line(opts)
+    if metadata:
+        doc.add_paragraph(metadata, style=PENNY_METADATA)
+    rule = doc.add_paragraph(style=PENNY_BODY)
     rule.paragraph_format.space_after = Pt(12)
-    _paragraph_borders(rule, {"bottom": (t.accent, 8)})
+    _paragraph_borders(rule, {"bottom": (opts.colors.accent, 8)})
 
 
 def _add_cover_page(doc: Any, opts: Options, title: str) -> None:
-    t = opts.theme
-    spacer = doc.add_paragraph()
-    spacer.paragraph_format.space_before = Pt(190)
-    bar = doc.add_paragraph()
+    available_points = opts.content_height_in * 72.0
+    spacer_points = max(72.0, min(180.0, available_points * 0.28))
+    spacer = doc.add_paragraph(style=PENNY_BODY)
+    spacer.paragraph_format.space_before = Pt(spacer_points)
+    bar = doc.add_paragraph(style=PENNY_BODY)
     bar.paragraph_format.space_after = Pt(18)
     bar.paragraph_format.right_indent = Inches(max(opts.content_width_in - 1.6, 0))
-    _paragraph_borders(bar, {"top": (t.accent, 32)})
-    paragraph = doc.add_paragraph()
-    paragraph.paragraph_format.space_after = Pt(6)
-    run = paragraph.add_run(title)
-    run.bold = True
-    _set_run_font(run, t.heading_font, 34, t.accent)
+    _paragraph_borders(bar, {"top": (opts.colors.accent, 32)})
+    doc.add_paragraph(title, style=PENNY_COVER_TITLE)
     if opts.subtitle:
-        paragraph = doc.add_paragraph()
-        _set_run_font(paragraph.add_run(opts.subtitle), t.body_font, 14, t.text_muted)
-    meta = _meta_line(opts)
-    if meta:
-        paragraph = doc.add_paragraph()
-        paragraph.paragraph_format.space_before = Pt(36)
-        _set_run_font(paragraph.add_run(meta), t.body_font, 10.5, t.text_muted)
-    doc.add_page_break()
+        doc.add_paragraph(opts.subtitle, style=PENNY_SUBTITLE)
+    metadata = _meta_line(opts)
+    if metadata:
+        paragraph = doc.add_paragraph(metadata, style=PENNY_METADATA)
+        paragraph.paragraph_format.space_before = Pt(30)
 
 
-def _add_toc(doc: Any, opts: Options) -> None:
-    t = opts.theme
+def _add_toc(doc: Any) -> None:
     heading = doc.add_paragraph(style=_style(doc, "Heading 1"))
     heading.add_run("Contents")
-    paragraph = doc.add_paragraph()
+    paragraph = doc.add_paragraph(style=PENNY_METADATA)
     _add_field(
         paragraph,
         'TOC \\o "1-3" \\h \\z \\u',
-        "[Right-click and choose Update Field to build the table of contents]",
+        "[Update the table of contents field if your viewer does not refresh it automatically]",
     )
-    _ = t
+    _request_field_update(doc)
     doc.add_page_break()
 
 
 # ============================================================
-# Entry point
+# Generation, validation, and publication
 # ============================================================
+
+
+class DocumentGenerationError(RuntimeError):
+    """A stage-aware document generation failure."""
+
+
+@contextmanager
+def _generation_stage(name: str) -> Iterator[None]:
+    try:
+        yield
+    except DocumentGenerationError:
+        raise
+    except Exception as exc:
+        raise DocumentGenerationError(f"{name}: {type(exc).__name__}: {exc}") from exc
 
 
 def _load_markdown(spec: dict[str, Any]) -> str:
@@ -913,8 +1378,7 @@ def _load_markdown(spec: dict[str, Any]) -> str:
     if markdown and str(markdown).strip():
         return str(markdown)
     if markdown_path:
-        with open(str(markdown_path), encoding="utf-8") as handle:
-            return handle.read()
+        return Path(str(markdown_path)).read_text(encoding="utf-8")
     raise ValueError("spec requires non-empty 'markdown' or 'markdown_path'")
 
 
@@ -925,40 +1389,127 @@ def _plain_text(inline: Token) -> str:
 
 
 def _derive_title(tokens: list[Token], opts: Options) -> tuple[str, list[Token]]:
-    """Use a leading H1 as the title (skipping it in the body) when appropriate."""
     if tokens and tokens[0].type == "heading_open" and tokens[0].tag == "h1":
-        h1_text = _plain_text(tokens[1])
-        if opts.title is None or opts.title == h1_text:
-            return (opts.title or h1_text or "Document"), tokens[3:]
+        heading_text = _plain_text(tokens[1])
+        title = opts.title or heading_text or "Document"
+        if opts.title_mode != "none" and (opts.title is None or opts.title == heading_text):
+            return title, tokens[3:]
+        return title, tokens
     return opts.title or "Document", tokens
 
 
+def _validate_docx(path: Path) -> dict[str, Any]:
+    try:
+        with zipfile.ZipFile(path, "r") as archive:
+            names = set(archive.namelist())
+            missing = _REQUIRED_DOCX_PARTS - names
+            if missing:
+                raise ValueError(f"DOCX package is missing required parts: {sorted(missing)}")
+            bad_member = archive.testzip()
+            if bad_member is not None:
+                raise ValueError(f"DOCX CRC check failed for {bad_member!r}")
+            xml_parts = [name for name in names if name.endswith(".xml") or name.endswith(".rels")]
+            for name in xml_parts:
+                ET.fromstring(archive.read(name))
+        Document(str(path))
+    except (zipfile.BadZipFile, ET.ParseError) as exc:
+        raise ValueError(f"invalid generated DOCX package: {exc}") from exc
+    return {
+        "package_valid": True,
+        "reopen_valid": True,
+        "required_parts": sorted(_REQUIRED_DOCX_PARTS),
+        "xml_parts_checked": len(xml_parts),
+    }
+
+
+def _save_docx_atomically(
+    doc: Any, output_path: Path, staging_path: Path | None = None
+) -> tuple[Path, dict[str, Any]]:
+    target = output_path.expanduser().resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if staging_path is None:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{target.stem}.", suffix=".tmp.docx", dir=target.parent
+        )
+        os.close(descriptor)
+        temporary_path = Path(temporary_name)
+    else:
+        temporary_path = staging_path.expanduser().resolve()
+        if temporary_path.parent != target.parent or temporary_path == target:
+            raise ValueError("staging_path must be a distinct file beside output_path")
+        if not temporary_path.exists():
+            descriptor = os.open(temporary_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(descriptor)
+    try:
+        doc.save(str(temporary_path))
+        validation = _validate_docx(temporary_path)
+        temporary_path.replace(target)
+        return target, validation
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 def generate(spec: dict[str, Any]) -> dict[str, Any]:
-    opts = parse_options(spec)
-    markdown = _load_markdown(spec)
-    parser = MarkdownIt("commonmark").enable(["table", "strikethrough"])
-    tokens = parser.parse(markdown)
-    title, body_tokens = _derive_title(tokens, opts)
+    with _generation_stage("options"):
+        opts = parse_options(spec)
+    with _generation_stage("load_markdown"):
+        markdown = _load_markdown(spec)
+    with _generation_stage("parse_markdown"):
+        parser = MarkdownIt("commonmark").enable(["table", "strikethrough"])
+        tokens = parser.parse(markdown)
+        title, body_tokens = _derive_title(tokens, opts)
 
-    doc = Document()
-    _setup_styles(doc, opts)
-    _setup_page(doc, opts)
-    _setup_header_footer(doc, opts)
-    _add_front_matter(doc, opts, title)
+    with _generation_stage("render"):
+        doc = Document()
+        doc.core_properties.title = title
+        if opts.author:
+            doc.core_properties.author = opts.author
+        _setup_styles(doc, opts)
+        first_section = doc.sections[0]
+        _setup_page(first_section, opts)
 
-    renderer = DocxRenderer(doc, opts)
-    renderer.render(body_tokens)
+        if opts.title_mode == "cover":
+            _add_cover_page(doc, opts, title)
+            body_section = doc.add_section(WD_SECTION.NEW_PAGE)
+            _setup_page(body_section, opts)
+            _set_page_number_start(body_section, 1)
+            _setup_header_footer(body_section, opts)
+        else:
+            _setup_header_footer(first_section, opts)
+            if opts.title_mode == "inline":
+                _add_title_block(doc, opts, title)
 
-    os.makedirs(os.path.dirname(opts.output_path) or ".", exist_ok=True)
-    doc.save(opts.output_path)
+        if opts.include_toc:
+            _add_toc(doc)
+
+        renderer = DocxRenderer(doc, opts)
+        renderer.render(body_tokens)
+
+    with _generation_stage("save_validate_publish"):
+        output_path, validation = _save_docx_atomically(doc, opts.output_path, opts.staging_path)
+
+    warnings = list(renderer.warnings)
+    if opts.include_toc:
+        warnings.append(
+            "The document contains a Word TOC field; viewers that do not refresh fields may require a manual update."
+        )
 
     return {
-        "path": os.path.abspath(opts.output_path),
+        "path": str(output_path),
         "title": title,
         "theme": opts.theme_name,
         "words": len(markdown.split()),
         **renderer.stats,
-        "warnings": renderer.warnings,
+        "warnings": warnings,
+        "validation": validation,
+        "normalization": {
+            "line_break_mode": opts.line_break_mode,
+            "title_mode": opts.title_mode,
+            "table_layout": opts.table_layout,
+            "leading_h1_consumed": body_tokens is not tokens,
+        },
+        "resolved_palette": asdict(opts.colors),
+        "toc_field_update_requested": opts.include_toc,
     }
 
 
@@ -971,6 +1522,7 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except Exception as exc:  # noqa: BLE001 — single stderr contract with the TS caller
-        print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 — one stderr contract with the TS caller
+        print(f"word generator failed [{type(exc).__name__}]: {exc}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         sys.exit(1)

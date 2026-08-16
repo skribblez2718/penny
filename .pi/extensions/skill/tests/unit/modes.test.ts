@@ -174,38 +174,6 @@ describe("truncateForPrevious", () => {
 });
 
 // ============================================================
-// {previous} placeholder replacement
-// ============================================================
-
-describe("{previous} placeholder replacement", () => {
-  it("replaces {previous} with output", () => {
-    const goal = "Research {previous} and plan";
-    const previous = "JWT, OAuth patterns";
-    const result = goal.replaceAll("{previous}", previous);
-    expect(result).toBe("Research JWT, OAuth patterns and plan");
-  });
-
-  it("handles empty previous output", () => {
-    const goal = "Use {previous} for planning";
-    const result = goal.replaceAll("{previous}", "");
-    expect(result).toBe("Use  for planning");
-  });
-
-  it("replaces multiple occurrences", () => {
-    const goal = "From {previous} build {previous}";
-    const previous = "output";
-    const result = goal.replaceAll("{previous}", previous);
-    expect(result).toBe("From output build output");
-  });
-
-  it("passes through when no placeholder present", () => {
-    const goal = "No placeholder here";
-    const result = goal.replaceAll("{previous}", "irrelevant");
-    expect(result).toBe("No placeholder here");
-  });
-});
-
-// ============================================================
 // getFinalOutputFromSkillResult
 // ============================================================
 

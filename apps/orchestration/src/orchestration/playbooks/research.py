@@ -53,10 +53,12 @@ honest-exhaustion + stall-escalation contract as the critique loops); a PASS
 proceeds to the report. This restores the independent verifier the legacy FSM
 dropped — the generator is never its own only verifier.
 
-Domain guidance stays in ``.pi/skills/research/assets/prompts/<agent>.md``; the
-mempalace room ``skills/research-{session_id}`` and the drawer conventions
-(``<sid> Planner`` / ``<sid>-echo-<n> Research Findings`` / ``<sid> Synthesis``
-/ ``<sid> Critique`` / ``<sid> Report Files``) are preserved verbatim.
+Domain guidance stays in ``.pi/skills/research/assets/prompts/<agent>.md``.
+Every cognitive stage receives exact execution-owner artifact references from the
+engine, reads them through ``artifact_read``, and returns complete output for owner
+capture. SUMMARY objects remain routing data only. The final owner-captured
+``report_writing`` output is the registered product artifact; the three report files
+remain user-facing product files.
 """
 
 from __future__ import annotations
@@ -68,6 +70,7 @@ from pathlib import Path
 
 from statemachine import State, StateMachine
 
+from ..artifacts import KIND_AGENT_OUTPUT, ArtifactError, ArtifactRef
 from ..context import RunContext
 from ..engine import BasePlaybook, tier_budget
 from ..primitives.spec import PrimitiveSpec
@@ -130,10 +133,7 @@ DEFAULT_MAX_RESEARCH_ROUNDS = 2
 _RESEARCH_EXPLORE_C_JSON = {
     "required": {"explore_complete": "bool"},
     "optional": {
-        "findings_count": "int",
-        "sources_count": "int",
         "confidence": "str",
-        "mempalace_drawer": "str",
         "needs_clarification": "bool",
         "clarifying_questions": "list",
     },
@@ -145,10 +145,9 @@ def _research_branches(sub_queries: list, *, start: int = 1, evidence: bool = Fa
     when there are no usable sub-queries (the quick fast-path stays single-agent
     via PRIMITIVE_BY_STATE).
 
-    ``start`` continues the branch numbering across research ROUNDS so a second,
-    evidence-seeking round writes NEW drawers (``-echo-4``, ``-echo-5``) instead of
-    overwriting round one's findings — one flat drawer namespace the synthesizer
-    already knows how to read.
+    ``start`` continues branch numbering across research rounds so every
+    evidence-seeking branch has a distinct artifact identity (``sq4``, ``sq5``)
+    instead of superseding an earlier branch.
 
     ``evidence=True`` marks the branch as filling a NAMED evidence gap the verifier
     diagnosed, rather than researching a fresh sub-query; ``_task_summary`` renders
@@ -187,9 +186,8 @@ def grounding_floor(claims: list, sources: list) -> list[str]:
 
     Why this exists: ``independence.py`` registers research's synthia->vera edge as a
     SAME_MODEL exception whose repayment is to *measure* same- vs cross-model catch
-    rate. prd's measured prior art showed a deterministic floor already decided 50%
-    of its defect corpus — and a second model adds NOTHING to a defect the floor
-    already caught. So the population that could ever justify paying for a second
+    rate. A second model adds nothing to a defect the deterministic floor already
+    caught. So the population that could ever justify paying for a second
     model on every run is the JUDGEMENT RESIDUAL: claims that ARE cited, to a source
     that DOES exist and DOES have content, where only a reader can tell whether the
     source actually supports the claim.
@@ -239,10 +237,6 @@ def _sanitize_topic(query: str) -> str:
     slug = sanitized.strip("-")[:71]
     digest = hashlib.sha256(query.strip().encode("utf-8")).hexdigest()[:8]
     return f"{slug}-{digest}" if slug else digest
-
-
-def _room(ctx: RunContext) -> str:
-    return f"skills/research-{ctx.session_id}"
 
 
 def _apply_mode_budget(research: dict, mode: str, constraints: dict) -> None:
@@ -345,18 +339,19 @@ class ResearchMachine(StateMachine):
         | validating.to(unknown)
     )
     escalate = unknown.to(awaiting_clarification)
-    # Conditional multi-target resume (mirrors the sca playbook): back to whichever
-    # producer can act on the answer, with planning as the conservative fallback.
+    # Conditional multi-target resume returns to whichever producer can act on
+    # the answer, with planning as the conservative fallback.
     clarify = (
         awaiting_clarification.to(researching, cond="rt_researching")
         | awaiting_clarification.to(synthesizing, cond="rt_synthesizing")
         | awaiting_clarification.to(planning)  # fallback / explicit planning target
     )
+
     # -- clarify guards (read resume_target) -------------------------------
-    def rt_researching(self, *a, **k) -> bool:
+    def rt_researching(self, *a: object, **k: object) -> bool:
         return self.resume_target == "researching"
 
-    def rt_synthesizing(self, *a, **k) -> bool:
+    def rt_synthesizing(self, *a: object, **k: object) -> bool:
         return self.resume_target == "synthesizing"
 
     abort = (
@@ -402,9 +397,7 @@ RESEARCH_PLAN = PrimitiveSpec(
         {"plan_steps": list, "plan_complete": bool},
         {
             "mode": str,  # model-declared rigor/budget preset (R1) when no caller sets it
-            "sub_queries": list,
             "confidence": str,
-            "mempalace_drawer": str,
             "needs_clarification": bool,
             "clarifying_questions": list,
         },
@@ -417,7 +410,6 @@ _CRITIQUE_C = _c(
     # Evidence-gated (Rec 4): the verdict must carry what carren examined.
     {"verdict": str, "issues": list, "evidence": list},
     {
-        "mempalace_drawer": str,
         "confidence": str,
         "needs_clarification": bool,
         "clarifying_questions": list,
@@ -442,15 +434,12 @@ RESEARCH_EXPLORE = PrimitiveSpec(
     _c(
         {"explore_complete": bool},
         {
-            "findings_count": int,
-            "sources_count": int,
             "confidence": str,
-            "mempalace_drawer": str,
             "needs_clarification": bool,
             "clarifying_questions": list,
         },
     ),
-    "Research the assigned sub-query and write tiered, cited findings to mempalace.",
+    "Research the assigned sub-query and return complete tiered, cited findings.",
 )
 RESEARCH_SYNTHESIZE = PrimitiveSpec(
     "RESEARCH_SYNTHESIZE",
@@ -458,16 +447,12 @@ RESEARCH_SYNTHESIZE = PrimitiveSpec(
     _c(
         {"synthesis_complete": bool},
         {
-            "theme_count": int,
-            "source_count": int,
-            "report_word_count": int,
             "confidence": str,
-            "mempalace_drawer": str,
             "needs_clarification": bool,
             "clarifying_questions": list,
         },
     ),
-    "Synthesize all research findings into a single thematic, cited report in mempalace.",
+    "Synthesize the exact research artifacts into a complete thematic, cited report.",
 )
 RESEARCH_VALIDATE = PrimitiveSpec(
     "RESEARCH_VALIDATE",
@@ -481,7 +466,6 @@ RESEARCH_VALIDATE = PrimitiveSpec(
             # DIAGNOSES the gap; echo fills it. A verifier that sourced its own
             # evidence would be judging material it authored.
             "evidence_needed": list,
-            "mempalace_drawer": str,
             "confidence": str,
             "needs_clarification": bool,
             "clarifying_questions": list,
@@ -493,32 +477,19 @@ RESEARCH_VALIDATE = PrimitiveSpec(
 RESEARCH_REPORT = PrimitiveSpec(
     "RESEARCH_REPORT",
     "skribble",
-    _c(
-        {"write_complete": bool, "files_written": list},
-        {
-            "word_count": int,
-            "confidence": str,
-            "mempalace_drawer": str,
-            "needs_clarification": bool,
-            "clarifying_questions": list,
-        },
-    ),
+    _c({"write_complete": bool}),
     "Write report.md, sources.md and README.md to the research output directory.",
 )
 
 
 # ---------------------------------------------------------------------------
-# Per-state task prompt builders (legacy task text + mempalace room preserved
-# verbatim; revision context mirrors the plan skill's revision blocks)
+# Per-state task prompt builders. Revision context carries the prior critique's
+# actionable issues into the next pass.
 # ---------------------------------------------------------------------------
 
 
 def _build_planning(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> str:
-    room = _room(ctx)
-    task = (
-        f"Research planning: decompose '{ctx.goal}' into sub-queries\n\n"
-        f"Write your plan to mempalace room: {room}"
-    )
+    task = f"Research planning: decompose '{ctx.goal}' into sub-queries."
     # An empty mode means the CALLER did not fix one, so piper declares it. Saying
     # "Mode: ." (the previous rendering) told the model nothing and silently dropped
     # the instruction that it owns the decision.
@@ -539,19 +510,14 @@ def _build_planning(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> 
         issues = research.get("plan_critique_issues", [])
         task += (
             f"\n\nThis is REVISION cycle {revision}. The prior critique identified these issues: "
-            f"{'; '.join(str(i) for i in issues) or 'see the critique in mempalace'}. "
-            f"Read the critique from mempalace room: {room}. Address EVERY issue and note how "
-            f"you resolved it."
+            f"{'; '.join(str(i) for i in issues) or 'inspect the exact critique artifact'}. "
+            "Address EVERY issue and note how you resolved it."
         )
     return task
 
 
 def _build_critiquing_plan(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> str:
-    room = _room(ctx)
-    task = (
-        f"Critique research plan for: {ctx.goal}\n\n"
-        f"Read the plan from mempalace room: {room}"
-    )
+    task = f"Critique the exact research plan artifact for: {ctx.goal}"
     revision = research.get("plan_revision", 0)
     if revision:
         task += (
@@ -567,37 +533,24 @@ def _build_researching(pb: "ResearchPlaybook", ctx: RunContext, research: dict) 
 
     Any run whose plan yielded usable sub-queries is dispatched as a dynamic FAN
     (one echo branch per sub-query, rendered by ``_task_summary``), so this builder
-    only ever serves the single-agent path. ``route_after('planning')`` stores only
-    non-blank sub-queries, which is what makes that guarantee hold: a plan of
-    whitespace-only steps yields no branches AND an empty ``sub_queries``, so it
-    lands here rather than emitting a task that lists blank sub-queries.
-
-    A legacy "Research ALL of the following sub-queries" multi-sub-query variant
-    lived here from the pre-fan topology; it was removed once the two functions'
-    notions of a usable sub-query were reconciled.
+    only ever serves the single-agent path.
     """
-    room = _room(ctx)
-    return f"Quick research: {ctx.goal}\n\nWrite findings to mempalace room: {room}"
+    return f"Quick research: {ctx.goal}"
 
 
 def _build_synthesizing(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> str:
-    room = _room(ctx)
     format_note = ""
     report_format = research.get("report_format", "default")
     if report_format != "default":
         format_note = f" Use {report_format} format."
-    task = (
-        f"Synthesize research report for: {ctx.goal}.{format_note}\n\n"
-        f"Read findings and validation from mempalace room: {room}"
-    )
+    task = f"Synthesize the exact research artifacts for: {ctx.goal}.{format_note}"
     revision = research.get("report_revision", 0)
     if revision:
         issues = research.get("report_critique_issues", [])
         task += (
             f"\n\nThis is REVISION cycle {revision}. The prior critique identified these issues: "
-            f"{'; '.join(str(i) for i in issues) or 'see the critique in mempalace'}. "
-            f"Read the critique from mempalace room: {room}. Address EVERY issue and note how "
-            f"you resolved it."
+            f"{'; '.join(str(i) for i in issues) or 'inspect the exact critique artifact'}. "
+            "Address EVERY issue and note how you resolved it."
         )
     # validation_revision and report_revision are separate keys, each popped when
     # its loop closes, so at most one is set on any given synthesis entry.
@@ -605,34 +558,30 @@ def _build_synthesizing(pb: "ResearchPlaybook", ctx: RunContext, research: dict)
     if val_revision:
         vissues = research.get("validation_issues", [])
         task += (
-            f"\n\nThis is a VALIDATION revision (cycle {val_revision}). The verifier (vera) flagged "
-            f"these claims as unsupported by the cited sources: "
-            f"{'; '.join(str(i) for i in vissues) or 'see the validation drawer'}. "
-            f"Read the validation report from mempalace room: {room}. Re-ground or REMOVE every "
-            f"flagged claim — cite a supporting source or drop the claim. Do not introduce new "
-            f"unsupported claims."
+            f"\n\nThis is a VALIDATION revision (cycle {val_revision}). The verifier (vera) "
+            f"flagged these claims as unsupported by the cited sources: "
+            f"{'; '.join(str(i) for i in vissues) or 'inspect the exact validation artifact'}. "
+            "Re-ground or REMOVE every flagged claim — cite a supporting source or drop the "
+            "claim. Do not introduce new unsupported claims."
         )
     if research.get("research_round", 1) > 1:
         task += (
-            f"\n\nAn EVIDENCE-SEEKING research round ran since your last synthesis: new findings "
-            f"drawers were added to room {room} to close the gaps the verifier flagged. Read ALL "
-            f"findings drawers again (including the new ones) and re-ground the flagged claims "
-            f"against them. Where a researcher reported that NO adequate source exists, DROP the "
-            f"claim rather than softening it into something the sources still do not support."
+            "\n\nAn EVIDENCE-SEEKING research round ran since your last synthesis. Re-read ALL "
+            "task-provided research artifacts, including the newly captured branches, and "
+            "re-ground the flagged claims against them. Where a researcher reported that NO "
+            "adequate source exists, DROP the claim rather than softening it into something the "
+            "sources still do not support."
         )
     return task
 
 
 def _build_validating(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> str:
-    room = _room(ctx)
     task = (
         f"Verify the synthesized research report for: {ctx.goal}\n\n"
-        f"Read the synthesis ('{ctx.session_id} Synthesis') and the cited research findings "
-        f"('{ctx.session_id}-echo-<n> Research Findings') from mempalace room: {room}\n\n"
-        f"For every material claim in the synthesis, confirm it is grounded in a source cited in "
-        f"the findings that actually supports it. Flag unsupported, overclaimed, fabricated, or "
-        f"mis-cited claims. Verdict PASS only if all material claims are source-grounded; "
-        f"otherwise FAIL and list each unsupported claim."
+        "For every material claim in the exact synthesis artifact, confirm it is grounded in a "
+        "source captured in the exact research artifacts that actually supports it. Flag "
+        "unsupported, overclaimed, fabricated, or mis-cited claims. Verdict PASS only if all "
+        "material claims are source-grounded; otherwise FAIL and list each unsupported claim."
     )
     revision = research.get("validation_revision", 0)
     if revision:
@@ -640,18 +589,14 @@ def _build_validating(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -
         task += (
             f"\n\nThis is re-validation cycle {revision + 1} — the synthesis was revised to "
             f"re-ground prior flagged claims: "
-            f"{'; '.join(str(i) for i in issues) or 'see prior verdict'}. "
+            f"{'; '.join(str(i) for i in issues) or 'inspect the prior exact verdict artifact'}. "
             f"Re-check those claims specifically, then the report as a whole."
         )
     return task
 
 
 def _build_critiquing_report(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> str:
-    room = _room(ctx)
-    task = (
-        f"Critique research report for: {ctx.goal}\n\n"
-        f"Read the report from mempalace room: {room}"
-    )
+    task = f"Critique the exact synthesized research report artifact for: {ctx.goal}"
     revision = research.get("report_revision", 0)
     if revision:
         task += (
@@ -663,13 +608,13 @@ def _build_critiquing_report(pb: "ResearchPlaybook", ctx: RunContext, research: 
 
 
 def _build_report_writing(pb: "ResearchPlaybook", ctx: RunContext, research: dict) -> str:
-    room = _room(ctx)
     return (
         f"Write the final research report for: {ctx.goal}\n\n"
         f"Write all files to: {_report_dir(ctx)}\n\n"
-        f"Read the synthesized report from mempalace room: {room}\n\n"
-        f"Produce: report.md (main report), sources.md (bibliography), "
-        f"README.md (quick reference)."
+        "Produce report.md (main report), sources.md (bibliography), and README.md (quick "
+        "reference). Also include the COMPLETE contents of all three products in your final "
+        "response so the execution owner's captured agent-output is the registered product "
+        "artifact."
     )
 
 
@@ -681,6 +626,28 @@ _TASK_BUILDERS = {
     "critiquing_report": _build_critiquing_report,
     "validating": _build_validating,
     "report_writing": _build_report_writing,
+}
+
+_ARTIFACT_HANDOFF = (
+    "Read every reference in the task-provided input_artifacts with artifact_read before "
+    "working. If the list is empty, this stage has no predecessor artifact. Treat those exact "
+    "bytes as the sole prior-stage handoff. Put your COMPLETE stage output in this response; "
+    "the execution owner captures it. SUMMARY is routing data only: never claim artifact "
+    "persistence or registration."
+)
+
+# A downstream stage often needs more than the immediately preceding reviewer output.
+# The generic engine checkpoints every selected ref; this playbook selects the exact
+# phase set each research consumer needs without copying payloads into RunContext.
+_INPUT_PHASES_BY_STATE: dict[str, tuple[str, ...]] = {
+    "planning": ("planning", "critiquing_plan"),
+    "critiquing_plan": ("planning",),
+    "researching": ("planning", "critiquing_plan", "synthesizing", "validating"),
+    "synthesizing": ("researching", "synthesizing", "critiquing_report", "validating"),
+    "critiquing_report": ("researching", "synthesizing"),
+    "validating": ("researching", "synthesizing", "critiquing_report"),
+    "report_writing": ("researching", "synthesizing", "critiquing_report", "validating"),
+    "complete": ("report_writing",),
 }
 
 
@@ -711,6 +678,43 @@ class ResearchPlaybook(BasePlaybook):
             "validating",
         }
     )
+
+    def _selected_artifact_refs(self, phases: tuple[str, ...]) -> tuple[ArtifactRef, ...]:
+        selected = [
+            ArtifactRef.from_dict(value) for value in self._artifact_state()["selected_refs"]
+        ]
+        ordered: list[ArtifactRef] = []
+        for phase in phases:
+            ordered.extend(
+                sorted(
+                    (ref for ref in selected if ref.phase == phase),
+                    key=lambda ref: (ref.branch_id or "", ref.version, ref.artifact_id),
+                )
+            )
+        return tuple(ordered)
+
+    def artifact_input_phases(self, ctx: RunContext) -> dict[str, tuple[str, ...]]:
+        """Declare every retained research phase each later consumer inspects.
+
+        The base engine combines this map with direct FSM successors and validates
+        every pair for graph reachability before it mints a consumer scope.
+        """
+        return _INPUT_PHASES_BY_STATE
+
+    @staticmethod
+    def _final_output_artifact_ref(ctx: RunContext) -> ArtifactRef | None:
+        protocol = ctx.extras.get("artifact_protocol") or {}
+        values = protocol.get("selected_refs") if isinstance(protocol, dict) else None
+        if not isinstance(values, list):
+            return None
+        matches = [
+            ref
+            for ref in (ArtifactRef.from_dict(value) for value in values)
+            if ref.phase == "report_writing"
+            and ref.branch_id is None
+            and ref.kind == KIND_AGENT_OUTPUT
+        ]
+        return matches[0] if len(matches) == 1 else None
 
     # -- lifecycle ---------------------------------------------------------
     def initial_transition(self, ctx: RunContext) -> str:
@@ -846,7 +850,7 @@ class ResearchPlaybook(BasePlaybook):
                 # The model just chose the rigor level: expand it into the budget
                 # (an explicit caller constraint still wins inside the helper).
                 _apply_mode_budget(research, mode, ctx.constraints)
-            steps = summary.get("plan_steps") or summary.get("sub_queries") or []
+            steps = summary.get("plan_steps") or []
             # Normalize at the boundary: only NON-BLANK sub-queries are usable.
             # ``_research_branches`` already skips blank entries, so without this
             # filter a whitespace-only plan produced an empty fan while leaving a
@@ -911,26 +915,23 @@ class ResearchPlaybook(BasePlaybook):
                 research["research_complete"] = all(
                     b.get("explore_complete") for b in bmap.values()
                 )
-                research["research_drawers"] = list(research.get("research_drawers", [])) + [
-                    b.get("mempalace_drawer", "") for b in bmap.values()
-                ]
                 research["research_branch_count"] = len(bmap)
             else:
                 research["research_complete"] = True
-                research["research_drawer"] = summary.get("mempalace_drawer", "")
             # An evidence-seeking round is over once its findings are in; the next
             # synthesis re-grounds against them and returns to the gate.
             research.pop("evidence_needed", None)
             self.sm.send("research_done")
         elif state == "synthesizing":
             research["synthesis_complete"] = True  # synthesis_complete gated in progress_check
-            research["report_word_count"] = summary.get("report_word_count", 0)
-            research["synthesis_drawer"] = summary.get("mempalace_drawer", "")
             # A report critique costs the 1st critique pass — so a run that EARNED a
             # pass mid-run (rigor escalation) gets carren's adversarial read even
             # though its mode label never said "deep". Once the critique loop closes
             # (phase="validation") a validation-driven re-synthesis goes back to vera.
-            if int(research.get("critique_passes", 0)) >= 1 and research.get("phase") != "validation":
+            if (
+                int(research.get("critique_passes", 0)) >= 1
+                and research.get("phase") != "validation"
+            ):
                 self.sm.send("synth_to_critique")
             else:
                 self.sm.send("synth_to_validate")
@@ -985,9 +986,7 @@ class ResearchPlaybook(BasePlaybook):
                 self.record_iteration(ctx, gaps=issues)
                 ctx.iteration += 1
                 rounds_used = int(research.get("research_round", 1))
-                max_rounds = int(
-                    research.get("max_research_rounds", DEFAULT_MAX_RESEARCH_ROUNDS)
-                )
+                max_rounds = int(research.get("max_research_rounds", DEFAULT_MAX_RESEARCH_ROUNDS))
                 if needed and rounds_used < max_rounds:
                     # EVIDENCE-SEEKING (the iterative research loop): the verifier
                     # named what is missing and a research round remains, so spend
@@ -1051,19 +1050,59 @@ class ResearchPlaybook(BasePlaybook):
                 self.sm.send("validate_exhausted")
         elif state == "report_writing":
             research["report_written"] = bool(summary.get("write_complete"))
-            research["report_files"] = summary.get("files_written", [])
             research["report_dir"] = _report_dir(ctx)
+            research["report_files"] = (
+                [
+                    str(Path(research["report_dir"]) / "report.md"),
+                    str(Path(research["report_dir"]) / "sources.md"),
+                    str(Path(research["report_dir"]) / "README.md"),
+                ]
+                if research["report_written"]
+                else []
+            )
             # Complete either way; done_predicate reports the honest outcome
             # (met=False when the write failed) — never a fabricated success.
             self.sm.send("report_done")
         else:
             raise ValueError(f"route_after: unexpected state '{state}'")
 
+    def _captured_product_is_complete(self, ctx: RunContext) -> bool:
+        ref = self._final_output_artifact_ref(ctx)
+        if ref is None:
+            return False
+        try:
+            output = self._artifact_store.read_bytes(
+                ref,
+                expected_run_id=ctx.run_id,
+                expected_phase="report_writing",
+                expected_branch_id=None,
+                expected_producer="agent:skribble",
+                require_selected=True,
+            ).decode("utf-8")
+        except (ArtifactError, UnicodeDecodeError):
+            return False
+        body = output.rsplit("\nSUMMARY:", 1)[0]
+        markers = ("# report.md", "# sources.md", "# README.md")
+        positions = [body.find(marker) for marker in markers]
+        if positions != sorted(positions) or any(position < 0 for position in positions):
+            return False
+        boundaries = positions[1:] + [len(body)]
+        return all(
+            body[position + len(marker) : boundary].strip()
+            for marker, position, boundary in zip(markers, positions, boundaries)
+        )
+
     def done_predicate(self, ctx: RunContext) -> bool:
-        return bool(ctx.extras.get("research", {}).get("report_written"))
+        report_written = bool(ctx.extras.get("research", {}).get("report_written"))
+        # Production accepts only protocol-v2 owner results, so successful delivery
+        # requires a complete exact product artifact. The explicit programmatic seam
+        # keeps legacy in-process tests able to exercise routing without forging one.
+        return report_written and (
+            self._captured_product_is_complete(ctx) or self.allow_programmatic_results
+        )
 
     # -- HITL resume -------------------------------------------------------
-    def _resume(self, state: str, result) -> dict:
+    def _resume(self, state: str, result: object) -> dict:
         """Reset the bounded-loop counters and choose WHERE to resume.
 
         The escalation path (to_unknown -> escalate) never closes the active loop via
@@ -1102,26 +1141,23 @@ class ResearchPlaybook(BasePlaybook):
             # Resuming mid-pipeline CONTINUES the same run, so `phase` and the
             # exhaustion flags are preserved: they are historical facts the result
             # must still report honestly, not state belonging to an abandoned pass.
+            previous = str(self.ctx.previous_state or "")
+            self._set_state_inputs(target, self._selected_artifact_refs((previous,)))
         return super()._resume(state, result)
 
     # -- cross-model verification hook -------------------------------------
     def model_for_state(self, state: str, ctx: RunContext) -> str | None:
         """Opt-in cross-model verification hook for the citation gate.
 
-        ``independence.py`` classifies research's synthia->vera edge SAME_MODEL: both
-        agents run sonnet by default, so vera's PASS is a same-model judgement over
-        synthia's own synthesis and correlated single-model errors can slip a false
-        PASS through. The gate is evidence-based (every claim must trace to a captured
-        source), which partly mitigates, and carren adds a cross-model (opus) critique
-        — but only in DEEP mode, so quick and standard have a same-model FINAL gate.
-        This is the hook a caller (or ops) pulls to make the judge a different model,
-        mirroring prd/jsa/sca.
+        ``independence.py`` classifies research's synthia-to-vera edge SAME_MODEL:
+        both agents currently resolve to the same model, so correlated errors can
+        slip a false PASS through. The gate is evidence-based, which partly
+        mitigates the risk. This hook lets a caller or operator choose a different
+        validation model.
 
         Precedence for ``validating``: ``constraints['validate_model']`` -> the
-        ``RESEARCH_VERA`` / ``RESEARCH_DEFAULT`` env tier -> ``None`` (vera's own
-        configured model). The key mirrors prd's ``validate_model`` rather than
-        jsa/sca's ``reverify_model``: research has no second reverify pass —
-        ``validating`` is its only verify state.
+        ``RESEARCH_VERA`` / ``RESEARCH_DEFAULT`` environment tier -> ``None``
+        (vera's configured model). Research has one verify state: ``validating``.
 
         UNSET IS UNCHANGED: with no constraint and no env var this returns ``None`` for
         every state, so every agent runs the model its own ``.pi/agents/*.md``
@@ -1140,44 +1176,31 @@ class ResearchPlaybook(BasePlaybook):
     def _task_summary(self, state: str, spec: PrimitiveSpec, ctx: RunContext) -> str:
         research = ctx.extras.get("research", {})
         # A dynamic research FAN branch (name RESEARCH_EXPLORE_SQ<n>) researches
-        # its OWN sub-query (spec.task_hint) and writes a branch-tagged drawer;
-        # the single-agent fast path uses the "research ALL" builder.
+        # its OWN sub-query; the execution owner captures one exact artifact per branch.
         spec_name = getattr(spec, "name", "")
         if state == "researching" and spec_name.startswith("RESEARCH_EVIDENCE_SQ"):
             # Evidence-seeking round: fill a gap the VERIFIER diagnosed. Framed as a
             # falsifiable errand (find a source that settles it, or report that none
             # exists) so a fruitless search returns an honest negative instead of a
             # weak source dragged in to make the claim survive.
-            room = _room(ctx)
-            n = spec_name.rsplit("SQ", 1)[-1] or "1"
             base = (
                 f"EVIDENCE-SEEKING round for: {ctx.goal}\n\n"
                 f"The citation gate found a claim in the draft report that no cited source "
                 f"supports. Your job is to settle it with evidence.\n\n"
                 f"Evidence needed: {spec.task_hint}\n\n"
                 f"Find a source that directly supports or refutes it, and cite it. If after a "
-                f"genuine search NO adequate source exists, say so plainly \u2014 'no supporting "
+                f"genuine search NO adequate source exists, say so plainly — 'no supporting "
                 f"source found' is a USEFUL result that lets the claim be dropped honestly. Do "
-                f"NOT stretch a weak or tangential source to make the claim survive.\n\n"
-                f"Write findings to mempalace room: {room} with header: "
-                f"{ctx.session_id}-echo-{n} Research Findings."
+                f"NOT stretch a weak or tangential source to make the claim survive."
             )
         elif state == "researching" and spec_name.startswith("RESEARCH_EXPLORE_SQ"):
-            room = _room(ctx)
-            n = spec_name.rsplit("SQ", 1)[-1] or "1"
-            base = (
-                f"Research this sub-query for: {ctx.goal}\n\n"
-                f"Sub-query: {spec.task_hint}\n\n"
-                f"Write findings to mempalace room: {room} with header: "
-                f"{ctx.session_id}-echo-{n} Research Findings."
-            )
+            base = f"Research this sub-query for: {ctx.goal}\n\nSub-query: {spec.task_hint}"
         else:
             builder = _TASK_BUILDERS.get(state)
             base = (
-                builder(self, ctx, research)
-                if builder
-                else f"{spec.task_hint}\nGoal: {ctx.goal}"
+                builder(self, ctx, research) if builder else f"{spec.task_hint}\nGoal: {ctx.goal}"
             )
+        base += f"\n\n{_ARTIFACT_HANDOFF}"
         if ctx.clarification_text:
             base += f"\n\nUser clarification: {ctx.clarification_text}"
         return base
@@ -1191,6 +1214,7 @@ class ResearchPlaybook(BasePlaybook):
             unresolved.extend(research.get("report_critique_issues", []))
         if research.get("validation_exhausted"):
             unresolved.extend(research.get("validation_issues", []))
+        final_ref = self._final_output_artifact_ref(ctx)
         return {
             "met": ctx.met,
             "research_rounds": research.get("research_round", 1),
@@ -1210,10 +1234,9 @@ class ResearchPlaybook(BasePlaybook):
             "query": ctx.goal,
             "mode": research.get("mode", ""),
             "sub_queries": research.get("sub_queries", []),
-            "report_drawer_id": f"{ctx.session_id} Synthesis",
+            "output_artifact_ref": final_ref.to_dict() if final_ref is not None else None,
             "report_dir": research.get("report_dir", ""),
             "report_files": research.get("report_files", []),
-            "room": _room(ctx),
             "warnings": research.get("warnings", []),
             "plan_critique_exhausted": research.get("plan_critique_exhausted", False),
             "report_critique_exhausted": research.get("report_critique_exhausted", False),

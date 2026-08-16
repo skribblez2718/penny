@@ -24,9 +24,7 @@ All config is read from environment variables (with `.env` fallback). See
 
 ## Proxy Support
 
-Route all browser traffic through an HTTP or SOCKS proxy. Primary use case:
-**route through Caido for HTTP history capture** (used by the jsa skill's
-STRUCTURE phase).
+Route all browser traffic through an HTTP or SOCKS proxy for controlled test environments, traffic inspection, or corporate-network access.
 
 | Env Var                     | Default | Description                                                              |
 | --------------------------- | ------- | ------------------------------------------------------------------------ |
@@ -35,38 +33,21 @@ STRUCTURE phase).
 | `PLAYWRIGHT_PROXY_PASSWORD` | (none)  | Password for HTTP proxy auth                                             |
 | `PLAYWRIGHT_PROXY_BYPASS`   | (none)  | Comma-separated domains to bypass proxy. e.g., `localhost,127.0.0.1`     |
 
-**Auto-derivation:** if `PLAYWRIGHT_PROXY_SERVER` is unset but `CAIDO_URL`
-is set, the proxy is auto-derived from Caido's URL. This makes Caido
-integration "just work" when both extensions are configured. Explicit
-`PLAYWRIGHT_PROXY_*` env vars always take precedence.
-
 ## HTTPS Certificate Handling
 
 By default, Playwright rejects invalid HTTPS certificates (self-signed,
 expired, etc.). For security testing this is often too strict.
 
-### Option 1: Install Caido's CA cert properly (recommended)
+### Option 1: Install the proxy CA certificate (recommended)
 
-Download Caido's CA cert and install it into the NSSDB that Playwright
-Chromium uses:
+Install the inspection proxy's CA certificate into the NSSDB used by Playwright Chromium, then verify the certificate is listed:
 
 ```bash
-# 1. Download cert from running Caido instance
-curl -s http://localhost:8080/ca.crt -o /tmp/caido-ca.crt
-
-# 2. Install libnss3-tools (one-time)
-sudo apt install libnss3-tools
-
-# 3. Install cert into NSSDB (user-level, no sudo for this step)
-certutil -d sql:$HOME/.pki/nssdb -A -t "CT,C,C" -n "Caido" -i /tmp/caido-ca.crt
-
-# 4. Verify
+certutil -d sql:$HOME/.pki/nssdb -A -t "CT,C,C" -n "Local Proxy" -i "$PROXY_CA_CERT"
 certutil -d sql:$HOME/.pki/nssdb -L
-# Should show "Caido" with trust CT,C,C
 ```
 
-This is the proper way — Playwright will trust Caido's cert without
-disabling TLS verification globally.
+This preserves TLS verification while trusting the configured local proxy.
 
 ### Option 2: Disable TLS verification (fallback for security testing)
 
@@ -77,20 +58,17 @@ that you don't want to install, set:
 PLAYWRIGHT_IGNORE_HTTPS_ERRORS=1
 ```
 
-**Security warning:** this is a security risk in production. Only enable
-for the jsa STRUCTURE phase, which intentionally navigates to test
-environments and Caido's HTTPS proxy.
+**Security warning:** this is a security risk in production. Enable it only for explicitly authorized test environments.
 
-### Example: Route through Caido (jsa STRUCTURE)
+### Example: Route through a local inspection proxy
 
 ```bash
-# Caido upstream proxy default
 PLAYWRIGHT_PROXY_SERVER=http://127.0.0.1:8080
 ```
 
-Set in `.env` at the project root, or export before running Penny.
+Set it in `.env` at the project root, or export it before running Penny.
 
-### Example: Route through authenticated corporate proxy
+### Example: Route through an authenticated corporate proxy
 
 ```bash
 PLAYWRIGHT_PROXY_SERVER=http://proxy.corp.example.com:3128
@@ -99,15 +77,15 @@ PLAYWRIGHT_PROXY_PASSWORD=hunter2
 PLAYWRIGHT_PROXY_BYPASS=localhost,127.0.0.1,*.internal.corp
 ```
 
-### Proxy Inspection Tools
+### Proxy Tools
 
-Two new tools let agents verify and inspect the proxy configuration:
+Three tools manage and inspect the proxy configuration:
 
-- **`playwright_get_proxy_info`** — Returns the current proxy config (server, username, bypass). Does NOT include the password in the response.
-- **`playwright_check_proxy_reachable`** — TCP-probes the proxy server. Returns reachable boolean + latency in ms.
+- **`playwright_get_proxy_info`** — Returns the current proxy config (server, username, bypass). Does not include the password.
+- **`playwright_check_proxy_reachable`** — TCP-probes the configured proxy and returns reachability plus latency.
+- **`playwright_set_proxy`** — Switches between direct browsing (`action="off"`) and an explicit proxy (`action="custom"`). Changing the proxy closes the current browser so the next navigation relaunches with the new setting.
 
-Both are always available regardless of `PLAYWRIGHT_ENABLE_NETWORK` setting
-(they're informational, not network operations).
+These tools are always available regardless of `PLAYWRIGHT_ENABLE_NETWORK`.
 
 ### Graceful Degradation
 
@@ -129,8 +107,8 @@ The proxy is set at `BrowserManager.launch()` via Playwright's
 `chromium.launch({ proxy: { server, username, password, bypass } })` API.
 Per Playwright docs, this applies to all browser contexts and pages.
 
-The proxy is **read-only at runtime** — to change the proxy, you must
-restart the session (the BrowserManager singleton only reads config at launch).
+The configured environment proxy is the default. A runtime override set through
+`playwright_set_proxy` takes precedence and applies after the browser relaunches.
 
 ## Tool Categories
 
@@ -172,7 +150,7 @@ index.ts (entry)
             ├─ testing.ts
             ├─ routes.ts
             ├─ vision.ts
-            └─ proxy.ts  (NEW: proxy info + reachability)
+            └─ proxy.ts  (proxy configuration + reachability)
 ```
 
 ## Security Notes

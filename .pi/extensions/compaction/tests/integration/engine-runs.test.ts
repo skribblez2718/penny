@@ -1,94 +1,179 @@
-/**
- * Integration test: queryEngineRuns reads real run state from a real
- * SQLite checkpointer DB (same schema as apps/orchestration checkpointer),
- * via the venv Python.
- */
-
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { createRequire } from "node:module";
 
-// Tests run with CWD = the extension dir; resolve the repo root (and its
-// venv) relative to this file, and pin it BEFORE importing bridge.js so
-// BRIDGE_CONFIG picks it up.
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
-const venvPython = process.env.PI_VENV_PYTHON || join(repoRoot, ".venv/bin/python");
-const pythonAvailable = existsSync(venvPython);
-process.env.PI_VENV_PYTHON = venvPython;
+const { DatabaseSync } = createRequire(import.meta.url)(
+  "node:sqlite"
+) as typeof import("node:sqlite");
 
-const { queryEngineRuns } = await import("../../bridge.js");
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-const FIXTURE_SCRIPT = `
-import json, sqlite3, sys
-path = sys.argv[1]
-conn = sqlite3.connect(path)
-conn.executescript("""
-CREATE TABLE IF NOT EXISTS runs (
-  run_id           TEXT PRIMARY KEY,
-  session_id       TEXT NOT NULL,
-  playbook         TEXT NOT NULL,
-  current_state_id TEXT NOT NULL,
-  context_json     TEXT NOT NULL,
-  status           TEXT NOT NULL,
-  created_at       TEXT,
-  updated_at       TEXT
-);
-""")
-ctx = json.dumps({"goal": "Migrate research skill onto engine", "clarification_text": "Keep fixture?"})
-rows = [
-    ("code-a1b2c3", "code-1751700000000", "code", "VERIFY", ctx, "awaiting_user", "t0", "2026-07-05T12:00:00+00:00"),
-    ("code-old111", "code-1751600000000", "code", "LEARN", "{}", "complete", "t0", "2026-07-04T12:00:00+00:00"),
-    ("plan-run222", "plan-1751690000000", "plan", "PLAN", "not-json", "running", "t0", "2026-07-05T11:00:00+00:00"),
-]
-conn.executemany("INSERT INTO runs VALUES (?,?,?,?,?,?,?,?)", rows)
-conn.commit()
-`;
+import { readExactCheckpoints } from "../../checkpointer.js";
 
-describe.skipIf(!pythonAvailable)("queryEngineRuns (real SQLite)", () => {
-  let dir: string;
-  let dbPath: string;
-  const prevEnv = process.env.PENNY_ORCH_DB;
+function artifactRef(runId: string, operationId: string, digest = "a".repeat(64)) {
+  const identity = {
+    branch_id: null,
+    kind: "agent-output",
+    operation_id: operationId,
+    phase: "observing",
+    run_id: runId,
+    version: 1,
+  };
+  return {
+    schema_version: 1,
+    artifact_id: `art_${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`,
+    run_id: runId,
+    phase: "observing",
+    branch_id: null,
+    kind: "agent-output",
+    operation_id: operationId,
+    version: 1,
+    producer: "agent:echo",
+    consumer_scope: ["state:framing"],
+    media_type: "text/markdown; charset=utf-8",
+    byte_length: 123,
+    content_digest: digest,
+    store_ref: `artifact://sha256/${digest}`,
+  };
+}
+
+function context(runId: string, selectedRefs: unknown[]) {
+  return JSON.stringify({
+    goal: `Goal for ${runId}`,
+    clarification_text: "Keep the fixture?",
+    extras: {
+      artifact_protocol: {
+        schema_version: 2,
+        selected_refs: selectedRefs,
+        state_inputs: {},
+        parallel_fan_in: {},
+      },
+    },
+  });
+}
+
+describe("readExactCheckpoints (real read-only SQLite)", () => {
+  let directory: string;
+  let databasePath: string;
+  const previousDatabase = process.env.PENNY_ORCH_DB;
+  const selected = artifactRef("run-current", "observe-1");
 
   beforeAll(() => {
-    dir = mkdtempSync(join(tmpdir(), "compaction-engine-test-"));
-    dbPath = join(dir, "orchestration.db");
-    execFileSync(venvPython, ["-c", FIXTURE_SCRIPT, dbPath]);
-    process.env.PENNY_ORCH_DB = dbPath;
+    directory = mkdtempSync(join(tmpdir(), "compaction-checkpointer-"));
+    databasePath = join(directory, "orchestration.db");
+    const database = new DatabaseSync(databasePath);
+    database.exec(`
+      CREATE TABLE runs (
+        run_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        playbook TEXT NOT NULL,
+        current_state_id TEXT NOT NULL,
+        context_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT,
+        updated_at TEXT
+      )
+    `);
+    const insert = database.prepare("INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    insert.run(
+      "run-current",
+      "session-current",
+      "research",
+      "framing",
+      context("run-current", [selected]),
+      "awaiting_user",
+      "t0",
+      "2026-08-15T12:00:00Z"
+    );
+    insert.run(
+      "run-unrelated",
+      "session-unrelated",
+      "research",
+      "observing",
+      context("run-unrelated", [artifactRef("run-unrelated", "observe-2")]),
+      "running",
+      "t0",
+      "2026-08-15T13:00:00Z"
+    );
+    insert.run(
+      "run-complete",
+      "session-current",
+      "research",
+      "complete",
+      context("run-complete", []),
+      "complete",
+      "t0",
+      "2026-08-15T14:00:00Z"
+    );
+    database.close();
+    process.env.PENNY_ORCH_DB = databasePath;
   });
 
   afterAll(() => {
-    if (prevEnv === undefined) delete process.env.PENNY_ORCH_DB;
-    else process.env.PENNY_ORCH_DB = prevEnv;
-    rmSync(dir, { recursive: true, force: true });
+    if (previousDatabase === undefined) delete process.env.PENNY_ORCH_DB;
+    else process.env.PENNY_ORCH_DB = previousDatabase;
+    rmSync(directory, { recursive: true, force: true });
   });
 
-  it("returns pending runs only, newest first, with context fields", async () => {
-    const runs = await queryEngineRuns();
-    expect(runs.map((r) => r.run_id)).toEqual(["code-a1b2c3", "plan-run222"]);
-
-    const code = runs[0];
-    expect(code).toMatchObject({
-      session_id: "code-1751700000000",
-      playbook: "code",
-      current_state_id: "VERIFY",
+  it("reads only caller-supplied exact run IDs and selected artifact refs", () => {
+    const result = readExactCheckpoints(["run-current"]);
+    expect(result.runs.map((run) => run.run_id)).toEqual(["run-current"]);
+    expect(result.runs[0]).toMatchObject({
+      playbook: "research",
+      current_state_id: "framing",
       status: "awaiting_user",
-      goal: "Migrate research skill onto engine",
-      clarification_text: "Keep fixture?",
+      clarification_text: "Keep the fixture?",
     });
-
-    // Malformed context_json degrades to no goal, not a crash
-    const plan = runs[1];
-    expect(plan.status).toBe("running");
-    expect(plan.goal).toBeUndefined();
+    expect(result.artifactRefs).toEqual([selected]);
+    expect(result.runs).not.toContainEqual(expect.objectContaining({ run_id: "run-unrelated" }));
   });
 
-  it("returns [] when the DB does not exist", async () => {
-    process.env.PENNY_ORCH_DB = join(dir, "missing.db");
-    const runs = await queryEngineRuns();
-    expect(runs).toEqual([]);
-    process.env.PENNY_ORCH_DB = dbPath;
+  it("supports a fresh reader using only the prior exact run ref", () => {
+    const previousSummary = "[RESUME-REFS v2]\nrun:run-current\n[/RESUME-REFS]";
+    const runId = previousSummary.match(/^run:(.+)$/m)?.[1];
+    const result = readExactCheckpoints(runId ? [runId] : []);
+    expect(result.runs[0]?.run_id).toBe("run-current");
+    expect(result.artifactRefs[0]?.artifact_id).toBe(selected.artifact_id);
+  });
+
+  it("does not require artifact object bytes to preserve a valid selected ref", () => {
+    // No artifact store exists in this fixture. Compaction validates exact ref
+    // metadata but never opens raw artifact content.
+    const result = readExactCheckpoints(["run-current"]);
+    expect(result.runs).toHaveLength(1);
+    expect(result.artifactRefs).toHaveLength(1);
+  });
+
+  it("rejects a corrupt selected ref without blocking its run reference", () => {
+    const database = new DatabaseSync(databasePath);
+    const corrupt = { ...selected, store_ref: `artifact://sha256/${"b".repeat(64)}` };
+    database
+      .prepare("UPDATE runs SET context_json = ? WHERE run_id = ?")
+      .run(context("run-current", [corrupt]), "run-current");
+    database.close();
+
+    const result = readExactCheckpoints(["run-current"]);
+    expect(result.runs).toHaveLength(1);
+    expect(result.artifactRefs).toEqual([]);
+    expect(result.issues[0]).toContain("selected_refs[0] rejected");
+
+    const restore = new DatabaseSync(databasePath);
+    restore
+      .prepare("UPDATE runs SET context_json = ? WHERE run_id = ?")
+      .run(context("run-current", [selected]), "run-current");
+    restore.close();
+  });
+
+  it("skips terminal or missing exact IDs and degrades on a missing database", () => {
+    expect(readExactCheckpoints(["run-complete", "does-not-exist"]).runs).toEqual([]);
+    process.env.PENNY_ORCH_DB = join(directory, "missing.db");
+    expect(readExactCheckpoints(["run-current"])).toEqual({
+      runs: [],
+      artifactRefs: [],
+      issues: [],
+    });
+    process.env.PENNY_ORCH_DB = databasePath;
   });
 });

@@ -1,188 +1,128 @@
-import { describe, it, expect } from "vitest";
-import { createProseSummary, buildResumeRefs } from "../../index.js";
-import type { PennyCompactArtifact } from "../../schema.js";
+import { describe, expect, it } from "vitest";
+
+import {
+  buildResumeRefs,
+  createProseSummary,
+  createResumeRefSet,
+  withResumeRefs,
+} from "../../index.js";
+import type { ArtifactRef, PennyCompactArtifact } from "../../schema.js";
+
+const run = {
+  run_id: "run-research-a1b2c3",
+  session_id: "research-1751700000000",
+  playbook: "research",
+  current_state_id: "framing",
+  status: "awaiting_user" as const,
+  goal: "Produce the report",
+  clarification_text: "Keep the fixture?",
+  updated_at: "2026-08-15T12:00:00.000Z",
+};
+
+const selectedArtifact: ArtifactRef = {
+  schema_version: 1,
+  artifact_id: `art_${"a".repeat(64)}`,
+  run_id: run.run_id,
+  phase: "observing",
+  branch_id: null,
+  kind: "agent-output",
+  operation_id: "observe-1",
+  version: 1,
+  producer: "agent:echo",
+  consumer_scope: ["state:framing"],
+  media_type: "text/markdown; charset=utf-8",
+  byte_length: 42,
+  content_digest: "b".repeat(64),
+  store_ref: `artifact://sha256/${"b".repeat(64)}`,
+};
 
 function baseArtifact(overrides: Partial<PennyCompactArtifact> = {}): PennyCompactArtifact {
+  const engineRuns = overrides.engine_runs ?? [];
+  const artifacts = overrides.artifact_refs ?? [];
   return {
-    schema_version: "2.0.0",
+    schema_version: "3.0.0",
     session_id: "sess-1",
     compaction_seq: 0,
-    compaction_timestamp: "2026-07-05T12:00:00.000Z",
-    goal: "Migrate research skill onto engine",
+    compaction_timestamp: "2026-08-15T12:00:00.000Z",
+    goal: "Produce the report",
     constraints: [],
     preferences: [],
     pending: null,
     errors: [],
-    engine_runs: [],
-    mempalace_rooms: [],
-    kg_entities: [],
+    engine_runs: engineRuns,
+    artifact_refs: artifacts,
+    resume_refs: createResumeRefSet(engineRuns, artifacts),
     files: { read: [], modified: [] },
     tool_calls: [],
     tool_error_recovery: [],
     metadata: { eviction_log: [] },
     ...overrides,
-  } as PennyCompactArtifact;
+  };
 }
 
-const run = {
-  run_id: "code-a1b2c3",
-  session_id: "code-1751700000000",
-  playbook: "code",
-  current_state_id: "VERIFY",
-  status: "awaiting_user" as const,
-  goal: "Migrate research skill onto engine",
-  clarification_text: "Keep the StandardCycle fixture?",
-  updated_at: "2026-07-05T12:00:00.000Z",
-};
-
 describe("buildResumeRefs", () => {
-  it("renders engine runs with a concrete resume instruction", () => {
-    const refs = buildResumeRefs(baseArtifact({ engine_runs: [run] }));
-    expect(refs).toContain("[RESUME-REFS v2]");
-    expect(refs).toContain("run_id=code-a1b2c3");
-    expect(refs).toContain('resume=skill(skill_name="code", resumeFrom="code-1751700000000")');
-    expect(refs).toContain("awaiting-user: Keep the StandardCycle fixture?");
-  });
-
-  it("renders mempalace room/drawer pointers and kg ids", () => {
+  it("renders exact run and immutable artifact digest refs", () => {
     const refs = buildResumeRefs(
-      baseArtifact({
-        mempalace_rooms: [
-          {
-            wing: "penny",
-            room: "skills/code-1751700000000",
-            drawer_ids: ["d-101", "d-104"],
-            last_updated: "2026-07-05T12:00:00.000Z",
-            dominant_for_session: true,
-          },
-        ],
-        kg_entities: [
-          {
-            entity_id: "Session:code-1751700000000",
-            entity_type: "Session",
-            relevant_predicates: ["uses"],
-          },
-        ],
-      })
+      baseArtifact({ engine_runs: [run], artifact_refs: [selectedArtifact] })
     );
-    expect(refs).toContain(
-      "room: penny/skills/code-1751700000000 drawers=d-101,d-104 (active session)"
+    expect(refs).toBe(
+      [
+        "[RESUME-REFS v2]",
+        `run:${run.run_id}`,
+        `artifact:${selectedArtifact.artifact_id}@sha256:${selectedArtifact.content_digest}`,
+        "[/RESUME-REFS]",
+      ].join("\n")
     );
-    expect(refs).toContain("kg: Session:code-1751700000000 [uses]");
   });
 
-  it("skips placeholder drawer ids — a fake pointer is worse than none", () => {
-    const refs = buildResumeRefs(
-      baseArtifact({
-        pending: {
-          state: "awaiting_clarification",
-          previous_state: "unknown",
-          mempalace_drawer_id: "pending-diary",
-          question_summary: "q",
-          turn_id: "t",
-        },
-        mempalace_rooms: [
-          {
-            wing: "penny",
-            room: "skills/x",
-            drawer_ids: ["unknown", "pending-abc", "d-real"],
-            last_updated: "2026-07-05T12:00:00.000Z",
-          },
-        ],
-      })
-    );
-    expect(refs).not.toContain("pending-drawer:");
-    expect(refs).toContain("drawers=d-real");
-  });
-
-  it("renders verbatim tool params, deduped by tool, successes only", () => {
-    const refs = buildResumeRefs(
-      baseArtifact({
-        tool_calls: [
-          { tool: "read", params: { path: "/a" }, successful: true },
-          { tool: "read", params: { path: "/b" }, successful: true },
-          { tool: "edit", params: { path: "/c" }, successful: false },
-        ],
-        tool_error_recovery: [
-          {
-            tool: "edit",
-            failed_params: { path: "" },
-            error_message: "Validation failed",
-            corrected_params: { path: "/c" },
-          },
-        ],
-      })
-    );
-    const toolOkLines = refs.split("\n").filter((l) => l.startsWith("tool-ok:"));
-    expect(toolOkLines).toHaveLength(1);
-    expect(toolOkLines[0]).toContain('{"path":"/a"}');
-    expect(refs).toContain('tool-fix: edit failed={"path":""} error="Validation failed"');
-  });
-
-  it("returns empty string when there is nothing to point at", () => {
+  it("returns an empty string when no exact refs exist", () => {
     expect(buildResumeRefs(baseArtifact())).toBe("");
   });
 });
 
 describe("createProseSummary", () => {
-  it("puts the prose brief first and the refs appendix last", () => {
-    const summary = createProseSummary(baseArtifact({ engine_runs: [run] }));
+  it("puts prose first and the exact refs appendix last", () => {
+    const summary = createProseSummary(
+      baseArtifact({ engine_runs: [run], artifact_refs: [selectedArtifact] })
+    );
     expect(summary.indexOf("## Goal")).toBe(0);
     expect(summary).toContain("## In-Flight Orchestration Runs");
-    expect(summary).toContain("Waiting on the user: Keep the StandardCycle fixture?");
+    expect(summary).toContain("Waiting on the user: Keep the fixture?");
     expect(summary.indexOf("[RESUME-REFS v2]")).toBeGreaterThan(summary.indexOf("## Goal"));
     expect(summary.trimEnd().endsWith("[/RESUME-REFS]")).toBe(true);
   });
 
-  it("omits the refs block entirely on an empty session", () => {
+  it("omits the refs block on an empty session", () => {
     const summary = createProseSummary(baseArtifact());
     expect(summary).toContain("## Goal");
     expect(summary).not.toContain("[RESUME-REFS");
   });
 
-  it("does not emit filler constraints", () => {
-    const summary = createProseSummary(baseArtifact());
-    expect(summary).not.toContain("No explicit constraints recorded");
-    expect(summary).not.toContain("## Constraints");
-  });
-
-  it("renders ## Current Work and ## Next Steps when present", () => {
+  it("renders current work, next steps, and supersession without filler", () => {
     const summary = createProseSummary(
       baseArtifact({
-        current_work: "Rewriting extractSessionState's newest-first fallback",
-        next_steps: ["Wire merged messages into pending detection", "Populate boundary_shift"],
-      })
-    );
-    expect(summary).toContain("## Current Work");
-    expect(summary).toContain("Rewriting extractSessionState's newest-first fallback");
-    expect(summary).toContain("## Next Steps");
-    expect(summary).toContain("- Wire merged messages into pending detection");
-    expect(summary).toContain("- Populate boundary_shift");
-  });
-
-  it("omits Current Work / Next Steps entirely when there is no signal", () => {
-    const summary = createProseSummary(baseArtifact());
-    expect(summary).not.toContain("## Current Work");
-    expect(summary).not.toContain("## Next Steps");
-  });
-
-  it("flags a superseded completed skill under Active Skill without changing Goal", () => {
-    const summary = createProseSummary(
-      baseArtifact({
-        goal: "Build the goal-recency fix",
+        goal: "Build the exact-ref fix",
+        current_work: "Reading exact orchestration checkpoints",
+        next_steps: ["Run focused tests"],
         dominant_skill: {
-          skill_name: "plan",
-          session_id: "plan-1",
-          goal: "Design a scoring system",
+          skill_name: "research",
+          session_id: "research-1",
+          goal: "Old research task",
           completed: true,
           superseded: true,
         },
       })
     );
-    expect(summary.indexOf("## Goal")).toBe(0);
-    expect(summary).toContain("Build the goal-recency fix");
-    expect(summary).toContain("## Active Skill");
+    expect(summary).toContain("## Current Work");
+    expect(summary).toContain("## Next Steps");
     expect(summary).toContain("superseded by a newer request");
-    expect(summary).toContain("Skill goal: Design a scoring system");
+    expect(summary).not.toContain("No explicit constraints recorded");
+  });
+
+  it("lets model prose receive only the code-owned exact appendix", () => {
+    const artifact = baseArtifact({ engine_runs: [run] });
+    const summary = withResumeRefs("## Goal\nContinue", artifact);
+    expect(summary).toContain(`run:${run.run_id}`);
+    expect(summary).not.toContain("resume=skill");
   });
 });

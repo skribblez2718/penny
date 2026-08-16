@@ -1,230 +1,103 @@
-# Memory Extension for Penny
+# Penny Memory Extension
 
-Intelligent memory retrieval for the Pi coding agent. Provides 23 tools for AI memory management.
+HTTP-only, role-scoped access to a MemPalace 3.7.1 MCP hub. The extension consumes the versioned `platform-memory` config, capability-policy, and HTTP client contract, then applies its Pi-specific normalization and final-envelope budget. The production extension never imports Python, spawns a bridge, opens palace bytes, or falls back to direct/prefer storage.
 
-## Tools
+## Runtime policy
 
-### Palace Read Tools (8 tools)
+- **Primary:** only an unmarked trusted main Pi runtime is primary.
+- **Denied:** any `PENNY_RUNTIME_ROLE` marker—including `worker`, `skill-driver`, or `primary`—is deny-only. The extension registers zero tools and zero lifecycle hooks.
+- **Disabled:** `PENNY_MEMORY_MODE=disabled` registers nothing.
+- **Hub:** production otherwise requires `PENNY_MEMORY_MODE=hub` (the default). `legacy`, `shadow`, `direct`, and `prefer` are rejected. No temporary mode remains; compatibility retirement is owned by the memory platform under MEM-07.
+- **Write gate:** `PENNY_MEMORY_WRITE_MODE` defaults to `disabled`. Read-only qualification omits every mutating tool, suppresses automatic diary writes, and rejects direct adapter writes before HTTP. The owner enables writes only after the journaled canary and reconciliation gate.
 
-| Tool                     | Description                                                |
-| ------------------------ | ---------------------------------------------------------- |
-| `memory_status`          | Get palace overview: total drawers, wings, rooms           |
-| `memory_list_wings`      | List all wings with drawer counts                          |
-| `memory_list_rooms`      | List rooms within a wing or all rooms                      |
-| `memory_get_taxonomy`    | Get full hierarchy: wing → room → count                    |
-| `memory_search`          | Semantic search across all memories (returns full text)    |
-| `memory_smart_search`    | **Context-efficient search** with summaries and thresholds |
-| `memory_check_duplicate` | Check if content already exists                            |
-| `memory_get_aaak_spec`   | Get AAAK dialect specification for diary entries           |
+A model cannot grant itself tools or enable writes by emitting role or bundle text.
 
-### Palace Write Tools (2 tools)
+## Configuration
 
-| Tool                   | Description                          |
-| ---------------------- | ------------------------------------ |
-| `memory_add_drawer`    | Store verbatim content in the palace |
-| `memory_delete_drawer` | Delete a drawer by ID                |
+| Variable                              | Contract                                                                    |
+| ------------------------------------- | --------------------------------------------------------------------------- |
+| `PENNY_MEMORY_MODE`                   | `hub` or `disabled` only                                                    |
+| `PENNY_MEMORY_WRITE_MODE`             | `disabled` (default) or owner-enabled `enabled` after canary reconciliation |
+| `PENNY_MEMORY_TRUST_MODE`             | `isolated` or `shared-trust-domain`                                         |
+| `PENNY_MEMORY_PRINCIPAL_ID`           | Caller-registry principal identifier                                        |
+| `PENNY_MEMORY_MCP_ENDPOINT`           | Absolute `http://` or `https://` endpoint; the adapter posts only to `/mcp` |
+| `PENNY_MEMORY_PALACE_ID`              | Caller-registry palace identifier                                           |
+| `PENNY_MEMORY_DATA_ROOT_ID`           | Opaque caller-registry data-custody/root identifier                         |
+| `PENNY_MEMORY_ISOLATION_BOUNDARY_ID`  | Required isolated-palace boundary identifier                                |
+| `PENNY_MEMORY_TRUST_DOMAIN_ID`        | Required shared trust-domain identifier                                     |
+| `PENNY_MEMORY_WHOLE_PALACE_TRUST_ACK` | Must be `whole-palace` for shared-trust-domain                              |
+| `PENNY_MEMORY_OWNER_ID`               | Data/service owner identifier                                               |
+| `PENNY_MEMORY_BACKUP_POLICY_REF`      | Caller-owned backup policy reference                                        |
+| `PENNY_MEMORY_MIGRATION_POLICY_REF`   | Caller-owned migration policy reference                                     |
+| `PENNY_MEMORY_RETENTION_POLICY_REF`   | Caller-owned retention policy reference                                     |
+| `PENNY_MEMORY_UNINSTALL_DISPOSITION`  | Must be `preserve`; code uninstall never mutates data                       |
+| `PENNY_MEMORY_MCP_TOKEN_FILE`         | Owner-only, non-symlink bearer-token file                                   |
+| `PENNY_MEMORY_MCP_TOKEN_ENV`          | Name of the owner-supplied environment variable containing the bearer token |
+| `PENNY_MEMORY_REQUEST_TIMEOUT_MS`     | 100–30000 ms; default 10000                                                 |
+| `PENNY_MEMORY_MAX_READ_ATTEMPTS`      | 1–3; retries apply only to safe idempotent reads                            |
+| `PENNY_MEMORY_CURSOR_TTL_SECONDS`     | 30–900 seconds; default 300                                                 |
+| `PENNY_MEMORY_MAX_RESPONSE_BYTES`     | Lower cap up to 16 MiB for an upstream HTTP response                        |
+| `PENNY_MEMORY_SOURCE_CACHE_MAX_BYTES` | Bounded cache cap, 16–32 MiB; used only where upstream has no range API     |
+| `PENNY_TOOL_RESULT_MAX_BYTES`         | Optional lower cap; hard maximum 32768                                      |
+| `PENNY_TOOL_RESULT_MAX_CHARACTERS`    | Optional lower cap; hard maximum 32768                                      |
+| `PENNY_TOOL_RESULT_MAX_TOKENS`        | Optional lower cap; hard maximum 8192 estimated tokens                      |
 
-### Knowledge Graph Tools (5 tools)
+Exactly one token reference (`*_TOKEN_FILE` or `*_TOKEN_ENV`) is required in hub mode. Direct token configuration is intentionally unsupported. Cursor HMAC keys are domain-separated from the loaded bearer secret and never emitted.
 
-| Tool                   | Description                                    |
-| ---------------------- | ---------------------------------------------- |
-| `memory_kg_query`      | Query knowledge graph for entity relationships |
-| `memory_kg_add`        | Add a fact to the knowledge graph              |
-| `memory_kg_invalidate` | Mark a fact as no longer true                  |
-| `memory_kg_timeline`   | Get chronological timeline of facts            |
-| `memory_kg_stats`      | Get knowledge graph statistics                 |
+`shared-trust-domain` means **whole-palace trust**: the bearer credential can access the entire configured palace. Wings, rooms, principal IDs, and routing headers are not ACLs. Use an isolated endpoint/root/credential or disable memory for any principal that is not trusted with all palace data.
 
-### Navigation Tools (3 tools)
+## Primary tool bundles
 
-| Tool                  | Description                        |
-| --------------------- | ---------------------------------- |
-| `memory_traverse`     | Walk the palace graph from a room  |
-| `memory_find_tunnels` | Find rooms that bridge two wings   |
-| `memory_graph_stats`  | Get palace connectivity statistics |
+During read-only qualification, write operations below are omitted while read operations—including duplicate checks and diary reads—remain available.
 
-### Agent Diary Tools (2 tools)
+- **Recall read:** `memory_smart_search`, compatibility `memory_search`, `memory_get_drawer`, bounded `memory_list_drawers`, bounded `memory_get_taxonomy`
+- **Curated write:** `memory_check_duplicate`, `memory_add_drawer`
+- **Diary:** `memory_diary_read`, `memory_diary_write` (primary `penny` diary only)
+- **KG read:** `memory_kg_query`, `memory_kg_timeline`, `memory_kg_stats`
+- **KG write:** `memory_kg_add`, `memory_kg_invalidate`, `memory_kg_supersede`
 
-| Tool                 | Description                              |
-| -------------------- | ---------------------------------------- |
-| `memory_diary_write` | Write an agent diary entry (AAAK format) |
-| `memory_diary_read`  | Read recent diary entries                |
+Delete/bulk-delete, unrestricted enumeration, export, archive, backup, repair, migration, and retention apply are not model-visible.
 
----
+Search defaults to summary/metadata candidates. `include_full`/`verbatim`, exact drawer reads, list, taxonomy, diary, KG queries, and KG timelines all pass through the same final-envelope budget.
 
-## Context-Efficient Search
+## Continuation and integrity
 
-### The Problem
+Every complete Pi tool result is measured after envelope construction. The tokenizer-independent estimate charges one token per serialized UTF-8 byte, so the unchanged 8,192 estimated-token hard cap permits at most 8,192 serialized bytes. Byte and character caps remain independent. The release minimum context headroom is 16,384 tokens; one conforming result consumes no more than half and leaves at least 8,192 tokens reserved after the result.
 
-The original `memory_search` returned full verbatim text from all 532+ memory drawers, consuming excessive context window:
+Oversized exact content returns:
 
-- No filtering by relevance threshold
-- Full document text returned, no summaries
-- Default limit of 5 results
-- Negative similarity scores included (noise)
-- No context-aware query building
+- source digest and revision;
+- total and returned UTF-8 byte counts;
+- exact content range;
+- `truncated: true`;
+- an expiring opaque HMAC cursor bound to operation, primary session, query, filters, source, and next range.
 
-### The Solution: `memory_smart_search`
+Oversized structured results use exact UTF-8 fragments of the normalized JSON source. Concatenating fragments reassembles that source byte-for-byte. Invalid, wrong-caller, wrong-query, stale, evicted, changed-revision, and expired cursors fail with typed errors. Nothing is silently truncated. Summary shortening is explicitly labeled with original and returned byte metadata.
 
-A context-aware search that minimizes token usage:
+Upstream-ranged list responses are re-fetched and digest-checked on continuation. Operations without upstream ranges use a bounded expiring source cache so continuation never replays writes or unrestricted calls.
 
-**Features:**
+## Result telemetry
 
-1. **Relevance Threshold** - Filters out low-similarity results (default: 0.05)
-2. **Summary Mode** - Returns 200-char summaries instead of full text
-3. **Lower Default Limit** - Returns 3 results vs 5
-4. **Context Analysis** - Extracts entities/keywords from query
-5. **Suggested Filters** - Recommends wing/room based on context
+Metadata-only result events record tool/operation, request ID, serialized bytes, estimated tokens, release-headroom assessment, truncation, page, status, and duration. `compactionCorrelation` records `status: not_evaluated` and a session correlation key for later analysis. That field does not assert a live supported-model trial, a compaction outcome, or causation. Content, cursor values, credentials, and HMAC material are excluded.
 
-**Example Usage:**
+## Typed failures
 
-```json
-{
-  "query": "authentication decisions",
-  "context": "We discussed using Clerk vs Auth0 for the new project",
-  "limit": 3,
-  "min_similarity": 0.05
-}
-```
+The adapter distinguishes unavailable, unauthorized, timeout, cancellation, conflict, invalid request, integrity, invalid cursor, stale cursor, expired cursor, and result-budget failures. Hub outages fail closed.
 
-**Response:**
+## KG governance
 
-```json
-{
-  "results": [
-    {
-      "summary": "Decided to use Clerk for authentication...",
-      "similarity": 0.42,
-      "wing": "penny",
-      "room": "decisions",
-      "id": "drawer_penny_decisions_abc123"
-    }
-  ],
-  "context_analysis": {
-    "entities_extracted": ["Clerk", "Auth0"],
-    "keywords_extracted": ["authentication", "decisions"],
-    "suggested_filters": {
-      "room": "decisions",
-      "confidence": 0.3
-    }
-  },
-  "filter_stats": {
-    "total_before_threshold": 6,
-    "total_after_threshold": 2,
-    "min_similarity": 0.05
-  }
-}
-```
+KG predicate schema **v1** is an exact allowlist implemented in `kg-policy.ts`, matching `docs/agents/memory/kg-patterns.md`. Add, invalidate, and supersede reject unknown predicates before HTTP dispatch.
 
-### When to Use
+## Automatic diary
 
-| Use `memory_search` when             | Use `memory_smart_search` when      |
-| ------------------------------------ | ----------------------------------- |
-| Need complete verbatim text          | Need quick context-efficient lookup |
-| Searching for specific code snippets | Exploring what's in memory          |
-| Already know wing/room filters       | Want relevance filtering            |
-| High confidence in query terms       | Unsure what terms to use            |
+Only the unmarked primary runtime with writes explicitly enabled installs effective shutdown-write behavior. It builds one bounded entry from content-free observability metadata, duplicate-checks it, writes at most once per session, logs metadata only, and tolerates observability or hub failure. Read-only qualification closes without a memory request. Worker and skill-driver processes make zero diary or KG shutdown calls.
 
----
-
-## Smart Retriever Module
-
-The `smart_retriever.py` module implements intelligent retrieval:
-
-### Context Extraction
-
-```python
-def extract_entities(text: str) -> list[str]:
-    """Extract names, projects, identifiers from text"""
-
-def extract_keywords(text: str, n: int = 5) -> list[str]:
-    """Extract key terms, ignoring stopwords"""
-```
-
-### Knowledge Graph Integration
-
-```python
-def get_related_entities(entity: str) -> dict:
-    """Find entities related via knowledge graph"""
-
-def detect_project_context(text: str) -> list[str]:
-    """Detect project identifiers from known projects"""
-```
-
-### Progressive Retrieval
-
-```python
-def search_summaries(query, limit=3, min_similarity=0.05):
-    """Get summaries first - use for initial retrieval"""
-
-def get_full_content(drawer_id: str):
-    """Get full content for specific results"""
-```
-
----
-
-## Prompt Guidelines
-
-For the LLM using these tools:
-
-1. **Use `memory_smart_search` by default** - It's context-efficient
-2. **Check `memory_status` first** - Know what's in the palace
-3. **Use `memory_kg_query` for entities** - Check relationships
-4. **Store with `memory_add_drawer`** - File important decisions
-5. **Write diary entries** - Record sessions with `memory_diary_write`
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Pi Coding Agent                       │
-│                     (TypeScript)                         │
-└─────────────────────┬───────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────┐
-│            Memory Extension (index.ts)                   │
-│    23 tools registered with Pi's tool system            │
-└─────────────────────┬───────────────────────────────────┘
-                      │
-                      ▼ spawn Python process
-┌─────────────────────────────────────────────────────────┐
-│          Penny Memory Bridge (Python)                    │
-│      penny_memory_bridge.py + smart_retriever.py        │
-└─────────────────────┬───────────────────────────────────┘
-                      │
-          ┌───────────┴───────────┐
-          ▼                       ▼
-┌──────────────────┐    ┌──────────────────┐
-│    ChromaDB      │    │  Knowledge Graph │
-│  (Vector Store)  │    │    (SQLite)      │
-│   532+ drawers   │    │    47 facts      │
-└──────────────────┘    └──────────────────┘
-```
-
----
-
-## Testing
+## Tests
 
 ```bash
-# Test smart search via bridge
-echo '{"tool": "smart_search", "params": {"query": "memory search"}}' | \
-  .venv/bin/python .venv/lib/python3.12/site-packages/penny_memory_bridge.py
-
-# Test smart retriever directly
-.venv/bin/python -c "
-from smart_retriever import SmartRetriever
-r = SmartRetriever()
-print(r.smart_search('authentication', limit=3))
-"
+cd $PROJECT_ROOT/.pi/extensions/memory
+bun run test:all
+bun run test:e2e
 ```
 
----
-
-## Integration Tests
-
-Located in `tests/`:
-
-- `unit/extension.test.ts` - TypeScript extension tests
-- `integration/mempalace.test.ts` - End-to-end tests
+All unit and integration suites are hermetic. The HTTP integration test uses an in-process fake MCP endpoint and never opens or mutates a palace.

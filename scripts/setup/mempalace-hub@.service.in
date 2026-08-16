@@ -1,0 +1,21 @@
+[Unit]
+Description=Supervised MemPalace HTTP hub (%i)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=@PROJECT_ROOT@
+ExecStart=@PYTHON_EXECUTABLE@ -m scripts.system.memory.hub_service foreground --config @CONFIG_PATH@
+ExecStop=@PYTHON_EXECUTABLE@ -m scripts.system.memory.hub_service stop --config @CONFIG_PATH@
+Restart=always
+RestartSec=2s
+TimeoutStopSec=@STOP_TIMEOUT_SECONDS@
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=@PALACE_ROOT@ @ARCHIVE_ROOT@ @RUNTIME_ROOT@ @LOG_ROOT@ @SERVICE_HOME@ @XDG_CONFIG_ROOT@ @XDG_CACHE_ROOT@ @XDG_STATE_ROOT@
+
+[Install]
+WantedBy=default.target

@@ -1,59 +1,83 @@
 # Compaction Resume Protocol
 
-Execute this protocol once when a compaction summary containing a `[RESUME-REFS v2]` block appears in your context. The summary is your memory of the compacted stretch of this session: a prose brief for orientation, followed by a pointer appendix into durable memory. Nothing was lost — anything not carried in the prose is dereferenceable through the refs.
+Execute this protocol once when a compaction summary containing a `[RESUME-REFS v2]` block appears in context. The prose brief is the primary orientation. The appendix contains exact recovery addresses selected from read-only orchestration checkpoints; it is not a search hint.
 
-Once processed, do not re-execute in this session.
+Once processed, do not re-execute it in the same session.
 
-## 1. Detection
+## 1. Validate the Appendix
 
-The compaction summary is prose markdown (`## Goal`, `## Active Skill`, `## Current Work`, `## In-Flight Orchestration Runs`, `## Pending`, `## Next Steps`, ...) ending in:
+The only supported format is:
 
-```
+```text
 [RESUME-REFS v2]
-run: run_id=<id> playbook=<name> state=<state> status=<status> resume=skill(skill_name="<name>", resumeFrom="<session_id>")
-room: <wing>/<room> drawers=<id,id,...>
-decision: <drawer_id> (<confidence>) <summary>
-kg: <entity_id> [<predicates>]
-tool-ok: <tool> <verbatim params JSON>
-tool-fix: <tool> failed=<params> error="<message>" fixed=<params>
+run:<run_id>
+artifact:<artifact_id>@sha256:<64-lowercase-hex-digest>
+memory:<durable_memory_id>
 [/RESUME-REFS]
 ```
 
-Every line is a real, dereferenceable address. Placeholder IDs are never rendered.
+Rules:
+
+- `run:` and `artifact:` are exact addresses, not names or search terms.
+- `memory:` is optional and appears only when an owner had already supplied that exact durable ID.
+- Every artifact ID is `art_` followed by 64 lowercase hexadecimal characters.
+- Every artifact digest is exactly 64 lowercase hexadecimal characters.
+- Unknown versions, malformed lines, duplicate refs, placeholders, and unclosed blocks are invalid. Do not partially reinterpret or repair them.
+- Never derive a run from a session name, room name, recency, goal similarity, or memory search.
+
+If the block is invalid, continue from the prose and report the invalid appendix only when it affects the requested work.
 
 ## 2. Reorient from the Prose
 
-Read the brief top to bottom: the goal, the active skill, current work, any in-flight orchestration runs, pending questions to the user, next steps, constraints, key decisions, unresolved errors, and touched files. This is enough to continue most work without any retrieval.
+Read the brief top to bottom: latest goal, current work, exact in-flight runs, pending user questions, next steps, constraints, unresolved errors, and touched files.
 
-- **`## Goal` is the LATEST substantive intent, not the first-seen one.** The brief is written by a model reading the compacted conversation (with a deterministic fallback when no model is reachable), constrained so a stale run or skill goal never overrides a fresh user pivot. Trust it as the current objective.
-- **Grounded state is scoped to this session.** In-flight runs, decisions, and rooms in the prose belong to THIS conversation's work; a run from a different, older session appears only under an `other pending runs (other sessions — verify before resuming)` label in the refs — never treat it as your current goal without checking.
-- **`## Active Skill` may be flagged `superseded by a newer request`.** That means a completed skill's goal was displaced by a later ad-hoc user message; the skill is shown for provenance, but `## Goal` (the newer request) is what you act on.
-- **`## Current Work` / `## Next Steps`** (when present) summarize what was in flight and the concrete next actions. A `Focus (from /compact): …` next step echoes the user's `/compact <focus>` hint — treat it as the priority.
+- `## Goal` is the latest substantive intent, not the first-seen intent.
+- `## Active Skill` may be marked `superseded by a newer request`; in that case the newer `## Goal` controls.
+- `## Current Work` and `## Next Steps` describe the immediate continuation.
+- `## Pending` preserves conversational escalation state. An exact awaiting-user checkpoint remains authoritative when present.
 
-## 3. Resume In-Flight Runs
+The prose is sufficient for ordinary continuation. Dereference only when missing detail is needed.
 
-`run:` lines come from the orchestration engine's durable run_id checkpointer — they are exact, not inferred.
+## 3. Resume Exact Runs
 
-- `status=awaiting_user` — the run is blocked on the user. An `awaiting-user:` line carries the open question; re-present it if it is still unanswered, then resume with the `resume=skill(...)` call given on the line.
-- `status=running` — the run was mid-step when compaction hit. Resume it with the `resume=skill(...)` call; the engine rehydrates from its checkpoint and re-issues the pending step.
+For each `run:<run_id>` needed by the current goal:
 
-Never reconstruct run state from memory searches — the checkpointer already holds it.
+1. Use the orchestration owner's exact run-ID recovery path.
+2. Rehydrate the persisted checkpoint; do not reconstruct FSM state from prose, artifact text, durable memory, or session metadata.
+3. If the checkpoint is `awaiting_user`, present its still-open question and submit the answer through the owner's resume path.
+4. If it is running, continue from the persisted state.
+5. If the exact row is absent or terminal, treat the ref as stale and continue from the prose; never search for a “similar” active run.
 
-## 4. Dereference on Demand
+## 4. Read Exact Artifacts on Demand
 
-When you need detail the prose didn't carry:
+For `artifact:<artifact_id>@sha256:<digest>`:
 
-- `room:` → `memory_smart_search(query=<topic>, room=<room>)` or read the listed drawers directly. Rooms marked `(active session)` belong to in-flight work.
-- `kg:` → `memory_kg_query(entity)` or `memory_kg_timeline(entity)`.
-- `tool-ok:` / `tool-fix:` → verbatim tool-call examples from before compaction. Follow the `tool-ok` shapes; avoid repeating the `tool-fix` failures.
+- Use `artifact_read` only when the execution owner has granted that exact artifact to the current consumer.
+- Verify that the returned artifact ID and `content_digest` exactly match the appendix before relying on content.
+- Follow typed continuation cursors for paged content; do not list, search, guess, or broaden grants.
+- Missing, ungranted, stale, malformed, or digest-mismatched artifacts do **not** block run recovery. Continue with the exact run checkpoint and prose, and report the artifact issue if its content is required.
 
-Do not bulk-prefetch. Dereference a pointer when the work actually needs it.
+The run checkpoint owns control state. Artifacts own immutable bytes and evidence. Neither is reconstructed from the other.
 
-## 5. Handle Pending State
+## 5. Optional Durable Memory
 
-If the `## Pending` section is present, an escalation was active at compaction time. Read the reason, check whether a `run:` line with `status=awaiting_user` covers the same question (prefer the engine's version — it is authoritative), and re-present to the user if still open.
+A `memory:<durable_memory_id>` line may be dereferenced directly when its detail is needed. Do not perform broad or semantic memory searches to replace an absent ID.
+
+Memory service absence, an unavailable memory ID, or no memory refs at all never blocks recovery. Continue from prose, run checkpoints, and exact artifacts.
 
 ## 6. Budget Awareness
 
-- The summary is built under a hard token budget with priority-based eviction. If something seems missing, it was demoted from "carried" to "addressable" — check the refs before concluding data doesn't exist.
-- A `[summary truncated to fit compaction budget]` marker means the tail (file lists, tool examples) was cut; goal, runs, and pending state always survive at the top.
+The final summary is fitted with the shared model-visible result budget. The
+estimator charges one token per serialized UTF-8 byte, so the unchanged 8,192
+estimated-token cap limits the complete envelope to at most 8,192 bytes. Byte
+and character caps remain independent. Release minimum context headroom is
+16,384 tokens, leaving at least 8,192 tokens reserved after one conforming
+result.
+
+- `[prose truncated to fit the shared result budget]` means lower-priority prose was shortened at a UTF-8 boundary.
+- `[N resume refs omitted by the shared result budget]` means complete ref lines were omitted, artifacts before runs. Never infer the omitted addresses.
+- A rendered v2 block is always structurally complete; raw byte truncation is not valid.
+
+Compaction metadata carries `not_evaluated` session/run correlation keys for a
+later telemetry join. Their presence does not claim a live supported-model
+trial, causation, or a no-compaction result.

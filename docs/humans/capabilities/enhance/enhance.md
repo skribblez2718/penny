@@ -2,7 +2,7 @@
 
 ## What It Is
 
-Enhance rewrites your raw prompt into a world-class, goal-oriented prompt — a verifiable goal, explicit scope, completion criteria, loop/verification design, and guardrails — before Penny's main model sees it. You trigger it on demand by ending your prompt with a trailing **` -i`**. The layer architecture calls this Interaction Circumstances 3 and 4: enhancement is a transformation on the Invocation Context, not a new prompt layer. Penny receives the enhanced prompt as if you had typed it; your original (with the flag) is kept in the session for audit.
+Enhance rewrites your raw prompt into a world-class, goal-oriented prompt — a verifiable goal, explicit scope, completion criteria, loop/verification design, and guardrails — before Penny's main model sees it. You trigger it on demand by ending your prompt with a trailing **` -i`**. In the layer architecture, enhancement is a transformation on the Invocation Context — not a new prompt layer. Penny receives the enhanced prompt as if you had typed it; your original (with the flag) is kept in the session for audit.
 
 ## Why It Exists
 
@@ -26,5 +26,5 @@ Enhancement blocks prompt submission for one LLM call (tens of seconds on the cu
 ## Learn More
 
 - Operational rules and config: `docs/agents/capabilities/enhance/enhance.md`
-- Where it sits in the architecture: [Layer Architecture](../../prompts/layer-architecture.md) (Interaction Circumstances)
+- Where it sits in the architecture: [Layer Architecture](../../prompts/layer-architecture.md) (Invocation Context)
 - Extension source: `.pi/extensions/enhance/`

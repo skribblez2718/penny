@@ -1,12 +1,12 @@
 # Agents Documentation Index
 
-- [Agents](agents/AGENTS.md): Agent architecture, lifecycle, and the Generic Agents + Skill Prompts pattern
+- [Agents](agents/AGENTS.md): Project-local agent catalog, artifact-granted worker lifecycle, and role/domain separation
 - [Extensions](extensions/AGENTS.md): Creating extensions: directory structure, tool registration, event handlers, TUI
-- [Skills](skills/AGENTS.md): Domain Guidance layer — design methodology, skill prompts, scaffolding, conventions
+- [Skills](skills/AGENTS.md): Artifact-first engine workflows, Domain Guidance, scaffolding, and tests
 - [Prompts](prompts/AGENTS.md): Layer Reference, standards, cognitive frame, role definitions
-- [Memory](memory/AGENTS.md): wing/room schema & retention, integration patterns (incl. large-content & dedup), and knowledge-graph predicate conventions
-- [Orchestration](orchestration/AGENTS.md): The shared FSM engine — `BasePlaybook` subclasses, per-state contracts, durable checkpointer, self-recovery
-- [Capabilities](capabilities/AGENTS.md): Skills, tiered memory, behavioral ratchet, observability, unknown/verification states
+- [Memory](memory/AGENTS.md): Primary-only durable recall/curation, supervised HTTP hub, temporal KG, and legacy retention
+- [Orchestration](orchestration/AGENTS.md): Shared FSM engine, exact artifact contracts, durable checkpoints, and recovery
+- [Capabilities](capabilities/AGENTS.md): Artifact-first skills, primary tiered memory, observability, and verification states
 - [State Management](state-management/AGENTS.md): python-statemachine reference, orchestration integration, and skill patterns
 - [Architecture](architecture/AGENTS.md): Canonical implementations, Pi alignment deviations, case studies, and coding standards
 - [Documentation](documentation/AGENTS.md): Rules for AGENTS.md files — indexes only, never content

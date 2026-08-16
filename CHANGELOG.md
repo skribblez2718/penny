@@ -49,7 +49,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   retrieval, trajectory), tiered memory, MemPalace and the knowledge graph, the
   observability server, and all skills and agents.
 
+### Changed
+
+- **Track-A recovery is forward-only.** The retired semantic workflow transport is
+  never a rollback path. Execution owners can set
+  `PENNY_ARTIFACT_DISPATCH_MODE=active|paused` (default `active`; unknown values
+  fail closed). Paused mode returns a typed non-terminal/retriable result before
+  any new agent, deterministic-tool, or fan-out dispatch; it preserves the running
+  checkpoint and selected artifact refs while status and exact artifact reads stay
+  available. A fresh-process recover after reactivation reissues the identical
+  pending state/input refs/output metadata (or the next explicit compatible
+  revision), with no semantic rooms, memory-service fallback, or payload injection.
+
 ### Added
+
+- **MemPalace 3.7.1 and exact artifact-plane migration.** Workflow handoff no
+  longer depends on semantic memory rooms. The execution owner persists exact
+  agent output in a separate immutable content-addressed store before SUMMARY
+  acceptance; result protocol v2, execution receipts, stale-safe selection,
+  parallel branch refs, bounded `artifact_read`, direct/skill chain refs, and
+  compaction `run:`/`artifact:` recovery keep workflows memory-independent.
+  Durable recall now uses one pinned, supervised MemPalace 3.7.1 HTTP hub through
+  the versioned `platform-memory` contract, with role-scoped tools, primary-only
+  diary hooks, governed KG predicates, typed failure, and hard final-envelope
+  byte/token budgets with exact continuation. Raw production peers are retired;
+  copied/offline recovery is receipt-gated. Added lossless export/reconciliation/
+  disposition tools plus shadow, accepted-write journal, canary, replay, and
+  rollback tooling. Setup, cleanup, and uninstall preserve memory data. New hub
+  deployments remain read-only by default until an owner-approved journaled
+  canary and exact reconciliation pass; replay incompatibility fails closed into
+  the no-downgrade forward-recovery branch. Setup and package installation never
+  perform a cutover automatically.
 
 - **derivation skill — Tier-1.5 compression-distance signal (`ncd.py`).** A new
   deterministic tier between the existing n-gram prefilter (Tier-1) and the
@@ -59,15 +89,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   median/MAD distribution rather than an absolute threshold. Stdlib-only
   (`lzma`/`zlib`), no network, no new dependencies. It is a **tripwire, never a
   verdict, and never exculpatory**: an unusually low distance means "read that
-  source closely in Tier-2" and can strengthen a rubric-based DERIVATIVE_RISK
-  case but never establish one, while a high or unflagged distance is *not*
+  source closely in Tier-2" and can strengthen a rubric-based DERIVATIVE*RISK
+  case but never establish one, while a high or unflagged distance is \_not*
   evidence of independence — structure, selection, and paraphrase dependence
   survive compression distance untouched. Below a 1000-token floor (or fewer
   than 4 corpus sources) no number-based signal is emitted at all
   (`valid: false`), so a thin corpus cannot manufacture false confidence.
   `SKILL.md` 1.1.0 → 1.2.0 (phase 2 becomes three tiers); `rubric.md` states D7
-  information-theoretically and records that the signal is evidence *for* the
-  originality question, not an answer *to* it. The Tier-1 `prefilter.py` is
+  information-theoretically and records that the signal is evidence _for_ the
+  originality question, not an answer _to_ it. The Tier-1 `prefilter.py` is
   deliberately byte-stable — an empty diff is a regression gate, since the two
   tiers must stay independently interpretable. Test suite 34 → 40.
 
@@ -94,6 +124,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   test stays opt-in behind `PENNY_IMAGEGEN_LIVE=1`.
 
 ### Fixed
+
+- **MemPalace SIGSEGV — real root cause found and fixed; the "corrupted palace"
+  story was wrong.** The memory bridge had been dying with `SIGSEGV` every week
+  or two for months. The error it printed blamed a corrupted index or an
+  incompatible ChromaDB version and prescribed `repair_palace.py`. All of that
+  was wrong, and the prescribed rebuild is what kept the failure alive.
+
+  What was actually happening: the bridge runs as a **fresh process per memory
+  call**, and ChromaDB only compacts its vector write-ahead log after
+  `sync_threshold` (stock default **1000**) operations accumulate _within one
+  process_. A per-call process performs a handful of writes and exits, so the
+  threshold was never reached — the vector index never flushed, the WAL grew
+  without bound, and every call replayed the entire backlog on startup. Once
+  that backlog contained a bulk-DELETE burst followed by ADDs, the replay tripped
+  a NULL-pointer dereference inside `chromadb_rust_bindings` (upstream defect,
+  present in 1.5.9 — the latest published release; there is no version to
+  upgrade to). The process then died on **reads and writes alike**, wedging the
+  palace: the WAL could not drain, because the replay that would drain it was
+  what crashed. `repair_palace.py` cleared the backlog and rebuilt the
+  collection **with stock defaults**, which re-armed the identical failure —
+  hence the 1-2 week cycle.
+
+  Measured on the live palace, repeating trials on byte-identical input (which
+  also rules out corruption — corrupt data fails deterministically):
+
+  | WAL backlog | crashes |
+  | ----------- | ------- |
+  | 0           | 0/8     |
+  | 142         | 0/5     |
+  | 162         | 4/4     |
+  | 218         | 5/5     |
+
+  Changes:
+  - **`memory_bridge.py`** — new `HNSW_TUNING` (`sync_threshold=64`,
+    `batch_size=32`) applied when the collection is created, keeping the WAL far
+    below the measured crash range. Must be set at creation: ChromaDB accepts
+    `collection.modify()` for these keys and persists them, then ignores them
+    (verified), so an existing collection can only be fixed by a rebuild.
+  - **`palace_doctor.py`** (new) — reports what is _actually_ wrong: WAL backlog,
+    segment drift, and whether bounded-WAL config is active. Opens sqlite
+    read-only and never imports chromadb, so it stays alive on a palace that is
+    actively segfaulting.
+  - **`repair_palace.py`** — rebuilds **with** the bounded-WAL settings and
+    verifies they persisted, refusing to swap in a palace that would re-accumulate
+    an unbounded WAL. Reframed from routine remedy to one-time migration /
+    break-glass, with the diagnosis to run first.
+  - **`.pi/extensions/memory/index.ts`** — the crash message no longer asserts a
+    cause it cannot know. It names the actual signal, states that retrying will
+    not help, and reports the doctor's measured findings.
+
+  Verified: live palace migrated (7082 drawers preserved) and now reports
+  healthy; 40 queries under the exact delete→add workload that previously
+  crashed 7/8 now crash **0/40**, with the WAL peaking at 61 instead of growing
+  without bound; full memory suite green (59 unit + 43 integration + 22 bridge).
+
+  Known remaining risk, unaddressed by design: the bridge takes **no lock**, so
+  parallel subagents can run several writer processes against one palace
+  directory. Concurrency was tested and was _not_ the cause here, so serializing
+  it (or moving to a long-lived bridge daemon) is left as a separate decision
+  rather than folded into this fix.
 
 - **Compaction goal-recency regression.** The custom compaction extension
   (`.pi/extensions/compaction/`) now guarantees the post-compaction `## Goal`

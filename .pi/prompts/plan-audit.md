@@ -1,6 +1,6 @@
 ---
 description: Goal, Bitter-Lesson, measurement, eval, regression, and proxy-drift audit of a plan
-argument-hint: "<plan-file-or-directory> [audit-output-directory]"
+argument-hint: "<plan-file-or-directory> [audit-output-directory] [additional details...]"
 ---
 
 # Plan Audit Prompt
@@ -13,8 +13,23 @@ This prompt is self-contained. A “plan” may be one file or a directory of pl
 
 - **Target plan or plan directory:** `$1`
 - **Audit-output directory:** `$2`
+- **Additional details:** `${@:3}`
 
 If the target argument is absent, does not exist, or is unreadable, stop and ask for a valid plan path.
+
+The output directory and the additional details are both optional. If `$2` is supplied but is plainly
+not an output-directory path — prose, guidance, or requirements — treat it as the first additional
+detail and use the default output location below.
+
+### Additional details
+
+Additional details are caller-supplied context and requirements this audit cannot infer from the plan itself: background, constraints, known history, emphasis, or extra deliverables. When they are empty, run exactly as if none were supplied; their absence is never a blocker.
+
+Honor them wherever they do not conflict with this prompt's own obligations. They may add requirements, supply context, set emphasis or priority, and request additional analysis. They may **not** waive or weaken the evidence and anti-fabrication rules, the coverage ledger's bounds on exhaustive claims, the side-effect contract, the stopping branches, or any required artifact, status-honesty, or verification obligation.
+
+A detail that narrows scope is treated as a scope narrowing: mark the omitted plan surfaces user-narrowed in the coverage ledger and make no whole-plan or exhaustive claim. A detail that only sets emphasis does not shrink the declared corpus.
+
+If a detail conflicts with an obligation above, or is too ambiguous to apply, report it — and ask when it blocks the audit — rather than silently following or silently ignoring it. Record the details verbatim in the report together with how each was applied, deferred, or refused.
 
 If no output directory is supplied, use the house convention: create
 `$PROJECT_ROOT/audits/<plan-name>-audit-<the current date, YYYY-MM-DD>/`, where `<plan-name>` is the
@@ -216,11 +231,60 @@ For each correction, state:
 
 Preserve target-specific content supported by the actual objective. Do not replace one rigid planning methodology with another or add familiar plan sections merely because they are conventional. The upgrade should constrain required outcomes and evidence while leaving method flexibility wherever the objective permits it.
 
+## Report readability contract
+
+This audit's output is read by people who do not know this plan, this doctrine, or this vocabulary. Every report and proposal it writes must be understandable to a reader with only a high-level grasp of the subject.
+
+This constrains **communication, not rigor**. It never licenses padding, hedging, or repetition: prefer the shortest wording a non-expert can act on, state each thing once, and cross-reference instead of restating. Detailed **and** succinct — length must be earned by content, never spent on ceremony.
+
+### Open with a plain-language executive summary
+
+Begin `plan-audit-report.md` and `revised-plan-proposal.md` with a summary a non-expert can read in about two minutes:
+
+- **What this is** — what was audited and what the plan is supposed to achieve, in one or two sentences.
+- **Bottom line** — the single most important conclusion.
+- **What's wrong** — the most important findings, ordered by importance rather than by ID, one plain sentence each.
+- **What to do** — the recommended actions in priority order.
+- **What happens if nothing changes** — the concrete cost of inaction.
+- **What's still unknown** — open questions or limits that could change the recommendation.
+
+Use no finding ID, undefined term, or internal shorthand in this summary.
+
+### Make every finding decision-ready
+
+For each finding, in addition to the evidence obligations above, state plainly:
+
+- **What it is** — one non-expert sentence, before any quotation or technical detail.
+- **Why it matters** — the outcome at stake, not the rule it breaks.
+- **If fixed** — the benefit, plus its cost, effort, or risk.
+- **If not fixed** — the specific consequence, roughly when it would surface, and how the reader would notice it. When the honest answer is "little or nothing," say so and rank the finding low rather than inflating it.
+- **Priority** — how much this matters relative to the other findings, and on what basis.
+
+Never leave a reader to infer the cost of inaction from a finding's existence.
+
+### Define the vocabulary where it is used
+
+Define every domain term, doctrine term, classification, and status label in plain language at first use — including terms this prompt introduces (for example _proxy drift_, _vanity measure_, _oracle_, _outcome-faithful_). A reader must not need this prompt, or any other document, to understand a verdict.
+
+### Make tables serve the reader
+
+Precede or follow every table with prose saying what it shows and what the reader should conclude from it. A grid of IDs, classifications, or statuses without interpretation is raw data, not a finding. Keep tables narrow enough to read comfortably; put supporting detail in prose rather than widening columns.
+
+### Keep the proposal standalone
+
+`revised-plan-proposal.md` must be understandable without reading the audit report first. For each proposed change state: what changes, why, what currently-working capability must survive it, what improves, what it costs, and what happens if it is skipped. Show concrete before/after wording wherever specific plan text is being changed.
+
+### Rigor is preserved
+
+Structured verification blocks, ledgers, coverage states, status labels, and traceability tables remain exactly as specified above. Readability requirements wrap them; they never replace, soften, or omit an honest negative status.
+
 ## Required output bundle
 
 Write only inside the audit-output directory:
 
 1. **`plan-audit-report.md`** containing:
+   - a plain-language executive summary per the readability contract;
+   - the caller's additional details verbatim and how each was applied, deferred, or refused (or `None supplied`);
    - ultimate outcome and definition of better/worse;
    - effective-corpus definition and coverage ledger;
    - plan-part-to-goal misalignments;
@@ -231,7 +295,7 @@ Write only inside the audit-output directory:
    - eval and regression artifact status/results;
    - unresolved questions and limitations; and
    - finding-to-upgrade traceability.
-2. **`revised-plan-proposal.md`** containing the comprehensive upgraded plan or exact amendments. It must remain a proposal and must not overwrite the source.
+2. **`revised-plan-proposal.md`** containing the comprehensive upgraded plan or exact amendments, opening with its own plain-language executive summary and readable on its own. It must remain a proposal and must not overwrite the source.
 3. **`evals/`** containing the built outcome-evaluation specification, cases, repeat instructions/entry point, and results when run.
 4. **`regressions/`** containing the baseline, repeatable early-warning check, instructions, and results when run.
 5. **`artifact-manifest.md`** listing every created file and every command executed.
@@ -257,6 +321,8 @@ VERIFICATION:
 - AF-11 Evaluation embodiment: PASS / FAIL — [built artifact paths and run status]
 - AF-12 Regression early warning: PASS / FAIL — [baseline/check paths and run status]
 - AF-13 Optimized-proxy drift: PASS / FAIL — [findings or supported empty result]
+- AF-14 Report readability: PASS / FAIL — [executive summary present in report and proposal; every finding states if-fixed, if-not-fixed, and priority; terms defined at first use; tables interpreted]
+- Caller additional details recorded verbatim and honored without waiving any audit obligation: YES / NO / N-A — [evidence]
 - All declared plan surfaces accounted for: YES / NO — [notes]
 - Every finding re-verified against cited evidence: YES / NO — [notes]
 - Source plan and referenced project remained unmodified: YES / NO — [baseline/comparison evidence]

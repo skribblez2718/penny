@@ -1,18 +1,12 @@
 # Capabilities Feature Index
 
 - [Behavioral Ratchet](behavioral-ratchet/AGENTS.md): Oracle-authored trajectory fixtures replayed + judged; anti-drift regression gate
+- [Enhance](enhance/AGENTS.md): On-demand prompt enhancement via a trailing ` -i` suffix; trigger, flag consumption, session context, config, failure semantics
 - [Error Logging](error-logging/AGENTS.md): Structured error codes from logger.ts; human-readable cross-reference
-- [JSA Skill](jsa-skill/AGENTS.md): Multi-agent JavaScript security analysis pipeline with SAST, structure/slice lanes, and browser PoC verification
-- [Learn Skill](learn-skill/AGENTS.md): Turn raw learning material into a study companion — per-lesson guides, practice exams, and final prep — with an evidence-gated recomputation oracle and a charter HITL gate
-- [Observability Server](observability-server/AGENTS.md): FastAPI + SQLite backend for log ingestion, session history queries, and watcher signal diagnostics
-- [Plan Skill](plan-skill/AGENTS.md): Structured planning workflow that explores, plans, critiques, and taskifies goals into execution-grade steps
-- [PRD Skill](prd-skill/AGENTS.md): Generate layered PRDs (narrative + atomic requirements + verification matrix + IDEAL_STATE) from a goal
-- [Progress Heartbeats](progress-heartbeats/AGENTS.md): Staleness-based progress monitoring replacing naive kill-timer for long-running agents
-- [Enhance](enhance/AGENTS.md): On-demand `-i`-suffix rewrite of raw prompts into world-class goal-oriented Invocation Context (Circumstances 3/4)
-- [Research Skill](research-skill/AGENTS.md): Structured research workflow with Quick/Standard/Deep modes, parallel evidence gathering, and synthesis
-- [Rez Skill](rez-skill/AGENTS.md): Tailor a base resume to a job description — gap analysis, fresh NIST NICE alignment, STAR/ATS rewriting, .docx export — with evidence-gated anti-fabrication validation
-- [SCA Skill](sca-skill/AGENTS.md): Deep, gated security audit of a local source tree — threat modeling, triage, and executed non-destructive PoC verification — with six HITL checkpoints
-- [Skill Tool](skill-tool/AGENTS.md): Four invocation modes (single/parallel/chain/resume) mirroring subagent tool architecture
-- [Tiered Memory](tiered-memory/AGENTS.md): 5-tier architecture (T0–T4), injection protocols, token budgets, distillation pipeline
-- [Unknown State](unknown-state/AGENTS.md): FSM handling when agent cannot proceed; UNKNOWN_STATE protocol
-- [Verification State](verification-state/AGENTS.md): High-stakes FSM gate; counter-argument generation
+- [Observability Server](observability-server/AGENTS.md): FastAPI + SQLite backend for log ingestion and session history queries
+- [Progress Heartbeats](progress-heartbeats/AGENTS.md): Staleness-based progress monitoring for long-running agents
+- [Research Skill](research-skill/AGENTS.md): Current workflow skill — Quick/Standard/Deep research with parallel evidence gathering, synthesis, and citation validation
+- [Skill Tool](skill-tool/AGENTS.md): Single/parallel/chain/resume with exact artifact handoff and durable checkpoints
+- [Tiered Memory](tiered-memory/AGENTS.md): Primary-only durable recall/curation, supervised HTTP hub, legacy retention, and cold archive
+- [Unknown State](unknown-state/AGENTS.md): Engine pause-and-resume behavior when an agent cannot proceed
+- [Verification State](verification-state/AGENTS.md): Evidence-grounded verification contracts and honest exhaustion

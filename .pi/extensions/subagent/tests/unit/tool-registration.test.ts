@@ -67,6 +67,20 @@ describe("subagent tool registration", () => {
     expect(snippet).toContain("skribble");
   });
 
+  it("includes every discovered agent name and description in the tool description", async () => {
+    const mod = await import("../../index.js");
+    const { discoverAgents, formatModelVisibleAgentCatalog } = await import("../../agents.js");
+    const pi = createMockPi();
+    mod.default(pi);
+
+    expect(registeredTool).toBeDefined();
+    const agents = discoverAgents(process.cwd(), "project").agents;
+    const expectedCatalog = formatModelVisibleAgentCatalog(agents);
+    const description = registeredTool!.description as string;
+    expect(description).toContain(expectedCatalog);
+    for (const agent of agents) expect(expectedCatalog).toContain(`${agent.name}:`);
+  });
+
   it("registers with promptGuidelines containing routing and anti-pattern guidance", async () => {
     const mod = await import("../../index.js");
     const pi = createMockPi();
@@ -105,10 +119,9 @@ describe("subagent tool registration with empty agent discovery", () => {
   });
 
   it("falls back to safe enum when no agents are discovered", async () => {
-    // Mock agent-runner to return empty agents
-    vi.doMock("../../agent-runner.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("../../agent-runner.js")>("../../agent-runner.js");
+    // Mock the sole local discovery module to return an empty catalog.
+    vi.doMock("../../agents.js", async () => {
+      const actual = await vi.importActual<typeof import("../../agents.js")>("../../agents.js");
       return {
         ...actual,
         discoverAgents: vi.fn(() => ({ agents: [], projectAgentsDir: null })),
@@ -122,12 +135,13 @@ describe("subagent tool registration with empty agent discovery", () => {
     expect(registeredTool).toBeDefined();
     const snippet = registeredTool!.promptSnippet as string;
     expect(snippet).toContain("no agents discovered");
+    expect(registeredTool!.description as string).toContain("Available agents: none discovered.");
 
     const params = registeredTool!.parameters as any;
     const agentProp = params?.properties?.agent;
     const schemaText = JSON.stringify(agentProp);
     expect(schemaText).toContain("no-agents-found");
 
-    vi.doUnmock("../../agent-runner.js");
+    vi.doUnmock("../../agents.js");
   });
 });

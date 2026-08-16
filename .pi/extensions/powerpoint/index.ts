@@ -30,6 +30,9 @@ export const SLIDE_LAYOUTS = [
   "quote",
   "image",
   "closing",
+  "image_left",
+  "image_right",
+  "full_bleed",
 ] as const;
 
 const DEFAULT_TIMEOUT_MS = 90_000;
@@ -305,6 +308,118 @@ export function runGenerator(
 
 // ── Tool parameters ──────────────────────────────────────────────────────────
 
+export const HexColor = Type.String({
+  pattern: "^#?[0-9A-Fa-f]{6}$",
+  description: "Six-digit hexadecimal color, with an optional leading '#'.",
+});
+
+export const Fit = Type.Union([Type.Literal("crop"), Type.Literal("contain")], {
+  description: "Aspect-preserving crop or contain fit.",
+});
+
+export const FocalPoint = Type.Object(
+  {
+    x: Type.Number({ minimum: 0, maximum: 1, description: "Normalized horizontal position." }),
+    y: Type.Number({ minimum: 0, maximum: 1, description: "Normalized vertical position." }),
+  },
+  { additionalProperties: false }
+);
+
+export const Overlay = Type.Object(
+  {
+    color: Type.Optional(HexColor),
+    opacity: Type.Number({
+      minimum: 0,
+      maximum: 1,
+      description: "Overlay opacity from 0 (transparent) to 1 (opaque).",
+    }),
+  },
+  { additionalProperties: false }
+);
+
+export const MediaSpec = Type.Object(
+  {
+    path: Type.String({
+      minLength: 1,
+      description: "Local static PNG/JPEG path, absolute or relative to the project root.",
+    }),
+    fit: Type.Optional(Fit),
+    focal_point: Type.Optional(FocalPoint),
+    overlay: Type.Optional(Overlay),
+  },
+  {
+    additionalProperties: false,
+    description:
+      "Local background or composed media. Fit defaults to crop for backgrounds/full_bleed and contain for side layouts.",
+  }
+);
+
+export const PalettePatch = Type.Object(
+  {
+    canvas: Type.Optional(HexColor),
+    surface: Type.Optional(HexColor),
+    accent: Type.Optional(HexColor),
+    text: Type.Optional(HexColor),
+    muted_text: Type.Optional(HexColor),
+  },
+  {
+    additionalProperties: false,
+    description: "Semantic palette patch; requested text roles may be contrast-corrected.",
+  }
+);
+
+export const PlacedImage = Type.Object(
+  {
+    path: Type.String({
+      minLength: 1,
+      description: "Local static PNG/JPEG path, absolute or relative to the project root.",
+    }),
+    x: Type.Number({ minimum: 0, maximum: 1, description: "Normalized left edge." }),
+    y: Type.Number({ minimum: 0, maximum: 1, description: "Normalized top edge." }),
+    width: Type.Number({
+      exclusiveMinimum: 0,
+      maximum: 1,
+      description: "Normalized width greater than zero.",
+    }),
+    height: Type.Number({
+      exclusiveMinimum: 0,
+      maximum: 1,
+      description: "Normalized height greater than zero.",
+    }),
+    fit: Type.Optional(Fit),
+    focal_point: Type.Optional(FocalPoint),
+  },
+  {
+    additionalProperties: false,
+    description: "One normalized placed mark; fit defaults to contain.",
+  }
+);
+
+export const DeckDesign = Type.Object(
+  {
+    palette: Type.Optional(PalettePatch),
+    background: Type.Optional(MediaSpec),
+    mark: Type.Optional(PlacedImage),
+  },
+  {
+    additionalProperties: false,
+    description: "Deck design defaults: palette, local background, and one mark.",
+  }
+);
+
+export const SlideDesign = Type.Object(
+  {
+    palette: Type.Optional(PalettePatch),
+    background: Type.Optional(Type.Union([MediaSpec, Type.Null()])),
+    mark: Type.Optional(Type.Union([PlacedImage, Type.Null()])),
+  },
+  {
+    additionalProperties: false,
+    description:
+      "Per-slide design patch: palette merges, objects replace, and null removes inherited background/mark.",
+  }
+);
+
 const bulletItem = Type.Union([
   Type.String({ description: "Plain bullet text (inline **bold**/*italic*/`code` supported)." }),
   Type.Object({
@@ -328,7 +443,8 @@ const slideSpec = Type.Object({
     description:
       "Slide layout: 'title' (opening), 'section' (full-accent divider), 'content' " +
       "(title + body/bullets), 'two_column', 'table', 'quote', 'image', 'closing' " +
-      "(full-accent thank-you).",
+      "(full-accent thank-you), or structured-only 'image_left', 'image_right', and " +
+      "'full_bleed' composed-media layouts.",
   }),
   title: Type.Optional(Type.String({ description: "Slide title." })),
   subtitle: Type.Optional(Type.String({ description: "Subtitle (title/closing layouts)." })),
@@ -353,6 +469,8 @@ const slideSpec = Type.Object({
     Type.String({ description: "Image file path (absolute or relative to the project root)." })
   ),
   caption: Type.Optional(Type.String({ description: "Muted caption under the image." })),
+  design: Type.Optional(SlideDesign),
+  media: Type.Optional(MediaSpec),
   author: Type.Optional(Type.String({ description: "Author on the title slide meta line." })),
   date: Type.Optional(Type.String({ description: "Date on the title slide meta line." })),
   notes: Type.Optional(Type.String({ description: "Speaker notes for this slide." })),
@@ -396,10 +514,17 @@ const powerpointGenerateParams = Type.Object({
       default: "executive",
     })
   ),
-  accent_color: Type.Optional(
-    Type.String({
-      description: "Hex accent color override for the theme, e.g. '0E7490' ('#' optional).",
-    })
+  accent_color: Type.Optional(HexColor),
+  design: Type.Optional(DeckDesign),
+  allowed_image_roots: Type.Optional(
+    Type.Array(
+      Type.String({ minLength: 1, description: "Additional canonical root for new image assets." }),
+      {
+        minItems: 1,
+        description:
+          "Additional allowed roots for design/background/media/mark assets; project_root is always allowed.",
+      }
+    )
   ),
   line_break_mode: Type.Optional(
     Type.String({
@@ -437,6 +562,8 @@ interface PowerpointGenerateParams {
   date?: string;
   theme?: string;
   accent_color?: string;
+  design?: Record<string, unknown>;
+  allowed_image_roots?: string[];
   line_break_mode?: "preserve" | "commonmark";
   footer_text?: string;
   slide_numbers?: boolean;
@@ -484,12 +611,15 @@ export default function powerpointExtension(pi: ExtensionAPI): void {
       "Render a professionally styled 16:9 PowerPoint (.pptx) presentation. Preferred input is " +
       "a structured 'slides' array with layouts: title, section (full-accent divider), content " +
       "(kicker/title/body/bullets with nesting), two_column, table (accent header, banded rows), " +
-      "quote, image (auto-fit with caption), and closing. Alternatively pass 'markdown' for " +
-      "convenience (see the parameter description for the exact slide-splitting rules). Five " +
-      "built-in themes (executive/modern/minimal/editorial/tech) control fonts and accent " +
-      "colors; speaker notes, footer text, and slide numbers are supported. Content is " +
-      "conservatively paginated without truncating table rows or code lines, custom palettes " +
-      "are contrast-safe, and every deck is structurally validated before atomic publication. " +
+      "quote, image (auto-fit with caption), closing, image_left, image_right, and full_bleed. " +
+      "The additive design API supports semantic light or dark palettes, a local background, " +
+      "one mark, and local composed media while keeping text editable. Alternatively pass " +
+      "'markdown' for convenience (see the parameter description for the exact slide-splitting " +
+      "rules); Markdown classification is unchanged. Five built-in themes " +
+      "(executive/modern/minimal/editorial/tech) remain legacy seeds. Speaker notes, footer " +
+      "text, and slide numbers are supported. Content is conservatively paginated without " +
+      "truncating table rows or code lines, resolved text roles meet 4.5:1 contrast against " +
+      "their opaque surfaces, and every deck is structurally validated before atomic publication. " +
       "When output_path is omitted, output is written to the OS temp dir " +
       "(…/penny/powerpoint/).",
     promptSnippet:

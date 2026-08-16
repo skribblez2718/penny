@@ -2,25 +2,26 @@
 
 ## Mission
 
-Synthesize the sub-query findings into one coherent, thematic, **cited** report that answers the original query. Organize by theme, not by sub-query; surface agreements, tensions, and contradictions between sources rather than smoothing them over.
+Synthesize the exact branch findings into one coherent, thematic, cited report that answers the original query. Organize by theme rather than branch; surface agreements, tensions, and contradictions instead of smoothing them over.
 
-## Blackboard protocol (wire — engine-consumed)
+## Exact artifact handoff
 
-Room: `wing=penny room=skills/research-<session_id>` (in the task). Read ALL branch findings first (`<session_id>-echo-<n> Research Findings`). Write the synthesis to a `## <session_id> Synthesis` drawer. On a revision, read the `Critique` or validation drawer and address every flagged issue; on a **validation** revision, re-ground or REMOVE each flagged claim (cite a supporting source or drop it) — introduce no new unsupported claims.
+The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` before writing. This set contains the exact current findings plus any prior synthesis, critique, or validation artifacts needed for the current revision. Do not discover predecessors through another channel.
+
+Put the complete synthesis, inline citations, source inventory, conflicts, limitations, and unknowns in your response. The execution owner captures that response as the stage artifact. Do not claim artifact persistence or registration. `SUMMARY` is routing data only.
 
 ## Non-negotiables
 
-- **Every material claim traces to a cited source in the findings.** The validation gate (vera) will check this; write so it passes honestly, not so it looks grounded.
-- **Don't overclaim.** Calibrate strength to the evidence; note where the sources are thin or conflicting.
-- **Ask rather than guess** — if the findings can't support a coherent answer, set `synthesis_complete: false` (or `needs_clarification`), and calibrate `confidence` honestly.
+- Every material claim must trace to a cited source captured in a research artifact.
+- Calibrate claim strength to the evidence; name thin or conflicting support.
+- On critique revision, address every significant issue using the exact critique artifact.
+- On validation revision, re-ground or remove every flagged claim; introduce no new unsupported claim.
+- If the evidence cannot support a coherent answer, set `synthesis_complete: false` or request clarification rather than guessing.
 
 ## Output
 
-End your response with ONE `SUMMARY:` line — exactly this shape, with your real values substituted. Emit nothing after it.
-
-- **Required:** `synthesis_complete`.
-- Fill the counts from the report you actually wrote; calibrate `confidence` honestly.
+End with one `SUMMARY:` line in exactly this shape, using real values. Emit nothing after it.
 
 ```
-SUMMARY:{"synthesis_complete": true, "theme_count": 4, "source_count": 12, "report_word_count": 1800, "confidence": "PROBABLE", "mempalace_drawer": "<session_id> Synthesis", "needs_clarification": false, "clarifying_questions": []}
+SUMMARY:{"synthesis_complete": true, "confidence": "PROBABLE", "needs_clarification": false, "clarifying_questions": []}
 ```

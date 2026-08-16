@@ -16,27 +16,27 @@ Skills have non-trivial workflows (red-green-refactor, gather-analyze-synthesize
 - a ~5-line `scripts/orchestrate.py` delegate,
 - an engine `SKILL.md` (`metadata.penny.engine: orchestration`) and `assets/prompts/`.
 
-The reference implementations to read are `orchestration/playbooks/code.py` and `plan.py`.
+The current reference implementation is `orchestration/playbooks/research.py`.
 
 ## Rules
 
 1. **The FSM is a `statemachine.StateMachine`.** `from statemachine import State, StateMachine`. Declare it as `machine_cls` on the playbook.
 2. **States are custom-named for the domain.** Use meaningful phase names (`exploring`, `analyzing`, `planning`, `implementing`, `verifying`, `learning`), not generic `idle/working/done`.
 3. **Include the engine's control states.** A migrated machine has `unknown` + `awaiting_clarification` (escalation seam) and terminal `complete` (final) and `error` (final).
-4. **The machine holds NO business data.** Per-run data lives on the `RunContext` (`ctx.extras`, `ctx.iteration`, `ctx.success_criteria`, …). The machine tracks only the current state.
+4. **The machine holds NO business data.** Compact routing fields and selected canonical artifact refs live on `RunContext`; exact stage payload bytes remain in the artifact plane. The machine tracks only the current state.
 5. **Do not persist manually.** State is saved by the engine to a durable `run_id`-keyed SQLite checkpointer after every step. There is NO `/tmp` session file, NO `--state` argv, NO `extract_state`/`restore_state`.
 6. **Routing lives in `route_after`, not in guards.** The playbook inspects the agent SUMMARY and calls `self.sm.send("<event>")`. Guards on the machine, if any, must be side-effect free.
 7. **Every loop is bounded.** Retry loops honor `ctx.max_iterations`; exhaustion routes to a terminal state and reports the outcome HONESTLY (`met=False`), never a fabricated success.
-8. **Work happens in agents, not callbacks.** The machine does not run tools, write files, or call agents. The engine dispatches the agent named by the state's `PrimitiveSpec`.
+8. **Work happens in workers, not callbacks.** The machine does not run tools, write files, or call agents. The engine dispatches the worker named by the state's `PrimitiveSpec` with owner-selected exact inputs and an output contract.
 
 ### What the FSM should and should NOT do
 
-| Should | Should NOT |
-| --- | --- |
-| Declare named phases and legal transition events | Execute code, run tests, or write files |
-| Provide the escalation seam (`unknown` → `awaiting_clarification`) and terminal `complete`/`error` | Store business data or cross-run knowledge |
-| Let `route_after` pick the next event from a SUMMARY | Persist itself to `/tmp` or an argv blob |
-| Model bounded retry loops with an exhaustion edge | Fabricate success when a loop runs out of budget |
+| Should                                                                                             | Should NOT                                       |
+| -------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| Declare named phases and legal transition events                                                   | Execute code, run tests, or write files          |
+| Provide the escalation seam (`unknown` → `awaiting_clarification`) and terminal `complete`/`error` | Store business data or cross-run knowledge       |
+| Let `route_after` pick the next event from a SUMMARY                                               | Persist itself to `/tmp` or an argv blob         |
+| Model bounded retry loops with an exhaustion edge                                                  | Fabricate success when a loop runs out of budget |
 
 ## Procedure/Constraints
 
@@ -45,67 +45,55 @@ The reference implementations to read are `orchestration/playbooks/code.py` and 
 ```python
 from statemachine import State, StateMachine
 
-class CodeMachine(StateMachine):
+class ExampleMachine(StateMachine):
     intake = State(initial=True)
-    exploring = State()
-    analyzing = State()
-    planning = State()
-    implementing = State()
-    verifying = State()
-    learning = State()
-    unknown = State()                 # escalation staging
-    awaiting_clarification = State()  # paused for the user
+    gathering = State()
+    synthesizing = State()
+    validating = State()
+    unknown = State()
+    awaiting_clarification = State()
     complete = State(final=True)
     error = State(final=True)
 
-    start_explore = intake.to(exploring)
-    explore_done = exploring.to(analyzing)
-    analyze_done = analyzing.to(planning)
-    plan_done = planning.to(implementing)
-    implement_done = implementing.to(verifying)
-    verify_done = verifying.to(learning)
-    learn_retry = learning.to(implementing)     # gap && within budget
-    learn_final = verifying.to(complete)        # oracle passed
-    learn_exhausted = learning.to(complete)     # budget spent; met=False
+    start = intake.to(gathering)
+    gathered = gathering.to(synthesizing)
+    synthesized = synthesizing.to(validating)
+    validate_pass = validating.to(complete)
+    validate_retry = validating.to(synthesizing)
+    validate_exhausted = validating.to(complete)  # honest met=False outcome
 
-    # escalation + abort seams
-    to_unknown = exploring.to(unknown) | implementing.to(unknown) | learning.to(unknown)
+    to_unknown = gathering.to(unknown) | synthesizing.to(unknown) | validating.to(unknown)
     escalate = unknown.to(awaiting_clarification)
-    clarify = awaiting_clarification.to(exploring)
-    abort = exploring.to(error) | implementing.to(error) | verifying.to(error)
+    clarify = awaiting_clarification.to(gathering)
+    abort = intake.to(error) | gathering.to(error) | synthesizing.to(error) | validating.to(error)
 ```
 
-Use `final=True` for terminal states. `plan_denied = plan_gate.to(error)` is a legitimate terminal edge — deny/exhaustion end in `error`/`complete`, they do not loop silently.
+Use `final=True` for terminal states. A denial edge from a planned review gate to `error` is legitimate; denial and exhaustion end explicitly rather than looping silently.
 
 ### The playbook binds behavior to states
 
 The `BasePlaybook` subclass names the machine and maps each working state to a `PrimitiveSpec` (which agent + which SUMMARY contract the engine validates):
 
 ```python
-class CodePlaybook(BasePlaybook):
-    NAME = "code"
-    machine_cls = CodeMachine
-    STEP_CAP = 60
+class ExamplePlaybook(BasePlaybook):
+    NAME = "example"
+    machine_cls = ExampleMachine
     PRIMITIVE_BY_STATE = {
-        "exploring": CODE_EXPLORE,      # agent "echo",   {findings_count, confidence}
-        "analyzing": CODE_ANALYZE,      # agent "annie"
-        "planning": CODE_PLAN,          # agent "piper"
-        "implementing": CODE_IMPLEMENT, # agent "skribble"
-        "verifying": CODE_VERIFY,       # oracle-backed: evidence must be non-empty
-        "learning": CODE_LEARN,         # agent "carren"
+        "gathering": EXAMPLE_GATHER,
+        "synthesizing": EXAMPLE_SYNTHESIZE,
+        "validating": EXAMPLE_VALIDATE,
     }
-    GATE_STATES = frozenset({"criteria_gate", "plan_gate"})
-    ESCALATABLE_STATES = frozenset({"exploring", "implementing", "verifying", "learning"})
+    ESCALATABLE_STATES = frozenset({"gathering", "synthesizing", "validating"})
 ```
 
 Optional capabilities are declared the same way:
 
-| Capability | Declared by | Also implement |
-| --- | --- | --- |
-| Planned HITL gate | `GATE_STATES` | `gate_questions`, `route_user` |
-| Parallel fan-out | `PARALLEL_BY_STATE = {"exploring": ParallelSpec(...)}` | — |
-| Deterministic in-process state (no agent) | `TOOL_STATES` | `run_tool_state` (must be safe to re-run) |
-| Confidence/stall escalation | `ESCALATABLE_STATES` | `progress_check` (optional) |
+| Capability                                | Declared by                                            | Also implement                            |
+| ----------------------------------------- | ------------------------------------------------------ | ----------------------------------------- |
+| Planned HITL gate                         | `GATE_STATES`                                          | `gate_questions`, `route_user`            |
+| Parallel fan-out                          | `PARALLEL_BY_STATE = {"exploring": ParallelSpec(...)}` | —                                         |
+| Deterministic in-process state (no agent) | `TOOL_STATES`                                          | `run_tool_state` (must be safe to re-run) |
+| Confidence/stall escalation               | `ESCALATABLE_STATES`                                   | `progress_check` (optional)               |
 
 ### Routing on the agent SUMMARY
 
@@ -113,26 +101,26 @@ The engine validates the agent's SUMMARY against the state's contract, then call
 
 ```python
 def route_after(self, state, ctx, summary):
-    if state == "verifying":
-        passed = summary["passed"]
-        ctx.verify_verdict = "PASS" if passed else "FAIL"
-        self.sm.send("verify_done" if not passed else "final_verify_pass")
-    elif state == "learning":
-        if not summary["gap"]:
-            self.sm.send("learn_final")
+    if state == "gathering":
+        self.sm.send("gathered")
+    elif state == "synthesizing":
+        self.sm.send("synthesized")
+    elif state == "validating":
+        ctx.verify_verdict = summary["verdict"]
+        if summary["verdict"] == "PASS":
+            self.sm.send("validate_pass")
         elif ctx.iteration + 1 < ctx.max_iterations:
             ctx.iteration += 1
-            self.sm.send("learn_retry")
+            self.sm.send("validate_retry")
         else:
-            self.sm.send("learn_exhausted")   # honest exhaustion, met=False
+            self.sm.send("validate_exhausted")
 ```
 
 `done_predicate(ctx)` decides whether `complete` means success. It reads `ctx`/`ctx.extras`, never the machine:
 
 ```python
 def done_predicate(self, ctx):
-    code = ctx.extras.get("code", {})
-    return code.get("learn_gap") is False and code.get("verify_passed", False)
+    return ctx.verify_verdict == "PASS"
 ```
 
 ### Escalation (no state blob)
@@ -151,7 +139,7 @@ There is NO `extract_state()`/`restore_state()`, NO `/tmp/<skill>-<session_id>.j
 
 ### Bounded loops & honest exhaustion
 
-Every retry edge (`learn_retry`, refinement loops, gather loops) is capped by `ctx.max_iterations` (default 3, from `constraints.max_iterations`) and the global `STEP_CAP`. When the cap is hit, route to a terminal state and let `done_predicate` report `met=False`. A `VERIFY` state with a real oracle must require evidence — `CODE_VERIFY`'s contract marks `evidence` as required-and-non-empty so a bare "passed" assertion is rejected.
+Every retry edge is capped by `ctx.max_iterations` and the global `STEP_CAP`. When the cap is hit, route to a terminal state and let `done_predicate` report `met=False`. A VERIFY state with an available oracle must require non-empty captured evidence so a bare pass assertion is rejected.
 
 ## Verification
 
@@ -165,12 +153,9 @@ Every retry edge (`learn_retry`, refinement loops, gather loops) is capped by `c
 
 ## Files
 
-| File | Purpose |
-| --- | --- |
-| `docs/agents/state-management/state-machine-reference.md` | This reference |
-| `docs/agents/state-management/orchestration-integration.md` | How the engine drives the machine (start/step/gates/escalation) |
-| `docs/agents/state-management/skill-patterns.md` | Reusable playbook workflow shapes |
-| `apps/orchestration/src/orchestration/playbooks/code.py` | Worked reference playbook |
-| `apps/orchestration/src/orchestration/playbooks/plan.py` | Worked reference playbook (parallel fan-out) |
-</content>
-</invoke>
+| File                                                         | Purpose                                                                        |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `docs/agents/state-management/state-machine-reference.md`    | This reference                                                                 |
+| `docs/agents/state-management/orchestration-integration.md`  | How the engine drives the machine (start/step/gates/escalation)                |
+| `docs/agents/state-management/skill-patterns.md`             | Reusable playbook workflow shapes                                              |
+| `apps/orchestration/src/orchestration/playbooks/research.py` | Current reference playbook (dynamic fan-out, critique, validation, escalation) |

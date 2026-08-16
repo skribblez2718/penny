@@ -29,8 +29,8 @@ def count_tokens(text: str) -> int:
     except ImportError:
         print(
             "FAIL: tiktoken is not installed — it is the ONLY sanctioned way to count "
-            "tokens. Install it: uv pip install --python .venv/bin/python tiktoken "
-            "(it is declared in scripts/setup/init-external-tools.sh)."
+            "tokens. Install the locked project dependencies with: uv sync --extra dev "
+            "(tiktoken is declared in pyproject.toml)."
         )
         sys.exit(2)
     return len(tiktoken.get_encoding(ENCODING).encode(text))

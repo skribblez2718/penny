@@ -18,7 +18,7 @@ verifier:
 - **Fail-loud validation** — an empty or malformed SUMMARY is rejected. The run
   does not advance on a fabricated default.
 - **Evidence grounding** — a verify state can require named fields (e.g. captured
-  command output) to be present *and non-empty*. A bare `passed: true` with an
+  command output) to be present _and non-empty_. A bare `passed: true` with an
   empty evidence list is rejected.
 - **Honest exhaustion** — when the retry budget runs out, the run finishes with
   `met=False` rather than pretending the goal was met.
@@ -34,18 +34,19 @@ verifier:
 4. On a genuine PASS, the run proceeds (or completes). On a FAIL, it loops back
    to fix the gap, up to the iteration budget.
 
-## Concrete Example — the code skill
+## Concrete Example — the research workflow
 
-The code skill's verify step (`CODE_VERIFY`) requires `passed`, `confidence`, and
-a non-empty `evidence` list. The agent is told to "run every configured
-verification tier and report pass/fail per tier honestly with the captured
-command output as evidence." Because `evidence` is declared as a required
-non-empty field, the agent cannot pass verification without attaching the actual
-tier results.
+The research skill's validation step (`RESEARCH_VALIDATE`) requires a `verdict`,
+an `unsupported_claims` list, and a non-empty `evidence` list. The validator must
+check each material claim against the captured source material and record the
+claim-to-source checks. Because `evidence` is declared as a required non-empty
+field, a bare `verdict: "PASS"` cannot satisfy the contract.
 
-If the final verification fails, the run loops back to learning/implementing to
-fix regressions. If the iteration budget is spent, the run completes with
-`met=False` — an honest "not done," not a false green.
+A failed validation routes back to evidence gathering or synthesis so unsupported
+claims can be re-grounded, removed, or explicitly reported. If the validation
+budget is spent, the report can still be delivered, but the result distinguishes
+`met=true` from `grounded=false` and lists the unresolved claims instead of
+presenting the report as fully verified.
 
 ## When a Loop Won't Settle
 
@@ -56,10 +57,9 @@ same run.
 
 ## Not To Be Confused With — Approval Gates
 
-Verification is about *proof that work is correct*. It is separate from a
-**planned gate** — the human sign-off some skills request before high-stakes work
-(e.g. the code skill's plan-approval and criteria-refinement gates). Those are a
-different engine feature; verification does not ask for your confirmation, it
+Verification is about _proof that work is correct_. It is separate from a
+**planned gate** — a human sign-off that a workflow may declare before
+high-consequence work. A planned gate asks for your decision; verification
 demands evidence from the agent.
 
 ## Durability
@@ -73,4 +73,4 @@ are no temp state files and no state passed on the command line.
 
 - Agent notes: `docs/agents/capabilities/verification-state/verification-state.md`
 - Engine gatekeeper: `apps/orchestration/src/orchestration/contracts.py` (`validate_summary_contract`)
-- Concrete example: `apps/orchestration/src/orchestration/playbooks/code.py` (`CODE_VERIFY`)
+- Concrete example: `apps/orchestration/src/orchestration/playbooks/research.py` (`RESEARCH_VALIDATE`)

@@ -1,68 +1,70 @@
-# MemPalace Room Schema & Retention
+# Memory Retention — Active knowledge and legacy skill-room corpus
 
-The canonical structure for MemPalace wings/rooms and how each is retained. This
-is what keeps memory **signal, not accretion** — every drawer has a home and a
-lifecycle, and new skills inherit both automatically.
+## Classes
 
-## Room conventions
+| Class                                 | Examples                                                                         | Policy                                                              |
+| ------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Primary diary / recent working memory | `penny/diary`, selected audit/session material                                   | T2 with explicit room TTL and recall-aware extension.               |
+| Curated durable knowledge             | `penny/architecture`, `penny/decisions`, `penny/skills`                          | T3 permanent; written only after a durable-value judgment.          |
+| Legacy skill-room corpus              | Historical `penny/skills/<skill>-<session_id>` and retired dedicated skill wings | Historical data classification only; never active workflow handoff. |
+| Cold archive                          | Content-hash-bound JSONL archive                                                 | T4 recovery corpus, never automatic prompt input.                   |
 
-| Class | Wing / room | Who writes it |
-|-------|-------------|---------------|
-| **Lightweight skill scratch** | `penny` / `skills/<skill>-<session_id>` | agent, code, learn, plan, prd, research, rez — each agent writes its phase output here |
-| **Dedicated-wing skill scratch** | `wing_<skill>` / `<session_id>-<phase>` (e.g. `wing_jsa/plan-<ts>-findings`) | security skills (jsa, sca) that isolate untrusted target-scan data from general memory |
-| **Curated knowledge** | `<skill>-learnings`, `decisions`, `architecture`, `bug_bounty_methodology`, … | distilled, cross-session knowledge that must survive the scratch sweep |
-| **System / operational** | `penny/` `diary`, `compactions` | diary and compaction |
+New skills do **not** require a memory room or an entry in
+`scripts/system/tiered_memory/skill_rooms.json`. Active stage handoff uses owner
+artifacts, and run state uses the orchestration checkpointer.
 
-**Rule of thumb:** per-session run output is **scratch** (decays); anything meant
-to inform a *future* session is **curated** (persists) and lives in a stable,
-non-session-prefixed room.
+## `skill_rooms.json`
 
-## Retention (tiers)
+`skill_rooms.json` records historical room shapes so a retention **planner** can
+classify legacy corpus. It is not:
 
-Retention is **opt-in per room** — an unclassified room is KEPT by default, so a
-new or mislabelled room is never silently mass-archived.
+- a live skill registry;
+- a scaffolding or structure-check requirement;
+- proof that a room is transient;
+- a deletion list or deletion authority.
 
-| Tier | Meaning | TTL |
-|------|---------|-----|
-| **T2** | warm scratch — decays, recall-extended up to 4× | 30d (`diary` 90d, `compactions` 90d) |
-| **T3** | curated / permanent | −1 (never) |
-| **T4** | cold archive — aged-out drawers written to grep-able JSONL under `.mempalace/archive/` **before** deletion (never lost) | — |
+Unknown or unreviewed rooms are kept by default. A classification can only
+produce candidates in a dry-run plan.
 
-Policy lives in `scripts/system/tiered_memory/archiver.py`:
+## Retention gates
 
-- Base rules (hardcoded): `penny/skills/` and `penny/plan-` → T2 30d; the system
-  rooms above; the permanent `penny/{decisions,architecture,skills}`.
-- Per-skill rules (**loaded from the manifest**, see below): each dedicated-wing
-  skill's scratch prefixes → T2, its curated rooms → T3.
+1. Read online data only through the authenticated supervised 3.7.1 HTTP hub.
+2. Write a new immutable retention manifest bound to exact IDs and content hashes.
+3. Review the plan, archive destination, counts, and unknown/kept records.
+4. Apply only with that exact manifest plus a new operation journal and explicit
+   apply authorization.
+5. Cold-write each selected record before requesting hub deletion.
+6. Stop on ref, hash, revision, archive, or journal mismatch.
 
-## Single source of truth: `skill_rooms.json`
+Historical labels never bypass these gates.
 
-`scripts/system/tiered_memory/skill_rooms.json` is the **one** place a skill's
-memory footprint is declared. Three consumers read it, so they can never drift:
+## Data preservation
 
-1. **`archiver.py`** loads it and applies each dedicated-wing skill's decay +
-   curated-keep rules (penny-wing skills need nothing — the `penny/skills/` base
-   rule covers them).
-2. **`scripts/tools/scaffold-skill.py`** appends an entry (`convention: penny-wing`)
-   for every new scaffolded skill, so its scratch decays from day one.
-3. **`scripts/system/checks/check_skill_structure.py`** fails if a live skill is
-   missing from the manifest — the guard that stops a new dedicated-wing skill
-   silently re-creating the `wing_jsa` accretion.
+Setup never discovers, initializes, migrates, or deletes an existing palace.
+Cutover requires backup and rollback evidence before old access paths are
+retired. Uninstall removes code/service definitions only and preserves
+caller-owned palace, KG, logstream, archive, config, and state roots. Deleting
+those roots is a separate explicit operator action.
 
-**Adding a dedicated-wing skill:** change its manifest entry to
-`convention: dedicated-wing` and declare `wing`, `scratch_prefixes` (room-name
-prefixes under that wing that are transient — `""` means "all rooms"),
-`curated_rooms` (kept permanent), and `ttl_days`.
+## Offline repair
 
-## One-time cleanup tooling
+Raw-byte tools may operate only on an explicit copied target after all writers
+are drained, the supervised hub and peers are stopped, and an owner-approved
+receipt binds the copy. Configured live paths are rejected.
 
-For reclaiming accreted bulk that decay alone won't clear promptly:
+## Verification
 
-- `scripts/system/maintenance/mempalace_audit.py` — **read-only** inventory +
-  categorized candidate manifest (test artifacts, dead-name references,
-  oversized transcripts, transient scratch).
-- `scripts/system/maintenance/mempalace_cleanup.py` — **dry-run by default**;
-  `--execute` cold-archives then deletes. Categorization is imported from the
-  audit so the two never disagree.
+- [ ] Old skill rooms are described as legacy corpus, not active handoff.
+- [ ] Live skills have no room-manifest requirement.
+- [ ] `skill_rooms.json` is planning classification only.
+- [ ] Unknown data defaults to keep.
+- [ ] Apply is exact-manifest, archive-first, journaled, and explicitly authorized.
+- [ ] Setup, cutover, offline work, and uninstall preserve data.
 
-Always back up (`cp -r .mempalace .mempalace.bak.<date>`) before `--execute`.
+## Files
+
+| File                                            | Purpose                            |
+| ----------------------------------------------- | ---------------------------------- |
+| `scripts/system/tiered_memory/skill_rooms.json` | Legacy corpus classification hints |
+| `scripts/system/tiered_memory/archiver.py`      | Hub-routed plan/apply workflow     |
+| `scripts/system/memory/offline_access.py`       | Copied-target authorization        |

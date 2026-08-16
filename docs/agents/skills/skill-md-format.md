@@ -1,105 +1,75 @@
-# SKILL.md Format — Manifest specification for skill discovery
+# SKILL.md Format — Manifest for artifact-first workflows
 
-## What
-
-Every skill's SKILL.md is a YAML frontmatter + Markdown body that Pi discovers and Penny reads to decide when to invoke the skill.
-
-## Why
-
-Pi auto-discovers skills by scanning `.pi/skills/*/SKILL.md`. The frontmatter provides structured metadata; the body provides human/agent-readable usage guidance.
-
-## Rules
-
-1. **YAML frontmatter required.** `name`, `description`, `metadata.penny` fields.
-2. **Canonical description pattern.** `description` must follow: `[One sentence defining the skill]. Use when [trigger conditions + 5–8 signal phrases the user actually says]. Do not use when [anti-use-cases — name the skill/agent to use instead].` The signal phrases are load-bearing: they are the capability surface the orchestrator reasons over for proactive routing (see SYSTEM.md → Reach for Skills and Agents First — routing is capability reasoning, not keyword lookup; the phrases make the capability legible, they are not a match table). `check_skill_structure.py` enforces the presence of `Use when` and `Do not use when`.
-3. **`metadata.penny.engine: orchestration`** — the routing key that marks the skill as running on the shared orchestration engine. This is the current marker. (The legacy `metadata.penny.state_machine: true` boolean is REMOVED — do not add it.)
-4. **`metadata.penny.mempalace`** — `true` if agents communicate via mempalace.
-5. **`metadata.penny.subagents`** — list of agent names this skill uses.
-6. **Body sections required:** `## When to Use`, `## When NOT to Use`, `## Invocation`.
-
-## Template
+## Frontmatter
 
 ```yaml
 ---
 name: skill-name
-description: "[One sentence]. Use when [trigger conditions + signal phrases]. Do not use when [anti-cases — use X instead]."
-# Prefer concrete verbs over abstract nominalizations throughout SKILL.md (see Design Principles §10):
-# "Analyze the source", not "perform analysis of the source".
+description: "One sentence. Use when [triggers]. Do not use when [anti-cases]."
 license: MIT
 metadata:
   penny:
     engine: orchestration
-    mempalace: true
-    subagents: [echo, piper]
+    mempalace: false
+    subagents: [echo, vera]
 ---
-
-# Skill Name
-
-## When to Use
-- Condition 1
-- Condition 2
-
-## When NOT to Use
-- Anti-condition 1
-
-## Invocation
-skill({ skill_name: "name", goal: "..." })
 ```
 
-## What Belongs in SKILL.md vs. Elsewhere
+## Rules
 
-| Belongs in SKILL.md | Belongs in `assets/prompts/` | Belongs in `README.md` |
-|---------------------|------------------------------|------------------------|
-| When to invoke | Domain checklists (CREST) | Detailed flow diagrams |
-| Parameters | Session-specific instructions | Failure modes |
-| Output location | Output format (SUMMARY) | Diagnostics |
-| Chain integration | Mempalace protocols | Version history |
-| Post-completion rules | | |
+1. `name` matches the directory and uses lowercase kebab-case.
+2. `description` contains a role sentence, `Use when`, and an anti-use clause.
+3. `metadata.penny.engine` is `orchestration`; the removed `state_machine` key is forbidden.
+4. `metadata.penny.mempalace` is optional. It describes optional **primary
+   durable-memory** integration only. It does not authorize worker memory tools
+   or workflow rooms.
+5. `metadata.penny.subagents` lists project-local catalog roles with matching
+   Domain Guidance files.
+6. Body sections include When to Use, When Not to Use, Invocation, Exact Artifact
+   Handoff, Output, recovery/escalation as applicable, and terminal truth.
 
-## Constraints
+## Content boundaries
 
-- **SKILL.md is Project Index, not Domain Guidance.** It tells Penny when to invoke. Domain patterns go in `assets/prompts/`.
-- **No deprecation notices in SKILL.md.** Remove deprecated skills; don't leave warnings.
-- **The playbook is not in SKILL.md.** The state machine is a `BasePlaybook` subclass in the `orchestration` package. SKILL.md only names the engine and the agents.
+| SKILL.md                           | Domain Guidance                              | README/reference                                |
+| ---------------------------------- | -------------------------------------------- | ----------------------------------------------- |
+| Routing triggers and parameters    | Mission and domain criteria                  | Detailed FSM, contracts, failure modes          |
+| Artifact-first invocation contract | Exact input read + complete output + SUMMARY | Selected refs and recovery behavior             |
+| Terminal result shape              | Role-specific output fields                  | Diagnostics and tests                           |
+| Optional primary memory flag       | No memory instructions                       | Durable-memory boundary explanation if relevant |
 
-## Canonical Vocabulary
+SKILL.md is Project Index content, not the worker prompt. It must not instruct
+workers to use session rooms, duplicate checks, diaries, or KG links.
 
-Skill-specific terms. The system-wide vocabulary (constraints, variables, assumptions, unknowns, tradeoffs, verification) is defined in `.pi/SYSTEM.md`.
+## Exact handoff statement
 
-### SKILL.md Section Headers
+State that cognitive stages receive owner-selected `input_artifacts`, read exact
+grants with `artifact_read` through complete continuation, and return complete
+stage content for owner capture before routing. State that memory availability
+cannot affect workflow correctness.
 
-| Term | Definition | Do NOT substitute |
-|------|-----------|-------------------|
-| **Invocation** | How to invoke the skill | Usage, How to Use, MANDATORY |
-| **Post-Completion** | What happens after the skill succeeds | Approve/Refine, After Completion |
-| **awaiting_clarification** | Engine pause state when an agent returns UNCERTAIN | escalation, error, paused |
-| **Verification** | Playbook state / final oracle for high-stakes confirmation | approval gate, verify required |
+## Canonical wire terms
 
-### Prompt↔Playbook Bridge Terms
-
-These terms appear both in skill prompts and in the playbook's SUMMARY contracts and `route_after` routing. They must match exactly across the two.
-
-| Term | Definition | Where it binds | Do NOT substitute |
-|------|-----------|----------------|-------------------|
-| **SUMMARY** | Minimal structured output an agent returns to the engine | The `result` dict the playbook validates and routes on | result, output, response |
-| **verdict** | Carren's approval decision | `verdict` field in the SUMMARY, read by `route_after` | ruling, decision, result |
-| **needs_clarification** | Agent signals it needs user input | SUMMARY field; pauses the run at `awaiting_clarification` | ask_user, escalate, blocked |
-| **clarifying_questions** | Questions for the user | SUMMARY field surfaced in the escalation directive | questions, prompts, queries |
-| **confidence** | CERTAIN/PROBABLE/POSSIBLE/UNCERTAIN | SUMMARY field; UNCERTAIN in an `ESCALATABLE_STATES` state escalates | certainty, sureness |
-| **explore_complete** | Echo agent finished exploration | SUMMARY field read by the playbook's `route_after` | done, finished, complete |
-| **plan_complete** | Piper agent finished planning | SUMMARY field read by the playbook's `route_after` | done, finished, complete |
+| Term                   | Meaning                                                              |
+| ---------------------- | -------------------------------------------------------------------- |
+| `input_artifacts`      | Exact current-consumer predecessor slots/refs selected by the owner. |
+| `output_artifact`      | Owner contract for the current stage's exact response bytes.         |
+| `output_artifact_ref`  | Canonical selected product ref exposed by the terminal result.       |
+| `SUMMARY`              | Minimal model-authored routing payload, never persistence proof.     |
+| `needs_clarification`  | Worker requests owner-mediated user input.                           |
+| `clarifying_questions` | Questions preserved by the run checkpoint.                           |
+| `confidence`           | CERTAIN / PROBABLE / POSSIBLE / UNCERTAIN wire vocabulary.           |
 
 ## Verification
 
-- [ ] YAML frontmatter parses without errors
-- [ ] `metadata.penny.engine: orchestration` present (no `state_machine` key)
-- [ ] All `subagents` listed have corresponding prompt files
-- [ ] When to Use / When NOT to Use sections present
-- [ ] Invocation syntax documented
+- [ ] YAML parses and engine marker is present.
+- [ ] No legacy state-machine key.
+- [ ] Artifact handoff and terminal product ref are documented.
+- [ ] Memory is optional/primary-only and not workflow transport.
+- [ ] All listed worker roles have prompts.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `docs/agents/skills/skill-standard.md` | Full skill standard |
-| `docs/agents/skills/skill-md-template.md` | Copy-paste template |
+| File                                      | Purpose       |
+| ----------------------------------------- | ------------- |
+| `docs/agents/skills/skill-standard.md`    | Full standard |
+| `docs/agents/skills/skill-md-template.md` | Template      |

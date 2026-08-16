@@ -115,8 +115,11 @@ async function resolveComplete(deps: EnhanceDeps): Promise<CompleteFn> {
   }
   // The @earendil-works scope is what pi's loader bundles (the shipped
   // summarize.ts example imports it); lazy so test environments never resolve it.
-  const mod = await import("@earendil-works/pi-ai/compat");
-  return mod.complete as CompleteFn;
+  // A variable specifier keeps tsc from statically resolving a package that only
+  // exists inside pi's loader — same pattern as compaction/summarizer.ts.
+  const spec = "@earendil-works/pi-ai/compat";
+  const mod = (await import(spec)) as unknown as { complete: CompleteFn };
+  return mod.complete;
 }
 
 async function enhanceText(
@@ -201,8 +204,15 @@ async function enhanceText(
   }
 }
 
+/** The slice of pi's InputEvent this extension reads. */
+interface InputEventLike {
+  text: string;
+  source: string;
+  streamingBehavior?: "steer" | "followUp";
+}
+
 export default function enhance(pi: ExtensionAPI, deps: EnhanceDeps = {}): void {
-  pi.on("input", async (event, ctx) => {
+  pi.on("input", async (event: InputEventLike, ctx: ExtensionContext) => {
     // The `-i` suffix is a human-typing convention: only interactive input.
     if (event.source !== "interactive") {
       return { action: "continue" as const };

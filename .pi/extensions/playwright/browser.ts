@@ -148,16 +148,14 @@ export class BrowserManager {
       this.browser = await chromium.launch(launchOpts);
 
       // Create context with network allowlist if configured.
-      // ignoreHTTPSErrors is opt-in via PLAYWRIGHT_IGNORE_HTTPS_ERRORS=1
-      // (needed for jsa STRUCTURE phase when navigating to test envs with
-      // self-signed or invalid certs, OR when proxying through Caido's
-      // self-signed upstream cert).
+      // ignoreHTTPSErrors is opt-in via PLAYWRIGHT_IGNORE_HTTPS_ERRORS=1 for
+      // explicitly authorized test environments with invalid certificates.
       const contextOpts: Record<string, unknown> = {};
       if (this.config.ignoreHTTPSErrors) {
         contextOpts.ignoreHTTPSErrors = true;
         logger.warn(
           "ignoreHTTPSErrors is enabled — browser will accept invalid HTTPS certs. " +
-            "This is a security risk in production; intended only for jsa STRUCTURE phase."
+            "This is a security risk outside explicitly authorized test environments."
         );
       }
       this.context = await this.browser.newContext(contextOpts);

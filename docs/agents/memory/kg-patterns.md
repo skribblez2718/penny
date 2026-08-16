@@ -1,67 +1,71 @@
-# Knowledge Graph Patterns — Entity relationship conventions
+# Knowledge Graph Patterns — Governed temporal facts
 
-## What
+## Scope
 
-The knowledge graph stores relationships between entities: agents, sessions, decisions, skills, and findings. Use consistent predicates to enable cross-session querying.
+The temporal KG is a primary-runtime durable-memory capability. Workers and
+skill drivers do not receive KG tools. Every write passes the extension's
+predicate allowlist before HTTP dispatch and remains subject to hub-side schema
+validation.
 
-## Why
+## Value gate
 
-Without a shared relationship vocabulary, KG queries return inconsistent results. Standardized predicates make the graph queryable across time and context.
+Add a fact only when future traversal, provenance, impact analysis, preference
+lookup, or temporal invalidation is likely to matter. Do not add facts for
+routine turns, ordinary task completion, transient workflow stages, speculative
+relationships, or ceremonial agent attribution.
 
-## Rules
+Every changing fact creates an invalidation obligation. Use `memory_kg_invalidate`
+when it ends and `memory_kg_supersede` when one governed fact replaces another;
+do not delete history.
 
-1. **Use canonical predicates.** Do not invent new predicates without updating this document.
-2. **Link every completed task.** `memory_kg_add("<Agent>", "completed", "Task:<id>")`
-3. **Link every decision.** `memory_kg_add("Penny", "decided", "Decision:<id>")`
-4. **Link every session.** `memory_kg_add("Session:<id>", "produced", "Outcome:<id>")`
-5. **Invalidate superseded facts.** `memory_kg_invalidate(subject, predicate, object)` when a fact is no longer true.
+## Canonical predicate schema v1
 
-## Canonical Predicates
+| Predicate        | Subject               | Object               | Durable use                                              |
+| ---------------- | --------------------- | -------------------- | -------------------------------------------------------- |
+| `completed`      | Durable entity        | Durable task/outcome | Consequential completion that future queries will trace. |
+| `decided`        | Actor                 | Decision             | Consequential decision.                                  |
+| `evaluated`      | Decision/outcome      | Evaluation           | Later result tied to an earlier choice.                  |
+| `produced`       | Session/project       | Durable product      | Product provenance.                                      |
+| `works_on`       | Actor                 | Project/task         | Changing active assignment.                              |
+| `uses`           | Project/capability    | Tool/system          | Durable dependency.                                      |
+| `prefers`        | User                  | Setting              | Stable or temporally governed preference.                |
+| `explored_by`    | Durable topic         | Agent                | Only when attribution improves later provenance queries. |
+| `planned_by`     | Durable plan          | Agent                | Only for reusable plan provenance.                       |
+| `critiqued_by`   | Durable product       | Agent                | Only for a review gate later work depends on.            |
+| `generated_by`   | Durable artifact      | Agent                | Product provenance.                                      |
+| `verified_by`    | Durable claim/product | Verifier             | Verification gate later work depends on.                 |
+| `broken_into`    | Durable plan          | Task set             | Reusable decomposition relation.                         |
+| `based_on`       | Durable product       | Source artifact      | Derivation/provenance.                                   |
+| `generated_from` | Durable artifact      | Source/spec          | Generation provenance.                                   |
+| `tested_by`      | Code/finding          | Test/evidence        | Verification trace.                                      |
+| `fixes`          | Change                | Finding              | Remediation trace.                                       |
+| `follows`        | Durable step          | Prior step           | Stable ordering relation.                                |
 
-| Predicate | Subject | Object | When |
-|-----------|---------|--------|------|
-| `completed` | Agent name | Task ID | Agent finishes work |
-| `decided` | Penny | Decision ID | Consequential action recorded |
-| `evaluated` | Penny | Decision ID | Outcome feedback captured |
-| `produced` | Session ID | Outcome ID | Session produces result |
-| `works_on` | Agent/Penny | Project/Task | Active work assignment |
-| `uses` | Agent/Skill | Tool/Extension | Capability declaration |
-| `prefers` | User | Setting | Stored preference |
+The allowlist is case-sensitive. Extending it requires an atomic schema update in
+this document, `kg-policy.ts`, hub policy, and tests.
 
-### Skill lifecycle predicates
+## Entity and temporal rules
 
-These link artifacts produced by the skill agents across a session's lifecycle
-(explore → plan → critique → generate → verify → taskify → fix).
-
-| Predicate | Subject | Object | When |
-|-----------|---------|--------|------|
-| `explored_by` | Topic/Goal | Agent (echo) | Exploration completed for a goal |
-| `planned_by` | Goal/Plan | Agent (piper) | A plan was produced |
-| `critiqued_by` | Plan/Output | Agent (carren) | A critique/review was produced |
-| `generated_by` | Artifact | Agent (skribble) | Content/code was generated |
-| `verified_by` | Plan/Finding | Agent (vera)/User | A verification gate confirmed an action |
-| `broken_into` | Plan | Task IDs | A plan was decomposed into tasks |
-| `based_on` | Output | Source artifact | An artifact derives from another |
-| `generated_from` | Artifact | Source/spec | An artifact was generated from a source |
-| `tested_by` | Code/Finding | Test/PoC | A test or PoC exercises the subject |
-| `fixes` | Change/Commit | Bug/Finding | A change remediates a defect |
-| `follows` | Step/Phase | Prior step/phase | Sequencing between lifecycle steps |
-
-## Constraints
-
-- **Predicates are case-sensitive.** `completed` ≠ `Completed`.
-- **Entity names must be consistent.** Use the same string for the same entity across all facts.
-- **Invalidate, don't delete.** Use `memory_kg_invalidate` to mark facts as no longer true.
+- Use one stable entity identifier for the same thing across facts.
+- Attach source/provenance accepted by the hub contract.
+- Add validity metadata for facts that can change.
+- Query `as_of` or timeline data when historical truth matters.
+- Invalidate or supersede changed facts; never overwrite history by adding a
+  contradictory active edge.
 
 ## Verification
 
-- [ ] All completed tasks linked with `completed` predicate
-- [ ] All decisions linked with `decided` predicate
-- [ ] Superseded facts invalidated, not deleted
+- [ ] Write came from the unmarked primary runtime.
+- [ ] Relationship passed the future-query value gate.
+- [ ] Predicate is in schema v1.
+- [ ] Entity identifiers are stable and provenance is present.
+- [ ] Changing facts carry temporal lifecycle handling.
+- [ ] No routine per-agent, per-file, or per-turn link was created.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `docs/agents/memory/integration.md` | Memory integration patterns |
-| `.pi/extensions/memory/index.ts` | Memory extension implementation |
+| File                                    | Purpose                     |
+| --------------------------------------- | --------------------------- |
+| `.pi/extensions/memory/kg-policy.ts`    | Client-side exact allowlist |
+| `docs/humans/memory/knowledge-graph.md` | Human rationale             |
+| `docs/agents/memory/integration.md`     | Primary memory policy       |

@@ -1,7 +1,7 @@
 # Agents Feature Index
 
-- [Overview](overview.md): Agent architecture, lifecycle, and the Generic Agents + Skill Prompts pattern
-- [Definition Format](definition-format.md): YAML frontmatter, body sections, layer separation, examples, and best practices
-- [Discovery and Tool Sets](discovery-and-tools.md): Agent discovery paths, standard agents, and common tool sets
-- [Invocation](invocation.md): Single, parallel, and chain invocation patterns; skill context injection
-- [System Prompt Security](system-prompt-security.md): Anti-injection defense with boundary markers and security directives
+- [Overview](overview.md): Project-local catalog, worker lifecycle, exact artifact handoff, and primary-memory boundary
+- [Definition Format](definition-format.md): Catalog frontmatter, artifact-read discipline, body sections, and boundary block
+- [Discovery and Tool Sets](discovery-and-tools.md): Local catalog snapshots, remote registry boundary, and worker tool exposure
+- [Invocation](invocation.md): Dispatch, owner artifact grants/capture, continuation, chain handoff, and recovery
+- [System Prompt Security](system-prompt-security.md): Trust boundaries, task-authority model, execution-path security matrix, and runtime controls (markers are structural, not enforcement)

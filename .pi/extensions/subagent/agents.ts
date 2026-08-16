@@ -2,6 +2,7 @@
  * Agent discovery and configuration
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
@@ -25,6 +26,57 @@ export interface AgentDiscoveryResult {
   projectAgentsDir: string | null;
 }
 
+export interface AgentCatalogSnapshot {
+  digest: string;
+  agentNames: string[];
+}
+
+export const MODEL_VISIBLE_AGENT_LIMIT = 24;
+export const MODEL_VISIBLE_AGENT_NAME_LIMIT = 80;
+export const MODEL_VISIBLE_AGENT_DESCRIPTION_LIMIT = 512;
+export const MODEL_VISIBLE_AGENT_CATALOG_LIMIT = 16_000;
+
+function normalizeCatalogText(value: string, limit: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, limit - 1)}…`;
+}
+
+/**
+ * Build a bounded catalog for the provider-visible tool description.
+ *
+ * Pi omits tool prompt snippets/guidelines when a custom system prompt is in
+ * use, but provider tool descriptions remain model-visible. Keep the same
+ * trusted .pi/agents frontmatter as the source of truth while bounding its
+ * contribution to every model request.
+ */
+export function formatModelVisibleAgentCatalog(agents: AgentConfig[]): string {
+  if (agents.length === 0) return "Available agents: none discovered.";
+
+  const prefix = "Available agents (name: description): ";
+  const entries: string[] = [];
+  const candidates = agents.slice(0, MODEL_VISIBLE_AGENT_LIMIT);
+
+  for (const agent of candidates) {
+    const name = normalizeCatalogText(agent.name, MODEL_VISIBLE_AGENT_NAME_LIMIT);
+    const description = normalizeCatalogText(
+      agent.description,
+      MODEL_VISIBLE_AGENT_DESCRIPTION_LIMIT
+    );
+    const entry = `${name}: ${description}`;
+    const candidate = `${prefix}${[...entries, entry].join(" | ")}`;
+    if (candidate.length > MODEL_VISIBLE_AGENT_CATALOG_LIMIT) break;
+    entries.push(entry);
+  }
+
+  const remaining = agents.length - entries.length;
+  const suffix =
+    remaining > 0
+      ? ` | ${remaining} additional agent${remaining === 1 ? " is" : "s are"} available by name in the tool schema.`
+      : ".";
+  return `${prefix}${entries.join(" | ")}${suffix}`;
+}
+
 function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig[] {
   const agents: AgentConfig[] = [];
 
@@ -39,7 +91,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
     return agents;
   }
 
-  for (const entry of entries) {
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.name.endsWith(".md")) continue;
     if (!entry.isFile() && !entry.isSymbolicLink()) continue;
 
@@ -96,6 +148,37 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
     if (parentDir === currentDir) return null;
     currentDir = parentDir;
   }
+}
+
+/**
+ * Capture the exact catalog state used for tool registration.
+ *
+ * The digest includes provider-visible metadata and execution-affecting agent
+ * configuration. If any of it changes after registration, execution must wait
+ * for Pi to reload and re-register the tool rather than using stale schema.
+ */
+export function snapshotAgentCatalog(discovery: AgentDiscoveryResult): AgentCatalogSnapshot {
+  const agents = discovery.agents
+    .map((agent) => ({
+      name: agent.name,
+      description: agent.description,
+      tools: agent.tools ?? [],
+      model: agent.model ?? null,
+      provider: agent.provider ?? null,
+      thinking: agent.thinking ?? null,
+      systemPrompt: agent.systemPrompt,
+      source: agent.source,
+      filePath: path.resolve(agent.filePath),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.filePath.localeCompare(b.filePath));
+  const canonical = JSON.stringify({
+    projectAgentsDir: discovery.projectAgentsDir ? path.resolve(discovery.projectAgentsDir) : null,
+    agents,
+  });
+  return {
+    digest: `sha256:${createHash("sha256").update(canonical).digest("hex")}`,
+    agentNames: agents.map((agent) => agent.name),
+  };
 }
 
 export function discoverAgents(cwd: string, _scope: AgentScope): AgentDiscoveryResult {

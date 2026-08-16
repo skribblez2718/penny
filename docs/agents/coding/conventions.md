@@ -10,7 +10,7 @@ Without pre-generation rules, agents produce inconsistent, untested, unverified 
 
 ## Rules
 
-1. **Tests that prove the change.** Every change ships with tests that exercise it and fail on a reverted implementation — a pass is backed by an oracle, never asserted. Sequencing (test-first, alongside, or after) is the author's choice; the outcome is what's required, matching the `code` skill's own contract.
+1. **Tests that prove the change.** Every change ships with tests that exercise it and fail on a reverted implementation — a pass is backed by an oracle, never asserted. Sequencing (test-first, alongside, or after) is the author's choice; the verified outcome is what matters.
 2. **Lint before delivery.** Code must pass lint with zero errors.
 3. **Format before delivery.** Code must pass format check.
 4. **Typecheck before delivery.** TypeScript: `tsc --noEmit`. Python: `mypy`.
@@ -21,17 +21,17 @@ Without pre-generation rules, agents produce inconsistent, untested, unverified 
 
 For web application projects, **build UIs as custom [Lit](https://lit.dev) web components styled with [Tailwind CSS](https://tailwindcss.com)** — this is the documented default. Prefer composing small, encapsulated Lit components (reactive properties + scoped styles + declarative templates) over ad-hoc DOM manipulation or a heavyweight SPA framework.
 
-- **UI default:** Lit web components for all new UI work. See [lit/AGENTS.md](lit/AGENTS.md) for the documentation map and `.pi/skills/code/resources/web-ui.md` for patterns and gotchas.
+- **UI default:** Lit web components for all new UI work. See [lit/AGENTS.md](lit/AGENTS.md) for the live documentation map and project integration guidance.
 - **CSS default:** Tailwind CSS (v4 — CSS-first `@import "tailwindcss"` + `@theme`, no `tailwind.config.js`). See [tailwind/AGENTS.md](tailwind/AGENTS.md).
-- **Lit + Tailwind integration (required pattern):** Lit renders into shadow DOM, which a global Tailwind stylesheet cannot pierce, so a compiled Tailwind sheet is adopted into each component's shadow root; theme tokens on `:root`/`:host` (Tailwind `@theme`) cross the boundary as CSS custom properties. Only ever pass **trusted, compiled** CSS to `unsafeCSS()` (a security boundary). The step-by-step API pattern and code live in **one** place — `.pi/skills/code/resources/web-ui.md` (§6) — this bullet does not restate them.
+- **Lit + Tailwind integration (required pattern):** Lit renders into shadow DOM, which a global Tailwind stylesheet cannot pierce, so adopt a compiled Tailwind sheet into each component's shadow root; theme tokens on `:root`/`:host` (Tailwind `@theme`) cross the boundary as CSS custom properties. Only pass **trusted, compiled** CSS to `unsafeCSS()`. See the [Lit](lit/AGENTS.md) and [Tailwind](tailwind/AGENTS.md) documentation maps for the current APIs.
 - **Exceptions** are allowed when a project already standardizes on another framework (React, Vue, etc.) or a hard constraint rules Lit/Tailwind out — state the reason explicitly in the plan.
 - **Accessibility is mandatory (WCAG 2.2 AA).** Every user-facing surface must meet Level AA at build time — semantic HTML, keyboard operability, visible focus, contrast in **both** themes, and no meaning by color alone. This is a delivery gate, not a later audit. See [accessibility.md](accessibility.md) for the full standard + verification checklist (axe + keyboard + screen-reader).
 
 ## Severity
 
-| Severity | Meaning | Action |
-|----------|---------|--------|
-| **BLOCKER** | Rule 1-4 violation | Must fix before delivery |
+| Severity     | Meaning            | Action                         |
+| ------------ | ------------------ | ------------------------------ |
+| **BLOCKER**  | Rule 1-4 violation | Must fix before delivery       |
 | **CRITICAL** | Rule 5-6 violation | Must fix or document exception |
 
 ## Constraints

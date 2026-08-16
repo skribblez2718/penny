@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:penny:orchestration:artifacts:artifact-ref:1",
+  "title": "ArtifactRef v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_id",
+    "run_id",
+    "phase",
+    "branch_id",
+    "kind",
+    "operation_id",
+    "version",
+    "producer",
+    "consumer_scope",
+    "media_type",
+    "byte_length",
+    "content_digest",
+    "store_ref"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "artifact_id": { "type": "string", "pattern": "^art_[0-9a-f]{64}$" },
+    "run_id": { "$ref": "#/$defs/nonemptyCanonicalString" },
+    "phase": { "$ref": "#/$defs/nonemptyCanonicalString" },
+    "branch_id": {
+      "oneOf": [{ "$ref": "#/$defs/nonemptyCanonicalString" }, { "type": "null" }]
+    },
+    "kind": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "operation_id": { "$ref": "#/$defs/nonemptyCanonicalString" },
+    "version": { "type": "integer", "minimum": 1 },
+    "producer": { "$ref": "#/$defs/nonemptyCanonicalString" },
+    "consumer_scope": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonemptyCanonicalString" },
+      "uniqueItems": true
+    },
+    "media_type": { "$ref": "#/$defs/nonemptyCanonicalString" },
+    "byte_length": { "type": "integer", "minimum": 0 },
+    "content_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "store_ref": { "type": "string", "pattern": "^artifact://sha256/[0-9a-f]{64}$" }
+  },
+  "$defs": {
+    "nonemptyCanonicalString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001F\\u007F]).+$"
+    }
+  }
+}

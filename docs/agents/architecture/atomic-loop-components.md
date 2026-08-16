@@ -1,6 +1,6 @@
 # Atomic Loop Components
 
-How to build Python-orchestrated loops that comply with the [Bitter-Lesson Doctrine](bitter-lesson.md): instead of one universal loop, a small set of atomic components arranged per task. This is the **construction** companion to the doctrine — the doctrine says *ratchet on capabilities, prune constraints*; this doc says *here are the parts that are capabilities and the parts that are constraints, and here is how to assemble them.* Full derivation, close reading of Sutton's essay, and reference Python live in `research/atomic-loop-components/`.
+How to build Python-orchestrated loops that comply with the [Bitter-Lesson Doctrine](bitter-lesson.md): instead of one universal loop, a small set of atomic components arranged per task. This is the **construction** companion to the doctrine — the doctrine says _ratchet on capabilities, prune constraints_; this doc says _here are the parts that are capabilities and the parts that are constraints, and here is how to assemble them._ Full derivation, close reading of Sutton's essay, and reference Python live in `research/atomic-loop-components/`.
 
 ## The one structural law
 
@@ -9,7 +9,7 @@ How to build Python-orchestrated loops that comply with the [Bitter-Lesson Doctr
 Consequences that make the whole approach compliant:
 
 - The **procedure** for solving a task is never encoded in any atom — it is an output of `Decide` at runtime.
-- When the model improves, only the two intelligent atoms improve their outputs; nothing else needs to change, so nothing else *fights* the improvement.
+- When the model improves, only the two intelligent atoms improve their outputs; nothing else needs to change, so nothing else _fights_ the improvement.
 - Models are swappable because they appear behind exactly one interface.
 
 The anti-goal is a **universal loop** — one concrete control-flow object all tasks flow through. Any such object forces task-knowledge (phases, routers, decompositions) to be baked in, which maximizes the constraint budget and rots hardest exactly as the Bitter Lesson predicts. The compliant inversion: an **empty kernel** + a library of atoms, with each task's loop assembled late.
@@ -20,32 +20,43 @@ Every loop component must pass one test:
 
 > **A component is compliant iff its value is non-decreasing as (a) model capability rises and (b) available compute grows** — i.e. it is a conduit for search or learning, a consequence boundary that exists for human/business reasons independent of capability, or capability-neutral plumbing.
 
-A component whose value *decreases* as the model improves is a **KNOWLEDGE-CONSTRAINT** (doctrine term): permitted only as an explicitly-tagged, instrumented, deletable **loan**.
+A component whose value _decreases_ as the model improves is a **KNOWLEDGE-CONSTRAINT** (doctrine term): permitted only as an explicitly-tagged, instrumented, deletable **loan**.
+
+## What qualifies as an atom
+
+The catalog is a set of **16 core atoms**, not a list of every valuable capability. At this design grain, an atom must have one stable responsibility, introduce a distinct state/action/authority boundary, contain no embedded multi-stage task procedure, and route every model judgment through `Decide` or optional `Critique`.
+
+Two useful learning concepts are therefore arrangements rather than extra atoms:
+
+- An outcome **ledger** is a rebuildable, non-authoritative projection of terminal `Thread` state, `Verify` evidence, `Observe` events, and `Workspace` artifacts. It must never become a second source of workflow truth.
+- **Distillation/curation** composes `Recall`, `Compact`, `Decide`/`Critique`, `Verify`/`Ablate`, `Gate`, `Act`, and `Workspace`. Treating that multi-stage, partly intelligent workflow as one primitive would violate the one-intelligence-interface law.
+
+Passing the compliance criterion is necessary but not sufficient for atomhood: a compound learning workflow can scale with models and compute while still being an arrangement of smaller parts.
 
 ## The atom catalog (16 atoms, 7 families)
 
 Each atom is classified by **Kind** (`SEARCH-CONDUIT` · `LEARNING-CONDUIT` · `BOUNDARY` · `PLUMBING` · `INTELLIGENCE`), **Durability** (`DURABLE` vs `LOAN`), and **Decision owner** (`CODE` vs `MODEL`).
 
-| # | Atom | Family | Kind | Durability | Decisions |
-|---|---|---|---|---|---|
-| A1 | **Thread** — append-only event log; unified execution+business state | State | plumbing | durable | code |
-| A2 | **Checkpoint** — durable pause/resume; interrupt between intent selection & execution | State | plumbing | durable | code |
-| A3 | **Workspace** — externalized artifacts (files, git, progress notes) in media the model already knows | State | plumbing / learning | durable | model content |
-| B1 | **Decide** — the single intelligent step: `render(thread) → structured Intent` | Intelligence | **intelligence** | durable (prompts = loans) | **model** |
-| B2 | **Critique** — separated evaluator in fresh context, ideally a different model | Intelligence | intelligence / search | durable | **model** |
-| C1 | **Act** — deterministic dispatch of an intent; errors are data, not control flow | Action | plumbing | durable | code executes, model chooses |
-| C2 | **Toolspace** — the declared action surface; broad primitives, not bespoke wrappers | Action | search-conduit | durable (wrappers = loans) | code declares, model uses |
-| D1 | **Verify** — externally grounded verification; the objective function of the search | Control | **search-conduit** | **durable — top survivor** | code |
-| D2 | **Budget** — bounded expenditure + honest exhaustion; the primary scaling knob | Control | boundary + scaling dial | durable | code caps, model spends |
-| D3 | **Gate** — deny-by-default consequence boundary on irreversible/external actions | Control | **boundary** | durable | code / human |
-| D4 | **Escalate** — human contact as a first-class Intent (`AskHuman`) | Control | boundary / search | durable | model asks, code transports |
-| E1 | **Fan** — parallelism: sectioning, voting/best-of-N, spawn (isolated sub-context) | Scale | **search-conduit (purest)** | durable | model topology, code mechanics |
-| E2 | **Compact** — context economy; trim stale results, summarize resolved errors | Scale | search-conduit | need durable, mechanisms = loans | model preferred |
-| F1 | **Recall** — retrieve relevant stored context into `Decide` | Learning | learning-conduit | durable | code retrieves, model applies |
-| G1 | **Observe** — structured traces; audit + measurement substrate | Meta | plumbing / boundary | durable | code |
-| G2 | **Ablate** — scaffold ON vs OFF measurement; the deletion mechanism | Meta | **meta-method** | **permanent** | code measures, human disposes |
+| #   | Atom                                                                                                                                                               | Family       | Kind                        | Durability                       | Decisions                      |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------ | --------------------------- | -------------------------------- | ------------------------------ |
+| A1  | **Thread** — append-only event log; unified execution+business state                                                                                               | State        | plumbing                    | durable                          | code                           |
+| A2  | **Checkpoint** — durable pause/resume; interrupt between intent selection & execution                                                                              | State        | plumbing                    | durable                          | code                           |
+| A3  | **Workspace** — externalized artifacts (files, git, progress notes) in media the model already knows                                                               | State        | plumbing / learning         | durable                          | model content                  |
+| B1  | **Decide** — the single intelligent step: `render(thread) → structured Intent`                                                                                     | Intelligence | **intelligence**            | durable (prompts = loans)        | **model**                      |
+| B2  | **Critique** — separated evaluator in fresh context, ideally a different model (model-diverse review — supplementary scrutiny, not independent evidence by itself) | Intelligence | intelligence / search       | durable                          | **model**                      |
+| C1  | **Act** — deterministic dispatch of an intent; errors are data, not control flow                                                                                   | Action       | plumbing                    | durable                          | code executes, model chooses   |
+| C2  | **Toolspace** — the declared action surface; broad primitives, not bespoke wrappers                                                                                | Action       | search-conduit              | durable (wrappers = loans)       | code declares, model uses      |
+| D1  | **Verify** — externally grounded verification; the objective function of the search                                                                                | Control      | **search-conduit**          | **durable — top survivor**       | code                           |
+| D2  | **Budget** — bounded expenditure + honest exhaustion; the primary scaling knob                                                                                     | Control      | boundary + scaling dial     | durable                          | code caps, model spends        |
+| D3  | **Gate** — deny-by-default consequence boundary on irreversible/external actions                                                                                   | Control      | **boundary**                | durable                          | code / human                   |
+| D4  | **Escalate** — human contact as a first-class Intent (`AskHuman`)                                                                                                  | Control      | boundary / search           | durable                          | model asks, code transports    |
+| E1  | **Fan** — parallelism: sectioning, voting/best-of-N, spawn (isolated sub-context)                                                                                  | Scale        | **search-conduit (purest)** | durable                          | model topology, code mechanics |
+| E2  | **Compact** — context economy; trim stale results, summarize resolved errors                                                                                       | Scale        | search-conduit              | need durable, mechanisms = loans | model preferred                |
+| F1  | **Recall** — explicitly retrieve relevant, provenance-linked stored context for `Decide`; advisory, never automatic authority                                      | Learning     | learning-conduit            | durable                          | model requests, code retrieves |
+| G1  | **Observe** — structured traces; audit + measurement substrate                                                                                                     | Meta         | plumbing / boundary         | durable                          | code                           |
+| G2  | **Ablate** — scaffold ON vs OFF measurement; the deletion mechanism                                                                                                | Meta         | **meta-method**             | **permanent**                    | code measures, human disposes  |
 
-**`Verify` (D1) is where extra engineering investment is *most* compliant** — the verifier is the objective function of the search, and its quality is the ceiling of the whole system (Carlini: "the task verifier must be nearly perfect, otherwise the agent solves the wrong problem"). Strength hierarchy: **oracle** (test suite, compiler, environment state) > **rules** (schema, lint, invariant) > **proxy** (Goodhart-vulnerable measurable stand-in) > **critic** (B2, never sole). A PASS with empty evidence is a contract violation.
+**`Verify` (D1) is where extra engineering investment is _most_ compliant** — the verifier is the objective function of the search, and its quality is the ceiling of the whole system (Carlini: "the task verifier must be nearly perfect, otherwise the agent solves the wrong problem"). Strength hierarchy: **oracle** (test suite, compiler, environment state) > **rules** (schema, lint, invariant) > **proxy** (Goodhart-vulnerable measurable stand-in) > **critic** (B2, never sole). A PASS with empty evidence is a contract violation.
 
 **`Ablate` (G2) is the only permanent atom** — it is Sutton's meta-method clause made executable (build in the machinery of discovery, not the discoveries). Every LOAN-tagged component carries an ablation hook.
 
@@ -56,19 +67,21 @@ Each atom is classified by **Kind** (`SEARCH-CONDUIT` · `LEARNING-CONDUIT` · `
 Every loop is the same three-line kernel; everything else is which atoms decorate it and who owns the `while`.
 
 ```
-context = Recall(Thread)            # F1 → A1: seed with relevant stored context
+context = render(Thread)            # A1: current run state; no automatic memory injection
 while Budget.ok():                  # D2: the only unconditional bound
-    intent = Decide(render(Thread)) # B1: the ONE intelligent step
+    intent = Decide(context)        # B1: the ONE intelligent step
     Thread.append(intent)
     match intent:
         done   → if Verify(claim): return done        # D1 gates success
                  else: append verdict; continue        # verify failed → search continues
         ask    → Checkpoint; break                     # D4/A2: pause for human
+        recall → Thread.append(Recall(intent.query))   # F1: explicit, relevant, advisory retrieval
         act    → gated = Gate(intent)                   # D3: consequence boundary
                  Thread.append(Act(gated, Toolspace))   # C1/C2
+    context = render(Thread)
 ```
 
-The kernel is universal because it contains **no task knowledge** — no steps, no decomposition, no routing. All of that is `Decide`'s runtime output. Chasing a universal loop means over-specifying this kernel; the compliant move is to keep it empty of task-content and vary the *arrangement* around it.
+The kernel is universal because it contains **no task knowledge** — no steps, no decomposition, no routing. All of that is `Decide`'s runtime output. Chasing a universal loop means over-specifying this kernel; the compliant move is to keep it empty of task-content and vary the _arrangement_ around it.
 
 ## The seven assembly invariants
 
@@ -88,11 +101,11 @@ The master design lever, and what makes the strategy age well:
 
 > **Who owns the control flow — your Python or the model?** Not binary; a dial. The Bitter-Lesson-correct direction is to turn it toward the model over model releases.
 
-| Dial position | Who decides the path | When correct | Atoms emphasized |
-|---|---|---|---|
-| **Code-owned** (workflow) | `if/elif`/DAG fixes the sequence | Steps fixed, nameable, reversibility matters, audit required | Chain of `Decide` calls + `Gate`s |
-| **Mixed** (micro-agents in a DAG) | Code owns the skeleton, model owns segments | Most 2026 production work | Short agent loops (3–20 steps) between code-owned gates |
-| **Model-owned** (agent) | `Decide` chooses every next step and when to stop | Open-ended, unpredictable step count, trusted sandbox | The full kernel; `Fan` orchestrator; `Escalate` |
+| Dial position                     | Who decides the path                              | When correct                                                 | Atoms emphasized                                        |
+| --------------------------------- | ------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------- |
+| **Code-owned** (workflow)         | `if/elif`/DAG fixes the sequence                  | Steps fixed, nameable, reversibility matters, audit required | Chain of `Decide` calls + `Gate`s                       |
+| **Mixed** (micro-agents in a DAG) | Code owns the skeleton, model owns segments       | Most 2026 production work                                    | Short agent loops (3–20 steps) between code-owned gates |
+| **Model-owned** (agent)           | `Decide` chooses every next step and when to stop | Open-ended, unpredictable step count, trusted sandbox        | The full kernel; `Fan` orchestrator; `Escalate`         |
 
 A compliant codebase makes moving the dial a small edit, not a rewrite — which is why arrangements are data, not inheritance.
 
@@ -100,20 +113,34 @@ A compliant codebase makes moving the dial a small edit, not a rewrite — which
 
 These are **not** distinct architectures to choose a framework for — they are six ways to wire the same atoms. They map onto the [seven loop classes](../skills/loops.md) (L1–L7 are these arrangements nested) and Anthropic's five workflow patterns. You move between them by re-wiring, not re-building.
 
-| Arrangement | Dial | Atoms | Loop-class map |
-|---|---|---|---|
-| **1. Chain** (prompt chaining) | code-owned | `Decide`×n + `Gate`/`Verify` between; no loop-back | L-pipeline |
-| **2. Agent loop** | model-owned | the bare kernel; keep 3–20 effective steps | L1 + L5 |
-| **3. Evaluator-optimizer** | model-owned loop | kernel + `Critique`/`Verify` in-loop + bounded repair; **retries must change strategy** | L2 + L3 |
-| **4. Orchestrator-workers** | model-owned | `Decide` emits subtasks *at runtime*; `Fan`-spawn worker loops; `Decide`-synthesis fan-in | L5 + fan-out |
-| **5. Parallel vote/sample** | pure search | `Fan` N attempts; select by `Verify` (oracle/rules), never by vibes | pure search |
-| **6. Background tick** | scheduled | cron/event trigger that starts or *resumes* (via `Checkpoint`) any of 1–5 | L7 |
+| Arrangement                    | Dial             | Atoms                                                                                     | Loop-class map |
+| ------------------------------ | ---------------- | ----------------------------------------------------------------------------------------- | -------------- |
+| **1. Chain** (prompt chaining) | code-owned       | `Decide`×n + `Gate`/`Verify` between; no loop-back                                        | L-pipeline     |
+| **2. Agent loop**              | model-owned      | the bare kernel; keep 3–20 effective steps                                                | L1 + L5        |
+| **3. Evaluator-optimizer**     | model-owned loop | kernel + `Critique`/`Verify` in-loop + bounded repair; **retries must change strategy**   | L2 + L3        |
+| **4. Orchestrator-workers**    | model-owned      | `Decide` emits subtasks _at runtime_; `Fan`-spawn worker loops; `Decide`-synthesis fan-in | L5 + fan-out   |
+| **5. Parallel vote/sample**    | pure search      | `Fan` N attempts; select by `Verify` (oracle/rules), never by vibes                       | pure search    |
+| **6. Background tick**         | scheduled        | cron/event trigger that starts or _resumes_ (via `Checkpoint`) any of 1–5                 | L7             |
 
 They nest: a tick (6) resumes an orchestrator (4) whose workers are evaluator-optimizer loops (3) that internally vote (5) on a code-owned chain (1). Depth of composition, not competing designs.
 
+## Optional learning/curation arrangement (L6)
+
+Cross-run learning remains valuable without adding `Ledger` or `Distill` atoms or reviving an automatic self-improvement pipeline. Compose it from the core atoms:
+
+1. **Capture:** terminal facts and grounded evidence stay in `Thread`; `Observe` emits measurements; `Workspace` stores durable artifacts.
+2. **Project:** if cross-run analytics are useful, derive a rebuildable outcome view that has no transition authority.
+3. **Retrieve:** `Recall` is explicitly requested when prior context could matter; results are provenance-linked, dated, overridable task material.
+4. **Reduce:** `Compact` bounds the selected material without dropping authoritative references or unresolved gaps.
+5. **Propose and challenge:** `Decide` drafts a candidate lesson/change; optional fresh-context `Critique` challenges it.
+6. **Ground and authorize:** `Verify` or `Ablate` measures support/usefulness; `Gate` controls promotion of consequential guidance.
+7. **Persist and reuse:** `Act` writes an approved artifact to `Workspace`/memory; later `Recall` may retrieve it when relevant.
+
+This arrangement is optional per product and run. It is not part of the bare kernel, never silently injects stored text into a prompt, and never makes remembered content authoritative. Penny currently provides explicit memory tools and archival, but its orchestration engine deliberately does not auto-inject retrieved memory or run an automatic outcome/compression/amendment pipeline.
+
 ## The LOAN lifecycle (how loops stay compliant over time)
 
-Loans (KNOWLEDGE-CONSTRAINT scaffolding a current model still needs) must be repaid or they become the *BLE-hobbled system* — scaffolding aged past usefulness, now making the system worse. Triggered at every model upgrade (when scaffolding becomes newly obsolete) and periodically:
+Loans (KNOWLEDGE-CONSTRAINT scaffolding a current model still needs) must be repaid or they become the _BLE-hobbled system_ — scaffolding aged past usefulness, now making the system worse. Triggered at every model upgrade (when scaffolding becomes newly obsolete) and periodically:
 
 1. **Inventory** all LOAN-tagged components (they're tagged per invariant 6).
 2. **Ablate** each: task set scaffold-ON vs OFF; record pass-rate + cost deltas.
@@ -127,23 +154,24 @@ Proposes; measurement disposes. No loan deleted on taste, none kept on sentiment
 Before adding any component — atom instance, prompt clause, threshold, tool wrapper, routing rule, mandated step — answer:
 
 > **Will this get more or less valuable as the model improves and compute gets cheaper?**
+>
 > - **More / neutral** (search/learning conduit, consequence boundary, capability-neutral plumbing) → compliant, add it.
 > - **Less** (substitutes for capability) → do NOT hard-code it. Can the model do it by reading an artifact? If yes, give the model the artifact (a `Recall` lesson, a prompt line, a tool description) and verify with evidence. If it genuinely can't yet, add it as a **tagged LOAN** with an `Ablate` hook and expiry — never as a first-class atom.
 
 ## Anti-patterns (the non-compliant tells)
 
-| Anti-pattern | Why it violates | Compliant replacement |
-|---|---|---|
-| Universal loop / `BaseOrchestrator` with mandated phases | Maximizes frozen decisions; bakes a theory of how tasks should be solved | Empty kernel + atoms; arrangement per task |
-| Keyword/regex router table | Encodes task understanding outside `Decide` | `Decide` routes; or a tiny classifier as a tagged LOAN |
-| Hard-coded task decomposition | Procedure frozen at author time | Orchestrator `Decide` emits subtasks at runtime (arr. 4) |
-| Bespoke tool wrappers "to help the model" | Narrow surface the model outgrows | Broad primitives (bash/http/files); wrappers only for consequence shaping |
-| Output-format repair layer | Compensates for a dissolving weakness | Error → event → model repairs; ablate each upgrade |
-| "Think step by step" / procedure prompts | Tells a capable model how to think | State goals+constraints; prompt-ablate on upgrades |
-| Success on `Done` claim alone | Premature-termination class; no grounded exit | Gate success on `Verify` with captured evidence |
-| Unbounded loop / retry-without-strategy-change | Paralysis class | `Budget` bound + reflection-informed repair |
-| Custom memory abstraction | Model re-taught it every release | `Workspace`: files + git + markdown |
-| Fixed `Fan` topology ("always 3 workers") | Org chart, not search | Topology is `Decide`'s output, bounded by `Budget` |
+| Anti-pattern                                             | Why it violates                                                          | Compliant replacement                                                     |
+| -------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| Universal loop / `BaseOrchestrator` with mandated phases | Maximizes frozen decisions; bakes a theory of how tasks should be solved | Empty kernel + atoms; arrangement per task                                |
+| Keyword/regex router table                               | Encodes task understanding outside `Decide`                              | `Decide` routes; or a tiny classifier as a tagged LOAN                    |
+| Hard-coded task decomposition                            | Procedure frozen at author time                                          | Orchestrator `Decide` emits subtasks at runtime (arr. 4)                  |
+| Bespoke tool wrappers "to help the model"                | Narrow surface the model outgrows                                        | Broad primitives (bash/http/files); wrappers only for consequence shaping |
+| Output-format repair layer                               | Compensates for a dissolving weakness                                    | Error → event → model repairs; ablate each upgrade                        |
+| "Think step by step" / procedure prompts                 | Tells a capable model how to think                                       | State goals+constraints; prompt-ablate on upgrades                        |
+| Success on `Done` claim alone                            | Premature-termination class; no grounded exit                            | Gate success on `Verify` with captured evidence                           |
+| Unbounded loop / retry-without-strategy-change           | Paralysis class                                                          | `Budget` bound + reflection-informed repair                               |
+| Custom memory abstraction                                | Model re-taught it every release                                         | `Workspace`: files + git + markdown                                       |
+| Fixed `Fan` topology ("always 3 workers")                | Org chart, not search                                                    | Topology is `Decide`'s output, bounded by `Budget`                        |
 
 ## Pre-ship checklist (run on any new loop)
 
@@ -158,7 +186,7 @@ CONTROL & TERMINATION
 [ ] Success terminates ONLY on an externally-grounded Verify pass, with captured evidence
 [ ] Verify uses the strongest available tier (oracle > rules > proxy > critic)
 [ ] Budget exhaustion returns met=False + best artifact + reason (no fake pass, no loop-past)
-[ ] Retries change strategy (reflection-informed), never blind repeat
+[ ] Retries change strategy (reflection-informed) and are chosen for expected information gain — never blind repeat, and never "more attempts" for its own sake
 
 CONSEQUENCE & CONTINUITY
 [ ] Irreversible/external actions pass a deny-by-default Gate; sandbox/allow-lists present
@@ -166,8 +194,9 @@ CONSEQUENCE & CONTINUITY
 [ ] Long-horizon work reconstructs progress from external state (memoryless-safe)
 
 SCALING & LEARNING
-[ ] Improving output = turning a knob (iterations/samples/Fan/verifier), not editing control flow
-[ ] Recall seeds relevant stored context (dated, overridable)
+[ ] Improving output = turning a knob (iterations/samples/Fan/verifier), not editing control flow — and the knob is turned when expected value justifies the compute, not by default
+[ ] Recall is explicit, relevance-driven, provenance-linked, dated, overridable, and advisory — never automatic authority
+[ ] Cross-run outcome views are rebuildable projections; any learning/curation path uses the gated L6 arrangement
 
 COMPLIANCE HYGIENE
 [ ] Every component passed the add-side gate; every LOAN is tagged + has an Ablate hook + expiry
@@ -179,13 +208,16 @@ COMPLIANCE HYGIENE
 
 The atoms are not a rewrite target — they are a **lens** for reading and evolving the existing engine. The mapping (fuller version in `research/atomic-loop-components/`):
 
-| Atom | Penny mechanism |
-|---|---|
-| Thread / Checkpoint / Workspace | `RunContext`, durable `run_id` checkpointer + `recover_pending`, MemPalace + git |
-| Decide / Critique | `invoke_agent` (pi subagent) / Vera (objective) + Carren (subjective) |
+| Atom                              | Penny mechanism                                                                                                                              |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Thread / Checkpoint / Workspace   | `RunContext`, durable `run_id` checkpointer + `recover_pending`, MemPalace + git                                                             |
+| Decide / Critique                 | `invoke_agent` (pi subagent) / Vera (objective) + Carren (subjective)                                                                        |
 | Verify / Budget / Gate / Escalate | `done_predicate` + evidence `summary_contract` / `max_iterations` + `learn_exhausted` / `GATE_STATES` / UNCERTAIN → `awaiting_clarification` |
-| Fan / Compact | parallel fan-out with weakest-confidence fan-in / context discipline |
-| Observe / Ablate | observability events / the eval ratchet |
+| Fan / Compact                     | parallel fan-out with weakest-confidence fan-in / context discipline                                                                         |
+| Recall                            | explicit agent/tool retrieval when prior context could matter; no engine-level memory injection                                              |
+| Observe / Ablate                  | observability events / the eval ratchet                                                                                                      |
+
+Penny has no automatic L6 outcome-ledger/compression/amendment pipeline. Durable knowledge is written value-conditionally and retrieved explicitly; workflow-session drawers remain transport/state rather than automatically promoted learning.
 
 Of the four gaps this framing sharpened (see [loops.md](../skills/loops.md)), three are now closed at the engine level (2026-07-14): strategy-delta enforcement and stall detection are **default-on** (the base `progress_check` + engine-recorded iteration digests, opt-out via `LOOP_GUARDS = False`), and evidence-grounded verify contracts are enforced (`contracts.py`). The engine also carries a LOAN registry with Ablate toggles (`loans.py`, invariant 6), an honest-exhaustion backstop on the iteration budget, runtime-emitted fan topology (`parallel_spec` seam), and model-owned routing as a small edit (`fire_model_route`). The remaining open gap is **verifier-gaming hardening** (dual-verifier agreement at high-stakes gates).
 

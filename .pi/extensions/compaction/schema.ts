@@ -1,248 +1,292 @@
 /**
- * Penny Compact Artifact — Zod Schemas (Canonical Runtime Source)
+ * Penny compaction checkpoint schemas.
  *
- * v2.1.0: the artifact is a resumability checkpoint — a prose brief plus
- * pointers into durable stores (engine checkpointer, mempalace, KG,
- * knowledge graph). These schemas are the single source of truth for
- * TypeScript types AND runtime validators.
- *
- * 2.3.0 is an ADDITIVE bump: model-owned-prose provenance (`summary_source`,
- * `summary_model`, `prose_summary`), session-scoping transparency
- * (`scoped_session_ids`), and the cross-session run bucket
- * (`other_session_runs`). Every new field is optional, so a 2.1.0/2.2.0-shaped
- * artifact still validates unchanged.
- *
- * 2.1.0 was an ADDITIVE bump over 2.0.0: every new field is optional, so a
- * 2.0.0-shaped artifact still validates unchanged. New in 2.1.0:
- *   - `dominant_skill.superseded` — a completed skill whose goal was
- *     displaced by a fresher user pivot (listed under Active Skill, but it
- *     no longer sets Goal).
- *   - `current_work` / `next_steps` — rendered as prose sections when
- *     derivable from live signal.
- *   - `metadata.compaction_reason` / `metadata.custom_instructions` — the
- *     named observability sink for the triggering reason and focus hint.
- *   - `metadata.goal_streak` — consecutive byte-identical Goal count, for
- *     the goal-stagnation regression canary (observational only).
+ * Version 3 removes semantic memory/session discovery. Recovery state is a
+ * strict set of exact orchestration run IDs and immutable artifact references
+ * read from those runs' artifact_protocol.selected_refs checkpoints.
  */
+
+import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
-/** The current artifact schema version. Single source of truth. */
-export const SCHEMA_VERSION = "2.3.0" as const;
+export const SCHEMA_VERSION = "3.0.0" as const;
+export const RESUME_REFS_VERSION = 2 as const;
+export const ARTIFACT_REF_SCHEMA_VERSION = 1 as const;
 
-/** Which path produced the prose brief: the summarization model, or the
- *  deterministic LOAN fallback when no model was reachable. */
+function hasControlCharacter(value: string): boolean {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0) ?? -1;
+    return codePoint < 32 || codePoint === 127;
+  });
+}
+
+function compareUnicode(left: string, right: string): number {
+  const leftPoints = Array.from(left, (character) => character.codePointAt(0) ?? -1);
+  const rightPoints = Array.from(right, (character) => character.codePointAt(0) ?? -1);
+  const length = Math.min(leftPoints.length, rightPoints.length);
+  for (let index = 0; index < length; index += 1) {
+    if (leftPoints[index] !== rightPoints[index]) {
+      return (leftPoints[index] ?? -1) - (rightPoints[index] ?? -1);
+    }
+  }
+  return leftPoints.length - rightPoints.length;
+}
+
+const CanonicalStringSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .refine((value) => value === value.trim() && !hasControlCharacter(value), {
+    message: "must be a canonical non-control string",
+  });
+const DigestSchema = z.string().regex(/^[0-9a-f]{64}$/);
+const ArtifactIdSchema = z.string().regex(/^art_[0-9a-f]{64}$/);
+
 export const SummarySourceEnum = z.enum(["model", "deterministic_fallback"]);
-
-/** The reason Pi triggered this compaction (mirrors Pi's event.reason). */
 export const CompactionReasonEnum = z.enum(["manual", "threshold", "overflow"]);
-
-// ============================================================
-// Enums
-// ============================================================
-
 export const PendingStateEnum = z.enum([
   "UNKNOWN_STATE",
   "awaiting_clarification",
   "verification_required",
 ]);
 
-// ============================================================
-// Sub-Schemas
-// ============================================================
+export const PendingStateSchema = z
+  .object({
+    state: PendingStateEnum,
+    previous_state: CanonicalStringSchema,
+    question_summary: z.string().max(300),
+    turn_id: CanonicalStringSchema,
+  })
+  .strict();
 
-export const PendingStateSchema = z.object({
-  state: PendingStateEnum,
-  previous_state: z.string().min(1),
-  mempalace_drawer_id: z.string().min(1),
-  question_summary: z.string().max(300),
-  turn_id: z.string().min(1),
-});
+export const ErrorRefSchema = z
+  .object({
+    error_type: CanonicalStringSchema,
+    message: z.string().max(300),
+    turn_id: CanonicalStringSchema,
+    resolved: z.boolean(),
+  })
+  .strict();
 
-export const ErrorRefSchema = z.object({
-  error_type: z.string().min(1),
-  message: z.string().max(300),
-  turn_id: z.string().min(1),
-  mempalace_drawer_id: z.string().min(1),
-  resolved: z.boolean(),
-});
+export const EngineRunRefSchema = z
+  .object({
+    run_id: CanonicalStringSchema,
+    session_id: CanonicalStringSchema,
+    playbook: CanonicalStringSchema,
+    current_state_id: CanonicalStringSchema,
+    status: z.enum(["running", "awaiting_user"]),
+    goal: z.string().max(500).optional(),
+    clarification_text: z.string().max(300).optional(),
+    updated_at: z.string(),
+  })
+  .strict();
 
-/**
- * A reference to an orchestration-engine run, read from the durable
- * run_id checkpointer (.penny/orchestration.db). The checkpointer is the
- * source of truth for run state — post-compaction Penny resumes a run
- * with skill(skill_name=<playbook>, goal=..., resumeFrom=<session_id>).
- */
-export const EngineRunRefSchema = z.object({
-  run_id: z.string().min(1),
-  session_id: z.string().min(1),
-  playbook: z.string().min(1),
-  current_state_id: z.string().min(1),
-  status: z.enum(["running", "awaiting_user", "complete", "error"]),
-  goal: z.string().max(500).optional(),
-  clarification_text: z.string().max(300).optional(),
-  updated_at: z.string(),
-});
+export const ArtifactRefSchema = z
+  .object({
+    schema_version: z.literal(ARTIFACT_REF_SCHEMA_VERSION),
+    artifact_id: ArtifactIdSchema,
+    run_id: CanonicalStringSchema,
+    phase: CanonicalStringSchema,
+    branch_id: CanonicalStringSchema.nullable(),
+    kind: z.string().regex(/^[a-z][a-z0-9-]*$/),
+    operation_id: CanonicalStringSchema,
+    version: z.number().int().positive(),
+    producer: CanonicalStringSchema,
+    consumer_scope: z.array(CanonicalStringSchema).max(100),
+    media_type: CanonicalStringSchema,
+    byte_length: z.number().int().nonnegative(),
+    content_digest: DigestSchema,
+    store_ref: z.string().regex(/^artifact:\/\/sha256\/[0-9a-f]{64}$/),
+  })
+  .strict()
+  .superRefine((ref, ctx) => {
+    if (new Set(ref.consumer_scope).size !== ref.consumer_scope.length) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "consumer_scope contains duplicates" });
+    }
+    const sorted = [...ref.consumer_scope].sort(compareUnicode);
+    if (sorted.some((value, index) => value !== ref.consumer_scope[index])) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "consumer_scope is not sorted" });
+    }
+    if (ref.store_ref !== `artifact://sha256/${ref.content_digest}`) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "store_ref does not match digest" });
+    }
+    const identity = JSON.stringify({
+      branch_id: ref.branch_id,
+      kind: ref.kind,
+      operation_id: ref.operation_id,
+      phase: ref.phase,
+      run_id: ref.run_id,
+      version: ref.version,
+    });
+    const expectedId = `art_${createHash("sha256").update(identity, "utf8").digest("hex")}`;
+    if (ref.artifact_id !== expectedId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "artifact_id does not match canonical identity",
+      });
+    }
+  });
 
-// ============================================================
-// Skill Invocation Reference (new v1.1.0)
-// ============================================================
+export const RunResumeRefSchema = z
+  .object({
+    type: z.literal("run"),
+    run_id: CanonicalStringSchema,
+  })
+  .strict();
+export const ArtifactResumeRefSchema = z
+  .object({
+    type: z.literal("artifact"),
+    artifact_id: ArtifactIdSchema,
+    digest: DigestSchema,
+  })
+  .strict();
+export const DurableMemoryResumeRefSchema = z
+  .object({
+    type: z.literal("memory"),
+    memory_id: CanonicalStringSchema,
+  })
+  .strict();
+export const ResumeRefSchema = z.discriminatedUnion("type", [
+  RunResumeRefSchema,
+  ArtifactResumeRefSchema,
+  DurableMemoryResumeRefSchema,
+]);
+export const ResumeRefSetSchema = z
+  .object({
+    version: z.literal(RESUME_REFS_VERSION),
+    refs: z.array(ResumeRefSchema).max(250),
+  })
+  .strict();
 
-export const SkillInvocationRefSchema = z.object({
-  skill_name: z.string().min(1),
-  session_id: z.string().min(1),
-  goal: z.string().min(1).max(500),
-  completed: z.boolean(),
-  result_summary: z.string().max(500).optional(),
-  // 2.1.0: set when a COMPLETED skill's goal was displaced by a fresher
-  // user pivot. The skill stays listed under Active Skill, but Goal is
-  // sourced from the later user message instead.
-  superseded: z.boolean().optional(),
-});
+export const SkillInvocationRefSchema = z
+  .object({
+    skill_name: CanonicalStringSchema,
+    session_id: CanonicalStringSchema.optional(),
+    goal: z.string().min(1).max(500),
+    completed: z.boolean(),
+    result_summary: z.string().max(500).optional(),
+    superseded: z.boolean().optional(),
+  })
+  .strict();
 
-export const MempalaceRoomRefSchema = z.object({
-  wing: z.string().min(1),
-  room: z.string().min(1),
-  drawer_ids: z.array(z.string().min(1)).max(5),
-  last_updated: z.string().datetime(),
-  dominant_for_session: z.boolean().optional(),
-});
+export const ToolCallExampleSchema = z
+  .object({
+    tool: CanonicalStringSchema,
+    params: z.record(z.string(), z.unknown()),
+    successful: z.boolean(),
+  })
+  .strict();
+export const ToolErrorRecoverySchema = z
+  .object({
+    tool: CanonicalStringSchema,
+    failed_params: z.record(z.string(), z.unknown()),
+    error_message: z.string().max(200),
+    corrected_params: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+export const FileContextSchema = z
+  .object({
+    read: z.array(z.string()).max(30),
+    modified: z.array(z.string()).max(30),
+  })
+  .strict();
+export const EvictionRecordSchema = z
+  .object({
+    field: CanonicalStringSchema,
+    evicted_count: z.number().int().nonnegative(),
+    strategy: CanonicalStringSchema,
+    timestamp: z.string().datetime(),
+  })
+  .strict();
+export const BoundaryShiftRecordSchema = z
+  .object({
+    previous: CanonicalStringSchema,
+    current: CanonicalStringSchema,
+    compaction_seq: z.number().int().nonnegative(),
+  })
+  .strict();
+export const PiBoundaryDebugSchema = z
+  .object({
+    first_kept_entry_id: CanonicalStringSchema,
+    tokens_before: z.number().int().nonnegative(),
+    boundary_shift: BoundaryShiftRecordSchema.optional(),
+  })
+  .strict();
+export const ResultBudgetTelemetrySchema = z
+  .object({
+    serialized_bytes: z.number().int().nonnegative(),
+    serialized_characters: z.number().int().nonnegative(),
+    estimated_tokens: z.number().int().nonnegative(),
+    release_minimum_context_headroom_tokens: z.number().int().positive(),
+    required_reserved_after_result_tokens: z.number().int().nonnegative(),
+    estimated_reserved_after_result_tokens: z.number().int(),
+    reserve_invariant_preserved: z.boolean(),
+  })
+  .strict();
+export const CompactionCorrelationSchema = z
+  .object({
+    status: z.literal("not_evaluated"),
+    keys: z.array(CanonicalStringSchema).max(21),
+  })
+  .strict();
+export const ArtifactMetadataSchema = z
+  .object({
+    eviction_log: z.array(EvictionRecordSchema).max(10),
+    pi_boundary: PiBoundaryDebugSchema.optional(),
+    result_budget: ResultBudgetTelemetrySchema.optional(),
+    compaction_correlation: CompactionCorrelationSchema.optional(),
+    compaction_reason: CompactionReasonEnum.optional(),
+    custom_instructions: z.string().max(2000).optional(),
+    goal_streak: z.number().int().nonnegative().optional(),
+    checkpoint_issues: z.array(z.string().max(300)).max(20).optional(),
+  })
+  .strict();
 
-export const KGEntityRefSchema = z.object({
-  entity_id: z.string().min(1),
-  entity_type: z.string().min(1),
-  relevant_predicates: z.array(z.string()),
-  last_verified: z.string().datetime().optional(),
-  stale: z.boolean().optional(),
-  valid_from: z.string().datetime().optional(),
-});
+export const PennyCompactArtifactSchema = z
+  .object({
+    schema_version: z.literal(SCHEMA_VERSION),
+    session_id: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+    compaction_seq: z.number().int().nonnegative(),
+    compaction_timestamp: z.string().datetime(),
 
-export const ToolCallExampleSchema = z.object({
-  tool: z.string().min(1),
-  params: z.record(z.string(), z.any()),
-  successful: z.boolean(),
-});
+    goal: z.string().min(1).max(500),
+    constraints: z.array(z.string().min(1).max(200)).max(20),
+    preferences: z.array(z.string().min(1)).max(10),
+    pending: PendingStateSchema.nullable(),
+    current_work: z.string().min(1).max(1000).optional(),
+    next_steps: z.array(z.string().min(1).max(300)).max(10).optional(),
 
-export const ToolErrorRecoverySchema = z.object({
-  tool: z.string().min(1),
-  failed_params: z.record(z.string(), z.any()),
-  error_message: z.string().max(200),
-  corrected_params: z.record(z.string(), z.any()),
-});
+    errors: z.array(ErrorRefSchema).max(10),
+    engine_runs: z.array(EngineRunRefSchema).max(20),
+    artifact_refs: z.array(ArtifactRefSchema).max(200),
+    resume_refs: ResumeRefSetSchema,
+    files: FileContextSchema,
+    dominant_skill: SkillInvocationRefSchema.optional(),
+    tool_calls: z.array(ToolCallExampleSchema).max(15),
+    tool_error_recovery: z.array(ToolErrorRecoverySchema).max(3),
+    metadata: ArtifactMetadataSchema,
 
-export const FileContextSchema = z.object({
-  read: z.array(z.string()).max(30),
-  modified: z.array(z.string()).max(30),
-});
-
-export const EvictionRecordSchema = z.object({
-  field: z.string().min(1),
-  evicted_count: z.number().int().nonnegative(),
-  strategy: z.string().min(1),
-  timestamp: z.string().datetime(),
-});
-
-export const BoundaryShiftRecordSchema = z.object({
-  previous: z.string().min(1),
-  current: z.string().min(1),
-  compaction_seq: z.number().int().nonnegative(),
-});
-
-export const PiBoundaryDebugSchema = z.object({
-  first_kept_entry_id: z.string().min(1),
-  tokens_before: z.number().int().nonnegative(),
-  boundary_shift: BoundaryShiftRecordSchema.optional(),
-});
-
-export const ArtifactMetadataSchema = z.object({
-  eviction_log: z.array(EvictionRecordSchema).max(10),
-  pi_boundary: PiBoundaryDebugSchema.optional(),
-  // 2.1.0 named observability sink: what triggered the compaction and the
-  // focus hint the user passed (e.g. `/compact <focus>`). Additive/optional.
-  compaction_reason: CompactionReasonEnum.optional(),
-  custom_instructions: z.string().max(2000).optional(),
-  // 2.1.0: consecutive compactions with a byte-identical Goal, for the
-  // goal-stagnation regression canary. Observational; never gates behavior.
-  goal_streak: z.number().int().nonnegative().optional(),
-});
-
-// ============================================================
-// Top-Level Artifact Schema
-// ============================================================
-
-export const PennyCompactArtifactSchema = z.object({
-  // IDENTITY
-  schema_version: z.string().regex(/^\d+\.\d+\.\d+$/),
-  session_id: z.string().regex(/^[a-zA-Z0-9_-]+$/),
-  compaction_seq: z.number().int().nonnegative(),
-  compaction_timestamp: z.string().datetime(),
-
-  // ACTIVE STATE
-  goal: z.string().min(1).max(500),
-  constraints: z.array(z.string().min(1).max(200)).max(20),
-  preferences: z.array(z.string().min(1)).max(10),
-  pending: PendingStateSchema.nullable(),
-
-  // WORK CONTEXT (new 2.1.0 — rendered as prose when derivable, else omitted)
-  current_work: z.string().min(1).max(1000).optional(),
-  next_steps: z.array(z.string().min(1).max(300)).max(10).optional(),
-
-  // ERRORS
-  errors: z.array(ErrorRefSchema).max(10),
-
-  // ENGINE ORCHESTRATION (checkpointer is the source of truth)
-  engine_runs: z.array(EngineRunRefSchema).max(5),
-
-  // PROVENANCE MAPS
-  mempalace_rooms: z.array(MempalaceRoomRefSchema).max(10),
-  kg_entities: z.array(KGEntityRefSchema).max(20),
-  files: FileContextSchema,
-
-  // SKILL TRACKING (new v1.1.0)
-  dominant_skill: SkillInvocationRefSchema.optional(),
-
-  // TOOL USAGE PATTERNS (for weak tool-callers like Kimi/GLM)
-  tool_calls: z.array(ToolCallExampleSchema).max(15),
-  tool_error_recovery: z.array(ToolErrorRecoverySchema).max(3),
-
-  // METADATA
-  metadata: ArtifactMetadataSchema,
-
-  // ============================================================
-  // 2.3.0 (additive, all optional): model-owned-prose provenance +
-  // session-scoping transparency + the cross-session run bucket. A
-  // 2.1.0/2.2.0-shaped artifact still validates unchanged.
-  // ============================================================
-  /** Which path produced the prose brief (model vs deterministic fallback). */
-  summary_source: SummarySourceEnum.optional(),
-  /** provider/model-id of the summarization model, when the model path ran. */
-  summary_model: z.string().max(200).optional(),
-  /** The session ids the grounded state was scoped to (skill results ∪ their
-   *  checkpointer rows ∪ prior-refs ids). Transparency for the archive. */
-  scoped_session_ids: z.array(z.string().min(1)).max(50).optional(),
-  /** Pending runs from OTHER sessions — never in the prose, surfaced only in
-   *  RESUME-REFS under an explicit "verify before resuming" label. */
-  other_session_runs: z.array(EngineRunRefSchema).max(10).optional(),
-  /** The model prose brief, archived so compaction quality is measurable
-   *  offline (the Ablate substrate: compare summary_source populations). */
-  prose_summary: z.string().max(20000).optional(),
-});
-
-// ============================================================
-// Type Exports (generated from zod schemas)
-// ============================================================
+    summary_source: SummarySourceEnum.optional(),
+    summary_model: z.string().max(200).optional(),
+    prose_summary: z.string().max(20000).optional(),
+  })
+  .strict();
 
 export type PennyCompactArtifact = z.infer<typeof PennyCompactArtifactSchema>;
 export type PendingState = z.infer<typeof PendingStateSchema>;
 export type ErrorRef = z.infer<typeof ErrorRefSchema>;
 export type EngineRunRef = z.infer<typeof EngineRunRefSchema>;
+export type ArtifactRef = z.infer<typeof ArtifactRefSchema>;
+export type ResumeRef = z.infer<typeof ResumeRefSchema>;
+export type ResumeRefSet = z.infer<typeof ResumeRefSetSchema>;
 export type SkillInvocationRef = z.infer<typeof SkillInvocationRefSchema>;
-export type MempalaceRoomRef = z.infer<typeof MempalaceRoomRefSchema>;
-export type KGEntityRef = z.infer<typeof KGEntityRefSchema>;
 export type ToolCallExample = z.infer<typeof ToolCallExampleSchema>;
 export type ToolErrorRecovery = z.infer<typeof ToolErrorRecoverySchema>;
 export type FileContext = z.infer<typeof FileContextSchema>;
 export type ArtifactMetadata = z.infer<typeof ArtifactMetadataSchema>;
+export type ResultBudgetTelemetry = z.infer<typeof ResultBudgetTelemetrySchema>;
+export type CompactionCorrelation = z.infer<typeof CompactionCorrelationSchema>;
 export type EvictionRecord = z.infer<typeof EvictionRecordSchema>;
 export type BoundaryShiftRecord = z.infer<typeof BoundaryShiftRecordSchema>;
 export type CompactionReason = z.infer<typeof CompactionReasonEnum>;

@@ -11,7 +11,7 @@ Skills run in subprocesses (one per `start`/`step` invocation) with no interacti
 ## Rules
 
 1. **State is checkpointed by the engine.** Every step is persisted against `run_id`. There is no `/tmp/<skill>-<session_id>.json` to write and no `extract_state`/`restore_state` round-trip to maintain.
-2. **Crash-resume is automatic.** An interrupted run re-issues its pending step via `recover_pending` / the `recover` CLI. Design each state's work to be idempotent so a re-issued step is harmless.
+2. **Crash-resume is automatic.** An interrupted run re-issues its pending step via `recover_pending` / the `recover` CLI with the same selected artifact refs. Design each state's work to be idempotent so a re-issued step is harmless.
 3. **Validate agent SUMMARY before routing.** In `route_after`, reject empty, malformed, or missing SUMMARY fields; a contract violation should re-issue the same step (bounded by `ctx.max_iterations`), not advance on bad data.
 4. **Use safe defaults that never claim completion.** Treat a missing/invalid field as `complete: false`, `passed: false`, `count: 0` — never as success.
 5. **Report loop exhaustion honestly.** When a retry loop hits `ctx.max_iterations`, emit `complete` with `met=False` (record the miss); never fabricate success.
@@ -19,20 +19,22 @@ Skills run in subprocesses (one per `start`/`step` invocation) with no interacti
 
 ## Error / recovery behavior
 
-| Situation | Behavior |
-|-----------|----------|
-| Agent SUMMARY malformed / missing required field | Contract violation → re-issue the same step (bounded by `max_iterations`) |
-| Agent returns `confidence: UNCERTAIN` | Escalate → pause at `awaiting_clarification`; user answer resumes via `step --agent user` |
-| Parallel branch failure | Aggregate per `PARALLEL_BY_STATE`; proceed if the state's contract is met, else re-issue/escalate |
-| Process crash mid-step | Engine re-issues the pending step from the last checkpoint on `recover` |
-| Retry budget exhausted | `complete` with `met=False` — honest miss, never faked success |
-| Planned gate denied | Route to the playbook's terminal `error` state |
+| Situation                                        | Behavior                                                                                          |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| Agent SUMMARY malformed / missing required field | Contract violation → re-issue the same step (bounded by `max_iterations`)                         |
+| Agent returns `confidence: UNCERTAIN`            | Escalate → pause at `awaiting_clarification`; user answer resumes via `step --agent user`         |
+| Parallel branch failure                          | Aggregate per `PARALLEL_BY_STATE`; proceed if the state's contract is met, else re-issue/escalate |
+| Process crash mid-step                           | Engine re-issues the pending step from the last checkpoint on `recover`                           |
+| Owner dispatch mode paused/invalid               | Typed `paused`, non-terminal/retriable; no agent/tool/fan-out dispatch or checkpoint/ref mutation |
+| Retry budget exhausted                           | `complete` with `met=False` — honest miss, never faked success                                    |
+| Planned gate denied                              | Route to the playbook's terminal `error` state                                                    |
 
 ## Constraints
 
 - **Never fake completion.** No error or exhaustion path may report success.
-- **The checkpointer is the source of truth for run state** — not mempalace, not a temp file. Agents' working notes go to mempalace; run state lives in the checkpointer keyed by `run_id`.
+- **The checkpointer is the source of truth for run state** — not an artifact payload, durable memory, or a temp file. Exact stage bytes live in owner artifacts; compact state and selected refs live in the checkpointer keyed by `run_id`.
 - **Make steps idempotent.** A re-issued step must not double-apply side effects.
+- **Forward recovery only for Track A.** The owner sets `PENNY_ARTIFACT_DISPATCH_MODE=active|paused` (default active; unknown fails closed). Paused runs keep status and exact artifact reads available. Reactivation uses fresh-process recovery with the same pending refs/metadata; there is no semantic-memory fallback.
 
 ## Verification
 
@@ -40,6 +42,7 @@ Skills run in subprocesses (one per `start`/`step` invocation) with no interacti
 - [ ] Loop exhaustion emits `complete` with `met=False`
 - [ ] UNCERTAIN / stalled loops escalate to `awaiting_clarification`
 - [ ] A killed run resumes correctly via `recover` (covered by a playbook test)
+- [ ] Pause/unpause leaves artifact manifest/object hashes and memory sentinel unchanged and reissues identical pending refs
 
 ## Related Documents
 

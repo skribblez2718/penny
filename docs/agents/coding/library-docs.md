@@ -7,9 +7,7 @@ and any third-party dependency), **look the docs up at runtime from the
 canonical source** rather than trusting a static list of links. Docs change and
 versions upgrade; a cached link dump drifts from the current, correct patterns.
 
-This is the same discipline the `rez` skill uses for its fresh-every-run NIST
-NICE lookup: the local reference is a **lookup entry point, never a data
-source.**
+The local reference is a **lookup entry point, never a data source**: freshness-sensitive claims must be checked against the current canonical source.
 
 ## How to look up library docs (hybrid: cached table + self-heal)
 
@@ -18,7 +16,7 @@ Each library's local index (`docs/agents/coding/<lib>/<lib>.md`) carries a
 as a fast index, and repair it when it drifts:
 
 1. **Confirm the version** the target project uses (`package.json` / lockfile /
-   `pyproject.toml`) and look up docs for *that* major version. Major versions
+   `pyproject.toml`) and look up docs for _that_ major version. Major versions
    can differ substantially (Tailwind v3 vs v4, Lit v2 vs v3, Pydantic v1 vs v2).
 2. **Resolve the concept in the table and fetch that URL.**
    - Fetch succeeds + content matches the concept → use it. If the row's
@@ -27,13 +25,13 @@ as a fast index, and repair it when it drifts:
 3. **Self-heal on failure** (404, redirect to a generic page, or content that no
    longer matches the concept):
    a. Find the correct URL — web-search `"<lib> docs <concept>"`, or fetch the
-      site's nav/sitemap from the canonical base.
+   site's nav/sitemap from the canonical base.
    b. **Verify before persisting:** the candidate must return 200 **and** serve
-      content matching the concept. Never write a guessed/unverified URL.
+   content matching the concept. Never write a guessed/unverified URL.
    c. **Update the table row** (URL + today's `Verified` date) with an `edit`,
-      and note the repair in your summary. Add a new row for a missing concept.
-      This is a working-tree edit only — **never `git commit` it without explicit
-      user approval** (see [../../penny/tool-usage.md](../../penny/tool-usage.md)).
+   and note the repair in your summary. Add a new row for a missing concept.
+   This is a working-tree edit only — **never `git commit` it without explicit
+   user approval** (see [../../penny/tool-usage.md](../../penny/tool-usage.md)).
 
 This keeps the fast direct-URL benefit while the table stays current on its own,
 and it sidesteps sites (e.g. Tailwind) that have no browsable "root" docs page.

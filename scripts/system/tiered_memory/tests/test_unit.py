@@ -4,13 +4,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from memory.admin_client import AdminCallResult  # noqa: E402
+from memory.common import atomic_write_json  # noqa: E402
+from memory.hub_config import HubConfig  # noqa: E402
 from tiered_memory import (  # noqa: E402
+    DrawerMeta,
     age_days,
+    apply_retention_manifest,
+    build_retention_manifest,
     classify_drawer,
     should_archive,
     sweep_for_archival,
     weekly_archival_report,
-    DrawerMeta,
 )
 
 
@@ -68,14 +73,19 @@ class TestClassifyDrawer:
 
     def test_jsa_wing_session_scratch_is_t2_30d(self):
         # The 77%-accretion fix: dedicated-wing per-session scratch now decays.
-        for room in ("plan-1782417115437-findings", "plan-1782321357342-cve-validate-CVE-2025-4690"):
+        for room in (
+            "plan-1782417115437-findings",
+            "plan-1782321357342-cve-validate-CVE-2025-4690",
+        ):
             d = DrawerMeta("d1", "wing_jsa", room, "2026-04-01T00:00:00Z")
             tier, ttl = classify_drawer(d)
             assert tier == "T2", room
             assert ttl == 30, room
 
     def test_jsa_e2e_scratch_is_t2_30d(self):
-        d = DrawerMeta("d1", "wing_jsa", "jsa-gj-2026-06-09-e2e-01-sast-validated", "2026-04-01T00:00:00Z")
+        d = DrawerMeta(
+            "d1", "wing_jsa", "jsa-gj-2026-06-09-e2e-01-sast-validated", "2026-04-01T00:00:00Z"
+        )
         tier, ttl = classify_drawer(d)
         assert tier == "T2"
         assert ttl == 30
@@ -184,84 +194,128 @@ class TestWeeklyReport:
         assert "audit" in report.lower() or "s1" in report
 
 
-class TestMainCLI:
-    def test_cli_no_expired_drawers(self, tmp_path):
-        import subprocess
-        import sys
-
-        venv_site = tmp_path / "scripts" / "system" / "bridge"
-        venv_site.mkdir(parents=True)
-        bridge = venv_site / "memory_bridge.py"
-        bridge.write_text("""
-def tool_list_drawers(params):
-    from datetime import datetime, timezone, timedelta
-    if params.get("offset", 0):
-        return {"drawers": []}
-    recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-    return {
-        "drawers": [
-            {"id": "d1", "wing": "penny", "room": "audit", "filed_at": recent, "content": "x"},
-        ]
+def _hub_config(tmp_path: Path) -> HubConfig:
+    roots = {
+        name: tmp_path / name
+        for name in ("palace", "archive", "runtime", "logs", "home", "config", "cache", "state")
     }
+    for path in roots.values():
+        path.mkdir()
+    roots["kg"] = roots["palace"] / "knowledge_graph.sqlite3"
+    roots["logstream"] = roots["palace"] / "logstream.sqlite3"
+    return HubConfig(
+        config_path=tmp_path / "hub.json",
+        endpoint="http://127.0.0.1:8766",
+        host="127.0.0.1",
+        port=8766,
+        palace_id="synthetic-palace",
+        backend="chroma",
+        python_executable=Path(sys.executable),
+        token_file=tmp_path / "token",
+        data_roots=roots,
+        health_timeout_seconds=1.0,
+        stop_timeout_seconds=1.0,
+        config_sha256="a" * 64,
+    )
 
-def tool_delete_drawer(params):
-    return {"success": True}
 
-def tool_add_drawer(params):
-    return {"success": True}
-""")
+class _FakeAdminClient:
+    def __init__(self, drawers):
+        self.drawers = drawers
+        self.deleted = []
 
-        archiver = Path(__file__).parent.parent / "archiver.py"
-        result = subprocess.run(
-            [sys.executable, str(archiver)],
-            capture_output=True,
-            text=True,
-            cwd=str(tmp_path),
-            env={"PI_MEMORY_BRIDGE": str(bridge)},
+    def call_tool(self, tool, arguments=None):
+        if tool == "mempalace_list_drawers":
+            offset = (arguments or {}).get("offset", 0)
+            batch = self.drawers if offset == 0 else []
+            payload = {"drawers": batch, "total": len(self.drawers)}
+            return AdminCallResult("list-request", payload)
+        if tool == "mempalace_get_drawer":
+            drawer_id = arguments["drawer_id"]
+            payload = next(
+                drawer
+                for drawer in self.drawers
+                if drawer.get("drawer_id", drawer.get("id")) == drawer_id
+            )
+            return AdminCallResult("get-request", payload)
+        assert tool == "mempalace_delete_drawer"
+        self.deleted.append(arguments["drawer_id"])
+        return AdminCallResult("delete-request", {"success": True})
+
+
+class TestRetentionManifest:
+    def test_apply_requires_reviewed_manifest_and_writes_journal(self, tmp_path):
+        config = _hub_config(tmp_path)
+        now = datetime(2026, 5, 1, tzinfo=timezone.utc)
+        old = (now - timedelta(days=31)).isoformat()
+        drawers = [DrawerMeta("d1", "penny", "audit", old, content="recoverable")]
+        manifest_path = tmp_path / "retention.json"
+        atomic_write_json(
+            manifest_path,
+            build_retention_manifest(drawers, config, now=now),
+        )
+        client = _FakeAdminClient(
+            [
+                {
+                    "drawer_id": "d1",
+                    "wing": "penny",
+                    "room": "audit",
+                    "filed_at": old,
+                    "content": "recoverable",
+                }
+            ]
+        )
+        journal = tmp_path / "operation.jsonl"
+
+        stats = apply_retention_manifest(manifest_path, journal, config, client)
+
+        assert stats == {"archived": 1, "deleted": 1, "failed": 0, "stale": 0}
+        assert client.deleted == ["d1"]
+        events = [
+            __import__("json").loads(line)["event"] for line in journal.read_text().splitlines()
+        ]
+        assert events == [
+            "apply-started",
+            "cold-archived",
+            "delete-requested",
+            "delete-result",
+            "apply-finished",
+        ]
+        archives = list(config.data_roots["archive"].rglob("*.jsonl"))
+        assert len(archives) == 1
+        assert "recoverable" in archives[0].read_text()
+
+    def test_stale_content_is_never_deleted(self, tmp_path):
+        config = _hub_config(tmp_path)
+        now = datetime(2026, 5, 1, tzinfo=timezone.utc)
+        old = (now - timedelta(days=31)).isoformat()
+        manifest_path = tmp_path / "retention.json"
+        atomic_write_json(
+            manifest_path,
+            build_retention_manifest(
+                [DrawerMeta("d1", "penny", "audit", old, content="reviewed")],
+                config,
+                now=now,
+            ),
+        )
+        client = _FakeAdminClient(
+            [
+                {
+                    "drawer_id": "d1",
+                    "wing": "penny",
+                    "room": "audit",
+                    "filed_at": old,
+                    "content": "changed after review",
+                }
+            ]
         )
 
-        assert result.returncode == 0, result.stderr
-        assert "# Weekly Archival Report" in result.stdout
-        assert "No expired drawers to archive." in result.stdout
-
-    def test_cli_with_pi_memory_bridge_env(self, tmp_path):
-        import subprocess
-        import sys
-
-        venv_site = tmp_path / "scripts" / "system" / "bridge"
-        venv_site.mkdir(parents=True)
-        bridge = venv_site / "memory_bridge.py"
-        bridge.write_text("""
-def tool_list_drawers(params):
-    from datetime import datetime, timezone, timedelta
-    if params.get("offset", 0):
-        return {"drawers": []}
-    old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-    return {
-        "drawers": [
-            {"id": "d1", "wing": "penny", "room": "audit", "filed_at": old, "content": "x"},
-            {"id": "d2", "wing": "penny", "room": "skills", "filed_at": old, "content": "y"},
-        ]
-    }
-
-def tool_delete_drawer(params):
-    return {"success": True, "deleted": params["drawer_id"]}
-
-def tool_add_drawer(params):
-    return {"success": True}
-""")
-
-        archiver = Path(__file__).parent.parent / "archiver.py"
-        result = subprocess.run(
-            [sys.executable, str(archiver)],
-            capture_output=True,
-            text=True,
-            cwd=str(tmp_path),
-            env={"PI_MEMORY_BRIDGE": str(bridge), "MEMPALACE_PATH": str(tmp_path / ".mempalace")},
+        stats = apply_retention_manifest(
+            manifest_path,
+            tmp_path / "operation.jsonl",
+            config,
+            client,
         )
 
-        assert result.returncode == 0, result.stderr
-        assert "# Weekly Archival Report" in result.stdout
-        assert "Archiving 1 expired drawers" in result.stdout
-        # Expired drawers are now written to T4 cold storage before deletion.
-        assert "Deleted: 1, Archived: 1, Failed: 0" in result.stdout
+        assert stats == {"archived": 0, "deleted": 0, "failed": 1, "stale": 1}
+        assert client.deleted == []

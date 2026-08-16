@@ -1,27 +1,55 @@
 #!/usr/bin/env python3
-"""
-Memory Bridge - Python bridge for MemPalace tools
-Called by the TypeScript extension to interact with MemPalace
+"""Legacy MemPalace bridge for tests and copied/offline compatibility only.
 
-All 23 MemPalace tools are available:
+Production extensions and administration must use the supervised HTTP hub.
+Importing or executing this module requires an explicit compatibility flag,
+an absolute copied/offline target, and a validated drain/no-hub/no-peer receipt.
+There is no configured-path or live-palace default.
+
+All 23 historical tools remain available for gated recovery compatibility:
 - Palace (read): status, list_wings, list_rooms, get_taxonomy, search, smart_search, check_duplicate, get_aaak_spec, list_drawers
 - Palace (write): add_drawer, delete_drawer, delete_drawers_by_room
 - Knowledge Graph: kg_query, kg_add, kg_invalidate, kg_timeline, kg_stats
 - Navigation: traverse, find_tunnels, graph_stats
 - Agent Diary: diary_write, diary_read
 
-Configuration:
-    MEMPALACE_PATH: Override default palace path (default: ~/.mempalace/palace)
+Required environment:
+    PENNY_MEMORY_BRIDGE_OFFLINE_COMPAT=1
+    PENNY_MEMORY_OFFLINE_TARGET=/absolute/path/to/copied-palace
+    PENNY_MEMORY_OFFLINE_RECEIPT=/absolute/path/to/offline-receipt.json
 """
 
 import sys
 import os
 import json
 import hashlib
+import errno
+import fcntl
+import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-# Import mempalace modules
+from scripts.system.memory.hnsw import HNSW_TUNING
+from scripts.system.memory.offline_access import authorize_offline_target
+
+if os.environ.get("PENNY_MEMORY_BRIDGE_OFFLINE_COMPAT") != "1":
+    raise RuntimeError(
+        "memory_bridge is offline/test compatibility only; "
+        "set PENNY_MEMORY_BRIDGE_OFFLINE_COMPAT=1 with an explicit copy and receipt"
+    )
+_offline_target_raw = os.environ.get("PENNY_MEMORY_OFFLINE_TARGET", "")
+_offline_receipt_raw = os.environ.get("PENNY_MEMORY_OFFLINE_RECEIPT", "")
+if not _offline_target_raw or not _offline_receipt_raw:
+    raise RuntimeError("memory_bridge requires explicit offline target and receipt paths")
+_OFFLINE_AUTHORIZATION = authorize_offline_target(
+    Path(_offline_target_raw), Path(_offline_receipt_raw)
+)
+os.environ["MEMPALACE_PALACE_PATH"] = str(_OFFLINE_AUTHORIZATION.target)
+os.environ.pop("MEMPAL_PALACE_PATH", None)
+os.environ.pop("MEMPALACE_PATH", None)
+
+# Raw peers are imported only after the copied/offline runtime guard succeeds.
 try:
     from mempalace.config import MempalaceConfig
     from mempalace.palace_graph import traverse, find_tunnels, graph_stats
@@ -50,10 +78,60 @@ except ImportError as e:
     )
     sys.exit(1)
 
-# Initialize config. Cheap and dependency-free: reads ~/.mempalace/config.json if
-# present, otherwise falls back to defaults. Safe at import.
-_config = MempalaceConfig()
 
+def _apply_palace_path_env_compat() -> None:
+    """Reassert the one receipt-authorized target; aliases cannot redirect it."""
+
+    authorized = str(_OFFLINE_AUTHORIZATION.target)
+    for name in ("MEMPALACE_PALACE_PATH", "MEMPAL_PALACE_PATH", "MEMPALACE_PATH"):
+        supplied = os.environ.get(name)
+        if supplied and Path(supplied).resolve(strict=False) != _OFFLINE_AUTHORIZATION.target:
+            raise RuntimeError(f"{name} cannot redirect the authorized offline target")
+    os.environ["MEMPALACE_PALACE_PATH"] = authorized
+
+
+_apply_palace_path_env_compat()
+_config = MempalaceConfig()
+# Do not leak the compatibility target into child processes, where the generic
+# offline guard would correctly interpret a configured path as live. The
+# process-local config above remains permanently bound to the authorized copy.
+os.environ.pop("MEMPALACE_PALACE_PATH", None)
+
+# HNSW tuning applied at COLLECTION CREATION time. Load-bearing — do not drop.
+#
+# Why this exists
+# ---------------
+# The bridge is spawned as a fresh short-lived process for EVERY memory call.
+# ChromaDB only persists its write-ahead log (the `embeddings_queue` table) into
+# the HNSW vector index once `sync_threshold` operations accumulate. Its own
+# SqlEmbeddingsQueue docstring explicitly says it is suitable only when producer
+# and consumer live in the SAME process, because notification is in-process.
+# Penny instead spawns a fresh short-lived process for every memory call.
+#
+# At the stock threshold of 1000, metadata-only recall UPDATEs and ADDs accumulate
+# into a large replay backlog while HNSW persistence lags. Historical production
+# corpora prove the immediate trigger is UPDATE+ADD replay, NOT deletes:
+#     Aug 1 wedge: 83 UPDATE + 38 ADD, zero DELETE, byte-exact HNSW files
+#     Aug 2 wedge: 167 UPDATE + 52 ADD, zero DELETE, byte-exact HNSW files
+# Replaying the full byte-identical Aug 2 corpus crashed 2/2; truncating it at
+# earlier operation boundaries survived. The NULL-pointer dereference is inside
+# chromadb_rust_bindings (upstream bug, unfixed as of 1.5.9 — latest release).
+# It kills BOTH reads and writes, wedging the palace because the replay that
+# would advance the vector segment is itself what crashes.
+#
+# Measured on this palace (identical bytes, repeated trials):
+#     WAL backlog    0 records -> 0/8 crashes
+#     WAL backlog  142 records -> 0/5 crashes
+#     WAL backlog  162 records -> 4/4 crashes
+#     WAL backlog  218 records -> 5/5 crashes
+#
+# Keeping the backlog bounded well under that cliff is what prevents the crash.
+#
+# MUST be set at creation: ChromaDB accepts `collection.modify(metadata=...)`
+# for these keys and even persists them to `collection_metadata`, but the Rust
+# core does NOT honor them afterwards — verified: a healthy collection modified
+# after the fact still never compacted. Applying this to an existing collection
+# therefore requires a rebuild (see scripts/system/bridge/repair_palace.py).
 # The knowledge graph is initialized LAZILY, on first KG-tool use — never at import.
 #
 # Why: KnowledgeGraph() opens a SQLite DB at mempalace's DEFAULT_KG_PATH
@@ -101,6 +179,148 @@ except ImportError:  # pragma: no cover - import-context robustness
     from chunk_reassembly import reassemble_rows
 
 
+# ==================== CROSS-PROCESS PALACE LOCK ====================
+#
+# Why this exists
+# ---------------
+# ChromaDB's PersistentClient is SINGLE-PROCESS. Its metadata segment is SQLite
+# and is safely serialized by SQLite's own locking, but its vector segment is
+# four raw files (data_level0.bin, length.bin, link_lists.bin, header.bin) with
+# NO cross-process locking whatsoever. Two processes flushing the HNSW segment
+# at the same time interleave their writes and tear the index.
+#
+# Penny's architecture guarantees that concurrency: the bridge is spawned as a
+# fresh process for EVERY memory call, `subagent` runs up to 25 agents at once,
+# `skill` runs up to 3 skills at once, and the tiered-memory archiver fires from
+# cron with no coordination with live sessions.
+#
+# Measured on this palace (identical workload, 8 workers x 90 adds, only the
+# concurrency changed):
+#     8 workers CONCURRENT  -> 2/8 SIGSEGV, data_level0.bin size wrong,
+#                             link_lists.bin +772 trailing bytes,
+#                             121 of 720 rows landed (~83% silently LOST),
+#                             palace then segfaulted on every subsequent read
+#     8 workers SEQUENTIAL  -> 0/8 crashes, all files byte-exact,
+#                             675 of 675 rows landed, palace healthy
+#
+# The torn-write fingerprint (trailing bytes in link_lists.bin) is what wedged
+# the production palace on 2026-08-11. The damage is subtle enough to pass every
+# consistency check — labels, tombstones, neighbour ranges, levels and vector
+# norms all validate — but it leaves a corrupt region in the graph, and any
+# later insert or query whose traversal reaches it dereferences garbage and
+# dies with SIGSEGV. Because that crash happens during WAL replay, the vector
+# segment can never advance, so the palace stays wedged permanently.
+#
+# There is no upstream fix to upgrade into: chromadb 1.5.9 is still the latest
+# release on PyPI. Serializing writers is the only durable remedy.
+#
+# The lock is taken here, in the Python bridge, rather than in the TypeScript
+# extension, so that EVERY consumer is covered by construction: the extension's
+# per-call spawns, the archiver importing tool_* directly, and the maintenance
+# and repair scripts.
+_LOCK_FILENAME = ".palace.lock"
+_LOCK_TIMEOUT_S = float(os.environ.get("MEMPALACE_LOCK_TIMEOUT", "120"))
+_lock_fd = None
+_lock_depth = 0
+
+
+def _open_lock_file(path: str):
+    """Open (creating if needed) the palace lock file. None if unavailable."""
+    fd = None
+    try:
+        os.makedirs(path, exist_ok=True)
+        return os.open(os.path.join(path, _LOCK_FILENAME), os.O_RDWR | os.O_CREAT, 0o644)
+    except Exception:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        return None
+
+
+def _flock_until(fd: int, timeout: float) -> bool:
+    """Poll for an exclusive flock until acquired or the timeout expires."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError as exc:
+            if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                return False
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
+
+
+@contextmanager
+def palace_lock(palace_path: str = None, timeout: float = None):
+    """Hold an exclusive cross-process lock on the palace for the whole block.
+
+    Serializes every process that touches the ChromaDB store, which is what
+    keeps concurrent writers from tearing the HNSW segment (see the block
+    comment above for the measurements that motivate this).
+
+    Reentrant within a process: nested acquisitions bump a depth counter rather
+    than calling flock() on a second file descriptor, which would deadlock
+    against ourselves (flock locks are per open-file-description).
+
+    Fails CLOSED if the lock file cannot be opened or the timeout expires.
+    Running a memory operation unlocked would recreate the torn-index condition
+    this lock exists to prevent; availability must never outrank store integrity.
+
+    Args:
+        palace_path: Palace directory. Defaults to the configured palace.
+        timeout: Seconds to wait for the lock. Defaults to MEMPALACE_LOCK_TIMEOUT
+            (120s).
+
+    Yields:
+        bool: Always True; yielded only while the lock is held.
+
+    Raises:
+        RuntimeError: lock file could not be opened.
+        TimeoutError: another process held the lock past the deadline.
+    """
+    global _lock_fd, _lock_depth
+
+    if _lock_depth > 0:  # already held by this process — reentrant
+        _lock_depth += 1
+        try:
+            yield True
+        finally:
+            _lock_depth -= 1
+        return
+
+    path = palace_path or _config.palace_path
+    timeout = _LOCK_TIMEOUT_S if timeout is None else timeout
+
+    fd = _open_lock_file(path)
+    if fd is None:
+        raise RuntimeError(f"Cannot open palace lock file under {path}")
+
+    acquired = _flock_until(fd, timeout)
+    if not acquired:
+        os.close(fd)
+        raise TimeoutError(f"Timed out after {timeout}s waiting for palace lock at {path}")
+
+    _lock_fd, _lock_depth = fd, 1
+    try:
+        yield True
+    finally:
+        _lock_depth -= 1
+        if _lock_depth == 0:
+            _lock_fd = None
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except Exception:
+                pass
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+
+
 def _fix_blob_seq_ids(palace_path: str):
     """Fix ChromaDB BLOB seq_ids → INTEGER before creating PersistentClient.
 
@@ -134,14 +354,18 @@ def _fix_blob_seq_ids(palace_path: str):
 
 
 def _get_collection(create: bool = False):
-    """Get ChromaDB collection."""
+    """Get ChromaDB collection.
+
+    On the create path the collection is given HNSW_TUNING so its write-ahead
+    log stays bounded. See the HNSW_TUNING comment for why that is load-bearing.
+    """
     try:
         _fix_blob_seq_ids(_config.palace_path)
         client = chromadb.PersistentClient(path=_config.palace_path)
         # Always use 'mempalace_drawers' to match searcher.py
         collection_name = "mempalace_drawers"
         if create:
-            return client.get_or_create_collection(collection_name)
+            return client.get_or_create_collection(collection_name, metadata=dict(HNSW_TUNING))
         return client.get_collection(collection_name)
     except Exception:
         return None
@@ -1116,8 +1340,12 @@ def handle_request(request: dict) -> dict:
             "error": f"Unknown tool: {tool_name}. Available: {list(TOOL_HANDLERS.keys())}",
         }
 
+    # Serialize the ENTIRE tool call, not just collection acquisition: ChromaDB
+    # flushes the HNSW segment during add/delete/query, so the window that must
+    # be exclusive is the whole operation.
     handler = TOOL_HANDLERS[tool_name]
-    result = handler(params)
+    with palace_lock():
+        result = handler(params)
     return result
 
 

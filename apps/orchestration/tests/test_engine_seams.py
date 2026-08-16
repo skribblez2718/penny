@@ -279,8 +279,7 @@ def test_gate_approve_routes_forward(cp):
 
 
 class _GateNoopPlaybook(GatePlaybook):
-    """Gate playbook whose route_user FIRES NOTHING on an unrecognized answer,
-    so the engine's re-ask path is exercised (mirrors sca's gate contract)."""
+    """Gate playbook that fires nothing for an unrecognized user answer."""
 
     def route_user(self, state, ctx, response):
         ans = response.get("answer") if isinstance(response, dict) else str(response)

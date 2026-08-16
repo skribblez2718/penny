@@ -3,6 +3,8 @@ import {
   type TrustedQuestionnaireBinding,
   type TrustedQuestionnaireQuestion,
 } from "./execution-receipts.js";
+import type { ArtifactDispatchPause, ArtifactDispatchRecovery } from "./dispatch-control.js";
+import type { ArtifactRef } from "./artifact-client.js";
 
 /**
  * Result shape returned by executeSkill to the skill extension.
@@ -22,6 +24,14 @@ export interface SkillResult {
   errors: string[];
   /** Complete Python engine terminal result, preserved without reconstruction. */
   result?: Record<string, unknown>;
+  /** Exact terminal output selected by the skill's execution owner. */
+  output_artifact_ref?: ArtifactRef;
+  /** Owner dispatch pause is non-success and safe to retry from the same checkpoint. */
+  retriable?: boolean;
+  /** Closed Python/driver pause contract retained verbatim for operator tooling. */
+  dispatch_pause?: ArtifactDispatchPause;
+  /** Exact forward-recovery instruction associated with a dispatch pause. */
+  recovery?: ArtifactDispatchRecovery;
 
   // ── Multi-mode fields (all optional — default 'single' backward compat) ──
 
@@ -217,6 +227,7 @@ export interface ResumeChainStep {
   goal: string;
   session_id?: string;
   constraints?: Record<string, unknown>;
+  model?: string;
 }
 
 /** Minimal checkpoint shape reconstructResumeChain reads (subset of ChainCheckpoint). */
@@ -226,23 +237,36 @@ export interface ResumeCheckpointStep {
   goal: string;
   session_id: string;
   status: "pending" | "running" | "complete" | "failed";
-  result_summary?: string;
+  model?: string;
+  constraints?: Record<string, unknown>;
+  result_preview?: string;
+  output_artifact_ref?: ArtifactRef;
+  handoff_artifact_ref?: ArtifactRef;
 }
 
 export interface ResumeCheckpointShape {
   steps: ResumeCheckpointStep[];
-  pending_steps?: Array<{ index: number; skill_name: string; goal: string }>;
+  pending_steps?: Array<{
+    index: number;
+    skill_name: string;
+    goal: string;
+    session_id?: string;
+    model?: string;
+    constraints?: Record<string, unknown>;
+  }>;
 }
 
 export interface ResumeReconstruction {
   /** Steps still to run (failed step first, then still-pending), each exactly once. */
   chain: ResumeChainStep[];
-  /** Already-completed steps in order, with their {previous} handoff summaries. */
+  /** Already-completed steps in order, with durable exact terminal/handoff refs. */
   completed: Array<{
     index: number;
     skill_name: string;
     session_id: string;
-    result_summary: string;
+    result_preview: string;
+    output_artifact_ref?: ArtifactRef;
+    handoff_artifact_ref?: ArtifactRef;
   }>;
   /** 0-based index of the first step to (re)run. */
   startStep: number;
@@ -281,7 +305,9 @@ export function reconstructResumeChain(
         index: step.index,
         skill_name: step.skill_name,
         session_id: step.session_id,
-        result_summary: step.result_summary || "",
+        result_preview: step.result_preview || "",
+        output_artifact_ref: step.output_artifact_ref,
+        handoff_artifact_ref: step.handoff_artifact_ref,
       });
       continue;
     }
@@ -291,8 +317,9 @@ export function reconstructResumeChain(
       chain.push({
         skill_name: step.skill_name,
         goal: override?.goal ?? step.goal,
-        constraints: override?.constraints ?? {},
+        constraints: override?.constraints ?? step.constraints ?? {},
         session_id: step.session_id,
+        model: step.model,
       });
       startStep = step.index;
       sawFailed = true;
@@ -302,6 +329,8 @@ export function reconstructResumeChain(
         skill_name: step.skill_name,
         goal: step.goal,
         session_id: step.session_id,
+        constraints: step.constraints,
+        model: step.model,
       });
     }
     seen.add(step.index);
@@ -309,7 +338,13 @@ export function reconstructResumeChain(
 
   for (const pending of checkpoint.pending_steps ?? []) {
     if (seen.has(pending.index)) continue;
-    chain.push({ skill_name: pending.skill_name, goal: pending.goal });
+    chain.push({
+      skill_name: pending.skill_name,
+      goal: pending.goal,
+      session_id: pending.session_id,
+      constraints: pending.constraints,
+      model: pending.model,
+    });
     seen.add(pending.index);
   }
 
@@ -397,7 +432,7 @@ export function formatResult(
       );
       lines.push(theme("muted", "Use the questionnaire tool to ask: Approve / Refine / Deny."));
       lines.push(
-        theme("muted", "Full plan details are in mempalace — fetch with memory_smart_search.")
+        theme("muted", "Read the exact granted plan artifact with artifact_read when needed.")
       );
       lines.push("");
       lines.push(theme("toolTitle", "Plan Steps:"));
@@ -430,6 +465,18 @@ export function formatResult(
         }
       }
     }
+  } else if (result.dispatch_pause) {
+    lines.push(theme("warning", `⏸️ ${result.skill_name} dispatch paused`));
+    lines.push(`  State: ${result.state}`);
+    lines.push(`  Session: ${result.session_id}`);
+    lines.push(`  Code: ${result.dispatch_pause.code}`);
+    lines.push(`  Reason: ${result.dispatch_pause.reason}`);
+    lines.push(
+      theme(
+        "muted",
+        `  Retriable: set PENNY_ARTIFACT_DISPATCH_MODE=active, then recover run ${result.dispatch_pause.run_id}.`
+      )
+    );
   } else if (result.escalation) {
     const esc = result.escalation;
 
@@ -572,11 +619,10 @@ export function parseSummaryFromOutput(output: string): Record<string, unknown> 
 }
 
 /**
- * Truncate text for use as {previous} in chain mode.
+ * Build an optional bounded display preview for chain status/checkpoints.
  *
- * Cuts at a word boundary near maxChars, appending '…' when truncated.
- * If no word boundary exists within 80% of maxChars, does a hard cut.
- * Returns empty string as-is (no truncation marker).
+ * The preview is never handoff authority; exact terminal/handoff ArtifactRefs
+ * carry chain data. Cuts near a word boundary and marks truncation with `…`.
  */
 export function truncateForPrevious(text: string, maxChars: number = 2000): string {
   if (!text || text.length <= maxChars) return text;
@@ -591,10 +637,10 @@ export function truncateForPrevious(text: string, maxChars: number = 2000): stri
 }
 
 /**
- * Extract a text summary from a SkillResult for chain {previous} handoff.
+ * Extract optional human-readable chain status text.
  *
- * Uses plan.plan_summary if available (structured output from completion action),
- * falls back to a simple session + state description.
+ * Uses plan.plan_summary when available and otherwise emits session/state
+ * metadata. Callers may store a bounded preview, never use it as exact handoff.
  */
 export function getFinalOutputFromSkillResult(result: SkillResult): string {
   // Structured plan_summary from the skill's completion action

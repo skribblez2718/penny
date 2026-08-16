@@ -1,50 +1,32 @@
 #!/usr/bin/env python3
-"""Read-only MemPalace audit — Phase 1 of the Item-5 memory cleanup.
+"""Read-only, hub-routed memory inventory and cleanup-candidate audit.
 
-NEVER deletes or writes to the store. It enumerates every drawer (reusing the
-archiver's own paginator + tier classifier so the audit and the real sweep can
-never disagree), classifies each against the CURRENT policy and a PROPOSED
-policy (dedicated-wing scratch decay), cross-references room/wing names against
-the live skills/extensions on disk, and flags:
-
-  * TEST artifacts (safe delete)                      — wing_test-agent-*, e2e/test rooms
-  * DEAD-NAME references (review/delete)              — `jobz` + non-live skill/extension wings/rooms
-  * OVERSIZED raw-transcript drawers (review)         — content > 20 KB (raw jsonl blobs)
-  * TRANSIENT scratch a decay rule would age out      — the 77% JSA bulk
-
-It prints a summary and writes a full JSON manifest to /tmp for the
-human-gated Phase 2. Nothing here mutates the palace.
-
-    .venv/bin/python scripts/system/maintenance/mempalace_audit.py
+Normal operation requires an explicit supervised-hub config and an explicit
+absolute output manifest.  The audit never imports a local memory peer and
+never opens memory-store bytes.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Sequence, Tuple
 
-_HERE = Path(__file__).resolve()
-_ROOT = _HERE.parents[3]
-for _p in (_ROOT / "scripts" / "system" / "tiered_memory", _ROOT / "scripts" / "system" / "bridge"):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
+from scripts.system.memory.admin_client import AdminClientError, MemoryAdminClient
+from scripts.system.memory.common import ValidationError, atomic_write_json
+from scripts.system.memory.hub_config import load_hub_config
+from scripts.system.tiered_memory import archiver as arch
 
-import archiver as arch  # noqa: E402
-from memory_bridge import tool_list_drawers  # noqa: E402
-
-# ── Proposed policy (SIMULATED here — not written to archiver.py) ─────────────
-# Dedicated-wing scratch uses session-id-prefixed room names (plan-<ts>-*,
-# jsa-gj-<date>-*), which are definitionally transient. Curated cross-session
-# rooms are kept permanent by exact match (checked first).
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PROPOSED_PREFIXES: List[Tuple[str, Tuple[str, int]]] = [
     ("wing_jsa/plan-", ("T2", 30)),
     ("wing_jsa/jsa-gj-", ("T2", 30)),
-    ("wing_sca/", ("T2", 30)),  # forward-looking: sca has no drawers yet
+    ("wing_sca/", ("T2", 30)),
 ]
 PROPOSED_KEEP = {
     "wing_jsa/jsa-learnings",
@@ -52,11 +34,8 @@ PROPOSED_KEEP = {
     "wing_jsa/vulnerability_research",
     "wing_sca/sca-learnings",
 }
-
 OVERSIZE_BYTES = 20_000
-DEAD_TOKENS = ["jobz"]  # user-flagged defunct names; extend as the manifest reveals more
-
-# Wings that are legitimately not skill-named (kept regardless of skill list).
+DEAD_TOKENS = ["jobz"]
 _NON_SKILL_WINGS = {
     "penny",
     "wing_travel",
@@ -68,44 +47,53 @@ _NON_SKILL_WINGS = {
     "ring_jsa",
 }
 
-LIVE_SKILLS = {p.name for p in (_ROOT / ".pi" / "skills").iterdir() if p.is_dir()}
-LIVE_EXT = {p.name for p in (_ROOT / ".pi" / "extensions").iterdir() if p.is_dir()}
+
+def _live_directory_names(path: Path) -> set[str]:
+    if not path.is_dir():
+        return set()
+    return {candidate.name for candidate in path.iterdir() if candidate.is_dir()}
 
 
-def proposed_classify(d: "arch.DrawerMeta") -> Tuple[str, int]:
-    key = f"{d.wing}/{d.room}"
+LIVE_SKILLS = _live_directory_names(PROJECT_ROOT / ".pi" / "skills")
+
+
+def proposed_classify(drawer: arch.DrawerMeta) -> Tuple[str, int]:
+    """Apply the historical cleanup proposal without mutating current policy."""
+
+    key = f"{drawer.wing}/{drawer.room}"
     if key in PROPOSED_KEEP:
         return ("T3", -1)
-    for prefix, tt in PROPOSED_PREFIXES:
+    for prefix, tier_ttl in PROPOSED_PREFIXES:
         if key.startswith(prefix):
-            return tt
-    return arch.classify_drawer(d)
+            return tier_ttl
+    return arch.classify_drawer(drawer)
 
 
-def _archive_verdict(tier_ttl: Tuple[str, int], d: "arch.DrawerMeta") -> str:
+def _archive_verdict(tier_ttl: Tuple[str, int], drawer: arch.DrawerMeta) -> str:
     _, ttl = tier_ttl
     if ttl < 0:
         return "keep"
-    days = arch.age_days(d.timestamp)
+    days = arch.age_days(drawer.timestamp)
     if days is None:
         return "unknown"
     return "archive" if days > ttl else "keep"
 
 
 def _dead_name(wing: str, room: str) -> str:
-    """Return a reason string if this wing/room references a defunct thing, else ''."""
+    """Return a reason when a room refers to a known-defunct name."""
+
     key = f"{wing}/{room}".lower()
-    for tok in DEAD_TOKENS:
-        if tok in key:
-            return f"name contains defunct token '{tok}'"
-    m = re.match(r"wing_([a-z0-9-]+)$", wing)
-    if m and wing not in _NON_SKILL_WINGS and not wing.startswith("wing_test-agent"):
-        skill = m.group(1)
+    for token in DEAD_TOKENS:
+        if token in key:
+            return f"name contains defunct token '{token}'"
+    wing_match = re.match(r"wing_([a-z0-9-]+)$", wing)
+    if wing_match and wing not in _NON_SKILL_WINGS and not wing.startswith("wing_test-agent"):
+        skill = wing_match.group(1)
         if skill not in LIVE_SKILLS:
             return f"wing '{wing}' names a non-live skill '{skill}'"
-    m2 = re.match(r"skills/([a-z0-9]+)-", room)
-    if m2 and m2.group(1) not in LIVE_SKILLS:
-        return f"room '{room}' names a non-live skill '{m2.group(1)}'"
+    room_match = re.match(r"skills/([a-z0-9]+)-", room)
+    if room_match and room_match.group(1) not in LIVE_SKILLS:
+        return f"room '{room}' names a non-live skill '{room_match.group(1)}'"
     return ""
 
 
@@ -114,113 +102,104 @@ def _is_test(wing: str, room: str, content: str) -> bool:
         return True
     if room.startswith("e2e") or "test-" in room or room.endswith("-test"):
         return True
-    if wing == "penny" and room == "signals" and ("Multi test" in content or "multi1_" in content):
-        return True
-    return False
+    return (
+        wing == "penny" and room == "signals" and ("Multi test" in content or "multi1_" in content)
+    )
 
 
-def main() -> int:
-    metas = arch._fetch_all_drawers(tool_list_drawers)
-    total = len(metas)
+def build_audit(drawers: List[arch.DrawerMeta]) -> dict[str, object]:
+    """Build a deterministic audit document from hub-returned logical drawers."""
 
     wings: Dict[str, Dict[str, int]] = defaultdict(lambda: {"count": 0, "bytes": 0})
     rooms: Dict[str, Dict[str, object]] = {}
-    manifest: Dict[str, List[dict]] = {
+    flagged: Dict[str, List[dict[str, object]]] = {
         "test_artifacts": [],
         "dead_name": [],
         "oversized": [],
         "content_mentions_dead": [],
     }
-    cur_roll = defaultdict(int)
-    prop_roll = defaultdict(int)
+    current_rollup: Dict[str, int] = defaultdict(int)
+    proposed_rollup: Dict[str, int] = defaultdict(int)
     newly_decayable = {"count": 0, "bytes": 0}
 
-    for d in metas:
-        size = len(d.content or "")
-        wings[d.wing]["count"] += 1
-        wings[d.wing]["bytes"] += size
+    for drawer in drawers:
+        size = len((drawer.content or "").encode("utf-8"))
+        wings[drawer.wing]["count"] += 1
+        wings[drawer.wing]["bytes"] += size
+        room_key = f"{drawer.wing}/{drawer.room}"
+        room = rooms.setdefault(room_key, {"count": 0, "bytes": 0, "current": "", "proposed": ""})
+        count = room.get("count")
+        byte_count = room.get("bytes")
+        room["count"] = (count if isinstance(count, int) else 0) + 1
+        room["bytes"] = (byte_count if isinstance(byte_count, int) else 0) + size
 
-        rk = f"{d.wing}/{d.room}"
-        r = rooms.setdefault(rk, {"count": 0, "bytes": 0, "cur": "", "prop": ""})
-        r["count"] += 1  # type: ignore[operator]
-        r["bytes"] += size  # type: ignore[operator]
-
-        cur = _archive_verdict(arch.classify_drawer(d), d)
-        prop = _archive_verdict(proposed_classify(d), d)
-        r["cur"], r["prop"] = cur, prop
-        cur_roll[cur] += 1
-        prop_roll[prop] += 1
-        if cur != "archive" and prop == "archive":
+        current = _archive_verdict(arch.classify_drawer(drawer), drawer)
+        proposed = _archive_verdict(proposed_classify(drawer), drawer)
+        room["current"], room["proposed"] = current, proposed
+        current_rollup[current] += 1
+        proposed_rollup[proposed] += 1
+        if current != "archive" and proposed == "archive":
             newly_decayable["count"] += 1
             newly_decayable["bytes"] += size
 
-        entry = {"id": d.drawer_id, "wing": d.wing, "room": d.room, "bytes": size}
-        if _is_test(d.wing, d.room, d.content or ""):
-            manifest["test_artifacts"].append(entry)
-        dn = _dead_name(d.wing, d.room)
-        if dn:
-            manifest["dead_name"].append({**entry, "reason": dn})
+        entry: dict[str, object] = {
+            "id": drawer.drawer_id,
+            "wing": drawer.wing,
+            "room": drawer.room,
+            "bytes": size,
+        }
+        if _is_test(drawer.wing, drawer.room, drawer.content):
+            flagged["test_artifacts"].append(entry)
+        dead_reason = _dead_name(drawer.wing, drawer.room)
+        if dead_reason:
+            flagged["dead_name"].append({**entry, "reason": dead_reason})
         if size > OVERSIZE_BYTES:
-            manifest["oversized"].append(entry)
-        if any(tok in (d.content or "").lower() for tok in DEAD_TOKENS) and not dn:
-            manifest["content_mentions_dead"].append(entry)
+            flagged["oversized"].append(entry)
+        if any(token in drawer.content.lower() for token in DEAD_TOKENS) and not dead_reason:
+            flagged["content_mentions_dead"].append(entry)
 
-    # ── Report ────────────────────────────────────────────────────────────
-    print(f"# MemPalace Audit (READ-ONLY) — {datetime.now(timezone.utc).date()}")
-    print(f"\nTotal drawers: {total}\n")
+    return {
+        "schema_version": 1,
+        "manifest_type": "memory-read-only-audit",
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "total_drawers": len(drawers),
+        "wings": dict(wings),
+        "rooms": rooms,
+        "rollup": {"current": dict(current_rollup), "proposed": dict(proposed_rollup)},
+        "newly_decayable": newly_decayable,
+        "proposed_prefixes": PROPOSED_PREFIXES,
+        "proposed_keep": sorted(PROPOSED_KEEP),
+        "flagged": flagged,
+    }
 
-    print("## Wings")
-    for w, s in sorted(wings.items(), key=lambda x: -x[1]["count"]):
-        print(f"  {w:<34} {s['count']:>5} drawers  {s['bytes'] / 1024:>9.1f} KB")
 
-    print("\n## Top 25 rooms (current → proposed archiver verdict)")
-    top = sorted(rooms.items(), key=lambda x: -x[1]["count"])[:25]  # type: ignore[index]
-    for rk, s in top:
-        flag = "  ⇒ NEWLY DECAYABLE" if s["cur"] != "archive" and s["prop"] == "archive" else ""
-        print(
-            f"  {rk:<52} {s['count']:>5}  {s['bytes'] / 1024:>8.1f}KB  "
-            f"{s['cur']:>7} → {s['prop']:<7}{flag}"
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", required=True, type=Path, help="absolute hub config path")
+    parser.add_argument("--output", required=True, type=Path, help="new absolute audit path")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    try:
+        if not args.config.is_absolute() or not args.output.is_absolute():
+            raise ValidationError("--config and --output must be explicit absolute paths")
+        config = load_hub_config(args.config)
+        client = MemoryAdminClient.from_hub_config(config)
+        drawers = arch._fetch_all_drawers(
+            lambda params: client.call_tool("mempalace_list_drawers", params).payload
         )
+        audit = build_audit(drawers)
+        atomic_write_json(args.output, audit)
+    except (AdminClientError, OSError, ValidationError, ValueError) as exc:
+        print(json.dumps({"error": str(exc), "type": type(exc).__name__}), file=sys.stderr)
+        return 2
 
-    print("\n## Archive-verdict rollup")
-    print(f"  CURRENT : keep={cur_roll['keep']}  archive={cur_roll['archive']}  unknown={cur_roll['unknown']}")
-    print(f"  PROPOSED: keep={prop_roll['keep']}  archive={prop_roll['archive']}  unknown={prop_roll['unknown']}")
-    print(
-        f"  ⇒ Proposed rules newly age out {newly_decayable['count']} drawers "
-        f"({newly_decayable['bytes'] / 1024:.1f} KB) that today are kept forever."
-    )
-
-    print("\n## Flagged for the human gate")
-    for cat in ("test_artifacts", "dead_name", "oversized", "content_mentions_dead"):
-        items = manifest[cat]
-        tb = sum(i["bytes"] for i in items)
-        print(f"  {cat:<22} {len(items):>4} drawers  {tb / 1024:>8.1f} KB")
-        for i in items[:5]:
-            extra = f"  ({i['reason']})" if "reason" in i else ""
-            print(f"      - {i['wing']}/{i['room']}  [{i['id'][:40]}]{extra}")
-        if len(items) > 5:
-            print(f"      … +{len(items) - 5} more (see manifest)")
-
-    out = Path("/tmp") / f"mempalace_audit_{datetime.now(timezone.utc).date()}.json"
-    out.write_text(
-        json.dumps(
-            {
-                "generated": datetime.now(timezone.utc).isoformat(),
-                "total_drawers": total,
-                "wings": wings,
-                "rooms": {k: v for k, v in rooms.items()},
-                "rollup": {"current": dict(cur_roll), "proposed": dict(prop_roll)},
-                "newly_decayable": newly_decayable,
-                "proposed_prefixes": PROPOSED_PREFIXES,
-                "proposed_keep": sorted(PROPOSED_KEEP),
-                "flagged": manifest,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    print(f"\nFull manifest → {out}")
-    print("READ-ONLY: nothing was modified. Phase 2 (deletion) is separate and human-gated.")
+    print(f"# MemPalace Audit (READ-ONLY) — {datetime.now(timezone.utc).date()}")
+    print(f"Total drawers: {audit['total_drawers']}")
+    print(f"Full manifest: {args.output}")
+    print("Nothing was modified; all memory reads used the authenticated hub.")
     return 0
 
 

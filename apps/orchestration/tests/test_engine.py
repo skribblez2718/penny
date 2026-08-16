@@ -7,6 +7,7 @@ tests inherently exercise kill-and-resume durability (no --state, no replay).
 
 import pytest
 
+from artifact_protocol_helpers import owner_result
 from orchestration.checkpointer import (
     STATUS_AWAITING_USER,
     STATUS_COMPLETE,
@@ -142,44 +143,34 @@ def test_happy_path_to_complete(cp):
 
 
 # ---------------------------------------------------------------------------
-# Driver-wire-format regression.
-#
-# The single-agent step must accept the TS driver's wrapper
-# {exitCode, summary, summary_missing, error} (skill/index.ts:1012-1021), not
-# just a bare summary. A prior bug validated the WHOLE wrapper against the state
-# contract, so every required field read as "missing", every single-agent step
-# failed validation and retried to death, no run reached terminal, and the runs
-# table stayed empty.
-#
-# The rest of this suite passes bare summaries and so never exercised the real
-# production wire format, which is why the bug survived. These tests drive the
-# exact envelope the driver emits.
+# Driver-wire-format regression. These tests persist the exact owner-captured
+# bytes and drive the full result-protocol-v2 wrapper emitted by skill/index.ts.
 
 
-def _wrap(summary, *, exit_code=0, missing=False, error=None):
-    """The exact envelope the TS driver emits per single-agent step."""
-    return {
-        "exitCode": exit_code,
-        "summary": summary,
-        "summary_missing": missing,
-        "error": error,
-    }
+def _wrap(directive, summary, *, exit_code=0, missing=False, error=None):
+    return owner_result(
+        directive,
+        summary,
+        exit_code=exit_code,
+        summary_missing=missing,
+        error=error,
+    )
 
 
 def test_driver_wrapper_reaches_complete(cp):
     """Full happy path using the real driver wrapper — the regression guard."""
-    _start(cp)
-    d = _step(cp, "echo", _wrap(S_OBSERVE))
+    d = _start(cp)
+    d = _step(cp, "echo", _wrap(d, S_OBSERVE))
     assert d["agent"] == "annie" and d["state_id"] == "framing"
-    d = _step(cp, "annie", _wrap(S_FRAME))
+    d = _step(cp, "annie", _wrap(d, S_FRAME))
     assert d["agent"] == "piper" and d["state_id"] == "planning"
-    d = _step(cp, "piper", _wrap(S_PLAN))
+    d = _step(cp, "piper", _wrap(d, S_PLAN))
     assert d["agent"] == "skribble" and d["state_id"] == "acting"
-    d = _step(cp, "skribble", _wrap(S_ACT))
+    d = _step(cp, "skribble", _wrap(d, S_ACT))
     assert d["agent"] == "vera" and d["state_id"] == "verifying"
-    d = _step(cp, "vera", _wrap(S_VERIFY_PASS))
+    d = _step(cp, "vera", _wrap(d, S_VERIFY_PASS))
     assert d["agent"] == "carren" and d["state_id"] == "learning"
-    d = _step(cp, "carren", _wrap(S_LEARN))
+    d = _step(cp, "carren", _wrap(d, S_LEARN))
     assert d["action"] == "complete" and d["result"]["met"] is True
 
     rec = cp.load(RID)
@@ -188,23 +179,38 @@ def test_driver_wrapper_reaches_complete(cp):
 
 def test_driver_wrapper_summary_missing_retries(cp):
     """summary_missing must retry the state, not validate an empty summary."""
-    _start(cp)
-    d = _step(cp, "echo", _wrap({}, missing=True, error="no parseable SUMMARY"))
+    directive = _start(cp)
+    d = _step(
+        cp,
+        "echo",
+        _wrap(directive, {}, missing=True, error="no parseable SUMMARY"),
+    )
     assert d["action"] == "invoke_agent" and d["state_id"] == "observing"
 
 
 def test_driver_wrapper_agent_failure_retries(cp):
     """A nonzero exitCode must retry on the agent failure, not silently advance."""
-    _start(cp)
-    d = _step(cp, "echo", _wrap({}, exit_code=1, error="agent crashed"))
+    directive = _start(cp)
+    d = _step(
+        cp,
+        "echo",
+        _wrap(directive, {}, exit_code=1, error="agent crashed"),
+    )
     assert d["action"] == "invoke_agent" and d["state_id"] == "observing"
 
 
-def test_bare_summary_still_accepted(cp):
-    """Direct/programmatic callers (and the existing suite) pass a bare summary."""
+def test_bare_summary_still_accepted_in_explicit_test_mode(cp):
+    """The suite's named test-only seam preserves programmatic unit callers."""
     _start(cp)
     d = _step(cp, "echo", S_OBSERVE)
     assert d["agent"] == "annie" and d["state_id"] == "framing"
+
+
+def test_bare_summary_rejected_without_programmatic_test_mode(cp, monkeypatch):
+    monkeypatch.delenv("PENNY_ORCH_TEST_ALLOW_PROGRAMMATIC_RESULTS", raising=False)
+    _start(cp)
+    d = _step(cp, "echo", S_OBSERVE)
+    assert d["action"] == "invoke_agent" and d["state_id"] == "observing"
 
 
 def test_evidence_ref_skips_observe(cp):

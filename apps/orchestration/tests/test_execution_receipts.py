@@ -22,8 +22,8 @@ def _receipt(tmp_path, key, **overrides):
     values = {
         "receipt_id": "receipt-1",
         "run_id": "run-1",
-        "state_id": "verifying",
-        "obligation_id": "criterion:1",
+        "state_id": "validating",
+        "obligation_id": "state:validating",
         "argv": ["pytest", "tests", "-q"],
         "working_directory": str(tmp_path),
         "executor_identity": "tool:bash",
@@ -53,7 +53,7 @@ def test_valid_same_run_receipt_preserves_status_and_redacted_digest(tmp_path, k
     assert validate_execution_receipt(
         receipt,
         run_id="run-1",
-        obligation_id="criterion:1",
+        obligation_id="state:validating",
         key=key,
         allowed_working_root=str(tmp_path),
     ) == (True, "")
@@ -63,9 +63,8 @@ def test_valid_same_run_receipt_preserves_status_and_redacted_digest(tmp_path, k
     ("mutation", "reason"),
     [
         (lambda value: value.update(run_id="other-run"), "different run"),
-        (lambda value: value.update(obligation_id="criterion:2"), "different obligation"),
+        (lambda value: value.update(obligation_id="state:other"), "different obligation"),
         (lambda value: value.update(exit_status=1), "not successful"),
-        (lambda value: value.update(state_id="implementing"), "final verifying state"),
         (
             lambda value: value.update(execution_owner_identity=value["executor_identity"]),
             "must be distinct",
@@ -76,15 +75,13 @@ def test_valid_same_run_receipt_preserves_status_and_redacted_digest(tmp_path, k
         (lambda value: value.update(redaction_state="raw"), "not valid"),
     ],
 )
-def test_forged_wrong_run_tampered_failed_and_wrong_class_receipts_rejected(
-    tmp_path, key, mutation, reason
-):
+def test_forged_wrong_run_tampered_and_failed_receipts_rejected(tmp_path, key, mutation, reason):
     receipt = _receipt(tmp_path, key)
     mutation(receipt)
     valid, error = validate_execution_receipt(
         receipt,
         run_id="run-1",
-        obligation_id="criterion:1",
+        obligation_id="state:validating",
         key=key,
         allowed_working_root=str(tmp_path),
     )
@@ -97,13 +94,21 @@ def test_signature_forgery_and_missing_owner_key_never_satisfy(tmp_path, key):
     forged = deepcopy(receipt)
     forged["signature"] = "0" * 64
     assert (
-        validate_execution_receipt(forged, run_id="run-1", obligation_id="criterion:1", key=key)[0]
+        validate_execution_receipt(
+            forged,
+            run_id="run-1",
+            obligation_id="state:validating",
+            key=key,
+        )[0]
         is False
     )
     assert (
-        validate_execution_receipt(receipt, run_id="run-1", obligation_id="criterion:1", key=None)[
-            0
-        ]
+        validate_execution_receipt(
+            receipt,
+            run_id="run-1",
+            obligation_id="state:validating",
+            key=None,
+        )[0]
         is False
     )
 

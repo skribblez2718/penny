@@ -1,10 +1,11 @@
 """Shared plumbing for Penny's eval & regression suite.
 
 The suite measures what actually matters (see README.md — "what better means"),
-reading the LIVE stores directly:
+reading online memory through the supervised HTTP hub and other local stores
+through their own read-only interfaces:
 
-  * mempalace (via the memory bridge)   — diary and curated rooms
-  * the engine checkpointer             — .penny/orchestration.db
+  * mempalace (authenticated HTTP JSON-RPC) — diary and curated rooms
+  * the engine checkpointer                 — .penny/orchestration.db
   * the observability database          — sessions, logs, orchestration ingest
 
 Every check returns an :class:`EvalResult`. The runner compares results against
@@ -27,11 +28,12 @@ import json
 import os
 import re
 import sqlite3
-import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
+
+from scripts.system.memory.admin_client import AdminClientError, MemoryAdminClient
 
 EVALS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = EVALS_DIR.parents[2]
@@ -138,36 +140,41 @@ def within_days(value: Any, days: float, now: Optional[datetime] = None) -> bool
 
 # ── Store access ────────────────────────────────────────────────────────────
 
-_BRIDGE: Any = None
+_MEMORY_CLIENT: Optional[MemoryAdminClient] = None
 
 
-def bridge() -> Any:
-    """Import the memory bridge lazily (chromadb is heavy)."""
-    global _BRIDGE
-    if _BRIDGE is None:
-        bridge_dir = str(REPO_ROOT / "scripts" / "system" / "bridge")
-        if bridge_dir not in sys.path:
-            sys.path.insert(0, bridge_dir)
-        import memory_bridge  # type: ignore[import-not-found]
+def memory_client() -> MemoryAdminClient:
+    """Load the hub client lazily from one explicit absolute config path."""
 
-        _BRIDGE = memory_bridge
-    return _BRIDGE
+    global _MEMORY_CLIENT
+    if _MEMORY_CLIENT is None:
+        raw_config = os.environ.get("PENNY_MEMORY_HUB_CONFIG", "").strip()
+        if not raw_config:
+            raise EvalSkip("PENNY_MEMORY_HUB_CONFIG is required for memory evals")
+        config_path = Path(raw_config)
+        if not config_path.is_absolute():
+            raise EvalSkip("PENNY_MEMORY_HUB_CONFIG must be absolute")
+        try:
+            _MEMORY_CLIENT = MemoryAdminClient.from_config(config_path)
+        except (AdminClientError, OSError, ValueError) as exc:
+            raise EvalSkip(f"memory hub config unavailable: {exc}") from exc
+    return _MEMORY_CLIENT
 
 
-def _bridge_call(tool: Callable[[dict], dict], params: dict) -> dict:
-    result = tool(params)
-    if not isinstance(result, dict):
-        raise EvalSkip(f"bridge returned non-dict: {result!r}")
-    if result.get("error"):
-        raise EvalSkip(f"bridge error: {result['error']}")
-    return result
+def memory_call(tool: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Call one memory tool through the authenticated hub or skip cleanly."""
+
+    try:
+        return cast(Dict[str, Any], memory_client().call_tool(tool, params).payload)
+    except AdminClientError as exc:
+        raise EvalSkip(f"memory hub call failed: {type(exc).__name__}: {exc}") from exc
 
 
 def list_drawers_all(
     wing: Optional[str] = None,
     room: Optional[str] = None,
     include_content: bool = False,
-    page: int = 10000,
+    page: int = 100,
 ) -> List[Dict[str, Any]]:
     """Page through drawers (the whole store when wing/room are None)."""
     drawers: List[Dict[str, Any]] = []
@@ -182,8 +189,10 @@ def list_drawers_all(
             params["wing"] = wing
         if room:
             params["room"] = room
-        result = _bridge_call(bridge().tool_list_drawers, params)
+        result = memory_call("mempalace_list_drawers", params)
         batch = result.get("drawers", [])
+        if not isinstance(batch, list):
+            raise EvalSkip("memory hub returned an invalid drawer list")
         drawers.extend(batch)
         if len(batch) < page:
             return drawers
@@ -253,7 +262,10 @@ class Verdict:
 def load_baseline(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {"expected_failures": {}, "metrics": {}}
-    baseline = json.loads(path.read_text(encoding="utf-8"))
+    decoded = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(decoded, dict):
+        return {"expected_failures": {}, "metrics": {}}
+    baseline = cast(Dict[str, Any], decoded)
     baseline.setdefault("expected_failures", {})
     baseline.setdefault("metrics", {})
     return baseline

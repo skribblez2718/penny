@@ -216,7 +216,9 @@ class ScopePolicy:
             ("rm", "-rf"),
         }
         if any(normalized[: len(prefix)] == prefix for prefix in destructive):
-            raise ScopeViolation(f"destructive command is outside the P0 mutation contract: {argv}")
+            raise ScopeViolation(
+                f"destructive command is outside the authorized mutation scope: {argv}"
+            )
 
 
 def _git(

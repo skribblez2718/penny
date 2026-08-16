@@ -8,13 +8,8 @@
 import { describe, it, expect, vi } from "vitest";
 import compactionExtension from "../../index.js";
 
-vi.mock("../../bridge.js", () => ({
-  queryEngineRuns: vi.fn(async () => []),
-  queryMempalaceSkillRooms: vi.fn(async () => []),
-  queryMempalaceSkillRoomsForSession: vi.fn(async () => []),
-  queryKGEntitiesForScope: vi.fn(async () => []),
-  queryOutcomeLedgerDecisions: vi.fn(async () => []),
-  queryDiaryEscalation: vi.fn(async () => []),
+vi.mock("../../checkpointer.js", () => ({
+  readExactCheckpoints: vi.fn(() => ({ runs: [], artifactRefs: [], issues: [] })),
 }));
 
 vi.mock("../../pending.js", () => ({

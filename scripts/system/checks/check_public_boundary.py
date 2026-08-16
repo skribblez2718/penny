@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_MANIFEST = Path(__file__).with_name("code_p0_scope_manifest.json")
+DEFAULT_MANIFEST = Path(__file__).with_name("public_boundary_manifest.json")
 
 
 @dataclass(frozen=True)
@@ -64,22 +64,44 @@ def load_manifest(path: str | Path = DEFAULT_MANIFEST) -> dict[str, Any]:
     return manifest
 
 
-def _tracked_paths(root: Path) -> list[str]:
+def _git_paths(root: Path, *arguments: str) -> list[str]:
     process = subprocess.run(
-        ["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True, shell=False
+        ["git", "ls-files", "-z", *arguments],
+        cwd=root,
+        capture_output=True,
+        check=True,
+        shell=False,
     )
     return sorted(
         item.decode("utf-8", "surrogateescape") for item in process.stdout.split(b"\0") if item
     )
 
 
-def _tracked_and_selected_paths(root: Path, selected_patterns: list[str]) -> list[str]:
-    """Include scoped newly-created files without widening out-of-scope reporting."""
+def _tracked_paths(root: Path) -> list[str]:
+    return _git_paths(root)
+
+
+def _untracked_non_ignored_paths(root: Path) -> list[str]:
+    return _git_paths(root, "--others", "--exclude-standard")
+
+
+def _tracked_and_selected_paths(
+    root: Path, selected_patterns: list[str], ignored_patterns: list[str]
+) -> list[str]:
+    """Include every non-ignored untracked file selected by the manifest.
+
+    ``Path.glob("**")`` can yield directories without recursively yielding their
+    files, which let a repository-wide scope miss nested new files. Git's own
+    untracked/non-ignored inventory is both complete and aligned with the public
+    repository boundary.
+    """
+
     paths = set(_tracked_paths(root))
-    for pattern in selected_patterns:
-        for candidate in root.glob(pattern):
-            if candidate.is_file():
-                paths.add(candidate.relative_to(root).as_posix())
+    for relative in _untracked_non_ignored_paths(root):
+        if _matches_any(relative, selected_patterns) and not _matches_any(
+            relative, ignored_patterns
+        ):
+            paths.add(relative)
     return sorted(paths)
 
 
@@ -145,8 +167,11 @@ def scan_manifest(root: str | Path, manifest: Mapping[str, Any]) -> list[LeakMat
     """Read tracked plus selected untracked files and return all match records."""
     project = Path(root).resolve()
     in_scope_patterns = [str(item) for item in manifest["in_scope_tracked_paths"]]
+    ignored_patterns = [str(item) for item in manifest["ignored_runtime_outputs"]]
     matches: list[LeakMatch] = []
-    for relative in _tracked_and_selected_paths(project, in_scope_patterns):
+    for relative in _tracked_and_selected_paths(project, in_scope_patterns, ignored_patterns):
+        if _matches_any(relative, ignored_patterns):
+            continue
         path = project / relative
         if not path.is_file():
             continue

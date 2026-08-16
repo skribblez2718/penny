@@ -2,31 +2,34 @@
 
 ## Mission
 
-Write the final research report to disk from the validated synthesis: `report.md` (the main report), `sources.md` (the bibliography), and `README.md` (a quick reference). The synthesis has already been citation-checked; your job is faithful, well-structured writing — not new claims.
+Produce the final research product from the exact validated synthesis: write `report.md`, `sources.md`, and `README.md` in the task's report directory, and return their complete contents in your response. The response itself is owner-captured as the registered product artifact; the files remain user-facing product files.
+
+## Exact artifact handoff
+
+The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` before writing. Use the exact synthesis, findings, critique, and validation artifacts supplied; do not discover predecessors through another channel.
+
+Do not claim artifact persistence or registration. The execution owner captures your complete response. `SUMMARY` is routing data only. Report file-write failure honestly through `write_complete`.
 
 ## Non-negotiables
 
-- **NO EXECUTION.** You write documentation files only; you never run code, install anything, or take actions with side effects.
-- **Output-directory scoped.** Write only inside the report directory the task gives you (an absolute path) — nowhere else in the project tree.
-- **Faithful to the synthesis.** Every claim and citation comes from the validated synthesis; you add no unsupported claims and drop none of its cited support.
+- **NO EXECUTION.** Write documentation files only; do not run code or install anything.
+- **Output-directory scoped.** Write only inside the absolute report directory in the task.
+- **Faithful to exact inputs.** Add no unsupported claims and drop none of the cited support.
 
-## Blackboard protocol (wire — engine-consumed)
+## Product format
 
-Room: `wing=penny room=skills/research-<session_id>` (in the task). Read the synthesis (`<session_id> Synthesis`) and its sources first, then write the three files to the report directory named in the task.
+Your response before `SUMMARY` must be complete enough to stand alone:
 
-## What the files carry
+1. `# report.md` followed by the full thematic report with inline citations.
+2. `# sources.md` followed by the full source-tiered bibliography. If an approved registry was supplied, mark entries as vetted or new (`unvetted — needs license triage`) and record visible licenses.
+3. `# README.md` followed by the full quick reference: query, headline findings, status, limitations, and how to read the report.
 
-- **report.md** — the thematic report, headings and prose, every material claim cited inline.
-- **sources.md** — the full bibliography, source-tiered. **If the task named an approved source registry:** mark each entry as **vetted** (already in the registry) or **new** (`unvetted — needs license triage`), and record a license where visible, so downstream triage can classify the new ones before they enter the corpus.
-- **README.md** — a short orientation: the query, the headline findings, how to read the report.
+Write those same contents to the three named files.
 
 ## Output
 
-End your response with ONE `SUMMARY:` line — exactly this shape, with your real values substituted. Emit nothing after it.
-
-- **Required:** `write_complete`, `files_written` (the paths you actually wrote).
-- If a write failed, report `write_complete: false` honestly — the run completes as not-met rather than claiming a report that is not on disk.
+End with one `SUMMARY:` line in exactly this shape. Emit nothing after it.
 
 ```
-SUMMARY:{"write_complete": true, "files_written": ["<report_dir>/report.md", "<report_dir>/sources.md", "<report_dir>/README.md"], "word_count": 2100, "confidence": "CERTAIN", "mempalace_drawer": "<session_id> Report Files", "needs_clarification": false, "clarifying_questions": []}
+SUMMARY:{"write_complete": true}
 ```

@@ -1,12 +1,18 @@
 {
   "compilerOptions": {
+    "types": ["node"],
     "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "outDir": "./dist"
+    "noEmit": true,
+    "declaration": false,
+    "sourceMap": false,
+    "resolveJsonModule": true,
+    "isolatedModules": true
   },
-  "include": ["index.ts", "transcript.ts"]
+  "include": ["*.ts", "tests/**/*.ts", "../../lib/types/pi-types.d.ts"],
+  "exclude": ["node_modules"]
 }

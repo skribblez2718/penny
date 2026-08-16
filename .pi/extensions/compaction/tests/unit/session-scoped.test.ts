@@ -52,8 +52,8 @@ describe("detectDominantSkill", () => {
   });
 
   it("NEVER fabricates a session_id when the result carries none", () => {
-    // Regression: fabricated `${skill}-${Date.now()}` ids silently poisoned
-    // room scoping — empty string is the honest value.
+    // Regression: fabricated `${skill}-${Date.now()}` ids created false
+    // addresses — empty string is the honest value.
     const dominant = detectDominantSkill([skillCall("Do the thing")]);
     expect(dominant).not.toBeNull();
     expect(dominant!.session_id).toBe("");
@@ -119,11 +119,11 @@ describe("extractSessionState", () => {
       null,
       "Migrate research skill onto engine"
     );
-    // The fresh user intent outranks a scoped run's (staler) goal.
+    // The fresh user intent outranks an exact run's older goal.
     expect(state.goal).toBe("some general chatter here that is substantive");
   });
 
-  it("uses the scoped engine-run goal when no substantive user message exists", () => {
+  it("uses the exact engine-run goal when no substantive user message exists", () => {
     const state = extractSessionState(
       [{ role: "user", content: "ok" }],
       null,
@@ -239,52 +239,33 @@ describe("extractSessionState", () => {
 });
 
 // ============================================================
-// Eviction — real algorithm, real protection
+// Eviction
 // ============================================================
 
 describe("eviction", () => {
-  const room = (name: string, ageMs: number) => ({
-    wing: "penny",
-    room: name,
-    drawer_ids: ["d1"],
-    last_updated: new Date(Date.now() - ageMs).toISOString(),
-  });
-
-  it("never evicts rooms matching a protected (real) session id", () => {
-    const rooms = [
-      room("skills/code-1751700000000", 86_400_000 * 30), // old but protected
-      room("skills/plan-aaa", 1000),
-      room("skills/plan-bbb", 2000),
-    ];
-    const { kept } = evictArray("mempalace_rooms", rooms, 1, false, ["code-1751700000000"]);
-    expect(kept).toHaveLength(1);
-    expect(kept[0].room).toBe("skills/code-1751700000000");
-  });
-
   it("keeps unresolved errors over resolved ones", () => {
     const errors = [
-      { error_type: "E1", message: "m", turn_id: "t", mempalace_drawer_id: "d", resolved: true },
-      { error_type: "E2", message: "m", turn_id: "t", mempalace_drawer_id: "d", resolved: false },
+      { error_type: "E1", message: "m", turn_id: "t", resolved: true },
+      { error_type: "E2", message: "m", turn_id: "t", resolved: false },
     ];
     const { kept } = evictArray("errors", errors, 1, true);
     expect(kept[0].error_type).toBe("E2");
   });
 
-
-  it("scale tightens caps but floors at 1 (degrade never empties a field)", () => {
+  it("scale tightens caps but floors at 1", () => {
     const artifact: any = {
       constraints: Array.from({ length: 20 }, (_, i) => `c${i}`),
       preferences: [],
       errors: [],
       engine_runs: [],
-      mempalace_rooms: [],
-      kg_entities: [],
+      artifact_refs: [],
+      resume_refs: { version: 2, refs: [] },
       files: { read: Array.from({ length: 30 }, (_, i) => `/f${i}`), modified: [] },
       tool_calls: [],
       tool_error_recovery: [],
       metadata: { eviction_log: [] },
     };
-    const result = applyEviction(artifact, [], 0.01);
+    const result = applyEviction(artifact, 0.01);
     expect(result.constraints.length).toBe(1);
     expect(result.files.read.length).toBe(1);
   });

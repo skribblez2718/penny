@@ -1,13 +1,16 @@
 """Tests for TOOL_STATES — deterministic in-process states (no agent) that the
-engine executes inline and advances past, used by the security skills' scan
-phases (sca P2/P7, jsa acquire/sast). Covers the inline run, chained tool states,
+engine executes inline and advances past. Covers the inline run, chained tool states,
 mid-tool crash recovery, and the fail-loud guards.
 """
 
 import pytest
 from statemachine import State, StateMachine
 
-from orchestration.checkpointer import STATUS_RUNNING, Checkpointer
+from orchestration.checkpointer import (
+    STATUS_AWAITING_USER,
+    STATUS_RUNNING,
+    Checkpointer,
+)
 from orchestration.engine import BasePlaybook
 from orchestration.primitives.spec import PrimitiveSpec
 
@@ -45,7 +48,9 @@ class ScanMachine(StateMachine):
     )
 
 
-TRIAGE = PrimitiveSpec("TRIAGE", "annie", {"required": {"triaged": bool}, "optional": {}}, "triage")
+TRIAGE = PrimitiveSpec(
+    "TRIAGE", "annie", {"required": {"triaged": bool}, "optional": {}}, "triage"
+)
 
 
 class ScanPlaybook(BasePlaybook):
@@ -82,7 +87,11 @@ def _step(cp, agent, result):
 def test_start_runs_tool_states_then_dispatches_agent(cp):
     d = _start(cp)
     # Both tool states ran inline; the run lands on the first AGENT state.
-    assert d["action"] == "invoke_agent" and d["agent"] == "annie" and d["state_id"] == "triage"
+    assert (
+        d["action"] == "invoke_agent"
+        and d["agent"] == "annie"
+        and d["state_id"] == "triage"
+    )
     rec = cp.load(RID)
     assert rec.current_state_id == "triage" and rec.status == STATUS_RUNNING
     assert rec.context.extras["ran"] == ["baseline", "targeted"]
@@ -108,6 +117,45 @@ def test_tool_state_that_does_not_advance_errors(cp):
     d = StuckPlaybook(cp).start(session_id=SID, run_id=RID, goal="x")
     assert d["action"] == "error"
     assert any("did not advance" in e for e in d["errors"])
+
+
+def test_tool_state_can_pause_without_falling_into_agent_dispatch(cp):
+    class PauseMachine(StateMachine):
+        intake = State(initial=True)
+        mutate = State()
+        unknown = State()
+        awaiting_clarification = State()
+        complete = State(final=True)
+        error = State(final=True)
+
+        start = intake.to(mutate)
+        to_unknown = mutate.to(unknown)
+        escalate = unknown.to(awaiting_clarification)
+        stop = awaiting_clarification.to(complete)
+        abort = mutate.to(error) | unknown.to(error) | awaiting_clarification.to(error)
+
+    class PausePlaybook(BasePlaybook):
+        NAME = "pause-tool-test"
+        machine_cls = PauseMachine
+        TOOL_STATES = frozenset({"mutate"})
+        PRIMITIVE_BY_STATE = {}
+
+        def initial_transition(self, ctx):
+            self.sm.send("start")
+            return "mutate"
+
+        def run_tool_state(self, state, ctx):
+            ctx.previous_state = "mutate"
+            ctx.unknown_reason = "submission disposition unknown"
+            self.sm.send("to_unknown")
+            self.sm.send("escalate")
+
+    directive = PausePlaybook(cp).start(session_id=SID, run_id=RID, goal="pause")
+    assert directive["action"] == "escalate_to_user"
+    assert directive["previous_state"] == "mutate"
+    rec = cp.load(RID)
+    assert rec.status == STATUS_AWAITING_USER
+    assert rec.current_state_id == "awaiting_clarification"
 
 
 def test_mid_tool_crash_recovers_by_rerunning(cp):
@@ -138,4 +186,7 @@ def test_mid_tool_crash_recovers_by_rerunning(cp):
         pb_mod.PLAYBOOKS.update(orig)
     # Recovery re-drives the tool loop and lands on the agent state.
     assert len(directives) == 1
-    assert directives[0]["action"] == "invoke_agent" and directives[0]["state_id"] == "triage"
+    assert (
+        directives[0]["action"] == "invoke_agent"
+        and directives[0]["state_id"] == "triage"
+    )

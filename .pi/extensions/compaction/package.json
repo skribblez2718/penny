@@ -1,7 +1,7 @@
 {
   "name": "pi-compaction-extension",
   "version": "0.1.0",
-  "description": "Pi extension for Penny custom conversation compaction — replaces default prose summary with a structured checkpoint",
+  "description": "Pi compaction extension with exact run/artifact recovery refs and bounded model-visible output",
   "type": "module",
   "scripts": {
     "lint": "eslint . --ext .ts",
@@ -10,9 +10,9 @@
     "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
     "test": "bunx vitest run --config tests/vitest.config.ts",
     "test:unit": "bunx vitest run --config tests/vitest.config.ts",
-    "test:integration": "bunx vitest run --config tests/vitest.integration.config.ts",
-    "test:all": "bun run lint && bun run format:check && bun run test:unit",
-    "test:watch": "bunx vitest --config tests/vitest.config.ts"
+    "test:all": "bun run lint && bun run format:check && bun run typecheck && bun run test:unit",
+    "test:watch": "bunx vitest --config tests/vitest.config.ts",
+    "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
     "zod": "^3.24.0"

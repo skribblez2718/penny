@@ -50,6 +50,9 @@ interface ContentPart {
   thinking?: string;
   name?: string;
   arguments?: unknown;
+  /** Real parts carry more fields than are named here (an image part's `data`
+   *  and `mimeType`, a toolCall's `id`); this view is partial by design. */
+  [key: string]: unknown;
 }
 
 interface MessageLike {

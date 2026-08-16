@@ -7,7 +7,7 @@
  * - Message serialization
  */
 
-import { describe, it, expect, vi, beforeAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 
 // Mock WebSocket — we test integration with the Pi API, not real WS connections
 vi.mock("ws", () => ({
@@ -24,8 +24,11 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 describe("Observability Integration — Event Handler Registration", () => {
   let registeredEvents: string[];
   let registeredTools: string[];
+  let previousAutoStart: string | undefined;
 
   beforeAll(async () => {
+    previousAutoStart = process.env.PI_OBSERVABILITY_AUTO_START;
+    process.env.PI_OBSERVABILITY_AUTO_START = "false";
     registeredEvents = [];
     registeredTools = [];
     const mockPi = {
@@ -40,6 +43,14 @@ describe("Observability Integration — Event Handler Registration", () => {
 
     const mod = await import("../../index.js");
     await mod.default(mockPi);
+  });
+
+  afterAll(() => {
+    if (previousAutoStart === undefined) {
+      delete process.env.PI_OBSERVABILITY_AUTO_START;
+    } else {
+      process.env.PI_OBSERVABILITY_AUTO_START = previousAutoStart;
+    }
   });
 
   it("should register session_start event handler", () => {

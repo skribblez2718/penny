@@ -4,8 +4,8 @@
 Asserts the protected capabilities from ``docs/agents/architecture/bitter-lesson.md``
 at the CONTRACT / CONFIG level, so a change that weakens one turns a check RED in
 ``make evals``. Per the doctrine's rule — *ratchet on capabilities, not
-implementations* — each check asserts a capability (evidence is required; a human
-gate exists; the generator is not its own judge), never a specific code shape, so
+implementations* — each check asserts a capability (evidence is required; the
+generator is not its own judge), never a specific code shape, so
 the checks themselves do not ossify.
 
 Cheap and cron-safe: pure imports + in-process assertions. No model calls, no
@@ -19,15 +19,12 @@ safety guards (SSRF / path allow-lists, orchestration guards) by ``compat``
 (check_orchestration_guards / check_compliance). This section covers the
 orchestration-level leverage spine.
 """
+
 from __future__ import annotations
 
 from typing import Callable, List, Tuple
 
 from eval_lib import FAIL, PASS, EvalResult, EvalSkip, run_checks
-
-# High-stakes skills that MUST pause for human approval before expensive or
-# irreversible work. Referenced by NAME against the playbook registry.
-_HIGH_STAKES_GATED: Tuple[str, ...] = ("code", "sca", "jsa", "plan", "learn")
 
 
 def _require_orchestration() -> None:
@@ -94,32 +91,6 @@ def check_independent_verification() -> EvalResult:
     )
 
 
-def check_hitl_gates_present() -> EvalResult:
-    """Every high-stakes playbook declares a non-empty ``GATE_STATES`` (human pause)."""
-    _require_orchestration()
-    from orchestration.playbooks import PLAYBOOKS
-
-    missing: List[str] = []
-    for name in _HIGH_STAKES_GATED:
-        klass = PLAYBOOKS.get(name)
-        if klass is None:
-            missing.append(f"{name}(not registered)")
-            continue
-        if not getattr(klass, "GATE_STATES", frozenset()):
-            missing.append(f"{name}(no GATE_STATES)")
-    ok = not missing
-    return EvalResult(
-        name="invariants.hitl_gates_present",
-        status=PASS if ok else FAIL,
-        detail=(
-            f"all {len(_HIGH_STAKES_GATED)} high-stakes playbooks declare a human gate: "
-            + ", ".join(_HIGH_STAKES_GATED)
-            if ok
-            else f"MISSING human gate: {', '.join(missing)}"
-        ),
-    )
-
-
 def check_checkpoint_resume() -> EvalResult:
     """Durable checkpoint/resume is present: state persists across transitions."""
     _require_orchestration()
@@ -170,7 +141,6 @@ def check_honest_exhaustion() -> EvalResult:
 CHECKS: List[Tuple[str, Callable[[], EvalResult]]] = [
     ("invariants.grounded_verification", check_grounded_verification),
     ("invariants.independent_verification", check_independent_verification),
-    ("invariants.hitl_gates_present", check_hitl_gates_present),
     ("invariants.checkpoint_resume", check_checkpoint_resume),
     ("invariants.honest_exhaustion", check_honest_exhaustion),
 ]

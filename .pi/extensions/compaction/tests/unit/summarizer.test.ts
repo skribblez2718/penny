@@ -24,29 +24,23 @@ const run = (sid: string, goal: string): EngineRunRef => ({
 // ============================================================
 
 describe("renderGroundedDigest", () => {
-  it("labels other-session runs distinctly so they are never treated as current", () => {
+  it("contains only exact checkpoint-backed runs", () => {
     const digest = renderGroundedDigest({
-      scopedRuns: [run("plan-1", "Current work")],
-      otherSessionRuns: [run("stale-9", "Old work")],
-      rooms: [],
-      kgEntities: [],
+      runs: [run("plan-1", "Current work")],
+      artifacts: [],
       pending: null,
       readFiles: [],
       modifiedFiles: [],
     });
-    expect(digest).toContain("in-flight runs (this session):");
+    expect(digest).toContain("in-flight runs (exact checkpointer IDs):");
     expect(digest).toContain("run-plan-1");
-    expect(digest).toContain("other pending runs (OTHER sessions");
-    expect(digest).toContain("run-stale-9");
   });
 
   it("is empty when there is nothing grounded", () => {
     expect(
       renderGroundedDigest({
-        scopedRuns: [],
-        otherSessionRuns: [],
-        rooms: [],
-          kgEntities: [],
+        runs: [],
+        artifacts: [],
         pending: null,
         readFiles: [],
         modifiedFiles: [],
@@ -64,7 +58,7 @@ describe("buildSummarizerMessages", () => {
     const [msg] = buildSummarizerMessages({
       conversationText: "[User]: do X",
       previousSummary: "## Goal\nold goal",
-      digest: "in-flight runs (this session):\n  - code run-1",
+      digest: "in-flight runs (exact checkpointer IDs):\n  - code run-1",
       customInstructions: "focus here",
       proseTokenTarget: 4000,
     });
@@ -85,11 +79,11 @@ describe("buildSummarizerMessages", () => {
 
 describe("stripResumeRefs", () => {
   it("removes a complete refs block a model may have emitted", () => {
-    const out = stripResumeRefs("## Goal\nX\n\n[RESUME-REFS v2]\nrun: ...\n[/RESUME-REFS]");
+    const out = stripResumeRefs("## Goal\nX\n\n[RESUME-REFS v2]\nrun:run-1\n[/RESUME-REFS]");
     expect(out).toBe("## Goal\nX");
   });
   it("removes a dangling refs opener too", () => {
-    expect(stripResumeRefs("brief\n[RESUME-REFS v2]\nrun: x")).toBe("brief");
+    expect(stripResumeRefs("brief\n[RESUME-REFS v2]\nrun:run-1")).toBe("brief");
   });
 });
 
@@ -117,7 +111,7 @@ function ctxWithModel(): SummarizerCtx {
 
 const baseInput = {
   messages: [{ role: "user", content: "do X" }],
-  digest: "in-flight runs (this session):\n  - code run-1",
+  digest: "in-flight runs (exact checkpointer IDs):\n  - code run-1",
   proseTokenTarget: 4000,
 };
 
@@ -125,7 +119,9 @@ describe("generateModelSummary", () => {
   it("returns the model prose (refs stripped) + provider/model id", async () => {
     _summaryInternals.serialize = async () => "[User]: do X";
     _summaryInternals.complete = async () => ({
-      content: [{ type: "text", text: "## Goal\nDo X\n[RESUME-REFS v2]\nx\n[/RESUME-REFS]" }],
+      content: [
+        { type: "text", text: "## Goal\nDo X\n[RESUME-REFS v2]\nrun:run-1\n[/RESUME-REFS]" },
+      ],
     });
     const res = await generateModelSummary(baseInput, ctxWithModel());
     expect(res).not.toBeNull();
@@ -142,7 +138,7 @@ describe("generateModelSummary", () => {
     };
     await generateModelSummary(baseInput, ctxWithModel());
     expect(seen.text).toContain("[User]: do X");
-    expect(seen.text).toContain("in-flight runs (this session)");
+    expect(seen.text).toContain("in-flight runs (exact checkpointer IDs)");
   });
 
   it("returns null when no model is resolvable (→ caller falls back)", async () => {

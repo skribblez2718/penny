@@ -1,70 +1,92 @@
-# Skill Orchestration — Engine-backed state machine protocol
+# Skill Orchestration — Engine and exact-artifact protocol
 
+## Architecture
 
-## What
+Every workflow skill is a registered `BasePlaybook` subclass. The playbook owns
+its named states, SUMMARY contracts, input selection, routing, gates, fan-out,
+and terminal result. The shared engine owns protocol validation, checkpointing,
+recovery, artifact metadata, budgets, and observability. The skill-directory
+`orchestrate.py` is the canonical thin delegate.
 
-An engine-backed skill's `orchestrate.py` is a **thin (~5-line) delegate** to the shared `orchestration` package — but the skill's real state machine is a concrete **`BasePlaybook` subclass** in `apps/orchestration/src/orchestration/playbooks/<skill>.py`. That subclass owns *what* (its own domain-named states, per-state SUMMARY contracts, routing); the engine owns *how* (protocol, validation, checkpointing, recovery, observability). Every workflow skill runs this way — each is a registered `BasePlaybook` subclass in `playbooks/__init__.py` (that registry is the single source of truth for the current set); there are no legacy per-skill FSMs left.
+## Protocol rules
 
-## Why
+1. Use `start`, `step`, `status`, and `recover` through `orchestration.cli`.
+2. Persist run control state in the SQLite checkpointer keyed by `run_id`; never
+   serialize it to argv, a temporary file, an artifact, or durable memory.
+3. Emit one JSON directive per CLI invocation.
+4. Every cognitive directive carries strict `input_artifacts` plus an owner
+   `output_artifact` contract.
+5. Grant only the selected current-state refs. An output scope contains the
+   same-state retry/fan-in consumer, actual non-control FSM successors, and only
+   explicitly declared retained-input consumers whose graph reachability validates.
+   Never use the full playbook state registry as a scope. Workers use
+   `artifact_read`, follow continuation until complete, and return the complete
+   stage output.
+6. Canonical finalized output is all `text` parts in the final assistant message,
+   concatenated in order without an inserted separator. Preserve part whitespace;
+   exclude thinking/reasoning and tool calls; never fall back to an earlier turn.
+   Persist and verify those exact UTF-8 bytes before parsing the model-authored
+   `SUMMARY`; artifact failure prevents `step`.
+7. Keep payload bytes out of `RunContext`. Store only compact routing fields,
+   canonical refs, branch identities, warnings, and terminal metadata.
+8. Workers and skill drivers receive no durable-memory tools. Memory availability
+   cannot affect start, retry, fan-in, clarification, restart, or completion.
 
-One engine replaces the ~10k lines of per-skill FSM plumbing that previously drifted out of sync. State no longer rides on `argv` (`--state`) or `/tmp` files, and there is no `extract_state`/`restore_state`/`_force_state`: a durable checkpointer keyed by `run_id` rehydrates every run. The JSON directive contract is unchanged, so the TS driver and every agent are untouched.
+## Directives
 
-## Rules
+| Action                   | Required handoff                                                                 |
+| ------------------------ | -------------------------------------------------------------------------------- |
+| `invoke_agent`           | Agent, state/run/session IDs, task, exact input slots, output contract.          |
+| `invoke_agents_parallel` | Branch-ID keyed tasks; each branch gets only its own grants and output contract. |
+| `escalate_to_user`       | Persisted prior state and questions; no state blob.                              |
+| `complete`               | Honest result with selected exact product ref, warnings, unresolved issues.      |
+| `paused`                 | Typed non-terminal/retriable dispatch stop plus exact `recover` instruction.     |
+| `error`                  | Typed errors and run identity.                                                   |
+| `status`                 | Current persisted state and completion status.                                   |
 
-1. **The skill dir holds only a thin delegate; the playbook is a real subclass.** The entire `.pi/skills/<name>/scripts/orchestrate.py` is the canonical ~5-line stub in [skill-standard.md](skill-standard.md) — it imports `orchestration.cli.main` and calls `raise SystemExit(main(default_playbook="<name>"))`, nothing else. The FSM itself — states, `PRIMITIVE_BY_STATE`, `route_after`, `done_predicate` — lives in the package's `playbooks/<name>.py` as a `BasePlaybook` subclass. There is no shared "standard cycle" base to inherit and no single-operation ("primitive") skill category — every skill is its own bespoke subclass.
-2. **Four subcommands, via the package CLI.** `start`, `step`, `status`, `recover` — dispatched by `orchestration.cli:main`. `start` initializes + checkpoints; `step` validates the agent SUMMARY, routes, checkpoints; `status` reports; `recover` auto-resumes a pending run for the session (playbook-scoped).
-3. **State lives in the durable checkpointer**, keyed by `run_id` (SQLite at `PENNY_ORCH_DB`, session-indexed). **Never** serialize state to `argv` and **never** reintroduce a transition-replay `_force_state`.
-4. **One JSON directive per invocation to stdout.** No other stdout output; use stderr for logs.
-5. **The agent SUMMARY is the only data returned to the engine.** Full output stays in MemPalace.
+## Recovery and continuation
 
-## Action Directives (unchanged vocabulary)
+- Crash recovery reissues only pending work from the checkpointer.
+- Track A is forward-only. `PENNY_ARTIFACT_DISPATCH_MODE=paused` blocks new agent, deterministic-tool, and fan-out dispatch before selected refs or the pending checkpoint can change. The default is `active`; unknown values fail closed as typed retriable pauses.
+- Status and exact artifact reads remain available while paused. After reactivation, a fresh-process `recover` reissues the identical pending state, selected input refs, and output metadata, or the next explicit compatible revision.
+- Accepted sibling refs survive partial parallel recovery.
+- Clarification resumes the producer state selected by the playbook with the
+  exact checkpointed predecessor refs.
+- Malformed SUMMARY retry creates a versioned owner artifact rather than
+  replacing exact handoff with semantic discovery; the retry/fan-in state is an
+  explicit legal consumer without authorizing unrelated phases.
+- Large artifact inputs use typed UTF-8 continuation until `truncated` is false.
+- `[RESUME-REFS v2]` after compaction supplies code-owned exact addresses;
+  recover control state from the run ref and read artifacts only when granted.
 
-| Action | Purpose | Required fields |
-|--------|---------|-----------------|
-| `invoke_agent` | Dispatch single agent | `agent`, `task_summary`, `state_id`, `session_id`, `run_id` |
-| `invoke_agents_parallel` | Dispatch multiple agents (fan-out state) | `tasks[]`, `state_id`, `session_id`, `run_id` |
-| `escalate_to_user` | Pause for user input (UNCERTAIN escalation or a planned gate) | `questions[]`, `previous_state`, `session_id`, `run_id` |
-| `complete` | Skill finished | `result`, `session_id`, `run_id` |
-| `error` | Skill failed | `errors[]`, `session_id`, `run_id` |
-| `status` | Report state | `state`, `complete`, `session_id`, `run_id` |
+## Safety and truth
 
-Every directive carries `run_id`. **No `orchestrator_state` blob** is echoed — the checkpointer owns state.
-
-## Engine responsibilities (the base, not the skill)
-
-- `start/step/status` protocol; summary gatekeeper (validates each state's SUMMARY against that state's `PrimitiveSpec.summary_contract`; fail loud on missing/mistyped fields).
-- **Two HITL paths:** `confidence == UNCERTAIN` on an escalatable state → escalate (`unknown`→`awaiting_clarification`, `status=awaiting_user`); and **planned gates** (`GATE_STATES`) → pause with `gate_questions`, resume via `route_user` (multi-way).
-- **Parallel fan-out:** a `PARALLEL_BY_STATE` state dispatches N branch agents in one directive and routes once on fan-in, aggregating branch SUMMARYs by weakest confidence.
-- Checkpointing after every committed transition; resume by direct rehydrate (no replay).
-- **Self-recovery:** bounded step-retry (transient failures), crash-resume (re-issue the pending step), auto-recovery scan (resume `running`/`awaiting_user` runs on start).
-- Budgets: `max_iterations` (loops), global step cap, explicit done-predicate.
-- Best-effort observability emission (never blocks the run).
-
-## Skill (playbook) responsibilities
-
-A concrete `BasePlaybook` subclass provides: `NAME`, `machine_cls` (its `python-statemachine` FSM with its own state names), `PRIMITIVE_BY_STATE`, `ESCALATABLE_STATES`, `initial_transition(ctx)`, `route_after(state, ctx, summary)`, `done_predicate(ctx)` — plus, as needed, `PARALLEL_BY_STATE`, `GATE_STATES` + `gate_questions`/`route_user`, and the optional `task_context_parts` / `result_payload` hooks. Domain run state that isn't in the standard `RunContext` fields goes in `RunContext.extras`.
-
-## Constraints
-
-- **No stdout except JSON directives.**
-- **States must be safe to re-run** (crash-resume re-issues the pending step). An `ACT`-style state must be idempotent or split author/apply.
-- **The engine imports no agent-side capability** — that work happens in the agent subprocess.
+States must be safe to reissue. Bounded loops end with honest `met=False` and
+unresolved issues when the goal was not met. Verification states require
+captured evidence. Skill-invoked workers have separate context and tool
+allowlists but no filesystem/process sandbox.
 
 ## Verification
 
-- [ ] `orchestrate.py` is the 5-line delegate; the FSM lives in `playbooks/<name>.py` as a `BasePlaybook` subclass
-- [ ] `start` returns the first directive; `step` routes on SUMMARY; `status` reports
-- [ ] Kill mid-run → a fresh `step` (no `--state`) resumes from the checkpointer
-- [ ] CI grep: zero `_force_state`, zero `--state` handling in the package
-- [ ] A run emits correlated `orchestration_events` to the observability server (by `session_id`)
+- [ ] Delegate is the canonical engine stub.
+- [ ] Directive and result protocols validate exact refs and signed owner receipts.
+- [ ] Pairwise wrong legitimate phases, stale checkpoints, retries, loops,
+      clarification re-entry, and dynamic fan-in fail closed under least-authority scopes.
+- [ ] Ordinary output, persisted bytes, byte length, and digest use the same
+      multipart final-assistant text sequence.
+- [ ] Artifact persistence/ref verification precedes SUMMARY parsing.
+- [ ] Fan-in is branch-ID based, not completion-order based.
+- [ ] RunContext contains no artifact payloads or retrieved memory.
+- [ ] Recovery and compaction continuation are exact-ref based.
+- [ ] Memory-absent integration paths pass.
+- [ ] Pause/unpause drills prove no dispatch, unchanged manifest/object and memory-sentinel hashes, and same-ref forward recovery without semantic rooms or payload injection.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `apps/orchestration/src/orchestration/engine.py` | `BasePlaybook` engine |
-| `apps/orchestration/src/orchestration/playbooks/code.py` | The `code` skill's playbook (reference subclass) |
-| `apps/orchestration/src/orchestration/checkpointer.py` | Durable state (replaces `/tmp` + `_force_state`) |
-| `docs/agents/orchestration/overview.md` | The orchestration package |
-| `docs/agents/skills/skill-standard.md` | Full skill standard |
-| `docs/agents/skills/resilience.md` | Self-recovery & error handling |
+| File                                                         | Purpose                    |
+| ------------------------------------------------------------ | -------------------------- |
+| `apps/orchestration/src/orchestration/engine.py`             | Shared engine              |
+| `apps/orchestration/src/orchestration/artifacts.py`          | Immutable artifact store   |
+| `apps/orchestration/src/orchestration/checkpointer.py`       | Durable run state          |
+| `apps/orchestration/src/orchestration/playbooks/research.py` | Current workflow reference |
+| `.pi/extensions/skill/README.md`                             | TypeScript owner loop      |

@@ -22,10 +22,7 @@ SID, RID = "sess-research", "run-research"
 STANDARD_GOAL = "compare postgres and mysql replication strategies for production deployments"
 QUICK_GOAL = "what is retrieval augmented generation?"
 
-SKRIBBLE_OK = {
-    "write_complete": True,
-    "files_written": ["report.md", "sources.md", "README.md"],
-}
+SKRIBBLE_OK = {"write_complete": True}
 
 
 @pytest.fixture
@@ -38,7 +35,11 @@ _TEST_ROOT = "/tmp/penny-test"
 
 def _start(cp, goal=STANDARD_GOAL, constraints=None, project_root=_TEST_ROOT):
     return ResearchPlaybook(cp).start(
-        session_id=SID, run_id=RID, goal=goal, constraints=constraints or {}, project_root=project_root
+        session_id=SID,
+        run_id=RID,
+        goal=goal,
+        constraints=constraints or {},
+        project_root=project_root,
     )
 
 
@@ -91,7 +92,8 @@ def test_explicit_quick_constraint_skips_planning(cp):
     assert d["action"] == "invoke_agent" and d["agent"] == "echo"
     assert d["state_id"] == "researching"
     assert "Quick research:" in d["task_summary"]
-    assert f"skills/research-{SID}" in d["task_summary"]
+    assert "artifact_read" in d["task_summary"]
+    assert d["input_artifacts"]["artifacts"] == []
 
 
 def test_default_start_is_planning_for_model_to_declare_mode(cp):
@@ -138,20 +140,22 @@ def test_quick_happy_path_to_complete(cp):
     _start(cp, goal=QUICK_GOAL, constraints={"mode": "quick"})
     d = _step(cp, "echo", {"explore_complete": True, "confidence": "PROBABLE"})
     assert d["agent"] == "synthia" and d["state_id"] == "synthesizing"
-    d = _step(cp, "synthia", {"synthesis_complete": True, "theme_count": 2})
+    d = _step(cp, "synthia", {"synthesis_complete": True})
     assert d["agent"] == "vera" and d["state_id"] == "validating"
     d = _step(cp, "vera", _validate("PASS", []))
     assert d["agent"] == "skribble" and d["state_id"] == "report_writing"
-    expected_dir = str(
-        Path(_TEST_ROOT) / "research" / "what-is-retrieval-augmented-generation"
-    )
+    expected_dir = str(Path(_TEST_ROOT) / "research" / "what-is-retrieval-augmented-generation")
     assert expected_dir in d["task_summary"] and "~" not in d["task_summary"]
     d = _step(cp, "skribble", SKRIBBLE_OK)
     assert d["action"] == "complete"
     assert d["result"]["met"] is True and d["result"]["mode"] == "quick"
-    assert d["result"]["report_drawer_id"] == f"{SID} Synthesis"
-    assert d["result"]["room"] == f"skills/research-{SID}"
-    assert d["result"]["report_files"] == SKRIBBLE_OK["files_written"]
+    assert "report_drawer_id" not in d["result"] and "room" not in d["result"]
+    assert d["result"]["output_artifact_ref"] is None  # test-only bare SUMMARY seam
+    assert d["result"]["report_files"] == [
+        str(Path(d["result"]["report_dir"]) / "report.md"),
+        str(Path(d["result"]["report_dir"]) / "sources.md"),
+        str(Path(d["result"]["report_dir"]) / "README.md"),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -163,10 +167,10 @@ def test_standard_happy_path_to_complete(cp):
     _start(cp)
     d = _step(cp, "piper", _plan(["q1", "q2"]))
     assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "researching"
-    # each branch researches its OWN sub-query, writing a branch-tagged drawer
+    # each branch researches its OWN sub-query and gets a distinct owner artifact
     joined = " ".join(t["task_summary"] for t in d["tasks"])
     assert "Sub-query: q1" in joined and "Sub-query: q2" in joined
-    assert f"{SID}-echo-1 Research Findings" in joined
+    assert all("artifact_read" in task["task_summary"] for task in d["tasks"])
     assert _research_fan(cp, 2)["state_id"] == "synthesizing"
     assert _step(cp, "synthia", {"synthesis_complete": True})["state_id"] == "validating"
     assert _step(cp, "vera", _validate("PASS", []))["state_id"] == "report_writing"
@@ -643,7 +647,7 @@ def test_failed_report_write_completes_with_met_false(cp):
     _step(cp, "echo", {"explore_complete": True})
     _step(cp, "synthia", {"synthesis_complete": True})
     _step(cp, "vera", _validate("PASS", []))
-    d = _step(cp, "skribble", {"write_complete": False, "files_written": []})
+    d = _step(cp, "skribble", {"write_complete": False})
     assert d["action"] == "complete" and d["result"]["met"] is False
 
 
@@ -854,7 +858,11 @@ def test_named_evidence_gap_refans_research_instead_of_only_rewriting(cp):
     SEARCH, not just claim-deletion. (The synthesizer has no web tools by design,
     so re-grounding alone can only ever make the report thinner.)"""
     _standard_to_validating(cp)
-    d = _step(cp, "vera", _validate("FAIL", ["claim 3 unsupported"], ["primary source for the 40% figure"]))
+    d = _step(
+        cp,
+        "vera",
+        _validate("FAIL", ["claim 3 unsupported"], ["primary source for the 40% figure"]),
+    )
     assert d["action"] == "invoke_agents_parallel" and d["state_id"] == "researching"
     task = d["tasks"][0]["task_summary"]
     assert "EVIDENCE-SEEKING" in task
@@ -863,7 +871,7 @@ def test_named_evidence_gap_refans_research_instead_of_only_rewriting(cp):
 
 
 def test_evidence_round_continues_branch_numbering_and_does_not_overwrite(cp):
-    """Round two must write NEW drawers, not clobber round one's findings."""
+    """Round two must use NEW branch identities, not supersede round one."""
     _start(cp)
     _step(cp, "piper", _plan(["q1", "q2", "q3"]))  # branches 1-3
     _research_fan(cp, 3)
@@ -871,8 +879,8 @@ def test_evidence_round_continues_branch_numbering_and_does_not_overwrite(cp):
     d = _step(cp, "vera", _validate("FAIL", ["c1"], ["gap A", "gap B"]))
     assert {t["branch_id"] for t in d["tasks"]} == {"sq4", "sq5"}
     joined = " ".join(t["task_summary"] for t in d["tasks"])
-    assert f"{SID}-echo-4 Research Findings" in joined
-    assert f"{SID}-echo-5 Research Findings" in joined
+    assert "gap A" in joined and "gap B" in joined
+    assert all("artifact_read" in t["task_summary"] for t in d["tasks"])
 
 
 def test_evidence_round_returns_through_synthesis_to_the_gate(cp):
@@ -880,8 +888,9 @@ def test_evidence_round_returns_through_synthesis_to_the_gate(cp):
     is told new findings landed."""
     _standard_to_validating(cp)
     _step(cp, "vera", _validate("FAIL", ["c1"], ["gap A"]))
-    batch = [{"branch_id": "sq3", "agent": "echo", "exitCode": 0,
-              "summary": {"explore_complete": True}}]
+    batch = [
+        {"branch_id": "sq3", "agent": "echo", "exitCode": 0, "summary": {"explore_complete": True}}
+    ]
     d = _step(cp, "__parallel__", batch)
     assert d["agent"] == "synthia" and d["state_id"] == "synthesizing"
     assert "EVIDENCE-SEEKING research round ran" in d["task_summary"]
@@ -912,8 +921,9 @@ def test_research_round_budget_is_a_hard_ceiling(cp):
     loop cannot spin on search forever."""
     _standard_to_validating(cp)
     _step(cp, "vera", _validate("FAIL", ["c1"], ["gap A"]))  # round 2 (budget = 2)
-    batch = [{"branch_id": "sq3", "agent": "echo", "exitCode": 0,
-              "summary": {"explore_complete": True}}]
+    batch = [
+        {"branch_id": "sq3", "agent": "echo", "exitCode": 0, "summary": {"explore_complete": True}}
+    ]
     _step(cp, "__parallel__", batch)
     _step(cp, "synthia", {"synthesis_complete": True})
     d = _step(cp, "vera", _validate("FAIL", ["c2"], ["gap B"]))  # budget spent
@@ -936,8 +946,9 @@ def test_evidence_seeking_still_exhausts_honestly(cp):
     report and still reports its unverified claims rather than faking a pass."""
     _standard_to_validating(cp)
     _step(cp, "vera", _validate("FAIL", ["c1"], ["gap A"]))
-    batch = [{"branch_id": "sq3", "agent": "echo", "exitCode": 0,
-              "summary": {"explore_complete": True}}]
+    batch = [
+        {"branch_id": "sq3", "agent": "echo", "exitCode": 0, "summary": {"explore_complete": True}}
+    ]
     _step(cp, "__parallel__", batch)
     _step(cp, "synthia", {"synthesis_complete": True})
     d = _step(cp, "vera", _validate("FAIL", ["c2"], ["gap B"]))  # -> revise
@@ -956,8 +967,9 @@ def test_evidence_seeking_still_escalates_on_a_stall(cp):
     """Non-regression: repeating the SAME gap must escalate, not burn the budget."""
     _standard_to_validating(cp)
     _step(cp, "vera", _validate("FAIL", ["same claim"], ["same gap"]))
-    batch = [{"branch_id": "sq3", "agent": "echo", "exitCode": 0,
-              "summary": {"explore_complete": True}}]
+    batch = [
+        {"branch_id": "sq3", "agent": "echo", "exitCode": 0, "summary": {"explore_complete": True}}
+    ]
     _step(cp, "__parallel__", batch)
     _step(cp, "synthia", {"synthesis_complete": True})
     d = _step(cp, "vera", _validate("FAIL", ["same claim"], ["same gap"]))
@@ -1087,8 +1099,7 @@ def test_every_research_prompt_carries_its_own_summary_schema():
     """Because the engine directive vanishes on the strong-model path, a prompt that
     only says "per the OUTPUT FORMAT directive appended to your task" leaves its
     agent with NO typed contract exactly when a better model is declared — i.e.
-    upgrading the fleet would DEGRADE the skill. Each prompt must be self-sufficient.
-    (prd hit this same trap and was fixed 2026-07-28; research was not.)"""
+    upgrading the fleet would DEGRADE the skill. Each prompt must be self-sufficient."""
     missing = [
         agent
         for agent in _RESEARCH_AGENTS

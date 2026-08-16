@@ -1,20 +1,8 @@
 # Research Skill
 
-Conduct structured, evidence-based research on any topic with automatic depth detection and parallel sub-query dispatch.
+The research skill runs structured, evidence-based investigations in Quick, Standard, or Deep mode. It separates planning, evidence gathering, synthesis, critique, citation validation, and final report writing so no single stage silently substitutes for another.
 
-## Overview
-
-The research skill is a production-grade research workflow that gathers evidence from the web, assesses source credibility, resolves conflicting findings, and synthesizes a coherent report. It operates at three depths:
-
-| Mode         | When Used                                        | What It Does                                                          | Approx. Time |
-| ------------ | ------------------------------------------------ | --------------------------------------------------------------------- | ------------ |
-| **Quick**    | Simple questions, definitions, overviews         | Direct research + brief report                                        | 1-2 min      |
-| **Standard** | Multi-faceted questions, comparisons             | Plan sub-queries → parallel research → synthesis                      | 3-5 min      |
-| **Deep**     | Complex topics, tradeoff analysis, due diligence | Plan + critique → parallel research → validate → synthesis + critique | 8-12 min     |
-
-## How to Use
-
-Invoke the skill with a research query:
+## How to use it
 
 ```
 skill({
@@ -23,69 +11,43 @@ skill({
 })
 ```
 
-### Optional Constraints
+Optional constraints select the mode, report format, sub-query/fan budgets, research-round budget, critique budget, and an optional different model for citation validation. If mode is omitted, Piper chooses it from the actual query; no keyword list auto-detects it.
 
-| Constraint      | Type   | Default     | Description                                                |
-| --------------- | ------ | ----------- | ---------------------------------------------------------- |
-| `mode`          | string | `"auto"`    | Override auto-detection: `"quick"`, `"standard"`, `"deep"` |
-| `report_format` | string | `"default"` | `"default"`, `"brief"`, `"academic"`, `"executive"`        |
+## What each mode does
 
-### Auto-Detection
+- **Quick:** one focused research pass → synthesis → citation validation → report.
+- **Standard:** plan → parallel evidence branches → synthesis → citation validation → report.
+- **Deep:** Standard plus evidence-gated plan and report critiques.
 
-The skill detects mode automatically from your query:
+All modes can run a bounded additional evidence-seeking round when Vera identifies a claim that needs a specific source. Loops and retries are bounded; repeated unresolved issues pause for clarification instead of spinning.
 
-- **Quick triggers:** "what is", "define", "overview", "quickly", short single-question queries
-- **Deep triggers:** "deep research", "comprehensive", "thorough", "detailed analysis"
-- **Standard:** Everything else
+## Exact handoff and recovery
 
-## What You Get
+Each stage receives exact, execution-owner-verified artifact references. Workers read every ref with `artifact_read` and follow typed continuation until complete; their full responses are captured before the small routing SUMMARY is accepted. Workers have no durable-memory tools, and parallel branches are matched by branch ID rather than completion order.
 
-After the skill completes, Penny presents:
+Checkpoint state retains the exact selected refs, so retry, clarification, and restart do not depend on semantic search. The complete workflow works when no memory endpoint or memory extension exists.
 
-1. **Executive Summary** — 3-4 sentence top-line
-2. **Key Findings** — Most important findings with confidence levels
-3. **Sources** — Count and quality distribution (T1-T4 tiers)
-4. **Recommendations** — Actionable next steps
-5. **Constraints** — Hard limits and unknowns
+## What you get
 
-The full report is stored in mempalace and can be retrieved anytime.
+Skribble writes three user-facing files:
 
-## Credibility Framework
+1. `report.md` — full thematic report with inline citations;
+2. `sources.md` — complete source-tiered bibliography;
+3. `README.md` — query, headline findings, status, limitations, and orientation.
 
-Sources are assessed using a 4-tier system:
+Skribble also returns the complete contents of all three in its response. The execution owner captures that response as the registered product artifact, and the terminal result exposes its exact `output_artifact_ref`.
 
-| Tier | Name                   | Examples                                      |
-| ---- | ---------------------- | --------------------------------------------- |
-| T1   | Primary/Authoritative  | Official docs, RFCs, arXiv papers, specs      |
-| T2   | Expert/Established     | ACM Queue, official blogs, recognized experts, official vendor YouTube channels, conference talks |
-| T3   | Community/Practitioner | High-vote SO, dev.to, tutorials, established practitioner YouTube channels |
-| T4   | Unverified/Commercial  | Product pages, SEO content, unknown blogs, unverified YouTube channels |
+The result reports both:
 
-Video content is treated as a first-class source: for every sub-query, the research agent runs a YouTube-targeted search and pulls the transcript of any relevant, credible video (tiered the same way as written sources).
+- `met`: the final report product was completed;
+- `grounded`: Vera's citation gate passed.
 
-**Confidence markers:**
+A report may be delivered after validation budget exhaustion with `grounded: false`. In that case, unresolved claims remain explicitly listed and should not be presented as verified.
 
-- ✅ High — multiple authoritative sources agree
-- ⚠️ Medium — some credible support
-- ❓ Low — thin or lower-tier evidence
-- ⚡ Conflicting — sources disagree
+## Evidence quality
 
-## Deep Mode: What Makes It Different
+Echo cites every material claim and ranks sources contextually: primary sources first, reputable secondary sources next, weak sources last. Search, browser rendering, and video transcripts are available according to the question; no modality is mandatory merely to satisfy a checklist. Synthia preserves disagreement and uncertainty. Vera checks that citations actually support the claims attributed to them.
 
-Deep mode adds two quality gates:
+## When not to use it
 
-1. **Plan critique** — A second agent reviews the research plan before dispatch to catch gaps or low-value sub-queries
-2. **Report critique** — A second agent reviews the final report for overclaiming, bias, and fairness to conflicting evidence
-
-Additionally, deep mode includes **verification** — URL verification, cross-reference checks, and systematic conflict resolution using a 5-step hierarchy (tier authority → recency → consensus → context match → escalation).
-
-## When NOT to Use
-
-- Simple lookups (use `web_search` directly)
-- Code implementation (use `plan` skill then execute)
-- Already have sufficient information (proceed directly)
-- Very time-sensitive queries where 8-12 minutes is too long (use quick mode or direct search)
-
-## Resuming Research
-
-Research sessions can be interrupted and resumed. If a session times out or is paused, the skill stores its state in mempalace. Re-invoking with the same query or session ID resumes from where it left off.
+Use direct search for simple lookups. Skip research when enough evidence already exists or when the task is implementation and more investigation would not change the result. The skill delivers research; it does not execute recommendations.

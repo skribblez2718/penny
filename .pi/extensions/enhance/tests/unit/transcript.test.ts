@@ -20,7 +20,7 @@ function userEntry(text: string) {
   return { type: "message", message: { role: "user", content: [{ type: "text", text }] } };
 }
 
-function assistantEntry(content: unknown[]) {
+function assistantEntry(content: Array<Record<string, unknown>>) {
   return { type: "message", message: { role: "assistant", content } };
 }
 

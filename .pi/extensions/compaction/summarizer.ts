@@ -5,7 +5,7 @@
  * resumption brief — the same mechanism Pi's default compaction uses, so it
  * improves automatically as models improve (bitter-lesson LEVERAGE). We augment
  * it with two things Pi can't provide: the previous brief as iterative context,
- * and a session-scoped GROUNDED STATE digest (real run/room ids). The
+ * and a GROUNDED STATE digest containing exact run/artifact refs. The
  * deterministic pointer appendix and the LOAN fallback live in index.ts.
  *
  * The `complete` / `serializeConversation` calls sit behind `_summaryInternals`
@@ -13,12 +13,7 @@
  * unit tests mock the seam and never touch a model or the pi package.
  */
 
-import type {
-  EngineRunRef,
-  KGEntityRef,
-  MempalaceRoomRef,
-  PendingState,
-} from "./schema.js";
+import type { ArtifactRef, EngineRunRef, PendingState } from "./schema.js";
 import type { SessionMessage } from "./pi-messages.js";
 
 // ============================================================
@@ -53,37 +48,34 @@ export interface SummarizerCtx {
 // ============================================================
 
 export interface GroundedDigestInput {
-  scopedRuns: EngineRunRef[];
-  otherSessionRuns: EngineRunRef[];
-  rooms: MempalaceRoomRef[];
-  kgEntities: KGEntityRef[];
+  runs: EngineRunRef[];
+  artifacts: ArtifactRef[];
   pending: PendingState | null;
   readFiles: string[];
   modifiedFiles: string[];
 }
 
-/**
- * Render the session-scoped grounded state the model may cite (never invent).
- * Cross-session pending runs are listed under an explicit "other sessions"
- * label so the model never treats them as the current goal/work.
- */
+/** Render only exact checkpoint-backed state the model may cite. */
 export function renderGroundedDigest(input: GroundedDigestInput): string {
   const lines: string[] = [];
 
-  if (input.scopedRuns.length > 0) {
-    lines.push("in-flight runs (this session):");
-    for (const r of input.scopedRuns) {
+  if (input.runs.length > 0) {
+    lines.push("in-flight runs (exact checkpointer IDs):");
+    for (const run of input.runs) {
       lines.push(
-        `  - ${r.playbook} run ${r.run_id} ${r.status} @${r.current_state_id}` +
-          (r.goal ? ` — ${r.goal.slice(0, 120)}` : "") +
-          (r.clarification_text ? ` [awaiting: ${r.clarification_text.slice(0, 120)}]` : "")
+        `  - ${run.playbook} run ${run.run_id} ${run.status} @${run.current_state_id}` +
+          (run.goal ? ` — ${run.goal.slice(0, 120)}` : "") +
+          (run.clarification_text ? ` [awaiting: ${run.clarification_text.slice(0, 120)}]` : "")
       );
     }
   }
-  if (input.otherSessionRuns.length > 0) {
-    lines.push("other pending runs (OTHER sessions — do not treat as current goal/work):");
-    for (const r of input.otherSessionRuns) {
-      lines.push(`  - ${r.playbook} run ${r.run_id} ${r.status} (session ${r.session_id})`);
+  if (input.artifacts.length > 0) {
+    lines.push("selected immutable artifacts:");
+    for (const artifact of input.artifacts.slice(0, 50)) {
+      lines.push(
+        `  - ${artifact.artifact_id}@sha256:${artifact.content_digest} ` +
+          `(${artifact.phase}/${artifact.kind})`
+      );
     }
   }
   if (input.pending) {
@@ -91,17 +83,6 @@ export function renderGroundedDigest(input: GroundedDigestInput): string {
       `pending: ${input.pending.state}` +
         (input.pending.question_summary ? ` — ${input.pending.question_summary}` : "")
     );
-  }
-  if (input.rooms.length > 0) {
-    lines.push("mempalace rooms:");
-    for (const room of input.rooms.slice(0, 10)) {
-      const drawers = (room.drawer_ids || []).slice(0, 5).join(",");
-      lines.push(`  - ${room.wing}/${room.room}${drawers ? ` [${drawers}]` : ""}`);
-    }
-  }
-  if (input.kgEntities.length > 0) {
-    const names = input.kgEntities.slice(0, 12).map((e) => e.entity_id);
-    lines.push(`kg entities: ${names.join(", ")}`);
   }
   if (input.modifiedFiles.length > 0) {
     lines.push(`modified files: ${input.modifiedFiles.slice(0, 20).join(", ")}`);
@@ -165,7 +146,7 @@ export function buildSummarizerMessages(input: BuildPromptInput): SummarizerMess
       "goal named in an older skill call or an in-flight run must NOT override a " +
       "newer user pivot.\n" +
       "- Carry unresolved errors and blockers forward with enough detail to act on.\n" +
-      "- You may cite facts from GROUNDED STATE (run ids, rooms) but " +
+      "- You may cite facts from GROUNDED STATE (exact run/artifact refs) but " +
       "NEVER invent identifiers or addresses — exact pointers are appended " +
       "separately, so do not emit a [RESUME-REFS] block yourself.\n" +
       `- Be concise; target about ${input.proseTokenTarget} tokens. No preamble.`

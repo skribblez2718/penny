@@ -27,6 +27,8 @@ export interface SessionMessage {
   toolName?: string;
   toolCallId?: string;
   isError?: boolean;
+  /** Tool-owned metadata persisted by Pi but not sent to the model. */
+  details?: unknown;
 }
 
 /** Narrow arbitrary JSON to a string-keyed record (arrays/primitives → {}). */

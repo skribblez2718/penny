@@ -1,71 +1,26 @@
-# Multi-GPU Standard for AI Applications
+# Multi-Accelerator Standard for AI Applications
 
-**Status:** Mandatory. Applies to every AI app in this workspace.
-**Applies to:** `simple_chatbot`, `simple_voicebot`, `simple_meeting_summarizer`, and all future AI projects.
+## Scope
 
-## The Rule
+Use this standard when a caller-selected project can run models on CUDA, MPS, or CPU. Tracked Penny code and documentation remain hardware- and downstream-project-neutral; deployment profiles supply visible devices, model names, memory requirements, and overrides.
 
-The invariant is capability-first: **make every GPU present on the host
-visible to PyTorch, select exactly one device adaptively at startup, and
-degrade to CPU when there is none** — never hard-code a device or assume a
-fixed GPU count.
+## Invariant
 
-Concretely:
-1. `.env` and `.env.example` expose all present cards to PyTorch, and the
-   app still handles 1 GPU, N GPUs, or no GPU gracefully. On the current
-   host (2× RTX 4090) that is `CUDA_VISIBLE_DEVICES=0,1` — an example for
-   this box, not a universal constant; a 1-GPU or different host sets its
-   own value.
-2. **All models in a single app share ONE device.** Do NOT split
-   multiple models across different cards. Prefer an explicit
-   single-device map; `device_map="auto"` is only appropriate when a
-   model genuinely exceeds one card (see “Why not `device_map="auto"`?”).
-3. The device is chosen once at startup by a shared helper and cached.
-   The app code uses `get_device()` to read the choice.
-4. A `MEETING_DEVICE` (or project-specific) env var lets the user
-   override the choice (e.g. `MEETING_DEVICE=cuda:0`,
-   `MEETING_DEVICE=cpu`).
-5. No hardcoded `"cuda"`, `"cuda:0"`, or `"cpu"` in model-loading
-   paths.
+Select one compatible device at startup, reuse it for every tightly coupled model/tensor path, and degrade safely to CPU. Never encode a host's hardware inventory, fixed device index, or downstream model layout in Penny.
 
-## Why one device for everything
+## Rules
 
-The single biggest cause of cross-device tensor errors in this
-workspace is **splitting one model's submodules across GPUs**:
+1. **Caller-owned visibility.** Deployment configuration controls which accelerators are visible. Application code discovers only that visible set.
+2. **One selection point.** A shared helper chooses and caches the device. Model loaders do not choose independently.
+3. **One device for coupled work.** Models that exchange tensors use the same device unless the selected project explicitly implements and tests distributed execution.
+4. **Validated override.** A project-specific environment variable may request `cpu`, `mps`, `cuda`, or `cuda:<index>`. Invalid or unavailable requests fail clearly or fall back according to caller policy.
+5. **Capability-first fallback.** Prefer an available compatible accelerator; otherwise use CPU. Detection failure does not crash startup unless an accelerator is a declared project requirement.
+6. **No automatic sharding by default.** Automatic multi-device maps are allowed only when the selected model cannot fit one device and the caller has explicit distributed-execution tests.
+7. **No Penny deployment profile.** Device counts, memory sizes, model footprints, and visibility values belong to the selected target or deployment registry.
 
-- `device_map="auto"` on Qwen TTS places the text encoder on one
-  card and the audio decoder on another. At inference time, a tensor
-  flow hits `torch.cat` and PyTorch raises
-  *"tensors on cuda:0, different from cuda:1"*.
-- Two models in the same app each picking a different GPU creates
-  a similar coupling: data lives on GPU 0, the model lives on GPU 1,
-  and the first request fails.
-
-The fix is to pin all models in an app to the same single device.
-(Concretely, this workspace's current audio pipeline — Whisper medium and
-Qwen3-TTS-0.6B, ~1.5 GB + ~1.2 GB at time of writing — fits comfortably on
-one 24 GB card; verify headroom at load time rather than trusting these
-point-in-time sizes.) Splitting is wasteful AND broken.
-
-## `.env` Template
-
-```bash
-# ----------------------------------------------------------------------------
-# Compute — both RTX 4090s are visible to PyTorch. The app picks ONE
-# device at startup (whichever has the most free VRAM, with CPU fallback).
-# Set MEETING_DEVICE below to force a specific device.
-# ----------------------------------------------------------------------------
-CUDA_VISIBLE_DEVICES=0,1
-# MEETING_DEVICE=cuda:0   # uncomment to force a specific device
-```
-
-## Code Pattern — Shared Device Picker
-
-Create a `backend/_gpu.py` (or equivalent) module that is the single
-source of truth for device selection:
+## Generic device picker
 
 ```python
-# backend/_gpu.py
 from __future__ import annotations
 
 import logging
@@ -76,211 +31,122 @@ import torch
 
 logger = logging.getLogger(__name__)
 
-DEVICE_OVERRIDE: str | None = os.environ.get("MEETING_DEVICE")
-
+_DEVICE_ENV = "APP_DEVICE"
 _selected_device: str | None = None
 _selection_lock = threading.Lock()
 
 
 def get_device() -> str:
-    """Return the single device all models should load onto.
-
-    Resolves in this order:
-    1. MEETING_DEVICE env var, if set and valid
-    2. GPU with the most free VRAM (across CUDA_VISIBLE_DEVICES)
-    3. Apple MPS
-    4. CPU
-
-    The result is cached after the first call.
-    """
+    """Return the cached device selected for this process."""
     global _selected_device
     with _selection_lock:
-        if _selected_device is not None:
-            return _selected_device
-
-        device = _resolve_device()
-        _selected_device = device
-        logger.info("Selected compute device for all models: %s", device)
-        return device
+        if _selected_device is None:
+            _selected_device = _resolve_device(os.environ.get(_DEVICE_ENV, ""))
+        return _selected_device
 
 
 def reset_device_cache() -> None:
-    """Clear the cached device selection. For tests only."""
+    """Clear selection for isolated tests."""
     global _selected_device
     with _selection_lock:
         _selected_device = None
 
 
-def _resolve_device() -> str:
-    if DEVICE_OVERRIDE:
-        override = DEVICE_OVERRIDE.strip().lower()
-        if _is_valid_device(override):
-            logger.info("Using MEETING_DEVICE override: %s", override)
+def _resolve_device(raw_override: str) -> str:
+    override = raw_override.strip().lower()
+    if override:
+        if _is_available(override):
             return override
-        logger.warning(
-            "MEETING_DEVICE=%r is not valid; ignoring.", DEVICE_OVERRIDE
-        )
+        logger.warning("Configured device is unavailable; using capability fallback")
 
     try:
-        if torch.cuda.is_available():
-            return _pick_best_cuda_device()
+        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+            return _best_visible_cuda_device()
     except Exception as exc:
-        logger.warning("CUDA detection failed: %s", exc)
+        logger.warning("CUDA capability detection failed: %s", exc)
 
     try:
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             return "mps"
     except Exception:
         pass
-
     return "cpu"
 
 
-def _pick_best_cuda_device() -> str:
-    """Return 'cuda:N' for the GPU with the most free VRAM."""
-    try:
-        n = torch.cuda.device_count()
-        if n <= 0:
-            return "cpu"
-        if n == 1:
-            return "cuda:0"
-        free_per_dev: list[tuple[int, int]] = []
-        for i in range(n):
-            try:
-                free, _total = torch.cuda.mem_get_info(i)
-                free_per_dev.append((free, i))
-            except Exception:
-                continue
-        if not free_per_dev:
-            return "cuda:0"
-        free_per_dev.sort(reverse=True)
-        return f"cuda:{free_per_dev[0][1]}"
-    except Exception:
-        return "cuda:0"
+def _best_visible_cuda_device() -> str:
+    candidates: list[tuple[int, int]] = []
+    for index in range(torch.cuda.device_count()):
+        try:
+            free_bytes, _total_bytes = torch.cuda.mem_get_info(index)
+            candidates.append((free_bytes, index))
+        except Exception:
+            continue
+    if not candidates:
+        return "cuda"
+    _free_bytes, selected_index = max(candidates)
+    return f"cuda:{selected_index}"
 
 
-def _is_valid_device(device: str) -> bool:
-    if device in ("cpu", "mps", "cuda"):
+def _is_available(device: str) -> bool:
+    if device == "cpu":
         return True
-    if device.startswith("cuda:"):
-        return device[5:].isdigit()
+    if device == "mps":
+        return bool(hasattr(torch.backends, "mps") and torch.backends.mps.is_available())
+    if device == "cuda":
+        return bool(torch.cuda.is_available() and torch.cuda.device_count() > 0)
+    if device.startswith("cuda:") and device.removeprefix("cuda:").isdigit():
+        index = int(device.removeprefix("cuda:"))
+        return bool(torch.cuda.is_available() and 0 <= index < torch.cuda.device_count())
     return False
 ```
 
-## Code Pattern — Model Loading
+The selected project may use a different helper or framework. The invariant is one validated, cached selection—not this exact implementation.
 
-Every model loader calls `get_device()` and uses the returned string
-as the device. **Do not** use `device_map="auto"`.
-
-```python
-# backend/stt.py
-from backend._gpu import get_device
-import whisper
-
-def load_stt_model() -> bool:
-    device = get_device()  # "cuda:0", "cuda:1", or "cpu"
-    model = whisper.load_model("medium", device=device)  # NOT device_map=
-    return True
-```
+## Model loading
 
 ```python
-# backend/tts.py
-from backend._gpu import get_device
-from qwen_tts import Qwen3TTSModel
+from project_runtime.device import get_device
 
-def load_tts_model() -> bool:
-    device = get_device()  # SAME device as STT
-    model = Qwen3TTSModel.from_pretrained(
-        "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
-        device_map=device,  # single device, NOT "auto"
-    )
-    return True
+
+def load_model(model_factory):
+    device = get_device()
+    model = model_factory()
+    return model.to(device)
 ```
 
-For the LLM (`simple_chatbot` / `simple_voicebot` use a 7B model that
-WANTS to be sharded):
+For libraries that accept a device map, use an explicit single-device map based on `get_device()`. Automatic sharding requires separate project evidence.
+
+## Verification
+
+The author and verifier confirm:
+
+- [ ] tracked Penny files contain no host-specific accelerator inventory or downstream model/profile;
+- [ ] deployment configuration owns device visibility and overrides;
+- [ ] one helper selects and caches the device;
+- [ ] coupled models/tensors use the same selected device;
+- [ ] invalid/unavailable overrides follow the documented policy;
+- [ ] accelerator detection failure has a tested CPU fallback;
+- [ ] automatic sharding is absent unless explicit distributed tests justify it;
+- [ ] tests cover override, unavailable override, one visible accelerator, multiple visible accelerators, detection failure, and no accelerator.
+
+## Test shape
+
+Use mocks; CI does not require accelerator hardware.
 
 ```python
-# backend/main.py (single-LLM app)
-from backend._gpu import get_device
-from transformers import AutoModelForCausalLM
+def test_no_accelerator_falls_back_to_cpu(monkeypatch):
+    from project_runtime import device
 
-def load_model() -> None:
-    device = get_device()  # "cuda:0" — pin the entire model to one card
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        torch_dtype="auto",
-        device_map={"": device},  # explicit single-device map
-    )
+    device.reset_device_cache()
+    monkeypatch.setattr(device.torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(device.torch.backends.mps, "is_available", lambda: False)
+    assert device.get_device() == "cpu"
+
+
+def test_coupled_loaders_share_cached_selection(monkeypatch):
+    from project_runtime import device
+
+    device.reset_device_cache()
+    monkeypatch.setattr(device, "_resolve_device", lambda _override: "cpu")
+    assert device.get_device() == device.get_device()
 ```
-
-`device_map={"": device}` is the recommended pattern for
-single-model apps: it pins everything to the chosen device and works
-the same on 1-GPU, 2-GPU, and CPU machines.
-
-## Why not `device_map="auto"`?
-
-`device_map="auto"` lets Accelerate split a model across multiple
-GPUs. For a 7B model on a single 24 GB card, this is necessary.
-For small models (Whisper medium, Qwen TTS-0.6B), it is broken:
-
-- The model's submodules end up on different cards.
-- At runtime, a tensor flow between submodules hits
-  `torch.cat` and fails with cross-device errors.
-- There is no clean way to fix this without patching the model
-  internals.
-
-**Always pin to a single device string.**
-
-## Code-Skill Agent Responsibility
-
-When the code skill creates or modifies an AI project, the
-`implement` and `verify` agents MUST:
-
-- [ ] Confirm `CUDA_VISIBLE_DEVICES=0,1` is in both `.env` and `.env.example`
-- [ ] Confirm a `get_device()`-style helper exists and is the single
-      source of truth for device selection
-- [ ] Confirm `device_map="auto"` is **not** used in any model-loading
-      path
-- [ ] Confirm no hardcoded `"cuda"`, `"cuda:0"`, or `"cpu"` in
-      model-loading paths
-- [ ] Add a test for the device picker covering: override, single-GPU,
-      multi-GPU, no-GPU
-- [ ] Add a regression test that verifies STT and TTS use the same
-      device
-- [ ] Fail verification if any of the above is missing
-
-## Tests
-
-```python
-def test_get_device_uses_override(monkeypatch):
-    monkeypatch.setenv("MEETING_DEVICE", "cpu")
-    from backend._gpu import get_device, reset_device_cache
-    reset_device_cache()
-    assert get_device() == "cpu"
-
-
-def test_get_device_picks_best_gpu(monkeypatch):
-    from backend import _gpu
-    _gpu.reset_device_cache()
-    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
-    monkeypatch.setattr("torch.cuda.device_count", lambda: 2)
-
-    def fake_mem(dev):
-        return (4 * 1024**3, 24 * 1024**3) if dev == 0 else (20 * 1024**3, 24 * 1024**3)
-
-    monkeypatch.setattr("torch.cuda.mem_get_info", fake_mem)
-    assert _gpu.get_device() == "cuda:1"
-
-
-def test_stt_and_tts_share_device(monkeypatch):
-    """Regression test for the cross-device tensor error."""
-    from backend import _gpu
-    _gpu.reset_device_cache()
-    monkeypatch.setattr(_gpu, "get_device", lambda: "cuda:0")
-    # ... load both models, assert both use cuda:0
-```
-
-The `simple_meeting_summarizer` project has full reference tests in
-`tests/test_stt.py::TestSTTModelLoading::test_load_stt_model_uses_shared_device`
-and `tests/test_tts.py::TestTTSModelLoading::test_load_tts_model_uses_shared_device`.

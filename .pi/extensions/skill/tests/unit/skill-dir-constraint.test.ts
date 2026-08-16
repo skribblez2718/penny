@@ -36,7 +36,7 @@ function buildConstraints(
   return JSON.stringify({ skill_dir: skillPath, ...constraintsObj });
 }
 
-const SKILL_PATH = "/abs/path/.pi/skills/prd";
+const SKILL_PATH = "/abs/path/.pi/skills/example-skill";
 
 describe("skill_dir constraint injection", () => {
   it("injects an absolute skill_dir when no constraints are supplied", () => {

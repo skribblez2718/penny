@@ -105,7 +105,7 @@ def test_legacy_checkpoint_carrying_the_retired_key_still_loads():
     legacy = {
         "session_id": "s",
         "run_id": "r",
-        "playbook": "prd",
+        "playbook": "research",
         "goal": "build a thing",
         "iteration": 2,
         "recall_lessons": ["a stale injected lesson", "another"],
@@ -120,7 +120,7 @@ def test_genuinely_unknown_keys_still_fail_loud():
     # Retiring a key must not weaken the schema-drift guard for everything else.
     with pytest.raises(ValueError, match="unknown keys"):
         RunContext.from_dict(
-            {"session_id": "s", "run_id": "r", "playbook": "prd", "bogus_field": 1}
+            {"session_id": "s", "run_id": "r", "playbook": "research", "bogus_field": 1}
         )
 
 

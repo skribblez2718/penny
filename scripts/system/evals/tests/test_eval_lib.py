@@ -2,6 +2,9 @@
 
 from datetime import datetime, timezone
 
+import eval_lib
+from memory.admin_client import AdminCallResult
+
 from eval_lib import (
     DOWN_GOOD,
     ERROR,
@@ -18,6 +21,7 @@ from eval_lib import (
     EvalResult,
     EvalSkip,
     compare,
+    memory_call,
     parse_when,
     run_checks,
     update_baseline,
@@ -51,6 +55,18 @@ class TestParseWhen:
         assert parse_when("not a date") is None
         assert parse_when("") is None
         assert parse_when(None) is None
+
+
+class TestMemoryHubAccess:
+    def test_memory_call_uses_injected_http_admin_client(self, monkeypatch):
+        class Client:
+            def call_tool(self, tool, params):
+                assert tool == "mempalace_list_drawers"
+                assert params == {"limit": 1}
+                return AdminCallResult("request", {"drawers": []})
+
+        monkeypatch.setattr(eval_lib, "_MEMORY_CLIENT", Client())
+        assert memory_call("mempalace_list_drawers", {"limit": 1}) == {"drawers": []}
 
 
 class TestRunChecks:

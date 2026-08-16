@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "endpoint": "http://127.0.0.1:@PORT@",
+  "palace_id": "@PALACE_ID@",
+  "backend": "@BACKEND@",
+  "python_executable": "@PYTHON_EXECUTABLE@",
+  "token_file": "@TOKEN_FILE@",
+  "data_roots": {
+    "palace": "@PALACE_ROOT@",
+    "kg": "@PALACE_ROOT@/knowledge_graph.sqlite3",
+    "logstream": "@PALACE_ROOT@/logstream.sqlite3",
+    "archive": "@ARCHIVE_ROOT@",
+    "runtime": "@RUNTIME_ROOT@",
+    "logs": "@LOG_ROOT@",
+    "home": "@SERVICE_HOME@",
+    "config": "@XDG_CONFIG_ROOT@",
+    "cache": "@XDG_CACHE_ROOT@",
+    "state": "@XDG_STATE_ROOT@"
+  },
+  "health_timeout_seconds": 2.0,
+  "stop_timeout_seconds": 15.0
+}

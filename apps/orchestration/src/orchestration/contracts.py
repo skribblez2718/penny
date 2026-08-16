@@ -5,7 +5,7 @@ Single source of truth for:
   * the canonical per-primitive SUMMARY contracts + ``validate_summary`` (the
     engine's fail-loud gatekeeper);
   * the stdout directive builders (``invoke_agent`` / ``invoke_agents_parallel``
-    / ``escalate_to_user`` / ``complete`` / ``error`` / ``status``).
+    / ``paused`` / ``escalate_to_user`` / ``complete`` / ``error`` / ``status``).
 
 Every directive carries ``session_id`` + ``run_id``. There is deliberately NO
 ``orchestrator_state`` field — the durable checkpointer owns all state (this is
@@ -16,8 +16,64 @@ what retires the legacy state-on-argv transport). See
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import os
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
+
+ARTIFACT_DISPATCH_MODE_ENV = "PENNY_ARTIFACT_DISPATCH_MODE"
+ARTIFACT_DISPATCH_MODE_ACTIVE = "active"
+ARTIFACT_DISPATCH_MODE_PAUSED = "paused"
+
+
+@dataclass(frozen=True)
+class ArtifactDispatchControl:
+    """Owner dispatch control resolved from one exact environment value.
+
+    Unknown values intentionally resolve to the paused side of the boundary.
+    This control governs creation of new agent, deterministic-tool, and fan-out
+    work only; status and exact artifact reads use separate read-only paths.
+    """
+
+    mode: str
+    code: str
+    reason: str
+
+    @property
+    def dispatch_allowed(self) -> bool:
+        return self.mode == ARTIFACT_DISPATCH_MODE_ACTIVE
+
+
+def artifact_dispatch_control(
+    environ: Mapping[str, str] | None = None,
+) -> ArtifactDispatchControl:
+    """Resolve ``active|paused`` exactly; absent defaults active, unknown fails closed."""
+    source = os.environ if environ is None else environ
+    configured = source.get(ARTIFACT_DISPATCH_MODE_ENV)
+    if configured is None or configured == ARTIFACT_DISPATCH_MODE_ACTIVE:
+        return ArtifactDispatchControl(
+            mode=ARTIFACT_DISPATCH_MODE_ACTIVE,
+            code="ARTIFACT_DISPATCH_ACTIVE",
+            reason="artifact workflow dispatch is active",
+        )
+    if configured == ARTIFACT_DISPATCH_MODE_PAUSED:
+        return ArtifactDispatchControl(
+            mode=ARTIFACT_DISPATCH_MODE_PAUSED,
+            code="ARTIFACT_DISPATCH_PAUSED",
+            reason=(
+                "new agent, tool, and fan-out dispatch is paused by the execution owner; "
+                "the durable checkpoint remains pending"
+            ),
+        )
+    return ArtifactDispatchControl(
+        mode=ARTIFACT_DISPATCH_MODE_PAUSED,
+        code="ARTIFACT_DISPATCH_MODE_INVALID",
+        reason=(
+            f"{ARTIFACT_DISPATCH_MODE_ENV} must be exactly 'active' or 'paused'; "
+            "unknown configuration fails closed without advancing the run"
+        ),
+    )
+
 
 # ---------------------------------------------------------------------------
 # Confidence taxonomy (§2). Canonical, reused from Penny. UNCERTAIN triggers the
@@ -244,11 +300,13 @@ class Directives:
         skill_context: str | None = None,
         model: str | None = None,
         project_root: str = "",
+        output_artifact: dict[str, Any] | None = None,
+        input_artifacts: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         # By default the TS skill driver injects domain guidance from
         # assets/prompts/{agent}.md against skill.path. A playbook whose states map
-        # to per-state prompt files (sca/jsa) may set `skill_context` (a
-        # skill-relative path); the driver resolves + injects it (index.ts ~1158,
+        # to per-state prompt files may set `skill_context` (a skill-relative path);
+        # the driver resolves + injects it (index.ts ~1158,
         # `resolveSkillContextPath`). `model` is an optional per-state model
         # override the driver honors (index.ts ~1243). Both are omitted unless set,
         # so single-prompt skills' directives are unchanged.
@@ -265,6 +323,10 @@ class Directives:
             directive["skillContext"] = skill_context
         if model:
             directive["model"] = model
+        if output_artifact is not None:
+            directive["output_artifact"] = output_artifact
+        if input_artifacts is not None:
+            directive["input_artifacts"] = input_artifacts
         # The TARGET root, stated authoritatively by the side that owns durable run
         # state. The driver otherwise re-derives it per invocation from its own
         # params and silently falls back to its cwd when a caller omits it — which is
@@ -285,6 +347,7 @@ class Directives:
         session_id: str,
         run_id: str,
         project_root: str = "",
+        input_artifacts: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         directive: dict[str, Any] = {
             "action": "invoke_agents_parallel",
@@ -293,6 +356,8 @@ class Directives:
             "session_id": session_id,
             "run_id": run_id,
         }
+        if input_artifacts is not None:
+            directive["input_artifacts"] = input_artifacts
         # Same authority rule as invoke_agent: every branch agent must land in the
         # selected target, not wherever the driver happens to be running.
         if project_root:
@@ -343,6 +408,37 @@ class Directives:
             "errors": errors,
             "session_id": session_id,
             "run_id": run_id,
+        }
+
+    @staticmethod
+    def paused(
+        *,
+        state_id: str,
+        run_status: str,
+        session_id: str,
+        run_id: str,
+        control: ArtifactDispatchControl,
+    ) -> dict[str, Any]:
+        """Typed non-terminal result for owner-paused or invalid dispatch mode."""
+        if control.dispatch_allowed:
+            raise ValueError("an active dispatch control cannot build a paused directive")
+        return {
+            "schema_version": 1,
+            "action": "paused",
+            "code": control.code,
+            "reason": control.reason,
+            "retryable": True,
+            "dispatch_mode": ARTIFACT_DISPATCH_MODE_PAUSED,
+            "run_status": run_status,
+            "state_id": state_id,
+            "session_id": session_id,
+            "run_id": run_id,
+            "recovery": {
+                "action": "recover",
+                "run_id": run_id,
+                "requires_dispatch_mode": ARTIFACT_DISPATCH_MODE_ACTIVE,
+                "checkpoint_preserved": True,
+            },
         }
 
     @staticmethod

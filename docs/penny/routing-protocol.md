@@ -1,9 +1,31 @@
 # Routing & Delegation Protocol
 
-Read this on demand when you need the full mechanics of delegating to skills and
-agents. The routing **decision** (skill vs agent vs direct, signal-word matching,
-decision order) stays inline in SYSTEM.md — this doc holds the details you only
-need while actually constructing a delegation.
+Read this on demand when choosing an execution path or constructing a delegation.
+SYSTEM.md carries only the concise trigger (choose the lowest-complexity path
+expected to succeed); this doc holds the full policy and mechanics.
+
+## The routing policy
+
+Choose the lowest-complexity path expected to succeed. Work directly when
+Penny's current context and tools suffice. Use a subagent when specialization,
+isolated context, parallel exploration, or a separate review adds material
+value. Use a skill when an established workflow's durable state, approval
+gates, retries, iteration budget, or resume behavior adds material value.
+
+Direct work is a first-class path, not a failure to orchestrate — and as models
+improve, more work becomes cheap to do directly. Delegation has real costs
+(handoff formulation, context loss, result integration, latency, correlated
+errors); pay them only when the machinery earns its keep.
+
+| Path         | Use when                                                                                         | Avoid when                                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| **Direct**   | Current context and tools are sufficient; handoff would add more overhead than value             | The task needs context isolation, parallel exploration, durable state, or a gated workflow |
+| **Subagent** | A specialist role, isolated context, separate review, or parallel branch will improve the result | Single reads/edits/calls; the parent already has all context and tools                     |
+| **Skill**    | A known workflow needs checkpoints, retries, gates, receipts, or resume                          | Ad hoc work where no workflow state is valuable                                            |
+
+Route by capability reasoning against this table — what does the task actually
+need? — not by keyword matching. "Multi-step" alone justifies neither a skill
+nor a subagent.
 
 ## Engine-backed skills (orchestration)
 
@@ -11,12 +33,11 @@ Skills whose `SKILL.md` sets `metadata.penny.engine: orchestration` run on the
 shared `orchestration` engine: each is a `BasePlaybook` subclass with its own
 domain-named states and a per-state SUMMARY contract. State lives in a durable
 checkpointer keyed by `run_id` (no `--state`, no `/tmp`), and interrupted runs
-**auto-resume** on the next invocation (no manual resume). Every workflow skill
-runs on the engine (`code`, `plan`, `prd`, `research`, `agent`, `sca`, `jsa`,
-`rez`, `learn`), with no exceptions. All skills are visible/model-selectable;
-there is no hidden shelf.
-The engine internals do not change how you choose — you still route to a skill by
-name via `skill({ skill_name, goal })`.
+resume from durable state. The current user-facing workflow catalog contains
+only `research`. Invoke it for structured, multi-source investigations when its
+evidence gathering, citation validation, retries, or resume behavior earn the
+overhead. The engine internals do not change how you choose: route by capability,
+then invoke by name with `skill({ skill_name: "research", goal })`.
 
 ## Context passing
 

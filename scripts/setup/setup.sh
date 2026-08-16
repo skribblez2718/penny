@@ -91,3 +91,7 @@ else
 fi
 
 echo ""
+
+if [ $PASSED -ne $TOTAL ]; then
+    exit 1
+fi

@@ -11,9 +11,10 @@
  *     4. Repeat until complete
  *     5. Return final result to Penny
  *
- * Key principle: Penny's context window stays clean.
- * All substantial data flows through mempalace (agents read/write directly).
- * The extension only passes minimal summaries to the orchestrator.
+ * Key principle: Penny's context window stays clean without making semantic
+ * memory the output authority. The execution owner persists exact final-output
+ * bytes before parsing SUMMARY and passes only the trusted ref plus bounded
+ * routing/evidence metadata to the orchestrator.
  *
  * Agent invocation: Uses the shared agent-runner module from the subagent
  * extension. This module spawns pi processes for agents directly, bypassing
@@ -23,7 +24,6 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { homedir, tmpdir } from "os";
 import { randomUUID } from "crypto";
 import type {
   ExtensionAPI,
@@ -51,51 +51,46 @@ import {
   signTrustedInvocation,
   withExecutionOwnerEnvironment,
 } from "./execution-receipts.js";
+import {
+  ArtifactClientError,
+  RESULT_PROTOCOL_VERSION,
+  parseArtifactRef,
+  parseOutputArtifactMetadata,
+  persistArtifactOutput,
+  stableArtifactReceiptId,
+  type OutputArtifactMetadata,
+} from "./artifact-client.js";
+import {
+  appendInputArtifactInstruction,
+  buildArtifactInvocationEnvironment,
+  parseInputArtifacts,
+  type InputArtifactsV1,
+} from "./input-artifacts.js";
+import {
+  artifactDispatchControl,
+  localArtifactDispatchPause,
+  parseArtifactDispatchPause,
+  type ArtifactDispatchPause,
+} from "./dispatch-control.js";
+import {
+  readChainCheckpoint,
+  saveChainCheckpoint,
+  type ChainCheckpoint,
+} from "./chain-checkpoint.js";
+import {
+  persistSkillChainHandoff,
+  skillChainInput,
+  validateSkillChainHandoff,
+} from "./skill-chain-artifacts.js";
+import {
+  discoverSkillsFromDirectory,
+  modelInvocableSkills,
+  type SkillDiscovery,
+} from "./skill-discovery.js";
 import { createLogger, setSessionId, type ErrorCode } from "../../lib/logger/logger.js";
+import { resolveToolResultBudget, type ToolResultBudget } from "../lib/tool-result-budget.js";
 
 const logger = createLogger("skill");
-
-function executionOwnerIsolation(targetRoot: string) {
-  const pennyRoot = process.env.PROJECT_ROOT || targetRoot;
-  return {
-    protectedPaths: [path.join(path.resolve(pennyRoot), ".penny")],
-    // The agent runtime's own state directory stays WRITABLE inside the sandbox.
-    // `--ro-bind / /` otherwise makes it read-only, and an OAuth provider
-    // (openai-codex) refreshes its token by rewriting ~/.pi/agent/auth.json — a
-    // write that fails silently and surfaces as "No API key found", killing the
-    // agent right after its session event. This is the agent's own runtime
-    // state, which it could already READ; the orchestration authority boundary
-    // (.penny) remains tmpfs-shadowed above, and the owner HMAC keys are still
-    // stripped from the environment by isolatedAgentEnvironment().
-    // Narrow further to <home>/.pi/agent if only credential refresh is needed.
-    //
-    // `.mempalace` is agent MEMORY — every agent prompt mandates reading prior context
-    // and persisting its findings there. Under `--ro-bind / /` it was read-only, so the
-    // bridge died at import with `sqlite3.OperationalError: unable to open database
-    // file` (KnowledgeGraph._init_db runs CREATE TABLE IF NOT EXISTS; SQLite needs write
-    // access even to open). Agents then ran blind to each other's durable context, and
-    // one honestly filed the outage as a security finding that no plan could discharge —
-    // turning an infrastructure fault into a permanent completion blocker.
-    //
-    // This is NOT the authority boundary: `.penny` (orchestration state, receipts,
-    // approvals) remains tmpfs-shadowed via protectedPaths above, and the owner HMAC
-    // keys are still stripped by isolatedAgentEnvironment(). Mempalace is a directory
-    // whose entire purpose is agent-written memory.
-    // BOTH mempalace stores are needed. They are NOT the same directory:
-    //   - <pennyRoot>/.mempalace          drawers / chroma (the palace_path)
-    //   - <home>/.mempalace               knowledge graph (mempalace's DEFAULT_KG_PATH,
-    //                                     ~/.mempalace/knowledge_graph.sqlite3)
-    // memory_bridge.py constructs KnowledgeGraph() at IMPORT time, so a read-only HOME
-    // store kills the bridge before any tool runs — which is the actual
-    // `unable to open database file` seen in runs.
-    writablePaths: [
-      path.join(homedir(), ".pi"),
-      path.join(homedir(), ".mempalace"),
-      path.join(path.resolve(pennyRoot), ".mempalace"),
-    ],
-    requireSandbox: true,
-  };
-}
 
 import {
   discoverAgents,
@@ -122,6 +117,17 @@ function errorStack(err: unknown): string | undefined {
   return err instanceof Error ? err.stack : undefined;
 }
 
+/** Recognize typed artifact errors across test/runtime module-realm boundaries. */
+function isArtifactClientError(err: unknown): err is ArtifactClientError {
+  return (
+    err instanceof ArtifactClientError ||
+    (err instanceof Error &&
+      "code" in err &&
+      typeof err.code === "string" &&
+      err.code.startsWith("ARTIFACT_"))
+  );
+}
+
 // ============================================================
 // Configuration
 // ============================================================
@@ -131,6 +137,7 @@ interface SkillConfig {
   skillsDir: string;
   skillTimeout: number;
   agentTimeout: number;
+  resultBudget: ToolResultBudget;
 }
 
 let config: SkillConfig;
@@ -139,20 +146,13 @@ let config: SkillConfig;
 // Types
 // ============================================================
 
-interface SkillDiscovery {
-  name: string;
-  description: string;
-  path: string;
-  hasOrchestrate: boolean;
-}
-
 // Orchestration step timeout — individual Python steps (explore/plan/critique/taskify)
 // should complete well within this; cold starts may need the full window.
 const STEP_TIMEOUT_MS = 300_000;
 
 // Action protocol from Python orchestrate.py — canonical source of truth
 interface Action {
-  action: string; // "invoke_agent" | "invoke_agents_parallel" | "escalate_to_user" | "complete" | "error" | "status"
+  action: string; // invoke_agent | invoke_agents_parallel | paused | escalate_to_user | complete | incomplete | error | status
   state_id: string;
   session_id: string;
   // run_id: minted once per run and threaded through every directive. The
@@ -170,12 +170,18 @@ interface Action {
   // skill root (e.g. "assets/prompts/tabitha-threat-model.md"); the extension
   // joins it against skill.path. Absent/empty ⇒ fall back to the bare guess.
   skillContext?: string;
+  /** Trusted owner metadata for the exact single-agent final output. */
+  output_artifact?: OutputArtifactMetadata;
+  /** Exact owner-selected predecessor refs for this state. */
+  input_artifacts?: InputArtifactsV1;
   tasks?: Array<{
     agent: string;
     task_summary: string;
     model?: string;
     branch_id?: string;
     skillContext?: string;
+    /** Trusted owner metadata for this exact fan-out branch output. */
+    output_artifact?: OutputArtifactMetadata;
   }>;
   model?: string;
   agent_config?: Record<string, unknown>;
@@ -218,6 +224,15 @@ interface Action {
   // Present on the `send-email` directive response (callPython for send-email
   // returns a delivery-status object rather than a state-machine action).
   sent?: boolean;
+  // Owner-controlled forward-recovery pause. The closed shape is validated by
+  // parseArtifactDispatchPause before it becomes a public SkillResult.
+  schema_version?: number;
+  code?: string;
+  reason?: string;
+  retryable?: boolean;
+  dispatch_mode?: string;
+  run_status?: string;
+  recovery?: Record<string, unknown>;
 }
 
 // ============================================================
@@ -225,41 +240,10 @@ interface Action {
 // ============================================================
 
 function discoverSkills(): SkillDiscovery[] {
-  const skills: SkillDiscovery[] = [];
-  if (!fs.existsSync(config.skillsDir)) return skills;
-
-  for (const entry of fs.readdirSync(config.skillsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-
-    const skillPath = path.join(config.skillsDir, entry.name);
-    const skillMdPath = path.join(skillPath, "SKILL.md");
-    const orchestratePath = path.join(skillPath, "scripts", "orchestrate.py");
-    if (!fs.existsSync(skillMdPath)) continue;
-
-    let name = entry.name;
-    let description = "";
-    try {
-      const content = fs.readFileSync(skillMdPath, "utf-8");
-      const fm = content.match(/^---\n([\s\S]*?)\n---/);
-      if (fm) {
-        const nm = fm[1].match(/^name:\s*(.+)$/m);
-        const dm = fm[1].match(/^description:\s*(.+)$/m);
-        if (nm) name = nm[1].trim();
-        if (dm) description = dm[1].trim();
-      }
-    } catch {
-      logger.debug("Skill metadata parse failed, using default description", { skill: entry.name });
-      description = `Skill: ${entry.name}`;
-    }
-
-    skills.push({
-      name,
-      description,
-      path: skillPath,
-      hasOrchestrate: fs.existsSync(orchestratePath),
-    });
-  }
-  return skills;
+  return discoverSkillsFromDirectory(config.skillsDir, {
+    onMetadataError: (skill) =>
+      logger.debug("Skill metadata parse failed, using default description", { skill }),
+  });
 }
 
 /**
@@ -291,6 +275,40 @@ function createTimeoutResult(agentName: string, timeoutMs: number): SingleResult
   };
 }
 
+/** Resolve an interrupted agent promptly instead of waiting for its hard cap. */
+function createAbortedResult(agentName: string): SingleResult {
+  return {
+    agent: agentName,
+    agentSource: "project",
+    task: "(aborted)",
+    exitCode: 1,
+    messages: [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Agent invocation interrupted" }],
+      },
+    ],
+    stderr: `Agent "${agentName}" invocation was interrupted`,
+    stopReason: "aborted",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      contextTokens: 0,
+      turns: 0,
+    },
+  };
+}
+
+function abortError(agentName: string): Error {
+  return Object.assign(new Error(`Agent "${agentName}" invocation was interrupted`), {
+    name: "AbortError",
+    code: "AGENT_ABORTED" as const,
+  });
+}
+
 /**
  * Race an agent promise against a timeout with progress heartbeats.
  *
@@ -309,40 +327,52 @@ function withAgentTimeout<T>(
   timeoutMs: number,
   fallbackFactory?: (agentName: string, err?: unknown) => T
 ): Promise<T> {
-  // Backward compatibility: no progressEmitter → old single-setTimeout behavior
+  // Backward compatibility: no progressEmitter → one bounded timeout.
   if (!progressEmitter) {
     return new Promise<T>((resolve) => {
+      let settled = false;
+      const finish = (result: T) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      };
       const timer = setTimeout(() => {
-        if (fallbackFactory) {
-          resolve(fallbackFactory(agentName));
-          return;
-        }
-        resolve(createTimeoutResult(agentName, timeoutMs) as T);
+        finish(
+          fallbackFactory
+            ? fallbackFactory(agentName)
+            : (createTimeoutResult(agentName, timeoutMs) as T)
+        );
       }, timeoutMs);
 
       if (signal) {
-        signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+        const onAbort = () => {
+          const err = abortError(agentName);
+          finish(
+            fallbackFactory
+              ? fallbackFactory(agentName, err)
+              : (createAbortedResult(agentName) as T)
+          );
+        };
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
       }
 
       agentPromise.then(
-        (result) => {
-          clearTimeout(timer);
-          resolve(result);
-        },
+        (result) => finish(result),
         (err) => {
-          clearTimeout(timer);
           if (fallbackFactory) {
-            resolve(fallbackFactory(agentName, err));
+            finish(fallbackFactory(agentName, err));
             return;
           }
           logger.error(
             "Agent invocation failed",
             { agent: agentName, timeout: `${timeoutMs}ms`, isTimeout: false },
-            Object.assign(new Error((err as Error)?.message || String(err)), {
+            Object.assign(err instanceof Error ? err : new Error(String(err)), {
               code: "AGENT_ERROR" as ErrorCode,
             })
           );
-          resolve({
+          finish({
             agent: agentName,
             agentSource: "project",
             task: "(error)",
@@ -435,7 +465,16 @@ function withAgentTimeout<T>(
     }, 15_000);
 
     if (signal) {
-      signal.addEventListener("abort", () => cleanup(), { once: true });
+      const onAbort = () => {
+        if (resolved) return;
+        cleanup();
+        const err = abortError(agentName);
+        resolve(
+          fallbackFactory ? fallbackFactory(agentName, err) : (createAbortedResult(agentName) as T)
+        );
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
     }
 
     agentPromise.then(
@@ -452,7 +491,7 @@ function withAgentTimeout<T>(
         logger.error(
           "Agent invocation failed",
           { agent: agentName, timeout: `${timeoutMs}ms`, isTimeout: false },
-          Object.assign(new Error((err as Error)?.message || String(err)), {
+          Object.assign(err instanceof Error ? err : new Error(String(err)), {
             code: "AGENT_ERROR" as ErrorCode,
           })
         );
@@ -670,8 +709,8 @@ async function pythonStep(
 /**
  * Parse SUMMARY block from agent output.
  * Agents are instructed to emit inline JSON SUMMARY blocks via their
- * skill context prompts. The orchestrator receives only this summary,
- * not the full agent output. All substantial data flows through mempalace.
+ * skill context prompts. The execution owner persists the exact output first;
+ * the orchestrator then receives the summary beside the verified artifact ref.
  *
  * Standard format: SUMMARY:{"key":"value",...}
  * - Single line of valid JSON (no newlines in the JSON)
@@ -741,14 +780,15 @@ export function resolveSkillContextPath(
  * 1. Call Python START → get first action
  * 2. For each agent action:
  *    a. Invoke the subagent tool (delegates to subagent extension)
- *    b. Extract the SUMMARY from agent output (minimal data)
- *    c. Feed summary back to Python for next action
+ *    b. Persist exact final-output bytes and verify the canonical ArtifactRef
+ *    c. Parse the SUMMARY and bind a signed receipt to the real ref
+ *    d. Feed the trusted result wrapper back to Python for the next action
  * 3. Repeat until complete or error
  * 4. Return final result to Penny
  *
- * Mempalace-first: Agents read/write mempalace directly. The extension
- * only passes structured summaries to the Python orchestrator, keeping
- * Penny's context window clean.
+ * Exact output stays in the artifact plane. Structured SUMMARY data remains
+ * routing input, while optional durable-memory writes are outside this owner's
+ * persistence and trust contract.
  */
 async function executeSkill(
   skillName: string,
@@ -757,6 +797,10 @@ async function executeSkill(
     session_id?: string;
     project_root?: string;
     constraints?: Record<string, unknown>;
+    /** Caller-level fallback; an orchestrator's per-state model remains authoritative. */
+    model?: string;
+    /** Internal owner-only exact handoff from a preceding skill-chain step. */
+    chain_input_artifacts?: InputArtifactsV1;
   },
   cwd: string,
   signal: AbortSignal | undefined,
@@ -793,15 +837,16 @@ async function executeSkill(
     params.constraints && typeof params.constraints === "object"
       ? (params.constraints as Record<string, unknown>)
       : {};
-  const clarificationResponse = _constraintsObj.user_response as string | undefined;
-  const isClarificationResume = Boolean(clarificationResponse);
-  const sessionId = params.session_id || `plan-${Date.now()}`;
+  const clarificationResponse = _constraintsObj.user_response;
+  const isClarificationResume =
+    clarificationResponse !== undefined && clarificationResponse !== null;
+  const sessionId = params.session_id || `skill-${Date.now()}`;
   const projectRoot = params.project_root || cwd;
   const orchestratePath = path.join(skill.path, "scripts", "orchestrate.py");
   // `skill_dir` (ABSOLUTE) is injected into every run's constraints so a playbook can
   // hand its agents absolute guidance/validator paths. This matters because an agent
   // subprocess is spawned with `cwd = projectRoot` — the TARGET repo, which for
-  // code/jsa/sca/prd runs is NOT this repo — so a skill-relative path in a task message
+  // runs against another project are NOT in this repo — so a skill-relative path in a task message
   // ("resources/foo.md", "scripts/bar.py") resolves into the wrong tree and the agent
   // silently proceeds without the guidance. The driver is the only component that knows
   // `skill.path` authoritatively; everything downstream was guessing via __file__ walk-ups.
@@ -820,25 +865,22 @@ async function executeSkill(
   })();
   const agentsInvoked: string[] = [];
   const errors: string[] = [];
-  let skillTimedOut = false;
+  let interruptionReason: "external_abort" | "skill_timeout" | undefined;
 
-  // Issue 3 fix: create a local AbortController for agent subprocesses.
-  // Pi's tool-level AbortSignal must NOT reach agents — Pi can abort a
-  // long-running tool call before agents finish, killing all subprocesses
-  // and losing all analysis work. Agents have their own 30-min timeout.
+  // Keep one controller local to this skill invocation. An interrupted tool must
+  // stop its active child promptly; otherwise the outer call waits until the
+  // agent's 3× hard cap (90 minutes at the default) before it can return.
   const agentAbortController = new AbortController();
+  const interrupt = (reason: "external_abort" | "skill_timeout") => {
+    if (interruptionReason) return;
+    interruptionReason = reason;
+    agentAbortController.abort(reason);
+  };
 
-  // If Pi aborts the tool, stop starting new agents but let running ones finish.
   if (signal) {
-    signal.addEventListener(
-      "abort",
-      () => {
-        skillTimedOut = true;
-        // NOTE: we deliberately do NOT call agentAbortController.abort() here.
-        // The agents have their own timeout (30 min) via withAgentTimeout.
-      },
-      { once: true }
-    );
+    const onAbort = () => interrupt("external_abort");
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
   }
 
   // Helper to emit TUI progress updates during orchestration.
@@ -849,8 +891,26 @@ async function executeSkill(
   };
 
   const skillTimer = setTimeout(() => {
-    skillTimedOut = true;
+    interrupt("skill_timeout");
   }, config.skillTimeout);
+
+  const dispatchPausedResult = (pause: ArtifactDispatchPause): SkillResult => {
+    clearTimeout(skillTimer);
+    emitProgress(`Dispatch paused at ${pause.state_id}; checkpoint preserved for recovery`);
+    return {
+      success: false,
+      session_id: pause.session_id || sessionId,
+      skill_name: skillName,
+      state: pause.state_id,
+      requires_approval: false,
+      steps_total: 0,
+      agents_invoked: agentsInvoked,
+      errors: [],
+      retriable: true,
+      dispatch_pause: pause,
+      recovery: pause.recovery,
+    };
+  };
 
   try {
     // Step 1: Call Python START — or, when the user has answered a prior
@@ -863,16 +923,29 @@ async function executeSkill(
     // minted ONCE per run and reused across step/resume via --run-id. The
     // durable checkpointer (keyed by run_id) owns all FSM state.
     const recovered = await pythonRecover(orchestratePath, sessionId, projectRoot, sessionId);
-    const hasPending = recovered && recovered.action !== "status" && recovered.action !== "error";
+    // A recovery error belongs to the existing run and must be surfaced. Treating
+    // it as "no pending run" starts a second run with resume-only constraints,
+    // obscuring the real tool failure and corrupting operator expectations.
+    const hasPending = recovered && recovered.action !== "status";
     const recoveredRunId =
       recovered && typeof recovered.run_id === "string" ? recovered.run_id : "";
-    if (isClarificationResume) {
+    if (recovered?.action === "paused") {
+      runId = recoveredRunId;
+      action = recovered;
+    } else if (isClarificationResume) {
       runId = recoveredRunId || randomUUID();
       emitProgress(`Resuming ${skillName} with user clarification...`);
-      const trustedHumanEvent = parseTrustedHumanEventMarker(clarificationResponse || "");
+      const trustedHumanEvent =
+        typeof clarificationResponse === "string"
+          ? parseTrustedHumanEventMarker(clarificationResponse)
+          : undefined;
+      const clarificationText =
+        typeof clarificationResponse === "string"
+          ? clarificationResponse
+          : JSON.stringify(clarificationResponse);
       const resumeResult = JSON.stringify({
         answer: clarificationResponse,
-        clarification: clarificationResponse,
+        clarification: clarificationText,
         user_response: clarificationResponse,
         ...(trustedHumanEvent ? { trusted_human_event: trustedHumanEvent } : {}),
       });
@@ -914,8 +987,23 @@ async function executeSkill(
         errors: action.errors || ["Python start failed"],
       };
     }
+    if (action.action === "paused") {
+      return dispatchPausedResult(parseArtifactDispatchPause(action));
+    }
 
-    // Step 2: Drive the action loop
+    // Step 2: Drive the action loop. A skill-chain predecessor is an
+    // execution-owner input, not a caller/model grant. It is offered to the
+    // first fresh worker action only; a recovered state with current-run inputs
+    // has already incorporated that predecessor and keeps its engine refs.
+    const chainInput = params.chain_input_artifacts
+      ? parseInputArtifacts(params.chain_input_artifacts)
+      : undefined;
+    let chainInputPending = Boolean(chainInput);
+    const selectWorkerInputs = (engineInput: InputArtifactsV1): InputArtifactsV1 => {
+      if (!chainInputPending || !chainInput) return engineInput;
+      chainInputPending = false;
+      return engineInput.artifacts.length === 0 ? chainInput : engineInput;
+    };
     let iterations = 0;
     const maxIterations = parseInt(process.env.PENNY_SKILL_MAX_ITERATIONS || "300");
 
@@ -924,8 +1012,26 @@ async function executeSkill(
       action.action !== "incomplete" &&
       action.action !== "error" &&
       iterations < maxIterations &&
-      !skillTimedOut
+      !interruptionReason
     ) {
+      if (action.action === "paused") {
+        return dispatchPausedResult(parseArtifactDispatchPause(action));
+      }
+      if (action.action === "invoke_agent" || action.action === "invoke_agents_parallel") {
+        const dispatchControl = artifactDispatchControl(process.env);
+        if (!dispatchControl.dispatchAllowed) {
+          // Defense in depth for an older/stale Python engine: the driver still
+          // refuses to spend an agent/fan-out dispatch under paused or unknown mode.
+          return dispatchPausedResult(
+            localArtifactDispatchPause(dispatchControl, {
+              state_id: action.state_id,
+              session_id: action.session_id,
+              run_id: action.run_id || runId,
+            })
+          );
+        }
+      }
+
       // Only count logical step boundaries (orchestrator-defined).
       // If an orchestrator doesn't emit logical_step, fall back to
       // counting every action to preserve backward compatibility.
@@ -945,7 +1051,7 @@ async function executeSkill(
 
       if (action.action === "invoke_agent" && action.agent) {
         // === Single agent invocation via agent-runner ===
-        const taskText = action.task || action.task_summary || "";
+        const rawTaskText = action.task || action.task_summary || "";
         // Prefer an explicit orchestrator-supplied skillContext; fall back to
         // the legacy bare `{agent}.md` guess when absent (see
         // resolveSkillContextPath). Returns undefined if neither exists.
@@ -994,23 +1100,48 @@ async function executeSkill(
         const agentConfigModel =
           typeof rawAgentConfigModel === "string" ? rawAgentConfigModel : undefined;
 
-        const receiptStartedAt = new Date().toISOString();
-        const receiptId = `${runId}:receipt:${randomUUID()}`;
-        const progressEmitter = new ProgressEmitter();
         // AUTHORITATIVE target root, stated by the engine on every directive.
         //
         // `projectRoot` is re-derived per invocation from `params.project_root || cwd`,
         // and the printed resume contract carries NO project_root -- so after the first
         // HITL gate every resumed invocation silently fell back to the DRIVER's cwd.
-        // That pointed the agent's cwd, its bubblewrap writable root, and every
-        // execution receipt at the wrong repository; Python then rejected all of them
-        // with "execution receipt working directory is outside the selected target".
-        // The checkpointer owns the run's target, so the directive is authoritative and
-        // the local fallback is only for pre-existing playbooks that omit it.
+        // That pointed the agent's cwd and every execution receipt at the wrong
+        // repository; Python then rejected all of them with "execution receipt working
+        // directory is outside the selected target". The checkpointer owns the run's
+        // target, so the directive is authoritative and the local fallback is only for
+        // pre-existing playbooks that omit it.
         const targetRoot =
           typeof action.project_root === "string" && action.project_root
             ? action.project_root
             : projectRoot;
+        // Validate the complete owner contract BEFORE spending an agent invocation.
+        // Missing, extra, stale, or mismatched metadata is an execution-owner fault,
+        // never something model output may repair after the fact.
+        const stateConsumer = `state:${action.state_id || "unknown"}`;
+        const engineInputArtifacts = parseInputArtifacts(action.input_artifacts, {
+          runId,
+          consumer: stateConsumer,
+        });
+        const inputArtifacts = selectWorkerInputs(engineInputArtifacts);
+        const outputArtifact = parseOutputArtifactMetadata(action.output_artifact, {
+          runId,
+          phase: action.state_id || "unknown",
+          branchId: null,
+          producer: `agent:${action.agent}`,
+          kind: "agent-output",
+        });
+        const taskText = appendInputArtifactInstruction(
+          rawTaskText,
+          inputArtifacts,
+          config.resultBudget
+        );
+        const artifactEnvironment = buildArtifactInvocationEnvironment(
+          inputArtifacts,
+          `skill:${randomUUID()}`
+        );
+        const receiptStartedAt = new Date().toISOString();
+        const receiptId = stableArtifactReceiptId(outputArtifact);
+        const progressEmitter = new ProgressEmitter();
         const agentResult = await withAgentTimeout(
           runSingleAgent(
             cwd,
@@ -1024,8 +1155,8 @@ async function executeSkill(
             makeDetails,
             resolveSkillContext(skillContextPath, cwd),
             progressEmitter,
-            action.model || agentConfigModel,
-            executionOwnerIsolation(targetRoot)
+            action.model || params.model || agentConfigModel,
+            artifactEnvironment
           ),
           action.agent,
           agentAbortController.signal,
@@ -1034,14 +1165,25 @@ async function executeSkill(
           undefined
         );
 
-        // Extract minimal summary from agent output.
-        // All substantial data is in mempalace — we only send the summary to Python.
+        // Preserve the engine's current checkpoint for recovery; never submit a
+        // synthetic failed agent result after the outer invocation was interrupted.
+        if (interruptionReason) break;
+
         const output = getFinalOutput(agentResult.messages);
         const isError =
           agentResult.exitCode !== 0 ||
           agentResult.stopReason === "error" ||
           agentResult.stopReason === "aborted";
 
+        // GOV-02 ordering is load-bearing: exact bytes are durable and verified
+        // BEFORE model-authored SUMMARY parsing can influence routing.
+        const outputArtifactRef = await persistArtifactOutput({
+          pythonPath: config.venvPython,
+          metadata: outputArtifact,
+          output,
+          cwd: targetRoot,
+          env: process.env,
+        });
         const summary = parseSummaryFromOutput(output);
         const summaryMissing = Object.keys(summary).length === 0;
         const configuredSecrets = Array.isArray(_constraintsObj.secret_values)
@@ -1061,6 +1203,7 @@ async function executeSkill(
           startedAt: receiptStartedAt,
           endedAt: receiptEndedAt,
           exitStatus: isError ? 1 : 0,
+          outputArtifactRef,
           output,
           secretValues: configuredSecrets,
         });
@@ -1073,28 +1216,40 @@ async function executeSkill(
           projectRoot: targetRoot,
           startedAt: receiptStartedAt,
           endedAt: receiptEndedAt,
+          outputArtifactRef,
           secretValues: configuredSecrets,
         });
+        const trustedInvocation = signTrustedInvocation({
+          invocationId: receiptId,
+          runId,
+          stateId: action.state_id || "unknown",
+          agentIdentity: `agent:${action.agent}`,
+          model: agentResult.model || action.model || params.model || agentConfigModel || "",
+          startedAt: receiptStartedAt,
+          endedAt: receiptEndedAt,
+        });
         // NO domain-shaped synthesis. Each state's summary_contract in the
-        // playbook is the sole validator, so pass the raw (possibly empty)
-        // summary through and flag the omission — the engine fails loud rather
-        // than advancing on a plausible-looking synthesized default.
+        // playbook is the sole validator. Owner fields remain outside SUMMARY;
+        // legacy exit/error/receipt/invocation fields stay present until the Python
+        // consumer completes its additive result-protocol-v2 migration.
         const resultJson = JSON.stringify({
+          protocol_version: RESULT_PROTOCOL_VERSION,
+          run_id: outputArtifactRef.run_id,
+          phase: outputArtifactRef.phase,
+          branch_id: outputArtifactRef.branch_id,
+          producer: outputArtifactRef.producer,
+          operation_id: outputArtifactRef.operation_id,
+          output_artifact_ref: outputArtifactRef,
+          execution_receipt: executionReceipt,
           exitCode: isError ? 1 : 0,
           summary,
           summary_missing: summaryMissing,
           receipts: [executionReceipt, ...observedCommandReceipts],
-          trusted_invocation: signTrustedInvocation({
-            invocationId: receiptId,
-            runId,
-            stateId: action.state_id || "unknown",
-            agentIdentity: `agent:${action.agent}`,
-            model: agentResult.model || action.model || agentConfigModel || "",
-            startedAt: receiptStartedAt,
-            endedAt: receiptEndedAt,
-          }),
+          trusted_invocation: trustedInvocation,
           error: isError
-            ? agentResult.errorMessage || agentResult.stderr || "Agent failed"
+            ? agentResult.errorMessage ||
+              agentResult.stderr.trim() ||
+              `Agent "${action.agent}" stopped with ${agentResult.stopReason || "a runtime error"}`
             : summaryMissing
               ? `Agent "${action.agent}" emitted no parseable SUMMARY:{...} block`
               : undefined,
@@ -1116,18 +1271,53 @@ async function executeSkill(
           agentsInvoked.push(t.agent);
         }
 
-        const parallelTasks = action.tasks.map((t) => ({
-          branch_id: t.branch_id,
-          agent: t.agent,
-          task: t.task_summary,
-          cwd: projectRoot,
-          // Honor an orchestrator-supplied per-task prompt (explicit wins over
-          // the bare `<agent>.md` guess), path-containment checked — same as the
-          // single-agent path. A playbook can fan the same agent out with
-          // different role prompts per branch.
-          skillContext: resolveSkillContextPath(skill.path, t.agent, t.skillContext),
-          model: t.model,
-        }));
+        const targetRoot =
+          typeof action.project_root === "string" && action.project_root
+            ? action.project_root
+            : projectRoot;
+        const stateConsumer = `state:${action.state_id || "unknown"}`;
+        const engineInputArtifacts = parseInputArtifacts(action.input_artifacts, {
+          runId,
+          consumer: stateConsumer,
+        });
+        const inputArtifacts = selectWorkerInputs(engineInputArtifacts);
+        // Validate EVERY branch contract before invoking any branch. A partial
+        // fan-out with owner metadata missing on one task must fail closed.
+        const parallelTasks = action.tasks.map((t) => {
+          if (typeof t.branch_id !== "string" || !t.branch_id.trim()) {
+            throw new ArtifactClientError(
+              "ARTIFACT_CONTRACT_INVALID",
+              "parallel output artifact requires a canonical branch_id"
+            );
+          }
+          return {
+            branch_id: t.branch_id,
+            agent: t.agent,
+            task: appendInputArtifactInstruction(
+              t.task_summary,
+              inputArtifacts,
+              config.resultBudget
+            ),
+            cwd: targetRoot,
+            artifactEnvironment: buildArtifactInvocationEnvironment(
+              inputArtifacts,
+              `skill:${randomUUID()}`
+            ),
+            // Honor an orchestrator-supplied per-task prompt (explicit wins over
+            // the bare `<agent>.md` guess), path-containment checked — same as the
+            // single-agent path. A playbook can fan the same agent out with
+            // different role prompts per branch.
+            skillContext: resolveSkillContextPath(skill.path, t.agent, t.skillContext),
+            model: t.model || params.model,
+            outputArtifact: parseOutputArtifactMetadata(t.output_artifact, {
+              runId,
+              phase: action.state_id || "unknown",
+              branchId: t.branch_id,
+              producer: `agent:${t.agent}`,
+              kind: "agent-output",
+            }),
+          };
+        });
 
         const agentNames = parallelTasks.map((t) => t.agent).join(", ");
         emitProgress(`Running ${parallelTasks.length} agents in parallel (${agentNames})...`);
@@ -1144,9 +1334,10 @@ async function executeSkill(
 
         // P4: Per-agent timeouts — each agent gets its own full timeout window.
         // Previously the entire batch shared one timeout (unfair to fast agents).
-        const individualPromises = parallelTasks.map((t) => {
+        const individualPromises = parallelTasks.map(async (t) => {
+          const receiptStartedAt = new Date().toISOString();
           const progressEmitter = new ProgressEmitter();
-          return withAgentTimeout(
+          const result = await withAgentTimeout(
             runSingleAgent(
               cwd,
               agents,
@@ -1160,7 +1351,7 @@ async function executeSkill(
               resolveSkillContext(t.skillContext, cwd),
               progressEmitter,
               t.model,
-              executionOwnerIsolation(t.cwd || cwd)
+              t.artifactEnvironment
             ),
             t.agent,
             agentAbortController.signal,
@@ -1190,28 +1381,112 @@ async function executeSkill(
               } as SingleResult;
             }
           );
+          return { task: t, result, receiptStartedAt };
         });
 
         const parallelResults = await Promise.all(individualPromises);
+        if (interruptionReason) break;
 
-        // Extract summaries from parallel results — no domain-shaped
-        // synthesis (see the invoke_agent branch above); pass the raw
-        // (possibly empty) summary through and flag the omission.
-        const resultEntries = parallelResults.map((r, i) => {
-          const output = getFinalOutput(r.messages);
-          const summary = parseSummaryFromOutput(output);
-          const summaryMissing = Object.keys(summary).length === 0;
+        // Persist EVERY exact branch output before parsing even one SUMMARY.
+        // Promise.all may leave harmless immutable artifacts from successful
+        // siblings when one persistence fails, but it never calls pythonStep.
+        const persistedBranches = await Promise.all(
+          parallelResults.map(async ({ task, result, receiptStartedAt }) => {
+            const output = getFinalOutput(result.messages);
+            const outputArtifactRef = await persistArtifactOutput({
+              pythonPath: config.venvPython,
+              metadata: task.outputArtifact,
+              output,
+              cwd: targetRoot,
+              env: process.env,
+            });
+            return {
+              task,
+              result,
+              output,
+              outputArtifactRef,
+              receiptStartedAt,
+              receiptEndedAt: new Date().toISOString(),
+            };
+          })
+        );
 
-          return {
-            // branch_id ties each result back to the fan-out branch the engine
-            // declared (parallelResults is index-aligned with parallelTasks).
-            branch_id: parallelTasks[i].branch_id,
-            exitCode: r.exitCode !== 0 ? 1 : 0,
-            summary,
-            summary_missing: summaryMissing,
-            agent: r.agent,
-          };
-        });
+        const configuredSecrets = Array.isArray(_constraintsObj.secret_values)
+          ? _constraintsObj.secret_values.filter(
+              (value): value is string => typeof value === "string"
+            )
+          : [];
+        // Only after all branch refs are durable may model-authored summaries
+        // influence fan-in routing.
+        const resultEntries = persistedBranches.map(
+          ({ task, result, output, outputArtifactRef, receiptStartedAt, receiptEndedAt }) => {
+            const summary = parseSummaryFromOutput(output);
+            const summaryMissing = Object.keys(summary).length === 0;
+            const isError =
+              result.exitCode !== 0 ||
+              result.stopReason === "error" ||
+              result.stopReason === "aborted";
+            const receiptId = stableArtifactReceiptId(task.outputArtifact);
+            const executionReceipt = buildAgentExecutionReceipt({
+              receiptId,
+              runId,
+              stateId: action.state_id || "unknown",
+              agent: task.agent,
+              projectRoot: targetRoot,
+              startedAt: receiptStartedAt,
+              endedAt: receiptEndedAt,
+              exitStatus: isError ? 1 : 0,
+              outputArtifactRef,
+              output,
+              secretValues: configuredSecrets,
+            });
+            const observedCommandReceipts = buildObservedCommandReceipts({
+              messages: result.messages,
+              claims: summary.receipt_claims,
+              runId,
+              stateId: action.state_id || "unknown",
+              agent: task.agent,
+              projectRoot: targetRoot,
+              startedAt: receiptStartedAt,
+              endedAt: receiptEndedAt,
+              outputArtifactRef,
+              secretValues: configuredSecrets,
+            });
+            const trustedInvocation = signTrustedInvocation({
+              invocationId: receiptId,
+              runId,
+              stateId: action.state_id || "unknown",
+              agentIdentity: `agent:${task.agent}`,
+              model: result.model || task.model || "",
+              startedAt: receiptStartedAt,
+              endedAt: receiptEndedAt,
+            });
+
+            return {
+              protocol_version: RESULT_PROTOCOL_VERSION,
+              run_id: outputArtifactRef.run_id,
+              phase: outputArtifactRef.phase,
+              branch_id: outputArtifactRef.branch_id,
+              producer: outputArtifactRef.producer,
+              operation_id: outputArtifactRef.operation_id,
+              output_artifact_ref: outputArtifactRef,
+              execution_receipt: executionReceipt,
+              exitCode: isError ? 1 : 0,
+              summary,
+              summary_missing: summaryMissing,
+              receipts: [executionReceipt, ...observedCommandReceipts],
+              trusted_invocation: trustedInvocation,
+              agent: result.agent,
+              error: isError
+                ? result.errorMessage ||
+                  result.stderr.trim() ||
+                  `Agent "${task.agent}" stopped with ${result.stopReason || "a runtime error"}`
+                : summaryMissing
+                  ? `Agent "${task.agent}" emitted no parseable SUMMARY:{...} block`
+                  : undefined,
+            };
+          }
+        );
 
         const resultJson = JSON.stringify(resultEntries);
         emitProgress("Processing parallel results...");
@@ -1303,11 +1578,19 @@ async function executeSkill(
 
     clearTimeout(skillTimer);
 
-    if (skillTimedOut) {
-      emitProgress(`Skill timed out after ${config.skillTimeout / 1000}s`);
-      errors.push(
-        `Skill timed out after ${config.skillTimeout / 1000}s — last state was ${action.state_id || "unknown"}`
-      );
+    if (interruptionReason) {
+      const state = action.state_id || "unknown";
+      if (interruptionReason === "skill_timeout") {
+        emitProgress(`Skill timed out after ${config.skillTimeout / 1000}s`);
+        errors.push(
+          `Skill timed out after ${config.skillTimeout / 1000}s — checkpoint preserved at ${state}; resume with session_id "${sessionId}"`
+        );
+      } else {
+        emitProgress("Skill invocation interrupted; checkpoint preserved");
+        errors.push(
+          `Skill invocation interrupted — checkpoint preserved at ${state}; resume with session_id "${sessionId}"`
+        );
+      }
     } else if (action.action === "complete" && action.result?.["met"] === true) {
       emitProgress(`Skill completed successfully`);
 
@@ -1369,6 +1652,17 @@ async function executeSkill(
     // missing result.met is unverified and therefore cannot be promoted to success.
     const isSuccess = action.action === "complete" && action.result?.["met"] === true;
     const planSummary = action.plan_summary as Record<string, unknown> | undefined;
+    const terminalRefValue = action.result?.["output_artifact_ref"];
+    const outputArtifactRef =
+      terminalRefValue === undefined || terminalRefValue === null
+        ? undefined
+        : parseArtifactRef(terminalRefValue);
+    if (outputArtifactRef && outputArtifactRef.run_id !== runId) {
+      throw new ArtifactClientError(
+        "ARTIFACT_CONTRACT_INVALID",
+        "skill terminal output artifact belongs to another run"
+      );
+    }
     const result: SkillResult = {
       success: isSuccess,
       session_id: sessionId,
@@ -1383,11 +1677,23 @@ async function executeSkill(
       agents_invoked: agentsInvoked,
       errors: [...errors, ...(action.errors || [])],
       result: action.result,
+      output_artifact_ref: outputArtifactRef,
     };
 
     return result;
   } catch (err: unknown) {
     clearTimeout(skillTimer);
+    if (isArtifactClientError(err)) {
+      // Artifact failures are typed owner failures. Do not flatten them into a
+      // model-facing summary error or call pythonStep: the pending checkpoint is
+      // intentionally left for deterministic retry/recovery.
+      logger.error(
+        "Artifact owner capture failed",
+        { code: err.code, ...err.metadata },
+        Object.assign(new Error(err.message), { code: "SKILL_EXECUTION_FAILED" as const })
+      );
+      throw err;
+    }
     logger.error(
       "Skill execution failed",
       { error: errorMessage(err) },
@@ -1429,12 +1735,12 @@ const MAX_CHAIN_STEPS = 10;
  */
 const SkillStep = Type.Object({
   skill_name: Type.String({
-    description: "Name of the skill to invoke (e.g., 'plan')",
+    description: "Name of the skill to invoke (e.g., 'research')",
   }),
   goal: Type.String({
     description:
       "The goal or objective for the skill to accomplish. " +
-      "In chain mode, use {previous} placeholder to receive prior step's output.",
+      "In chain mode, {previous} identifies the prior skill's exact granted terminal artifact; payload bytes are never substituted.",
   }),
   session_id: Type.Optional(
     Type.String({
@@ -1501,11 +1807,11 @@ const SkillParams = Type.Object({
     })
   ),
 
-  // Chain mode — invoke skills sequentially with {previous} output handoff.
+  // Chain mode — invoke skills sequentially with exact terminal-artifact handoff.
   chain: Type.Optional(
     Type.Array(SkillStep, {
       description:
-        "Invoke skills sequentially, with {previous} placeholder for prior step output. " +
+        "Invoke skills sequentially with owner-granted exact terminal artifacts; {previous} is an artifact marker, not payload text. " +
         `Max ${MAX_CHAIN_STEPS} steps. Stops on first error — use resume_chain to recover.`,
     })
   ),
@@ -1534,7 +1840,7 @@ const SkillParams = Type.Object({
 type SkillToolParams = Static<typeof SkillParams>;
 
 // Re-export internals for unit testing
-export { createTimeoutResult, withAgentTimeout };
+export { createAbortedResult, createTimeoutResult, withAgentTimeout };
 export { detectSkillMode } from "./skill-utils.js";
 
 // ============================================================
@@ -1544,7 +1850,7 @@ export { detectSkillMode } from "./skill-utils.js";
 /**
  * Run multiple skills concurrently with concurrency limiting.
  *
- * Each skill gets its own session and mempalace room — no cross-contamination.
+ * Each parallel skill gets an independent session and no chain-artifact grant.
  * On abort, pending skills are cancelled and partial results returned.
  */
 async function executeSkillsParallel(
@@ -1553,6 +1859,7 @@ async function executeSkillsParallel(
     goal: string;
     session_id?: string;
     constraints?: Record<string, unknown>;
+    model?: string;
   }>,
   cwd: string,
   signal: AbortSignal | undefined,
@@ -1575,6 +1882,7 @@ async function executeSkillsParallel(
           goal: skill.goal,
           session_id: skill.session_id,
           constraints: skill.constraints,
+          model: skill.model,
         },
         cwd,
         signal,
@@ -1612,104 +1920,9 @@ async function executeSkillsParallel(
 }
 
 /**
- * Chain checkpoint shape — persisted to disk as JSON.
- * TODO: Migrate to mempalace when cross-tool invocation is available.
- */
-interface ChainCheckpoint {
-  chain_session_id: string;
-  chain_goal_summary: string;
-  steps: Array<{
-    index: number;
-    skill_name: string;
-    goal: string;
-    session_id: string;
-    status: "pending" | "running" | "complete" | "failed";
-    result_summary?: string;
-    error?: string;
-    error_detail?: {
-      agent?: string;
-      stop_reason?: string;
-      timestamp: string;
-    };
-  }>;
-  current_step: number;
-  total_steps: number;
-  chain_status: "running" | "failed" | "complete";
-  pending_steps: Array<{
-    index: number;
-    skill_name: string;
-    goal: string;
-  }>;
-  created_at: string;
-  updated_at: string;
-}
-
-/**
- * Checkpoint directory location.
- *
- * Penny rule: NEVER write temporary files into the project tree. Chain
- * checkpoints are runtime artifacts (resume state) and live in /tmp.
- * Located in a stable, well-known directory so users can find/list them
- * with `ls /tmp/skill-checkpoints/`.
- *
- * NOTE: /tmp is OS-managed and may be cleared on reboot. This is
- * intentional — checkpoints are short-lived resume state, not durable
- * data. Long-term state belongs in mempalace.
- */
-const CHECKPOINTS_DIR = path.join(tmpdir(), "skill-checkpoints");
-
-function ensureCheckpointsDir(): void {
-  if (!fs.existsSync(CHECKPOINTS_DIR)) {
-    fs.mkdirSync(CHECKPOINTS_DIR, { recursive: true });
-  }
-}
-
-function checkpointPath(chainSessionId: string, _projectRoot: string): string {
-  // projectRoot kept in signature for call-site compatibility but unused —
-  // checkpoints are intentionally project-agnostic (live in /tmp).
-  void _projectRoot;
-  ensureCheckpointsDir();
-  return path.join(CHECKPOINTS_DIR, `${chainSessionId}.json`);
-}
-
-function saveCheckpoint(checkpoint: ChainCheckpoint, projectRoot: string): void {
-  const filePath = checkpointPath(checkpoint.chain_session_id, projectRoot);
-  // Directory is created by ensureCheckpointsDir() in checkpointPath().
-  checkpoint.updated_at = new Date().toISOString();
-  fs.writeFileSync(filePath, JSON.stringify(checkpoint, null, 2), "utf-8");
-  logger.debug("Chain checkpoint saved", {
-    chainSessionId: checkpoint.chain_session_id,
-    step: checkpoint.current_step,
-    status: checkpoint.chain_status,
-  });
-}
-
-function readCheckpoint(chainSessionId: string, projectRoot: string): ChainCheckpoint | null {
-  const filePath = checkpointPath(chainSessionId, projectRoot);
-  if (!fs.existsSync(filePath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf-8")) as ChainCheckpoint;
-  } catch (err) {
-    logger.error(
-      "Failed to read chain checkpoint",
-      { chainSessionId },
-      Object.assign(err instanceof Error ? err : new Error(String(err)), {
-        code: "SKILL_CHAIN_CHECKPOINT_READ_FAILED" as ErrorCode,
-      })
-    );
-    return null;
-  }
-}
-
-/**
- * Run skills sequentially with {previous} output handoff + checkpoint/resume.
- *
- * Checkpoints are saved before each step and on error. On resume (resumeFrom
- * provided), completed steps are skipped and execution continues from the failed
- * step with optional overrides applied.
- *
- * Checkpoints are written as JSON files to /tmp/skill-checkpoints/.
- * Future: migrate to mempalace when cross-tool API is available.
+ * Run skills sequentially with exact terminal-artifact handoff and durable
+ * owner-only XDG checkpoint/resume state. A bounded preview may be retained for
+ * display, but it never replaces the canonical ref.
  */
 async function executeSkillsChain(
   chain: Array<{
@@ -1717,6 +1930,7 @@ async function executeSkillsChain(
     goal: string;
     session_id?: string;
     constraints?: Record<string, unknown>;
+    model?: string;
   }>,
   cwd: string,
   signal: AbortSignal | undefined,
@@ -1727,54 +1941,34 @@ async function executeSkillsChain(
   resumeFrom?: string,
   stepOverrides?: Record<number, { goal?: string; constraints?: Record<string, unknown> }>
 ): Promise<SkillResult> {
-  const projectRoot = cwd;
-
-  // ── Resume path: load checkpoint, skip completed steps ──
-  let startStep = 0;
-  let previousOutput = "";
   const results: SkillResult[] = [];
+  let startStep = 0;
   let chainSessionId: string;
+  let checkpoint: ChainCheckpoint;
+  let previousHandoffRef: ReturnType<typeof parseArtifactRef> | undefined;
+  let finalOutputRef: ReturnType<typeof parseArtifactRef> | undefined;
 
   if (resumeFrom) {
-    const checkpoint = readCheckpoint(resumeFrom, projectRoot);
-    if (!checkpoint) {
+    const recovered = readChainCheckpoint(resumeFrom, process.env);
+    if (!recovered) {
       return {
         success: false,
         session_id: resumeFrom,
         skill_name: "chain",
         state: "error",
         requires_approval: false,
-        steps_total: chain.length,
+        steps_total: 0,
         agents_invoked: [],
         errors: [`Checkpoint not found: ${resumeFrom}`],
         mode: "chain",
       };
     }
-
-    if (checkpoint.chain_status === "complete") {
-      return {
-        success: true,
-        session_id: resumeFrom,
-        skill_name: "chain",
-        state: "complete",
-        requires_approval: false,
-        steps_total: checkpoint.total_steps,
-        agents_invoked: [],
-        errors: [],
-        mode: "chain",
-        chain_session_id: resumeFrom,
-      };
-    }
-
-    // Reconstruct chain from checkpoint. Pure + unit-tested: dedupes pending
-    // steps by index (fixes the "prd → code → code" duplication) and preserves
-    // each step's session_id so a paused run is recovered on resume instead of
-    // minting a fresh run_id (fixes "unknown run_id"). See reconstructResumeChain.
-    chainSessionId = resumeFrom;
-    const reconstruction = reconstructResumeChain(checkpoint, stepOverrides);
-    chain = reconstruction.chain;
-    startStep = reconstruction.startStep;
-    for (const done of reconstruction.completed) {
+    checkpoint = recovered;
+    chainSessionId = recovered.chain_session_id;
+    const completedSteps = [...recovered.steps]
+      .filter((step) => step.status === "complete")
+      .sort((left, right) => left.index - right.index);
+    for (const done of completedSteps) {
       results.push({
         success: true,
         session_id: done.session_id,
@@ -1786,17 +1980,39 @@ async function executeSkillsChain(
         errors: [],
         mode: "chain",
         chain_step: done.index,
-        chain_total: checkpoint.total_steps,
-        chain_session_id: resumeFrom,
-        plan: { plan_summary: done.result_summary },
+        chain_total: recovered.total_steps,
+        chain_session_id: chainSessionId,
+        plan: done.result_preview ? { plan_summary: done.result_preview } : undefined,
+        output_artifact_ref: done.output_artifact_ref,
       });
-      if (done.result_summary) {
-        previousOutput = done.result_summary;
-      }
+      if (done.handoff_artifact_ref) previousHandoffRef = done.handoff_artifact_ref;
+      if (done.output_artifact_ref) finalOutputRef = done.output_artifact_ref;
     }
 
-    logger.info("Resuming chain from checkpoint", {
-      chainSessionId: resumeFrom,
+    if (recovered.chain_status === "complete") {
+      return {
+        success: true,
+        session_id: chainSessionId,
+        skill_name: "chain",
+        state: "complete",
+        requires_approval: false,
+        steps_total: recovered.total_steps,
+        agents_invoked: [],
+        errors: [],
+        mode: "chain",
+        chain_step: recovered.total_steps - 1,
+        chain_total: recovered.total_steps,
+        chain_session_id: chainSessionId,
+        chain_results: results,
+        output_artifact_ref: finalOutputRef,
+      };
+    }
+
+    const reconstruction = reconstructResumeChain(recovered, stepOverrides);
+    chain = reconstruction.chain;
+    startStep = reconstruction.startStep;
+    logger.info("Resuming chain from durable checkpoint", {
+      chainSessionId,
       startStep,
       stepsToRun: chain.length,
     });
@@ -1804,83 +2020,102 @@ async function executeSkillsChain(
       content: [
         {
           type: "text",
-          text: `Resuming chain ${resumeFrom} from step ${startStep + 1}/${checkpoint.total_steps}`,
+          text: `Resuming chain ${chainSessionId} from step ${startStep + 1}/${recovered.total_steps}`,
         },
       ],
       details: undefined,
     });
   } else {
-    chainSessionId = `chain-${Date.now()}`;
-  }
-
-  // ── Build initial checkpoint ──
-  const allStepDefs = [];
-  for (let i = 0; i < chain.length; i++) {
-    const existingComplete = results.find((r) => r.chain_step === startStep + i);
-    if (existingComplete) continue;
-    allStepDefs.push({
-      index: startStep + i,
-      skill_name: chain[i].skill_name,
-      goal: chain[i].goal,
+    chainSessionId = `chain-${randomUUID()}`;
+    const createdAt = new Date().toISOString();
+    const steps = chain.map((step, index) => ({
+      index,
+      skill_name: step.skill_name,
+      goal: step.goal,
+      session_id: step.session_id || `${step.skill_name}-${randomUUID()}`,
       status: "pending" as const,
-      session_id: chain[i].session_id || `${chain[i].skill_name}-${Date.now() + i}`,
-    });
+      model: step.model,
+      constraints: step.constraints,
+    }));
+    checkpoint = {
+      schema_version: 1,
+      chain_session_id: chainSessionId,
+      chain_run_id: chainSessionId,
+      chain_goal_summary: chain.map((step) => step.skill_name).join(" → "),
+      steps,
+      current_step: 0,
+      total_steps: steps.length,
+      chain_status: "running",
+      pending_steps: steps.map((step) => ({
+        index: step.index,
+        skill_name: step.skill_name,
+        goal: step.goal,
+        session_id: step.session_id,
+        model: step.model,
+        constraints: step.constraints,
+      })),
+      created_at: createdAt,
+      updated_at: createdAt,
+    };
   }
 
-  const checkpoint: ChainCheckpoint = {
-    chain_session_id: chainSessionId,
-    chain_goal_summary: chain.map((s) => s.skill_name).join(" → "),
-    steps: [
-      ...results.map((r, i) => ({
-        index: i,
-        skill_name: r.skill_name,
-        goal: "",
-        session_id: r.session_id,
-        status: "complete" as const,
-        result_summary: (r.plan?.["plan_summary"] as string) || `Completed: ${r.skill_name}`,
-      })),
-      ...allStepDefs,
-    ],
-    current_step: startStep,
-    total_steps: startStep + chain.length,
-    chain_status: "running",
-    pending_steps: allStepDefs
-      .slice(1)
-      .map((s) => ({ index: s.index, skill_name: s.skill_name, goal: s.goal })),
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  };
+  for (let index = 0; index < chain.length; index++) {
+    const step = chain[index];
+    const stepIndex = startStep + index;
+    const stepEntry = checkpoint.steps.find((candidate) => candidate.index === stepIndex);
+    if (!stepEntry) {
+      throw new ArtifactClientError(
+        "ARTIFACT_CONTRACT_INVALID",
+        `skill-chain checkpoint is missing step ${stepIndex}`
+      );
+    }
 
-  // ── Execute each step ──
-  for (let i = 0; i < chain.length; i++) {
-    const step = chain[i];
-    const stepIndex = startStep + i;
-
-    // Save pre-step checkpoint (status: running)
-    checkpoint.current_step = stepIndex;
-    const stepEntry = checkpoint.steps.find((s) => s.index === stepIndex);
-    if (stepEntry) stepEntry.status = "running";
-    saveCheckpoint(checkpoint, projectRoot);
-
-    // Replace {previous} placeholder
-    const resolvedGoal = step.goal.replaceAll("{previous}", previousOutput);
-
-    // If the previous step was prd, inject its context into this step's
-    // constraints so the downstream skill (e.g. code) can locate the
-    // IDEAL_STATE via mempalace room. This is the fix for the gap where
-    // the chain only passed truncated text, discarding session_room.
-    if (results.length > 0) {
-      const prev = results[results.length - 1];
-      if (prev.session_room && prev.session_room.startsWith("skills/prd-")) {
-        // Merge prd context into this step's constraints (or create if absent)
-        step.constraints = {
-          ...(step.constraints || {}),
-          prd_room: prev.session_room,
-          prd_session_id: prev.session_id,
+    let chainInputArtifacts: InputArtifactsV1 | undefined;
+    if (previousHandoffRef) {
+      try {
+        await validateSkillChainHandoff(previousHandoffRef, process.env);
+        chainInputArtifacts = skillChainInput({
+          chainRunId: checkpoint.chain_run_id,
+          stepIndex,
+          handoffRef: previousHandoffRef,
+        });
+      } catch (error) {
+        const code = error instanceof ArtifactClientError ? error.code : "ARTIFACT_MISSING";
+        stepEntry.status = "failed";
+        stepEntry.error = `Exact predecessor artifact is unavailable (${code})`;
+        checkpoint.current_step = stepIndex;
+        checkpoint.chain_status = "failed";
+        saveChainCheckpoint(checkpoint, process.env);
+        return {
+          success: false,
+          session_id: chainSessionId,
+          skill_name: "chain",
+          state: "failed",
+          requires_approval: false,
+          steps_total: checkpoint.total_steps,
+          agents_invoked: results.flatMap((result) => result.agents_invoked),
+          errors: [stepEntry.error],
+          mode: "chain",
+          chain_step: stepIndex,
+          chain_total: checkpoint.total_steps,
+          chain_session_id: chainSessionId,
+          chain_error_step: stepIndex,
+          chain_results: results,
+          resumable: true,
+          output_artifact_ref: finalOutputRef,
         };
       }
     }
 
+    checkpoint.current_step = stepIndex;
+    checkpoint.chain_status = "running";
+    stepEntry.status = "running";
+    saveChainCheckpoint(checkpoint, process.env);
+
+    const previousMarker = chainInputArtifacts
+      ? "the exact granted prior-skill terminal artifact"
+      : "";
+    const resolvedGoal = step.goal.replaceAll("{previous}", previousMarker);
     onUpdate?.({
       content: [
         {
@@ -1891,48 +2126,72 @@ async function executeSkillsChain(
       details: undefined,
     });
 
-    // Execute the skill
     const result = await executeSkill(
       step.skill_name,
       {
-        // Use the CHECKPOINTED session_id (minted once in allStepDefs) so the run
-        // and the checkpoint agree — otherwise executeSkill would mint its own
-        // `plan-<ts>` and a later resume could not recover this run.
         goal: resolvedGoal,
-        session_id: stepEntry?.session_id ?? step.session_id,
+        session_id: stepEntry.session_id,
         constraints: step.constraints,
+        model: step.model,
+        chain_input_artifacts: chainInputArtifacts,
       },
       cwd,
       signal,
       ctx,
       undefined
     );
-
-    // Enrich result with chain metadata
     result.mode = "chain";
+    // Chain transport is artifact/checkpoint-only; legacy playbook rooms are
+    // neither exposed nor retained as chain authority.
+    result.session_room = undefined;
     result.chain_step = stepIndex;
     result.chain_total = checkpoint.total_steps;
     result.chain_session_id = chainSessionId;
     results.push(result);
 
-    if (!result.success) {
-      // ── Error: save checkpoint and stop ──
-      if (stepEntry) {
-        stepEntry.status = "failed";
-        stepEntry.error = result.errors.join("; ") || `Step ${stepIndex + 1} failed`;
-        stepEntry.error_detail = {
-          agent: result.agents_invoked[result.agents_invoked.length - 1] || "unknown",
-          stop_reason: result.state,
-          timestamp: new Date().toISOString(),
-        };
-      }
-      checkpoint.chain_status = "failed";
-      saveCheckpoint(checkpoint, projectRoot);
+    if (!result.success && result.retriable && result.dispatch_pause) {
+      // A dispatch pause is not a failed chain step. Keep both the engine run and
+      // chain step pending/running so a fresh resume reuses the same session and
+      // exact predecessor refs after the owner returns the mode to active.
+      stepEntry.status = "running";
+      delete stepEntry.error;
+      delete stepEntry.error_detail;
+      checkpoint.chain_status = "running";
+      saveChainCheckpoint(checkpoint, process.env);
+      return {
+        success: false,
+        session_id: chainSessionId,
+        skill_name: "chain",
+        state: "paused",
+        requires_approval: false,
+        steps_total: checkpoint.total_steps,
+        agents_invoked: results.flatMap((item) => item.agents_invoked),
+        errors: [],
+        mode: "chain",
+        chain_step: stepIndex,
+        chain_total: checkpoint.total_steps,
+        chain_session_id: chainSessionId,
+        chain_error_step: stepIndex,
+        chain_results: results.slice(0, -1),
+        resumable: true,
+        retriable: true,
+        dispatch_pause: result.dispatch_pause,
+        recovery: result.recovery,
+        output_artifact_ref: finalOutputRef,
+      };
+    }
 
-      // A clarification PAUSE (the step needs user input) is not a hard error:
-      // surface the STEP's actual questions so the user answers them, and route
-      // the answer back to THIS step (constraints.user_response) on resume,
-      // instead of the generic retry/skip/diagnose recovery prompt.
+    if (!result.success) {
+      stepEntry.status = "failed";
+      stepEntry.error = result.errors.join("; ") || `Step ${stepIndex + 1} failed`;
+      stepEntry.error_detail = {
+        agent: result.agents_invoked.at(-1) || "unknown",
+        stop_reason: result.state,
+        timestamp: new Date().toISOString(),
+      };
+      checkpoint.chain_status = "failed";
+      saveChainCheckpoint(checkpoint, process.env);
+
       const escalation = result.escalation;
       if (isClarificationEscalation(result) && escalation) {
         return {
@@ -1941,9 +2200,8 @@ async function executeSkillsChain(
           skill_name: "chain",
           state: "awaiting_clarification",
           requires_approval: false,
-          session_room: result.session_room,
           steps_total: checkpoint.total_steps,
-          agents_invoked: results.flatMap((r) => r.agents_invoked),
+          agents_invoked: results.flatMap((item) => item.agents_invoked),
           errors: [],
           mode: "chain",
           chain_step: stepIndex,
@@ -1952,6 +2210,7 @@ async function executeSkillsChain(
           chain_error_step: stepIndex,
           chain_results: results.slice(0, -1),
           resumable: true,
+          output_artifact_ref: finalOutputRef,
           escalation: {
             questions: escalation.questions,
             unknown_reason:
@@ -1968,9 +2227,8 @@ async function executeSkillsChain(
         skill_name: "chain",
         state: "failed",
         requires_approval: true,
-        session_room: `skills/chain-${chainSessionId}`,
         steps_total: checkpoint.total_steps,
-        agents_invoked: results.flatMap((r) => r.agents_invoked),
+        agents_invoked: results.flatMap((item) => item.agents_invoked),
         errors: [
           `Chain stopped at step ${stepIndex + 1}/${checkpoint.total_steps} (${step.skill_name}): ${result.errors.join("; ")}`,
         ],
@@ -1979,8 +2237,9 @@ async function executeSkillsChain(
         chain_total: checkpoint.total_steps,
         chain_session_id: chainSessionId,
         chain_error_step: stepIndex,
-        chain_results: results.slice(0, -1), // prior successes only
+        chain_results: results.slice(0, -1),
         resumable: true,
+        output_artifact_ref: finalOutputRef,
         escalation: {
           questions: [
             {
@@ -2002,39 +2261,105 @@ async function executeSkillsChain(
       };
     }
 
-    // ── Success: capture output (truncated), save checkpoint, continue ──
-    previousOutput = truncateForPrevious(getFinalOutputFromSkillResult(result));
-
-    if (stepEntry) {
-      stepEntry.status = "complete";
-      stepEntry.result_summary = previousOutput;
+    const terminalRef = result.output_artifact_ref;
+    if (terminalRef) finalOutputRef = terminalRef;
+    const hasNextStep = stepIndex + 1 < checkpoint.total_steps;
+    if (hasNextStep && !terminalRef) {
+      stepEntry.status = "failed";
+      stepEntry.error = "Successful skill step has no exact terminal output artifact ref";
+      checkpoint.chain_status = "failed";
+      saveChainCheckpoint(checkpoint, process.env);
+      return {
+        success: false,
+        session_id: chainSessionId,
+        skill_name: "chain",
+        state: "failed",
+        requires_approval: false,
+        steps_total: checkpoint.total_steps,
+        agents_invoked: results.flatMap((item) => item.agents_invoked),
+        errors: [stepEntry.error],
+        mode: "chain",
+        chain_step: stepIndex,
+        chain_total: checkpoint.total_steps,
+        chain_session_id: chainSessionId,
+        chain_error_step: stepIndex,
+        chain_results: results.slice(0, -1),
+        resumable: true,
+        output_artifact_ref: finalOutputRef,
+      };
     }
-    checkpoint.pending_steps = checkpoint.pending_steps.filter((s) => s.index !== stepIndex);
-    saveCheckpoint(checkpoint, projectRoot);
+
+    let handoffRef: ReturnType<typeof parseArtifactRef> | undefined;
+    if (hasNextStep && terminalRef) {
+      try {
+        handoffRef = await persistSkillChainHandoff({
+          pythonPath: config.venvPython,
+          chainRunId: checkpoint.chain_run_id,
+          completedStepIndex: stepIndex,
+          nextStepIndex: stepIndex + 1,
+          skillName: step.skill_name,
+          terminalRef,
+          cwd,
+          env: process.env,
+        });
+      } catch (error) {
+        const code = error instanceof ArtifactClientError ? error.code : "ARTIFACT_PERSIST_FAILED";
+        stepEntry.status = "failed";
+        stepEntry.output_artifact_ref = terminalRef;
+        stepEntry.error = `Exact skill-chain handoff persistence failed (${code})`;
+        checkpoint.chain_status = "failed";
+        saveChainCheckpoint(checkpoint, process.env);
+        return {
+          success: false,
+          session_id: chainSessionId,
+          skill_name: "chain",
+          state: "failed",
+          requires_approval: false,
+          steps_total: checkpoint.total_steps,
+          agents_invoked: results.flatMap((item) => item.agents_invoked),
+          errors: [stepEntry.error],
+          mode: "chain",
+          chain_step: stepIndex,
+          chain_total: checkpoint.total_steps,
+          chain_session_id: chainSessionId,
+          chain_error_step: stepIndex,
+          chain_results: results.slice(0, -1),
+          resumable: true,
+          output_artifact_ref: finalOutputRef,
+        };
+      }
+    }
+
+    stepEntry.status = "complete";
+    stepEntry.result_preview = truncateForPrevious(getFinalOutputFromSkillResult(result));
+    stepEntry.output_artifact_ref = terminalRef;
+    stepEntry.handoff_artifact_ref = handoffRef;
+    previousHandoffRef = handoffRef;
+    checkpoint.pending_steps = checkpoint.pending_steps.filter(
+      (pending) => pending.index !== stepIndex
+    );
+    saveChainCheckpoint(checkpoint, process.env);
   }
 
-  // ── All steps complete ──
   checkpoint.chain_status = "complete";
-  saveCheckpoint(checkpoint, projectRoot);
-
+  saveChainCheckpoint(checkpoint, process.env);
   return {
     success: true,
     session_id: chainSessionId,
     skill_name: "chain",
     state: "complete",
     requires_approval: false,
-    session_room: `skills/chain-${chainSessionId}`,
     steps_total: checkpoint.total_steps,
-    agents_invoked: results.flatMap((r) => r.agents_invoked),
+    agents_invoked: results.flatMap((result) => result.agents_invoked),
     errors: [],
     mode: "chain",
     chain_step: checkpoint.total_steps - 1,
     chain_total: checkpoint.total_steps,
     chain_session_id: chainSessionId,
     chain_results: results,
+    output_artifact_ref: finalOutputRef,
   };
 }
-
 // ============================================================
 // Extension Registration
 // ============================================================
@@ -2100,9 +2425,13 @@ export default function skillExtension(pi: ExtensionAPI): void {
       path.join(process.env.PROJECT_ROOT || process.cwd(), ".pi", "skills"),
     skillTimeout: parseInt(process.env.PENNY_SKILL_TIMEOUT || "43200000"), // 12 hrs (batch processing headroom)
     agentTimeout: parseInt(process.env.PENNY_AGENT_TIMEOUT || "1800000"), // 30 min per agent invocation
+    resultBudget: resolveToolResultBudget(process.env),
   };
 
-  const skills = discoverSkills();
+  // Pi's standard `disable-model-invocation` field is a soft hide: keep those
+  // skills executable for explicit `/skill:name` requests, but do not advertise
+  // them through this model-facing tool description or the `/skills` listing.
+  const skills = modelInvocableSkills(discoverSkills());
 
   pi.on("session_start", async (_event: unknown, ctx: ExtensionCommandContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
@@ -2116,14 +2445,14 @@ export default function skillExtension(pi: ExtensionAPI): void {
       "Invoke a Python-based skill with state machine orchestration.",
       "Skills define workflows (phases, transitions, subagent order).",
       "Penny decides WHEN to invoke; skills decide HOW to execute.",
-      "Agents communicate via mempalace — Penny's context stays clean.",
+      "Exact agent output is owner-persisted as an artifact before SUMMARY routing.",
       "",
       "Modes:",
       "  - Single:  skill({ skill_name, goal })",
       "  - Parallel: skill({ skills: [{ skill_name, goal }, ...] })",
       `    Max ${MAX_PARALLEL_SKILLS} concurrent skills. Each skill runs independently.`,
       "  - Chain:   skill({ chain: [{ skill_name, goal }, ...] })",
-      `    Max ${MAX_CHAIN_STEPS} steps. {previous} placeholder receives prior step output.`,
+      `    Max ${MAX_CHAIN_STEPS} steps. {previous} points to the prior skill's exact granted terminal artifact.`,
       "    Stops on first error — use resume_chain to recover from the failed step.",
       "  - Resume:  skill({ resume_chain: chain_session_id, step_overrides?: {...} })",
       "    Skips completed steps, resumes from the failed step.",

@@ -38,8 +38,8 @@ describe("Skill E2E — Extension Discovery", () => {
     expect(fs.existsSync(path.join(extDir, "tsconfig.json"))).toBe(true);
   });
 
-  it("should have the plan skill with orchestrate script", () => {
-    const skillDir = path.join(PROJECT_ROOT, ".pi/skills/plan");
+  it("should have the research skill with orchestrate script", () => {
+    const skillDir = path.join(PROJECT_ROOT, ".pi/skills/research");
     expect(fs.existsSync(path.join(skillDir, "SKILL.md"))).toBe(true);
     expect(fs.existsSync(path.join(skillDir, "scripts/orchestrate.py"))).toBe(true);
   });

@@ -1,48 +1,44 @@
-# mempalace.yaml — MemPalace project config
+# mempalace.yaml — curated MemPalace taxonomy for this repository
 #
-# Consumed by the `mempalace` CLI (github.com/mempalace/mempalace, installed v3.0.0):
-#   - `mempalace init <dir>`  GENERATES/overwrites this file from folder structure (interactive).
-#   - `mempalace mine <dir>`  READS `wing` + `rooms` to classify source-file chunks into rooms.
-#                              Hard-exits if this file is missing.
+# MemPalace is pinned to 3.7.1. Normal runtime and administration use one
+# authenticated, supervised HTTP hub. They do not open palace bytes and do not
+# fall back to a raw/direct peer.
 #
-# NOT read by the runtime `memory_add_drawer` tool: agents write to free-form rooms via the
-# MCP bridge and are NEVER validated against this list. So this `rooms` list is a curated,
-# documentation-grade taxonomy of Penny's durable canonical rooms — editing it does not
-# delete drawers or affect live agent writes.
+# The upstream CLI may read this file when mining caller-selected source files.
+# The Penny memory extension does not use it as a tool grant, service registry,
+# retention plan, deletion authority, or workflow-handoff manifest. Editing this
+# taxonomy never deletes data. Setup and uninstall preserve caller-owned data;
+# migration, retention apply, repair, or deletion require separate explicit gates.
 #
-# Ephemeral `skills/<skill_name>-<session_id>` rooms are created per skill run and are
-# intentionally NOT listed here (they are cleaned up / T2-expired). See
-# docs/agents/skills/mempalace-integration.md.
-#
-# NOTE: `mempalace init` regenerates this file and strips comments/extra keys — avoid running
-# it unless you intend to regenerate. `file_patterns`/`exclude` are ignored by miner v3.0.0
-# (it uses hardcoded READABLE_EXTENSIONS/SKIP_DIRS); kept here to express intent.
+# Historical `skills/<skill>-<session_id>` rooms are legacy corpus. They are not
+# active handoff channels and are intentionally absent from this curated room
+# list. See the retention documentation before classifying legacy data.
 
 wing: penny
 
 rooms:
   - name: architecture
-    description: System architecture, design, and structural decisions
+    description: Curated system architecture and structural decisions
   - name: decisions
-    description: Decision records and their rationale
+    description: Consequential decisions and their rationale
   - name: planning
-    description: Plans, roadmaps, and task decomposition
+    description: Durable plans and roadmaps selected for later reuse
   - name: research
-    description: Research findings and reports
+    description: Curated research findings and reports
   - name: technical
-    description: Technical notes, implementation details, and code references
+    description: Reusable technical notes and implementation references
   - name: skills
-    description: Skill outputs, learnings, and durable results
+    description: Curated cross-run skill knowledge, never active workflow handoff
   - name: sessions
-    description: Session summaries and end-of-session notes
+    description: Selected primary-session summaries worth durable recall
   - name: diary
-    description: Agent diary entries (AAAK format)
+    description: Primary Penny diary entries
   - name: projects
-    description: Per-project working memory and context
+    description: Reusable project context supplied without downstream-specific paths
   - name: user
-    description: User profile, preferences, and personal context
+    description: User preferences and durable personal context
   - name: general
-    description: Fallback for uncategorized content (miner default)
+    description: Fallback taxonomy room for explicitly curated content
 
 file_patterns:
   - "**/*.ts"

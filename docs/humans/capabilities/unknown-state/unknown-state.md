@@ -10,9 +10,9 @@ Without an escape hatch, the system would fall through to raw LLM behavior in ex
 
 ## When it triggers
 
-| Condition | Example |
-| --- | --- |
-| An agent reports **UNCERTAIN** confidence | Echo can't find files relevant to the goal |
+| Condition                                            | Example                                                   |
+| ---------------------------------------------------- | --------------------------------------------------------- |
+| An agent reports **UNCERTAIN** confidence            | Echo can't find files relevant to the goal                |
 | A retry loop **stalls or repeats a failed approach** | Two implement→verify cycles show the same unresolved gaps |
 
 Only the weakest confidence level (**UNCERTAIN**) escalates. **CERTAIN / PROBABLE / POSSIBLE** proceed normally. Each skill decides which of its own steps are allowed to escalate.
@@ -28,7 +28,7 @@ When the run pauses, Penny shows you:
 
 Your answer is handed back to the **same run** (matched by its run id). The engine records what you said, resumes at the working step the skill designates for clarifications, and injects your guidance into that step's next attempt. So your words actually steer the retry — they aren't just logged.
 
-Each skill controls where a clarified run resumes. For the code skill, for instance, a clarification restarts from exploration with your guidance in hand.
+Each skill controls where a clarified run resumes. In the current research workflow, the answer returns to the producer that can act on it — planning, evidence gathering, synthesis, or validation — with your guidance in hand.
 
 ## Planned check-ins are different
 

@@ -2,7 +2,7 @@
 
 ## What
 
-The design process for creating a new skill: how to decide a skill is warranted, derive its states, place its gates, split its knowledge between prompts and resources, and ship it compliant. The mechanics (files, formats, hooks, tests) are specified in `skill-standard.md`, `skill-md-format.md`, and `quick-reference.md`; this document covers the design decisions those specs assume you have already made. Extracted from the `learn` skill build (2026-07), which converted a proven manual course-building session into an engine playbook.
+The design process for creating a new skill: decide whether a skill is warranted, derive its states, place its gates, split its knowledge between prompts and resources, and ship it compliant. The mechanics (files, formats, hooks, tests) are specified in `skill-standard.md`, `skill-md-format.md`, and `quick-reference.md`; this document covers the design decisions those specs assume you have already made.
 
 ## Why
 
@@ -18,21 +18,21 @@ A skill is an **extraction, not an invention**. Do the work by hand (or observe 
 
 For each "X before Y" in the flow, write down the concrete defect that ordering prevents — ideally one actually observed in the manual run. Record the table in the skill's `README.md`:
 
-| Order rule (example, from `learn`) | Failure mode it prevents |
-|---|---|
-| Global conventions decided before authoring | Convention forks across output files |
-| Human gate before the expensive phase | Mass-producing to a wrong design |
-| Fixes always re-enter verification | A fix to one file breaking its linked partner |
+| Order rule                                  | Failure mode it prevents                      |
+| ------------------------------------------- | --------------------------------------------- |
+| Global conventions decided before authoring | Convention forks across output files          |
+| Human gate before the expensive phase       | Mass-producing to a wrong design              |
+| Fixes always re-enter verification          | A fix to one file breaking its linked partner |
 
 A phase that prevents no nameable failure has not earned its place — cut it.
 
 ### 3. Front-load global decisions; gate them; then never re-decide
 
-Anything that can drift across artifacts (conventions, registries, naming schemes, output layout) is decided in ONE early state, locked at a gate, and treated as binding canon downstream. Downstream agents look decisions up; they never make them. This is the single highest-leverage design rule: per-artifact decisions are how large multi-artifact outputs rot.
+Anything that can drift across artifacts (conventions, registries, naming schemes, output layout) is decided in one early state, locked at a gate when consequences justify one, and treated as binding canon downstream. Downstream agents look decisions up rather than silently redefining them.
 
 ### 4. Place HITL gates at the reversibility cliff
 
-One planned gate immediately before the most expensive or least reversible span (e.g. `charter_gate` before mass authoring; `plan_gate` before writing code). Gates present the decision compactly (counts, canon, open questions) with approve / refine / deny — refine loops back to the deciding state with the user's note; deny terminates in `error`. Everything else uses the unplanned escalation seam (`needs_clarification` / UNCERTAIN), not extra gates. See `loops.md` §L4.
+Place a planned gate immediately before an expensive, external, or hard-to-reverse span. Present the decision compactly with approve / refine / deny; refine loops back to the deciding state with the user's note, and deny terminates safely. Everything else uses the unplanned escalation seam (`needs_clarification` / UNCERTAIN), not extra gates. See `loops.md` §L4.
 
 ### 5. Choose loop shapes from the work's structure
 
@@ -46,11 +46,11 @@ An evidence-grounded verifier state (vera: scripted checks, recomputation, whole
 
 ### 7. Split knowledge into three layers by volatility
 
-| Layer | Holds | Lifetime |
-|---|---|---|
-| `resources/*.md` | The durable domain spec — the distilled, generalized "how this domain is done well" (checklists, canons, layouts) | Survives skill redesigns; reusable outside the skill |
-| `assets/prompts/<role>.md` | Per-state role guidance: mission, mempalace protocol, non-negotiables (each traced to a failure mode), SUMMARY contract | Changes when the workflow changes |
-| Task builders (playbook) | Run-specific context: session id, paths, lesson index, prior-round violations | Per invocation |
+| Layer                      | Holds                                                                                                             | Lifetime                                             |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `resources/*.md`           | The durable domain spec — the distilled, generalized "how this domain is done well" (checklists, canons, layouts) | Survives skill redesigns; reusable outside the skill |
+| `assets/prompts/<role>.md` | Per-state role guidance: mission, exact artifact handoff, non-negotiables, complete output, SUMMARY contract      | Changes when the workflow changes                    |
+| Task builders (playbook)   | Run-specific context: exact input slots/refs, paths, unit index, prior-round violations                           | Per invocation                                       |
 
 Prompts stay thin and reference resources; resources never contain run-specific detail. When one agent serves multiple states with different jobs, use per-state prompt files via the `skill_context()` hook (`<agent>-<state>.md`), not one bloated prompt.
 
@@ -62,9 +62,9 @@ Required SUMMARY fields are only what `route_after` needs to route (a completion
 
 Fan out (`PARALLEL_BY_STATE`) only where branches share no ordering dependency (e.g. three ingest perspectives). Work with cross-unit consistency requirements (authoring artifacts that must agree with each other) runs sequentially through a canon, even though parallel would be faster.
 
-### 10. Close the loop in memory
+### 10. Preserve reusable learning deliberately
 
-After the skill ships: store the build decisions and their failure-mode rationale in mempalace, add knowledge-graph facts linking the skill to its origin session, and record per-run learnings per `mempalace-integration.md`. Future redesigns start from that record, not from scratch.
+After the skill ships, keep durable design rationale in the requested project documentation. The unmarked primary runtime may curate a reusable memory or governed KG relationship only when future retrieval will plausibly use it. Do not create per-run worker memories, routine graph links, or active workflow rooms.
 
 ## The Design Sequence
 
@@ -75,7 +75,7 @@ After the skill ships: store the build decisions and their failure-mode rational
 5. **Choose loop shapes and budgets** (Rules 5–6); draw `resources/flow.html` FIRST — review the diagram before writing code.
 6. **Write contracts** (Rule 8), then the playbook, then register it.
 7. **Distill resources, then prompts** (Rule 7).
-8. **Build per `quick-reference.md`** (delegate, SKILL.md, room registration) and test per `testing.md` — every branch, every gate route, exhaustion, stall, escalation.
+8. **Build per `quick-reference.md`** (delegate, SKILL.md, exact artifact contracts) and test per `testing.md` — every branch, every gate route, exhaustion, stall, escalation, and recovery ref.
 9. **Validate** — `check_skill_structure.py`, the full engine test suite (regressions), and a live CLI smoke test (`start` → first directive has the right action, branches, and `skillContext`).
 10. **Record** (Rule 10).
 
@@ -98,11 +98,11 @@ After the skill ships: store the build decisions and their failure-mode rational
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `docs/agents/skills/quick-reference.md` | The build checklist this methodology feeds |
-| `docs/agents/skills/skill-standard.md` | Structure and compliance specification |
-| `docs/agents/skills/loops.md` | Loop taxonomy, gates, verifier design |
-| `docs/agents/skills/testing.md` | Playbook test requirements |
-| `apps/orchestration/src/orchestration/playbooks/learn.py` | Worked example: the build this methodology was extracted from |
-| `.pi/skills/learn/README.md` | Worked example of the failure-mode table |
+| File                                                         | Purpose                                    |
+| ------------------------------------------------------------ | ------------------------------------------ |
+| `docs/agents/skills/quick-reference.md`                      | The build checklist this methodology feeds |
+| `docs/agents/skills/skill-standard.md`                       | Structure and compliance specification     |
+| `docs/agents/skills/loops.md`                                | Loop taxonomy, gates, verifier design      |
+| `docs/agents/skills/testing.md`                              | Playbook test requirements                 |
+| `apps/orchestration/src/orchestration/playbooks/research.py` | Current engine-backed playbook example     |
+| `.pi/skills/research/README.md`                              | Current skill documentation example        |

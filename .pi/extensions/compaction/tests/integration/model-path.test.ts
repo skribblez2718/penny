@@ -5,16 +5,21 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import compactionExtension from "../../index.js";
+import {
+  HARD_MAX_ESTIMATED_TOKENS,
+  HARD_MAX_RESULT_BYTES,
+  HARD_MAX_RESULT_CHARACTERS,
+  RELEASE_MINIMUM_CONTEXT_HEADROOM_TOKENS,
+  createTextToolResult,
+  fitsToolResultBudget,
+  measureToolResult,
+  resolveToolResultBudget,
+} from "../../../lib/tool-result-budget.js";
 
 const generateModelSummaryMock = vi.fn();
 
-vi.mock("../../bridge.js", () => ({
-  queryEngineRuns: vi.fn(async () => []),
-  queryMempalaceSkillRooms: vi.fn(async () => []),
-  queryMempalaceSkillRoomsForSession: vi.fn(async () => []),
-  queryKGEntitiesForScope: vi.fn(async () => []),
-  queryOutcomeLedgerDecisions: vi.fn(async () => []),
-  queryDiaryEscalation: vi.fn(async () => []),
+vi.mock("../../checkpointer.js", () => ({
+  readExactCheckpoints: vi.fn(() => ({ runs: [], artifactRefs: [], issues: [] })),
 }));
 vi.mock("../../pending.js", () => ({ detectPendingState: vi.fn(async () => null) }));
 vi.mock("../../summarizer.js", () => ({
@@ -80,6 +85,44 @@ describe("model-owned prose path", () => {
     expect(result.compaction.details.prose_summary).toContain("## Goal");
     // artifact.goal is kept consistent with the model's brief.
     expect(result.compaction.details.goal).toBe("Refactor the token estimator");
+  });
+
+  it("bounds a giant multibyte envelope through the registered compaction hook", async () => {
+    generateModelSummaryMock.mockResolvedValueOnce({
+      prose: [
+        "## Goal",
+        "Bound the registered compaction result",
+        "## Critical Context",
+        `- ${'escaped-"-\\-🙂漢字/'.repeat(100_000)}`,
+      ].join("\n"),
+      model: "anthropic/claude-x",
+    });
+    const pi = createMockPi() as any;
+    compactionExtension(pi);
+    const result = await pi.emit("session_before_compact", mockEvent(), ctx);
+    const modelVisibleResult = createTextToolResult({ summary: result.compaction.summary });
+    const measurement = measureToolResult(modelVisibleResult);
+    const budget = resolveToolResultBudget({});
+
+    expect(fitsToolResultBudget(measurement, budget)).toBe(true);
+    expect(measurement.bytes).toBeLessThanOrEqual(HARD_MAX_RESULT_BYTES);
+    expect(measurement.characters).toBeLessThanOrEqual(HARD_MAX_RESULT_CHARACTERS);
+    expect(measurement.estimatedTokens).toBeLessThanOrEqual(HARD_MAX_ESTIMATED_TOKENS);
+    expect(measurement.estimatedTokens * 2).toBeLessThanOrEqual(
+      RELEASE_MINIMUM_CONTEXT_HEADROOM_TOKENS
+    );
+    expect(result.compaction.summary).toContain(
+      "[prose truncated to fit the shared result budget]"
+    );
+    expect(result.compaction.details.metadata.result_budget).toMatchObject({
+      serialized_bytes: measurement.bytes,
+      estimated_tokens: measurement.estimatedTokens,
+      reserve_invariant_preserved: true,
+    });
+    expect(result.compaction.details.metadata.compaction_correlation).toEqual({
+      status: "not_evaluated",
+      keys: ["session:sess-1"],
+    });
   });
 
   it("falls back to the deterministic prose when the model path fails", async () => {

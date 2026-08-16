@@ -14,11 +14,8 @@ because it looks like assurance.
 
 from __future__ import annotations
 
-import pytest
-
 from orchestration import independence as ind
 from orchestration import loans as loans_mod
-from orchestration import roster as roster_mod
 from orchestration.roster import (
     distinct_models,
     model_roster,
@@ -44,20 +41,20 @@ def _agents(tmp_path, mapping: dict) -> str:
 
 
 def test_roster_reads_models_from_frontmatter(tmp_path):
-    d = _agents(tmp_path, {"vera": "sonnet", "echo": "opus"})
-    assert model_roster(d) == {"echo": "opus", "vera": "sonnet"}
-    assert distinct_models(d) == ("opus", "sonnet")
+    d = _agents(tmp_path, {"vera": "model-b", "echo": "model-a"})
+    assert model_roster(d) == {"echo": "model-a", "vera": "model-b"}
+    assert distinct_models(d) == ("model-a", "model-b")
 
 
 def test_agent_without_a_model_is_omitted_not_guessed(tmp_path):
-    d = _agents(tmp_path, {"vera": "sonnet"})
+    d = _agents(tmp_path, {"vera": "model-b"})
     (tmp_path / "agents" / "broken.md").write_text("---\nname: broken\n---\n", encoding="utf-8")
     assert "broken" not in model_roster(d)
 
 
 def test_hash_is_stable_and_order_independent(tmp_path):
-    a = _agents(tmp_path / "a", {"x": "opus", "y": "sonnet"})
-    b = _agents(tmp_path / "b", {"y": "sonnet", "x": "opus"})
+    a = _agents(tmp_path / "a", {"x": "model-a", "y": "model-b"})
+    b = _agents(tmp_path / "b", {"y": "model-b", "x": "model-a"})
     assert roster_hash(a) == roster_hash(b)
 
 
@@ -65,20 +62,20 @@ def test_repointing_an_agent_within_the_same_fleet_does_not_move_the_hash(tmp_pa
     """Deliberate: re-pointing one agent at a model already in the fleet is caught
     LIVE and more precisely by independence.classify. This trigger is for the fleet
     gaining/losing/swapping a MODEL."""
-    before = _agents(tmp_path / "before", {"a": "opus", "b": "sonnet"})
-    after = _agents(tmp_path / "after", {"a": "sonnet", "b": "opus"})
+    before = _agents(tmp_path / "before", {"a": "model-a", "b": "model-b"})
+    after = _agents(tmp_path / "after", {"a": "model-b", "b": "model-a"})
     assert roster_hash(before) == roster_hash(after)
 
 
 def test_a_new_model_in_the_fleet_moves_the_hash(tmp_path):
-    before = _agents(tmp_path / "before", {"a": "opus", "b": "sonnet"})
-    after = _agents(tmp_path / "after", {"a": "opus", "b": "sonnet", "c": "opus-5"})
+    before = _agents(tmp_path / "before", {"a": "model-a", "b": "model-b"})
+    after = _agents(tmp_path / "after", {"a": "model-a", "b": "model-b", "c": "model-a-v2"})
     assert roster_hash(before) != roster_hash(after)
 
 
 def test_swapping_the_fleet_wholesale_moves_the_hash(tmp_path):
-    before = _agents(tmp_path / "before", {"a": "opus", "b": "sonnet"})
-    after = _agents(tmp_path / "after", {"a": "opus-5", "b": "sonnet-5"})
+    before = _agents(tmp_path / "before", {"a": "model-a", "b": "model-b"})
+    after = _agents(tmp_path / "after", {"a": "model-a-v2", "b": "model-b-v2"})
     assert roster_hash(before) != roster_hash(after)
 
 
@@ -89,7 +86,7 @@ def test_missing_agents_dir_reads_as_unknown_not_as_a_change(tmp_path):
 
 
 def test_unbaselined_entry_is_not_reported_as_changed(tmp_path):
-    d = _agents(tmp_path, {"a": "opus"})
+    d = _agents(tmp_path, {"a": "model-a"})
     assert roster_changed("", d) is False
 
 

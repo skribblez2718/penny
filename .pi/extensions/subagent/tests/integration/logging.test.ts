@@ -10,7 +10,9 @@ describe("subagent integration logging", () => {
   });
 
   it("emits JSON to observability REST endpoint for agent spawn error with sessionId", async () => {
-    const fetchSpy = vi.fn((_url: string, _options?: RequestInit) => Promise.resolve({ ok: true } as Response));
+    const fetchSpy = vi.fn((_url: string, _options?: RequestInit) =>
+      Promise.resolve({ ok: true } as Response)
+    );
     vi.stubGlobal("fetch", fetchSpy);
 
     const logger = createLogger("agent-runner");

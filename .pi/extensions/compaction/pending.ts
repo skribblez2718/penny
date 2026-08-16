@@ -1,21 +1,13 @@
 /**
- * Pending State Detection
+ * Pending-state detection from the compacted conversation only.
  *
- * Detects if the session is in an escalation state (UNKNOWN_STATE,
- * awaiting_clarification, or verification_required) by:
- *   1. Scanning recent messages for escalation signals
- *   2. Querying mempalace diary for recent escalation entries
- *
- * Returns a PendingState object if active, null otherwise.
+ * Recovery never depends on durable memory availability. The authoritative
+ * awaiting-user state still comes from an exact orchestration checkpoint;
+ * this scanner preserves conversational escalation signals for prose fallback.
  */
 
-import { queryDiaryEscalation } from "./bridge.js";
-import type { PendingState } from "./schema.js";
 import type { SessionMessage } from "./pi-messages.js";
-
-// ============================================================
-// Message-Based Detection
-// ============================================================
+import type { PendingState } from "./schema.js";
 
 interface EscalationSignal {
   state: "UNKNOWN_STATE" | "awaiting_clarification" | "verification_required";
@@ -23,77 +15,9 @@ interface EscalationSignal {
   turn_id?: string;
 }
 
-/**
- * Scan messages for escalation signals.
- *
- * Detects:
- *   - questionnaire tool calls → awaiting_clarification
- *   - "Verification needed" / "verify" in assistant text → verification_required
- *   - "UNKNOWN_STATE" / "escalate" in text → UNKNOWN_STATE
- */
-function scanMessagesForEscalation(messages: SessionMessage[]): EscalationSignal | null {
-  // Scan from newest to oldest
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    const content = extractText(msg);
-    if (!content) continue;
-
-    const lower = content.toLowerCase();
-
-    // Detect questionnaire tool results (user responded to escalation)
-    if (msg.role === "toolResult" && msg.toolName === "questionnaire") {
-      return {
-        state: "awaiting_clarification",
-        question_summary: "User responded to questionnaire",
-        turn_id: msg.id,
-      };
-    }
-
-    // Detect verification language in assistant messages
-    if (msg.role === "assistant") {
-      if (/verification needed|awaiting user input|⏸️ .*awaiting/i.test(lower)) {
-        return {
-          state: "verification_required",
-          question_summary: extractQuestionSummary(content) || "Verification pending",
-          turn_id: msg.id,
-        };
-      }
-      if (/unknown_state|escalation needed|need your input/i.test(lower)) {
-        return {
-          state: "UNKNOWN_STATE",
-          question_summary: extractQuestionSummary(content) || "Clarification needed",
-          turn_id: msg.id,
-        };
-      }
-    }
-
-    // Detect user messages that look like escalation responses
-    if (msg.role === "user" && i > 0) {
-      const prevMsg = messages[i - 1];
-      if (
-        prevMsg?.role === "assistant" &&
-        /questionnaire|verify|clarify/i.test(extractText(prevMsg) || "")
-      ) {
-        return {
-          state: "awaiting_clarification",
-          question_summary: "User provided clarification",
-          turn_id: msg.id,
-        };
-      }
-    }
-  }
-
-  return null;
-}
-
-/**
- * Extract a one-line question summary from assistant text.
- */
 function extractQuestionSummary(text: string): string | null {
-  // Look for the first sentence that ends with ? or contains "verify"/"confirm"
-  const sentences = text.split(/[.!?\n]/);
-  for (const s of sentences) {
-    const trimmed = s.trim();
+  for (const sentence of text.split(/[.!?\n]/)) {
+    const trimmed = sentence.trim();
     if (trimmed.endsWith("?")) return trimmed.slice(0, 200);
     if (/verify|confirm|proceed with|reject|escalate/i.test(trimmed)) {
       return trimmed.slice(0, 200);
@@ -102,90 +26,71 @@ function extractQuestionSummary(text: string): string | null {
   return null;
 }
 
-function extractText(msg: SessionMessage | undefined): string | null {
-  if (!msg) return null;
-  if (typeof msg.content === "string") return msg.content;
-  if (Array.isArray(msg.content)) {
-    return msg.content
-      .filter((c) => c.type === "text")
-      .map((c) => c.text ?? "")
+function extractText(message: SessionMessage | undefined): string | null {
+  if (!message) return null;
+  if (typeof message.content === "string") return message.content;
+  if (Array.isArray(message.content)) {
+    return message.content
+      .filter((content) => content.type === "text")
+      .map((content) => content.text ?? "")
       .join(" ");
   }
   return null;
 }
 
-// ============================================================
-// Bridge-Based Detection
-// ============================================================
+function scanMessagesForEscalation(messages: SessionMessage[]): EscalationSignal | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const content = extractText(message);
+    if (!content) continue;
+    const lower = content.toLowerCase();
 
-/**
- * Query mempalace diary for recent escalation entries.
- */
-async function detectEscalationFromDiary(): Promise<EscalationSignal | null> {
-  try {
-    const entries = await queryDiaryEscalation("penny", 3);
-    if (entries.length === 0) return null;
-
-    const latest = entries[0];
-    const text = latest.text || "";
-
-    if (/verification/i.test(text)) {
+    if (message.role === "toolResult" && message.toolName === "questionnaire") {
       return {
-        state: "verification_required",
-        question_summary: "Verification state detected from diary",
+        state: "awaiting_clarification",
+        question_summary: "User responded to questionnaire",
+        turn_id: message.id,
       };
     }
-    if (/unknown_state|escalation|clarification/i.test(text)) {
-      return {
-        state: "UNKNOWN_STATE",
-        question_summary: "UNKNOWN_STATE detected from diary",
-      };
+    if (message.role === "assistant") {
+      if (/verification needed|awaiting user input|⏸️ .*awaiting/i.test(lower)) {
+        return {
+          state: "verification_required",
+          question_summary: extractQuestionSummary(content) || "Verification pending",
+          turn_id: message.id,
+        };
+      }
+      if (/unknown_state|escalation needed|need your input/i.test(lower)) {
+        return {
+          state: "UNKNOWN_STATE",
+          question_summary: extractQuestionSummary(content) || "Clarification needed",
+          turn_id: message.id,
+        };
+      }
     }
-    return {
-      state: "awaiting_clarification",
-      question_summary: "Pending clarification detected from diary",
-    };
-  } catch {
-    return null;
+    if (message.role === "user" && index > 0) {
+      const previous = messages[index - 1];
+      if (
+        previous?.role === "assistant" &&
+        /questionnaire|verify|clarify/i.test(extractText(previous) || "")
+      ) {
+        return {
+          state: "awaiting_clarification",
+          question_summary: "User provided clarification",
+          turn_id: message.id,
+        };
+      }
+    }
   }
+  return null;
 }
 
-// ============================================================
-// Public API
-// ============================================================
-
-/**
- * Detect pending state for the compact artifact.
- *
- * Strategy:
- *   1. Fast path: scan messages (no bridge call needed)
- *   2. Fallback: query diary via bridge
- *   3. If found, return PendingState with mempalace reference
- */
-export async function detectPendingState(
-  messages: SessionMessage[],
-  sessionId: string
-): Promise<PendingState | null> {
-  // Fast path: message scanning
+export async function detectPendingState(messages: SessionMessage[]): Promise<PendingState | null> {
   const signal = scanMessagesForEscalation(messages);
-  if (!signal) {
-    // Fallback: bridge query
-    const diarySignal = await detectEscalationFromDiary();
-    if (!diarySignal) return null;
-    // Merge diary signal
-    return {
-      state: diarySignal.state,
-      previous_state: "unknown", // Can't determine from diary alone
-      mempalace_drawer_id: "pending-diary", // Phase 3+ will use real drawer ID
-      question_summary: diarySignal.question_summary,
-      turn_id: "unknown",
-    };
-  }
-
+  if (!signal) return null;
   return {
     state: signal.state,
-    previous_state: "unknown", // Phase 3+: query orchestrator state
-    mempalace_drawer_id: `pending-${sessionId}`, // Phase 3+: real drawer ID
+    previous_state: "unknown",
     question_summary: signal.question_summary,
     turn_id: signal.turn_id || "unknown",
   };

@@ -2,18 +2,12 @@
 
 WHY THIS EXISTS
 ---------------
-An agent subprocess is spawned with ``cwd = project_root`` — the TARGET repo a skill
-is operating on (``.pi/extensions/skill/index.ts`` passes ``projectRoot`` as the agent
-cwd; ``agent-runner.ts`` spawns with ``cwd: cwd ?? defaultCwd``). For ``code`` /
-``sca`` / ``jsa`` / ``learn`` runs that directory is NOT this repo.
+An agent subprocess is spawned with ``cwd = project_root`` — the target repository a
+skill is operating on. That directory need not be this repository.
 
-So any repo-relative path written into a task message — ``resources/rubric.md``,
-``.pi/skills/code/resources/security-checklist.md``, ``docs/agents/secure-coding/…`` —
-resolves against the wrong tree. It does not raise: the agent simply cannot read the
-file and proceeds WITHOUT the guidance, which is how a *mandatory* security checklist
-can silently fail to load on every foreign-repo run.
-
-Every path handed to an agent must therefore be ABSOLUTE. There are two roots:
+A repository-relative path in a task message can therefore resolve against the wrong
+tree without raising. The agent then continues without the referenced guidance.
+Every path handed to an agent must instead be absolute. There are two roots:
 
 * :func:`skill_root`  — the skill's own directory (``resources/``, ``scripts/``).
   Authoritative source is ``constraints["skill_dir"]``, injected for every run by the

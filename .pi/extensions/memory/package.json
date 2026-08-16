@@ -1,22 +1,28 @@
 {
-  "name": "pi-memory-extension",
-  "version": "0.1.0",
-  "description": "Pi extension for MemPalace memory integration",
+  "name": "@penny/memory-extension",
+  "version": "1.0.0",
+  "description": "HTTP-only, role-scoped, context-bounded MemPalace adapter",
   "type": "module",
   "scripts": {
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
     "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
+    "typecheck": "bunx tsc --noEmit",
     "test": "bunx vitest run --config tests/vitest.config.ts",
     "test:unit": "bunx vitest run --config tests/vitest.config.ts",
     "test:integration": "bunx vitest run --config tests/vitest.integration.config.ts",
     "test:e2e": "bunx vitest run --config tests/vitest.e2e.config.ts",
-    "test:python": "cd ../../../ && source .venv/bin/activate && pytest .pi/extensions/memory/tests/integration/test_bridge.py -v",
-    "test:all": "bun run lint && bun run format:check && bun run test:unit && bun run test:integration",
+    "test:all": "bun run lint && bun run format:check && bun run typecheck && bun run test:unit && bun run test:integration",
     "test:watch": "bunx vitest --config tests/vitest.config.ts"
   },
   "dependencies": {
+    "@sinclair/typebox": "^0.34.49",
+    "platform-memory": "workspace:*",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vitest": "^2.1.0"
   }
 }

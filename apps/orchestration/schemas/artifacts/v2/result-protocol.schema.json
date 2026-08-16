@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:penny:orchestration:artifacts:result-protocol:2",
+  "title": "Trusted result protocol v2",
+  "$comment": "Exact skill-driver result wrapper. Receipt and invocation objects have independent strict validators; only the outer error field may be omitted within either the single or parallel shape.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "run_id",
+    "phase",
+    "branch_id",
+    "producer",
+    "operation_id",
+    "output_artifact_ref",
+    "execution_receipt",
+    "exitCode",
+    "summary",
+    "summary_missing",
+    "receipts",
+    "trusted_invocation"
+  ],
+  "properties": {
+    "protocol_version": { "const": 2 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "phase": { "type": "string", "minLength": 1 },
+    "branch_id": {
+      "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }]
+    },
+    "producer": { "type": "string", "minLength": 1 },
+    "operation_id": { "type": "string", "minLength": 1 },
+    "output_artifact_ref": {
+      "$ref": "urn:penny:orchestration:artifacts:artifact-ref:1"
+    },
+    "execution_receipt": { "type": "object" },
+    "exitCode": { "type": "integer", "enum": [0, 1] },
+    "summary": { "type": "object" },
+    "summary_missing": { "type": "boolean" },
+    "receipts": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "object" }
+    },
+    "trusted_invocation": { "type": "object" },
+    "agent": { "type": "string", "minLength": 1 },
+    "error": { "type": "string", "minLength": 1 }
+  },
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "properties": { "branch_id": { "type": "null" } },
+          "not": { "required": ["agent"] }
+        },
+        {
+          "required": ["agent"],
+          "properties": { "branch_id": { "type": "string", "minLength": 1 } }
+        }
+      ]
+    },
+    {
+      "if": { "properties": { "summary_missing": { "const": true } } },
+      "then": { "properties": { "summary": { "maxProperties": 0 } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "exitCode": { "const": 0 },
+          "summary_missing": { "const": false }
+        }
+      },
+      "then": { "not": { "required": ["error"] } }
+    }
+  ]
+}

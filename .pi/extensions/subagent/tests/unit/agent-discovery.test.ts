@@ -103,4 +103,58 @@ describe("discoverAgents", () => {
     expect(result.agents).toEqual([]);
     expect(result.projectAgentsDir).toBeNull();
   });
+
+  it("excludes invalid or missing frontmatter deterministically", () => {
+    const projectRoot = fs.mkdtempSync(path.join("/tmp", "penny-agent-discovery-"));
+    const agentsDir = path.join(projectRoot, ".pi", "agents");
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentsDir, "valid.md"),
+      "---\nname: valid\ndescription: Valid fixture\n---\nPrompt"
+    );
+    fs.writeFileSync(
+      path.join(agentsDir, "missing-description.md"),
+      "---\nname: missing-description\n---\nPrompt"
+    );
+    fs.writeFileSync(path.join(agentsDir, "invalid.md"), "No frontmatter");
+
+    try {
+      const result = discoverAgents(projectRoot, "project");
+      expect(result.agents.map((agent) => agent.name)).toEqual(["valid"]);
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("guards local discovery source against MemPalace or memory lookup dependencies", () => {
+    const source = fs.readFileSync(new URL("../../agents.ts", import.meta.url), "utf-8");
+    const forbiddenLookup =
+      /\bmempalace\b|mempalace_|memory_(?:smart_search|search|list|get|query)|(?:from|require\()\s*["'][^"']*(?:memory|mempalace)/i;
+    expect(source).not.toMatch(forbiddenLookup);
+  });
+
+  it("formats a bounded, single-line model-visible agent catalog", async () => {
+    const {
+      formatModelVisibleAgentCatalog,
+      MODEL_VISIBLE_AGENT_LIMIT,
+      MODEL_VISIBLE_AGENT_DESCRIPTION_LIMIT,
+      MODEL_VISIBLE_AGENT_CATALOG_LIMIT,
+    } = await import("../../agents.js");
+    const agents = Array.from({ length: MODEL_VISIBLE_AGENT_LIMIT + 2 }, (_, index) => ({
+      name: `agent-${index}`,
+      description: `specialty-${index}\n${"x".repeat(MODEL_VISIBLE_AGENT_DESCRIPTION_LIMIT + 100)}`,
+      systemPrompt: "test",
+      source: "project" as const,
+      filePath: `/tmp/agent-${index}.md`,
+    }));
+
+    const catalog = formatModelVisibleAgentCatalog(agents);
+
+    expect(catalog).not.toContain("\n");
+    expect(catalog).toContain("agent-0: specialty-0 ");
+    expect(catalog).toContain("…");
+    expect(catalog).toContain("2 additional agents are available by name in the tool schema");
+    expect(catalog).not.toContain(`agent-${MODEL_VISIBLE_AGENT_LIMIT}:`);
+    expect(catalog.length).toBeLessThanOrEqual(MODEL_VISIBLE_AGENT_CATALOG_LIMIT);
+  });
 });

@@ -1,134 +1,120 @@
-# Cognitive Frame Standards for the Universal Cognitive Frame (SYSTEM.md)
+# Cognitive Frame Standards for the Universal Operating Policy (SYSTEM.md)
 
-Standards for writing and maintaining the universal cognitive frame that applies to every interaction regardless of domain or agent.
+Standards for writing and maintaining the universal frame that applies to every interaction regardless of domain or agent.
 
 ## What the Cognitive Frame Is
 
-The Cognitive Frame is the **universal cognitive frame** — the reasoning protocol that never changes. It lives in `.pi/SYSTEM.md` and is present in every interaction, whether Penny is in direct conversation or delegating to a subagent.
+The Cognitive Frame is the **stable operating policy and outcome contract** shared by Penny and her subagents. It lives in `.pi/SYSTEM.md` and is present in every interaction, whether Penny is in direct conversation or delegating to a subagent. It defines goals, trust and action boundaries, ambiguity handling, completion evidence, memory discipline, and execution-path selection. It does **not** prescribe a universal internal reasoning transcript or fixed workflow — the frame constrains outcomes and boundaries, and leaves the method to the model.
 
-It defines **how the model thinks**, not **what it thinks about**. Domain-specific content belongs in Domain Guidance. Task-specific content belongs in Invocation Context.
+Domain-specific content belongs in Domain Guidance. Task-specific content belongs in Invocation Context.
 
-## Core Principle
+## Required Structure
 
-Cognitive Frame must be **process-shaped**, not output-shaped. The difference:
+Every SYSTEM.md must include these blocks in this order:
 
-- **Output-shaped**: "Be helpful, be accurate, be thorough" — tells the model what the result should look like
-- **Process-shaped**: "RESTATE the goal, IDENTIFY the category, LIST constraints" — tells the model what steps to follow
+### 1. `<system_directives>` — Trust and Action Boundaries (Authored)
 
-Output-shaped prompts let the model fill the process gap with probability. Process-shaped prompts constrain the path, not just the destination. Every section in the Cognitive Frame must define a thinking step, not a desired output quality.
+The authored trust and action boundaries: what the system prompt and runtime limits govern, what user messages are authoritative for, what external content can and cannot do, the anti-fabrication rule, and the approval rule for consequential actions. These are behavioral policy delivered in the system role — a real cue models are trained to prioritize — plus defense-in-depth prose. They are **not** technically immutable and must never be described as enforcement; enforceable controls live in the runtime (tool allowlists, approvals/receipts, process isolation, OS permissions). It is authored in SYSTEM.md — Pi uses the custom prompt verbatim. Do not duplicate these rules elsewhere.
 
-## Required Sections
+### 2. `Current date: ${CURRENT_DATE}` (Authored, substituted)
 
-Every SYSTEM.md must include these sections in this order:
+The environment extension substitutes the current date at session start. This keeps relative-date reasoning correct without hard-coding a date.
 
-### 1. `<system_directives>` — Security (Authored)
+### 3. `<system_context>` — The Operating Policy
 
-This section contains the immutable security rules. It is authored in SYSTEM.md — Pi uses the custom prompt verbatim without XML parsing. Do not duplicate these rules elsewhere.
+The authored frame. Every subsection is lean, universal policy and carries **no file paths**. Current sections:
 
-### 2. `<system_context>` — The Cognitive Frame
+| Subsection                 | Purpose                                                                                                                                                                                          |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Identity and Objective** | Who Penny is; how appended role guidance narrows (never expands) identity and permissions; optimize for progress, prefer reversible decisions, name tradeoffs                                    |
+| **Work Policy**            | Task authority (stated request is the goal), assumption/clarification balance, simplest-sufficient path, state inspection, conditional retrieval, freshness handling, evidence-status discipline |
+| **Completion**             | Success criteria at smallest useful scope, evidence-backed completion claims, failures as evidence, honest partial results, independent evidence preference                                      |
+| **Memory and Improvement** | Value-conditional memory retrieval and storage; the capability ratchet (outcomes over implementations, remove scaffolding that stops earning its cost)                                           |
+| **Files and Delivery**     | Requested changes in the project tree; scratch in `/tmp/`/mempalace; answer-first delivery                                                                                                       |
+| **On-Demand Protocols**    | Parent-only routing (lowest-complexity path), clarification trigger, compaction-resume trigger, KG-linking trigger (names each; paths resolve via the index)                                     |
 
-The authored Cognitive Frame. Every subsection is lean, universal reasoning and carries **no file paths**. Current sections:
+Sections consolidate over time — the invariant is not a fixed list but that every subsection is universal policy with no reference paths. This table describes the canonical structure as of its last update; the frame file is authoritative.
 
-| Subsection                            | Purpose                                                                                                         |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **Who You Are**                        | Identity and reasoning stance (reversible over irreversible, name tradeoffs, truth over agreement)                 |
-| **The Operating Bet**                  | The Bitter-Lesson disposition: leverage computation, ratchet on capabilities not implementations, the add-side gate, knobs over procedure, measure scaffolding |
-| **What Done Requires**                 | The outcome contract: criteria before work, evidence-backed completion, honest exhaustion, strategy change on retry, prior work first, independent checks |
-| **Instruction Hierarchy**              | Conflict resolution for competing rules                                                                            |
-| **Signal Your Certainty**              | Calibrated certainty — "verified" ≠ "likely" ≠ "need to check"                                                    |
-| **Ask vs. Act**                        | When to clarify before acting and when to escalate mid-work (names the clarification protocol; path resolves via the index) |
-| **Reach for Skills and Agents First**  | The delegation decision (skill / agent / direct), by capability reasoning not keyword-matching                     |
-| **Tools & Boundaries**                 | Lean core-tool list + the always-on "no output files in the project tree" rule                                     |
-| **Deliver**                            | Answer-first structure; a response must add information or progress                                                |
-| **On-Demand Protocols**                | Trigger→action for KG linking and compaction resume (names each; paths resolve via the index)                      |
+**The `# On-Demand Protocols` heading is a wire format.** The agent runner strips exactly that section before passing the frame to subagents. Parent-only guidance must live under that exact heading; renaming it is an implementation-breaking change unless the runner and tests change with it.
 
-Sections consolidate over time — the invariant is not a fixed list but that every subsection is universal reasoning with no reference paths. This table describes the canonical structure as of its last update; the frame file is authoritative.
+### 4. Tool and boundary content
 
-### 3. Tools and guidelines (Authored)
-
-Only the lean core-tool list and the one always-on output-file constraint are authored inline (Pi does not inject tool definitions when a custom prompt is present). Detailed tool-usage tactics and Pi documentation references are NOT in the frame — they live in `docs/penny/tool-usage.md` and the root `AGENTS.md`, resolved on demand through the index chain.
+The frame names capabilities by trigger, not by inventory. Detailed tool-usage tactics and Pi documentation references are NOT in the frame — they live in `docs/penny/tool-usage.md` and the root `AGENTS.md`, resolved on demand through the index chain. (As of the pinned Pi version, Pi does not inject tool definitions when a custom prompt is present; treat that as version-specific behavior to regression-test on Pi upgrades, not a permanent guarantee.)
 
 ## What Belongs in the Cognitive Frame
 
-- **Identity**: Who Penny is (human-facing name for warmth, process role for reasoning)
-- **The operating bet**: How the system improves as models improve (the Bitter-Lesson disposition)
-- **The outcome contract**: What "done" requires — evidence, honest exhaustion, strategy change on retry
-- **Instruction hierarchy**: Priority table for conflict resolution
-- **Certainty discipline**: How to signal what is verified vs. likely vs. unchecked
-- **Ask/escalate conditions**: When to clarify before acting; when to escalate mid-work
-- **Delegation rule**: Reach for skills and agents first, chosen by capability reasoning
-- **Consequence boundaries**: The always-on tool/output constraints
+- **Identity**: Who Penny is and how appended guidance narrows it
+- **Trust and action boundaries**: What each content source is authoritative for; the approval rule for consequential actions
+- **The outcome contract**: What "done" requires — evidence, honest exhaustion, strategy change when retries add no information
+- **Ambiguity policy**: When to clarify versus proceed on stated assumptions
+- **Execution-path selection**: The lowest-complexity-sufficient routing principle (parent-only section)
+- **Memory discipline**: Value-conditional retrieval and storage
+- **The capability ratchet**: Outcomes over implementations; scaffolding is disposable
 
 ## What Does NOT Belong in the Cognitive Frame
 
 - **Domain-specific checklists** (CREST tables, planning checklists) → Domain Guidance
 - **Agent role definitions** (Echo is READ-ONLY, Piper is DOMAIN-AGNOSTIC) → Role Definition
-- **Task-specific instructions** (session IDs, mempalace rooms, specific goals) → Invocation Context
+- **Task-specific instructions** (goals, constraints, run IDs, exact artifact grants) → Invocation Context
+- **Mandated reasoning scripts** (step sequences, fixed orderings) → keep procedures that need state or gates in skills; everything else is the model's choice
 - **Narrative descriptions** ("assumptions are the enemy of accuracy") → Use declarative rules instead
-- **Process details that vary by domain** → Domain Guidance via CREST
-- **File paths / references to additional knowledge** (docs to read, protocol file locations, Pi doc paths) → the **AGENTS.md index chain** (root `AGENTS.md` → sub-index → leaf). SYSTEM.md names a protocol by its *trigger* ("run the clarification protocol"), never its path; the always-in-context root `AGENTS.md` resolves trigger → index → file. **Path references are the primary Cognitive-Frame bloat vector — keep them out.**
+- **File paths / references to additional knowledge** (docs to read, protocol file locations, Pi doc paths) → the **AGENTS.md index chain** (root `AGENTS.md` → sub-index → leaf). SYSTEM.md names a protocol by its _trigger_ ("run the clarification protocol"), never its path; the always-in-context root `AGENTS.md` resolves trigger → index → file. **Path references are the primary Cognitive-Frame bloat vector — keep them out.**
 
 ## Writing Rules
 
 ### Rule 1: Declarative, not narrative
 
 ❌ **Don't**: "The agent should try to understand constraints before making a plan."
-✅ **Do**: "LIST the constraints (hard limits that cannot be violated)."
+✅ **Do**: "State material assumptions."
 
 Narrative descriptions are aspirations. Declarative rules are instructions. The model follows instructions more reliably than aspirations.
 
-### Rule 2: Make implicit things explicit
+### Rule 2: Make implicit things explicit — for outcomes, not methods
 
-Every assumption left unstated is a gap the model fills with probability. If "a plan has phases" seems obvious, state it anyway — without stating it, the model may produce a flat list instead of a structured sequence.
+Every _boundary or outcome_ assumption left unstated is a gap the model fills with probability: state what must be true, what needs approval, what counts as evidence. Do not extend this to methods — an unstated method is the model's freedom, not a gap.
 
 ### Rule 3: Consistent vocabulary across all layers
 
-If the Cognitive Frame uses the word "constraints" and Domain Guidance uses "limitations," the model treats them as potentially different things. Use one term per concept across all layers. Two tiers: **wire formats** (the confidence scale, `needs_clarification`, SUMMARY fields) are engine-parsed contracts — treat them as an API and never rename them in a prompt edit; **editorial vocabulary** (constraints, assumptions, tradeoffs, verification) is enforced at review time by the Carren+Vera pipeline. The frame itself no longer carries a vocabulary table — consistency is an authoring discipline, not always-on frame content.
+If the Cognitive Frame uses the word "constraints" and Domain Guidance uses "limitations," the model treats them as potentially different things. Use one term per concept across all layers. Two tiers: **wire formats** (the agent-contract confidence scale, `needs_clarification`, SUMMARY fields) are engine-parsed contracts — treat them as an API and never rename them in a prompt edit; **editorial vocabulary** (constraints, assumptions, tradeoffs, verification) is enforced at review time by the Carren+Vera pipeline. The frame itself no longer carries a vocabulary table — consistency is an authoring discipline, not always-on frame content.
 
 ### Rule 4: Evidence-gated completion is unconditional
 
-The What Done Requires contract has no priority override. No rule, instruction, or user request lets a "done" claim ship without evidence, lets exhaustion masquerade as success, or lets the pre-delivery Deliver check (does this response add information or progress?) be skipped. "Just do it" (Priority 3) skips clarification, not self-verification.
+The Completion contract has no override. No rule, instruction, or user request lets a "done" claim ship without evidence appropriate to the task, lets exhaustion masquerade as success, or waives the requirement to state what was not verified. "Just proceed" authorizes reasonable assumptions, not unverified completion claims.
 
-### Rule 5: Process-shaped, not output-shaped
+### Rule 5: Outcome-shaped directives, not reasoning scripts (the Bitter-Lesson rule)
 
-Every rule must define a thinking step, not a desired output quality:
+Prefer clear goals, observable constraints, and lightweight execution directives. Do not mandate multi-step reasoning scripts unless a measured task-specific failure justifies them, and keep procedures that require state, gates, or resumability in skills.
 
-| Output-shaped (AVOID)   | Process-shaped (PREFER)                           |
-| ----------------------- | ------------------------------------------------- |
-| "Be accurate"           | "Never fabricate facts, sources, or results"      |
-| "Be thorough"           | "Verify before delivering"                        |
-| "Be clear"              | "Resolve ambiguity explicitly before proceeding"  |
-| "Consider alternatives" | "When two approaches conflict, name the tradeoff" |
+| Vague aspiration (AVOID) | Executable directive (PREFER)             | Reasoning script (AVOID)                         |
+| ------------------------ | ----------------------------------------- | ------------------------------------------------ |
+| "Be accurate"            | "Never invent facts, sources, or results" | "Step 1: restate. Step 2: categorize. Step 3: …" |
+| "Be thorough"            | "Claim completion only with evidence"     | Mandated N-step verification sequence            |
+| "Be clear"               | "State material assumptions"              | Fixed clarification transcript                   |
 
-**Exception — the Who You Are identity clause.** Rule 5 governs *instructions and rules* (what to do), not *self-description* (who Penny is). The identity clause names Penny's role and character — e.g., "a personal AI assistant — adaptable to any domain or request." Descriptive identity traits there are self-description, not output-quality instructions, and MUST NOT be flagged as output-shaped. The process-shaped requirement still applies in full to the reasoning directives that follow the identity ("think in steps", "prefer reversible decisions", "name the tradeoff") — those are instructions and must stay process-shaped.
+The dividing line is whether the model retains freedom to choose its path. A single executable directive ("verify before delivering") constrains the outcome; a mandated step sequence constrains the method and is a bet against model improvement — it helps the current model and fights the next one. This matters most on reasoning-native models: prescriptive process scaffolds are the technique class that goes neutral-to-negative there (Sprague et al., ICLR 2025, arXiv:2409.12183; vendor guidance uniformly says don't CoT-prompt thinking models; see [Evidence Base](../../humans/prompts/evidence.md)). This is why the multi-step clarification procedure lives in the _on-demand_ clarification protocol rather than the always-on frame.
 
-### Reasoning Models and Process-Shaped Steps
+**Exception — the identity clause.** This rule governs _instructions_ (what to do), not _self-description_ (who Penny is). Descriptive identity traits are not output-quality instructions and must not be flagged.
 
-The frame's process-shaped rules are **single lightweight directives** ("surface constraints and success criteria before work", "verify before delivering"), never mandated multi-step reasoning scripts. This distinction matters for reasoning models (Claude extended thinking, DeepSeek reasoner, GLM/Kimi/MiniMax thinking modes): prescriptive process scaffolds are the technique class that goes neutral-to-negative on reasoning-native models — chain-of-thought prompting adds ~+12–14 points on math/symbolic but +0.7 points elsewhere and can be negative on thinking models (Sprague et al., ICLR 2025, arXiv:2409.12183; vendor guidance uniformly says don't CoT-prompt thinking models; see [Evidence Base](../../humans/prompts/evidence.md)). This is why the six-step RESTATE/IDENTIFY/LIST/LIST/SURFACE/FLAG sequence lives in the *on-demand* clarification protocol rather than the always-on frame (see Rule 7): the directive stays, the script loads only when its trigger fires.
+**Every frame line is a loan unless it is a consequence boundary, a conduit (verification, memory, escalation, delegation), or an engine-consumed wire format.** Before adding a line, ask the add-side gate question: _does this line gain or lose value as models improve?_ If it loses — it compensates for a current-model weakness — it may ship only as a deliberate, temporary loan, and it is first in line for review at the next model upgrade.
 
 ### Rule 6: Concrete verbs, not abstract nominalizations
 
 ❌ **Don't**: "Perform verification of the result before delivery."
 ✅ **Do**: "Verify the result before delivering."
 
-A nominalization ("verification", "analysis", "decision") hides the action inside a noun, so the model interprets a topic instead of executing a step — the same failure as Rule 1 and Rule 5. Flag a weak verb (perform / conduct / provide / ensure) + `-tion`/`-ment`/`-ance` noun, or a "the {noun} of X" construction. Do not flag legitimate label or artifact nouns ("the analysis skill", "the specification"). See [Design Principles §10](../../humans/prompts/design-principles.md).
+A nominalization ("verification", "analysis", "decision") hides the action inside a noun, so the model interprets a topic instead of executing a step — the same failure as Rule 1. Flag a weak verb (perform / conduct / provide / ensure) + `-tion`/`-ment`/`-ance` noun, or a "the {noun} of X" construction. Do not flag legitimate label or artifact nouns ("the analysis skill", "the specification"). See [Design Principles §10](../../humans/prompts/design-principles.md).
 
-### Rule 7: Goals, constraints, and capabilities — never procedure (the Bitter-Lesson rule)
+### Rule 7: Routing is lowest-complexity-sufficient
 
-Frame text states **what must be true** (goals, constraints, consequence boundaries, wire formats) and **what exists** (capabilities); it never scripts **how to work** (step sequences, mandated orderings, reasoning recipes, workarounds for a past model's quirks). Procedure text is a bet against model improvement: it helps the current model and fights the next one.
+The frame's routing rule (parent-only, under `# On-Demand Protocols`) is: choose the lowest-complexity path expected to succeed — direct work when current context and tools suffice; a subagent when specialization, isolated context, parallel exploration, or separate review pays; a skill when durable state, approval gates, retries, or resume semantics pay. Never write a skills-and-agents-first mandate into the frame: as models improve, more work becomes cheap to do directly, and a delegation mandate would fight that improvement.
 
-❌ **Don't**: "Step 1: restate the goal. Step 2: identify the category. Step 3: …"
-✅ **Do**: "Surface constraints and success criteria before work" (a constraint on outcomes, not a script).
+### Rule 8: Evidence status over confidence rhetoric
 
-A consequence:
-
-**Every frame line is a loan unless it is a consequence boundary, a conduit (verification, memory, escalation, delegation), or an engine-consumed wire format.** Before adding a line, ask the add-side gate question: *does this line gain or lose value as models improve?* If it loses — it compensates for a current-model weakness — it may ship only as a deliberate, temporary loan, and it is first in line for review at the next model upgrade.
-
-This rule reconciles with Rule 5 (process-shaped): a *single executable directive* ("verify before delivering") is process-shaped and compliant; a *mandated multi-step script* is procedure and is not. The line between them is whether the model retains freedom to choose its path. Full rationale: `research/atomic-loop-components/` (esp. 06-compliance.md).
+The frame requires distinguishing source-backed facts, tool-verified results, inferences, assumptions, and unknowns **when the distinction affects a decision** — not a verbal confidence label on every sentence. Do not describe any confidence vocabulary as "calibrated" unless calibration has actually been measured. The `CERTAIN / PROBABLE / POSSIBLE / UNCERTAIN` scale in agent output contracts is an engine-parsed **wire-format compatibility constraint** (see `contracts.py`), not a universal user-facing behavior; it stays until the parser contract is deliberately migrated.
 
 ## Token Budget
 
-The `<system_context>` block (the always-on Cognitive Frame) must stay **≤1,500
+The `<system_context>` block (the always-on frame) must stay **≤1,500
 tokens**, measured with **tiktoken** (`cl100k_base`) and enforced by
 `scripts/system/checks/check_token_budget.py`. Never use a word-count heuristic —
 markdown tables tokenize very differently from prose, and Penny runs models whose
@@ -146,47 +132,41 @@ It keeps the always-on frame lean.
 **When over budget:** move conditionally-needed or non-universal (Penny-operational)
 content into `docs/penny/` and reference it for on-demand `read` — the extraction
 pattern (see `docs/penny/AGENTS.md`). Remove elaboration before removing rules — a
-concise declarative rule beats a narrative explanation. Trim ceremony first: the
-inline vocabulary table and the always-on step protocol were both extracted this
-way (Rule 7), with the capability preserved (review-enforced consistency; the
-on-demand clarification protocol).
+concise declarative rule beats a narrative explanation.
 
 ## The Clarification Protocol
 
-The clarification protocol (RESTATE/IDENTIFY/LIST/LIST/SURFACE/FLAG) is the on-demand mechanism for resolving ambiguity. It lives in `docs/penny/clarification-protocol.md` and is activated via the **Ask vs. Act** section of SYSTEM.md — it is deliberately *not* an always-on frame protocol (prescriptive step scaffolds are the technique class that rots on reasoning-native models; see Rule 7). The Ask vs. Act activation condition stays inline in SYSTEM.md; the full 5-step protocol (identify knowns → surface assumptions → flag unknowns → classify BLOCKER/NAVIGABLE/IRRELEVANT → irreversibility check) is loaded via `read` when the gate activates.
-
-Steps prevent misalignment (wrong goal, wrong category), define the solution space, and surface hidden risks. The protocol ends with a decision rule: ask only when a BLOCKER is present OR the action is irreversible.
+The clarification protocol is the on-demand mechanism for resolving blocking ambiguity. It lives in `docs/penny/clarification-protocol.md` and is activated by the frame's trigger ("run the clarification protocol") — it is deliberately _not_ an always-on frame protocol (prescriptive step scaffolds are the technique class that rots on reasoning-native models; see Rule 5). The trigger condition stays inline in SYSTEM.md; the protocol is loaded via `read` when the trigger fires.
 
 ## Compliance Checklist
 
 Before modifying SYSTEM.md, verify every item:
 
-- [ ] Who You Are section present (identity + reasoning stance)
-- [ ] The Operating Bet present (ratchet on capabilities not implementations; the add-side gate; knobs over procedure)
-- [ ] What Done Requires present (criteria-first, evidence-backed completion, honest exhaustion, strategy change on retry)
-- [ ] Instruction Hierarchy defined with explicit priorities
-- [ ] Signal Your Certainty present (verified ≠ likely ≠ need-to-check)
-- [ ] Ask vs. Act present: clarification condition + mid-work escalation; names the clarification protocol by trigger (NO file path)
-- [ ] Reach for Skills and Agents First present and mandatory (capability reasoning, not keyword-matching)
-- [ ] Tools & Boundaries: lean core-tool list + the always-on output-file constraint (no tool-tactics detail, no doc paths)
-- [ ] Deliver present (answer-first; response must add information or progress)
-- [ ] On-Demand Protocols present (KG linking + compaction-resume trigger, named — NO file paths)
+- [ ] Trust and Action Boundaries present in `<system_directives>` (authority model, anti-fabrication, approval rule) and described as behavioral policy, never as enforcement
+- [ ] `Current date: ${CURRENT_DATE}` present
+- [ ] Identity and Objective present (identity + narrowing rule for appended guidance)
+- [ ] Work Policy present (task authority, assumption/clarification balance, simplest-sufficient path, conditional retrieval, freshness, evidence-status discipline)
+- [ ] Completion present (criteria at smallest useful scope, evidence-backed claims, failures as evidence, independent-evidence preference)
+- [ ] Memory and Improvement present (value-conditional retrieval/storage; capability ratchet)
+- [ ] Files and Delivery present (requested changes in tree; scratch in `/tmp/`/mempalace; answer-first)
+- [ ] On-Demand Protocols present under the exact `# On-Demand Protocols` heading (runner wire format), containing parent-only routing, clarification trigger, compaction-resume trigger, KG-linking trigger — protocols named by trigger, NO file paths
+- [ ] Routing is lowest-complexity-sufficient — no delegate-first mandate
 - [ ] **No file paths anywhere in `<system_context>`** — knowledge references live in the AGENTS.md index chain
 - [ ] No domain-specific content (no CREST tables, no agent roles, no checklists)
-- [ ] Process-shaped throughout — no output-shaped phrasing in instructions/rules (Rule 5; the Who You Are identity clause is self-description and is exempt — see Rule 5 exception)
+- [ ] No mandated reasoning scripts; every new line passed the add-side gate; loans are tagged for ablation (Rule 5)
 - [ ] No abstract nominalizations — concrete verbs in all instructions (Rule 6)
-- [ ] No procedure scripts; every new line passed the add-side gate; loans are tagged for ablation (Rule 7)
-- [ ] Security directives block unmodified (consequence boundary — never machine-edited, never trimmed)
+- [ ] No confidence vocabulary described as calibrated without measurement; wire formats untouched (Rule 8)
+- [ ] Token budget passes (`check_token_budget.py`)
 
 ## Change Protocol
 
 Cognitive Frame changes affect every interaction. Follow this protocol:
 
-1. **Audit impact**: Cognitive Frame changes propagate to all agents and all domains. Estimate blast radius before changing.
+1. **Audit impact**: Frame changes propagate to all agents and all domains. Estimate blast radius before changing.
 2. **Test before deploying**: Use a single test domain first. Verify no regression in agent behavior.
 3. **Update references**: If you change any cross-layer term — above all an engine-parsed wire format (confidence scale, `needs_clarification`, SUMMARY fields) — search all Role Definition, Domain Guidance, and Invocation Context files for the old terms and update them, and confirm `contracts.py` still parses.
 4. **Update this checklist**: If you add a new required section, add it to the compliance checklist above.
-5. **Record the change**: Store a session note in mempalace explaining what changed and why.
+5. **Record the change**: Update the requested durable project documentation when the rationale will matter to future maintainers. Do not create a routine memory or KG record.
 
 ### Changes that do NOT require audit
 
@@ -196,11 +176,12 @@ Cognitive Frame changes affect every interaction. Follow this protocol:
 ### Changes that DO require audit
 
 - Adding, removing, or reordering any section
-- Changing Instruction Hierarchy priorities
-- Modifying the certainty vocabulary or any engine-consumed wire format
-- Modifying What Done Requires or Deliver items
-- Changing the Who You Are identity
-- Any change to The Operating Bet (it encodes the ratchet doctrine)
+- **Any change to the trust and action boundaries** — this is a cross-layer change: the environment extension's `<system_boundary>` marker, every agent's `<agent_boundary>` block, the security docs, and any related tests must be updated in the same change so the layers do not contradict each other
+- Modifying the evidence-status policy or any engine-consumed wire format
+- Modifying Completion or Files and Delivery items
+- Changing the Identity and Objective section
+- Any change to the capability-ratchet language (it encodes the ratchet doctrine)
+- Renaming the `# On-Demand Protocols` heading or the `<agent_boundary>` / `<system_boundary>` markers (runner/extension wire formats)
 
 Every audited change also runs `make evals`.
 
@@ -208,9 +189,11 @@ Every audited change also runs `make evals`.
 
 Compliance checklists are enforced by **review, not by a linter** — a suffix-based automated check produces too many false positives on legitimate domain nouns to be useful. Instead, prompt changes go through a two-agent enforcement pipeline:
 
-1. **Carren critiques** (model: `deepseek-v4-pro:cloud` — MUST differ from the model that authored the prompt). Carren reviews the changed prompt against every applicable compliance checklist item, flagging violations of declarative rules, process-shaped phrasing, and abstract nominalizations.
+1. **Carren critiques** (model: `deepseek-v4-pro:cloud` — MUST differ from the model that authored the prompt). Carren reviews the changed prompt against every applicable compliance checklist item, flagging violations of declarative rules, outcome-shaped phrasing, and abstract nominalizations.
 2. **Corrections are applied** based on Carren's critique.
 3. **Vera verifies** (model: `glm-5.2:cloud`) that each correction actually resolves the cited violation without introducing new violations. Vera judges each corrected item as PASS or FAIL against the compliance checklist.
+
+Review by a different model is **model-diverse review** — a useful supplementary check, not independent evidence by itself; the deterministic gates (token budget, `make evals`, parser checks) remain the stronger anchors.
 
 See [Architecture §Enforcement](architecture.md#enforcement-carren-critique--vera-verification) for the full pipeline specification.
 

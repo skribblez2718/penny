@@ -1,7 +1,7 @@
 """RunContext — the lean, serializable state of a single orchestration run.
 
-Holds metadata + **references, not payloads** (full agent output lives in
-MemPalace; the context carries pointers and routing fields only). One explicit
+Holds metadata + **references, not payloads** (exact agent output lives in the
+separate artifact plane; the context carries pointers and routing fields only). One explicit
 key list drives (de)serialization via ``to_dict``/``from_dict`` — this is a
 stable, hand-maintained schema and is NOT the transition-replay state-forcing problem (that was
 FSM-position transition-replay; here we only persist plain data). See pack

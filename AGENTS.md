@@ -13,8 +13,8 @@ filesystem or any specific downstream project.** The boundary:
   in tracked Penny files.
 - **Penny's own root is `PROJECT_ROOT`** (`.env`). In code use `ctx.project_root`; in docs
   and prompts write `$PROJECT_ROOT` — never a hardcoded absolute path.
-- **Operator-private inputs** (e.g. the rez résumé/accomplishments) are gitignored, never
-  committed.
+- **Operator-private inputs** (for example, source corpora or personal records) are
+  gitignored and never committed.
 - `plans/`, `ideas/`, `research/` are **gitignored staging** for work-in-progress and may
   hold specifics; nothing tracked may.
 
@@ -36,7 +36,7 @@ Penny's procedural protocols live in `docs/penny/` and are indexed in [docs/penn
 
 ## Pi Platform
 
-Documentation for the pi agent runtime that Penny is built on. Trigger: the user asks about pi itself (extensions, themes, skills, TUI, SDK, providers, models, packages) — *not* when using those features to do other work.
+Documentation for the pi agent runtime that Penny is built on. Trigger: the user asks about pi itself (extensions, themes, skills, TUI, SDK, providers, models, packages) — _not_ when using those features to do other work.
 
 - Main documentation: `${PI_PACKAGE_DIR}/README.md`
 - Additional docs: `${PI_PACKAGE_DIR}/docs`

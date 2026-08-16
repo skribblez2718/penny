@@ -4,6 +4,7 @@ Proves each gating invariant both HOLDS today and REGRESSES when the capability
 is weakened — the whole point of the section is that gutting the leverage spine
 turns a check red.
 """
+
 import sys
 import types
 from pathlib import Path
@@ -17,7 +18,6 @@ from eval_lib import FAIL, PASS  # noqa: E402
 GATING = {
     "invariants.grounded_verification",
     "invariants.independent_verification",
-    "invariants.hitl_gates_present",
     "invariants.checkpoint_resume",
 }
 
@@ -65,12 +65,3 @@ class TestInvariantsRegressWhenWeakened:
         # simulate a regression: ACT sharing VERIFY's agent
         monkeypatch.setattr(prim, "ACT", types.SimpleNamespace(agent="vera"))
         assert ei.check_independent_verification().status == FAIL
-
-    def test_hitl_gate_regression_detected(self, monkeypatch):
-        from orchestration.playbooks import PLAYBOOKS
-
-        # simulate emptying a high-stakes gate
-        monkeypatch.setattr(PLAYBOOKS["code"], "GATE_STATES", frozenset())
-        r = ei.check_hitl_gates_present()
-        assert r.status == FAIL
-        assert "code" in r.detail

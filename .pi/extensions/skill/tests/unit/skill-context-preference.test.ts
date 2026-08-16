@@ -28,8 +28,9 @@ import { fileURLToPath } from "url";
 // (.pi/extensions/skill/tests/unit/ → five levels up) instead of hardcoding.
 const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..");
 
-const { mockSpawn, fsState } = vi.hoisted(() => ({
+const { mockSpawn, mockPersistArtifactOutput, fsState } = vi.hoisted(() => ({
   mockSpawn: vi.fn(),
+  mockPersistArtifactOutput: vi.fn(),
   fsState: {
     // Suffixes (path endings) that should report as NON-existent for this test.
     nonExistent: new Set<string>(),
@@ -40,6 +41,14 @@ const { mockSpawn, fsState } = vi.hoisted(() => ({
 
 vi.mock("child_process", () => ({ spawn: mockSpawn }));
 vi.mock("node:child_process", () => ({ spawn: mockSpawn }));
+vi.mock("../../artifact-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../artifact-client.js")>();
+  mockPersistArtifactOutput.mockImplementation(
+    async (input: { metadata: unknown; output: string | Buffer }) =>
+      actual.expectedArtifactRef(input.metadata, input.output)
+  );
+  return { ...actual, persistArtifactOutput: mockPersistArtifactOutput };
+});
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
@@ -138,6 +147,23 @@ function createMockPi(): any {
   };
 }
 
+function outputArtifact(runId: string, phase: string, agent: string) {
+  return {
+    schema_version: 1,
+    run_id: runId,
+    phase,
+    branch_id: null,
+    kind: "agent-output",
+    operation_id: `${phase}-single-output-v1`,
+    version: 1,
+    producer: `agent:${agent}`,
+    consumer_scope: ["state:next"],
+    media_type: "text/plain; charset=utf-8",
+    parent_ref: null,
+    upstream_refs: [],
+  };
+}
+
 function buildPythonSpawner(actionPayloads: any[]) {
   let idx = 0;
   return (_cmd: string, args: string[]) => {
@@ -151,7 +177,26 @@ function buildPythonSpawner(actionPayloads: any[]) {
         }),
       };
     }
-    const payload = actionPayloads[idx++];
+    const rawPayload = actionPayloads[idx++];
+    const runIdIndex = args.indexOf("--run-id");
+    const runId = runIdIndex >= 0 ? args[runIdIndex + 1] : "run-test";
+    const payload = rawPayload ? structuredClone(rawPayload) : rawPayload;
+    if (payload) {
+      payload.run_id = runId;
+      if (payload.action === "invoke_agent") {
+        payload.output_artifact = outputArtifact(
+          runId,
+          payload.state_id || "unknown",
+          payload.agent
+        );
+        payload.input_artifacts = {
+          schema_version: 1,
+          run_id: runId,
+          consumer: `state:${payload.state_id || "unknown"}`,
+          artifacts: [],
+        };
+      }
+    }
     return {
       stdout: {
         on: vi.fn((event: string, cb: Function) => {

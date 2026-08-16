@@ -3,10 +3,10 @@
 A full OBSERVE->FRAME->PLAN->ACT<->VERIFY->LEARN run on the engine, registered
 ONLY so the engine/CLI/recovery/observability tests can drive an end-to-end run.
 
-It is NOT a base class and NOT a shape domain skills inherit: every domain skill
-subclasses ``BasePlaybook`` directly with its own states, PrimitiveSpecs and
-per-state summary contracts (see ``playbooks/code.py`` for the real pattern).
-This fixture is also the canonical example of the ``task_context_parts`` /
+It is NOT a base class and NOT a shape domain skills inherit: domain playbooks
+subclass ``BasePlaybook`` directly with their own states, PrimitiveSpecs, and
+per-state summary contracts. This fixture is also the canonical example of the
+``task_context_parts`` /
 ``result_payload`` hooks.
 """
 

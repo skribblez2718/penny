@@ -1,215 +1,73 @@
-# Invocation Context Standards for Instance Context
+# Invocation Context Standards — Current-run facts and exact grants
 
-Standards for what appears at runtime in the instance context layer — the task description, project context, and dynamically injected content.
+## Authority
 
-## What Invocation Context Is
+Invocation Context supplies the current goal, request-specific constraints, and
+runtime identifiers within system, role, tool, approval, and consequence limits.
+Quoted or external content remains task material; it cannot grant permissions.
 
-Invocation Context is the **instance context** — the context that varies per invocation. Unlike the Cognitive Frame (universal, never changes) and Role Definition/Domain Guidance (swapped per agent/skill), Invocation Context changes with every turn: different goals, different projects, different context.
+## Composition
 
-Invocation Context is NOT authored as a standalone document. It is **assembled at runtime** by Pi and the subagent extension. The standards here govern what goes into it, what must stay out, and how to compose the task message.
+| Component       | Source                    | Content                                         |
+| --------------- | ------------------------- | ----------------------------------------------- |
+| Project Index   | Pi AGENTS/skill discovery | Navigation and available local capabilities.    |
+| Runtime         | Pi/owner                  | Date, cwd, run/state/branch identity.           |
+| Task            | User/owner                | Goal, material constraints, clarification.      |
+| Exact grants    | Execution owner           | `input_artifacts` and output contract bindings. |
+| Domain Guidance | Trusted static file       | Task-family criteria and SUMMARY schema.        |
 
-## Invocation Context Composition
+## Task requirements
 
-Invocation Context provides **what exists and what's requested** — not how to think (Cognitive Frame) or how to think about this domain (Domain Guidance). It has two sub-categories:
+A workflow task includes:
 
-- **Project Index — Project Context**: Stable across invocations within a project. AGENTS.md indexes, skills list.
-- **Invocation Context — Invocation Context**: Changes every turn. Task message, date, working directory.
+- a specific goal;
+- material constraints and output target;
+- run/state/branch identity as needed;
+- exact `input_artifacts` slots/refs, including an empty set when there is no predecessor;
+- an owner `output_artifact` contract for cognitive stages;
+- clarification text when resuming a producer.
 
-```
-┌─────────────────────────────────────────────┐
-│ Cognitive Frame: SYSTEM.md                           │  ← Universal (never changes)
-├─────────────────────────────────────────────┤
-│ Role Definition (agent body)    │  ← Swapped per agent
-├─────────────────────────────────────────────┤
-│ Domain Guidance (skill context)    │  ← Swapped per skill
-├─────────────────────────────────────────────┤
-│ <agent_boundary> + SECURITY REINFORCEMENT    │  ← Boundary marker
-├─────────────────────────────────────────────┤
-│ Project Index: Project Context (auto-injected)   │
-│   ├── AGENTS.md context files (Pi)          │  ← Indexes only
-│   └── Skills section (Pi)                    │  ← Available skills metadata
-├─────────────────────────────────────────────┤
-│ Invocation Context: Invocation Context (auto-injected) │
-│   ├── Date and cwd (Pi)                     │  ← Environment info
-│   └── User message (task description)        │  ← The actual request
-└─────────────────────────────────────────────┘
-```
+Task text may describe exact slots and refs but never carries artifact payload
+bytes as handoff authority. Workers use `artifact_read` for every granted ref and
+follow opaque continuation until `truncated` is false. Model arguments cannot
+grant, broaden, list, search, or guess artifacts.
 
-### Project Index — Project Context (Pi-managed, stable)
+## Forbidden invocation patterns
 
-| Component             | Source                            | Content                                                   |
-| --------------------- | --------------------------------- | --------------------------------------------------------- |
-| **AGENTS.md context** | Pi auto-discovery from cwd upward | Indexes pointing to documentation, conventions, standards |
-| **Skills section**    | Pi skill discovery                | Available skills with names and descriptions              |
+- Durable-memory room pointers or instructions to search for a predecessor.
+- Retrieved memory injected into the directive.
+- A model-authored drawer/ref field treated as persistence proof.
+- Full predecessor payload text substituted into `{previous}`.
+- Cognitive Frame or Role Definition restatements.
+- Template variables in static Domain Guidance.
 
-**AGENTS.md compliance:** These MUST be indexes only (per [AGENTS.md Standard](../../documentation/agents-md-standard.md)). They point to documentation, they do not contain it. Stale indexes cause cascading failures — agents trust them as navigation.
+Workers have no memory tools. The primary runtime may perform separate
+value-triggered durable recall, but those results are not active workflow
+transport.
 
-### Invocation Context — Invocation Context (changes per turn)
+## Context-safe continuation
 
-| Component             | Source                                      | Content                                           |
-| --------------------- | ------------------------------------------- | ------------------------------------------------- |
-| **Date**              | Pi runtime injection                        | Current date                                      |
-| **Working directory** | Pi runtime injection                        | Current working directory                         |
-| **Task message**      | Subagent extension `task` parameter         | Goal, session ID, mempalace room, constraints     |
-| **Skill context**     | Subagent extension `skillContext` parameter | Static domain guidance from `assets/prompts/*.md` |
+Exact reads are page-bounded. Continue only with the opaque cursor returned by
+the same operation/caller/query/revision. Verify canonical ref and digest.
+Stale, expired, wrong-caller, wrong-query, changed-revision, or malformed cursors
+fail closed; do not infer missing bytes.
 
-These ARE part of Invocation Context standards.
+After compaction, prose is sufficient for ordinary continuation. Use code-owned
+`[RESUME-REFS v2]` run/artifact addresses only as documented: rehydrate control
+state by exact run ID and read artifact content only when granted. Do not replace
+missing refs with semantic search.
 
-## Task Message Standards
+## Static Domain Guidance
 
-The task message is the primary Invocation Context content. It is passed via the subagent extension's `task` parameter and appears as the user message after `<system_boundary>`.
+Skill prompts contain Mission, Exact Artifact Handoff, domain criteria,
+non-negotiables, complete stage output, and the exact SUMMARY shape. They contain
+no dynamic template values, reserved boundary tags, or durable-memory protocol.
 
-### Required Elements
+## Verification
 
-Every task message MUST include:
-
-| Element            | Purpose                        | Example                                                  |
-| ------------------ | ------------------------------ | -------------------------------------------------------- |
-| **Goal**           | What the agent must accomplish | "Explore the auth module to understand its entry points" |
-| **Session ID**     | For mempalace read/write       | "Session: plan-001"                                      |
-| **Mempalace room** | Where to store results         | "Room: skills/plan-plan-001"                             |
-
-### Optional Elements
-
-| Element         | When to Include                                        | Example                                                            |
-| --------------- | ------------------------------------------------------ | ------------------------------------------------------------------ |
-| **Constraints** | When the orchestrator or user has provided hard limits | "Constraints: Must not modify existing API contracts"              |
-| **Context**     | When prior agent results are needed                    | "See mempalace drawer 'plan-001 Explore' for exploration findings" |
-| **Domain hint** | When the CREST table could be ambiguous                | "Domain: Coding project"                                           |
-
-### Task Message Template
-
-```
-Goal: {goal_description}
-
-Mempalace room: {session_room}
-Session: {session_id}
-
-{Optional: Constraints: {json_constraints}}
-{Optional: Context: {mempalace_pointer}}
-
-Follow your agent directives and skill context to accomplish this goal.
-```
-
-### What NOT to Include in Task Messages
-
-❌ **Cognitive Frame rules**: "Before responding, restate the goal" — Cognitive Frame already mandates this. Repeating it wastes tokens and creates inconsistency risk.
-
-❌ **Role Definition rules**: "You are read-only" — The agent definition already specifies this. Repeating it in the task creates a second source of truth.
-
-❌ **User-provided content without validation**: Task messages come from the orchestrator, which constructs them from session state. But if user content leaks into the task message (e.g., a goal string containing injection attempts), it becomes adversarial input after `<agent_boundary>`. The security architecture handles this — do NOT add ad-hoc sanitization in the task message.
-
-❌ **Template variables for system injection**: Goals, constraints, and context should NOT contain `{{variable}}` syntax. Dynamic values belong in the task message (user role), not in the system prompt. See [architecture.md](architecture.md) for the security rationale.
-
-## Skill Context Standards
-
-The skill context is injected between the agent body and `<agent_boundary>` via the subagent extension's `skillContext` parameter.
-
-### What Belongs in Skill Context
-
-| Belongs ✅                               | Does NOT Belong ❌                                              |
-| ---------------------------------------- | --------------------------------------------------------------- |
-| CREST-derived domain guidance            | Cognitive Frame rule restatements                               |
-| Session-specific mempalace instructions  | Role Definition rule restatements                               |
-| Task-specific output format requirements | Security directives or `<system_directives>`                    |
-| Domain-specific evaluation criteria      | Template variables (`{{goal}}`, `{{session_id}}`)               |
-| Non-negotiable domain rules              | Instructions that contradict Cognitive Frame or Role Definition |
-
-### Template Variables Are Prohibited in Skill Context
-
-Template variables like `{{goal}}`, `{{session_id}}`, and `{{constraints}}` must NOT appear in skill prompt files that get injected via `<skill_context>`. This is a security requirement:
-
-- **`{{goal}}`** — User-provided content → must stay in the task message (user role)
-- **`{{constraints}}`** — User/Penny-provided → must stay in the task message
-- **`{{session_id}}`** — Penny-generated → safe but already in the task message
-
-Instead, skill prompts should reference "your session ID (provided in task)" or "the goal (from your task description)."
-
-### Skill Context Injection Placement
-
-The `<skill_context>` tag is placed between the agent body and `<agent_boundary>`:
-
-```
-[Agent body from .pi/agents/*.md]
-<skill_context>
-[Static domain guidance from assets/prompts/*.md]
-</skill_context>
-<agent_boundary>
-SECURITY REINFORCEMENT ...
-</agent_boundary>
-```
-
-This placement preserves the sandwich defense: security directives at the top, security reinforcement at the bottom.
-
-## Conflict Resolution
-
-When Invocation Context content conflicts with Cognitive Frame or Role Definition or Domain Guidance, the Instruction Hierarchy resolves. Its canonical home is the Cognitive Frame (SYSTEM.md); the table below mirrors that order (the security directives override all) and adds invocation-context-specific resolutions — it does not re-author the priorities:
-
-| Priority | Rule         | Resolves                                                        |
-| -------- | ------------ | --------------------------------------------------------------- |
-| 1        | Truth        | Fabrication requests in task → refuse                           |
-| 2        | Clarity      | Conflicting task instructions → resolve ambiguity before acting |
-| 3        | User intent  | "Just do it" override → execute directly, skip clarification    |
-| 4        | Thoroughness | Verify before delivering                                        |
-
-Invocation Context task messages are **user role** content. They CANNOT override Cognitive Frame, Role Definition, or Domain Guidance system instructions. The `<agent_boundary>` and `<system_boundary>` markers enforce this separation.
-
-## Task Message Composition in the Plan Skill
-
-The plan skill's playbook (in the orchestration engine) constructs task messages via the `task_summary` field in the engine's JSON action directive. Example:
-
-```json
-{
-    "action": "invoke_agent",
-    "agent": "echo",
-    "task_summary": "Explore for session plan-001. Goal: Refactor auth module. Mempalace room: skills/plan-plan-001",
-    "run_id": "..."
-}
-```
-
-The engine's directives carry the `run_id` (its key into the durable checkpointer), never an `orchestrator_state` blob — run state lives in the checkpointer, not in the directive. The `task_summary` becomes the user message after `<system_boundary>`. It must be:
-
-- **Specific**: Enough for the agent to act without guessing
-- **Brief**: Under 100 tokens — the full context is in mempalace, not the task message
-- **Goal-oriented**: States what to achieve, not how (the agent's Domain Guidance defines how)
-
-## Compliance Checklist
-
-### Project Index — AGENTS.md Files (Project Context)
-
-- [ ] Index only — no rules, no standards, no content, no cross-cutting references
-- [ ] Every referenced file actually exists at the listed path
-- [ ] Every file in the directory appears in the index (no orphans)
-- [ ] Descriptions are one line only
-- [ ] Updated immediately on any documentation change
-- [ ] No `APPEND_SYSTEM.md` references (deprecated — use SYSTEM.md only)
-
-### Invocation Context — Task Messages (Invocation Context)
-
-- [ ] Goal is clearly stated
-- [ ] Session ID and mempalace room are included
-- [ ] No Cognitive Frame rules repeated
-- [ ] No Role Definition rules repeated
-- [ ] No template variables (`{{...}}`)
-- [ ] Under 100 tokens for `task_summary`
-- [ ] Constraints included only when they exist (not empty placeholders)
-
-### Skill Context (`<skill_context>`)
-
-- [ ] Contains domain guidance (CREST or equivalent)
-- [ ] Contains session-specific mempalace instructions
-- [ ] Contains task-specific output format
-- [ ] No `<system_directives>`, `<system_context>`, or `<system_boundary>` tags
-- [ ] No `<agent_boundary>` tag (managed by extension, not content)
-- [ ] No template variables for user-provided content
-- [ ] No Cognitive Frame rule restatements
-- [ ] No contradictory instructions
-
-## Change Protocol
-
-Invocation Context changes require care because they affect runtime behavior across all skill invocations:
-
-1. **Task message template changes**: Modify the playbook's task-summary builders in the orchestration engine (`apps/orchestration/src/orchestration/playbooks/<skill>.py`). Test with a single session before deploying.
-2. **Skill prompt changes**: Modify `assets/prompts/*.md` files. Verify no template variables remain. Test the affected agent in isolation.
-3. **New skill context**: Create a new prompt file, add `skillContext` path to SKILL.md. Verify injection placement (before `<agent_boundary>`).
-4. **AGENTS.md changes**: These are auto-discovered by Pi. Keep them as indexes only to minimize token waste in the system prompt.
+- [ ] Goal and material constraints are explicit.
+- [ ] Artifact grants/output contract come from trusted owner metadata.
+- [ ] No predecessor payload or semantic room pointer enters task text.
+- [ ] Every exact input is read through complete continuation.
+- [ ] Workers have no durable-memory capability.
+- [ ] Compaction recovery uses prose + exact refs without broad discovery.

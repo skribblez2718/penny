@@ -29,7 +29,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+EVALS_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = EVALS_DIR.parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(EVALS_DIR))
 
 import eval_lib  # noqa: E402 — path insert above is required first
 from eval_lib import (  # noqa: E402

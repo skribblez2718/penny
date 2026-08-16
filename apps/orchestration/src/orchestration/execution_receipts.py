@@ -1,26 +1,23 @@
-"""Trusted execution receipts, deterministic redaction, and review dispositions.
+"""Trusted execution receipts and deterministic redaction.
 
 Receipts are signed by the TypeScript execution owner with a per-process HMAC key
 that is passed only to orchestration subprocesses. Agent subprocesses receive no
 signing capability. Python validates signatures, same-run/obligation binding,
-command identity, timestamps, successful status, redacted output integrity, and
-artifact digest before command-verifiable coverage can cite a receipt.
+command identity, timestamps, successful status, and redacted output integrity.
 """
 
 from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import re
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
-from .code_artifacts import canonical_json, sha256_json
-
 RECEIPT_SCHEMA_VERSION = 1
-DISPOSITION_SCHEMA_VERSION = 1
 RECEIPT_HMAC_ENV = "PENNY_RECEIPT_HMAC_KEY"
 
 _RECEIPT_KEYS = frozenset(
@@ -46,25 +43,6 @@ _RECEIPT_KEYS = frozenset(
         "signature",
     }
 )
-_DISPOSITION_KEYS = frozenset(
-    {
-        "schema_version",
-        "run_id",
-        "obligation_id",
-        "finding_id",
-        "evidence_refs",
-        "rationale",
-        "final_disposition",
-        "reviewer_identity",
-        "reviewer_model",
-        "evidence_author_identity",
-        "evidence_author_model",
-        "execution_actor_identity",
-        "execution_actor_model",
-        "timestamp",
-        "redaction_state",
-    }
-)
 _SECRET_NAME = re.compile(
     r"(?i)(?:secret|token|password|passwd|api[_-]?key|credential|private[_-]?key)"
 )
@@ -75,6 +53,22 @@ _FLAG_SECRET = re.compile(
     r"(?i)(--(?:secret|token|password|passwd|api-key|credential|private-key))(?:=|\s+)([^\s]+)"
 )
 _BEARER_SECRET = re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+")
+
+
+def canonical_json(value: Any) -> bytes:
+    """Encode JSON deterministically for receipt signatures and digests."""
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def sha256_json(value: Any) -> str:
+    """Return a SHA-256 digest of canonical JSON."""
+    return hashlib.sha256(canonical_json(value)).hexdigest()
 
 
 def _contains_unredacted_secret(text: str) -> bool:
@@ -222,9 +216,6 @@ def validate_execution_receipt(  # noqa: C901 - cryptographic receipt validation
         return False, "execution receipt is bound to a different run"
     if value.get("obligation_id") != obligation_id:
         return False, "execution receipt is bound to a different obligation"
-    if str(obligation_id).startswith(("criterion:", "quality:", "finding:", "verification:")):
-        if value.get("state_id") != "verifying":
-            return False, "completion evidence was not captured by the final verifying state"
     if value.get("executor_identity") == value.get("execution_owner_identity"):
         return False, "execution owner must be distinct from the command executor"
     argv = value.get("argv")
@@ -272,45 +263,6 @@ def validate_execution_receipt(  # noqa: C901 - cryptographic receipt validation
     expected = sign_receipt(value, verification_key)
     if not hmac.compare_digest(str(value.get("signature", "")), expected):
         return False, "execution receipt signature is invalid or tampered"
-    return True, ""
-
-
-def validate_independent_disposition(  # noqa: C901 - independence validation
-    value: Any, *, run_id: str, obligation_id: str
-) -> tuple[bool, str]:
-    """Validate a durable judgment-only disposition and actor/model independence."""
-    if not isinstance(value, dict) or frozenset(value) != _DISPOSITION_KEYS:
-        return False, "independent-review disposition has missing or stale fields"
-    if value.get("schema_version") != DISPOSITION_SCHEMA_VERSION:
-        return False, "unsupported independent-review disposition schema version"
-    if value.get("run_id") != run_id or value.get("obligation_id") != obligation_id:
-        return False, "independent-review disposition is bound to the wrong run or obligation"
-    if not isinstance(value.get("evidence_refs"), list) or not value["evidence_refs"]:
-        return False, "independent-review disposition has no evidence references"
-    if not isinstance(value.get("rationale"), str) or not value["rationale"].strip():
-        return False, "independent-review disposition has no rationale"
-    if value.get("final_disposition") not in {"satisfied", "remediated", "not_applicable"}:
-        return False, "independent-review final disposition is not eligible"
-    identities = [
-        value.get("reviewer_identity"),
-        value.get("evidence_author_identity"),
-        value.get("execution_actor_identity"),
-    ]
-    models = [
-        value.get("reviewer_model"),
-        value.get("evidence_author_model"),
-        value.get("execution_actor_model"),
-    ]
-    if any(not isinstance(item, str) or not item for item in identities + models):
-        return False, "independent-review actor/model identities must be non-empty"
-    if identities[0] in identities[1:]:
-        return False, "reviewer is the evidence author or execution actor"
-    if models[0] in models[1:]:
-        return False, "reviewer model is not independent of the author/execution actor"
-    if _parse_utc(value.get("timestamp")) is None:
-        return False, "independent-review timestamp is invalid"
-    if value.get("redaction_state") != "redacted":
-        return False, "independent-review disposition is not safely redacted"
     return True, ""
 
 

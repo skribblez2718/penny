@@ -1,108 +1,49 @@
 # Prompt Architecture Overview
 
-## The Journey: Why We Built a Prompt Architecture
+Penny separates stable policy, worker roles, domain guidance, project navigation,
+and the current task so each concern has one owner.
 
-Penny started as a single `APPEND_SYSTEM.md` file appended to Pi's default coding-assistant prompt. That file grew organically — new rules were added, old rules were never removed, and there was no structure separating universal reasoning from domain-specific guidance. Every interaction burned ~900 tokens just on system instructions, and agents (sub-models) received duplicated, sometimes contradictory directives.
+| Layer              | Purpose                                           | Source              |
+| ------------------ | ------------------------------------------------- | ------------------- |
+| Cognitive Frame    | Stable operating policy and outcome contract      | `.pi/SYSTEM.md`     |
+| Role Definition    | Project-local worker identity and constraints     | `.pi/agents/*.md`   |
+| Domain Guidance    | Static task-family criteria and output contract   | Skill prompts       |
+| Project Index      | Navigation                                        | `AGENTS.md` indexes |
+| Invocation Context | Current goal, constraints, and exact owner grants | Runtime task        |
 
-In April 2026, during an [AI gap analysis](../../../plans/ai-gaps-resolution/01-classification.md), we identified six fundamental limitations of LLM-based assistants:
+## Local catalog and remote services
 
-1. **Knowledge vs. Judgment** — LLMs can recall facts but can't exercise judgment in novel situations
-2. **No stake in outcomes** — No mechanism to learn from past successes or failures
-3. **Cannot initiate** — No proactive awareness or initiative
-4. **Uncalibrated confidence** — No reliable self-assessment of certainty
-5. **Context collapse across time** — Each session starts fresh; no persistent learning
-6. **Cannot be held accountable** — No structured record of decisions and outcomes
+`.pi/agents` is the local worker catalog. It does not advertise remote service
+availability; that belongs to the harness/service registry.
 
-The prompt architecture was designed as part of a broader response to these gaps. It addresses gaps #1 (judgment through structured reasoning protocols), #4 (confidence through mandatory calibration), and #5 (context preservation through layered separation and mempalace offloading).
+## Context preservation
 
-## The Goal, Reframed: Floor versus Points
+Workflows no longer use durable memory as a relay. The execution owner grants
+exact immutable predecessor refs, workers read them with `artifact_read`, and the
+owner captures each complete response before consuming a small routing SUMMARY.
+Large reads use typed continuation, and checkpoints keep refs rather than payload
+bytes.
 
-The original ambition — one universal prompt that raises benchmark performance single-to-double percentage points on any model — is not what the 2024–2026 evidence supports. Prompts are model-specific artifacts: the best format for one family barely overlaps the best format for another, optimized prompts lose ~6–11 absolute points when ported across models, and the generic techniques with big historical effect sizes either apply narrowly (chain-of-thought: math/symbolic only) or failed replication on frontier models entirely (personas-for-accuracy, emotional appeals). See the [Evidence Base](evidence.md) for the numbers and citations.
+Workers and skill drivers have no memory tools. The unmarked primary runtime
+still owns value-triggered durable recall, curated writes, a primary diary, and
+governed temporal KG access.
 
-So the architecture's claim is now narrower:
+## Recovery
 
-**The universal layer raises the floor and cuts variance.** The Cognitive Frame carries the cross-model survivors — completeness, explicitness, non-contradiction, front-loaded critical rules, structural hygiene, and task-specification discipline. Its job is preventing losses (fabrication, silently-guessed ambiguity, skipped verification), not adding benchmark points.
+Retry, clarification, restart, and partial fan recovery reuse checkpointed exact
+refs. Compaction keeps a prose resumption brief plus optional code-owned
+`[RESUME-REFS v2]` addresses. Memory availability is not required to continue an
+active workflow.
 
-## What the Prompt Architecture Is
+## Boundaries
 
-The prompt architecture is a **layered system for composing model instructions**. It separates universal reasoning rules from role-specific constraints, domain-specific guidance, project navigation, and turn-specific goals. Each layer has a single responsibility, a defined author, and a specific injection mechanism.
+Prompt markers clarify structure but do not enforce permissions. Tool allowlists,
+owner artifact grants, approval receipts, and OS/container permissions are the
+control plane.
 
-The architecture is governed by two sets of documents:
+## Related documents
 
-- **Agent-facing standards** (`docs/agents/prompts/`) — Operational HOW-TO guidance for Penny and subagents. These define what goes in each layer, token budgets, and compliance checklists.
-- **Human-facing docs** (`docs/humans/prompts/`) — The WHAT-IS and WHY. These documents you're reading now.
-
-## The Five Layers
-
-| Layer | Function | Source | Changes |
-|-------|----------|--------|---------|
-| **Cognitive Frame** | How to think (universal reasoning protocol) | `.pi/SYSTEM.md` | Rarely |
-| **Role Definition** | Who I am (agent identity and constraints) | `.pi/agents/*.md` | Per agent |
-| **Domain Guidance** | How to think about THIS domain | `.pi/skills/*/assets/prompts/*.md` | Per skill |
-| **Project Index** | Where things are (file references) | `AGENTS.md` files (auto-discovered) | Per project |
-| **Invocation Context** | What to do now (the specific goal) | Task message + Pi runtime | Every turn |
-
-Only three layers are active in direct conversation. All five are active during skill invocations. This means Penny operates with a lean prompt in the common case and gets full domain guidance only when running complex multi-agent workflows.
-
-## Key Innovations
-
-### 1. Named Layers, Not Numbered Layers
-
-Earlier versions numbered layers (L1, L2a, L2b, etc.), conflating scope with injection order. Named layers describe **what each layer does** — Cognitive Frame tells you _how to think_, Domain Guidance tells you _how to think about this domain_. The names are the function.
-
-### 2. Process-Shaped, Not Output-Shaped
-
-Every rule in the Cognitive Frame is a thinking step, not a desired output quality. Instead of "be accurate" (output-shaped), we write "never fabricate facts, sources, or results" (process-shaped). Output-shaped prompts let the model fill the process gap with probability. Process-shaped prompts constrain the path, not just the destination.
-
-This principle applies to all **cognitive layers** (Cognitive Frame, Role Definition, Domain Guidance). The Invocation Context — the goal/task message — is inherently output-shaped by design: it defines *what to achieve*, not *how to think*. The overall system is a **process-shaped wrapper around an output-shaped goal**: the goal (output-shaped) enters the FSM (process-shaped iteration loop), which dispatches agents with process-shaped directives, producing output structured by the frame's Deliver rule (also process-shaped — it defines *how to structure*, not *what quality to aim for*). The destination is output-shaped; the path is process-shaped. One boundary: process-shaped means *single executable directives*, never mandated multi-step scripts — always-on procedure is the prompt content that ages worst as models improve. See [Design Principles §1](design-principles.md#1-process-shaped-not-output-shaped) and [§11](design-principles.md#11-goals-constraints-capabilities--never-procedure-the-bitter-lesson-rule).
-
-### 3. Domain-Agnostic Agents
-
-Agents (Echo, Piper, Carren, Tabitha) are generic reasoning roles — explorer, planner, critic, task-decomposer. They're not tied to any domain. A skill's `assets/prompts/*.md` files inject domain-specific guidance (CREST tables, checklists, output formats) via the `<skill_context>` mechanism. The same Carren agent critiques vacation plans, code architectures, and research papers — it just gets different Domain Guidance each time.
-
-### 4. Context Window Preservation
-
-Agents serve a dual purpose. Beyond domain expertise, they preserve Penny's context window. When Penny delegates to a subagent, the subagent's full reasoning is offloaded — it writes complete output to mempalace but returns only a minimal structured SUMMARY (~50 tokens) to Penny. This is why Penny doesn't create agent variants per domain. The existing pool is sufficient because specificity comes from Domain Guidance, not from duplicating agent definitions.
-
-### 5. The Sandwich Defense
-
-XML boundary markers create a security architecture that prevents prompt injection:
-- `<system_directives>` at the top (immutable security rules, authored)
-- `<agent_boundary>` between system-role content and user-role content
-- `<system_boundary>` at the absolute end (appended by the environment extension)
-
-Content between `<agent_boundary>` and `<system_boundary>` is user-role — it cannot override system instructions. The `skillContext` injection respects this by inserting before `<agent_boundary>`, keeping skill prompts as system-role content.
-
-## The Token Budget Constraint
-
-The Cognitive Frame is injected into every Penny turn and every subagent, so it is the most-multiplied text in the system — we keep it the leanest and cap it as a forcing-function. Our budgets:
-
-| Layer | Budget | Rationale |
-|-------|--------|-----------|
-| Cognitive Frame | ≤1,500 tokens | Always-on + multiplied across every subagent — CI-enforced |
-| Role Definition | ≤1,200 tokens | Role-specific rules must be lean |
-| Domain Guidance | ≤1,000 tokens | Domain guidance, not repetition |
-| Total system prompt | ≤3,000 tokens | ~1.5% of a 200K window for instructions |
-
-All counts are measured with **tiktoken** (`cl100k_base`) — the one canonical token counter — never a word-count heuristic. The 1,500-token cap is a forcing-function, not a model limit: there is no hard adherence cliff at a small token count. It keeps the always-on frame lean by pushing conditionally-needed content into `docs/penny/` for on-demand `read` (the extraction pattern). The current count is reported by `check_token_budget.py` (CI-gated against the 1,500 cap); the number is not duplicated here because it changes with every frame edit.
-
-## What This Architecture Replaced
-
-Before the architecture existed:
-
-- One monolithic `APPEND_SYSTEM.md` appended to Pi's default coding prompt
-- No separation between universal rules and domain-specific guidance
-- "Delegate immediately" was ambiguous — Penny would read 15+ files before delegating
-- Agents had no structured identity — they were ad-hoc prompts with no standards
-- Skill prompts contained template variables (`{{goal}}`) in system-role content (security risk)
-- No token budgets — SYSTEM.md grew without constraint
-
-The migration to `.pi/SYSTEM.md` (replacing Pi's default prompt entirely) and the introduction of layered standards happened across multiple sessions between April 10-17, 2026.
-
-## Related Documents
-
-- [Evidence Base](evidence.md) — What the literature supports, what it debunks, and which principles are hypotheses
-- [Layer Architecture](layer-architecture.md) — Deep dive on each layer
-- [Assembly Pipeline](assembly-pipeline.md) — How prompts are assembled at runtime
-- [Design Principles](design-principles.md) — Core design principles with rationale
-- [Security Architecture](security-architecture.md) — Boundary markers and injection defense
+- [Layer Architecture](layer-architecture.md)
+- [Assembly Pipeline](assembly-pipeline.md)
+- [Design Principles](design-principles.md)
+- [Security Architecture](security-architecture.md)

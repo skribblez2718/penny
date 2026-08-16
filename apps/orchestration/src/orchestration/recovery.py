@@ -12,10 +12,11 @@ from __future__ import annotations
 from typing import Any
 
 from .checkpointer import STATUS_AWAITING_USER, STATUS_ERROR, Checkpointer
+from .contracts import Directives, artifact_dispatch_control
 from .playbooks import get_playbook
 
 
-def recover_pending(  # noqa: C901 - legacy/P0 recovery compatibility
+def recover_pending(  # noqa: C901 - recovery compatibility branches
     checkpointer: Checkpointer,
     obs: Any = None,
     session_id: str | None = None,
@@ -40,15 +41,13 @@ def recover_pending(  # noqa: C901 - legacy/P0 recovery compatibility
     unchanged, so genuinely-abandoned error runs are never auto-retried.
     """
     directives: list[dict] = []
+    dispatch_control = artifact_dispatch_control()
     for rec in checkpointer.list_pending(session_id, include_errored=include_errored):
         if playbook is not None and rec.playbook != playbook:
             continue
         pb_cls = get_playbook(rec.playbook)
         if pb_cls is None:
             continue
-        pb = pb_cls(checkpointer, obs)
-        pb.ctx = rec.context
-        pb.sm = pb.machine_cls()
         # For an errored run, the failed phase — not the terminal "error" state —
         # is the resume point. Skip error runs with no recoverable phase.
         resume_state = rec.current_state_id
@@ -56,19 +55,44 @@ def recover_pending(  # noqa: C901 - legacy/P0 recovery compatibility
             resume_state = str((rec.context.extras or {}).get("failed_state") or "")
             if not resume_state:
                 continue
+        if not dispatch_control.dispatch_allowed:
+            # Do not instantiate/prepare the playbook, migrate its context, execute
+            # a tool state, build artifact metadata, or save a checkpoint while the
+            # owner boundary is paused. The persisted pending state is the recovery
+            # authority and will be rebuilt after a fresh active process starts.
+            directives.append(
+                Directives.paused(
+                    state_id=resume_state,
+                    run_status=rec.status,
+                    session_id=rec.session_id,
+                    run_id=rec.run_id,
+                    control=dispatch_control,
+                )
+            )
+            continue
+        pb = pb_cls(checkpointer, obs)
+        pb.ctx = rec.context
+        pb.sm = pb.machine_cls()
         try:
             pb.sm.current_state_value = resume_state
         except Exception:
             continue
         try:
             migrated = pb.prepare_recovery(pb.ctx)
-        except Exception:
+        except Exception as exc:
+            directives.append(
+                Directives.error(
+                    errors=[f"recovery checkpoint validation failed: {exc}"],
+                    session_id=rec.session_id,
+                    run_id=rec.run_id,
+                )
+            )
             continue
         if migrated:
             checkpointer.save(
-                run_id=pb.ctx.run_id,
-                session_id=pb.ctx.session_id,
-                playbook=pb.NAME,
+                run_id=rec.run_id,
+                session_id=rec.session_id,
+                playbook=rec.playbook,
                 current_state_id=rec.current_state_id,
                 context=pb.ctx,
                 status=rec.status,

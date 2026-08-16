@@ -15,6 +15,11 @@ deleted per the Bitter-Lesson gate and must not be reintroduced (rationale in th
 `ResearchPlaybook` module docstring). Only an explicit caller `quick` skips
 planning.
 
+Every cognitive directive carries exact `input_artifacts`; agents read each with
+`artifact_read` and return complete stage content for execution-owner capture.
+SUMMARY objects contain routing data only. Selected refs, not payloads, survive in
+the checkpoint and drive retry, clarification, restart, fan-in, and terminal output.
+
 > **Drift guard.** The State and Transition tables below are enforced against
 > `ResearchMachine` by `apps/orchestration/tests/test_reference_drift.py`, and
 > `resources/flow.html` by `test_flow_diagrams.py` — a state or edge added,
@@ -78,11 +83,11 @@ on a bare assertion).
 |-------|-----------|----------|------------------|----------------|
 | `planning` | `RESEARCH_PLAN` | `plan_steps`, `plan_complete` | `mode` (model-declared rigor preset) | no |
 | `critiquing_plan` | `RESEARCH_CRITIQUE_PLAN` | `verdict`, `issues`, `evidence` | — | **yes** |
-| `researching` | `RESEARCH_EXPLORE` (fan branches: `RESEARCH_EXPLORE_SQ<n>` / `RESEARCH_EVIDENCE_SQ<n>`) | `explore_complete` | `findings_count`, `sources_count` | no |
-| `synthesizing` | `RESEARCH_SYNTHESIZE` | `synthesis_complete` | `theme_count`, `source_count` | no |
+| `researching` | `RESEARCH_EXPLORE` (fan branches: `RESEARCH_EXPLORE_SQ<n>` / `RESEARCH_EVIDENCE_SQ<n>`) | `explore_complete` | — | no |
+| `synthesizing` | `RESEARCH_SYNTHESIZE` | `synthesis_complete` | — | no |
 | `critiquing_report` | `RESEARCH_CRITIQUE_REPORT` | `verdict`, `issues`, `evidence` | — | **yes** |
 | `validating` | `RESEARCH_VALIDATE` | `verdict`, `unsupported_claims`, `evidence` | **`evidence_needed`** — researchable questions that drive the evidence-seeking loop | **yes** |
-| `report_writing` | `RESEARCH_REPORT` | `write_complete`, `files_written` | `word_count` | no |
+| `report_writing` | `RESEARCH_REPORT` | `write_complete` | — | no |
 
 `confidence` is optional everywhere; an `UNCERTAIN` confidence on an escalatable
 state routes to the HITL seam. Every prompt in `assets/prompts/` carries its own
@@ -169,8 +174,8 @@ never better grounded. Bounded by BOTH `max_research_rounds` and
 `ctx.max_iterations`; when either is spent the run falls back to `validate_revise`
 and ultimately to honest exhaustion.
 
-Branch numbering CONTINUES across rounds (round two writes `-echo-4`, `-echo-5`, …)
-so new findings join one flat drawer namespace instead of overwriting round one's.
+Branch numbering CONTINUES across rounds (`sq4`, `sq5`, …), so each new finding set
+has a distinct artifact identity instead of superseding an earlier branch.
 
 **The verifier names what is missing; it does not supply it.** vera diagnoses the
 gap, echo (read-only, full search toolset) fills it, synthia integrates it, vera
@@ -260,17 +265,25 @@ model spend and zero false positives. The **60% judgement residual** is the only
 slice a second model could affect — cross-model does not become the default until
 it is measured on that slice.
 
-## MemPalace
+## Exact artifact handoff
 
-**Room:** `skills/research-{session_id}`
+The execution owner persists exact finalized response bytes before SUMMARY routing.
+The checkpoint keeps strict selected refs and per-state input refs; payload bytes stay
+in the artifact store. Research selects the predecessor set each consumer needs:
 
-| Drawer | Written By | Content |
-|--------|-----------|---------|
-| `{sid} Planner` | piper | Sub-queries, scope, rationale |
-| `{sid}-echo-{n} Research Findings` | echo | Findings for branch N — numbering continues across evidence-seeking rounds, so nothing is overwritten |
-| `{sid} Synthesis` | synthia | Synthesized report |
-| `{sid} Critique` | carren | Plan / report critique verdicts |
-| `{sid} Report Files` | skribble | Written report files |
+| Consumer | Exact task-provided predecessors |
+|---|---|
+| planning revision | latest plan and plan critique |
+| researching | latest plan/plan critique, or synthesis/validation for evidence seeking |
+| synthesizing | every selected research branch plus relevant synthesis, critique, and validation revisions |
+| report critique | current synthesis and research evidence |
+| validating | current synthesis, every research branch, and report critique when present |
+| report writing | current synthesis, research evidence, critique when present, and validation |
+
+Each prompt requires `artifact_read` for every supplied ref and prohibits model claims
+of artifact persistence or registration. A malformed SUMMARY creates a versioned
+revision; parallel refs are keyed by `branch_id`; recovery reloads the same selected
+refs. No memory endpoint or memory extension is needed for any path.
 
 ## Output
 
@@ -288,7 +301,8 @@ The result payload reports:
 | `met` | **DELIVERY** — the report was written (`done_predicate`) |
 | `grounded` | **VERIFICATION** — vera's citation gate passed |
 | `mode`, `sub_queries`, `research_rounds`, `critique_passes`, `rigor_escalated` | what the run actually spent |
-| `report_dir`, `report_files`, `room`, `iterations` | where the output and working state live |
+| `output_artifact_ref` | exact selected `report_writing` owner artifact; the registered product artifact |
+| `report_dir`, `report_files`, `iterations` | user-facing file products and revision count |
 | `warnings`, `unresolved_issues`, the three `*_exhausted` flags | the honest record |
 
 `met` and `grounded` answer different questions: a validation-exhausted run is

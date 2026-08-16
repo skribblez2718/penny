@@ -93,7 +93,7 @@ def test_playbook_scoping_prevents_cross_skill_resume(cp):
         status=STATUS_RUNNING,
     )
     # recover scoped to a different skill -> nothing (correct isolation)
-    assert recover_pending(cp, session_id="shared", playbook="code") == []
+    assert recover_pending(cp, session_id="shared", playbook="research") == []
     # recover scoped to reference-cycle -> the run
     d = recover_pending(cp, session_id="shared", playbook="reference-cycle")
     assert len(d) == 1 and d[0]["state_id"] == "observing" and d[0]["agent"] == "echo"

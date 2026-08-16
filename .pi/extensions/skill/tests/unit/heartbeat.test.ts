@@ -24,7 +24,7 @@ vi.mock("@mariozechner/pi-tui", () => ({
 }));
 
 import { ProgressEmitter } from "../../../subagent/agent-runner.js";
-import { withAgentTimeout, createTimeoutResult } from "../../index.js";
+import { withAgentTimeout, createAbortedResult, createTimeoutResult } from "../../index.js";
 
 describe("ProgressEmitter", () => {
   it("emits tool_result event when markProgress is called", () => {
@@ -259,12 +259,11 @@ describe("withAgentTimeout", () => {
     expect(result).toBe("fallback-test-agent");
   });
 
-  it("cleans up listeners and interval when signal is aborted", async () => {
+  it("resolves promptly and cleans up listeners when signal is aborted", async () => {
     const emitter = new ProgressEmitter();
     const abortController = new AbortController();
-    let resolveAgent: ((value: string) => void) | undefined;
-    const agentPromise = new Promise<string>((resolve) => {
-      resolveAgent = resolve;
+    const agentPromise = new Promise<ReturnType<typeof createAbortedResult>>(() => {
+      // Intentionally never resolves: abort must release the caller itself.
     });
 
     const timeoutPromise = withAgentTimeout(
@@ -278,13 +277,38 @@ describe("withAgentTimeout", () => {
 
     abortController.abort();
 
-    // Simulate agent finishing after abort
-    vi.advanceTimersByTime(100);
-    resolveAgent!("done");
-
     const result = await timeoutPromise;
-    expect(result).toBe("done");
+    expect(result.stopReason).toBe("aborted");
+    expect(result.exitCode).toBe(1);
     expect(emitter.listenerCount("progress")).toBe(0);
+  });
+
+  it("passes an AbortError to a typed fallback factory", async () => {
+    const emitter = new ProgressEmitter();
+    const abortController = new AbortController();
+    const fallback = vi.fn((_name: string, err?: unknown) => (err as Error).name);
+    const timeoutPromise = withAgentTimeout(
+      new Promise<string>(() => {}),
+      "test-agent",
+      abortController.signal,
+      emitter,
+      60_000,
+      fallback
+    );
+
+    abortController.abort();
+
+    await expect(timeoutPromise).resolves.toBe("AbortError");
+    expect(fallback).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createAbortedResult", () => {
+  it("returns a failed SingleResult with aborted stopReason", () => {
+    const result = createAbortedResult("echo");
+    expect(result.agent).toBe("echo");
+    expect(result.stopReason).toBe("aborted");
+    expect(result.exitCode).toBe(1);
   });
 });
 

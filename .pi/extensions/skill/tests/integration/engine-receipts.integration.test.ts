@@ -1,21 +1,14 @@
 import { spawnSync } from "child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import * as os from "os";
 import * as path from "path";
 import { describe, expect, it } from "vitest";
 import { captureToolResultForExecutionOwner } from "../../../subagent/execution-owner-capture.js";
 import {
-  buildIsolatedAgentInvocation,
-  isolatedAgentEnvironment,
-} from "../../../subagent/process-isolation.js";
+  canonicalArtifactJson,
+  expectedArtifactRef,
+  type ArtifactRef,
+} from "../../artifact-client.js";
 import {
   buildAgentExecutionReceipt,
   buildObservedCommandReceipts,
@@ -25,6 +18,26 @@ import {
   verifyOwnerReceiptForTest,
   withExecutionOwnerEnvironment,
 } from "../../execution-receipts.js";
+
+function outputArtifactRef(output = "owner-captured output"): ArtifactRef {
+  return expectedArtifactRef(
+    {
+      schema_version: 1,
+      run_id: "run-1",
+      phase: "verifying",
+      branch_id: null,
+      kind: "agent-output",
+      operation_id: "verify-output-v1",
+      version: 1,
+      producer: "agent:skribble",
+      consumer_scope: ["state:complete"],
+      media_type: "text/plain; charset=utf-8",
+      parent_ref: null,
+      upstream_refs: [],
+    },
+    output
+  );
+}
 
 function findProjectRoot(start: string): string {
   let current = path.resolve(start);
@@ -49,6 +62,7 @@ describe("trusted execution-owner receipt seam", () => {
       startedAt: "2026-08-02T00:00:00+00:00",
       endedAt: "2026-08-02T00:00:01+00:00",
       exitStatus: 0,
+      outputArtifactRef: outputArtifactRef(),
       output: "12 passed API_TOKEN=secret-value --password hidden-value environment-secret-value",
       secretValues: ["secret-value", "hidden-value"],
     });
@@ -67,6 +81,8 @@ describe("trusted execution-owner receipt seam", () => {
       redaction_state: "redacted",
       signature_algorithm: "hmac-sha256",
     });
+    expect(receipt.output_artifact_ref).toBe(canonicalArtifactJson(outputArtifactRef()));
+    expect(String(receipt.output_artifact_ref)).not.toContain("skill-driver://");
     expect(String(receipt.output_excerpt)).not.toContain("secret-value");
     expect(String(receipt.output_excerpt)).not.toContain("hidden-value");
     expect(String(receipt.output_excerpt)).not.toContain("environment-secret-value");
@@ -145,170 +161,6 @@ describe("trusted execution-owner receipt seam", () => {
     expect(rejected.stdout).toContain("signature is missing or invalid");
   });
 
-  it("shadows the authoritative store from the model-controlled write namespace", () => {
-    const targetRoot = mkdtempSync(path.join(os.tmpdir(), "penny-agent-isolation-"));
-    const protectedDirectory = path.join(targetRoot, ".penny");
-    const protectedStore = path.join(protectedDirectory, "orchestration.db");
-    mkdirSync(protectedDirectory);
-    writeFileSync(protectedStore, "owner-state", { mode: 0o600 });
-    try {
-      const invocation = buildIsolatedAgentInvocation(
-        {
-          command: "/bin/sh",
-          args: [
-            "-c",
-            'test ! -e "$1/orchestration.db" && printf attacker > "$1/orchestration.db"',
-            "sh",
-            protectedDirectory,
-          ],
-        },
-        targetRoot,
-        { protectedPaths: [protectedDirectory], requireSandbox: true }
-      );
-      const result = spawnSync(invocation.command, invocation.args, {
-        cwd: targetRoot,
-        env: isolatedAgentEnvironment({
-          ...process.env,
-          PENNY_RECEIPT_HMAC_KEY: "forbidden",
-          PENNY_APPROVAL_HMAC_KEY: "forbidden",
-        }),
-        encoding: "utf8",
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(readFileSync(protectedStore, "utf8")).toBe("owner-state");
-      expect(isolatedAgentEnvironment({ PENNY_RECEIPT_HMAC_KEY: "x" })).not.toHaveProperty(
-        "PENNY_RECEIPT_HMAC_KEY"
-      );
-    } finally {
-      rmSync(targetRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps agent runtime state writable while still shadowing the authoritative store", () => {
-    // Regression guard. `--ro-bind / /` made the agent's OWN state directory
-    // read-only, so an OAuth provider could not persist a refreshed token and
-    // every skill-driven agent died with "No API key found" right after its
-    // session event. Both properties must hold AT ONCE: the agent can write its
-    // runtime state, and the owner-protected store stays shadowed.
-    const targetRoot = mkdtempSync(path.join(os.tmpdir(), "penny-agent-writable-"));
-    const protectedDirectory = path.join(targetRoot, ".penny");
-    const protectedStore = path.join(protectedDirectory, "orchestration.db");
-    mkdirSync(protectedDirectory);
-    writeFileSync(protectedStore, "owner-state", { mode: 0o600 });
-    // Stand-in for the agent runtime state dir (e.g. ~/.pi), outside the target.
-    const agentState = mkdtempSync(path.join(os.tmpdir(), "penny-agent-state-"));
-    writeFileSync(path.join(agentState, "auth.json"), "original-token", { mode: 0o600 });
-    try {
-      const invocation = buildIsolatedAgentInvocation(
-        {
-          command: "/bin/sh",
-          args: [
-            "-c",
-            // Refresh the credential (must succeed), then confirm the owner
-            // store is NOT visible inside the namespace (tmpfs shadow). A write
-            // into the shadow would succeed but never reach the real file, so
-            // invisibility is the property that matters here.
-            'printf refreshed > "$1/auth.json" || exit 3; ' +
-              '[ -e "$2/orchestration.db" ] && exit 4; exit 0',
-            "sh",
-            agentState,
-            protectedDirectory,
-          ],
-        },
-        targetRoot,
-        {
-          protectedPaths: [protectedDirectory],
-          writablePaths: [agentState],
-          requireSandbox: true,
-        }
-      );
-      const result = spawnSync(invocation.command, invocation.args, {
-        cwd: targetRoot,
-        env: isolatedAgentEnvironment({ ...process.env }),
-        encoding: "utf8",
-      });
-      expect(result.status, result.stderr).toBe(0);
-      // Agent state really persisted outside the sandbox.
-      expect(readFileSync(path.join(agentState, "auth.json"), "utf8")).toBe("refreshed");
-      // Authority boundary untouched.
-      expect(readFileSync(protectedStore, "utf8")).toBe("owner-state");
-    } finally {
-      rmSync(targetRoot, { recursive: true, force: true });
-      rmSync(agentState, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps agent memory writable while shadowing orchestration state under the SAME root", () => {
-    // The real topology: <pennyRoot>/.mempalace (agent memory, must be WRITABLE) and
-    // <pennyRoot>/.penny (orchestration authority, must stay SHADOWED) are siblings.
-    // Under `--ro-bind / /` mempalace was read-only, so the memory bridge died with
-    // sqlite3.OperationalError and every agent ran blind to durable context.
-    const pennyRoot = mkdtempSync(path.join(os.tmpdir(), "penny-root-"));
-    const targetRoot = mkdtempSync(path.join(os.tmpdir(), "penny-target-"));
-    const mempalace = path.join(pennyRoot, ".mempalace");
-    const orchestration = path.join(pennyRoot, ".penny");
-    mkdirSync(mempalace);
-    mkdirSync(orchestration);
-    writeFileSync(path.join(orchestration, "orchestration.db"), "owner-state", { mode: 0o600 });
-    try {
-      const invocation = buildIsolatedAgentInvocation(
-        {
-          command: "/bin/sh",
-          args: [
-            "-c",
-            // Write agent memory (must succeed), then confirm the owner store is
-            // invisible inside the namespace (tmpfs shadow).
-            'printf remembered > "$1/kg.db" || exit 3; ' +
-              '[ -e "$2/orchestration.db" ] && exit 4; exit 0',
-            "sh",
-            mempalace,
-            orchestration,
-          ],
-        },
-        targetRoot,
-        {
-          protectedPaths: [orchestration],
-          writablePaths: [mempalace],
-          requireSandbox: true,
-        }
-      );
-      const result = spawnSync(invocation.command, invocation.args, {
-        cwd: targetRoot,
-        env: isolatedAgentEnvironment({ ...process.env }),
-        encoding: "utf8",
-      });
-      expect(result.status, result.stderr).toBe(0);
-      // Agent memory really persisted ...
-      expect(readFileSync(path.join(mempalace, "kg.db"), "utf8")).toBe("remembered");
-      // ... and the authority boundary under the same root is untouched.
-      expect(readFileSync(path.join(orchestration, "orchestration.db"), "utf8")).toBe(
-        "owner-state"
-      );
-    } finally {
-      rmSync(pennyRoot, { recursive: true, force: true });
-      rmSync(targetRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects a writable agent path that is a symlink", () => {
-    const base = mkdtempSync(path.join(os.tmpdir(), "penny-agent-symlink-"));
-    const real = path.join(base, "real");
-    const link = path.join(base, "link");
-    mkdirSync(real);
-    symlinkSync(real, link);
-    try {
-      expect(() =>
-        buildIsolatedAgentInvocation({ command: "/bin/true", args: [] }, base, {
-          protectedPaths: [],
-          writablePaths: [link],
-          requireSandbox: true,
-        })
-      ).toThrow(/unsafe writable agent path/);
-    } finally {
-      rmSync(base, { recursive: true, force: true });
-    }
-  });
-
   it("signs obligation receipts only for exact observed successful bash commands", () => {
     const messages = [
       {
@@ -359,6 +211,7 @@ describe("trusted execution-owner receipt seam", () => {
       projectRoot: process.cwd(),
       startedAt: "2026-08-02T00:00:00+00:00",
       endedAt: "2026-08-02T00:00:01+00:00",
+      outputArtifactRef: outputArtifactRef(),
       secretValues: [],
     });
     expect(receipts).toHaveLength(1);
@@ -384,6 +237,7 @@ describe("trusted execution-owner receipt seam", () => {
         projectRoot: process.cwd(),
         startedAt: "2026-08-02T00:00:00+00:00",
         endedAt: "2026-08-02T00:00:01+00:00",
+        outputArtifactRef: outputArtifactRef(),
         secretValues: [],
       })
     ).toEqual([]);
@@ -432,6 +286,7 @@ describe("trusted execution-owner receipt seam", () => {
       projectRoot: process.cwd(),
       startedAt: "2026-08-02T00:00:00+00:00",
       endedAt: "2026-08-02T00:00:02+00:00",
+      outputArtifactRef: outputArtifactRef(),
       secretValues: [] as string[],
     };
 

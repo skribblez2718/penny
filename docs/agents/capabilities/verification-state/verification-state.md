@@ -47,51 +47,38 @@ Every state SUMMARY is checked against `spec.summary_contract` by
 Malformed or empty SUMMARYs fail loud — the engine does not synthesize a default
 and does not advance the machine.
 
-### Concrete example — `CODE_VERIFY`
+### Concrete example — `RESEARCH_VALIDATE`
 
-The code playbook's verify state
-(`apps/orchestration/src/orchestration/playbooks/code.py`, `CODE_VERIFY`)
-declares:
+The current research playbook's `validating` state (`apps/orchestration/src/orchestration/playbooks/research.py`) declares a `RESEARCH_VALIDATE` contract with required `verdict`, `issues`, and non-empty `evidence` fields. Vera must return captured claim-to-source checks; a bare `PASS` with an empty evidence list is rejected by the engine.
 
 ```python
-CODE_VERIFY = PrimitiveSpec(
-    "CODE_VERIFY", "skribble",
+RESEARCH_VALIDATE = PrimitiveSpec(
+    "RESEARCH_VALIDATE",
+    "vera",
     _c(
-        {"passed": bool, "confidence": str, "evidence": list},
-        {...tier flags...},
-        evidence=("evidence",),   # must be present AND non-empty
+        {"verdict": str, "issues": list, "evidence": list},
+        evidence=["evidence"],
     ),
-    "Run every configured verification tier; report pass/fail per tier honestly "
-    "with the captured command output as evidence.",
+    "Verify every material claim is grounded in a cited source.",
 )
 ```
 
-`evidence=("evidence",)` is the externally-grounded guarantee: a bare
-`passed: True` with an empty `evidence` list is rejected by the engine.
-
 ### Routing on the verdict
 
-`route_after` for `verifying` sets `ctx.verify_verdict` from `passed`, records
-gaps, then branches on whether this was the FINAL battery:
+`route_after` for research validation records the verdict and unsupported claims, then routes:
 
-- non-final: `verify_done` → `learning` (carren judges the gap);
-- final + pass: `final_verify_pass` → `complete`;
-- final + fail: `final_verify_fail` → `learning` (regressions loop).
+- pass: `validate_pass` → `report_writing`;
+- researchable evidence gap: `validate_research` → `researching` within the research-round budget;
+- grounding issue with existing evidence: `validate_revise` → `synthesizing` within the revision budget;
+- exhausted budget: `validate_exhausted` → `report_writing`, with unresolved claims surfaced.
 
 ### Honest exhaustion + escalation
 
-`learning` loops back to `implementing` only while `ctx.iteration + 1 <
-ctx.max_iterations`; otherwise `learn_exhausted` → `complete` with `met=False`.
-A spinning loop escalates instead of burning budget: `progress_check` returns a
-reason (repeated strategy or stalled gaps) that drives the escalatable state to
-`unknown` → `awaiting_clarification`, pausing the run for user input.
+Research validation loops are bounded by iteration and research-round budgets. Exhaustion does not manufacture a grounded verdict: the report is still delivered with `grounded: false` and the unresolved claims listed. A stalled loop escalates instead of burning budget: `progress_check` can drive an escalatable state to `unknown` → `awaiting_clarification`.
 
 ## Constraints
 
-- **No manual trigger.** There is no confirmation-gate `verifying` state gated on
-  `confidence + stakes`; that legacy plan-skill mechanism is gone. High-stakes
-  human sign-off is a **planned gate** (`GATE_STATES` + `gate_questions` /
-  `route_user`), a separate engine seam.
+- **Verification and approval are separate.** Evidence validation is a verifier state. High-stakes human sign-off is a planned gate (`GATE_STATES` + `gate_questions` / `route_user`), a separate engine seam.
 - **State is durable.** Verify verdict, gaps, and iteration digests live in
   `ctx` and are checkpointed by run_id; there is no `--state` argv, no
   `/tmp/<skill>-<session_id>.json`, no `extract_state`/`restore_state`.
@@ -101,16 +88,16 @@ reason (repeated strategy or stalled gaps) that drives the escalatable state to
 
 - [ ] An empty/malformed VERIFY SUMMARY is rejected by
       `validate_summary_contract`; the run does not advance.
-- [ ] A `passed: True` with empty `evidence` fails the evidence check.
-- [ ] A failed FINAL verify completes with `met=False`, not a fabricated pass.
+- [ ] A `PASS` verdict with empty `evidence` fails the evidence check.
+- [ ] Exhausted validation surfaces unresolved claims instead of fabricating grounding.
 - [ ] A stalled/repeated-strategy loop escalates to `awaiting_clarification`.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `apps/orchestration/src/orchestration/contracts.py` | `validate_summary_contract`, `_is_nonempty`, the `evidence` grounding rule |
-| `apps/orchestration/src/orchestration/engine.py` | invokes contract validation before routing; escalation + honest-exhaustion routing |
-| `apps/orchestration/src/orchestration/playbooks/code.py` | `CODE_VERIFY` (`evidence=("evidence",)`) and the `verifying⇄learning` loop as the concrete example |
-| `apps/orchestration/tests/test_contracts.py` | contract-validation + evidence-grounding tests |
-| `apps/orchestration/tests/test_code_playbook.py` | `CODE_VERIFY` routing, honest-exhaustion, and escalation tests |
+| File                                                         | Purpose                                                                            |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| `apps/orchestration/src/orchestration/contracts.py`          | `validate_summary_contract`, `_is_nonempty`, the `evidence` grounding rule         |
+| `apps/orchestration/src/orchestration/engine.py`             | invokes contract validation before routing; escalation + honest-exhaustion routing |
+| `apps/orchestration/src/orchestration/playbooks/research.py` | `RESEARCH_VALIDATE` and its evidence-seeking/re-grounding routes                   |
+| `apps/orchestration/tests/test_contracts.py`                 | Contract-validation and evidence-grounding tests                                   |
+| `apps/orchestration/tests/test_research_playbook.py`         | Research validation routing, honest exhaustion, and escalation tests               |

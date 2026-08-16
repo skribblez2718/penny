@@ -7,16 +7,9 @@ The engine used to bound every value embedded in an agent task message at 600 ch
 digests… full data lives in MemPalace".
 
 That premise was false for the single most important value it truncated: ``ctx.goal``.
-A live prd run on 2026-07-28 sent a 1,967-char goal and the agent received 613 chars —
-**69% of the specification discarded**, silently, with no way for the agent to recover
-it. The agent noticed only because the cut landed mid-sentence and it escalated. A cut
-landing on a clause boundary would have produced a confidently wrong PRD.
-
-Seven further agent-facing truncations were found alongside it: evidence capture
-(5 items x 300 chars), manifest file content (`[:2000]`), the violations list a learn
-fix pass must address (`[:20]`), discovered repo commands (`[:20]`), plan deliverables
-(`[:15]`), rez fabrication-suspect flags (`[:8]`, 120 chars), and derivation license
-evidence (240 chars).
+A prior run sent a 1,967-character goal and the agent received only 613 characters —
+69% of the specification was silently discarded with no recovery path. Similar caps
+also clipped evidence and other agent-facing context.
 
 THE RULE (operator-set): no truncation of agent input or output, anywhere, in any skill.
 A fixed character threshold is scaffolding for small-context models; it destroys primary
@@ -28,7 +21,6 @@ storage chunk threshold) — and it must be explicit and marked, never silent.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
@@ -72,14 +64,16 @@ def test_no_source_reintroduces_the_cap_helper(path):
 
 def test_a_long_goal_reaches_the_agent_verbatim(tmp_path):
     from orchestration.checkpointer import Checkpointer
-    from orchestration.playbooks.prd import PrdPlaybook
+    from orchestration.playbooks.research import ResearchPlaybook
 
     goal = (
-        "Build a thing. " + "CONTEXT: " + ("x" * 1500) + " FINAL REQUIREMENT: the last "
+        "Research a topic. " + "CONTEXT: " + ("x" * 1500) + " FINAL REQUIREMENT: the last "
         "sentence must survive, because a truncated goal silently drops the acceptance bar."
     )
     cp = Checkpointer(db_path=tmp_path / "o.db")
-    d = PrdPlaybook(cp).start(session_id="s", run_id="r", goal=goal, project_root=str(tmp_path))
+    d = ResearchPlaybook(cp).start(
+        session_id="s", run_id="r", goal=goal, project_root=str(tmp_path)
+    )
     task = d["task_summary"]
     assert goal in task, "the goal must reach the agent verbatim"
     assert "FINAL REQUIREMENT" in task, "the tail of the goal was dropped"
@@ -88,16 +82,27 @@ def test_a_long_goal_reaches_the_agent_verbatim(tmp_path):
 
 def test_clarification_text_is_not_truncated(tmp_path):
     from orchestration.checkpointer import Checkpointer
-    from orchestration.playbooks.prd import PrdPlaybook
+    from orchestration.playbooks.research import ResearchPlaybook
 
     cp = Checkpointer(db_path=tmp_path / "o.db")
-    PrdPlaybook(cp).start(session_id="s", run_id="r", goal="g", project_root=str(tmp_path))
-    PrdPlaybook(cp).step(
-        session_id="s", run_id="r", agent="synthia",
-        result={"complete": True, "needs_clarification": True, "clarifying_questions": ["q?"]},
+    ResearchPlaybook(cp).start(
+        session_id="s", run_id="r", goal="g", project_root=str(tmp_path)
+    )
+    ResearchPlaybook(cp).step(
+        session_id="s",
+        run_id="r",
+        agent="piper",
+        result={
+            "plan_steps": [],
+            "plan_complete": False,
+            "needs_clarification": True,
+            "clarifying_questions": ["q?"],
+        },
     )
     answer = "ANSWER-START " + ("y" * 1200) + " ANSWER-END"
-    d = PrdPlaybook(cp).step(session_id="s", run_id="r", agent="user", result={"answer": answer})
+    d = ResearchPlaybook(cp).step(
+        session_id="s", run_id="r", agent="user", result={"answer": answer}
+    )
     assert "ANSWER-START" in d["task_summary"] and "ANSWER-END" in d["task_summary"]
     assert "[truncated]" not in d["task_summary"]
 
@@ -109,10 +114,10 @@ def test_clarification_text_is_not_truncated(tmp_path):
 
 def test_evidence_is_captured_complete(tmp_path):
     from orchestration.checkpointer import Checkpointer
-    from orchestration.playbooks.prd import PrdPlaybook
+    from orchestration.playbooks.research import ResearchPlaybook
 
     cp = Checkpointer(db_path=tmp_path / "o.db")
-    pb = PrdPlaybook(cp)
+    pb = ResearchPlaybook(cp)
     pb.start(session_id="s", run_id="r", goal="g", project_root=str(tmp_path))
     long_item = "captured tool output: " + ("z" * 900)
     pb._capture_evidence({"evidence": [long_item] + [f"item {i}" for i in range(9)]})

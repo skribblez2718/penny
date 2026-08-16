@@ -12,6 +12,7 @@
  * Uses JSON mode to capture structured output from subagents.
  */
 
+import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { Message } from "@mariozechner/pi-ai";
@@ -20,21 +21,39 @@ import { type ExtensionAPI, getMarkdownTheme } from "@mariozechner/pi-coding-age
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import {
-  type AgentConfig,
-  type AgentScope,
-  discoverAgents,
   formatUsageStats,
   getFinalOutput,
   mapWithConcurrencyLimit,
   resolveSkillContext,
   runSingleAgent,
   type SingleResult,
+  type SubagentCatalogDriftError,
   type SubagentDetails,
   type UsageStats,
   ProgressEmitter,
   MAX_PARALLEL_TASKS,
   MAX_CONCURRENCY,
 } from "./agent-runner.js";
+import {
+  type AgentConfig,
+  type AgentScope,
+  discoverAgents,
+  formatModelVisibleAgentCatalog,
+  snapshotAgentCatalog,
+} from "./agents.js";
+import {
+  ArtifactClientError,
+  resolveArtifactPythonPath,
+  type ArtifactRef,
+} from "../artifacts/owner-client.js";
+import { resolveToolResultBudget } from "../lib/tool-result-budget.js";
+import {
+  directChainEnvironment,
+  directChainInput,
+  directChainOutputMetadata,
+  directChainTask,
+  persistDirectChainOutput,
+} from "./chain-artifacts.js";
 
 const COLLAPSED_ITEM_COUNT = 10;
 
@@ -79,7 +98,9 @@ interface RenderTheme {
 }
 
 // ── Agent discovery at module load (drives dynamic enum + promptSnippet) ──
-const { agents: discoveredAgents } = discoverAgents(process.cwd(), "project");
+const registeredDiscovery = discoverAgents(process.cwd(), "project");
+const discoveredAgents = registeredDiscovery.agents;
+const registeredCatalogSnapshot = snapshotAgentCatalog(registeredDiscovery);
 const agentNames =
   discoveredAgents.length > 0 ? discoveredAgents.map((a) => a.name) : ["no-agents-found"];
 
@@ -92,10 +113,7 @@ const dynamicPromptSnippet =
     ? `Delegate to specialized agents (${agentNames.join(", ")}) for domain-specific tasks`
     : "Delegate tasks to specialized subagents (no agents discovered)";
 
-const dynamicAgentGuide =
-  discoveredAgents.length > 0
-    ? `Available agents: ${discoveredAgents.map((a) => `${a.name}: ${a.description}`).join(". ")}.`
-    : "No agents discovered.";
+const dynamicAgentCatalog = formatModelVisibleAgentCatalog(discoveredAgents);
 
 function formatToolCall(
   toolName: string,
@@ -210,7 +228,8 @@ async function runSingleAgentLocal(
   makeDetails: (results: SingleResult[]) => SubagentDetails,
   skillContextContent: string | undefined = undefined,
   progressEmitter?: ProgressEmitter,
-  modelOverride?: string
+  modelOverride?: string,
+  ownerEnvironment?: NodeJS.ProcessEnv
 ): Promise<SingleResult> {
   // Adapt OnUpdateCallback from AgentToolResult<SubagentDetails> to the shared
   // agent-runner's simpler update callback signature
@@ -235,7 +254,8 @@ async function runSingleAgentLocal(
     makeDetails,
     skillContextContent,
     progressEmitter,
-    modelOverride
+    modelOverride,
+    ownerEnvironment
   );
 }
 
@@ -259,7 +279,10 @@ const TaskItem = Type.Object({
 
 const ChainItem = Type.Object({
   agent: AgentNameEnum,
-  task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
+  task: Type.String({
+    description:
+      "Task with optional {previous} placeholder. The owner replaces it with an exact granted artifact instruction, never prior payload bytes.",
+  }),
   cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
   skillContext: Type.Optional(
     Type.String({
@@ -324,20 +347,24 @@ const SubagentParams = Type.Object({
 });
 
 export default function (pi: ExtensionAPI) {
+  // Resolve owner-lowered caps inside the factory; a cap cannot raise the shared hard limit.
+  const handoffBudget = resolveToolResultBudget(process.env);
+
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
     description: [
       "Delegate tasks to specialized subagents with isolated context.",
-      "Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+      "Modes: single (agent + task), parallel (isolated tasks array), chain (sequential exact-artifact handoff through {previous}).",
       "Agents are discovered from the project's .pi/agents/ directory.",
       'Use agentScope: "both" to include agents from parent directories.',
       "Use skillContext to inject skill-specific prompt content (file path or inline) as <skill_context> in the system prompt.",
+      dynamicAgentCatalog,
     ].join(" "),
     promptSnippet: dynamicPromptSnippet,
     promptGuidelines: [
       "Use subagent when a task matches an agent's specialty and benefits from isolated context or specialized constraints.",
-      dynamicAgentGuide,
+      dynamicAgentCatalog,
       "For ad-hoc single tasks, use single mode: { agent, task }. For multi-step workflows with state/approval gates, use the skill tool instead.",
       "Always pass sufficient context in the task parameter — the agent has no access to your conversation history.",
       "Anti-pattern: do NOT use subagent for trivial single-step tasks (single file read, simple edit, one-line bash command). Do those directly with your own tools.",
@@ -360,15 +387,59 @@ export default function (pi: ExtensionAPI) {
       const hasTasks = (params.tasks?.length ?? 0) > 0;
       const hasSingle = Boolean(params.agent && params.task);
       const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
+      const requestedMode: "single" | "parallel" | "chain" = hasChain
+        ? "chain"
+        : hasTasks
+          ? "parallel"
+          : "single";
 
+      let artifactRunId: string | undefined;
       const makeDetails =
         (mode: "single" | "parallel" | "chain") =>
-        (results: SingleResult[]): SubagentDetails => ({
-          mode,
-          agentScope,
-          projectAgentsDir: discovery.projectAgentsDir,
-          results,
-        });
+        (results: SingleResult[]): SubagentDetails => {
+          const outputArtifactRefs = results.flatMap((result) =>
+            result.outputArtifactRef ? [result.outputArtifactRef] : []
+          );
+          return {
+            mode,
+            agentScope,
+            projectAgentsDir: discovery.projectAgentsDir,
+            results,
+            ...(mode === "chain" && artifactRunId
+              ? {
+                  artifactRunId,
+                  outputArtifactRefs,
+                  ...(outputArtifactRefs.length > 0
+                    ? { finalOutputArtifactRef: outputArtifactRefs.at(-1) }
+                    : {}),
+                }
+              : {}),
+          };
+        };
+
+      const executionCatalogSnapshot = snapshotAgentCatalog(discovery);
+      if (executionCatalogSnapshot.digest !== registeredCatalogSnapshot.digest) {
+        const error: SubagentCatalogDriftError = {
+          code: "SUBAGENT_RELOAD_REQUIRED",
+          kind: "catalog_drift",
+          retryable: true,
+          registeredCatalogDigest: registeredCatalogSnapshot.digest,
+          executionCatalogDigest: executionCatalogSnapshot.digest,
+        };
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Subagent catalog drift detected. Run /reload before invoking an agent so the registered schema and execution catalog agree.",
+            },
+          ],
+          details: {
+            ...makeDetails(requestedMode)([]),
+            error,
+          },
+          isError: true,
+        };
+      }
 
       if (modeCount !== 1) {
         const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
@@ -414,22 +485,42 @@ export default function (pi: ExtensionAPI) {
 
       if (params.chain && params.chain.length > 0) {
         const results: SingleResult[] = [];
-        let previousOutput = "";
+        artifactRunId = `subagent-chain:${randomUUID()}`;
+        const pythonPath = resolveArtifactPythonPath(ctx.cwd, process.env);
+        let previousRef: ArtifactRef | undefined;
 
         for (let i = 0; i < params.chain.length; i++) {
           const step = params.chain[i];
-          const taskWithContext = step.task.replace(/\{previous\}/g, previousOutput);
+          const input = directChainInput({
+            runId: artifactRunId,
+            stepIndex: i,
+            previousRef,
+          });
+          const taskWithContext = directChainTask({
+            task: step.task,
+            input,
+            budget: handoffBudget,
+          });
+          const ownerEnvironment = directChainEnvironment(
+            input,
+            `subagent-chain:${artifactRunId}:step:${i + 1}:${randomUUID()}`
+          );
+          const outputMetadata = directChainOutputMetadata({
+            runId: artifactRunId,
+            stepIndex: i,
+            totalSteps: params.chain.length,
+            agent: step.agent,
+            previousRef,
+          });
 
-          // Create update callback that includes all previous results
+          // Create update callback that includes all previous results.
           const chainUpdate: OnUpdateCallback | undefined = onUpdate
             ? (partial) => {
-                // Combine completed results with current streaming result
                 const currentResult = partial.details?.results[0];
                 if (currentResult) {
-                  const allResults = [...results, currentResult];
                   onUpdate({
                     content: partial.content,
-                    details: makeDetails("chain")(allResults),
+                    details: makeDetails("chain")([...results, currentResult]),
                   });
                 }
               }
@@ -447,8 +538,31 @@ export default function (pi: ExtensionAPI) {
             makeDetails("chain"),
             resolveSkillContext(step.skillContext, ctx.cwd),
             undefined,
-            step.model
+            step.model,
+            ownerEnvironment
           );
+          const exactOutput = getFinalOutput(result.messages);
+          try {
+            result.outputArtifactRef = await persistDirectChainOutput({
+              pythonPath,
+              metadata: outputMetadata,
+              output: exactOutput,
+              cwd: ctx.cwd,
+              env: process.env,
+            });
+          } catch (error) {
+            if (!(error instanceof ArtifactClientError)) throw error;
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Chain stopped at step ${i + 1} (${step.agent}): exact output persistence failed (${error.code}).`,
+                },
+              ],
+              details: makeDetails("chain")(results),
+              isError: true,
+            };
+          }
           results.push(result);
 
           const isError =
@@ -456,11 +570,7 @@ export default function (pi: ExtensionAPI) {
             result.stopReason === "error" ||
             result.stopReason === "aborted";
           if (isError) {
-            const errorMsg =
-              result.errorMessage ||
-              result.stderr ||
-              getFinalOutput(result.messages) ||
-              "(no output)";
+            const errorMsg = result.errorMessage || result.stderr || exactOutput || "(no output)";
             return {
               content: [
                 {
@@ -472,7 +582,7 @@ export default function (pi: ExtensionAPI) {
               isError: true,
             };
           }
-          previousOutput = getFinalOutput(result.messages);
+          previousRef = result.outputArtifactRef;
         }
         return {
           content: [

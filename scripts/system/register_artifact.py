@@ -1,47 +1,31 @@
 #!/usr/bin/env python3
+"""Register agent or skill documentation without duplicating runtime registries.
+
+Local agent discovery is catalog-driven: ``.pi/agents/*.md`` frontmatter is the
+project-local catalog. Remote harness or service presence belongs to its own
+harness/service registry and is never inferred or registered here.
+
+This utility creates capability docs and updates only their documentation
+indexes. It never adds operational content to an ``AGENTS.md`` file and never
+creates a MemPalace room, workflow handoff, or durable-memory record.
 """
-register_artifact.py — Shared registration utility for Penny artifacts.
 
-Updates AGENTS.md and scaffolds documentation when a new agent or skill is created.
-Called by:
-  - Penny post-approval (agent skill standalone mode)
-  - Parent skill orchestrator (e.g., create skill sub-skill mode)
-
-Usage:
-  python3 scripts/system/register_artifact.py agent \
-    --name compliance \
-    --description "Audit work products against Penny standards. Use when the task requires checking a deliverable for standards compliance — signals like 'audit this', 'check against standards', 'is this compliant'. Do not use when exploring (echo) or planning (piper)." \
-    --file-path .pi/agents/compliance.md \
-    --purpose "Audit agent definitions, skills, and plans against Penny standards" \
-    --rules "READ-ONLY: Never modify files; EVIDENCE-BASED: Every verdict cites specific evidence"
-
-  python3 scripts/system/register_artifact.py skill \
-    --name weather-analysis \
-    --description "Analyze weather data and generate trend reports. Use when the task requires turning weather data into pattern reports — signals like 'analyze weather', 'weather trends', 'generate a weather report'. Do not use for live forecasting or non-weather data." \
-    --skill-dir .pi/skills/weather-analysis
-"""
+from __future__ import annotations
 
 import argparse
 import os
 import re
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-# ============================================================
-# Config
-# ============================================================
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-AGENTS_MD = PROJECT_ROOT / "AGENTS.md"
 DOCS_HUMANS = PROJECT_ROOT / "docs" / "humans" / "capabilities"
 DOCS_AGENTS = PROJECT_ROOT / "docs" / "agents" / "capabilities"
-
-
-# ============================================================
-# Data Classes
-# ============================================================
+AGENTS_INDEX = DOCS_AGENTS / "AGENTS.md"
+HUMANS_INDEX = DOCS_HUMANS / "index.md"
 
 
 @dataclass
@@ -67,388 +51,334 @@ class RegistrationResult:
     warnings: List[str] = field(default_factory=list)
 
 
-# ============================================================
-# AGENTS.md Updater
-# ============================================================
+def _atomic_write(path: Path, content: str) -> None:
+    """Atomically publish one complete UTF-8 text file."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
-class AgentsMdUpdater:
-    """Safely update AGENTS.md structure table and Feature Index."""
+def _slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
-    def __init__(self, path: Path = AGENTS_MD):
-        self.path = path
-        self.content = path.read_text(encoding="utf-8")
-        self.original = self.content
 
-    def _escape_table_cell(self, text: str) -> str:
-        """Escape pipe characters in table cells."""
-        return text.replace("|", "\\|")
+def _title(name: str) -> str:
+    return name.replace("-", " ").title()
 
-    def update_structure_table(self, spec: ArtifactSpec) -> Tuple[bool, str]:
-        """Add the artifact to the Structure table if it's an agent."""
-        if spec.artifact_type != "agent":
-            return True, "Only agents appear in Structure table — skipped"
 
-        # Find the .pi/agents/ row — flexible regex for different path formats
-        pattern = r"(\|\s*`.*/\.pi/agents/`\s*\|\s*Agent definitions \(runtime\) — .*? \|)"
-        match = re.search(pattern, self.content)
-        if not match:
-            # Fallback: try without full path
-            pattern = r"(\|\s*`.pi/agents/`\s*\|\s*Agent definitions \(runtime\) — .*? \|)"
-            match = re.search(pattern, self.content)
-        if not match:
-            return False, "Could not find .pi/agents/ row in Structure table"
+def _one_line(text: str, limit: int = 140) -> str:
+    compact = " ".join(text.split()).replace("|", "\\|")
+    return compact if len(compact) <= limit else compact[: limit - 1].rstrip() + "…"
 
-        old_row = match.group(1)
-        # Extract existing agent names from the row
-        names_match = re.search(r"—\s*(.*?)\s*\|", old_row)
-        if not names_match:
-            return False, "Could not parse agent names from .pi/agents/ row"
 
-        existing = names_match.group(1).strip()
-        # Check if already present
-        if f"`{spec.name}.md`" in existing:
-            return True, f"`{spec.name}.md` already present in .pi/agents/ row"
+class CapabilityIndexUpdater:
+    """Update the agent-facing and human-facing capability indexes."""
 
-        new_names = f"{existing}, `{spec.name}.md`"
-        new_row = old_row.replace(existing, new_names)
-        self.content = self.content.replace(old_row, new_row)
-        return True, f"Added `{spec.name}.md` to .pi/agents/ row"
+    def __init__(
+        self,
+        agents_index: Path = AGENTS_INDEX,
+        humans_index: Path = HUMANS_INDEX,
+    ) -> None:
+        self.agents_index = agents_index
+        self.humans_index = humans_index
+        self.agent_content = agents_index.read_text(encoding="utf-8")
+        self.human_content = humans_index.read_text(encoding="utf-8")
+        self._agent_original = self.agent_content
+        self._human_original = self.human_content
 
-    def update_feature_index(self, spec: ArtifactSpec) -> Tuple[bool, str]:
-        """Add a Feature Index entry for the artifact."""
-        # Find the last row of the Feature Index table
-        table_end = self.content.rfind("| Tiered Memory |")
-        if table_end == -1:
-            return False, "Could not find Feature Index table"
+    def update(self, spec: ArtifactSpec) -> Tuple[bool, str]:
+        slug = _slug(spec.name)
+        title = _title(slug)
+        agent_link = f"{slug}/AGENTS.md"
+        if f"]({agent_link})" not in self.agent_content:
+            label = "Agent role" if spec.artifact_type == "agent" else "Workflow skill"
+            line = f"- [{title}]({agent_link}): {label} — {_one_line(spec.description)}"
+            lines = self.agent_content.rstrip().splitlines()
+            lines.append(line)
+            heading = lines[:2]
+            entries = sorted(lines[2:], key=str.casefold)
+            self.agent_content = "\n".join(heading + entries).rstrip() + "\n"
 
-        # Find the end of that row
-        line_end = self.content.find("\n", table_end)
-        if line_end == -1:
-            line_end = len(self.content)
-
-        if spec.artifact_type == "agent":
-            human_doc = f"`docs/humans/capabilities/{spec.name}/{spec.name}.md`"
-            agent_doc = f"`docs/agents/capabilities/{spec.name}/{spec.name}.md`"
-            design = "`N/A`"
-            impl = f"`.pi/agents/{spec.name}.md`"
-        else:  # skill
-            human_doc = f"`docs/humans/capabilities/{spec.name}/{spec.name}.md`"
-            agent_doc = f"`docs/agents/capabilities/{spec.name}/{spec.name}.md`"
-            design = (
-                f"`.pi/skills/{spec.name}/README.md`"
-                if not spec.design_doc
-                else f"`{spec.design_doc}`"
-            )
-            impl = (
-                f"`.pi/skills/{spec.name}/`"
-                if not spec.implementation_dir
-                else f"`{spec.implementation_dir}`"
-            )
-
-        # Escape description to avoid breaking table formatting
-        desc = self._escape_table_cell(spec.description)
-        if len(desc) > 80:
-            desc = desc[:77] + "..."
-
-        new_row = f"| {spec.name.replace('-', ' ').title().replace(' ', '-')} | {human_doc} | {agent_doc} | {design} | {impl} |\n"
-
-        self.content = self.content[:line_end] + "\n" + new_row + self.content[line_end:]
-        return True, f"Added Feature Index row for {spec.name}"
+        human_link = f"{slug}/{slug}.md"
+        if f"]({human_link})" not in self.human_content:
+            marker = "\n## How This Index Is Organized"
+            if marker not in self.human_content:
+                return False, "Could not find the human capability index insertion point"
+            row = f"| [{title}]({human_link}) | {_one_line(spec.description)} |\n"
+            self.human_content = self.human_content.replace(marker, f"{row}{marker}", 1)
+        return True, f"Indexed {slug} capability docs"
 
     def write(self) -> None:
-        """Write changes back to disk."""
-        if self.content != self.original:
-            self.path.write_text(self.content, encoding="utf-8")
+        if self.agent_content != self._agent_original:
+            _atomic_write(self.agents_index, self.agent_content)
+        if self.human_content != self._human_original:
+            _atomic_write(self.humans_index, self.human_content)
 
     def rollback(self) -> None:
-        """Restore original content."""
-        self.path.write_text(self.original, encoding="utf-8")
-
-
-# ============================================================
-# Doc Scaffolder
-# ============================================================
+        _atomic_write(self.agents_index, self._agent_original)
+        _atomic_write(self.humans_index, self._human_original)
 
 
 class DocScaffolder:
-    """Scaffold human and agent docs from artifact metadata."""
+    """Create capability leaves and their index-only agent sub-index."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.humans_dir = DOCS_HUMANS
         self.agents_dir = DOCS_AGENTS
 
-    def _slug(self, name: str) -> str:
-        return name.lower().replace(" ", "-")
+    @staticmethod
+    def _publish_new(path: Path, content: str) -> Tuple[bool, Path, str]:
+        if path.exists():
+            return True, path, f"Kept existing {path}"
+        _atomic_write(path, content)
+        return True, path, f"Created {path}"
 
     def scaffold_human_doc(self, spec: ArtifactSpec) -> Tuple[bool, Path, str]:
-        """Create docs/humans/capabilities/<name>/<name>.md"""
-        slug = self._slug(spec.name)
-        dir_path = self.humans_dir / slug
-        dir_path.mkdir(parents=True, exist_ok=True)
-        file_path = dir_path / f"{slug}.md"
-
-        if spec.artifact_type == "agent":
-            content = self._human_agent_template(spec)
-        else:
-            content = self._human_skill_template(spec)
-
-        file_path.write_text(content, encoding="utf-8")
-        return True, file_path, f"Created {file_path}"
+        slug = _slug(spec.name)
+        path = self.humans_dir / slug / f"{slug}.md"
+        content = (
+            self._human_agent_template(spec)
+            if spec.artifact_type == "agent"
+            else self._human_skill_template(spec)
+        )
+        return self._publish_new(path, content)
 
     def scaffold_agent_doc(self, spec: ArtifactSpec) -> Tuple[bool, Path, str]:
-        """Create docs/agents/capabilities/<name>/<name>.md"""
-        slug = self._slug(spec.name)
-        dir_path = self.agents_dir / slug
-        dir_path.mkdir(parents=True, exist_ok=True)
-        file_path = dir_path / f"{slug}.md"
+        slug = _slug(spec.name)
+        directory = self.agents_dir / slug
+        path = directory / f"{slug}.md"
+        content = (
+            self._agent_agent_template(spec)
+            if spec.artifact_type == "agent"
+            else self._agent_skill_template(spec)
+        )
+        ok, published, message = self._publish_new(path, content)
+        if ok:
+            index = directory / "AGENTS.md"
+            self._publish_new(
+                index,
+                f"# {_title(slug)} Feature Index\n\n- [{_title(slug)}]({slug}.md): Operational reference\n",
+            )
+        return ok, published, message
 
-        if spec.artifact_type == "agent":
-            content = self._agent_agent_template(spec)
-        else:
-            content = self._agent_skill_template(spec)
-
-        file_path.write_text(content, encoding="utf-8")
-        return True, file_path, f"Created {file_path}"
-
-    def _human_agent_template(self, spec: ArtifactSpec) -> str:
-        title = spec.name.replace("-", " ").title()
-        return f"""# {title} Agent
+    @staticmethod
+    def _human_agent_template(spec: ArtifactSpec) -> str:
+        slug = _slug(spec.name)
+        return f"""# {_title(slug)} Agent
 
 ## What It Is
 
 {spec.description}
 
-## When to Use
+## Local Catalog and Remote Presence
 
-- [Add specific use cases based on the agent's purpose]
+The local definition in `.pi/agents/{slug}.md` is part of the project-local
+agent catalog. Remote harness or service availability is owned by the separate
+harness/service registry; this document does not assert remote presence.
 
-## When Not to Use
+## Purpose
 
-- [Add exclusions based on the agent's constraints]
-
-## Key Capabilities
-
-- {spec.purpose}
+{spec.purpose or "[Describe the role's durable purpose.]"}
 
 ## Constraints
 
-{spec.rules}
+{spec.rules or "[Describe role-specific consequence and evidence boundaries.]"}
+
+## Current-Run Inputs
+
+When the execution owner grants exact artifacts, the worker reads them with
+`artifact_read` and follows typed continuation until complete. Workers do not
+receive durable-memory tools.
 
 ## Learn More
 
-- Agent docs: `docs/agents/capabilities/{spec.name}/{spec.name}.md`
-- Definition: `.pi/agents/{spec.name}.md`
+- Agent reference: `docs/agents/capabilities/{slug}/{slug}.md`
+- Local definition: `.pi/agents/{slug}.md`
 """
 
-    def _human_skill_template(self, spec: ArtifactSpec) -> str:
-        title = spec.name.replace("-", " ").title()
-        return f"""# {title} Skill
+    @staticmethod
+    def _human_skill_template(spec: ArtifactSpec) -> str:
+        slug = _slug(spec.name)
+        return f"""# {_title(slug)} Skill
 
 ## What It Is
 
 {spec.description}
-
-## When to Use
-
-- [Add specific use cases]
-
-## When Not to Use
-
-- [Add exclusions]
 
 ## How It Works
 
-- [High-level workflow description]
+The workflow runs as a `BasePlaybook` subclass. Exact current-run stage output
+moves through execution-owner artifacts: workers read granted predecessors with
+`artifact_read`, return complete stage content, and append only the routing
+`SUMMARY` required by the state contract.
 
-## Constraints
-
-| Constraint | Meaning |
-|-----------|---------|
-| [Add constraints] | [Descriptions] |
+Durable memory is optional. It may preserve curated reusable knowledge, but it
+is never workflow transport, run state, or persistence proof.
 
 ## Learn More
 
-- Agent docs: `docs/agents/capabilities/{spec.name}/{spec.name}.md`
-- Implementation: `.pi/skills/{spec.name}/`
+- Agent reference: `docs/agents/capabilities/{slug}/{slug}.md`
+- Manifest: `.pi/skills/{slug}/SKILL.md`
 """
 
-    def _agent_agent_template(self, spec: ArtifactSpec) -> str:
-        title = spec.name.replace("-", " ").title()
-        return f"""# {title} Agent — Agent Implementation Notes
+    @staticmethod
+    def _agent_agent_template(spec: ArtifactSpec) -> str:
+        slug = _slug(spec.name)
+        return f"""# {_title(slug)} Agent — Operational Reference
+
+## Catalog
+
+- Local project catalog entry: `.pi/agents/{slug}.md`
+- Remote harness/service presence: separate harness/service registry only
+- Durable-memory discovery: prohibited as an availability signal
+
+## Role Contract
+
+{spec.rules or "[Document role-specific constraints and evidence requirements.]"}
+
+Granted current-run artifacts are read with `artifact_read` and typed
+continuation. The worker has no durable-memory tools.
+"""
+
+    @staticmethod
+    def _agent_skill_template(spec: ArtifactSpec) -> str:
+        slug = _slug(spec.name)
+        implementation = spec.implementation_dir or f".pi/skills/{slug}/"
+        return f"""# {_title(slug)} Skill — Operational Reference
 
 ## Architecture
 
-- **Role**: [Agent role based on purpose]
-- **Tools**: [List tools from definition]
-- **Model**: [Model from definition]
-
-## Key Rules
-
-{spec.rules}
-
-## Prompt Architecture Compliance
-
-- **Agent definition** (`.pi/agents/{spec.name}.md`) is the **Role Definition** layer
-- Domain Guidance is injected via `assets/prompts/` when used in skills
-- No domain-specific content in SYSTEM.md
+- `BasePlaybook` owns the state machine and routing.
+- The skill delegate routes `start`, `step`, `status`, and `recover`.
+- Each cognitive directive declares exact `input_artifacts` and an owner
+  `output_artifact` contract.
+- Workers use `artifact_read` for granted inputs and return complete stage
+  content before the routing-only `SUMMARY`.
+- Durable memory is optional and never carries active workflow handoff.
 
 ## Files
 
-- `.pi/agents/{spec.name}.md` — role definition
+- `.pi/skills/{slug}/SKILL.md` — manifest
+- `{implementation}` — implementation
+- `.pi/skills/{slug}/assets/prompts/*.md` — domain guidance
 """
-
-    def _agent_skill_template(self, spec: ArtifactSpec) -> str:
-        title = spec.name.replace("-", " ").title()
-        return f"""# {title} Skill — Agent Implementation Notes
-
-## Architecture
-
-Hybrid extension + Python orchestrator:
-- **Skill extension** (`skill` tool): Routes orchestrator actions
-- **Python state machine** (`scripts/orchestrate.py`): Drives the workflow
-
-## Key Rules
-
-1. **Penny is a router in the skill loop** — she sees agent names and session IDs, never full prompts/results
-2. **All substantial data flows through mempalace** — agents read/write it directly
-3. **Approve/Refine cycle is mandatory** — never execute before user approval
-4. **TDD enforced** — unit, integration, and E2E tests required
-5. **Lint clean** — `orchestrate.py` passes `flake8`
-
-## Files
-
-- `.pi/skills/{spec.name}/SKILL.md` — skill manifest
-- `.pi/skills/{spec.name}/scripts/orchestrate.py` — state machine
-- `.pi/skills/{spec.name}/assets/prompts/*.md` — domain guidance
-- `.pi/skills/{spec.name}/scripts/test_*.py` — tests
-"""
-
-
-# ============================================================
-# Link Validator
-# ============================================================
 
 
 class LinkValidator:
-    """Validate that AGENTS.md references resolve to existing files."""
+    """Validate repository-relative Markdown and backtick paths in selected indexes."""
 
-    def __init__(self, agents_md: Path = AGENTS_MD):
-        self.agents_md = agents_md
-        self.project_root = agents_md.parent
+    def __init__(
+        self, paths: Optional[List[Path]] = None, project_root: Path = PROJECT_ROOT
+    ) -> None:
+        self.paths = paths or [AGENTS_INDEX, HUMANS_INDEX]
+        self.project_root = project_root
 
     def validate(self) -> Tuple[bool, List[str]]:
-        """Return (all_valid, list_of_errors)."""
-        content = self.agents_md.read_text(encoding="utf-8")
-        errors = []
-
-        # Find all backtick-quoted paths starting with docs/ or .pi/ or scripts/
-        paths = re.findall(r"`((?:docs/|\.pi/|scripts/)[^`]+?)`", content)
-
-        for path_str in paths:
-            # Skip wildcards and non-file references
-            if "*" in path_str or path_str.endswith("/"):
-                continue
-            full_path = self.project_root / path_str
-            if not full_path.exists():
-                errors.append(f"MISSING: {path_str}")
-
-        return len(errors) == 0, errors
-
-
-# ============================================================
-# Main Orchestrator
-# ============================================================
+        errors: List[str] = []
+        for source in self.paths:
+            content = source.read_text(encoding="utf-8")
+            candidates = re.findall(r"\[[^\]]+\]\(([^)]+)\)", content)
+            candidates += re.findall(r"`((?:docs/|\.pi/|scripts/)[^`]+?)`", content)
+            for value in candidates:
+                if value.startswith(("http://", "https://", "#")) or "*" in value:
+                    continue
+                target = (
+                    self.project_root / value
+                    if value.startswith(("docs/", ".pi/", "scripts/"))
+                    else source.parent / value.split("#", 1)[0]
+                )
+                if not target.exists():
+                    errors.append(f"MISSING from {source}: {value}")
+        return not errors, errors
 
 
 class RegisterArtifact:
-    """High-level registration workflow."""
+    """Create docs, update docs indexes, and validate links as one workflow."""
 
-    def __init__(self, agents_md: Optional[Path] = None):
-        self.agents_md = agents_md or AGENTS_MD
-        self.agents_updater = AgentsMdUpdater(self.agents_md)
+    def __init__(
+        self,
+        agents_index: Optional[Path] = None,
+        humans_index: Optional[Path] = None,
+    ) -> None:
+        self.agents_index = agents_index or AGENTS_INDEX
+        self.humans_index = humans_index or HUMANS_INDEX
+        self.indexes = CapabilityIndexUpdater(self.agents_index, self.humans_index)
         self.scaffolder = DocScaffolder()
-        self.validator = LinkValidator(self.agents_md)
 
-    def register(self, spec: ArtifactSpec) -> RegistrationResult:
-        result = RegistrationResult(
-            success=False,
-            agents_md_updated=False,
-            human_doc_created=False,
-            agent_doc_created=False,
-            links_valid=False,
-        )
-
+    def register(self, spec: ArtifactSpec) -> RegistrationResult:  # noqa: C901
+        result = RegistrationResult(False, False, False, False, False)
         try:
-            # 1. Update AGENTS.md
-            ok, msg = self.agents_updater.update_structure_table(spec)
-            if not ok:
-                result.errors.append(f"Structure table: {msg}")
-            else:
-                result.warnings.append(msg)
-
-            ok, msg = self.agents_updater.update_feature_index(spec)
-            if not ok:
-                result.errors.append(f"Feature Index: {msg}")
-            else:
-                result.warnings.append(msg)
-
-            if result.errors:
-                self.agents_updater.rollback()
+            if spec.artifact_type not in {"agent", "skill"}:
+                result.errors.append("artifact_type must be agent or skill")
                 return result
+            if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", spec.name):
+                result.errors.append("name must be lowercase kebab-case")
+                return result
+            for field_name, value in (
+                ("design_doc", spec.design_doc),
+                ("implementation_dir", spec.implementation_dir),
+            ):
+                if value:
+                    candidate = Path(value)
+                    if candidate.is_absolute() or ".." in candidate.parts:
+                        result.errors.append(
+                            f"{field_name} must be a generic project-relative path"
+                        )
+                        return result
 
-            self.agents_updater.write()
+            ok, message = self.indexes.update(spec)
+            if not ok:
+                result.errors.append(message)
+                return result
+            self.indexes.write()
             result.agents_md_updated = True
+            result.warnings.append(message)
 
-            # 2. Scaffold docs
-            ok, path, msg = self.scaffolder.scaffold_human_doc(spec)
-            if ok:
-                result.human_doc_created = True
-                result.warnings.append(msg)
-            else:
-                result.errors.append(msg)
+            ok, _, message = self.scaffolder.scaffold_human_doc(spec)
+            result.human_doc_created = ok
+            (result.warnings if ok else result.errors).append(message)
 
-            ok, path, msg = self.scaffolder.scaffold_agent_doc(spec)
-            if ok:
-                result.agent_doc_created = True
-                result.warnings.append(msg)
-            else:
-                result.errors.append(msg)
+            ok, _, message = self.scaffolder.scaffold_agent_doc(spec)
+            result.agent_doc_created = ok
+            (result.warnings if ok else result.errors).append(message)
 
-            # 3. Validate links
-            valid, link_errors = self.validator.validate()
-            result.links_valid = valid
-            if not valid:
-                result.errors.extend(link_errors)
-
-            result.success = len(result.errors) == 0
+            validator = LinkValidator(
+                [self.agents_index, self.humans_index],
+                project_root=self.agents_index.parents[3],
+            )
+            result.links_valid, link_errors = validator.validate()
+            result.errors.extend(link_errors)
+            result.success = not result.errors
             return result
-
-        except Exception as e:
-            self.agents_updater.rollback()
-            result.errors.append(f"Exception during registration: {e}")
+        except Exception as exc:  # registration is an operator utility; report full failure
+            try:
+                self.indexes.rollback()
+            except OSError:
+                pass
+            result.errors.append(f"Exception during registration: {exc}")
             return result
 
 
-# ============================================================
-# CLI
-# ============================================================
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Register a Penny artifact (agent or skill)")
-    parser.add_argument("artifact_type", choices=["agent", "skill"], help="Type of artifact")
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Register Penny agent or skill documentation")
+    parser.add_argument("artifact_type", choices=["agent", "skill"])
     parser.add_argument("--name", required=True, help="Artifact name (kebab-case)")
-    parser.add_argument("--description", required=True, help="1-2 sentence description")
-    parser.add_argument("--file-path", help="Path to the artifact file (for agents)")
-    parser.add_argument("--purpose", default="", help="Agent purpose or skill goal")
-    parser.add_argument("--rules", default="", help="Key rules/constraints")
-    parser.add_argument("--design-doc", default="", help="Path to design documentation")
-    parser.add_argument("--implementation-dir", default="", help="Path to implementation directory")
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Show what would change without writing"
-    )
-
+    parser.add_argument("--description", required=True, help="One-line description")
+    parser.add_argument("--file-path", help="Local agent definition path")
+    parser.add_argument("--purpose", default="")
+    parser.add_argument("--rules", default="")
+    parser.add_argument("--design-doc", default="")
+    parser.add_argument("--implementation-dir", default="")
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     spec = ArtifactSpec(
@@ -461,28 +391,25 @@ def main():
         design_doc=args.design_doc,
         implementation_dir=args.implementation_dir,
     )
+    if args.dry_run:
+        slug = _slug(spec.name)
+        print(f"Would index and scaffold capability docs for {slug}")
+        print(DOCS_HUMANS / slug / f"{slug}.md")
+        print(DOCS_AGENTS / slug / "AGENTS.md")
+        print(DOCS_AGENTS / slug / f"{slug}.md")
+        raise SystemExit(0)
 
-    registrar = RegisterArtifact()
-    result = registrar.register(spec)
-
+    result = RegisterArtifact().register(spec)
     print(f"Registration {'SUCCEEDED' if result.success else 'FAILED'}")
-    print(f"  AGENTS.md updated: {result.agents_md_updated}")
+    print(f"  Agent docs index updated: {result.agents_md_updated}")
     print(f"  Human doc created: {result.human_doc_created}")
     print(f"  Agent doc created: {result.agent_doc_created}")
     print(f"  Links valid: {result.links_valid}")
-
-    if result.warnings:
-        print("\nWarnings:")
-        for w in result.warnings:
-            print(f"  ⚠ {w}")
-
-    if result.errors:
-        print("\nErrors:")
-        for e in result.errors:
-            print(f"  ✗ {e}")
-        sys.exit(1)
-
-    sys.exit(0)
+    for warning in result.warnings:
+        print(f"  WARN: {warning}")
+    for error in result.errors:
+        print(f"  ERROR: {error}", file=sys.stderr)
+    raise SystemExit(0 if result.success else 1)
 
 
 if __name__ == "__main__":

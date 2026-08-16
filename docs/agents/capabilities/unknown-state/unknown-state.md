@@ -29,7 +29,7 @@ The TS driver resumes by feeding a `user` step keyed by `run_id` (the user's tex
 
 1. Rejects the resume unless the run is at `awaiting_clarification` (a planned `GATE_STATES` pause is a different path, handled by `_resume_gate` / `route_user`).
 2. Stores the answer in `ctx.clarification_text`.
-3. Fires the `clarify` event. The machine transitions to whatever working state the playbook declared as the `clarify` target (e.g. `code.py`: `clarify = awaiting_clarification.to(exploring)`).
+3. Fires the `clarify` event. The machine transitions to the producer state that can act on the answer. The research playbook resumes at `researching` or `synthesizing` when the blocker identifies one of those producers, with `planning` as the fallback.
 4. `_advance_to` re-issues that state. `ctx.clarification_text` is appended to the next agent's task message so the answer actually informs the retry.
 
 There is no `restart`/`skip`/`retry` tri-choice, no `orchestrator_state` blob on the wire, and no `previous_state` payload threaded back — `previous_state` lives in `ctx` and is checkpointed.
@@ -42,20 +42,14 @@ There is no `restart`/`skip`/`retry` tri-choice, no `orchestrator_state` blob on
 
 ## Declaring escalatability (per playbook)
 
-A playbook opts a state in by listing it in `ESCALATABLE_STATES` and giving its machine a `to_unknown` edge from that state plus the `escalate`/`clarify` edges. Concrete example — `playbooks/code.py`:
+A playbook opts a state in by listing it in `ESCALATABLE_STATES` and giving its machine a `to_unknown` edge from each listed state plus the `escalate` and `clarify` edges. The current research playbook lists its planning, critique, research, synthesis, and validation producers; its conditional `clarify` edges resume the producer that can use the answer, with planning as the conservative fallback.
 
 ```python
 ESCALATABLE_STATES = frozenset({
-    "exploring", "analyzing", "checking_criteria",
-    "planning", "implementing", "verifying", "learning",
+    "planning", "critiquing_plan", "researching",
+    "synthesizing", "critiquing_report", "validating",
 })
-# machine:
-#   to_unknown = exploring.to(unknown) | ... | learning.to(unknown)
-#   escalate   = unknown.to(awaiting_clarification)
-#   clarify    = awaiting_clarification.to(exploring)
 ```
-
-`code.py` also overrides `progress_check` so a `learning` retry that repeats a strategy or shows no gap progress escalates instead of looping.
 
 ## Verification
 
@@ -67,9 +61,9 @@ ESCALATABLE_STATES = frozenset({
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `apps/orchestration/src/orchestration/engine.py` | `_escalate`, `_resume`, `progress_check`, escalation guardrail, `escalation_directive` |
-| `apps/orchestration/src/orchestration/contracts.py` | `Confidence` taxonomy, `escalate_to_user` directive builder |
-| `apps/orchestration/src/orchestration/playbooks/code.py` | concrete `ESCALATABLE_STATES` + `progress_check` example |
-| `apps/orchestration/tests/test_engine.py`, `test_engine_seams.py`, `test_code_playbook.py` | escalation + resume tests |
+| File                                                                                           | Purpose                                                                                |
+| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `apps/orchestration/src/orchestration/engine.py`                                               | `_escalate`, `_resume`, `progress_check`, escalation guardrail, `escalation_directive` |
+| `apps/orchestration/src/orchestration/contracts.py`                                            | `Confidence` taxonomy, `escalate_to_user` directive builder                            |
+| `apps/orchestration/src/orchestration/playbooks/research.py`                                   | Current `ESCALATABLE_STATES`, progress checks, and conditional clarification resume    |
+| `apps/orchestration/tests/test_engine.py`, `test_engine_seams.py`, `test_research_playbook.py` | Escalation and resume tests                                                            |

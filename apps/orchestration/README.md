@@ -1,131 +1,123 @@
-# orchestration — Penny's shared FSM execution engine
+# orchestration — Penny's research workflow engine
 
-`orchestration` is the one installable runtime every Penny skill's state machine
-delegates to. Skills delegate in ~5 lines; the package owns the FSM protocol, a
-durable checkpointer, self-recovery, and best-effort observability. It replaces
-the per-skill `orchestrate.py` FSM plumbing and the legacy `--state`/`/tmp`
-state model.
+`orchestration` is the installable runtime for Penny's retained research skill.
+The research directory contains a thin delegate; this package owns the FSM
+protocol, durable checkpointing, recovery, and best-effort observability.
 
-## Why
+The registry contains exactly:
 
-Previously every skill re-implemented state serialization, transition replay,
-the `start/step/status` protocol, summary validation, and escalation — ~10k
-lines that drifted out of sync. One engine collapses that into a thin
-`BasePlaybook` subclass per playbook. State lives in a SQLite checkpointer keyed
-by `run_id`, so a fresh `step` subprocess resumes by id — no argv blob, no
-replay — and any interrupted run auto-resumes.
+- `research` — the user-facing research workflow.
+- `reference-cycle` — an internal engine/CLI/recovery fixture with no skill directory.
 
-## Install (uv workspace)
+## Install
 
-This package is a member of the repo's uv workspace and is installed **editable**
-into `.venv`:
+The package is a member of the repository's uv workspace and is installed
+editable into `.venv`:
 
 ```bash
-uv sync --extra dev      # installs orchestration + penny-observability editable
-python -c "import orchestration; print(orchestration.__version__)"
+uv sync --extra dev
+.venv/bin/python -c "import orchestration; print(orchestration.__version__)"
 ```
 
-No `sys.path`/`PYTHONPATH` hacks — the skill driver spawns `.venv/bin/python`
-and `import orchestration` just works.
+No `sys.path` or `PYTHONPATH` hacks are required.
 
 ## CLI
 
-```
+```text
 orchestrate {start|step|status|recover} --playbook <name> --session-id <id> --run-id <id>
             [--goal <text>] [--constraints <json>] [--agent <name>] [--result <json>]
 ```
 
-- `start` — init a run, checkpoint, emit the first directive.
-- `step`  — validate the agent SUMMARY, route the FSM, checkpoint, emit the next directive.
-- `status`— report the run's state.
-- `recover` — auto-resume a pending run for the session (playbook-scoped).
+- `start` initializes and checkpoints a run, then emits the first directive.
+- `step` validates a SUMMARY, routes the FSM, checkpoints, and emits the next directive.
+- `status` reports durable run state.
+- `recover` reissues a pending step or re-presents pending user input.
 
-Exactly one JSON directive is printed to stdout. **There is no `--state` flag** —
+Track A uses forward-only recovery. `PENNY_ARTIFACT_DISPATCH_MODE=paused`
+returns a typed, retriable `paused` directive before any new agent, deterministic
+tool, or fan-out dispatch. It does not complete/error the run or rewrite the
+pending checkpoint. A fresh `recover` after the mode returns to `active`
+reconstructs the same selected input refs and output metadata (or the next
+explicit compatible revision). There is no semantic-memory fallback.
+
+Exactly one JSON directive is printed to stdout. There is no `--state` flag;
 state lives in the checkpointer.
 
-## How skills delegate
+## Research delegate
 
-Each `.pi/skills/<name>/scripts/orchestrate.py` is the entire delegate:
+`.pi/skills/research/scripts/orchestrate.py` delegates directly to the package:
 
 ```python
 from orchestration.cli import main
-if __name__ == "__main__":
-    raise SystemExit(main(default_playbook="<name>"))
-```
 
-`<name>` is a domain skill's playbook (e.g. `code`, `plan`, …), registered in
-`orchestration.playbooks.PLAYBOOKS`. (`reference-cycle` is registered too, but
-only as the engine's internal smoke-test fixture — it has no `.pi/skills/` dir
-and is never delegated to.)
+if __name__ == "__main__":
+    raise SystemExit(main(default_playbook="research"))
+```
 
 ## Components
 
-| Module | Role |
-|---|---|
-| `engine.py` (`BasePlaybook`) | FSM engine: start/step/status, summary gatekeeper, escalate, planned gates, parallel fan-out (static or runtime-emitted), resume, checkpoint, emit, budgets + honest-exhaustion backstop, retry, default-on loop guards, model-owned routing helper |
-| `loans.py` | LOAN registry + Ablate hooks: every piece of "current model is weak" scaffolding is tagged (rationale, dates) and toggleable via `PENNY_ABLATE_<LOAN_ID>=1` for scaffold-ON/OFF ablation runs |
-| `primitives/` (`PrimitiveSpec` / `ParallelSpec`) | Reusable operation descriptors — name, default agent, per-state SUMMARY contract, task hint; a playbook binds them to its own states (and fan-out branches) via `PRIMITIVE_BY_STATE` / `PARALLEL_BY_STATE` |
-| `playbooks/` | One `BasePlaybook` subclass per domain skill (e.g. `code.py`) — each defines its own states, `PRIMITIVE_BY_STATE`, `route_after`, `done_predicate` — plus `reference_cycle.py` (`ReferenceCycle`, the engine test fixture) and the registry |
-| `checkpointer.py` | Durable SQLite persistence by `run_id` (replaces `--state`/`_force_state`) |
-| `recovery.py` | Auto-recovery scan (resume `running`/`awaiting_user` runs, playbook-scoped) |
-| `obs_client.py` | Best-effort digest emission to the observability server (never blocks a run) |
-| `contracts.py` | Confidence taxonomy, per-state SUMMARY contract validation + weakest-confidence aggregation, directive builders |
-| `context.py` | `RunContext` (references not payloads, plus a domain `extras` dict) + `to_dict`/fail-loud `from_dict` |
-
-## Engine seams (what a playbook subclass customizes)
-
-Domain skills subclass `BasePlaybook` directly — there is no shared "standard
-cycle" base and no single-primitive playbook. A subclass owns its state names
-and wires the seams it needs:
-
-- **Per-state SUMMARY contracts** — each state's `PrimitiveSpec.summary_contract`
-  is validated by the engine's gatekeeper; missing/mistyped fields fail loud.
-- **Parallel fan-out** — a `PARALLEL_BY_STATE` state dispatches N branch agents in
-  one `invoke_agents_parallel` directive and routes once on fan-in, aggregating by
-  weakest branch confidence.
-- **Planned-gate HITL** — `GATE_STATES` + `gate_questions`/`route_user` pause for a
-  user decision with multi-way resume, distinct from the `UNCERTAIN`-confidence
-  escalation path.
-- **Domain `extras`** — a subclass stashes its own run state in `RunContext.extras`
-  (round-trips through the checkpointer without touching the schema).
-- **Dynamic fan topology** — the `parallel_spec(state, ctx)` seam reads runtime-emitted
-  branches from `ctx.extras["dynamic_branches"][state]` (a model's PLAN output in
-  JSON-safe form, see `parallel_spec_from_dict`) before falling back to
-  `PARALLEL_BY_STATE`; both are bounded by `constraints["max_fan_width"]` (default 8).
-- **Default-on loop guards** — the base `progress_check` escalates a retry whose
-  declared `strategy_change` repeats the prior one, or a `gaps` set that hasn't moved
-  in two iterations (the engine auto-records iteration digests). Opt-out:
-  `LOOP_GUARDS = False`. Backstop: routing past `max_iterations` forces honest
-  exhaustion (`complete`, `met=False`, `exhausted` reason) — never a fake pass.
-- **Model-owned routing** — `route_after` may delegate an edge choice to the model via
-  `fire_model_route(summary)`: the chosen event fires iff it is a declared, currently
-  allowed, non-reserved transition; otherwise the code-owned fallback routes.
-- **Safe completion default** — the base `done_predicate` returns `False`; success is
-  only ever claimed by a playbook's own grounded predicate.
+| Module                         | Role                                                                                                                              |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `engine.py`                    | Shared start/step/status protocol, owner artifact validation/selection, SUMMARY validation, fan-out, gates, budgets, and recovery |
+| `playbooks/research.py`        | Research state machine, routing, contracts, prompts, and terminal result                                                          |
+| `playbooks/reference_cycle.py` | Internal full-cycle fixture                                                                                                       |
+| `checkpointer.py`              | Durable SQLite FSM/run persistence keyed by `run_id`; stores selected refs, never artifact payloads                               |
+| `artifacts.py`                 | Generic immutable artifact schemas, content-addressed objects, manifest validation, and CAS selection                             |
+| `artifact_cli.py`              | Owner-side exact-stdin artifact persistence used before SUMMARY parsing                                                           |
+| `execution_receipts.py`        | Generic execution-owner receipt signing, redaction, and binding to a real artifact ref                                            |
+| `loans.py`                     | Exact live engine LOAN ledger and ablation switches                                                                               |
+| `independence.py`              | Research producer/verifier independence ledger                                                                                    |
+| `recovery.py`                  | Pending-run recovery through the registry                                                                                         |
+| `obs_client.py`                | Best-effort digest-only observability                                                                                             |
+| `contracts.py`                 | Confidence, SUMMARY, and directive contracts                                                                                      |
+| `context.py`                   | Serializable `RunContext` and research `extras` storage                                                                           |
 
 ## Environment
 
-| Var | Purpose | Default |
-|---|---|---|
-| `PENNY_ORCH_DB` | checkpointer SQLite path | `<project>/.penny/orchestration.db` (gitignored) |
-| `PI_OBSERVABILITY_URL` | observability base URL | `http://localhost:8765` |
-| `PI_OBSERVABILITY_API_KEY` | Bearer token (reused) | empty ⇒ auth off |
-| `PENNY_ORCH_MAX_STEP_RETRIES` | transient step-retry budget | 2 |
-| `PENNY_ABLATE_<LOAN_ID>` | `1` ablates a tagged loan (see `loans.list_loans()`) | off |
-| `PI_STALL_MODEL` | model that judges "stalled vs progressing" for the loop guards; unset ⇒ normalized-string comparison | unset |
-| `PI_STRATEGY_MODEL` | model that judges "same approach vs different" on a retry (`code` only) | unset |
-| `PI_MODEL_TIER` | `strong` / `cheap` — scales tier-aware budgets and drops the SUMMARY-restatement crutch | unset |
+| Variable                             | Purpose                                     | Default                                 |
+| ------------------------------------ | ------------------------------------------- | --------------------------------------- |
+| `PENNY_ORCH_DB`                      | Checkpointer SQLite path                    | `$PROJECT_ROOT/.penny/orchestration.db` |
+| `PENNY_ARTIFACT_ROOT`                | Separate owner-only manifest/object root    | XDG state directory                     |
+| `PENNY_ARTIFACT_DISPATCH_MODE`       | Owner dispatch control: `active`/`paused`   | `active`                                |
+| `PENNY_TOOL_RESULT_MAX_BYTES`        | Optional lower model-result byte cap        | `32768`                                 |
+| `PENNY_TOOL_RESULT_MAX_TOKENS`       | Optional lower conservative token cap       | `8192`                                  |
+| `PI_OBSERVABILITY_URL`               | Observability base URL                      | `http://localhost:8765`                 |
+| `PI_OBSERVABILITY_API_KEY`           | Observability bearer token                  | empty                                   |
+| `PENNY_ORCH_MAX_STEP_RETRIES`        | Transient step retry budget                 | `2`                                     |
+| `PENNY_ABLATE_<LOAN_ID>`             | Disable one registered loan for an ablation | unset                                   |
+| `PI_STALL_MODEL`                     | Optional semantic stall judge               | unset                                   |
+| `PI_STRATEGY_MODEL`                  | Optional semantic retry-strategy judge      | unset                                   |
+| `PI_MODEL_TIER`                      | `strong` / `cheap` capability-tier scaling  | unset                                   |
+| `RESEARCH_VERA` / `RESEARCH_DEFAULT` | Optional research validation/model routing  | unset                                   |
 
-> **Removed:** `PENNY_RECALL` and the run-start lesson-recall mechanism it gated. The
-> engine no longer injects anything retrieved from MemPalace into an agent directive —
-> it was delivering unreviewed stored text into prompts. See
-> `tests/test_no_memory_injection.py`.
+The engine never injects retrieved durable memory into directives. It emits exact
+`input_artifacts` and owner-only `output_artifact` contracts. Output
+`consumer_scope` is derived from the actual non-control FSM successors, the
+same-state retry/parallel fan-in consumer, and a fail-closed playbook seam for
+explicit retained historical inputs. It never defaults to the playbook registry;
+a ref granted to one legitimate phase is rejected by every other unlisted phase.
+Only a direct or explicitly declared terminal consumer receives `state:complete`.
 
-## Tests & CI guards
+Unknown dispatch-mode values fail closed as a retriable pause. `status` and
+exact artifact reads remain available while paused; the mode controls dispatch,
+not read access or memory-service authority.
+
+The skill driver persists canonical finalized output before parsing SUMMARY:
+every text part in the final assistant message, concatenated in order with no
+inserted separator; thinking/reasoning and tool calls are excluded. The engine
+verifies exact bytes, length/digest, receipt, run/state/branch/producer/consumer
+binding, and stale-safe selection before routing. Memory may be absent.
+
+## Verification
+
+From the repository root:
 
 ```bash
-.venv/bin/python -m pytest apps/orchestration/tests --timeout=30
-python scripts/system/checks/check_orchestration_guards.py   # zero _force_state, zero --state
+.venv/bin/python -m pytest apps/orchestration/tests/test_cli.py \
+  apps/orchestration/tests/test_research_playbook.py \
+  apps/orchestration/tests/test_execution_receipts.py -v
+.venv/bin/python -m pytest apps/orchestration/tests -v
 ```
 
-See `docs/agents/orchestration/overview.md` and `docs/agents/skills/orchestration.md`.
+See `docs/agents/orchestration/overview.md` and
+`docs/agents/skills/orchestration.md` for the shared protocol.

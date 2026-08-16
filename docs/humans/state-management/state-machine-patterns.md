@@ -2,7 +2,7 @@
 
 Ready-to-use patterns for building a skill as a `BasePlaybook` subclass on the shared orchestration engine (`apps/orchestration/`). Each pattern uses the engine's building blocks — states, `route_after`, `done_predicate`, gates, fan-out, escalation, and tool states — rather than a hand-rolled per-skill FSM.
 
-> **Legacy note.** These patterns replace the old `python-statemachine`-in-`orchestrate.py` recipes with their `/tmp` session files and `SessionManager` JSON persistence. That path is **removed**: run state lives in the engine's durable checkpointer keyed by `run_id`, and a skill's `scripts/orchestrate.py` is a ~5-line delegate. Study `playbooks/code.py` and `playbooks/plan.py` for full worked examples.
+> **Legacy note.** These patterns replace the old `python-statemachine`-in-`orchestrate.py` recipes with their `/tmp` session files and `SessionManager` JSON persistence. That path is **removed**: run state lives in the engine's durable checkpointer keyed by `run_id`, and a skill's `scripts/orchestrate.py` is a ~5-line delegate. The current worked implementation is `playbooks/research.py`.
 
 ## The Shape of Every Playbook
 
@@ -29,45 +29,45 @@ The engine reserves `awaiting_clarification`, `complete` (final), and `error` (f
 
 ## Pattern 1: Sequential Pipeline
 
-A fixed chain of agents, each reading the prior one's output from mempalace. This is the backbone of the plan skill (explore → plan → critique → decompose).
+A fixed chain of workers, each receiving the exact owner-granted predecessor artifact. Use it when each phase has a clear predecessor and the sequence benefits from durable checkpoints.
 
 ```python
-class PlanPlaybook(BasePlaybook):
-    ESCALATABLE_STATES = frozenset({"exploring", "planning", "critiquing"})
+class PipelinePlaybook(BasePlaybook):
+    ESCALATABLE_STATES = frozenset({"gathering", "synthesizing", "validating"})
 
     def route_after(self, state, ctx, summary):
         ctx.set(f"{state}_summary", summary)
-        if state == "exploring":
-            self.sm.send("to_planning")
-        elif state == "planning":
-            self.sm.send("to_critiquing")
-        elif state == "critiquing":
-            self.sm.send("to_decomposing")
-        elif state == "decomposing":
+        if state == "gathering":
+            self.sm.send("to_synthesizing")
+        elif state == "synthesizing":
+            self.sm.send("to_validating")
+        elif state == "validating":
+            self.sm.send("to_writing")
+        elif state == "writing":
             self.sm.send("to_complete")
 
     def done_predicate(self, ctx):
-        return ctx.get("decomposing_summary") is not None
+        return ctx.get("writing_summary") is not None
 ```
 
-Each state's SUMMARY contract validates that the agent returned the fields the next state needs. The full artifact stays in mempalace; only the SUMMARY flows through `ctx`.
+Each state's SUMMARY contract validates routing fields. Complete stage bytes stay in immutable owner artifacts; only compact SUMMARY data and selected refs flow through `ctx`.
 
 ## Pattern 2: Bounded Retry Loop (Ralph Wiggum)
 
-Iterate implement → verify → learn until the goal is met or the budget is spent. This is the core of the code skill.
+Iterate act → verify → learn until the goal is met or the budget is spent. This is useful whenever verification can identify an actionable gap for the next attempt.
 
 ```python
-class CodePlaybook(BasePlaybook):
-    ESCALATABLE_STATES = frozenset({"implementing", "verifying", "learning"})
+class RepairPlaybook(BasePlaybook):
+    ESCALATABLE_STATES = frozenset({"acting", "verifying", "learning"})
 
     def route_after(self, state, ctx, summary):
         if state == "learning":
             if not summary["gap"]:
                 self.sm.send("to_final_verify")        # one final verify → complete
             elif ctx.iteration < ctx.max_iterations:
-                self.sm.send("to_implementing")        # retry with the gap findings
+                self.sm.send("to_acting")              # retry with the gap findings
             else:
-                # budget spent — complete HONESTLY, never fake success
+                # Budget spent — complete honestly, never fake success.
                 ctx.set("met", False)
                 self.sm.send("to_complete")
 ```
@@ -80,7 +80,7 @@ Rules the engine enforces for you:
 
 ### Stall detection
 
-Wire `progress_check` so a loop that keeps retrying the *same* failing strategy escalates instead of spinning:
+Wire `progress_check` so a loop that keeps retrying the _same_ failing strategy escalates instead of spinning:
 
 ```python
 def progress_check(self, state, ctx, summary):
@@ -93,32 +93,32 @@ Returning a reason on an escalatable state pauses the run at `awaiting_clarifica
 
 ## Pattern 3: Planned HITL Gate
 
-Pause for an explicit user decision at a known point. The code skill gates twice: a criteria gate and a plan-approval gate.
+Pause for an explicit user decision at a known point before expensive, external, or hard-to-reverse work.
 
 ```python
-class CodePlaybook(BasePlaybook):
-    GATE_STATES = frozenset({"criteria_gate", "plan_gate"})
+class ApprovalPlaybook(BasePlaybook):
+    GATE_STATES = frozenset({"approval_gate"})
 
     def gate_questions(self, state, ctx):
-        if state == "plan_gate":
+        if state == "approval_gate":
             return [{
                 "id": "decision",
-                "prompt": "Approve this plan?",
+                "prompt": "Approve this approach?",
                 "options": ["approve", "refine", "deny"],
             }]
         ...
 
     def route_user(self, state, ctx, response):
-        if state == "plan_gate":
+        if state == "approval_gate":
             if response == "approve":
-                self.sm.send("to_implementing")
+                self.sm.send("to_executing")
             elif response == "refine":
-                self.sm.send("to_planning")
+                self.sm.send("to_revising")
             else:  # deny → terminate honestly
                 self.sm.send("to_error")
 ```
 
-The engine pauses the run at the gate, surfaces the questionnaire, and resumes on the user's answer via `route_user`. No code is written before an `approve`.
+The engine pauses the run at the gate, surfaces the questionnaire, and resumes on the user's answer via `route_user`. The gated work does not begin before an `approve`.
 
 ## Pattern 4: Parallel Fan-Out
 
@@ -151,37 +151,37 @@ When an agent on one of these states returns `confidence: UNCERTAIN`, the engine
 
 ## Pattern 6: Deterministic Tool State
 
-A step that runs in-process with no agent — detection, setup, a pure computation. The code skill uses one to enrich the IDEAL_STATE with server-startup detection before exploring.
+A step that runs in-process with no agent — validation, setup, or another pure computation.
 
 ```python
-class CodePlaybook(BasePlaybook):
-    TOOL_STATES = frozenset({"detecting"})
+class SetupPlaybook(BasePlaybook):
+    TOOL_STATES = frozenset({"preparing"})
 
     def run_tool_state(self, state, ctx):
         # MUST be idempotent — a crash-resumed run re-issues this step.
-        if state == "detecting":
-            ctx.set("server_project", detect_server(ctx.get("project_root")))
+        if state == "preparing":
+            ctx.set("normalized_inputs", normalize(ctx.get("inputs")))
 ```
 
 `run_tool_state` runs synchronously inside `step`; make it safe to re-run, because an interrupted run re-issues the state on resume.
 
 ## Testing a Playbook
 
-Drive the engine step by step against a temporary checkpointer, asserting the state transition and the captured SUMMARY at each step. Use a fresh playbook instance per step to prove crash-resume works (state comes from the checkpointer, not the object). See `apps/orchestration/tests/test_code_playbook.py` for the reference pattern:
+Drive the engine step by step against a temporary checkpointer, asserting the state transition and captured SUMMARY at each step. Use a fresh playbook instance per step to prove crash-resume works (state comes from the checkpointer, not the object). See `apps/orchestration/tests/test_research_playbook.py` for the current reference pattern:
 
 ```python
-def test_explore_to_analyze(tmp_path):
+def test_gather_to_synthesize(tmp_path):
     cp = Checkpointer(tmp_path / "runs.db")
-    run_id = start_run(CodePlaybook, cp, goal=..., constraints=...)
+    run_id = start_run(PipelinePlaybook, cp, goal=..., constraints=...)
 
-    # fresh instance each step — state is loaded from the checkpointer by run_id
-    directive = step(CodePlaybook, cp, run_id, agent="echo", summary={...})
+    # Fresh instance each step — state is loaded from the checkpointer by run_id.
+    directive = step(PipelinePlaybook, cp, run_id, agent="echo", summary={...})
     assert directive["action"] == "invoke_agent"
-    assert directive["agent"] == "annie"        # exploring → analyzing
+    assert directive["agent"] == "synthia"      # gathering → synthesizing
 ```
 
 ## Related
 
 - [State Management](state-management.md) — the engine model and building blocks.
-- [Architecture](state-machine-architecture.md) — how engine, playbook, agents, checkpointer, and mempalace fit together.
-- `apps/orchestration/src/orchestration/playbooks/code.py`, `plan.py` — worked playbooks.
+- [Architecture](state-machine-architecture.md) — how engine, playbook, workers, checkpointer, artifacts, and optional primary memory fit together.
+- `apps/orchestration/src/orchestration/playbooks/research.py` — current worked playbook.

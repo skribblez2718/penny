@@ -1,46 +1,56 @@
-# MemPalace Integration for Skills — Inter-agent communication via memory
+# Skill Artifact Handoff and Optional Durable Memory
 
-## What
+> The filename is retained for link stability. Its former session-room protocol
+> is retired.
 
-Skills use mempalace as the communication bus between agents. Each agent reads upstream context and writes downstream results to the skill's session room.
+## Active workflow handoff
 
-## Why
+1. The playbook selects exact predecessor refs for each consumer.
+2. The directive declares strict `input_artifacts` and an owner
+   `output_artifact` contract.
+3. The runner grants only those refs to that worker.
+4. The worker reads every grant with `artifact_read`, following continuation
+   until complete, and returns complete stage content.
+5. The execution owner persists and verifies exact response bytes before parsing
+   the routing-only `SUMMARY`.
+6. The checkpointer records compact routing state and selected refs for retry,
+   clarification, restart, and compaction recovery.
 
-Without a shared memory substrate, agents would need to pass data through Penny's context — bloating it and breaking the context-preservation model.
+Parallel branches are keyed by `branch_id` and receive no sibling grants. A
+malformed SUMMARY may create an explicit artifact revision; it never causes a
+semantic search for a replacement predecessor.
 
-## Rules
+## Durable memory boundary
 
-1. **One room per skill session.** `skills/<skill_name>-<session_id>`.
-2. **Agents read before acting.** Search the session room for prior agent output.
-3. **Agents write after completing.** Store results in named drawers within the session room.
-4. **Orchestrator reads SUMMARY only.** Full agent output stays in mempalace.
+Memory is optional and primary-owned. The unmarked primary runtime may retrieve
+prior durable knowledge when it could materially affect the task and may curate
+a reusable result after completion. Workers and skill drivers receive no memory
+tools or lifecycle hooks.
 
-## Room Convention
+Historical `skills/<skill>-<session_id>` rooms are legacy corpus. They are not
+active handoff channels, and their legacy classification is never deletion
+authority.
 
-```
-skills/plan-<session_id>/
-├── <session_id> state        # FSM state blob
-├── <session_id> explore       # Echo findings
-├── <session_id> plan          # Piper plan
-├── <session_id> critique      # Carren review
-└── <session_id> tasks         # Tabitha task list
-```
+## Context safety
 
-## Constraints
-
-- **Never pass full agent output through Penny.** SUMMARY only.
-- **Drawer names must be consistent** across skill invocations for the same agent role.
-- **Clean up session rooms** after skill completion (or let T2 expiry handle it).
+- Artifact reads are exact-ref and grant bound; there is no list/search/guess surface.
+- Oversized content uses an opaque, caller/query/revision-bound continuation.
+- `RunContext` stores refs, not payload bytes.
+- Compaction preserves a prose orientation plus code-owned exact run/artifact refs;
+  ordinary continuation does not require memory availability.
 
 ## Verification
 
-- [ ] Each agent writes to the correct session room
-- [ ] Orchestrator reads SUMMARY, not full output
-- [ ] Drawer names follow convention
+- [ ] Every stage selects all required exact predecessors.
+- [ ] Owner capture and ref verification precede SUMMARY routing.
+- [ ] No worker prompt or tool list contains a durable-memory instruction/tool.
+- [ ] Retry/restart retain the same selected refs.
+- [ ] Legacy rooms are treated only as historical corpus.
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `docs/agents/memory/integration.md` | Memory integration patterns |
-| `docs/agents/skills/orchestration.md` | Orchestrator protocol |
+| File                                  | Purpose                               |
+| ------------------------------------- | ------------------------------------- |
+| `docs/agents/skills/orchestration.md` | Engine protocol                       |
+| `.pi/extensions/artifacts/README.md`  | Exact artifact reads and continuation |
+| `docs/agents/memory/integration.md`   | Primary durable-memory policy         |

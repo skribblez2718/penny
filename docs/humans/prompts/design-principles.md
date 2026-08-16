@@ -10,15 +10,14 @@ The core concepts and rationale behind Penny's prompt architecture. These princi
 
 ### The Concept
 
-Every rule in the Cognitive Frame defines a **thinking step**, not a desired output quality.
+Every rule is a **specific, executable directive**, not a desired output quality — while stopping short of mandated multi-step reasoning scripts (see Principle 11; the two principles together say: constrain outcomes, not methods).
 
-| Output-Shaped (AVOID) | Process-Shaped (PREFER) |
-|----------------------|------------------------|
-| "Be accurate" | "Never fabricate facts, sources, or results" |
-| "Be thorough" | "Verify before delivering" |
-| "Be clear" | "Resolve ambiguity explicitly before proceeding" |
+| Output-Shaped (AVOID)   | Process-Shaped (PREFER)                           |
+| ----------------------- | ------------------------------------------------- |
+| "Be accurate"           | "Never invent facts, sources, or results"         |
+| "Be thorough"           | "Claim completion only with evidence"             |
+| "Be clear"              | "State material assumptions"                      |
 | "Consider alternatives" | "When two approaches conflict, name the tradeoff" |
-| "Be helpful" | "RESTATE the goal, IDENTIFY the category, LIST constraints" |
 
 ### Why
 
@@ -26,28 +25,28 @@ Output-shaped prompts are aspirations. "Be thorough" tells the model _what the r
 
 Process-shaped prompts constrain the path, not just the destination. "Verify before delivering" is an executable step. The model doesn't need to interpret — it just follows the instruction.
 
-This principle was codified in the Cognitive Frame standards on April 14, 2026: "Every section in the Cognitive Frame must define a thinking step, not a desired output quality."
+This principle was first codified in the Cognitive Frame standards on April 14, 2026 as "every section must define a thinking step." The current standards state it more carefully — prefer clear goals, observable constraints, and lightweight execution directives; never mandate reasoning scripts — because "process-shaped beats output-shaped" as an absolute has no direct published test, and prescriptive scaffolds measurably hurt reasoning-native models. The narrower editorial form (specific directives over vague aspirations) is the part that survives.
 
 ### From Always-On Protocol to On-Demand Protocol
 
-The six-step RESTATE / IDENTIFY / LIST / LIST / SURFACE / FLAG sequence was originally an always-on "Before Responding Protocol" — mandatory cognitive steps before every response. It no longer lives in the frame. Prescriptive step scaffolds are exactly the prompt content that goes neutral-to-negative on reasoning-native models (the [DEBUNKED-ADJACENT] tag above), and always-on procedure is the class of scaffolding that ages worst as models improve (Principle 11). The sequence survives as the **on-demand clarification protocol** (`docs/penny/clarification-protocol.md`): the frame's Ask vs. Act section states only the *activation condition* (genuinely under-specified, irreversible, high-stakes, or not sure enough to proceed safely), and the full protocol loads only when that trigger fires. The frame keeps single executable directives ("surface constraints and success criteria before work"); the multi-step script became a tool reached for on demand.
+The six-step RESTATE / IDENTIFY / LIST / LIST / SURFACE / FLAG sequence was originally an always-on "Before Responding Protocol" — mandatory cognitive steps before every response. It no longer lives in the frame. Prescriptive step scaffolds are exactly the prompt content that goes neutral-to-negative on reasoning-native models (the [DEBUNKED-ADJACENT] tag above), and always-on procedure is the class of scaffolding that ages worst as models improve (Principle 11). The sequence survives as the **on-demand clarification protocol** (`docs/penny/clarification-protocol.md`): the frame states only the _activation trigger_ (blocking ambiguity: a missing fact that could materially change the result, a materially consequential action, or missing authorization), and the full protocol loads only when that trigger fires. The frame keeps single executable directives ("surface constraints and success criteria before work"); the multi-step script became a tool reached for on demand.
 
 ### Scope: Which Layers This Principle Applies To
 
-This principle applies to all **cognitive layers** — layers that define *how to think*:
+This principle applies to all **cognitive layers** — layers that define _how to think_:
 
-| Layer | Shape | Rationale |
-|-------|-------|-----------|
-| Cognitive Frame | Process-shaped | Universal reasoning steps — defines *how to think* |
-| Role Definition | Process-shaped | Role constraints — defines *how this role operates* |
-| Domain Guidance | Process-shaped | Domain patterns — defines *how to reason about this domain* |
-| Invocation Context | **Output-shaped (by design)** | The goal/task — defines *what to achieve*, not *how to think* |
+| Layer              | Shape                         | Rationale                                                                           |
+| ------------------ | ----------------------------- | ----------------------------------------------------------------------------------- |
+| Cognitive Frame    | Executable policy directives  | Universal operating policy — outcome and boundary constraints, no reasoning scripts |
+| Role Definition    | Process-shaped                | Role constraints — defines _how this role operates_                                 |
+| Domain Guidance    | Process-shaped                | Domain patterns — defines _how to reason about this domain_                         |
+| Invocation Context | **Output-shaped (by design)** | The goal/task — defines _what to achieve_, not _how to think_                       |
 
-The Invocation Context is the one layer where output-shaped language is correct and expected. "Review session plan-001's explore findings" is a goal, not a process. If someone tried to make it process-shaped ("First read the findings, then identify gaps, then list issues"), they would duplicate the Cognitive Frame's reasoning protocol and the Domain Guidance's domain-specific steps — a cross-layer violation of Principle 5 (No Repetition Across Layers).
+The Invocation Context is the one layer where output-shaped language is correct and expected. "Review session research-001's draft findings" is a goal, not a process. If someone tried to make it process-shaped ("First read the findings, then identify gaps, then list issues"), they would duplicate the Cognitive Frame's reasoning protocol and the Domain Guidance's domain-specific steps — a cross-layer violation of Principle 5 (No Repetition Across Layers).
 
 ### The Deliver Rule Is Process-Shaped
 
-The frame's Deliver rule ("Lead with the answer or critical insight; close with risks and watch-points; a response must add information or progress") is itself **process-shaped**, not output-shaped. It tells the model *how to structure the output* (an executable step), not *what the output should be* (a quality aspiration). "Lead with the answer" is an actionable directive. "Make the output insightful" would be output-shaped. This distinction is important: even the rules governing output structure are process-shaped.
+The frame's Deliver rule ("Lead with the answer or critical insight; close with risks and watch-points; a response must add information or progress") is itself **process-shaped**, not output-shaped. It tells the model _how to structure the output_ (an executable step), not _what the output should be_ (a quality aspiration). "Lead with the answer" is an actionable directive. "Make the output insightful" would be output-shaped. This distinction is important: even the rules governing output structure are process-shaped.
 
 ### The Process-Shaped Wrapper Pattern
 
@@ -55,10 +54,10 @@ The overall system is a **process-shaped wrapper around an output-shaped goal**:
 
 ```
 Output-shaped goal (Invocation Context)
-    "Review session plan-001's explore findings"
+    "Review session research-001's draft findings"
         ↓
 Process-shaped loop (FSM orchestration)
-    explore → plan → critique → revise → complete
+    gather → synthesize → validate → revise → complete
         ↓
 Process-shaped directives (Cognitive Frame + Domain Guidance)
     criteria before work → evidence-backed completion → honest exhaustion
@@ -71,7 +70,7 @@ The goal is the only output-shaped element, and it sits in the Invocation Contex
 
 ## 2. Domain-Agnostic Agents
 
-**Status: [EVIDENCE] for the constraints, [DEBUNKED-ADJACENT] for identity.** Functional role constraints (tools, READ-ONLY, output contracts) are engineering with clear value. But do not expect the identity sentence itself ("You are Carren…") to add accuracy: persona prompting for accuracy is debunked — 162 personas across 4 model families showed no gain, with per-persona effects "largely random" (Zheng et al. 2024; Wharton Report 4 found 9 significant *decreases* across 6 frontier models).
+**Status: [EVIDENCE] for the constraints, [DEBUNKED-ADJACENT] for identity.** Functional role constraints (tools, READ-ONLY, output contracts) are engineering with clear value. But do not expect the identity sentence itself ("You are Carren…") to add accuracy: persona prompting for accuracy is debunked — 162 personas across 4 model families showed no gain, with per-persona effects "largely random" (Zheng et al. 2024; Wharton Report 4 found 9 significant _decreases_ across 6 frontier models).
 
 ### The Concept
 
@@ -83,15 +82,15 @@ Agent Definition (.pi/agents/carren.md)
     "I am Carren. I review work products for quality.
      I am READ-ONLY, EVIDENCE-BASED, CONSTRUCTIVE."
 
-Domain Guidance (.pi/skills/plan/assets/prompts/carren.md)
+Domain Guidance (.pi/skills/research/assets/prompts/carren.md)
     ↓
-    "In this skill context, review plans against CREST dimensions.
-     Use APPROVE / NEEDS_REVISION / BLOCKED verdicts."
+    "In this skill context, review research artifacts for grounding,
+     coverage, bias, and unsupported claims."
 
 Task Message
     ↓
-    "Review session plan-001's explore findings.
-     Goal: Vacation planning for Japan trip."
+    "Review session research-001's draft report.
+     Goal: Compare storage approaches."
 ```
 
 ### Why
@@ -114,44 +113,49 @@ Only when the agent needs fundamentally different **tools**, **security constrai
 
 Every skill prompt (Domain Guidance) uses the CREST framework to structure domain-specific thinking:
 
-| Dimension | Question | Example (Coding) |
-|-----------|----------|-----------------|
-| **C**onstraints | What are the universal hard limits? | Must not break existing tests |
-| **R**esources | What does this domain consume or require? | Dependencies, build tools |
-| **E**valuation | How do you know good from bad? | Tests pass, reviews clean |
-| **S**equence | Does order matter? What depends on what? | Dep analysis → impl → testing |
-| **T**radeoffs | What are the fundamental tensions? | Speed vs. readability |
+| Dimension       | Question                                  | Example (Coding)              |
+| --------------- | ----------------------------------------- | ----------------------------- |
+| **C**onstraints | What are the universal hard limits?       | Must not break existing tests |
+| **R**esources   | What does this domain consume or require? | Dependencies, build tools     |
+| **E**valuation  | How do you know good from bad?            | Tests pass, reviews clean     |
+| **S**equence    | Does order matter? What depends on what?  | Dep analysis → impl → testing |
+| **T**radeoffs   | What are the fundamental tensions?        | Speed vs. readability         |
 
 ### Why
 
-CREST provides a consistent mental model across all domains. When Echo explores for a plan skill, it uses the CREST table from the plan's explore prompt. When Carren critiques, it uses the CREST evaluation criteria from the plan's critique prompt. The same framework, different domain content.
+CREST provides a consistent mental model across domains. In the current research workflow, an evidence-gathering assignment can use CREST to surface source constraints and tradeoffs, while a critique assignment uses the domain's evaluation criteria to test coverage and grounding. The framework stays consistent while the assignment-specific content changes.
 
 This was formalized in the role-and-domain-standards.md on April 14, 2026: "Each new domain gets a CREST analysis that becomes a section in the relevant skill prompt."
 
 ## 4. Context Window Preservation
 
-### The Concept
+### The concept
 
-Agents serve a dual purpose: domain expertise AND context window preservation. When Penny delegates to a subagent:
+Agents still provide domain focus and separate context, but exact workflow data
+moves through an immutable artifact plane:
 
-1. Subagent writes **full output** to mempalace (complete findings, plan text, critique report)
-2. Subagent returns **minimal SUMMARY** to Penny (~50 tokens: `{"findings_count": 12, "explore_complete": true, "mempalace_drawer": "drawer_abc123"}`)
-3. Penny hands the SUMMARY back to the engine, which advances the playbook using SUMMARY metadata only
-4. Next subagent reads full prior output directly from mempalace
+1. The execution owner grants only the exact predecessor refs needed now.
+2. The worker reads them with `artifact_read`, following typed continuation until complete.
+3. The worker returns complete stage content plus a small routing SUMMARY.
+4. The owner persists and verifies exact bytes before SUMMARY routing.
+5. The checkpointer retains compact state and selected refs, never payload bytes.
 
 ### Why
 
-This was the solution to the "68K token problem" discovered on April 12, 2026. Penny was consuming ~68,000 tokens per skill invocation because she was acting as a pass-through relay — reading full agent outputs and feeding them back to the orchestrator. After the refactoring:
+This keeps Penny from becoming a pass-through relay without making semantic
+memory search part of workflow correctness. Exact refs survive malformed-SUMMARY
+retry, clarification, process restart, parallel partial recovery, and compaction.
+The model cannot list, search, guess, or self-grant artifacts.
 
-- OLD: ~68,000 tokens per skill invocation
-- NEW: ~1,054 tokens per skill invocation
-- REDUCTION: 98.5% (64x fewer tokens)
-
-The engine now stores run state in a durable SQLite checkpointer keyed by `run_id` — not as an `orchestrator_state` blob in Penny's context or mempalace — and its action directives carry the `run_id` plus a minimal `task_summary` string. Agents read prior context from mempalace, not from Penny's context.
+Workers and skill drivers have no durable-memory tools. The unmarked primary
+runtime retains bounded, value-triggered recall and curated cross-session memory
+as a separate capability.
 
 ### Consequence
 
-This is why we don't create agent variants. Creating `echo-travel`, `echo-code`, etc. would encourage orchestrators to treat agents as data containers — embedding domain knowledge in the agent file instead of injecting it via Domain Guidance. The existing 4-agent pool is sufficient because specificity comes from the skill context, and context preservation requires lean agent outputs.
+Complete stage output and routing data are distinct. A model-authored SUMMARY or
+locator cannot prove persistence. Local agent definitions stay domain-agnostic,
+and remote harness/service presence remains in its own registry.
 
 ## 5. No Repetition Across Layers
 
@@ -186,7 +190,7 @@ One term per concept, across every layer — enforced through two different mech
 
 ### Why the frame no longer carries the table
 
-An earlier frame carried a six-term inline vocabulary table, accepted as an intentional budget deviation. It was trimmed in the Bitter-Lesson frame passes: an always-on table is a standing token cost whose adherence value was never demonstrated, and a capable model does not need definitions of ordinary words — it needs the terms *used consistently*, which is an authoring discipline, not frame content. The principle (consistency) outlived the mechanism (the inline table) — exactly the "ratchet on capabilities, never implementations" pattern.
+An earlier frame carried a six-term inline vocabulary table, accepted as an intentional budget deviation. It was trimmed in the Bitter-Lesson frame passes: an always-on table is a standing token cost whose adherence value was never demonstrated, and a capable model does not need definitions of ordinary words — it needs the terms _used consistently_, which is an authoring discipline, not frame content. The principle (consistency) outlived the mechanism (the inline table) — exactly the "ratchet on capabilities, never implementations" pattern.
 
 ## 7. Declarative Rules, Not Narrative
 
@@ -203,35 +207,35 @@ Rules in the Cognitive Frame are declarative (imperative verbs), not narrative (
 
 Declarative rules are instructions. Narrative is aspiration. The model follows instructions more reliably than aspirations. This is related to process-shaped vs. output-shaped: declarative rules define executable steps; narrative describes desired outcomes.
 
-## 8. Reach for Skills and Agents First ("Route to the Right Abstraction")
+## 8. Lowest-Complexity-Sufficient Routing ("Route to the Right Abstraction")
 
 ### The Concept
 
-Penny follows a decision tree for task routing:
+Penny chooses the lowest-complexity execution path expected to succeed:
 
-1. Does a **skill** exist for this task? → Use it (skills orchestrate multi-step workflows)
-2. Is this a **single-domain task**? → Use a subagent (isolated context, domain expertise)
-3. Otherwise → Handle directly (trivially simple tasks)
+1. **Direct** — current context and tools are sufficient; a handoff would add more overhead than value.
+2. **Subagent** — specialization, isolated context, parallel exploration, or a separate review materially improves the result.
+3. **Skill** — an established workflow's durable state, approval gates, retries, or resumability materially improves reliability.
 
-In the current frame this lives in the **Reach for Skills and Agents First** section, with one Bitter-Lesson refinement: the choice is made by *reasoning over capability descriptions*, never by keyword-matching — routing is the model's judgment over declared capabilities, not a lookup table.
+The choice is made by _reasoning over capability descriptions_, never by keyword-matching — routing is the model's judgment over declared capabilities, not a lookup table.
 
 ### Why
 
-This prevents Penny from "doing the work herself" when a skill exists. Early in development, Penny would read 15+ files to "understand context" before invoking the plan skill. This violated the architecture — agents read files in isolated contexts; Penny is a router. The fix on April 15, 2026 was to replace the ambiguous "delegate immediately" with the concrete "invoke the skill or agent tool immediately."
+Delegation has real costs: the handoff must be formulated, context can be lost in transfer, results must be integrated, latency and tokens accumulate, and a child model can make a correlated version of the same mistake. Skills and agents earn those costs when their isolation, specialization, state, or gates add material value — not merely because a task has multiple steps.
 
-The word "invoke" maps directly to the `skill()` and `subagent()` tools. "Delegate" is an abstract concept that LLMs can interpret broadly.
+An earlier frame mandated "reach for skills and agents first," self-handling only trivial one-call work. That mandate was retired: it fought the Bitter-Lesson ratchet (as models improve, more work becomes cheap to do directly, and a delegation mandate blocks that gain) and it contradicted the more selective guidance in the routing tools themselves. The lesson that _was_ kept: when Penny does delegate to a skill, she invokes it rather than re-doing the same discovery in her own context first — the historical failure mode was reading many files "to understand context" before delegation, duplicating work the workflow's agents then repeated in isolated contexts.
 
 ## 9. Self-Verification Is Unconditional
 
-**Status: [EVIDENCE] for the framing.** Intrinsic self-correction is debunked — asking a model to review its own answer *reduces* accuracy (GPT-4 lost 4 points on GSM8K after self-review; Huang et al., ICLR 2024), and no published work demonstrates successful intrinsic self-correction (Kamoi et al., TACL 2024). That is exactly why the frame relies on external anchors (evidence-backed completion, honest exhaustion, the one-line Deliver check) rather than self-critique, and why correctness review routes to a *different model* (Carren critique, Vera verification).
+**Status: [EVIDENCE] for the framing.** Intrinsic self-correction is debunked — asking a model to review its own answer _reduces_ accuracy (GPT-4 lost 4 points on GSM8K after self-review; Huang et al., ICLR 2024), and no published work demonstrates successful intrinsic self-correction (Kamoi et al., TACL 2024). That is exactly why the frame relies on external anchors (evidence-backed completion, honest exhaustion, the one-line Deliver check) rather than self-critique, and why correctness review routes to a _different model_ (Carren critique, Vera verification).
 
 ### The Concept
 
-Evidence-gated completion cannot be skipped by any priority override. The frame's **What Done Requires** contract — a "done" claim carries evidence; exhaustion is reported honestly; the response must add information or progress — binds even under "just do it" (Priority 3 skips *clarification*, never *self-verification*).
+Evidence-gated completion cannot be skipped by any instruction. The frame's **Completion** contract — a "done" claim carries evidence appropriate to the task; exhaustion is reported honestly; what was not verified is stated — binds even under "just proceed" (which authorizes reasonable assumptions, never unverified completion claims).
 
 ### Why
 
-This is the safety net, and it is deliberately **not** self-critique. Intrinsic self-correction is debunked (the citations above), so the frame does not ask the model to re-grade its own reasoning. Instead it demands *external anchors*: captured evidence for completion claims (test output, tool output, a citation), honest `met=false` reporting on budget exhaustion, and a lightweight presence check at delivery. Correctness review routes to a *different model* (Carren critique, Vera verification — vera's evidence-tier hierarchy: execute > apply-the-rule > judge). Verification quality, not model quality, is the ceiling of the system — which is why the investment goes into evidence contracts rather than into asking the model to try harder.
+This is the safety net, and it is deliberately **not** self-critique. Intrinsic self-correction is debunked (the citations above), so the frame does not ask the model to re-grade its own reasoning. Instead it demands _external anchors_: captured evidence for completion claims (test output, tool output, a citation), honest `met=false` reporting on budget exhaustion, and a lightweight presence check at delivery. Correctness review routes to a _different model_ (Carren critique, Vera verification — vera's evidence-tier hierarchy: execute > apply-the-rule > judge). That cross-model review is **model-diverse review** — valuable supplementary scrutiny, not independent evidence by itself; the independent anchors remain tests, tools, and sources. Verification quality, not model quality, is the ceiling of the system — which is why the investment goes into evidence contracts rather than into asking the model to try harder.
 
 ## 10. Concrete Verbs, Not Abstract Nominalizations
 
@@ -241,13 +245,13 @@ This is the safety net, and it is deliberately **not** self-critique. Intrinsic 
 
 Name actions with verbs, not abstract nouns. A **nominalization** turns a process ("analyze", "decide", "verify") into a thing ("analysis", "decision", "verification"). When an instruction hides its action inside a noun, it stops being a step the model can execute and becomes a topic the model must interpret.
 
-| Nominalized (AVOID) | Concrete verb (PREFER) |
-|---------------------|------------------------|
-| "Perform an analysis of the input" | "Analyze the input" |
-| "Responsible for the identification of gaps" | "Identify gaps" |
-| "Conduct a review of the plan" | "Review the plan" |
-| "For the purpose of verification" | "To verify" |
-| "Upon completion of the exploration" | "After you explore" |
+| Nominalized (AVOID)                          | Concrete verb (PREFER) |
+| -------------------------------------------- | ---------------------- |
+| "Perform an analysis of the input"           | "Analyze the input"    |
+| "Responsible for the identification of gaps" | "Identify gaps"        |
+| "Conduct a review of the plan"               | "Review the plan"      |
+| "For the purpose of verification"            | "To verify"            |
+| "Upon completion of the exploration"         | "After you explore"    |
 
 ### Why
 
@@ -275,18 +279,18 @@ Applies to every authored layer: Cognitive Frame (`SYSTEM.md`), Role Definition 
 
 Every line of prompt text is classified before it ships:
 
-| Class | Examples | Treatment |
-|-------|----------|-----------|
-| **Consequence boundary** | Security directives, READ-ONLY, no-output-to-project-tree, HITL conditions | Permanent — kept or strengthened, never trimmed |
-| **Conduit** | Evidence-backed completion, honest exhaustion, escalation, delegation, memory discipline | Durable — these scale *with* model improvement |
-| **Wire format** | Confidence vocabulary, `needs_clarification`, SUMMARY structure | Plumbing — an API; stated once, never renamed casually |
-| **Procedure / ceremony** | Step scripts, per-agent restatements of frame rules, "think step by step", workarounds for a past model's quirks | A **loan** — permitted only deliberately and tagged |
+| Class                    | Examples                                                                                                         | Treatment                                              |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| **Consequence boundary** | Security directives, READ-ONLY, no-output-to-project-tree, HITL conditions                                       | Permanent — kept or strengthened, never trimmed        |
+| **Conduit**              | Evidence-backed completion, honest exhaustion, escalation, delegation, memory discipline                         | Durable — these scale _with_ model improvement         |
+| **Wire format**          | Confidence vocabulary, `needs_clarification`, SUMMARY structure                                                  | Plumbing — an API; stated once, never renamed casually |
+| **Procedure / ceremony** | Step scripts, per-agent restatements of frame rules, "think step by step", workarounds for a past model's quirks | A **loan** — permitted only deliberately and tagged    |
 
-The add-side gate (from the frame's Operating Bet): *does this line gain or lose value as models improve?* If it loses, don't hard-code it — give the model the artifact and verify the output with evidence.
+The add-side gate (from the frame's Operating Bet): _does this line gain or lose value as models improve?_ If it loses, don't hard-code it — give the model the artifact and verify the output with evidence.
 
 ### Why
 
-Sutton's Bitter Lesson, applied to the prompt layer: methods that leverage computation (search, verification, learning, memory) beat baked-in human knowledge as compute grows — and prompt procedure *is* baked-in human knowledge about how the model should think. It helps the current model, plateaus, then actively fights the next one. The concrete house application: the always-on Before Responding Protocol became the on-demand clarification protocol (§1); the per-agent "Alignment with System Rules" restatements became the compact Working Discipline wire-format block; the inline vocabulary table became an authoring discipline (§6). In each case the *capability* was kept and the *implementation* was replaced — the ratchet protects outcomes, never mechanisms.
+Sutton's Bitter Lesson, applied to the prompt layer: methods that leverage computation (search, verification, learning, memory) beat baked-in human knowledge as compute grows — and prompt procedure _is_ baked-in human knowledge about how the model should think. It helps the current model, plateaus, then actively fights the next one. The concrete house application: the always-on Before Responding Protocol became the on-demand clarification protocol (§1); the per-agent "Alignment with System Rules" restatements became the compact Working Discipline wire-format block; the inline vocabulary table became an authoring discipline (§6). In each case the _capability_ was kept and the _implementation_ was replaced — the ratchet protects outcomes, never mechanisms.
 
 ## Related Documents
 

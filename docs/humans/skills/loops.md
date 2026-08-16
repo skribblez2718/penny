@@ -30,15 +30,15 @@ Both trace back to the same root cause: **the goal wasn't verifiable, or the loo
 
 Loops are not alternatives — they **nest**. A production system layers seven classes, each running inside the one above it:
 
-| # | Loop Class | What It Does | Penny Mechanism |
-|---|-----------|-------------|-----------------|
-| **L1** | Inner tool-use (ReAct) | Thought → action → observation, per agent invocation | Pi runtime (per subagent) |
-| **L2** | Verifier / critic gate | Separate evaluation decides: converge or cycle back | `done_predicate`, Vera/Carren split, SUMMARY contracts |
-| **L3** | Retry / repair (bounded) | On failure, repair and retry under a budget | `max_iterations`, `learn_retry`/`learn_exhausted` |
-| **L4** | Human-in-the-loop gates | Planned checkpoints for approval or escalation | Planned gates, UNCERTAIN → `awaiting_clarification` |
-| **L5** | Orchestration FSM | Explicit states, typed transitions, checkpointing, resume | `BasePlaybook` engine + durable checkpointer |
-| **L6** | Reflection / memory | Learning between runs without weight updates | MemPalace, LEARN |
-| **L7** | Background / scheduled | Time-triggered polling, monitoring, maintenance | Heartbeats |
+| #      | Loop Class               | What It Does                                                 | Penny Mechanism                                            |
+| ------ | ------------------------ | ------------------------------------------------------------ | ---------------------------------------------------------- |
+| **L1** | Inner tool-use (ReAct)   | Thought → action → observation, per agent invocation         | Pi runtime (per subagent)                                  |
+| **L2** | Verifier / critic gate   | Separate evaluation decides: converge or cycle back          | `done_predicate`, Vera/Carren split, SUMMARY contracts     |
+| **L3** | Retry / repair (bounded) | On failure, repair and retry under a budget                  | `max_iterations`, `learn_retry`/`learn_exhausted`          |
+| **L4** | Human-in-the-loop gates  | Planned checkpoints for approval or escalation               | Planned gates, UNCERTAIN → `awaiting_clarification`        |
+| **L5** | Orchestration FSM        | Explicit states, typed transitions, checkpointing, resume    | `BasePlaybook` engine + durable checkpointer               |
+| **L6** | Reflection / memory      | Optional, gated learning between runs without weight updates | Primary-only durable recall/curation; never worker handoff |
+| **L7** | Background / scheduled   | Time-triggered polling, monitoring, maintenance              | Heartbeats                                                 |
 
 ```
 ┌─ L7 Background loops ─────────────────────────────────────────────┐
@@ -59,7 +59,7 @@ Loops are not alternatives — they **nest**. A production system layers seven c
 
 ### These Classes Are Arrangements of Smaller Parts
 
-The seven classes are not the ground floor. Beneath them is a smaller set of **atomic components** — reusable building blocks (an event log, a budget counter, a verifier, a safety gate, parallel-execution machinery, memory) that snap together into loops. The seven classes are just the common *arrangements* of those parts. The reason this matters: it lets Penny build a loop for any task by assembling parts rather than reaching for a one-size-fits-all loop — and it keeps the loops from ageing badly as models improve, because the one component that ever *thinks* is isolated behind a single interface, so a better model upgrades every loop for free. See [Atomic Loop Components](../architecture/atomic-loop-components.md) for the full picture and the [Bitter-Lesson Doctrine](../architecture/bitter-lesson.md) for why it's built this way.
+The seven classes are not the ground floor. Beneath them is a set of **16 core atomic components**—reusable building blocks (an event log, a budget counter, a verifier, a safety gate, parallel-execution machinery, explicit memory retrieval) that snap together into loops. The seven classes are common _arrangements_ of those parts. The reason this matters: it lets Penny build a loop for any task without reaching for a one-size-fits-all loop, and it keeps loops from ageing badly as models improve because all model judgment stays behind one intelligence interface (`Decide` plus optional fresh-context `Critique`). See [Atomic Loop Components](../architecture/atomic-loop-components.md) for the atomhood rule, the optional L6 learning arrangement, and the [Bitter-Lesson Doctrine](../architecture/bitter-lesson.md) for why it is built this way.
 
 ### Key Finding: Verifier Loops Are Load-Bearing
 
@@ -73,13 +73,13 @@ Pure LLM self-critique hallucinates violations and over-corrects. Rules-based fe
 
 Match the loop stack to the task's verifiability and step-predictability:
 
-| Task Type | Primary Loops | Oracle Strength | Key Risk |
-|-----------|--------------|----------------|----------|
-| **Coding** | L2+L3 (+L4 gates) | High (tests/lint) | Premature "done" |
-| **Security** | L5+L4 (+bounded L3) | High on PoC, low on triage | Verifier gaming |
-| **Research** | L5+L1 fan-out+L2+L6 | Low (source grounding) | Shallow/premature report |
-| **Scheduling** | L7+L5 (+L4) | High but narrow | Double-execution |
-| **Long-horizon** | L5+L6 | Mixed, drifting | Lost state across sessions |
+| Task Type        | Primary Loops       | Oracle Strength            | Key Risk                   |
+| ---------------- | ------------------- | -------------------------- | -------------------------- |
+| **Coding**       | L2+L3 (+L4 gates)   | High (tests/lint)          | Premature "done"           |
+| **Security**     | L5+L4 (+bounded L3) | High on PoC, low on triage | Verifier gaming            |
+| **Research**     | L5+L1 fan-out+L2+L6 | Low (source grounding)     | Shallow/premature report   |
+| **Scheduling**   | L7+L5 (+L4)         | High but narrow            | Double-execution           |
+| **Long-horizon** | L5+L6               | Mixed, drifting            | Lost state across sessions |
 
 **Principle:** Tasks with crisp external oracles (code: tests; security: PoC) can lean hard on tight verifier-gated retry loops. Fuzzy-oracle tasks (research, writing) must lean on HITL gates and structured criteria because the verifier is weak.
 
@@ -93,19 +93,19 @@ Penny's architecture is already aligned with what the research prescribes:
 
 3. **The FSM is a safety mechanism.** An FSM whose only edges are the intended loop edges cannot wander into an unintended cycle. The graph boundary defines what actions are even possible, reducing the frequency and severity of runaway loops.
 
-## Five Leverage Points the Engine Has Since Acted On
+## Four Loop-Quality Leverage Points
 
-The research identified five concrete improvements, ordered by leverage. Penny's engine has since implemented all five — the descriptions below are the original *recommendations*; for exactly what shipped and its live status (a frozen status list rots the moment a gap closes), see the agent-facing [Loops reference](../../agents/skills/loops.md) (Rec 1–5) and [Atomic Loop Components](../architecture/atomic-loop-components.md):
+The research identified four current leverage points. Penny has acted on each, although verifier authenticity remains an open frontier; the agent-facing [Loops reference](../../agents/skills/loops.md) and [Atomic Loop Components](../architecture/atomic-loop-components.md) hold the operational detail:
 
-1. **Enforce a strategy delta between retries** — Require the LEARN SUMMARY to carry a `strategy_change` field stating what will be done differently. Reject retries with no change. This prevents agent paralysis.
+1. **Enforce a strategy delta between retries** — Require the LEARN SUMMARY to state what will be done differently. Reject or escalate a repeated strategy.
 
-2. **Add stall detection** — Compare successive iterations' verifier evidence. If no progress for N iterations, escalate rather than burn the remaining budget.
+2. **Add stall detection and honest exhaustion** — Compare successive gap/evidence records. If no progress occurs, escalate or terminate incomplete rather than burning the budget or fabricating success.
 
-3. **Retrieve past-run reflections at run start** — Query MemPalace for reflections tagged to this skill + task shape. Inject as advisory context into the first agent. Closes the L6 loop from write-only to read-write.
+3. **Require externally grounded evidence in VERIFY contracts** — A verifier must carry an evidence artifact such as test output, a lint result, or a PoC transcript. Presence is only the floor; executed or otherwise non-fabricable evidence is stronger.
 
-4. **Require externally-grounded evidence in VERIFY contracts** — Each skill's VERIFY contract should demand an evidence artifact (test output, lint result, PoC transcript), not an assertion. The validator should fail-loud if the evidence is a bare claim.
+4. **Harden verifiers against gaming** — Cross-model separation and per-finding agreement now provide defense in depth for high-stakes skills. Stronger executed-marker oracles and the appropriate policy for verifier disagreement remain active design work.
 
-5. **Harden verifiers against gaming** — For high-stakes gates (especially security), add a second independent verifier and require agreement; prefer evidence the actor cannot fabricate. *(Shipped as an enforced cross-model independence invariant plus per-finding agreement in jsa/sca grounded in unfabricatable execution evidence; the executed-browser-PoC harness remains the open frontier.)*
+Memory is handled separately: the engine does not inject past-run lessons into directives. Agents explicitly retrieve stored context only when it could materially affect the task, and full cross-run learning uses the optional gated L6 curation arrangement.
 
 ## Research Basis
 

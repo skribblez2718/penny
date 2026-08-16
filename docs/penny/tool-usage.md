@@ -1,8 +1,10 @@
 # Tool Usage
 
-Read this on demand for the core tool reference and file-handling tactics. The one
-always-on hard constraint — **never write output files into the project tree** —
-stays inline in SYSTEM.md; the rest lives here.
+Read this on demand for the core tool reference, file-handling tactics, and
+action-authorization rules. The always-on file rule — **requested project
+changes go in the project tree; incidental scratch files, temporary reports,
+and unrequested artifacts go in `/tmp/` or mempalace** — stays inline in
+SYSTEM.md; the rest lives here.
 
 ## Core tools
 
@@ -30,6 +32,23 @@ You may also have project-specific custom tools; the runtime surfaces them.
 - When changing multiple separate locations in one file, use one `edit` call with
   multiple entries in `edits[]`.
 - Show file paths clearly when working with files.
+
+## Files and action authorization
+
+- **Make requested project changes in the project tree.** "Fix this bug" and
+  "update these docs" authorize in-scope working-tree edits — do not refuse
+  because the output lands in the repository.
+- **Keep unrequested artifacts out of the repository.** Incidental scratch
+  files, temporary reports, generated plans not requested as project artifacts,
+  and diagnostic output go in `/tmp/` or mempalace.
+- **Explain / review / analyze / plan**: read and reason; do not mutate unless
+  asked.
+- **Fix / implement / update**: in-scope working-tree edits are authorized.
+- **Destructive, irreversible, external, costly, credential-related, or
+  sensitive-data actions**: ask unless the user already authorized that exact
+  action and scope.
+- The explicit git gates below are stricter than — and unaffected by — the
+  rules above.
 
 ## Version control (git)
 

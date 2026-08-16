@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "manifest_id": "penny-public-repository-boundary",
+  "version": 1,
+  "in_scope_tracked_paths": ["**", "scripts/system/checks/public_boundary_manifest.json"],
+  "writable_paths": ["scripts/system/checks/public_boundary_manifest.json"],
+  "leak_patterns": [
+    {
+      "id": "operator-home",
+      "pattern_parts": ["/home/", "skribblez"],
+      "reason": "operator filesystem path must be supplied by the caller"
+    },
+    {
+      "id": "operator-projects",
+      "pattern_parts": ["~/", "projects/"],
+      "reason": "operator project layout must not be tracked"
+    },
+    {
+      "id": "operator-content",
+      "pattern_parts": ["~/", "quantum"],
+      "reason": "operator content roots belong to downstream configuration"
+    },
+    {
+      "id": "downstream-course-layout",
+      "pattern_parts": ["basics_of_", "quantum_information"],
+      "reason": "a specific downstream course layout is outside Penny"
+    },
+    {
+      "id": "private-hardware-model",
+      "pattern_parts": ["RTX", " 4090"],
+      "reason": "operator-specific hardware belongs in the selected target profile"
+    },
+    {
+      "id": "private-device-layout",
+      "pattern_parts": ["CUDA_VISIBLE_DEVICES", "=0,1"],
+      "reason": "fixed device indexes are operator/deployment-specific"
+    },
+    {
+      "id": "nonexistent-security-doc-tree",
+      "pattern_parts": ["docs/agents/", "secure-coding/"],
+      "reason": "security guidance must resolve through the real generic index"
+    }
+  ],
+  "leak_fixtures": [
+    {
+      "id": "generic-home-example",
+      "text": "/home/testuser/project",
+      "expected": "allowed-generic"
+    },
+    {
+      "id": "specific-operator-example",
+      "pattern_id": "operator-home",
+      "text_parts": ["/home/", "skribblez"],
+      "expected": "unresolved-unless-authorized"
+    }
+  ],
+  "allowed_generic_cases": [
+    {
+      "path": "scripts/system/checks/public_boundary_manifest.json",
+      "pattern_id": "operator-home",
+      "source_evidence": "The manifest stores the forbidden value as separately joined pattern_parts; tracked source contains no literal operator path."
+    },
+    {
+      "path": "scripts/system/checks/check_public_boundary.py",
+      "pattern_id": "*",
+      "source_evidence": "The scanner implementation may load and report selected manifest patterns but may not embed downstream paths as product behavior."
+    }
+  ],
+  "ignored_runtime_outputs": [
+    ".git/**",
+    ".mempalace/**",
+    ".penny/**",
+    ".run-logs/**",
+    ".venv/**",
+    "**/__pycache__/**",
+    "**/.pytest_cache/**",
+    "**/.mypy_cache/**",
+    "**/node_modules/**"
+  ],
+  "out_of_scope_reporting_boundary": "All tracked and dirty repository paths are in scope. Ignored runtime outputs remain excluded; no tracked violation is report-only."
+}

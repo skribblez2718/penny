@@ -2,185 +2,73 @@
 
 ## What
 
-A multi-agent research workflow that investigates a query, assesses source credibility, resolves conflicts, and synthesizes a coherent report. It operates at three depths: Quick, Standard, and Deep.
-
-## Why
-
-Agents need to ground claims in evidence. The research skill separates evidence gathering from synthesis, tracks source quality, and flags uncertainty rather than fabricating consensus.
+A multi-agent workflow that decomposes a query, gathers cited external evidence, synthesizes it, critiques it when budgeted, validates citation grounding in every mode, and produces a complete report artifact plus user-facing files.
 
 ## Rules
 
-1. **Use for complex or multi-source questions.** Do not use for simple lookups (`web_search` directly), code implementation, or when you already have enough information.
-2. **Penny is a router.** Agents communicate via mempalace (`skills/research-<session_id>`); Penny only sees per-state SUMMARY contracts.
-3. **Mode is auto-detected but can be overridden.** Use `constraints.mode` only when the default detection is wrong.
-4. **Credibility tiers are mandatory.** Echo classifies every source as T1–T4; Synthia uses those tiers when assigning confidence.
-4a. **Video sources are in scope, not optional extras.** Echo holds the `youtube_transcript` tool and runs a YouTube-targeted `web_search` for every sub-query; relevant videos (official channels, conference talks, established practitioners) get their transcript pulled and tiered like any written source. A miss is documented explicitly ("No relevant video content found"), not silently skipped.
-5. **Deep mode adds critique gates.** Plan critique and report critique catch gaps and overclaiming.
-6. **The skill returns a report, not decisions.** Do not execute recommendations without user approval.
+1. Use research for complex or multi-source questions, not simple lookups or implementation when sufficient evidence already exists.
+2. Penny routes only. Exact execution-owner artifacts carry stage content; SUMMARY objects carry routing data.
+3. Mode is caller- or model-owned. `constraints.mode` wins; otherwise Piper declares it. No keyword detector selects mode.
+4. Echo ranks sources relationally (primary > reputable secondary > weak), cites material claims, and chooses search tools according to uncertainty. Video and browser-rendered sources are available but never mandatory sweeps.
+5. Vera runs an evidence-gated citation check in every mode. Deep mode also budgets plan and report critique.
+6. The skill returns research products, not authorization to execute recommendations.
+7. Start, retry, fan-in, clarification, restart, and terminal completion must work with no memory endpoint or memory extension.
 
-## Procedure
-
-### Invocation
+## Invocation
 
 ```typescript
 skill({
   skill_name: "research",
   goal: "What are the tradeoffs of microservices vs monoliths?",
-  project_root: "/path/to/project",
-})
+});
 ```
 
-Optional constraints:
+| Constraint            | Default        | Meaning                                                                                   |
+| --------------------- | -------------- | ----------------------------------------------------------------------------------------- |
+| `mode`                | model-declared | `quick`, `standard`, or `deep`; only explicit caller quick skips planning.                |
+| `report_format`       | `default`      | Free-form shaping instruction.                                                            |
+| `max_sub_queries`     | 4              | One decomposition budget, clamped to fan width.                                           |
+| `max_fan_width`       | 8              | Maximum parallel Echo branches.                                                           |
+| `validate_model`      | Vera default   | Optional different model for validation only.                                             |
+| `critique_passes`     | mode preset    | `>=1` report critique; `>=2` plan critique.                                               |
+| `max_research_rounds` | mode preset    | Initial plus evidence-seeking rounds.                                                     |
+| `rigor_escalation`    | false          | Permit one earned report critique after validation difficulty without a researchable gap. |
 
-| Constraint | Values | Default | Description |
-|------------|--------|---------|-------------|
-| `mode` | `auto`, `quick`, `standard`, `deep` | `auto` | Research depth |
-| `report_format` | `default`, `brief`, `academic`, `executive` | `default` | Output style |
-| `max_sub_queries` | int | mode-dependent | Cap on the number of sub-queries |
+## Engine and exact artifacts
 
-### Engine
+`ResearchPlaybook` is a `BasePlaybook` subclass in `apps/orchestration/src/orchestration/playbooks/research.py`; the skill delegate contains no FSM logic. SQLite checkpoint state is keyed by `run_id`.
 
-The research skill runs on the shared orchestration engine at `apps/orchestration/`. The behavior lives in `ResearchPlaybook` (`apps/orchestration/src/orchestration/playbooks/research.py`), a `BasePlaybook` subclass with custom-named states, per-state SUMMARY contracts, `route_after` routing, a `done_predicate`, and a `progress_check` escalation gate. `.pi/skills/research/scripts/orchestrate.py` is a ~5-line delegate into `orchestration.cli`; it holds no state machine.
+Every cognitive directive supplies strict `input_artifacts` and `output_artifact` contracts. A worker reads every task-provided ref with `artifact_read`, follows typed continuation until complete, and returns complete stage content. The execution owner persists exact response bytes before parsing the final SUMMARY line. Workers have no durable-memory tools, never claim artifact registration, and payloads never enter `RunContext`.
 
-Run state lives in the engine's durable SQLite checkpointer keyed by `run_id`. There is no `--state` argv and no `/tmp` session file. A run interrupted mid-step is recovered automatically by the engine (`recover_pending`), which re-issues the interrupted step.
+The playbook selects all exact predecessor refs required by a consumer, not only reviewer metadata. Parallel research captures one artifact per `branch_id`; fan-in is order-independent. Artifact revisions, selected refs, and per-state inputs survive malformed-SUMMARY retry, clarification, and fresh-process recovery.
 
-### Mode selection (model-owned)
+The final Skribble output includes the complete contents of `report.md`, `sources.md`, and `README.md`. Its selected `report_writing` ref is returned as `output_artifact_ref` and is the registered product artifact. The same contents remain in the three user-facing files.
 
-The keyword `detect_mode` router was deleted (Bitter-Lesson gate). Mode is a
-rigor/budget preset: a caller `constraints["mode"]` wins; otherwise the run
-transits planning and **piper declares the mode** (`quick`/`standard`/`deep`) in
-its plan SUMMARY (an unknown declaration falls back to `standard`). Only an
-explicit caller `quick` takes the single-agent researching fast-path.
+## Flows
 
-**Research is a dynamic fan** (arrangement 4): `route_after("planning")` turns the
-plan's sub-queries into `ctx.extras["dynamic_branches"]["researching"]` — one
-read-only `echo` branch per sub-query — bounded by `constraints["max_fan_width"]`
-(default 8). The per-mode `MAX_SUB_QUERIES_BY_MODE` table is replaced by one
-`max_sub_queries` budget (default 4, clamped to the fan width). **Critique and
-validation are evidence-gated** (Rec 4): `_CRITIQUE_C` and `RESEARCH_VALIDATE`
-require a non-empty `evidence` field, which flows to `ctx.verify_evidence`.
+- **Quick:** intake → researching → synthesizing → validating → report_writing → complete
+- **Standard:** intake → planning → researching → synthesizing → validating → report_writing → complete
+- **Deep:** intake → planning → critiquing_plan → researching → synthesizing → critiquing_report → validating → report_writing → complete
 
-### State phases
+`researching` is a dynamic fan bounded by `max_fan_width`. Vera may return `evidence_needed`, which drives a bounded evidence-seeking fan before re-synthesis and re-validation. Mode sets budgets, not a fixed sub-query count.
 
-#### Quick mode (explicit caller constraint)
+## Loops, clarification, and terminal truth
 
-```
-intake → researching → synthesizing → validating → report_writing → complete
-```
+Plan critique, report critique, and validation loops are bounded by `max_iterations`. Repeated identical issues escalate. Exhaustion records warnings and unresolved issues; it never produces fake approval.
 
-Agents: `echo` → `synthia` → `vera` → `skribble`
+Clarification resumes the producer that can act: planning/plan critique → planning; research → research; synthesis/report critique/validation → synthesis. The same run and exact selected refs are retained.
 
-Explicit-quick skips planning; `intake` routes straight to a single-agent
-`researching`.
+Terminal fields distinguish delivery and verification:
 
-#### Standard mode
-
-```
-intake → planning → researching → synthesizing → report_writing → complete
-```
-
-Agents: `piper` → `echo` → `synthia` → `skribble`
-
-#### Deep mode
-
-```
-intake → planning → critiquing_plan → researching → synthesizing → critiquing_report → report_writing → complete
-```
-
-Agents: `piper` → `carren` → `echo` → `synthia` → `carren` → `skribble`
-
-In deep mode `critiquing_plan` and `critiquing_report` are bounded revise loops: a `NEEDS_REVISION` verdict routes back to `planning` (respectively `synthesizing`) for another cycle, capped by `ctx.max_iterations`. When the budget is exhausted the run proceeds honestly with a recorded warning and the unresolved issues surfaced in the result — it never force-approves.
-
-### State descriptions
-
-| State | Agent | Purpose |
-|-------|-------|---------|
-| `intake` | — | Validate query, detect mode, seed `max_sub_queries` |
-| `planning` | `piper` | Decompose query into sub-queries (standard/deep; also the clarify-resume entry point) |
-| `critiquing_plan` | `carren` | Review sub-query plan; APPROVE or NEEDS_REVISION (deep only) |
-| `researching` | `echo` | A single agent researches ALL sub-queries, writing one findings drawer per sub-query |
-| `synthesizing` | `synthia` | Merge findings into a coherent, cited report |
-| `critiquing_report` | `carren` | Review synthesis for overclaiming, bias, fairness; APPROVE or NEEDS_REVISION (deep only) |
-| `report_writing` | `skribble` | Write `report.md`, `sources.md`, `README.md` to the output directory |
-| `complete` | — | Return report metadata (`met` reflects whether the report was actually written) |
-| `unknown` / `awaiting_clarification` | — | Escalation seam (see below) |
-| `error` | — | Terminal failure |
-
-`researching` is a single Echo agent instructed to research every sub-query; there is no per-sub-query fan-out and no separate validation state (Vera is not invoked — that state was removed from the workflow). Echo's toolset for this state is `web_search`, `web_fetch`, and `youtube_transcript` (per `.pi/agents/echo.md`); the domain prompt (`assets/prompts/echo.md`) requires a YouTube-targeted search per sub-query and a transcript pull on relevant hits.
-
-### Escalation and resilience
-
-Escalatable states: `planning`, `critiquing_plan`, `researching`, `synthesizing`, `critiquing_report`.
-
-An agent that emits `needs_clarification` (or `confidence=UNCERTAIN`), a `plan_complete`/`explore_complete`/`synthesis_complete` of `false`, or a critique loop that stalls (the same issues persisting across revisions) drives the machine `→ unknown → awaiting_clarification` and pauses the run. `progress_check` decides this; it is the engine's HITL seam.
-
-The user's answer resumes the SAME run (keyed by `run_id`) via a `user` step; the clarification text is carried into the next task through `ctx`. Resume re-enters at `planning` (a quick-mode resume passes through planning, which then routes straight on to researching). No state blob is threaded on the wire — `previous_state` lives in `ctx` and is checkpointed.
-
-Summary validation is the engine's job (`contracts.py` `validate_summary_contract`), not a per-skill helper. Empty or malformed summaries are rejected and the run does not advance on fabricated defaults.
-
-### Credibility framework
-
-| Tier | Name | Examples |
-|------|------|----------|
-| T1 | Primary / Authoritative | Official docs, RFCs, arXiv papers, specs |
-| T2 | Expert / Established | ACM Queue, official blogs, recognized experts, official vendor YouTube channels, recorded conference talks |
-| T3 | Community / Practitioner | High-vote Stack Overflow, dev.to, tutorials, established practitioner YouTube channels |
-| T4 | Unverified / Commercial | Product pages, SEO content, unknown blogs, unverified/low-authority YouTube channels |
-
-Video transcripts are tiered by publisher/channel authority, exactly like written sources — the medium (video vs. text) does not change the tier.
-
-Confidence markers used in the report:
-
-| Marker | Meaning |
-|--------|---------|
-| ✅ High | Multiple authoritative sources agree |
-| ⚠️ Medium | Some credible support |
-| ❓ Low | Thin or lower-tier evidence |
-| ⚡ Conflicting | Sources disagree |
-
-### Deep-mode quality gates
-
-1. **Plan critique** — Carren reviews Piper's sub-query plan before dispatch.
-2. **Report critique** — Carren reviews Synthia's final report for overclaiming, bias, and fairness to conflicting evidence.
-3. **Conflict resolution** — Conflicting sources must be resolved and the resolution justified with cited evidence; genuine disagreement is reported, not smoothed over. The weighing (source authority, recency, consensus, context fit) is synthia's judgment per case, not a fixed ordering.
-
-### Mempalace room organization
-
-Room: `skills/research-<session_id>`
-
-| Drawer | Content |
-|--------|---------|
-| `<sid> Planner` | Sub-queries, scope, rationale (piper) |
-| `<sid>-echo-<n> Research Findings` | Tiered, cited findings for sub-query N (echo) |
-| `<sid> Synthesis` | Synthesized thematic report (synthia) |
-| `<sid> Critique` | Plan and report critique verdicts (carren, deep mode) |
-| `<sid> Report Files` | Written report files (skribble) |
-
-Run state is not stored in mempalace — it lives in the engine's durable checkpointer.
-
-## Constraints
-
-- **Sub-query budget (not a per-mode table).** One `max_sub_queries` budget (default 4, tier-adjusted, clamped to `max_fan_width`) caps how many sub-queries are dispatched — code caps, the model spends. The per-mode `MAX_SUB_QUERIES_BY_MODE` table was deleted per the Bitter-Lesson gate (see the dynamic-fan description above); mode is caller- or model-declared, not a cap lookup.
-- `max_sub_queries` is enforced at dispatch: the plan is truncated to the cap before researching.
-- Malformed or empty agent summaries are rejected by the engine (no fabricated defaults; the run does not advance).
-- Critique revise loops are bounded by `ctx.max_iterations` and report exhaustion honestly.
-- Crash-resume is automatic via the engine checkpointer keyed by `run_id`.
+- `met`: final report production completed;
+- `grounded`: Vera's final verdict passed;
+- `output_artifact_ref`: exact checkpointed product artifact;
+- `report_dir` / `report_files`: user-facing files;
+- warnings, exhaustion flags, and unresolved issues: honest limitations.
 
 ## Verification
 
-- [ ] Report includes executive summary, key findings, source count/quality, recommendations, and constraints.
-- [ ] Every key finding has a confidence marker.
-- [ ] Conflicting evidence is reported, not smoothed over.
-- [ ] Sources are classified T1–T4.
-- [ ] Deep mode includes both plan critique and report critique.
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `apps/orchestration/src/orchestration/playbooks/research.py` | `ResearchPlaybook` — states, SUMMARY contracts, routing, escalation |
-| `apps/orchestration/tests/test_research_playbook.py` | Playbook tests |
-| `.pi/skills/research/SKILL.md` | Skill definition and invocation (`metadata.penny.engine: orchestration`) |
-| `.pi/skills/research/scripts/orchestrate.py` | ~5-line delegate into `orchestration.cli` |
-| `.pi/skills/research/assets/prompts/*.md` | Agent domain prompts and SUMMARY blocks |
-| `docs/humans/capabilities/research-skill/research-skill.md` | Human-facing overview |
+- `test_research_playbook.py`: standard/deep, dynamic fan, critique, re-research, clarification, and honest terminal semantics.
+- `test_research_artifact_handoff.py`: protocol-v2 exact refs and memory-absent start/step/parallel/retry/clarification/restart/terminal paths.
+- `test_contract_prompt_drift.py`: SUMMARY alignment and source guards against semantic workflow transport.
+- `test_reference_drift.py` and `test_flow_diagrams.py`: reference/diagram FSM parity.

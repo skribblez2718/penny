@@ -1,40 +1,29 @@
 # Tiered Memory
 
-## What It Is
+Penny separates active context from durable knowledge and cold archive:
 
-Penny's memory is organized into five tiers, each with different lifetime, size, and injection rules. This ensures the right information is available at the right time without flooding context.
+| Tier | Content                                                                            |
+| ---- | ---------------------------------------------------------------------------------- |
+| T0   | Stable frame/identity.                                                             |
+| T1   | Current conversation plus compact run state and selected artifact refs.            |
+| T2   | Recent primary diary and warm classified data.                                     |
+| T3   | Curated decisions, architecture, reusable knowledge, preferences, and temporal KG. |
+| T4   | Cold archive / legacy corpus.                                                      |
 
-## The Five Tiers
+Only the unmarked primary runtime has memory tools. Recall is explicit and
+relevance-driven; writes are curated; the primary diary is bounded; KG facts are
+allowlisted and temporally governed. Workers and skill drivers have no memory
+tools.
 
-| Tier              | Content                                                    | Lifetime  | How It Reaches Penny      |
-| ----------------- | ---------------------------------------------------------- | --------- | ------------------------- |
-| **T0: Identity**  | `SYSTEM.md` — who Penny is, how she thinks                 | Permanent | Always injected           |
-| **T1: Active**    | Current session data, FSM state, active task               | Hours     | Built during the session  |
-| **T2: Working**   | Recent outcomes, diary, pending signals, last 5-10 actions | 7-30 days | Pre-turn smart search     |
-| **T3: Reference** | Architecture docs, decisions, KG facts                     | Permanent | RAG on demand (AGENTS.md) |
-| **T4: Archive**   | Old sessions, expired outcomes, past versions              | 90+ days  | Search only, not injected |
+Active workflow bytes live in owner artifacts, not memory. Workers read exact
+grants with `artifact_read` and typed continuation. Historical skill rooms are
+legacy corpus and never deletion authority.
 
-## How It Works
+Normal memory access uses one supervised MemPalace 3.7.1 HTTP hub with no raw
+fallback. Offline access is copy-only and receipt-gated. Setup, cutover, and
+uninstall preserve caller-owned data.
 
-- **T0** is your cognitive identity — always there, defines how you think
-- **T1** is the current conversation — what you're doing right now
-- **T2** is your short-term memory — recent experiences that inform this conversation
-- **T3** is your long-term knowledge — things you can look up when needed
-- **T4** is deep storage — accessible via search when relevant, never automatic
+## Learn more
 
-## Current Status
-
-| Tier | Status                                                     |
-| ---- | ---------------------------------------------------------- |
-| T0   | ✅ Static (self-update pipeline designed but not active)   |
-| T1   | ✅ Automatic via session state                             |
-| T2   | ✅ Pre-turn injection via `memory_smart_search`            |
-| T3   | ✅ AGENTS.md hierarchy + KG                                |
-| T4   | ✅ Archival via `scripts/system/tiered_memory/archiver.py` |
-
-T3→T4 archival runs age-based sweeps: signals expire at 7 days, outcomes at 30 days, diary at 90 days, permanent T3 items never archive.
-
-## Learn More
-
-- Architecture: `docs/agents/architecture/tiered-memory.md`
-- Design: `plans/ai-gaps-resolution/02-designs/09-tiered-memory.md`
+- `docs/agents/architecture/tiered-memory.md`
+- `docs/agents/memory/integration.md`

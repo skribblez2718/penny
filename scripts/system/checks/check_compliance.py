@@ -4,6 +4,8 @@ Runs all P2 automated checks:
 1. Token budget (SYSTEM.md)
 2. AGENTS.md link integrity
 3. Test count reporting by module
+4. Skill structure
+5. No raw memory peers outside receipt-gated recovery
 
 Usage:
     python scripts/system/checks/check_compliance.py
@@ -15,7 +17,6 @@ import os
 from pathlib import Path
 
 MODULES = {
-    "plan_skill": ".pi/skills/plan/scripts",
     "tiered_memory": "scripts/system/tiered_memory",
     "register_artifact": "scripts/system/tests",
 }
@@ -42,7 +43,6 @@ SKILL_FLOW_DIAGRAM_ANY = [
 ]
 
 
-
 def run(cmd: list[str], cwd: str = ".", extra_env=None) -> tuple[bool, str]:
     env = os.environ.copy()
     if extra_env:
@@ -58,29 +58,27 @@ def run(cmd: list[str], cwd: str = ".", extra_env=None) -> tuple[bool, str]:
 
 
 def check_token_budget() -> bool:
-    print("[1/3] Checking SYSTEM.md token budget...")
+    print("[1/5] Checking SYSTEM.md token budget...")
     ok, out = run([sys.executable, "scripts/system/checks/check_token_budget.py"], cwd=".")
     print("   " + "\n   ".join(out.strip().splitlines()))
     return ok
 
 
 def check_agents_links() -> bool:
-    print("[2/3] Checking AGENTS.md link integrity...")
+    print("[2/5] Checking AGENTS.md link integrity...")
     ok, out = run([sys.executable, "scripts/system/checks/check_agents_links.py"], cwd=".")
     print("   " + "\n   ".join(out.strip().splitlines()))
     return ok
 
 
 def check_tests() -> bool:
-    print("[3/3] Running test discovery by module...")
+    print("[3/5] Running test discovery by module...")
     total = 0
     all_ok = True
     for name, path in MODULES.items():
         test_args = [sys.executable, "-m", "pytest", "--co", "-q", path]
         extra = {"PYTHONPATH": "scripts"}
-        if name == "plan_skill":
-            extra["PYTHONPATH"] += ":.pi/skills/plan/scripts"
-        elif name in (
+        if name in (
             "tiered_memory",
             "register_artifact",
         ):
@@ -109,7 +107,7 @@ def check_tests() -> bool:
 
 
 def check_skills() -> bool:
-    print("[4/4] Checking skill directory structure...")
+    print("[4/5] Checking skill directory structure...")
     skills_dir = Path(".pi/skills")
     if not skills_dir.exists():
         print("   .pi/skills/ does not exist — skipping skill check")
@@ -140,12 +138,20 @@ def check_skills() -> bool:
     return all_ok
 
 
+def check_no_raw_memory_peer() -> bool:
+    print("[5/5] Checking raw memory peer boundary...")
+    ok, out = run([sys.executable, "scripts/system/checks/check_no_raw_memory_peer.py"])
+    print("   " + "\n   ".join(out.strip().splitlines()))
+    return ok
+
+
 def main() -> int:
     results = {
         "token_budget": check_token_budget(),
         "agents_links": check_agents_links(),
         "test_discovery": check_tests(),
         "skills": check_skills(),
+        "no_raw_memory_peer": check_no_raw_memory_peer(),
     }
     print()
     if all(results.values()):

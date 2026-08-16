@@ -24,7 +24,6 @@ ALLOWLIST_PATTERNS = [
     r"\.pi/test-utils/",  # test utilities may use console.*
     r"\.pi/extensions/.*/tests/",  # all test files
     r"/node_modules/",  # third-party deps, incl. bundled .d.ts type decls
-    r"\.pi/extensions/semgrep/rules/",  # semgrep rule DEFINITIONS embed console.* as detection patterns, not logging
 ]
 
 REMEDIATED_EXTENSIONS = [
@@ -146,7 +145,7 @@ def check_no_bare_catch(project_root: str) -> list[str]:  # noqa: C901
                 if last_throw != -1:
                     tail = block[last_throw:]
                     semi = tail.find(";")
-                    remainder = tail[semi + 1:].strip() if semi != -1 else ""
+                    remainder = tail[semi + 1 :].strip() if semi != -1 else ""
                     if remainder == "" or all(ch in ");,}" for ch in remainder):
                         continue
                 if not has_logger:

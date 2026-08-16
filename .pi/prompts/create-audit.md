@@ -82,6 +82,23 @@ Do not:
 
 If a framework requirement conflicts with an existing prompt's purpose or side-effect contract, name the tradeoff and ask or choose an additive design. For example, a read-only target can remain read-only while eval/regression artifacts are built in a separate output directory. If the caller prohibits all writes, AF-11 and AF-12 cannot be fully satisfied; report that incompatibility rather than weakening “build” to “recommend.”
 
+## House argument convention for generated audit prompts
+
+Every generated audit prompt must accept a **final optional free-form additional-details argument** after its required and optional positional arguments — `${@:3}` when the prompt already takes a target and an output directory, `${@:2}` when it takes only a target, and so on. Declare it in `argument-hint` as a trailing `[additional details...]`, and define it in the prompt body as caller-supplied context and requirements the audit cannot infer from the target: background, constraints, known history, emphasis, or extra deliverables.
+
+The generated prompt must bound that argument with these rules:
+
+- when it is empty, the audit runs exactly as if it were not supplied; it is never required and never a stopping condition on its own;
+- it may add requirements, supply context, set emphasis or priority, and request additional analysis, and the audit must honor it wherever it does not conflict with the prompt's own obligations;
+- it may not waive or weaken the evidence and anti-fabrication rules, the coverage ledger and its bounds on exhaustive claims, the side-effect contract, the stopping/branch conditions, or any required artifact, status-honesty, or verification obligation;
+- a detail that narrows scope is treated as a scope narrowing — recorded in the coverage ledger with the omitted surfaces marked user-narrowed and no exhaustive claim — while a detail that only sets emphasis does not shrink the declared corpus;
+- a detail that conflicts with an obligation above, or that is too ambiguous to apply, must be reported (and asked about where it blocks the audit) rather than silently followed or silently ignored; and
+- the detail text must be recorded verbatim in the audit report along with how each was applied, deferred, or refused, so findings and coverage claims stay interpretable.
+
+Where positional ambiguity is possible — prose supplied in the position of an optional path argument — the generated prompt must state a disambiguation rule that resolves it from the argument's content rather than from position alone. Where a multi-word leading argument must arrive as one value, the generated prompt must say so.
+
+The generated prompt's completion or verification obligations must include a check that any supplied details were recorded and honored without waiving an audit obligation.
+
 ## House output convention for generated audit prompts
 
 Unless the caller specifies a different location, every generated audit prompt must default its output to a single bundle directory:
@@ -92,7 +109,7 @@ $PROJECT_ROOT/audits/<target-name>-audit-<the current date, YYYY-MM-DD>/
 
 where `<target-name>` is the audited object's name derived from the prompt's own target argument. The generated prompt must:
 
-- accept an optional caller-supplied output directory that overrides this default, where the prompt's argument shape allows one (a prompt whose arguments are consumed by `$@` may rely on the deterministic default alone);
+- accept an optional caller-supplied output directory that overrides this default, where the prompt's argument shape leaves an unambiguous slot for one (a prompt with no such slot may rely on the deterministic default alone);
 - permit creating `audits/` and the dated bundle directory when absent;
 - append `-2`, `-3`, ... when a bundle for that date already exists, rather than overwriting or merging into a prior audit;
 - treat that bundle directory as the sole write location, keeping the audited target read-only;
@@ -204,6 +221,7 @@ The final audit prompt must:
 
 - be valid Markdown with Pi frontmatter containing `description` and, when it accepts arguments, `argument-hint`;
 - use Pi argument syntax correctly (`$1`, `$2`, `$@`, `${N:-default}`, or slicing as needed);
+- accept and bound a final optional additional-details argument per the house argument convention above;
 - be self-contained at execution time and not require this creator or the framework file;
 - define missing/invalid-input behavior;
 - enforce all thirteen AF attributes in its body and completion check;
@@ -244,8 +262,8 @@ List every material existing capability and its disposition. A revised candidate
 
 Produce exactly one row for AF-01 through AF-13 with columns:
 
-| ID | Generated prompt section/clause | Domain adaptation | Verification assertion |
-|---|---|---|---|
+| ID  | Generated prompt section/clause | Domain adaptation | Verification assertion |
+| --- | ------------------------------- | ----------------- | ---------------------- |
 
 No row may rely only on the presence of an AF identifier.
 
@@ -276,6 +294,7 @@ VERIFICATION:
 - Concrete eval artifacts required: YES / NO — [evidence]
 - Concrete regression artifacts and false-warning risks required: YES / NO — [evidence]
 - Proxy drift requires divergence evidence: YES / NO — [evidence]
+- Final optional additional-details argument accepted, bounded, and recorded in the report: YES / NO — [evidence]
 - Side-effect contract internally consistent: YES / NO — [evidence]
 - No target-specific criterion fabricated as framework doctrine: YES / NO — [evidence]
 - Existing capabilities preserved (revise mode): YES / NO / N-A — [evidence]

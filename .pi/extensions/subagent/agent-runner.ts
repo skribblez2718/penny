@@ -17,26 +17,75 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@mariozechner/pi-ai";
-import {
-  buildIsolatedAgentInvocation,
-  isolatedAgentEnvironment,
-  type AgentProcessIsolation,
-} from "./process-isolation.js";
-
-export {
-  buildIsolatedAgentInvocation,
-  isolatedAgentEnvironment,
-  type AgentProcessIsolation,
-} from "./process-isolation.js";
 import { withFileMutationQueue } from "@mariozechner/pi-coding-agent";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
 import { captureToolResultForExecutionOwner } from "./execution-owner-capture.js";
+import type { ArtifactRef } from "../artifacts/owner-client.js";
 import { createLogger } from "../../lib/logger/logger.js";
 
 const logger = createLogger("agent-runner");
+const ARTIFACT_TOOL_NAME = "artifact_read";
+const OWNER_SCOPED_ARTIFACT_ENVIRONMENT = [
+  "PENNY_ARTIFACT_INVOCATION_JSON",
+  "PENNY_ARTIFACT_INVOCATION_FILE",
+  "PENNY_ARTIFACT_CURSOR_HMAC_KEY",
+] as const;
+const MEMORY_ENVIRONMENT_PREFIXES = ["PENNY_MEMORY_", "MEMPALACE_"] as const;
+const LEGACY_MEMORY_ENVIRONMENT_SELECTORS = ["PI_MEMORY_BRIDGE", "MEMPAL_PALACE_PATH"] as const;
 
 // Re-export agent discovery for convenience
 export { type AgentConfig, type AgentScope, discoverAgents };
+
+/**
+ * Build the execution-owner-controlled environment for a spawned worker.
+ *
+ * Every agent process (direct `subagent(...)` or skill-invoked) is spawned
+ * with this environment — never the raw `process.env`. Owner-only signing
+ * secrets, memory-plane configuration/credentials, and legacy memory
+ * selectors are removed before any inherited role claim is overwritten. The
+ * role marker classifies this child for lifecycle policy; it is not an
+ * authorization grant, a tool grant, or a sandbox boundary.
+ */
+export function isolatedAgentEnvironment(
+  environment: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
+  const selectedMemoryCredential = environment.PENNY_MEMORY_MCP_TOKEN_ENV?.trim();
+  const isolated: NodeJS.ProcessEnv = { ...environment };
+  for (const name of Object.keys(isolated)) {
+    if (MEMORY_ENVIRONMENT_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+      delete isolated[name];
+    }
+  }
+  for (const name of LEGACY_MEMORY_ENVIRONMENT_SELECTORS) delete isolated[name];
+  if (selectedMemoryCredential) delete isolated[selectedMemoryCredential];
+  delete isolated.PENNY_RECEIPT_HMAC_KEY;
+  delete isolated.PENNY_APPROVAL_HMAC_KEY;
+  isolated.PENNY_RUNTIME_ROLE = "worker";
+  return isolated;
+}
+
+function ownerSuppliedAgentEnvironment(ownerEnvironment?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const selectedMemoryCredentials = [
+    process.env.PENNY_MEMORY_MCP_TOKEN_ENV?.trim(),
+    ownerEnvironment?.PENNY_MEMORY_MCP_TOKEN_ENV?.trim(),
+  ].filter((name): name is string => Boolean(name));
+  const merged: NodeJS.ProcessEnv = { ...process.env };
+  for (const name of OWNER_SCOPED_ARTIFACT_ENVIRONMENT) delete merged[name];
+  for (const [name, value] of Object.entries(ownerEnvironment ?? {})) {
+    if (value === undefined) delete merged[name];
+    else merged[name] = value;
+  }
+  const isolated = isolatedAgentEnvironment(merged);
+  for (const name of selectedMemoryCredentials) delete isolated[name];
+  return isolated;
+}
+
+function hasOwnerArtifactGrant(environment?: NodeJS.ProcessEnv): boolean {
+  const json = environment?.PENNY_ARTIFACT_INVOCATION_JSON?.trim();
+  const file = environment?.PENNY_ARTIFACT_INVOCATION_FILE?.trim();
+  const cursorKey = environment?.PENNY_ARTIFACT_CURSOR_HMAC_KEY?.trim();
+  return Boolean(cursorKey && ((json && !file) || (file && !json)));
+}
 
 // ============================================================
 // Provider resolution
@@ -162,6 +211,16 @@ export interface SingleResult {
   stopReason?: string;
   errorMessage?: string;
   step?: number;
+  /** Exact execution-owner output ref when this invocation is artifact-captured. */
+  outputArtifactRef?: ArtifactRef;
+}
+
+export interface SubagentCatalogDriftError {
+  code: "SUBAGENT_RELOAD_REQUIRED";
+  kind: "catalog_drift";
+  retryable: true;
+  registeredCatalogDigest: string;
+  executionCatalogDigest: string;
 }
 
 export interface SubagentDetails {
@@ -169,6 +228,13 @@ export interface SubagentDetails {
   agentScope: AgentScope;
   projectAgentsDir: string | null;
   results: SingleResult[];
+  /** Owner-generated run identity for direct chain artifacts. */
+  artifactRunId?: string;
+  /** Exact output refs in completed step order. */
+  outputArtifactRefs?: ArtifactRef[];
+  /** Exact final output ref; authoritative over any preview. */
+  finalOutputArtifactRef?: ArtifactRef;
+  error?: SubagentCatalogDriftError;
 }
 
 // ============================================================
@@ -220,13 +286,20 @@ export function formatUsageStats(usage: UsageStats, model?: string): string {
   return parts.join(" ");
 }
 
+/**
+ * Return the canonical finalized assistant output.
+ *
+ * The byte sequence is UTF-8 of every `text` part in the final assistant
+ * message, concatenated in content-array order with no inserted separator.
+ * Thinking/reasoning and tool-call parts are excluded. A final assistant
+ * message with no text is canonically empty; an earlier turn is never reused
+ * as a substitute for an incomplete final turn.
+ */
 export function getFinalOutput(messages: Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role === "assistant") {
-      for (const part of msg.content) {
-        if (part.type === "text") return part.text || "";
-      }
+      return msg.content.map((part) => (part.type === "text" ? part.text || "" : "")).join("");
     }
   }
   return "";
@@ -575,7 +648,7 @@ export async function runSingleAgent(
   skillContextContent: string | undefined = undefined,
   progressEmitter?: ProgressEmitter,
   modelOverride?: string,
-  processIsolation?: AgentProcessIsolation
+  ownerEnvironment?: NodeJS.ProcessEnv
 ): Promise<SingleResult> {
   const agent = agents.find((a) => a.name === agentName);
 
@@ -647,12 +720,19 @@ export async function runSingleAgent(
   // spawned pi subprocess accepts `--thinking <off|minimal|low|medium|high|xhigh>`.
   if (agent.thinking) args.push("--thinking", agent.thinking);
   // Pass all declared agent tools via --tools so Pi exposes them to the agent.
-  // Pi's --tools flag is an allowlist — when passed, ONLY listed tools are
-  // available. Without this, builtins and extensions would both be available,
-  // but agents list their tools explicitly for a reason (least privilege).
+  // artifact_read is owner-grant-sensitive: a declared allowlist cannot expose
+  // it without an invocation environment, while a valid owner environment adds
+  // it for this worker only. The artifact extension still validates the exact
+  // refs; tool visibility and PENNY_RUNTIME_ROLE are not authorization.
+  const hasArtifactGrant = hasOwnerArtifactGrant(ownerEnvironment);
   if (agent.tools && agent.tools.length > 0) {
-    args.push("--tools", agent.tools.join(","));
+    const tools = agent.tools.filter((tool) => tool !== ARTIFACT_TOOL_NAME);
+    if (hasArtifactGrant) tools.push(ARTIFACT_TOOL_NAME);
+    if (tools.length > 0) args.push("--tools", tools.join(","));
+    else args.push("--no-tools");
   }
+  if (!hasArtifactGrant) args.push("--exclude-tools", ARTIFACT_TOOL_NAME);
+  const workerEnvironment = ownerSuppliedAgentEnvironment(ownerEnvironment);
 
   const currentResult: SingleResult = {
     agent: agentName,
@@ -738,10 +818,7 @@ export async function runSingleAgent(
         resolve(code);
       };
 
-      const baseInvocation = getPiInvocation(args);
-      const invocation = processIsolation
-        ? buildIsolatedAgentInvocation(baseInvocation, cwd ?? defaultCwd, processIsolation)
-        : baseInvocation;
+      const invocation = getPiInvocation(args);
       // stdin = "ignore" so Pi reads /dev/null (immediate EOF).
       // Using "pipe" would keep a writable stream handle in the parent's
       // event loop, preventing Pi's process from exiting cleanly.
@@ -755,7 +832,7 @@ export async function runSingleAgent(
       // The abort signal handles user-initiated cancellation.
       const proc = spawn(invocation.command, invocation.args, {
         cwd: cwd ?? defaultCwd,
-        env: isolatedAgentEnvironment(),
+        env: workerEnvironment,
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
       });

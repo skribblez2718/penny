@@ -15,8 +15,11 @@ from orchestration.primitives.spec import PrimitiveSpec
 # ---------------------------------------------------------------------------
 
 
-def test_registry_is_non_empty():
-    assert len(LOANS) >= 4  # the engine's known loans are tagged
+def test_registry_contains_exactly_the_live_engine_loans():
+    assert set(LOANS) == {
+        "summary_schema_restatement",
+        "malformed_summary_retry",
+    }
 
 
 def test_every_loan_has_rationale_dates_and_toggle():
@@ -177,8 +180,6 @@ def test_gate_intent_model_failure_is_safe_refine(monkeypatch):
         raise OSError("spawn failed")
 
     assert BasePlaybook.classify_gate_intent("some free text", runner=boom) == "refine"
-
-
 
 
 # ---------------------------------------------------------------------------

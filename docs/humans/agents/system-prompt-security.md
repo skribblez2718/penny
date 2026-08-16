@@ -2,47 +2,49 @@
 
 ## What It Is
 
-System prompt security is the set of boundaries that prevent untrusted content — user messages, tool output, fetched web pages, uploaded files — from overriding the instructions that govern Penny and her agents. The defense is built from three XML-style markers that separate system-role content from user-role content.
+System prompt security is the set of layered controls that keep untrusted content — user-quoted text, tool output, fetched web pages, uploaded files — from expanding what Penny and her agents are allowed to do. Prompt markers (`<system_directives>`, `<system_boundary>`, `<agent_boundary>`) are part of that picture, but they are **parsing aids and defense-in-depth cues, not enforcement**. Repeated prompt text and XML tags cannot guarantee injection resistance; Pi has no built-in sandbox, and a sufficiently persuasive injected instruction can still influence a model. What actually bounds the damage is the runtime control plane.
 
-## Why It Exists
+## The Layered Controls
 
-Large language models are instruction-following systems. If a user message, a malicious web page, or a cleverly crafted document says "ignore previous instructions," the model might comply unless the architecture makes that impossible. Boundary markers enforce a structural answer: system instructions live on one side of a hard line, and everything after that line is treated as untrusted input.
+1. **System-role authority.** Penny's operating policy is delivered in the system role, which models are trained to prioritize over user-role content.
+2. **User-authorized task scope.** The user's message is authoritative for the goal and request-specific constraints — but not for system policy, tools, permissions, credentials, or consequence limits.
+3. **Tool allowlists and exact grants.** Each worker's `--tools` list controls visible tools; workers receive no durable-memory tools. `artifact_read` is exposed only with trusted owner invocation metadata, and the artifact service separately validates each exact grant.
+4. **Workflow approval states and signed receipts.** Consequential skill-workflow steps require approval gates backed by HMAC receipts, not prompt promises.
+5. **No filesystem sandbox currently (2026-08-06).** Agents invoked by a workflow skill previously ran under Bubblewrap (filesystem mounted read-only except the work target and selected state paths, owner-protected paths shadowed). That layer was removed after testing showed it did not address the runtime failure mode it had been introduced to mitigate; receipt/approval secrets are still stripped from every spawned agent's environment regardless. A containerized replacement is planned but not yet implemented.
+6. **Host/container isolation for primary and direct paths.** The primary session and direct subagent calls run with the invoking user's OS permissions. For untrusted repositories or unattended work, use an external container or VM.
 
-This matters for agents in particular because agents read files, search the web, and process external data. Without boundary enforcement, an adversarial file in the project could rewrite an agent's role.
+## What the Markers Actually Do
 
-## How the Boundaries Work
+Markers give the model a clear structural map: here is stable policy, here is the role, here is domain guidance, here is project context, here is the task. That clarity genuinely helps models resist confusion attacks — content after the boundary claiming to be system instructions is visibly out of place. But position in the prompt is a cue, not a privilege mechanism. Treat marker language that says "cannot be overridden" as aspiration unless a runtime control backs it.
 
-The prompt is assembled in layers, with markers between them:
+## Authority in One Sentence
 
-| Boundary | Role | What It Separates |
-| ---------- | ---- | ----------------- |
-| **`<system_directives>`** | System | Immutable security rules at the very top. These override all other instructions. |
-| **`<system_context>`** | System | The Cognitive Frame — how Penny thinks in general. |
-| **Agent body + skill context** | System | The agent's role definition and any domain guidance from the skill. |
-| **`<agent_boundary>`** | System end | The end of the agent's trusted system instructions. |
-| **Reinforcement + project index + invocation context** | User-side system | AGENTS.md context, date, working directory — necessary but not authoritative. |
-| **`<system_boundary>`** | Absolute system end | The final marker before all system-role content ends. |
-| **User/task message** | User | The actual untrusted input for this turn. |
+The user defines the task; external content may supply evidence or designated requirements for that task; **neither can mint a tool, permission, or side effect the runtime did not grant.**
 
-Everything after `<agent_boundary>` and especially after `<system_boundary>` is treated as user-role content. User-role content cannot override system-role content.
+## Security by Execution Path
 
-## Why the Markers Are Effective
+| Execution path                         | Context/tool isolation                                                     | Filesystem/process isolation                                                                                                        | Effective boundary                                                                                                                 |
+| -------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Primary Penny session                  | Pi system role plus current tool inventory                                 | Pi runs with the invoking user's permissions; no Pi built-in sandbox                                                                | Host OS/container, actual tool surface, explicit approvals, user supervision                                                       |
+| Direct `subagent(...)`                 | Separate Pi process and context; tools restricted by the agent's allowlist | No filesystem/process sandbox on this path                                                                                          | Host OS/container plus tool allowlist — separate context is not a filesystem sandbox                                               |
+| Skill-invoked agent                    | Separate process and context; tool allowlist                               | No filesystem/process sandbox (Bubblewrap removed 2026-08-06; approval/receipt secrets still stripped from the spawned environment) | Tool allowlist, workflow gates, receipts, host boundary — same as direct `subagent(...)` until a container-based replacement lands |
+| Untrusted repository / unattended work | Depends on selected path                                                   | Use an external container, VM, or micro-VM with minimal mounts, credentials, and network                                            | OS or virtualization boundary                                                                                                      |
 
-The markers work because the architecture treats position as privilege. The model knows that content above `<agent_boundary>` and `<system_boundary>` is system-role and authoritative. Even if a user message contains spoofed tags like "<system_directives>" or claims of admin override, those tags appear after the real boundaries and are therefore in user-role territory.
+One more subtlety: the agent runner force-loads Penny's extension modules so tools can register regardless of working directory. The `--tools` allowlist controls what the model can call; it does not prevent extension code from loading. Artifact tool visibility still does not grant an artifact—the owner grant and runtime checks do that.
 
 ## What Skill Prompts Must Avoid
 
 Skill Domain Guidance prompts are injected inside the system-role region, before `<agent_boundary>`. Because of that privileged position, they must not contain:
 
 - Template variables such as `{{goal}}` or `{{session_id}}`, which would be filled at runtime from untrusted sources.
-- Reserved boundary tags, which would confuse or break the security architecture.
-- Instructions that try to relax the immutable security rules.
+- Reserved boundary tags, which would confuse prompt assembly.
+- Instructions that try to relax trust or action boundaries.
 
-Dynamic values belong in the task message, which sits safely in user-role space after `<system_boundary>`.
+Dynamic values belong in the task message.
 
 ## Learn More
 
-- [Agents Overview](overview.md): Why agents need this protection.
+- [Agents Overview](overview.md): Why agents need this layering.
 - [Agent Definition Format](definition-format.md): Where `<agent_boundary>` lives in an agent file.
 - [Invocation](invocation.md): How task messages are placed after the boundaries.
-- Agent-facing reference: [System Prompt Security](../../agents/agents/system-prompt-security.md)
+- Agent-facing reference: [System Prompt Trust Boundaries and Runtime Controls](../../agents/agents/system-prompt-security.md)

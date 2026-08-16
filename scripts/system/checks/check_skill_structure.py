@@ -7,11 +7,10 @@ Exits with code 0 if all pass, 1 if any fail.
 
 Usage:
     python scripts/system/checks/check_skill_structure.py
-    python scripts/system/checks/check_skill_structure.py --skill plan
+    python scripts/system/checks/check_skill_structure.py --skill research
 """
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -25,7 +24,7 @@ SKILLS_DIR = PROJECT_ROOT / ".pi" / "skills"
 # orchestration engine (apps/orchestration/); its FSM is a BasePlaybook subclass in
 # the engine package and its playbook tests live in apps/orchestration/tests/. So a
 # per-skill `tests/` dir, `requirements.txt`, and `scripts/__init__.py` are OPTIONAL
-# (only skills with their own domain tooling — e.g. sca, jsa — carry them).
+# (only skills with their own domain tooling carry them).
 REQUIRED_DIRS = ["scripts", "assets/prompts", "resources"]
 REQUIRED_FILES = [
     "SKILL.md",
@@ -236,58 +235,7 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
     return issues
 
 
-def check_skill_room_registration() -> List[Tuple[str, str]]:
-    """Every live skill must be registered in tiered_memory/skill_rooms.json so its
-    MemPalace scratch decays. A DEDICATED-wing skill missing here silently
-    re-creates the wing_jsa accretion (2,086-drawer / 77% bloat this guard exists
-    to prevent); a penny-wing skill missing here is a hygiene gap."""
-    issues: List[Tuple[str, str]] = []
-    manifest_path = (
-        PROJECT_ROOT / "scripts" / "system" / "tiered_memory" / "skill_rooms.json"
-    )
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return [("ERROR", f"skill_rooms.json unreadable ({exc}) — scratch retention is unverified")]
-    registered = manifest.get("skills", {})
-    live = [
-        d.name
-        for d in SKILLS_DIR.iterdir()
-        if d.is_dir()
-        and not d.name.startswith((".", "_"))
-        and (d / "SKILL.md").exists()
-    ]
-    for name in sorted(live):
-        cfg = registered.get(name)
-        if cfg is None:
-            issues.append(
-                (
-                    "ERROR",
-                    f"skill '{name}' is not registered in tiered_memory/skill_rooms.json — its "
-                    'scratch will not decay (accretion risk). Add {"convention":"penny-wing"} '
-                    "(or a dedicated-wing entry).",
-                )
-            )
-            continue
-        conv = cfg.get("convention")
-        if conv == "dedicated-wing":
-            for req in ("wing", "scratch_prefixes", "curated_rooms"):
-                if req not in cfg:
-                    issues.append(
-                        ("ERROR", f"skill '{name}' dedicated-wing entry missing '{req}'")
-                    )
-        elif conv != "penny-wing":
-            issues.append(
-                (
-                    "ERROR",
-                    f"skill '{name}' has invalid convention '{conv}' in skill_rooms.json "
-                    "(expected 'penny-wing' or 'dedicated-wing')",
-                )
-            )
-    return issues
-
-
-def main():
+def main():  # noqa: C901
     parser = argparse.ArgumentParser(description="Validate Penny skill structure")
     parser.add_argument("--skill", help="Validate only a specific skill name")
     args = parser.parse_args()
@@ -320,18 +268,6 @@ def main():
             icon_map = {"ERROR": "❌", "WARN": "⚠️", "INFO": "ℹ️"}
             icon = icon_map.get(severity, "•")
             print(f"     {icon} {msg}")
-            if severity == "ERROR":
-                total_errors += 1
-            elif severity == "WARN":
-                total_warnings += 1
-
-    # Global check: MemPalace scratch retention is registered for every skill.
-    room_issues = check_skill_room_registration()
-    if room_issues:
-        print("  🗄️  MemPalace room registration (tiered_memory/skill_rooms.json)")
-        for severity, msg in room_issues:
-            icon_map = {"ERROR": "❌", "WARN": "⚠️", "INFO": "ℹ️"}
-            print(f"     {icon_map.get(severity, '•')} {msg}")
             if severity == "ERROR":
                 total_errors += 1
             elif severity == "WARN":

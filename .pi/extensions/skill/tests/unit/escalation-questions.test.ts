@@ -160,9 +160,7 @@ describe("normalizeEscalationQuestions", () => {
       artifact_ref: artifactRef,
       questionnaire_transport_ref: transportRef,
     };
-    raw.rendered_questions_digest = renderedQuestionsDigest(
-      normalizeEscalationQuestions([raw])
-    );
+    raw.rendered_questions_digest = renderedQuestionsDigest(normalizeEscalationQuestions([raw]));
 
     // RAW questions -> capability is minted (the fixed path).
     expect(prepareQuestionnairePayload([raw])).toHaveProperty("trustedTransportCapability");

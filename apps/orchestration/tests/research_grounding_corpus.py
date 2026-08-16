@@ -3,17 +3,16 @@ registered SAME_MODEL exception (``orchestration/independence.py``).
 
 WHY THIS EXISTS
 ---------------
-research's citation gate (vera) runs sonnet over synthia's sonnet synthesis, so the
-final verdict in quick/standard mode is a same-model judgement over the generator's
-own work. P5 shipped the opt-in cross-model hook (``constraints['validate_model']``);
+The citation gate and synthesis currently resolve to the same model, so the final
+verdict is a same-model judgement over the generator's work. The opt-in cross-model
+hook is ``constraints['validate_model']``;
 this is the substrate for deciding whether cross-model should become the DEFAULT,
 which costs latency on every single run.
 
 The deciding question is NOT "are two models better than one?" in the abstract. It is:
 **how many real grounding defects are still settled by model judgement at all?** Every
 defect a deterministic floor catches is one for which a second model's opinion is
-irrelevant — the floor caught it before either model spoke. prd measured exactly this
-and found its floor already decided 50% of its corpus.
+irrelevant — the floor caught it before either model spoke.
 
 So each case is labelled with the tier that SHOULD catch it:
 

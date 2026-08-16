@@ -1,17 +1,17 @@
 /**
  * Word Extension
  *
- * Generate modern, professionally styled Word (.docx) documents from markdown:
- *   - word_generate: render markdown (inline or from a file) into a themed .docx
- *
- * The heavy lifting happens in generate_docx.py (python-docx + markdown-it-py),
- * run with the project venv and fed a JSON spec over stdin.
+ * Generate professionally styled Word documents from Markdown. TypeScript owns
+ * tool validation and process lifecycle; generate_docx.py owns rendering,
+ * structural validation, and atomic publication.
  */
 
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { createLogger, setSessionId } from "../../lib/logger/logger.js";
@@ -21,15 +21,44 @@ const logger = createLogger("word");
 export const WORD_THEMES = ["executive", "modern", "minimal", "editorial", "tech"] as const;
 
 const DEFAULT_TIMEOUT_MS = 90_000;
+const MAX_STDERR_CHARS = 16_000;
+const MAX_STAGING_ATTEMPTS = 10;
+const EXTENSION_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DISCOVERED_PROJECT_ROOT = path.resolve(EXTENSION_DIR, "../../..");
 
-// ── Path helpers (exported for unit tests) ───────────────────────────────────
+// ── Path helpers (exported for tests) ───────────────────────────────────────
 
-export function getProjectRoot(): string {
-  return process.env.PROJECT_ROOT || process.cwd();
+export function getExtensionDir(): string {
+  return EXTENSION_DIR;
 }
 
-export function getVenvPython(): string {
-  return process.env.PI_VENV_PYTHON || path.join(getProjectRoot(), ".venv", "bin", "python");
+export function getGeneratorScript(): string {
+  return path.join(EXTENSION_DIR, "generate_docx.py");
+}
+
+export function getProjectRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.PROJECT_ROOT?.trim();
+  return configured ? path.resolve(configured) : DISCOVERED_PROJECT_ROOT;
+}
+
+export function venvPythonCandidates(
+  root: string,
+  platform: NodeJS.Platform = process.platform
+): string[] {
+  const unix = path.join(root, ".venv", "bin", "python");
+  const windows = path.join(root, ".venv", "Scripts", "python.exe");
+  return platform === "win32" ? [windows, unix] : [unix, windows];
+}
+
+export function getVenvPython(
+  root = getProjectRoot(),
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): string {
+  const override = env.PI_VENV_PYTHON?.trim();
+  if (override) return path.resolve(override);
+  const candidates = venvPythonCandidates(root, platform);
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
 }
 
 /** Lowercase, alphanumeric-and-dash slug for filenames; never empty. */
@@ -43,8 +72,7 @@ export function slugify(input: string, fallback = "document"): string {
   return slug || fallback;
 }
 
-/** Default output path when the caller gives none: a per-run temp file under the
- *  OS temp dir (…/penny/word/) — never the project tree. */
+/** Default output path: a unique per-run file in the OS temp directory. */
 export function defaultOutputPath(title: string | undefined, now: Date = new Date()): string {
   const stamp = [
     now.getFullYear(),
@@ -56,112 +84,207 @@ export function defaultOutputPath(title: string | undefined, now: Date = new Dat
     String(now.getMinutes()).padStart(2, "0"),
     String(now.getSeconds()).padStart(2, "0"),
   ].join("");
-  // Millisecond + random suffix: sibling tool calls run concurrently in pi, so a
-  // 1-second timestamp alone can collide and silently overwrite a sibling's output.
-  const uniq = `${String(now.getMilliseconds()).padStart(3, "0")}${Math.random()
+  // Sibling tool calls can execute concurrently. Milliseconds plus randomness
+  // prevent silent overwrites when two calls share the same title and second.
+  const unique = `${String(now.getMilliseconds()).padStart(3, "0")}${Math.random()
     .toString(36)
     .slice(2, 6)}`;
-  const name = `${slugify(title || "document")}_${stamp}_${time}_${uniq}.docx`;
+  const name = `${slugify(title || "document")}_${stamp}_${time}_${unique}.docx`;
   return path.join(os.tmpdir(), "penny", "word", name);
 }
 
-/** Resolve the final output path from an optional explicit param. */
 export function resolveOutputPath(
   outputPath: string | undefined,
   title: string | undefined,
   projectRoot: string
 ): string {
-  if (!outputPath) {
-    return defaultOutputPath(title);
-  }
+  if (!outputPath) return defaultOutputPath(title);
   const resolved = path.isAbsolute(outputPath) ? outputPath : path.join(projectRoot, outputPath);
   return resolved.toLowerCase().endsWith(".docx") ? resolved : `${resolved}.docx`;
 }
 
-// ── Generator invocation ─────────────────────────────────────────────────────
+/** Reserve a parent-owned same-directory staging path for one invocation. */
+export function reserveStagingPath(outputPath: string): string {
+  const target = path.resolve(outputPath);
+  const directory = path.dirname(target);
+  fs.mkdirSync(directory, { recursive: true });
+  for (let attempt = 0; attempt < MAX_STAGING_ATTEMPTS; attempt += 1) {
+    const candidate = path.join(
+      directory,
+      `.${path.basename(target, ".docx")}.${randomUUID()}.tmp.docx`
+    );
+    try {
+      const descriptor = fs.openSync(candidate, "wx", 0o600);
+      fs.closeSync(descriptor);
+      return candidate;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") throw error;
+    }
+  }
+  throw new Error(`Unable to reserve a unique Word staging file beside ${target}`);
+}
 
-interface GeneratorOutcome {
+// ── Generator invocation ───────────────────────────────────────────────────
+
+export interface GeneratorOutcome {
   cancelled: boolean;
   result?: Record<string, unknown>;
 }
 
-function generatorTimeoutMs(): number {
-  const raw = Number(process.env.PENNY_DOCGEN_TIMEOUT_MS);
+export interface GeneratorRunOptions {
+  pythonPath?: string;
+  timeoutMs?: number;
+}
+
+function generatorTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.PENNY_DOCGEN_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
 }
 
-function runGenerator(
+function boundedAppend(current: string, chunk: Buffer, limit: number): string {
+  const appended = current + chunk.toString();
+  return appended.length <= limit ? appended : appended.slice(-limit);
+}
+
+export function runGenerator(
   scriptPath: string,
   spec: Record<string, unknown>,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  options: GeneratorRunOptions = {}
 ): Promise<GeneratorOutcome> {
-  const python = getVenvPython();
+  if (signal?.aborted) return Promise.resolve({ cancelled: true });
+
+  const projectRoot = getProjectRoot();
+  const configuredOverride = process.env.PI_VENV_PYTHON?.trim();
+  const attempted = options.pythonPath
+    ? [path.resolve(options.pythonPath)]
+    : configuredOverride
+      ? [path.resolve(configuredOverride)]
+      : venvPythonCandidates(projectRoot);
+  const python = options.pythonPath ? path.resolve(options.pythonPath) : getVenvPython(projectRoot);
+
   if (!fs.existsSync(python)) {
     throw new Error(
-      `Python venv not found at ${python}. Run scripts/setup/init-external-tools.sh (or make setup) first.`
+      `Python interpreter not found. Attempted: ${attempted.join(", ")}. ` +
+        "Run `uv sync --extra dev --frozen` or set PI_VENV_PYTHON."
     );
   }
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error(`Word generator script not found: ${scriptPath}`);
+  }
 
+  const outputPath = spec.output_path;
+  if (typeof outputPath !== "string" || outputPath.length === 0) {
+    throw new Error("Document generator spec requires output_path");
+  }
+  const stagingPath = reserveStagingPath(outputPath);
+  const preparedSpec = { ...spec, staging_path: stagingPath };
+  const timeoutMs = options.timeoutMs ?? generatorTimeoutMs();
   return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
     const proc = spawn(python, [scriptPath], { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let aborted = false;
+    let timedOut = false;
+    let settled = false;
+    const lifecycle: { timer?: ReturnType<typeof setTimeout> } = {};
 
-    const timer = setTimeout(() => {
-      proc.kill("SIGKILL");
-      reject(new Error(`Document generator timed out after ${generatorTimeoutMs()}ms`));
-    }, generatorTimeoutMs());
+    const cleanup = () => {
+      if (lifecycle.timer !== undefined) clearTimeout(lifecycle.timer);
+      signal?.removeEventListener("abort", onAbort);
+      fs.rmSync(stagingPath, { force: true });
+    };
+    const settleResolve = (outcome: GeneratorOutcome) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(outcome);
+    };
+    const settleReject = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
 
     const onAbort = () => {
       aborted = true;
-      proc.kill("SIGKILL");
+      if (!proc.kill("SIGKILL")) settleResolve({ cancelled: true });
     };
     signal?.addEventListener("abort", onAbort, { once: true });
+
+    lifecycle.timer = setTimeout(() => {
+      timedOut = true;
+      if (!proc.kill("SIGKILL")) {
+        settleReject(new Error(`Document generator timed out after ${timeoutMs}ms`));
+      }
+    }, timeoutMs);
 
     proc.stdout.on("data", (data: Buffer) => {
       stdout += data.toString();
     });
     proc.stderr.on("data", (data: Buffer) => {
-      stderr += data.toString();
+      stderr = boundedAppend(stderr, data, MAX_STDERR_CHARS);
     });
 
     proc.on("close", (code) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
+      const durationMs = Date.now() - startedAt;
+      if (timedOut) {
+        settleReject(
+          new Error(
+            `Document generator timed out after ${timeoutMs}ms ` +
+              `(python=${python}, script=${scriptPath}, durationMs=${durationMs})`
+          )
+        );
+        return;
+      }
       if (aborted) {
-        resolve({ cancelled: true });
+        settleResolve({ cancelled: true });
         return;
       }
       if (code !== 0) {
-        reject(new Error(stderr.trim() || `Document generator exited with code ${code}`));
+        const diagnostic = stderr.trim() || `Document generator exited with code ${code}`;
+        settleReject(
+          new Error(
+            `${diagnostic}\n` +
+              `(python=${python}, script=${scriptPath}, exitCode=${String(code)}, durationMs=${durationMs})`
+          )
+        );
         return;
       }
       try {
-        resolve({ cancelled: false, result: JSON.parse(stdout) });
+        settleResolve({ cancelled: false, result: JSON.parse(stdout) as Record<string, unknown> });
       } catch {
-        reject(new Error(`Document generator returned invalid JSON: ${stdout.slice(0, 500)}`));
+        settleReject(
+          new Error(
+            `Document generator returned invalid JSON: ${stdout.slice(0, 500)} ` +
+              `(python=${python}, script=${scriptPath}, durationMs=${durationMs})`
+          )
+        );
       }
     });
 
-    proc.on("error", (err) => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      reject(err);
+    proc.on("error", (error) => {
+      settleReject(
+        new Error(
+          `Unable to start document generator: ${error.message} ` +
+            `(python=${python}, script=${scriptPath})`
+        )
+      );
     });
 
-    // If the child dies before draining stdin (broken venv, abort/timeout SIGKILL),
-    // the pending write fails with EPIPE. Without this listener that surfaces as an
-    // unhandled 'error' event on the Socket and kills the whole pi process; the
-    // 'close' handler above already settles the promise with the real failure.
+    // A child that exits before reading stdin can produce EPIPE. The close/error
+    // handlers above own the actual result; swallowing this socket error prevents
+    // an unhandled event from terminating the Pi process.
     proc.stdin.on("error", () => {});
-
-    proc.stdin.write(JSON.stringify(spec));
+    proc.stdin.write(JSON.stringify(preparedSpec));
     proc.stdin.end();
   });
 }
 
-// ── Tool parameters ──────────────────────────────────────────────────────────
+// ── Tool parameters ────────────────────────────────────────────────────────
 
 const wordGenerateParams = Type.Object({
   markdown: Type.Optional(
@@ -169,49 +292,50 @@ const wordGenerateParams = Type.Object({
       description:
         "Full markdown content to render. Supports headings H1–H6, paragraphs, **bold**, " +
         "*italic*, `inline code`, ~~strikethrough~~, [links](url), nested bullet and numbered " +
-        "lists, tables, fenced code blocks, blockquotes, horizontal rules, and images " +
-        "(![caption](path) — absolute path or relative to the project root). Exactly one of " +
-        "'markdown' or 'markdown_path' is required.",
+        "lists, tables, fenced code blocks, blockquotes, horizontal rules, and local images " +
+        "(![caption](path)). Exactly one of 'markdown' or 'markdown_path' is required.",
     })
   ),
   markdown_path: Type.Optional(
     Type.String({
       description:
-        "Path to a markdown file to render instead of inline 'markdown'. Relative paths " +
-        "resolve against the project root.",
+        "Path to a markdown file instead of inline 'markdown'. Relative paths resolve " +
+        "against the project root.",
     })
   ),
   title: Type.Optional(
     Type.String({
       description:
-        "Document title. Defaults to the first H1 in the markdown (which is then not " +
-        "repeated in the body), else 'Document'.",
+        "Document title. Defaults to the first H1. The leading H1 is removed from the body " +
+        "when title_mode renders separate title matter.",
     })
   ),
   subtitle: Type.Optional(
     Type.String({ description: "Subtitle rendered under the title in muted text." })
   ),
   author: Type.Optional(
-    Type.String({ description: "Author shown on the title block / cover page meta line." })
+    Type.String({ description: "Author shown on the title block or cover page." })
   ),
   date: Type.Optional(
     Type.String({
       description:
-        "Date for the meta line. Defaults to today (YYYY-MM-DD) when author or cover_page is set.",
+        "Date for title metadata. Defaults to today (YYYY-MM-DD) when author or a cover is used.",
     })
   ),
   theme: Type.Optional(
     Type.String({
       enum: [...WORD_THEMES],
-      description:
-        "Visual theme: 'executive' (deep navy, Calibri — default), 'modern' (indigo, Segoe UI), " +
-        "'minimal' (near-black, Arial), 'editorial' (rust, Georgia serif), 'tech' (teal, Segoe UI).",
       default: "executive",
+      description:
+        "Visual theme: executive (deep navy), modern (indigo), minimal (near-black), " +
+        "editorial (rust serif), or tech (teal).",
     })
   ),
   accent_color: Type.Optional(
     Type.String({
-      description: "Hex accent color override for the theme, e.g. '0E7490' ('#' optional).",
+      description:
+        "Hex accent override, e.g. '0E7490'. The generator derives a coherent, " +
+        "contrast-safe palette from this color.",
     })
   ),
   font_size_pt: Type.Optional(
@@ -219,14 +343,23 @@ const wordGenerateParams = Type.Object({
   ),
   line_spacing: Type.Optional(
     Type.Number({
-      minimum: 1.0,
-      maximum: 2.0,
+      minimum: 1,
+      maximum: 2,
       default: 1.15,
       description: "Line spacing multiplier.",
     })
   ),
+  line_break_mode: Type.Optional(
+    Type.String({
+      enum: ["preserve", "commonmark"],
+      default: "preserve",
+      description:
+        "Single-newline policy. 'preserve' (default) emits a Word line break; 'commonmark' " +
+        "folds a soft break to a space. Explicit Markdown hard breaks and <br> are always preserved.",
+    })
+  ),
   margin_inches: Type.Optional(
-    Type.Number({ minimum: 0.4, maximum: 2.0, default: 1.0, description: "Uniform page margin." })
+    Type.Number({ minimum: 0.4, maximum: 2, default: 1, description: "Uniform page margin." })
   ),
   orientation: Type.Optional(
     Type.String({
@@ -238,47 +371,64 @@ const wordGenerateParams = Type.Object({
   page_size: Type.Optional(
     Type.String({ enum: ["letter", "a4"], default: "letter", description: "Paper size." })
   ),
+  title_mode: Type.Optional(
+    Type.String({
+      enum: ["auto", "none", "inline", "cover"],
+      default: "auto",
+      description:
+        "Title treatment: auto (legacy inline/cover_page behavior), none (retain a leading H1 " +
+        "in the body), inline, or a standalone cover with body page numbering restarted at 1.",
+    })
+  ),
   cover_page: Type.Optional(
     Type.Boolean({
       default: false,
       description:
-        "Render a standalone cover page (accent bar, large title, author/date), then a page break.",
+        "Legacy cover-page switch. Equivalent to title_mode='cover' when title_mode is auto.",
     })
   ),
   include_toc: Type.Optional(
     Type.Boolean({
       default: false,
-      description: "Insert a Table of Contents (heading levels 1–3) before the body.",
+      description:
+        "Insert a Word TOC field for heading levels 1–3 and request refresh on open. Some " +
+        "viewers may still require a manual field update.",
     })
   ),
   include_page_numbers: Type.Optional(
     Type.Boolean({ default: true, description: "Show page numbers in the footer." })
   ),
   header_text: Type.Optional(
-    Type.String({ description: "Small muted text in the page header (right-aligned)." })
+    Type.String({ description: "Small muted text in the right-aligned page header." })
   ),
   footer_text: Type.Optional(
-    Type.String({ description: "Small muted text in the page footer (left-aligned)." })
+    Type.String({ description: "Small muted text in the left side of the page footer." })
   ),
   table_style: Type.Optional(
     Type.String({
       enum: ["banded", "minimal", "grid", "none"],
       default: "banded",
+      description: "Table look: banded, minimal, grid, or none.",
+    })
+  ),
+  table_layout: Type.Optional(
+    Type.String({
+      enum: ["content", "equal"],
+      default: "content",
       description:
-        "Table look: 'banded' (accent header, alternating row fill — default), 'minimal' " +
-        "(accent underline below header only), 'grid' (all hairline borders), 'none'.",
+        "Column sizing: content-aware widths (default) or equal-width compatibility mode.",
     })
   ),
   output_path: Type.Optional(
     Type.String({
       description:
-        "Destination .docx path. When omitted, writes to a temp file under the OS temp dir (…/penny/word/) — not the project tree. " +
-        "Relative paths resolve against the project root.",
+        "Destination .docx path. Relative paths resolve against the project root. When omitted, " +
+        "a unique file is written under the OS temp directory (…/penny/word/).",
     })
   ),
 });
 
-interface WordGenerateParams {
+export interface WordGenerateParams {
   markdown?: string;
   markdown_path?: string;
   title?: string;
@@ -289,19 +439,21 @@ interface WordGenerateParams {
   accent_color?: string;
   font_size_pt?: number;
   line_spacing?: number;
+  line_break_mode?: string;
   margin_inches?: number;
   orientation?: string;
   page_size?: string;
+  title_mode?: string;
   cover_page?: boolean;
   include_toc?: boolean;
   include_page_numbers?: boolean;
   header_text?: string;
   footer_text?: string;
   table_style?: string;
+  table_layout?: string;
   output_path?: string;
 }
 
-/** Build the JSON spec handed to generate_docx.py. Exported for unit tests. */
 export function buildSpec(
   params: WordGenerateParams,
   projectRoot: string
@@ -311,6 +463,7 @@ export function buildSpec(
   if (hasInline === hasFile) {
     throw new Error("Provide exactly one of 'markdown' or 'markdown_path'.");
   }
+
   let markdownPath: string | undefined;
   if (hasFile) {
     markdownPath = path.isAbsolute(params.markdown_path as string)
@@ -320,41 +473,37 @@ export function buildSpec(
       throw new Error(`Markdown file not found: ${markdownPath}`);
     }
   }
+
   const spec: Record<string, unknown> = {
     ...params,
     markdown_path: markdownPath,
     output_path: resolveOutputPath(params.output_path, params.title, projectRoot),
     project_root: projectRoot,
   };
-  if (!hasInline) {
-    // Drop e.g. whitespace-only markdown so the generator's own
-    // exactly-one-input check agrees with the gate above.
-    delete spec.markdown;
-  }
+  if (!hasInline) delete spec.markdown;
   return spec;
 }
 
-// ── Registration ─────────────────────────────────────────────────────────────
+// ── Registration ───────────────────────────────────────────────────────────
 
 export default function wordExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event: unknown, ctx: unknown) => {
-    const sessionCtx = ctx as { sessionManager: { getSessionId(): string } };
-    setSessionId(sessionCtx.sessionManager.getSessionId());
+    const sessionContext = ctx as { sessionManager: { getSessionId(): string } };
+    setSessionId(sessionContext.sessionManager.getSessionId());
   });
 
   pi.registerTool({
     name: "word_generate",
     label: "Generate Word Document",
     description:
-      "Render markdown into a professionally styled Word (.docx) document. Compose the full " +
-      "document content as markdown (any content type: reports, proposals, guides, memos, " +
-      "resumes) and pass it inline via 'markdown', or point at a file with 'markdown_path'. " +
-      "Supports CommonMark plus tables and strikethrough; a leading H1 becomes the document " +
-      "title automatically. Five built-in themes (executive/modern/minimal/editorial/tech) " +
-      "control fonts and accent colors; optional cover page, table of contents, headers/footers, " +
-      "and page numbers. When output_path is omitted, output is written to the OS temp dir (…/penny/word/).",
+      "Render Markdown into a professionally styled, structurally validated Word (.docx) " +
+      "document. The generator preserves intentional line breaks by default, uses inherited " +
+      "Word styles and a contrast-safe palette, sizes tables by content, validates the OOXML " +
+      "package, and atomically publishes the result. A leading H1 can become title matter; " +
+      "title_mode='none' retains it in the body. Five themes, covers, TOCs, headers/footers, " +
+      "page numbers, and local images are supported.",
     promptSnippet:
-      "word_generate: render markdown into a professionally styled Word (.docx) document",
+      "word_generate: render Markdown into a validated, professionally styled Word document",
     parameters: wordGenerateParams,
     async execute(
       _toolCallId: string,
@@ -369,28 +518,37 @@ export default function wordExtension(pi: ExtensionAPI): void {
           details: { cancelled: true },
         };
       }
-      const projectRoot = getProjectRoot();
-      const spec = buildSpec(params, projectRoot);
-      fs.mkdirSync(path.dirname(spec.output_path as string), { recursive: true });
 
-      const script = path.join(projectRoot, ".pi", "extensions", "word", "generate_docx.py");
+      const startedAt = Date.now();
       try {
-        const outcome = await runGenerator(script, spec, signal);
+        const projectRoot = getProjectRoot();
+        const spec = buildSpec(params, projectRoot);
+        fs.mkdirSync(path.dirname(spec.output_path as string), { recursive: true });
+
+        const outcome = await runGenerator(getGeneratorScript(), spec, signal);
         if (outcome.cancelled) {
           return {
             content: [{ type: "text" as const, text: "Cancelled" }],
             details: { cancelled: true },
           };
         }
+
         const result = outcome.result as Record<string, unknown>;
-        logger.info("Word document generated", { path: result.path, theme: result.theme });
+        logger.info("Word document generated", {
+          path: result.path,
+          theme: result.theme,
+          durationMs: Date.now() - startedAt,
+        });
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
           details: result,
         };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        logger.error("Word generation failed", { error: message });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error("Word generation failed", {
+          error: message,
+          durationMs: Date.now() - startedAt,
+        });
         throw new Error(`word_generate failed: ${message}`);
       }
     },

@@ -22,7 +22,7 @@ rough prompt, copying the enhanced result out of the reply, and re-pasting it.
 - **Session context** comes from `sessionManager.buildContextEntries()` — the
   same compaction-aware entry set pi sends the main model — flattened to text by
   `transcript.ts`. Without it, mid-session referential prompts ("fix that bug",
-  "same for the other file") were enhanced into confident *invented* specifics,
+  "same for the other file") were enhanced into confident _invented_ specifics,
   because the rubric demands concreteness the enhancer could not source. The
   methodology constrains that context hard: it resolves references and inherits
   established constraints, but the **goal always comes from `<raw_prompt>`
@@ -42,11 +42,11 @@ rough prompt, copying the enhanced result out of the reply, and re-pasting it.
 
 ## Configuration (.env, read lazily at each prompt)
 
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| `PENNY_ENHANCE_MODEL` | session model | `provider/model-id` for the enhancement call. Must be a **large-context** model — it receives the whole session. Currently `ollama/glm-5.2:cloud` (999,424 ctx) |
-| `PENNY_ENHANCE_TIMEOUT_MS` | `25000` | hard cap on the enhancement call (set to `60000` in `.env`) |
-| `PENNY_ENHANCE_CONTEXT_MAX_CHARS` | `3200000` | safety valve only (~800K tokens). Oldest entries are dropped first if the transcript would overflow the enhance model. Not a trimming policy — full context is the design |
+| Variable                          | Default       | Meaning                                                                                                                                                                   |
+| --------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PENNY_ENHANCE_MODEL`             | session model | `provider/model-id` for the enhancement call. Must be a **large-context** model — it receives the whole session. Currently `ollama/glm-5.2:cloud` (999,424 ctx)           |
+| `PENNY_ENHANCE_TIMEOUT_MS`        | `25000`       | hard cap on the enhancement call (set to `60000` in `.env`)                                                                                                               |
+| `PENNY_ENHANCE_CONTEXT_MAX_CHARS` | `3200000`     | safety valve only (~800K tokens). Oldest entries are dropped first if the transcript would overflow the enhance model. Not a trimming policy — full context is the design |
 
 ## Usage
 

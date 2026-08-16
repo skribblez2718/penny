@@ -11,6 +11,7 @@ from orchestration.contracts import (
     VERIFY,
     Confidence,
     Directives,
+    artifact_dispatch_control,
     validate_summary,
     validate_summary_contract,
 )
@@ -181,6 +182,22 @@ def test_invoke_agent_directive_shape():
     assert "orchestrator_state" not in d  # state lives in the checkpointer
 
 
+def test_invoke_agent_carries_owner_artifact_contracts_verbatim():
+    output_artifact = {"schema_version": 1, "operation_id": "op"}
+    input_artifacts = {"schema_version": 1, "artifacts": []}
+    d = Directives.invoke_agent(
+        agent="annie",
+        task_summary="x",
+        state_id="framing",
+        session_id="s",
+        run_id="r",
+        output_artifact=output_artifact,
+        input_artifacts=input_artifacts,
+    )
+    assert d["output_artifact"] is output_artifact
+    assert d["input_artifacts"] is input_artifacts
+
+
 def test_invoke_agent_no_skill_context_key():
     # skillContext is owned by the TS driver, not the Python engine.
     d = Directives.invoke_agent(
@@ -193,6 +210,51 @@ def test_invoke_agent_no_skill_context_key():
     )
     assert d["logical_step"] is False
     assert "skillContext" not in d
+
+
+def test_artifact_dispatch_mode_defaults_active_and_unknown_fails_closed():
+    assert artifact_dispatch_control({}).dispatch_allowed is True
+    assert artifact_dispatch_control({"PENNY_ARTIFACT_DISPATCH_MODE": "active"}).dispatch_allowed
+
+    paused = artifact_dispatch_control({"PENNY_ARTIFACT_DISPATCH_MODE": "paused"})
+    assert paused.dispatch_allowed is False
+    assert paused.code == "ARTIFACT_DISPATCH_PAUSED"
+
+    for unknown in ("", "ACTIVE", " paused", "legacy", "semantic-memory"):
+        control = artifact_dispatch_control({"PENNY_ARTIFACT_DISPATCH_MODE": unknown})
+        assert control.dispatch_allowed is False
+        assert control.mode == "paused"
+        assert control.code == "ARTIFACT_DISPATCH_MODE_INVALID"
+
+
+def test_paused_directive_is_typed_retriable_and_non_terminal():
+    control = artifact_dispatch_control({"PENNY_ARTIFACT_DISPATCH_MODE": "paused"})
+    directive = Directives.paused(
+        state_id="framing",
+        run_status="running",
+        session_id="S",
+        run_id="R",
+        control=control,
+    )
+    assert directive == {
+        "schema_version": 1,
+        "action": "paused",
+        "code": "ARTIFACT_DISPATCH_PAUSED",
+        "reason": control.reason,
+        "retryable": True,
+        "dispatch_mode": "paused",
+        "run_status": "running",
+        "state_id": "framing",
+        "session_id": "S",
+        "run_id": "R",
+        "recovery": {
+            "action": "recover",
+            "run_id": "R",
+            "requires_dispatch_mode": "active",
+            "checkpoint_preserved": True,
+        },
+    }
+    assert "complete" not in directive and "errors" not in directive
 
 
 def test_all_directives_carry_session_and_run_id():
@@ -208,6 +270,13 @@ def test_all_directives_carry_session_and_run_id():
         ),
         Directives.complete(result={"ok": True}, session_id="S", run_id="R"),
         Directives.error(errors=["boom"], session_id="S", run_id="R"),
+        Directives.paused(
+            state_id="framing",
+            run_status="running",
+            session_id="S",
+            run_id="R",
+            control=artifact_dispatch_control({"PENNY_ARTIFACT_DISPATCH_MODE": "paused"}),
+        ),
         Directives.status(state="framing", complete=False, session_id="S", run_id="R"),
     ]
     for d in builders:

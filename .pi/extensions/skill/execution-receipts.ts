@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes } from "crypto";
 import * as path from "path";
+import { canonicalArtifactJson, parseArtifactRef, type ArtifactRef } from "./artifact-client.js";
 
 /**
  * REALM-SHARED process singletons (owner key + questionnaire transport registry).
@@ -264,8 +265,14 @@ interface OwnedReceiptInput {
   startedAt: string;
   endedAt: string;
   exitStatus: number;
+  outputArtifactRef: ArtifactRef;
   output: string;
   secretValues: string[];
+}
+
+/** Encode the real canonical ref into the receipt schema's legacy string field. */
+export function encodeReceiptArtifactRef(value: ArtifactRef | unknown): string {
+  return canonicalArtifactJson(parseArtifactRef(value));
 }
 
 function buildOwnedReceipt(input: OwnedReceiptInput): Record<string, unknown> {
@@ -283,7 +290,7 @@ function buildOwnedReceipt(input: OwnedReceiptInput): Record<string, unknown> {
     started_at: input.startedAt,
     ended_at: input.endedAt,
     exit_status: input.exitStatus,
-    output_artifact_ref: `skill-driver://${input.runId}/${input.receiptId}/redacted-output`,
+    output_artifact_ref: encodeReceiptArtifactRef(input.outputArtifactRef),
     output_digest: createHash("sha256").update(redactedOutput, "utf8").digest("hex"),
     output_excerpt: redactedOutput,
     integrity_state: "intact",
@@ -304,6 +311,7 @@ export function buildAgentExecutionReceipt(input: {
   startedAt: string;
   endedAt: string;
   exitStatus: number;
+  outputArtifactRef: ArtifactRef;
   output: string;
   secretValues: string[];
 }): Record<string, unknown> {
@@ -421,6 +429,7 @@ export function buildObservedCommandReceipts(input: {
   projectRoot: string;
   startedAt: string;
   endedAt: string;
+  outputArtifactRef: ArtifactRef;
   secretValues: string[];
 }): Record<string, unknown>[] {
   if (!Array.isArray(input.claims)) return [];
@@ -454,6 +463,7 @@ export function buildObservedCommandReceipts(input: {
         startedAt: match.startedAt,
         endedAt: match.endedAt,
         exitStatus: 0,
+        outputArtifactRef: input.outputArtifactRef,
         output: match.output,
         secretValues: input.secretValues,
       })

@@ -24,8 +24,8 @@ event the doctrine names as the moment to re-measure.
 
 Known limitation (stated rather than papered over)
 --------------------------------------------------
-Agent frontmatter names models by ALIAS (``opus``, ``sonnet``), not by version. A
-provider silently improving the model behind an unchanged alias will NOT move this
+Agent frontmatter may name models by aliases rather than immutable versions. A
+provider silently improving a model behind an unchanged alias will NOT move this
 hash, and no amount of hashing local files can detect it. This trigger therefore
 catches *declared* fleet changes only; a silent upgrade still relies on the periodic
 pass. Recording the alias set is strictly better than a date, and strictly worse than
