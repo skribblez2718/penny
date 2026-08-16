@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import date
 
-from .roster import roster_changed, roster_hash
+from .roster import REVIEW_CURRENT, review_state, roster_changed, roster_hash
 
 # Fleet baseline for the two retained engine loans. This is a change tripwire,
 # not evidence that either mechanism was freshly measured on this fleet.
@@ -41,6 +42,11 @@ class Loan:
     def fleet_changed(self) -> bool:
         """Whether the configured fleet changed since the loan's review baseline."""
         return roster_changed(self.roster_at_review)
+
+    @property
+    def review_state(self) -> str:
+        """Current changed/overdue/unknown/current lifecycle state."""
+        return review_state(self.roster_at_review, self.review_by)
 
 
 LOANS: dict[str, Loan] = {
@@ -72,6 +78,36 @@ LOANS: dict[str, Loan] = {
             added="2026-07-14",
             review_by="2026-10-01",
         ),
+        Loan(
+            loan_id="research_mode_presets",
+            description="Quick/standard/deep research mode budget presets.",
+            rationale=(
+                "Retained for corrected migration parity; fixed presets may under- or "
+                "over-spend as model capability and query difficulty change."
+            ),
+            added="2026-08-16",
+            review_by="2026-10-01",
+        ),
+        Loan(
+            loan_id="research_fixed_topology",
+            description="The retained named research FSM and fixed critique ordering.",
+            rationale=(
+                "The topology preserves recovery and parity during the runtime migration "
+                "but should later be compared with bounded model-chosen arrangements."
+            ),
+            added="2026-08-16",
+            review_by="2026-10-01",
+        ),
+        Loan(
+            loan_id="research_three_file_output",
+            description="The mandatory report.md, sources.md, and README.md product shape.",
+            rationale=(
+                "Retained for artifact compatibility until outcome/usability evidence "
+                "supports a more task-adaptive result shape."
+            ),
+            added="2026-08-16",
+            review_by="2026-10-01",
+        ),
     )
 }
 
@@ -87,9 +123,22 @@ def list_loans() -> list[Loan]:
     return list(LOANS.values())
 
 
-def loans_needing_review() -> list[Loan]:
-    """Return loans whose fleet-change review tripwire has fired."""
-    return [loan for loan in LOANS.values() if loan.fleet_changed]
+def loan_review_states(*, as_of: date | None = None) -> dict[str, str]:
+    """Expose lifecycle state for every loan, including unknown and overdue."""
+    return {
+        loan.loan_id: review_state(
+            loan.roster_at_review,
+            loan.review_by,
+            as_of=as_of,
+        )
+        for loan in LOANS.values()
+    }
+
+
+def loans_needing_review(*, as_of: date | None = None) -> list[Loan]:
+    """Return every loan that is changed, overdue, or unknown."""
+    states = loan_review_states(as_of=as_of)
+    return [loan for loan in LOANS.values() if states[loan.loan_id] != REVIEW_CURRENT]
 
 
 def current_roster() -> str:

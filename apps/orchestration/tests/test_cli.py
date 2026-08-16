@@ -122,7 +122,8 @@ def test_recover_is_playbook_scoped(capsys, monkeypatch):
         default_playbook="other-skill", argv=["recover", "--session-id", "s-x", "--run-id", "r-x"]
     )
     out = json.loads(capsys.readouterr().out.strip())
-    assert rc == 0 and out["action"] == "status" and out["state"] == "unknown"
+    assert rc == 0 and out["action"] == "error"
+    assert "immutable identity" in out["errors"][0]
 
 
 def test_no_state_flag_supported(capsys):

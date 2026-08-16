@@ -71,6 +71,7 @@ from .checkpointer import (
     STATUS_AWAITING_USER,
     STATUS_COMPLETE,
     STATUS_ERROR,
+    STATUS_INCOMPLETE,
     STATUS_RUNNING,
     Checkpointer,
 )
@@ -397,15 +398,9 @@ class BasePlaybook:
         return {"met": ctx.met, "iterations": ctx.iteration}
 
     def terminal_directive(self, result: dict[str, Any]) -> dict[str, Any]:
-        """Build the public terminal directive.
-
-        The compatibility default retains the historic ``complete`` action even
-        for an honest met=False exhaustion. Security-sensitive playbooks may
-        override this to emit ``incomplete`` so no public complete signal exists.
-        """
-        return Directives.complete(
-            result=result, session_id=self._ctx.session_id, run_id=self._ctx.run_id
-        )
+        """Emit public success only when the required outcome was met."""
+        builder = Directives.complete if self._ctx.met else Directives.incomplete
+        return builder(result=result, session_id=self._ctx.session_id, run_id=self._ctx.run_id)
 
     def skill_context(self, state: str, ctx: RunContext) -> str | None:
         """Skill-relative path to the domain-guidance prompt for this state's
@@ -1190,6 +1185,13 @@ class BasePlaybook:
         constraints: dict | None = None,
         project_root: str = "",
     ) -> dict:
+        existing = self.cp.load(run_id)
+        if existing is not None:
+            return self._plain_error(
+                session_id,
+                run_id,
+                f"run_id '{run_id}' already exists and cannot be started again",
+            )
         constraints = constraints or {}
         ctx = RunContext(
             session_id=session_id,
@@ -1227,6 +1229,9 @@ class BasePlaybook:
         rec = self.cp.load(run_id)
         if rec is None:
             return self._plain_error(session_id, run_id, f"unknown run_id '{run_id}'")
+        identity_error = self._record_identity_error(rec, session_id=session_id)
+        if identity_error:
+            return self._plain_error(session_id, run_id, identity_error)
         paused = self._dispatch_pause_directive(
             state=rec.current_state_id,
             run_status=rec.status,
@@ -1388,14 +1393,31 @@ class BasePlaybook:
             return Directives.status(
                 state="unknown", complete=False, session_id=session_id, run_id=run_id
             )
+        identity_error = self._record_identity_error(rec, session_id=session_id)
+        if identity_error:
+            return self._plain_error(session_id, run_id, identity_error)
         return Directives.status(
             state=rec.current_state_id,
-            complete=rec.status in (STATUS_COMPLETE, STATUS_ERROR),
+            complete=rec.status in (STATUS_COMPLETE, STATUS_INCOMPLETE, STATUS_ERROR),
             session_id=session_id,
             run_id=run_id,
         )
 
     # -- internals ---------------------------------------------------------
+    def _record_identity_error(self, rec: Any, *, session_id: str) -> str:
+        if rec.session_id != session_id:
+            return "requested session_id does not match the run's immutable identity"
+        if rec.playbook != self.NAME:
+            return "requested playbook does not match the run's immutable identity"
+        ctx = rec.context
+        if (ctx.run_id, ctx.session_id, ctx.playbook) != (
+            rec.run_id,
+            rec.session_id,
+            rec.playbook,
+        ):
+            return "checkpoint context identity does not match its immutable row identity"
+        return ""
+
     @staticmethod
     def _dispatch_pause_directive(
         *,
@@ -2190,8 +2212,9 @@ class BasePlaybook:
         self.ctx.met = self.done_predicate(self.ctx)
         self.ctx.complete = True
         result = self.result_payload(self.ctx)
-        self._save(STATUS_COMPLETE, "complete")
-        self.obs.run_end(self.ctx, STATUS_COMPLETE, self.ctx.met, self.ctx.iteration)
+        terminal_status = STATUS_COMPLETE if self.ctx.met else STATUS_INCOMPLETE
+        self._save(terminal_status, "complete")
+        self.obs.run_end(self.ctx, terminal_status, self.ctx.met, self.ctx.iteration)
         exhausted_reason = self._ctx.extras.get("engine_exhausted")
         if exhausted_reason:
             # Honest exhaustion is reported, never dressed as a pass.

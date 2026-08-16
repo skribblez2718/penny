@@ -4,14 +4,14 @@ Operational reference for `scripts/system/trajectory/`. Human rationale: [Behavi
 
 ## What It Is
 
-The eval ratchet catches *metric* regression; this catches *behavioral* regression — the system silently producing worse outputs than Oracle did as the driver weakens. Each fixture (`fixtures.json`, **Oracle-authored** — reference output + `pass_bar` + `load_bearing_facts`) is replayed through the current system and scored by the judge against the pass bar (quality, not byte-identity).
+The eval ratchet catches _metric_ regression; this catches _behavioral_ regression — the system silently producing worse outputs than Oracle did as the driver weakens. Each fixture (`fixtures.json`, **Oracle-authored** — reference output + `pass_bar` + `load_bearing_facts`) is replayed through the current system and scored by the judge against the pass bar (quality, not byte-identity).
 
 ## Two-Part Design
 
-| Part | Role |
-|------|------|
-| `run_trajectory.py` (`make trajectory`) | EXPENSIVE: replays fixtures through headless pi (production frame + driver) → judges each → writes `.penny/evals/trajectory/latest.json`. Run weekly. |
-| `eval_trajectory.py` (section `trajectory`) | CHEAP: reads the artifact in every `make evals` — never a model call. |
+| Part                                        | Role                                                                                                                                                  |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `run_trajectory.py` (`make trajectory`)     | EXPENSIVE: replays fixtures through headless pi (production frame + driver) → judges each → writes `.penny/evals/trajectory/latest.json`. Run weekly. |
+| `eval_trajectory.py` (section `trajectory`) | CHEAP: reads the artifact in every `make evals` — never a model call.                                                                                 |
 
 ## Metrics (RATCHETED, not Oracle-absolute)
 
@@ -34,7 +34,7 @@ The live baseline is stored in `scripts/system/evals/baseline.json` (regenerated
 Each fixture carries an `expected_route` (the correct delegation call: `direct` | `skill:<name>` | `agent:<name>`). The runner captures the current system's routing decision for each task under the production frame (`capture_route` → `parse_route`) and compares. `trajectory.route_fidelity` (in `eval_trajectory`) reports the fraction routed correctly.
 
 - **Informational, not a gate** — per the plan, route divergence is a supporting signal unless it correlates with output failure. It surfaces over-delegation (routing a simple ask to a heavy skill) and under-delegation drift.
-- The current fixtures are single-turn direct-answer tasks (all `expected_route: direct`), so route fidelity here guards against the system starting to over-delegate. Richer route-fidelity (fixtures that *should* route to a skill) benefits from engine-driven replay — the natural next fixture additions.
+- The current fixtures are single-turn direct-answer tasks (all `expected_route: direct`), so route fidelity here guards against the system starting to over-delegate. Richer route-fidelity (fixtures that _should_ route to a skill) benefits from engine-driven replay — the natural next fixture additions.
 
 ## Wiring status
 

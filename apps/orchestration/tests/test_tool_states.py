@@ -48,9 +48,7 @@ class ScanMachine(StateMachine):
     )
 
 
-TRIAGE = PrimitiveSpec(
-    "TRIAGE", "annie", {"required": {"triaged": bool}, "optional": {}}, "triage"
-)
+TRIAGE = PrimitiveSpec("TRIAGE", "annie", {"required": {"triaged": bool}, "optional": {}}, "triage")
 
 
 class ScanPlaybook(BasePlaybook):
@@ -87,11 +85,7 @@ def _step(cp, agent, result):
 def test_start_runs_tool_states_then_dispatches_agent(cp):
     d = _start(cp)
     # Both tool states ran inline; the run lands on the first AGENT state.
-    assert (
-        d["action"] == "invoke_agent"
-        and d["agent"] == "annie"
-        and d["state_id"] == "triage"
-    )
+    assert d["action"] == "invoke_agent" and d["agent"] == "annie" and d["state_id"] == "triage"
     rec = cp.load(RID)
     assert rec.current_state_id == "triage" and rec.status == STATUS_RUNNING
     assert rec.context.extras["ran"] == ["baseline", "targeted"]
@@ -100,7 +94,7 @@ def test_start_runs_tool_states_then_dispatches_agent(cp):
 def test_agent_step_completes(cp):
     _start(cp)
     d = _step(cp, "annie", {"triaged": True})
-    assert d["action"] == "complete"
+    assert d["action"] == "incomplete"
 
 
 def test_tool_state_that_does_not_advance_errors(cp):
@@ -186,7 +180,4 @@ def test_mid_tool_crash_recovers_by_rerunning(cp):
         pb_mod.PLAYBOOKS.update(orig)
     # Recovery re-drives the tool loop and lands on the agent state.
     assert len(directives) == 1
-    assert (
-        directives[0]["action"] == "invoke_agent"
-        and directives[0]["state_id"] == "triage"
-    )
+    assert directives[0]["action"] == "invoke_agent" and directives[0]["state_id"] == "triage"

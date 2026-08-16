@@ -43,11 +43,7 @@ def contaminating_global_prompts() -> List[Path]:
     contaminates: it is appended to EVERY run regardless of --system-prompt.
     """
     agent_dir = pi_agent_dir()
-    return [
-        agent_dir / name
-        for name in ("APPEND_SYSTEM.md",)
-        if (agent_dir / name).exists()
-    ]
+    return [agent_dir / name for name in ("APPEND_SYSTEM.md",) if (agent_dir / name).exists()]
 
 
 def parse_model_spec(spec: str) -> Tuple[str, str]:

@@ -2,7 +2,7 @@
 
 ## What It Is
 
-A floor under Penny's quality. The eval suite already catches numbers getting worse; this catches *behavior* getting worse — the system quietly producing weaker plans, sloppier answers, or missing a step that Oracle-era Penny handled. It's the safety rail that makes change safe: change is how Penny improves and how she drifts, and this is the asymmetry that keeps improvements and blocks drift.
+A floor under Penny's quality. The eval suite already catches numbers getting worse; this catches _behavior_ getting worse — the system quietly producing weaker plans, sloppier answers, or missing a step that Oracle-era Penny handled. It's the safety rail that makes change safe: change is how Penny improves and how she drifts, and this is the asymmetry that keeps improvements and blocks drift.
 
 ## How It Works
 
@@ -10,7 +10,7 @@ Oracle authored a handful of representative tasks, each with a reference answer 
 
 ## The Honest Part
 
-The fixtures encode *Oracle's* quality, and the current driver models are weaker — so some fixtures fail on day one. That's a known gap, not drift. The ratchet is smart about this: it locks in the *current* baseline and alarms only when things get worse than that. Today 6 of 7 fixtures pass; the one gap is a planning task where the open model drops a detail Oracle included. A catastrophic floor still catches a total collapse regardless.
+The fixtures encode _Oracle's_ quality, and the current driver models are weaker — so some fixtures fail on day one. That's a known gap, not drift. The ratchet is smart about this: it locks in the _current_ baseline and alarms only when things get worse than that. Today 6 of 7 fixtures pass; the one gap is a planning task where the open model drops a detail Oracle included. A catastrophic floor still catches a total collapse regardless.
 
 ## Keeping It Honest
 

@@ -48,61 +48,73 @@ def test_websocket_stream_stores_entries(client):
 
     with client.websocket_connect("/ws") as ws:
         # 1. session_start
-        ws.send_json({
-            "event": "session_start",
-            "sessionId": session_id,
-            "timestamp": 1700000000000,
-            "data": {
-                "cwd": str(Path(__file__).resolve().parents[4]),
-                "model": {"provider": "openai", "model": "gpt-4o"},
-            },
-        })
+        ws.send_json(
+            {
+                "event": "session_start",
+                "sessionId": session_id,
+                "timestamp": 1700000000000,
+                "data": {
+                    "cwd": str(Path(__file__).resolve().parents[4]),
+                    "model": {"provider": "openai", "model": "gpt-4o"},
+                },
+            }
+        )
         # 2. user message_end
-        ws.send_json({
-            "event": "message_end",
-            "sessionId": session_id,
-            "timestamp": 1700000001000,
-            "data": {"role": "user", "content": "hello from integration test"},
-        })
+        ws.send_json(
+            {
+                "event": "message_end",
+                "sessionId": session_id,
+                "timestamp": 1700000001000,
+                "data": {"role": "user", "content": "hello from integration test"},
+            }
+        )
         # 3. assistant message_end
-        ws.send_json({
-            "event": "message_end",
-            "sessionId": session_id,
-            "timestamp": 1700000002000,
-            "data": {
-                "role": "assistant",
-                "content": [
-                    {"type": "thinking", "thinking": "The user said hello."},
-                    {"type": "text", "text": "Hello! How can I help?"},
-                ],
-            },
-        })
+        ws.send_json(
+            {
+                "event": "message_end",
+                "sessionId": session_id,
+                "timestamp": 1700000002000,
+                "data": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "The user said hello."},
+                        {"type": "text", "text": "Hello! How can I help?"},
+                    ],
+                },
+            }
+        )
         # 4. tool execution_start
-        ws.send_json({
-            "event": "tool_execution_start",
-            "sessionId": session_id,
-            "timestamp": 1700000003000,
-            "data": {"toolCallId": "tc-1", "toolName": "read", "args": {"path": "README.md"}},
-        })
+        ws.send_json(
+            {
+                "event": "tool_execution_start",
+                "sessionId": session_id,
+                "timestamp": 1700000003000,
+                "data": {"toolCallId": "tc-1", "toolName": "read", "args": {"path": "README.md"}},
+            }
+        )
         # 5. tool_result
-        ws.send_json({
-            "event": "tool_result",
-            "sessionId": session_id,
-            "timestamp": 1700000004000,
-            "data": {
-                "toolCallId": "tc-1",
-                "toolName": "read",
-                "isError": False,
-                "hasContent": True,
-            },
-        })
+        ws.send_json(
+            {
+                "event": "tool_result",
+                "sessionId": session_id,
+                "timestamp": 1700000004000,
+                "data": {
+                    "toolCallId": "tc-1",
+                    "toolName": "read",
+                    "isError": False,
+                    "hasContent": True,
+                },
+            }
+        )
         # 6. session_shutdown
-        ws.send_json({
-            "event": "session_shutdown",
-            "sessionId": session_id,
-            "timestamp": 1700000009000,
-            "data": {"duration": 90000},
-        })
+        ws.send_json(
+            {
+                "event": "session_shutdown",
+                "sessionId": session_id,
+                "timestamp": 1700000009000,
+                "data": {"duration": 90000},
+            }
+        )
 
         # Allow the server event loop to process queued messages before disconnect
         time.sleep(0.15)
@@ -172,14 +184,17 @@ def test_compaction_post_and_retrieve(client):
         },
     }
 
-    r = client.post("/compactions", json={
-        "session_id": session_id,
-        "compaction_seq": 0,
-        "compaction_timestamp": "2026-05-05T12:00:00Z",
-        "artifact": artifact,
-        "first_kept_entry_id": "fk-1",
-        "tokens_before": 15000,
-    })
+    r = client.post(
+        "/compactions",
+        json={
+            "session_id": session_id,
+            "compaction_seq": 0,
+            "compaction_timestamp": "2026-05-05T12:00:00Z",
+            "artifact": artifact,
+            "first_kept_entry_id": "fk-1",
+            "tokens_before": 15000,
+        },
+    )
     assert r.status_code == 200
     assert r.json()["compaction_seq"] == 0
 
@@ -209,24 +224,30 @@ def test_full_pipeline_with_search(client):
     session_id = "sess-e2e-search-001"
 
     with client.websocket_connect("/ws") as ws:
-        ws.send_json({
-            "event": "session_start",
-            "sessionId": session_id,
-            "timestamp": 1700000000000,
-            "data": {"cwd": "/tmp"},
-        })
-        ws.send_json({
-            "event": "message_end",
-            "sessionId": session_id,
-            "timestamp": 1700000001000,
-            "data": {"role": "user", "content": "searchable keyword: elephant"},
-        })
-        ws.send_json({
-            "event": "message_end",
-            "sessionId": session_id,
-            "timestamp": 1700000002000,
-            "data": {"role": "assistant", "content": "I found the giraffe you mentioned"},
-        })
+        ws.send_json(
+            {
+                "event": "session_start",
+                "sessionId": session_id,
+                "timestamp": 1700000000000,
+                "data": {"cwd": "/tmp"},
+            }
+        )
+        ws.send_json(
+            {
+                "event": "message_end",
+                "sessionId": session_id,
+                "timestamp": 1700000001000,
+                "data": {"role": "user", "content": "searchable keyword: elephant"},
+            }
+        )
+        ws.send_json(
+            {
+                "event": "message_end",
+                "sessionId": session_id,
+                "timestamp": 1700000002000,
+                "data": {"role": "assistant", "content": "I found the giraffe you mentioned"},
+            }
+        )
 
         # Allow the server event loop to process queued messages before disconnect
         time.sleep(0.15)
@@ -275,17 +296,19 @@ def test_websocket_log_event(client, tmp_path):
 
     session_id = f"log-session-{int(time.time() * 1000)}"
     with client.websocket_connect("/ws") as ws:
-        ws.send_json({
-            "event": "log",
-            "sessionId": session_id,
-            "timestamp": int(time.time() * 1000),
-            "data": {
-                "level": 2,
-                "extension": "test",
-                "message": "integration log test",
-                "context": {"foo": "bar"},
-            },
-        })
+        ws.send_json(
+            {
+                "event": "log",
+                "sessionId": session_id,
+                "timestamp": int(time.time() * 1000),
+                "data": {
+                    "level": 2,
+                    "extension": "test",
+                    "message": "integration log test",
+                    "context": {"foo": "bar"},
+                },
+            }
+        )
         time.sleep(0.15)
 
     db = main_module.db
@@ -299,36 +322,46 @@ def test_entries_event_type_filter(client):
     """GET /sessions/{id}/entries?event_type= filters entries correctly via REST."""
     session_id = "sess-filter-001"
     with client.websocket_connect("/ws") as ws:
-        ws.send_json({
-            "event": "session_start",
-            "sessionId": session_id,
-            "timestamp": 1700000000000,
-            "data": {"cwd": "/tmp"},
-        })
-        ws.send_json({
-            "event": "agent_start",
-            "sessionId": session_id,
-            "timestamp": 1700000001000,
-            "data": {"agent": "echo"},
-        })
-        ws.send_json({
-            "event": "tool_execution_start",
-            "sessionId": session_id,
-            "timestamp": 1700000002000,
-            "data": {"toolName": "read"},
-        })
-        ws.send_json({
-            "event": "agent_start",
-            "sessionId": session_id,
-            "timestamp": 1700000003000,
-            "data": {"agent": "piper"},
-        })
-        ws.send_json({
-            "event": "session_shutdown",
-            "sessionId": session_id,
-            "timestamp": 1700000009000,
-            "data": {"duration": 1000},
-        })
+        ws.send_json(
+            {
+                "event": "session_start",
+                "sessionId": session_id,
+                "timestamp": 1700000000000,
+                "data": {"cwd": "/tmp"},
+            }
+        )
+        ws.send_json(
+            {
+                "event": "agent_start",
+                "sessionId": session_id,
+                "timestamp": 1700000001000,
+                "data": {"agent": "echo"},
+            }
+        )
+        ws.send_json(
+            {
+                "event": "tool_execution_start",
+                "sessionId": session_id,
+                "timestamp": 1700000002000,
+                "data": {"toolName": "read"},
+            }
+        )
+        ws.send_json(
+            {
+                "event": "agent_start",
+                "sessionId": session_id,
+                "timestamp": 1700000003000,
+                "data": {"agent": "piper"},
+            }
+        )
+        ws.send_json(
+            {
+                "event": "session_shutdown",
+                "sessionId": session_id,
+                "timestamp": 1700000009000,
+                "data": {"duration": 1000},
+            }
+        )
         time.sleep(0.15)
 
     # No filter — should return 4 entries (agent_start, tool_execution_start, agent_start, session_shutdown)

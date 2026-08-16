@@ -112,12 +112,11 @@ def _safe_insert_log(
         return
     try:
         import asyncio
+
         try:
             # Fast path: async context with a running loop
             loop = asyncio.get_running_loop()
-            loop.create_task(
-                db.insert_log(level, component, event, session_id, client_id, data)
-            )
+            loop.create_task(db.insert_log(level, component, event, session_id, client_id, data))
         except RuntimeError:
             # No running loop — create one temporarily for sync contexts
             _logger.debug(
@@ -145,6 +144,7 @@ def _safe_insert_log(
 # ---------------------------------------------------------------------------
 # Message handlers (shared between WS and future HTTP POST)
 # ---------------------------------------------------------------------------
+
 
 async def handle_message(
     message: dict[str, Any],
@@ -234,26 +234,50 @@ async def handle_message(
     extra = {"event": event, "session_id": session_id, "role": role}
     if event == "message_end":
         content_preview = _preview_content(data.get("content"), 80)
-        _logger.info("observability.server", f"[{ts_iso}] [{session_id}] {role:15} {content_preview}", extra)
+        _logger.info(
+            "observability.server", f"[{ts_iso}] [{session_id}] {role:15} {content_preview}", extra
+        )
     elif event == "tool_execution_start":
-        _logger.info("observability.server", f"[{ts_iso}] [{session_id}] tool: {data.get('toolName')}", extra)
+        _logger.info(
+            "observability.server", f"[{ts_iso}] [{session_id}] tool: {data.get('toolName')}", extra
+        )
     elif event == "tool_result":
         status = "error" if data.get("isError") else "ok"
-        _logger.info("observability.server", f"[{ts_iso}] [{session_id}] tool_result: {data.get('toolName')} ({status})", extra | {"status": status})
+        _logger.info(
+            "observability.server",
+            f"[{ts_iso}] [{session_id}] tool_result: {data.get('toolName')} ({status})",
+            extra | {"status": status},
+        )
     elif event == "session_start":
-        _logger.info("observability.server", f"[{ts_iso}] [{session_id}] SESSION START cwd={data.get('cwd')}", extra)
+        _logger.info(
+            "observability.server",
+            f"[{ts_iso}] [{session_id}] SESSION START cwd={data.get('cwd')}",
+            extra,
+        )
     elif event == "session_shutdown":
-        _logger.info("observability.server", f"[{ts_iso}] [{session_id}] SESSION END duration={data.get('duration')}ms", extra)
+        _logger.info(
+            "observability.server",
+            f"[{ts_iso}] [{session_id}] SESSION END duration={data.get('duration')}ms",
+            extra,
+        )
     elif event == "agent_start":
         _logger.info("observability.server", f"[{ts_iso}] [{session_id}] AGENT START", extra)
     elif event == "agent_end":
-        _logger.info("observability.server", f"[{ts_iso}] [{session_id}] AGENT END messages={data.get('messageCount')}", extra | {"message_count": data.get("messageCount")})
+        _logger.info(
+            "observability.server",
+            f"[{ts_iso}] [{session_id}] AGENT END messages={data.get('messageCount')}",
+            extra | {"message_count": data.get("messageCount")},
+        )
     elif event == "model_select":
         model = data.get("model")
         prev = data.get("previousModel")
         mid = model["id"] if model else "null"
         pid = prev["id"] if prev else "null"
-        _logger.info("observability.server", f"[{ts_iso}] [{session_id}] MODEL {pid} → {mid} ({data.get('source')})", extra | {"prev_model": pid, "model": mid, "source": data.get("source")})
+        _logger.info(
+            "observability.server",
+            f"[{ts_iso}] [{session_id}] MODEL {pid} → {mid} ({data.get('source')})",
+            extra | {"prev_model": pid, "model": mid, "source": data.get("source")},
+        )
     else:
         _logger.info("observability.server", f"[{ts_iso}] [{session_id}] {event}", extra)
 
@@ -287,28 +311,60 @@ def _log_message(
     extra = {"event": event, "session_id": session_id, "role": role}
     if event == "message_end":
         content_preview = _preview_content(data.get("content"), 80)
-        _logger.info("observability.server", f"Console log: [{ts_iso}] [{session_id}] {role:15} {content_preview}", extra)
+        _logger.info(
+            "observability.server",
+            f"Console log: [{ts_iso}] [{session_id}] {role:15} {content_preview}",
+            extra,
+        )
     elif event == "tool_execution_start":
-        _logger.info("observability.server", f"Console log: [{ts_iso}] [{session_id}] tool: {data.get('toolName')}", extra)
+        _logger.info(
+            "observability.server",
+            f"Console log: [{ts_iso}] [{session_id}] tool: {data.get('toolName')}",
+            extra,
+        )
     elif event == "tool_result":
         status = "error" if data.get("isError") else "ok"
-        _logger.info("observability.server", f"Console log: [{ts_iso}] [{session_id}] tool_result: {data.get('toolName')} ({status})", extra | {"status": status})
+        _logger.info(
+            "observability.server",
+            f"Console log: [{ts_iso}] [{session_id}] tool_result: {data.get('toolName')} ({status})",
+            extra | {"status": status},
+        )
     elif event == "session_start":
-        _logger.info("observability.server", f"Console log: [{ts_iso}] [{session_id}] SESSION START cwd={data.get('cwd')}", extra)
+        _logger.info(
+            "observability.server",
+            f"Console log: [{ts_iso}] [{session_id}] SESSION START cwd={data.get('cwd')}",
+            extra,
+        )
     elif event == "session_shutdown":
-        _logger.info("observability.server", f"Console log: [{ts_iso}] [{session_id}] SESSION END duration={data.get('duration')}ms", extra)
+        _logger.info(
+            "observability.server",
+            f"Console log: [{ts_iso}] [{session_id}] SESSION END duration={data.get('duration')}ms",
+            extra,
+        )
     elif event == "agent_start":
-        _logger.info("observability.server", f"Console log: [{ts_iso}] [{session_id}] AGENT START", extra)
+        _logger.info(
+            "observability.server", f"Console log: [{ts_iso}] [{session_id}] AGENT START", extra
+        )
     elif event == "agent_end":
-        _logger.info("observability.server", f"Console log: [{ts_iso}] [{session_id}] AGENT END messages={data.get('messageCount')}", extra | {"message_count": data.get("messageCount")})
+        _logger.info(
+            "observability.server",
+            f"Console log: [{ts_iso}] [{session_id}] AGENT END messages={data.get('messageCount')}",
+            extra | {"message_count": data.get("messageCount")},
+        )
     elif event == "model_select":
         model = data.get("model")
         prev = data.get("previousModel")
         mid = model["id"] if model else "null"
         pid = prev["id"] if prev else "null"
-        _logger.info("observability.server", f"Console log: [{ts_iso}] [{session_id}] MODEL {pid} → {mid} ({data.get('source')})", extra | {"prev_model": pid, "model": mid, "source": data.get("source")})
+        _logger.info(
+            "observability.server",
+            f"Console log: [{ts_iso}] [{session_id}] MODEL {pid} → {mid} ({data.get('source')})",
+            extra | {"prev_model": pid, "model": mid, "source": data.get("source")},
+        )
     else:
-        _logger.info("observability.server", f"Console log: [{ts_iso}] [{session_id}] {event}", extra)
+        _logger.info(
+            "observability.server", f"Console log: [{ts_iso}] [{session_id}] {event}", extra
+        )
 
 
 def _preview_content(content: Any, max_len: int) -> str:
@@ -339,6 +395,7 @@ def _preview_content(content: Any, max_len: int) -> str:
 # FastAPI lifespan
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle."""
@@ -355,9 +412,13 @@ async def lifespan(app: FastAPI):
     _logger.info("observability.server", f"  Size:      {stats['db_size_mb']:.2f} MB")
     _logger.info("observability.server", f"  Sessions:  {stats['session_count']}")
     _logger.info("observability.server", f"  Entries:   {stats['entry_count']}")
-    _logger.info("observability.server", f"  WebSocket: ws://{Config.HOST}:{Config.PORT}{Config.WS_PATH}")
+    _logger.info(
+        "observability.server", f"  WebSocket: ws://{Config.HOST}:{Config.PORT}{Config.WS_PATH}"
+    )
     _logger.info("observability.server", f"  REST:      http://{Config.HOST}:{Config.PORT}/health")
-    _logger.info("observability.server", f"  Auth:      {'enabled' if Config.API_KEY else 'disabled'}")
+    _logger.info(
+        "observability.server", f"  Auth:      {'enabled' if Config.API_KEY else 'disabled'}"
+    )
     _logger.info("observability.server", "═" * 60)
     _logger.info("observability.server", "Waiting for connections...")
 
@@ -398,8 +459,6 @@ app = FastAPI(
 )
 
 
-
-
 @app.get("/health")
 async def health() -> dict[str, Any]:
     """Report server health and DB statistics (no auth required)."""
@@ -418,6 +477,7 @@ async def health() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Session endpoints
 # ---------------------------------------------------------------------------
+
 
 @app.get("/sessions")
 async def list_sessions(
@@ -449,6 +509,7 @@ async def get_session(
 # ---------------------------------------------------------------------------
 # Entry endpoints
 # ---------------------------------------------------------------------------
+
 
 @app.get("/sessions/{session_id}/entries")
 async def get_entries(
@@ -491,6 +552,7 @@ async def search_entries(
 # ---------------------------------------------------------------------------
 # Compaction endpoints
 # ---------------------------------------------------------------------------
+
 
 @app.post("/compactions")
 async def post_compaction(
@@ -552,6 +614,7 @@ async def get_compaction(
 # Admin endpoints
 # ---------------------------------------------------------------------------
 
+
 @app.post("/admin/cleanup")
 async def trigger_cleanup(
     _token: str | None = Depends(require_auth),
@@ -584,6 +647,7 @@ async def admin_stats(
 # ---------------------------------------------------------------------------
 # Log endpoints
 # ---------------------------------------------------------------------------
+
 
 @app.post("/logs")
 async def create_log(
@@ -664,6 +728,7 @@ _start_time = int(time.time())
 # WebSocket endpoint
 # ---------------------------------------------------------------------------
 
+
 @app.websocket(Config.WS_PATH)
 async def websocket_endpoint(websocket: WebSocket) -> None:
     """Primary ingestion endpoint — receives events from the Pi extension."""
@@ -681,7 +746,13 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             f"REJECTED client={client_id} ip={client_ip}",
             extra={"client_id": client_id, "client_ip": client_ip},
         )
-        _safe_insert_log("WARN", "auth", "auth_failure", client_id=client_id, data={"reason": "invalid_api_key", "ip": client_ip})
+        _safe_insert_log(
+            "WARN",
+            "auth",
+            "auth_failure",
+            client_id=client_id,
+            data={"reason": "invalid_api_key", "ip": client_ip},
+        )
         await websocket.close(code=1008, reason="Authentication failed")
         return
 
@@ -696,9 +767,19 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     _logger.info(
         "observability.server",
         f"CONNECTED client={client_id} ip={client_ip} total={len(active_connections)}",
-        extra={"client_id": client_id, "client_ip": client_ip, "total_connections": len(active_connections)},
+        extra={
+            "client_id": client_id,
+            "client_ip": client_ip,
+            "total_connections": len(active_connections),
+        },
     )
-    _safe_insert_log("INFO", "server", "client_connected", client_id=client_id, data={"ip": client_ip, "total_connections": len(active_connections)})
+    _safe_insert_log(
+        "INFO",
+        "server",
+        "client_connected",
+        client_id=client_id,
+        data={"ip": client_ip, "total_connections": len(active_connections)},
+    )
 
     # Send welcome
     await websocket.send_json(
@@ -724,7 +805,13 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     "INVALID JSON",
                     extra={"client_id": client_id, "raw": raw[:200]},
                 )
-                _safe_insert_log("WARN", "server", "invalid_json", client_id=client_id, data={"raw_preview": raw[:200]})
+                _safe_insert_log(
+                    "WARN",
+                    "server",
+                    "invalid_json",
+                    client_id=client_id,
+                    data={"raw_preview": raw[:200]},
+                )
                 continue
 
             await handle_message(message, client_id)
@@ -740,7 +827,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             error=err,
             extra={"client_id": client_id},
         )
-        _safe_insert_log("ERROR", "server", "websocket_error", client_id=client_id, data={"error": str(exc)})
+        _safe_insert_log(
+            "ERROR", "server", "websocket_error", client_id=client_id, data={"error": str(exc)}
+        )
     finally:
         active_connections.discard(websocket)
         stats = connection_stats.pop(client_id, {})
@@ -749,9 +838,20 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         _logger.info(
             "observability.server",
             f"DISCONNECTED client={client_id} duration={duration}ms messages={msg_count} total={len(active_connections)}",
-            extra={"client_id": client_id, "duration_ms": duration, "messages": msg_count, "total_connections": len(active_connections)},
+            extra={
+                "client_id": client_id,
+                "duration_ms": duration,
+                "messages": msg_count,
+                "total_connections": len(active_connections),
+            },
         )
-        _safe_insert_log("INFO", "server", "client_disconnected", client_id=client_id, data={"duration_ms": duration, "messages": msg_count})
+        _safe_insert_log(
+            "INFO",
+            "server",
+            "client_disconnected",
+            client_id=client_id,
+            data={"duration_ms": duration, "messages": msg_count},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -878,6 +978,7 @@ signal.signal(signal.SIGTERM, _handle_signal)
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     """Run the server with uvicorn."""

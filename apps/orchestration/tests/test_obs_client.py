@@ -1,5 +1,6 @@
 """Tests for orchestration.obs_client — best-effort, fail-silent emission."""
 
+import hashlib
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -124,10 +125,28 @@ def test_run_start_posts_run_and_event(stub_server):
     paths = [p for p, _ in collector.posts]
     assert "/orchestration/runs" in paths
     assert "/orchestration/events" in paths
-    # The run digest carries playbook + goal + running status.
+    # The run digest carries only safe goal metadata, never the raw goal.
     run_body = next(b for p, b in collector.posts if p == "/orchestration/runs")
     assert run_body["playbook"] == "reference-cycle"
     assert run_body["status"] == "running"
+    assert "goal" not in run_body
+    assert run_body["goal_sha256"] == hashlib.sha256(b"prove it").hexdigest()
+    assert run_body["goal_bytes"] == len(b"prove it")
+
+
+def test_raw_goal_sentinel_never_enters_any_observability_payload(stub_server):
+    base_url, collector = stub_server
+    sentinel = "PRIVATE-GOAL-SENTINEL-6f0f88"
+    ctx = RunContext(
+        session_id="s-private",
+        run_id="r-private",
+        playbook="research",
+        goal=sentinel,
+    )
+    ObsClient(base_url=base_url).run_start(ctx)
+    serialized = json.dumps(collector.posts, sort_keys=True)
+    assert sentinel not in serialized
+    assert hashlib.sha256(sentinel.encode()).hexdigest() in serialized
 
 
 def test_seq_is_monotonic_across_events(stub_server):

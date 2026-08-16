@@ -37,11 +37,18 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import date
 from pathlib import Path
 
 _AGENTS_DIR = Path(__file__).resolve().parents[4] / ".pi" / "agents"
 
 _MODEL_RE = re.compile(r"(?m)^model:[ \t]*(\S+)[ \t]*$")
+
+REVIEW_CHANGED = "changed"
+REVIEW_OVERDUE = "overdue"
+REVIEW_UNKNOWN = "unknown"
+REVIEW_CURRENT = "current"
+REVIEW_STATES = frozenset({REVIEW_CHANGED, REVIEW_OVERDUE, REVIEW_UNKNOWN, REVIEW_CURRENT})
 
 
 def model_roster(agents_dir: Path | str = _AGENTS_DIR) -> dict[str, str]:
@@ -76,6 +83,28 @@ def roster_hash(agents_dir: Path | str = _AGENTS_DIR) -> str:
     if not models:
         return ""
     return hashlib.sha256("|".join(models).encode("utf-8")).hexdigest()[:12]
+
+
+def review_state(
+    recorded: str,
+    review_by: str,
+    *,
+    as_of: date | None = None,
+    agents_dir: Path | str = _AGENTS_DIR,
+) -> str:
+    """Classify one review obligation without treating unknown state as current."""
+    current = roster_hash(agents_dir)
+    if not recorded or not current:
+        return REVIEW_UNKNOWN
+    if recorded != current:
+        return REVIEW_CHANGED
+    try:
+        deadline = date.fromisoformat(review_by)
+    except (TypeError, ValueError):
+        return REVIEW_UNKNOWN
+    if deadline < (as_of or date.today()):
+        return REVIEW_OVERDUE
+    return REVIEW_CURRENT
 
 
 def roster_changed(recorded: str, agents_dir: Path | str = _AGENTS_DIR) -> bool:

@@ -26,13 +26,17 @@ owner artifacts, and orchestration state uses the checkpointer.
 - Add KG facts only when future traversal/invalidation value justifies them.
 - Treat old skill rooms as legacy corpus, never active handoff or deletion authority.
 - Use one authenticated supervised MemPalace 3.7.1 HTTP hub; no production/admin raw fallback.
+- Keep the optional advisory logstream default-off and primary-only. It is bounded, strictly self-addressed append/list/wait/ack and rejects raw upstream broadcasts. Dedicated artifact/patch endpoints and refs are absent; free-form advisory body text is non-authoritative by policy and is never consumed as artifact handoff, workflow state, a persistence receipt, or recovery input.
+- Keep generic `platform-memory` logstream denial and worker memory/tool scrubbing unchanged.
 - Keep uninstall data-preserving.
 
 ## Verification
 
 - [ ] No retrieved memory appears in worker directives.
-- [ ] No worker memory tool or lifecycle hook exists.
+- [ ] No worker memory/logstream tool or lifecycle hook exists.
 - [ ] Artifact continuation is complete and exact for workflow inputs.
+- [ ] Advisory list/wait enforces requested filters, anchor exclusion, unique IDs, and strict positive sequence order.
+- [ ] Advisory ack proves configured stream/principal/correlation under bounded reads.
 - [ ] Retention apply is reviewed, manifest-bound, archive-first, and journaled.
 - [ ] Offline byte access is receipt-bound to a copied target.
 

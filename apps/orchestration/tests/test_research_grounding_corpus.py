@@ -97,8 +97,10 @@ def test_report_deterministic_coverage(capsys):
         print(f"  defect corpus size ......... {total}")
         print(f"  caught by the floor ........ {caught}/{total} ({100 * caught // total}%)")
         print(f"  rules tier (code decides) .. {len(rules)}")
-        print(f"  judgement residual ......... {residual} "
-              f"({100 * residual // total}% of the defect corpus)")
+        print(
+            f"  judgement residual ......... {residual} "
+            f"({100 * residual // total}% of the defect corpus)"
+        )
         print("  → a second model can only affect the residual. Cost/benefit for making")
         print("    cross-model the DEFAULT must be argued against that slice, not the whole.")
         print("  → provenance: corpus is SYNTHETIC; P1's ledger signal now enables")

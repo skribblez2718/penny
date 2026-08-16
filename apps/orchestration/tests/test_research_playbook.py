@@ -53,7 +53,7 @@ def _plan(steps, **extra):
 
 def _fan_batch(n, **branch_summary):
     """A __parallel__ fan-in batch of n echo branches (sq1..sqN)."""
-    base = {"explore_complete": True}
+    base = {"explore_complete": True, "confidence": "PROBABLE"}
     base.update(branch_summary)
     return [
         {"branch_id": f"sq{i}", "agent": "echo", "exitCode": 0, "summary": dict(base)}
@@ -418,7 +418,7 @@ def test_validation_failure_loops_back_to_synthesizing(cp):
     assert d["state_id"] == "report_writing"
 
 
-def test_validation_exhaustion_completes_honestly(cp):
+def test_validation_exhaustion_is_useful_but_incomplete(cp):
     _standard_to_validating(cp)
     _step(cp, "vera", _validate("FAIL", ["c1"]))
     _step(cp, "synthia", {"synthesis_complete": True})
@@ -427,8 +427,8 @@ def test_validation_exhaustion_completes_honestly(cp):
     d = _step(cp, "vera", _validate("FAIL", ["c3"]))  # exhausted
     assert d["agent"] == "skribble" and d["state_id"] == "report_writing"
     d = _step(cp, "skribble", SKRIBBLE_OK)
-    assert d["action"] == "complete"
-    assert d["result"]["met"] is True
+    assert d["action"] == "incomplete"
+    assert d["result"]["met"] is False
     assert d["result"]["validation_exhausted"] is True
     assert d["result"]["unresolved_issues"] == ["c3"]
     assert any("validation budget exhausted" in w for w in d["result"]["warnings"])
@@ -500,9 +500,9 @@ def test_shipped_but_unverified_run_is_distinguishable(cp):
     _step(cp, "vera", _validate("FAIL", ["c3 unsupported"]))  # budget exhausted
     d = _step(cp, "skribble", SKRIBBLE_OK)
 
-    # Delivery is still honest: the report WAS written.
-    assert d["action"] == "complete"
-    assert d["result"]["met"] is True
+    # Delivery is retained, but required grounding did not succeed.
+    assert d["action"] == "incomplete"
+    assert d["result"]["met"] is False
     assert d["result"]["validation_exhausted"] is True
     # ...but the run no longer claims to be grounded.
     assert d["result"]["grounded"] is False
@@ -517,6 +517,15 @@ def test_grounded_is_false_when_validation_never_ran(cp):
     """A run that errors before the gate must not report grounded=True."""
     ctx = RunContext(session_id=SID, run_id=RID, playbook="research", goal=STANDARD_GOAL)
     assert ResearchPlaybook(cp).result_payload(ctx)["grounded"] is False
+
+
+def test_public_result_projects_query_digest_not_raw_goal(cp):
+    sentinel = "PRIVATE-RESULT-GOAL-8d4264"
+    ctx = RunContext(session_id=SID, run_id=RID, playbook="research", goal=sentinel)
+    result = ResearchPlaybook(cp).result_payload(ctx)
+    assert "query" not in result
+    assert result["query_bytes"] == len(sentinel.encode("utf-8"))
+    assert sentinel not in repr(result)
 
 
 # ---------------------------------------------------------------------------
@@ -642,13 +651,13 @@ def test_incomplete_plan_escalates(cp):
 # ---------------------------------------------------------------------------
 
 
-def test_failed_report_write_completes_with_met_false(cp):
+def test_failed_report_write_is_incomplete_with_met_false(cp):
     _start(cp, goal=QUICK_GOAL, constraints={"mode": "quick"})
     _step(cp, "echo", {"explore_complete": True})
     _step(cp, "synthia", {"synthesis_complete": True})
     _step(cp, "vera", _validate("PASS", []))
     d = _step(cp, "skribble", {"write_complete": False})
-    assert d["action"] == "complete" and d["result"]["met"] is False
+    assert d["action"] == "incomplete" and d["result"]["met"] is False
 
 
 def test_malformed_summary_reissues_step(cp):
@@ -785,7 +794,13 @@ def test_planning_task_tells_the_model_it_owns_the_mode_decision(cp):
     d = _start(cp)
     assert "Mode: ." not in d["task_summary"]
     assert "YOU declare it" in d["task_summary"]
-    d = _start(cp, constraints={"mode": "deep"})
+    d = ResearchPlaybook(cp).start(
+        session_id=SID,
+        run_id=f"{RID}-deep",
+        goal=STANDARD_GOAL,
+        constraints={"mode": "deep"},
+        project_root=_TEST_ROOT,
+    )
     assert "Mode: deep." in d["task_summary"]
 
 
@@ -889,7 +904,12 @@ def test_evidence_round_returns_through_synthesis_to_the_gate(cp):
     _standard_to_validating(cp)
     _step(cp, "vera", _validate("FAIL", ["c1"], ["gap A"]))
     batch = [
-        {"branch_id": "sq3", "agent": "echo", "exitCode": 0, "summary": {"explore_complete": True}}
+        {
+            "branch_id": "sq3",
+            "agent": "echo",
+            "exitCode": 0,
+            "summary": {"explore_complete": True, "confidence": "PROBABLE"},
+        }
     ]
     d = _step(cp, "__parallel__", batch)
     assert d["agent"] == "synthia" and d["state_id"] == "synthesizing"
@@ -922,7 +942,12 @@ def test_research_round_budget_is_a_hard_ceiling(cp):
     _standard_to_validating(cp)
     _step(cp, "vera", _validate("FAIL", ["c1"], ["gap A"]))  # round 2 (budget = 2)
     batch = [
-        {"branch_id": "sq3", "agent": "echo", "exitCode": 0, "summary": {"explore_complete": True}}
+        {
+            "branch_id": "sq3",
+            "agent": "echo",
+            "exitCode": 0,
+            "summary": {"explore_complete": True, "confidence": "PROBABLE"},
+        }
     ]
     _step(cp, "__parallel__", batch)
     _step(cp, "synthia", {"synthesis_complete": True})
@@ -947,7 +972,12 @@ def test_evidence_seeking_still_exhausts_honestly(cp):
     _standard_to_validating(cp)
     _step(cp, "vera", _validate("FAIL", ["c1"], ["gap A"]))
     batch = [
-        {"branch_id": "sq3", "agent": "echo", "exitCode": 0, "summary": {"explore_complete": True}}
+        {
+            "branch_id": "sq3",
+            "agent": "echo",
+            "exitCode": 0,
+            "summary": {"explore_complete": True, "confidence": "PROBABLE"},
+        }
     ]
     _step(cp, "__parallel__", batch)
     _step(cp, "synthia", {"synthesis_complete": True})
@@ -956,8 +986,8 @@ def test_evidence_seeking_still_exhausts_honestly(cp):
     d = _step(cp, "vera", _validate("FAIL", ["c3"]))  # budget exhausted
     assert d["agent"] == "skribble" and d["state_id"] == "report_writing"
     d = _step(cp, "skribble", SKRIBBLE_OK)
-    assert d["action"] == "complete"
-    assert d["result"]["met"] is True
+    assert d["action"] == "incomplete"
+    assert d["result"]["met"] is False
     assert d["result"]["grounded"] is False
     assert d["result"]["validation_exhausted"] is True
     assert d["result"]["unresolved_issues"] == ["c3"]
@@ -968,7 +998,12 @@ def test_evidence_seeking_still_escalates_on_a_stall(cp):
     _standard_to_validating(cp)
     _step(cp, "vera", _validate("FAIL", ["same claim"], ["same gap"]))
     batch = [
-        {"branch_id": "sq3", "agent": "echo", "exitCode": 0, "summary": {"explore_complete": True}}
+        {
+            "branch_id": "sq3",
+            "agent": "echo",
+            "exitCode": 0,
+            "summary": {"explore_complete": True, "confidence": "PROBABLE"},
+        }
     ]
     _step(cp, "__parallel__", batch)
     _step(cp, "synthia", {"synthesis_complete": True})

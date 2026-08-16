@@ -37,6 +37,7 @@ from .context import RunContext
 STATUS_RUNNING = "running"
 STATUS_AWAITING_USER = "awaiting_user"
 STATUS_COMPLETE = "complete"
+STATUS_INCOMPLETE = "incomplete"
 STATUS_ERROR = "error"
 
 # Statuses that the auto-recovery scan considers resumable.
@@ -76,6 +77,10 @@ def _default_db_path(project_root: str | Path | None) -> Path:
     # 3. last-resort fallback (PROJECT_ROOT unset — e.g. bare unit tests)
     root = Path(project_root) if project_root else Path.cwd()
     return root / ".penny" / "orchestration.db"
+
+
+class CheckpointIdentityError(ValueError):
+    """A caller attempted to reuse a run ID with different immutable identity."""
 
 
 @dataclass
@@ -152,21 +157,42 @@ class Checkpointer:
         context: RunContext,
         status: str,
     ) -> None:
-        """Upsert a run's state. ``created_at`` is preserved across updates."""
+        """Persist state without permitting ``run_id`` identity reassignment.
+
+        ``(run_id, session_id, playbook)`` is immutable. The context must carry
+        the same identity as the row arguments, and an existing row may update
+        only state, context, status, and ``updated_at``. ``BEGIN IMMEDIATE``
+        serializes the collision check with the write across processes.
+        """
         import json
+
+        context_identity = (context.run_id, context.session_id, context.playbook)
+        requested_identity = (run_id, session_id, playbook)
+        if context_identity != requested_identity:
+            raise CheckpointIdentityError(
+                "checkpoint context identity does not match the requested run/session/playbook"
+            )
 
         now = _now()
         ctx_json = json.dumps(context.to_dict())
         conn = self._connect()
         try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT session_id, playbook FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if existing is not None and (
+                existing["session_id"] != session_id or existing["playbook"] != playbook
+            ):
+                raise CheckpointIdentityError(
+                    f"run_id '{run_id}' is already bound to a different session or playbook"
+                )
             conn.execute(
                 """
                 INSERT INTO runs (run_id, session_id, playbook, current_state_id,
                                   context_json, status, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
-                    session_id       = excluded.session_id,
-                    playbook         = excluded.playbook,
                     current_state_id = excluded.current_state_id,
                     context_json     = excluded.context_json,
                     status           = excluded.status,
@@ -184,6 +210,9 @@ class Checkpointer:
                 ),
             )
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -247,8 +276,8 @@ class Checkpointer:
         conn = self._connect()
         try:
             cur = conn.execute(
-                "DELETE FROM runs WHERE status IN (?, ?) AND updated_at < ?",
-                (STATUS_COMPLETE, STATUS_ERROR, cutoff),
+                "DELETE FROM runs WHERE status IN (?, ?, ?) AND updated_at < ?",
+                (STATUS_COMPLETE, STATUS_INCOMPLETE, STATUS_ERROR, cutoff),
             )
             conn.commit()
             return cur.rowcount

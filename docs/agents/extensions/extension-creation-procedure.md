@@ -44,13 +44,13 @@ Consistent extension structure ensures Pi can load and register extensions corre
 
 Extension-specific terms. (The frame no longer carries a system-wide vocabulary table; cross-layer term consistency is review-enforced — see [Cognitive Frame Standards Rule 3](../prompts/cognitive-frame-standards.md).)
 
-| Term | Definition | Code Binding | Do NOT substitute |
-|------|-----------|-------------|-------------------|
-| **registerTool** | Pi API for registering a tool | `pi.registerTool({ name, parameters, execute })` | addTool, createTool |
-| **factory function** | Default export receiving `ExtensionAPI` | `export default function (pi: ExtensionAPI)` | init, setup, main |
-| **skillContext** | Domain Guidance injected via `<skill_context>` | `skillContext` parameter in subagent tool | prompt, context, guidance |
-| **createLogger** | Shared structured logger | `import { createLogger } from "../../lib/logger/logger.js"` | console.log, console.error |
-| **TypeBox** | Parameter schema validation | `import { Type } from "@sinclair/typebox"` | Zod, Joi, manual validation |
+| Term                 | Definition                                     | Code Binding                                                | Do NOT substitute           |
+| -------------------- | ---------------------------------------------- | ----------------------------------------------------------- | --------------------------- |
+| **registerTool**     | Pi API for registering a tool                  | `pi.registerTool({ name, parameters, execute })`            | addTool, createTool         |
+| **factory function** | Default export receiving `ExtensionAPI`        | `export default function (pi: ExtensionAPI)`                | init, setup, main           |
+| **skillContext**     | Domain Guidance injected via `<skill_context>` | `skillContext` parameter in subagent tool                   | prompt, context, guidance   |
+| **createLogger**     | Shared structured logger                       | `import { createLogger } from "../../lib/logger/logger.js"` | console.log, console.error  |
+| **TypeBox**          | Parameter schema validation                    | `import { Type } from "@sinclair/typebox"`                  | Zod, Joi, manual validation |
 
 ## Verification
 
@@ -64,7 +64,7 @@ Extension-specific terms. (The frame no longer carries a system-wide vocabulary 
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `docs/humans/extensions/extension-standard.md` | Human-facing extension standard |
-| `.pi/extensions/` | Existing extensions for reference |
+| File                                           | Purpose                           |
+| ---------------------------------------------- | --------------------------------- |
+| `docs/humans/extensions/extension-standard.md` | Human-facing extension standard   |
+| `.pi/extensions/`                              | Existing extensions for reference |

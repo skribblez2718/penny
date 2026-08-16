@@ -6,10 +6,10 @@ The Penny Observability Server is a Python FastAPI + SQLite backend that ingests
 
 ## Two Data Planes
 
-| Plane | Transport | Content | Retention |
-|-------|-----------|---------|-----------|
-| **Events** | WebSocket | Session lifecycle, messages, tool results, agent boundaries, compactions | 14 days (raw entries) |
-| **Operational Logs** | WebSocket (`event: "log"`) | Structured JSON logs from `.pi/lib/logger/logger.ts` | 14 days (logs table) |
+| Plane                | Transport                  | Content                                                                  | Retention             |
+| -------------------- | -------------------------- | ------------------------------------------------------------------------ | --------------------- |
+| **Events**           | WebSocket                  | Session lifecycle, messages, tool results, agent boundaries, compactions | 14 days (raw entries) |
+| **Operational Logs** | WebSocket (`event: "log"`) | Structured JSON logs from `.pi/lib/logger/logger.ts`                     | 14 days (logs table)  |
 
 Both planes share the same WebSocket connection — the extension sends `event: "message_end"` for the message plane and `event: "log"` for the structured logging plane.
 
@@ -54,10 +54,10 @@ Every extension that imports `createLogger` from `.pi/lib/logger/logger.ts` auto
 
 Two tools are registered by the observability extension for Penny to query data directly:
 
-| Tool | Purpose | Parameters |
-|------|---------|------------|
-| `observability_query_logs` | Query operational logs | `level`, `component`, `session_id`, `from_ts`, `to_ts`, `limit`, `offset` |
-| `observability_query_history` | Query conversation history | `session_id`, `limit`, `offset` |
+| Tool                          | Purpose                    | Parameters                                                                |
+| ----------------------------- | -------------------------- | ------------------------------------------------------------------------- |
+| `observability_query_logs`    | Query operational logs     | `level`, `component`, `session_id`, `from_ts`, `to_ts`, `limit`, `offset` |
+| `observability_query_history` | Query conversation history | `session_id`, `limit`, `offset`                                           |
 
 Penny calls these tools directly to diagnose issues, correlate errors with conversation events, or investigate system behavior. No skill orchestration needed — Penny decides what to query and how to analyze the results.
 
@@ -65,11 +65,11 @@ Penny calls these tools directly to diagnose issues, correlate errors with conve
 
 > Auth: Bearer token when `PI_OBSERVABILITY_API_KEY` is set; otherwise open.
 
-| Method | Path | Query Params | Response |
-|--------|------|-------------|----------|
-| `GET` | `/logs` | `?level=ERROR&component=memory&session_id=sess-abc&from_ts=0&to_ts=999999&limit=50&offset=0` | `{items:[], total, limit, offset}` |
-| `GET` | `/logs/stats` | — | `{total_logs, oldest_log_unix, newest_log_unix, by_level:[], by_component:[]}` |
-| `GET` | `/logs/{log_id}` | — | Single `LogEntry` object |
+| Method | Path             | Query Params                                                                                 | Response                                                                       |
+| ------ | ---------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `GET`  | `/logs`          | `?level=ERROR&component=memory&session_id=sess-abc&from_ts=0&to_ts=999999&limit=50&offset=0` | `{items:[], total, limit, offset}`                                             |
+| `GET`  | `/logs/stats`    | —                                                                                            | `{total_logs, oldest_log_unix, newest_log_unix, by_level:[], by_component:[]}` |
+| `GET`  | `/logs/{log_id}` | —                                                                                            | Single `LogEntry` object                                                       |
 
 ### Example
 
@@ -80,17 +80,17 @@ curl -H "Authorization: Bearer $PI_OBSERVABILITY_API_KEY" \
 
 ## REST API — Compaction and Orchestration Endpoints
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `POST` | `/compactions` | Archive a compaction artifact (compaction extension) |
-| `GET` | `/sessions/{session_id}/compactions` | List a session's archived compaction artifacts |
-| `GET` | `/sessions/{session_id}/compactions/{compaction_seq}` | Fetch one archived artifact |
-| `POST` | `/orchestration/runs`, `/orchestration/events` | Engine run/event ingestion |
-| `GET` | `/orchestration/runs` | List engine runs (`session_id`, `status` filters) |
-| `GET` | `/orchestration/runs/{run_id}` (+ `/events`) | One run and its event stream |
-| `GET` | `/sessions/{session_id}/orchestration` | All orchestration activity for a session |
+| Method | Path                                                  | Purpose                                              |
+| ------ | ----------------------------------------------------- | ---------------------------------------------------- |
+| `POST` | `/compactions`                                        | Archive a compaction artifact (compaction extension) |
+| `GET`  | `/sessions/{session_id}/compactions`                  | List a session's archived compaction artifacts       |
+| `GET`  | `/sessions/{session_id}/compactions/{compaction_seq}` | Fetch one archived artifact                          |
+| `POST` | `/orchestration/runs`, `/orchestration/events`        | Engine run/event ingestion                           |
+| `GET`  | `/orchestration/runs`                                 | List engine runs (`session_id`, `status` filters)    |
+| `GET`  | `/orchestration/runs/{run_id}` (+ `/events`)          | One run and its event stream                         |
+| `GET`  | `/sessions/{session_id}/orchestration`                | All orchestration activity for a session             |
 
-The compaction archive holds the *full* structured artifact; the model context only receives its prose brief + `[RESUME-REFS]` appendix. Engine run state's source of truth is the local checkpointer DB (`.penny/orchestration.db`), not these mirror tables.
+The compaction archive holds the _full_ structured artifact; the model context only receives its prose brief + `[RESUME-REFS]` appendix. Engine run state's source of truth is the local checkpointer DB (`.penny/orchestration.db`), not these mirror tables.
 
 ## Log Table Schema (SQLite)
 

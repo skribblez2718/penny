@@ -106,7 +106,9 @@ def test_uncertain_escalates_immediately_when_disabled(cp):
 
 def test_uncertain_is_retried_once_before_escalating(cp, on):
     _start(cp)
-    d = _step(cp, {"done": False, "confidence": "UNCERTAIN", "unknown_reason": "two sources conflict"})
+    d = _step(
+        cp, {"done": False, "confidence": "UNCERTAIN", "unknown_reason": "two sources conflict"}
+    )
     assert d["action"] == "invoke_agent" and d["state_id"] == "working"
 
     # a SECOND uncertain report on the same state goes to the human
@@ -117,7 +119,9 @@ def test_uncertain_is_retried_once_before_escalating(cp, on):
 
 def test_retry_directive_targets_the_uncertainty_and_forbids_faking_confidence(cp, on):
     _start(cp)
-    d = _step(cp, {"done": False, "confidence": "UNCERTAIN", "unknown_reason": "two sources conflict"})
+    d = _step(
+        cp, {"done": False, "confidence": "UNCERTAIN", "unknown_reason": "two sources conflict"}
+    )
     task = d["task_summary"]
     assert "RETRY AFTER UNCERTAINTY" in task
     assert "two sources conflict" in task
@@ -234,10 +238,18 @@ def test_parallel_fan_still_escalates_on_an_uncertain_branch(cp, on):
     named follow-on work, not something to smuggle in behind a flag."""
     ParPlaybook(cp).start(session_id="p", run_id="p", goal="g")
     batch = [
-        {"branch_id": "a", "agent": "vera", "exitCode": 0,
-         "summary": {"passed": True, "confidence": "CERTAIN"}},
-        {"branch_id": "b", "agent": "echo", "exitCode": 0,
-         "summary": {"passed": False, "confidence": "UNCERTAIN"}},
+        {
+            "branch_id": "a",
+            "agent": "vera",
+            "exitCode": 0,
+            "summary": {"passed": True, "confidence": "CERTAIN"},
+        },
+        {
+            "branch_id": "b",
+            "agent": "echo",
+            "exitCode": 0,
+            "summary": {"passed": False, "confidence": "UNCERTAIN"},
+        },
     ]
     d = ParPlaybook(cp).step(session_id="p", run_id="p", agent="__parallel__", result=batch)
     assert d["action"] == "escalate_to_user"

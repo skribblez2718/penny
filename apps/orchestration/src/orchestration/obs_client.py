@@ -15,6 +15,7 @@ Uses only the stdlib (``urllib``) so the package stays dependency-light.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -79,7 +80,7 @@ class ObsClient:
             if self.api_key:
                 req.add_header("Authorization", f"Bearer {self.api_key}")
             with urllib.request.urlopen(req, timeout=_TIMEOUT_SECONDS) as resp:
-                return 200 <= resp.status < 300
+                return 200 <= int(resp.status) < 300
         except Exception as exc:
             # Any failure (connection refused, timeout, auth, HTTP error) trips
             # the breaker and is swallowed — emission must never break a run.
@@ -127,18 +128,27 @@ class ObsClient:
 
     # -- lifecycle emitters (digests only) --------------------------------
     def run_start(self, ctx: "RunContext") -> None:
+        goal_bytes = ctx.goal.encode("utf-8")
+        goal_metadata = {
+            "goal_sha256": hashlib.sha256(goal_bytes).hexdigest(),
+            "goal_bytes": len(goal_bytes),
+        }
         self._post(
             "/orchestration/runs",
             {
                 "run_id": ctx.run_id,
                 "session_id": ctx.session_id,
                 "playbook": ctx.playbook,
-                "goal": ctx.goal,
+                **goal_metadata,
                 "status": "running",
                 "started_at": _now(),
             },
         )
-        self._event(ctx, "run_start", data={"playbook": ctx.playbook, "goal": ctx.goal})
+        self._event(
+            ctx,
+            "run_start",
+            data={"playbook": ctx.playbook, **goal_metadata},
+        )
 
     def step_start(self, ctx: "RunContext", primitive: str, agent: str, state_id: str) -> None:
         self._event(

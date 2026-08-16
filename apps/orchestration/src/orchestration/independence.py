@@ -10,9 +10,10 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
-from .roster import roster_changed, roster_hash
+from .roster import REVIEW_CURRENT, review_state, roster_hash
 
 _AGENTS_DIR = Path(__file__).resolve().parents[4] / ".pi" / "agents"
 
@@ -97,13 +98,22 @@ def stale_exceptions(model_of: Callable[[str], str] = agent_model) -> list[str]:
     return stale
 
 
-def exceptions_needing_roster_review() -> list[str]:
-    """Return exceptions whose fleet-change review tripwire has fired."""
-    return [
-        skill
+def exception_review_states(*, as_of: date | None = None) -> dict[str, str]:
+    """Expose changed/overdue/unknown/current state for every exception."""
+    return {
+        skill: review_state(
+            exception.roster_at_review,
+            exception.review_by,
+            as_of=as_of,
+        )
         for skill, exception in SAME_MODEL_EXCEPTIONS.items()
-        if roster_changed(exception.roster_at_review)
-    ]
+    }
+
+
+def exceptions_needing_roster_review(*, as_of: date | None = None) -> list[str]:
+    """Return exceptions whose lifecycle state is not current."""
+    states = exception_review_states(as_of=as_of)
+    return [skill for skill, state in states.items() if state != REVIEW_CURRENT]
 
 
 def current_roster() -> str:

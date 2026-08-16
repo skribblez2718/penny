@@ -305,14 +305,18 @@ export const env = EnvSchema.parse(process.env);
 When writing Pi extensions, environment variables must be read inside the factory function, not at module scope. Pi loads extension modules sequentially, and the `environment` extension populates `process.env` from `.env` before other extensions run their factories. Module-level `process.env` reads capture stale or missing values.
 
 **Incorrect:**
+
 ```typescript
 const CONFIG = {
   url: process.env.MY_EXT_URL || "default", // Captured before .env is loaded
 };
-export default function (pi: ExtensionAPI) { /* CONFIG already locked */ }
+export default function (pi: ExtensionAPI) {
+  /* CONFIG already locked */
+}
 ```
 
 **Correct:**
+
 ```typescript
 interface MyConfig {
   url: string;

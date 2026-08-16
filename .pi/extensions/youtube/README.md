@@ -16,15 +16,16 @@ Fetch the transcript/captions from a YouTube video along with metadata.
 | `languages` | No | Language codes for caption detection. `['auto']` picks best available |
 
 **Example:**
+
 ```typescript
 // Get plain text transcript
-youtube_transcript({ url: "https://youtube.com/watch?v=ogTLWGBc3cE" })
+youtube_transcript({ url: "https://youtube.com/watch?v=ogTLWGBc3cE" });
 
 // Get structured JSON with timing
-youtube_transcript({ url: "ogTLWGBc3cE", format: "json" })
+youtube_transcript({ url: "ogTLWGBc3cE", format: "json" });
 
 // Try French captions, fallback to English
-youtube_transcript({ url: "https://youtu.be/ogTLWGBc3cE", languages: ["fr", "en"] })
+youtube_transcript({ url: "https://youtu.be/ogTLWGBc3cE", languages: ["fr", "en"] });
 ```
 
 ### `youtube_status` (Command)

@@ -16,7 +16,9 @@ describe("observability extension structured logging", () => {
   });
 
   it("emits structured ERROR log for WebSocket error with OBSERVABILITY_WS_ERROR code", () => {
-    const err = Object.assign(new Error("Connection refused"), { code: "OBSERVABILITY_WS_ERROR" as const });
+    const err = Object.assign(new Error("Connection refused"), {
+      code: "OBSERVABILITY_WS_ERROR" as const,
+    });
     logger.error("WebSocket error", {}, err);
     expect(buffer).toHaveLength(1);
     expect(buffer[0].error?.code).toBe("OBSERVABILITY_WS_ERROR");

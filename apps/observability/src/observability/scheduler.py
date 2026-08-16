@@ -28,9 +28,7 @@ _scheduler: AsyncIOScheduler | None = None
 
 # How often the periodic size check runs (seconds). Overridable for operators;
 # defaults to hourly. This is an interval, never a fixed wall-clock time.
-_ROTATION_INTERVAL_SECONDS = int(
-    os.getenv("PI_OBSERVABILITY_ROTATION_INTERVAL_SECONDS", "3600")
-)
+_ROTATION_INTERVAL_SECONDS = int(os.getenv("PI_OBSERVABILITY_ROTATION_INTERVAL_SECONDS", "3600"))
 
 _GIB = 1024**3
 

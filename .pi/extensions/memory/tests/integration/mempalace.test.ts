@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { MemoryMcpClient } from "../../index.js";
+import { MemoryLogstreamClient } from "../../logstream-client.js";
 import { TEST_TOKEN, testConfig } from "../fixtures.js";
 
 interface SeenRequest {
@@ -27,29 +28,28 @@ beforeEach(async () => {
         path: request.url,
         body,
       });
+      const toolPayload =
+        body.params.name === "mempalace_event_list"
+          ? { events: [], count: 0 }
+          : {
+              query: body.params.arguments.query,
+              filters: {},
+              total_before_filter: 1,
+              results: [
+                {
+                  drawer_id: "fixture-drawer",
+                  text: "fixture content",
+                  wing: "fixture",
+                  room: "isolated",
+                  similarity: 1,
+                },
+              ],
+            };
       const payload = {
         jsonrpc: "2.0",
         id: body.id,
         result: {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                query: body.params.arguments.query,
-                filters: {},
-                total_before_filter: 1,
-                results: [
-                  {
-                    drawer_id: "fixture-drawer",
-                    text: "fixture content",
-                    wing: "fixture",
-                    room: "isolated",
-                    similarity: 1,
-                  },
-                ],
-              }),
-            },
-          ],
+          content: [{ type: "text", text: JSON.stringify(toolPayload) }],
         },
       };
       const encoded = Buffer.from(JSON.stringify(payload));
@@ -93,5 +93,46 @@ describe("hermetic HTTP-only MemPalace adapter integration", () => {
       },
     });
     expect(String(seen[0]!.body!.id)).toMatch(/^platform-memory-/);
+  });
+
+  it("posts the local advisory list surface through the same authenticated HTTP hub", async () => {
+    const config = testConfig({
+      endpoint,
+      logstream: {
+        mode: "primary-advisory",
+        stream: "project/advisory",
+        rooms: ["status"],
+      },
+    });
+    const client = new MemoryLogstreamClient(config);
+    const result = await client.call("list", {
+      stream: "project/advisory",
+      room: "status",
+      from_agent: "test-primary",
+      to_agent: "test-primary",
+      limit: 1,
+      preview: false,
+    });
+
+    expect(result.payload).toEqual({ events: [], count: 0 });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.path).toBe("/mcp");
+    expect(seen[0]!.authorization).toBe(`Bearer ${TEST_TOKEN}`);
+    expect(seen[0]!.body).toMatchObject({
+      jsonrpc: "2.0",
+      method: "tools/call",
+      params: {
+        name: "mempalace_event_list",
+        arguments: {
+          stream: "project/advisory",
+          room: "status",
+          from_agent: "test-primary",
+          to_agent: "test-primary",
+          limit: 1,
+          preview: false,
+        },
+      },
+    });
+    expect(String(seen[0]!.body!.id)).toMatch(/^penny-memory-logstream-/);
   });
 });

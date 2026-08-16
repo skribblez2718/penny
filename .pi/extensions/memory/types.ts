@@ -4,7 +4,16 @@ import type { TextToolResult, ToolResultBudget } from "../lib/tool-result-budget
 
 export const MEMORY_SCHEMA_VERSION = 1 as const;
 
+export type LogstreamOperation =
+  | "logstream_append"
+  | "logstream_list"
+  | "logstream_wait"
+  | "logstream_ack";
 export type MemoryOperation = PlatformMemoryOperation;
+export type MemoryResultOperation = MemoryOperation | LogstreamOperation;
+export type MemoryLogstreamConfig =
+  | { mode: "disabled"; stream: null; rooms: readonly [] }
+  | { mode: "primary-advisory"; stream: string; rooms: readonly string[] };
 
 export type MemoryErrorCode =
   | "MEMPALACE_UNAVAILABLE"
@@ -34,6 +43,7 @@ export class MemoryError extends Error {
 export interface MemoryRuntimeConfig {
   mode: "hub" | "disabled";
   writeEnabled: boolean;
+  logstream: MemoryLogstreamConfig;
   platformConfig: PlatformMemoryConfigV1;
   bearerToken: string;
   cursorKey: Buffer;

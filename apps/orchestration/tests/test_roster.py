@@ -14,11 +14,18 @@ because it looks like assurance.
 
 from __future__ import annotations
 
+from datetime import date
+
 from orchestration import independence as ind
 from orchestration import loans as loans_mod
 from orchestration.roster import (
+    REVIEW_CHANGED,
+    REVIEW_CURRENT,
+    REVIEW_OVERDUE,
+    REVIEW_UNKNOWN,
     distinct_models,
     model_roster,
+    review_state,
     roster_changed,
     roster_hash,
 )
@@ -90,6 +97,30 @@ def test_unbaselined_entry_is_not_reported_as_changed(tmp_path):
     assert roster_changed("", d) is False
 
 
+def test_review_state_exposes_current_changed_overdue_and_unknown(tmp_path):
+    agents = _agents(tmp_path / "live", {"a": "model-a"})
+    baseline = roster_hash(agents)
+    assert (
+        review_state(baseline, "2026-10-01", as_of=date(2026, 8, 16), agents_dir=agents)
+        == REVIEW_CURRENT
+    )
+    assert (
+        review_state("ffffffffffff", "2099-01-01", as_of=date(2026, 8, 16), agents_dir=agents)
+        == REVIEW_CHANGED
+    )
+    assert (
+        review_state(baseline, "2026-01-01", as_of=date(2026, 8, 16), agents_dir=agents)
+        == REVIEW_OVERDUE
+    )
+    assert (
+        review_state("", "2026-01-01", as_of=date(2026, 8, 16), agents_dir=agents) == REVIEW_UNKNOWN
+    )
+    assert (
+        review_state(baseline, "not-a-date", as_of=date(2026, 8, 16), agents_dir=agents)
+        == REVIEW_UNKNOWN
+    )
+
+
 # ---------------------------------------------------------------------------
 # the tripwire must TRIP \u2014 on both ledgers
 # ---------------------------------------------------------------------------
@@ -122,10 +153,34 @@ def test_loans_needing_review_lists_the_moved_ones(monkeypatch):
     assert [loan.loan_id for loan in loans_mod.loans_needing_review()] == ["moved"]
 
 
+def test_loan_overdue_state_is_visible_even_when_fleet_is_unchanged(monkeypatch):
+    expired = loans_mod.Loan(
+        "expired",
+        "d",
+        "r",
+        "2026-01-01",
+        "2026-02-01",
+        loans_mod.current_roster(),
+    )
+    monkeypatch.setattr(loans_mod, "LOANS", {"expired": expired})
+    states = loans_mod.loan_review_states(as_of=date(2026, 8, 16))
+    assert states == {"expired": REVIEW_OVERDUE}
+    assert [loan.loan_id for loan in loans_mod.loans_needing_review(as_of=date(2026, 8, 16))] == [
+        "expired"
+    ]
+
+
 def test_an_exception_recorded_against_another_fleet_is_flagged(monkeypatch):
     exc = ind.IndependenceException("research", "x" * 41, "2099-01-01", "ffffffffffff")
     monkeypatch.setattr(ind, "SAME_MODEL_EXCEPTIONS", {"research": exc})
     assert ind.exceptions_needing_roster_review() == ["research"]
+
+
+def test_independence_unknown_state_is_visible(monkeypatch):
+    exc = ind.IndependenceException("research", "r", "2026-10-01", "")
+    monkeypatch.setattr(ind, "SAME_MODEL_EXCEPTIONS", {"research": exc})
+    assert ind.exception_review_states(as_of=date(2026, 8, 16)) == {"research": REVIEW_UNKNOWN}
+    assert ind.exceptions_needing_roster_review(as_of=date(2026, 8, 16)) == ["research"]
 
 
 def test_roster_review_is_a_distinct_signal_from_staleness(monkeypatch):

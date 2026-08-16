@@ -54,7 +54,7 @@ def test_validate_summary_contract_tolerates_missing_optional_key():
 def test_weakest_confidence():
     assert weakest_confidence(["CERTAIN", "PROBABLE"]) == "PROBABLE"
     assert weakest_confidence(["CERTAIN", "UNCERTAIN"]) == "UNCERTAIN"
-    assert weakest_confidence(["CERTAIN", "bogus"]) == "bogus"  # unknown ranks as UNCERTAIN
+    assert weakest_confidence(["CERTAIN", "bogus"]) == "UNCERTAIN"
     assert weakest_confidence([]) == ""
 
 
@@ -127,7 +127,20 @@ def test_parallel_batch_fan_in_routes_once(cp):
             _entry("deps", "echo", passed=True, confidence="PROBABLE"),
         ],
     )
-    assert d["action"] == "complete"
+    assert d["action"] == "incomplete"
+
+
+def test_parallel_wrong_agent_is_rejected(cp):
+    _par_start(cp)
+    d = _par_step(
+        cp,
+        [
+            _entry("sast", "echo", passed=True, confidence="CERTAIN"),
+            _entry("deps", "echo", passed=True, confidence="CERTAIN"),
+        ],
+    )
+    assert d["action"] == "invoke_agents_parallel"
+    assert cp.load(RID).current_state_id == "scanning"
 
 
 def test_parallel_weakest_confidence_escalates(cp):
@@ -383,6 +396,6 @@ def test_result_payload_default_is_cycle_neutral(cp):
     d = OkGuardPlaybook(cp).step(
         session_id=SID, run_id=RID, agent="skribble", result={"confidence": "CERTAIN"}
     )
-    assert d["action"] == "complete"
+    assert d["action"] == "incomplete"
     # Base result_payload carries no cycle vocabulary (no verify_verdict/gaps).
     assert set(d["result"]) == {"met", "iterations"}

@@ -63,6 +63,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Primary-only MemPalace advisory logstream.** Added a default-off, strict
+  `PENNY_MEMORY_LOGSTREAM_MODE=primary-advisory` surface in the local memory
+  extension with exactly append/list/wait/ack. Trusted configuration pins the
+  stream and self-addressed principal; safe rooms/types/statuses and small body,
+  list, wait, request, response, retry, and final-envelope bounds fail closed.
+  Ack requires a bounded exact stream/principal/correlation proof before its
+  single mutation attempt. Read-only memory mode exposes only list/wait. Generic
+  `platform-memory` clients still forbid logstream operations, and workers still
+  receive no memory tools or environment. The surface is strictly self-addressed
+  and rejects raw upstream broadcasts. Bodies are bounded free-form advisory text;
+  by policy they are non-authoritative and never consumed as artifact handoff,
+  workflow state, a persistence receipt, or recovery input. Dedicated
+  artifact/patch endpoints and refs are absent; the artifact store and
+  orchestration checkpointer remain the workflow/output and run-state/recovery
+  authorities.
+
 - **MemPalace 3.7.1 and exact artifact-plane migration.** Workflow handoff no
   longer depends on semantic memory rooms. The execution owner persists exact
   agent output in a separate immutable content-addressed store before SUMMARY

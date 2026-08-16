@@ -96,9 +96,7 @@ async def main_async(dry_run: bool = False, vacuum: bool = False) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Penny Observability — manual size-based rotation"
-    )
+    parser = argparse.ArgumentParser(description="Penny Observability — manual size-based rotation")
     parser.add_argument("--dry-run", action="store_true", help="Show what would happen")
     parser.add_argument(
         "--vacuum",

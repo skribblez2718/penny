@@ -4,11 +4,11 @@
 
 Penny's documentation is split into three categories, each written for a different reader with different needs. The same topics often appear in more than one category, but the tone, depth, and purpose change to match the audience.
 
-| Category | Location | Audience | Purpose |
-| -------- | ---------- | -------- | ------- |
-| **Agent-facing** | `docs/agents/` | Penny and subagents | Operational HOW-TO: rules, formats, compliance checklists. |
+| Category         | Location       | Audience                    | Purpose                                                                   |
+| ---------------- | -------------- | --------------------------- | ------------------------------------------------------------------------- |
+| **Agent-facing** | `docs/agents/` | Penny and subagents         | Operational HOW-TO: rules, formats, compliance checklists.                |
 | **Human-facing** | `docs/humans/` | Human users and maintainers | Explanatory WHAT-IS and WHY: concepts, trade-offs, user-visible behavior. |
-| **Penny system** | `docs/penny/` | Trigger-gated protocols | Special protocols loaded only when specific conditions are met. |
+| **Penny system** | `docs/penny/`  | Trigger-gated protocols     | Special protocols loaded only when specific conditions are met.           |
 
 ## How the Categories Differ
 
@@ -30,12 +30,12 @@ Penny system docs contain protocols that are loaded only when specific triggers 
 
 ## When to Use Which
 
-| Situation | Use |
-| --------- | --- |
-| You are a human trying to understand Penny's architecture. | `docs/humans/` |
-| You are a maintainer writing a new skill or agent. | `docs/agents/` plus the relevant `docs/humans/` overview. |
-| Penny needs to know the exact rule for a task. | `docs/agents/` |
-| A task is ambiguous, irreversible, or high-stakes. | `docs/penny/` clarification protocol (triggered automatically). |
+| Situation                                                  | Use                                                             |
+| ---------------------------------------------------------- | --------------------------------------------------------------- |
+| You are a human trying to understand Penny's architecture. | `docs/humans/`                                                  |
+| You are a maintainer writing a new skill or agent.         | `docs/agents/` plus the relevant `docs/humans/` overview.       |
+| Penny needs to know the exact rule for a task.             | `docs/agents/`                                                  |
+| A task is ambiguous, irreversible, or high-stakes.         | `docs/penny/` clarification protocol (triggered automatically). |
 
 The two main categories are designed to complement each other. The human docs explain the ideas; the agent docs encode the implementation. Reading only one gives an incomplete picture.
 

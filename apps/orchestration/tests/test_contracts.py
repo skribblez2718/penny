@@ -163,6 +163,21 @@ def test_confidence_taxonomy():
     assert not Confidence.is_uncertain("PROBABLE")
 
 
+@pytest.mark.parametrize("value", ["certain", "bogus", "", None, 1, True])
+def test_declared_confidence_rejects_noncanonical_values(value):
+    contract = {"required": {"done": bool, "confidence": str}, "optional": {}}
+    ok, err = validate_summary_contract("STRICT", contract, {"done": True, "confidence": value})
+    assert not ok
+    assert "confidence" in err
+
+
+def test_optional_declared_confidence_is_validated_when_present():
+    contract = {"required": {"done": bool}, "optional": {"confidence": str}}
+    assert validate_summary_contract("STRICT", contract, {"done": True})[0]
+    ok, err = validate_summary_contract("STRICT", contract, {"done": True, "confidence": "likely"})
+    assert not ok and "confidence" in err
+
+
 # -- Directives -------------------------------------------------------------
 
 
@@ -269,6 +284,7 @@ def test_all_directives_carry_session_and_run_id():
             questions=[], previous_state="framing", unknown_reason="why", session_id="S", run_id="R"
         ),
         Directives.complete(result={"ok": True}, session_id="S", run_id="R"),
+        Directives.incomplete(result={"ok": False}, session_id="S", run_id="R"),
         Directives.error(errors=["boom"], session_id="S", run_id="R"),
         Directives.paused(
             state_id="framing",

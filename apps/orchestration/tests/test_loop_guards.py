@@ -169,7 +169,7 @@ def test_identical_gaps_across_iterations_escalate(cp):
 def test_no_gap_completes_without_escalation(cp):
     _start(cp)
     d = _act_then_learn(cp, {"gap": False})
-    assert d["action"] == "complete"
+    assert d["action"] == "incomplete"
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +222,8 @@ def _mstream(text):
     msg = {
         "type": "message_end",
         "message": {
-            "role": "assistant", "stopReason": "stop",
+            "role": "assistant",
+            "stopReason": "stop",
             "content": [{"type": "text", "text": text}],
         },
     }
@@ -247,14 +248,15 @@ def test_strategy_repeated_model_overrides_string_equality(cp, monkeypatch):
     ctx.iteration_history.append({"strategy_change": "add a database index on user_id", "gaps": []})
     # strings differ, but the model judges the approach the SAME -> repeat (blocked)
     same = _j.dumps({"answer": "same", "confidence": "PROBABLE"})
-    assert pb.strategy_repeated(
-        ctx, "index the users table by id", runner=_mrunner(_mstream(same))
-    ) is True
+    assert (
+        pb.strategy_repeated(ctx, "index the users table by id", runner=_mrunner(_mstream(same)))
+        is True
+    )
     # model judges a genuinely DIFFERENT approach -> not a repeat (allowed)
     diff = _j.dumps({"answer": "different", "confidence": "CERTAIN"})
-    assert pb.strategy_repeated(
-        ctx, "add a caching layer", runner=_mrunner(_mstream(diff))
-    ) is False
+    assert (
+        pb.strategy_repeated(ctx, "add a caching layer", runner=_mrunner(_mstream(diff))) is False
+    )
 
 
 def test_strategy_repeated_model_failure_falls_back_to_string(cp, monkeypatch):
@@ -280,14 +282,10 @@ def test_is_stalled_model_overrides_string_equality(cp, monkeypatch):
     ctx.iteration_history.append({"gaps": ["auth still broken"]})
     # identical gap strings, but the model sees PROGRESS -> not stalled
     prog = _j.dumps({"answer": "progressing", "confidence": "PROBABLE"})
-    assert pb.is_stalled(
-        ctx, ["auth still broken"], runner=_mrunner(_mstream(prog))
-    ) is False
+    assert pb.is_stalled(ctx, ["auth still broken"], runner=_mrunner(_mstream(prog))) is False
     # different gap strings, but the model judges STALLED -> stalled
     stalled = _j.dumps({"answer": "stalled", "confidence": "PROBABLE"})
-    assert pb.is_stalled(
-        ctx, ["auth partially broken"], runner=_mrunner(_mstream(stalled))
-    ) is True
+    assert pb.is_stalled(ctx, ["auth partially broken"], runner=_mrunner(_mstream(stalled))) is True
 
 
 def test_is_stalled_model_failure_falls_back_to_string(cp, monkeypatch):

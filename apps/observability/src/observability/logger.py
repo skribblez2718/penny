@@ -43,13 +43,28 @@ class LogLevel(IntEnum):
     CRITICAL = 4
 
 
-# Environment overrides  
-_LOG_LEVEL = LogLevel.DEBUG if os.getenv("PI_LOG_LEVEL", "").upper() == "DEBUG" else \
-             LogLevel.INFO if os.getenv("PI_LOG_LEVEL", "").upper() == "INFO" else \
-             LogLevel.WARN if os.getenv("PI_LOG_LEVEL", "").upper() == "WARN" else \
-             LogLevel.ERROR if os.getenv("PI_LOG_LEVEL", "").upper() == "ERROR" else \
-             LogLevel.CRITICAL if os.getenv("PI_LOG_LEVEL", "").upper() == "CRITICAL" else \
-             LogLevel.WARN
+# Environment overrides
+_LOG_LEVEL = (
+    LogLevel.DEBUG
+    if os.getenv("PI_LOG_LEVEL", "").upper() == "DEBUG"
+    else (
+        LogLevel.INFO
+        if os.getenv("PI_LOG_LEVEL", "").upper() == "INFO"
+        else (
+            LogLevel.WARN
+            if os.getenv("PI_LOG_LEVEL", "").upper() == "WARN"
+            else (
+                LogLevel.ERROR
+                if os.getenv("PI_LOG_LEVEL", "").upper() == "ERROR"
+                else (
+                    LogLevel.CRITICAL
+                    if os.getenv("PI_LOG_LEVEL", "").upper() == "CRITICAL"
+                    else LogLevel.WARN
+                )
+            )
+        )
+    )
+)
 
 _LOG_FORMAT = os.getenv("PI_LOG_FORMAT", "json").lower()
 
@@ -91,7 +106,11 @@ def _serialize_error(err: Optional[BaseException]) -> Optional[dict[str, Any]]:
     if err is None:
         return None
     code = getattr(err, "code", None)
-    stack = "".join(traceback.format_exception(type(err), err, err.__traceback__)) if err.__traceback__ else None
+    stack = (
+        "".join(traceback.format_exception(type(err), err, err.__traceback__))
+        if err.__traceback__
+        else None
+    )
     return {
         "name": type(err).__name__,
         "message": str(err),
@@ -142,7 +161,13 @@ def _emit_no_lock(
     # stdout is line-buffered, stderr is unbuffered; no explicit flush needed on stderr
 
 
-def _emit(level: LogLevel, component: str, message: str, extra: Optional[dict[str, Any]] = None, error: Optional[BaseException] = None) -> None:
+def _emit(
+    level: LogLevel,
+    component: str,
+    message: str,
+    extra: Optional[dict[str, Any]] = None,
+    error: Optional[BaseException] = None,
+) -> None:
     if level < _LOG_LEVEL:
         return
     _emit_no_lock(level, _level_name(level), component, message, error, extra)
@@ -157,13 +182,28 @@ def info(component: str, message: str, extra: Optional[dict[str, Any]] = None) -
     _emit(LogLevel.INFO, component, message, extra)
 
 
-def warn(component: str, message: str, extra: Optional[dict[str, Any]] = None, error: Optional[BaseException] = None) -> None:
+def warn(
+    component: str,
+    message: str,
+    extra: Optional[dict[str, Any]] = None,
+    error: Optional[BaseException] = None,
+) -> None:
     _emit(LogLevel.WARN, component, message, extra, error)
 
 
-def error(component: str, message: str, extra: Optional[dict[str, Any]] = None, error: Optional[BaseException] = None) -> None:
+def error(
+    component: str,
+    message: str,
+    extra: Optional[dict[str, Any]] = None,
+    error: Optional[BaseException] = None,
+) -> None:
     _emit(LogLevel.ERROR, component, message, extra, error)
 
 
-def critical(component: str, message: str, extra: Optional[dict[str, Any]] = None, error: Optional[BaseException] = None) -> None:
+def critical(
+    component: str,
+    message: str,
+    extra: Optional[dict[str, Any]] = None,
+    error: Optional[BaseException] = None,
+) -> None:
     _emit(LogLevel.CRITICAL, component, message, extra, error)

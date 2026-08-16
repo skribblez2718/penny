@@ -76,11 +76,11 @@ This discipline prevents code drift. If an extension invents an ad-hoc string, i
 
 Structured logging adds a small upfront cost: every error needs a code and a component. The return is large at scale:
 
-| With structure | Without structure |
-| --- | --- |
-| Known codes map to known remedies | Every error is a unique string to interpret |
-| Trends and anomalies are queryable | Spot-checking logs one by one |
-| Cross-component correlation is easy | Siloed logs per extension |
+| With structure                      | Without structure                           |
+| ----------------------------------- | ------------------------------------------- |
+| Known codes map to known remedies   | Every error is a unique string to interpret |
+| Trends and anomalies are queryable  | Spot-checking logs one by one               |
+| Cross-component correlation is easy | Siloed logs per extension                   |
 
 The cost is lowest when the code is chosen at the time the error is introduced. Retrofitting codes onto a sea of ad-hoc strings is much harder.
 

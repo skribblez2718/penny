@@ -256,7 +256,10 @@ def test_deep_artifact_handoff_keeps_plan_synthesis_evidence_and_critiques(cp, p
     synthesis = _parallel(
         cp,
         research,
-        {"sq1": {"explore_complete": True}, "sq2": {"explore_complete": True}},
+        {
+            "sq1": {"explore_complete": True, "confidence": "PROBABLE"},
+            "sq2": {"explore_complete": True, "confidence": "PROBABLE"},
+        },
     )
     report_critique = _single(cp, synthesis, {"synthesis_complete": True})
     validation = _single(
@@ -285,7 +288,11 @@ def test_memory_absent_research_retry_refans_and_preserves_all_exact_evidence(cp
         planning,
         {"plan_steps": ["evidence A"], "plan_complete": True},
     )
-    synthesis = _parallel(cp, research, {"sq1": {"explore_complete": True}})
+    synthesis = _parallel(
+        cp,
+        research,
+        {"sq1": {"explore_complete": True, "confidence": "PROBABLE"}},
+    )
     validation = _single(cp, synthesis, {"synthesis_complete": True})
     re_research = _single(
         cp,
@@ -307,7 +314,11 @@ def test_memory_absent_research_retry_refans_and_preserves_all_exact_evidence(cp
         "state:validating",
     }
 
-    revised_synthesis = _parallel(cp, re_research, {"sq2": {"explore_complete": True}})
+    revised_synthesis = _parallel(
+        cp,
+        re_research,
+        {"sq2": {"explore_complete": True, "confidence": "PROBABLE"}},
+    )
     refs = _input_refs(revised_synthesis)
     assert {(ref.phase, ref.branch_id) for ref in refs if ref.phase == "researching"} == {
         ("researching", "sq1"),
@@ -326,7 +337,7 @@ def test_terminal_refuses_summary_only_output_as_the_registered_product(cp, proj
         {"verdict": "PASS", "unsupported_claims": [], "evidence": ["all claims matched"]},
     )
     terminal = _single(cp, report, {"write_complete": True})
-    assert terminal["action"] == "complete"
+    assert terminal["action"] == "incomplete"
     assert terminal["result"]["met"] is False
     assert terminal["result"]["output_artifact_ref"] is not None
 

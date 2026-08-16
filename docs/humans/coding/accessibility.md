@@ -31,12 +31,12 @@ The benefits are cumulative, and they overlap with quality:
 The Web Content Accessibility Guidelines organize accessibility around four principles — every
 interface must be **POUR**:
 
-| Principle | What it means | Examples of what Penny enforces |
-| --- | --- | --- |
-| **Perceivable** | Users can perceive the content with the sense they have. | Sufficient color contrast (in every theme), text alternatives for images, never conveying meaning by color alone, content that reflows and resizes. |
-| **Operable** | Users can operate the interface however they navigate. | Full keyboard operability with no traps, always-visible focus, adequate target sizes, honoring reduced-motion, alternatives to drag gestures. |
-| **Understandable** | Users can understand the content and how it behaves. | Labeled inputs, clear error messages that are announced, consistent navigation and help, not forcing people to re-enter information. |
-| **Robust** | It keeps working across browsers and assistive technology. | Valid semantic markup, correct name/role/value for every control, status messages announced without stealing focus. |
+| Principle          | What it means                                              | Examples of what Penny enforces                                                                                                                     |
+| ------------------ | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Perceivable**    | Users can perceive the content with the sense they have.   | Sufficient color contrast (in every theme), text alternatives for images, never conveying meaning by color alone, content that reflows and resizes. |
+| **Operable**       | Users can operate the interface however they navigate.     | Full keyboard operability with no traps, always-visible focus, adequate target sizes, honoring reduced-motion, alternatives to drag gestures.       |
+| **Understandable** | Users can understand the content and how it behaves.       | Labeled inputs, clear error messages that are announced, consistent navigation and help, not forcing people to re-enter information.                |
+| **Robust**         | It keeps working across browsers and assistive technology. | Valid semantic markup, correct name/role/value for every control, status messages announced without stealing focus.                                 |
 
 **Level AA** is the middle conformance tier and the one nearly everyone means by "accessible." **WCAG
 2.2** (the current version) adds several criteria Penny specifically watches for: interactive targets

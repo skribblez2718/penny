@@ -50,7 +50,11 @@ def test_contract_from_json_rejects_unknown_type_name():
 def test_parallel_spec_from_dict_builds_branches():
     spec = parallel_spec_from_dict(
         {
-            "b1": {"agent": "skribble", "task_hint": "do part 1"},
+            "b1": {
+                "agent": "skribble",
+                "task_hint": "do part 1",
+                "summary_contract": {"required": {"done": "bool"}},
+            },
             "b2": {
                 "agent": "vera",
                 "name": "CHECK",
@@ -65,7 +69,14 @@ def test_parallel_spec_from_dict_builds_branches():
 
 def test_parallel_spec_from_dict_requires_agent():
     with pytest.raises(ValueError, match="missing required 'agent'"):
-        parallel_spec_from_dict({"b1": {"task_hint": "no agent"}})
+        parallel_spec_from_dict(
+            {"b1": {"task_hint": "no agent", "summary_contract": {"required": {"ok": "bool"}}}}
+        )
+
+
+def test_parallel_spec_from_dict_rejects_empty_result_contract():
+    with pytest.raises(ValueError, match="non-empty typed summary_contract"):
+        parallel_spec_from_dict({"b1": {"agent": "echo"}})
 
 
 # ---------------------------------------------------------------------------

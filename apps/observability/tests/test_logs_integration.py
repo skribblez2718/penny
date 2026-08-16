@@ -14,10 +14,12 @@ import observability.main as main_module
 def client(tmp_path: Path):
     """Yield a FastAPI TestClient with an in-memory DB."""
     import observability.main as main
-    original_db = getattr(main, 'db', None)
+
+    original_db = getattr(main, "db", None)
     db_path = tmp_path / "test-integration.db"
     main.db = Database(db_path)
     import asyncio
+
     asyncio.run(main.db.connect())
     yield TestClient(app)
     asyncio.run(main.db.close())
@@ -30,6 +32,7 @@ class TestLogsEndpoints:
     def test_logs_endpoint_list(self, client: TestClient) -> None:
         """GET /logs returns paginated log entries."""
         import asyncio
+
         asyncio.run(main_module.db.insert_log("INFO", "server", "hello"))
         response = client.get("/logs")
         assert response.status_code == 200
@@ -45,6 +48,7 @@ class TestLogsEndpoints:
     def test_logs_endpoint_filter_level(self, client: TestClient) -> None:
         """GET /logs?level=ERROR filters correctly."""
         import asyncio
+
         asyncio.run(main_module.db.insert_log("INFO", "server", "info_evt"))
         asyncio.run(main_module.db.insert_log("ERROR", "server", "err_evt"))
         response = client.get("/logs?level=ERROR")
@@ -56,6 +60,7 @@ class TestLogsEndpoints:
     def test_logs_endpoint_filter_component(self, client: TestClient) -> None:
         """GET /logs?component=scheduler filters correctly."""
         import asyncio
+
         asyncio.run(main_module.db.insert_log("INFO", "server", "srv"))
         asyncio.run(main_module.db.insert_log("INFO", "scheduler", "sch"))
         response = client.get("/logs?component=scheduler")
@@ -67,6 +72,7 @@ class TestLogsEndpoints:
     def test_logs_endpoint_pagination(self, client: TestClient) -> None:
         """limit and offset query params work."""
         import asyncio
+
         for i in range(5):
             asyncio.run(main_module.db.insert_log("INFO", "server", f"evt-{i}"))
         response = client.get("/logs?limit=2&offset=0")
@@ -84,6 +90,7 @@ class TestLogsEndpoints:
     def test_logs_endpoint_stats(self, client: TestClient) -> None:
         """GET /logs/stats returns grouped counts."""
         import asyncio
+
         asyncio.run(main_module.db.insert_log("INFO", "server", "e1"))
         asyncio.run(main_module.db.insert_log("ERROR", "server", "e2"))
         asyncio.run(main_module.db.insert_log("INFO", "scheduler", "e3"))
@@ -110,6 +117,7 @@ class TestLogsEndpoints:
     def test_admin_stats_includes_log_fields(self, client: TestClient) -> None:
         """GET /admin/stats includes log_count and oldest_log_unix."""
         import asyncio
+
         asyncio.run(main_module.db.insert_log("INFO", "server", "evt"))
         response = client.get("/admin/stats")
         assert response.status_code == 200

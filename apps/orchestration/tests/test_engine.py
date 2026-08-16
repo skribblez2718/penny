@@ -116,6 +116,54 @@ def test_summary_contract_directive_appended(cp):
 # ---------------------------------------------------------------------------
 
 
+def test_duplicate_start_is_rejected_without_mutating_existing_run(cp):
+    first = _start(cp)
+    before = cp.load(RID)
+    duplicate = ReferenceCycle(cp).start(
+        session_id=SID,
+        run_id=RID,
+        goal="replacement",
+    )
+    after = cp.load(RID)
+    assert first["state_id"] == "observing"
+    assert duplicate["action"] == "error"
+    assert "already exists" in duplicate["errors"][0]
+    assert after.current_state_id == before.current_state_id == "observing"
+    assert after.context.goal == before.context.goal == "prove it"
+
+
+def test_step_and_status_reject_session_mismatch_without_mutation(cp):
+    _start(cp)
+    before = cp.load(RID).context.total_steps
+    wrong_step = ReferenceCycle(cp).step(
+        session_id="other-session",
+        run_id=RID,
+        agent="echo",
+        result=S_OBSERVE,
+    )
+    wrong_status = ReferenceCycle(cp).status(session_id="other-session", run_id=RID)
+    assert wrong_step["action"] == "error"
+    assert wrong_status["action"] == "error"
+    assert "immutable identity" in wrong_step["errors"][0]
+    assert cp.load(RID).context.total_steps == before
+
+
+def test_step_rejects_playbook_mismatch_without_mutation(cp):
+    from orchestration.playbooks.research import ResearchPlaybook
+
+    _start(cp)
+    before = cp.load(RID).current_state_id
+    result = ResearchPlaybook(cp).step(
+        session_id=SID,
+        run_id=RID,
+        agent="echo",
+        result=S_OBSERVE,
+    )
+    assert result["action"] == "error"
+    assert "playbook" in result["errors"][0]
+    assert cp.load(RID).current_state_id == before
+
+
 def test_happy_path_to_complete(cp):
     obs = FakeObs()
     d = _start(cp, obs)
@@ -240,7 +288,7 @@ def test_verify_fail_retries_then_exhausts(cp):
     d = _step(cp, "vera", {"verdict": "FAIL", "gaps": ["gap 2"], "confidence": "PROBABLE"})
     assert d["state_id"] == "learning"
     d = _step(cp, "carren", S_LEARN)
-    assert d["action"] == "complete"
+    assert d["action"] == "incomplete"
     assert d["result"]["met"] is False  # honest: never faked success
 
 

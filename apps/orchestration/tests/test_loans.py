@@ -19,6 +19,9 @@ def test_registry_contains_exactly_the_live_engine_loans():
     assert set(LOANS) == {
         "summary_schema_restatement",
         "malformed_summary_retry",
+        "research_mode_presets",
+        "research_fixed_topology",
+        "research_three_file_output",
     }
 
 
@@ -98,15 +101,15 @@ def test_tier_budget_scales_by_model_tier(monkeypatch):
     from orchestration.engine import tier_budget
 
     monkeypatch.delenv("PI_MODEL_TIER", raising=False)
-    assert tier_budget(4, ceiling=8) == 4        # default: base unchanged
+    assert tier_budget(4, ceiling=8) == 4  # default: base unchanged
     monkeypatch.setenv("PI_MODEL_TIER", "strong")
-    assert tier_budget(4, ceiling=8) == 8        # 2x, at the ceiling
-    assert tier_budget(10, ceiling=15) == 15     # 2x=20 clamped to the hard ceiling
+    assert tier_budget(4, ceiling=8) == 8  # 2x, at the ceiling
+    assert tier_budget(10, ceiling=15) == 15  # 2x=20 clamped to the hard ceiling
     monkeypatch.setenv("PI_MODEL_TIER", "cheap")
-    assert tier_budget(4, ceiling=8) == 2        # 0.5x
-    assert tier_budget(1, ceiling=8) == 1        # floored at 1
+    assert tier_budget(4, ceiling=8) == 2  # 0.5x
+    assert tier_budget(1, ceiling=8) == 1  # floored at 1
     monkeypatch.setenv("PI_MODEL_TIER", "mystery")
-    assert tier_budget(4, ceiling=8) == 4        # unknown tier -> base unchanged
+    assert tier_budget(4, ceiling=8) == 4  # unknown tier -> base unchanged
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +123,8 @@ def _mstream(text):
     msg = {
         "type": "message_end",
         "message": {
-            "role": "assistant", "stopReason": "stop",
+            "role": "assistant",
+            "stopReason": "stop",
             "content": [{"type": "text", "text": text}],
         },
     }
@@ -153,13 +157,14 @@ def test_gate_intent_model_reads_free_text_when_gated(monkeypatch):
 
     monkeypatch.setenv("PI_GATE_INTENT_MODEL", "anthropic/haiku")
     approve = _j.dumps({"answer": "approve", "evidence": ["ship it"], "confidence": "CERTAIN"})
-    assert BasePlaybook.classify_gate_intent(
-        "yep, ship it", runner=_mrunner(_mstream(approve))
-    ) == "approve"
+    assert (
+        BasePlaybook.classify_gate_intent("yep, ship it", runner=_mrunner(_mstream(approve)))
+        == "approve"
+    )
     deny = _j.dumps({"answer": "deny", "confidence": "PROBABLE"})
-    assert BasePlaybook.classify_gate_intent(
-        "nah, kill it", runner=_mrunner(_mstream(deny))
-    ) == "deny"
+    assert (
+        BasePlaybook.classify_gate_intent("nah, kill it", runner=_mrunner(_mstream(deny))) == "deny"
+    )
 
 
 def test_gate_intent_low_confidence_approve_is_safe_refine(monkeypatch):
@@ -168,9 +173,10 @@ def test_gate_intent_low_confidence_approve_is_safe_refine(monkeypatch):
     monkeypatch.setenv("PI_GATE_INTENT_MODEL", "anthropic/haiku")
     weak = _j.dumps({"answer": "approve", "confidence": "POSSIBLE"})
     # an UNCERTAIN approval must NOT proceed the seam -> refine (re-ask)
-    assert BasePlaybook.classify_gate_intent(
-        "maybe? i guess", runner=_mrunner(_mstream(weak))
-    ) == "refine"
+    assert (
+        BasePlaybook.classify_gate_intent("maybe? i guess", runner=_mrunner(_mstream(weak)))
+        == "refine"
+    )
 
 
 def test_gate_intent_model_failure_is_safe_refine(monkeypatch):

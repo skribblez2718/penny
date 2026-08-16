@@ -10,7 +10,7 @@ import {
 } from "platform-memory";
 
 import { ToolResultBudgetConfigError, resolveToolResultBudget } from "../lib/tool-result-budget.js";
-import { MemoryError, type MemoryRuntimeConfig } from "./types.js";
+import { MemoryError, type MemoryLogstreamConfig, type MemoryRuntimeConfig } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
@@ -18,6 +18,11 @@ const DEFAULT_SOURCE_CACHE_BYTES = 32 * 1024 * 1024;
 const DEFAULT_CURSOR_TTL_MS = 5 * 60 * 1_000;
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const LOGSTREAM_STREAM_PATTERN = /^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*$/;
+const LOGSTREAM_ROOM_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const LOGSTREAM_PRINCIPAL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+const MAX_LOGSTREAM_STREAM_CHARACTERS = 128;
+const MAX_LOGSTREAM_ROOMS = 16;
 
 export type MemoryActor = "primary" | "denied";
 
@@ -149,6 +154,50 @@ function parseWriteEnabled(raw: string | undefined): boolean {
   configError("PENNY_MEMORY_WRITE_MODE must be disabled or enabled");
 }
 
+function parseLogstreamConfig(
+  env: Readonly<Record<string, string | undefined>>,
+  memoryMode: "hub" | "disabled"
+): MemoryLogstreamConfig {
+  const mode = env.PENNY_MEMORY_LOGSTREAM_MODE?.trim() || "disabled";
+  if (mode === "disabled") return { mode, stream: null, rooms: [] };
+  if (mode !== "primary-advisory") {
+    configError("PENNY_MEMORY_LOGSTREAM_MODE must be disabled or primary-advisory");
+  }
+  if (memoryMode !== "hub") {
+    configError("primary-advisory logstream mode requires PENNY_MEMORY_MODE=hub");
+  }
+
+  const stream = env.PENNY_MEMORY_LOGSTREAM_STREAM?.trim() ?? "";
+  if (
+    stream.length === 0 ||
+    stream.length > MAX_LOGSTREAM_STREAM_CHARACTERS ||
+    !LOGSTREAM_STREAM_PATTERN.test(stream) ||
+    stream.split("/").some((segment) => segment === "." || segment === "..")
+  ) {
+    configError(
+      "PENNY_MEMORY_LOGSTREAM_STREAM must be a safe lowercase slash-separated identifier"
+    );
+  }
+
+  const rawRooms = env.PENNY_MEMORY_LOGSTREAM_ROOMS;
+  if (rawRooms === undefined || rawRooms.trim() === "") {
+    configError("PENNY_MEMORY_LOGSTREAM_ROOMS must be a nonempty comma-separated allowlist");
+  }
+  const rooms = rawRooms.split(",").map((room) => room.trim());
+  if (
+    rooms.length > MAX_LOGSTREAM_ROOMS ||
+    rooms.some((room) => !LOGSTREAM_ROOM_PATTERN.test(room))
+  ) {
+    configError(
+      `PENNY_MEMORY_LOGSTREAM_ROOMS must contain 1-${MAX_LOGSTREAM_ROOMS} safe room identifiers`
+    );
+  }
+  if (new Set(rooms).size !== rooms.length) {
+    configError("PENNY_MEMORY_LOGSTREAM_ROOMS cannot contain duplicates");
+  }
+  return { mode, stream, rooms: Object.freeze([...rooms]) };
+}
+
 function validatePlatformConfig(config: PlatformMemoryConfigV1): PlatformMemoryConfigV1 {
   try {
     return validatePlatformMemoryConfigV1(config);
@@ -162,10 +211,19 @@ export function loadMemoryRuntimeConfig(
   env: Readonly<Record<string, string | undefined>>
 ): MemoryRuntimeConfig {
   const mode = parseMode(env.PENNY_MEMORY_MODE);
+  const logstream = parseLogstreamConfig(env, mode);
   if (mode === "disabled") {
+    let budget;
+    try {
+      budget = resolveToolResultBudget(env);
+    } catch (error) {
+      if (error instanceof ToolResultBudgetConfigError) configError(error.message);
+      throw error;
+    }
     return {
       mode,
       writeEnabled: false,
+      logstream,
       platformConfig: {
         contractVersion: 1,
         mode: "none",
@@ -176,7 +234,7 @@ export function loadMemoryRuntimeConfig(
       cursorTtlMs: DEFAULT_CURSOR_TTL_MS,
       sourceCacheMaxBytes: DEFAULT_SOURCE_CACHE_BYTES,
       sourceCacheMaxEntries: 8,
-      budget: resolveToolResultBudget(env),
+      budget,
     };
   }
 
@@ -222,6 +280,14 @@ export function loadMemoryRuntimeConfig(
     })
   );
   if (platformConfig.mode === "none") configError("hub mode cannot resolve to none");
+  if (
+    logstream.mode === "primary-advisory" &&
+    !LOGSTREAM_PRINCIPAL_PATTERN.test(platformConfig.principalId)
+  ) {
+    configError(
+      "PENNY_MEMORY_PRINCIPAL_ID must be a safe bounded routing identifier in primary-advisory mode"
+    );
+  }
 
   let bearerToken: string;
   try {
@@ -234,6 +300,7 @@ export function loadMemoryRuntimeConfig(
   return {
     mode,
     writeEnabled: parseWriteEnabled(env.PENNY_MEMORY_WRITE_MODE),
+    logstream,
     platformConfig,
     bearerToken,
     cursorKey: createHash("sha256")

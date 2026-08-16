@@ -155,9 +155,7 @@ CORPUS: tuple[GroundingCase, ...] = (
         "temporal_overreach",
         "a 2019 survey figure is restated as a present-tense current fact",
         "judgement",
-        claims=(
-            {"id": "C1", "text": "61% of operators currently use pooling.", "cites": ["S2"]},
-        ),
+        claims=({"id": "C1", "text": "61% of operators currently use pooling.", "cites": ["S2"]},),
         sources=(_SRC_SURVEY,),
         unsupported=("C1",),
     ),

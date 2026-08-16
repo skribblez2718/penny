@@ -52,9 +52,9 @@ def test_task_digest_cap_loan_is_retired():
 @pytest.mark.parametrize("path", _sources(), ids=lambda p: p.name)
 def test_no_source_reintroduces_the_cap_helper(path):
     text = path.read_text(encoding="utf-8")
-    assert "_cap(" not in text.replace("_augment_cap(", ""), (
-        f"{path.name} reintroduces a task-value cap. Agents must receive full input."
-    )
+    assert "_cap(" not in text.replace(
+        "_augment_cap(", ""
+    ), f"{path.name} reintroduces a task-value cap. Agents must receive full input."
 
 
 # ---------------------------------------------------------------------------
@@ -85,9 +85,7 @@ def test_clarification_text_is_not_truncated(tmp_path):
     from orchestration.playbooks.research import ResearchPlaybook
 
     cp = Checkpointer(db_path=tmp_path / "o.db")
-    ResearchPlaybook(cp).start(
-        session_id="s", run_id="r", goal="g", project_root=str(tmp_path)
-    )
+    ResearchPlaybook(cp).start(session_id="s", run_id="r", goal="g", project_root=str(tmp_path))
     ResearchPlaybook(cp).step(
         session_id="s",
         run_id="r",

@@ -30,6 +30,6 @@ Supply chain attacks and known CVEs in dependencies are the fastest-growing thre
 
 ## Files
 
-| File | Purpose |
-|------|---------|
+| File                                         | Purpose                  |
+| -------------------------------------------- | ------------------------ |
 | `docs/agents/coding/security/conventions.md` | Universal security rules |

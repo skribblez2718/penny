@@ -841,7 +841,6 @@ export default async function (pi: ExtensionAPI) {
     },
   });
 
-
   pi.registerTool({
     name: "observability_query_history",
     label: "Query Conversation History",

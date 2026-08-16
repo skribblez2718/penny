@@ -69,6 +69,10 @@ exclude = '''
     | build
     | dist
     | node_modules
+    | audits
+    | ideas
+    | plans
+    | research
 )/
 '''
 

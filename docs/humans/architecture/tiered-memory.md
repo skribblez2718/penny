@@ -17,8 +17,14 @@ Workers read exact grants with `artifact_read`; the checkpointer retains refs.
 
 Only the unmarked primary runtime has durable-memory tools. It recalls prior
 knowledge when it could materially affect a task, curates only stable reusable
-results, writes the primary diary, and governs temporal KG facts. Workers and
-skill drivers have no memory tools.
+results, writes the primary diary, and governs temporal KG facts. An optional,
+default-off advisory log adds only bounded, strictly self-addressed
+append/list/wait/ack and rejects raw upstream broadcasts. Its body is bounded
+free-form advisory text, so it can technically contain arbitrary small text.
+Dedicated artifact/patch endpoints and refs are absent; by policy the body is
+non-authoritative and is never consumed as artifact handoff, workflow state, a
+persistence receipt, or recovery input. Workers and skill drivers have no memory
+or advisory-log tools.
 
 ## Retention
 
@@ -30,9 +36,11 @@ archive-first behavior, and an operation journal through the supervised hub.
 ## Service and preservation
 
 One supervised MemPalace 3.7.1 HTTP hub owns normal access. Production and online
-admin paths have no raw fallback. Offline repair is restricted to a drained,
-stopped, receipt-bound copy. Setup, cutover, and uninstall preserve data;
-deletion is separate.
+admin paths have no raw fallback. Generic memory clients continue to reject
+logstream operations; the strict advisory subset is local to the primary Penny
+extension and pins routing identity to configuration. Offline repair is
+restricted to a drained, stopped, receipt-bound copy. Setup, cutover, and
+uninstall preserve data; deletion is separate.
 
 ## Compaction
 

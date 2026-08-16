@@ -12,11 +12,11 @@ Usage:
 
 import json
 import sys
-from pathlib import Path
 from typing import Optional
 
 try:
     from pydantic import BaseModel, Field, ValidationError
+
     HAS_PYDANTIC = True
 except ImportError:
     HAS_PYDANTIC = False
@@ -39,15 +39,15 @@ class IdealState(BaseModel):
             "is backward compatible and the version records INTENT for consumers."
         ),
     )
-    
+
     success_criteria: list[str] = Field(
         ..., min_length=1, description="Measurable conditions that define 'done'"
     )
-    
+
     anti_criteria: list[str] = Field(
         default_factory=list, description="Things that must NOT happen"
     )
-    
+
     verification: dict[str, bool] = Field(
         default_factory=lambda: {
             "lint": True,
@@ -65,26 +65,24 @@ class IdealState(BaseModel):
             "it) and never silently drop it."
         ),
     )
-    
+
     security_review: list[str] = Field(
         default_factory=list, description="Security domains to review (injection, xss, auth, etc.)"
     )
-    
-    edge_cases: list[str] = Field(
-        default_factory=list, description="What-if scenarios"
-    )
-    
+
+    edge_cases: list[str] = Field(default_factory=list, description="What-if scenarios")
+
     language: Optional[str] = Field(default=None, description="Primary programming language")
     impacted_files_estimate: int = Field(default=0, ge=0, description="Estimated files affected")
-    
+
     dependencies: list[str] = Field(
         default_factory=list, description="External systems, APIs, packages required"
     )
-    
+
     deliverables: list[str] = Field(
         default_factory=list, description="All artifacts this task produces (code, docs, config)"
     )
-    
+
     build_order: list[str] = Field(
         default_factory=list,
         description=(
@@ -108,7 +106,7 @@ def validate_json(data: dict) -> tuple[bool, list[str]]:
         if len(data.get("success_criteria", [])) == 0:
             errors.append("success_criteria must have at least one item")
         return len(errors) == 0, errors
-    
+
     try:
         IdealState(**data)
         return True, []
@@ -146,7 +144,7 @@ if __name__ == "__main__":
     else:
         print("Usage: validate_ideal_state.py <file.json> | --stdin", file=sys.stderr)
         sys.exit(2)
-    
+
     if valid:
         print("✅ IDEAL STATE valid")
         sys.exit(0)

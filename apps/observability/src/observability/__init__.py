@@ -1,5 +1,6 @@
 """Penny Observability Backend — FastAPI + SQLite ingestion and querying server."""
 
+
 # ---------------------------------------------------------------------------
 # FTS5 guarantee (must run before aiosqlite/sqlite3 is imported anywhere).
 #

@@ -107,9 +107,7 @@ async def test_websocket_log_ingestion():
     await asyncio.sleep(0.2)
     data = _get_json("/logs?component=e2e_test&level=ERROR&limit=10")
     assert data["total"] >= 1
-    found = any(
-        item["event"] == "E2E test: bridge timeout" for item in data["items"]
-    )
+    found = any(item["event"] == "E2E test: bridge timeout" for item in data["items"])
     assert found
 
 

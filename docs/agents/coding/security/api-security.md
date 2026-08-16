@@ -32,7 +32,7 @@ APIs are the primary attack surface for web applications. An unauthenticated, un
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `docs/agents/coding/security/authentication.md` | Auth patterns |
+| File                                              | Purpose          |
+| ------------------------------------------------- | ---------------- |
+| `docs/agents/coding/security/authentication.md`   | Auth patterns    |
 | `docs/agents/coding/security/input-validation.md` | Input validation |

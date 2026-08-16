@@ -21,9 +21,7 @@ async def db(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_logs_table_exists(db: Database) -> None:
-    row = await db._fetchone(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='logs'"
-    )
+    row = await db._fetchone("SELECT name FROM sqlite_master WHERE type='table' AND name='logs'")
     assert row is not None
     assert row[0] == "logs"
 
@@ -36,9 +34,8 @@ async def test_schema_version_is_3(db: Database) -> None:
     v3->v4 migration that fixes the broken sessions_old FK reference.
     """
     from observability.db import SCHEMA_VERSION
-    row = await db._fetchone(
-        "SELECT value FROM meta WHERE key = 'schema_version'"
-    )
+
+    row = await db._fetchone("SELECT value FROM meta WHERE key = 'schema_version'")
     assert row is not None
     assert int(row[0]) == SCHEMA_VERSION
 
@@ -150,6 +147,7 @@ async def test_cleanup_logs(db: Database) -> None:
 @pytest.mark.asyncio
 async def test_cleanup_logs_signature_unchanged(db: Database) -> None:
     import inspect
+
     sig = inspect.signature(db.cleanup)
     params = list(sig.parameters.keys())
     assert "raw_retention_days" in params

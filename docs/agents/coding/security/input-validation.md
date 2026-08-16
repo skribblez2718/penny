@@ -30,7 +30,7 @@ Unvalidated input is the root cause of injection, buffer overflows, type confusi
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `docs/agents/coding/security/injection.md` | Injection prevention |
+| File                                         | Purpose                  |
+| -------------------------------------------- | ------------------------ |
+| `docs/agents/coding/security/injection.md`   | Injection prevention     |
 | `docs/agents/coding/security/conventions.md` | Universal security rules |

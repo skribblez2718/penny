@@ -32,7 +32,7 @@ Authentication failures are the highest-impact security bugs. A single weak pass
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `docs/agents/coding/security/secrets.md` | Secrets handling |
+| File                                         | Purpose                  |
+| -------------------------------------------- | ------------------------ |
+| `docs/agents/coding/security/secrets.md`     | Secrets handling         |
 | `docs/agents/coding/security/conventions.md` | Universal security rules |

@@ -26,6 +26,7 @@ artifact plane; `RunContext` stores only compact refs and routing state.
 7. Temporal KG writes are allowlisted and value-gated; changed facts are
    invalidated/superseded, not deleted.
 8. T4 is never prompt-injected.
+9. A default-off primary advisory logstream may expose only bounded append/list/wait/ack. It is strictly self-addressed and rejects raw upstream broadcasts. Dedicated artifact/patch endpoints and refs are absent; its bounded free-form body is non-authoritative advice by policy and is never consumed as artifact handoff, workflow state, a persistence receipt, or recovery input.
 
 ## Retention and legacy corpus
 
@@ -39,8 +40,11 @@ an operation journal through the supervised HTTP hub.
 
 One authenticated supervised MemPalace 3.7.1 HTTP hub owns normal writable
 access. Production, admin, eval, and retention paths have no raw/direct fallback.
-Offline raw access is limited to a drained, stopped, receipt-bound copied target.
-Setup, cutover, and uninstall preserve caller-owned data; deletion is separate.
+The local primary extension may expose the strict advisory logstream subset while
+generic `platform-memory` clients continue to forbid all logstream operations.
+Workers receive neither tools nor memory configuration. Offline raw access is
+limited to a drained, stopped, receipt-bound copied target. Setup, cutover, and
+uninstall preserve caller-owned data; deletion is separate.
 
 ## Compaction
 
@@ -50,8 +54,10 @@ checkpoint and granted artifacts; memory absence does not block continuation.
 
 ## Verification
 
-- [ ] Workers expose no memory tools.
+- [ ] Workers expose no memory or advisory logstream tools.
 - [ ] Workflow handoff/recovery is exact-artifact based.
+- [ ] Dedicated artifact/patch endpoints and refs are absent; advisory body text is never consumed as artifact handoff, workflow state, a persistence receipt, or recovery input.
+- [ ] Advisory reads remain strictly self-addressed and reject upstream broadcasts.
 - [ ] Primary recall and writes pass durable-value gates.
 - [ ] Diary and KG writes are primary-only and governed.
 - [ ] Legacy corpus labels cannot authorize deletion.

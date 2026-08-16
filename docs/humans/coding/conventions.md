@@ -17,14 +17,14 @@ The benefits are cumulative:
 
 Before any code is delivered, it must pass six universal checks. These rules are independent of language or framework.
 
-| Rule | What it means | Why it matters |
-| --- | --- | --- |
-| **Test-first** | Write a failing test that describes the desired behavior, then write the code to make it pass. | Tests become a specification. They also make refactorings safer and catch regressions early. |
-| **Lint clean** | Code must pass the project's linter with zero errors. | Linters catch style violations, suspicious patterns, and common bugs that humans miss. |
-| **Format clean** | Code must pass the formatter. | Consistent formatting removes pointless diff noise and lets reviewers focus on logic. |
-| **Type-check clean** | TypeScript must pass `tsc --noEmit`; Python must pass `mypy`. | Static types turn whole classes of runtime errors into compile-time errors. |
-| **No dead code** | Remove commented-out blocks, unused imports, and unreachable branches. | Dead code confuses readers, inflates diffs, and can accidentally be reactivated. |
-| **No magic numbers** | Every constant must be named and documented. | Bare numbers have no meaning. Named constants explain intent and make changes safer. |
+| Rule                 | What it means                                                                                  | Why it matters                                                                               |
+| -------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| **Test-first**       | Write a failing test that describes the desired behavior, then write the code to make it pass. | Tests become a specification. They also make refactorings safer and catch regressions early. |
+| **Lint clean**       | Code must pass the project's linter with zero errors.                                          | Linters catch style violations, suspicious patterns, and common bugs that humans miss.       |
+| **Format clean**     | Code must pass the formatter.                                                                  | Consistent formatting removes pointless diff noise and lets reviewers focus on logic.        |
+| **Type-check clean** | TypeScript must pass `tsc --noEmit`; Python must pass `mypy`.                                  | Static types turn whole classes of runtime errors into compile-time errors.                  |
+| **No dead code**     | Remove commented-out blocks, unused imports, and unreachable branches.                         | Dead code confuses readers, inflates diffs, and can accidentally be reactivated.             |
+| **No magic numbers** | Every constant must be named and documented.                                                   | Bare numbers have no meaning. Named constants explain intent and make changes safer.         |
 
 These rules are the floor, not the ceiling. Language-specific guides — such as the [Python](python.md) and [TypeScript](typescript.md) references — add idioms on top of them. Cross-cutting standards apply on top regardless of language: [accessibility](accessibility.md) (WCAG 2.2 AA for every interface Penny renders) and the [security overview](security-overview.md).
 
@@ -32,11 +32,11 @@ These rules are the floor, not the ceiling. Language-specific guides — such as
 
 Not every convention violation has the same weight. Severity makes it clear what must be fixed immediately and what can be documented as an exception.
 
-| Severity | Meaning | Typical Action |
-| --- | --- | --- |
-| **BLOCKER** | A pre-generation rule is violated: tests fail, lint fails, format fails, type-check fails, or unsafe dynamic execution is present. | Fix before delivery. No exceptions. |
-| **CRITICAL** | A quality rule is violated: dead code, magic numbers, hardcoded secrets, or unvalidated security boundaries. | Fix or document a deliberate exception with justification. |
-| **WARN** | A best-practice deviation that does not block correctness or security. | Fix when practical; document if deferred. |
+| Severity     | Meaning                                                                                                                            | Typical Action                                             |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| **BLOCKER**  | A pre-generation rule is violated: tests fail, lint fails, format fails, type-check fails, or unsafe dynamic execution is present. | Fix before delivery. No exceptions.                        |
+| **CRITICAL** | A quality rule is violated: dead code, magic numbers, hardcoded secrets, or unvalidated security boundaries.                       | Fix or document a deliberate exception with justification. |
+| **WARN**     | A best-practice deviation that does not block correctness or security.                                                             | Fix when practical; document if deferred.                  |
 
 BLOCKER items are non-negotiable because they undermine the verification that the rest of the system relies on. CRITICAL items are negotiable only with explicit rationale, because they are where subtle failures tend to accumulate.
 
@@ -65,11 +65,11 @@ The rule exists because splitting small models across GPUs is both wasteful and 
 
 Conventions add overhead. A one-line fix might require a test, a type annotation, and a lint pass. That cost is intentional, but it is not infinite.
 
-| When conventions help most | When conventions can be relaxed |
-| --- | --- |
+| When conventions help most                   | When conventions can be relaxed                       |
+| -------------------------------------------- | ----------------------------------------------------- |
 | New code that will be read or modified later | Truly throwaway exploration (still not in production) |
-| Code that crosses trust boundaries | Early spikes that will be rewritten before review |
-| Code that multiple agents or humans touch | Documentation-only changes with no executable impact |
+| Code that crosses trust boundaries           | Early spikes that will be rewritten before review     |
+| Code that multiple agents or humans touch    | Documentation-only changes with no executable impact  |
 
 The default stance is strict. If a task is too small to justify the full pipeline, that is usually a signal to execute it directly rather than generate a file.
 

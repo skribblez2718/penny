@@ -100,11 +100,11 @@ Penny's secure-coding guidance covers ten categories. Each one addresses a diffe
 
 Security rules use the same severity vocabulary as the rest of the conventions:
 
-| Severity | Examples |
-| --- | --- |
-| **BLOCKER** | Hardcoded secrets, string-concatenated SQL, unescaped user HTML, `eval`, weak password hashing, path traversal. |
-| **CRITICAL** | Known-vulnerable dependencies, missing input validation at a boundary, client-side exposure of server config. |
-| **WARN** | Missing security headers, permissive but not exploitable defaults. |
+| Severity     | Examples                                                                                                        |
+| ------------ | --------------------------------------------------------------------------------------------------------------- |
+| **BLOCKER**  | Hardcoded secrets, string-concatenated SQL, unescaped user HTML, `eval`, weak password hashing, path traversal. |
+| **CRITICAL** | Known-vulnerable dependencies, missing input validation at a boundary, client-side exposure of server config.   |
+| **WARN**     | Missing security headers, permissive but not exploitable defaults.                                              |
 
 BLOCKER issues must be fixed before delivery. CRITICAL issues must be fixed or accompanied by a documented exception. WARN issues should be addressed when practical.
 

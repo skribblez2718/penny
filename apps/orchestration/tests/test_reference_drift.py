@@ -183,12 +183,12 @@ def test_no_invented_transitions(skill, machine):
 @pytest.mark.parametrize("skill,machine", CASES)
 def test_collapsible_seams_are_documented(skill, machine):
     text = _reference_md(skill).lower()
-    assert "abort" in text and "error" in text, (
-        f"{skill}/resources/reference.md must document the abort -> error seam"
-    )
-    assert "escalat" in text and "unknown" in text, (
-        f"{skill}/resources/reference.md must document the escalation -> unknown seam"
-    )
+    assert (
+        "abort" in text and "error" in text
+    ), f"{skill}/resources/reference.md must document the abort -> error seam"
+    assert (
+        "escalat" in text and "unknown" in text
+    ), f"{skill}/resources/reference.md must document the escalation -> unknown seam"
 
 
 @pytest.mark.parametrize("skill,machine", CASES)

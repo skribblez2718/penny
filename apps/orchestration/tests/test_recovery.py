@@ -10,7 +10,7 @@ from orchestration.checkpointer import (
     Checkpointer,
 )
 from orchestration.context import RunContext
-from orchestration.recovery import recover_pending
+from orchestration.recovery import recover_pending, recover_run
 
 
 @pytest.fixture
@@ -59,7 +59,7 @@ def test_recovers_awaiting_user_re_presents_escalation(cp):
     assert "ambiguous scope" in d["unknown_reason"]
 
 
-def test_ignores_terminal_and_unknown_playbook(cp):
+def test_scan_ignores_terminal_and_surfaces_unknown_playbook_tombstone(cp):
     cp.save(
         run_id="r-done",
         session_id="s",
@@ -77,7 +77,52 @@ def test_ignores_terminal_and_unknown_playbook(cp):
         status=STATUS_RUNNING,
     )
     directives = recover_pending(cp)
-    assert directives == []  # terminal ignored, unknown playbook skipped
+    assert len(directives) == 1
+    tombstone = directives[0]
+    assert tombstone["action"] == "error"
+    assert tombstone["code"] == "PLAYBOOK_UNAVAILABLE"
+    assert tombstone["playbook"] == "does-not-exist"
+    assert cp.load("r-bogus").status == STATUS_RUNNING
+
+
+def test_exact_recover_uses_run_id_not_first_session_match(cp):
+    for run_id, state in (("r-first", "observing"), ("r-target", "acting")):
+        cp.save(
+            run_id=run_id,
+            session_id="shared",
+            playbook="reference-cycle",
+            current_state_id=state,
+            context=_ctx(run_id, session_id="shared"),
+            status=STATUS_RUNNING,
+        )
+    directive = recover_run(
+        cp,
+        run_id="r-target",
+        session_id="shared",
+        playbook="reference-cycle",
+    )
+    assert directive["run_id"] == "r-target"
+    assert directive["state_id"] == "acting"
+
+
+def test_exact_recover_rejects_identity_mismatch(cp):
+    cp.save(
+        run_id="r-target",
+        session_id="stored-session",
+        playbook="reference-cycle",
+        current_state_id="acting",
+        context=_ctx("r-target", session_id="stored-session"),
+        status=STATUS_RUNNING,
+    )
+    mismatch = recover_run(
+        cp,
+        run_id="r-target",
+        session_id="other-session",
+        playbook="reference-cycle",
+    )
+    assert mismatch["action"] == "error"
+    assert "immutable identity" in mismatch["errors"][0]
+    assert cp.load("r-target").current_state_id == "acting"
 
 
 def test_playbook_scoping_prevents_cross_skill_resume(cp):
@@ -89,7 +134,7 @@ def test_playbook_scoping_prevents_cross_skill_resume(cp):
         session_id="shared",
         playbook="reference-cycle",
         current_state_id="observing",
-        context=_ctx("r-ref"),
+        context=_ctx("r-ref", session_id="shared"),
         status=STATUS_RUNNING,
     )
     # recover scoped to a different skill -> nothing (correct isolation)
@@ -123,8 +168,8 @@ def test_errored_run_is_not_auto_recovered_but_opt_in_redrives_failed_phase(cp):
     assert d[0]["run_id"] == "r-err"
 
 
-def test_errored_run_without_failed_state_is_skipped_even_opt_in(cp):
-    # F2: an error run with no recoverable phase is skipped (never guessed).
+def test_errored_run_without_failed_state_is_actionable_even_opt_in(cp):
+    # An exact surfaced error is preferable to silently hiding a stranded run.
     cp.save(
         run_id="r-err2",
         session_id="s",
@@ -133,7 +178,10 @@ def test_errored_run_without_failed_state_is_skipped_even_opt_in(cp):
         context=_ctx("r-err2"),
         status=STATUS_ERROR,
     )
-    assert recover_pending(cp, include_errored=True) == []
+    directives = recover_pending(cp, include_errored=True)
+    assert len(directives) == 1
+    assert directives[0]["action"] == "error"
+    assert "no recoverable" in directives[0]["errors"][0]
 
 
 def test_session_scoping(cp):

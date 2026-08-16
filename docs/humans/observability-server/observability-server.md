@@ -9,13 +9,13 @@ FastAPI + aiosqlite. Single-writer, WAL mode. Two data planes share one WebSocke
 
 ## Code Layout
 
-| File | Responsibility |
-|------|---------------|
-| `apps/observability/src/observability/main.py` | FastAPI app, WebSocket handlers, REST endpoints, lifespan |
-| `apps/observability/src/observability/db.py` | SQLite DDL + CRUD (`insert_log`, `get_logs`, `cleanup_logs`, `get_log_stats`) |
-| `apps/observability/src/observability/models.py` | Pydantic request/response models |
-| `apps/observability/src/observability/logger.py` | Server-side structured logger (JSON/text output) |
-| `apps/observability/src/observability/scheduler.py` | APScheduler daily cleanup + startup emergency cleanup |
+| File                                                | Responsibility                                                                |
+| --------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `apps/observability/src/observability/main.py`      | FastAPI app, WebSocket handlers, REST endpoints, lifespan                     |
+| `apps/observability/src/observability/db.py`        | SQLite DDL + CRUD (`insert_log`, `get_logs`, `cleanup_logs`, `get_log_stats`) |
+| `apps/observability/src/observability/models.py`    | Pydantic request/response models                                              |
+| `apps/observability/src/observability/logger.py`    | Server-side structured logger (JSON/text output)                              |
+| `apps/observability/src/observability/scheduler.py` | APScheduler daily cleanup + startup emergency cleanup                         |
 
 ## WebSocket Event → DB Path
 
@@ -26,6 +26,7 @@ client ──event:"log"──>  handle_message
 ```
 
 The `handle_message` `elif event == "log"` branch:
+
 - Maps integer `level` enum → string (`DEBUG`/`INFO`/`WARN`/`ERROR`/`CRITICAL`)
 - Extracts `extension`, `message`, `sessionId`, `error`, `context` from `data`
 - Calls `_safe_insert_log` (async-tolerant; uses `asyncio.new_event_loop()` if no event loop running)
@@ -152,6 +153,7 @@ async def get_log_stats(self) → dict[str, Any]
 ```
 
 Aggregates:
+
 - `COUNT(*)`
 - `MIN(timestamp)`, `MAX(timestamp)`
 - `GROUP BY level`
@@ -208,22 +210,22 @@ No changes needed in individual extensions. The `observability` extension alone:
 
 See `docs/agents/capabilities/error-logging/error-codes.md` for the full taxonomy. Server-side additions:
 
-| Code | Component | Context |
-|------|-----------|---------|
-| `OBSERVERV_WS_ERROR` | server | WebSocket endpoint exception |
-| `OBSERVERV_WS_CLOSE_ERROR` | server | WebSocket close() failure |
-| `OBSERVERV_WS_INVALID_JSON` | server | Invalid JSON from client |
-| `OBSERVERV_SCHEDULER_FAIL` | scheduler | Cleanup job failed |
-| `OBSERVERV_STARTUP_CLEANUP_FAIL` | scheduler | Emergency cleanup failed |
+| Code                             | Component | Context                      |
+| -------------------------------- | --------- | ---------------------------- |
+| `OBSERVERV_WS_ERROR`             | server    | WebSocket endpoint exception |
+| `OBSERVERV_WS_CLOSE_ERROR`       | server    | WebSocket close() failure    |
+| `OBSERVERV_WS_INVALID_JSON`      | server    | Invalid JSON from client     |
+| `OBSERVERV_SCHEDULER_FAIL`       | scheduler | Cleanup job failed           |
+| `OBSERVERV_STARTUP_CLEANUP_FAIL` | scheduler | Emergency cleanup failed     |
 
 ## Penny Tools (Extension-Registered)
 
 The observability extension registers two tools for Penny to query server data directly:
 
-| Tool | REST Endpoint | Parameters |
-|------|---------------|------------|
-| `observability_query_logs` | `GET /logs` | `level`, `component`, `session_id`, `from_ts`, `to_ts`, `limit`, `offset` |
-| `observability_query_history` | `GET /sessions/{id}/entries` or `GET /sessions` | `session_id`, `limit`, `offset` |
+| Tool                          | REST Endpoint                                   | Parameters                                                                |
+| ----------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------- |
+| `observability_query_logs`    | `GET /logs`                                     | `level`, `component`, `session_id`, `from_ts`, `to_ts`, `limit`, `offset` |
+| `observability_query_history` | `GET /sessions/{id}/entries` or `GET /sessions` | `session_id`, `limit`, `offset`                                           |
 
 - Both tools call the REST API using `fetch` with Bearer auth (when `PI_OBSERVABILITY_API_KEY` is set)
 - The `observabilityFetch` helper handles URL construction, headers, and JSON parsing
@@ -234,17 +236,17 @@ Use pattern: Penny calls the tool → gets JSON → analyzes/correlates → deci
 
 ## Testing
 
-| Test Suite | File | Count | Coverage |
-|-----------|------|-------|----------|
-| Unit (logs) | `tests/test_logs.py` | 16 | Table CRUD, filtering, stats, cleanup, migration |
-| Unit (db) | `tests/test_db.py` | 8 | Schema, sessions, entries, compactions |
-| Integration (logs) | `tests/test_logs_integration.py` | 9 | FastAPI endpoints via TestClient |
-| Integration (auth) | `tests/test_auth.py` | 9 | Bearer token auth, open endpoints |
-| Integration (scheduler) | `tests/test_scheduler.py` | 5 | APScheduler cleanup jobs |
-| Integration (pipeline) | `tests/test_integration.py` | 5 | Full WebSocket → REST pipeline |
-| E2E | `tests/test_e2e.py` | 7 | Live server: health, WS log ingestion, REST queries, admin stats |
-| TypeScript (unit) | `.pi/extensions/observability/tests/unit/` | 30 | WebSocket mock, reconnection, logging |
-| TypeScript (integration) | `.pi/extensions/observability/tests/integration/` | 11 | Tool registration, message format |
+| Test Suite               | File                                              | Count | Coverage                                                         |
+| ------------------------ | ------------------------------------------------- | ----- | ---------------------------------------------------------------- |
+| Unit (logs)              | `tests/test_logs.py`                              | 16    | Table CRUD, filtering, stats, cleanup, migration                 |
+| Unit (db)                | `tests/test_db.py`                                | 8     | Schema, sessions, entries, compactions                           |
+| Integration (logs)       | `tests/test_logs_integration.py`                  | 9     | FastAPI endpoints via TestClient                                 |
+| Integration (auth)       | `tests/test_auth.py`                              | 9     | Bearer token auth, open endpoints                                |
+| Integration (scheduler)  | `tests/test_scheduler.py`                         | 5     | APScheduler cleanup jobs                                         |
+| Integration (pipeline)   | `tests/test_integration.py`                       | 5     | Full WebSocket → REST pipeline                                   |
+| E2E                      | `tests/test_e2e.py`                               | 7     | Live server: health, WS log ingestion, REST queries, admin stats |
+| TypeScript (unit)        | `.pi/extensions/observability/tests/unit/`        | 30    | WebSocket mock, reconnection, logging                            |
+| TypeScript (integration) | `.pi/extensions/observability/tests/integration/` | 11    | Tool registration, message format                                |
 
 **Total: 59 Python + 41 TypeScript = 100 tests**
 

@@ -237,10 +237,16 @@ class Database:
                         created_at INTEGER DEFAULT (cast(strftime('%s', 'now') as integer))
                     )
                 """)
-                await self._db.execute("CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp)")
+                await self._db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp)"
+                )
                 await self._db.execute("CREATE INDEX IF NOT EXISTS idx_logs_level ON logs(level)")
-                await self._db.execute("CREATE INDEX IF NOT EXISTS idx_logs_component ON logs(component)")
-                await self._db.execute("CREATE INDEX IF NOT EXISTS idx_logs_session ON logs(session_id)")
+                await self._db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_logs_component ON logs(component)"
+                )
+                await self._db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_logs_session ON logs(session_id)"
+                )
             if from_version < 3:
                 # v2 -> v3: create watcher_logs table and indexes
                 await self._db.execute("""
@@ -255,10 +261,18 @@ class Database:
                         created_at INTEGER DEFAULT (cast(strftime('%s', 'now') as integer))
                     )
                 """)
-                await self._db.execute("CREATE INDEX IF NOT EXISTS idx_watcher_logs_timestamp ON watcher_logs(timestamp)")
-                await self._db.execute("CREATE INDEX IF NOT EXISTS idx_watcher_logs_level ON watcher_logs(level)")
-                await self._db.execute("CREATE INDEX IF NOT EXISTS idx_watcher_logs_source ON watcher_logs(source)")
-                await self._db.execute("CREATE INDEX IF NOT EXISTS idx_watcher_logs_session ON watcher_logs(session_id)")
+                await self._db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_watcher_logs_timestamp ON watcher_logs(timestamp)"
+                )
+                await self._db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_watcher_logs_level ON watcher_logs(level)"
+                )
+                await self._db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_watcher_logs_source ON watcher_logs(source)"
+                )
+                await self._db.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_watcher_logs_session ON watcher_logs(session_id)"
+                )
             if from_version < 4:
                 # v3 -> v4: fix entries/compactions FK that incorrectly references
                 # "sessions_old" (a leftover from an early schema draft). The
@@ -814,6 +828,7 @@ class Database:
     async def cleanup_logs(self, log_retention_days: int = 14) -> int:
         """Delete old operational logs. Returns count deleted."""
         import time
+
         cutoff = int(time.time()) - (log_retention_days * 86400)
         cursor = await self._execute("DELETE FROM logs WHERE created_at < ?", (cutoff,))
         try:
@@ -858,8 +873,16 @@ class Database:
                 iterations = COALESCE(excluded.iterations, orchestration_runs.iterations)
             """,
             (
-                run_id, session_id, playbook, goal, status,
-                started_at or now, ended_at, met_int, iterations, now,
+                run_id,
+                session_id,
+                playbook,
+                goal,
+                status,
+                started_at or now,
+                ended_at,
+                met_int,
+                iterations,
+                now,
             ),
         )
         await self._db.commit()
@@ -887,8 +910,15 @@ class Database:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                run_id, session_id, seq, event_type, state_id, primitive, agent,
-                json.dumps(data) if data is not None else None, ts,
+                run_id,
+                session_id,
+                seq,
+                event_type,
+                state_id,
+                primitive,
+                agent,
+                json.dumps(data) if data is not None else None,
+                ts,
             ),
         )
         await self._db.commit()
@@ -896,16 +926,19 @@ class Database:
 
     def _row_to_run(self, row: Any) -> dict[str, Any]:
         return {
-            "run_id": row[0], "session_id": row[1], "playbook": row[2],
-            "goal": row[3], "status": row[4], "started_at": row[5],
+            "run_id": row[0],
+            "session_id": row[1],
+            "playbook": row[2],
+            "goal": row[3],
+            "status": row[4],
+            "started_at": row[5],
             "ended_at": row[6],
             "met": None if row[7] is None else bool(row[7]),
-            "iterations": row[8], "created_at": row[9],
+            "iterations": row[8],
+            "created_at": row[9],
         }
 
-    _RUN_COLS = (
-        "run_id, session_id, playbook, goal, status, started_at, ended_at, met, iterations, created_at"
-    )
+    _RUN_COLS = "run_id, session_id, playbook, goal, status, started_at, ended_at, met, iterations, created_at"
 
     async def get_orchestration_runs(
         self,
@@ -935,7 +968,9 @@ class Database:
         )
         return self._row_to_run(row) if row else None
 
-    async def get_orchestration_events(self, run_id: str, limit: int = 10000) -> list[dict[str, Any]]:
+    async def get_orchestration_events(
+        self, run_id: str, limit: int = 10000
+    ) -> list[dict[str, Any]]:
         rows = await self._fetchall(
             "SELECT id, run_id, session_id, seq, event_type, state_id, primitive, agent, data, timestamp "
             "FROM orchestration_events WHERE run_id = ? ORDER BY seq ASC, id ASC LIMIT ?",
@@ -943,9 +978,15 @@ class Database:
         )
         return [
             {
-                "id": r[0], "run_id": r[1], "session_id": r[2], "seq": r[3],
-                "event_type": r[4], "state_id": r[5], "primitive": r[6],
-                "agent": r[7], "data": json.loads(r[8]) if r[8] else None,
+                "id": r[0],
+                "run_id": r[1],
+                "session_id": r[2],
+                "seq": r[3],
+                "event_type": r[4],
+                "state_id": r[5],
+                "primitive": r[6],
+                "agent": r[7],
+                "data": json.loads(r[8]) if r[8] else None,
                 "timestamp": r[9],
             }
             for r in rows
@@ -985,7 +1026,10 @@ class Database:
         deleted_runs = cur_runs.rowcount
         await cur_runs.close()
         await self._db.commit()
-        return {"deleted_orchestration_runs": deleted_runs, "deleted_orchestration_events": deleted_events}
+        return {
+            "deleted_orchestration_runs": deleted_runs,
+            "deleted_orchestration_events": deleted_events,
+        }
 
     # ------------------------------------------------------------------
     # Cleanup / retention
@@ -1004,9 +1048,7 @@ class Database:
         compaction_cutoff = now - (compaction_retention_days * 86400)
 
         # Delete old raw entries
-        cursor_raw = await self._execute(
-            "DELETE FROM entries WHERE created_at < ?", (raw_cutoff,)
-        )
+        cursor_raw = await self._execute("DELETE FROM entries WHERE created_at < ?", (raw_cutoff,))
         deleted_raw = cursor_raw.rowcount
         await cursor_raw.close()
 
@@ -1138,15 +1180,9 @@ class Database:
         entries_row = await self._fetchone("SELECT COUNT(*) FROM entries")
         compactions_row = await self._fetchone("SELECT COUNT(*) FROM compactions")
         logs_row = await self._fetchone("SELECT COUNT(*) FROM logs")
-        oldest_raw = await self._fetchone(
-            "SELECT MIN(created_at) FROM entries"
-        )
-        oldest_comp = await self._fetchone(
-            "SELECT MIN(created_at) FROM compactions"
-        )
-        oldest_log = await self._fetchone(
-            "SELECT MIN(created_at) FROM logs"
-        )
+        oldest_raw = await self._fetchone("SELECT MIN(created_at) FROM entries")
+        oldest_comp = await self._fetchone("SELECT MIN(created_at) FROM compactions")
+        oldest_log = await self._fetchone("SELECT MIN(created_at) FROM logs")
         db_size = self.db_path.stat().st_size if self.db_path.exists() else 0
         page_count, freelist, page_size = await self._page_metrics()
         live_bytes = (page_count - freelist) * page_size

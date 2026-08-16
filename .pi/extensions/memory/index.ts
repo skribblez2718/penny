@@ -6,6 +6,9 @@ import { WebSocket } from "ws";
 import { createLogger, setSessionId } from "../../lib/logger/logger.js";
 import { MemoryAdapter } from "./adapter.js";
 import { loadMemoryRuntimeConfig, resolveMemoryActor } from "./config.js";
+import { MemoryLogstreamAdapter } from "./logstream-adapter.js";
+import { MemoryLogstreamClient } from "./logstream-client.js";
+import { createPrimaryLogstreamTools } from "./logstream-tools.js";
 import { createPrimaryMemoryTools } from "./tools.js";
 import type { MemoryAdapterDependencies, MemoryTelemetry } from "./types.js";
 
@@ -217,13 +220,28 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}) {
       },
     };
 
+    const callerId = () => `primary:${currentSessionId || "unbound"}`;
     for (const tool of createPrimaryMemoryTools({
       adapter,
-      callerId: () => `primary:${currentSessionId || "unbound"}`,
+      callerId,
       writeEnabled: config.writeEnabled,
       telemetry,
     })) {
       pi.registerTool(tool);
+    }
+
+    if (config.logstream.mode === "primary-advisory") {
+      const logstreamClient = new MemoryLogstreamClient(config, options);
+      const logstreamAdapter = new MemoryLogstreamAdapter(config, adapter, logstreamClient);
+      for (const tool of createPrimaryLogstreamTools({
+        adapter: logstreamAdapter,
+        callerId,
+        rooms: config.logstream.rooms,
+        writeEnabled: config.writeEnabled,
+        telemetry,
+      })) {
+        pi.registerTool(tool);
+      }
     }
 
     pi.on("session_start", async (_event: unknown, context: SessionStartContext) => {
@@ -302,6 +320,15 @@ export default createMemoryExtension();
 export { MemoryAdapter } from "./adapter.js";
 export { loadMemoryRuntimeConfig, resolveMemoryActor } from "./config.js";
 export { CANONICAL_KG_PREDICATES, KG_PREDICATE_SCHEMA_VERSION } from "./kg-policy.js";
+export {
+  LOGSTREAM_MODEL_MAX_BODY_BYTES,
+  LOGSTREAM_MODEL_MAX_BODY_CHARACTERS,
+  LOGSTREAM_MODEL_MAX_LIST_LIMIT,
+  LOGSTREAM_MODEL_MAX_WAIT_TIMEOUT_MS,
+  SAFE_ADVISORY_EVENT_TYPES,
+  UPSTREAM_LOGSTREAM_STATUSES,
+} from "./logstream-adapter.js";
+export { createPrimaryLogstreamTools, primaryLogstreamToolNames } from "./logstream-tools.js";
 export { MemoryMcpClient, SAFE_READ_TOOLS } from "./mcp-client.js";
 export {
   FORBIDDEN_MODEL_MEMORY_TOOLS,
@@ -310,8 +337,11 @@ export {
 } from "./tools.js";
 export { MemoryError } from "./types.js";
 export type {
+  LogstreamOperation,
   MemoryErrorCode,
   MemoryExecution,
+  MemoryLogstreamConfig,
   MemoryOperation,
+  MemoryResultOperation,
   MemoryRuntimeConfig,
 } from "./types.js";

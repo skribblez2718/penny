@@ -91,4 +91,3 @@ def test_session_overwrite_warns():
         entry = json.loads(warn_lines[0].strip())
         assert entry["level"] == "WARN"
         assert entry["component"] == "observability.logger"
-

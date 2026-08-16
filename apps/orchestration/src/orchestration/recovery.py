@@ -1,124 +1,183 @@
-"""Auto-recovery — resume interrupted runs from the durable checkpointer.
+"""Exact and scan-based recovery from the durable Python checkpointer.
 
-The "self" in self-recovery: on skill/Penny start, scan for runs left
-``running`` or ``awaiting_user`` and re-issue their pending step (or re-present
-the pending escalation) by ``run_id`` — no manual resume tool. Durable SQLite
-means this survives reboots. Primitives must be safe to re-run (ACT is the one to
-guard). See pack 06-technical-reference.md §14.
+``recover_run`` addresses one immutable run identity. ``recover_pending`` is the
+separate operational scan used to list/reissue all resumable records. Neither
+operation guesses a row by session/playbook ordering.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from .checkpointer import STATUS_AWAITING_USER, STATUS_ERROR, Checkpointer
+from .checkpointer import (
+    STATUS_AWAITING_USER,
+    STATUS_COMPLETE,
+    STATUS_ERROR,
+    STATUS_INCOMPLETE,
+    STATUS_RUNNING,
+    CheckpointRecord,
+    Checkpointer,
+)
 from .contracts import Directives, artifact_dispatch_control
 from .playbooks import get_playbook
 
+_TERMINAL_STATUSES = frozenset({STATUS_COMPLETE, STATUS_INCOMPLETE, STATUS_ERROR})
 
-def recover_pending(  # noqa: C901 - recovery compatibility branches
+
+def _unavailable_playbook(rec: CheckpointRecord) -> dict[str, Any]:
+    """Return an actionable tombstone without altering the legacy checkpoint."""
+    return {
+        "schema_version": 2,
+        "action": "error",
+        "code": "PLAYBOOK_UNAVAILABLE",
+        "retryable": False,
+        "errors": [
+            f"playbook '{rec.playbook}' is not available in this runtime; "
+            "the legacy checkpoint remains unchanged"
+        ],
+        "playbook": rec.playbook,
+        "status": rec.status,
+        "session_id": rec.session_id,
+        "run_id": rec.run_id,
+    }
+
+
+def _recover_record(  # noqa: C901 - recovery status and state branches
+    checkpointer: Checkpointer,
+    rec: CheckpointRecord,
+    obs: Any,
+    *,
+    retry_errored: bool,
+) -> dict[str, Any]:
+    pb_cls = get_playbook(rec.playbook)
+    if pb_cls is None:
+        return _unavailable_playbook(rec)
+
+    if rec.status in {STATUS_COMPLETE, STATUS_INCOMPLETE} or (
+        rec.status == STATUS_ERROR and not retry_errored
+    ):
+        return Directives.status(
+            state=rec.current_state_id,
+            complete=True,
+            session_id=rec.session_id,
+            run_id=rec.run_id,
+        )
+
+    resume_state = rec.current_state_id
+    if rec.status == STATUS_ERROR:
+        resume_state = str((rec.context.extras or {}).get("failed_state") or "")
+        if not resume_state:
+            return Directives.error(
+                errors=[
+                    "errored run has no recoverable failed_state; start a new run "
+                    "or retain the checkpoint for inspection"
+                ],
+                session_id=rec.session_id,
+                run_id=rec.run_id,
+            )
+
+    dispatch_control = artifact_dispatch_control()
+    if not dispatch_control.dispatch_allowed:
+        return Directives.paused(
+            state_id=resume_state,
+            run_status=rec.status,
+            session_id=rec.session_id,
+            run_id=rec.run_id,
+            control=dispatch_control,
+        )
+
+    pb = pb_cls(checkpointer, obs)
+    pb.ctx = rec.context
+    pb.sm = pb.machine_cls()
+    try:
+        pb.sm.current_state_value = resume_state
+    except Exception as exc:
+        return Directives.error(
+            errors=[f"cannot rehydrate state '{resume_state}': {exc}"],
+            session_id=rec.session_id,
+            run_id=rec.run_id,
+        )
+
+    try:
+        migrated = pb.prepare_recovery(pb.ctx)
+    except Exception as exc:
+        return Directives.error(
+            errors=[f"recovery checkpoint validation failed: {exc}"],
+            session_id=rec.session_id,
+            run_id=rec.run_id,
+        )
+    if migrated:
+        checkpointer.save(
+            run_id=rec.run_id,
+            session_id=rec.session_id,
+            playbook=rec.playbook,
+            current_state_id=rec.current_state_id,
+            context=pb.ctx,
+            status=rec.status,
+        )
+
+    if rec.status == STATUS_ERROR:
+        pb.ctx.errors = []
+        pb.ctx.complete = False
+        pb.ctx.met = False
+        return pb._advance_to(resume_state)
+    if rec.status == STATUS_AWAITING_USER:
+        return pb.pending_user_directive(resume_state)
+    if rec.status != STATUS_RUNNING:
+        return Directives.error(
+            errors=[f"unsupported checkpoint status '{rec.status}'"],
+            session_id=rec.session_id,
+            run_id=rec.run_id,
+        )
+    if rec.current_state_id in pb.TOOL_STATES:
+        return pb._advance_to(rec.current_state_id)
+    return pb._directive_for_state(rec.current_state_id)
+
+
+def recover_run(
+    checkpointer: Checkpointer,
+    *,
+    run_id: str,
+    obs: Any = None,
+    session_id: str | None = None,
+    playbook: str | None = None,
+    retry_errored: bool = False,
+) -> dict[str, Any]:
+    """Recover exactly ``run_id`` and fail closed on identity mismatch."""
+    rec = checkpointer.load(run_id)
+    if rec is None:
+        return Directives.status(
+            state="unknown",
+            complete=False,
+            session_id=session_id or "",
+            run_id=run_id,
+        )
+    if session_id is not None and rec.session_id != session_id:
+        return Directives.error(
+            errors=["requested session_id does not match the run's immutable identity"],
+            session_id=session_id,
+            run_id=run_id,
+        )
+    if playbook is not None and rec.playbook != playbook:
+        return Directives.error(
+            errors=["requested playbook does not match the run's immutable identity"],
+            session_id=session_id or rec.session_id,
+            run_id=run_id,
+        )
+    return _recover_record(checkpointer, rec, obs, retry_errored=retry_errored)
+
+
+def recover_pending(  # noqa: C901 - public scan compatibility surface
     checkpointer: Checkpointer,
     obs: Any = None,
     session_id: str | None = None,
     playbook: str | None = None,
     include_errored: bool = False,
-) -> list[dict]:
-    """Return a directive for each resumable run (running/awaiting_user).
-
-    Each directive re-issues the pending step (for ``running``) or re-presents
-    the escalation question (for ``awaiting_user``). Unknown playbooks and
-    un-rehydratable states are skipped rather than raising.
-
-    When ``playbook`` is given, only runs of THAT playbook are considered. This
-    is essential when several engine skills share a ``session_id`` (ad-hoc /
-    Door-2 composition): recovering ``frame`` must never resume a pending
-    ``observe`` run in the same session.
-
-    ``include_errored`` (F2): when True, ``error`` runs are ALSO surfaced and
-    re-driven from the phase they failed on (``ctx.extras['failed_state']``),
-    so a hard phase crash is retriable instead of forcing a full restart. This
-    is OPT-IN — the default (False) leaves the automatic recovery scan
-    unchanged, so genuinely-abandoned error runs are never auto-retried.
-    """
-    directives: list[dict] = []
-    dispatch_control = artifact_dispatch_control()
+) -> list[dict[str, Any]]:
+    """Scan pending records explicitly; unknown playbooks surface tombstones."""
+    directives: list[dict[str, Any]] = []
     for rec in checkpointer.list_pending(session_id, include_errored=include_errored):
         if playbook is not None and rec.playbook != playbook:
             continue
-        pb_cls = get_playbook(rec.playbook)
-        if pb_cls is None:
-            continue
-        # For an errored run, the failed phase — not the terminal "error" state —
-        # is the resume point. Skip error runs with no recoverable phase.
-        resume_state = rec.current_state_id
-        if rec.status == STATUS_ERROR:
-            resume_state = str((rec.context.extras or {}).get("failed_state") or "")
-            if not resume_state:
-                continue
-        if not dispatch_control.dispatch_allowed:
-            # Do not instantiate/prepare the playbook, migrate its context, execute
-            # a tool state, build artifact metadata, or save a checkpoint while the
-            # owner boundary is paused. The persisted pending state is the recovery
-            # authority and will be rebuilt after a fresh active process starts.
-            directives.append(
-                Directives.paused(
-                    state_id=resume_state,
-                    run_status=rec.status,
-                    session_id=rec.session_id,
-                    run_id=rec.run_id,
-                    control=dispatch_control,
-                )
-            )
-            continue
-        pb = pb_cls(checkpointer, obs)
-        pb.ctx = rec.context
-        pb.sm = pb.machine_cls()
-        try:
-            pb.sm.current_state_value = resume_state
-        except Exception:
-            continue
-        try:
-            migrated = pb.prepare_recovery(pb.ctx)
-        except Exception as exc:
-            directives.append(
-                Directives.error(
-                    errors=[f"recovery checkpoint validation failed: {exc}"],
-                    session_id=rec.session_id,
-                    run_id=rec.run_id,
-                )
-            )
-            continue
-        if migrated:
-            checkpointer.save(
-                run_id=rec.run_id,
-                session_id=rec.session_id,
-                playbook=rec.playbook,
-                current_state_id=rec.current_state_id,
-                context=pb.ctx,
-                status=rec.status,
-            )
-        if rec.status == STATUS_ERROR:
-            # Explicit retry: re-drive the failed phase (tools are idempotent;
-            # agent phases re-dispatch). Clear the terminal error markers.
-            pb.ctx.errors = []
-            pb.ctx.complete = False
-            pb.ctx.met = False
-            directives.append(pb._advance_to(resume_state))
-        elif rec.status == STATUS_AWAITING_USER:
-            # Re-present the pending pause — a planned gate re-emits its gate
-            # questions; an UNCERTAIN escalation re-emits its clarification.
-            directives.append(pb.pending_user_directive(resume_state))
-        elif rec.current_state_id in pb.TOOL_STATES:
-            # A run interrupted mid tool-state has no agent directive to re-issue;
-            # resuming IS re-running the deterministic tool. _advance_to re-drives
-            # the tool loop (tool ops are idempotent) and returns the next real
-            # directive (agent/gate) once it reaches a dispatchable state.
-            directives.append(pb._advance_to(rec.current_state_id))
-        else:  # running -> re-issue the pending step (re-run the current agent).
-            # Use the PURE directive builder: this scan must be side-effect-free
-            # (no checkpoint writes, no duplicate step_start). The step_start for
-            # this state was already emitted + persisted when it was first
-            # advanced-to, before the interruption; the resumed agent's result
-            # then produces the step_end, keeping the obs seq monotonic.
-            directives.append(pb._directive_for_state(rec.current_state_id))
+        directives.append(_recover_record(checkpointer, rec, obs, retry_errored=include_errored))
     return directives

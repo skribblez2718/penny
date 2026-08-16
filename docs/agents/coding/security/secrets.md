@@ -30,6 +30,6 @@ Hardcoded secrets are the most common security finding in code reviews. A single
 
 ## Files
 
-| File | Purpose |
-|------|---------|
+| File                                         | Purpose                  |
+| -------------------------------------------- | ------------------------ |
 | `docs/agents/coding/security/conventions.md` | Universal security rules |

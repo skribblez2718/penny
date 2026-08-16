@@ -1,6 +1,6 @@
 # Penny Memory Extension
 
-HTTP-only, role-scoped access to a MemPalace 3.7.1 MCP hub. The extension consumes the versioned `platform-memory` config, capability-policy, and HTTP client contract, then applies its Pi-specific normalization and final-envelope budget. The production extension never imports Python, spawns a bridge, opens palace bytes, or falls back to direct/prefer storage.
+HTTP-only, role-scoped access to a MemPalace 3.7.1 MCP hub. Ordinary recall/curation consumes the versioned `platform-memory` config, capability policy, and HTTP client contract. The optional primary advisory logstream surface is implemented locally because `platform-memory` intentionally continues to forbid logstream operations for generic harness clients. Both paths apply Pi-specific normalization and the same final-envelope budget/continuation machinery. The production extension never imports Python, spawns a bridge, opens palace bytes, or falls back to direct/prefer storage.
 
 ## Runtime policy
 
@@ -9,8 +9,9 @@ HTTP-only, role-scoped access to a MemPalace 3.7.1 MCP hub. The extension consum
 - **Disabled:** `PENNY_MEMORY_MODE=disabled` registers nothing.
 - **Hub:** production otherwise requires `PENNY_MEMORY_MODE=hub` (the default). `legacy`, `shadow`, `direct`, and `prefer` are rejected. No temporary mode remains; compatibility retirement is owned by the memory platform under MEM-07.
 - **Write gate:** `PENNY_MEMORY_WRITE_MODE` defaults to `disabled`. Read-only qualification omits every mutating tool, suppresses automatic diary writes, and rejects direct adapter writes before HTTP. The owner enables writes only after the journaled canary and reconciliation gate.
+- **Advisory logstream gate:** `PENNY_MEMORY_LOGSTREAM_MODE` defaults to `disabled`. `primary-advisory` is valid only with hub mode, a safe configured stream, and a nonempty safe room allowlist. It is independent of curated-write mode for list/wait; append/ack additionally require the ordinary write gate.
 
-A model cannot grant itself tools or enable writes by emitting role or bundle text.
+A model cannot grant itself tools, enable writes, select a stream/principal, or address another principal by emitting role, bundle, or routing text.
 
 ## Configuration
 
@@ -18,6 +19,9 @@ A model cannot grant itself tools or enable writes by emitting role or bundle te
 | ------------------------------------- | --------------------------------------------------------------------------- |
 | `PENNY_MEMORY_MODE`                   | `hub` or `disabled` only                                                    |
 | `PENNY_MEMORY_WRITE_MODE`             | `disabled` (default) or owner-enabled `enabled` after canary reconciliation |
+| `PENNY_MEMORY_LOGSTREAM_MODE`         | `disabled` (default) or `primary-advisory`                                  |
+| `PENNY_MEMORY_LOGSTREAM_STREAM`       | Required safe lowercase slash-separated stream when advisory mode is active |
+| `PENNY_MEMORY_LOGSTREAM_ROOMS`        | Required nonempty comma-separated safe room allowlist; no duplicates        |
 | `PENNY_MEMORY_TRUST_MODE`             | `isolated` or `shared-trust-domain`                                         |
 | `PENNY_MEMORY_PRINCIPAL_ID`           | Caller-registry principal identifier                                        |
 | `PENNY_MEMORY_MCP_ENDPOINT`           | Absolute `http://` or `https://` endpoint; the adapter posts only to `/mcp` |
@@ -58,7 +62,22 @@ During read-only qualification, write operations below are omitted while read op
 
 Delete/bulk-delete, unrestricted enumeration, export, archive, backup, repair, migration, and retention apply are not model-visible.
 
-Search defaults to summary/metadata candidates. `include_full`/`verbatim`, exact drawer reads, list, taxonomy, diary, KG queries, and KG timelines all pass through the same final-envelope budget.
+## Primary advisory logstream
+
+When `PENNY_MEMORY_LOGSTREAM_MODE=primary-advisory`, the extension adds exactly four tools:
+
+- `memory_logstream_append`
+- `memory_logstream_list`
+- `memory_logstream_wait`
+- `memory_logstream_ack`
+
+Only `advisory.note`, `advisory.status`, `advisory.question`, and `advisory.reply` may be selected, with upstream event statuses, an 8,192-byte/character body bound, list limit at most 20, and wait timeout at most 5,000 ms. Append/list/wait pin the configured stream and `platformConfig.principalId`; acknowledgement first proves that same scope, then sends only the target ID and pinned sender. The model has no stream, sender, recipient, metadata, or artifact-ID argument. Rooms are schema- and runtime-limited to the configured allowlist. List/wait responses must match requested type, status, and anchor exclusion, with unique event IDs in strictly increasing positive sequence order.
+
+Ack first performs one bounded, pinned event-list proof. The target ID must appear under the exact configured stream, sender/recipient principal, allowed room, and supplied correlation before the one-attempt upstream ack. An absent, ambiguous, over-bound, or mismatched proof rejects without acking. This surface is strictly self-addressed and not broadcast-capable; a raw upstream broadcast fails closed.
+
+Bodies are bounded free-form advisory text and can technically contain arbitrary small text. Policy makes them non-authoritative: they are never consumed as artifact handoff, workflow state, a persistence receipt, or recovery input. Dedicated artifact/patch endpoints and refs are absent, as are live-stream, sync, replication, broadcast, and administration operations. The immutable artifact store remains the exact stage-output authority; the orchestration checkpointer remains the run-control and recovery authority. Workers and skill drivers receive no logstream tools or configuration. No heuristic body-content detection is performed.
+
+Search defaults to summary/metadata candidates. `include_full`/`verbatim`, exact drawer reads, list, taxonomy, diary, KG queries, KG timelines, and advisory results all pass through the same final-envelope budget.
 
 ## Continuation and integrity
 
@@ -74,7 +93,7 @@ Oversized exact content returns:
 
 Oversized structured results use exact UTF-8 fragments of the normalized JSON source. Concatenating fragments reassembles that source byte-for-byte. Invalid, wrong-caller, wrong-query, stale, evicted, changed-revision, and expired cursors fail with typed errors. Nothing is silently truncated. Summary shortening is explicitly labeled with original and returned byte metadata.
 
-Upstream-ranged list responses are re-fetched and digest-checked on continuation. Operations without upstream ranges use a bounded expiring source cache so continuation never replays writes or unrestricted calls.
+Upstream-ranged drawer-list responses are re-fetched and digest-checked on continuation. Operations without upstream ranges—including advisory event reads and write responses—use a bounded expiring source cache so continuation never replays writes or unrestricted calls. Advisory HTTP responses are independently capped at 512 KiB; append/ack make one mutation attempt, list alone may use at most one bounded safe retry, and wait remains one bounded request.
 
 ## Result telemetry
 

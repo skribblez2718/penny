@@ -16,7 +16,7 @@ The intent is a **clear, total, intentional** dev/prod split — never an accide
 - `make prod` → build and run the hardened container(s) via `docker compose`. The **only** supported
   deployment path.
 - Do not blur these. A local "prod-style" host run may exist as a **legacy/smoke-test** target
-  (e.g. `make run`), but it is explicitly labeled *not the deploy path*.
+  (e.g. `make run`), but it is explicitly labeled _not the deploy path_.
 
 ## 2. Make-target contract (identical across repos)
 
@@ -24,19 +24,19 @@ The intent is a **clear, total, intentional** dev/prod split — never an accide
 command, a port, an interpreter path, or an activation step.** `make help` is the default goal and
 lists every target.
 
-| Target | Meaning |
-|---|---|
-| `make help` | **Default goal.** Self-documenting target list |
-| `make setup` | **Idempotent, from-clone bootstrap**: create venv, install deps (`uv sync`), build frontend if any, scaffold gitignored dev `.env`, mint the dev TLS cert (§2a). Safe to re-run |
-| `make dev` | DEV: local processes (Hypercorn `--reload` + frontend), dev DB, dev secrets |
-| `make start` | DEV-PROD-STYLE: Hypercorn on the host, no reload, prod-shaped flags. **Not the deploy path** |
-| `make prod` | PROD: `docker compose --env-file .env.prod up --build` |
-| `make prod-down` / `make prod-logs` | stop / tail the prod stack |
-| `make stop` | kill this project's stray dev processes |
-| `make check` | the full local gate (lint + types + tests) |
-| `make create-admin-dev` | create the single admin in the **dev** DB |
-| `make create-admin-prod` | create the single admin **inside the running prod container** |
-| `make delete-admin-dev` / `make delete-admin-prod` | remove that environment's single admin (rotate/reset) |
+| Target                                             | Meaning                                                                                                                                                                         |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `make help`                                        | **Default goal.** Self-documenting target list                                                                                                                                  |
+| `make setup`                                       | **Idempotent, from-clone bootstrap**: create venv, install deps (`uv sync`), build frontend if any, scaffold gitignored dev `.env`, mint the dev TLS cert (§2a). Safe to re-run |
+| `make dev`                                         | DEV: local processes (Hypercorn `--reload` + frontend), dev DB, dev secrets                                                                                                     |
+| `make start`                                       | DEV-PROD-STYLE: Hypercorn on the host, no reload, prod-shaped flags. **Not the deploy path**                                                                                    |
+| `make prod`                                        | PROD: `docker compose --env-file .env.prod up --build`                                                                                                                          |
+| `make prod-down` / `make prod-logs`                | stop / tail the prod stack                                                                                                                                                      |
+| `make stop`                                        | kill this project's stray dev processes                                                                                                                                         |
+| `make check`                                       | the full local gate (lint + types + tests)                                                                                                                                      |
+| `make create-admin-dev`                            | create the single admin in the **dev** DB                                                                                                                                       |
+| `make create-admin-prod`                           | create the single admin **inside the running prod container**                                                                                                                   |
+| `make delete-admin-dev` / `make delete-admin-prod` | remove that environment's single admin (rotate/reset)                                                                                                                           |
 
 - `make setup` MUST be safe to run on a clean clone **and** on an existing tree — detect and skip
   completed steps rather than failing.
@@ -74,11 +74,11 @@ eliminated. `http://localhost:<port>` must not answer.
 Because the cert is gitignored and therefore never present on a fresh clone, **every launch path
 mints-or-reuses it**:
 
-| Path | Behaviour |
-|---|---|
-| `make setup` | mints the dev cert into `certs/` if absent |
-| `make dev` / `make start` / `make run` | depend on the `certs` target — mint if absent, **reuse** if present |
-| `make prod` (container) | the entrypoint mints into **`/data/certs`** if absent, **reuses** if present, then `exec`s Hypercorn |
+| Path                                   | Behaviour                                                                                            |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `make setup`                           | mints the dev cert into `certs/` if absent                                                           |
+| `make dev` / `make start` / `make run` | depend on the `certs` target — mint if absent, **reuse** if present                                  |
+| `make prod` (container)                | the entrypoint mints into **`/data/certs`** if absent, **reuses** if present, then `exec`s Hypercorn |
 
 The `certs` target MUST be a **file target** (`$(CERT_DIR)/dev-cert.pem`), not a phony one, so a
 second run is a no-op (`make: Nothing to be done for 'certs'`) and the fingerprint is stable. A phony
@@ -97,7 +97,7 @@ to `https://` with verification disabled (self-signed):
 - **Docker `HEALTHCHECK`** — prefer `python -c` with `ssl._create_unverified_context()` over `curl -k`;
   slim images often have no `curl`.
 - **Dev-server proxies** (e.g. Vite `server.proxy`) — target `https://` and set `secure: false`.
-- **Browser-facing dev servers stay http** — only the *proxy target* changes. So CORS
+- **Browser-facing dev servers stay http** — only the _proxy target_ changes. So CORS
   `allow_origins` needs the **app's own origin as `https://`** while the dev-server origin stays
   `http://`. Getting this half-right is a silent breakage.
 - **Readiness/health polls** in dev scripts and launchers.
@@ -126,8 +126,8 @@ ingress:
   - hostname: <host>
     service: https://localhost:<port>
     originRequest:
-      http2Origin: true    # HTTP/2 to the origin — the desync fix
-      noTLSVerify: true    # accept the local self-signed cert
+      http2Origin: true # HTTP/2 to the origin — the desync fix
+      noTLSVerify: true # accept the local self-signed cert
 ```
 
 Items 1–2 live in the repo. **Item 3 lives in tunnel configuration outside the repo** — a migration is
@@ -200,7 +200,7 @@ trusted proxy CIDRs (never trust `*`).
   a `uv` extra) when there's a concrete need (write concurrency / replicas). SQLite↔Postgres are not
   drop-in compatible: pick one per app and keep dev and prod on the same engine. Hardening is identical
   either way.
-- **`.dockerignore` MUST exclude `**/.env` and `**/.env.*`.** A dev `.env` swept into the image (e.g.
+- **`.dockerignore` MUST exclude `**/.env`and`**/.env.\*`.** A dev `.env` swept into the image (e.g.
   by `COPY backend/ …`) leaks dev secrets AND overrides the prod environment (it flipped `env=prod`
   into `debug=true` in a real build — the fail-closed validator caught it, but exclude it anyway).
   Prod config comes from the container environment only, never a baked file.

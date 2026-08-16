@@ -102,25 +102,27 @@ def test_every_pipeline_edge_is_drawn(skill, machine):
 def test_no_invented_edges(skill, machine):
     _, edges = _parse_html_flow(_flow_html(skill))
     invented = edges - _fsm_transitions(machine)
-    assert not invented, (
-        f"{skill}/flow.html draws edges that are not real FSM transitions: {sorted(invented)}"
-    )
+    assert (
+        not invented
+    ), f"{skill}/flow.html draws edges that are not real FSM transitions: {sorted(invented)}"
 
 
 @pytest.mark.parametrize("skill,machine", CASES)
 def test_collapsible_seams_are_documented(skill, machine):
     text = _flow_html(skill).lower()
-    assert "abort" in text and "error" in text, (
-        f"{skill}/flow.html must document the omitted abort -> error transitions"
-    )
-    assert "escalat" in text and "unknown" in text, (
-        f"{skill}/flow.html must document the escalation -> unknown seam"
-    )
+    assert (
+        "abort" in text and "error" in text
+    ), f"{skill}/flow.html must document the omitted abort -> error transitions"
+    assert (
+        "escalat" in text and "unknown" in text
+    ), f"{skill}/flow.html must document the escalation -> unknown seam"
 
 
 @pytest.mark.parametrize("skill", [c[0] for c in CASES])
 def test_mermaid_mmd_is_retired(skill):
     # flow.html is the standard; the old Mermaid source must not linger and drift.
-    assert not (_skill_resources(skill) / "flow.mmd").exists(), (
+    assert not (
+        _skill_resources(skill) / "flow.mmd"
+    ).exists(), (
         f"{skill}/resources/flow.mmd still exists — flow.html is the standard; remove the .mmd"
     )

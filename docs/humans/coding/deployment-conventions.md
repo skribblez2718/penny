@@ -13,7 +13,7 @@ deliberately blunt:
 
 > **`make dev` runs locally. `make prod` runs Docker. Nothing else deploys.**
 
-You should never have to *wonder* which environment you're in. The command you type, the file that
+You should never have to _wonder_ which environment you're in. The command you type, the file that
 holds the secrets, and the failure you get when something's missing all tell you.
 
 ## Why `dev = local` and `prod = Docker`
@@ -76,23 +76,23 @@ per app and keep it consistent across dev and prod).
 ## Why authored content is "code" — and why the importer can't just rebuild
 
 Apps like ketwise ship their courses as committed `content/*.json`. That data is baked into the prod
-image, and `make prod` seeds it. The subtle trap: the *obvious* way to seed — "drop the old content,
+image, and `make prod` seeds it. The subtle trap: the _obvious_ way to seed — "drop the old content,
 insert the new" — quietly destroys **learner progress**, because progress is stored per-lesson keyed
 by the lesson's database id, and a drop-and-reinsert hands every lesson a brand-new id. The saved
 progress then points at ids that no longer exist.
 
 So the seed is a **non-destructive, stable-id upsert**: it matches content by slug and updates rows
-*in place*, keeping their ids. Editing a lesson keeps its progress; adding a lesson gives it a fresh
-id so it shows as *incomplete* until completed; removing a lesson deletes it. This is exactly the
+_in place_, keeping their ids. Editing a lesson keeps its progress; adding a lesson gives it a fresh
+id so it shows as _incomplete_ until completed; removing a lesson deletes it. This is exactly the
 behavior you'd want intuitively — but it only holds because the importer is careful about identity,
 and a regression test pins it so a future refactor can't silently break it. The lesson generalizes:
 **when a deploy re-seeds data that user state points at, the seed must preserve identity, not rebuild.**
 
 There's a second half once you author content **in an admin panel** rather than only building it from
 source: the **database becomes the source of truth**, so the seed must stop overwriting it. In ketwise
-the seed became *bootstrap-only* — it fills an empty database and then never touches it, so your edits
+the seed became _bootstrap-only_ — it fills an empty database and then never touches it, so your edits
 survive every restart. To ship those edits, you run an **explicit export** (`make export-content`) that
-regenerates the committed `content/` (JSON + a media folder) *from the DB*. Why explicit rather than a
+regenerates the committed `content/` (JSON + a media folder) _from the DB_. Why explicit rather than a
 live mirror that's always in sync? Because a live mirror fights your in-progress edits and produces
 noisy churn; an explicit export gives you a **reviewable `git diff`** and lets you decide when content
 ships — export, review, commit, then `git pull && make prod` applies it (progress preserved). The

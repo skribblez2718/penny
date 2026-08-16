@@ -81,7 +81,7 @@ if __name__ == "__main__":
 | `PENNY_ARTIFACT_DISPATCH_MODE`       | Owner dispatch control: `active`/`paused`   | `active`                                |
 | `PENNY_TOOL_RESULT_MAX_BYTES`        | Optional lower model-result byte cap        | `32768`                                 |
 | `PENNY_TOOL_RESULT_MAX_TOKENS`       | Optional lower conservative token cap       | `8192`                                  |
-| `PI_OBSERVABILITY_URL`               | Observability base URL                      | `http://localhost:8765`                 |
+| `PI_OBSERVABILITY_REST_URL`          | Observability REST base URL                 | `http://localhost:8765`                 |
 | `PI_OBSERVABILITY_API_KEY`           | Observability bearer token                  | empty                                   |
 | `PENNY_ORCH_MAX_STEP_RETRIES`        | Transient step retry budget                 | `2`                                     |
 | `PENNY_ABLATE_<LOAN_ID>`             | Disable one registered loan for an ablation | unset                                   |

@@ -55,8 +55,8 @@ Consistent TypeScript style ensures extensions are type-safe, lint-clean, and ma
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `eslint.config.js` | ESLint config |
-| `.prettierrc` | Prettier config |
+| File                                                     | Purpose                      |
+| -------------------------------------------------------- | ---------------------------- |
+| `eslint.config.js`                                       | ESLint config                |
+| `.prettierrc`                                            | Prettier config              |
 | `docs/agents/extensions/extension-creation-procedure.md` | Extension creation procedure |

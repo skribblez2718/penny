@@ -18,6 +18,29 @@ direct/prefer storage. An unavailable hub fails closed.
 Only the unmarked primary Penny runtime exposes memory tools. Workers and skill
 drivers expose none.
 
+## Optional advisory log
+
+The primary runtime can opt into a narrow MemPalace logstream view. It is off by
+default and offers only append, list, a wait of at most five seconds, and
+acknowledgement. Stream and sender/recipient identity come from trusted
+configuration rather than model arguments; rooms, event types, body size, and
+result count are tightly bounded. List/wait results must preserve requested
+filters and anchor exclusion, contain unique IDs, and remain in strictly
+increasing positive sequence order. Acknowledgement proceeds only after a
+bounded read proves the target belongs to that stream, principal, and supplied
+correlation. The surface is strictly self-addressed, not broadcast-capable; raw
+upstream broadcasts fail closed.
+
+The body is bounded free-form advisory text and can technically contain
+arbitrary small text. Dedicated artifact/patch endpoints and refs are absent.
+Policy makes body text non-authoritative and never consumes it as artifact
+handoff, workflow state, a persistence receipt, or recovery input. Exact stage
+output still lives in the immutable artifact store; the orchestration
+checkpointer still owns run state and recovery. Workers do not receive the tools
+or their configuration. The generic memory package continues to reject
+logstream operations; the narrow surface exists only inside the primary Penny
+extension.
+
 ## Durable recall
 
 Penny searches memory when a prior preference, decision, incident, result, or

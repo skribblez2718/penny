@@ -15,6 +15,7 @@ from orchestration.checkpointer import (
     STATUS_COMPLETE,
     STATUS_ERROR,
     STATUS_RUNNING,
+    CheckpointIdentityError,
     Checkpointer,
 )
 from orchestration.context import RunContext
@@ -26,7 +27,7 @@ def db_path(tmp_path):
 
 
 def _ctx(run_id="run-1", **over) -> RunContext:
-    base = dict(session_id="sess-1", run_id=run_id, playbook="reference-cycle")
+    base = dict(session_id="s", run_id=run_id, playbook="reference-cycle")
     base.update(over)
     return RunContext(**base)
 
@@ -36,7 +37,7 @@ def test_save_then_load_in_fresh_object(db_path):
     ctx = _ctx(goal="ship it", success_criteria=["c1"], iteration=2, verify_verdict="FAIL")
     cp.save(
         run_id="run-1",
-        session_id="sess-1",
+        session_id="s",
         playbook="reference-cycle",
         current_state_id="verifying",
         context=ctx,
@@ -62,7 +63,7 @@ def test_upsert_preserves_created_at_updates_updated_at(db_path):
     cp.save(
         run_id="run-1",
         session_id="s",
-        playbook="p",
+        playbook="reference-cycle",
         current_state_id="framing",
         context=_ctx(),
         status=STATUS_RUNNING,
@@ -72,7 +73,7 @@ def test_upsert_preserves_created_at_updates_updated_at(db_path):
     cp.save(
         run_id="run-1",
         session_id="s",
-        playbook="p",
+        playbook="reference-cycle",
         current_state_id="acting",
         context=_ctx(iteration=1),
         status=STATUS_RUNNING,
@@ -83,12 +84,62 @@ def test_upsert_preserves_created_at_updates_updated_at(db_path):
     assert second.current_state_id == "acting"
 
 
+def test_run_identity_collision_is_rejected_without_mutation(db_path):
+    cp = Checkpointer(db_path=db_path)
+    original = _ctx(run_id="fixed", goal="original")
+    cp.save(
+        run_id="fixed",
+        session_id="s",
+        playbook="reference-cycle",
+        current_state_id="observing",
+        context=original,
+        status=STATUS_RUNNING,
+    )
+    conflicting = RunContext(
+        session_id="other",
+        run_id="fixed",
+        playbook="research",
+        goal="replacement",
+    )
+    with pytest.raises(CheckpointIdentityError):
+        cp.save(
+            run_id="fixed",
+            session_id="other",
+            playbook="research",
+            current_state_id="planning",
+            context=conflicting,
+            status=STATUS_RUNNING,
+        )
+    record = cp.load("fixed")
+    assert record is not None
+    assert (record.session_id, record.playbook, record.current_state_id) == (
+        "s",
+        "reference-cycle",
+        "observing",
+    )
+    assert record.context.goal == "original"
+
+
+def test_context_identity_must_match_save_arguments(db_path):
+    cp = Checkpointer(db_path=db_path)
+    with pytest.raises(CheckpointIdentityError):
+        cp.save(
+            run_id="fixed",
+            session_id="s",
+            playbook="reference-cycle",
+            current_state_id="observing",
+            context=_ctx(run_id="different"),
+            status=STATUS_RUNNING,
+        )
+    assert cp.load("fixed") is None
+
+
 def test_list_pending_only_resumable(db_path):
     cp = Checkpointer(db_path=db_path)
     cp.save(
         run_id="r-run",
         session_id="s",
-        playbook="p",
+        playbook="reference-cycle",
         current_state_id="acting",
         context=_ctx(run_id="r-run"),
         status=STATUS_RUNNING,
@@ -96,7 +147,7 @@ def test_list_pending_only_resumable(db_path):
     cp.save(
         run_id="r-wait",
         session_id="s",
-        playbook="p",
+        playbook="reference-cycle",
         current_state_id="awaiting_clarification",
         context=_ctx(run_id="r-wait"),
         status=STATUS_AWAITING_USER,
@@ -104,7 +155,7 @@ def test_list_pending_only_resumable(db_path):
     cp.save(
         run_id="r-done",
         session_id="s",
-        playbook="p",
+        playbook="reference-cycle",
         current_state_id="complete",
         context=_ctx(run_id="r-done"),
         status=STATUS_COMPLETE,
@@ -112,7 +163,7 @@ def test_list_pending_only_resumable(db_path):
     cp.save(
         run_id="r-err",
         session_id="s",
-        playbook="p",
+        playbook="reference-cycle",
         current_state_id="error",
         context=_ctx(run_id="r-err"),
         status=STATUS_ERROR,
@@ -136,7 +187,7 @@ def test_purge_older_than_only_terminal(db_path, monkeypatch):
     cp.save(
         run_id="old-done",
         session_id="s",
-        playbook="p",
+        playbook="reference-cycle",
         current_state_id="complete",
         context=_ctx(run_id="old-done"),
         status=STATUS_COMPLETE,
@@ -144,7 +195,7 @@ def test_purge_older_than_only_terminal(db_path, monkeypatch):
     cp.save(
         run_id="old-run",
         session_id="s",
-        playbook="p",
+        playbook="reference-cycle",
         current_state_id="acting",
         context=_ctx(run_id="old-run"),
         status=STATUS_RUNNING,
@@ -152,7 +203,7 @@ def test_purge_older_than_only_terminal(db_path, monkeypatch):
     cp.save(
         run_id="fresh-done",
         session_id="s",
-        playbook="p",
+        playbook="reference-cycle",
         current_state_id="complete",
         context=_ctx(run_id="fresh-done"),
         status=STATUS_COMPLETE,

@@ -19,7 +19,9 @@ from .checkpointer import (  # noqa: E402
     STATUS_AWAITING_USER,
     STATUS_COMPLETE,
     STATUS_ERROR,
+    STATUS_INCOMPLETE,
     STATUS_RUNNING,
+    CheckpointIdentityError,
     CheckpointRecord,
     Checkpointer,
 )
@@ -59,7 +61,7 @@ from .primitives.spec import (  # noqa: E402
     contract_from_json,
     parallel_spec_from_dict,
 )
-from .recovery import recover_pending  # noqa: E402
+from .recovery import recover_pending, recover_run  # noqa: E402
 
 __all__ = [
     "__version__",
@@ -94,6 +96,7 @@ __all__ = [
     "PLAYBOOKS",
     "get_playbook",
     "recover_pending",
+    "recover_run",
     # primitives
     "PrimitiveSpec",
     "PRIMITIVES",
@@ -108,8 +111,10 @@ __all__ = [
     # checkpointer
     "Checkpointer",
     "CheckpointRecord",
+    "CheckpointIdentityError",
     "STATUS_RUNNING",
     "STATUS_AWAITING_USER",
     "STATUS_COMPLETE",
+    "STATUS_INCOMPLETE",
     "STATUS_ERROR",
 ]

@@ -32,6 +32,8 @@ def contract_from_json(contract: dict) -> dict:
     the ``{"required": {"k": bool}, ...}`` shape ``validate_summary_contract``
     consumes. Raises ``ValueError`` on an unknown type name.
     """
+    if not isinstance(contract, dict):
+        raise ValueError("summary_contract must be a dict")
     out: dict = {}
     for section in ("required", "optional"):
         fields = contract.get(section, {}) or {}
@@ -67,10 +69,13 @@ def parallel_spec_from_dict(branches: dict) -> "ParallelSpec":
         agent = branch.get("agent")
         if not agent or not isinstance(agent, str):
             raise ValueError(f"dynamic branch '{bid}' missing required 'agent'")
+        raw_contract = branch.get("summary_contract")
+        if not isinstance(raw_contract, dict) or not raw_contract:
+            raise ValueError(f"dynamic branch '{bid}' requires a non-empty typed summary_contract")
         specs[str(bid)] = PrimitiveSpec(
             name=str(branch.get("name") or str(bid).upper()),
             agent=agent,
-            summary_contract=contract_from_json(branch.get("summary_contract") or {}),
+            summary_contract=contract_from_json(raw_contract),
             task_hint=str(branch.get("task_hint") or ""),
         )
     return ParallelSpec(branches=specs)
@@ -87,3 +92,14 @@ class ParallelSpec:
     agent, contract, and task hint."""
 
     branches: dict[str, PrimitiveSpec] = field(default_factory=dict)  # branch_id -> spec
+
+    def __post_init__(self) -> None:
+        for branch_id, spec in self.branches.items():
+            fields = {
+                **spec.summary_contract.get("required", {}),
+                **spec.summary_contract.get("optional", {}),
+            }
+            if not fields:
+                raise ValueError(
+                    f"parallel branch '{branch_id}' requires a non-empty typed summary contract"
+                )

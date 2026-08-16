@@ -29,6 +29,6 @@ XSS is the most common web vulnerability. Generated frontend code is especially 
 
 ## Files
 
-| File | Purpose |
-|------|---------|
+| File                                         | Purpose                  |
+| -------------------------------------------- | ------------------------ |
 | `docs/agents/coding/security/conventions.md` | Universal security rules |

@@ -78,6 +78,9 @@ const ARTIFACT_INVOCATION_ENV_NAMES = [
 const DYNAMIC_MEMORY_CREDENTIAL_NAME = "WORKER_MEMORY_BEARER";
 const MEMORY_ENV_NAMES = [
   "PENNY_MEMORY_MODE",
+  "PENNY_MEMORY_LOGSTREAM_MODE",
+  "PENNY_MEMORY_LOGSTREAM_STREAM",
+  "PENNY_MEMORY_LOGSTREAM_ROOMS",
   "PENNY_MEMORY_MCP_ENDPOINT",
   "PENNY_MEMORY_MCP_TOKEN_ENV",
   "PENNY_MEMORY_MCP_TOKEN_FILE",
@@ -225,6 +228,9 @@ beforeEach(() => {
   process.env.PENNY_ARTIFACT_INVOCATION_FILE = "/stale/invocation.json";
   process.env.PENNY_ARTIFACT_CURSOR_HMAC_KEY = "stale-cursor-key";
   process.env.PENNY_MEMORY_MODE = "hub";
+  process.env.PENNY_MEMORY_LOGSTREAM_MODE = "primary-advisory";
+  process.env.PENNY_MEMORY_LOGSTREAM_STREAM = "project/advisory";
+  process.env.PENNY_MEMORY_LOGSTREAM_ROOMS = "status";
   process.env.PENNY_MEMORY_MCP_ENDPOINT = "http://127.0.0.1:8765/mcp";
   process.env.PENNY_MEMORY_MCP_TOKEN_ENV = DYNAMIC_MEMORY_CREDENTIAL_NAME;
   process.env.PENNY_MEMORY_MCP_TOKEN_FILE = "/owner/private/memory-token";
@@ -258,6 +264,9 @@ describe("isolatedAgentEnvironment", () => {
       PENNY_RUNTIME_ROLE: "primary",
       PENNY_TEST_SAFE_VALUE: "retained",
       PENNY_MEMORY_MODE: "hub",
+      PENNY_MEMORY_LOGSTREAM_MODE: "primary-advisory",
+      PENNY_MEMORY_LOGSTREAM_STREAM: "project/advisory",
+      PENNY_MEMORY_LOGSTREAM_ROOMS: "status",
       PENNY_MEMORY_MCP_ENDPOINT: "http://127.0.0.1:8765/mcp",
       PENNY_MEMORY_MCP_TOKEN_ENV: DYNAMIC_MEMORY_CREDENTIAL_NAME,
       PENNY_MEMORY_MCP_TOKEN_FILE: "/owner/private/memory-token",
@@ -283,6 +292,9 @@ describe("isolatedAgentEnvironment", () => {
   it("cannot rebuild memory config or resolve a direct HTTP credential from the worker environment", async () => {
     const worker = isolatedAgentEnvironment({
       PENNY_MEMORY_MODE: "hub",
+      PENNY_MEMORY_LOGSTREAM_MODE: "primary-advisory",
+      PENNY_MEMORY_LOGSTREAM_STREAM: "project/advisory",
+      PENNY_MEMORY_LOGSTREAM_ROOMS: "status",
       PENNY_MEMORY_MCP_ENDPOINT: "http://127.0.0.1:8765/mcp",
       PENNY_MEMORY_MCP_TOKEN_ENV: DYNAMIC_MEMORY_CREDENTIAL_NAME,
       PENNY_MEMORY_MCP_TOKEN_FILE: "/owner/private/memory-token",
@@ -294,6 +306,9 @@ describe("isolatedAgentEnvironment", () => {
     });
 
     expect(worker.PENNY_MEMORY_MODE).toBeUndefined();
+    expect(worker.PENNY_MEMORY_LOGSTREAM_MODE).toBeUndefined();
+    expect(worker.PENNY_MEMORY_LOGSTREAM_STREAM).toBeUndefined();
+    expect(worker.PENNY_MEMORY_LOGSTREAM_ROOMS).toBeUndefined();
     expect(worker.PENNY_MEMORY_MCP_ENDPOINT).toBeUndefined();
     expect(worker.PENNY_MEMORY_MCP_TOKEN_ENV).toBeUndefined();
     expect(worker.PENNY_MEMORY_MCP_TOKEN_FILE).toBeUndefined();

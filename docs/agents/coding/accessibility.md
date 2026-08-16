@@ -107,11 +107,11 @@ keyboard path, invisible focus). Building to AA from the first render is far che
 
 ## Severity
 
-| Severity | Meaning | Action |
-|----------|---------|--------|
-| **BLOCKER** | A perceivable/operable barrier: keyboard trap or unreachable control, missing focus indicator, missing form label/name, an axe AA violation, or contrast below the AA threshold. | Fix before delivery. |
-| **CRITICAL** | Meaning by color alone, missing/incorrect `alt`, skipped headings / no landmarks, misused ARIA, reduced-motion not honored, target < 24px. | Fix or document a justified exception. |
-| **WARN** | AAA-level niceties or polish beyond AA (e.g. 7:1 contrast, 44px targets everywhere). | Improve when practical. |
+| Severity     | Meaning                                                                                                                                                                          | Action                                 |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| **BLOCKER**  | A perceivable/operable barrier: keyboard trap or unreachable control, missing focus indicator, missing form label/name, an axe AA violation, or contrast below the AA threshold. | Fix before delivery.                   |
+| **CRITICAL** | Meaning by color alone, missing/incorrect `alt`, skipped headings / no landmarks, misused ARIA, reduced-motion not honored, target < 24px.                                       | Fix or document a justified exception. |
+| **WARN**     | AAA-level niceties or polish beyond AA (e.g. 7:1 contrast, 44px targets everywhere).                                                                                             | Improve when practical.                |
 
 ## Constraints
 

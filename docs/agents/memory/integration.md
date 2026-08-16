@@ -30,6 +30,37 @@ after the journaled canary and accepted-write reconciliation gate passes.
 Delete, bulk-delete, unrestricted export/enumeration, backup, repair, migration,
 and retention apply are not model-visible.
 
+## Default-off primary advisory logstream
+
+`PENNY_MEMORY_LOGSTREAM_MODE` defaults to `disabled`. `primary-advisory`
+requires hub mode, one safe configured stream, and a nonempty safe room
+allowlist. Only the unmarked primary runtime may receive exactly four tools:
+append, list, bounded wait, and acknowledgement. List/wait remain available
+when curated writes are disabled; append/ack additionally require
+`PENNY_MEMORY_WRITE_MODE=enabled`.
+
+The extension pins stream, sender, and recipient to trusted configuration. The
+model cannot supply stream, principal, metadata, artifact IDs, patches, or
+replication fields. Event types are limited to the fixed `advisory.*` set;
+bodies are at most 8,192 bytes/characters, lists return at most 20 events, and
+waits last at most 5,000 ms. List/wait responses must match requested type,
+status, and anchor exclusion, with unique IDs in strictly increasing positive
+sequence order. Ack first proves the exact target under the configured
+stream/principal and supplied correlation within one bounded read; missing or
+ambiguous proof rejects before the one-attempt ack. This surface is strictly
+self-addressed, not broadcast-capable; raw upstream broadcasts fail closed.
+
+Bodies are bounded free-form advisory text and can technically contain arbitrary
+small text. By policy they are non-authoritative and are never consumed as
+artifact handoff, workflow state, a persistence receipt, or recovery input.
+Dedicated artifact/patch endpoints and refs are absent. The immutable artifact
+store remains authoritative for exact workflow products; the orchestration
+checkpointer remains authoritative for run control and recovery. No live-stream,
+sync, replication, broadcast, or administration operation is exposed. Generic
+`platform-memory` clients continue to forbid logstream operations; this narrowly
+governed surface lives only in the primary memory extension. Worker role denial
+and memory-environment scrubbing apply unchanged.
+
 ## Retrieval policy
 
 1. Retrieve only when prior preferences, decisions, work, or changing facts
@@ -101,6 +132,9 @@ live supported-model trial or a no-compaction outcome.
 - [ ] Exactly one supervised 3.7.1 HTTP hub owns writable access.
 - [ ] Production and online admin paths have no raw/direct fallback.
 - [ ] Workers and skill drivers expose zero memory tools/hooks.
+- [ ] Advisory logstream is default-off, primary-only, and strictly self-addressed; broadcasts fail closed.
+- [ ] Dedicated artifact/patch endpoints and refs are absent; advisory bodies are never consumed as artifact handoff, workflow state, persistence receipts, or recovery input.
+- [ ] Ack scope is proved under bounded reads before one mutation attempt.
 - [ ] Primary retrieval is relevance-driven and bounded.
 - [ ] Writes are curated; no routine duplicate precheck or routine KG linking.
 - [ ] Diary writes come only from the primary runtime.

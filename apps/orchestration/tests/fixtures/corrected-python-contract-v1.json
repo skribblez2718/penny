@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "engine_owner": "python",
+  "identity": {
+    "immutable_fields": ["run_id", "session_id", "playbook"],
+    "cases": [
+      {"id": "ID-START-COLLISION", "operation": "start", "expected": "identity_error"},
+      {"id": "ID-STEP-SESSION-MISMATCH", "operation": "step", "expected": "identity_error"},
+      {"id": "ID-STATUS-PLAYBOOK-MISMATCH", "operation": "status", "expected": "identity_error"},
+      {"id": "ID-RECOVER-EXACT", "operation": "recover", "expected": "exact_run"}
+    ]
+  },
+  "confidence": {
+    "valid": ["CERTAIN", "PROBABLE", "POSSIBLE", "UNCERTAIN"],
+    "invalid": ["certain", "likely", "", null, 1, true],
+    "invalid_fan_aggregate": "UNCERTAIN"
+  },
+  "parallel_provenance": {
+    "required": ["branch_id", "agent", "run_id", "state_id", "attempt", "worker_receipt"],
+    "reject": [
+      "wrong_branch",
+      "wrong_agent",
+      "wrong_run",
+      "wrong_state",
+      "wrong_attempt",
+      "duplicate_branch",
+      "empty_result_contract"
+    ]
+  },
+  "terminal_truth": [
+    {"id": "TERM-SUCCESS", "met": true, "grounded": true, "write_complete": true, "action": "complete", "status": "complete"},
+    {"id": "TERM-FAILED-WRITE", "met": false, "grounded": true, "write_complete": false, "action": "incomplete", "status": "incomplete"},
+    {"id": "TERM-UNGROUNDED", "met": false, "grounded": false, "write_complete": true, "action": "incomplete", "status": "incomplete"},
+    {"id": "TERM-EXHAUSTED", "met": false, "grounded": false, "write_complete": true, "action": "incomplete", "status": "incomplete"}
+  ],
+  "privacy": {
+    "owner_only_allowed": ["workflow_input.goal"],
+    "forbidden_raw_fields": ["telemetry.goal", "logs.goal", "public_result.query", "pi_session.goal"],
+    "safe_projection": ["goal_sha256", "goal_bytes"]
+  },
+  "recovery": {
+    "exact_operation": "recover",
+    "scan_operation": "recover_pending",
+    "unknown_playbook": "PLAYBOOK_UNAVAILABLE",
+    "unknown_playbook_mutates_checkpoint": false
+  }
+}

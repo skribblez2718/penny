@@ -21,8 +21,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 
 _HERMETIC = [
-    "--no-session", "--no-extensions", "--no-skills", "--no-prompt-templates",
-    "--no-themes", "--no-context-files", "--no-tools",
+    "--no-session",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
+    "--no-context-files",
+    "--no-tools",
 ]
 _CONFIDENCE = ("CERTAIN", "PROBABLE", "POSSIBLE", "UNCERTAIN")
 
@@ -60,8 +65,13 @@ def pi_json_call(  # noqa: C901 - linear build-cmd -> spawn -> stream-parse
     run = runner or subprocess.run
     try:
         proc = run(
-            cmd, cwd=cwd or str(Path.cwd()), env=env, stdin=subprocess.DEVNULL,
-            capture_output=True, text=True, timeout=timeout_s,
+            cmd,
+            cwd=cwd or str(Path.cwd()),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
         )
     except (subprocess.TimeoutExpired, OSError):
         return None
@@ -84,7 +94,8 @@ def pi_json_call(  # noqa: C901 - linear build-cmd -> spawn -> stream-parse
         if message.get("stopReason") == "error":
             return None
         last = "".join(
-            b.get("text", "") for b in message.get("content", [])
+            b.get("text", "")
+            for b in message.get("content", [])
             if isinstance(b, dict) and b.get("type") == "text"
         )
     return last
@@ -145,8 +156,11 @@ def detect(
     )
     try:
         text = pi_json_call(
-            prompt, model_spec=model_spec, system=_DETECT_SYSTEM,
-            runner=runner, timeout_s=timeout_s,
+            prompt,
+            model_spec=model_spec,
+            system=_DETECT_SYSTEM,
+            runner=runner,
+            timeout_s=timeout_s,
         )
     except Exception:  # noqa: BLE001 - detection must never raise
         return fail

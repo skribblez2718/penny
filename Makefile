@@ -94,12 +94,12 @@ check-public:
 lint:
 	bun run lint
 	bun run format:check
-	source .venv/bin/activate && flake8 . --config .flake8
-	source .venv/bin/activate && black . --check --config pyproject.toml
+	.venv/bin/flake8 . --config .flake8
+	.venv/bin/black . --check --config pyproject.toml
 
 format:
 	bun run format
-	source .venv/bin/activate && black . --config pyproject.toml
+	.venv/bin/black . --config pyproject.toml
 
 # ── Cleanup ─────────────────────────────────────────────────────────────────
 

@@ -5,15 +5,13 @@ tables with the bad FK, then verifies the migration recreates them with
 the correct FK and preserves all data.
 """
 
+import asyncio
 import sqlite3
+import tempfile
 from pathlib import Path
-
 
 import pytest
 from observability.db import Database, SCHEMA_VERSION
-import asyncio
-import tempfile
-import shutil
 
 
 @pytest.mark.asyncio
@@ -101,8 +99,9 @@ async def test_v3_to_v4_migration():
 
         # Verify the bug exists
         fk_list = con.execute("PRAGMA foreign_key_list(entries)").fetchall()
-        assert any("sessions_old" in str(fk) for fk in fk_list), \
-            "Test setup: entries should reference sessions_old (buggy)"
+        assert any(
+            "sessions_old" in str(fk) for fk in fk_list
+        ), "Test setup: entries should reference sessions_old (buggy)"
         con.close()
 
         # Run the migration by connecting via Database class
@@ -115,13 +114,15 @@ async def test_v3_to_v4_migration():
         con.execute("PRAGMA foreign_keys = ON")
         fk_list = con.execute("PRAGMA foreign_key_list(entries)").fetchall()
         fk_table = fk_list[0][2] if fk_list else None
-        assert fk_table == "sessions", \
-            f"After migration: entries should reference sessions, got {fk_table}"
+        assert (
+            fk_table == "sessions"
+        ), f"After migration: entries should reference sessions, got {fk_table}"
 
         fk_list = con.execute("PRAGMA foreign_key_list(compactions)").fetchall()
         fk_table = fk_list[0][2] if fk_list else None
-        assert fk_table == "sessions", \
-            f"After migration: compactions should reference sessions, got {fk_table}"
+        assert (
+            fk_table == "sessions"
+        ), f"After migration: compactions should reference sessions, got {fk_table}"
 
         # Verify data preserved
         sess_count = con.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
@@ -133,13 +134,15 @@ async def test_v3_to_v4_migration():
 
         # Verify schema version bumped
         ver = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-        assert int(ver) == SCHEMA_VERSION, \
-            f"Schema version not bumped: {ver} (expected {SCHEMA_VERSION})"
+        assert (
+            int(ver) == SCHEMA_VERSION
+        ), f"Schema version not bumped: {ver} (expected {SCHEMA_VERSION})"
 
         # Verify _old tables dropped
-        tables = [r[0] for r in con.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()]
+        tables = [
+            r[0]
+            for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        ]
         assert "entries_old" not in tables, "entries_old should be dropped after migration"
         assert "compactions_old" not in tables, "compactions_old should be dropped"
 
@@ -158,11 +161,11 @@ async def test_v3_to_v4_migration():
 
         con.close()
         print(f"✓ Migration v3→v{SCHEMA_VERSION} verified:")
-        print(f"  - Buggy FK fixed (entries/compactions → sessions)")
-        print(f"  - Data preserved (2 sessions, 3 entries, 1 compaction)")
+        print("  - Buggy FK fixed (entries/compactions → sessions)")
+        print("  - Data preserved (2 sessions, 3 entries, 1 compaction)")
         print(f"  - Schema version bumped to v{SCHEMA_VERSION}")
-        print(f"  - _old tables dropped")
-        print(f"  - FK enforcement now active (rejected bad insert)")
+        print("  - _old tables dropped")
+        print("  - FK enforcement now active (rejected bad insert)")
 
 
 if __name__ == "__main__":

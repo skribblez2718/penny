@@ -4,10 +4,10 @@
 
 The Penny Observability Server is a FastAPI + SQLite backend that ingests two data planes over a single WebSocket and exposes them through a queryable REST API.
 
-| Plane | WebSocket event | Stored in | Use case |
-|-------|-----------------|-----------|----------|
-| **Message plane** | `session_start`, `message_end`, `tool_execution_start`, `tool_result`, `agent_start`, `agent_end`, `model_select`, `session_shutdown` | `entries` + `sessions` tables | Reconstruct a conversation timeline |
-| **Log plane** | `event: "log"` | `logs` table | Query structured operational logs by level, component, session |
+| Plane             | WebSocket event                                                                                                                       | Stored in                     | Use case                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------- |
+| **Message plane** | `session_start`, `message_end`, `tool_execution_start`, `tool_result`, `agent_start`, `agent_end`, `model_select`, `session_shutdown` | `entries` + `sessions` tables | Reconstruct a conversation timeline                            |
+| **Log plane**     | `event: "log"`                                                                                                                        | `logs` table                  | Query structured operational logs by level, component, session |
 
 Penny does not query the database directly. The observability extension registers two tools that hit the REST API and return JSON.
 
@@ -39,15 +39,15 @@ Tool: `observability_query_logs`
 
 REST endpoint: `GET /logs`
 
-| Query param | Type | Match |
-|-------------|------|-------|
-| `level` | string | exact: `DEBUG`, `INFO`, `WARN`, `ERROR`, `CRITICAL` |
-| `component` | string | exact extension name (`memory`, `skill`, `observability`, ...) |
-| `session_id` | string | exact session UUID |
-| `from_ts` | int | `timestamp >= from_ts` (ms) |
-| `to_ts` | int | `timestamp <= to_ts` (ms) |
-| `limit` | int | 1–500, default 50 |
-| `offset` | int | default 0 |
+| Query param  | Type   | Match                                                          |
+| ------------ | ------ | -------------------------------------------------------------- |
+| `level`      | string | exact: `DEBUG`, `INFO`, `WARN`, `ERROR`, `CRITICAL`            |
+| `component`  | string | exact extension name (`memory`, `skill`, `observability`, ...) |
+| `session_id` | string | exact session UUID                                             |
+| `from_ts`    | int    | `timestamp >= from_ts` (ms)                                    |
+| `to_ts`      | int    | `timestamp <= to_ts` (ms)                                      |
+| `limit`      | int    | 1–500, default 50                                              |
+| `offset`     | int    | default 0                                                      |
 
 Log level enum (from `.pi/lib/logger/logger.ts`):
 
@@ -67,7 +67,7 @@ observability_query_logs({
   component: "memory",
   session_id: "sess-abc-123",
   limit: 10,
-})
+});
 ```
 
 Example curl:
@@ -91,6 +91,7 @@ Single log: `GET /logs/{log_id}`
 Tool: `observability_query_history`
 
 REST endpoints:
+
 - `GET /sessions` — list sessions (omit `session_id`)
 - `GET /sessions/{session_id}` — single session metadata
 - `GET /sessions/{session_id}/entries` — chronological events for that session
@@ -102,13 +103,13 @@ Example tool call:
 
 ```typescript
 // List recent sessions
-observability_query_history({ limit: 20 })
+observability_query_history({ limit: 20 });
 
 // Then pull entries for a specific session
 observability_query_history({
   session_id: "sess-abc-123",
   limit: 100,
-})
+});
 ```
 
 Example curl:
@@ -148,25 +149,25 @@ Events the server expects on `ws://host:port/ws`:
 
 ### 5. When to query observability
 
-| Symptom | Tool(s) to use |
-|---------|----------------|
-| An agent returned an error | `observability_query_logs` with `level=ERROR` and the agent's `session_id` |
-| Need to reconstruct what happened in a session | `observability_query_history` |
-| Want overall error trends | `/logs/stats` |
+| Symptom                                        | Tool(s) to use                                                             |
+| ---------------------------------------------- | -------------------------------------------------------------------------- |
+| An agent returned an error                     | `observability_query_logs` with `level=ERROR` and the agent's `session_id` |
+| Need to reconstruct what happened in a session | `observability_query_history`                                              |
+| Want overall error trends                      | `/logs/stats`                                                              |
 
 ### 6. Compaction and orchestration endpoints
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `POST` | `/compactions` | Ingest a compaction artifact (called by the compaction extension; archive of the full structured artifact whose prose+refs summary went into context) |
-| `GET` | `/sessions/{session_id}/compactions` | List archived compaction artifacts for a session (`limit`/`offset`) |
-| `GET` | `/sessions/{session_id}/compactions/{compaction_seq}` | Fetch one archived artifact |
-| `POST` | `/orchestration/runs` | Ingest engine run upserts (called by the engine's ObsClient) |
-| `POST` | `/orchestration/events` | Ingest engine state-transition events |
-| `GET` | `/orchestration/runs` | List runs, filterable by `session_id` / `status` |
-| `GET` | `/orchestration/runs/{run_id}` | Fetch one run |
-| `GET` | `/orchestration/runs/{run_id}/events` | Fetch a run's event stream |
-| `GET` | `/sessions/{session_id}/orchestration` | All orchestration activity for a session |
+| Method | Path                                                  | Purpose                                                                                                                                               |
+| ------ | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST` | `/compactions`                                        | Ingest a compaction artifact (called by the compaction extension; archive of the full structured artifact whose prose+refs summary went into context) |
+| `GET`  | `/sessions/{session_id}/compactions`                  | List archived compaction artifacts for a session (`limit`/`offset`)                                                                                   |
+| `GET`  | `/sessions/{session_id}/compactions/{compaction_seq}` | Fetch one archived artifact                                                                                                                           |
+| `POST` | `/orchestration/runs`                                 | Ingest engine run upserts (called by the engine's ObsClient)                                                                                          |
+| `POST` | `/orchestration/events`                               | Ingest engine state-transition events                                                                                                                 |
+| `GET`  | `/orchestration/runs`                                 | List runs, filterable by `session_id` / `status`                                                                                                      |
+| `GET`  | `/orchestration/runs/{run_id}`                        | Fetch one run                                                                                                                                         |
+| `GET`  | `/orchestration/runs/{run_id}/events`                 | Fetch a run's event stream                                                                                                                            |
+| `GET`  | `/sessions/{session_id}/orchestration`                | All orchestration activity for a session                                                                                                              |
 
 There is no `/checkpoints` endpoint: the engine's durable checkpointer is a separate local SQLite DB (`.penny/orchestration.db`, override `PENNY_ORCH_DB`) that the engine and the compaction extension read directly. Observability's `orchestration_runs`/`orchestration_events` tables are the reporting mirror, not the source of truth.
 
@@ -186,10 +187,10 @@ There is no `/checkpoints` endpoint: the engine's durable checkpointer is a sepa
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `apps/observability/src/observability/main.py` | FastAPI app, WebSocket handler, REST endpoints |
-| `apps/observability/src/observability/db.py` | SQLite DDL and CRUD |
-| `apps/observability/src/observability/models.py` | Pydantic request/response models |
-| `.pi/extensions/observability/index.ts` | Extension that registers Penny tools and streams events |
-| `docs/humans/observability-server/observability-server.md` | Human-facing overview and configuration |
+| File                                                       | Purpose                                                 |
+| ---------------------------------------------------------- | ------------------------------------------------------- |
+| `apps/observability/src/observability/main.py`             | FastAPI app, WebSocket handler, REST endpoints          |
+| `apps/observability/src/observability/db.py`               | SQLite DDL and CRUD                                     |
+| `apps/observability/src/observability/models.py`           | Pydantic request/response models                        |
+| `.pi/extensions/observability/index.ts`                    | Extension that registers Penny tools and streams events |
+| `docs/humans/observability-server/observability-server.md` | Human-facing overview and configuration                 |

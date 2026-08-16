@@ -1,6 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
-import { PLATFORM_MEMORY_OPERATIONS } from "platform-memory";
+import { PLATFORM_MEMORY_OPERATIONS, type PlatformMemoryOperation } from "platform-memory";
 
 import {
   ToolResultBudgetError,
@@ -19,7 +19,8 @@ import {
   type MemoryCallContext,
   type MemoryErrorCode,
   type MemoryExecution,
-  type MemoryOperation,
+  type LogstreamOperation,
+  type MemoryResultOperation,
   type MemoryRuntimeConfig,
 } from "./types.js";
 
@@ -27,8 +28,17 @@ const CURSOR_VERSION = 1 as const;
 const CURSOR_MAX_CHARACTERS = 4_096;
 const SUMMARY_MAX_CODE_POINTS = 320;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
-const MEMORY_OPERATION_SET = new Set<string>(PLATFORM_MEMORY_OPERATIONS);
-const MEMORY_WRITE_OPERATIONS = new Set<MemoryOperation>([
+const LOGSTREAM_OPERATIONS: readonly LogstreamOperation[] = Object.freeze([
+  "logstream_append",
+  "logstream_list",
+  "logstream_wait",
+  "logstream_ack",
+]);
+const MEMORY_OPERATION_SET = new Set<string>([
+  ...PLATFORM_MEMORY_OPERATIONS,
+  ...LOGSTREAM_OPERATIONS,
+]);
+const MEMORY_WRITE_OPERATIONS = new Set<PlatformMemoryOperation>([
   "add_drawer",
   "diary_write",
   "kg_add",
@@ -38,7 +48,7 @@ const MEMORY_WRITE_OPERATIONS = new Set<MemoryOperation>([
 
 interface CursorPayload {
   v: 1;
-  op: MemoryOperation;
+  op: MemoryResultOperation;
   caller: string;
   query: string;
   filter: string;
@@ -63,7 +73,7 @@ interface ContinuationSource {
 
 interface SourceCacheEntry extends ContinuationSource {
   id: string;
-  operation: MemoryOperation;
+  operation: MemoryResultOperation;
   queryHash: string;
   filterHash: string;
   expiresAt: number;
@@ -83,7 +93,7 @@ class BoundedSourceCache {
 
   add(
     source: ContinuationSource,
-    operation: MemoryOperation,
+    operation: MemoryResultOperation,
     queryHash: string,
     filterHash: string,
     expiresAt: number
@@ -173,13 +183,13 @@ function sha256(value: string | Buffer): string {
 }
 
 function splitBindings(
-  operation: MemoryOperation,
+  operation: MemoryResultOperation,
   params: Record<string, unknown>
 ): { queryHash: string; filterHash: string } {
   const clean = Object.fromEntries(
     Object.entries(params).filter(([key, value]) => key !== "cursor" && value !== undefined)
   );
-  const queryKeys: Readonly<Record<MemoryOperation, readonly string[]>> = {
+  const queryKeys: Readonly<Record<MemoryResultOperation, readonly string[]>> = {
     search: ["query", "context"],
     smart_search: ["query", "context"],
     get_drawer: ["drawer_id"],
@@ -195,6 +205,10 @@ function splitBindings(
     kg_supersede: ["subject", "predicate", "old_object", "new_object"],
     kg_timeline: ["entity"],
     kg_stats: [],
+    logstream_append: ["type", "room", "correlation_id", "body"],
+    logstream_list: ["room", "correlation_id"],
+    logstream_wait: ["room", "correlation_id"],
+    logstream_ack: ["event_id", "correlation_id", "body"],
   };
   const queryKeySet = new Set(queryKeys[operation]);
   const query = Object.fromEntries(Object.entries(clean).filter(([key]) => queryKeySet.has(key)));
@@ -205,7 +219,7 @@ function splitBindings(
 }
 
 function prepareUpstreamArguments(
-  operation: MemoryOperation,
+  operation: PlatformMemoryOperation,
   params: Record<string, unknown>
 ): Record<string, unknown> {
   if (operation === "kg_add" || operation === "kg_invalidate" || operation === "kg_supersede") {
@@ -330,7 +344,7 @@ function normalizeList(
 }
 
 function normalizePayload(
-  operation: MemoryOperation,
+  operation: PlatformMemoryOperation,
   payload: Record<string, unknown>,
   params: Record<string, unknown>
 ): Record<string, unknown> {
@@ -558,7 +572,7 @@ export class MemoryAdapter {
   }
 
   async invokeRaw(
-    operation: MemoryOperation,
+    operation: PlatformMemoryOperation,
     params: Record<string, unknown>,
     signal?: AbortSignal
   ): Promise<{ payload: Record<string, unknown>; requestId: string }> {
@@ -578,18 +592,62 @@ export class MemoryAdapter {
   }
 
   async execute(
-    operation: MemoryOperation,
+    operation: PlatformMemoryOperation,
     params: Record<string, unknown>,
     context: MemoryCallContext
   ): Promise<MemoryExecution> {
+    return this.executeWithSource(
+      operation,
+      params,
+      context,
+      async () => {
+        const response = await this.invokeRaw(operation, params, context.signal);
+        const normalized = normalizePayload(operation, response.payload, params);
+        return {
+          source:
+            operation === "get_drawer" ? exactDrawerSource(normalized) : jsonSource(normalized),
+          requestId: response.requestId,
+        };
+      },
+      () => {
+        if (MEMORY_WRITE_OPERATIONS.has(operation) && !this.config.writeEnabled) {
+          throw new MemoryError(
+            "MEMPALACE_INVALID",
+            "Memory writes are disabled during read-only qualification"
+          );
+        }
+      }
+    );
+  }
+
+  /**
+   * Render a locally governed structured operation through the same typed,
+   * digest-bound final-envelope continuation path as ordinary memory results.
+   * The loader is never called while serving a cached continuation page, so a
+   * continuation cannot replay a write.
+   */
+  async executeStructured(
+    operation: LogstreamOperation,
+    params: Record<string, unknown>,
+    context: MemoryCallContext,
+    load: () => Promise<{ payload: Record<string, unknown>; requestId: string }>
+  ): Promise<MemoryExecution> {
+    return this.executeWithSource(operation, params, context, async () => {
+      const response = await load();
+      return { source: jsonSource(response.payload), requestId: response.requestId };
+    });
+  }
+
+  private async executeWithSource(
+    operation: MemoryResultOperation,
+    params: Record<string, unknown>,
+    context: MemoryCallContext,
+    load: () => Promise<{ source: ContinuationSource; requestId: string }>,
+    preflight?: () => void
+  ): Promise<MemoryExecution> {
     let requestId: string | undefined;
     try {
-      if (MEMORY_WRITE_OPERATIONS.has(operation) && !this.config.writeEnabled) {
-        throw new MemoryError(
-          "MEMPALACE_INVALID",
-          "Memory writes are disabled during read-only qualification"
-        );
-      }
+      preflight?.();
       if (context.signal?.aborted) {
         throw new MemoryError("MEMPALACE_CANCELLED", "Memory request was cancelled");
       }
@@ -636,11 +694,9 @@ export class MemoryAdapter {
           }
           source = cached;
         } else {
-          const response = await this.invokeRaw(operation, params, context.signal);
-          requestId = response.requestId;
-          const normalized = normalizePayload(operation, response.payload, params);
-          source =
-            operation === "get_drawer" ? exactDrawerSource(normalized) : jsonSource(normalized);
+          const loaded = await load();
+          source = loaded.source;
+          requestId = loaded.requestId;
         }
         if (
           source.kind !== cursor.kind ||
@@ -662,15 +718,13 @@ export class MemoryAdapter {
         end = cursor.end;
         page = cursor.page;
       } else {
-        const response = await this.invokeRaw(operation, params, context.signal);
-        requestId = response.requestId;
-        const normalized = normalizePayload(operation, response.payload, params);
-        source =
-          operation === "get_drawer" ? exactDrawerSource(normalized) : jsonSource(normalized);
+        const loaded = await load();
+        source = loaded.source;
+        requestId = loaded.requestId;
         end = source.buffer.length;
       }
 
-      const execution = this.renderSource({
+      return this.renderSource({
         operation,
         source,
         callerId: context.callerId,
@@ -682,7 +736,6 @@ export class MemoryAdapter {
         cacheId,
         requestId,
       });
-      return execution;
     } catch (error) {
       const typed = memoryErrorFromUnknown(error);
       return errorResult(
@@ -696,7 +749,7 @@ export class MemoryAdapter {
   }
 
   private renderSource(options: {
-    operation: MemoryOperation;
+    operation: MemoryResultOperation;
     source: ContinuationSource;
     callerId: string;
     bindings: { queryHash: string; filterHash: string };

@@ -16,11 +16,11 @@ A single hard timeout kills agents that are making progress but running slowly. 
 
 ## Thresholds
 
-| Tier | Condition | Action |
-|------|-----------|--------|
-| Progress window | No progress for `timeoutMs` | Log WARN |
-| Staleness kill | No progress for `timeoutMs × 2` | Resolve with fallback |
-| Hard cap | Total elapsed > `timeoutMs × 3` | Resolve regardless of progress |
+| Tier            | Condition                       | Action                         |
+| --------------- | ------------------------------- | ------------------------------ |
+| Progress window | No progress for `timeoutMs`     | Log WARN                       |
+| Staleness kill  | No progress for `timeoutMs × 2` | Resolve with fallback          |
+| Hard cap        | Total elapsed > `timeoutMs × 3` | Resolve regardless of progress |
 
 ## Constraints
 
@@ -35,8 +35,8 @@ A single hard timeout kills agents that are making progress but running slowly. 
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `.pi/extensions/subagent/agent-runner.ts` | `ProgressEmitter` + progress emission |
-| `.pi/extensions/skill/index.ts` | `withAgentTimeout` staleness logic |
-| `.pi/extensions/skill/tests/unit/heartbeat.test.ts` | Unit tests (15) |
+| File                                                | Purpose                               |
+| --------------------------------------------------- | ------------------------------------- |
+| `.pi/extensions/subagent/agent-runner.ts`           | `ProgressEmitter` + progress emission |
+| `.pi/extensions/skill/index.ts`                     | `withAgentTimeout` staleness logic    |
+| `.pi/extensions/skill/tests/unit/heartbeat.test.ts` | Unit tests (15)                       |

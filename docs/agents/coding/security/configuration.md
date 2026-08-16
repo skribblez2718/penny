@@ -29,6 +29,6 @@ Hardcoded config makes code brittle and leaks implementation details. Environmen
 
 ## Files
 
-| File | Purpose |
-|------|---------|
+| File                                     | Purpose          |
+| ---------------------------------------- | ---------------- |
 | `docs/agents/coding/security/secrets.md` | Secrets handling |

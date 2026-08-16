@@ -31,8 +31,8 @@ Deliberate behavior fixes vs. the legacy runtime:
     passed an unexpanded ``~`` tilde literal instead of an absolute path);
   * ``max_sub_queries`` is actually enforced at dispatch (the legacy launched
     however many sub-queries piper returned);
-  * ``write_complete=false`` completes honestly with ``met=False`` instead of
-    stalling into a generic error.
+  * ``write_complete=false`` terminates honestly as ``incomplete`` with
+    ``met=False`` instead of stalling or emitting a public success.
 
 Researching is a **dynamic fan** (arrangement 4): ``route_after("planning")`` turns
 the plan's sub-queries into ``ctx.extras["dynamic_branches"]["researching"]`` — one
@@ -1093,12 +1093,15 @@ class ResearchPlaybook(BasePlaybook):
         )
 
     def done_predicate(self, ctx: RunContext) -> bool:
-        report_written = bool(ctx.extras.get("research", {}).get("report_written"))
-        # Production accepts only protocol-v2 owner results, so successful delivery
-        # requires a complete exact product artifact. The explicit programmatic seam
-        # keeps legacy in-process tests able to exercise routing without forging one.
-        return report_written and (
-            self._captured_product_is_complete(ctx) or self.allow_programmatic_results
+        research = ctx.extras.get("research", {})
+        report_written = bool(research.get("report_written"))
+        grounded = research.get("validation_verdict") == "PASS"
+        # Canonical success requires both useful delivery and the required grounding
+        # outcome. A validation-exhausted report remains available but is incomplete.
+        return (
+            grounded
+            and report_written
+            and (self._captured_product_is_complete(ctx) or self.allow_programmatic_results)
         )
 
     # -- HITL resume -------------------------------------------------------
@@ -1220,18 +1223,17 @@ class ResearchPlaybook(BasePlaybook):
             "research_rounds": research.get("research_round", 1),
             "critique_passes": research.get("critique_passes", 0),
             "rigor_escalated": bool(research.get("rigor_escalated", False)),
-            # ``met`` reports DELIVERY (the report was written); ``grounded`` reports
-            # VERIFICATION (vera's citation gate passed). They are different
-            # questions and an honest run answers both: a validation-exhausted run
-            # is met=True, grounded=False — delivered, with its unverified claims
-            # named in ``unresolved_issues``.
+            # Canonical ``met`` is true only when the required grounded outcome and
+            # delivery both succeeded. ``grounded`` remains explicit so an incomplete
+            # but useful artifact explains which criterion failed.
             "grounded": research.get("validation_verdict") == "PASS",
             "iterations": (
                 research.get("plan_revisions", 0)
                 + research.get("report_revisions", 0)
                 + research.get("validation_revisions", 0)
             ),
-            "query": ctx.goal,
+            "query_sha256": hashlib.sha256(ctx.goal.encode("utf-8")).hexdigest(),
+            "query_bytes": len(ctx.goal.encode("utf-8")),
             "mode": research.get("mode", ""),
             "sub_queries": research.get("sub_queries", []),
             "output_artifact_ref": final_ref.to_dict() if final_ref is not None else None,

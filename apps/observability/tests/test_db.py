@@ -23,9 +23,7 @@ async def db():
 @pytest.mark.asyncio
 async def test_connect_initializes_schema(db):
     """Schema tables must exist after connect()."""
-    rows = await db._fetchall(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-    )
+    rows = await db._fetchall("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
     names = {r[0] for r in rows}
     assert "sessions" in names
     assert "entries" in names
@@ -54,8 +52,12 @@ async def test_upsert_session(db):
 @pytest.mark.asyncio
 async def test_close_session(db):
     await db.upsert_session(session_id="sess-abc", started_at=1_700_000_000)
-    await db.insert_entry("sess-abc", "message_end", 1_700_000_001, {"role": "user", "content": "hello"})
-    await db.insert_entry("sess-abc", "message_end", 1_700_000_002, {"role": "assistant", "content": "hi"})
+    await db.insert_entry(
+        "sess-abc", "message_end", 1_700_000_001, {"role": "user", "content": "hello"}
+    )
+    await db.insert_entry(
+        "sess-abc", "message_end", 1_700_000_002, {"role": "assistant", "content": "hi"}
+    )
     await db.close_session("sess-abc", ended_at=1_700_000_010)
 
     sess = await db.get_session("sess-abc")
@@ -205,7 +207,17 @@ async def _ins_orch_events(db, n: int, base: int) -> None:
         await db._execute(
             "INSERT INTO orchestration_events(run_id, session_id, seq, event_type, state_id, "
             "primitive, agent, data, timestamp) VALUES (?,?,?,?,?,?,?,?,?)",
-            (f"run-{base + i}", "s", i, "state_enter", None, None, None, _JSON_BLOB, f"{base + i:020d}"),
+            (
+                f"run-{base + i}",
+                "s",
+                i,
+                "state_enter",
+                None,
+                None,
+                None,
+                _JSON_BLOB,
+                f"{base + i:020d}",
+            ),
         )
 
 
@@ -214,7 +226,18 @@ async def _ins_orch_runs(db, n: int, base: int) -> None:
         await db._execute(
             "INSERT INTO orchestration_runs(run_id, session_id, playbook, goal, status, started_at, "
             "ended_at, met, iterations, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (f"orun-{base + i}", "s", "pb", _JSON_BLOB, "complete", None, None, 1, 1, f"{base + i:020d}"),
+            (
+                f"orun-{base + i}",
+                "s",
+                "pb",
+                _JSON_BLOB,
+                "complete",
+                None,
+                None,
+                1,
+                1,
+                f"{base + i:020d}",
+            ),
         )
 
 
@@ -234,9 +257,11 @@ async def test_c3_live_bytes_drops_file_bytes_constant_after_delete(db):
     await db._db.commit()
     file_before = await db.file_bytes()
     live_before = await db.live_bytes()
-    assert file_before == (await db._fetchone("PRAGMA page_count"))[0] * (
-        await db._fetchone("PRAGMA page_size")
-    )[0]
+    assert (
+        file_before
+        == (await db._fetchone("PRAGMA page_count"))[0]
+        * (await db._fetchone("PRAGMA page_size"))[0]
+    )
 
     cur = await db._execute("DELETE FROM logs WHERE created_at <= 200")
     await cur.close()
@@ -281,13 +306,9 @@ async def test_c4_rotate_deletes_oldest_across_all_tables(db):
         ("orchestration_runs", "created_at", f"{1:020d}", f"{newest:020d}"),
     ]
     for table, col, oldest_val, newest_val in checks:
-        gone = await db._fetchone(
-            f"SELECT COUNT(*) FROM {table} WHERE {col} = ?", (oldest_val,)
-        )
+        gone = await db._fetchone(f"SELECT COUNT(*) FROM {table} WHERE {col} = ?", (oldest_val,))
         assert gone[0] == 0, f"{table}: oldest row must be evicted"
-        kept = await db._fetchone(
-            f"SELECT COUNT(*) FROM {table} WHERE {col} = ?", (newest_val,)
-        )
+        kept = await db._fetchone(f"SELECT COUNT(*) FROM {table} WHERE {col} = ?", (newest_val,))
         assert kept[0] == 1, f"{table}: newest row must be retained"
 
 
@@ -330,9 +351,7 @@ async def test_c6_rotate_keeps_newest_rows(db):
         cap_bytes=file_before, floor_bytes=int(live_before * 0.75), batch_size=50
     )
     assert result["triggered"] is True
-    survivors = await db._fetchone(
-        "SELECT COUNT(*) FROM entries WHERE created_at >= 10000000"
-    )
+    survivors = await db._fetchone("SELECT COUNT(*) FROM entries WHERE created_at >= 10000000")
     assert survivors[0] == 10, "the newest 10 rows must survive"
     oldest = await db._fetchone("SELECT COUNT(*) FROM entries WHERE created_at = 1")
     assert oldest[0] == 0, "the oldest row must be evicted"

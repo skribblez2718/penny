@@ -14,7 +14,6 @@
   non-reserved events.
 """
 
-
 from statemachine import State, StateMachine
 
 from orchestration.checkpointer import Checkpointer
@@ -127,19 +126,19 @@ def test_routing_past_budget_forces_honest_exhaustion(tmp_path):
     _cycle(cp, {"gap": True})  # iteration 0 -> 1, loops back
     _cycle(cp, {"gap": True})  # iteration 1 -> 2, loops back (== max, still allowed)
     d = _cycle(cp, {"gap": True})  # iteration 2 -> 3 > max -> backstop fires
-    assert d["action"] == "complete"
+    assert d["action"] == "incomplete"
     assert d["result"]["met"] is False  # safe default, never fabricated
     assert d["result"]["exhausted"] is True
     assert "iteration budget exceeded" in d["result"]["exhausted_reason"]
     rec = cp.load(RID)
-    assert rec.status == "complete"
+    assert rec.status == "incomplete"
 
 
 def test_normal_completion_carries_no_exhaustion_flag(tmp_path):
     cp = Checkpointer(db_path=tmp_path / "orch.db")
     _start(cp)
     d = _cycle(cp, {"gap": False})
-    assert d["action"] == "complete"
+    assert d["action"] == "incomplete"
     assert "exhausted" not in d["result"]
 
 

@@ -57,8 +57,8 @@ def build_parser(default_playbook: str | None = None) -> argparse.ArgumentParser
     p_status = sub.add_parser("status")
     _add_common(p_status, default_playbook)
 
-    # recover: auto-resume any pending run for the session (re-issue the pending
-    # step, or re-present the escalation). Powers the driver's kill-and-resume.
+    # recover: address exactly --run-id and reject session/playbook mismatch.
+    # Multi-run pending discovery is a separate recover_pending API.
     p_recover = sub.add_parser("recover")
     _add_common(p_recover, default_playbook)
 
@@ -77,6 +77,22 @@ def main(default_playbook: str | None = None, argv: list[str] | None = None) -> 
     run_id: str = args.run_id
     playbook_name = args.playbook or default_playbook
 
+    checkpointer = Checkpointer(project_root=args.project_root or None)
+    obs = ObsClient()
+
+    if args.command == "recover":
+        from .recovery import recover_run
+
+        directive = recover_run(
+            checkpointer,
+            obs=obs,
+            run_id=run_id,
+            session_id=session_id,
+            playbook=playbook_name,
+        )
+        _emit(directive)
+        return 0
+
     pb_cls = get_playbook(playbook_name) if playbook_name else None
     if pb_cls is None:
         _emit(
@@ -85,9 +101,6 @@ def main(default_playbook: str | None = None, argv: list[str] | None = None) -> 
             )
         )
         return 1
-
-    checkpointer = Checkpointer(project_root=args.project_root or None)
-    obs = ObsClient()
     pb = pb_cls(checkpointer, obs, max_step_retries=_max_step_retries_from_env())
 
     if args.command == "start":
@@ -133,21 +146,6 @@ def main(default_playbook: str | None = None, argv: list[str] | None = None) -> 
                 )
                 return 1
         directive = pb.step(session_id=session_id, run_id=run_id, agent=args.agent, result=result)
-    elif args.command == "recover":
-        from .recovery import recover_pending
-
-        # Scope recovery to THIS skill's playbook so a shared session_id across
-        # engine skills (ad-hoc composition) never resumes the wrong run.
-        directives = recover_pending(
-            checkpointer, obs, session_id=session_id, playbook=playbook_name
-        )
-        directive = (
-            directives[0]
-            if directives
-            else Directives.status(
-                state="unknown", complete=False, session_id=session_id, run_id=run_id
-            )
-        )
     else:  # status
         directive = pb.status(session_id=session_id, run_id=run_id)
 

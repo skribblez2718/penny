@@ -45,7 +45,9 @@ class ComponentCount(BaseModel):
 class CreateLogRequest(BaseModel):
     """Payload for ingesting a structured operational log entry."""
 
-    level: str = Field(default="INFO", description="Log severity: DEBUG, INFO, WARN, ERROR, CRITICAL")
+    level: str = Field(
+        default="INFO", description="Log severity: DEBUG, INFO, WARN, ERROR, CRITICAL"
+    )
     component: str = Field(..., description="Subsystem that emitted the log")
     event: str = Field(..., description="Short event identifier / message")
     session_id: str | None = Field(default=None, description="Optional session correlation ID")
@@ -70,7 +72,9 @@ class CreateOrchestrationRunRequest(BaseModel):
     session_id: str = Field(..., description="Correlating Pi session id")
     playbook: str | None = Field(default=None, description="Playbook name")
     goal: str | None = Field(default=None)
-    status: str | None = Field(default=None, description="running | awaiting_user | complete | error")
+    status: str | None = Field(
+        default=None, description="running | awaiting_user | complete | error"
+    )
     started_at: str | None = Field(default=None, description="ISO8601")
     ended_at: str | None = Field(default=None, description="ISO8601")
     met: bool | None = Field(default=None)

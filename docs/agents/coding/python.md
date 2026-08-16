@@ -41,7 +41,7 @@ Consistent style reduces cognitive load when reading code across skills. Agents 
 
 ## Files
 
-| File | Purpose |
-|------|---------|
+| File             | Purpose                    |
+| ---------------- | -------------------------- |
 | `pyproject.toml` | Black, mypy, pytest config |
-| `.flake8` | Flake8 config |
+| `.flake8`        | Flake8 config              |

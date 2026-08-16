@@ -21,11 +21,11 @@ Generated code is the highest-risk surface for security vulnerabilities. Agents 
 
 ## Severity
 
-| Severity | Meaning | Action |
-|----------|---------|--------|
-| **BLOCKER** | Rule 1-6 violation | Must fix before delivery |
-| **CRITICAL** | Rule 7-8 violation | Must fix or document exception |
-| **WARN** | Best practice deviation | Should fix; document if deferred |
+| Severity     | Meaning                 | Action                           |
+| ------------ | ----------------------- | -------------------------------- |
+| **BLOCKER**  | Rule 1-6 violation      | Must fix before delivery         |
+| **CRITICAL** | Rule 7-8 violation      | Must fix or document exception   |
+| **WARN**     | Best practice deviation | Should fix; document if deferred |
 
 ## Constraints
 
@@ -42,10 +42,10 @@ Generated code is the highest-risk surface for security vulnerabilities. Agents 
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `docs/agents/coding/security/injection.md` | Injection-specific rules |
-| `docs/agents/coding/security/xss.md` | XSS-specific rules |
-| `docs/agents/coding/security/authentication.md` | Auth-specific rules |
-| `docs/agents/coding/security/secrets.md` | Secrets handling |
-| `docs/agents/coding/security/input-validation.md` | Input validation |
+| File                                              | Purpose                  |
+| ------------------------------------------------- | ------------------------ |
+| `docs/agents/coding/security/injection.md`        | Injection-specific rules |
+| `docs/agents/coding/security/xss.md`              | XSS-specific rules       |
+| `docs/agents/coding/security/authentication.md`   | Auth-specific rules      |
+| `docs/agents/coding/security/secrets.md`          | Secrets handling         |
+| `docs/agents/coding/security/input-validation.md` | Input validation         |

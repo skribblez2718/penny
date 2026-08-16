@@ -29,6 +29,6 @@ Injection is the #1 vulnerability class in generated code. String concatenation 
 
 ## Files
 
-| File | Purpose |
-|------|---------|
+| File                                         | Purpose                  |
+| -------------------------------------------- | ------------------------ |
 | `docs/agents/coding/security/conventions.md` | Universal security rules |

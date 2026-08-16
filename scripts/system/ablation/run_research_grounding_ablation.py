@@ -24,6 +24,7 @@ residual it leaves is the only population that can justify cross-model spend.
 
 Deterministic and hermetic (no live model / network) — safe to re-run.
 """
+
 from __future__ import annotations
 
 import sys

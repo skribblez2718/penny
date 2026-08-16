@@ -25,7 +25,9 @@ async def db(tmp_path: Path):
 
 async def _backdate(db: Database, run_id: str, days: int) -> None:
     old = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    await db._execute("UPDATE orchestration_runs SET created_at = ? WHERE run_id = ?", (old, run_id))
+    await db._execute(
+        "UPDATE orchestration_runs SET created_at = ? WHERE run_id = ?", (old, run_id)
+    )
     await db._db.commit()
 
 
@@ -63,7 +65,11 @@ async def test_upsert_coalesce_preserves_start_fields(db: Database):
     )
     # run_end style update omits playbook/goal.
     await db.upsert_orchestration_run(
-        run_id="r", session_id="s", status="complete", met=True, iterations=3,
+        run_id="r",
+        session_id="s",
+        status="complete",
+        met=True,
+        iterations=3,
         ended_at="2026-07-03T00:00:00+00:00",
     )
     run = await db.get_orchestration_run("r")

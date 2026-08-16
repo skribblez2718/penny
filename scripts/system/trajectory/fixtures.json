@@ -20,11 +20,7 @@
       "workflow": "code-reasoning",
       "task": "Without running it, what exactly does `summarize([3, 9, 4])` return?\n```python\ndef summarize(xs):\n    total = 0\n    peak = xs[0]\n    for x in xs:\n        total += x\n        if x > peak:\n            peak = x\n    return {'sum': total, 'peak': peak, 'mean': total // len(xs)}\n```",
       "pass_bar": "PASS iff the answer states sum=16, peak=9, and mean=5 (integer division). FAIL if any of the three values is wrong.",
-      "load_bearing_facts": [
-        "sum = 16",
-        "peak = 9",
-        "mean = 5 (16 // 3)"
-      ],
+      "load_bearing_facts": ["sum = 16", "peak = 9", "mean = 5 (16 // 3)"],
       "oracle_output": "It returns `{'sum': 16, 'peak': 9, 'mean': 5}` — sum is 3+9+4=16, peak is the max (9), and mean is integer division 16 // 3 = 5.",
       "expected_route": "direct"
     },

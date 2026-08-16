@@ -31,7 +31,7 @@ Cryptography is the hardest domain to get right. Even experts make mistakes with
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `docs/agents/coding/security/secrets.md` | Secrets handling |
-| `docs/agents/coding/security/authentication.md` | Auth patterns |
+| File                                            | Purpose          |
+| ----------------------------------------------- | ---------------- |
+| `docs/agents/coding/security/secrets.md`        | Secrets handling |
+| `docs/agents/coding/security/authentication.md` | Auth patterns    |

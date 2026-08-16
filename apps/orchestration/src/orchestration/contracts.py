@@ -109,13 +109,13 @@ _CONFIDENCE_RANK: dict[str, int] = {
 
 
 def weakest_confidence(values: Iterable[Any]) -> str:
-    """Fan-in aggregation for a parallel state: the weakest branch confidence
-    wins. Unknown or missing values rank as UNCERTAIN so a silent branch cannot
-    fake certainty. Empty input -> "" (no branches reported)."""
+    """Return the weakest canonical value; invalid input fails to ``UNCERTAIN``."""
     vals = list(values)
     if not vals:
         return ""
-    return str(max(vals, key=lambda value: _CONFIDENCE_RANK.get(value, 3)))
+    if any(not Confidence.is_valid(value) for value in vals):
+        return Confidence.UNCERTAIN
+    return str(max(vals, key=lambda value: _CONFIDENCE_RANK[value]))
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +239,16 @@ def validate_summary_contract(  # noqa: C901 - recursive typed contract validati
     for field, typ in contract.get("optional", {}).items():
         if field in summary and not _type_ok(summary[field], typ):
             return False, f"{name}: optional '{field}' must be {typ.__name__}"
+
+    declared_fields = {
+        **contract.get("required", {}),
+        **contract.get("optional", {}),
+    }
+    if "confidence" in declared_fields and "confidence" in summary:
+        if not Confidence.is_valid(summary["confidence"]):
+            return False, (
+                f"{name}: 'confidence' must be one of " "CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN"
+            )
 
     for field in contract.get("evidence", ()):  # externally-grounded evidence
         if not _is_nonempty(summary.get(field)):

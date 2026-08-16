@@ -29,6 +29,7 @@ AGENTS.md files are navigation, not instruction. The following discipline govern
 **Default discipline (most docs):** Read only files relevant to the current task. Do not greedily follow all index references — use the descriptions to identify the 1–2 features needed, then drill down.
 
 **Load-bearing exception (system docs):** When drilling into a system documentation file (architecture, capability pages, prompt standards, coding standards), the following applies:
+
 - Read the file completely before acting on it. Partial reads miss cross-references that make the guidance work.
 - Follow `.md` cross-references as they are encountered. They are load-bearing, not decorative.
 
@@ -74,6 +75,7 @@ fails if any `AGENTS.md` appears anywhere under `docs/humans/`.
 ## Pi Auto-Discovery Behavior
 
 Pi loads AGENTS.md by walking UP from the current working directory to the filesystem root, not DOWN into subdirectories. This means:
+
 - The root `AGENTS.md` is always loaded (it's on the upward path) — it is the entry point of the index chain above.
 - Nested `docs/**/AGENTS.md` files are **never auto-loaded by Pi** — they are read on demand by Penny's `read` tool as it walks the chain.
 - The root AGENTS.md is the entry point; nested AGENTS.md files are navigation within a sub-tree.

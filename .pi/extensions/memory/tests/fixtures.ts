@@ -23,6 +23,7 @@ export function testConfig(overrides: TestConfigOverrides = {}): MemoryRuntimeCo
   return {
     mode: "hub",
     writeEnabled: true,
+    logstream: { mode: "disabled", stream: null, rooms: [] },
     platformConfig: {
       contractVersion: 1,
       mode: "isolated",

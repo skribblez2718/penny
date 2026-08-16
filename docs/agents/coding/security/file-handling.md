@@ -31,6 +31,6 @@ File handling bugs lead to path traversal (reading arbitrary files), remote code
 
 ## Files
 
-| File | Purpose |
-|------|---------|
+| File                                              | Purpose          |
+| ------------------------------------------------- | ---------------- |
 | `docs/agents/coding/security/input-validation.md` | Input validation |
