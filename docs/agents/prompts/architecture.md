@@ -74,6 +74,9 @@ serialized envelopes and return typed continuation rather than silent truncation
 
 - [ ] Catalog frontmatter declares minimum tools, includes `artifact_read`, and
       contains no `memory_*` tool.
+- [ ] `authority` and `tool_profiles` are declared, and `tools:` is exactly their
+      expansion (`check_tool_profiles.py`).
+- [ ] Capability metadata is complete and valid (`check_capability_registry.py`).
 - [ ] Working Discipline states exact granted input handling.
 - [ ] Output requires complete content before a routing SUMMARY.
 - [ ] No session-room, duplicate-precheck, diary, routine-KG, or memory-persistence instruction.

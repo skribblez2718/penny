@@ -68,13 +68,48 @@ Process-shaped deliver rule
 
 The goal is the only output-shaped element, and it sits in the Invocation Context layer — which is correctly identified as the "what to do now" layer. Everything that processes the goal — the iteration loop, the cognitive steps, the output structure — is process-shaped. This is not a contradiction; it's a separation of concerns: the destination is output-shaped, the path is process-shaped.
 
-## 2. Domain-Agnostic Agents
+## 2. Universal Capability Roles
 
 **Status: [EVIDENCE] for the constraints, [DEBUNKED-ADJACENT] for identity.** Functional role constraints (tools, READ-ONLY, output contracts) are engineering with clear value. But do not expect the identity sentence itself ("You are Carren…") to add accuracy: persona prompting for accuracy is debunked — 162 personas across 4 model families showed no gain, with per-persona effects "largely random" (Zheng et al. 2024; Wharton Report 4 found 9 significant _decreases_ across 6 frontier models).
 
+That finding is unaffected by the reframe below. What follows is a claim about **what an agent is**, not a claim that telling a model its name makes it smarter.
+
 ### The Concept
 
-Agents (Echo, Piper, Carren, Tabitha) are generic reasoning roles. They don't know anything about code, travel, research, or any specific domain. Domain-specific knowledge comes from the skill prompt (`assets/prompts/*.md`) injected via `<skill_context>`.
+An agent is a **domain-invariant capability contract** whose objective, invariants, authority, tool posture, and input→output transformation remain stable when the subject matter changes.
+
+The earlier framing — agents as universal _mental faculties_ — was retired because it misdescribed its own membership. Echo, Annie and Synthia resemble epistemic functions, but Skribble is a _production authority_ with write access and Tabitha is _operationalization_. Neither is a psychological faculty, and judging the roster by that standard invites two opposite mistakes: deleting good abstractions (Skribble and Tabitha look like category errors) and inventing useless ones ("complete the taxonomy" with `learn`, `remember`, `attend`, `route`).
+
+The capability-contract definition explains all ten current roles cleanly and rejects the domain-agent proliferation the architecture was built to escape.
+
+#### The transformation table
+
+Every Role Definition must be expressible as a domain-free `input → output` transformation. This is the primary routing basis and a required field in the registry.
+
+| Capability | Agent    | Transformation                                             |
+| ---------- | -------- | ---------------------------------------------------------- |
+| Explore    | echo     | unknown area → relevant evidence/context                   |
+| Analyze    | annie    | evidence/material → structured understanding               |
+| Synthesize | synthia  | multiple evidence sets → integrated understanding          |
+| Critique   | carren   | work product + quality criteria → improvement judgment     |
+| Verify     | vera     | target + standard → evidence-backed validity verdict       |
+| Ideate     | ida      | problem + constraints → diverse candidate possibilities    |
+| Decide     | demetri  | alternatives + objectives → justified choice + sensitivity |
+| Plan       | piper    | goal + state + constraints → strategy                      |
+| Taskify    | tabitha  | strategy/specification → executable task graph             |
+| Generate   | skribble | specification → materialized artifact                      |
+
+#### Three families
+
+The roster is not one flat set. Recognising three families removes the pressure to force every role into a single ontology:
+
+- **Epistemic** — turn information into knowledge or judgment: explore, analyze, synthesize, critique, verify.
+- **Deliberative** — determine what should happen: ideate, decide, plan.
+- **Operational** — convert intent into externalizable work: taskify, generate.
+
+Family membership is descriptive, **not** a workflow constraint. `analyze → decide`, `generate → verify` and `explore → synthesize` are all valid without passing through an intermediate family.
+
+Roles know nothing about code, travel, or research. Domain-specific knowledge comes from the skill prompt (`assets/prompts/*.md`) injected via `<skill_context>`.
 
 ```
 Agent Definition (.pi/agents/carren.md)
@@ -97,15 +132,28 @@ Task Message
 
 This was a deliberate decision made on April 10, 2026. The alternative was domain-specific agents (`echo-code`, `echo-travel`, `echo-research`), which would have:
 
-- Exploded the agent directory (4 agents × N domains)
+- Exploded the agent directory (N capabilities × M domains)
 - Created maintenance burden (every domain needed its own agent)
 - Broken context preservation (agents would be treated as data containers, not reasoning offloads)
 
-By keeping agents generic and injecting domain guidance at invocation time, the same 4-agent pool serves all skills and all domains. New domains require a new skill prompt, not a new agent.
+By keeping agents generic and injecting domain guidance at invocation time, the same capability pool serves all skills and all domains. New domains require a new skill prompt, not a new agent.
+
+The research skill is the proof: it is a composition of Piper, Echo, Synthia, Carren, Vera and Skribble rather than a `research-agent`. Domain and function are orthogonal — security analysis and financial analysis are different domains but the same transformation.
 
 ### When to Create a New Agent
 
-Only when the agent needs fundamentally different **tools**, **security constraints**, or **reasoning approach** than any existing agent. A "knowledge graph analyst" that queries structurally (not broadly like Echo) would warrant a new agent. A "plan reviewer for travel" reuses Carren with travel-specific Domain Guidance.
+A proposal must pass all six gates, recorded in [Capability Registry](../agents/capability-registry.md):
+
+1. **Stable transformation** — expressible as `input → output` with no subject-matter noun.
+2. **Cross-domain validity** — three genuinely unrelated domains where the same invariants hold.
+3. **Independent evaluability** — its correctness is judgeable without evaluating a whole workflow.
+4. **Distinct reasoning or authority contract** — merging it into an existing agent would blur objectives, create conflicting incentives, change tools, or mix side-effect permissions.
+5. **No workflow identity** — if it is really `explore → analyze → synthesize`, it is a skill.
+6. **No domain identity** — security, finance, travel, software and research belong in Domain Guidance.
+
+The governing question: **would replacing the subject-matter nouns in this Role Definition change anything important?** If yes, Domain Guidance is leaking into the Role Definition.
+
+A "plan reviewer for travel" reuses Carren with travel-specific Domain Guidance. A `secure-code-reviewer` is `critique` or `verify` plus Domain Guidance — the registry's semantic coordinates make that visible immediately.
 
 ## 3. CREST Domain Methodology
 

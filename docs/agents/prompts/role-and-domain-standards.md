@@ -14,12 +14,40 @@ own registry and is never inferred from local files or memory.
 
 Required order:
 
-1. YAML frontmatter (`name`, description, `tools`, model/provider settings).
+1. YAML frontmatter (`name`, description, `tools`, `authority`, `tool_profiles`,
+   capability metadata, model/provider settings).
 2. Purpose.
 3. Working Discipline.
 4. Non-Negotiables.
 5. Output.
 6. Canonical `<agent_boundary>` block.
+
+### Capability metadata
+
+Frontmatter is the single source of truth for the roster; there is no parallel
+registry file. Every role declares `capability`, `family`, `transformation`,
+`accepts`, `produces`, `authority`, `tool_profiles`, `side_effects`, and the
+semantic coordinates (`gathers`, `evaluates`, `selects`, `sequences`, `writes`,
+`requires_standard`, `neighbors`). Validated by
+`scripts/system/checks/check_capability_registry.py`; schema and allowed values in
+[Capability Registry](../agents/capability-registry.md).
+
+Descriptions name only an agent's **nearest confusable neighbours** (≤3), not every
+other role. Exhaustive pairwise exclusion is quadratic and drifts.
+
+### The purification test
+
+Apply to every invariant before it enters a Role Definition:
+
+> If the subject matter changed from software to travel to scientific research to
+> writing, would this invariant still define the capability, or would I sometimes
+> want Domain Guidance to turn it off?
+
+If it can be turned off, it is Domain Guidance. Per-step acceptance criteria,
+mandatory parallelisation, rubric dimensions, veto conditions, and fixed report
+section lists have all failed this test and belong to skills. No Role Definition may
+contain an invariant that a shipping skill violates — an invariant the system's own
+workflow cannot satisfy is not an invariant.
 
 ### Tools
 
@@ -88,6 +116,9 @@ contains code-owned addresses; prose remains the primary orientation.
 ## Verification
 
 - [ ] Role tools contain `artifact_read` and no `memory_*` entries.
+- [ ] `tools:` is exactly the expansion of `tool_profiles:` (CI-enforced).
+- [ ] Capability metadata complete; `neighbors` resolve; description ≤3 neighbours.
+- [ ] Every invariant passes the purification test, and none is violated by a shipping skill.
 - [ ] Role output requires complete content, not memory persistence.
 - [ ] Domain prompt contains exact grants, continuation, owner capture, and routing-only SUMMARY.
 - [ ] No session-room, duplicate-precheck, diary, routine KG, or memory-drawer protocol.

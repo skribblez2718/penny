@@ -2,13 +2,13 @@
 
 ## Responsibilities
 
-| Layer              | Owns                                                                                  | Must not own                                                             |
-| ------------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| Cognitive Frame    | Stable identity, trust/action boundaries, completion, primary memory discipline.      | Domain criteria, file paths, worker handoff procedure.                   |
-| Role Definition    | Local worker role, tool expectations, consequence/evidence contracts, generic output. | Domain checklists, remote service presence, durable-memory instructions. |
-| Domain Guidance    | Static task-family criteria, exact artifact handoff, state SUMMARY schema.            | Agent identity, dynamic values, permission expansion.                    |
-| Project Index      | Paths and one-line descriptions.                                                      | Rules or standards prose.                                                |
-| Invocation Context | Current goal, constraints, owner-generated exact grants and identifiers.              | Tool grants, policy overrides, semantic predecessor discovery.           |
+| Layer              | Owns                                                                                                                  | Must not own                                                             |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Cognitive Frame    | Stable identity, trust/action boundaries, completion, primary memory discipline.                                      | Domain criteria, file paths, worker handoff procedure.                   |
+| Role Definition    | Local worker role, the **maximum** authority class and tool profiles, consequence/evidence contracts, generic output. | Domain checklists, remote service presence, durable-memory instructions. |
+| Domain Guidance    | Static task-family criteria, exact artifact handoff, state SUMMARY schema.                                            | Agent identity, dynamic values, permission expansion.                    |
+| Project Index      | Paths and one-line descriptions.                                                                                      | Rules or standards prose.                                                |
+| Invocation Context | Current goal, constraints, owner-generated exact grants and identifiers.                                              | Tool grants, policy overrides, semantic predecessor discovery.           |
 
 ## Local catalog and remote registry
 
@@ -27,6 +27,13 @@ local catalog proves it.
 
 The unmarked primary runtime may receive durable-memory tools. Worker and
 skill-driver runtimes receive none.
+
+## Authority direction
+
+The Role Definition selects the **maximum** authority class through `authority:` and
+`tool_profiles:`. A lower layer — Domain Guidance or Invocation Context — may narrow
+what an agent actually uses; **neither may broaden it**. A task, prompt body, artifact,
+or remote service cannot add a tool.
 
 ## Exact handoff
 

@@ -31,8 +31,12 @@ registry. Never duplicate or infer remote presence in `.pi/agents`.
 4. **Return complete work.** The execution owner captures exact response bytes
    before a routing `SUMMARY` may advance a workflow. `SUMMARY` is routing data,
    not the stage artifact.
-5. **Keep roles domain-adaptive.** Domain-specific criteria come from injected
-   Domain Guidance; do not create domain variants of an existing role.
+5. **Keep roles domain-invariant.** An agent is a capability contract whose
+   objective, invariants, authority, tool posture, and input→output transformation
+   stay stable when the subject matter changes. Domain-specific criteria come from
+   injected Domain Guidance; do not create domain variants of an existing role. A
+   proposed agent must pass the six-gate admission test in
+   [Capability Registry](capability-registry.md).
 
 ## Lifecycle
 

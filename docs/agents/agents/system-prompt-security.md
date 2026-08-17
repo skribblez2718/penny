@@ -49,7 +49,10 @@ The agent runner force-loads Penny's project extension modules so their tools ex
 - [ ] Prompt markers present and described as structural, not enforcement
 - [ ] User/task authority distinguished from permission authority
 - [ ] External requirements allowed only within the user's request and runtime limits
-- [ ] Agent tool allowlists match role requirements
+- [ ] Agent tool allowlists match declared authority — enforced by
+      `scripts/system/checks/check_tool_profiles.py` in `make lint`, not by review
+      (see [Tool Authority Profiles](tool-profiles.md)). Browser authority is
+      structural; `bash` means filesystem and process authority remain advisory.
 - [ ] Execution-path isolation status accurately documented
 - [ ] Destructive/external/sensitive actions have a deterministic gate where feasible
 - [ ] `<agent_boundary>` present in every agent definition (runner insertion anchor)

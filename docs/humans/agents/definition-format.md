@@ -1,9 +1,9 @@
 # Agent Definition Format
 
 Each `.pi/agents/<name>.md` file is one local catalog entry. YAML frontmatter
-provides the role name, routing description, model, and exact tool list. The body
-provides Purpose, Working Discipline, role-specific Non-Negotiables, Output, and
-the `<agent_boundary>` insertion anchor.
+provides the role name, routing description, model, exact tool list, authority
+class, and tool-authority profiles. The body provides Purpose, Working Discipline,
+role-specific Non-Negotiables, Output, and the `<agent_boundary>` insertion anchor.
 
 ## The important changes
 
@@ -22,6 +22,38 @@ Output is complete work, not a claim that full content lives in memory. When a
 skill defines a SUMMARY, it is appended only as routing data. The execution owner,
 not the model, proves persistence and registration.
 
+## Frontmatter fields
+
+| Field               | Purpose                                                                                               |
+| ------------------- | ----------------------------------------------------------------------------------------------------- |
+| `name`              | Lowercase alphanumeric plus hyphens; matches filename.                                                |
+| `description`       | One-line role, positive triggers, and anti-cases.                                                     |
+| `tools`             | Comma-delimited role minimum. No `memory_*` tools. Include `artifact_read`.                           |
+| `authority`         | Maximum authority class: `read`, `write`, or `inspect`. Cannot be broadened by invocation or skills.  |
+| `tool_profiles`     | Named rungs that expand exactly to `tools:`. Verified by `check_tool_profiles.py` in `make lint`.     |
+| capability metadata | `capability`, `family`, `transformation`, `accepts`, `produces`, and semantic coordinates. See below. |
+| `model`             | Runtime-resolvable model name.                                                                        |
+
+## Capability metadata
+
+Frontmatter is also the roster's single source of truth. Each role declares the one-word
+capability it owns, its family, its domain-free `input → output` transformation, what it
+accepts and produces, and a set of semantic coordinates (does it gather, evaluate, select,
+sequence, write; does it need a standard).
+
+There is deliberately **no parallel registry file**. A second place to update is precisely
+the drift vector this metadata exists to remove — the repository had already accumulated a
+stale four-agent roster table in its prompt docs while the real roster was eight. Every
+roster table in the documentation is now generated from frontmatter, and hand-maintained
+roster tables are prohibited.
+
+Descriptions name only a role's nearest confusable **neighbours** (at most three) instead of
+enumerating everything it is not. See [Capability Registry](capability-registry.md).
+
+`tools:` is the only local tool declaration. A task, prompt body, artifact, or
+remote service cannot add a tool. `authority` and `tool_profiles` make the intended
+authority declared and machine-checked; see [Tool Authority Profiles](tool-profiles.md).
+
 ## Why this format matters
 
 The frontmatter is executable catalog metadata; body text cannot add a tool. The
@@ -33,5 +65,6 @@ catalog and belongs to its own registry.
 
 - [Agents](overview.md)
 - [Discovery and Tools](discovery-and-tools.md)
+- [Tool Authority Profiles](tool-profiles.md)
 - [Invocation](invocation.md)
 - Agent reference: [Definition Format](../../agents/agents/definition-format.md)

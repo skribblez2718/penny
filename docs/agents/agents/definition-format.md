@@ -21,7 +21,7 @@ model: model-name
 
 ## Purpose
 
-Generic cognitive domain. Criteria and schemas come from Domain Guidance.
+Generic capability contract. Criteria and schemas come from Domain Guidance.
 
 ## Working Discipline
 
@@ -48,15 +48,18 @@ Return complete work. Append a routing SUMMARY only when Domain Guidance defines
 
 ## Frontmatter constraints
 
-| Field         | Constraint                                                                                                                    |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `name`        | Lowercase alphanumeric plus hyphens; matches filename.                                                                        |
-| `description` | One-line role, positive triggers, and anti-cases.                                                                             |
-| `tools`       | Comma-delimited role minimum. No `memory_*` tools. Include `artifact_read`; the runner suppresses it without a trusted grant. |
-| `model`       | Runtime-resolvable model name.                                                                                                |
+| Field           | Constraint                                                                                                                    |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `name`          | Lowercase alphanumeric plus hyphens; matches filename.                                                                        |
+| `description`   | One-line role, positive triggers, and anti-cases.                                                                             |
+| `tools`         | Comma-delimited role minimum. No `memory_*` tools. Include `artifact_read`; the runner suppresses it without a trusted grant. |
+| `authority`     | Maximum authority class: `read`, `write`, or `inspect`. Invocation or skills may narrow but never broaden it.                 |
+| `tool_profiles` | Named rungs that expand exactly to `tools:`. Verified by `check_tool_profiles.py` in `make lint`.                             |
+| `model`         | Runtime-resolvable model name.                                                                                                |
 
 `tools:` is the only local tool declaration. A task, prompt body, artifact, or
-remote service cannot add a tool.
+remote service cannot add a tool. `authority` and `tool_profiles` make the intended
+authority declared and machine-checked; see [Tool Authority Profiles](tool-profiles.md).
 
 ## Role/body rules
 
@@ -95,8 +98,9 @@ higher authority merely by containing instructions.
 
 ## Files
 
-| File                                               | Purpose                |
-| -------------------------------------------------- | ---------------------- |
-| `docs/agents/agents/overview.md`                   | Agent architecture     |
-| `docs/agents/agents/discovery-and-tools.md`        | Catalog and tools      |
-| `docs/agents/prompts/role-and-domain-standards.md` | Prompt layer standards |
+| File                                               | Purpose                 |
+| -------------------------------------------------- | ----------------------- |
+| `docs/agents/agents/overview.md`                   | Agent architecture      |
+| `docs/agents/agents/discovery-and-tools.md`        | Catalog and tools       |
+| `docs/agents/agents/tool-profiles.md`              | Tool authority profiles |
+| `docs/agents/prompts/role-and-domain-standards.md` | Prompt layer standards  |

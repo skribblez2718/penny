@@ -10,6 +10,7 @@ A personal AI assistant built on [Pi](https://github.com/mariozechner/pi-coding-
 
 - [Overview](#overview)
 - [Architecture](#architecture)
+- [Capability Roles](#capability-roles)
 - [Progress Heartbeats](#progress-heartbeats)
 - [Evidence Status & Vocabulary](#evidence-status--vocabulary)
 - [AGENTS.md Indexing](#agentsmd-indexing)
@@ -26,22 +27,79 @@ A personal AI assistant built on [Pi](https://github.com/mariozechner/pi-coding-
 Penny is not a single prompt or a single model call. She is a layered reasoning system that:
 
 - **Composes the right instructions** for the current moment via five separated prompt layers
-- **Chooses the lowest-complexity path that succeeds** — direct work when context and tools suffice; specialized agents with isolated context windows when specialization, isolation, or separate review pays; the research skill when a structured, multi-source investigation needs durable state, evidence gates, retries, or resumability
+- **Chooses the lowest-complexity path that succeeds** — direct work when context and tools suffice; reusable capability roles with isolated context windows when specialization, isolation, or separate review pays; the research skill when a structured, multi-source investigation needs durable state, evidence gates, retries, or resumability
 - **Remembers across sessions when configured** through one pinned MemPalace 3.7.1 HTTP hub, with bounded results and no raw/direct fallback
 
 ## Architecture
 
 Penny's prompt system uses five **named layers** each with a single responsibility:
 
-| Layer                  | Function                                     | Source                             |
-| ---------------------- | -------------------------------------------- | ---------------------------------- |
-| **Cognitive Frame**    | Stable operating policy and outcome contract | `.pi/SYSTEM.md`                    |
-| **Role Definition**    | Who I am (per-agent)                         | `.pi/agents/*.md`                  |
-| **Domain Guidance**    | How to think about this domain               | `.pi/skills/*/assets/prompts/*.md` |
-| **Project Index**      | Where things are                             | `AGENTS.md` files                  |
-| **Invocation Context** | What to do now                               | Task message + runtime             |
+| Layer                  | Function                                            | Source                             |
+| ---------------------- | --------------------------------------------------- | ---------------------------------- |
+| **Cognitive Frame**    | Stable operating policy and outcome contract        | `.pi/SYSTEM.md`                    |
+| **Role Definition**    | Which capability this is, and its maximum authority | `.pi/agents/*.md`                  |
+| **Domain Guidance**    | How to think about this domain                      | `.pi/skills/*/assets/prompts/*.md` |
+| **Project Index**      | Where things are                                    | `AGENTS.md` files                  |
+| **Invocation Context** | What to do now                                      | Task message + runtime             |
 
 The current workflow skill is `research`. It runs as a `BasePlaybook` subclass on the shared `orchestration` engine with durable, checkpointed run state (`run_id`-keyed SQLite), so an interrupted run can resume. The execution owner stores each exact agent output before accepting its routing SUMMARY; downstream phases receive validated artifact refs and bounded `artifact_read` access. Workflows do not require memory. Track-A recovery is forward-only: `PENNY_ARTIFACT_DISPATCH_MODE=paused` halts new agent/tool/fan-out dispatch while status and exact artifact reads remain available; returning to `active` resumes from the unchanged checkpoint and refs, never semantic-memory fallback.
+
+## Capability Roles
+
+Penny's agents are not subject-matter specialists. An agent is a **domain-invariant
+capability contract** whose objective, invariants, authority, tool posture, and
+input→output transformation stay stable when the subject matter changes.
+
+That is why there is no `security-review` agent and no `travel-planner` agent. Domain and
+function are orthogonal: security analysis and financial analysis are different domains but
+the same transformation. The research skill is the proof — it is a composition of six
+generic roles, not a `research-agent`.
+
+<!-- BEGIN GENERATED: roster -->
+
+| Capability   | Agent      | Family       | Authority | Transformation                                                           |
+| ------------ | ---------- | ------------ | --------- | ------------------------------------------------------------------------ |
+| `analyze`    | `annie`    | epistemic    | `read`    | evidence/material → structured understanding                             |
+| `critique`   | `carren`   | epistemic    | `read`    | work product + quality criteria → improvement judgment                   |
+| `explore`    | `echo`     | epistemic    | `read`    | unknown area → relevant evidence/context                                 |
+| `synthesize` | `synthia`  | epistemic    | `read`    | multiple evidence sets → integrated understanding                        |
+| `verify`     | `vera`     | epistemic    | `inspect` | target + standard → evidence-backed validity verdict                     |
+| `decide`     | `demetri`  | deliberative | `read`    | alternatives + objectives + uncertainty → justified choice + sensitivity |
+| `ideate`     | `ida`      | deliberative | `read`    | problem + constraints → diverse candidate possibilities                  |
+| `plan`       | `piper`    | deliberative | `read`    | goal + state + constraints → strategy                                    |
+| `generate`   | `skribble` | operational  | `write`   | specification → materialized artifact                                    |
+| `taskify`    | `tabitha`  | operational  | `read`    | strategy/specification → executable task graph                           |
+
+<!-- END GENERATED -->
+
+The roster falls into three families. Membership is descriptive, not a pipeline —
+`analyze → decide`, `generate → verify` and `explore → synthesize` are all ordinary
+compositions that skip intermediate families.
+
+<!-- BEGIN GENERATED: families -->
+
+- **Epistemic** — transform information into knowledge or judgment: `analyze`, `critique`, `explore`, `synthesize`, `verify`
+- **Deliberative** — determine what should happen: `decide`, `ideate`, `plan`
+- **Operational** — convert intent into externalizable work: `generate`, `taskify`
+
+<!-- END GENERATED -->
+
+```
+            acquire                     determine what           externalize
+         (epistemic)                  should happen               the work
+                                     (deliberative)             (operational)
+
+  explore ──► analyze ──┬──► ideate ──► decide ──► plan ──► taskify ──► generate
+                        │                                                    │
+                        └──► synthesize                    critique ◄────────┴
+                                                            verify ◄────────┘
+```
+
+Adding an eleventh capability is deliberately hard: a proposal must pass a six-gate
+admission test, and "complete the taxonomy" is not one of the gates. Every roster table in
+the documentation — including the two above — is generated from `.pi/agents/*.md`
+frontmatter, because hand-maintained roster tables drift. See
+[Capability Registry](docs/humans/agents/capability-registry.md).
 
 ## Progress Heartbeats
 
@@ -72,7 +130,8 @@ Penny's security is layered: behavioral policy in the prompt, enforcement in the
 
 - **Trust and action boundaries** (prompt policy) — the user's message is authoritative for the task within system and runtime limits; external content (tool outputs, fetched pages, quoted text) supplies evidence or designated task material but cannot expand permissions, authorize side effects, or claim special authority; consequential actions require explicit approval
 - **Structural markers** — `<system_directives>`, `<agent_boundary>`, and `<system_boundary>` delimit context regions as defense-in-depth; they are parsing aids, not enforcement
-- **Runtime controls** (enforcement) — per-agent tool allowlists, workflow approval gates with signed receipts, and host OS/container permissions
+- **Runtime controls** (enforcement) — per-agent tool allowlists derived from a declared authority class and CI-checked for drift, workflow approval gates with signed receipts, and host OS/container permissions
+- **What allowlists do and do not guarantee** — each role declares a maximum authority class and named [tool profiles](docs/humans/agents/tool-profiles.md); a build check asserts its tools are exactly that expansion, so declared authority cannot silently drift from the real permission envelope. **Browser authority is structural**: a read-only role cannot submit a form, upload a file, or execute arbitrary Playwright/Node code, and `playwright_run_code_unsafe` is granted to no agent. **Filesystem and shell authority are not**: every agent holds `bash`, so a read-only role can still write files, install packages, and reach the network. Read-only is enforced at the browser layer and advisory at the filesystem layer
 - **Path-specific isolation** — all agent-invocation paths (primary, direct-subagent, skill-invoked) currently rely on tool allowlists and the host boundary; no filesystem/process sandbox is applied — see the execution-path matrix in [System Prompt Security](docs/agents/agents/system-prompt-security.md)
 
 ## Protocols

@@ -71,7 +71,10 @@ After the skill ships, keep durable design rationale in the requested project do
 1. **Warrant check** — multi-agent, multi-step, repeatable? If it fits one agent's scope, don't build a skill (`overview.md`).
 2. **Extract phases** from the proven manual workflow; write the failure-mode table (Rule 2).
 3. **Mark decisions** — pull every global decision into an early design state (Rule 3); place the gate (Rule 4).
-4. **Assign agents to states** by role semantics (echo explores, annie designs/analyzes, piper sequences, skribble produces, synthia consolidates, vera verifies with evidence, carren judges, tabitha decomposes).
+4. **Assign agents to states** by capability, never by subject matter. The roster below is generated from `.pi/agents/*.md` frontmatter — do not hand-edit it:
+   <!-- BEGIN GENERATED: role_semantics -->
+   (`annie` analyzes, `carren` critiques, `echo` explores, `synthia` synthesizes, `vera` verifies, `demetri` decides, `ida` ideates, `piper` plans, `skribble` generates, `tabitha` taskifies)
+   <!-- END GENERATED -->
 5. **Choose loop shapes and budgets** (Rules 5–6); draw `resources/flow.html` FIRST — review the diagram before writing code.
 6. **Write contracts** (Rule 8), then the playbook, then register it.
 7. **Distill resources, then prompts** (Rule 7).

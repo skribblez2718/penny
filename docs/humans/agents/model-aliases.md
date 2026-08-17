@@ -1,6 +1,6 @@
 # Agent Model Aliases (capability-tier, upgrade-proof)
 
-Penny's 8 agents reference their model by a **capability-tier alias** (`sol`, `terra`)
+Penny's 10 agents reference their model by a **capability-tier alias** (`sol`, `terra`)
 instead of a pinned version string. This removes the per-upgrade edit tax: on a model
 upgrade you change **one** line in one file instead of editing every agent.
 
@@ -62,6 +62,36 @@ frontmatter alone.
 `luna` is defined but **no agent currently uses it** — it exists so a light tier is one
 frontmatter edit away.
 
+### Current tier assignment
+
+| Tier           | Agents                                                    |
+| -------------- | --------------------------------------------------------- |
+| `sol` (heavy)  | `annie`, `carren`, `demetri`, `echo`, `piper`, `skribble` |
+| `terra` (mid)  | `ida`, `synthia`, `tabitha`, `vera`                       |
+| `luna` (light) | — none                                                    |
+
+Tiers are chosen by the **reasoning demand of the capability contract**, never by
+convenience or by which tier avoids a test failure. `demetri` is `sol` because selection
+under competing objectives is the highest-stakes deliberative reasoning in the roster and a
+wrong decision propagates into planning and everything downstream. `ida` is `terra` because
+its hardest invariant — candidates must differ in _approach_, not phrasing — is
+reasoning-hard rather than sampling-easy, and the characteristic light-tier failure is
+exactly the banned defect.
+
+Two standing opportunities, both currently unexercised:
+
+- **`tabitha` → `luna`.** Taskification introduces no new judgment, which makes it the
+  strongest light-tier candidate. It is a hypothesis and must be **measured** before it is
+  applied — asserting it would be exactly the reasoning this table exists to prevent.
+- **`synthia` `terra` → `sol`.** `VERIFY_EDGES` contains one edge, `research: synthia → vera`.
+  Both endpoints are `terra`, so the system carries a dated same-model independence
+  exception. Re-tiering either endpoint makes the edge cross-model and lets the exception be
+  **retired rather than renewed**. Because it is a `sol`↔`terra` move the distinct model set
+  is unchanged, so the roster hash does not move and no re-measurement is triggered.
+
+> **Hard constraint: never put `vera` on `luna`.** Verification is the system's evidence
+> backstop. If the same-model edge needs breaking, raise `synthia` rather than lower `vera`.
+
 ## How resolution works
 
 The subagent runner passes the frontmatter `model:` value verbatim to `pi --model <value>`,
@@ -97,14 +127,14 @@ the runner is: explicit `provider/model` override → agent frontmatter `provide
 
 ## Thinking levels
 
-All 8 agents run `thinking: xhigh`. The `gpt-5.6-*` models declare
+All 10 agents run `thinking: xhigh`. The `gpt-5.6-*` models declare
 `thinkingLevelMap: {"xhigh": "xhigh", "max": "max", "minimal": "low"}`, so `xhigh` passes
 through unchanged. A higher `max` level is available and currently unused.
 
 ## Upgrading a model (the whole point)
 
 To move the fleet from `gpt-5.6-sol` to `gpt-5.7-sol`: change the one `modelOverrides` key
-in `~/.pi/agent/models.json`. The 8 agent files never change.
+in `~/.pi/agent/models.json`. The 10 agent files never change.
 
 ```json
 "modelOverrides": { "gpt-5.7-sol": { "name": "sol" } }   // was gpt-5.6-sol
