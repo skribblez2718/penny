@@ -91,11 +91,31 @@ trajectory:
 check-public:
 	@.venv/bin/python scripts/system/checks/check_public_boundary.py
 
+# Tool-authority conformance: each agent's `tools:` must be exactly the expansion of
+# its declared `tool_profiles:`. Fails on drift, forbidden tools, and any non-modifying
+# role exceeding the browser authority ceiling. See docs/agents/agents/tool-profiles.md.
+check-tool-profiles:
+	@.venv/bin/python scripts/system/checks/check_tool_profiles.py
+
+# Capability registry: `.pi/agents/*.md` frontmatter is the single source of truth for
+# the roster. Validates completeness, enums, unique capabilities, neighbour referential
+# integrity, and the description budget (silent truncation is the defect being prevented).
+check-capability-registry:
+	@.venv/bin/python scripts/system/checks/check_capability_registry.py
+
+# Generated roster regions: every roster table in the docs is emitted from the registry.
+# Hand-maintained roster tables are prohibited — they demonstrably drift.
+check-agent-roster:
+	@.venv/bin/python scripts/system/generate_agent_roster.py --check
+
 lint:
 	bun run lint
 	bun run format:check
 	.venv/bin/flake8 . --config .flake8
 	.venv/bin/black . --check --config pyproject.toml
+	.venv/bin/python scripts/system/checks/check_tool_profiles.py
+	.venv/bin/python scripts/system/checks/check_capability_registry.py
+	.venv/bin/python scripts/system/generate_agent_roster.py --check
 
 format:
 	bun run format
