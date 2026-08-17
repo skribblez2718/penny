@@ -1,0 +1,132 @@
+{
+  "fixture_id": "routing-confusion-pairs-hard-v1",
+  "notes": "Adversarial companion to routing-confusion-pairs-v2. The v2 set sits at a 1.0 ceiling, which detects regression but cannot detect improvement. These probes are deliberately harder in three ways: (a) UNDERSPECIFIED — the surface verb points one way and the actual work points another; (b) MIXED-INTENT — the request legitimately spans two capabilities and the router must pick the FIRST one, since composition is Penny's job not a single agent's; (c) NON-DELEGATION — trivial or conversational tasks where the correct answer is penny-direct, testing over-triggering rather than mis-routing. `expected` is the capability that should own the FIRST step.",
+  "probes": [
+    {
+      "id": "h01",
+      "pair": "underspecified: verb says generate, work is ideate",
+      "leans": "ideate",
+      "expected": "ida",
+      "prompt": "Write up some options for how we might restructure the onboarding flow. I haven't decided on an approach yet."
+    },
+    {
+      "id": "h02",
+      "pair": "underspecified: verb says analyse, work is verify",
+      "leans": "verify",
+      "expected": "vera",
+      "prompt": "Analyse whether this configuration actually meets the compliance standard we were given. I need a defensible yes or no."
+    },
+    {
+      "id": "h03",
+      "pair": "underspecified: verb says review, work is decide",
+      "leans": "decide",
+      "expected": "demetri",
+      "prompt": "Review these three offers and tell me which to accept given that I care most about job security."
+    },
+    {
+      "id": "h04",
+      "pair": "underspecified: verb says plan, work is taskify",
+      "leans": "taskify",
+      "expected": "tabitha",
+      "prompt": "Plan out the work for the approved migration strategy — I need it broken into assignable units with dependencies."
+    },
+    {
+      "id": "h05",
+      "pair": "underspecified: verb says research, work is analyse in-hand",
+      "leans": "analyze",
+      "expected": "annie",
+      "prompt": "Research why these attached quarterly numbers diverge from the forecast. Everything you need is in the file."
+    },
+    {
+      "id": "h06",
+      "pair": "underspecified: verb says summarise, work is synthesize",
+      "leans": "synthesize",
+      "expected": "synthia",
+      "prompt": "Summarise these nine interview transcripts into one account of what customers actually want."
+    },
+    {
+      "id": "h07",
+      "pair": "mixed-intent: explore then synthesize",
+      "leans": "explore",
+      "expected": "echo",
+      "prompt": "I don't know how our billing retries work. Find out, then give me one coherent picture of it."
+    },
+    {
+      "id": "h08",
+      "pair": "mixed-intent: ideate then decide",
+      "leans": "ideate",
+      "expected": "ida",
+      "prompt": "Come up with some ways to cut our deployment time, then we'll pick one."
+    },
+    {
+      "id": "h09",
+      "pair": "mixed-intent: decide then plan",
+      "leans": "decide",
+      "expected": "demetri",
+      "prompt": "Pick between the two vendors given our stated priorities, and once that's settled we'll work out the rollout."
+    },
+    {
+      "id": "h10",
+      "pair": "mixed-intent: critique then generate",
+      "leans": "critique",
+      "expected": "carren",
+      "prompt": "Tell me what's wrong with this API design doc before I rewrite it."
+    },
+    {
+      "id": "h11",
+      "pair": "boundary: critique vs verify, criteria supplied",
+      "leans": "verify",
+      "expected": "vera",
+      "prompt": "Here is the accessibility standard. Determine, with evidence, whether each page conforms to it."
+    },
+    {
+      "id": "h12",
+      "pair": "boundary: critique vs verify, no standard",
+      "leans": "critique",
+      "expected": "carren",
+      "prompt": "Is this onboarding email any good? Tell me how it could be better."
+    },
+    {
+      "id": "h13",
+      "pair": "boundary: analyze vs decide, no preferences",
+      "leans": "analyze",
+      "expected": "annie",
+      "prompt": "Help me understand how these two insurance policies actually differ in what they cover."
+    },
+    {
+      "id": "h14",
+      "pair": "boundary: generate vs taskify",
+      "leans": "generate",
+      "expected": "skribble",
+      "prompt": "Turn this specification into the actual configuration files it describes."
+    },
+    {
+      "id": "h15",
+      "pair": "non-delegation: trivial lookup",
+      "leans": "penny-direct",
+      "expected": "penny-direct",
+      "prompt": "What's the syntax for a Python list comprehension with a conditional?"
+    },
+    {
+      "id": "h16",
+      "pair": "non-delegation: conversational",
+      "leans": "penny-direct",
+      "expected": "penny-direct",
+      "prompt": "Thanks, that worked. Can you remind me what we changed earlier?"
+    },
+    {
+      "id": "h17",
+      "pair": "non-delegation: single-step tool work",
+      "leans": "penny-direct",
+      "expected": "penny-direct",
+      "prompt": "Rename the variable `usr` to `user` in this one file."
+    },
+    {
+      "id": "h18",
+      "pair": "boundary: research skill vs explore, external + cited",
+      "leans": "research-skill",
+      "expected": "research-skill",
+      "prompt": "I need a properly sourced picture of how other companies handle on-call compensation, with citations I can show my CFO."
+    }
+  ]
+}

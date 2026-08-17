@@ -1,0 +1,188 @@
+{
+  "fixture_id": "routing-confusion-pairs-v2",
+  "notes": "Probes for the nine confusion pairs in universal-agents IMPLEMENTATION-PLAN \u00a77.4, each exercised in both directions, plus one unambiguous control per currently-existing capability. Domains are deliberately varied (software, personal, research, ops, communication) because the architecture's claim is cross-domain transfer, not software routing. `expected` is the capability that SHOULD own the task. v2: the five decide/ideate probes gained owners (demetri, ida) in Phase 5; under v1 they were null and recorded where the work bled instead.",
+  "probes": [
+    {
+      "id": "p01",
+      "pair": "analyze|critique",
+      "leans": "analyze",
+      "expected": "annie",
+      "prompt": "I have three months of support-ticket records here. Work out why escalations cluster at the end of every month."
+    },
+    {
+      "id": "p02",
+      "pair": "analyze|critique",
+      "leans": "critique",
+      "expected": "carren",
+      "prompt": "Here is our draft incident-response runbook. Tell me where it is weak and how it should improve."
+    },
+    {
+      "id": "p03",
+      "pair": "critique|verify",
+      "leans": "critique",
+      "expected": "carren",
+      "prompt": "Read this grant proposal draft and tell me how compelling the argument is and what would strengthen it."
+    },
+    {
+      "id": "p04",
+      "pair": "critique|verify",
+      "leans": "verify",
+      "expected": "vera",
+      "prompt": "Establish whether this configuration file actually satisfies the stated security policy. I need a pass/fail determination with evidence."
+    },
+    {
+      "id": "p05",
+      "pair": "analyze|decide",
+      "leans": "analyze",
+      "expected": "annie",
+      "prompt": "Break down how these two pension schemes differ in structure, cost and risk exposure."
+    },
+    {
+      "id": "p06",
+      "pair": "analyze|decide",
+      "leans": "decide",
+      "expected": "demetri",
+      "prompt": "Given my stated priorities \u2014 rent first, then commute time \u2014 which of these three apartments should I take?"
+    },
+    {
+      "id": "p07",
+      "pair": "decide|plan",
+      "leans": "decide",
+      "expected": "demetri",
+      "prompt": "We have four vendor bids and a fixed budget. Which one should we choose, and on what grounds?"
+    },
+    {
+      "id": "p08",
+      "pair": "decide|plan",
+      "leans": "plan",
+      "expected": "piper",
+      "prompt": "The vendor is chosen. Work out how we get from contract signature to go-live."
+    },
+    {
+      "id": "p09",
+      "pair": "plan|taskify",
+      "leans": "plan",
+      "expected": "piper",
+      "prompt": "Work out a strategy for moving our team to a four-day week."
+    },
+    {
+      "id": "p10",
+      "pair": "plan|taskify",
+      "leans": "taskify",
+      "expected": "tabitha",
+      "prompt": "Here is the approved migration plan. Turn it into discrete work items with their dependencies."
+    },
+    {
+      "id": "p11",
+      "pair": "ideate|decide",
+      "leans": "ideate",
+      "expected": "ida",
+      "prompt": "Give me five genuinely different approaches we could take to reduce customer churn. I am not ready to pick one."
+    },
+    {
+      "id": "p12",
+      "pair": "ideate|decide",
+      "leans": "decide",
+      "expected": "demetri",
+      "prompt": "Of these five churn-reduction options, which should we commit to given limited engineering time?"
+    },
+    {
+      "id": "p13",
+      "pair": "synthesize|generate",
+      "leans": "synthesize",
+      "expected": "synthia",
+      "prompt": "I have notes from six user interviews. Pull them into one coherent picture of what users actually want."
+    },
+    {
+      "id": "p14",
+      "pair": "synthesize|generate",
+      "leans": "generate",
+      "expected": "skribble",
+      "prompt": "Using this agreed outline, produce the final onboarding guide document."
+    },
+    {
+      "id": "p15",
+      "pair": "explore|research-skill",
+      "leans": "explore",
+      "expected": "echo",
+      "prompt": "Find out how session resumption is implemented in this codebase."
+    },
+    {
+      "id": "p16",
+      "pair": "explore|research-skill",
+      "leans": "research-skill",
+      "expected": "research-skill",
+      "prompt": "Investigate the current state of EU battery-recycling regulation and give me a grounded, cited summary of where it stands."
+    },
+    {
+      "id": "p17",
+      "pair": "ideate|generate",
+      "leans": "ideate",
+      "expected": "ida",
+      "prompt": "Brainstorm possible architectures for a low-latency notification system. I want a spread of options, not an implementation."
+    },
+    {
+      "id": "p18",
+      "pair": "ideate|generate",
+      "leans": "generate",
+      "expected": "skribble",
+      "prompt": "Here is the agreed specification. Write the notification service module and its tests."
+    },
+    {
+      "id": "c01",
+      "pair": "control",
+      "leans": "explore",
+      "expected": "echo",
+      "prompt": "Trace where authentication tokens are validated in this repository."
+    },
+    {
+      "id": "c02",
+      "pair": "control",
+      "leans": "analyze",
+      "expected": "annie",
+      "prompt": "Analyse this dataset of delivery times and explain what is driving the variance."
+    },
+    {
+      "id": "c03",
+      "pair": "control",
+      "leans": "synthesize",
+      "expected": "synthia",
+      "prompt": "Combine these four research reports into a single integrated briefing."
+    },
+    {
+      "id": "c04",
+      "pair": "control",
+      "leans": "critique",
+      "expected": "carren",
+      "prompt": "Critique the argument structure of this conference presentation."
+    },
+    {
+      "id": "c05",
+      "pair": "control",
+      "leans": "verify",
+      "expected": "vera",
+      "prompt": "Check that every citation in this paper resolves to a real, correctly attributed source."
+    },
+    {
+      "id": "c06",
+      "pair": "control",
+      "leans": "plan",
+      "expected": "piper",
+      "prompt": "Plan a six-month strategy for learning classical guitar from scratch."
+    },
+    {
+      "id": "c07",
+      "pair": "control",
+      "leans": "taskify",
+      "expected": "tabitha",
+      "prompt": "Convert this product specification into an executable breakdown of tasks."
+    },
+    {
+      "id": "c08",
+      "pair": "control",
+      "leans": "generate",
+      "expected": "skribble",
+      "prompt": "Generate a Terraform module that matches this specification."
+    }
+  ]
+}
