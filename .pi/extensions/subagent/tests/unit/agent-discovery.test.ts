@@ -153,8 +153,28 @@ describe("discoverAgents", () => {
     expect(catalog).not.toContain("\n");
     expect(catalog).toContain("agent-0: specialty-0 ");
     expect(catalog).toContain("…");
-    expect(catalog).toContain("2 additional agents are available by name in the tool schema");
-    expect(catalog).not.toContain(`agent-${MODEL_VISIBLE_AGENT_LIMIT}:`);
     expect(catalog.length).toBeLessThanOrEqual(MODEL_VISIBLE_AGENT_CATALOG_LIMIT);
+
+    // The catalog is bounded by whichever limit binds FIRST: the agent count or the
+    // total character budget. Which one that is depends on the description limit, so
+    // asserting a fixed remainder silently encodes the current constants. (It did:
+    // this previously hard-coded "2 additional agents", which held only while
+    // MODEL_VISIBLE_AGENT_LIMIT was the binding constraint at a 512-char description
+    // limit. Raising that limit made the catalog budget bind instead.)
+    //
+    // Assert the accounting invariant instead — every agent is either listed or
+    // counted in the remainder, exactly once. That is stronger than a magic number
+    // and survives a change to either limit.
+    const listed = (catalog.match(/agent-\d+:/g) ?? []).length;
+    const remainder = catalog.match(
+      /(\d+) additional agents? (?:is|are) available by name in the tool schema/
+    );
+
+    expect(remainder).not.toBeNull();
+    expect(listed).toBeGreaterThan(0);
+    expect(listed).toBeLessThanOrEqual(MODEL_VISIBLE_AGENT_LIMIT);
+    expect(listed + Number(remainder![1])).toBe(agents.length);
+    // The first omitted agent must not appear.
+    expect(catalog).not.toContain(`agent-${listed}:`);
   });
 });

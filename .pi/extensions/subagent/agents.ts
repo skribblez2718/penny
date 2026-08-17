@@ -33,7 +33,12 @@ export interface AgentCatalogSnapshot {
 
 export const MODEL_VISIBLE_AGENT_LIMIT = 24;
 export const MODEL_VISIBLE_AGENT_NAME_LIMIT = 80;
-export const MODEL_VISIBLE_AGENT_DESCRIPTION_LIMIT = 512;
+// Raised 512 -> 1024. normalizeCatalogText truncates SILENTLY, and truncation removes
+// the tail -- exactly where the anti-cases that disambiguate routing live. The ceiling
+// bounds absurdity, not authorship; the authoring budget (400 soft / 600 warn) is
+// enforced by scripts/system/checks/check_capability_registry.py, which fails the build
+// above 1024 so truncation can never again be silent.
+export const MODEL_VISIBLE_AGENT_DESCRIPTION_LIMIT = 1024;
 export const MODEL_VISIBLE_AGENT_CATALOG_LIMIT = 16_000;
 
 function normalizeCatalogText(value: string, limit: number): string {
