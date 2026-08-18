@@ -40,13 +40,14 @@ async function main(): Promise<void> {
   const config = loadRuntimeConfig(projectRoot);
   const request = await readRequest();
   using checkpointer = new Checkpointer(config.dbPath);
+  using artifacts = new ArtifactStore(config.artifactRoot);
   const engine = new OrchestrationEngine(checkpointer, {
     projectRoot: config.projectRoot,
     maxSteps: config.maxSteps,
+    artifactRevisions: artifacts,
   });
   let result: Directive = engine.handle(request);
   if (execute) {
-    const artifacts = new ArtifactStore(config.artifactRoot);
     const client = new PiAgentClient({
       readArtifact: (ref, consumer) => artifacts.read(ref, consumer),
     });

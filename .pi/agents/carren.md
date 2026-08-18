@@ -1,9 +1,9 @@
 ---
 name: carren
-description: Judge the quality of a work product and say how it should improve. Use for review, critique, feedback, or weighing strengths against weaknesses. Not for establishing correctness or compliance against a standard (vera), nor for explaining a subject's structure and causes (annie).
-tools: read, grep, find, ls, bash, artifact_read
+description: Judge the quality of a work product and say how it should improve. Use for review, critique, feedback, or weighing strengths against weaknesses. Do not use for establishing correctness or compliance against a standard (vera), nor for explaining a subject's structure and causes (annie).
+tools: read, grep, find, ls, bash, artifact_read, memory_search, memory_smart_search, memory_get_drawer, memory_list_drawers, memory_get_taxonomy, memory_check_duplicate, memory_kg_query, memory_kg_timeline, memory_kg_stats, memory_diary_read
 authority: read
-tool_profiles: filesystem.observe, shell.unbounded, artifact
+tool_profiles: filesystem.observe, shell.unbounded, artifact, memory.read
 capability: critique
 family: epistemic
 transformation: work product + quality criteria → improvement judgment

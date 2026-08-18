@@ -46,6 +46,10 @@ describe("runtime role policy", () => {
     expect(resolveMemoryActor({ PENNY_RUNTIME_ROLE: "invented-grant" })).toBe("denied");
   });
 
+  it("resolves worker-read for the worker-read marker", () => {
+    expect(resolveMemoryActor({ PENNY_RUNTIME_ROLE: "worker-read" })).toBe("worker-read");
+  });
+
   it.each(["", "worker", "skill-driver", "primary", "invented-grant"])(
     "registers zero tools and zero lifecycle hooks for marker %s",
     (role) => {
@@ -73,6 +77,48 @@ describe("runtime role policy", () => {
     expect(names).toContain("memory_get_drawer");
     expect(names).toContain("memory_kg_supersede");
     expect(names).not.toContain("memory_status");
+  });
+
+  it("registers only read tools for worker-read and no lifecycle hooks", () => {
+    const recorder = piRecorder();
+    const fetchSpy = vi.fn();
+    const workerEnv = {
+      PENNY_RUNTIME_ROLE: "worker-read",
+      PENNY_MEMORY_MCP_ENDPOINT: "http://127.0.0.1:8766",
+      PENNY_MEMORY_MCP_TOKEN_ENV: "TEST_MEMORY_TOKEN",
+      TEST_MEMORY_TOKEN: TEST_TOKEN,
+      PENNY_MEMORY_PALACE_ID: "penny-primary",
+      PENNY_MEMORY_PRINCIPAL_ID: "agent-echo",
+      PENNY_MEMORY_TRUST_MODE: "isolated",
+      PENNY_MEMORY_ISOLATION_BOUNDARY_ID: "penny-primary-local",
+      PENNY_TOOL_RESULT_MAX_BYTES: "4096",
+      PENNY_TOOL_RESULT_MAX_CHARACTERS: "4096",
+      PENNY_TOOL_RESULT_MAX_TOKENS: "4096",
+    };
+    createMemoryExtension({
+      env: workerEnv,
+      fetch: fetchSpy as typeof fetch,
+    })(recorder.pi as any);
+    const names = recorder.tools.map((tool) => tool.name);
+    // Read-only tools only (writeEnabled=false filters out write operations)
+    expect(names).toEqual(primaryMemoryToolNames({ writeEnabled: false }));
+    // No write tools
+    expect(names).not.toContain("memory_add_drawer");
+    expect(names).not.toContain("memory_diary_write");
+    expect(names).not.toContain("memory_kg_add");
+    expect(names).not.toContain("memory_kg_invalidate");
+    expect(names).not.toContain("memory_kg_supersede");
+    // No logstream tools
+    expect(names).not.toContain("memory_logstream_append");
+    // No admin tools
+    for (const forbidden of FORBIDDEN_MODEL_MEMORY_TOOLS) expect(names).not.toContain(forbidden);
+    // No lifecycle hooks (no auto-diary)
+    expect(recorder.handlers.size).toBe(0);
+    // Read tools ARE present
+    expect(names).toContain("memory_smart_search");
+    expect(names).toContain("memory_get_drawer");
+    expect(names).toContain("memory_kg_query");
+    expect(names).toContain("memory_diary_read");
   });
 
   it("defaults hub clients to read-only qualification with no write tools", async () => {

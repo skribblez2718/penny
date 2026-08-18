@@ -3,7 +3,7 @@ name: research
 description: Structured research workflow with Quick, Standard, and Deep modes. Use when a task requires investigating an unfamiliar topic or gathering authoritative external evidence. Do not use for simple lookups, analysis of already-supplied material, or implementation when sufficient evidence exists.
 license: MIT
 metadata:
-  version: "2.1.0"
+  version: "2.2.0"
   penny:
     engine: orchestration
     mempalace: false
@@ -49,6 +49,7 @@ skill({
 | `session_id` | no | Generated when omitted. |
 | `project_root` | no | Target root; defaults to cwd. |
 | `constraints` | no | Run budgets and shaping instructions below. |
+| `engine` | no | Stable default is `python`. `typescript` is an explicit single-run pilot until the M7 approval gate. |
 
 ### Constraints
 
@@ -116,4 +117,4 @@ Present the exact product artifact referenced by `result.output_artifact_ref`, p
 - `report_dir` and `report_files`: user-facing file products;
 - warnings, exhausted flags, and `unresolved_issues`.
 
-A run may be `met: true, grounded: false` after honest validation exhaustion. Surface those unresolved claims and do not present the report as fully verified. Do not execute recommendations; the skill ends at research delivery.
+After honest validation exhaustion, a useful report may still be delivered with `met: false` and `grounded: false`. Surface those unresolved claims and do not present the report as fully verified. Do not execute recommendations; the skill ends at research delivery.

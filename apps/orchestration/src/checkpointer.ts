@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 
@@ -26,6 +26,18 @@ interface GateRow extends Record<string, SQLOutputValue> {
   status: string;
   response_json: string | null;
 }
+
+export interface CheckpointObservation {
+  readonly identity: RunIdentity;
+  readonly status: string;
+  readonly stateId: string;
+  readonly eventType: string;
+  readonly payload: Record<string, JsonValue>;
+  readonly sequence: number;
+  readonly timestamp: string;
+}
+
+export type CheckpointObserver = (observation: CheckpointObservation) => void;
 
 export interface CheckpointEvent {
   readonly sequence: number;
@@ -99,15 +111,28 @@ export class Checkpointer implements Disposable {
   readonly dbPath: string;
   private readonly db: DatabaseSync;
 
-  constructor(dbPath: string) {
+  constructor(
+    dbPath: string,
+    private readonly observer?: CheckpointObserver
+  ) {
     this.dbPath = dbPath;
     if (dbPath !== ":memory:") {
-      mkdirSync(path.dirname(dbPath), { recursive: true });
+      const parent = path.dirname(dbPath);
+      mkdirSync(parent, { recursive: true, mode: 0o700 });
+      chmodSync(parent, 0o700);
     }
     const { DatabaseSync } = sqliteModule();
     this.db = new DatabaseSync(dbPath);
     this.db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
     this.migrate();
+    if (dbPath !== ":memory:") {
+      for (const suffix of ["", "-wal", "-shm"]) {
+        const databaseFile = `${dbPath}${suffix}`;
+        if (existsSync(databaseFile)) {
+          chmodSync(databaseFile, 0o600);
+        }
+      }
+    }
   }
 
   private migrate(): void {
@@ -210,6 +235,7 @@ export class Checkpointer implements Disposable {
       this.persistPendingGate(context);
       this.insertEvent(identity.run_id, eventType, payload, timestamp);
     });
+    this.observe(context, eventType, payload);
   }
 
   saveRun(context: RunContext, eventType: string, payload: Record<string, JsonValue>): void {
@@ -218,6 +244,7 @@ export class Checkpointer implements Disposable {
       this.persistPendingGate(context);
       this.insertEvent(context.identity.run_id, eventType, payload, now());
     });
+    this.observe(context, eventType, payload);
   }
 
   saveWithReceipt(
@@ -233,6 +260,7 @@ export class Checkpointer implements Disposable {
       this.persistPendingGate(context);
       this.insertEvent(context.identity.run_id, eventType, payload, now());
     });
+    this.observe(context, eventType, payload);
   }
 
   saveGateResponse(
@@ -273,6 +301,7 @@ export class Checkpointer implements Disposable {
       this.persistPendingGate(context);
       this.insertEvent(context.identity.run_id, eventType, payload, now());
     });
+    this.observe(context, eventType, payload);
   }
 
   loadRun(identity: RunIdentity): RunContext {
@@ -451,6 +480,33 @@ export class Checkpointer implements Disposable {
       throw new ReceiptConflictError(
         `assignment ${receipt.run_id}/${receipt.state_id}/${branchId}/${receipt.attempt} already has a receipt: ${String(error)}`
       );
+    }
+  }
+
+  private observe(
+    context: RunContext,
+    eventType: string,
+    payload: Record<string, JsonValue>
+  ): void {
+    if (this.observer === undefined) {
+      return;
+    }
+    try {
+      const event = this.events(context.identity.run_id).at(-1);
+      if (event === undefined) {
+        return;
+      }
+      this.observer({
+        identity: context.identity,
+        status: context.status,
+        stateId: context.stateId,
+        eventType,
+        payload: structuredClone(payload),
+        sequence: event.sequence,
+        timestamp: event.createdAt,
+      });
+    } catch {
+      // The observability mirror never blocks durable checkpoint truth.
     }
   }
 

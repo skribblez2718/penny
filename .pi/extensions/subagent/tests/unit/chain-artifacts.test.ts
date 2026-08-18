@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { expectedArtifactRef } from "../../../artifacts/owner-client.js";
+import { OWNER_CONSUMER_REF, withOwnerConsumer } from "../../../artifacts/owner-grants.js";
 import { resolveToolResultBudget } from "../../../lib/tool-result-budget.js";
 import {
   directChainEnvironment,
@@ -42,7 +43,7 @@ describe("direct chain exact-artifact handoff", () => {
     expect(Buffer.byteLength(task, "utf8")).toBeLessThan(2048);
     expect(invocation.caller).toMatchObject({
       run_id: RUN_ID,
-      consumer_ref: "subagent-chain:step:0002",
+      consumer_ref: "state:chain-step-0002",
     });
     expect(
       invocation.grants.map(
@@ -69,6 +70,9 @@ describe("direct chain exact-artifact handoff", () => {
 
     expect(second.upstream_refs).toEqual([ref]);
     expect(second.consumer_scope).toEqual(["subagent-chain:caller"]);
+    // The predecessor must grant exactly `state:{consuming phase}`, which is
+    // what both artifact stores enforce for any put declaring upstream_refs.
+    expect(first.consumer_scope).toEqual([`state:${second.phase}`]);
     expect(() =>
       directChainInput({
         runId: "subagent-chain:other",
@@ -76,5 +80,46 @@ describe("direct chain exact-artifact handoff", () => {
         previousRef: ref,
       })
     ).toThrow(/directive run/);
+  });
+
+  it("forwards the stored envelope, never the owner-granted one, as the next step's upstream", () => {
+    // Regression: the chain loop used to forward `grantToOwner(persisted)` as
+    // `previousRef`. That envelope carries an extra `penny-primary:owner`
+    // consumer, so it no longer matches stored manifest metadata byte-for-byte
+    // and both stores reject the put with an exact-match integrity error --
+    // every step after the first died with ARTIFACT_PERSIST_FAILED.
+    const first = directChainOutputMetadata({
+      runId: RUN_ID,
+      stepIndex: 0,
+      totalSteps: 2,
+      agent: "echo",
+    });
+    const stored = expectedArtifactRef(first, "exact");
+    const granted = withOwnerConsumer(stored);
+
+    // The grant is a genuinely different envelope, identical in identity only.
+    expect(granted.artifact_id).toBe(stored.artifact_id);
+    expect(granted.consumer_scope).toContain(OWNER_CONSUMER_REF);
+    expect(granted.consumer_scope).not.toEqual(stored.consumer_scope);
+
+    const fromStored = directChainOutputMetadata({
+      runId: RUN_ID,
+      stepIndex: 1,
+      totalSteps: 2,
+      agent: "annie",
+      previousRef: stored,
+    });
+    const fromGranted = directChainOutputMetadata({
+      runId: RUN_ID,
+      stepIndex: 1,
+      totalSteps: 2,
+      agent: "annie",
+      previousRef: granted,
+    });
+
+    // Only the stored envelope round-trips as an upstream.
+    expect(fromStored.upstream_refs).toEqual([stored]);
+    expect(fromGranted.upstream_refs).not.toEqual([stored]);
+    expect(fromGranted.upstream_refs[0]?.consumer_scope).toContain(OWNER_CONSUMER_REF);
   });
 });

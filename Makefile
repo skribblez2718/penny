@@ -1,4 +1,4 @@
-.PHONY: setup venv install-py install-js init clean test test-integration check-public lint format evals evals-update-baseline trajectory
+.PHONY: setup venv install-py install-js init clean test test-integration check-public check-agents-links check-kb-privacy lint format evals evals-update-baseline trajectory
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 
@@ -43,6 +43,12 @@ test:
 	@echo ""
 	@echo "==================== public-boundary guard ===================="
 	@.venv/bin/python scripts/system/checks/check_public_boundary.py
+	@echo ""
+	@echo "==================== AGENTS.md index guard ===================="
+	@.venv/bin/python scripts/system/checks/check_agents_links.py
+	@echo ""
+	@echo "==================== knowledge-base privacy guard ===================="
+	@.venv/bin/python scripts/system/checks/check_kb_privacy.py
 	@echo ""
 	@echo "==================== eval compat guards ===================="
 	@.venv/bin/python scripts/system/evals/run_evals.py --sections compat --quiet --no-history
@@ -91,6 +97,19 @@ trajectory:
 check-public:
 	@.venv/bin/python scripts/system/checks/check_public_boundary.py
 
+# AGENTS.md grammar guard: the repository root uses the bounded bootstrap grammar; every
+# other tracked AGENTS.md — anywhere in the repo, including docs/penny/ — must be a pure,
+# complete, direct-child index. docs/humans/ may contain none. Tracked files only, so a
+# configured private root is never scanned. See docs/agents/documentation/agents-md-standard.md.
+check-agents-links:
+	@.venv/bin/python scripts/system/checks/check_agents_links.py
+
+# Knowledge-base privacy gate: the docs/kb scaffold stays exactly five tracked files with a
+# default-deny ignore grammar, no live KB path is ever tracked, and root admission is
+# default-deny for any registry-resolved root. See docs/agents/knowledge-base/privacy-and-promotion.md.
+check-kb-privacy:
+	@.venv/bin/python scripts/system/checks/check_kb_privacy.py
+
 # Tool-authority conformance: each agent's `tools:` must be exactly the expansion of
 # its declared `tool_profiles:`. Fails on drift, forbidden tools, and any non-modifying
 # role exceeding the browser authority ceiling. See docs/agents/agents/tool-profiles.md.
@@ -115,6 +134,8 @@ lint:
 	.venv/bin/black . --check --config pyproject.toml
 	.venv/bin/python scripts/system/checks/check_tool_profiles.py
 	.venv/bin/python scripts/system/checks/check_capability_registry.py
+	.venv/bin/python scripts/system/checks/check_agents_links.py
+	.venv/bin/python scripts/system/checks/check_kb_privacy.py
 	.venv/bin/python scripts/system/generate_agent_roster.py --check
 
 format:

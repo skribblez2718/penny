@@ -41,6 +41,7 @@ function createMockPi(): any {
     registerTool: (def: Record<string, unknown>) => {
       registeredTool = def;
     },
+    on: () => {},
   };
 }
 

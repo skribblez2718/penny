@@ -2,8 +2,10 @@
 
 A skill's playbook names its states and legal transitions. The shared engine
 validates SUMMARY contracts, checkpoints compact run state, enforces budgets and
-gates, and recovers pending work. The TypeScript skill driver owns worker
-invocation and exact artifact capture.
+gates, and recovers pending work. Python remains the default engine; an opt-in
+TypeScript v2 runtime is available for the `research` playbook during the
+migration pilot. The TypeScript skill driver owns worker invocation and exact
+artifact capture.
 
 ## One stage
 
@@ -24,7 +26,8 @@ The SQLite checkpointer stores current state, compact routing fields, and select
 canonical refs. It never stores stage payloads. Retry, clarification, restart,
 and crash recovery reissue pending work with the same exact refs. A compaction
 summary can preserve code-owned run/artifact addresses so the conversation can
-continue without broad discovery.
+continue without broad discovery. TypeScript v2 uses the same checkpointer schema
+with Node SQLite; both runtimes support forward-only pause/recovery.
 
 ## Durable memory boundary
 
@@ -39,3 +42,4 @@ Historical skill rooms are legacy corpus only.
 - [Skill Standard](skill-standard.md)
 - [Testing](testing.md)
 - Agent reference: [Orchestration](../../agents/skills/orchestration.md)
+- Agent reference: [Orchestration Overview](../../agents/orchestration/overview.md)

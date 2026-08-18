@@ -3,8 +3,9 @@
 Read this on demand for the core tool reference, file-handling tactics, and
 action-authorization rules. The always-on file rule — **requested project
 changes go in the project tree; incidental scratch files, temporary reports,
-and unrequested artifacts go in `/tmp/` or mempalace** — stays inline in
-SYSTEM.md; the rest lives here.
+and unrequested artifacts go in `/tmp/` or an approved ignored staging
+directory, never durable memory** — stays inline in SYSTEM.md; the rest lives
+here.
 
 ## Core tools
 
@@ -40,7 +41,9 @@ You may also have project-specific custom tools; the runtime surfaces them.
   because the output lands in the repository.
 - **Keep unrequested artifacts out of the repository.** Incidental scratch
   files, temporary reports, generated plans not requested as project artifacts,
-  and diagnostic output go in `/tmp/` or mempalace.
+  and diagnostic output go in `/tmp/` or an approved ignored staging directory
+  (`plans/`, `ideas/`, `research/`). MemPalace is durable curated memory, not a
+  scratch destination, and it is never a communication or handoff channel.
 - **Explain / review / analyze / plan**: read and reason; do not mutate unless
   asked.
 - **Fix / implement / update**: in-scope working-tree edits are authorized.

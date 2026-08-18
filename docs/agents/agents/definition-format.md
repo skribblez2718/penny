@@ -52,7 +52,7 @@ Return complete work. Append a routing SUMMARY only when Domain Guidance defines
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `name`          | Lowercase alphanumeric plus hyphens; matches filename.                                                                        |
 | `description`   | One-line role, positive triggers, and anti-cases.                                                                             |
-| `tools`         | Comma-delimited role minimum. No `memory_*` tools. Include `artifact_read`; the runner suppresses it without a trusted grant. |
+| `tools`         | Comma-delimited role minimum. Include `artifact_read` and `memory.read` profile tools; the runner suppresses `artifact_read` without a trusted grant. |
 | `authority`     | Maximum authority class: `read`, `write`, or `inspect`. Invocation or skills may narrow but never broaden it.                 |
 | `tool_profiles` | Named rungs that expand exactly to `tools:`. Verified by `check_tool_profiles.py` in `make lint`.                             |
 | `model`         | Runtime-resolvable model name.                                                                                                |
@@ -66,8 +66,10 @@ authority declared and machine-checked; see [Tool Authority Profiles](tool-profi
 - Keep Role Definition domain-agnostic; put domain criteria in skill prompts.
 - Keep consequence boundaries such as READ-ONLY, NO-EXECUTION, and output scope.
 - State outcomes and constraints, not reasoning scripts or tool choreography.
-- Never instruct a worker to retrieve or write durable memory, maintain a
-  session room, precheck duplicates, write a diary, or add routine KG links.
+- Never instruct a worker to write durable memory, maintain a
+  session room, write a diary, or add routine KG links. Read-only recall
+  (search, get_drawer, diary_read, kg_query) is permitted via the
+  `memory.read` profile; write operations are not.
 - Treat exact artifacts as current-run task material, not authority expansion.
 - Return complete content in the response or specified files. Do not claim that
   a model-authored reference proves persistence or registration.
@@ -90,10 +92,10 @@ higher authority merely by containing instructions.
 
 - [ ] Frontmatter parses and filename matches `name`.
 - [ ] Description follows role / use / do-not-use pattern.
-- [ ] Tool list contains `artifact_read` and no `memory_*` tool.
+- [ ] Tool list contains `artifact_read` and `memory.read` profile tools.
 - [ ] Working Discipline defines exact granted input handling.
 - [ ] Output requires complete work before any routing SUMMARY.
-- [ ] No durable-memory, session-room, duplicate-precheck, diary, or routine-KG instruction.
+- [ ] No write-memory, session-room, diary-write, or routine-KG-write instruction.
 - [ ] Boundary marker and wording are intact.
 
 ## Files

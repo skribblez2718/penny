@@ -121,6 +121,24 @@ FLAT: Dict[str, List[str]] = {
     "web.transcript": ["youtube_transcript"],
     "docgen": ["word_generate", "powerpoint_generate"],
     "artifact": ["artifact_read"],
+    # Read-only memory recall: search, read drawers/list/taxonomy, read KG,
+    # read Penny's diary. No write operations (add_drawer, diary_write,
+    # kg_add, kg_invalidate, kg_supersede) and no logstream tools.
+    # Operator-approved 2026-08-17 per the no-memory-injection ratchet
+    # exception (agent-readonly-memory-plan.md). Read-only recall is not
+    # semantic workflow transport.
+    "memory.read": [
+        "memory_search",
+        "memory_smart_search",
+        "memory_get_drawer",
+        "memory_list_drawers",
+        "memory_get_taxonomy",
+        "memory_check_duplicate",
+        "memory_kg_query",
+        "memory_kg_timeline",
+        "memory_kg_stats",
+        "memory_diary_read",
+    ],
 }
 
 # Browser rungs an agent declaring read/inspect authority may hold (rule 3).

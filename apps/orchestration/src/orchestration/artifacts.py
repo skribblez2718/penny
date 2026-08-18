@@ -1049,6 +1049,13 @@ def _assert_safe_root_contents(path: Path) -> None:
         "manifest.sqlite3-wal",
         "manifest.sqlite3-shm",
         "manifest.sqlite3-journal",
+        # The v2 (TypeScript) engine shares this root and its CAS ``objects``
+        # tree, differing only in its manifest database. Its manifest and
+        # SQLite sidecars are managed files, not unrelated debris.
+        "manifest-v2.db",
+        "manifest-v2.db-wal",
+        "manifest-v2.db-shm",
+        "manifest-v2.db-journal",
     }
     unrelated = sorted(entry.name for entry in path.iterdir() if entry.name not in managed_names)
     if unrelated:

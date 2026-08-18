@@ -22,10 +22,13 @@ semantic search for a replacement predecessor.
 
 ## Durable memory boundary
 
-Memory is optional and primary-owned. The unmarked primary runtime may retrieve
-prior durable knowledge when it could materially affect the task and may curate
-a reusable result after completion. Workers and skill drivers receive no memory
-tools or lifecycle hooks.
+Memory is optional and primary-owned for writes. The unmarked primary runtime
+may retrieve prior durable knowledge when it could materially affect the task and
+may curate a reusable result after completion. Since 2026-08-17 subagent workers
+also hold a read-only recall subset (`memory.read`); they hold no write, diary,
+KG-mutation, or logstream tool and no lifecycle hooks. Skill drivers receive
+nothing. Read-only recall is not a handoff channel — with no write surface, one
+agent cannot leave a message for another.
 
 Historical `skills/<skill>-<session_id>` rooms are legacy corpus. They are not
 active handoff channels, and their legacy classification is never deletion
@@ -43,7 +46,7 @@ authority.
 
 - [ ] Every stage selects all required exact predecessors.
 - [ ] Owner capture and ref verification precede SUMMARY routing.
-- [ ] No worker prompt or tool list contains a durable-memory instruction/tool.
+- [ ] No worker prompt or tool list contains a durable-memory **write** instruction/tool.
 - [ ] Retry/restart retain the same selected refs.
 - [ ] Legacy rooms are treated only as historical corpus.
 

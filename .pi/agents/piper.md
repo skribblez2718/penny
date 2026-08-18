@@ -1,9 +1,9 @@
 ---
 name: piper
-description: Form a strategy for moving from a current state toward a desired state under constraints. Use for strategy, sequencing, dependencies, contingencies, and risk. Not for breaking an approved strategy into executable units (tabitha) or explaining material already in hand (annie).
-tools: read, grep, find, ls, bash, web_search, web_fetch, artifact_read
+description: Form a strategy for moving from a current state toward a desired state under constraints. Use for strategy, sequencing, dependencies, contingencies, and risk. Do not use for breaking an approved strategy into executable units (tabitha) or explaining material already in hand (annie).
+tools: read, grep, find, ls, bash, web_search, web_fetch, artifact_read, memory_search, memory_smart_search, memory_get_drawer, memory_list_drawers, memory_get_taxonomy, memory_check_duplicate, memory_kg_query, memory_kg_timeline, memory_kg_stats, memory_diary_read
 authority: read
-tool_profiles: filesystem.observe, shell.unbounded, web.search, artifact
+tool_profiles: filesystem.observe, shell.unbounded, web.search, artifact, memory.read
 capability: plan
 family: deliberative
 transformation: goal + state + constraints → strategy

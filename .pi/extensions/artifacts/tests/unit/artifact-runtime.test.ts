@@ -535,10 +535,12 @@ describe("trusted configuration contract", () => {
     });
   });
 
-  it("requires exactly one owner-supplied invocation source and a strong cursor key", () => {
+  it("rejects two invocation sources and a weak cursor key", () => {
     expect(() =>
       loadArtifactRuntimeConfig({
         PENNY_ARTIFACT_ROOT: "/tmp/example",
+        PENNY_ARTIFACT_INVOCATION_JSON: "{}",
+        PENNY_ARTIFACT_INVOCATION_FILE: "/tmp/example/invocation.json",
         PENNY_ARTIFACT_CURSOR_HMAC_KEY: CURSOR_KEY_HEX,
       })
     ).toThrow();
@@ -549,5 +551,33 @@ describe("trusted configuration contract", () => {
         PENNY_ARTIFACT_CURSOR_HMAC_KEY: "short",
       })
     ).toThrow();
+  });
+
+  it("generates a per-process cursor key only when the owner supplies none", () => {
+    const generated = loadArtifactRuntimeConfig({
+      PENNY_ARTIFACT_ROOT: "/tmp/example",
+      PENNY_ARTIFACT_INVOCATION_JSON: "{}",
+    });
+    expect(generated.cursorKey.length).toBeGreaterThanOrEqual(32);
+
+    const supplied = loadArtifactRuntimeConfig({
+      PENNY_ARTIFACT_ROOT: "/tmp/example",
+      PENNY_ARTIFACT_INVOCATION_JSON: "{}",
+      PENNY_ARTIFACT_CURSOR_HMAC_KEY: CURSOR_KEY_HEX,
+    });
+    expect(supplied.cursorKey.toString("hex")).toBe(CURSOR_KEY_HEX);
+  });
+
+  it("fails closed when no invocation source and no owner resolver exist", async () => {
+    const config = loadArtifactRuntimeConfig({
+      PENNY_ARTIFACT_ROOT: "/tmp/example",
+      PENNY_ARTIFACT_CURSOR_HMAC_KEY: CURSOR_KEY_HEX,
+    });
+    const execution = await executeArtifactRead(
+      config,
+      { artifact: `art_${"a".repeat(64)}` },
+      { now: () => FIXED_NOW }
+    );
+    expect(execution.code).toBe("ARTIFACT_CONFIG_INVALID");
   });
 });

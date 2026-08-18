@@ -93,6 +93,13 @@ export interface ArtifactTelemetry {
 export interface ArtifactRuntimeDependencies {
   now?: () => number;
   telemetry?: ArtifactTelemetry;
+  /**
+   * Owner-side resolution of one exact artifact ID for runtimes that have no
+   * process-environment invocation snapshot (the unmarked primary runtime).
+   * Returning `undefined` is `ARTIFACT_NOT_GRANTED`; the resolver never
+   * enumerates and is never reachable from model arguments.
+   */
+  invocationResolver?: (artifactId: string) => Promise<ArtifactInvocation | undefined>;
 }
 
 export interface ArtifactExecution {

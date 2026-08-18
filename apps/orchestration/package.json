@@ -13,13 +13,18 @@
     "./cli": {
       "types": "./dist/cli.d.ts",
       "import": "./dist/cli.js"
+    },
+    "./source": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
     }
   },
   "bin": {
     "penny-orchestration": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "scripts": {
     "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.json",

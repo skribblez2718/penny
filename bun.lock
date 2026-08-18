@@ -112,6 +112,10 @@
     ".pi/extensions/skill": {
       "name": "pi-skill-extension",
       "version": "0.1.0",
+      "dependencies": {
+        "@penny/memory-extension": "workspace:*",
+        "@penny/orchestration": "workspace:*",
+      },
     },
     ".pi/extensions/statusline": {
       "name": "pi-statusline-extension",

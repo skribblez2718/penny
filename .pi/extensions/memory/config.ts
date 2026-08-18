@@ -24,14 +24,126 @@ const LOGSTREAM_PRINCIPAL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const MAX_LOGSTREAM_STREAM_CHARACTERS = 128;
 const MAX_LOGSTREAM_ROOMS = 16;
 
-export type MemoryActor = "primary" | "denied";
+export type MemoryActor = "primary" | "worker-read" | "denied";
 
 /**
  * The primary runtime is identified by the absence of a marker. Markers are
  * deny-only: even a value of "primary" cannot grant memory capabilities.
+ *
+ * The execution owner may set ``PENNY_RUNTIME_ROLE=worker-read`` on a spawned
+ * agent process to grant read-only memory access. This value is set by the
+ * agent runner (isolatedAgentEnvironment), never by the child process itself,
+ * so a child cannot escalate its own role. The memory extension's policy
+ * decision to register only read tools for this actor is its own, not a grant
+ * from the child.
  */
 export function resolveMemoryActor(env: Readonly<Record<string, string | undefined>>): MemoryActor {
-  return env.PENNY_RUNTIME_ROLE === undefined ? "primary" : "denied";
+  const role = env.PENNY_RUNTIME_ROLE;
+  if (role === undefined) return "primary";
+  if (role === "worker-read") return "worker-read";
+  return "denied";
+}
+
+/**
+ * Load a read-only memory runtime config for worker agents.
+ *
+ * Requires only the minimal set of env vars needed for authenticated read
+ * access: endpoint, credential, palace ID, principal ID, trust mode, and
+ * isolation boundary. Custody/backup/migration/retention fields are not
+ * required because workers do not write. Write is always disabled. Logstream
+ * is always disabled. Diary write and KG write are never available.
+ */
+export function loadWorkerReadConfig(
+  env: Readonly<Record<string, string | undefined>>
+): MemoryRuntimeConfig {
+  const endpoint = required(env, "PENNY_MEMORY_MCP_ENDPOINT");
+  const palaceId = required(env, "PENNY_MEMORY_PALACE_ID");
+  const principalId = required(env, "PENNY_MEMORY_PRINCIPAL_ID");
+  const mode = platformMode(env);
+
+  if (mode !== "isolated") {
+    configError("Worker read access requires PENNY_MEMORY_TRUST_MODE=isolated");
+  }
+
+  const credential = credentialReference(env);
+  const isolationBoundaryId = required(env, "PENNY_MEMORY_ISOLATION_BOUNDARY_ID");
+
+  const platformConfig: PlatformMemoryConfigV1 = {
+    contractVersion: 1,
+    mode: "isolated",
+    principalId,
+    target: {
+      endpoint,
+      palaceId,
+      dataRootId: env.PENNY_MEMORY_DATA_ROOT_ID?.trim() || `${palaceId}-data-root`,
+    },
+    credential,
+    custody: {
+      ownerId: env.PENNY_MEMORY_OWNER_ID?.trim() || "penny-operator",
+      backupPolicyRef: env.PENNY_MEMORY_BACKUP_POLICY_REF?.trim() || "worker-read-default",
+      migrationPolicyRef: env.PENNY_MEMORY_MIGRATION_POLICY_REF?.trim() || "worker-read-default",
+      retentionPolicyRef: env.PENNY_MEMORY_RETENTION_POLICY_REF?.trim() || "worker-read-default",
+      uninstallDisposition: "preserve" as const,
+    },
+    capabilities: ["recall-read", "kg-read", "primary-diary"] as const,
+    primaryDiaryId: "penny",
+    transport: {
+      requestTimeoutMs: parseInteger(
+        env.PENNY_MEMORY_REQUEST_TIMEOUT_MS,
+        "PENNY_MEMORY_REQUEST_TIMEOUT_MS",
+        DEFAULT_TIMEOUT_MS,
+        100,
+        30_000
+      ),
+      maxReadAttempts: 3,
+      maxRequestBytes: MAX_REQUEST_BYTES,
+      maxResponseBytes: parseInteger(
+        env.PENNY_MEMORY_MAX_RESPONSE_BYTES,
+        "PENNY_MEMORY_MAX_RESPONSE_BYTES",
+        DEFAULT_MAX_RESPONSE_BYTES,
+        65_536,
+        DEFAULT_MAX_RESPONSE_BYTES
+      ),
+    },
+    trust: {
+      kind: "isolated",
+      isolationBoundaryId,
+    },
+  };
+
+  const validated = validatePlatformConfig(platformConfig);
+
+  let bearerToken: string;
+  try {
+    bearerToken = resolveMemoryCredentialReference(credential, { env });
+  } catch (error) {
+    if (error instanceof PlatformMemoryError) configError(error.message);
+    throw error;
+  }
+
+  let budget;
+  try {
+    budget = resolveToolResultBudget(env);
+  } catch (error) {
+    if (error instanceof ToolResultBudgetConfigError) configError(error.message);
+    throw error;
+  }
+
+  return {
+    mode: "hub",
+    writeEnabled: false,
+    logstream: { mode: "disabled", stream: null, rooms: [] },
+    platformConfig: validated,
+    bearerToken,
+    cursorKey: createHash("sha256")
+      .update("penny-memory-cursor-v1\0", "utf8")
+      .update(bearerToken, "utf8")
+      .digest(),
+    cursorTtlMs: DEFAULT_CURSOR_TTL_MS,
+    sourceCacheMaxBytes: DEFAULT_SOURCE_CACHE_BYTES,
+    sourceCacheMaxEntries: 8,
+    budget,
+  };
 }
 
 function configError(message: string): never {

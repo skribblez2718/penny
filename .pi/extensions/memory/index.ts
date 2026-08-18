@@ -5,7 +5,7 @@ import { WebSocket } from "ws";
 
 import { createLogger, setSessionId } from "../../lib/logger/logger.js";
 import { MemoryAdapter } from "./adapter.js";
-import { loadMemoryRuntimeConfig, resolveMemoryActor } from "./config.js";
+import { loadMemoryRuntimeConfig, loadWorkerReadConfig, resolveMemoryActor } from "./config.js";
 import { MemoryLogstreamAdapter } from "./logstream-adapter.js";
 import { MemoryLogstreamClient } from "./logstream-client.js";
 import { createPrimaryLogstreamTools } from "./logstream-tools.js";
@@ -178,7 +178,51 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}) {
     // Runtime markers are deny-only. Resolve role before any config, network,
     // tool registration, or shutdown hook so workers cannot turn a marker into
     // a grant and do not contact the memory plane at all.
-    if (resolveMemoryActor(env) !== "primary") return;
+    const actor = resolveMemoryActor(env);
+    if (actor === "denied") return;
+
+    // ---- Worker-read branch: read-only memory tools for spawned agents ----
+    //
+    // The execution owner (agent-runner) sets PENNY_RUNTIME_ROLE=worker-read
+    // and passes through a minimal set of read-only memory env vars. The
+    // memory extension registers only read tools (writeEnabled=false filters
+    // out all write operations). No auto-diary, no logstream, no KG mutation.
+    if (actor === "worker-read") {
+      let workerConfig;
+      try {
+        workerConfig = loadWorkerReadConfig(env);
+      } catch (error) {
+        logger.warn("Memory worker-read disabled: invalid configuration", {
+          errorCode:
+            typeof error === "object" && error !== null && "code" in error
+              ? String((error as { code: unknown }).code)
+              : "MEMPALACE_CONFIG_INVALID",
+        });
+        return;
+      }
+      if (workerConfig.mode === "disabled") return;
+
+      const workerAdapter = new MemoryAdapter(workerConfig, options);
+      const workerTelemetry: MemoryTelemetry = {
+        info(event, context) { logger.info(event, context); },
+        warn(event, context) { logger.warn(event, context); },
+      };
+
+      for (const tool of createPrimaryMemoryTools({
+        adapter: workerAdapter,
+        callerId: () => "worker-read",
+        writeEnabled: false,
+        telemetry: workerTelemetry,
+      })) {
+        pi.registerTool(tool);
+      }
+
+      // No session_shutdown auto-diary hook for workers.
+      // No logstream tools for workers.
+      return;
+    }
+
+    // ---- Primary branch: full memory tools for the main Penny session ----
 
     let config;
     try {
@@ -318,7 +362,7 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}) {
 export default createMemoryExtension();
 
 export { MemoryAdapter } from "./adapter.js";
-export { loadMemoryRuntimeConfig, resolveMemoryActor } from "./config.js";
+export { loadMemoryRuntimeConfig, loadWorkerReadConfig, resolveMemoryActor } from "./config.js";
 export { CANONICAL_KG_PREDICATES, KG_PREDICATE_SCHEMA_VERSION } from "./kg-policy.js";
 export {
   LOGSTREAM_MODEL_MAX_BODY_BYTES,

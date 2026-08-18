@@ -1,9 +1,9 @@
 ---
 name: tabitha
-description: Convert an approved strategy or specification into executable, dependency-aware work units. Use for work breakdowns, tickets, or task graphs. Not for forming the strategy itself (piper) or materializing the artifact from a spec (skribble).
-tools: read, grep, find, ls, bash, artifact_read
+description: Convert an approved strategy or specification into executable, dependency-aware work units. Use for work breakdowns, tickets, or task graphs. Do not use for forming the strategy itself (piper) or materializing the artifact from a spec (skribble).
+tools: read, grep, find, ls, bash, artifact_read, memory_search, memory_smart_search, memory_get_drawer, memory_list_drawers, memory_get_taxonomy, memory_check_duplicate, memory_kg_query, memory_kg_timeline, memory_kg_stats, memory_diary_read
 authority: read
-tool_profiles: filesystem.observe, shell.unbounded, artifact
+tool_profiles: filesystem.observe, shell.unbounded, artifact, memory.read
 capability: taskify
 family: operational
 transformation: strategy/specification → executable task graph

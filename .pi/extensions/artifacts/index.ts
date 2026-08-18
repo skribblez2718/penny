@@ -14,7 +14,13 @@ import {
   executeArtifactRead,
   loadArtifactRuntimeConfig,
 } from "./artifact-runtime.js";
-import type { ArtifactReadParams, ArtifactRuntimeConfig, ArtifactTelemetry } from "./types.js";
+import { ownerGrantBookPath, readOwnerGrantBook, resolveOwnerInvocation } from "./owner-grants.js";
+import type {
+  ArtifactInvocation,
+  ArtifactReadParams,
+  ArtifactRuntimeConfig,
+  ArtifactTelemetry,
+} from "./types.js";
 
 const logger = createLogger("artifacts");
 
@@ -89,9 +95,14 @@ const ArtifactReadParamsSchema = Type.Object(
   { additionalProperties: false }
 );
 
+interface SessionStartContext {
+  sessionManager: { getSessionId(): string };
+}
+
 export default function artifactExtension(pi: ExtensionAPI): void {
   let config: ArtifactRuntimeConfig | undefined;
   let configError: unknown;
+  let currentSessionId: string | undefined;
   try {
     // Read process.env inside the factory, after Penny's environment extension.
     config = loadArtifactRuntimeConfig(process.env);
@@ -106,6 +117,31 @@ export default function artifactExtension(pi: ExtensionAPI): void {
     warn(event, context) {
       logger.warn(event, context);
     },
+  };
+
+  pi.on("session_start", async (_event: unknown, context: SessionStartContext) => {
+    currentSessionId = context.sessionManager.getSessionId();
+  });
+
+  /**
+   * Owner-held grant resolution for the primary runtime. Workers never reach
+   * this path: they carry an invocation snapshot in their environment, which
+   * takes precedence in `loadInvocation`.
+   */
+  const invocationResolver = async (
+    artifactId: string
+  ): Promise<ArtifactInvocation | undefined> => {
+    if (!currentSessionId) return undefined;
+    try {
+      const book = readOwnerGrantBook(ownerGrantBookPath(currentSessionId));
+      return resolveOwnerInvocation(book, artifactId);
+    } catch (error) {
+      telemetry.warn("artifact_owner_grant_unreadable", {
+        errorCode: "ARTIFACT_CONFIG_INVALID",
+        reason: error instanceof Error ? error.message : "unknown",
+      });
+      return undefined;
+    }
   };
 
   pi.registerTool({
@@ -128,7 +164,7 @@ export default function artifactExtension(pi: ExtensionAPI): void {
         });
         return execution.result;
       }
-      return (await executeArtifactRead(config, params, { telemetry })).result;
+      return (await executeArtifactRead(config, params, { telemetry, invocationResolver })).result;
     },
   });
 }

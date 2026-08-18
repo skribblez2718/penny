@@ -7,9 +7,10 @@ role-specific Non-Negotiables, Output, and the `<agent_boundary>` insertion anch
 
 ## The important changes
 
-Workers no longer receive durable-memory tools or instructions. Their role files
-include `artifact_read` because workflows may grant exact current-run inputs; the
-runner hides that tool when no trusted grant exists.
+Workers now receive read-only memory tools (the `memory.read` profile: search,
+read drawers/list/taxonomy, read KG, read Penny's diary) but no write tools.
+Their role files include `artifact_read` because workflows may grant exact
+current-run inputs; the runner hides that tool when no trusted grant exists.
 
 Working Discipline now says:
 
@@ -28,7 +29,7 @@ not the model, proves persistence and registration.
 | ------------------- | ----------------------------------------------------------------------------------------------------- |
 | `name`              | Lowercase alphanumeric plus hyphens; matches filename.                                                |
 | `description`       | One-line role, positive triggers, and anti-cases.                                                     |
-| `tools`             | Comma-delimited role minimum. No `memory_*` tools. Include `artifact_read`.                           |
+| `tools`             | Comma-delimited role minimum. Include `artifact_read` and `memory.read` profile tools.                |
 | `authority`         | Maximum authority class: `read`, `write`, or `inspect`. Cannot be broadened by invocation or skills.  |
 | `tool_profiles`     | Named rungs that expand exactly to `tools:`. Verified by `check_tool_profiles.py` in `make lint`.     |
 | capability metadata | `capability`, `family`, `transformation`, `accepts`, `produces`, and semantic coordinates. See below. |

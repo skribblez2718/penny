@@ -1,9 +1,9 @@
 ---
 name: synthia
-description: Integrate multiple evidence sets into one coherent understanding. Use when several sources or findings must become a single unified output. Not for analyzing one subject's internal structure (annie) or materializing a specified artifact (skribble).
-tools: read, bash, artifact_read
+description: Integrate multiple evidence sets into one coherent understanding. Use when several sources or findings must become a single unified output. Do not use for analyzing one subject's internal structure (annie) or materializing a specified artifact (skribble).
+tools: read, bash, artifact_read, memory_search, memory_smart_search, memory_get_drawer, memory_list_drawers, memory_get_taxonomy, memory_check_duplicate, memory_kg_query, memory_kg_timeline, memory_kg_stats, memory_diary_read
 authority: read
-tool_profiles: filesystem.read, shell.unbounded, artifact
+tool_profiles: filesystem.read, shell.unbounded, artifact, memory.read
 capability: synthesize
 family: epistemic
 transformation: multiple evidence sets → integrated understanding

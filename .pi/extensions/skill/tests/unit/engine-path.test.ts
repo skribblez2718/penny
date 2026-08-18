@@ -14,14 +14,29 @@ import { fileURLToPath } from "url";
 
 const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..");
 
-const { mockSpawn, mockPersistArtifactOutput, mockParseSummaryFromOutput } = vi.hoisted(() => ({
-  mockSpawn: vi.fn(),
-  mockPersistArtifactOutput: vi.fn(),
-  mockParseSummaryFromOutput: vi.fn(),
-}));
+const { mockSpawn, mockPersistArtifactOutput, mockParseSummaryFromOutput, mockTypeScriptExecute } =
+  vi.hoisted(() => ({
+    mockSpawn: vi.fn(),
+    mockPersistArtifactOutput: vi.fn(),
+    mockParseSummaryFromOutput: vi.fn(),
+    mockTypeScriptExecute: vi.fn(),
+  }));
 
 vi.mock("child_process", () => ({ spawn: mockSpawn }));
 vi.mock("node:child_process", () => ({ spawn: mockSpawn }));
+vi.mock("@penny/orchestration/source", () => ({
+  OrchestrationService: class {
+    checkpointer = {
+      loadRunById: vi.fn(() => undefined),
+      events: vi.fn(() => [{ payload: { agent: "echo" } }]),
+    };
+    execute = mockTypeScriptExecute;
+    close() {}
+    [Symbol.dispose]() {
+      this.close();
+    }
+  },
+}));
 vi.mock("../../artifact-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../artifact-client.js")>();
   mockPersistArtifactOutput.mockImplementation(
@@ -271,7 +286,11 @@ async function run(constraints?: Record<string, unknown>) {
   const mod = await import("../../index.js");
   const pi = createMockPi();
   mod.default(pi);
-  const ctx = { cwd: process.cwd(), ui: { theme: { fg: () => "" }, notify: vi.fn() } };
+  const ctx = {
+    cwd: process.cwd(),
+    isProjectTrusted: () => true,
+    ui: { theme: { fg: () => "" }, notify: vi.fn() },
+  };
   return registeredTool.execute(
     "t1",
     { skill_name: "eng-skill", goal: "prove it", constraints },
@@ -288,10 +307,50 @@ describe("skill engine path", () => {
     state.engine = true;
     state.hasOrchestrate = true;
     process.env.PROJECT_ROOT = PROJECT_ROOT;
+    mockTypeScriptExecute.mockResolvedValue({
+      action: "complete",
+      status: "complete",
+      met: true,
+      result: { met: true, output_artifact_ref: null },
+      artifacts: [],
+      unresolved: [],
+    });
   });
   afterEach(() => {
     delete process.env.PROJECT_ROOT;
     delete process.env.PENNY_ARTIFACT_DISPATCH_MODE;
+  });
+
+  it("uses TypeScript only when explicitly selected and spawns no Python", async () => {
+    const mod = await import("../../index.js");
+    const pi = createMockPi();
+    mod.default(pi);
+    const ctx = {
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { theme: { fg: () => "" }, notify: vi.fn() },
+    };
+    const response = await registeredTool.execute(
+      "ts-pilot",
+      {
+        skill_name: "research",
+        goal: "research safely",
+        session_id: "ts-pilot-run",
+        engine: "typescript",
+      },
+      undefined,
+      undefined,
+      ctx
+    );
+
+    expect(response.details).toMatchObject({
+      success: true,
+      session_id: "ts-pilot-run",
+      skill_name: "research",
+      state: "complete",
+    });
+    expect(mockTypeScriptExecute).toHaveBeenCalledTimes(1);
+    expect(mockSpawn).not.toHaveBeenCalled();
   });
 
   it("handles an engine pause as non-success/retriable without agent or step dispatch", async () => {

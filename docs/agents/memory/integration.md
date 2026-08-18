@@ -7,10 +7,18 @@ Normal memory access goes through **one authenticated, supervised MemPalace
 import a raw memory peer, open palace bytes, spawn a per-call bridge, or fall back
 to direct/prefer storage. Hub outage fails closed.
 
-Only the **unmarked primary Pi runtime** receives memory tools and lifecycle
-hooks. Worker and skill-driver processes receive none. Active workflow handoff
-uses immutable execution-owner artifacts; run control state uses the orchestration
-checkpointer. Memory is neither channel.
+Only the **unmarked primary Pi runtime** receives the full memory bundle and
+lifecycle hooks. Since the operator-approved policy change of 2026-08-17,
+subagent workers additionally receive a **read-only recall subset** declared in
+their frontmatter `tools:` via the `memory.read` tool profile: search, exact
+drawer/taxonomy reads, KG reads, and primary-diary read. Workers get no write
+surface, no diary write, no KG mutation, no logstream, and no lifecycle hooks;
+skill-driver processes receive nothing.
+
+Read-only recall lets an agent look up prior durable knowledge. It is not a
+channel: with no write surface, no agent can post a message for another to read.
+Active workflow handoff uses immutable execution-owner artifacts; run control
+state uses the orchestration checkpointer. Memory is neither channel.
 
 ## Primary capability bundles
 
@@ -131,7 +139,8 @@ live supported-model trial or a no-compaction outcome.
 
 - [ ] Exactly one supervised 3.7.1 HTTP hub owns writable access.
 - [ ] Production and online admin paths have no raw/direct fallback.
-- [ ] Workers and skill drivers expose zero memory tools/hooks.
+- [ ] Workers expose only the read-only `memory.read` subset and zero lifecycle hooks; skill drivers expose nothing.
+- [ ] No worker holds a memory write, diary-write, KG-mutation, or logstream tool.
 - [ ] Advisory logstream is default-off, primary-only, and strictly self-addressed; broadcasts fail closed.
 - [ ] Dedicated artifact/patch endpoints and refs are absent; advisory bodies are never consumed as artifact handoff, workflow state, persistence receipts, or recovery input.
 - [ ] Ack scope is proved under bounded reads before one mutation attempt.

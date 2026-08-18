@@ -2,19 +2,57 @@
 
 ## Purpose
 
-AGENTS.md files are **indexes only**. They reference documentation, never contain it. This conserves context windows — Penny and agents read ONLY the specific document they need, never the entire index.
+Nested AGENTS.md files are **indexes only**. They reference documentation, never contain it. This conserves context windows — Penny and agents read ONLY the specific document they need, never the entire index.
 
-## Rules
+Exactly two grammars exist, and exactly one file uses the first.
+
+## Grammar 1 — the repository-root `AGENTS.md` (bootstrap)
+
+The root is the **sole bounded exception**. Pi loads it by walking *up* from the working
+directory, so it is always in context, on every turn, multiplied into every subagent. It is
+the entry point of the index chain and may therefore carry a small amount of instruction —
+but only these four things:
+
+1. **Bounded project-wide invariants** that must hold for any work in the repository.
+2. **Traversal guidance** — how to read the documentation tree.
+3. **Protocol/Pi lookup guidance** — how to resolve gated protocols and platform docs by trigger.
+4. **The next-level index** — links to sub-index `AGENTS.md` files.
+
+Root constraints:
+
+- **Sub-index links only.** The root may link to `<dir>/AGENTS.md` and never to a leaf
+  document. A link that reaches a document directly skips the chain and defeats it.
+- **No operator filesystem paths.** Never `/home/...`, `/Users/...`, `~/...`, or a drive
+  letter. Write `$PROJECT_ROOT` or an expanded variable such as `${PI_PACKAGE_DIR}`.
+- **No domain detail.** Feature specifics, methodology, and per-project rules belong in the
+  tree, not the root. This is enforced as a hard line/byte budget: bloat fails the check.
+- **Exactly one level-one heading.**
+
+## Grammar 2 — every other tracked `AGENTS.md` (nested index)
+
+This grammar applies uniformly to **every tracked `AGENTS.md` anywhere in the repository**,
+not only those under `docs/agents/**`. `docs/penny/AGENTS.md` is held to exactly the same
+rules as any other nested index.
 
 1. **AGENTS.md = lookup table.** Contains document names, paths (relative), and one-line descriptions. Nothing else.
-2. **No content in AGENTS.md.** No rules, no standards, no explanations, no cross-cutting references, no architecture descriptions, no quick-reference summaries. Those belong in individual documents.
+2. **No content in AGENTS.md.** No rules, no standards, no explanations, no cross-cutting references, no architecture descriptions, no quick-reference summaries. Those belong in individual documents. Prose lines fail the check.
 3. **Relative paths.** Links use relative paths from the AGENTS.md file location. E.g., `agents/AGENTS.md` links to `overview.md`, not `docs/agents/agents/overview.md`.
-4. **One entry per document.** List format: `- [Document Title](filename.md): One-line description`
+4. **One entry per document, on one line.** Exact format: `- [Document Title](filename.md): One-line description`. A description continued on a following line is prose and fails.
 5. **Direct children only.** An AGENTS.md may only reference its immediate directory contents:
    - A leaf `.md` file in the same directory.
    - A subdirectory's `AGENTS.md` that is a direct child of the current directory.
    - Never link across directories (e.g., `../other/file.md`) and never skip levels (e.g., `subdir/nested/file.md`).
-6. **Keep current.** When a document is added, moved, or removed, update the index immediately. Stale indexes waste agent time.
+6. **Complete.** Every tracked direct-child document, and every direct subdirectory that has
+   its own `AGENTS.md`, must have exactly one entry. A missing entry orphans that branch of
+   the chain; a duplicate entry makes the index ambiguous. Both fail.
+7. **Exactly one level-one heading**, and no subheadings.
+8. **Keep current.** When a document is added, moved, or removed, update the index immediately. Stale indexes waste agent time.
+
+## Scope is tracked files only
+
+The checker enumerates `git ls-files` and validates only tracked paths. This is load-bearing,
+not an optimization: an operator may configure a private, gitignored root inside the worktree,
+and a documentation checker must never descend into or open private content to do its job.
 
 ## Why
 
@@ -70,7 +108,7 @@ human audience. When a change touches a concept documented in both, update both
 so they do not drift.
 
 This is machine-enforced by `scripts/system/checks/check_agents_links.py`, which
-fails if any `AGENTS.md` appears anywhere under `docs/humans/`.
+fails if any tracked `AGENTS.md` appears anywhere under `docs/humans/`.
 
 ## Pi Auto-Discovery Behavior
 

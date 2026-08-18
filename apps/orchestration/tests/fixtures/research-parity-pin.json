@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "fixture_id": "research-parity-pin-v1",
+  "purpose": "Foundation stage W12. Pins research's observable topology before any universal-skills refactor. When this fixture and the implementation disagree, THIS FIXTURE WINS: revert the refactor step rather than amend the pin. Amending it requires an explicit prior decision and a plan revision.",
+  "states": [
+    "planning",
+    "critiquing_plan",
+    "researching",
+    "synthesizing",
+    "critiquing_report",
+    "validating",
+    "report_writing"
+  ],
+  "agent_by_state": {
+    "planning": "piper",
+    "critiquing_plan": "carren",
+    "researching": "echo",
+    "synthesizing": "synthia",
+    "critiquing_report": "carren",
+    "validating": "vera",
+    "report_writing": "skribble"
+  },
+  "modes": {
+    "allowed": ["quick", "standard", "deep"],
+    "default": "standard"
+  },
+  "budget_constraints": [
+    "critique_passes",
+    "max_fan_width",
+    "max_research_rounds",
+    "max_sub_queries"
+  ],
+  "output_files": ["report.md", "sources.md", "README.md"],
+  "terminal": {
+    "completion_state": "report_writing",
+    "completion_field": "write_complete",
+    "met_field": "met"
+  },
+  "non_states": ["ingesting", "composing", "linting", "promoting", "planning_v2", ""]
+}

@@ -54,6 +54,25 @@ RETIRED_ACTIVE_PATTERNS = {
 }
 
 
+# The exact read-only recall subset a worker may declare. Any memory tool
+# outside this set (writes, diary write, KG mutation, logstream) is a
+# regression of the no-memory-channel boundary.
+WORKER_READ_MEMORY_TOOLS = frozenset(
+    {
+        "memory_search",
+        "memory_smart_search",
+        "memory_get_drawer",
+        "memory_list_drawers",
+        "memory_get_taxonomy",
+        "memory_check_duplicate",
+        "memory_kg_query",
+        "memory_kg_timeline",
+        "memory_kg_stats",
+        "memory_diary_read",
+    }
+)
+
+
 def _frontmatter_tools(text: str) -> list[str]:
     match = re.search(r"^tools:\s*(.+)$", text, re.MULTILINE)
     assert match, "agent definition has no tools field"
@@ -67,9 +86,17 @@ def test_every_worker_has_artifact_read_and_no_memory_tools_or_protocol() -> Non
         tools = _frontmatter_tools(text)
         if "artifact_read" not in tools:
             problems.append(f"{path.name}: missing artifact_read")
-        memory_tools = [tool for tool in tools if tool.startswith("memory_")]
-        if memory_tools:
-            problems.append(f"{path.name}: memory tools {memory_tools}")
+        # Operator-approved 2026-08-17: workers may hold the read-only recall
+        # subset. The load-bearing invariant is that no worker holds a memory
+        # WRITE or logstream surface, because a write surface is what would turn
+        # durable memory back into an agent-to-agent channel.
+        forbidden = [
+            tool
+            for tool in tools
+            if tool.startswith("memory_") and tool not in WORKER_READ_MEMORY_TOOLS
+        ]
+        if forbidden:
+            problems.append(f"{path.name}: non-read memory tools {forbidden}")
         for label, pattern in RETIRED_ACTIVE_PATTERNS.items():
             if pattern.search(text):
                 problems.append(f"{path.name}: {label}")
@@ -190,7 +217,9 @@ def test_memory_normative_doc_states_service_and_data_boundaries() -> None:
         "3.7.1 HTTP hub",
         "supervised",
         "Hub outage fails closed",
-        "Worker and skill-driver processes receive none",
+        "read-only recall subset",
+        "skill-driver processes receive nothing",
+        "Memory is neither channel",
         "copied target",
         "Uninstall",
         "typed opaque continuation",

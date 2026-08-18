@@ -1,9 +1,9 @@
 ---
 name: annie
-description: Analyze material already in hand — decompose it, map relationships, and explain causes. Use for deep analysis, comparison, gap-finding, or root-cause work. Not for acquiring unknown information (echo), judging a work product's quality (carren), or integrating many sources into one output (synthia).
-tools: read, grep, find, ls, bash, web_search, web_fetch, playwright_navigate, playwright_navigate_back, playwright_navigate_forward, playwright_reload, playwright_get_current_url, playwright_get_title, playwright_snapshot, playwright_screenshot, playwright_close, playwright_resize, playwright_new_page, playwright_close_page, playwright_switch_tab, playwright_list_tabs, playwright_wait_for, playwright_console_messages, playwright_network_requests, playwright_network_request, playwright_pdf, playwright_verify_element_visible, playwright_verify_text_visible, playwright_verify_value, playwright_highlight, playwright_hide_highlight, playwright_mouse_move_xy, playwright_mouse_wheel, artifact_read
+description: Analyze material already in hand — decompose it, map relationships, and explain causes. Use for deep analysis, comparison, gap-finding, or root-cause work. Do not use for acquiring unknown information (echo), judging a work product's quality (carren), or integrating many sources into one output (synthia).
+tools: read, grep, find, ls, bash, web_search, web_fetch, playwright_navigate, playwright_navigate_back, playwright_navigate_forward, playwright_reload, playwright_get_current_url, playwright_get_title, playwright_snapshot, playwright_screenshot, playwright_close, playwright_resize, playwright_new_page, playwright_close_page, playwright_switch_tab, playwright_list_tabs, playwright_wait_for, playwright_console_messages, playwright_network_requests, playwright_network_request, playwright_pdf, playwright_verify_element_visible, playwright_verify_text_visible, playwright_verify_value, playwright_highlight, playwright_hide_highlight, playwright_mouse_move_xy, playwright_mouse_wheel, artifact_read, memory_search, memory_smart_search, memory_get_drawer, memory_list_drawers, memory_get_taxonomy, memory_check_duplicate, memory_kg_query, memory_kg_timeline, memory_kg_stats, memory_diary_read
 authority: read
-tool_profiles: filesystem.observe, shell.unbounded, web.search, browser.observe, artifact
+tool_profiles: filesystem.observe, shell.unbounded, web.search, browser.observe, artifact, memory.read
 capability: analyze
 family: epistemic
 transformation: evidence/material → structured understanding

@@ -1,6 +1,6 @@
 # Skill Invocation Extension
 
-Drives Python-based skill orchestration using the subagent tool for agent invocation.
+Drives durable skill orchestration. Python remains the default engine; a single `research` invocation can explicitly select the TypeScript v2 pilot.
 
 ## Architecture
 
@@ -16,6 +16,10 @@ Penny → skill tool → TypeScript loop:
 ```
 
 **Key principle: owner-captured artifacts.** Exact agent output is immutable and verified before model-authored SUMMARY data can influence routing. The driver passes refs, receipts, trusted invocation data, and compact routing summaries without placing full output in Penny's context.
+
+### TypeScript v2 pilot
+
+`skill({ skill_name: "research", goal: "...", engine: "typescript" })` selects the in-process TypeScript service, Node SQLite v2 checkpoint, signed owner receipts, immutable TypeScript manifest, phase-specific result tools, and worker-safe Pi SDK resource loader. It supports single research mode only. Omitted or explicit `engine: "python"` follows the unchanged Python path; parallel, chain, and chain resume remain Python. TypeScript workers load only the search and YouTube extensions plus owner-defined result/artifact tools, so the memory/knowledge-base extension is neither initialized nor exposed. No Python orchestration or artifact child is spawned in TypeScript mode.
 
 ## How It Works
 
@@ -59,13 +63,14 @@ Penny does not ingest full agent output into its context. Single and parallel wo
 
 ## Parameters
 
-| Parameter      | Type   | Description                                        |
-| -------------- | ------ | -------------------------------------------------- |
-| `skill_name`   | string | Name of the skill to invoke (currently `research`) |
-| `goal`         | string | The goal or objective                              |
-| `session_id`   | string | Optional unique session ID (auto-generated)        |
-| `project_root` | string | Optional project root directory                    |
-| `constraints`  | object | Optional additional constraints                    |
+| Parameter      | Type   | Description                                                             |
+| -------------- | ------ | ----------------------------------------------------------------------- |
+| `skill_name`   | string | Name of the skill to invoke (currently `research`)                      |
+| `goal`         | string | The goal or objective                                                   |
+| `session_id`   | string | Optional unique session ID (auto-generated)                             |
+| `project_root` | string | Optional project root directory                                         |
+| `constraints`  | object | Optional additional constraints                                         |
+| `engine`       | string | Single research only: `python` (default) or explicit `typescript` pilot |
 
 ## Agent Invocation
 

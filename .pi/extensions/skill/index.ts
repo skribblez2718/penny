@@ -58,6 +58,7 @@ import {
   parseOutputArtifactMetadata,
   persistArtifactOutput,
   stableArtifactReceiptId,
+  type ArtifactRef,
   type OutputArtifactMetadata,
 } from "./artifact-client.js";
 import {
@@ -87,6 +88,7 @@ import {
   modelInvocableSkills,
   type SkillDiscovery,
 } from "./skill-discovery.js";
+import { registerOwnerArtifactGrants } from "../artifacts/owner-grants.js";
 import { createLogger, setSessionId, type ErrorCode } from "../../lib/logger/logger.js";
 import { resolveToolResultBudget, type ToolResultBudget } from "../lib/tool-result-budget.js";
 
@@ -768,6 +770,245 @@ export function resolveSkillContextPath(
   }
   const bareGuessPath = path.join(skillPath, "assets", "prompts", `${agent}.md`);
   return fs.existsSync(bareGuessPath) ? bareGuessPath : undefined;
+}
+
+// ============================================================
+// Opt-in TypeScript orchestration pilot
+// ============================================================
+
+async function executeTypeScriptSkill(
+  skillName: string,
+  params: {
+    goal: string;
+    session_id?: string;
+    project_root?: string;
+    constraints?: Record<string, unknown>;
+  },
+  cwd: string,
+  signal: AbortSignal | undefined,
+  ctx: ExtensionCommandContext,
+  onUpdate:
+    | ((partial: { content: Array<{ type: string; text: string }>; details: unknown }) => void)
+    | undefined
+): Promise<SkillResult> {
+  if (skillName !== "research") {
+    return {
+      success: false,
+      session_id: params.session_id || "",
+      skill_name: skillName,
+      state: "error",
+      requires_approval: false,
+      steps_total: 0,
+      agents_invoked: [],
+      errors: ["The TypeScript orchestration pilot currently supports only research."],
+    };
+  }
+  if (signal?.aborted) {
+    throw abortError(skillName);
+  }
+  const projectRoot = path.resolve(params.project_root || cwd);
+  const sessionId = params.session_id || `skill-${randomUUID()}`;
+  const runId = sessionId;
+  const constraints =
+    params.constraints && typeof params.constraints === "object" ? params.constraints : {};
+  const { user_response: clarificationResponse, ...workflowConstraints } = constraints;
+  const trustedProject =
+    typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : false;
+  const orchestration = await import("@penny/orchestration/source");
+  // Owner-supplied, read-only memory grant for TS workers (worker-read posture).
+  // The memory extension is instantiated HERE (bun owner context) with a pinned,
+  // minimal worker-read env, so the worker session never reads the primary env and
+  // cannot gain write/logstream/inline-token access. Fail-closed: if worker-read
+  // memory is not fully provisioned, the workers simply run without memory tools
+  // (search/youtube only) and the run is not broken.
+  const workerExtensions = await (async () => {
+    try {
+      const memory = await import("@penny/memory-extension");
+      memory.loadWorkerReadConfig(process.env); // validate provisioning; throws if incomplete
+      const readEnv: Record<string, string> = {};
+      const copy = (name: string) => {
+        const value = process.env[name];
+        if (value && value.trim().length > 0) readEnv[name] = value;
+      };
+      for (const name of [
+        "PENNY_MEMORY_MCP_ENDPOINT",
+        "PENNY_MEMORY_PALACE_ID",
+        "PENNY_MEMORY_PRINCIPAL_ID",
+        "PENNY_MEMORY_TRUST_MODE",
+        "PENNY_MEMORY_ISOLATION_BOUNDARY_ID",
+        "PENNY_MEMORY_DATA_ROOT_ID",
+        "PENNY_MEMORY_MAX_RESPONSE_BYTES",
+        "PENNY_MEMORY_REQUEST_TIMEOUT_MS",
+      ]) {
+        copy(name);
+      }
+      // Credential: either a token file (copy the path; the secret is read from
+      // disk) or an environment secret (copy BOTH the referencing variable name and
+      // the secret it holds, since the factory resolves the credential from the
+      // env object it is given, not from the worker's process env).
+      const tokenFile = process.env.PENNY_MEMORY_MCP_TOKEN_FILE;
+      const tokenEnvName = process.env.PENNY_MEMORY_MCP_TOKEN_ENV;
+      if (tokenFile && tokenFile.trim().length > 0) {
+        readEnv.PENNY_MEMORY_MCP_TOKEN_FILE = tokenFile;
+      } else if (tokenEnvName && tokenEnvName.trim().length > 0) {
+        readEnv.PENNY_MEMORY_MCP_TOKEN_ENV = tokenEnvName;
+        const secret = process.env[tokenEnvName];
+        if (secret && secret.trim().length > 0) readEnv[tokenEnvName] = secret;
+      }
+      readEnv.PENNY_RUNTIME_ROLE = "worker-read";
+      // Scope/load the extension only. The worker's tool allow-list comes from the
+      // .pi/agents/<agent>.md SSOT (which declares memory.read), so there is no
+      // per-grant tool list to maintain here.
+      return [
+        {
+          name: "memory-worker-read",
+          factory: memory.createMemoryExtension({ env: readEnv }),
+          hidden: true,
+        },
+      ];
+    } catch {
+      return undefined; // memory not provisioned -> workers stay memory-free
+    }
+  })();
+  using service = new orchestration.OrchestrationService({
+    projectRoot,
+    env: process.env,
+    ...(workerExtensions ? { workerExtensions } : {}),
+  });
+  const identity = {
+    schema_version: 2 as const,
+    run_id: runId,
+    session_id: sessionId,
+    playbook: "research",
+    engine_owner: "typescript" as const,
+  };
+  onUpdate?.({
+    content: [{ type: "text", text: `Starting TypeScript research run ${runId}...` }],
+    details: undefined,
+  });
+
+  const existing = service.checkpointer.loadRunById(runId);
+  let directive;
+  if (existing !== undefined && clarificationResponse !== undefined) {
+    const gate = existing.pendingDirective;
+    if (gate?.action !== "await_user") {
+      throw new Error(`run '${runId}' is not awaiting clarification`);
+    }
+    directive = await service.execute(
+      {
+        schema_version: 2,
+        action: "respond",
+        identity,
+        gate_id: gate.gate_id,
+        challenge: gate.challenge,
+        response: clarificationResponse,
+      },
+      signal
+    );
+  } else if (existing !== undefined) {
+    directive = await service.execute(
+      {
+        schema_version: 2,
+        action: "recover",
+        identity,
+      },
+      signal
+    );
+  } else {
+    directive = await service.execute(
+      {
+        schema_version: 2,
+        action: "start",
+        identity,
+        goal: params.goal,
+        constraints: workflowConstraints,
+        project_root: projectRoot,
+        trust_profile: trustedProject ? "trusted-interactive" : "hardened-untrusted",
+      },
+      signal
+    );
+  }
+
+  if (signal?.aborted) {
+    throw abortError(skillName);
+  }
+  const agentsInvoked = service.checkpointer
+    .events(runId)
+    .map((event) => event.payload.agent)
+    .filter((agent): agent is string => typeof agent === "string");
+
+  if (directive.action === "await_user") {
+    return {
+      success: false,
+      session_id: sessionId,
+      skill_name: skillName,
+      state: directive.state_id,
+      requires_approval: false,
+      steps_total: agentsInvoked.length,
+      agents_invoked: agentsInvoked,
+      errors: [],
+      escalation: {
+        questions: directive.questions.map((question, index) => ({
+          id: question.id,
+          label: `Clarification ${index + 1}`,
+          prompt: question.prompt,
+          options: [],
+          allowOther: true,
+        })),
+        unknown_reason: "The TypeScript research run requires user clarification.",
+        previous_state: existing?.previousState || undefined,
+      },
+    };
+  }
+
+  if (directive.action === "paused") {
+    const control = artifactDispatchControl(process.env);
+    const pause = localArtifactDispatchPause(control, {
+      state_id: directive.state_id,
+      session_id: sessionId,
+      run_id: runId,
+    });
+    return {
+      success: false,
+      session_id: sessionId,
+      skill_name: skillName,
+      state: directive.state_id,
+      requires_approval: false,
+      steps_total: agentsInvoked.length,
+      agents_invoked: agentsInvoked,
+      errors: [],
+      retriable: true,
+      dispatch_pause: pause,
+      recovery: pause.recovery,
+    };
+  }
+
+  if (
+    directive.action === "complete" ||
+    directive.action === "incomplete" ||
+    directive.action === "error" ||
+    directive.action === "cancelled"
+  ) {
+    const outputRefValue = directive.result.output_artifact_ref;
+    const outputRef =
+      outputRefValue === null || outputRefValue === undefined
+        ? undefined
+        : parseArtifactRef(outputRefValue);
+    return {
+      success: directive.action === "complete" && directive.met === true,
+      session_id: sessionId,
+      skill_name: skillName,
+      state: directive.status,
+      requires_approval: false,
+      steps_total: agentsInvoked.length,
+      agents_invoked: agentsInvoked,
+      errors: directive.unresolved.map(String),
+      result: directive.result,
+      output_artifact_ref: outputRef,
+    };
+  }
+
+  throw new Error(`TypeScript orchestration stopped at unexpected action '${directive.action}'`);
 }
 
 // ============================================================
@@ -1798,6 +2039,13 @@ const SkillParams = Type.Object({
       description: "Additional constraints as JSON object",
     })
   ),
+  engine: Type.Optional(
+    Type.String({
+      pattern: "^(python|typescript)$",
+      description:
+        "Execution engine for single research runs. Omit for the stable Python default; TypeScript is an explicit pilot.",
+    })
+  ),
 
   // Parallel mode — invoke multiple skills concurrently (max 3).
   skills: Type.Optional(
@@ -2433,16 +2681,42 @@ export default function skillExtension(pi: ExtensionAPI): void {
   // them through this model-facing tool description or the `/skills` listing.
   const skills = modelInvocableSkills(discoverSkills());
 
+  let currentSessionId: string | undefined;
+
   pi.on("session_start", async (_event: unknown, ctx: ExtensionCommandContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
+    currentSessionId = sessionId;
     setSessionId(sessionId);
   });
+
+  /**
+   * Grant the terminal skill artifact to the execution owner so the
+   * orchestrator can read the exact result it is handed a ref for. Best effort:
+   * a completed skill run is never failed by grant bookkeeping.
+   */
+  const grantTerminalArtifact = (result: SkillResult): SkillResult => {
+    const ref = result.output_artifact_ref;
+    if (!ref || !currentSessionId) return result;
+    try {
+      const [granted] = registerOwnerArtifactGrants({
+        sessionId: currentSessionId,
+        refs: [ref as ArtifactRef],
+      });
+      return granted ? { ...result, output_artifact_ref: granted } : result;
+    } catch (error) {
+      logger.warn("skill_owner_grant_failed", {
+        errorCode: "SKILL_OWNER_GRANT_FAILED",
+        reason: error instanceof Error ? error.message : "unknown",
+      });
+      return result;
+    }
+  };
 
   pi.registerTool({
     name: "skill",
     label: "Invoke Skill",
     description: [
-      "Invoke a Python-based skill with state machine orchestration.",
+      "Invoke a skill with durable state-machine orchestration (Python default; TypeScript research pilot only when explicitly selected).",
       "Skills define workflows (phases, transitions, subagent order).",
       "Penny decides WHEN to invoke; skills decide HOW to execute.",
       "Exact agent output is owner-persisted as an artifact before SUMMARY routing.",
@@ -2492,6 +2766,25 @@ export default function skillExtension(pi: ExtensionAPI): void {
 
       let result: SkillResult;
 
+      if (params.engine === "typescript" && detected.mode !== "single") {
+        const errorResult: SkillResult = {
+          success: false,
+          session_id: params.session_id || "error",
+          skill_name: "skill",
+          state: "error",
+          requires_approval: false,
+          steps_total: 0,
+          agents_invoked: [],
+          errors: ["The TypeScript orchestration pilot supports single research mode only."],
+        };
+        return {
+          content: [
+            { type: "text", text: formatResult(errorResult, ctx.ui.theme.fg.bind(ctx.ui.theme)) },
+          ],
+          details: errorResult,
+        };
+      }
+
       switch (detected.mode) {
         case "single": {
           // detectSkillMode guarantees skill_name+goal in single mode; re-check
@@ -2508,7 +2801,10 @@ export default function skillExtension(pi: ExtensionAPI): void {
             project_root: params.project_root,
             constraints: params.constraints,
           };
-          result = await executeSkill(skillName, cleanParams, ctx.cwd, signal, ctx, onUpdate);
+          result =
+            params.engine === "typescript"
+              ? await executeTypeScriptSkill(skillName, cleanParams, ctx.cwd, signal, ctx, onUpdate)
+              : await executeSkill(skillName, cleanParams, ctx.cwd, signal, ctx, onUpdate);
           result.mode = "single";
           break;
         }
@@ -2576,9 +2872,12 @@ export default function skillExtension(pi: ExtensionAPI): void {
           throw new Error(`Unknown mode: ${String(detected.mode)}`);
       }
 
+      const granted = grantTerminalArtifact(result);
       return {
-        content: [{ type: "text", text: formatResult(result, ctx.ui.theme.fg.bind(ctx.ui.theme)) }],
-        details: result,
+        content: [
+          { type: "text", text: formatResult(granted, ctx.ui.theme.fg.bind(ctx.ui.theme)) },
+        ],
+        details: granted,
       };
     },
 

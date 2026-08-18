@@ -1,9 +1,9 @@
 ---
 name: skribble
-description: Materialize an artifact from a specification — source code and tests, documents, templates, configuration, or scaffolding. Use when a clear spec must become files. Not for integrating evidence into understanding (synthia) or decomposing work into tasks (tabitha).
-tools: read, grep, find, ls, write, edit, bash, web_search, web_fetch, word_generate, powerpoint_generate, artifact_read
+description: Materialize an artifact from a specification — source code and tests, documents, templates, configuration, or scaffolding. Use when a clear spec must become files. Do not use for integrating evidence into understanding (synthia) or decomposing work into tasks (tabitha).
+tools: read, grep, find, ls, write, edit, bash, web_search, web_fetch, word_generate, powerpoint_generate, artifact_read, memory_search, memory_smart_search, memory_get_drawer, memory_list_drawers, memory_get_taxonomy, memory_check_duplicate, memory_kg_query, memory_kg_timeline, memory_kg_stats, memory_diary_read
 authority: write
-tool_profiles: filesystem.write, shell.unbounded, web.search, docgen, artifact
+tool_profiles: filesystem.write, shell.unbounded, web.search, docgen, artifact, memory.read
 capability: generate
 family: operational
 transformation: specification → materialized artifact

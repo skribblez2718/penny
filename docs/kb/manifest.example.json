@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "kb_id": "kb_example_only_not_a_live_identity",
+  "title": "Example advisory knowledge base",
+  "authority": "advisory",
+  "paths": {
+    "policy": ".kb/policy.json",
+    "source_records": "sources/records",
+    "source_objects": "sources/objects",
+    "pages": "pages",
+    "conflicts": "conflicts",
+    "work": "work",
+    "lock": ".kb/lock",
+    "generations": ".kb/generations",
+    "generation_catalog_filename": "catalog.json",
+    "generation_index_filename": "index.sqlite",
+    "current": ".kb/current.json",
+    "root_index": "index.md"
+  },
+  "created_at": "2026-01-01T00:00:00Z"
+}

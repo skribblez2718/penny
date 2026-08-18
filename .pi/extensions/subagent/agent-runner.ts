@@ -37,6 +37,42 @@ const LEGACY_MEMORY_ENVIRONMENT_SELECTORS = ["PI_MEMORY_BRIDGE", "MEMPAL_PALACE_
 export { type AgentConfig, type AgentScope, discoverAgents };
 
 /**
+ * Environment variables to pass through for worker-read memory access.
+ * Only the minimal set needed for authenticated read-only hub access.
+ * Write credentials, custody fields, and logstream config are NOT passed.
+ */
+const WORKER_READ_MEMORY_ENV_VARS = [
+  "PENNY_MEMORY_MCP_ENDPOINT",
+  "PENNY_MEMORY_MCP_TOKEN_FILE",
+  "PENNY_MEMORY_PALACE_ID",
+  "PENNY_MEMORY_PRINCIPAL_ID",
+  "PENNY_MEMORY_TRUST_MODE",
+  "PENNY_MEMORY_ISOLATION_BOUNDARY_ID",
+  "PENNY_MEMORY_DATA_ROOT_ID",
+  "PENNY_MEMORY_MAX_RESPONSE_BYTES",
+  "PENNY_MEMORY_REQUEST_TIMEOUT_MS",
+] as const;
+
+/**
+ * Read-only memory tools declared in agent frontmatter via the `memory.read`
+ * tool profile. These are NOT injected by the agent-runner — the frontmatter
+ * `tools:` field is the entire control plane (universal-agents PRD R1.5,
+ * R2.1). This constant is exported for reference and test assertions only.
+ */
+export const WORKER_READ_MEMORY_TOOLS = [
+  "memory_search",
+  "memory_smart_search",
+  "memory_get_drawer",
+  "memory_list_drawers",
+  "memory_get_taxonomy",
+  "memory_check_duplicate",
+  "memory_kg_query",
+  "memory_kg_timeline",
+  "memory_kg_stats",
+  "memory_diary_read",
+] as const;
+
+/**
  * Build the execution-owner-controlled environment for a spawned worker.
  *
  * Every agent process (direct `subagent(...)` or skill-invoked) is spawned
@@ -45,9 +81,15 @@ export { type AgentConfig, type AgentScope, discoverAgents };
  * selectors are removed before any inherited role claim is overwritten. The
  * role marker classifies this child for lifecycle policy; it is not an
  * authorization grant, a tool grant, or a sandbox boundary.
+ *
+ * When ``memoryReadAccess`` is true, a minimal set of read-only memory env
+ * vars is re-added after stripping, and the role is set to ``worker-read``
+ * so the memory extension registers only read tools. The child cannot
+ * escalate its own role — the parent overwrites PENNY_RUNTIME_ROLE.
  */
 export function isolatedAgentEnvironment(
-  environment: NodeJS.ProcessEnv = process.env
+  environment: NodeJS.ProcessEnv = process.env,
+  options: { memoryReadAccess?: boolean } = {}
 ): NodeJS.ProcessEnv {
   const selectedMemoryCredential = environment.PENNY_MEMORY_MCP_TOKEN_ENV?.trim();
   const isolated: NodeJS.ProcessEnv = { ...environment };
@@ -60,11 +102,30 @@ export function isolatedAgentEnvironment(
   if (selectedMemoryCredential) delete isolated[selectedMemoryCredential];
   delete isolated.PENNY_RECEIPT_HMAC_KEY;
   delete isolated.PENNY_APPROVAL_HMAC_KEY;
-  isolated.PENNY_RUNTIME_ROLE = "worker";
+
+  if (options.memoryReadAccess) {
+    // Re-add only the minimal read-only memory config
+    for (const name of WORKER_READ_MEMORY_ENV_VARS) {
+      if (environment[name]) isolated[name] = environment[name];
+    }
+    // Never pass the token env var (only the token file path)
+    delete isolated.PENNY_MEMORY_MCP_TOKEN_ENV;
+    // Never pass write-related config
+    delete isolated.PENNY_MEMORY_WRITE_MODE;
+    delete isolated.PENNY_MEMORY_LOGSTREAM_MODE;
+    delete isolated.PENNY_MEMORY_LOGSTREAM_STREAM;
+    delete isolated.PENNY_MEMORY_LOGSTREAM_ROOMS;
+    isolated.PENNY_RUNTIME_ROLE = "worker-read";
+  } else {
+    isolated.PENNY_RUNTIME_ROLE = "worker";
+  }
   return isolated;
 }
 
-function ownerSuppliedAgentEnvironment(ownerEnvironment?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function ownerSuppliedAgentEnvironment(
+  ownerEnvironment?: NodeJS.ProcessEnv,
+  options: { memoryReadAccess?: boolean } = {}
+): NodeJS.ProcessEnv {
   const selectedMemoryCredentials = [
     process.env.PENNY_MEMORY_MCP_TOKEN_ENV?.trim(),
     ownerEnvironment?.PENNY_MEMORY_MCP_TOKEN_ENV?.trim(),
@@ -75,7 +136,7 @@ function ownerSuppliedAgentEnvironment(ownerEnvironment?: NodeJS.ProcessEnv): No
     if (value === undefined) delete merged[name];
     else merged[name] = value;
   }
-  const isolated = isolatedAgentEnvironment(merged);
+  const isolated = isolatedAgentEnvironment(merged, options);
   for (const name of selectedMemoryCredentials) delete isolated[name];
   return isolated;
 }
@@ -725,6 +786,24 @@ export async function runSingleAgent(
   // it for this worker only. The artifact extension still validates the exact
   // refs; tool visibility and PENNY_RUNTIME_ROLE are not authorization.
   const hasArtifactGrant = hasOwnerArtifactGrant(ownerEnvironment);
+
+  // Memory read access: enabled when the primary session has a configured
+  // memory hub. The worker-read branch of the memory extension will register
+  // only read tools (writeEnabled=false). If the env vars are missing, the
+  // extension gracefully degrades and registers no tools.
+  //
+  // Memory tools are declared in each agent's frontmatter `tools:` field and
+  // `tool_profiles:` (via the `memory.read` profile in check_tool_profiles.py).
+  // The agent-runner does NOT inject them dynamically — the frontmatter is the
+  // entire control plane (universal-agents PRD R1.5, R2.1). The runner only
+  // sets the role marker and passes through read-only memory env vars.
+  const memoryReadAccess = Boolean(
+    process.env.PENNY_MEMORY_MODE === "hub" &&
+    process.env.PENNY_MEMORY_MCP_ENDPOINT &&
+    process.env.PENNY_MEMORY_MCP_TOKEN_FILE &&
+    process.env.PENNY_MEMORY_PALACE_ID
+  );
+
   if (agent.tools && agent.tools.length > 0) {
     const tools = agent.tools.filter((tool) => tool !== ARTIFACT_TOOL_NAME);
     if (hasArtifactGrant) tools.push(ARTIFACT_TOOL_NAME);
@@ -732,7 +811,7 @@ export async function runSingleAgent(
     else args.push("--no-tools");
   }
   if (!hasArtifactGrant) args.push("--exclude-tools", ARTIFACT_TOOL_NAME);
-  const workerEnvironment = ownerSuppliedAgentEnvironment(ownerEnvironment);
+  const workerEnvironment = ownerSuppliedAgentEnvironment(ownerEnvironment, { memoryReadAccess });
 
   const currentResult: SingleResult = {
     agent: agentName,

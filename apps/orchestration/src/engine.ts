@@ -1,23 +1,52 @@
 import path from "node:path";
 
+import type { ArtifactRevisionLookup } from "./artifact-store.js";
 import { Checkpointer, ReceiptConflictError, canonicalJson, sha256 } from "./checkpointer.js";
 import { RunContext } from "./context.js";
 import {
-  DirectiveSchema,
+  ContractValidationError,
   OrchestrationRequestSchema,
   type ArtifactRef,
   type Confidence,
   type Directive,
   type JsonValue,
   type PhaseResult,
+  type EvaluationResult,
+  isTerminalStatus,
   type RunIdentity,
+  type RunStatus,
+  type SkillContract,
   validateContract,
+  validateDirective,
 } from "./contracts.js";
-import { ResearchPlaybook } from "./playbooks/research.js";
+import {
+  evaluateCompletionGate,
+  hasFanAggregate,
+  hasMalformedReissue,
+  type PlaybookV1,
+} from "./playbooks/playbook.js";
+import {
+  isRegisteredPlaybook,
+  PLAYBOOK_REGISTRY,
+  resolvePlaybook,
+  SOLE_PRODUCTION_PLAYBOOK,
+  validateRegistrationContract,
+  type PlaybookRegistryV1,
+} from "./playbooks/registry.js";
+import { ReceiptAuthority, trustedInvocationDigest } from "./receipts.js";
 
 export interface EngineOptions {
   readonly projectRoot: string;
   readonly maxSteps: number;
+  readonly dispatchMode?: () => string | undefined;
+  readonly receiptAuthority?: ReceiptAuthority;
+  /** Immutable artifact-manifest ledger used to resolve output revision chains. */
+  readonly artifactRevisions?: ArtifactRevisionLookup;
+  /**
+   * Playbook registry override. Production uses the shipped single-entry registry;
+   * tests inject a double to prove multi-playbook dispatch without activating a skill.
+   */
+  readonly playbookRegistry?: PlaybookRegistryV1;
 }
 
 const CONFIDENCE_RANK: Record<Confidence, number> = {
@@ -28,7 +57,7 @@ const CONFIDENCE_RANK: Record<Confidence, number> = {
 };
 
 function directive(value: unknown): Directive {
-  return validateContract(DirectiveSchema, value, "engine directive");
+  return validateDirective(value);
 }
 
 function weakestConfidence(values: readonly Confidence[]): Confidence {
@@ -51,20 +80,69 @@ function metadata(identity: RunIdentity): Record<string, JsonValue> {
 }
 
 export class OrchestrationEngine {
-  private readonly playbook = new ResearchPlaybook();
+  // Typed as the capability-probed union, never as a concrete playbook class: the engine
+  // must not know which playbook it is driving. See playbooks/playbook.ts (W1).
+  private readonly playbook: PlaybookV1;
+  private readonly registry: PlaybookRegistryV1;
+  /** The active skill contract (W3). Exposed for worker posture resolution (W6). */
+  readonly contract: SkillContract;
   private readonly projectRoot: string;
   private readonly maxSteps: number;
+  private readonly dispatchMode: () => string | undefined;
+  readonly receiptAuthority: ReceiptAuthority;
 
   constructor(
     private readonly checkpointer: Checkpointer,
     options: EngineOptions
   ) {
+    this.registry = options.playbookRegistry ?? PLAYBOOK_REGISTRY;
+    // Construct through the registry. The engine imports no concrete playbook class.
+    const registration = resolvePlaybook(SOLE_PRODUCTION_PLAYBOOK, this.registry);
+    if (registration === undefined) {
+      throw new Error(
+        `playbook '${SOLE_PRODUCTION_PLAYBOOK}' is not registered in the supplied registry`
+      );
+    }
+    // W3: the contract is validated before the playbook is constructed. An invalid
+    // contract fails closed -- it is authority metadata, not documentation.
+    this.contract = validateRegistrationContract(registration);
+    this.playbook = registration.construct({
+      ...(options.artifactRevisions ? { artifactRevisions: options.artifactRevisions } : {}),
+    });
     this.projectRoot = path.resolve(options.projectRoot);
     this.maxSteps = options.maxSteps;
+    this.dispatchMode = options.dispatchMode ?? (() => process.env.PENNY_ARTIFACT_DISPATCH_MODE);
+    this.receiptAuthority =
+      options.receiptAuthority ?? ReceiptAuthority.load(`${this.checkpointer.dbPath}.receipt-key`);
   }
 
   handle(value: unknown): Directive {
     const request = validateContract(OrchestrationRequestSchema, value, "orchestration request");
+    const dispatch = this.dispatchState();
+    if (!dispatch.active && request.action !== "status" && request.action !== "cancel") {
+      if (request.action === "start") {
+        if (path.resolve(request.project_root) !== this.projectRoot) {
+          throw new Error(
+            `project_root mismatch: engine owns '${this.projectRoot}', request supplied '${request.project_root}'`
+          );
+        }
+        return this.pausedDirective(
+          request.identity,
+          "intake",
+          dispatch.code,
+          dispatch.reason,
+          false
+        );
+      }
+      const context = this.checkpointer.loadRun(request.identity);
+      return this.pausedDirective(
+        context.identity,
+        context.stateId,
+        dispatch.code,
+        dispatch.reason,
+        true
+      );
+    }
     switch (request.action) {
       case "start": {
         if (path.resolve(request.project_root) !== this.projectRoot) {
@@ -176,8 +254,25 @@ export class OrchestrationEngine {
         throw new Error("single-agent result must not include branch_id");
       }
       this.assertAssignment(result, pending.state_id, pending.agent, pending.attempt);
-      this.playbook.validateDetails(context.stateId, result.details);
+      this.validateOutputArtifact(
+        result,
+        context.identity,
+        pending.output_artifact,
+        pending.input_artifacts,
+        pending.task,
+        pending.trust_profile,
+        pending.model_override ?? null,
+        null
+      );
       this.captureArtifact(context, result.output_artifact);
+      try {
+        this.playbook.validateDetails(context.stateId, result.details);
+      } catch (error) {
+        if (error instanceof ContractValidationError) {
+          return this.reissueMalformed(context, result, branchId, error);
+        }
+        throw error;
+      }
       next = this.playbook.acceptSummary(context, result.details, result.confidence);
     } else if (pending.action === "invoke_agents_parallel") {
       if (result.branch_id === undefined) {
@@ -189,7 +284,26 @@ export class OrchestrationEngine {
         throw new Error(`wrong_branch '${branchId}' for state '${pending.state_id}'`);
       }
       this.assertAssignment(result, assignment.state_id, assignment.agent, assignment.attempt);
-      const details = this.playbook.validateDetails(assignment.state_id, result.details);
+      this.validateOutputArtifact(
+        result,
+        context.identity,
+        assignment.output_artifact,
+        assignment.input_artifacts,
+        assignment.task,
+        assignment.trust_profile,
+        assignment.model_override ?? null,
+        branchId
+      );
+      this.captureArtifact(context, result.output_artifact);
+      let details: Record<string, JsonValue>;
+      try {
+        details = this.playbook.validateDetails(assignment.state_id, result.details);
+      } catch (error) {
+        if (error instanceof ContractValidationError) {
+          return this.reissueMalformed(context, result, branchId, error);
+        }
+        throw error;
+      }
       const branch = context.pendingBranches.find((candidate) => candidate.branch_id === branchId);
       if (branch === undefined) {
         throw new Error(`branch '${branchId}' is absent from checkpoint state`);
@@ -197,7 +311,7 @@ export class OrchestrationEngine {
       if (branch.completed) {
         throw new Error(`duplicate_branch '${branchId}'`);
       }
-      const artifact = this.captureArtifact(context, result.output_artifact);
+      const artifact = result.output_artifact;
       const branchIndex = context.pendingBranches.indexOf(branch);
       context.pendingBranches[branchIndex] = {
         ...branch,
@@ -207,10 +321,27 @@ export class OrchestrationEngine {
         artifact,
       };
       if (context.pendingBranches.some((candidate) => !candidate.completed)) {
-        next = pending;
+        const incomplete = new Set(
+          context.pendingBranches
+            .filter((candidate) => !candidate.completed)
+            .map((candidate) => candidate.branch_id)
+        );
+        next = directive({
+          ...pending,
+          branches: pending.branches.filter((candidate) => incomplete.has(candidate.branch_id)),
+        });
+        context.pendingDirective = next;
       } else {
         const completed = context.pendingBranches;
-        const aggregate = this.playbook.aggregateResearchBranches(
+        if (!hasFanAggregate(this.playbook)) {
+          // A playbook that emits parallel branches must be able to fold them back.
+          // Failing loudly here is correct: silently dropping branch results would
+          // corrupt the run's evidence.
+          throw new Error(
+            `playbook '${identity.playbook}' produced parallel branches but does not implement the fan-aggregate capability`
+          );
+        }
+        const aggregate = this.playbook.aggregateBranches(
           completed.map((candidate) => candidate.result ?? {})
         );
         const confidences = completed.map((candidate) => candidate.confidence ?? "UNCERTAIN");
@@ -219,6 +350,9 @@ export class OrchestrationEngine {
     } else {
       throw new Error(`run '${identity.run_id}' is not awaiting an agent result`);
     }
+
+    // W7: the engine, not the playbook, admits a met terminal.
+    this.admitTerminal(context, next);
 
     this.checkpointer.saveWithReceipt(context, result, branchId, "phase_result_accepted", {
       ...metadata(identity),
@@ -233,8 +367,51 @@ export class OrchestrationEngine {
     return next;
   }
 
+  private reissueMalformed(
+    context: RunContext,
+    result: PhaseResult,
+    branchId: string,
+    error: ContractValidationError
+  ): Directive {
+    const pending = context.pendingDirective;
+    // W5: a malformed worker result is a typed feedback kind, not an ad-hoc branch.
+    // The engine records the classification and routes on it.
+    const evaluation: EvaluationResult = {
+      schema_version: 1,
+      kind: "malformed_result",
+      detail: error.message,
+      ...(branchId.length > 0 ? { target_state: result.state_id } : {}),
+      exhausted: false,
+    };
+    const reissueCurrent = (): Directive => {
+      context.reissueCurrent();
+      return this.playbook.dispatch(context);
+    };
+    const next =
+      evaluation.kind === "malformed_result" &&
+      pending?.action === "invoke_agents_parallel" &&
+      branchId.length > 0 &&
+      hasMalformedReissue(this.playbook)
+        ? this.playbook.reissueMalformedBranch(context, pending, branchId)
+        : // Without the capability, fall back to reissuing the current state -- the same
+          // path already used for non-branch results.
+          reissueCurrent();
+    this.checkpointer.saveWithReceipt(context, result, branchId, "phase_result_malformed", {
+      ...metadata(context.identity),
+      state_id: result.state_id,
+      agent: result.agent,
+      attempt: result.attempt,
+      branch_id: branchId,
+      feedback_kind: evaluation.kind,
+      receipt_id: result.worker_receipt.receipt_id,
+      error_sha256: sha256(error.message),
+      next_action: next.action,
+    });
+    return next;
+  }
+
   private validateReceiptEnvelope(identity: RunIdentity, result: PhaseResult): void {
-    const receipt = result.worker_receipt;
+    const receipt = this.receiptAuthority.verify(result.worker_receipt);
     const comparisons: Array<[string, string | number, string | number]> = [
       ["run_id", identity.run_id, result.run_id],
       ["receipt.run_id", identity.run_id, receipt.run_id],
@@ -270,6 +447,75 @@ export class OrchestrationEngine {
     for (const [name, expected, actual] of fields) {
       if (expected !== actual) {
         throw new Error(`wrong_${name}: expected '${expected}', found '${actual}'`);
+      }
+    }
+  }
+
+  private validateOutputArtifact(
+    result: PhaseResult,
+    identity: RunIdentity,
+    expected: Extract<Directive, { action: "invoke_agent" }>["output_artifact"],
+    inputArtifacts: Extract<Directive, { action: "invoke_agent" }>["input_artifacts"],
+    task: string,
+    trustProfile: Extract<Directive, { action: "invoke_agent" }>["trust_profile"],
+    modelOverride: string | null,
+    branchId: string | null
+  ): void {
+    const artifact = result.output_artifact;
+    if (artifact === undefined) {
+      throw new Error("phase result is missing the owner output artifact ref");
+    }
+    const comparisons: Array<[string, unknown, unknown]> = [
+      ["run_id", expected.run_id, artifact.run_id],
+      ["phase", expected.phase, artifact.phase],
+      ["branch_id", branchId, artifact.branch_id],
+      ["kind", expected.kind, artifact.kind],
+      ["operation_id", expected.operation_id, artifact.operation_id],
+      ["version", expected.version, artifact.version],
+      ["producer", expected.producer, artifact.producer],
+      ["media_type", expected.media_type, artifact.media_type],
+      [
+        "consumer_scope",
+        canonicalJson(expected.consumer_scope),
+        canonicalJson(artifact.consumer_scope),
+      ],
+      ["output_digest", result.worker_receipt.output_digest, artifact.content_digest],
+      [
+        "receipt_artifact_ref",
+        canonicalJson(artifact),
+        canonicalJson(result.worker_receipt.output_artifact_ref),
+      ],
+      ["receipt_branch_id", branchId, result.worker_receipt.branch_id],
+      ["receipt_trust_profile", trustProfile, result.worker_receipt.trust_profile],
+      ["receipt_model", modelOverride, result.worker_receipt.model],
+      [
+        "receipt_command",
+        canonicalJson(["pi-sdk", result.agent]),
+        canonicalJson(result.worker_receipt.command),
+      ],
+      ["receipt_working_directory", this.projectRoot, result.worker_receipt.working_directory],
+      [
+        "trusted_invocation_digest",
+        trustedInvocationDigest({
+          identity,
+          state_id: expected.phase,
+          branch_id: branchId,
+          agent: result.agent,
+          attempt: result.attempt,
+          trust_profile: trustProfile,
+          model_override: modelOverride,
+          task_sha256: sha256(task),
+          input_artifacts: inputArtifacts,
+          output_artifact: expected,
+        }),
+        result.worker_receipt.trusted_invocation_digest,
+      ],
+    ];
+    for (const [name, wanted, actual] of comparisons) {
+      if (wanted !== actual) {
+        throw new Error(
+          `output artifact mismatch for ${name}: expected '${String(wanted)}', found '${String(actual)}'`
+        );
       }
     }
   }
@@ -320,7 +566,9 @@ export class OrchestrationEngine {
 
   private recover(identity: RunIdentity): Directive {
     const context = this.checkpointer.loadRun(identity);
-    if (context.identity.playbook !== "research") {
+    // Fail closed on an unregistered playbook, with the exact refusal this engine
+    // produced before the registry existed: same code, same fields, checkpoint untouched.
+    if (!isRegisteredPlaybook(context.identity.playbook, this.registry)) {
       return directive({
         schema_version: 2,
         action: "error",
@@ -341,6 +589,81 @@ export class OrchestrationEngine {
     return this.currentDirective(context);
   }
 
+  private dispatchState(): {
+    active: boolean;
+    code: "DISPATCH_PAUSED" | "DISPATCH_MODE_INVALID";
+    reason: string;
+  } {
+    const mode = this.dispatchMode()?.trim() || "active";
+    if (mode === "active") {
+      return {
+        active: true,
+        code: "DISPATCH_PAUSED",
+        reason: "artifact dispatch is active",
+      };
+    }
+    if (mode === "paused") {
+      return {
+        active: false,
+        code: "DISPATCH_PAUSED",
+        reason: "artifact dispatch is paused by the execution owner",
+      };
+    }
+    return {
+      active: false,
+      code: "DISPATCH_MODE_INVALID",
+      reason: `unknown artifact dispatch mode '${mode}'`,
+    };
+  }
+
+  private pausedDirective(
+    identity: RunIdentity,
+    stateId: string,
+    code: "DISPATCH_PAUSED" | "DISPATCH_MODE_INVALID",
+    reason: string,
+    checkpointPreserved: boolean
+  ): Directive {
+    return directive({
+      schema_version: 2,
+      action: "paused",
+      identity,
+      status: "running",
+      state_id: stateId,
+      code,
+      reason,
+      retryable: true,
+      recovery: {
+        action: "recover",
+        run_id: identity.run_id,
+        checkpoint_preserved: checkpointPreserved,
+      },
+    });
+  }
+
+  /**
+   * W7 — evaluate the active skill's completion gate before a `met: true` terminal is
+   * accepted. Non-met terminals pass through untouched: an honest incomplete or cancelled
+   * outcome must stay reachable.
+   */
+  private admitTerminal(context: RunContext, next: Directive): void {
+    const candidate = next as Directive & { status?: string; met?: boolean };
+    if (candidate.met !== true || !isTerminalStatus(candidate.status as RunStatus)) {
+      return;
+    }
+    const refusal = evaluateCompletionGate({
+      gate: this.contract.completion_gate,
+      terminalStatus: String(candidate.status),
+      met: true,
+      fromState: context.previousState,
+      unresolvedCount: Array.isArray((candidate as { unresolved?: unknown[] }).unresolved)
+        ? ((candidate as { unresolved: unknown[] }).unresolved satisfies unknown[]).length
+        : 0,
+    });
+    if (refusal !== null) {
+      throw new Error(`playbook '${context.identity.playbook}': ${refusal}`);
+    }
+  }
+
   private currentDirective(context: RunContext): Directive {
     if (context.terminalDirective !== null) {
       return context.terminalDirective;
@@ -348,6 +671,12 @@ export class OrchestrationEngine {
     if (context.pendingDirective === null) {
       throw new Error(`checkpoint '${context.identity.run_id}' has no recoverable directive`);
     }
-    return context.pendingDirective;
+    // Re-bind the output artifact spec to the current ledger top so a directive
+    // saved across a crash window is never replayed with a stale version.
+    const rebound = this.playbook.rebindPendingDirective(context);
+    if (rebound === null) {
+      throw new Error(`checkpoint '${context.identity.run_id}' has no recoverable directive`);
+    }
+    return rebound;
   }
 }

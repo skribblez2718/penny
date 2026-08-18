@@ -269,6 +269,7 @@ describe("effective prompt assembly", () => {
     const registeredTools: Array<Record<string, unknown>> = [];
     subagentExtension({
       registerTool: (tool: Record<string, unknown>) => registeredTools.push(tool),
+      on: () => {},
     } as never);
     const subagentTool = registeredTools.find((tool) => tool.name === "subagent");
     expect(subagentTool).toBeDefined();
@@ -300,6 +301,9 @@ describe("effective prompt assembly", () => {
     );
 
     for (const capture of promptCaptures) {
+      // Memory tools are declared in agent frontmatter (via the memory.read
+      // profile), not injected by the agent-runner. The --tools argument is
+      // exactly the agent's declared tools list.
       expect(argValue(capture.args, "--tools")).toBe(agent.tools!.join(","));
     }
   });

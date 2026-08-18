@@ -33,6 +33,14 @@ Workers and skill drivers expose no memory tools. The primary runtime may
 retrieve or curate durable knowledge separately. Normal memory access uses one
 supervised MemPalace 3.7.1 HTTP hub with no raw fallback.
 
+## Dual runtime
+
+Python remains the default engine. An opt-in TypeScript v2 runtime is available
+for the `research` playbook during the migration pilot. Both runtimes share the
+same FSM protocol, checkpointer schema, and forward-only recovery; TypeScript v2
+additionally defines `respond` and `cancel` through its closed service/CLI request
+schema. No default changes before the M7 approval gate.
+
 ## Truth and safety
 
 Loops are bounded, verifier passes require evidence, and exhaustion reports

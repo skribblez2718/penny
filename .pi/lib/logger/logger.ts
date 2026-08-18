@@ -254,8 +254,22 @@ export function setGlobalLogTransport(transport: LogTransport | undefined): void
   globalTransport = transport;
 }
 
+/**
+ * Per-component threshold, e.g. `PI_LOG_LEVEL_ARTIFACTS=INFO`.
+ *
+ * The global default stays WARN so routine operation is quiet, while one
+ * component can be turned up without flooding the log with every other
+ * component's INFO traffic. Component names are normalized: `agent-runner`
+ * becomes `PI_LOG_LEVEL_AGENT_RUNNER`, `playwright:browser` becomes
+ * `PI_LOG_LEVEL_PLAYWRIGHT_BROWSER`.
+ */
+export function componentLevelVariable(extension: string): string {
+  return `PI_LOG_LEVEL_${extension.replace(/[^A-Za-z0-9]+/g, "_").toUpperCase()}`;
+}
+
 export function createLogger(extension: string, transport?: LogTransport): Logger {
-  const configuredLevel = parseLevel(process.env.PI_LOG_LEVEL);
+  const componentLevel = process.env[componentLevelVariable(extension)];
+  const configuredLevel = parseLevel(componentLevel ?? process.env.PI_LOG_LEVEL);
   const configuredFormat = parseFormat(process.env.PI_LOG_FORMAT);
   const localDefaultTransport: LogTransport = defaultTransport;
   const write = transport ?? globalTransport ?? localDefaultTransport;

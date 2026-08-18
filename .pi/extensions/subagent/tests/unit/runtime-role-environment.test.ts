@@ -185,6 +185,7 @@ function registeredSubagentTool(): {
     registerTool: (definition: { name: string; execute: (...args: any[]) => Promise<any> }) => {
       if (definition.name === "subagent") tool = definition;
     },
+    on: () => {},
   } as never);
   if (!tool) throw new Error("subagent tool was not registered");
   return tool;
@@ -202,11 +203,50 @@ function spawnedEnvironments(): NodeJS.ProcessEnv[] {
   return mockSpawn.mock.calls.map((call) => (call[2] as { env: NodeJS.ProcessEnv }).env);
 }
 
+/** Env vars that worker-read mode re-adds (read-only subset). */
+const WORKER_READ_MEMORY_PASSTHROUGH = [
+  "PENNY_MEMORY_MCP_ENDPOINT",
+  "PENNY_MEMORY_MCP_TOKEN_FILE",
+  "PENNY_MEMORY_PALACE_ID",
+  "PENNY_MEMORY_PRINCIPAL_ID",
+  "PENNY_MEMORY_TRUST_MODE",
+  "PENNY_MEMORY_ISOLATION_BOUNDARY_ID",
+  "PENNY_MEMORY_DATA_ROOT_ID",
+  "PENNY_MEMORY_MAX_RESPONSE_BYTES",
+  "PENNY_MEMORY_REQUEST_TIMEOUT_MS",
+] as const;
+
+/** Env vars that must always be stripped, even in worker-read mode. */
+const MEMORY_ALWAYS_STRIPPED = [
+  "PENNY_MEMORY_MODE",
+  "PENNY_MEMORY_WRITE_MODE",
+  "PENNY_MEMORY_LOGSTREAM_MODE",
+  "PENNY_MEMORY_LOGSTREAM_STREAM",
+  "PENNY_MEMORY_LOGSTREAM_ROOMS",
+  "PENNY_MEMORY_MCP_TOKEN_ENV",
+  "PENNY_MEMORY_FUTURE_SELECTOR",
+  "MEMPALACE_MCP_HTTP_TOKEN",
+  "MEMPALACE_FUTURE_SECRET",
+  "MEMPALACE_PALACE_PATH",
+  "MEMPAL_PALACE_PATH",
+  "PI_MEMORY_BRIDGE",
+  DYNAMIC_MEMORY_CREDENTIAL_NAME,
+] as const;
+
 function expectWorkerEnvironment(environment: NodeJS.ProcessEnv): void {
-  expect(environment.PENNY_RUNTIME_ROLE).toBe("worker");
+  // The role could be "worker" (no memory access, direct isolatedAgentEnvironment
+  // call without memoryReadAccess) or "worker-read" (read-only memory access,
+  // when the agent spawning code detects a configured memory hub in process.env).
+  const role = environment.PENNY_RUNTIME_ROLE;
+  expect(role === "worker" || role === "worker-read").toBe(true);
+
+  // Authority secrets are always stripped
   for (const name of AUTHORITY_ENV_NAMES) expect(environment[name]).toBeUndefined();
   for (const name of ARTIFACT_INVOCATION_ENV_NAMES) expect(environment[name]).toBeUndefined();
-  for (const name of MEMORY_ENV_NAMES) expect(environment[name]).toBeUndefined();
+
+  // Write/logstream/legacy memory env vars are always stripped, even in worker-read mode
+  for (const name of MEMORY_ALWAYS_STRIPPED) expect(environment[name]).toBeUndefined();
+
   expect(environment.PENNY_TEST_SAFE_VALUE).toBe("retained");
 }
 
@@ -217,6 +257,11 @@ beforeEach(() => {
     "PENNY_RUNTIME_ROLE",
     "PENNY_TEST_SAFE_VALUE",
     ...MEMORY_ENV_NAMES,
+    "PENNY_MEMORY_PALACE_ID",
+    "PENNY_MEMORY_PRINCIPAL_ID",
+    "PENNY_MEMORY_TRUST_MODE",
+    "PENNY_MEMORY_ISOLATION_BOUNDARY_ID",
+    "PENNY_MEMORY_DATA_ROOT_ID",
   ] as const) {
     originalEnv.set(name, process.env[name]);
   }
@@ -234,6 +279,10 @@ beforeEach(() => {
   process.env.PENNY_MEMORY_MCP_ENDPOINT = "http://127.0.0.1:8765/mcp";
   process.env.PENNY_MEMORY_MCP_TOKEN_ENV = DYNAMIC_MEMORY_CREDENTIAL_NAME;
   process.env.PENNY_MEMORY_MCP_TOKEN_FILE = "/owner/private/memory-token";
+  process.env.PENNY_MEMORY_PALACE_ID = "penny-primary";
+  process.env.PENNY_MEMORY_PRINCIPAL_ID = "penny-primary";
+  process.env.PENNY_MEMORY_TRUST_MODE = "isolated";
+  process.env.PENNY_MEMORY_ISOLATION_BOUNDARY_ID = "penny-primary-local";
   process.env.PENNY_MEMORY_FUTURE_SELECTOR = "future-config";
   process.env[DYNAMIC_MEMORY_CREDENTIAL_NAME] = "m".repeat(64);
   process.env.MEMPALACE_MCP_HTTP_TOKEN = "upstream-memory-token";
@@ -356,6 +405,8 @@ describe("worker role propagation", () => {
     expect(
       args.slice(args.indexOf("--exclude-tools"), args.indexOf("--exclude-tools") + 2)
     ).toEqual(["--exclude-tools", "artifact_read"]);
+    // Memory tools are now declared in agent frontmatter, not injected.
+    // The fixture agent declares only "read", so --tools is just "read".
     expect(args[args.indexOf("--tools") + 1]).toBe("read");
   });
 
@@ -382,7 +433,7 @@ describe("worker role propagation", () => {
     expect(mockSpawn).toHaveBeenCalledTimes(2);
     const [first, second] = spawnedEnvironments();
     expectWorkerEnvironment(first);
-    expect(second.PENNY_RUNTIME_ROLE).toBe("worker");
+    expect(second.PENNY_RUNTIME_ROLE).toBe("worker-read");
     expect(second.PENNY_RECEIPT_HMAC_KEY).toBeUndefined();
     expect(second.PENNY_APPROVAL_HMAC_KEY).toBeUndefined();
     expect(second.PENNY_ARTIFACT_INVOCATION_JSON).toBeTruthy();
@@ -422,10 +473,10 @@ describe("worker role propagation", () => {
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const environment = spawnedEnvironments()[0];
-    expect(environment.PENNY_RUNTIME_ROLE).toBe("worker");
+    expect(environment.PENNY_RUNTIME_ROLE).toBe("worker-read");
     expect(environment.PENNY_RECEIPT_HMAC_KEY).toBeUndefined();
     expect(environment.PENNY_APPROVAL_HMAC_KEY).toBeUndefined();
-    for (const name of MEMORY_ENV_NAMES) expect(environment[name]).toBeUndefined();
+    for (const name of MEMORY_ALWAYS_STRIPPED) expect(environment[name]).toBeUndefined();
     expect(environment.OWNER_MEMORY_BEARER).toBeUndefined();
     expect(environment.PENNY_ARTIFACT_INVOCATION_JSON).toBe(
       ownerEnvironment.PENNY_ARTIFACT_INVOCATION_JSON
@@ -436,6 +487,8 @@ describe("worker role propagation", () => {
     );
     const args = mockSpawn.mock.calls[0][1] as string[];
     expect(args).toContain("--append-system-prompt");
+    // Memory tools are now declared in agent frontmatter, not injected.
+    // The fixture agent declares only "read", so --tools is "read,artifact_read".
     expect(args[args.indexOf("--tools") + 1]).toBe("read,artifact_read");
     expect(args).not.toContain("--exclude-tools");
   });

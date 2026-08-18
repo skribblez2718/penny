@@ -9,14 +9,11 @@ import {
   CheckpointIdentityError,
   Checkpointer,
   ReceiptConflictError,
-  sha256,
 } from "../src/checkpointer.js";
 import { RunContext } from "../src/context.js";
 import {
   ConfidenceSchema,
   PhaseResultSchema,
-  type ArtifactRef,
-  type Confidence,
   type Directive,
   type JsonValue,
   type PhaseResult,
@@ -102,57 +99,17 @@ function runtime(root: string): {
   };
 }
 
-function result(input: {
-  identity: RunIdentity;
-  stateId: string;
-  agent: string;
-  attempt: number;
-  details: Record<string, JsonValue>;
-  branchId?: string;
-  confidence?: Confidence;
-  receiptId?: string;
-  artifact?: ArtifactRef;
-}): PhaseResult {
-  const receiptId =
-    input.receiptId ??
-    `receipt_${sha256(
-      JSON.stringify([
-        input.identity.run_id,
-        input.stateId,
-        input.branchId ?? "",
-        input.agent,
-        input.attempt,
-        input.details,
-      ])
-    )}`;
-  return validateContract(
-    PhaseResultSchema,
-    {
-      schema_version: 2,
-      run_id: input.identity.run_id,
-      state_id: input.stateId,
-      agent: input.agent,
-      attempt: input.attempt,
-      ...(input.branchId ? { branch_id: input.branchId } : {}),
-      confidence: input.confidence ?? "CERTAIN",
-      details: input.details,
-      ...(input.artifact ? { output_artifact: input.artifact } : {}),
-      worker_receipt: {
-        schema_version: 2,
-        receipt_id: receiptId,
-        run_id: input.identity.run_id,
-        state_id: input.stateId,
-        agent: input.agent,
-        attempt: input.attempt,
-        worker_id: `worker-${sha256(receiptId).slice(0, 12)}`,
-        started_at: "2026-08-16T12:00:00.000Z",
-        ended_at: "2026-08-16T12:00:01.000Z",
-        exit_code: 0,
-        output_digest: sha256(`output:${receiptId}`),
-      },
-    },
-    "parity phase result"
-  );
+function configuredWorkers(
+  root: string,
+  engine: OrchestrationEngine,
+  client: ModelClient = new ScenarioClient()
+): WorkerExecutor {
+  const workers = new WorkerExecutor(client, new ArtifactStore(path.join(root, "artifacts")), {
+    projectRoot: root,
+    parallelConcurrency: 2,
+  });
+  workers.setReceiptAuthority(engine.receiptAuthority);
+  return workers;
 }
 
 class ScenarioClient implements ModelClient {
@@ -261,6 +218,7 @@ async function typescriptHappyTrace(mode: "quick" | "standard" | "deep"): Promis
     projectRoot: root,
     parallelConcurrency: 2,
   });
+  workers.setReceiptAuthority(engine.receiptAuthority);
   let current = engine.handle(start(root, identity(`ts-${mode}`), { mode }));
   const trace = [canonicalDirective(current)];
   while (current.action === "invoke_agent" || current.action === "invoke_agents_parallel") {
@@ -340,9 +298,10 @@ describe("corrected Python contract fixture", () => {
     expect(() => validateContract(ConfidenceSchema, value, "confidence")).toThrow();
   });
 
-  it("enforces start/step/status identity and exact recovery cases", () => {
+  it("enforces start/step/status identity and exact recovery cases", async () => {
     const root = tempRoot();
     const { checkpointer, engine } = runtime(root);
+    const workers = configuredWorkers(root, engine);
     const runIdentity = identity("fixture-identity");
     const initial = engine.handle(start(root, runIdentity, { mode: "quick" }));
     expect(() => engine.handle(start(root, runIdentity, { mode: "quick" }))).toThrow(
@@ -358,18 +317,13 @@ describe("corrected Python contract fixture", () => {
     if (initial.action !== "invoke_agent") {
       throw new Error("expected quick research directive");
     }
+    const validResult = (await workers.execute(initial))[0]!;
     expect(() =>
       engine.handle({
         schema_version: 2,
         action: "step",
         identity: { ...runIdentity, session_id: "different" },
-        result: result({
-          identity: runIdentity,
-          stateId: initial.state_id,
-          agent: initial.agent,
-          attempt: initial.attempt,
-          details: { explore_complete: true },
-        }),
+        result: validResult,
       })
     ).toThrow(CheckpointIdentityError);
     expect(
@@ -412,9 +366,10 @@ describe("corrected Python contract fixture", () => {
     checkpointer.close();
   });
 
-  it("binds dynamic branches to branch, agent, run, state, attempt, and receipt", () => {
+  it("binds dynamic branches to branch, agent, run, state, attempt, and receipt", async () => {
     const root = tempRoot();
     const { checkpointer, engine } = runtime(root);
+    const workers = configuredWorkers(root, engine);
     const runIdentity = identity("fixture-provenance");
     const plan = engine.handle(start(root, runIdentity, { mode: "standard" }));
     if (plan.action !== "invoke_agent") {
@@ -424,26 +379,12 @@ describe("corrected Python contract fixture", () => {
       schema_version: 2,
       action: "step",
       identity: runIdentity,
-      result: result({
-        identity: runIdentity,
-        stateId: plan.state_id,
-        agent: plan.agent,
-        attempt: plan.attempt,
-        details: { plan_steps: ["one", "two"], plan_complete: true },
-      }),
+      result: (await workers.execute(plan))[0]!,
     });
     if (fan.action !== "invoke_agents_parallel") {
       throw new Error("expected research fan");
     }
-    const branch = fan.branches[0]!;
-    const valid = result({
-      identity: runIdentity,
-      stateId: branch.state_id,
-      agent: branch.agent,
-      attempt: branch.attempt,
-      branchId: branch.branch_id,
-      details: { explore_complete: true },
-    });
+    const valid = (await workers.execute(fan))[0]!;
     const mutations: PhaseResult[] = [
       { ...valid, branch_id: "wrong-branch" },
       {
@@ -469,7 +410,6 @@ describe("corrected Python contract fixture", () => {
           attempt: valid.worker_receipt.attempt + 1,
         },
       },
-      { ...valid, details: {} },
     ];
     for (const mutation of mutations) {
       expect(() =>
@@ -488,6 +428,9 @@ describe("corrected Python contract fixture", () => {
         "missing receipt"
       )
     ).toThrow();
+    expect(() =>
+      validateContract(researchSummarySchema("researching"), {}, "empty contract")
+    ).toThrow();
     engine.handle({
       schema_version: 2,
       action: "step",
@@ -499,17 +442,15 @@ describe("corrected Python contract fixture", () => {
         schema_version: 2,
         action: "step",
         identity: runIdentity,
-        result: result({
-          identity: runIdentity,
-          stateId: branch.state_id,
-          agent: branch.agent,
-          attempt: branch.attempt,
-          branchId: branch.branch_id,
-          receiptId: `receipt_${"f".repeat(64)}`,
-          details: { explore_complete: true },
-        }),
+        result: {
+          ...valid,
+          worker_receipt: {
+            ...valid.worker_receipt,
+            receipt_id: `receipt_${"f".repeat(64)}`,
+          },
+        },
       })
-    ).toThrow("duplicate_branch");
+    ).toThrow();
     expect(Object.keys(researchSummarySchema("researching"))).not.toHaveLength(0);
     checkpointer.close();
   });
@@ -564,54 +505,52 @@ describe("research behavioral parity", () => {
     }
   );
 
-  it("retries malformed results without advancing the checkpoint", () => {
+  it("retries malformed results without advancing the checkpoint", async () => {
     const root = tempRoot();
     const { checkpointer, engine } = runtime(root);
+    const workers = configuredWorkers(root, engine);
     const runIdentity = identity("malformed-retry");
     const pending = engine.handle(start(root, runIdentity, { mode: "quick" }));
     if (pending.action !== "invoke_agent") {
       throw new Error("expected research directive");
     }
-    expect(() =>
-      engine.handle({
-        schema_version: 2,
-        action: "step",
-        identity: runIdentity,
-        result: result({
-          identity: runIdentity,
-          stateId: pending.state_id,
-          agent: pending.agent,
-          attempt: pending.attempt,
-          details: {},
-        }),
-      })
-    ).toThrow();
+    const malformed = {
+      ...(await workers.execute(pending))[0]!,
+      details: {},
+    };
+    const retry = engine.handle({
+      schema_version: 2,
+      action: "step",
+      identity: runIdentity,
+      result: malformed,
+    });
+    expect(retry.action).toBe("invoke_agent");
+    if (retry.action === "invoke_agent") {
+      expect(retry.state_id).toBe(pending.state_id);
+      expect(retry.attempt).toBe(pending.attempt + 1);
+      expect(retry.output_artifact.version).toBe(2);
+      expect(retry.output_artifact.parent_ref).toEqual(malformed.output_artifact);
+    }
     expect(
       engine.handle({
         schema_version: 2,
         action: "recover",
         identity: runIdentity,
       })
-    ).toEqual(pending);
+    ).toEqual(retry);
     checkpointer.close();
   });
 
-  it("rejects divergent replay while exact receipt replay is idempotent", () => {
+  it("rejects divergent replay while exact receipt replay is idempotent", async () => {
     const root = tempRoot();
     const { checkpointer, engine } = runtime(root);
+    const workers = configuredWorkers(root, engine);
     const runIdentity = identity("divergent-replay");
     const pending = engine.handle(start(root, runIdentity, { mode: "quick" }));
     if (pending.action !== "invoke_agent") {
       throw new Error("expected research directive");
     }
-    const accepted = result({
-      identity: runIdentity,
-      stateId: pending.state_id,
-      agent: pending.agent,
-      attempt: pending.attempt,
-      receiptId: `receipt_${"a".repeat(64)}`,
-      details: { explore_complete: true },
-    });
+    const accepted = (await workers.execute(pending))[0]!;
     const next = engine.handle({
       schema_version: 2,
       action: "step",

@@ -2,15 +2,17 @@
 
 ## Architecture
 
-Every workflow skill is a registered `BasePlaybook` subclass. The playbook owns
-its named states, SUMMARY contracts, input selection, routing, gates, fan-out,
-and terminal result. The shared engine owns protocol validation, checkpointing,
-recovery, artifact metadata, budgets, and observability. The skill-directory
-`orchestrate.py` is the canonical thin delegate.
+Every workflow skill is owned by a registered playbook. The playbook owns its
+named states, result contracts, input selection, routing, gates, fan-out, and
+terminal result. The shared engine owns protocol validation, checkpointing,
+recovery, artifact metadata, budgets, and observability. Python remains the
+default and uses the skill-directory `orchestrate.py` thin delegate. During the
+migration pilot, only a single `research` invocation may explicitly select the
+TypeScript v2 host; no default changes before the M7 approval gate.
 
 ## Protocol rules
 
-1. Use `start`, `step`, `status`, and `recover` through `orchestration.cli`.
+1. Python uses `start`, `step`, `status`, and `recover` through `orchestration.cli`. TypeScript v2 additionally defines `respond` and `cancel` through its closed service/CLI request schema.
 2. Persist run control state in the SQLite checkpointer keyed by `run_id`; never
    serialize it to argv, a temporary file, an artifact, or durable memory.
 3. Emit one JSON directive per CLI invocation.
@@ -83,10 +85,12 @@ allowlists but no filesystem/process sandbox.
 
 ## Files
 
-| File                                                         | Purpose                    |
-| ------------------------------------------------------------ | -------------------------- |
-| `apps/orchestration/src/orchestration/engine.py`             | Shared engine              |
-| `apps/orchestration/src/orchestration/artifacts.py`          | Immutable artifact store   |
-| `apps/orchestration/src/orchestration/checkpointer.py`       | Durable run state          |
-| `apps/orchestration/src/orchestration/playbooks/research.py` | Current workflow reference |
-| `.pi/extensions/skill/README.md`                             | TypeScript owner loop      |
+| File                                                         | Purpose                                        |
+| ------------------------------------------------------------ | ---------------------------------------------- |
+| `apps/orchestration/src/orchestration/engine.py`             | Shared engine                                  |
+| `apps/orchestration/src/orchestration/artifacts.py`          | Immutable artifact store                       |
+| `apps/orchestration/src/orchestration/checkpointer.py`       | Durable run state                              |
+| `apps/orchestration/src/orchestration/playbooks/research.py` | Corrected Python workflow reference            |
+| `apps/orchestration/src/playbooks/research.ts`               | Opt-in TypeScript v2 research playbook         |
+| `apps/orchestration/src/service.ts`                          | TypeScript host adapter                        |
+| `.pi/extensions/skill/README.md`                             | Skill owner loop and explicit engine selection |

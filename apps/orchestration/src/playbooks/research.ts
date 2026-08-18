@@ -2,15 +2,26 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { Type, type TSchema } from "typebox";
 
-import { sha256 } from "../checkpointer.js";
+import type { ArtifactRevisionLookup } from "../artifact-store.js";
+import { canonicalJson, sha256 } from "../checkpointer.js";
+import type {
+  FanAggregateCapabilityV1,
+  GapClassificationCapabilityV1,
+  MalformedReissueCapabilityV1,
+  PlaybookCoreV1,
+} from "./playbook.js";
 import { positiveIntegerConstraint, RunContext, type PendingBranch } from "../context.js";
 import {
-  DirectiveSchema,
   type ArtifactRef,
   type Confidence,
   type Directive,
+  type InputArtifacts,
   type JsonValue,
+  type EvaluationResult,
+  type OutputArtifactMetadata,
+  type SkillContract,
   validateContract,
+  validateDirective,
 } from "../contracts.js";
 
 const MODES = new Set(["quick", "standard", "deep"]);
@@ -226,18 +237,127 @@ function taskForState(context: RunContext, state: ResearchState): string {
   return `${task}${handoff}${clarification}`;
 }
 
-function inputArtifacts(context: RunContext, state: ResearchState): ArtifactRef[] {
+const SUCCESSORS_BY_STATE: Record<ResearchState, readonly string[]> = {
+  planning: ["critiquing_plan", "researching"],
+  critiquing_plan: ["planning", "researching"],
+  researching: ["synthesizing"],
+  synthesizing: ["critiquing_report", "validating"],
+  critiquing_report: ["synthesizing", "validating"],
+  validating: ["researching", "synthesizing", "report_writing"],
+  report_writing: ["complete"],
+};
+
+function selectedInputRefs(context: RunContext, state: ResearchState): ArtifactRef[] {
   const phases = new Set(INPUT_PHASES_BY_STATE[state]);
   return context.selectedArtifacts
     .filter((artifact) => phases.has(artifact.phase))
     .sort((left, right) =>
-      `${left.phase}/${left.artifact_id}`.localeCompare(`${right.phase}/${right.artifact_id}`)
+      `${left.phase}/${left.branch_id ?? ""}/${left.version}/${left.artifact_id}`.localeCompare(
+        `${right.phase}/${right.branch_id ?? ""}/${right.version}/${right.artifact_id}`
+      )
     )
     .slice(0, 128);
 }
 
+function inputArtifacts(
+  context: RunContext,
+  state: ResearchState,
+  refs: readonly ArtifactRef[]
+): InputArtifacts {
+  return {
+    schema_version: 1,
+    run_id: context.identity.run_id,
+    consumer: `state:${state}`,
+    artifacts: refs.map((ref, index) => ({
+      slot: `upstream-${String(index).padStart(4, "0")}`,
+      ref,
+    })),
+  };
+}
+
+function consumerScope(state: ResearchState): string[] {
+  const consumers = new Set<string>([state, ...SUCCESSORS_BY_STATE[state]]);
+  for (const [consumer, phases] of Object.entries(INPUT_PHASES_BY_STATE)) {
+    if (phases.includes(state)) {
+      consumers.add(consumer);
+    }
+  }
+  return [...consumers].map((consumer) => `state:${consumer}`).sort();
+}
+
+function asResearchState(value: string): ResearchState {
+  if (!isResearchState(value)) {
+    throw new Error(`unknown research state '${value}' in pending directive`);
+  }
+  return value;
+}
+
+function outputArtifactMetadata(
+  context: RunContext,
+  state: ResearchState,
+  agent: string,
+  branchId: string | null,
+  upstreamRefs: readonly ArtifactRef[],
+  revisions?: ArtifactRevisionLookup
+): OutputArtifactMetadata {
+  const operationId = `agent-operation:${sha256(
+    canonicalJson({
+      branch_id: branchId,
+      kind: "agent-output",
+      run_id: context.identity.run_id,
+      state,
+    })
+  )}`;
+  const selected = context.selectedArtifacts
+    .filter(
+      (ref) => ref.phase === state && ref.branch_id === branchId && ref.operation_id === operationId
+    )
+    .sort((left, right) => right.version - left.version)[0];
+  const selectedVersion = selected?.version ?? 0;
+  const storedVersion = revisions
+    ? revisions.lastVersion(context.identity.run_id, state, branchId, "agent-output", operationId)
+    : 0;
+  // The immutable manifest is the revision ledger: it also contains attempts
+  // persisted by a worker that was interrupted before the engine accepted the
+  // result. Resolve past the ledger so a later attempt on the same output slot
+  // continues the chain instead of diverging from the orphaned revision.
+  const version = Math.max(selectedVersion, storedVersion) + 1;
+  let parent: ArtifactRef | null = null;
+  if (version > 1) {
+    parent =
+      revisions?.refFor(
+        context.identity.run_id,
+        state,
+        branchId,
+        "agent-output",
+        operationId,
+        version - 1
+      ) ??
+      (version - 1 === selectedVersion ? (selected ?? null) : null);
+    if (parent === null) {
+      throw new Error(
+        `revision chain for ${operationId} is broken at v${version}: no v${version - 1} in the ledger`
+      );
+    }
+  }
+  return {
+    schema_version: 1,
+    run_id: context.identity.run_id,
+    phase: state,
+    branch_id: branchId,
+    kind: "agent-output",
+    operation_id: operationId,
+    version,
+    producer: `agent:${agent}`,
+    consumer_scope: consumerScope(state),
+    media_type: "text/plain; charset=utf-8",
+    parent_ref: parent,
+    upstream_refs: [...upstreamRefs],
+  };
+}
+
 function directive<T>(value: T): Directive {
-  return validateContract(DirectiveSchema, value, "research directive");
+  return validateDirective(value);
 }
 
 function unresolvedIssues(context: RunContext): string[] {
@@ -256,7 +376,106 @@ export function researchSummarySchema(state: string): TSchema {
   return SUMMARY_SCHEMA_BY_STATE[state];
 }
 
-export class ResearchPlaybook {
+/**
+ * W3 — research expressed as the reference `SkillContractV1`.
+ *
+ * Every value here is a statement of what research already does; nothing new is
+ * introduced. `budgets` records the knob names and current defaults declaratively --
+ * runtime budget ownership stays where it is (W4 is deferred to workstream 3).
+ */
+export const RESEARCH_SKILL_CONTRACT: SkillContract = {
+  schema_version: 1,
+  name: "research",
+  objective:
+    "Investigate a question against external evidence and produce a grounded, cited report.",
+  accepts: ["agent-output"],
+  produces: ["agent-output"],
+  invariants: [
+    "Every reported claim carries at least one citation.",
+    "Verification is performed by a separate agent from synthesis.",
+    "An honest incomplete outcome is preferred over an ungrounded answer.",
+  ],
+  authority: {
+    trust_profiles: ["trusted-interactive", "hardened-untrusted"],
+  },
+  guidance: {
+    skill_root: ".pi/skills/research/assets/prompts",
+    resolution: "per_agent",
+  },
+  feedback_kinds: ["evidence_gap", "synthesis_gap", "validation_gap", "malformed_result"],
+  budgets: {
+    max_sub_queries: 4,
+    max_fan_width: 8,
+    max_research_rounds: 2,
+    critique_passes: 1,
+  },
+  completion_gate: {
+    schema_version: 1,
+    required_receipts: [],
+    // A met research run must have reached report writing. That is research's real
+    // completion condition; `unresolved_allowance` is deliberately absent because
+    // research warns on an exhausted critique budget rather than blocking on it.
+    required_states: ["report_writing"],
+  },
+};
+
+/**
+ * The reference playbook. `implements` is load-bearing: it makes the compiler prove that
+ * the W1 extraction is faithful, so the interfaces cannot drift away from the one
+ * implementation they were extracted from.
+ */
+export class ResearchPlaybook
+  implements
+    PlaybookCoreV1,
+    FanAggregateCapabilityV1,
+    MalformedReissueCapabilityV1,
+    GapClassificationCapabilityV1
+{
+  constructor(private readonly revisions?: ArtifactRevisionLookup) {}
+
+  /**
+   * Returns the recoverable directive with its output-artifact spec re-bound to
+   * the current ledger top, so a directive saved across a crash window (or
+   * before a revision-chain change) is never replayed with a stale version.
+   * Returns null when the context has no recoverable directive.
+   */
+  rebindPendingDirective(context: RunContext): Directive | null {
+    const pending = context.pendingDirective;
+    if (pending === null) {
+      return null;
+    }
+    if (pending.action !== "invoke_agent" && pending.action !== "invoke_agents_parallel") {
+      return pending;
+    }
+    if (pending.action === "invoke_agent") {
+      return validateDirective({
+        ...pending,
+        output_artifact: outputArtifactMetadata(
+          context,
+          asResearchState(pending.state_id),
+          pending.agent,
+          null,
+          pending.output_artifact.upstream_refs,
+          this.revisions
+        ),
+      });
+    }
+    return validateDirective({
+      ...pending,
+      branches: pending.branches.map((branch) => ({
+        ...branch,
+        output_artifact: outputArtifactMetadata(
+          context,
+          asResearchState(branch.state_id),
+          branch.agent,
+          branch.branch_id,
+          branch.output_artifact.upstream_refs,
+          this.revisions
+        ),
+      })),
+    });
+  }
+
   modelForState(
     context: RunContext,
     state: string,
@@ -267,14 +486,19 @@ export class ResearchPlaybook {
       if (explicit.length > 0) {
         return explicit;
       }
-      const verifier = env.PENNY_RESEARCH_VERA_MODEL?.trim();
+      const verifier = env.RESEARCH_VERA?.trim() || env.PENNY_RESEARCH_VERA_MODEL?.trim();
       if (verifier) {
         return verifier;
       }
     }
     const stateKey = `PENNY_RESEARCH_${state.toUpperCase()}_MODEL`;
     const stateModel = env[stateKey]?.trim();
-    return stateModel || env.PENNY_RESEARCH_DEFAULT_MODEL?.trim() || undefined;
+    return (
+      stateModel ||
+      env.RESEARCH_DEFAULT?.trim() ||
+      env.PENNY_RESEARCH_DEFAULT_MODEL?.trim() ||
+      undefined
+    );
   }
 
   initialize(context: RunContext): Directive {
@@ -299,7 +523,8 @@ export class ResearchPlaybook {
     }
     const state = context.stateId;
     const attempt = context.stepCount;
-    const artifacts = inputArtifacts(context, state);
+    const refs = selectedInputRefs(context, state);
+    const artifacts = inputArtifacts(context, state, refs);
     const modelOverride = this.modelForState(context, state);
     const branchTasks = state === "researching" ? this.researchBranchTasks(context) : [];
     let next: Directive;
@@ -313,6 +538,14 @@ export class ResearchPlaybook {
         ...(modelOverride ? { model_override: modelOverride } : {}),
         task: branch.task,
         input_artifacts: artifacts,
+        output_artifact: outputArtifactMetadata(
+          context,
+          state,
+          "echo",
+          branch.branchId,
+          refs,
+          this.revisions
+        ),
       }));
       next = directive({
         schema_version: 2,
@@ -344,6 +577,14 @@ export class ResearchPlaybook {
         ...(modelOverride ? { model_override: modelOverride } : {}),
         task: taskForState(context, state),
         input_artifacts: artifacts,
+        output_artifact: outputArtifactMetadata(
+          context,
+          state,
+          AGENT_BY_STATE[state],
+          null,
+          refs,
+          this.revisions
+        ),
       });
       context.pendingBranches = [];
     }
@@ -362,7 +603,38 @@ export class ResearchPlaybook {
     >;
   }
 
-  aggregateResearchBranches(
+  /**
+   * W5 — classify why a result was inadequate.
+   *
+   * This encodes research's existing evidence-versus-synthesis rule exactly: unsupported
+   * claims plus a remaining research round means the evidence is short (`evidence_gap`);
+   * otherwise the evidence is adequate and the synthesis over it is not
+   * (`synthesis_gap`).
+   */
+  classifyGap(
+    context: RunContext,
+    state: string,
+    details: Record<string, JsonValue>
+  ): EvaluationResult | null {
+    if (state !== "validating" || details.verdict === "PASS") {
+      return null;
+    }
+    const needed = stringArray(details.evidence_needed);
+    const exhausted = context.iteration + 1 >= context.maxIterations;
+    const evidenceShort =
+      needed.length > 0 && context.research.research_round < context.research.max_research_rounds;
+    return {
+      schema_version: 1,
+      kind: evidenceShort ? "evidence_gap" : "synthesis_gap",
+      detail: evidenceShort
+        ? `validation reported ${needed.length} evidence gap(s)`
+        : "validation failed with no further evidence rounds available",
+      target_state: evidenceShort ? "researching" : "synthesizing",
+      exhausted,
+    };
+  }
+
+  aggregateBranches(
     branchDetails: readonly Record<string, JsonValue>[]
   ): Record<string, JsonValue> {
     const questions = branchDetails.flatMap((details) => stringArray(details.clarifying_questions));
@@ -373,6 +645,63 @@ export class ResearchPlaybook {
         : {}),
       ...(questions.length > 0 ? { clarifying_questions: questions } : {}),
     };
+  }
+
+  reissueMalformedBranch(
+    context: RunContext,
+    pending: Extract<Directive, { action: "invoke_agents_parallel" }>,
+    branchId: string
+  ): Directive {
+    const assignment = pending.branches.find((candidate) => candidate.branch_id === branchId);
+    const branchIndex = context.pendingBranches.findIndex(
+      (candidate) => candidate.branch_id === branchId
+    );
+    if (assignment === undefined || branchIndex < 0) {
+      throw new Error(`cannot reissue absent branch '${branchId}'`);
+    }
+    if (context.stepCount >= context.maxSteps) {
+      throw new Error(`run exceeded max_steps=${context.maxSteps}`);
+    }
+    context.previousState = context.stateId;
+    context.stepCount += 1;
+    context.status = "running";
+    const retry = {
+      ...assignment,
+      attempt: context.stepCount,
+      output_artifact: outputArtifactMetadata(
+        context,
+        context.stateId as ResearchState,
+        assignment.agent,
+        branchId,
+        assignment.output_artifact.upstream_refs,
+        this.revisions
+      ),
+    };
+    context.pendingBranches[branchIndex] = {
+      branch_id: branchId,
+      agent: assignment.agent,
+      attempt: retry.attempt,
+      completed: false,
+      confidence: null,
+      result: null,
+      artifact: null,
+    };
+    const incomplete = new Set(
+      context.pendingBranches
+        .filter((candidate) => !candidate.completed)
+        .map((candidate) => candidate.branch_id)
+    );
+    const next = directive({
+      ...pending,
+      branches: [
+        ...pending.branches.filter(
+          (candidate) => candidate.branch_id !== branchId && incomplete.has(candidate.branch_id)
+        ),
+        retry,
+      ],
+    });
+    context.pendingDirective = next;
+    return next;
   }
 
   acceptSummary(
@@ -602,7 +931,10 @@ export class ResearchPlaybook {
         } else if (context.iteration + 1 < context.maxIterations) {
           this.recordIteration(context, issues);
           context.iteration += 1;
-          if (needed.length > 0 && research.research_round < research.max_research_rounds) {
+          // W5: the typed classification IS the routing decision. Both the seam and the
+          // transition read the same value, so the two cannot diverge.
+          const evaluation = this.classifyGap(context, "validating", summary);
+          if (evaluation?.kind === "evidence_gap") {
             research.research_round += 1;
             research.evidence_needed = needed.slice(0, research.max_sub_queries);
             research.validation_revision = 0;

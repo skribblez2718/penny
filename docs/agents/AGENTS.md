@@ -4,6 +4,7 @@
 - [Extensions](extensions/AGENTS.md): Creating extensions: directory structure, tool registration, event handlers, TUI
 - [Skills](skills/AGENTS.md): Artifact-first engine workflows, Domain Guidance, scaffolding, and tests
 - [Prompts](prompts/AGENTS.md): Layer Reference, standards, cognitive frame, role definitions
+- [Knowledge Base](knowledge-base/AGENTS.md): Private advisory KB — authority model, records, workflows, retrieval/lint, privacy/promotion, evaluation
 - [Memory](memory/AGENTS.md): Primary-only durable recall/curation, default-off advisory log, supervised HTTP hub, temporal KG, and retention
 - [Orchestration](orchestration/AGENTS.md): Shared FSM engine, exact artifact contracts, durable checkpoints, and recovery
 - [Capabilities](capabilities/AGENTS.md): Artifact-first skills, primary tiered memory, observability, and verification states

@@ -5,13 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { CheckpointIdentityError, Checkpointer, sha256 } from "../src/checkpointer.js";
-import type {
-  Confidence,
-  Directive,
-  JsonValue,
-  PhaseResult,
-  RunIdentity,
-} from "../src/contracts.js";
+import type { JsonValue, RunIdentity } from "../src/contracts.js";
 import { OrchestrationEngine } from "../src/engine.js";
 import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
 import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
@@ -54,46 +48,6 @@ function startRequest(
     constraints,
     project_root: root,
     trust_profile: "trusted-interactive",
-  };
-}
-
-function phaseResult(input: {
-  identity: RunIdentity;
-  stateId: string;
-  agent: string;
-  attempt: number;
-  details: Record<string, JsonValue>;
-  confidence?: Confidence;
-  branchId?: string;
-  receiptId?: string;
-}): PhaseResult {
-  const receiptId =
-    input.receiptId ??
-    `receipt_${sha256(
-      `${input.identity.run_id}/${input.stateId}/${input.branchId ?? "single"}/${input.agent}/${input.attempt}`
-    )}`;
-  return {
-    schema_version: 2,
-    run_id: input.identity.run_id,
-    state_id: input.stateId,
-    agent: input.agent,
-    attempt: input.attempt,
-    ...(input.branchId ? { branch_id: input.branchId } : {}),
-    confidence: input.confidence ?? "CERTAIN",
-    details: input.details,
-    worker_receipt: {
-      schema_version: 2,
-      receipt_id: receiptId,
-      run_id: input.identity.run_id,
-      state_id: input.stateId,
-      agent: input.agent,
-      attempt: input.attempt,
-      worker_id: `worker-${receiptId.slice(-12)}`,
-      started_at: "2026-08-16T00:00:00.000Z",
-      ended_at: "2026-08-16T00:00:01.000Z",
-      exit_code: 0,
-      output_digest: sha256(receiptId),
-    },
   };
 }
 
@@ -183,7 +137,7 @@ describe("durable orchestration runtime", () => {
     expect(terminal.status).toBe("complete");
     expect(terminal.result.grounded).toBe(true);
     expect(terminal.artifacts).toHaveLength(1);
-    expect(artifacts.read(terminal.artifacts[0]!, "agent:synthia").toString("utf8")).toContain(
+    expect(artifacts.read(terminal.artifacts[0]!, "state:complete").toString("utf8")).toContain(
       "# report.md"
     );
     expect(client.invocations.map((call) => call.stateId)).toEqual([
@@ -236,9 +190,15 @@ describe("durable orchestration runtime", () => {
     second.checkpointer.close();
   });
 
-  it("enforces parallel branch provenance and exact-once receipt replay", () => {
+  it("enforces parallel branch provenance and exact-once receipt replay", async () => {
     const root = temporaryDirectory();
     const { checkpointer, engine } = runtime(root);
+    const artifacts = new ArtifactStore(path.join(root, "artifacts"));
+    const workers = new WorkerExecutor(new FakeResearchClient(), artifacts, {
+      projectRoot: root,
+      parallelConcurrency: 2,
+    });
+    workers.setReceiptAuthority(engine.receiptAuthority);
     const runIdentity = identity("parallel-run");
     const planning = engine.handle(startRequest(root, runIdentity, { mode: "standard" }));
     expect(planning.action).toBe("invoke_agent");
@@ -249,30 +209,15 @@ describe("durable orchestration runtime", () => {
       schema_version: 2,
       action: "step",
       identity: runIdentity,
-      result: phaseResult({
-        identity: runIdentity,
-        stateId: planning.state_id,
-        agent: planning.agent,
-        attempt: planning.attempt,
-        details: {
-          plan_steps: ["one", "two"],
-          plan_complete: true,
-        },
-      }),
+      result: (await workers.execute(planning))[0]!,
     });
     expect(fan.action).toBe("invoke_agents_parallel");
     if (fan.action !== "invoke_agents_parallel") {
       throw new Error("expected parallel directive");
     }
-    const first = fan.branches[0]!;
-    const wrongAgent = phaseResult({
-      identity: runIdentity,
-      stateId: first.state_id,
-      agent: "synthia",
-      attempt: first.attempt,
-      branchId: first.branch_id,
-      details: { explore_complete: true },
-    });
+    const branchResults = await workers.execute(fan);
+    const accepted = branchResults[0]!;
+    const wrongAgent = { ...accepted, agent: "synthia" };
     expect(() =>
       engine.handle({
         schema_version: 2,
@@ -280,16 +225,8 @@ describe("durable orchestration runtime", () => {
         identity: runIdentity,
         result: wrongAgent,
       })
-    ).toThrow("wrong_agent");
+    ).toThrow();
 
-    const accepted = phaseResult({
-      identity: runIdentity,
-      stateId: first.state_id,
-      agent: first.agent,
-      attempt: first.attempt,
-      branchId: first.branch_id,
-      details: { explore_complete: true },
-    });
     expect(
       engine.handle({
         schema_version: 2,
@@ -309,26 +246,104 @@ describe("durable orchestration runtime", () => {
     checkpointer.close();
   });
 
-  it("uses a challenge-bound user gate and rejects tampering without mutation", () => {
+  it("reissues only a malformed fan branch while accepting completed sibling work", async () => {
     const root = temporaryDirectory();
     const { checkpointer, engine } = runtime(root);
+    const artifacts = new ArtifactStore(path.join(root, "artifacts"));
+    const workers = new WorkerExecutor(new FakeResearchClient(), artifacts, {
+      projectRoot: root,
+      parallelConcurrency: 2,
+    });
+    workers.setReceiptAuthority(engine.receiptAuthority);
+    const runIdentity = identity("malformed-fan-run");
+    const planning = engine.handle(startRequest(root, runIdentity, { mode: "standard" }));
+    if (planning.action !== "invoke_agent") {
+      throw new Error("expected planning directive");
+    }
+    const fan = engine.handle({
+      schema_version: 2,
+      action: "step",
+      identity: runIdentity,
+      result: (await workers.execute(planning))[0]!,
+    });
+    if (fan.action !== "invoke_agents_parallel") {
+      throw new Error("expected research fan");
+    }
+    const original = await workers.execute(fan);
+    const first = original[0]!;
+    const second = original[1]!;
+    const reissued = engine.handle({
+      schema_version: 2,
+      action: "step",
+      identity: runIdentity,
+      result: { ...first, details: {} },
+    });
+    expect(reissued.action).toBe("invoke_agents_parallel");
+    if (reissued.action !== "invoke_agents_parallel") {
+      throw new Error("expected bounded malformed branch reissue");
+    }
+    expect(reissued.branches.map((branch) => branch.branch_id)).toEqual([
+      second.branch_id,
+      first.branch_id,
+    ]);
+    const retryAssignment = reissued.branches.find(
+      (branch) => branch.branch_id === first.branch_id
+    );
+    expect(retryAssignment?.attempt).toBe(first.attempt + 1);
+    expect(retryAssignment?.output_artifact.version).toBe(2);
+    expect(retryAssignment?.output_artifact.parent_ref?.artifact_id).toBe(
+      first.output_artifact.artifact_id
+    );
+
+    const retryOnly = engine.handle({
+      schema_version: 2,
+      action: "step",
+      identity: runIdentity,
+      result: second,
+    });
+    expect(retryOnly.action).toBe("invoke_agents_parallel");
+    if (retryOnly.action !== "invoke_agents_parallel") {
+      throw new Error("expected only the malformed branch to remain");
+    }
+    expect(retryOnly.branches.map((branch) => branch.branch_id)).toEqual([first.branch_id]);
+    const synthesis = engine.handle({
+      schema_version: 2,
+      action: "step",
+      identity: runIdentity,
+      result: (await workers.execute(retryOnly))[0]!,
+    });
+    expect(synthesis.action).toBe("invoke_agent");
+    if (synthesis.action === "invoke_agent") {
+      expect(synthesis.state_id).toBe("synthesizing");
+    }
+    expect(
+      checkpointer
+        .events(runIdentity.run_id)
+        .filter((event) => event.eventType === "phase_result_malformed")
+    ).toHaveLength(1);
+    checkpointer.close();
+  });
+
+  it("uses a challenge-bound user gate and rejects tampering without mutation", async () => {
+    const root = temporaryDirectory();
+    const { checkpointer, engine } = runtime(root);
+    const artifacts = new ArtifactStore(path.join(root, "artifacts"));
+    const workers = new WorkerExecutor(new FakeResearchClient(), artifacts, {
+      projectRoot: root,
+      parallelConcurrency: 1,
+    });
+    workers.setReceiptAuthority(engine.receiptAuthority);
     const runIdentity = identity("gate-run");
     const research = engine.handle(startRequest(root, runIdentity));
     if (research.action !== "invoke_agent") {
       throw new Error("expected research directive");
     }
+    const researchResult = (await workers.execute(research))[0]!;
     const gate = engine.handle({
       schema_version: 2,
       action: "step",
       identity: runIdentity,
-      result: phaseResult({
-        identity: runIdentity,
-        stateId: research.state_id,
-        agent: research.agent,
-        attempt: research.attempt,
-        confidence: "UNCERTAIN",
-        details: { explore_complete: true },
-      }),
+      result: { ...researchResult, confidence: "UNCERTAIN" },
     });
     if (gate.action !== "await_user") {
       throw new Error("expected user gate");

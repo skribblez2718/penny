@@ -89,6 +89,7 @@ async function reloadAndRegister(): Promise<RegisteredTool> {
     registerTool: (tool: RegisteredTool) => {
       registered = tool;
     },
+    on: () => {},
   } as never);
   if (!registered) throw new Error("subagent tool was not registered");
   return registered;

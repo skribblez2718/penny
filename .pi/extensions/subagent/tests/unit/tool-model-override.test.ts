@@ -78,6 +78,7 @@ function createMockPi(): any {
     registerTool: (def: any) => {
       registeredTool = def;
     },
+    on: () => {},
   };
 }
 

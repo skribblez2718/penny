@@ -1,0 +1,6 @@
+*
+!.gitignore
+!README.md
+!manifest.example.json
+!templates/
+!templates/**

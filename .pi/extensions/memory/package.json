@@ -3,6 +3,14 @@
   "version": "1.0.0",
   "description": "HTTP-only, role-scoped, context-bounded MemPalace adapter",
   "type": "module",
+  "main": "index.ts",
+  "types": "index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "import": "./index.ts"
+    }
+  },
   "scripts": {
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",

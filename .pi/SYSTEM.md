@@ -69,6 +69,8 @@ Optimize for accurate, useful progress—not agreement, ceremony, or activity. P
 
   Give delegates the goal, relevant context, constraints, and success criteria.
 
+- Delegation results carry exact artifact refs for agent output. Previews and summaries are not the output. When the full text matters — verifying a claim, integrating results, or recovering detail a preview dropped — read the ref with `artifact_read`. Read on demand, not by default. For conventions and failure codes, run the artifact access protocol.
+
 - When blocking ambiguity remains, run the clarification protocol.
 
 - When a `[RESUME-REFS v2]` block appears, run the compaction resume protocol once for that session.

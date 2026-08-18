@@ -1,5 +1,8 @@
+import path from "node:path";
+
 import {
-  DirectiveSchema,
+  ArtifactRefSchema,
+  JsonValueSchema,
   RunIdentitySchema,
   RunStatusSchema,
   TrustProfileSchema,
@@ -12,6 +15,7 @@ import {
   type RunStatus,
   type TrustProfile,
   validateContract,
+  validateDirective,
 } from "./contracts.js";
 
 export interface PendingBranch {
@@ -202,20 +206,111 @@ export class RunContext {
     });
   }
 
-  static fromSnapshot(value: RunContextSnapshot): RunContext {
-    validateContract(RunIdentitySchema, value.identity, "checkpoint identity");
-    validateContract(RunStatusSchema, value.status, "checkpoint status");
-    validateContract(TrustProfileSchema, value.trust_profile, "checkpoint trust profile");
-    if (value.schema_version !== 2) {
-      throw new Error(`unsupported checkpoint schema version ${value.schema_version}`);
+  static fromSnapshot(value: unknown): RunContext {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("checkpoint context must be an object");
     }
-    if (value.pending_directive !== null) {
-      validateContract(DirectiveSchema, value.pending_directive, "pending directive");
+    const record = value as Record<string, unknown>;
+    const expectedKeys = [
+      "schema_version",
+      "identity",
+      "goal",
+      "constraints",
+      "project_root",
+      "trust_profile",
+      "status",
+      "state_id",
+      "previous_state",
+      "step_count",
+      "max_steps",
+      "iteration",
+      "max_iterations",
+      "iteration_history",
+      "clarification_text",
+      "met",
+      "research",
+      "selected_artifacts",
+      "pending_directive",
+      "pending_branches",
+      "terminal_directive",
+    ];
+    const unknownKeys = Object.keys(record).filter((key) => !expectedKeys.includes(key));
+    const missingKeys = expectedKeys.filter((key) => !Object.hasOwn(record, key));
+    if (unknownKeys.length > 0 || missingKeys.length > 0) {
+      throw new Error(
+        `checkpoint context fields are invalid (missing=${missingKeys.join(",")}; unknown=${unknownKeys.join(",")})`
+      );
     }
-    if (value.terminal_directive !== null) {
-      validateContract(DirectiveSchema, value.terminal_directive, "terminal directive");
+    const snapshot = record as unknown as RunContextSnapshot;
+    validateContract(RunIdentitySchema, snapshot.identity, "checkpoint identity");
+    if (snapshot.identity.engine_owner !== "typescript") {
+      throw new Error("checkpoint engine_owner must be typescript");
     }
-    return new RunContext(value);
+    if (typeof snapshot.goal !== "string" || snapshot.goal.trim().length === 0) {
+      throw new Error("checkpoint goal must be non-empty");
+    }
+    if (!path.isAbsolute(snapshot.project_root)) {
+      throw new Error("checkpoint project_root must be absolute");
+    }
+    if (
+      snapshot.constraints === null ||
+      typeof snapshot.constraints !== "object" ||
+      Array.isArray(snapshot.constraints)
+    ) {
+      throw new Error("checkpoint constraints must be an object");
+    }
+    validateContract(JsonValueSchema, snapshot.constraints, "checkpoint constraints");
+    validateContract(RunStatusSchema, snapshot.status, "checkpoint status");
+    validateContract(TrustProfileSchema, snapshot.trust_profile, "checkpoint trust profile");
+    if (snapshot.schema_version !== 2) {
+      throw new Error(`unsupported checkpoint schema version ${snapshot.schema_version}`);
+    }
+    for (const [name, numeric, minimum] of [
+      ["step_count", snapshot.step_count, 0],
+      ["max_steps", snapshot.max_steps, 1],
+      ["iteration", snapshot.iteration, 0],
+      ["max_iterations", snapshot.max_iterations, 1],
+    ] as const) {
+      if (!Number.isSafeInteger(numeric) || numeric < minimum) {
+        throw new Error(`checkpoint ${name} is invalid`);
+      }
+    }
+    if (!Array.isArray(snapshot.selected_artifacts)) {
+      throw new Error("checkpoint selected_artifacts must be an array");
+    }
+    for (const artifact of snapshot.selected_artifacts) {
+      validateContract(ArtifactRefSchema, artifact, "checkpoint artifact ref");
+      if (artifact.run_id !== snapshot.identity.run_id) {
+        throw new Error("checkpoint artifact belongs to another run");
+      }
+    }
+    if (snapshot.pending_directive !== null) {
+      const pending = validateDirective(snapshot.pending_directive);
+      if (pending.identity.run_id !== snapshot.identity.run_id) {
+        throw new Error("pending directive belongs to another run");
+      }
+    }
+    if (snapshot.terminal_directive !== null) {
+      const terminal = validateDirective(snapshot.terminal_directive);
+      if (terminal.identity.run_id !== snapshot.identity.run_id) {
+        throw new Error("terminal directive belongs to another run");
+      }
+    }
+    return new RunContext(snapshot);
+  }
+
+  reissueCurrent(): void {
+    if (isTerminalStatus(this.status)) {
+      throw new Error(`cannot reissue terminal run ${this.identity.run_id}`);
+    }
+    if (this.stepCount >= this.maxSteps) {
+      throw new Error(`run exceeded max_steps=${this.maxSteps}`);
+    }
+    this.previousState = this.stateId;
+    this.stepCount += 1;
+    this.status = "running";
+    this.pendingDirective = null;
+    this.pendingBranches = [];
   }
 
   transition(nextState: string): void {

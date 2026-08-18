@@ -46,14 +46,23 @@ import {
   resolveArtifactPythonPath,
   type ArtifactRef,
 } from "../artifacts/owner-client.js";
+import { registerOwnerArtifactGrants } from "../artifacts/owner-grants.js";
+import { createLogger } from "../../lib/logger/logger.js";
 import { resolveToolResultBudget } from "../lib/tool-result-budget.js";
 import {
+  directAgentOutputMetadata,
   directChainEnvironment,
   directChainInput,
   directChainOutputMetadata,
   directChainTask,
   persistDirectChainOutput,
 } from "./chain-artifacts.js";
+
+const logger = createLogger("subagent");
+
+interface SessionStartContext {
+  sessionManager: { getSessionId(): string };
+}
 
 const COLLAPSED_ITEM_COUNT = 10;
 
@@ -349,6 +358,107 @@ const SubagentParams = Type.Object({
 export default function (pi: ExtensionAPI) {
   // Resolve owner-lowered caps inside the factory; a cap cannot raise the shared hard limit.
   const handoffBudget = resolveToolResultBudget(process.env);
+  let currentSessionId: string | undefined;
+
+  pi.on("session_start", async (_event: unknown, context: SessionStartContext) => {
+    currentSessionId = context.sessionManager.getSessionId();
+  });
+
+  /**
+   * Record owner grants so the orchestrator can re-read exact agent output on
+   * demand. Registration never fails a delegation: the agent result is already
+   * complete, and a missing grant only costs the optional re-read.
+   */
+  const grantToOwner = (refs: readonly ArtifactRef[]): ArtifactRef[] => {
+    if (!currentSessionId || refs.length === 0) return [...refs];
+    try {
+      return registerOwnerArtifactGrants({ sessionId: currentSessionId, refs });
+    } catch (error) {
+      logger.warn("subagent_owner_grant_failed", {
+        errorCode: "SUBAGENT_OWNER_GRANT_FAILED",
+        reason: error instanceof Error ? error.message : "unknown",
+      });
+      return [...refs];
+    }
+  };
+
+  /**
+   * Persist exact output for a mode that has no successor worker. Best effort:
+   * a persistence failure must not discard a completed agent result.
+   */
+  const persistOwnerOutput = async (options: {
+    pythonPath: string;
+    runId: string;
+    index: number;
+    agent: string;
+    output: string;
+    cwd: string;
+  }): Promise<ArtifactRef | undefined> => {
+    if (!options.output) return undefined;
+    try {
+      return await persistDirectChainOutput({
+        pythonPath: options.pythonPath,
+        metadata: directAgentOutputMetadata({
+          runId: options.runId,
+          index: options.index,
+          agent: options.agent,
+        }),
+        output: options.output,
+        cwd: options.cwd,
+        env: process.env,
+      });
+    } catch (error) {
+      logger.warn("subagent_output_persist_failed", {
+        errorCode: "SUBAGENT_OUTPUT_PERSIST_FAILED",
+        agent: options.agent,
+        reason: error instanceof Error ? error.message : "unknown",
+      });
+      return undefined;
+    }
+  };
+
+  /**
+   * Persist exact output for each result, grant the owner, and attach the
+   * granted refs. Entirely best effort: results are returned unchanged when the
+   * artifact plane is unavailable.
+   */
+  const attachOwnerArtifacts = async (options: {
+    results: SingleResult[];
+    runId: string;
+    cwd: string;
+  }): Promise<void> => {
+    let pythonPath: string;
+    try {
+      pythonPath = resolveArtifactPythonPath(options.cwd, process.env);
+    } catch (error) {
+      logger.warn("subagent_artifact_python_unavailable", {
+        errorCode: "SUBAGENT_OUTPUT_PERSIST_FAILED",
+        reason: error instanceof Error ? error.message : "unknown",
+      });
+      return;
+    }
+
+    const persisted = await Promise.all(
+      options.results.map((result, index) =>
+        persistOwnerOutput({
+          pythonPath,
+          runId: options.runId,
+          index,
+          agent: result.agent,
+          output: getFinalOutput(result.messages),
+          cwd: options.cwd,
+        })
+      )
+    );
+
+    const indexed = persisted.flatMap((ref, index) => (ref ? [{ ref, index }] : []));
+    if (indexed.length === 0) return;
+    const granted = grantToOwner(indexed.map((entry) => entry.ref));
+    indexed.forEach((entry, position) => {
+      const result = options.results[entry.index];
+      if (result) result.outputArtifactRef = granted[position] ?? entry.ref;
+    });
+  };
 
   pi.registerTool({
     name: "subagent",
@@ -400,18 +510,18 @@ export default function (pi: ExtensionAPI) {
           const outputArtifactRefs = results.flatMap((result) =>
             result.outputArtifactRef ? [result.outputArtifactRef] : []
           );
+          // Every mode that produced exact artifacts surfaces them, so the
+          // orchestrator can re-read complete output instead of a preview.
           return {
             mode,
             agentScope,
             projectAgentsDir: discovery.projectAgentsDir,
             results,
-            ...(mode === "chain" && artifactRunId
+            ...(artifactRunId ? { artifactRunId } : {}),
+            ...(outputArtifactRefs.length > 0
               ? {
-                  artifactRunId,
                   outputArtifactRefs,
-                  ...(outputArtifactRefs.length > 0
-                    ? { finalOutputArtifactRef: outputArtifactRefs.at(-1) }
-                    : {}),
+                  finalOutputArtifactRef: outputArtifactRefs.at(-1),
                 }
               : {}),
           };
@@ -542,14 +652,30 @@ export default function (pi: ExtensionAPI) {
             ownerEnvironment
           );
           const exactOutput = getFinalOutput(result.messages);
+          let stepOutputRef: ArtifactRef;
           try {
-            result.outputArtifactRef = await persistDirectChainOutput({
+            const persisted = await persistDirectChainOutput({
               pythonPath,
               metadata: outputMetadata,
               output: exactOutput,
               cwd: ctx.cwd,
               env: process.env,
             });
+            // Two refs, deliberately kept distinct.
+            //
+            // `persisted` is the envelope exactly as the manifest stores it. It is
+            // the ONLY value that may flow into the next step, because a chain step
+            // declares its predecessor in `upstream_refs` and both stores require
+            // that envelope to match stored metadata byte-for-byte
+            // (artifacts.py `_validate` / artifact-store.ts `validateMetadata`).
+            //
+            // `grantToOwner` returns a DIFFERENT envelope: it appends
+            // `penny-primary:owner` to `consumer_scope` so Penny may read the
+            // artifact. Surfacing that ref is correct; forwarding it as an upstream
+            // is not — it fails the exact-match check and every step after the
+            // first dies with ARTIFACT_PERSIST_FAILED.
+            stepOutputRef = persisted;
+            result.outputArtifactRef = grantToOwner([persisted])[0] ?? persisted;
           } catch (error) {
             if (!(error instanceof ArtifactClientError)) throw error;
             return {
@@ -582,7 +708,8 @@ export default function (pi: ExtensionAPI) {
               isError: true,
             };
           }
-          previousRef = result.outputArtifactRef;
+          // Hand the stored envelope forward, never the owner-granted one.
+          previousRef = stepOutputRef;
         }
         return {
           content: [
@@ -678,10 +805,22 @@ export default function (pi: ExtensionAPI) {
         );
 
         const successCount = results.filter((r) => r.exitCode === 0).length;
+
+        // Parallel results are previewed, not returned whole. Persist exact
+        // output and grant it to the owner so the preview is a summary of
+        // something readable rather than the only surviving copy.
+        artifactRunId = `subagent-parallel:${randomUUID()}`;
+        await attachOwnerArtifacts({
+          results,
+          runId: artifactRunId,
+          cwd: ctx.cwd,
+        });
+
         const summaries = results.map((r) => {
           const output = getFinalOutput(r.messages);
           const preview = output.slice(0, 100) + (output.length > 100 ? "..." : "");
-          return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}: ${preview || "(no output)"}`;
+          const suffix = r.outputArtifactRef ? " [exact output: artifact_read]" : "";
+          return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}: ${preview || "(no output)"}${suffix}`;
         });
         return {
           content: [
@@ -725,6 +864,16 @@ export default function (pi: ExtensionAPI) {
             isError: true,
           };
         }
+
+        // Single-mode output is returned in full, but compaction can drop the
+        // inline copy later. The artifact keeps it recoverable by exact ref.
+        artifactRunId = `subagent-single:${randomUUID()}`;
+        await attachOwnerArtifacts({
+          results: [result],
+          runId: artifactRunId,
+          cwd: ctx.cwd,
+        });
+
         return {
           content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
           details: makeDetails("single")([result]),

@@ -1,7 +1,9 @@
+import { rm } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import artifactExtension from "../../index.js";
 import { artifactRefFromEnvelope } from "../../artifact-runtime.js";
+import { registerOwnerArtifactGrants } from "../../owner-grants.js";
 import {
   HARD_MAX_ESTIMATED_TOKENS,
   HARD_MAX_RESULT_BYTES,
@@ -27,7 +29,12 @@ const fixtures: ArtifactFixture[] = [];
 
 afterEach(async () => {
   vi.unstubAllEnvs();
-  await Promise.all(fixtures.splice(0).map((item) => item.cleanup()));
+  await Promise.all(
+    fixtures.splice(0).map(async (item) => {
+      await rm(`${item.root}-grants`, { recursive: true, force: true });
+      await item.cleanup();
+    })
+  );
 });
 
 describe("artifacts extension integration", () => {
@@ -46,6 +53,7 @@ describe("artifacts extension integration", () => {
       registerTool(tool: RegisteredTool) {
         tools.push(tool);
       },
+      on() {},
     });
 
     expect(tools.map((tool) => tool.name)).toEqual(["artifact_read"]);
@@ -103,6 +111,7 @@ describe("artifacts extension integration", () => {
       registerTool(tool: RegisteredTool) {
         tools.push(tool);
       },
+      on() {},
     });
     const budget = resolveToolResultBudget(process.env);
     const returned: Buffer[] = [];
@@ -138,7 +147,7 @@ describe("artifacts extension integration", () => {
     expect(Buffer.concat(returned).equals(item.content)).toBe(true);
   });
 
-  it("fails closed with a typed configuration error instead of exposing a discovery surface", async () => {
+  it("fails closed without exposing a discovery surface when nothing is granted", async () => {
     vi.stubEnv("PENNY_ARTIFACT_INVOCATION_JSON", "");
     vi.stubEnv("PENNY_ARTIFACT_INVOCATION_FILE", "");
     vi.stubEnv("PENNY_ARTIFACT_CURSOR_HMAC_KEY", "");
@@ -148,11 +157,88 @@ describe("artifacts extension integration", () => {
       registerTool(tool: RegisteredTool) {
         tools.push(tool);
       },
+      on() {},
     });
-    const result = await tools[0]!.execute("call-2", { artifact: "artifact-unknown" });
-    const payload = parseToolPayload(result);
 
-    expect((payload.error as Record<string, unknown>).code).toBe("ARTIFACT_CONFIG_INVALID");
+    // A malformed locator and a well-formed but ungranted ID are indistinguishable:
+    // neither confirms nor denies that any artifact exists.
+    const malformed = parseToolPayload(
+      await tools[0]!.execute("call-2", { artifact: "artifact-unknown" })
+    );
+    const ungranted = parseToolPayload(
+      await tools[0]!.execute("call-3", { artifact: `art_${"b".repeat(64)}` })
+    );
+
+    expect((malformed.error as Record<string, unknown>).code).toBe("ARTIFACT_NOT_GRANTED");
+    expect((ungranted.error as Record<string, unknown>).code).toBe("ARTIFACT_NOT_GRANTED");
     expect(tools).toHaveLength(1);
+  });
+
+  it("rejects a contradictory worker invocation configuration", async () => {
+    vi.stubEnv("PENNY_ARTIFACT_INVOCATION_JSON", "{}");
+    vi.stubEnv("PENNY_ARTIFACT_INVOCATION_FILE", "/tmp/penny-artifact-invocation.json");
+    vi.stubEnv("PENNY_ARTIFACT_CURSOR_HMAC_KEY", CURSOR_KEY_HEX);
+
+    const tools: RegisteredTool[] = [];
+    artifactExtension({
+      registerTool(tool: RegisteredTool) {
+        tools.push(tool);
+      },
+      on() {},
+    });
+    const payload = parseToolPayload(
+      await tools[0]!.execute("call-4", { artifact: `art_${"c".repeat(64)}` })
+    );
+    expect((payload.error as Record<string, unknown>).code).toBe("ARTIFACT_CONFIG_INVALID");
+  });
+
+  it("lets the primary runtime read exactly what the execution owner granted it", async () => {
+    const item = await createArtifactFixture("orchestrator readable output", {
+      consumerScope: ["subagent-chain:caller"],
+    });
+    fixtures.push(item);
+    vi.stubEnv("PENNY_ARTIFACT_ROOT", item.root);
+    // Grants live outside the artifact root; pin them into the fixture so the
+    // test never reads or writes real state.
+    const grantRoot = `${item.root}-grants`;
+    vi.stubEnv("PENNY_ARTIFACT_GRANT_ROOT", grantRoot);
+    // The primary runtime carries no invocation snapshot: this is Penny's shape.
+    vi.stubEnv("PENNY_ARTIFACT_INVOCATION_JSON", "");
+    vi.stubEnv("PENNY_ARTIFACT_INVOCATION_FILE", "");
+    vi.stubEnv("PENNY_ARTIFACT_CURSOR_HMAC_KEY", "");
+
+    const tools: RegisteredTool[] = [];
+    const handlers = new Map<string, (event: unknown, context: unknown) => Promise<void>>();
+    artifactExtension({
+      registerTool(tool: RegisteredTool) {
+        tools.push(tool);
+      },
+      on(event: string, handler: (event: unknown, context: unknown) => Promise<void>) {
+        handlers.set(event, handler);
+      },
+    });
+
+    const sessionId = "integration-session-owner-grants";
+    await handlers.get("session_start")!(undefined, {
+      sessionManager: { getSessionId: () => sessionId },
+    });
+
+    // Before the owner grants it, the artifact is unreadable.
+    const beforeGrant = parseToolPayload(
+      await tools[0]!.execute("call-5", { artifact: item.artifact.artifact_id })
+    );
+    expect((beforeGrant.error as Record<string, unknown>).code).toBe("ARTIFACT_NOT_GRANTED");
+
+    registerOwnerArtifactGrants({
+      sessionId,
+      refs: [artifactRefFromEnvelope(item.artifact)],
+      env: { PENNY_ARTIFACT_ROOT: item.root, PENNY_ARTIFACT_GRANT_ROOT: grantRoot },
+    });
+
+    const afterGrant = parseToolPayload(
+      await tools[0]!.execute("call-6", { artifact: item.artifact.artifact_id })
+    );
+    expect(afterGrant.ok).toBe(true);
+    expect(afterGrant.content).toBe("orchestrator readable output");
   });
 });

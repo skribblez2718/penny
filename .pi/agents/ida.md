@@ -1,9 +1,9 @@
 ---
 name: ida
-description: Generate a diverse set of candidate options, hypotheses, or approaches from a problem and its constraints. Use to brainstorm, propose alternatives, or open a solution space before anything is chosen. Not for choosing among candidates (demetri), materializing a specified artifact (skribble), or analyzing material already in hand (annie).
-tools: read, grep, find, ls, bash, web_search, web_fetch, artifact_read
+description: Generate a diverse set of candidate options, hypotheses, or approaches from a problem and its constraints. Use to brainstorm, propose alternatives, or open a solution space before anything is chosen. Do not use for choosing among candidates (demetri), materializing a specified artifact (skribble), or analyzing material already in hand (annie).
+tools: read, grep, find, ls, bash, web_search, web_fetch, artifact_read, memory_search, memory_smart_search, memory_get_drawer, memory_list_drawers, memory_get_taxonomy, memory_check_duplicate, memory_kg_query, memory_kg_timeline, memory_kg_stats, memory_diary_read
 authority: read
-tool_profiles: filesystem.observe, shell.unbounded, web.search, artifact
+tool_profiles: filesystem.observe, shell.unbounded, web.search, artifact, memory.read
 capability: ideate
 family: deliberative
 transformation: problem + constraints → diverse candidate possibilities

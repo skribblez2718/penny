@@ -166,7 +166,7 @@ function requiredCanonicalString(
   return candidate;
 }
 
-function compareUnicode(left: string, right: string): number {
+export function compareUnicode(left: string, right: string): number {
   const leftPoints = Array.from(left, (character) => character.codePointAt(0) ?? -1);
   const rightPoints = Array.from(right, (character) => character.codePointAt(0) ?? -1);
   const length = Math.min(leftPoints.length, rightPoints.length);
@@ -415,13 +415,14 @@ function parseBoolean(raw: string | undefined, name: string): boolean {
   throw new ArtifactReadError("ARTIFACT_CONFIG_INVALID", `${name} must be true or false`);
 }
 
+/**
+ * Workers always receive an owner-supplied key with their invocation snapshot.
+ * The primary runtime has no spawn boundary, so when no key is supplied one is
+ * generated for this process: cursors stay unforgeable and remain bound to a
+ * single process lifetime.
+ */
 function parseCursorKey(raw: string | undefined): Buffer {
-  if (!raw) {
-    throw new ArtifactReadError(
-      "ARTIFACT_CONFIG_INVALID",
-      "PENNY_ARTIFACT_CURSOR_HMAC_KEY is required"
-    );
-  }
+  if (!raw) return randomBytes(32);
   let key: Buffer;
   if (/^[a-fA-F0-9]+$/.test(raw) && raw.length % 2 === 0) {
     key = Buffer.from(raw, "hex");
@@ -436,7 +437,7 @@ function parseCursorKey(raw: string | undefined): Buffer {
   return key;
 }
 
-function resolveArtifactRoot(env: Readonly<Record<string, string | undefined>>): string {
+export function resolveArtifactRoot(env: Readonly<Record<string, string | undefined>>): string {
   const explicit = env.PENNY_ARTIFACT_ROOT?.trim();
   if (explicit) {
     if (!isAbsolute(explicit)) {
@@ -469,14 +470,19 @@ function resolveArtifactRoot(env: Readonly<Record<string, string | undefined>>):
 export function loadArtifactRuntimeConfig(
   env: Readonly<Record<string, string | undefined>>
 ): ArtifactRuntimeConfig {
-  const invocationJson = env.PENNY_ARTIFACT_INVOCATION_JSON?.trim();
-  const invocationFile = env.PENNY_ARTIFACT_INVOCATION_FILE?.trim();
-  if ((!invocationJson && !invocationFile) || (invocationJson && invocationFile)) {
+  // An empty value is absence, not an empty invocation: environments routinely
+  // present a cleared variable as "" rather than removing it.
+  const invocationJson = env.PENNY_ARTIFACT_INVOCATION_JSON?.trim() || undefined;
+  const invocationFile = env.PENNY_ARTIFACT_INVOCATION_FILE?.trim() || undefined;
+  if (invocationJson && invocationFile) {
     throw new ArtifactReadError(
       "ARTIFACT_CONFIG_INVALID",
       "Exactly one trusted artifact invocation source is required"
     );
   }
+  // Neither source is the unmarked primary runtime. It resolves owner-held
+  // grants through an owner resolver instead; without one, reads still fail
+  // closed with the same configuration error a worker would see.
   if (invocationFile && !isAbsolute(invocationFile)) {
     throw new ArtifactReadError(
       "ARTIFACT_CONFIG_INVALID",
@@ -568,13 +574,29 @@ async function assertProtectedPath(
   }
 }
 
-async function loadInvocation(config: ArtifactRuntimeConfig): Promise<ArtifactInvocation> {
+async function loadInvocation(
+  config: ArtifactRuntimeConfig,
+  locator: NormalizedLocator,
+  dependencies: ArtifactRuntimeDependencies
+): Promise<ArtifactInvocation> {
   if (config.invocationJson !== undefined) return parseArtifactInvocation(config.invocationJson);
-  if (!config.invocationFile) {
-    throw new ArtifactReadError("ARTIFACT_CONFIG_INVALID", "Invocation context is missing");
+  if (config.invocationFile) {
+    await assertProtectedPath(config.invocationFile, "file", "invocation context");
+    return parseArtifactInvocation(await readFile(config.invocationFile, "utf8"));
   }
-  await assertProtectedPath(config.invocationFile, "file", "invocation context");
-  return parseArtifactInvocation(await readFile(config.invocationFile, "utf8"));
+
+  const resolver = dependencies.invocationResolver;
+  if (!resolver) {
+    throw new ArtifactReadError(
+      "ARTIFACT_CONFIG_INVALID",
+      "Exactly one trusted artifact invocation source is required"
+    );
+  }
+  const invocation = await resolver(locator.artifactId);
+  if (!invocation) {
+    throw new ArtifactReadError("ARTIFACT_NOT_GRANTED", "Artifact is not granted");
+  }
+  return invocation;
 }
 
 function normalizeLocator(locator: ArtifactLocator): NormalizedLocator {
@@ -1006,7 +1028,7 @@ export async function executeArtifactRead(
     }
     const locator = normalizeLocator(params.artifact);
     artifactId = locator.artifactId;
-    const invocation = await loadInvocation(config);
+    const invocation = await loadInvocation(config, locator, dependencies);
     const grant = validateGrant(invocation, locator, now);
     const artifact = grant.artifact;
     const cursorPayload = params.cursor

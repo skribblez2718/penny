@@ -2,7 +2,7 @@
 
 ## What
 
-`orchestration` is an installable Python package (`apps/orchestration/`) that provides the shared runtime for engine-backed skills. Each skill is a `BasePlaybook` subclass with domain-named states and per-state SUMMARY contracts; its `orchestrate.py` is a thin delegate. The package owns the FSM protocol, durable checkpointer, self-recovery, and best-effort observability emission. The current user-facing playbook is `research`; `reference-cycle` is an internal engine fixture, not a user-facing skill.
+`orchestration` contains the stable installable Python runtime and an opt-in TypeScript v2 runtime in `apps/orchestration/`. Python remains the default for engine-backed skills. A single `research` invocation may explicitly select `engine: "typescript"` during the migration pilot; no default changes before the M7 approval gate. Both runtimes own FSM protocol validation, durable checkpointing, exact recovery, and best-effort observability. Python retains the internal `reference-cycle` fixture; TypeScript intentionally supports only `research` during the pilot.
 
 ## Why
 
@@ -20,6 +20,8 @@ Previously every skill re-implemented state serialization, transition replay (`_
 | `recovery.py`                                    | Forward-only recovery: owner dispatch pause and exact pending-state/ref reissue for `running`/`awaiting_user` runs                                                                                |
 | `obs_client.py`                                  | Best-effort digest emission to the observability server (never blocks a run)                                                                                                                      |
 | `cli.py`                                         | `orchestrate <start-or-step-or-status-or-recover> --playbook --session-id --run-id`                                                                                                               |
+| `src/*.ts`                                       | TypeScript v2 contracts, context/checkpointer, Node SQLite, SDK workers, signed receipts, immutable artifacts, service/CLI, observability, and loans                                              |
+| `src/playbooks/research.ts`                      | TypeScript research FSM and phase-specific result-tool schemas                                                                                                                                    |
 
 ## Engine seams (what a playbook subclass customizes)
 

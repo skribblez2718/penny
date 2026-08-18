@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "source_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "source_type": "file",
+  "captured_at": "2026-01-01T00:00:00Z",
+  "published_at": "2025-06-01T00:00:00Z",
+  "title": "Example source title",
+  "authors": ["Example Author"],
+  "media_type": "text/markdown",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "object_ref": "sources/objects/0000000000000000000000000000000000000000000000000000000000000000",
+  "provenance": {
+    "source_capability_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+    "supplied_by": "host_capability",
+    "originating_run_id": "run_example",
+    "redacted_locator": "example-source.md"
+  }
+}
