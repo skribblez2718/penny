@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "fixture_id": "research-parity-v1",
+  "description": "Language-neutral parity fixture for the TS research engine against the Python canonical behavior. Covers routing, dynamic fan/fan-in, critique/validation, grounding, uncertainty, target authority, gates/clarification, budgets, failed writes, receipts, recovery, flow diagrams, observability, no memory injection, and honest exhaustion.",
+  "modes": {
+    "quick": { "max_sub_queries": 4, "max_research_rounds": 1, "critique_passes": 0 },
+    "standard": { "max_sub_queries": 4, "max_research_rounds": 2, "critique_passes": 1 },
+    "deep": { "max_sub_queries": 8, "max_research_rounds": 3, "critique_passes": 2 }
+  },
+  "states": ["planning", "critiquing_plan", "researching", "synthesizing", "critiquing_report", "validating", "report_writing"],
+  "agents": {
+    "planning": "piper",
+    "critiquing_plan": "carren",
+    "researching": "echo",
+    "synthesizing": "synthia",
+    "critiquing_report": "carren",
+    "validating": "vera",
+    "report_writing": "skribble"
+  },
+  "terminal_states": ["complete", "incomplete", "error", "cancelled"],
+  "gate_states": ["awaiting_clarification"],
+  "output_files": ["report.md", "sources.md", "README.md"],
+  "no_private_data": true
+}

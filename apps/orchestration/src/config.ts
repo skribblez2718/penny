@@ -7,6 +7,8 @@ export const DEFAULT_DB_RELATIVE_PATH = ".penny/orchestration-v2.db";
 export const DEFAULT_MAX_STEPS = 96;
 export const DEFAULT_WORKER_TIMEOUT_MS = 15 * 60 * 1_000;
 export const DEFAULT_PARALLEL_CONCURRENCY = 4;
+/** Default cap on retained terminal runs; older terminal runs are pruned. */
+export const DEFAULT_MAX_RETAINED_RUNS = 500;
 
 export interface RuntimeConfig {
   readonly projectRoot: string;
@@ -15,6 +17,8 @@ export interface RuntimeConfig {
   readonly maxSteps: number;
   readonly workerTimeoutMs: number;
   readonly parallelConcurrency: number;
+  /** Bounded retention: maximum terminal runs to keep before pruning oldest. */
+  readonly maxRetainedRuns: number;
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number, name: string): number {
@@ -82,6 +86,11 @@ export function loadRuntimeConfig(
       env.PENNY_ORCH_V2_PARALLEL_CONCURRENCY,
       DEFAULT_PARALLEL_CONCURRENCY,
       "PENNY_ORCH_V2_PARALLEL_CONCURRENCY"
+    ),
+    maxRetainedRuns: parsePositiveInteger(
+      env.PENNY_ORCH_V2_MAX_RETAINED_RUNS,
+      DEFAULT_MAX_RETAINED_RUNS,
+      "PENNY_ORCH_V2_MAX_RETAINED_RUNS"
     ),
   };
 }

@@ -110,12 +110,15 @@ function numberValue(value: number | bigint): number {
 export class Checkpointer implements Disposable {
   readonly dbPath: string;
   private readonly db: DatabaseSync;
+  private readonly maxRetainedRuns: number;
 
   constructor(
     dbPath: string,
-    private readonly observer?: CheckpointObserver
+    private readonly observer?: CheckpointObserver,
+    options: { maxRetainedRuns?: number } = {}
   ) {
     this.dbPath = dbPath;
+    this.maxRetainedRuns = options.maxRetainedRuns ?? 500;
     if (dbPath !== ":memory:") {
       const parent = path.dirname(dbPath);
       mkdirSync(parent, { recursive: true, mode: 0o700 });
@@ -358,11 +361,58 @@ export class Checkpointer implements Disposable {
   }
 
   close(): void {
+    this.pruneTerminalRuns();
     this.db.close();
   }
 
   [Symbol.dispose](): void {
     this.close();
+  }
+
+  /**
+   * Bounded retention: prune the oldest terminal runs that exceed the retention cap.
+   *
+   * Terminal statuses are complete, incomplete, error, and cancelled. Non-terminal
+   * (running or awaiting_user) runs are never pruned — they may still be resumed.
+   * Pruning cascades to events, receipts, and gates via FK ON DELETE CASCADE.
+   */
+  pruneTerminalRuns(): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const terminalStatuses = ["complete", "incomplete", "error", "cancelled"];
+      const placeholders = terminalStatuses.map(() => "?").join(", ");
+      // Keep the newest `maxRetainedRuns` terminal runs; delete the rest.
+      // DESC ordering selects the newest first; NOT IN excludes them from deletion.
+      const keep = this.db
+        .prepare(
+          `SELECT run_id FROM runs
+           WHERE status IN (${placeholders})
+           ORDER BY updated_at DESC, rowid DESC
+           LIMIT ?`
+        )
+        .all(...terminalStatuses, this.maxRetainedRuns) as Array<{ run_id: string }>;
+      const keepIds = keep.map((r) => r.run_id);
+      const keepPlaceholders = keepIds.map(() => "?").join(", ");
+      const excess = this.db
+        .prepare(
+          `SELECT run_id FROM runs
+           WHERE status IN (${placeholders})
+             AND run_id NOT IN (${keepPlaceholders})`
+        )
+        .all(...terminalStatuses, ...keepIds) as Array<{ run_id: string }>;
+      if (excess.length === 0) {
+        this.db.exec("COMMIT");
+        return;
+      }
+      const deleteStmt = this.db.prepare("DELETE FROM runs WHERE run_id = ?");
+      for (const { run_id } of excess) {
+        deleteStmt.run(run_id);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   private selectRun(runId: string): RunRow | undefined {

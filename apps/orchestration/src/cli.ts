@@ -30,6 +30,34 @@ async function readRequest(): Promise<unknown> {
 }
 
 async function main(): Promise<void> {
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    stdout.write(
+      [
+        "Usage: penny-orchestration [--execute] [--project-root=PATH]",
+        "",
+        "Reads one JSON orchestration request from stdin and writes one JSON directive to stdout.",
+        "",
+        "Options:",
+        "  --execute          Execute the directive (run workers against a real model)",
+        "  --project-root=PATH  Override the project root (default: cwd)",
+        "  --help, -h          Show this help and exit",
+        "",
+        "Actions (in the JSON request):",
+        "  start, step, recover, respond, cancel, status",
+        "",
+        "Environment:",
+        "  PENNY_ORCH_V2_DB           Absolute path to the orchestration database",
+        "  PENNY_ARTIFACT_ROOT        Absolute path to the artifact store root",
+        "  PENNY_ORCH_V2_MAX_STEPS    Maximum steps per run (default: 96)",
+        "  PENNY_ORCH_V2_WORKER_TIMEOUT_MS  Worker timeout in ms (default: 900000)",
+        "  PENNY_ORCH_V2_PARALLEL_CONCURRENCY  Parallel branch limit (default: 4)",
+        "  PENNY_ORCH_V2_MAX_RETAINED_RUNS    Bounded retention cap (default: 500)",
+        "  PENNY_RESEARCH_DEFAULT_MODEL       Default model for all research agents",
+        "",
+      ].join("\n")
+    );
+    return;
+  }
   const execute = process.argv.includes("--execute");
   const projectRootArgument = process.argv.find((argument) =>
     argument.startsWith("--project-root=")
@@ -39,7 +67,9 @@ async function main(): Promise<void> {
     : process.cwd();
   const config = loadRuntimeConfig(projectRoot);
   const request = await readRequest();
-  using checkpointer = new Checkpointer(config.dbPath);
+  using checkpointer = new Checkpointer(config.dbPath, undefined, {
+    maxRetainedRuns: config.maxRetainedRuns,
+  });
   using artifacts = new ArtifactStore(config.artifactRoot);
   const engine = new OrchestrationEngine(checkpointer, {
     projectRoot: config.projectRoot,

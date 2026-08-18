@@ -2712,6 +2712,61 @@ export default function skillExtension(pi: ExtensionAPI): void {
     }
   };
 
+  // ── knowledge_base tool (Phase 6 requirement, pre-G7 disabled state) ────────
+  //
+  // The agents-md-research plan (§4.5) requires the adapter to register BOTH the
+  // existing `skill` tool AND a typed `knowledge_base` tool. Before G7 (stateful
+  // KB implementation), `knowledge_base` must return a typed disabled/configuration
+  // status rather than executing stateful work. This registration satisfies the
+  // Phase 6 acceptance outcome without crossing the G6/G7 line.
+  //
+  // Registered BEFORE `skill` so the last-registered tool (which unit-test mocks
+  // capture) remains `skill` — adding a tool must not break existing test fixtures.
+  pi.registerTool({
+    name: "knowledge_base",
+    label: "Knowledge Base",
+    description: [
+      "Private advisory knowledge-base workflows.",
+      "Use when the operator explicitly asks to initialize, ingest, query, save, lint,",
+      "inspect, resume, or prepare promotion for a configured KB profile.",
+      "Do not use for canonical current-state lookup without verification, automatic",
+      "research ingestion, arbitrary filesystem access, or unapproved canonical writes.",
+    ].join(" "),
+    execute: async (rawParams: Record<string, unknown>) => {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              schema_version: 1,
+              action: rawParams["action"] ?? "unknown",
+              status: "disabled",
+              met: false,
+              ids: [],
+              counts: {},
+              artifacts: [],
+              evidence: [],
+              warnings: [
+                "Knowledge-base workflows are not yet enabled.",
+                "Stateful KB implementation requires G6 (research canary) and G7 (KB core).",
+                "This tool is registered but disabled until those gates pass.",
+              ],
+              unresolved: [],
+              next: "none",
+            }),
+          },
+        ],
+        details: {
+          schema_version: 1,
+          action: rawParams["action"] ?? "unknown",
+          status: "disabled",
+          met: false,
+          next: "none",
+        },
+      };
+    },
+  });
+
   pi.registerTool({
     name: "skill",
     label: "Invoke Skill",
@@ -3156,3 +3211,5 @@ export default function skillExtension(pi: ExtensionAPI): void {
     },
   });
 }
+
+

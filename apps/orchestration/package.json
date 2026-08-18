@@ -31,8 +31,16 @@
     "typecheck": "node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
     "test": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "test:unit": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
+    "test:node-unit": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
+    "test:runner": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
+    "test:research-parity": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/research-parity.test.ts",
     "test:integration": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts 'tests/**/*.integration.test.ts'",
-    "test:parity": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/research-parity.test.ts"
+    "test:parity": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/research-parity.test.ts",
+    "test:all": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
+    "test:kb-core": "echo 'KB core tests not yet implemented (G7+); skipping'",
+    "verify:python-map": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/python-parity-map.test.ts",
+    "pending": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts --grep pending",
+    "smoke:research": "echo 'Smoke: set PENNY_RESEARCH_DEFAULT_MODEL and pipe a start request to dist/cli.js --execute'"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.1",
