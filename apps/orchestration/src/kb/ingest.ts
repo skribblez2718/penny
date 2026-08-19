@@ -142,7 +142,7 @@ function sourceRecordFor(src: IngestSource, runId: string): SourceRecord {
 // ── Phase briefs (in-band: instructions + output contract ONLY; no bodies) ──
 
 const ECHO_BRIEF = [
-  "Phase: echo_ingest (evidence extraction).",
+  "Phase: ingest (evidence extraction).",
   "Read each admitted source with read_source_snapshot (by its source_id) and extract the key claims.",
   "Submit EXACTLY ONE JSON object via submit_phase_result with this shape:",
   '{"schema_version":1,"artifact_kind":"claims","source_ids":[...],"claims":[{"claim_id":"clm_<unique>","text":"...","kind":"fact|inference|speculation|unknown","state":"supported|contested|superseded|unverified_current","confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","evidence":[{"source_id":"<src id>"}],"contradicts_claim_ids":[],"canonical_verification_refs":[]}]}',
@@ -150,8 +150,8 @@ const ECHO_BRIEF = [
 ].join("\n");
 
 const SYNTHIA_BRIEF = [
-  "Phase: synthia_compose (page composition).",
-  "Read the prior phase claims with read_phase_output (phase=echo_ingest). Where a claim needs its original wording, read the admitted sources with read_source_snapshot.",
+  "Phase: compose (page composition).",
+  "Read the prior phase claims with read_phase_output (phase=ingest). Where a claim needs its original wording, read the admitted sources with read_source_snapshot.",
   "Compose ONE advisory page. Its markdown MUST contain exactly these level-2 headings in this order, each with real content:",
   "## Synthesis",
   "## Evidence",
@@ -163,8 +163,8 @@ const SYNTHIA_BRIEF = [
 ].join("\n");
 
 const CARREN_BRIEF = [
-  "Phase: carren_lint (semantic review).",
-  "Read the candidate page with read_phase_output (phase=synthia_compose). Read admitted sources with read_source_snapshot where a claim's grounding is unclear.",
+  "Phase: lint (semantic review).",
+  "Read the candidate page with read_phase_output (phase=compose). Read admitted sources with read_source_snapshot where a claim's grounding is unclear.",
   "Review for unsupported claims, missing evidence, contradictions, and overclaims.",
   "For every material conflict between claims (or between a claim and its evidence), emit a candidate conflict whose claim_refs point at the involved claims of THIS candidate page.",
   "Submit EXACTLY ONE JSON object via submit_phase_result with this shape:",
@@ -173,8 +173,8 @@ const CARREN_BRIEF = [
 ].join("\n");
 
 const VERA_BRIEF = [
-  "Phase: vera_verify (groundedness verification).",
-  "Read the candidate page with read_phase_output (phase=synthia_compose) and the admitted sources with read_source_snapshot.",
+  "Phase: verify (groundedness verification).",
+  "Read the candidate page with read_phase_output (phase=compose) and the admitted sources with read_source_snapshot.",
   "For each claim in the candidate page's sidecar, decide whether the cited source supports it.",
   "Submit EXACTLY ONE JSON object via submit_phase_result with this shape:",
   '{"schema_version":1,"artifact_kind":"verification_report","verified_artifact_ids":[],"claim_findings":[{"claim_ref":{"page_id":"...","revision_id":"...","claim_id":"..."},"verdict":"supported|partially_supported|unsupported","notes":"..."}]}',
@@ -246,7 +246,7 @@ export async function ingestKb(
     // 2. Echo — extract claims from the admitted sources
     const claimsJson = await agentRunner({
       agent: "echo",
-      stateId: "echo_ingest",
+      stateId: "ingest",
       phaseBrief: ECHO_BRIEF,
       sourceAllowlist: sourceIds,
       priorPhaseAllowlist: [],
@@ -254,12 +254,12 @@ export async function ingestKb(
       readPhaseOutput: makeNoPriorPhases(),
     });
     const claimsHandle = store.stage({
-      state_id: "echo_ingest",
+      state_id: "ingest",
       kb_profile_id: ctx.profileId,
       artifact_kind: "claims",
       content: claimsJson,
     });
-    phaseHandles.set("echo_ingest", claimsHandle);
+    phaseHandles.set("ingest", claimsHandle);
 
     const priorOutputs = (allowed: readonly string[]): ((stateId: string) => string) => {
       return (stateId: string): string => {
@@ -279,51 +279,51 @@ export async function ingestKb(
     // 3. Synthia — compose a page revision from the claims
     const pageDraftJson = await agentRunner({
       agent: "synthia",
-      stateId: "synthia_compose",
+      stateId: "compose",
       phaseBrief: SYNTHIA_BRIEF,
       sourceAllowlist: sourceIds,
-      priorPhaseAllowlist: ["echo_ingest"],
+      priorPhaseAllowlist: ["ingest"],
       readSource,
-      readPhaseOutput: priorOutputs(["echo_ingest"]),
+      readPhaseOutput: priorOutputs(["ingest"]),
     });
     const pageDraftHandle = store.stage({
-      state_id: "synthia_compose",
+      state_id: "compose",
       kb_profile_id: ctx.profileId,
       artifact_kind: "page_draft",
       content: pageDraftJson,
     });
-    phaseHandles.set("synthia_compose", pageDraftHandle);
+    phaseHandles.set("compose", pageDraftHandle);
 
     // 4. Carren — semantic lint of the candidate page
     const lintJson = await agentRunner({
       agent: "carren",
-      stateId: "carren_lint",
+      stateId: "lint",
       phaseBrief: CARREN_BRIEF,
       sourceAllowlist: sourceIds,
-      priorPhaseAllowlist: ["synthia_compose"],
+      priorPhaseAllowlist: ["compose"],
       readSource,
-      readPhaseOutput: priorOutputs(["synthia_compose"]),
+      readPhaseOutput: priorOutputs(["compose"]),
     });
     const lintHandle = store.stage({
-      state_id: "carren_lint",
+      state_id: "lint",
       kb_profile_id: ctx.profileId,
       artifact_kind: "lint_report",
       content: lintJson,
     });
-    phaseHandles.set("carren_lint", lintHandle);
+    phaseHandles.set("lint", lintHandle);
 
     // 5. Vera — groundedness verification
     const verificationJson = await agentRunner({
       agent: "vera",
-      stateId: "vera_verify",
+      stateId: "verify",
       phaseBrief: VERA_BRIEF,
       sourceAllowlist: sourceIds,
-      priorPhaseAllowlist: ["synthia_compose", "echo_ingest"],
+      priorPhaseAllowlist: ["compose", "ingest"],
       readSource,
-      readPhaseOutput: priorOutputs(["synthia_compose", "echo_ingest"]),
+      readPhaseOutput: priorOutputs(["compose", "ingest"]),
     });
     const verificationHandle = store.stage({
-      state_id: "vera_verify",
+      state_id: "verify",
       kb_profile_id: ctx.profileId,
       artifact_kind: "verification_report",
       content: verificationJson,

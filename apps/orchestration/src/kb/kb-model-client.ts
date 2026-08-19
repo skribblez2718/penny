@@ -23,7 +23,13 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { PiAgentClient, ssotBody, ssotModel, type InlineExtension } from "../model-client.js";
+import {
+  PiAgentClient,
+  resolveDomainGuidancePath,
+  ssotBody,
+  ssotModel,
+  type InlineExtension,
+} from "../model-client.js";
 import { KNOWLEDGE_BASE_SKILL_CONTRACT } from "../playbooks/knowledge-base.js";
 import { kbSessionSpec, type KbAgentRunner, type KbPhaseInvocation } from "./session-tools.js";
 
@@ -75,6 +81,24 @@ export class KbModelClient {
       );
     }
 
+    // W6: the phase's guidance comes from the contract's prompt root, not from a
+    // literal in this file. Missing guidance is a refusal: an inline fallback is
+    // how the prompts drifted out of the skill in the first place.
+    const guidancePath = resolveDomainGuidancePath({
+      projectRoot,
+      agent: invocation.agent,
+      stateId: invocation.stateId,
+      ...(KNOWLEDGE_BASE_SKILL_CONTRACT.guidance
+        ? { guidance: KNOWLEDGE_BASE_SKILL_CONTRACT.guidance }
+        : {}),
+    });
+    const phaseGuidance = await optionalText(guidancePath);
+    if (phaseGuidance.trim().length === 0) {
+      throw new Error(
+        `KB phase '${invocation.stateId}': no guidance at ${guidancePath}; refusing to run a KB phase without its declared prompt`
+      );
+    }
+
     const model = this.options.modelOverride ?? ssotModel(agentDoc);
     if (model === undefined) {
       throw new Error(
@@ -92,7 +116,7 @@ export class KbModelClient {
       artifactConsumer: `kb:${invocation.stateId}`,
       modelOverride: model,
       guidance: KNOWLEDGE_BASE_SKILL_CONTRACT.guidance,
-      session: kbSessionSpec({ invocation, agentBody: body }),
+      session: kbSessionSpec({ invocation, agentBody: body, phaseGuidance }),
     });
     return completion.text;
   };

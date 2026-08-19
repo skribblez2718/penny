@@ -310,7 +310,7 @@ export function lintKb(ctx: KbWorkflowContext): KbResult {
     candidate_conflicts: [],
   });
   const handle = store.stage({
-    state_id: "carren_lint",
+    state_id: "lint",
     kb_profile_id: ctx.profileId,
     artifact_kind: "lint_report",
     content: reportContent,

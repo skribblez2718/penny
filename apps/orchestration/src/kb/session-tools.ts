@@ -47,6 +47,13 @@ export function kbSessionSpec(input: {
   invocation: KbPhaseInvocation;
   /** The agent's SSOT body, used for role context in the opening. */
   agentBody: string;
+  /**
+   * The phase's guidance, resolved from the KB skill contract
+   * (`per_agent_phase` → `<agent>-<phase>.md`). Required: a phase whose guidance
+   * file is missing must refuse rather than fall back to an inline prompt, or the
+   * contract's guidance root becomes decorative again.
+   */
+  phaseGuidance: string;
 }): AgentSessionSpecV1 {
   const { invocation } = input;
   const allowSources = new Set(invocation.sourceAllowlist);
@@ -144,6 +151,8 @@ export function kbSessionSpec(input: {
       `You are executing the '${invocation.agent}' role in a knowledge-base workflow (phase: ${invocation.stateId}).`,
       "AGENT CONTEXT (SSOT):",
       input.agentBody,
+      "PHASE GUIDANCE:",
+      input.phaseGuidance,
       "PHASE RULES:",
       "- Gather ALL inputs through the reader tools: read_phase_brief, read_source_snapshot (admission allowlist), read_phase_output (allowed prior phases).",
       "- Complete the phase entirely from reader output. Do not assume paths, files, or content you were not given.",

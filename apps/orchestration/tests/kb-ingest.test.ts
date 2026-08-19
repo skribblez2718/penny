@@ -225,10 +225,10 @@ function makeMockRunner(overrides: Partial<Record<string, string>> = {}): {
       }
     }
     const table: Record<string, string> = {
-      echo_ingest: claimJson(),
-      synthia_compose: pageDraftJson(),
-      carren_lint: lintJson(),
-      vera_verify: verificationJson(),
+      ingest: claimJson(),
+      compose: pageDraftJson(),
+      lint: lintJson(),
+      verify: verificationJson(),
     };
     const out = overrides[inv.stateId] ?? table[inv.stateId];
     if (out === undefined) throw new Error(`mock runner: no output for ${inv.stateId}`);
@@ -293,12 +293,7 @@ describe("ingest: gate (no publication)", () => {
 
     // All four agents ran, in pipeline order, with briefs + host readers wired.
     expect(calls.map((c) => c.agent)).toEqual(["echo", "synthia", "carren", "vera"]);
-    expect(calls.map((c) => c.stateId)).toEqual([
-      "echo_ingest",
-      "synthia_compose",
-      "carren_lint",
-      "vera_verify",
-    ]);
+    expect(calls.map((c) => c.stateId)).toEqual(["ingest", "compose", "lint", "verify"]);
 
     // Gate: awaiting_user, four sealed handles, no paths anywhere.
     expect(result.status).toBe("awaiting_user");
@@ -405,7 +400,7 @@ describe("approveIngest: publication", () => {
     const baseGen = readCurrent(root).generation_id;
 
     const { runner } = makeMockRunner({
-      synthia_compose: "I composed the page but here is prose without JSON. Sorry!",
+      compose: "I composed the page but here is prose without JSON. Sorry!",
     });
     const { pending } = await ingestPending(root, runner);
 

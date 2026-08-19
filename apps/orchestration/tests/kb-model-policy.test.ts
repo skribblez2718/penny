@@ -9,18 +9,33 @@
  * openai-codex/gpt-5.6-terra).
  */
 
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { KbModelClient, ssotModel } from "../src/kb/kb-model-client.js";
+import { resolveDomainGuidancePath } from "../src/model-client.js";
+import { KNOWLEDGE_BASE_SKILL_CONTRACT } from "../src/playbooks/knowledge-base.js";
 import { type AgentRunner, type IngestSource } from "../src/kb/ingest.js";
 
 const projectRoot = path.resolve(__dirname, "..", "..", "..");
 const agentFile = (name: string): string =>
   readFileSync(path.join(projectRoot, ".pi", "agents", `${name}.md`), "utf8");
+
+/** Seed a tmp project with one agent SSOT and (optionally) its phase guidance. */
+function seedAgent(root: string, name: string, frontmatter: string, withGuidance = true): void {
+  mkdirSync(path.join(root, ".pi", "agents"), { recursive: true });
+  writeFileSync(path.join(root, ".pi", "agents", `${name}.md`), frontmatter, { mode: 0o600 });
+  if (withGuidance) {
+    const prompts = path.join(root, ".pi", "skills", "knowledge-base", "assets", "prompts");
+    mkdirSync(prompts, { recursive: true });
+    writeFileSync(path.join(prompts, `${name}-phase_test.md`), "# guidance\n\nDo the phase.\n", {
+      mode: 0o600,
+    });
+  }
+}
 
 const dirs: string[] = [];
 function tmpProject(label = "penny-kb-model"): string {
@@ -49,12 +64,7 @@ describe("SSOT model parsing", () => {
 describe("KbModelClient model policy", () => {
   it("refuses to run a phase whose agent declares no model (no guessing)", async () => {
     const root = tmpProject();
-    mkdirSync(path.join(root, ".pi", "agents"), { recursive: true });
-    writeFileSync(
-      path.join(root, ".pi", "agents", "modelless.md"),
-      "---\nname: modelless\ntools: read\n---\n\nA body.\n",
-      { mode: 0o600 }
-    );
+    seedAgent(root, "modelless", "---\nname: modelless\ntools: read\n---\n\nA body.\n");
     const client = new KbModelClient({ projectRoot: root });
     const sources: IngestSource[] = [];
     await expect(
@@ -77,12 +87,7 @@ describe("KbModelClient model policy", () => {
 
   it("accepts an explicit test-only override even when the SSOT has none", async () => {
     const root = tmpProject();
-    mkdirSync(path.join(root, ".pi", "agents"), { recursive: true });
-    writeFileSync(
-      path.join(root, ".pi", "agents", "modelless.md"),
-      "---\nname: modelless\ntools: read\n---\n\nA body.\n",
-      { mode: 0o600 }
-    );
+    seedAgent(root, "modelless", "---\nname: modelless\ntools: read\n---\n\nA body.\n");
     const client = new KbModelClient({
       projectRoot: root,
       modelOverride: "definitely/not-a-real-model",
@@ -104,5 +109,55 @@ describe("KbModelClient model policy", () => {
         },
       })
     ).rejects.toThrow(/definitely\/not-a-real-model/);
+  });
+});
+
+describe("KB guidance policy (W6 seam)", () => {
+  it("refuses a phase whose declared guidance file is absent", async () => {
+    const root = tmpProject();
+    // Agent SSOT present and complete; only the contract-declared prompt is missing.
+    seedAgent(
+      root,
+      "guideless",
+      "---\nname: guideless\nmodel: sol\ntools: read\n---\n\nBody.\n",
+      false
+    );
+    const client = new KbModelClient({ projectRoot: root });
+    await expect(
+      client.run({
+        agent: "guideless",
+        stateId: "phase_test",
+        phaseBrief: "brief",
+        sourceAllowlist: [],
+        priorPhaseAllowlist: [],
+        readSource: () => {
+          throw new Error("no sources");
+        },
+        readPhaseOutput: () => {
+          throw new Error("no priors");
+        },
+      })
+    ).rejects.toThrow(/refusing to run a KB phase without its declared prompt/);
+  });
+
+  it("resolves each shipped ingest phase to its contract-declared prompt file", () => {
+    const root = path.resolve(__dirname, "..", "..", "..");
+    for (const [agent, phase] of [
+      ["echo", "ingest"],
+      ["synthia", "compose"],
+      ["carren", "lint"],
+      ["vera", "verify"],
+    ] as const) {
+      const resolved = resolveDomainGuidancePath({
+        projectRoot: root,
+        agent,
+        stateId: phase,
+        ...(KNOWLEDGE_BASE_SKILL_CONTRACT.guidance
+          ? { guidance: KNOWLEDGE_BASE_SKILL_CONTRACT.guidance }
+          : {}),
+      });
+      expect(resolved.endsWith(`/${agent}-${phase}.md`)).toBe(true);
+      expect(existsSync(resolved)).toBe(true);
+    }
   });
 });

@@ -141,10 +141,10 @@ function makeMockRunner(): AgentRunner {
     claim_findings: [],
   });
   const table: Record<string, string> = {
-    echo_ingest: claims,
-    synthia_compose: page,
-    carren_lint: lint,
-    vera_verify: verification,
+    ingest: claims,
+    compose: page,
+    lint: lint,
+    verify: verification,
   };
   return (async (_inv) => {
     const out = table[_inv.stateId];
