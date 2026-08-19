@@ -9,15 +9,18 @@
  * root, digests re-verified on every decision).
  *
  * Commands:
- *   capability-mint   Mint a source_read capability envelope (operator action)
- *   capability-list   List capability leases for a profile
- *   gate-list         List content-review gates for a profile (safe projection)
- *   approve           Approve a pending gate (host decision; publishes)
- *   deny              Deny a pending gate (host decision; publishes nothing)
- *   refine            Request a refinement round (host decision; re-enters compose, re-gates)
+ *   capability-mint    Mint a source_read capability envelope (operator action)
+ *   capability-list    List capability leases for a profile
+ *   gate-list          List content-review gates for a profile (safe projection)
+ *   approve            Approve a pending gate (host decision; publishes)
+ *   deny               Deny a pending gate (host decision; publishes nothing)
+ *   refine             Request a refinement round (host decision; re-enters compose, re-gates)
+ *   parent-grant-mint  Mint a single-use derived-answer grant (§5.1; operator action)
+ *   parent-grant-list  List parent-delivery grants (safe projection; no bodies)
  *
  * Conventions:
  *   --project-root  Defaults to cwd. KB root = <project-root>/.penny/kb/<profile>.
+ *   Grant store     <project-root>/.penny/kb-parent-grants/ (host state, not the KB).
  *   No command prints any source or page body to stdout.
  */
 
@@ -30,6 +33,12 @@ import { OrchestrationEngine } from "./engine.js";
 import { loadRuntimeConfig } from "./config.js";
 import type { Directive, JsonValue } from "./contracts.js";
 import { envelopeDigest, CapabilityStore } from "./kb/capabilities.js";
+import {
+  ParentDeliveryGrantStore,
+  computeRequestSha256,
+  mintParentDeliveryGrant,
+  validateQueryRequest,
+} from "./kb/parent-delivery.js";
 import {
   approveGate,
   denyGate,
@@ -84,6 +93,71 @@ function fail(message: string): never {
 }
 
 // ── capability-mint ─────────────────────────────────────────────────────────
+
+function grantStoreDir(args: Args): string {
+  return path.join(path.resolve(args.projectRoot), ".penny", "kb-parent-grants");
+}
+
+function cmdParentGrantMint(args: Args): void {
+  const sessionId = String(args["session"] ?? "");
+  const invocationId = String(args["invocation"] ?? "");
+  const requestJson = String(args["request"] ?? "");
+  if (sessionId.length === 0 || invocationId.length === 0 || requestJson.length === 0) {
+    fail("parent-grant-mint requires --session, --invocation, and --request '<json>'");
+  }
+  let rawRequest: unknown;
+  try {
+    rawRequest = JSON.parse(requestJson);
+  } catch {
+    fail("--request must be a JSON object (the exact QueryKbRequestV1 to run)");
+    return;
+  }
+  const request = validateQueryRequest(rawRequest);
+  if (request.kb_profile_id !== args.profile) {
+    fail(`--profile is ${args.profile} but the request names ${request.kb_profile_id}; they must match`);
+  }
+  if (request.answer_delivery !== undefined && request.answer_delivery !== "parent_tool_result") {
+    fail("a grant request must use answer_delivery: parent_tool_result (or omit it)");
+  }
+  const maxBytes = Number(args["max-bytes"] ?? 16384);
+  const ttlMinutes = Number(args["ttl-minutes"] ?? 15);
+  if (!Number.isFinite(maxBytes) || !Number.isFinite(ttlMinutes) || ttlMinutes < 1 || ttlMinutes > 10080) {
+    fail("--max-bytes must be a positive integer (≤ 32768) and --ttl-minutes 1–10080");
+  }
+  const now = new Date();
+  const grant = mintParentDeliveryGrant({
+    session_id: sessionId,
+    invocation_id: invocationId,
+    request,
+    max_utf8_bytes: Math.max(1, Math.min(32768, Math.trunc(maxBytes))),
+    issued_at: now.toISOString(),
+    expires_at: new Date(now.getTime() + ttlMinutes * 60_000).toISOString(),
+  });
+  const store = new ParentDeliveryGrantStore(grantStoreDir(args));
+  store.mint(grant);
+  process.stdout.write(
+    JSON.stringify(
+      {
+        schema_version: 1,
+        grant_id: grant.grant_id,
+        kb_profile_id: grant.kb_profile_id,
+        request_sha256: grant.request_sha256,
+        max_utf8_bytes: grant.max_utf8_bytes,
+        issued_at: grant.issued_at,
+        expires_at: grant.expires_at,
+        note: "single-use; consumed atomically by the matching approved run. See parent-grant-list.",
+      },
+      null,
+      2
+    ) + "\n"
+  );
+}
+
+function cmdParentGrantList(args: Args): void {
+  const store = new ParentDeliveryGrantStore(grantStoreDir(args));
+  const { grants, skipped_malformed } = store.list();
+  process.stdout.write(JSON.stringify({ schema_version: 1, grants, skipped_malformed }, null, 2) + "\n");
+}
 
 function cmdCapabilityMint(args: Args): void {
   const kbRoot = kbRootFor(args);
@@ -355,6 +429,8 @@ function main(argv: string[]): void {
         "  approve [--run RUN_ID]",
         "  deny [--run RUN_ID]",
         "  refine [--run RUN_ID]",
+        "  parent-grant-mint --profile P --session S --invocation I --request '<json>' [--max-bytes 16384] [--ttl-minutes 15]",
+        "  parent-grant-list",
         "",
       ].join("\n")
     );
@@ -381,6 +457,12 @@ function main(argv: string[]): void {
         break;
       case "refine":
         cmdRefine(args);
+        break;
+      case "parent-grant-mint":
+        cmdParentGrantMint(args);
+        break;
+      case "parent-grant-list":
+        cmdParentGrantList(args);
         break;
       default:
         fail(`unknown command: ${cmd}`);

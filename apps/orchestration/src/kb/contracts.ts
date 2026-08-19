@@ -461,3 +461,89 @@ export function canonicalJson(value: unknown): string {
 export function sha256Hex(value: string): Sha256Hex {
   return createHash("sha256").update(value, "utf8").digest("hex") as Sha256Hex;
 }
+
+// ── §5.6 query request (closed, exact keys) ──────────────────────────────────
+
+export const AnswerDeliverySchema = Type.Union([
+  Type.Literal("artifact_ref"),
+  Type.Literal("parent_tool_result"),
+]);
+export type AnswerDelivery = Static<typeof AnswerDeliverySchema>;
+
+/** RFC 3339 UTC with `Z` (fractional seconds ≤ 9 digits). */
+export const Rfc3339UtcSchema = Type.String({
+  pattern: /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?Z$/.source,
+  minLength: 20,
+  maxLength: 32,
+});
+export type Rfc3339Utc = Static<typeof Rfc3339UtcSchema>;
+
+/**
+ * `QueryKbRequestV1` (§5.6). Closed validation: query 1–32,768; filter ID sets
+ * 0–256 and unique; `max_candidates` 1–100; `verify_grounding` and
+ * `answer_delivery` default true / `artifact_ref`. `answer_delivery` is a
+ * request, never a grant: `parent_tool_result` additionally requires an exact
+ * unconsumed `ParentDeliveryGrantV1` plus the policy allowance.
+ */
+export const QueryKbRequestSchema = Type.Object({
+  schema_version: Type.Literal(1),
+  action: Type.Literal("query"),
+  kb_profile_id: OpaqueIdSchema,
+  query: Type.String({ minLength: 1, maxLength: 32_768 }),
+  page_ids: Type.Optional(Type.Array(OpaqueIdSchema, { minItems: 1, maxItems: 256, uniqueItems: true })),
+  source_ids: Type.Optional(Type.Array(OpaqueIdSchema, { minItems: 1, maxItems: 256, uniqueItems: true })),
+  max_candidates: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+  verify_grounding: Type.Optional(Type.Boolean()),
+  answer_delivery: Type.Optional(AnswerDeliverySchema),
+}, { additionalProperties: false });
+export type QueryKbRequest = Static<typeof QueryKbRequestSchema>;
+
+// ── §5.1 parent delivery grant (host-minted, single-use) ─────────────────────
+
+/**
+ * `ParentDeliveryGrantV1` (§5.1). Host-minted out of band, stored owner-only,
+ * single-use: exactly one unexpired grant whose session, invocation, action,
+ * profile, `request_sha256 = SHA-256(JCS(request))`, and byte maximum all match
+ * the host invocation context admits derived parent delivery; the grant store
+ * then atomically consumes it by the returned run, and retries never redeliver.
+ */
+export const ParentDeliveryGrantSchema = Type.Object({
+  schema_version: Type.Literal(1),
+  grant_id: OpaqueIdSchema,
+  session_id: OpaqueIdSchema,
+  invocation_id: OpaqueIdSchema,
+  action: Type.Literal("query"),
+  kb_profile_id: OpaqueIdSchema,
+  request_sha256: Sha256HexSchema,
+  max_utf8_bytes: Type.Integer({ minimum: 1, maximum: 32_768 }),
+  issued_at: Rfc3339UtcSchema,
+  expires_at: Rfc3339UtcSchema,
+}, { additionalProperties: false });
+export type ParentDeliveryGrant = Static<typeof ParentDeliveryGrantSchema>;
+
+export const ParentDeliveryGrantStateSchema = Type.Union([
+  Type.Literal("available"),
+  Type.Literal("consumed"),
+  Type.Literal("invalidated"),
+  Type.Literal("expired"),
+]);
+export type ParentDeliveryGrantState = Static<typeof ParentDeliveryGrantStateSchema>;
+
+/** `ParentDeliveryGrantStoreRecordV1` (§5.1) — the durable state row. */
+export const ParentDeliveryGrantStoreRecordSchema = Type.Object({
+  schema_version: Type.Literal(1),
+  grant_id: OpaqueIdSchema,
+  grant_sha256: Sha256HexSchema,
+  state: ParentDeliveryGrantStateSchema,
+  run_id: Type.Optional(OpaqueIdSchema),
+  updated_at: Rfc3339UtcSchema,
+}, { additionalProperties: false });
+export type ParentDeliveryGrantStoreRecord = Static<typeof ParentDeliveryGrantStoreRecordSchema>;
+
+/** The owner-only grant file: the state record plus the full grant. */
+export const ParentDeliveryGrantFileSchema = Type.Object({
+  schema_version: Type.Literal(1),
+  record: ParentDeliveryGrantStoreRecordSchema,
+  grant: ParentDeliveryGrantSchema,
+}, { additionalProperties: false });
+export type ParentDeliveryGrantFile = Static<typeof ParentDeliveryGrantFileSchema>;
