@@ -77,6 +77,20 @@ export interface RunContextSnapshot {
   readonly clarification_text: string;
   readonly met: boolean;
   readonly research: ResearchData;
+  /**
+   * Playbook-scoped durable state for playbooks that are not research.
+   *
+   * The Foundation stage extracted the playbook seam but left this snapshot
+   * research-shaped: `research` is a hardcoded field, so a second playbook had
+   * nowhere to keep durable state and was pushed into running beside the engine
+   * instead of on it.
+   *
+   * This slot is deliberately additive and **omitted when empty**, so research
+   * snapshots stay byte-identical and the parity oracle is untouched. It is a
+   * bounded JSON bag owned by the dispatching playbook; the engine never reads
+   * its contents.
+   */
+  readonly playbook_data?: Record<string, JsonValue>;
   readonly selected_artifacts: ArtifactRef[];
   readonly pending_directive: Directive | null;
   readonly pending_branches: PendingBranch[];
@@ -137,6 +151,8 @@ export class RunContext {
   clarificationText: string;
   met: boolean;
   research: ResearchData;
+  /** Playbook-scoped durable state; see `RunContextSnapshot.playbook_data`. */
+  playbookData: Record<string, JsonValue>;
   selectedArtifacts: ArtifactRef[];
   pendingDirective: Directive | null;
   pendingBranches: PendingBranch[];
@@ -159,6 +175,7 @@ export class RunContext {
     this.clarificationText = snapshot.clarification_text;
     this.met = snapshot.met;
     this.research = clone(snapshot.research);
+    this.playbookData = clone(snapshot.playbook_data ?? {});
     this.selectedArtifacts = clone(snapshot.selected_artifacts);
     this.pendingDirective = clone(snapshot.pending_directive);
     this.pendingBranches = clone(snapshot.pending_branches);
@@ -200,6 +217,8 @@ export class RunContext {
       met: false,
       research: emptyResearchData(),
       selected_artifacts: [],
+      // playbook_data is intentionally omitted here; it materializes only when a
+      // playbook writes to it, keeping research snapshots byte-identical.
       pending_directive: null,
       pending_branches: [],
       terminal_directive: null,
@@ -234,7 +253,13 @@ export class RunContext {
       "pending_branches",
       "terminal_directive",
     ];
-    const unknownKeys = Object.keys(record).filter((key) => !expectedKeys.includes(key));
+    // `playbook_data` is optional: absent on every research snapshot and on every
+    // checkpoint written before the slot existed, so it is accepted-if-present
+    // rather than required.
+    const optionalKeys = ["playbook_data"];
+    const unknownKeys = Object.keys(record).filter(
+      (key) => !expectedKeys.includes(key) && !optionalKeys.includes(key)
+    );
     const missingKeys = expectedKeys.filter((key) => !Object.hasOwn(record, key));
     if (unknownKeys.length > 0 || missingKeys.length > 0) {
       throw new Error(
@@ -296,6 +321,16 @@ export class RunContext {
         throw new Error("terminal directive belongs to another run");
       }
     }
+    if (snapshot.playbook_data !== undefined) {
+      if (
+        snapshot.playbook_data === null ||
+        typeof snapshot.playbook_data !== "object" ||
+        Array.isArray(snapshot.playbook_data)
+      ) {
+        throw new Error("checkpoint playbook_data must be an object");
+      }
+      validateContract(JsonValueSchema, snapshot.playbook_data, "checkpoint playbook_data");
+    }
     return new RunContext(snapshot);
   }
 
@@ -347,6 +382,11 @@ export class RunContext {
       clarification_text: this.clarificationText,
       met: this.met,
       research: clone(this.research),
+      // Omitted when empty so research snapshots serialize byte-identically to
+      // their pre-slot form. Parity is preserved by construction, not by promise.
+      ...(Object.keys(this.playbookData).length > 0
+        ? { playbook_data: clone(this.playbookData) }
+        : {}),
       selected_artifacts: clone(this.selectedArtifacts),
       pending_directive: clone(this.pendingDirective),
       pending_branches: clone(this.pendingBranches),

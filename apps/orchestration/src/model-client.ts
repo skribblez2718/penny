@@ -8,6 +8,7 @@ import {
   createAgentSession,
   defineTool,
   getAgentDir,
+  resolveModelScopeWithDiagnostics,
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 export type { InlineExtension };
@@ -42,6 +43,43 @@ export interface AgentInvocation {
    * what the hardcoded path did before.
    */
   readonly guidance?: SkillContract["guidance"];
+  /**
+   * Optional session posture supplied by the dispatching playbook.
+   *
+   * Research supplies nothing and takes the default posture (SSOT tools + the
+   * result/artifact tools + the research opening), so its path is unchanged.
+   *
+   * A playbook whose agents must not hold built-in tool authority — the KB
+   * private-reader sessions of `agents-md-research` §5.8 — supplies its own tools
+   * and result contract here instead of standing up a second session runner.
+   * That duplication is exactly what this seam exists to prevent.
+   */
+  readonly session?: AgentSessionSpecV1;
+}
+
+/**
+ * A dispatcher-supplied session posture.
+ *
+ * The tools are closures over the dispatcher's own private state (a KB phase's
+ * admitted-source allowlist, for instance), so they cannot be constructed here;
+ * the dispatcher passes them in ready-made and this client remains agnostic
+ * about their domain.
+ */
+export interface AgentSessionSpecV1 {
+  /** Grant no built-in tool authority; only `customTools` are exposed. */
+  readonly noTools?: "builtin";
+  /** Host-closed tools replacing the default result/artifact pair. */
+  readonly customTools?: readonly unknown[];
+  /** Complete opening prompt, replacing the default research opening. */
+  readonly opening?: string;
+  /**
+   * Reads the dispatcher's captured result after the turn ends. Returning
+   * `undefined` means the agent never satisfied the contract, which is a hard
+   * failure rather than a prose fallback.
+   */
+  readonly readResult?: () => string | undefined;
+  /** Failure text used when `readResult` yields nothing. */
+  readonly requireResultMessage?: string;
 }
 
 /** W6 — the resolved worker posture. Tool authority still comes from the agent SSOT. */
@@ -212,6 +250,29 @@ const WORKER_EXTENSION_NAMES = new Set(["search", "youtube"]);
  * must not maintain a private per-agent table. Fails loudly rather than running
  * a worker with an empty or guessed allow-list.
  */
+/**
+ * The agent's SSOT-declared model, or `undefined` when the frontmatter omits it.
+ *
+ * Lives beside `parseSsotTools` because it is the same idea: the agent definition
+ * is the single source of truth for how that agent runs, and the app reads it
+ * rather than keeping a private table. A caller that requires a declared model
+ * refuses to guess when this returns `undefined`.
+ */
+export function ssotModel(agentDoc: string): string | undefined {
+  const match = agentDoc.match(/^---\r?\n([\s\S]*?)\r?\n---/u);
+  const line = (match?.[1] ?? "")
+    .split(/\r?\n/)
+    .find((candidate) => candidate.startsWith("model:"));
+  const value = line?.slice(line.indexOf(":") + 1).trim();
+  return value && value.length > 0 ? value : undefined;
+}
+
+/** The agent SSOT body with its frontmatter removed. */
+export function ssotBody(agentDoc: string): string {
+  const match = agentDoc.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/u);
+  return (match ? agentDoc.slice(match[0].length) : agentDoc).trim();
+}
+
 export function parseSsotTools(agentDoc: string, agent: string): readonly string[] {
   if (agentDoc.trim().length === 0) {
     throw new Error(
@@ -295,7 +356,15 @@ export class PiAgentClient implements ModelClient {
   constructor(private readonly options: PiAgentClientOptions = {}) {}
 
   async runAgent(invocation: AgentInvocation): Promise<AgentCompletion> {
-    const summarySchema = researchSummarySchema(invocation.stateId);
+    const spec = invocation.session;
+    // A dispatcher that brings its own tools also brings its own result contract.
+    // Building research's summary schema unconditionally would make this runner
+    // reject every non-research state before it ever reached the session — the
+    // exact coupling the seam is meant to remove.
+    const usesDefaultTools = spec?.customTools === undefined;
+    const summarySchema = usesDefaultTools
+      ? researchSummarySchema(invocation.stateId)
+      : Type.Object({}, { additionalProperties: true });
     const ToolParameters = Type.Object(
       {
         confidence: Type.String({
@@ -420,27 +489,44 @@ export class PiAgentClient implements ModelClient {
       cwd: invocation.projectRoot,
       sessionManager: SessionManager.inMemory(invocation.projectRoot),
       resourceLoader,
-      tools: allowed,
-      customTools: [resultTool, ...(invocation.inputArtifacts.length > 0 ? [artifactTool] : [])],
+      ...(spec?.noTools === "builtin" ? { noTools: "builtin" as const } : { tools: allowed }),
+      customTools: (spec?.customTools ?? [
+        resultTool,
+        ...(invocation.inputArtifacts.length > 0 ? [artifactTool] : []),
+      ]) as NonNullable<CreateSessionOptions["customTools"]>,
     };
     if (invocation.modelOverride !== undefined) {
       if (this.options.resolveModel !== undefined) {
         sessionOptions.model = await this.options.resolveModel(invocation.modelOverride);
       } else {
-        const separator = invocation.modelOverride.indexOf("/");
-        if (separator <= 0 || separator === invocation.modelOverride.length - 1) {
-          throw new Error(`model override '${invocation.modelOverride}' must be provider/model-id`);
-        }
-        const provider = invocation.modelOverride.slice(0, separator);
-        const modelId = invocation.modelOverride.slice(separator + 1);
         const runtime = await ModelRuntime.create();
         await runtime.refresh({ allowNetwork: false });
-        const model = runtime.getModel(provider, modelId);
-        if (model === undefined) {
-          throw new Error(`model override '${invocation.modelOverride}' is unavailable`);
+        const separator = invocation.modelOverride.indexOf("/");
+        if (separator > 0 && separator !== invocation.modelOverride.length - 1) {
+          const provider = invocation.modelOverride.slice(0, separator);
+          const modelId = invocation.modelOverride.slice(separator + 1);
+          const model = runtime.getModel(provider, modelId);
+          if (model === undefined) {
+            throw new Error(`model override '${invocation.modelOverride}' is unavailable`);
+          }
+          sessionOptions.model = model;
+        } else {
+          // A catalog alias (an agent SSOT declares `model: sol`, not a
+          // provider/model pair). Previously any non-slash override threw, so
+          // resolving one here is additive rather than a behaviour change.
+          const resolved = await resolveModelScopeWithDiagnostics(
+            [invocation.modelOverride],
+            runtime
+          );
+          const scoped = resolved.scopedModels[0];
+          if (scoped === undefined) {
+            throw new Error(
+              `model override '${invocation.modelOverride}' does not resolve to an available model`
+            );
+          }
+          sessionOptions.model = scoped.model;
         }
         sessionOptions.modelRuntime = runtime;
-        sessionOptions.model = model;
       }
     }
 
@@ -453,7 +539,8 @@ export class PiAgentClient implements ModelClient {
       if (invocation.signal?.aborted) {
         throw new Error("agent invocation aborted before prompt");
       }
-      await session.prompt(
+      const opening =
+        spec?.opening ??
         [
           `You are executing the '${invocation.agent}' role in a durable research workflow.`,
           agentGuidance,
@@ -468,9 +555,25 @@ export class PiAgentClient implements ModelClient {
           "Return the complete stage output in assistant text. Use the result tool for routing metadata.",
         ]
           .filter((part) => part.length > 0)
-          .join("\n\n"),
-        { expandPromptTemplates: false, source: "rpc" }
-      );
+          .join("\n\n");
+      await session.prompt(opening, { expandPromptTemplates: false, source: "rpc" });
+      if (spec?.readResult !== undefined) {
+        const body = spec.readResult();
+        if (body === undefined) {
+          // Fail loudly. Accepting prose here would silently convert a contract
+          // violation into a result the workflow would then act on.
+          let tail = "(no assistant text)";
+          try {
+            tail = canonicalAssistantText(session.messages).slice(0, 400);
+          } catch {
+            /* diagnostics only */
+          }
+          throw new Error(
+            `${spec.requireResultMessage ?? `agent '${invocation.agent}' ended without submitting a typed result`}. Assistant tail: ${tail}`
+          );
+        }
+        return { text: body };
+      }
       const text = canonicalAssistantText(session.messages);
       if (captured === undefined) {
         // The execution owner persists exact assistant bytes before parsing fallback
