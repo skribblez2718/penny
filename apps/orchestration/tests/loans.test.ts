@@ -8,6 +8,9 @@ describe("TypeScript orchestration compatibility loans", () => {
       "research-mode-presets",
       "research-fixed-topology",
       "research-three-file-output",
+      // Foundation stage / agents-md G5: the typed terminating result is primary; this
+      // records the prose fallback that the Python parity oracle still exercises.
+      "prose-summary-fallback",
       "research-verifier-model-default",
     ]);
   });

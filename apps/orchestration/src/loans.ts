@@ -34,6 +34,14 @@ export const COMPATIBILITY_LOANS: readonly CompatibilityLoan[] = [
     assumptionDigest: "d892d88ca02cbf52bded4ae11df453f4fc780e371f446f454652596c8fb00047",
   },
   {
+    id: "prose-summary-fallback",
+    description:
+      "worker.ts falls back to parseSummaryFromText when a worker returns no typed terminating result. The typed submit_orchestration_result path is primary; the fallback degrades to UNCERTAIN with empty details rather than inventing domain values. Retained because the Python parity oracle exercises it; remove when the Python engine is retired (agents-md Phase 10).",
+    owner: "orchestration",
+    reviewBy: "2026-11-14",
+    assumptionDigest: "7b1de6a2c9f4835e0d2a6b18c7e93f5a4d0b8c62e1f7a39d5c84b0e6f2a17d93",
+  },
+  {
     id: "research-verifier-model-default",
     description:
       "Synthia and Vera may share a model unless a caller or environment override selects an independent verifier.",
