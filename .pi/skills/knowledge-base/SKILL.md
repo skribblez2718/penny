@@ -65,7 +65,6 @@ The model may name an opaque `kb_profile_id` and, where applicable, opaque capab
 
 ## Gates
 
-- **G6** must pass before any stateful KB work. (Passed by operator decision 2026-08-18.)
 - Profile/policy/capability checks before private reads.
 - Deterministic validation before semantic work.
 - Content review before ingest/save publication.
