@@ -83,6 +83,122 @@ const PRIOR_PHASES: Record<KbAgentPhase, readonly KbAgentPhase[]> = {
   verify: ["compose"],
 };
 
+// ── exported flow descriptor (§5.12) ─────────────────────────────────────────
+//
+// The machine's state/edge descriptor, exported so the skill's `resources/flow.html`
+// and `flow-diagrams.test.ts` compare against the REAL machine rather than a copy
+// of it. Forward edges are DERIVED from NEXT_STATE (the same table the machine
+// transitions on); the gate decisions are the decisions `resume` accepts; the
+// repair edges mirror `classifyGap` (the test re-checks them against
+// `classifyGap`'s actual routing, so the table and the code cannot drift apart).
+
+export type KbFlowStateKind = "agent" | "gate" | "host" | "terminal";
+export interface KbFlowState {
+  readonly id: string;
+  readonly kind: KbFlowStateKind;
+  readonly agent?: string;
+  readonly guidance?: string;
+}
+export type KbFlowEdgeKind = "forward" | "gate" | "repair" | "terminal";
+export type KbFeedbackKind = "synthesis_gap" | "validation_gap" | "malformed_result";
+export interface KbFlowEdge {
+  readonly from: string; // a state, or the virtual entry point "start"
+  readonly to: string;
+  readonly kind: KbFlowEdgeKind;
+  readonly trigger: string;
+  readonly bounded?: boolean;
+  readonly feedback_kind?: KbFeedbackKind;
+}
+export interface KbFlowGate {
+  readonly state: string;
+  readonly decisions: readonly string[];
+  readonly host_only: boolean;
+}
+export interface KbFlowTerminal {
+  readonly id: string;
+  readonly met: boolean;
+  readonly route_from: string;
+}
+export interface KbFlowDescriptor {
+  readonly schema_version: 1;
+  readonly playbook: "knowledge-base";
+  readonly states: KbFlowState[];
+  readonly edges: KbFlowEdge[];
+  readonly gates: KbFlowGate[];
+  readonly terminals: KbFlowTerminal[];
+}
+
+export const KB_FLOW: KbFlowDescriptor = {
+  schema_version: 1,
+  playbook: "knowledge-base",
+  states: [
+    ...KB_AGENT_PHASES.map((p): KbFlowState => ({
+      id: p,
+      kind: "agent",
+      agent: AGENT_BY_PHASE[p],
+      guidance: `${AGENT_BY_PHASE[p]}-${p}.md`,
+    })),
+    { id: "awaiting_review", kind: "gate" },
+    { id: "publishing", kind: "host" },
+    { id: "complete", kind: "terminal" },
+    { id: "incomplete", kind: "terminal" },
+  ],
+  edges: [
+    { from: "start", to: "ingest", kind: "forward", trigger: "initialize (claim + admit sources)" },
+    // Happy path, derived from the machine's own transition table.
+    ...Object.entries(NEXT_STATE)
+      .filter(([state]) => isAgentPhase(state))
+      .map(([from, to]) => ({ from, to, kind: "forward" as const, trigger: "phase_complete" })),
+    // Gate decisions — exactly what `resume` accepts.
+    { from: "awaiting_review", to: "publishing", kind: "gate", trigger: "approve (host-authenticated)" },
+    { from: "awaiting_review", to: "incomplete", kind: "terminal", trigger: "deny" },
+    { from: "awaiting_review", to: "compose", kind: "repair", trigger: "refine", bounded: true },
+    // publishing → complete is the machine's happy-path successor table entry,
+    // realized by the host publication behind the approval.
+    { from: "publishing", to: "complete", kind: "terminal", trigger: "publish (host I/O)" },
+    // Repairs — the same routes `classifyGap` produces (bounded by the budget).
+    {
+      from: "lint",
+      to: "compose",
+      kind: "repair",
+      trigger: "error-severity finding(s)",
+      bounded: true,
+      feedback_kind: "synthesis_gap",
+    },
+    {
+      from: "verify",
+      to: "compose",
+      kind: "repair",
+      trigger: "unsupported claim(s)",
+      bounded: true,
+      feedback_kind: "validation_gap",
+    },
+    ...KB_AGENT_PHASES.map((p) => ({
+      from: p,
+      to: p,
+      kind: "repair" as const,
+      trigger: "incomplete result (complete = false)",
+      bounded: true,
+      feedback_kind: "malformed_result" as const,
+    })),
+  ],
+  gates: [
+    {
+      state: "awaiting_review",
+      decisions: ["approve", "deny", "refine"],
+      // Approval/denial/refinement reach the run only as a gate response from the
+      // host (penny-kb-gate → engine respond); the model-facing tool cannot decide.
+      host_only: true,
+    },
+  ],
+  terminals: [
+    // The completion gate pins these: a `met: true` terminal is reachable only
+    // from publishing (KNOWLEDGE_BASE_SKILL_CONTRACT.completion_gate).
+    { id: "complete", met: true, route_from: "publishing" },
+    { id: "incomplete", met: false, route_from: "awaiting_review" },
+  ],
+};
+
 export function isKbState(value: string): value is KbState {
   return (KB_STATES as readonly string[]).includes(value);
 }
