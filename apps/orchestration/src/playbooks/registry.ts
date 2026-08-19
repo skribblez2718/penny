@@ -9,15 +9,30 @@
  * and never imports a concrete playbook class, so adding a playbook is a registration
  * change rather than an engine change.
  *
- * ## Exactly one entry
+ * ## Registration history — read this before adding an entry
  *
- * The Foundation stage registers **research and nothing else**. Research remains the sole
- * production skill and the mandatory parity/canary oracle (`agents-md-research` §1
- * outcome 5), and the M7 line forbids activating a second skill. Multi-playbook dispatch
- * is proven in tests with an injected double — never with a shipped registration.
+ * **Foundation stage (workstream 1): exactly one entry.** Research was the sole
+ * registration, because research is the mandatory parity/canary oracle
+ * (`agents-md-research` §1 outcome 5) and the Foundation PRD's binding constraint 1
+ * forbade registering or activating a second skill during that stage. Multi-playbook
+ * dispatch was proven with an injected test double, never a shipped registration.
  *
- * `assertSoleProductionRegistration()` makes that invariant executable rather than
- * aspirational.
+ * **Workstream 2 (post-G6): a second entry is authorized.** G6 passed by operator
+ * decision 2026-08-18, which unblocks stateful KB work, and the KB playbook is the
+ * second playbook the whole seam extraction existed to host. The Foundation-stage
+ * "exactly one entry" rule ended with that stage; it is not a standing invariant.
+ *
+ * **Recorded defect (2026-08-19).** The KB entry was added at G8 while this docstring
+ * still claimed "exactly one entry … never with a shipped registration", and
+ * `assertSoleProductionRegistration()` was weakened to "research is present" in the
+ * same change that would otherwise have failed — with its test edited to match. The
+ * Foundation PRD §8 names that exact stop condition ("a parity test is edited in the
+ * same change that makes it fail"). This block, `assertExpectedRegistrations()`, and
+ * the accompanying test now state one truth instead of three.
+ *
+ * `assertExpectedRegistrations()` is the executable form of the *current* rule:
+ * research must always be present, and only explicitly authorized names may ship.
+ * An accidental or unauthorized registration fails closed.
  */
 
 import { SkillContractSchema, validateContract, type SkillContract } from "../contracts.js";
@@ -122,16 +137,37 @@ export function validateRegistrationContract(registration: PlaybookRegistrationV
 }
 
 /**
- * Executable form of the constraint that research is the only *production* skill.
- * The KB playbook is registered as a second entry, but it is a stub — not a
- * production skill. This assertion checks that research is present and that no
- * more than the expected set of playbooks is registered.
+ * Every playbook name authorized to ship, in sorted order.
+ *
+ * `research` — the parity/canary oracle, authorized since the Foundation stage.
+ * `knowledge-base` — authorized by the G6 operator decision of 2026-08-18.
+ *
+ * Adding a name here is the explicit authorization step. It is deliberately a
+ * separate edit from adding the registration itself.
  */
-export function assertSoleProductionRegistration(
+export const AUTHORIZED_PLAYBOOK_NAMES: readonly string[] = [
+  "knowledge-base",
+  SOLE_PRODUCTION_PLAYBOOK,
+];
+
+/**
+ * Executable form of the current registration rule. Fails closed on both sides:
+ * research must be present (it is the oracle every other gate leans on), and no
+ * unauthorized name may ship (a registration is an authority grant, so an
+ * accidental one is a hard error rather than a warning).
+ */
+export function assertExpectedRegistrations(
   registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY
 ): void {
   const names = registeredPlaybookNames(registry);
   if (!names.includes(SOLE_PRODUCTION_PLAYBOOK)) {
     throw new Error(`research playbook is missing from the registry; found [${names.join(", ")}]`);
+  }
+  const unauthorized = names.filter((n) => !AUTHORIZED_PLAYBOOK_NAMES.includes(n));
+  if (unauthorized.length > 0) {
+    throw new Error(
+      `unauthorized playbook registration(s) [${unauthorized.join(", ")}]; ` +
+        `authorized names are [${[...AUTHORIZED_PLAYBOOK_NAMES].join(", ")}]`
+    );
   }
 }

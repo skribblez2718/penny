@@ -21,7 +21,8 @@ import { OrchestrationEngine } from "../src/engine.js";
 import type { PlaybookCoreV1, PlaybookV1 } from "../src/playbooks/playbook.js";
 import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
 import {
-  assertSoleProductionRegistration,
+  assertExpectedRegistrations,
+  AUTHORIZED_PLAYBOOK_NAMES,
   isRegisteredPlaybook,
   PLAYBOOK_REGISTRY,
   registeredPlaybookNames,
@@ -77,14 +78,14 @@ class DoublePlaybook implements PlaybookCoreV1 {
   }
 }
 
-describe("W2 shipped registry — research is the sole production skill", () => {
-  it("registers research and knowledge-base", () => {
-    expect(registeredPlaybookNames()).toEqual(["knowledge-base", "research"]);
-    expect(PLAYBOOK_REGISTRY.size).toBe(2);
+describe("W2 shipped registry — authorized registrations only", () => {
+  it("ships exactly the authorized names", () => {
+    expect(registeredPlaybookNames()).toEqual([...AUTHORIZED_PLAYBOOK_NAMES]);
+    expect(PLAYBOOK_REGISTRY.size).toBe(AUTHORIZED_PLAYBOOK_NAMES.length);
   });
 
-  it("passes the sole-production-registration invariant (research is present)", () => {
-    expect(() => assertSoleProductionRegistration()).not.toThrow();
+  it("passes the registration invariant as shipped", () => {
+    expect(() => assertExpectedRegistrations()).not.toThrow();
   });
 
   it("rejects a registry missing research", () => {
@@ -98,9 +99,22 @@ describe("W2 shipped registry — research is the sole production skill", () => 
         },
       ],
     ]);
-    expect(() => assertSoleProductionRegistration(noResearch)).toThrow(
-      /research playbook is missing/
-    );
+    expect(() => assertExpectedRegistrations(noResearch)).toThrow(/research playbook is missing/);
+  });
+
+  it("fails closed on an unauthorized registration", () => {
+    const rogue: PlaybookRegistryV1 = new Map([
+      ...PLAYBOOK_REGISTRY,
+      [
+        "coding",
+        {
+          name: "coding",
+          contract: RESEARCH_SKILL_CONTRACT,
+          construct: () => new DoublePlaybook(),
+        },
+      ],
+    ]);
+    expect(() => assertExpectedRegistrations(rogue)).toThrow(/unauthorized playbook registration/);
   });
 
   it("resolves research and knowledge-base, and does not resolve an unregistered name", () => {
