@@ -8,6 +8,8 @@ export * from "./loans.js";
 export * from "./model-client.js";
 export * from "./observability.js";
 export * from "./kb/workflows.js";
+export * from "./kb/ingest.js";
+export * from "./kb/kb-model-client.js";
 export * from "./playbooks/playbook.js";
 export * from "./playbooks/registry.js";
 export * from "./playbooks/research.js";

@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
 import {
@@ -207,7 +208,6 @@ export function queryKb(
       const revId = entry.revision_id;
       const pageMdPath = path.join(root, "pages", pageId, "revisions", revId, "page.md");
       const claimsPath = path.join(root, "pages", pageId, "revisions", revId, "claims.json");
-      const { readFileSync, existsSync } = require("node:fs");
       if (existsSync(pageMdPath) && existsSync(claimsPath)) {
         const md = readFileSync(pageMdPath, "utf8");
         const claims = JSON.parse(readFileSync(claimsPath, "utf8"));
@@ -215,9 +215,10 @@ export function queryKb(
         const fmMatch = md.match(/^---\n([\s\S]*?)\n---/);
         let title = pageId;
         let summary = "";
-        if (fmMatch) {
+        const fmText = fmMatch?.[1];
+        if (typeof fmText === "string") {
           try {
-            const fm = JSON.parse(fmMatch[1]);
+            const fm = JSON.parse(fmText);
             title = fm.title ?? pageId;
             summary = fm.summary ?? "";
           } catch {
