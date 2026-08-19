@@ -111,7 +111,7 @@ describe("W3 Foundation-stage boundaries", () => {
     expect(() => validateContract(SkillContractSchema, kbShaped, "contract")).not.toThrow();
   });
 
-  it("still ships exactly one registration", () => {
-    expect(PLAYBOOK_REGISTRY.size).toBe(1);
+  it("ships research and knowledge-base (two registrations)", () => {
+    expect(PLAYBOOK_REGISTRY.size).toBe(2);
   });
 });

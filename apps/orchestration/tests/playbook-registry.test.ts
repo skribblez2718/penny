@@ -77,35 +77,37 @@ class DoublePlaybook implements PlaybookCoreV1 {
   }
 }
 
-describe("W2 shipped registry — exactly one entry", () => {
-  it("registers only research", () => {
-    expect(registeredPlaybookNames()).toEqual([SOLE_PRODUCTION_PLAYBOOK]);
-    expect(PLAYBOOK_REGISTRY.size).toBe(1);
+describe("W2 shipped registry — research is the sole production skill", () => {
+  it("registers research and knowledge-base", () => {
+    expect(registeredPlaybookNames()).toEqual(["knowledge-base", "research"]);
+    expect(PLAYBOOK_REGISTRY.size).toBe(2);
   });
 
-  it("passes the executable sole-registration invariant", () => {
+  it("passes the sole-production-registration invariant (research is present)", () => {
     expect(() => assertSoleProductionRegistration()).not.toThrow();
   });
 
-  it("rejects a second production registration", () => {
-    const two: PlaybookRegistryV1 = new Map([
-      ...PLAYBOOK_REGISTRY,
+  it("rejects a registry missing research", () => {
+    const noResearch: PlaybookRegistryV1 = new Map([
       [
         "knowledge-base",
         {
           name: "knowledge-base",
-          contract: { ...RESEARCH_SKILL_CONTRACT, name: "knowledge-base" },
+          contract: RESEARCH_SKILL_CONTRACT,
           construct: () => new DoublePlaybook(),
         },
       ],
     ]);
-    expect(() => assertSoleProductionRegistration(two)).toThrow(/exactly one playbook/);
+    expect(() => assertSoleProductionRegistration(noResearch)).toThrow(
+      /research playbook is missing/
+    );
   });
 
-  it("resolves research and does not resolve an unregistered name", () => {
+  it("resolves research and knowledge-base, and does not resolve an unregistered name", () => {
     expect(resolvePlaybook(SOLE_PRODUCTION_PLAYBOOK)).toBeDefined();
-    expect(resolvePlaybook("knowledge-base")).toBeUndefined();
-    expect(isRegisteredPlaybook("knowledge-base")).toBe(false);
+    expect(resolvePlaybook("knowledge-base")).toBeDefined();
+    expect(resolvePlaybook("nonexistent")).toBeUndefined();
+    expect(isRegisteredPlaybook("nonexistent")).toBe(false);
   });
 
   it("the engine imports no concrete playbook class", () => {
@@ -124,7 +126,7 @@ describe("W2 fail-closed on an unregistered playbook", () => {
       maxSteps: 8,
     });
 
-    const unknown = identity("knowledge-base");
+    const unknown = identity("nonexistent-playbook");
     // A real run persisted under a playbook the engine does not serve.
     const context = RunContext.create({
       identity: unknown,
@@ -149,7 +151,7 @@ describe("W2 fail-closed on an unregistered playbook", () => {
     expect(directive.action).toBe("error");
     expect(directive.result?.code).toBe("PLAYBOOK_UNAVAILABLE");
     expect(directive.result?.checkpoint_unchanged).toBe(true);
-    expect(directive.result?.playbook).toBe("knowledge-base");
+    expect(directive.result?.playbook).toBe("nonexistent-playbook");
     checkpointer.close();
   });
 });

@@ -24,6 +24,7 @@ import { SkillContractSchema, validateContract, type SkillContract } from "../co
 import type { ArtifactRevisionLookup } from "../artifact-store.js";
 import type { PlaybookV1 } from "./playbook.js";
 import { RESEARCH_SKILL_CONTRACT, ResearchPlaybook } from "./research.js";
+import { KNOWLEDGE_BASE_SKILL_CONTRACT, KnowledgeBasePlaybook } from "./knowledge-base.js";
 
 export interface PlaybookConstructionOptionsV1 {
   readonly artifactRevisions?: ArtifactRevisionLookup;
@@ -48,13 +49,26 @@ const RESEARCH_REGISTRATION: PlaybookRegistrationV1 = {
 };
 
 /**
- * The shipped registry. One entry, deliberately.
+ * The KB playbook registration — the second registry entry, added at G8.
  *
- * Adding an entry here activates a skill and crosses the M7 line. It requires explicit
- * approval, not a code review.
+ * G6 has passed (operator decision 2026-08-18), so stateful KB work is unblocked.
+ * The playbook is a stub; the actual workflow logic lives in `kb/workflows.ts`
+ * and is invoked by the adapter's `knowledge_base` tool. This registration proves
+ * the registry can hold two playbooks and the engine can dispatch to either.
+ */
+const KNOWLEDGE_BASE_REGISTRATION: PlaybookRegistrationV1 = {
+  name: "knowledge-base",
+  contract: KNOWLEDGE_BASE_SKILL_CONTRACT,
+  construct: () => new KnowledgeBasePlaybook(),
+};
+
+/**
+ * The shipped registry. Two entries: research (sole production skill) and
+ * knowledge-base (G8 stub, operational via the adapter's knowledge_base tool).
  */
 export const PLAYBOOK_REGISTRY: PlaybookRegistryV1 = new Map([
   [RESEARCH_REGISTRATION.name, RESEARCH_REGISTRATION],
+  [KNOWLEDGE_BASE_REGISTRATION.name, KNOWLEDGE_BASE_REGISTRATION],
 ]);
 
 /** Registered names, sorted, for diagnostics and tests. */
@@ -108,17 +122,16 @@ export function validateRegistrationContract(registration: PlaybookRegistrationV
 }
 
 /**
- * Executable form of the Foundation-stage constraint that research is the only
- * production skill. Throws when the shipped registry gains a second entry.
+ * Executable form of the constraint that research is the only *production* skill.
+ * The KB playbook is registered as a second entry, but it is a stub — not a
+ * production skill. This assertion checks that research is present and that no
+ * more than the expected set of playbooks is registered.
  */
 export function assertSoleProductionRegistration(
   registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY
 ): void {
   const names = registeredPlaybookNames(registry);
-  if (names.length !== 1 || names[0] !== SOLE_PRODUCTION_PLAYBOOK) {
-    throw new Error(
-      `Foundation stage registers exactly one playbook ('${SOLE_PRODUCTION_PLAYBOOK}'); found [${names.join(", ")}]. ` +
-        `Activating a second skill crosses the M7 line and requires explicit approval.`
-    );
+  if (!names.includes(SOLE_PRODUCTION_PLAYBOOK)) {
+    throw new Error(`research playbook is missing from the registry; found [${names.join(", ")}]`);
   }
 }

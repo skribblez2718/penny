@@ -25,11 +25,10 @@ SKILLS_DIR = PROJECT_ROOT / ".pi" / "skills"
 # the engine package and its playbook tests live in apps/orchestration/tests/. So a
 # per-skill `tests/` dir, `requirements.txt`, and `scripts/__init__.py` are OPTIONAL
 # (only skills with their own domain tooling carry them).
-REQUIRED_DIRS = ["scripts", "assets/prompts", "resources"]
+REQUIRED_DIRS = ["assets/prompts", "resources"]
 REQUIRED_FILES = [
     "SKILL.md",
     "README.md",
-    "scripts/orchestrate.py",
 ]
 # A flow diagram (state machine mirror) IS required. resources/flow.html (the
 # self-contained interactive HTML) is THE standard; the legacy mermaid
@@ -68,6 +67,15 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
     is_delegate = "delegates_to:" in content
 
     if not is_delegate:
+        # Detect entrypoint type: pi-tool skills don't need scripts/orchestrate.py
+        import re
+        fm_match = re.search(r'^---\n(.*?)\n---', content, re.DOTALL)
+        entrypoint = "python-delegate"  # default for legacy skills
+        if fm_match:
+            ep_match = re.search(r'entrypoint:\s*(\S+)', fm_match.group(1))
+            if ep_match:
+                entrypoint = ep_match.group(1)
+
         # Check required directories (only for full skills, not delegates)
         for rel_dir in REQUIRED_DIRS:
             full_path = skill_dir / rel_dir
@@ -83,6 +91,16 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
                 issues.append(("ERROR", f"Missing file: {rel_file}"))
             elif not full_path.is_file():
                 issues.append(("ERROR", f"Not a file: {rel_file}"))
+
+        # pi-tool skills don't need scripts/orchestrate.py; python-delegate skills do
+        if entrypoint == "python-delegate":
+            delegate_path = skill_dir / "scripts" / "orchestrate.py"
+            if not delegate_path.exists():
+                issues.append(("ERROR", "Missing file: scripts/orchestrate.py"))
+        elif entrypoint == "pi-tool":
+            # pi-tool skills need a non-empty metadata.penny.tool
+            if not re.search(r'tool:\s*\S+', content):
+                issues.append(("ERROR", "pi-tool skill missing metadata.penny.tool"))
 
         # Flow diagram: resources/flow.html is THE standard. Require a diagram; a skill
         # still shipping only the legacy resources/flow.mmd gets a WARN to migrate.
