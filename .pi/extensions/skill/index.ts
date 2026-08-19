@@ -34,6 +34,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type, type Static } from "@sinclair/typebox";
+import { resolveEngineForNewRun } from "./engine-selection.js";
 import {
   parseSummaryFromOutput,
   SkillResult,
@@ -2043,7 +2044,7 @@ const SkillParams = Type.Object({
     Type.String({
       pattern: "^(python|typescript)$",
       description:
-        "Execution engine for single research runs. Omit for the stable Python default; TypeScript is an explicit pilot.",
+        "Execution engine override for single research runs. Omit to use the configured default (TypeScript since the 2026-08-18 M7 cutover). Set 'python' to roll a run back to the legacy engine.",
     })
   ),
 
@@ -2821,6 +2822,9 @@ export default function skillExtension(pi: ExtensionAPI): void {
 
       let result: SkillResult;
 
+      // Parallel and chain modes remain Python-owned: the TypeScript engine implements
+      // single research runs only. An explicit typescript request for a multi-skill mode
+      // is refused rather than silently downgraded.
       if (params.engine === "typescript" && detected.mode !== "single") {
         const errorResult: SkillResult = {
           success: false,
@@ -2856,8 +2860,11 @@ export default function skillExtension(pi: ExtensionAPI): void {
             project_root: params.project_root,
             constraints: params.constraints,
           };
+          // M7 cutover: TypeScript owns new single research runs by default.
+          // `engine: "python"` or PENNY_ORCHESTRATION_ENGINE=python rolls back.
+          const selectedEngine = resolveEngineForNewRun(params.engine);
           result =
-            params.engine === "typescript"
+            selectedEngine === "typescript" && skillName === "research"
               ? await executeTypeScriptSkill(skillName, cleanParams, ctx.cwd, signal, ctx, onUpdate)
               : await executeSkill(skillName, cleanParams, ctx.cwd, signal, ctx, onUpdate);
           result.mode = "single";
