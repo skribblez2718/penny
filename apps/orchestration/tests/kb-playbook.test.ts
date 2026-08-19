@@ -19,6 +19,7 @@ import {
 } from "../src/playbooks/knowledge-base.js";
 import { PLAYBOOK_REGISTRY, validateRegistrationContract } from "../src/playbooks/registry.js";
 import type { Confidence, Directive, JsonValue } from "../src/contracts.js";
+import type { KbIngestPlaneV1 } from "../src/kb/ingest-plane.js";
 
 const PROJECT_ROOT = "/tmp/penny-kb-playbook";
 
@@ -44,14 +45,72 @@ function newContext(constraints: Record<string, JsonValue> = {}): RunContext {
   });
 }
 
+interface PlaneCalls {
+  claims: Array<{ runId: string; capabilityIds: readonly string[] }>;
+  seals: Array<{ runId: string; artifactIds: readonly string[] }>;
+  gates: Array<{ runId: string; artifacts: number }>;
+  approvals: string[];
+  denials: string[];
+}
+
+/**
+ * A recording plane. The playbook's I/O is behind an interface precisely so the
+ * machine can be driven without a filesystem; these tests assert WHAT it does and
+ * WHEN, and the integration test below proves the real plane satisfies the same
+ * contract.
+ */
+function fakePlane(): { plane: KbIngestPlaneV1; calls: PlaneCalls } {
+  const calls: PlaneCalls = { claims: [], seals: [], gates: [], approvals: [], denials: [] };
+  const plane: KbIngestPlaneV1 = {
+    claim(input) {
+      calls.claims.push({ runId: input.runId, capabilityIds: input.capabilityIds });
+    },
+    seal(input) {
+      calls.seals.push({ runId: input.runId, artifactIds: input.artifactIds });
+    },
+    persistGate(input) {
+      calls.gates.push({ runId: input.runId, artifacts: input.artifactIds.length });
+      return {
+        schema_version: 1,
+        gate_id: "gate_fake01",
+        run_id: input.runId,
+        kb_profile_id: input.profileId,
+        action: "ingest",
+        status: "awaiting",
+        issued_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+        base_generation_id: "gen_base",
+        source_ids: [...input.sourceIds],
+        source_capability_ids: [...input.capabilityIds],
+        artifact_kinds: [],
+        packet_digest: "0".repeat(64),
+      } as unknown as ReturnType<KbIngestPlaneV1["persistGate"]>;
+    },
+    approve(input) {
+      calls.approvals.push(input.runId);
+      return { generationId: "gen_published", counts: { pages: 1, sources: 2 } };
+    },
+    deny(input) {
+      calls.denials.push(input.runId);
+    },
+  };
+  return { plane, calls };
+}
+
+function newPlaybook(plane?: KbIngestPlaneV1): KnowledgeBasePlaybook {
+  return new KnowledgeBasePlaybook(undefined, plane ?? fakePlane().plane);
+}
+
 const DETAILS: Record<string, Record<string, JsonValue>> = {
   ingest: {
+    kb_artifact_id: "art_ingest",
     artifact_kind: "claims",
     complete: true,
     claim_count: 3,
     source_ids: ["cap_a", "cap_b"],
   },
   compose: {
+    kb_artifact_id: "art_compose",
     artifact_kind: "page_draft",
     complete: true,
     claim_count: 3,
@@ -59,6 +118,7 @@ const DETAILS: Record<string, Record<string, JsonValue>> = {
     revision_id: "rev_1",
   },
   lint: {
+    kb_artifact_id: "art_lint",
     artifact_kind: "lint_report",
     complete: true,
     finding_count: 1,
@@ -66,6 +126,7 @@ const DETAILS: Record<string, Record<string, JsonValue>> = {
     candidate_conflict_count: 0,
   },
   verify: {
+    kb_artifact_id: "art_verify",
     artifact_kind: "verification_report",
     complete: true,
     supported: 3,
@@ -115,14 +176,14 @@ describe("KB playbook — state vocabulary", () => {
   });
 
   it("implements the typed-feedback capability", () => {
-    expect(hasGapClassification(new KnowledgeBasePlaybook())).toBe(true);
+    expect(hasGapClassification(newPlaybook())).toBe(true);
   });
 });
 
 describe("KB playbook — dispatch", () => {
   it("initializes into the first agent phase and dispatches its agent", () => {
     const context = newContext();
-    const directive = new KnowledgeBasePlaybook().initialize(context);
+    const directive = newPlaybook().initialize(context);
     expect(context.stateId).toBe("ingest");
     expect(directive.action).toBe("invoke_agent");
     if (directive.action !== "invoke_agent") throw new Error("unreachable");
@@ -132,7 +193,7 @@ describe("KB playbook — dispatch", () => {
   });
 
   it("dispatches each phase to its declared agent", () => {
-    const playbook = new KnowledgeBasePlaybook();
+    const playbook = newPlaybook();
     const context = newContext();
     const seen: Array<[string, string]> = [];
     let directive = playbook.initialize(context);
@@ -152,12 +213,12 @@ describe("KB playbook — dispatch", () => {
 
   it("refuses an unimplemented action rather than running the ingest machine", () => {
     const context = newContext({ action: "promote" });
-    expect(() => new KnowledgeBasePlaybook().initialize(context)).toThrow(/not implemented/);
+    expect(() => newPlaybook().initialize(context)).toThrow(/not implemented/);
   });
 
   it("refuses an ingest run with no admitted sources", () => {
     const context = newContext({ source_ids: [] });
-    expect(() => new KnowledgeBasePlaybook().initialize(context)).toThrow(/at least one admitted/);
+    expect(() => newPlaybook().initialize(context)).toThrow(/at least one admitted/);
   });
 
   it("refuses to run under another playbook's identity", () => {
@@ -166,22 +227,23 @@ describe("KB playbook — dispatch", () => {
       ...context.snapshot(),
       identity: { ...context.identity, playbook: "research" },
     });
-    expect(() => new KnowledgeBasePlaybook().initialize(foreign)).toThrow(/cannot run playbook/);
+    expect(() => newPlaybook().initialize(foreign)).toThrow(/cannot run playbook/);
   });
 });
 
 describe("KB playbook — result contracts", () => {
   it("rejects a phase result carrying the wrong artifact kind", () => {
-    const playbook = new KnowledgeBasePlaybook();
+    const playbook = newPlaybook();
     expect(() => playbook.validateDetails("ingest", { artifact_kind: "page_draft" })).toThrow(
       /must return artifact_kind 'claims'/
     );
   });
 
   it("requires compose to identify the page revision it produced", () => {
-    const playbook = new KnowledgeBasePlaybook();
+    const playbook = newPlaybook();
     expect(() =>
       playbook.validateDetails("compose", {
+        kb_artifact_id: "art_compose",
         artifact_kind: "page_draft",
         complete: true,
         page_id: "page_1",
@@ -190,7 +252,7 @@ describe("KB playbook — result contracts", () => {
   });
 
   it("rejects an agent result for a non-agent state", () => {
-    const playbook = new KnowledgeBasePlaybook();
+    const playbook = newPlaybook();
     expect(() => playbook.validateDetails("awaiting_review", DETAILS.ingest!)).toThrow(
       /does not accept an agent result/
     );
@@ -199,7 +261,7 @@ describe("KB playbook — result contracts", () => {
 
 describe("KB playbook — typed feedback routing (W5)", () => {
   it("routes error-severity lint findings back to compose", () => {
-    const playbook = new KnowledgeBasePlaybook();
+    const playbook = newPlaybook();
     const context = newContext();
     driveTo(playbook, context, "lint");
     const failing = { ...DETAILS.lint!, error_count: 2 };
@@ -211,7 +273,7 @@ describe("KB playbook — typed feedback routing (W5)", () => {
   });
 
   it("routes unsupported claims back to compose as a validation gap", () => {
-    const playbook = new KnowledgeBasePlaybook();
+    const playbook = newPlaybook();
     const context = newContext();
     driveTo(playbook, context, "verify");
     const failing = { ...DETAILS.verify!, unsupported: 2, supported: 1 };
@@ -222,7 +284,7 @@ describe("KB playbook — typed feedback routing (W5)", () => {
   });
 
   it("proceeds honestly when the repair budget is exhausted, carrying the finding", () => {
-    const playbook = new KnowledgeBasePlaybook();
+    const playbook = newPlaybook();
     const context = newContext({ max_iterations: 1 });
     driveTo(playbook, context, "verify");
     context.iteration = context.maxIterations; // budget already spent
@@ -236,7 +298,7 @@ describe("KB playbook — typed feedback routing (W5)", () => {
 
 describe("KB playbook — review gate and terminal truth", () => {
   it("reaches a review gate that binds the exact candidate set", () => {
-    const playbook = new KnowledgeBasePlaybook();
+    const playbook = newPlaybook();
     const context = newContext();
     const directive = driveTo(playbook, context, "awaiting_review");
     expect(context.stateId).toBe("awaiting_review");
@@ -247,7 +309,7 @@ describe("KB playbook — review gate and terminal truth", () => {
   });
 
   it("publishes only after approval, and reports met from publishing", () => {
-    const playbook = new KnowledgeBasePlaybook();
+    const playbook = newPlaybook();
     const context = newContext();
     driveTo(playbook, context, "awaiting_review");
     const terminal = playbook.resume(context, "approve");
@@ -257,7 +319,7 @@ describe("KB playbook — review gate and terminal truth", () => {
   });
 
   it("denial publishes nothing and terminates incomplete, not errored", () => {
-    const playbook = new KnowledgeBasePlaybook();
+    const playbook = newPlaybook();
     const context = newContext();
     driveTo(playbook, context, "awaiting_review");
     const terminal = playbook.resume(context, "deny");
@@ -267,7 +329,7 @@ describe("KB playbook — review gate and terminal truth", () => {
   });
 
   it("refinement returns to compose instead of publishing", () => {
-    const playbook = new KnowledgeBasePlaybook();
+    const playbook = newPlaybook();
     const context = newContext();
     driveTo(playbook, context, "awaiting_review");
     playbook.resume(context, { decision: "refine" });
@@ -275,7 +337,7 @@ describe("KB playbook — review gate and terminal truth", () => {
   });
 
   it("refuses an unreadable review decision", () => {
-    const playbook = new KnowledgeBasePlaybook();
+    const playbook = newPlaybook();
     const context = newContext();
     driveTo(playbook, context, "awaiting_review");
     expect(() => playbook.resume(context, "maybe")).toThrow(/must be approve, deny, or refine/);
@@ -306,7 +368,7 @@ describe("KB playbook — review gate and terminal truth", () => {
 
 describe("KB playbook — durable state", () => {
   it("keeps phase metadata in playbook_data and survives a snapshot round trip", () => {
-    const playbook = new KnowledgeBasePlaybook();
+    const playbook = newPlaybook();
     const context = newContext();
     driveTo(playbook, context, "awaiting_review");
     const restored = RunContext.fromSnapshot(context.snapshot());
@@ -316,7 +378,7 @@ describe("KB playbook — durable state", () => {
   });
 
   it("carries no private body into control state", () => {
-    const playbook = new KnowledgeBasePlaybook();
+    const playbook = newPlaybook();
     const context = newContext();
     driveTo(playbook, context, "awaiting_review", {
       compose: { ...DETAILS.compose!, page_id: "page_1", revision_id: "rev_1" },
@@ -325,5 +387,101 @@ describe("KB playbook — durable state", () => {
     // Only counts, ids, kinds, and verdicts are retained; nothing body-shaped.
     expect(serialized).not.toMatch(/markdown/i);
     expect(serialized).not.toMatch(/## Synthesis/);
+  });
+});
+
+describe("KB playbook — deterministic host I/O (§6.2 step 2)", () => {
+  it("seals the exact candidate set and persists the gate BEFORE presenting it", () => {
+    const { plane, calls } = fakePlane();
+    const playbook = newPlaybook(plane);
+    const context = newContext();
+    expect(calls.seals).toHaveLength(0);
+    driveTo(playbook, context, "awaiting_review");
+    expect(calls.seals).toHaveLength(1);
+    expect(calls.gates).toHaveLength(1);
+    // Exactly the four phase artifacts, in phase order.
+    expect(calls.seals[0]!.artifactIds).toEqual([
+      "art_ingest",
+      "art_compose",
+      "art_lint",
+      "art_verify",
+    ]);
+    expect(calls.gates[0]!.artifacts).toBe(4);
+    expect(context.playbookData.gate_id).toBe("gate_fake01");
+  });
+
+  it("publishes on approval and reports the generation", () => {
+    const { plane, calls } = fakePlane();
+    const playbook = newPlaybook(plane);
+    const context = newContext();
+    driveTo(playbook, context, "awaiting_review");
+    const terminal = playbook.resume(context, "approve");
+    expect(calls.approvals).toEqual([context.identity.run_id]);
+    expect(context.playbookData.published_generation_id).toBe("gen_published");
+    expect(terminal.action).toBe("complete");
+    if (terminal.action !== "complete") throw new Error("unreachable");
+    expect((terminal.result as Record<string, JsonValue>).published_generation_id).toBe(
+      "gen_published"
+    );
+  });
+
+  it("denial invalidates the gate and publishes nothing", () => {
+    const { plane, calls } = fakePlane();
+    const playbook = newPlaybook(plane);
+    const context = newContext();
+    driveTo(playbook, context, "awaiting_review");
+    playbook.resume(context, "deny");
+    expect(calls.denials).toEqual([context.identity.run_id]);
+    expect(calls.approvals).toEqual([]);
+    expect(context.playbookData.published_generation_id).toBeUndefined();
+  });
+
+  it("refinement does not re-seal or re-gate a superseded candidate set", () => {
+    const { plane, calls } = fakePlane();
+    const playbook = newPlaybook(plane);
+    const context = newContext();
+    driveTo(playbook, context, "awaiting_review");
+    playbook.resume(context, "refine");
+    expect(context.stateId).toBe("compose");
+    // One gate exists for this run; a refined candidate set must not silently
+    // stack a second gate on top of it.
+    expect(calls.gates).toHaveLength(1);
+  });
+
+  it("publishing is unreachable except through an approved gate", () => {
+    const playbook = newPlaybook();
+    const context = newContext();
+    driveTo(playbook, context, "awaiting_review");
+    context.transition("publishing");
+    expect(() => playbook.dispatch(context)).toThrow(/only reachable through an approved/);
+  });
+
+  it("requires each phase to name the artifact it staged", () => {
+    const playbook = newPlaybook();
+    const withoutHandle = { ...DETAILS.ingest! };
+    delete withoutHandle.kb_artifact_id;
+    expect(() => playbook.validateDetails("ingest", withoutHandle)).toThrow(
+      /must return the kb_artifact_id/
+    );
+  });
+
+  it("refuses a profile id that is not a valid opaque id, before any work", () => {
+    const { plane, calls } = fakePlane();
+    const playbook = newPlaybook(plane);
+    const context = newContext({ kb_profile_id: "../../escape" });
+    // The root is host-resolved from a validated id, and the refusal lands at
+    // initialize — before a capability is claimed or an agent reads anything.
+    expect(() => playbook.initialize(context)).toThrow(/not a valid opaque profile id/);
+    expect(calls.claims).toEqual([]);
+  });
+
+  it("claims the admitted capabilities before dispatching the first phase", () => {
+    const { plane, calls } = fakePlane();
+    const playbook = newPlaybook(plane);
+    const context = newContext();
+    playbook.initialize(context);
+    expect(calls.claims).toHaveLength(1);
+    expect(calls.claims[0]!.capabilityIds).toEqual(["cap_a", "cap_b"]);
+    expect(calls.claims[0]!.runId).toBe(context.identity.run_id);
   });
 });

@@ -118,6 +118,16 @@ function casWrite(root: string, gate: GateState, expectedContent: string | undef
     }
   }
   const payload = canonicalJson(gate);
+  // A gate row that cannot be read back is worse than a write failure: every reader
+  // here skips unparseable rows, so a malformed gate silently becomes "no gate" and
+  // an ingest run looks like it never reached review. Fail at the write instead.
+  try {
+    JSON.parse(payload);
+  } catch {
+    throw new GateStorageError(
+      `refusing to write gate '${gate.gate_id}': serialized row is not valid JSON (a field is undefined)`
+    );
+  }
   const tmp = `${p}.tmp${process.pid}`;
   writeFileSync(tmp, payload, { mode: 0o600 });
   chmodSync(tmp, 0o600);

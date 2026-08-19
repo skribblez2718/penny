@@ -48,6 +48,7 @@ import type { RunContext } from "../context.js";
 import type { ArtifactRevisionLookup } from "../artifact-store.js";
 import type { GapClassificationCapabilityV1, PlaybookCoreV1 } from "./playbook.js";
 import { buildOutputArtifactMetadata } from "./artifact-metadata.js";
+import { defaultKbIngestPlane, resolveKbRoot, type KbIngestPlaneV1 } from "../kb/ingest-plane.js";
 
 /** The agent phases of an ingest run, in order. */
 export const KB_AGENT_PHASES = ["ingest", "compose", "lint", "verify"] as const;
@@ -130,6 +131,8 @@ export const KNOWLEDGE_BASE_SKILL_CONTRACT: SkillContract = {
 
 interface KbPhaseRecord {
   readonly artifact_kind: string;
+  /** Handle into the KB content plane. An id, never a body. */
+  readonly kb_artifact_id: string;
   readonly counts: Record<string, number>;
   readonly verdict?: string;
 }
@@ -191,6 +194,12 @@ function validatePhaseDetails(
   if (typeof details.complete !== "boolean") {
     throw new Error(`KB phase '${phase}' must report a boolean 'complete'`);
   }
+  if (typeof details.kb_artifact_id !== "string" || details.kb_artifact_id.length === 0) {
+    // The body lives in the KB content plane; control state carries only its
+    // handle. Without one there is nothing to seal, so the phase has not really
+    // produced its artifact.
+    throw new Error(`KB phase '${phase}' must return the kb_artifact_id it staged`);
+  }
   if (phase === "ingest" && stringList(details.source_ids).length === 0) {
     throw new Error("KB phase 'ingest' must name the source_ids it read");
   }
@@ -205,7 +214,22 @@ function validatePhaseDetails(
 }
 
 export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationCapabilityV1 {
-  constructor(private readonly revisions?: ArtifactRevisionLookup) {}
+  private readonly plane: KbIngestPlaneV1;
+
+  constructor(
+    private readonly revisions?: ArtifactRevisionLookup,
+    plane?: KbIngestPlaneV1
+  ) {
+    // The real plane by default: an optional-I/O playbook could silently run
+    // without persisting anything, which is precisely the failure mode that lets a
+    // "successful" ingest publish nothing.
+    this.plane = plane ?? defaultKbIngestPlane();
+  }
+
+  /** Host-resolved, never caller-supplied. */
+  private kbRoot(context: RunContext): string {
+    return resolveKbRoot(context.projectRoot, String(context.playbookData.profile_id ?? ""));
+  }
 
   initialize(context: RunContext): Directive {
     if (context.identity.playbook !== "knowledge-base") {
@@ -225,6 +249,12 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     context.playbookData.action = action;
     context.playbookData.source_ids = sourceIds as unknown as JsonValue;
     context.playbookData.profile_id = String(context.constraints.kb_profile_id ?? "");
+    // All-or-none, before any agent reads a source.
+    this.plane.claim({
+      kbRoot: this.kbRoot(context),
+      capabilityIds: sourceIds,
+      runId: context.identity.run_id,
+    });
     context.transition("ingest");
     return this.dispatch(context);
   }
@@ -238,10 +268,10 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
       return this.awaitReview(context);
     }
     if (state === "publishing") {
-      // The deterministic publication step is wired to the KB content plane in the
-      // following slice; the machine already forbids reaching it except through an
-      // approved review gate.
-      return this.terminal(context, "complete", true, []);
+      // Reached only via `resume(approve)`, which publishes and terminates there.
+      // Arriving here by any other route means the machine entered publishing
+      // without an approval, which must not silently succeed.
+      throw new Error("KB publishing state is only reachable through an approved review gate");
     }
     return this.invokePhase(context, state);
   }
@@ -364,6 +394,7 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     }
     recordPhase(context, state, {
       artifact_kind: String(details.artifact_kind),
+      kb_artifact_id: String(details.kb_artifact_id),
       counts: this.countsFor(state, details),
       ...(typeof details.verdict === "string" ? { verdict: details.verdict } : {}),
     });
@@ -414,9 +445,31 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
    */
   private awaitReview(context: RunContext): Directive {
     const phases = phaseRecords(context);
+    // Seal the exact candidate set and persist the gate BEFORE presenting it. A gate
+    // offered before its candidates are frozen could be approved against a set that
+    // changed afterwards.
+    if (context.playbookData.gate_id === undefined) {
+      const kbRoot = this.kbRoot(context);
+      const artifactIds = KB_AGENT_PHASES.map((phase) => phases[phase]?.kb_artifact_id).filter(
+        (id): id is string => typeof id === "string" && id.length > 0
+      );
+      this.plane.seal({ kbRoot, runId: context.identity.run_id, artifactIds });
+      const capabilityIds = stringList(context.playbookData.source_ids);
+      const gate = this.plane.persistGate({
+        kbRoot,
+        profileId: String(context.playbookData.profile_id ?? ""),
+        runId: context.identity.run_id,
+        artifactIds,
+        sourceIds: capabilityIds,
+        capabilityIds,
+      });
+      context.playbookData.gate_id = gate.gate_id;
+      context.playbookData.base_generation_id = gate.base_generation_id ?? "";
+    }
     const summary = {
       sources: stringList(context.playbookData.source_ids).length,
       phases,
+      gate_id: String(context.playbookData.gate_id ?? ""),
       unresolved: stringList(context.playbookData.unresolved),
     };
     const gateId = randomUUID();
@@ -450,7 +503,16 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     context.playbookData.review_decision = decision;
     if (decision === "approve") {
       context.transition("publishing");
-      return this.dispatch(context);
+      // Publication is the deterministic host step this state exists for. The gate
+      // is CAS-guarded and the selector swap is atomic underneath, so a crash
+      // between publishing and checkpointing cannot double-publish.
+      const published = this.plane.approve({
+        kbRoot: this.kbRoot(context),
+        runId: context.identity.run_id,
+      });
+      context.playbookData.published_generation_id = published.generationId;
+      context.playbookData.published_counts = published.counts as unknown as JsonValue;
+      return this.terminal(context, "complete", true, stringList(context.playbookData.unresolved));
     }
     if (decision === "refine") {
       const unresolvedRefine = stringList(context.playbookData.unresolved);
@@ -463,6 +525,7 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
       return this.dispatch(context);
     }
     // Denial publishes nothing and is an honest negative terminal, not an error.
+    this.plane.deny({ kbRoot: this.kbRoot(context), runId: context.identity.run_id });
     const unresolved = [
       ...stringList(context.playbookData.unresolved),
       "reviewer denied publication",
@@ -535,6 +598,9 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
         kb_profile_id: String(context.playbookData.profile_id ?? ""),
         source_count: stringList(context.playbookData.source_ids).length,
         phases: phases as unknown as JsonValue,
+        gate_id: String(context.playbookData.gate_id ?? ""),
+        published_generation_id: String(context.playbookData.published_generation_id ?? ""),
+        published_counts: (context.playbookData.published_counts ?? {}) as JsonValue,
         review_decision: String(context.playbookData.review_decision ?? ""),
         warnings: stringList(context.playbookData.warnings),
         unresolved_issues: unresolved,
