@@ -41,6 +41,7 @@ import {
 } from "./filesystem.js";
 import {
   buildCatalog,
+  buildGenerationIndex,
   newGenerationId,
   publishGeneration,
   readSelectedGeneration,
@@ -154,8 +155,9 @@ export function initKb(ctx: KbWorkflowContext, title: string): KbResult {
   const policy = defaultDenyPolicy(kbId);
   writePolicy(root, policy);
 
-  // Publish the first empty generation
+  // Publish the first empty generation (with its real, verified index)
   const genId = newGenerationId();
+  const { index_sha256 } = buildGenerationIndex(root, genId, kbId, []);
   const catalog = buildCatalog({
     generation_id: genId,
     kb_id: kbId,
@@ -165,7 +167,7 @@ export function initKb(ctx: KbWorkflowContext, title: string): KbResult {
     source_records: [],
     source_objects: [],
     conflicts: [],
-    index_sha256: sha256Hex(""),
+    index_sha256,
   });
   publishGeneration(root, catalog);
 

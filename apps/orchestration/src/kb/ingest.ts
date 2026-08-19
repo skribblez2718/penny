@@ -47,6 +47,7 @@ import {
 } from "./filesystem.js";
 import {
   buildCatalog,
+  buildGenerationIndex,
   newGenerationId,
   publishGeneration,
   readSelectedGeneration,
@@ -56,17 +57,10 @@ import { type KbResult, type KbStatus, type KbWorkflowContext } from "./workflow
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
-/**
- * Pluggable agent runner. The workflow calls this for each agent phase; it
- * returns the agent's complete text output (a JSON artifact body per the
- * task prompt). The workflow stages that text as the phase artifact.
- */
-export type AgentRunner = (input: {
-  agent: string;
-  task: string;
-  model: string;
-  stateId: string;
-}) => Promise<string>;
+import type { KbAgentRunner, KbPhaseInvocation } from "./kb-model-client.js";
+
+/** API continuity: the workflow's runner type is the client's contract. */
+export type AgentRunner = KbAgentRunner;
 
 /** A source to ingest, supplied by the host (capability envelope already resolved). */
 export interface IngestSource {
@@ -145,63 +139,52 @@ function sourceRecordFor(src: IngestSource, runId: string): SourceRecord {
   return record; // validated by writeSourceRecord against SourceRecordSchema
 }
 
-// ── Phase prompts ───────────────────────────────────────────────────────────
+// ── Phase briefs (in-band: instructions + output contract ONLY; no bodies) ──
 
-const echoTask = (srcs: readonly IngestSource[]): string =>
-  [
-    "You are Echo, an evidence extraction agent in a knowledge-base ingest workflow.",
-    "Read the sources below and extract the key claims.",
-    "Return ONLY one JSON object, no prose, no markdown fences, with exactly this shape:",
-    '{"schema_version":1,"artifact_kind":"claims","source_ids":[...],"claims":[{"claim_id":"clm_<8 hex>","text":"...","kind":"fact|inference|speculation|unknown","state":"supported|contested|superseded|unverified_current","confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","evidence":[{"source_id":"<src id>"}],"contradicts_claim_ids":[],"canonical_verification_refs":[]}]}',
-    "claim_id must be unique per claim. evidence.source_id must be one of the supplied source ids.",
-    "",
-    "SOURCES:",
-    ...srcs.map((s) => `--- SOURCE ${s.sourceId} :: ${s.title} ---\n${s.content}`),
-  ].join("\n");
+const ECHO_BRIEF = [
+  "Phase: echo_ingest (evidence extraction).",
+  "Read each admitted source with read_source_snapshot (by its source_id) and extract the key claims.",
+  "Submit EXACTLY ONE JSON object via submit_phase_result with this shape:",
+  '{"schema_version":1,"artifact_kind":"claims","source_ids":[...],"claims":[{"claim_id":"clm_<unique>","text":"...","kind":"fact|inference|speculation|unknown","state":"supported|contested|superseded|unverified_current","confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","evidence":[{"source_id":"<src id>"}],"contradicts_claim_ids":[],"canonical_verification_refs":[]}]}',
+  "Rules: claim_id unique per claim; evidence.source_id must be one of the admitted sources you read; one claim per materially distinct statement.",
+].join("\n");
 
-const synthiaTask = (srcs: readonly IngestSource[], claimsJson: string): string =>
-  [
-    "You are Synthia, a synthesis agent in a knowledge-base ingest workflow.",
-    "From the extracted claims below, compose ONE advisory page.",
-    "The page markdown MUST contain exactly these level-2 headings in this order, each with content:",
-    "## Synthesis",
-    "## Evidence",
-    "## Tensions and unknowns",
-    "## Related",
-    "Return ONLY one JSON object, no prose, no markdown fences, with exactly this shape:",
-    '{"schema_version":1,"artifact_kind":"page_draft","pages":[{"frontmatter":{"schema_version":1,"page_id":"page_<8 hex>","revision_id":"rev_<8 hex>","kind":"synthesis","title":"...","summary":"...","authority":"advisory","lifecycle":"draft","created_at":"<ISO-8601 Z>","derived_from":[],"related_page_ids":[]},"markdown":"## Synthesis\\n...","claims":{"schema_version":1,"page_id":"<same page_id>","revision_id":"<same revision_id>","claims":[<the claims objects, verbatim from input>]}}]}',
-    "The sidecar claims array must reuse the claim objects exactly as provided (same claim_id, text, evidence).",
-    "",
-    "EXTRACTED CLAIMS:",
-    claimsJson,
-  ].join("\n");
+const SYNTHIA_BRIEF = [
+  "Phase: synthia_compose (page composition).",
+  "Read the prior phase claims with read_phase_output (phase=echo_ingest). Where a claim needs its original wording, read the admitted sources with read_source_snapshot.",
+  "Compose ONE advisory page. Its markdown MUST contain exactly these level-2 headings in this order, each with real content:",
+  "## Synthesis",
+  "## Evidence",
+  "## Tensions and unknowns",
+  "## Related",
+  "Submit EXACTLY ONE JSON object via submit_phase_result with this shape:",
+  '{"schema_version":1,"artifact_kind":"page_draft","pages":[{"frontmatter":{"schema_version":1,"page_id":"page_<unique>","revision_id":"rev_<unique>","kind":"synthesis","title":"...","summary":"...","authority":"advisory","lifecycle":"draft","created_at":"<ISO-8601 Z>","derived_from":[],"related_page_ids":[]},"markdown":"...","claims":{"schema_version":1,"page_id":"<same page_id>","revision_id":"<same revision_id>","claims":[<the claim objects, verbatim from the prior phase>]}}]}',
+  "The sidecar claims array must reuse the claim objects exactly as provided (same claim_id, text, evidence).",
+].join("\n");
 
-const carrenTask = (pageDraftJson: string): string =>
-  [
-    "You are Carren, a semantic lint agent in a knowledge-base ingest workflow.",
-    "Review this candidate page for unsupported claims, missing evidence, contradictions, and overclaims.",
-    "For every material conflict between claims (or between a claim and its evidence), emit a candidate conflict with claim_refs pointing at the involved claims.",
-    "Return ONLY one JSON object, no prose, no markdown fences, with exactly this shape:",
-    '{"schema_version":1,"artifact_kind":"lint_report","findings":[{"finding_id":"fnd_<8 hex>","severity":"warning|error","summary":"...","evidence":[]}],"candidate_conflicts":[{"candidate_conflict_id":"cfl_<8 hex>","claim_refs":[{"page_id":"...","revision_id":"...","claim_id":"..."}],"summary":"...","evidence_refs":[]}]}',
-    "If there are no conflicts, candidate_conflicts must be [].",
-    "",
-    "CANDIDATE PAGE DRAFT:",
-    pageDraftJson,
-  ].join("\n");
+const CARREN_BRIEF = [
+  "Phase: carren_lint (semantic review).",
+  "Read the candidate page with read_phase_output (phase=synthia_compose). Read admitted sources with read_source_snapshot where a claim's grounding is unclear.",
+  "Review for unsupported claims, missing evidence, contradictions, and overclaims.",
+  "For every material conflict between claims (or between a claim and its evidence), emit a candidate conflict whose claim_refs point at the involved claims of THIS candidate page.",
+  "Submit EXACTLY ONE JSON object via submit_phase_result with this shape:",
+  '{"schema_version":1,"artifact_kind":"lint_report","findings":[{"finding_id":"fnd_<unique>","severity":"warning|error","summary":"...","evidence":[]}],"candidate_conflicts":[{"candidate_conflict_id":"cfl_<unique>","claim_refs":[{"page_id":"...","revision_id":"...","claim_id":"..."}],"summary":"...","evidence_refs":[]}]}',
+  "If there are no conflicts, candidate_conflicts must be [].",
+].join("\n");
 
-const veraTask = (srcs: readonly IngestSource[], pageDraftJson: string): string =>
-  [
-    "You are Vera, a verification agent in a knowledge-base ingest workflow.",
-    "Check whether each claim in the candidate page is supported by the cited source.",
-    "Return ONLY one JSON object, no prose, no markdown fences, with exactly this shape:",
-    '{"schema_version":1,"artifact_kind":"verification_report","verified_artifact_ids":[],"claim_findings":[{"claim_ref":{"page_id":"...","revision_id":"...","claim_id":"..."},"verdict":"supported|partially_supported|unsupported","notes":"..."}]}',
-    "",
-    "CANDIDATE PAGE DRAFT:",
-    pageDraftJson,
-    "",
-    "SOURCES:",
-    ...srcs.map((s) => `--- SOURCE ${s.sourceId} :: ${s.title} ---\n${s.content}`),
-  ].join("\n");
+const VERA_BRIEF = [
+  "Phase: vera_verify (groundedness verification).",
+  "Read the candidate page with read_phase_output (phase=synthia_compose) and the admitted sources with read_source_snapshot.",
+  "For each claim in the candidate page's sidecar, decide whether the cited source supports it.",
+  "Submit EXACTLY ONE JSON object via submit_phase_result with this shape:",
+  '{"schema_version":1,"artifact_kind":"verification_report","verified_artifact_ids":[],"claim_findings":[{"claim_ref":{"page_id":"...","revision_id":"...","claim_id":"..."},"verdict":"supported|partially_supported|unsupported","notes":"..."}]}',
+].join("\n");
+
+function makeNoPriorPhases() {
+  return (_phase: string): string => {
+    throw new Error("this phase has no prior phases; refusing read_phase_output");
+  };
+}
 
 // ── Workflow: ingest → gate ─────────────────────────────────────────────────
 
@@ -214,8 +197,7 @@ const veraTask = (srcs: readonly IngestSource[], pageDraftJson: string): string 
 export async function ingestKb(
   ctx: KbWorkflowContext,
   sources: readonly IngestSource[],
-  agentRunner: AgentRunner,
-  model: string
+  agentRunner: AgentRunner
 ): Promise<KbResult> {
   const root = ctx.kbRoot;
   const selected = readSelectedGeneration(root);
@@ -245,13 +227,31 @@ export async function ingestKb(
   }
 
   const store = new RunArtifactStore(root, ctx.runId);
+  const admittedContent = new Map<string, string>(
+    sources.map((src) => [src.sourceId, src.content])
+  );
+  const sourceIds = sources.map((src) => src.sourceId);
+  const phaseHandles = new Map<string, ArtifactHandle>();
   try {
-    // 2. Echo — extract claims
+    const readSource = (sourceId: string): string => {
+      const content = admittedContent.get(sourceId);
+      if (content === undefined) {
+        throw new Error(
+          `source '${sourceId}' is not admitted for this run; refusing read_source_snapshot`
+        );
+      }
+      return content;
+    };
+
+    // 2. Echo — extract claims from the admitted sources
     const claimsJson = await agentRunner({
       agent: "echo",
-      task: echoTask(sources),
-      model,
       stateId: "echo_ingest",
+      phaseBrief: ECHO_BRIEF,
+      sourceAllowlist: sourceIds,
+      priorPhaseAllowlist: [],
+      readSource,
+      readPhaseOutput: makeNoPriorPhases(),
     });
     const claimsHandle = store.stage({
       state_id: "echo_ingest",
@@ -259,13 +259,32 @@ export async function ingestKb(
       artifact_kind: "claims",
       content: claimsJson,
     });
+    phaseHandles.set("echo_ingest", claimsHandle);
+
+    const priorOutputs = (allowed: readonly string[]): ((stateId: string) => string) => {
+      return (stateId: string): string => {
+        if (!allowed.includes(stateId)) {
+          throw new Error(
+            `phase '${stateId}' is not in this state's prior-phase allowlist; refusing`
+          );
+        }
+        const handle = phaseHandles.get(stateId);
+        if (handle === undefined) {
+          throw new Error(`phase '${stateId}' has no staged output; refusing`);
+        }
+        return store.read(handle.artifact_id).content;
+      };
+    };
 
     // 3. Synthia — compose a page revision from the claims
     const pageDraftJson = await agentRunner({
       agent: "synthia",
-      task: synthiaTask(sources, claimsJson),
-      model,
       stateId: "synthia_compose",
+      phaseBrief: SYNTHIA_BRIEF,
+      sourceAllowlist: sourceIds,
+      priorPhaseAllowlist: ["echo_ingest"],
+      readSource,
+      readPhaseOutput: priorOutputs(["echo_ingest"]),
     });
     const pageDraftHandle = store.stage({
       state_id: "synthia_compose",
@@ -273,13 +292,17 @@ export async function ingestKb(
       artifact_kind: "page_draft",
       content: pageDraftJson,
     });
+    phaseHandles.set("synthia_compose", pageDraftHandle);
 
     // 4. Carren — semantic lint of the candidate page
     const lintJson = await agentRunner({
       agent: "carren",
-      task: carrenTask(pageDraftJson),
-      model,
       stateId: "carren_lint",
+      phaseBrief: CARREN_BRIEF,
+      sourceAllowlist: sourceIds,
+      priorPhaseAllowlist: ["synthia_compose"],
+      readSource,
+      readPhaseOutput: priorOutputs(["synthia_compose"]),
     });
     const lintHandle = store.stage({
       state_id: "carren_lint",
@@ -287,13 +310,17 @@ export async function ingestKb(
       artifact_kind: "lint_report",
       content: lintJson,
     });
+    phaseHandles.set("carren_lint", lintHandle);
 
     // 5. Vera — groundedness verification
     const verificationJson = await agentRunner({
       agent: "vera",
-      task: veraTask(sources, pageDraftJson),
-      model,
       stateId: "vera_verify",
+      phaseBrief: VERA_BRIEF,
+      sourceAllowlist: sourceIds,
+      priorPhaseAllowlist: ["synthia_compose", "echo_ingest"],
+      readSource,
+      readPhaseOutput: priorOutputs(["synthia_compose", "echo_ingest"]),
     });
     const verificationHandle = store.stage({
       state_id: "vera_verify",
@@ -602,8 +629,22 @@ export function approveIngest(
     });
   }
 
-  // Build and atomically publish the new generation.
+  // Build the deterministic index (index.sqlite) from the published pages,
+  // then the catalog anchored to its canonical-content digest, then publish.
   const generationId = newGenerationId();
+  const { index_sha256 } = buildGenerationIndex(
+    root,
+    generationId,
+    manifest.kb_id,
+    pages.map((p) => ({
+      page_id: p.frontmatter.page_id,
+      revision_id: p.frontmatter.revision_id,
+      title: p.frontmatter.title,
+      summary: p.frontmatter.summary,
+      body_sha256: sha256Hex(p.markdown),
+      body: p.markdown,
+    }))
+  );
   const catalog = buildCatalog({
     generation_id: generationId,
     kb_id: manifest.kb_id,
@@ -614,7 +655,7 @@ export function approveIngest(
     source_records: sourceRecordEntries,
     source_objects: [...objectDigests],
     conflicts: conflictEntries,
-    index_sha256: sha256Hex("kb-no-fts-index-g8-slice"),
+    index_sha256,
   });
   const selector = publishGeneration(root, catalog);
 

@@ -208,16 +208,30 @@ function makeMockRunner(overrides: Partial<Record<string, string>> = {}): {
   calls: { agent: string; stateId: string }[];
 } {
   const calls: { agent: string; stateId: string }[] = [];
-  const runner: AgentRunner = async ({ agent, stateId }) => {
-    calls.push({ agent, stateId });
+  const runner: AgentRunner = async (inv) => {
+    calls.push({ agent: inv.agent, stateId: inv.stateId });
+    // Probe the host-closed readers exactly as a live agent would: every
+    // allowlisted source and every allowlisted prior-phase output must resolve.
+    for (const id of inv.sourceAllowlist) {
+      const text = inv.readSource(id);
+      if (typeof text !== "string" || text.length === 0) {
+        throw new Error(`host readSource('${id}') returned no content`);
+      }
+    }
+    for (const phase of inv.priorPhaseAllowlist) {
+      const text = inv.readPhaseOutput(phase);
+      if (typeof text !== "string" || text.length === 0) {
+        throw new Error(`host readPhaseOutput('${phase}') returned no content`);
+      }
+    }
     const table: Record<string, string> = {
       echo_ingest: claimJson(),
       synthia_compose: pageDraftJson(),
       carren_lint: lintJson(),
       vera_verify: verificationJson(),
     };
-    const out = overrides[stateId] ?? table[stateId];
-    if (out === undefined) throw new Error(`mock runner: no output for ${stateId}`);
+    const out = overrides[inv.stateId] ?? table[inv.stateId];
+    if (out === undefined) throw new Error(`mock runner: no output for ${inv.stateId}`);
     return out;
   };
   return { runner, calls };
@@ -247,7 +261,7 @@ async function ingestPending(
   runner: AgentRunner,
   sources: IngestSource[] = [SRC_A, SRC_B]
 ) {
-  const result = await ingestKb(ctx(root, "kb-ingest-run"), sources, runner, "mock/model");
+  const result = await ingestKb(ctx(root, "kb-ingest-run"), sources, runner);
   expect(result.status).toBe("awaiting_user");
   expect(result.next).toBe("review");
   expect(result.artifacts).toHaveLength(4);
@@ -277,7 +291,7 @@ describe("ingest: gate (no publication)", () => {
     const { runner, calls } = makeMockRunner();
     const { result, pending } = await ingestPending(root, runner);
 
-    // All four agents ran, in pipeline order, on the declared model.
+    // All four agents ran, in pipeline order, with briefs + host readers wired.
     expect(calls.map((c) => c.agent)).toEqual(["echo", "synthia", "carren", "vera"]);
     expect(calls.map((c) => c.stateId)).toEqual([
       "echo_ingest",
@@ -314,7 +328,7 @@ describe("ingest: gate (no publication)", () => {
   it("is refused on an uninitialized KB and stages nothing", async () => {
     const root = tmpRoot();
     const { runner } = makeMockRunner();
-    const result = await ingestKb(ctx(root), [SRC_A], runner, "mock/model");
+    const result = await ingestKb(ctx(root), [SRC_A], runner);
     expect(result.status).toBe("refused");
     expect(result.artifacts).toHaveLength(0);
     expect(existsSync(path.join(root, "work"))).toBe(false);
@@ -324,7 +338,7 @@ describe("ingest: gate (no publication)", () => {
     const root = tmpRoot();
     initKb(ctx(root), "Ingest Test KB");
     const { runner } = makeMockRunner();
-    const result = await ingestKb(ctx(root), [], runner, "mock/model");
+    const result = await ingestKb(ctx(root), [], runner);
     expect(result.status).toBe("refused");
     expect(result.warnings.join(" ")).toMatch(/at least one source/i);
   });

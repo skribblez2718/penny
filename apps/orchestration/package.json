@@ -20,7 +20,8 @@
     }
   },
   "bin": {
-    "penny-orchestration": "./dist/cli.js"
+    "penny-orchestration": "./dist/cli.js",
+    "penny-kb-gate": "./dist/kb-gate-cli.js"
   },
   "files": [
     "dist",

@@ -138,6 +138,237 @@ export function buildCatalog(input: {
 }
 
 /**
+ * Generation index — §5.10 `index.sqlite`.
+ *
+ * The manifest contract names the generation index `index.sqlite`; it is a
+ * derived, verifiable artifact: the `index_sha256` recorded in the catalog and
+ * selector is the SHA-256 of the index's CANONICAL CONTENT (JCS payload over
+ * the sorted page rows), not of the SQLite file bytes (which are not a stable
+ * digest target). Verification re-reads the rows and re-computes that payload,
+ * so a tampered or corrupt index is detected at read time.
+ */
+
+interface IndexRow {
+  page_id: string;
+  revision_id: string;
+  title: string;
+  summary: string;
+  body_sha256: Sha256Hex;
+  body: string;
+}
+
+function sqliteModule(): typeof import("node:sqlite") {
+  const mod = process.getBuiltinModule("node:" + "sqlite") as
+    | typeof import("node:sqlite")
+    | undefined;
+  if (mod === undefined) {
+    throw new GenerationError("Node.js runtime does not provide node:sqlite");
+  }
+  return mod;
+}
+
+/** One indexable page (content as published). */
+export interface IndexPageEntry {
+  readonly page_id: string;
+  readonly revision_id: string;
+  readonly title: string;
+  readonly summary: string;
+  readonly body_sha256: Sha256Hex;
+  readonly body: string;
+}
+
+function indexPathFor(root: string, generationId: string): string {
+  return path.join(generationsDir(root), generationId, "index.sqlite");
+}
+
+function indexPayload(generationId: string, kbId: string, rows: readonly IndexRow[]) {
+  const sorted = [...rows].sort((a, b) =>
+    a.page_id !== b.page_id
+      ? a.page_id < b.page_id
+        ? -1
+        : 1
+      : a.revision_id !== b.revision_id
+        ? a.revision_id < b.revision_id
+          ? -1
+          : 1
+        : 0
+  );
+  return {
+    schema_version: 1,
+    generation_id: generationId,
+    kb_id: kbId,
+    pages: sorted.map((r) => ({
+      page_id: r.page_id,
+      revision_id: r.revision_id,
+      title: r.title,
+      summary: r.summary,
+      body_sha256: r.body_sha256,
+      body: r.body,
+    })),
+  };
+}
+
+/**
+ * Build the generation's `index.sqlite` deterministically from the published
+ * page set and return its canonical-content digest. Idempotent for the same
+ * inputs (rows re-inserted in sorted order; file rebuilt from scratch).
+ */
+export function buildGenerationIndex(
+  root: string,
+  generationId: string,
+  kbId: string,
+  pages: readonly IndexPageEntry[]
+): { index_path: string; index_sha256: Sha256Hex } {
+  const rows: IndexRow[] = pages.map((p) => ({
+    page_id: p.page_id,
+    revision_id: p.revision_id,
+    title: p.title,
+    summary: p.summary,
+    body_sha256: p.body_sha256,
+    body: p.body,
+  }));
+
+  const genDir = path.join(generationsDir(root), generationId);
+  if (!existsSync(genDir)) {
+    mkdirSync(genDir, { recursive: true, mode: 0o700 });
+    chmodSync(genDir, 0o700);
+  }
+  const indexPath = path.join(genDir, "index.sqlite");
+  for (const suffix of ["", "-wal", "-shm"]) {
+    const f = path.join(genDir, `index.sqlite${suffix}`);
+    if (existsSync(f)) {
+      const st = lstatSync(f);
+      if (st.isSymbolicLink() || !st.isFile()) {
+        throw new GenerationError(`index location is not a regular file: suffix '${suffix}'`);
+      }
+      if ((st.mode & 0o077) !== 0) {
+        throw new GenerationError("index location is not owner-only; refusing to rebuild");
+      }
+    }
+  }
+
+  const index_sha256 = sha256Hex(canonicalJson(indexPayload(generationId, kbId, rows)));
+
+  const { DatabaseSync } = sqliteModule();
+  let db: InstanceType<typeof DatabaseSync> | undefined;
+  try {
+    db = new DatabaseSync(indexPath, { readOnly: false, enableForeignKeyConstraints: false });
+    db.exec("PRAGMA journal_mode=OFF;");
+    db.exec("DROP TABLE IF EXISTS pages;");
+    db.exec(
+      `CREATE TABLE pages (
+         page_id TEXT PRIMARY KEY,
+         revision_id TEXT NOT NULL,
+         title TEXT NOT NULL,
+         summary TEXT NOT NULL,
+         body_sha256 TEXT NOT NULL,
+         body TEXT NOT NULL
+       );`
+    );
+    const ins = db.prepare(
+      "INSERT INTO pages (page_id, revision_id, title, summary, body_sha256, body) VALUES (?, ?, ?, ?, ?, ?)"
+    );
+    const sorted = [...rows].sort((a, b) =>
+      a.page_id !== b.page_id
+        ? a.page_id < b.page_id
+          ? -1
+          : 1
+        : a.revision_id < b.revision_id
+          ? -1
+          : 1
+    );
+    for (const r of sorted) {
+      ins.run(r.page_id, r.revision_id, r.title, r.summary, r.body_sha256, r.body);
+    }
+    const check = db.prepare("PRAGMA integrity_check;").get() as { integrity_check: string };
+    if (check.integrity_check !== "ok") {
+      throw new GenerationError("index.sqlite failed integrity check");
+    }
+  } finally {
+    db?.close();
+  }
+  chmodSync(indexPath, 0o600);
+  return { index_path: indexPath, index_sha256 };
+}
+
+/**
+ * Verify a published generation's index against the expected canonical-content
+ * digest (from the catalog/selector). Throws on missing, unowned, tampered,
+ * or corrupt index. Readers must run this before trusting any retrieval from
+ * the generation.
+ */
+export function verifyGenerationIndex(
+  root: string,
+  generationId: string,
+  expectedIndexSha256: Sha256Hex,
+  kbId: string
+): void {
+  const indexPath = indexPathFor(root, generationId);
+  if (!existsSync(indexPath)) {
+    throw new GenerationError(`generation '${generationId}' has no index.sqlite`);
+  }
+  const st = lstatSync(indexPath);
+  if (st.isSymbolicLink() || !st.isFile()) {
+    throw new GenerationError("index.sqlite is not a regular file");
+  }
+  if ((st.mode & 0o077) !== 0) {
+    throw new GenerationError("index.sqlite is not owner-only");
+  }
+
+  const { DatabaseSync } = sqliteModule();
+  const db = new DatabaseSync(indexPath, { readOnly: true });
+  try {
+    const table = db
+      .prepare(
+        "SELECT page_id, revision_id, title, summary, body_sha256, body FROM pages ORDER BY page_id, revision_id"
+      )
+      .all() as Array<{
+      page_id: string;
+      revision_id: string;
+      title: string;
+      summary: string;
+      body_sha256: string;
+      body: string;
+    }>;
+    // Cross-check each row's body digest before hashing the payload.
+    for (const r of table) {
+      const calc = sha256Hex(r.body);
+      if (calc !== r.body_sha256) {
+        throw new GenerationError(`index row '${r.page_id}/${r.revision_id}' body digest mismatch`);
+      }
+    }
+    // The payload digest embeds generation identity and kb; the caller
+    // supplies kbId (the selected catalog's kb_id), so verification needs no
+    // second catalog read.
+    const actual = sha256Hex(
+      canonicalJson(
+        indexPayload(
+          generationId,
+          kbId,
+          table.map((r) => ({
+            page_id: String(r.page_id),
+            revision_id: String(r.revision_id),
+            title: String(r.title),
+            summary: String(r.summary),
+            body_sha256: String(r.body_sha256) as Sha256Hex,
+            body: String(r.body),
+          }))
+        )
+      )
+    );
+    if (actual !== expectedIndexSha256) {
+      throw new GenerationError(
+        `index digest mismatch for generation '${generationId}': expected ${expectedIndexSha256}, got ${actual}`
+      );
+    }
+  } finally {
+    db.close();
+  }
+}
+
+// ── Publication ─────────────────────────────────────────────────────────────
+
+/**
  * Publish a generation atomically.
  *
  * The commit point is the atomic replacement of `.kb/current.json`. Before that,
@@ -221,6 +452,8 @@ export function readSelectedGeneration(root: string):
       `catalog digest mismatch: selector says ${selector.catalog_sha256}, catalog is ${calculated}`
     );
   }
+  // Verify the index the catalog anchors (detects tampering/corruption).
+  verifyGenerationIndex(root, selector.generation_id, catalog.index_sha256, catalog.kb_id);
   return { selector, catalog };
 }
 

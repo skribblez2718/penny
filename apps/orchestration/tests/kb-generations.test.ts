@@ -27,6 +27,7 @@ import {
 } from "../src/kb/filesystem.js";
 import {
   buildCatalog,
+  buildGenerationIndex,
   newGenerationId,
   publishGeneration,
   readSelectedGeneration,
@@ -80,7 +81,7 @@ describe("KB §5.10 generation publication", () => {
     const root = tmpRoot();
     const { manifest, policy } = seedKb(root);
     const genId = newGenerationId();
-
+    const { index_sha256 } = buildGenerationIndex(root, genId, "kb_001", []);
     const catalog = buildCatalog({
       generation_id: genId,
       kb_id: "kb_001",
@@ -90,7 +91,7 @@ describe("KB §5.10 generation publication", () => {
       source_records: [],
       source_objects: [],
       conflicts: [],
-      index_sha256: ZERO,
+      index_sha256,
     });
 
     const selector = publishGeneration(root, catalog);
@@ -111,8 +112,10 @@ describe("KB §5.10 generation publication", () => {
   it("rebuilds the root index as convenience after publication", () => {
     const root = tmpRoot();
     const { manifest, policy } = seedKb(root);
+    const genId = newGenerationId();
+    const { index_sha256 } = buildGenerationIndex(root, genId, "kb_001", []);
     const catalog = buildCatalog({
-      generation_id: newGenerationId(),
+      generation_id: genId,
       kb_id: "kb_001",
       manifest,
       policy,
@@ -120,7 +123,7 @@ describe("KB §5.10 generation publication", () => {
       source_records: [],
       source_objects: [],
       conflicts: [],
-      index_sha256: ZERO,
+      index_sha256,
     });
     publishGeneration(root, catalog);
     const indexPath = path.join(root, "index.md");
@@ -134,8 +137,10 @@ describe("KB §5.10 generation publication", () => {
     const root = tmpRoot();
     const { manifest, policy } = seedKb(root);
 
+    const gen1Id = newGenerationId();
+    const gen1Index = buildGenerationIndex(root, gen1Id, "kb_001", []).index_sha256;
     const gen1 = buildCatalog({
-      generation_id: newGenerationId(),
+      generation_id: gen1Id,
       kb_id: "kb_001",
       manifest,
       policy,
@@ -143,12 +148,14 @@ describe("KB §5.10 generation publication", () => {
       source_records: [],
       source_objects: [],
       conflicts: [],
-      index_sha256: ZERO,
+      index_sha256: gen1Index,
     });
     publishGeneration(root, gen1);
 
+    const gen2Id = newGenerationId();
+    const gen2Index = buildGenerationIndex(root, gen2Id, "kb_001", []).index_sha256;
     const gen2 = buildCatalog({
-      generation_id: newGenerationId(),
+      generation_id: gen2Id,
       kb_id: "kb_001",
       parent_generation_id: gen1.generation_id,
       manifest,
@@ -157,7 +164,7 @@ describe("KB §5.10 generation publication", () => {
       source_records: [],
       source_objects: [],
       conflicts: [],
-      index_sha256: ZERO,
+      index_sha256: gen2Index,
     });
     publishGeneration(root, gen2);
 
@@ -169,8 +176,10 @@ describe("KB §5.10 generation publication", () => {
   it("the catalog digest in the selector matches the catalog", () => {
     const root = tmpRoot();
     const { manifest, policy } = seedKb(root);
+    const genId = newGenerationId();
+    const { index_sha256 } = buildGenerationIndex(root, genId, "kb_001", []);
     const catalog = buildCatalog({
-      generation_id: newGenerationId(),
+      generation_id: genId,
       kb_id: "kb_001",
       manifest,
       policy,
@@ -178,7 +187,7 @@ describe("KB §5.10 generation publication", () => {
       source_records: [],
       source_objects: [],
       conflicts: [],
-      index_sha256: ZERO,
+      index_sha256,
     });
     publishGeneration(root, catalog);
     const selected = readSelectedGeneration(root);

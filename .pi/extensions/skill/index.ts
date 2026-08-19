@@ -2761,8 +2761,89 @@ export default function skillExtension(pi: ExtensionAPI): void {
           kbResult = orch.lintKb(wfCtx);
           break;
         }
+        case "ingest": {
+          const capIds = Array.isArray(rawParams["source_capability_ids"])
+            ? (rawParams["source_capability_ids"] as unknown[])
+                .map((x) => String(x))
+                .filter((x) => x.length > 0)
+            : [];
+          if (capIds.length === 0) {
+            kbResult = {
+              schema_version: 1, action, run_id: runId, status: "refused", met: false,
+              ids: [], counts: {}, artifacts: [], evidence: [],
+              warnings: ["ingest requires 'source_capability_ids' — mint with: penny-kb-gate capability-mint --profile \"" + profileId + "\" --path <file> --title <t> --author <a>"],
+              unresolved: [], next: "none",
+            };
+            break;
+          }
+          // Model policy: production runs each agent on its SSOT-declared model;
+          // an explicit 'model' parameter is a test-only override.
+          const client = new orch.KbModelClient({
+            projectRoot,
+            ...(rawParams["model"] !== undefined
+              ? { modelOverride: String(rawParams["model"]) }
+              : {}),
+          });
+          try {
+            const sources = orch.sourcesFromCapabilities(kbRoot, capIds);
+            orch.claimCapabilities(kbRoot, capIds, runId);
+            kbResult = await orch.ingestKb(wfCtx, sources, client.run);
+            if (kbResult.status === "awaiting_user") {
+              orch.persistIngestGate(kbRoot, profileId, runId, kbResult.artifacts, capIds, capIds);
+            } else {
+              // Pipeline refused/errored: release the capability claims.
+              orch.invalidateCapabilities(kbRoot, capIds);
+            }
+          } catch (err) {
+            try {
+              orch.invalidateCapabilities(kbRoot, capIds);
+            } catch {
+              // best effort
+            }
+            kbResult = {
+              schema_version: 1, action, run_id: runId, status: "error", met: false,
+              ids: [], counts: {}, artifacts: [], evidence: [],
+              warnings: [String((err as Error)?.message ?? err).slice(0, 300)],
+              unresolved: [], next: "none",
+            };
+          }
+          break;
+        }
+        case "resume": {
+          const pending = orch.latestPendingGate(kbRoot);
+          if (pending === undefined) {
+            kbResult = {
+              schema_version: 1, action, run_id: runId, status: "refused", met: false,
+              ids: [], counts: {}, artifacts: [], evidence: [],
+              warnings: ["no pending content-review gate to resume"],
+              unresolved: [], next: "none",
+            };
+          } else {
+            kbResult = {
+              schema_version: 1, action: "resume", run_id: pending.run_id,
+              status: "awaiting_user", met: false,
+              ids: [pending.run_id],
+              counts: { artifacts: pending.artifacts.length },
+              artifacts: pending.artifacts,
+              evidence: [],
+              warnings: ["re-presenting pending human content-review gate; approve/deny is a host decision (penny-kb-gate approve|deny)"],
+              unresolved: [], next: "review",
+            };
+          }
+          break;
+        }
         case "status": {
           kbResult = orch.statusKb(wfCtx);
+          // Safe projection of any pending gate (no bodies, no paths).
+          const pending = orch.latestPendingGate(kbRoot);
+          if (pending !== undefined) {
+            (kbResult as { pending_gate?: unknown }).pending_gate = {
+              run_id: pending.run_id,
+              issued_at: pending.issued_at,
+              expires_at: pending.expires_at,
+              artifact_kinds: pending.artifacts.map((a) => a.artifact_kind),
+            };
+          }
           break;
         }
         default:
