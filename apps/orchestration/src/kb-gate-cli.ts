@@ -20,34 +20,20 @@
  *   No command prints any source or page body to stdout.
  */
 
-import { createHash, randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  writeFileSync,
-} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 
-import {
-  envelopeDigest,
-  validateEnvelopeCrossField,
-  CapabilityStore,
-  type CapabilityEnvelope,
-} from "./kb/capabilities.js";
+import { envelopeDigest, CapabilityStore } from "./kb/capabilities.js";
 import {
   approveGate,
   denyGate,
   findGateForRun,
   listGates,
   latestPendingGate,
+  mintSourceCapability,
   sourcesFromCapabilities,
-  capabilitySha256Of,
 } from "./kb/gate.js";
-import { canonicalJson } from "./kb/contracts.js";
 
 interface Args {
   projectRoot: string;
@@ -102,55 +88,35 @@ function cmdCapabilityMint(args: Args): void {
   if (filePath.length === 0 || title.length === 0 || authors.length === 0) {
     fail("capability-mint requires --path, --title, and at least one --author");
   }
-  const sourceType = String(args["source-type"] ?? "manual");
-  const mediaType = String(args["media-type"] ?? "text/plain");
-  const expiresHours = Number(args["expires-hours"] ?? 72);
-  if (!Number.isFinite(expiresHours) || expiresHours <= 0) fail("--expires-hours must be > 0");
-
   const absolute = path.resolve(args.projectRoot, filePath);
-  if (!existsSync(absolute)) fail(`file does not exist: ${absolute}`);
-  const st = lstatSync(absolute);
-  if (st.isSymbolicLink() || !st.isFile()) fail(`refusing non-regular file: ${absolute}`);
-  const bytes = readFileSync(absolute);
-  const digest = capabilitySha256Of(bytes);
 
-  const now = new Date().toISOString();
-  const envelope: CapabilityEnvelope = {
-    schema_version: 1,
-    capability_id: `cap_${randomUUID().replace(/-/g, "")}`,
-    kind: "source_read",
-    session_id: String(args["session-id"] ?? `host-${randomUUID().slice(0, 8)}`),
-    kb_profile_id: args.profile,
-    resolved_path: absolute,
-    expected_sha256: digest,
-    media_type: mediaType as "text/plain" | "text/markdown" | "application/json",
-    source_metadata: {
-      source_type: sourceType as "file" | "manual" | "url_snapshot" | "research_artifact",
-      captured_at: String(args["captured-at"] ?? now),
-      title,
-      authors,
-    },
-    allowed_operation: "ingest",
-    issued_at: now,
-    expires_at: new Date(Date.now() + expiresHours * 3600 * 1000).toISOString(),
-  };
-  validateEnvelopeCrossField(envelope);
-
-  const store = new CapabilityStore(kbRoot);
-  try {
-    store.register(envelope);
-  } finally {
-    store.close();
-  }
-
-  const regDir = path.join(kbRoot, "capabilities");
-  if (!existsSync(regDir)) {
-    mkdirSync(regDir, { recursive: true, mode: 0o700 });
-    chmodSync(regDir, 0o700);
-  }
-  const regPath = path.join(regDir, `${envelope.capability_id}.json`);
-  writeFileSync(regPath, canonicalJson(envelope), { mode: 0o600 });
-  chmodSync(regPath, 0o600);
+  const envelope = mintSourceCapability({
+    kbRoot,
+    kbProfileId: args.profile,
+    absolutePath: absolute,
+    title,
+    authors,
+    ...(args["source-type"] !== undefined
+      ? {
+          sourceType: String(args["source-type"]) as
+            | "file"
+            | "url_snapshot"
+            | "research_artifact"
+            | "manual",
+        }
+      : {}),
+    ...(args["media-type"] !== undefined
+      ? {
+          mediaType: String(args["media-type"]) as
+            | "text/plain"
+            | "text/markdown"
+            | "application/json",
+        }
+      : {}),
+    ...(args["session-id"] !== undefined ? { sessionId: String(args["session-id"]) } : {}),
+    ...(args["captured-at"] !== undefined ? { capturedAt: String(args["captured-at"]) } : {}),
+    ...(args["expires-hours"] !== undefined ? { expiresHours: Number(args["expires-hours"]) } : {}),
+  });
 
   process.stdout.write(
     JSON.stringify({

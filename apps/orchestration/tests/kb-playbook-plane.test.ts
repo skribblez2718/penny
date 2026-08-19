@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 /**
  * KB playbook ↔ real ingest plane integration (§6.2 step 2).
  *
@@ -14,7 +15,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -23,10 +23,9 @@ import { KnowledgeBasePlaybook } from "../src/playbooks/knowledge-base.js";
 import { defaultKbIngestPlane, resolveKbRoot } from "../src/kb/ingest-plane.js";
 import { initKb } from "../src/kb/workflows.js";
 import { RunArtifactStore } from "../src/kb/run-artifacts.js";
+import { findGateForRun, mintSourceCapability } from "../src/kb/gate.js";
 import { CapabilityStore } from "../src/kb/capabilities.js";
-import { capabilitySha256Of, findGateForRun } from "../src/kb/gate.js";
 import { readSelectedGeneration } from "../src/kb/generations.js";
-import type { CapabilityEnvelope } from "../src/kb/contracts.js";
 import type { Confidence, JsonValue } from "../src/contracts.js";
 
 const PROFILE = "kbp_integration";
@@ -43,43 +42,19 @@ function tmpProject(): string {
 }
 
 /** Mint a source capability the way the host CLI does. */
+/** Mint a source capability through the shared function the CLI uses. */
 function mintSource(kbRoot: string, projectRoot: string, name: string, content: string): string {
   const file = path.join(projectRoot, name);
   writeFileSync(file, content, { mode: 0o600 });
-  const now = new Date();
-  const envelope: CapabilityEnvelope = {
-    schema_version: 1,
-    capability_id: `cap_${randomUUID().replace(/-/g, "")}`,
-    kind: "source_read",
-    session_id: `host-${randomUUID().slice(0, 8)}`,
-    kb_profile_id: PROFILE,
-    resolved_path: file,
-    expected_sha256: capabilitySha256Of(Buffer.from(content, "utf8")),
-    media_type: "text/markdown",
-    source_metadata: {
-      source_type: "manual",
-      captured_at: now.toISOString(),
-      title: `Source ${name}`,
-      authors: ["P. Operator"],
-    },
-    allowed_operation: "ingest",
-    issued_at: now.toISOString(),
-    expires_at: new Date(now.getTime() + 3_600_000).toISOString(),
-  };
-  const store = new CapabilityStore(kbRoot);
-  try {
-    store.register(envelope);
-  } finally {
-    store.close();
-  }
-  // The host CLI also writes the envelope into the capability registry; the
-  // approval path re-resolves sources from there to re-verify digests.
-  const regDir = path.join(kbRoot, "capabilities");
-  mkdirSync(regDir, { recursive: true, mode: 0o700 });
-  writeFileSync(path.join(regDir, `${envelope.capability_id}.json`), JSON.stringify(envelope), {
-    mode: 0o600,
-  });
-  return envelope.capability_id;
+  return mintSourceCapability({
+    kbRoot,
+    kbProfileId: PROFILE,
+    absolutePath: file,
+    title: `Source ${name}`,
+    authors: ["P. Operator"],
+    mediaType: "text/markdown",
+    expiresHours: 1,
+  }).capability_id;
 }
 
 interface Fixture {

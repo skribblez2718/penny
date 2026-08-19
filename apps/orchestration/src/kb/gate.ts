@@ -441,6 +441,85 @@ export function capabilitySha256Of(bytes: Buffer): string {
   return sha256Hex(bytes.toString("utf8"));
 }
 
+/** Options for minting one source-read capability envelope. */
+export interface MintSourceCapabilityOptions {
+  readonly kbRoot: string;
+  readonly kbProfileId: string;
+  readonly absolutePath: string;
+  readonly title: string;
+  readonly authors: readonly string[];
+  readonly sourceType?: "file" | "url_snapshot" | "research_artifact" | "manual";
+  readonly mediaType?: "text/plain" | "text/markdown" | "application/json";
+  readonly sessionId?: string;
+  readonly capturedAt?: string;
+  readonly expiresHours?: number;
+}
+
+/**
+ * Mint a source-read capability — the single source of truth for the CLI and any
+ * test helper.
+ *
+ * Validates the file (exists, regular, non-symlink), builds the envelope, validates
+ * its cross-field contract, registers the lease in the capability store, and writes
+ * the envelope to the registry the approval path re-resolves from.
+ */
+export function mintSourceCapability(options: MintSourceCapabilityOptions): CapabilityEnvelope {
+  const { kbRoot, kbProfileId, absolutePath, title, authors } = options;
+  if (title.length === 0) throw new GateStorageError("capability title is required");
+  if (authors.length === 0) throw new GateStorageError("capability requires at least one author");
+
+  const sourceType = options.sourceType ?? "manual";
+  const mediaType = options.mediaType ?? "text/plain";
+  const expiresHours = options.expiresHours ?? 72;
+  if (!Number.isFinite(expiresHours) || expiresHours <= 0) {
+    throw new GateStorageError("expires-hours must be > 0");
+  }
+
+  assertRegularFile(absolutePath);
+  const bytes = readFileSync(absolutePath);
+  const digest = capabilitySha256Of(bytes);
+
+  const now = new Date().toISOString();
+  const envelope: CapabilityEnvelope = {
+    schema_version: 1,
+    capability_id: `cap_${randomUUID().replace(/-/g, "")}`,
+    kind: "source_read",
+    session_id: options.sessionId ?? `host-${randomUUID().slice(0, 8)}`,
+    kb_profile_id: kbProfileId,
+    resolved_path: absolutePath,
+    expected_sha256: digest,
+    media_type: mediaType,
+    source_metadata: {
+      source_type: sourceType,
+      captured_at: options.capturedAt ?? now,
+      title,
+      authors: [...authors],
+    },
+    allowed_operation: "ingest",
+    issued_at: now,
+    expires_at: new Date(Date.now() + expiresHours * 3600 * 1000).toISOString(),
+  };
+  validateEnvelopeCrossField(envelope);
+
+  const store = new CapabilityStore(kbRoot);
+  try {
+    store.register(envelope);
+  } finally {
+    store.close();
+  }
+
+  const regDir = path.join(kbRoot, "capabilities");
+  if (!existsSync(regDir)) {
+    mkdirSync(regDir, { recursive: true, mode: 0o700 });
+    chmodSync(regDir, 0o700);
+  }
+  const regPath = path.join(regDir, `${envelope.capability_id}.json`);
+  writeFileSync(regPath, canonicalJson(envelope), { mode: 0o600 });
+  chmodSync(regPath, 0o600);
+
+  return envelope;
+}
+
 /**
  * Resolve a set of minted capabilities to admitted sources, verifying each
  * file's digest against its envelope. Refuses on any drift.
