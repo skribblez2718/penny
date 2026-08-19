@@ -177,7 +177,9 @@ describe("KB §5.5 page revision frontmatter", () => {
       derived_from: [],
       related_page_ids: [],
     };
-    expect(() => validateKbContract(PageRevisionFrontmatterSchema, fm, "frontmatter")).not.toThrow();
+    expect(() =>
+      validateKbContract(PageRevisionFrontmatterSchema, fm, "frontmatter")
+    ).not.toThrow();
   });
 
   it("rejects an unknown page kind", () => {

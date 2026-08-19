@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "fixture_id": "kb-retrieval-v1",
+  "corpus": [
+    {
+      "frontmatter": {
+        "schema_version": 1,
+        "page_id": "page_sqlite",
+        "revision_id": "rev_1",
+        "kind": "concept",
+        "title": "node:sqlite unflagging",
+        "summary": "When node:sqlite was unflagged from behind the experimental flag.",
+        "authority": "advisory",
+        "lifecycle": "validated",
+        "created_at": "2026-01-01T00:00:00Z",
+        "derived_from": [],
+        "related_page_ids": []
+      },
+      "markdown": "## Synthesis\nnode:sqlite was unflagged in v23.4.0 mainline and v22.13.0 LTS.\n\n## Evidence\nnodejs.org changelogs.\n\n## Tensions and unknowns\nNone.\n\n## Related\nNone.\n",
+      "claims": {
+        "schema_version": 1,
+        "page_id": "page_sqlite",
+        "revision_id": "rev_1",
+        "claims": [
+          {
+            "claim_id": "clm_1",
+            "text": "node:sqlite unflagged in v23.4.0",
+            "kind": "fact",
+            "state": "supported",
+            "confidence": "CERTAIN",
+            "evidence": [],
+            "contradicts_claim_ids": [],
+            "canonical_verification_refs": []
+          }
+        ]
+      }
+    },
+    {
+      "frontmatter": {
+        "schema_version": 1,
+        "page_id": "page_typebox",
+        "revision_id": "rev_1",
+        "kind": "concept",
+        "title": "TypeBox schema validation",
+        "summary": "How TypeBox schemas validate closed contracts.",
+        "authority": "advisory",
+        "lifecycle": "validated",
+        "created_at": "2026-01-01T00:00:00Z",
+        "derived_from": [],
+        "related_page_ids": []
+      },
+      "markdown": "## Synthesis\nTypeBox uses Value.Check for runtime validation and Static for type derivation.\n\n## Evidence\ntypebox package docs.\n\n## Tensions and unknowns\nNone.\n\n## Related\nNone.\n",
+      "claims": {
+        "schema_version": 1,
+        "page_id": "page_typebox",
+        "revision_id": "rev_1",
+        "claims": [
+          {
+            "claim_id": "clm_2",
+            "text": "TypeBox provides Value.Check and Static",
+            "kind": "fact",
+            "state": "supported",
+            "confidence": "CERTAIN",
+            "evidence": [],
+            "contradicts_claim_ids": [],
+            "canonical_verification_refs": []
+          }
+        ]
+      }
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "sqlite-query",
+      "query": "When was node:sqlite unflagged?",
+      "expected_relevant": [
+        {
+          "page_id": "page_sqlite",
+          "revision_id": "rev_1"
+        }
+      ],
+      "expected_contradictions": [],
+      "supported_citations": [
+        {
+          "kind": "page",
+          "page_id": "page_sqlite",
+          "revision_id": "rev_1"
+        }
+      ]
+    },
+    {
+      "case_id": "typebox-query",
+      "query": "How does TypeBox validate schemas?",
+      "expected_relevant": [
+        {
+          "page_id": "page_typebox",
+          "revision_id": "rev_1"
+        }
+      ],
+      "expected_contradictions": [],
+      "supported_citations": [
+        {
+          "kind": "page",
+          "page_id": "page_typebox",
+          "revision_id": "rev_1"
+        }
+      ]
+    },
+    {
+      "case_id": "cross-query",
+      "query": "What validation tools does the orchestration use?",
+      "expected_relevant": [
+        {
+          "page_id": "page_typebox",
+          "revision_id": "rev_1"
+        },
+        {
+          "page_id": "page_sqlite",
+          "revision_id": "rev_1"
+        }
+      ],
+      "expected_contradictions": [],
+      "supported_citations": [
+        {
+          "kind": "page",
+          "page_id": "page_typebox",
+          "revision_id": "rev_1"
+        }
+      ]
+    }
+  ]
+}

@@ -15,7 +15,11 @@ import { Value } from "typebox/value";
 // ── Shared scalars ──────────────────────────────────────────────────────────
 
 /** Exactly 64 lowercase hexadecimal characters. */
-export const Sha256HexSchema = Type.String({ pattern: /^[0-9a-f]{64}$/.source, minLength: 64, maxLength: 64 });
+export const Sha256HexSchema = Type.String({
+  pattern: /^[0-9a-f]{64}$/.source,
+  minLength: 64,
+  maxLength: 64,
+});
 export type Sha256Hex = Static<typeof Sha256HexSchema>;
 
 /** 1–128 UTF-8 bytes matching [A-Za-z0-9][A-Za-z0-9._:-]{0,127} — no /, \, whitespace, or .. */
@@ -338,11 +342,7 @@ export const ConflictRecordSchema = Type.Object(
         { additionalProperties: false }
       )
     ),
-    state: Type.Union([
-      Type.Literal("open"),
-      Type.Literal("resolved"),
-      Type.Literal("superseded"),
-    ]),
+    state: Type.Union([Type.Literal("open"), Type.Literal("resolved"), Type.Literal("superseded")]),
     summary: Type.String({ minLength: 1, maxLength: 4_096 }),
     evidence_refs: Type.Array(Type.String({ maxLength: 128 })),
     supersedes_conflict_record_id: Type.Optional(OpaqueIdSchema),

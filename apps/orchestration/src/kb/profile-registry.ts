@@ -68,10 +68,7 @@ export function loadProfileRegistry(registryPath: string): KbProfileRegistry {
  * Returns `undefined` when the ID is not present — the caller decides whether
  * that is a refusal or a creation opportunity.
  */
-export function findProfile(
-  registry: KbProfileRegistry,
-  profileId: string
-): KbProfile | undefined {
+export function findProfile(registry: KbProfileRegistry, profileId: string): KbProfile | undefined {
   return registry.profiles.find((p) => p.kb_profile_id === profileId);
 }
 
