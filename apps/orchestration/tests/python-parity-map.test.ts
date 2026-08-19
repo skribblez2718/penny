@@ -6,7 +6,7 @@
  * the collected suite with no gaps.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -20,14 +20,24 @@ const map = JSON.parse(readFileSync(mapPath, "utf8")) as {
   schema_version: number;
   total_node_ids: number;
   dispositions: Record<string, number>;
+  files: Record<string, { count: number; disposition: string; behavior_owner: string }>;
   mappings: Array<{
     node_id: string;
     file: string;
     function: string;
+    behavior_owner: string;
     disposition: string;
     ts_evidence_id: string;
+    justification: string;
   }>;
 };
+
+/** TS test files that may be cited as parity evidence. */
+const TS_TEST_FILES = new Set(
+  readdirSync(here)
+    .filter((f) => f.endsWith(".test.ts"))
+    .map((f) => f)
+);
 
 // Collect current Python node IDs (may be expensive; only run when explicitly invoked).
 function collectPythonNodeIds(): string[] {
@@ -72,10 +82,37 @@ describe("G4 python-test-parity-map", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("every mapping has a non-empty ts_evidence_id", () => {
+  it("every mapping has a non-empty ts_evidence_id, behavior_owner, and justification", () => {
     for (const entry of map.mappings) {
       expect(entry.ts_evidence_id.length, `${entry.node_id}: empty evidence`).toBeGreaterThan(0);
+      expect(entry.behavior_owner.length, `${entry.node_id}: no behavior owner`).toBeGreaterThan(0);
+      expect(entry.justification.length, `${entry.node_id}: no justification`).toBeGreaterThan(20);
     }
+  });
+
+  it("every 'parity' entry cites a TS test file that actually exists", () => {
+    // Guards the failure mode where a disposition claims coverage that was never written.
+    for (const entry of map.mappings.filter((m) => m.disposition === "parity")) {
+      const cited = [...entry.ts_evidence_id.matchAll(/([a-z0-9-]+\.test\.ts)/g)].map((m) => m[1]);
+      expect(cited.length, `${entry.node_id}: parity cites no .test.ts file`).toBeGreaterThan(0);
+      for (const file of cited) {
+        expect(TS_TEST_FILES.has(file), `${entry.node_id}: cites missing TS file '${file}'`).toBe(
+          true
+        );
+      }
+    }
+  });
+
+  it("every 'retained' entry states an explicit non-ported rationale", () => {
+    for (const entry of map.mappings.filter((m) => m.disposition === "retained")) {
+      expect(entry.ts_evidence_id, `${entry.node_id}: retained must be marked n/a`).toMatch(
+        /^n\/a/
+      );
+    }
+  });
+
+  it("no entry is retired at this gate (retirement belongs to Phase 10)", () => {
+    expect(map.dispositions.retired).toBe(0);
   });
 
   it("disposition counts add up", () => {
