@@ -64,17 +64,17 @@ const RESEARCH_REGISTRATION: PlaybookRegistrationV1 = {
 };
 
 /**
- * The KB playbook registration — the second registry entry, added at G8.
+ * The KB playbook registration — the second registry entry, authorized by the G6
+ * operator decision of 2026-08-18.
  *
- * G6 has passed (operator decision 2026-08-18), so stateful KB work is unblocked.
- * The playbook is a stub; the actual workflow logic lives in `kb/workflows.ts`
- * and is invoked by the adapter's `knowledge_base` tool. This registration proves
- * the registry can hold two playbooks and the engine can dispatch to either.
+ * It constructs through the same options as research (including the artifact
+ * revision lookup), because it is a real state machine on the engine's seams rather
+ * than a name in a map.
  */
 const KNOWLEDGE_BASE_REGISTRATION: PlaybookRegistrationV1 = {
   name: "knowledge-base",
   contract: KNOWLEDGE_BASE_SKILL_CONTRACT,
-  construct: () => new KnowledgeBasePlaybook(),
+  construct: (options) => new KnowledgeBasePlaybook(options.artifactRevisions),
 };
 
 /**

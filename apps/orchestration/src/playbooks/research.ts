@@ -11,6 +11,7 @@ import type {
   PlaybookCoreV1,
 } from "./playbook.js";
 import { positiveIntegerConstraint, RunContext, type PendingBranch } from "../context.js";
+import { buildOutputArtifactMetadata } from "./artifact-metadata.js";
 import {
   type ArtifactRef,
   type Confidence,
@@ -300,60 +301,17 @@ function outputArtifactMetadata(
   upstreamRefs: readonly ArtifactRef[],
   revisions?: ArtifactRevisionLookup
 ): OutputArtifactMetadata {
-  const operationId = `agent-operation:${sha256(
-    canonicalJson({
-      branch_id: branchId,
-      kind: "agent-output",
-      run_id: context.identity.run_id,
-      state,
-    })
-  )}`;
-  const selected = context.selectedArtifacts
-    .filter(
-      (ref) => ref.phase === state && ref.branch_id === branchId && ref.operation_id === operationId
-    )
-    .sort((left, right) => right.version - left.version)[0];
-  const selectedVersion = selected?.version ?? 0;
-  const storedVersion = revisions
-    ? revisions.lastVersion(context.identity.run_id, state, branchId, "agent-output", operationId)
-    : 0;
-  // The immutable manifest is the revision ledger: it also contains attempts
-  // persisted by a worker that was interrupted before the engine accepted the
-  // result. Resolve past the ledger so a later attempt on the same output slot
-  // continues the chain instead of diverging from the orphaned revision.
-  const version = Math.max(selectedVersion, storedVersion) + 1;
-  let parent: ArtifactRef | null = null;
-  if (version > 1) {
-    parent =
-      revisions?.refFor(
-        context.identity.run_id,
-        state,
-        branchId,
-        "agent-output",
-        operationId,
-        version - 1
-      ) ??
-      (version - 1 === selectedVersion ? (selected ?? null) : null);
-    if (parent === null) {
-      throw new Error(
-        `revision chain for ${operationId} is broken at v${version}: no v${version - 1} in the ledger`
-      );
-    }
-  }
-  return {
-    schema_version: 1,
-    run_id: context.identity.run_id,
+  // Shared with every other playbook: the revision-chain rule has one
+  // implementation, not one per tenant.
+  return buildOutputArtifactMetadata({
+    context,
     phase: state,
-    branch_id: branchId,
-    kind: "agent-output",
-    operation_id: operationId,
-    version,
-    producer: `agent:${agent}`,
-    consumer_scope: consumerScope(state),
-    media_type: "text/plain; charset=utf-8",
-    parent_ref: parent,
-    upstream_refs: [...upstreamRefs],
-  };
+    agent,
+    branchId,
+    consumerScope: consumerScope(state),
+    upstreamRefs,
+    ...(revisions ? { revisions } : {}),
+  });
 }
 
 function directive<T>(value: T): Directive {
