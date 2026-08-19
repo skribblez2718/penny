@@ -14,6 +14,7 @@
  *   gate-list         List content-review gates for a profile (safe projection)
  *   approve           Approve a pending gate (host decision; publishes)
  *   deny              Deny a pending gate (host decision; publishes nothing)
+ *   refine            Request a refinement round (host decision; re-enters compose, re-gates)
  *
  * Conventions:
  *   --project-root  Defaults to cwd. KB root = <project-root>/.penny/kb/<profile>.
@@ -250,6 +251,39 @@ function cmdDeny(args: Args): void {
   );
 }
 
+function cmdRefine(args: Args): void {
+  const { gate } = resolveGate(args);
+  // refine is an engine path: the run's own machine re-enters compose, re-lints,
+  // re-verifies, and re-offers the gate. Non-engine (legacy) gates have no
+  // refinement path, and we refuse rather than guess one.
+  const directive = decisionViaEngine(args.projectRoot, gate.run_id, "refine");
+  if (directive === undefined) {
+    throw new Error("refine applies only to engine-driven runs; this gate is not owned by an engine run");
+  }
+  const d = directive as { action: string; gate_id?: string; status?: string };
+  if (d.action === "await_user") {
+    // The refinement round completed and the re-reviewed candidate is gated again.
+    process.stdout.write(
+      JSON.stringify(
+        {
+          schema_version: 1,
+          status: "awaiting_user",
+          gate_id: d.gate_id ?? null,
+          run_id: gate.run_id,
+          note: "refinement round executed; the re-reviewed candidate is pending at the gate again (use gate-list to inspect)",
+        },
+        null,
+        2
+      ) + "\n"
+    );
+    return;
+  }
+  // The refinement round hit a budget limit or the run terminated; project safely.
+  process.stdout.write(
+    JSON.stringify(terminalProjection(directive, { run_id: gate.run_id }), null, 2) + "\n"
+  );
+}
+
 /**
  * The canonical decision path for engine-driven runs (§5.12 "host-authenticated
  * callback"): the decision is a gate response on the run; the run's own state
@@ -260,7 +294,7 @@ function cmdDeny(args: Args): void {
 function decisionViaEngine(
   projectRoot: string,
   gateRunId: string,
-  response: "approve" | "deny"
+  response: "approve" | "deny" | "refine"
 ): Directive | undefined {
   const config = loadRuntimeConfig(projectRoot, process.env);
   const checkpointer = new Checkpointer(config.dbPath);
@@ -320,6 +354,7 @@ function main(argv: string[]): void {
         "  gate-list",
         "  approve [--run RUN_ID]",
         "  deny [--run RUN_ID]",
+        "  refine [--run RUN_ID]",
         "",
       ].join("\n")
     );
@@ -343,6 +378,9 @@ function main(argv: string[]): void {
         break;
       case "deny":
         cmdDeny(args);
+        break;
+      case "refine":
+        cmdRefine(args);
         break;
       default:
         fail(`unknown command: ${cmd}`);

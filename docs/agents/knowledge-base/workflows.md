@@ -66,10 +66,12 @@ I/O, all-or-none, before any agent read), then the four agent phases (echo → s
 vera) each producing a typed artifact on the run's content plane, then the run stops at the human
 content-review gate (`await_user`).
 
-The gate decision is a **host-authenticated response on the run**: `penny-kb-gate approve|deny`
+The gate decision is a **host-authenticated response on the run**: `penny-kb-gate approve|deny|refine`
 reads the run's pending gate (challenge and all) and submits it through the engine's respond
-protocol. The run's own state machine performs the publication (or the honest denial) behind the
-decision, so the terminal state can never disagree with what happened on disk. The model-facing
+protocol. The run's own state machine performs the publication (or the honest denial, or the
+bounded refinement re-entry into compose) behind the decision, so the terminal or re-gated state
+can never disagree with what happened on disk. `refine` re-enters compose, re-lints and re-verifies, and
+re-offers the gate; it is a host decision exactly like approve and deny. The model-facing
 tool never carries an approval decision — it only starts runs, re-presents the pending gate, and
 returns safe projections (counts and opaque IDs, never bodies, paths, challenges, or digests).
 
