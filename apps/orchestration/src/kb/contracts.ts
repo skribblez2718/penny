@@ -446,6 +446,8 @@ export function validateKbContract<T extends TSchema>(
   throw new KbContractError(`${label} failed schema validation`, issues);
 }
 
+import { createHash } from "node:crypto";
+
 /** RFC 8785 JCS canonical JSON (sorted keys, no whitespace). */
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -457,6 +459,5 @@ export function canonicalJson(value: unknown): string {
 }
 
 export function sha256Hex(value: string): Sha256Hex {
-  const { createHash } = require("node:crypto") as typeof import("node:crypto");
   return createHash("sha256").update(value, "utf8").digest("hex") as Sha256Hex;
 }

@@ -2728,45 +2728,54 @@ export default function skillExtension(pi: ExtensionAPI): void {
     label: "Knowledge Base",
     description: [
       "Private advisory knowledge-base workflows.",
-      "Use when the operator explicitly asks to initialize, ingest, query, save, lint,",
+      "Use when the operator explicitly asks to initialize, ingest approved sources, query, save, lint,",
       "inspect, resume, or prepare promotion for a configured KB profile.",
       "Do not use for canonical current-state lookup without verification, automatic",
       "research ingestion, arbitrary filesystem access, or unapproved canonical writes.",
     ].join(" "),
     execute: async (rawParams: Record<string, unknown>) => {
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              schema_version: 1,
-              action: rawParams["action"] ?? "unknown",
-              status: "disabled",
-              met: false,
-              ids: [],
-              counts: {},
-              artifacts: [],
-              evidence: [],
-              warnings: [
-                "Knowledge-base workflows are not yet enabled.",
-                "Stateful KB implementation requires G6 (research canary) and G7 (KB core).",
-                "This tool is registered but disabled until those gates pass.",
-              ],
-              unresolved: [],
-              next: "none",
-            }),
-          },
-        ],
-        details: {
-          schema_version: 1,
-          action: rawParams["action"] ?? "unknown",
-          status: "disabled",
-          met: false,
-          next: "none",
-        },
-      };
+      const action = String(rawParams["action"] ?? "");
+      const profileId = String(rawParams["kb_profile_id"] ?? "");
+      if (profileId.length === 0) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ schema_version: 1, action, status: "refused", met: false, warnings: ["kb_profile_id is required"], next: "none" }) }],
+          details: { status: "refused", met: false, next: "none" },
+        };
+      }
+      const runId = `kb-${Date.now()}-${randomUUID().slice(0, 8)}`;
+      const projectRoot = ctx.cwd;
+      const kbRoot = path.join(projectRoot, ".penny", "kb", profileId);
+      const orch = await import("@penny/orchestration/source");
+      const wfCtx = { kbRoot, profileId, runId };
+      let kbResult;
+      switch (action) {
+        case "init": {
+          kbResult = orch.initKb(wfCtx, String(rawParams["title"] ?? "Advisory KB"));
+          break;
+        }
+        case "query": {
+          kbResult = orch.queryKb(wfCtx, String(rawParams["query"] ?? ""));
+          break;
+        }
+        case "lint": {
+          kbResult = orch.lintKb(wfCtx);
+          break;
+        }
+        case "status": {
+          kbResult = orch.statusKb(wfCtx);
+          break;
+        }
+        default:
+          kbResult = {
+            schema_version: 1, action, run_id: runId, status: "refused", met: false,
+            ids: [], counts: {}, artifacts: [], evidence: [],
+            warnings: [`action '${action}' is not yet implemented`],
+            unresolved: [], next: "none",
+          };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(kbResult) }], details: kbResult };
     },
-  });
+  });;
 
   pi.registerTool({
     name: "skill",

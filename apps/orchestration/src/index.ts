@@ -7,6 +7,7 @@ export * from "./engine.js";
 export * from "./loans.js";
 export * from "./model-client.js";
 export * from "./observability.js";
+export * from "./kb/workflows.js";
 export * from "./playbooks/playbook.js";
 export * from "./playbooks/registry.js";
 export * from "./playbooks/research.js";
