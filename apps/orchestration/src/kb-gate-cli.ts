@@ -24,6 +24,10 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 
+import { Checkpointer } from "./checkpointer.js";
+import { OrchestrationEngine } from "./engine.js";
+import { loadRuntimeConfig } from "./config.js";
+import type { Directive, JsonValue } from "./contracts.js";
 import { envelopeDigest, CapabilityStore } from "./kb/capabilities.js";
 import {
   approveGate,
@@ -191,6 +195,17 @@ function cmdApprove(args: Args): void {
   if (gate.source_capability_ids.length === 0) {
     throw new Error("gate is not bound to source capabilities; refusing blind approval");
   }
+  // Engine-driven run: the canonical path terminates the run behind the publish
+  // (the gate decision is the run's gate response, and the run's state machine
+  // performs the publication behind it — one consistent outcome).
+  const engineTerminal = decisionViaEngine(args.projectRoot, gate.run_id, "approve");
+  if (engineTerminal !== undefined) {
+    process.stdout.write(
+      JSON.stringify(terminalProjection(engineTerminal, { run_id: gate.run_id }), null, 2) + "\n"
+    );
+    return;
+  }
+  // Legacy gate (no engine run owns it, e.g. pre-refactor): publish directly.
   const sources = sourcesFromCapabilities(kbRoot, gate.source_capability_ids);
   const { gate: updatedGate, result } = approveGate(kbRoot, sources, gate.run_id);
   process.stdout.write(
@@ -212,6 +227,13 @@ function cmdApprove(args: Args): void {
 
 function cmdDeny(args: Args): void {
   const { kbRoot, gate } = resolveGate(args);
+  const engineTerminal = decisionViaEngine(args.projectRoot, gate.run_id, "deny");
+  if (engineTerminal !== undefined) {
+    process.stdout.write(
+      JSON.stringify(terminalProjection(engineTerminal, { run_id: gate.run_id }), null, 2) + "\n"
+    );
+    return;
+  }
   const denied = denyGate(kbRoot, gate.run_id);
   process.stdout.write(
     JSON.stringify(
@@ -226,6 +248,62 @@ function cmdDeny(args: Args): void {
       2
     ) + "\n"
   );
+}
+
+/**
+ * The canonical decision path for engine-driven runs (§5.12 "host-authenticated
+ * callback"): the decision is a gate response on the run; the run's own state
+ * machine performs the publish/denial behind it, so the run's terminal state
+ * can never disagree with what happened on disk. Returns undefined when no
+ * engine run owns this gate, and the caller uses the direct-plane fallback.
+ */
+function decisionViaEngine(
+  projectRoot: string,
+  gateRunId: string,
+  response: "approve" | "deny"
+): Directive | undefined {
+  const config = loadRuntimeConfig(projectRoot, process.env);
+  const checkpointer = new Checkpointer(config.dbPath);
+  try {
+    const run = checkpointer.loadRunById(gateRunId);
+    const pending = run?.pendingDirective;
+    if (run === undefined || run.status !== "awaiting_user" || pending?.action !== "await_user") {
+      return undefined;
+    }
+    const engine = new OrchestrationEngine(checkpointer, {
+      projectRoot: config.projectRoot,
+      maxSteps: config.maxSteps,
+      playbookName: "knowledge-base",
+    });
+    return engine.handle({
+      schema_version: 2,
+      action: "respond",
+      identity: run.identity,
+      gate_id: pending.gate_id,
+      challenge: pending.challenge,
+      response,
+    });
+  } finally {
+    checkpointer.close();
+  }
+}
+
+/** Safe terminal projection for stdout: status, generation id, counts — no bodies. */
+function terminalProjection(
+  terminal: Directive,
+  fallback: Record<string, JsonValue>
+): Record<string, JsonValue> {
+  const result = (terminal as { result?: Record<string, JsonValue> }).result ?? {};
+  const counts = (result["published_counts"] ?? {}) as Record<string, JsonValue>;
+  const generationId = String(result["published_generation_id"] ?? "");
+  return {
+    schema_version: 1,
+    gate_status: String((terminal as { status?: string }).status ?? String(terminal.action)),
+    published: terminal.action === "complete",
+    published_generation_id: generationId.length > 0 ? generationId : null,
+    counts,
+    ...fallback,
+  };
 }
 
 // ── main ────────────────────────────────────────────────────────────────────

@@ -57,6 +57,32 @@ redelivered; a new derived delivery needs a new invocation and a new grant.
 
 `status` and `resume` are profile-safe control operations that expose no root and no body.
 
+## Execution architecture (TypeScript path)
+
+The agent-driven flows run on the orchestration engine, not on standalone workflow calls: the
+`knowledge_base` tool starts an engine run named `knowledge-base`, and the KB playbook drives the
+state machine — `initialize` claims the source capabilities and admits the source objects (host
+I/O, all-or-none, before any agent read), then the four agent phases (echo → synthia → carren →
+vera) each producing a typed artifact on the run's content plane, then the run stops at the human
+content-review gate (`await_user`).
+
+The gate decision is a **host-authenticated response on the run**: `penny-kb-gate approve|deny`
+reads the run's pending gate (challenge and all) and submits it through the engine's respond
+protocol. The run's own state machine performs the publication (or the honest denial) behind the
+decision, so the terminal state can never disagree with what happened on disk. The model-facing
+tool never carries an approval decision — it only starts runs, re-presents the pending gate, and
+returns safe projections (counts and opaque IDs, never bodies, paths, challenges, or digests).
+
+The deterministic host I/O the playbook performs between phases (claim, admit, seal, persist the
+gate, approve, deny) is behind one interface — the KB ingest plane — so the state machine stays
+testable without a filesystem and the KB's privacy rules stay in the KB modules. The agent runner
+is injectable behind the worker client, which is what lets the full pipeline be tested with
+deterministic bodies and no model.
+
+The pure workflow functions (`initKb`, `ingestKb`, `queryKb`, …) remain the shared canonical
+machines: the plane's approval path publishes through them, and deterministic surfaces (`init`,
+`status`, the gate CLI's listings) call them directly without an engine run.
+
 ## The content plane and child tools
 
 Private bodies stay in the host-owned content plane. A child role never receives a filesystem path

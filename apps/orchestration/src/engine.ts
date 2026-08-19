@@ -47,6 +47,14 @@ export interface EngineOptions {
    * tests inject a double to prove multi-playbook dispatch without activating a skill.
    */
   readonly playbookRegistry?: PlaybookRegistryV1;
+  /**
+   * Which registered playbook this engine instance drives. Defaults to the sole
+   * production playbook (research). The KB skill drives the engine with its own
+   * registration ('knowledge-base'); each engine instance still owns exactly one
+   * playbook, so the single-owner invariants (contract, state machine, receipts)
+   * are unchanged.
+   */
+  readonly playbookName?: string;
 }
 
 const CONFIDENCE_RANK: Record<Confidence, number> = {
@@ -96,12 +104,11 @@ export class OrchestrationEngine {
     options: EngineOptions
   ) {
     this.registry = options.playbookRegistry ?? PLAYBOOK_REGISTRY;
+    const playbookName = options.playbookName ?? SOLE_PRODUCTION_PLAYBOOK;
     // Construct through the registry. The engine imports no concrete playbook class.
-    const registration = resolvePlaybook(SOLE_PRODUCTION_PLAYBOOK, this.registry);
+    const registration = resolvePlaybook(playbookName, this.registry);
     if (registration === undefined) {
-      throw new Error(
-        `playbook '${SOLE_PRODUCTION_PLAYBOOK}' is not registered in the supplied registry`
-      );
+      throw new Error(`playbook '${playbookName}' is not registered in the supplied registry`);
     }
     // W3: the contract is validated before the playbook is constructed. An invalid
     // contract fails closed -- it is authority metadata, not documentation.

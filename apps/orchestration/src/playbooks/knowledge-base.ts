@@ -242,18 +242,27 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
       // different action would publish under the wrong contract.
       throw new Error(`KB playbook action '${action}' is not implemented yet`);
     }
-    const sourceIds = stringList(context.constraints.source_ids as JsonValue);
-    if (sourceIds.length === 0) {
+    const sourceCapabilityIds = stringList(context.constraints.source_capability_ids as JsonValue);
+    if (sourceCapabilityIds.length === 0) {
       throw new Error("KB ingest requires at least one admitted source capability");
     }
     context.playbookData.action = action;
-    context.playbookData.source_ids = sourceIds as unknown as JsonValue;
+    context.playbookData.source_ids = sourceCapabilityIds as unknown as JsonValue;
     context.playbookData.profile_id = String(context.constraints.kb_profile_id ?? "");
+    const kbRoot = this.kbRoot(context);
+    const runId = context.identity.run_id;
     // All-or-none, before any agent reads a source.
     this.plane.claim({
-      kbRoot: this.kbRoot(context),
-      capabilityIds: sourceIds,
-      runId: context.identity.run_id,
+      kbRoot,
+      capabilityIds: sourceCapabilityIds,
+      runId,
+    });
+    // Admit the source objects before any agent work: the approval path publishes
+    // what this admitted, so the agents must see exactly what will publish.
+    this.plane.admit({
+      kbRoot,
+      capabilityIds: sourceCapabilityIds,
+      runId,
     });
     context.transition("ingest");
     return this.dispatch(context);

@@ -45,7 +45,7 @@ function newContext(constraints: Record<string, JsonValue> = {}): RunContext {
     constraints: {
       action: "ingest",
       kb_profile_id: "kbp_test",
-      source_ids: ["cap_a", "cap_b"],
+      source_capability_ids: ["cap_a", "cap_b"],
       max_iterations: 3,
       ...constraints,
     },
@@ -101,6 +101,9 @@ function fakePlane(calls: FakePlaneCalls) {
   return {
     claim(i: { runId: string; capabilityIds: readonly string[] }) {
       calls.claims.push(i.runId);
+    },
+    admit() {
+      // Deterministic host step; this test asserts claim→seal→gate ordering.
     },
     seal(i: { runId: string; artifactIds: readonly string[] }) {
       calls.seals.push([...i.artifactIds]);

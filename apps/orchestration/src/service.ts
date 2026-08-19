@@ -10,10 +10,21 @@ import { OrchestrationRunner, WorkerExecutor } from "./worker.js";
 export interface OrchestrationServiceOptions {
   readonly projectRoot: string;
   readonly env?: NodeJS.ProcessEnv;
+  /**
+   * The `ModelClient` the worker executor drives. Research passes the default
+   * (or omits it); KB passes a `KbWorkerClient` with the §5.8 private-reader
+   * posture. Since each service instance owns exactly one engine/playbook, the
+   * right client is a caller decision, not a runtime dispatch.
+   */
   readonly modelClient?: ModelClient;
   readonly dispatchMode?: () => string | undefined;
   /** Owner-supplied worker extension factories (e.g. worker-read memory). Not a tool list. */
   readonly workerExtensions?: readonly InlineExtension[];
+  /**
+   * Which registered playbook this service drives ('knowledge-base' for the KB
+   * skill). Defaults to the sole production playbook (research).
+   */
+  readonly playbookName?: string;
 }
 
 export class OrchestrationService implements Disposable {
@@ -35,6 +46,7 @@ export class OrchestrationService implements Disposable {
       maxSteps: this.config.maxSteps,
       artifactRevisions: this.artifacts,
       ...(options.dispatchMode ? { dispatchMode: options.dispatchMode } : {}),
+      ...(options.playbookName ? { playbookName: options.playbookName } : {}),
     });
     const client =
       options.modelClient ??
@@ -47,6 +59,10 @@ export class OrchestrationService implements Disposable {
       parallelConcurrency: this.config.parallelConcurrency,
       workerTimeoutMs: this.config.workerTimeoutMs,
     });
+    // The workers sign receipts with the engine's authority so the engine can
+    // verify them. Without this wiring, every agent-driven run fails open at the
+    // receipt gate.
+    this.workers.setReceiptAuthority(this.engine.receiptAuthority);
     this.runner = new OrchestrationRunner(this.engine, this.workers);
   }
 

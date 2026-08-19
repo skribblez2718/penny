@@ -2743,7 +2743,9 @@ export default function skillExtension(pi: ExtensionAPI): void {
         };
       }
       const runId = `kb-${Date.now()}-${randomUUID().slice(0, 8)}`;
-      const projectRoot = ctx.cwd;
+      // Module scope: the extension root is the operator's project (the pi
+      // process cwd), never an injected variable.
+      const projectRoot = process.cwd();
       const kbRoot = path.join(projectRoot, ".penny", "kb", profileId);
       const orch = await import("@penny/orchestration/source");
       const wfCtx = { kbRoot, profileId, runId };
@@ -2776,29 +2778,123 @@ export default function skillExtension(pi: ExtensionAPI): void {
             };
             break;
           }
-          // Model policy: production runs each agent on its SSOT-declared model;
-          // an explicit 'model' parameter is a test-only override.
-          const client = new orch.KbModelClient({
+          // Engine-driven ingest (§6.2 step 4). The KB playbook is the run's state
+          // machine: initialize claims + admits the sources (host I/O), four agent
+          // phases produce and seal their typed artifacts, and the run stops at the
+          // human content-review gate. Approval/denial is a HOST decision that
+          // reaches the KB through `penny-kb-gate`, never through this tool.
+          const goal =
+            `Ingest the admitted sources into KB profile '${profileId}' and produce a ` +
+            `reviewable candidate page set for human review.`;
+          const service = new orch.OrchestrationService({
             projectRoot,
-            ...(rawParams["model"] !== undefined
-              ? { modelOverride: String(rawParams["model"]) }
-              : {}),
+            env: process.env,
+            playbookName: "knowledge-base",
+            modelClient: new orch.KbWorkerClient({
+              projectRoot,
+              kbRoot,
+              runId,
+              profileId,
+              sourceCapabilityIds: capIds,
+              ...(rawParams["model"] !== undefined ? { modelOverride: String(rawParams["model"]) } : {}),
+            }),
           });
           try {
-            const sources = orch.sourcesFromCapabilities(kbRoot, capIds);
-            orch.claimCapabilities(kbRoot, capIds, runId);
-            kbResult = await orch.ingestKb(wfCtx, sources, client.run);
-            if (kbResult.status === "awaiting_user") {
-              orch.persistIngestGate(kbRoot, profileId, runId, kbResult.artifacts, capIds, capIds);
+            const directive = await service.execute({
+              schema_version: 2,
+              action: "start",
+              identity: {
+                schema_version: 2,
+                run_id: runId,
+                session_id: `kb_${Date.now().toString(36)}`,
+                playbook: "knowledge-base",
+                engine_owner: "typescript",
+              },
+              goal,
+              constraints: {
+                action: "ingest",
+                kb_profile_id: profileId,
+                source_capability_ids: capIds,
+              },
+              project_root: projectRoot,
+              trust_profile: "hardened-untrusted",
+            });
+            if (directive.action === "complete" || directive.action === "incomplete" || directive.action === "cancelled") {
+              const terminal = directive as {
+                action: string;
+                status?: string;
+                met?: boolean;
+                result?: Record<string, unknown>;
+              };
+              const result = (terminal.result ?? {}) as Record<string, unknown>;
+              kbResult = {
+                schema_version: 1,
+                action,
+                run_id: runId,
+                status: String(terminal.status ?? terminal.action),
+                met: Boolean(terminal.met),
+                ids: [runId, ...(Array.isArray(result.ids) ? (result.ids as string[]) : [])],
+                counts: (result.counts ?? {}) as Record<string, number>,
+                artifacts: (result.artifacts ?? []) as unknown[],
+                evidence: (result.evidence ?? []) as unknown[],
+                warnings: Array.isArray(result.warnings) ? (result.warnings as string[]) : [],
+                unresolved: Array.isArray(result.unresolved) ? (result.unresolved as string[]) : [],
+                next: "none",
+              };
             } else {
-              // Pipeline refused/errored: release the capability claims.
-              orch.invalidateCapabilities(kbRoot, capIds);
+              // await_user at the content-review gate. Safe projection only: counts
+              // and ids, never the candidate bodies, the gate challenge, or the
+              // payload digest — approval is a host decision via penny-kb-gate.
+              const gate = orch.findGateForRun(kbRoot, runId) ?? orch.latestPendingGate(kbRoot);
+              const run = service.checkpointer.loadRunById(runId);
+              const playbookData =
+                (run?.playbookData as Record<string, unknown> | undefined) ?? {};
+              const phases =
+                (playbookData["phases"] as
+                  | Record<string, { kb_artifact_id?: string; counts?: Record<string, number> }>
+                  | undefined) ?? {};
+              const artifactIds = Object.values(phases)
+                .map((phaseRecord) => phaseRecord?.kb_artifact_id)
+                .filter((id): id is string => typeof id === "string" && id.length > 0);
+              kbResult = {
+                schema_version: 1,
+                action,
+                run_id: runId,
+                status: "waiting_for_review",
+                met: false,
+                ids: [runId, ...artifactIds],
+                counts: {
+                  admitted_sources: capIds.length,
+                  ...Object.fromEntries(
+                    Object.entries(phases).map(([phase, record]) => [
+                      phase,
+                      record?.counts ?? {},
+                    ])
+                  ),
+                },
+                artifacts: (gate !== undefined
+                  ? gate.artifacts.map((a) => ({
+                      artifact_id: String((a as { artifact_id?: string } | undefined)?.artifact_id ?? ""),
+                      artifact_kind: String((a as { artifact_kind?: string } | undefined)?.artifact_kind ?? ""),
+                      status: "sealed",
+                    }))
+                  : artifactIds.map((id) => ({ artifact_id: id, artifact_kind: "unknown", status: "sealed" }))) as unknown[],
+                evidence: [],
+                warnings: [
+                  "human content-review gate is pending; approve or deny on the host: " +
+                    `penny-kb-gate approve --profile ${profileId} --run ${runId}  |  penny-kb-gate deny --profile ${profileId} --run ${runId}`,
+                ],
+                unresolved: [],
+                next: "review",
+              };
             }
           } catch (err) {
+            // Refused mid-initialize (drifted source, expired capability, invalid
+            // profile): the run never started; release any claims that were bound.
             try {
               orch.invalidateCapabilities(kbRoot, capIds);
             } catch {
-              // best effort
+              // best effort — claims also expire by TTL
             }
             kbResult = {
               schema_version: 1, action, run_id: runId, status: "error", met: false,
@@ -2806,6 +2902,8 @@ export default function skillExtension(pi: ExtensionAPI): void {
               warnings: [String((err as Error)?.message ?? err).slice(0, 300)],
               unresolved: [], next: "none",
             };
+          } finally {
+            service.close();
           }
           break;
         }

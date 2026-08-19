@@ -36,7 +36,7 @@ function newContext(constraints: Record<string, JsonValue> = {}): RunContext {
     constraints: {
       action: "ingest",
       kb_profile_id: "kbp_test",
-      source_ids: ["cap_a", "cap_b"],
+      source_capability_ids: ["cap_a", "cap_b"],
       ...constraints,
     },
     projectRoot: PROJECT_ROOT,
@@ -47,6 +47,7 @@ function newContext(constraints: Record<string, JsonValue> = {}): RunContext {
 
 interface PlaneCalls {
   claims: Array<{ runId: string; capabilityIds: readonly string[] }>;
+  admits: Array<{ runId: string; capabilityIds: readonly string[] }>;
   seals: Array<{ runId: string; artifactIds: readonly string[] }>;
   gates: Array<{ runId: string; artifacts: number }>;
   approvals: string[];
@@ -60,10 +61,13 @@ interface PlaneCalls {
  * contract.
  */
 function fakePlane(): { plane: KbIngestPlaneV1; calls: PlaneCalls } {
-  const calls: PlaneCalls = { claims: [], seals: [], gates: [], approvals: [], denials: [] };
+  const calls: PlaneCalls = { claims: [], admits: [], seals: [], gates: [], approvals: [], denials: [] };
   const plane: KbIngestPlaneV1 = {
     claim(input) {
       calls.claims.push({ runId: input.runId, capabilityIds: input.capabilityIds });
+    },
+    admit(input) {
+      calls.admits.push({ runId: input.runId, capabilityIds: input.capabilityIds });
     },
     seal(input) {
       calls.seals.push({ runId: input.runId, artifactIds: input.artifactIds });
@@ -217,7 +221,7 @@ describe("KB playbook — dispatch", () => {
   });
 
   it("refuses an ingest run with no admitted sources", () => {
-    const context = newContext({ source_ids: [] });
+    const context = newContext({ source_capability_ids: [] });
     expect(() => newPlaybook().initialize(context)).toThrow(/at least one admitted/);
   });
 
@@ -483,5 +487,20 @@ describe("KB playbook — deterministic host I/O (§6.2 step 2)", () => {
     expect(calls.claims).toHaveLength(1);
     expect(calls.claims[0]!.capabilityIds).toEqual(["cap_a", "cap_b"]);
     expect(calls.claims[0]!.runId).toBe(context.identity.run_id);
+  });
+
+  it("admits the source objects before any phase work, bound to the run", () => {
+    const { plane, calls } = fakePlane();
+    const playbook = newPlaybook(plane);
+    const context = newContext();
+    playbook.initialize(context);
+    // Admit follows claim (all-or-none first) and precedes any seal/gate — the
+    // approval path publishes what this admitted, so agents must see exactly
+    // what will publish.
+    expect(calls.admits).toHaveLength(1);
+    expect(calls.admits[0]!.capabilityIds).toEqual(["cap_a", "cap_b"]);
+    expect(calls.admits[0]!.runId).toBe(context.identity.run_id);
+    expect(calls.seals).toEqual([]);
+    expect(calls.gates).toEqual([]);
   });
 });

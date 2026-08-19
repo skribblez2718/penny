@@ -37,6 +37,9 @@ import {
   type GateState,
 } from "./gate.js";
 import { RunArtifactStore } from "./run-artifacts.js";
+import { writeSourceObject, writeSourceRecord } from "./filesystem.js";
+import { sha256Hex } from "./contracts.js";
+import { sourceRecordFor } from "./ingest.js";
 
 export interface KbSealInput {
   readonly kbRoot: string;
@@ -82,6 +85,15 @@ export interface KbIngestPlaneV1 {
    * agent reads anything, not after.
    */
   claim(input: { kbRoot: string; capabilityIds: readonly string[]; runId: string }): void;
+  /**
+   * Admit the run's sources into the publication plane (content-addressed
+   * objects + records), re-verifying each against its capability envelope.
+   *
+   * Approval publishes the source objects this admits, so it must happen
+   * before any agent reads — the agents then see exactly what will be
+   * published.
+   */
+  admit(input: { kbRoot: string; capabilityIds: readonly string[]; runId: string }): void;
   /** Seal the exact candidate set, freezing what the review gate will offer. */
   seal(input: KbSealInput): void;
   /** Persist the review gate, bound to the sealed set and the base generation. */
@@ -110,6 +122,15 @@ export function defaultKbIngestPlane(): KbIngestPlaneV1 {
   return {
     claim(input) {
       claimCapabilities(input.kbRoot, input.capabilityIds, input.runId);
+    },
+    admit(input) {
+      // Host reads, re-verified against the envelope; the file must still match
+      // its mint-time digest or the admit refuses.
+      const sources = sourcesFromCapabilities(input.kbRoot, input.capabilityIds);
+      for (const src of sources) {
+        writeSourceObject(input.kbRoot, sha256Hex(src.content), Buffer.from(src.content, "utf8"));
+        writeSourceRecord(input.kbRoot, sourceRecordFor(src, input.runId));
+      }
     },
     seal(input) {
       const store = new RunArtifactStore(input.kbRoot, input.runId);

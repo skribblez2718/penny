@@ -13,6 +13,8 @@ export * from "./kb/generations.js";
 export * from "./kb/ingest.js";
 export * from "./kb/kb-model-client.js";
 export * from "./kb/gate.js";
+export * from "./kb/ingest-plane.js";
+export * from "./kb/kb-worker-client.js";
 export * from "./playbooks/playbook.js";
 export * from "./playbooks/registry.js";
 export * from "./playbooks/research.js";

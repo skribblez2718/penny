@@ -84,7 +84,7 @@ function seedRun(): Fixture {
       engine_owner: "typescript",
     },
     goal: "ingest two admitted sources",
-    constraints: { action: "ingest", kb_profile_id: PROFILE, source_ids: capabilityIds },
+    constraints: { action: "ingest", kb_profile_id: PROFILE, source_capability_ids: capabilityIds },
     projectRoot,
     trustProfile: "hardened-untrusted",
     maxSteps: 40,

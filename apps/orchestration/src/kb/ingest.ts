@@ -119,7 +119,8 @@ function result(
   };
 }
 
-function sourceRecordFor(src: IngestSource, runId: string): SourceRecord {
+/** Shared by the workflow and the ingest plane. */
+export function sourceRecordFor(src: IngestSource, runId: string): SourceRecord {
   const record = {
     schema_version: 1 as const,
     source_id: src.sourceId,
