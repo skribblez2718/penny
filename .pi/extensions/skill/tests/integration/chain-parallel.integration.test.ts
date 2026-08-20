@@ -2,7 +2,7 @@
  * Skill Extension Integration Tests — Parallel + Chain + Resume
  *
  * Verifies the full execute→dispatch→aggregate flow with mocked
- * Python orchestrators. No real LLM calls.
+ * TypeScript playbooks. No real model calls.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";

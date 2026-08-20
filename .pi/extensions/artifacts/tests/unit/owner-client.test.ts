@@ -12,7 +12,6 @@ import {
 } from "../../owner-client.js";
 
 const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..");
-const PYTHON = join(PROJECT_ROOT, ".venv", "bin", "python");
 const roots: string[] = [];
 
 function metadata(): OutputArtifactMetadata {
@@ -55,7 +54,6 @@ describe("shared artifact owner client", () => {
     };
 
     const ref = await persistArtifactOutput({
-      pythonPath: PYTHON,
       metadata: contract,
       output,
       cwd: PROJECT_ROOT,
@@ -76,7 +74,6 @@ describe("shared artifact owner client", () => {
     const output = "exact but removed";
     const env = { ...process.env, PENNY_ARTIFACT_ROOT: root };
     const ref = await persistArtifactOutput({
-      pythonPath: PYTHON,
       metadata: contract,
       output,
       cwd: PROJECT_ROOT,

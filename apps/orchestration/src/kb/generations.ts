@@ -12,19 +12,8 @@
  * - Root index rebuild (convenience, never authority)
  */
 
-import { createHash, randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-  fsyncSync,
-  closeSync,
-  openSync,
-} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import {
@@ -40,21 +29,10 @@ import {
   type Sha256Hex,
 } from "./contracts.js";
 import {
-  conflictPath,
-  currentPath,
   generationsDir,
   generationCatalogPath,
-  lockPath,
-  manifestPath,
-  pageClaimsPath,
-  pageMarkdownPath,
   readCurrent,
-  readManifest,
-  readPolicy,
-  rootIndexPath,
   secureWrite,
-  sourceObjectPath,
-  sourceRecordPath,
   writeCurrent,
   writeRootIndex,
 } from "./filesystem.js";
@@ -474,7 +452,8 @@ export function rebuildRootIndex(root: string, catalog: GenerationCatalog): void
     "",
   ];
   for (const pageId of Object.keys(catalog.pages).sort()) {
-    const entry = catalog.pages[pageId]!;
+    const entry = catalog.pages[pageId];
+    if (entry === undefined) continue;
     lines.push(
       `- [${pageId}](pages/${pageId}/revisions/${entry.revision_id}/page.md): revision ${entry.revision_id}`
     );

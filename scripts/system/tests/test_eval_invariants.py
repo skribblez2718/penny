@@ -1,67 +1,50 @@
-"""Tests for the capability-invariants eval section (eval_invariants.py).
+"""TypeScript orchestration capability-eval tests."""
 
-Proves each gating invariant both HOLDS today and REGRESSES when the capability
-is weakened — the whole point of the section is that gutting the leverage spine
-turns a check red.
-"""
+from __future__ import annotations
 
 import sys
-import types
 from pathlib import Path
 
-# eval_invariants lives in scripts/system/evals
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "evals"))
+ROOT = Path(__file__).resolve().parents[3]
+EVALS = ROOT / "scripts" / "system" / "evals"
+sys.path.insert(0, str(EVALS))
 
 import eval_invariants as ei  # noqa: E402
 from eval_lib import FAIL, PASS  # noqa: E402
 
-GATING = {
-    "invariants.grounded_verification",
-    "invariants.independent_verification",
-    "invariants.checkpoint_resume",
-}
+
+def test_all_checks_present() -> None:
+    assert [name for name, _ in ei.CHECKS] == [
+        "invariants.grounded_verification",
+        "invariants.independent_verification",
+        "invariants.checkpoint_resume",
+        "invariants.honest_exhaustion",
+    ]
 
 
-def _by_name():
-    return {r.name: r for r in ei.collect()}
+def test_gating_invariants_pass_when_typescript_evidence_is_green(monkeypatch) -> None:
+    monkeypatch.setattr(ei, "_vitest", lambda *_files: (True, "tests passed"))
+    results = ei.collect()
+    assert all(result.status == PASS for result in results)
+    assert results[-1].informational is True
+    assert all(not result.informational for result in results[:-1])
 
 
-class TestInvariantsHoldToday:
-    def test_all_checks_present(self):
-        names = set(_by_name())
-        assert GATING <= names
-        assert "invariants.honest_exhaustion" in names
-
-    def test_gating_invariants_pass_and_gate(self):
-        results = _by_name()
-        for name in GATING:
-            r = results[name]
-            assert r.status == PASS, f"{name} should hold today: {r.detail}"
-            assert r.informational is False, f"{name} must gate (not informational)"
-
-    def test_honest_exhaustion_tracked_informational(self):
-        r = ei.check_honest_exhaustion()
-        assert r.informational is True
+def test_gating_invariant_regresses_when_typescript_evidence_fails(monkeypatch) -> None:
+    monkeypatch.setattr(ei, "_vitest", lambda *_files: (False, "test failed"))
+    result = ei.check_grounded_verification()
+    assert result.status == FAIL
+    assert "test failed" in result.detail
 
 
-class TestInvariantsRegressWhenWeakened:
-    def test_grounded_verification_mechanism_rejects_empty_evidence(self):
-        # the capability itself: a PASS with empty evidence must be rejected
-        from orchestration.contracts import validate_summary_contract
+def test_each_check_names_real_typescript_test_evidence(monkeypatch) -> None:
+    captured: list[tuple[str, ...]] = []
 
-        ok, _ = validate_summary_contract(
-            "VERIFY",
-            {
-                "required": {"verdict": str, "gaps": list, "confidence": str},
-                "evidence": ["evidence"],
-            },
-            {"verdict": "PASS", "gaps": [], "confidence": "CERTAIN", "evidence": []},
-        )
-        assert ok is False
+    def fake(*files: str) -> tuple[bool, str]:
+        captured.append(files)
+        return True, "ok"
 
-    def test_independent_verification_detects_same_agent(self, monkeypatch):
-        import orchestration.primitives as prim
-
-        # simulate a regression: ACT sharing VERIFY's agent
-        monkeypatch.setattr(prim, "ACT", types.SimpleNamespace(agent="vera"))
-        assert ei.check_independent_verification().status == FAIL
+    monkeypatch.setattr(ei, "_vitest", fake)
+    ei.collect()
+    assert captured
+    assert all(files and all(path.endswith(".test.ts") for path in files) for files in captured)

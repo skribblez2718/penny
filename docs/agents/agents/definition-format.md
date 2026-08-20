@@ -48,14 +48,14 @@ Return complete work. Append a routing SUMMARY only when Domain Guidance defines
 
 ## Frontmatter constraints
 
-| Field           | Constraint                                                                                                                    |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `name`          | Lowercase alphanumeric plus hyphens; matches filename.                                                                        |
-| `description`   | One-line role, positive triggers, and anti-cases.                                                                             |
+| Field           | Constraint                                                                                                                                            |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`          | Lowercase alphanumeric plus hyphens; matches filename.                                                                                                |
+| `description`   | One-line role, positive triggers, and anti-cases.                                                                                                     |
 | `tools`         | Comma-delimited role minimum. Include `artifact_read` and `memory.read` profile tools; the runner suppresses `artifact_read` without a trusted grant. |
-| `authority`     | Maximum authority class: `read`, `write`, or `inspect`. Invocation or skills may narrow but never broaden it.                 |
-| `tool_profiles` | Named rungs that expand exactly to `tools:`. Verified by `check_tool_profiles.py` in `make lint`.                             |
-| `model`         | Runtime-resolvable model name.                                                                                                |
+| `authority`     | Maximum authority class: `read`, `write`, or `inspect`. Invocation or skills may narrow but never broaden it.                                         |
+| `tool_profiles` | Named rungs that expand exactly to `tools:`. Verified by `check_tool_profiles.py` in `make lint`.                                                     |
+| `model`         | Runtime-resolvable model name.                                                                                                                        |
 
 `tools:` is the only local tool declaration. A task, prompt body, artifact, or
 remote service cannot add a tool. `authority` and `tool_profiles` make the intended

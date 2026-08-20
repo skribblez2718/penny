@@ -4,7 +4,7 @@ Constrained, read-only model access to exact immutable artifacts granted by an e
 
 Track-A dispatch control is separate. `PENNY_ARTIFACT_DISPATCH_MODE=paused` stops new workflow agent/tool/fan-out dispatch, but exact artifact reads from already granted refs remain available. Returning the mode to `active` uses forward-only checkpoint recovery; there is no semantic-memory fallback or payload injection.
 
-Reusable owner helpers in `owner-client.ts` persist exact bytes through `orchestration.artifact_cli`, verify canonical refs, reopen durable objects for chain projection, and resolve only caller/platform-derived paths. `handoff.ts` builds closed exact-ref grants and measures model-visible ref instructions with the shared result-budget helper. These owner helpers expose no model tool or enumeration surface.
+Reusable owner helpers in `owner-client.ts` persist exact bytes through the TypeScript `ArtifactStore`, verify canonical refs, and reopen durable objects for chain projection. `handoff.ts` builds closed exact-ref grants and measures model-visible ref instructions with the shared result-budget helper. These owner helpers expose no model tool or enumeration surface.
 
 ## Tool
 
@@ -14,7 +14,7 @@ Reads one exact artifact by immutable ID or full ref. A caller may supply an inc
 
 | Parameter  | Type                    | Required | Description                                                                                             |
 | ---------- | ----------------------- | -------- | ------------------------------------------------------------------------------------------------------- |
-| `artifact` | string or immutable ref | Yes      | Exact `art_<64hex>` ID or full canonical Python `ArtifactRef` v1                                        |
+| `artifact` | string or immutable ref | Yes      | Exact `art_<64hex>` ID or full canonical `ArtifactRef` v1                                               |
 | `range`    | `{start, end?}`         | No       | UTF-8 byte range; both offsets must be code-point boundaries                                            |
 | `cursor`   | string                  | No       | HMAC-authenticated opaque continuation from the same operation, caller, query, revision, and invocation |
 
@@ -63,7 +63,7 @@ The closed schema is:
 }
 ```
 
-This invocation snapshot is the narrow bridge from owner-selected directive refs. Each `artifact` is the exact canonical Python `ArtifactRef` v1, not a full manifest envelope. IDs are verified against the canonical identity tuple `(run_id, phase, branch_id, kind, operation_id, version)`; store path, digest, run, and consumer scope are then validated before bytes are returned. The snapshot carries only exact grants needed by the current worker and remains independent of manifest enumeration or database access.
+This invocation snapshot is the narrow bridge from owner-selected directive refs. Each `artifact` is the exact canonical `ArtifactRef` v1, not a full manifest envelope. IDs are verified against the canonical identity tuple `(run_id, phase, branch_id, kind, operation_id, version)`; store path, digest, run, and consumer scope are then validated before bytes are returned. The snapshot carries only exact grants needed by the current worker and remains independent of manifest enumeration or database access.
 
 ## Owner Grant Book (primary runtime)
 
@@ -73,7 +73,7 @@ The unmarked primary runtime is the execution owner, so it has no spawn boundary
 $XDG_STATE_HOME/penny/artifact-grants/<sha256(session_id)[0:32]>.json   # 0600, directory 0700
 ```
 
-The grant root is **deliberately outside `PENNY_ARTIFACT_ROOT`**, as a sibling of the `skill-chains` state root. Both artifact stores claim the artifact root exclusively and refuse to operate if it contains any entry outside their managed set (`artifacts.py` `_assert_safe_root_contents`), so owner state placed inside it breaks all artifact persistence. Override with `PENNY_ARTIFACT_GRANT_ROOT` (absolute).
+The grant root is **deliberately outside `PENNY_ARTIFACT_ROOT`**, as a sibling of the `skill-chains` state root. The TypeScript artifact owner treats its root as a managed persistence boundary, so grant state belongs outside it. Override with `PENNY_ARTIFACT_GRANT_ROOT` (absolute).
 
 Owner code (`owner-grants.ts`) appends a grant after it has already persisted and verified exact bytes — when a `subagent` delegation or `skill` run returns an artifact ref to the orchestrator. The model never writes the book and there is no tool that does.
 
@@ -104,25 +104,25 @@ An artifact object is read only from the digest-derived path:
 $PENNY_ARTIFACT_ROOT/objects/sha256/<first-two-digest-chars>/<remaining-digest>
 ```
 
-The configured root, object directories, and object must be owner-only filesystem objects; symbolic links and paths escaping the root fail closed. The extension verifies byte length, SHA-256, and strict UTF-8 before returning content. The only accepted `store_ref` is Python's canonical `artifact://sha256/<digest>` URI; the reader resolves that URI to the sharded relative object path shown above.
+The configured root, object directories, and object must be owner-only filesystem objects; symbolic links and paths escaping the root fail closed. The extension verifies byte length, SHA-256, and strict UTF-8 before returning content. The only accepted `store_ref` is the canonical `artifact://sha256/<digest>` URI; the reader resolves that URI to the sharded relative object path shown above.
 
 ## Configuration
 
-| Variable                                         | Default                 | Constraint                                                      |
-| ------------------------------------------------ | ----------------------- | --------------------------------------------------------------- |
-| `PENNY_ARTIFACT_ROOT`                            | platform/XDG state root | Absolute when supplied                                          |
-| `PENNY_ARTIFACT_GRANT_ROOT`                      | `$XDG_STATE_HOME/penny/artifact-grants` | Absolute; must not be inside the artifact root |
-| `PENNY_ARTIFACT_DISPATCH_MODE`                   | `active`                | Owner dispatch mode; `paused` blocks new work, not reads        |
-| `PENNY_ARTIFACT_INVOCATION_FILE`                 | none                    | Mutually exclusive with JSON; absolute owner-only file          |
-| `PENNY_ARTIFACT_INVOCATION_JSON`                 | none                    | Mutually exclusive with file                                    |
-| `PENNY_ARTIFACT_CURSOR_HMAC_KEY`                 | generated per process   | Owner-supplied for workers; at least 32 bytes, hex or base64url |
-| `PENNY_ARTIFACT_CURSOR_TTL_SECONDS`              | `900`                   | 30–900; cannot raise the hard maximum                           |
-| `PENNY_TOOL_RESULT_MAX_BYTES`                    | `32768`                 | 512–32768; lower caps only                                      |
-| `PENNY_TOOL_RESULT_MAX_CHARACTERS`               | `32768`                 | 512–32768; lower caps only                                      |
-| `PENNY_TOOL_RESULT_MAX_TOKENS`                   | `8192`                  | 256–8192 estimated tokens; lower caps only                      |
-| `PENNY_ARTIFACT_MATERIALIZATION_ENABLED`         | `false`                 | Exact `true`/`false`                                            |
-| `PENNY_ARTIFACT_MATERIALIZATION_THRESHOLD_BYTES` | `1048576`               | 65536–1048576; lower threshold only                             |
-| `PENNY_ARTIFACT_MATERIALIZATION_TTL_SECONDS`     | `900`                   | 30–900                                                          |
+| Variable                                         | Default                                 | Constraint                                                      |
+| ------------------------------------------------ | --------------------------------------- | --------------------------------------------------------------- |
+| `PENNY_ARTIFACT_ROOT`                            | platform/XDG state root                 | Absolute when supplied                                          |
+| `PENNY_ARTIFACT_GRANT_ROOT`                      | `$XDG_STATE_HOME/penny/artifact-grants` | Absolute; must not be inside the artifact root                  |
+| `PENNY_ARTIFACT_DISPATCH_MODE`                   | `active`                                | Owner dispatch mode; `paused` blocks new work, not reads        |
+| `PENNY_ARTIFACT_INVOCATION_FILE`                 | none                                    | Mutually exclusive with JSON; absolute owner-only file          |
+| `PENNY_ARTIFACT_INVOCATION_JSON`                 | none                                    | Mutually exclusive with file                                    |
+| `PENNY_ARTIFACT_CURSOR_HMAC_KEY`                 | generated per process                   | Owner-supplied for workers; at least 32 bytes, hex or base64url |
+| `PENNY_ARTIFACT_CURSOR_TTL_SECONDS`              | `900`                                   | 30–900; cannot raise the hard maximum                           |
+| `PENNY_TOOL_RESULT_MAX_BYTES`                    | `32768`                                 | 512–32768; lower caps only                                      |
+| `PENNY_TOOL_RESULT_MAX_CHARACTERS`               | `32768`                                 | 512–32768; lower caps only                                      |
+| `PENNY_TOOL_RESULT_MAX_TOKENS`                   | `8192`                                  | 256–8192 estimated tokens; lower caps only                      |
+| `PENNY_ARTIFACT_MATERIALIZATION_ENABLED`         | `false`                                 | Exact `true`/`false`                                            |
+| `PENNY_ARTIFACT_MATERIALIZATION_THRESHOLD_BYTES` | `1048576`                               | 65536–1048576; lower threshold only                             |
+| `PENNY_ARTIFACT_MATERIALIZATION_TTL_SECONDS`     | `900`                                   | 30–900                                                          |
 
 `PENNY_ARTIFACT_CURSOR_HMAC_KEY` is not an operator setting. `handoff.ts` mints a fresh random key per worker invocation, and the primary runtime generates one per process when none is supplied. Pinning a long-lived static key would weaken cursor binding, not strengthen it.
 

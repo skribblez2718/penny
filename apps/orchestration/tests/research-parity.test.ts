@@ -1,5 +1,4 @@
-import { execFileSync } from "node:child_process";
-import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -30,7 +29,7 @@ import {
 import { researchSummarySchema } from "../src/playbooks/research.js";
 import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
 
-interface CorrectedFixture {
+interface ResearchContractFixture {
   confidence: { valid: unknown[]; invalid: unknown[] };
   terminal_truth: Array<{
     id: string;
@@ -40,9 +39,9 @@ interface CorrectedFixture {
   }>;
 }
 
-const correctedFixture = JSON.parse(
-  readFileSync(new URL("./fixtures/corrected-python-contract-v1.json", import.meta.url), "utf8")
-) as CorrectedFixture;
+const researchContractFixture = JSON.parse(
+  readFileSync(new URL("./fixtures/research-contract-v1.json", import.meta.url), "utf8")
+) as ResearchContractFixture;
 
 const tempDirectories: string[] = [];
 
@@ -237,64 +236,12 @@ async function typescriptHappyTrace(mode: "quick" | "standard" | "deep"): Promis
   return trace;
 }
 
-function pythonHappyTrace(root: string, mode: "quick" | "standard" | "deep"): string[] {
-  const script = String.raw`
-import json, os, sys
-from pathlib import Path
-from orchestration.checkpointer import Checkpointer
-from orchestration.playbooks.research import ResearchPlaybook
-root, mode = sys.argv[1], sys.argv[2]
-cp = Checkpointer(db_path=Path(root) / "python.db")
-sid, rid = "parity-session", f"py-{mode}"
-def canon(d):
-    action = d["action"]
-    if action == "invoke_agent": return f"invoke_agent:{d['state_id']}:{d['agent']}"
-    if action == "invoke_agents_parallel": return f"invoke_agents_parallel:{d['state_id']}:" + ",".join(t["agent"] for t in d["tasks"])
-    if action == "await_user": return f"await_user:{d['state_id']}"
-    return f"{action}:{action}"
-def step(agent, value):
-    return ResearchPlaybook(cp).step(session_id=sid, run_id=rid, agent=agent, result=value)
-d = ResearchPlaybook(cp).start(session_id=sid, run_id=rid, goal="compare two durable research systems", constraints={"mode": mode}, project_root=root)
-trace=[canon(d)]
-if mode != "quick":
-    d=step("piper", {"plan_steps":["sub-query one","sub-query two"],"plan_complete":True,"confidence":"CERTAIN"}); trace.append(canon(d))
-    if mode == "deep":
-        d=step("carren", {"verdict":"APPROVE","issues":[],"evidence":["reviewed"],"confidence":"CERTAIN"}); trace.append(canon(d))
-    d=step("__parallel__", [
-      {"branch_id":"sq1","agent":"echo","exitCode":0,"summary":{"explore_complete":True,"confidence":"PROBABLE"}},
-      {"branch_id":"sq2","agent":"echo","exitCode":0,"summary":{"explore_complete":True,"confidence":"PROBABLE"}},
-    ]); trace.append(canon(d))
-else:
-    d=step("echo", {"explore_complete":True,"confidence":"PROBABLE"}); trace.append(canon(d))
-d=step("synthia", {"synthesis_complete":True,"confidence":"PROBABLE"}); trace.append(canon(d))
-if mode == "deep":
-    d=step("carren", {"verdict":"APPROVE","issues":[],"evidence":["reviewed"],"confidence":"CERTAIN"}); trace.append(canon(d))
-d=step("vera", {"verdict":"PASS","unsupported_claims":[],"evidence":["checked"],"confidence":"CERTAIN"}); trace.append(canon(d))
-d=step("skribble", {"write_complete":True,"confidence":"CERTAIN"}); trace.append(canon(d))
-print(json.dumps(trace))
-`;
-  const projectRoot = path.resolve("../..");
-  const pythonPath = path.join(projectRoot, ".venv", "bin", "python");
-  const output = execFileSync(pythonPath, ["-c", script, root, mode], {
-    cwd: projectRoot,
-    env: {
-      ...process.env,
-      PYTHONPATH: path.join(projectRoot, "apps", "orchestration", "src"),
-      PENNY_ARTIFACT_ROOT: path.join(root, "python-artifacts"),
-      PENNY_RECEIPT_HMAC_KEY: "5a".repeat(32),
-      PENNY_ORCH_TEST_ALLOW_PROGRAMMATIC_RESULTS: "1",
-    },
-    encoding: "utf8",
-  });
-  return JSON.parse(output) as string[];
-}
-
-describe("corrected Python contract fixture", () => {
-  it.each(correctedFixture.confidence.valid)("accepts declared confidence %s", (value) => {
+describe("frozen research contract fixture", () => {
+  it.each(researchContractFixture.confidence.valid)("accepts declared confidence %s", (value) => {
     expect(validateContract(ConfidenceSchema, value, "confidence")).toBe(value);
   });
 
-  it.each(correctedFixture.confidence.invalid)("rejects invalid confidence %s", (value) => {
+  it.each(researchContractFixture.confidence.invalid)("rejects invalid confidence %s", (value) => {
     expect(() => validateContract(ConfidenceSchema, value, "confidence")).toThrow();
   });
 
@@ -455,7 +402,7 @@ describe("corrected Python contract fixture", () => {
     checkpointer.close();
   });
 
-  it.each(correctedFixture.terminal_truth)(
+  it.each(researchContractFixture.terminal_truth)(
     "$id preserves complete/incomplete terminal truth",
     async (scenario) => {
       const root = tempRoot();
@@ -497,11 +444,38 @@ describe("corrected Python contract fixture", () => {
 });
 
 describe("research behavioral parity", () => {
+  const EXPECTED_TRACES = {
+    quick: [
+      "invoke_agent:researching:echo",
+      "invoke_agent:synthesizing:synthia",
+      "invoke_agent:validating:vera",
+      "invoke_agent:report_writing:skribble",
+      "complete:complete",
+    ],
+    standard: [
+      "invoke_agent:planning:piper",
+      "invoke_agents_parallel:researching:echo,echo",
+      "invoke_agent:synthesizing:synthia",
+      "invoke_agent:validating:vera",
+      "invoke_agent:report_writing:skribble",
+      "complete:complete",
+    ],
+    deep: [
+      "invoke_agent:planning:piper",
+      "invoke_agent:critiquing_plan:carren",
+      "invoke_agents_parallel:researching:echo,echo",
+      "invoke_agent:synthesizing:synthia",
+      "invoke_agent:critiquing_report:carren",
+      "invoke_agent:validating:vera",
+      "invoke_agent:report_writing:skribble",
+      "complete:complete",
+    ],
+  } as const;
+
   it.each(["quick", "standard", "deep"] as const)(
-    "matches the corrected Python canonical happy-path trace for %s",
+    "matches the frozen TypeScript canonical happy-path trace for %s",
     async (mode) => {
-      const pythonRoot = tempRoot(`penny-python-${mode}-`);
-      expect(await typescriptHappyTrace(mode)).toEqual(pythonHappyTrace(pythonRoot, mode));
+      expect(await typescriptHappyTrace(mode)).toEqual(EXPECTED_TRACES[mode]);
     }
   );
 
@@ -684,18 +658,6 @@ describe("research behavioral parity", () => {
     );
     expect(terminal.action).toBe("complete");
     expect(maximum).toBe(2);
-    checkpointer.close();
-  });
-
-  it("uses a separate v2 database without mutating the legacy Python database", () => {
-    const root = tempRoot();
-    const legacyPath = path.join(root, "orchestration.db");
-    const sentinel = "legacy-python-db-must-remain-unchanged";
-    writeFileSync(legacyPath, sentinel);
-    const { checkpointer, engine } = runtime(root);
-    engine.handle(start(root, identity("separate-db"), { mode: "quick" }));
-    expect(readFileSync(legacyPath, "utf8")).toBe(sentinel);
-    expect(checkpointer.dbPath).toBe(path.join(root, "orchestration-v2.db"));
     checkpointer.close();
   });
 });

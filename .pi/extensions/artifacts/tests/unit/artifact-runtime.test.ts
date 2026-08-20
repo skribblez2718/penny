@@ -70,7 +70,7 @@ describe("artifact runtime", () => {
     }
   });
 
-  it("resolves the canonical artifact URI to Python's sharded objects/sha256 path", async () => {
+  it("resolves the canonical artifact URI to the sharded objects/sha256 path", async () => {
     const item = await fixture("canonical object path");
 
     expect(resolveArtifactObjectPath(item.root, item.artifact.store_ref)).toBe(item.objectPath);
@@ -406,7 +406,7 @@ describe("trusted configuration contract", () => {
     ).toThrow();
   });
 
-  it("matches Python's canonical identity and accepts exact ArtifactRef grants", () => {
+  it("matches the canonical identity and accepts exact ArtifactRef grants", () => {
     expect(
       canonicalArtifactId({
         run_id: "run-1",

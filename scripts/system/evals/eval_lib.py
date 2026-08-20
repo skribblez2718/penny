@@ -222,7 +222,7 @@ def newest_filed_at(drawers: List[Dict[str, Any]]) -> Optional[datetime]:
 
 
 def orch_db_path() -> Path:
-    return Path(os.environ.get("PENNY_ORCH_DB") or REPO_ROOT / ".penny" / "orchestration.db")
+    return Path(os.environ.get("PENNY_ORCH_V2_DB") or REPO_ROOT / ".penny" / "orchestration-v2.db")
 
 
 def obs_db_path() -> Path:

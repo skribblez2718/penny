@@ -116,6 +116,9 @@ export class KbModelClient {
       artifactConsumer: `kb:${invocation.stateId}`,
       modelOverride: model,
       guidance: KNOWLEDGE_BASE_SKILL_CONTRACT.guidance,
+      // §5.3: the alias above is not an identity. The runtime resolves it, then
+      // this hook admits the resolved tuple BEFORE any session exists.
+      ...(invocation.admitModel ? { admitResolvedModel: invocation.admitModel } : {}),
       session: kbSessionSpec({ invocation, agentBody: body, phaseGuidance }),
     });
     return completion.text;

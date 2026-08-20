@@ -130,8 +130,11 @@ function normalizeCheckpoint(value: ChainCheckpoint): ChainCheckpoint {
     const handoffRef = step.handoff_artifact_ref
       ? parseArtifactRef(step.handoff_artifact_ref)
       : undefined;
-    if (handoffRef && handoffRef.run_id !== value.chain_run_id) {
-      checkpointError("skill-chain handoff artifact belongs to another run");
+    if (handoffRef) {
+      const target = value.steps.find((candidate) => candidate.index === step.index + 1);
+      if (!target || handoffRef.run_id !== target.session_id) {
+        checkpointError("skill-chain handoff artifact is not bound to the next target run");
+      }
     }
     return {
       ...step,

@@ -30,7 +30,6 @@ const PROJECT_ROOT = path.join(
   "..",
   ".."
 );
-const PYTHON = path.join(PROJECT_ROOT, ".venv", "bin", "python");
 const temporaryRoots: string[] = [];
 
 function metadata(overrides: Partial<OutputArtifactMetadata> = {}): OutputArtifactMetadata {
@@ -64,13 +63,12 @@ afterEach(() => {
 });
 
 describe("skill artifact client", () => {
-  it("runs the configured Python module, sends exact UTF-8 stdin, and verifies the canonical ref", async () => {
+  it("persists exact UTF-8 bytes through the TypeScript owner and verifies the canonical ref", async () => {
     const root = tempArtifactRoot();
     const output = 'before\u0000after\nmultibyte: ☃\nSUMMARY:{"complete":true}\n';
     const contract = metadata();
 
     const ref = await persistArtifactOutput({
-      pythonPath: PYTHON,
       metadata: contract,
       output,
       cwd: PROJECT_ROOT,
@@ -108,7 +106,6 @@ describe("skill artifact client", () => {
     const contract = metadata();
 
     const ref = await persistArtifactOutput({
-      pythonPath: PYTHON,
       metadata: contract,
       output: normalResult,
       cwd: PROJECT_ROOT,
@@ -165,7 +162,6 @@ describe("skill artifact client", () => {
     const root = tempArtifactRoot();
     const contract = metadata();
     await persistArtifactOutput({
-      pythonPath: PYTHON,
       metadata: contract,
       output: "first",
       cwd: PROJECT_ROOT,
@@ -174,7 +170,6 @@ describe("skill artifact client", () => {
 
     await expect(
       persistArtifactOutput({
-        pythonPath: PYTHON,
         metadata: contract,
         output: "private divergent second output",
         cwd: PROJECT_ROOT,
@@ -183,7 +178,6 @@ describe("skill artifact client", () => {
     ).rejects.toMatchObject({ code: "ARTIFACT_PERSIST_FAILED" });
     try {
       await persistArtifactOutput({
-        pythonPath: PYTHON,
         metadata: contract,
         output: "private divergent second output",
         cwd: PROJECT_ROOT,

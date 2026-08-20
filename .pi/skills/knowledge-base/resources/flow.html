@@ -8,7 +8,7 @@
   :root{
     --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2a3341;
     --ink:#e6edf3; --muted:#8b949e; --desc:#b3bdc9;
-    --echo:#22d3ee; --synthia:#f472b6; --carren:#fb7185; --vera:#4ade80;
+    --echo:#22d3ee; --synthia:#f472b6; --carren:#fb7185; --vera:#4ade80; --piper:#7c5cff; --skribble:#c77dff;
     --start:#94a3b8; --gate:#e3b341; --host:#a78bfa;
     --done:#3fb950; --error:#f85149;
     --fwd:#8b98a9; --exit:#3fb950; --loop:#e3a52e; --gatec:#e3b341; --abort:#f85149;
@@ -38,6 +38,7 @@
   .node.echo::before{background:var(--echo)} .node.synthia::before{background:var(--synthia)}
   .node.carren::before{background:var(--carren)} .node.vera::before{background:var(--vera)}
   .node.start::before{background:var(--start)} .node.host::before{background:var(--host)}
+  .node.piper::before{background:var(--piper)} .node.skribble::before{background:var(--skribble)}
   .node.gate{background:#211d10;border-color:#4d3f1a}.node.gate::before{background:var(--gate)}
   .node.done{background:#0f2417;border-color:#1f5136}.node.done::before{background:var(--done)}
   .node.err{background:#2a1517;border-color:#5c2a2a}.node.err::before{background:var(--error)}
@@ -113,11 +114,13 @@ const W = { C:300, side:245 };
 // against the exported KB_FLOW descriptor in playbooks/knowledge-base.ts.
 // "start" is a virtual entry point (the engine's initialize), not a machine state.
 const N = {
-  "start":{"col":"Louter","y":40,"cls":"start","title":"start","desc":"Virtual entry point. Engine initialize: claim source capabilities + admit source objects (host I/O, all-or-none) before the first agent read."},
+  "start":{"col":"Louter","y":40,"cls":"start","title":"start","desc":"Virtual entry point. Engine initialize. For ingest: claim source capabilities + admit source objects (host I/O, all-or-none) before the first agent read. For save: CAS the named query run's answer claim available→claimed before any side effect. Both follow §5.3 admission (policy + active parent identity, before any private read or child session)."},
   "ingest":{"col":"C","y":120,"cls":"echo","title":"ingest","who":"echo","desc":"Extract materially distinct claims from the admitted source snapshots (host-closed readers). Submit one typed `claims` artifact naming every source read."},
   "compose":{"col":"C","y":280,"cls":"synthia","title":"compose","who":"synthia","desc":"Compose the page revision pair (frontmatter + markdown + claims sidecar) over the claims. Submit one typed `page_draft` artifact."},
   "lint":{"col":"C","y":440,"cls":"carren","title":"lint","who":"carren","desc":"Semantic lint of the candidate page: structure, coherence, candidate conflicts. Submit a `lint_report`; error-severity findings route back to compose (bounded)."},
   "verify":{"col":"C","y":600,"cls":"vera","title":"verify","who":"vera","desc":"Grounding check — every claim supported by its cited, admitted evidence. Submit a `verification_report`; unsupported claims route back to compose (bounded)."},
+  "plan":{"col":"Rmid","y":200,"cls":"piper","title":"plan","who":"piper","desc":"PREPARE ONLY. Plan the canonical transition for the named page revisions against the claimed canonical-target capabilities. Submit one typed `promotion_plan`. Cannot apply, sign, or mutate anything."},
+  "patch":{"col":"Rmid","y":380,"cls":"skribble","title":"patch","who":"skribble","desc":"PREPARE ONLY. Scope the exact promotion patch from the plan. Submit one typed `promotion_patch`. The host independently verifies targets and captures current preimages before the gate; apply is host-only at G9."},
   "awaiting_review":{"col":"C","y":780,"cls":"gate","title":"awaiting_review","badge":"HITL","desc":"Human content-review gate (await_user). The sealed candidate set is frozen BEFORE the gate is offered; its payload digest binds the exact candidate set. Decisions are host-authenticated only.","decisions":["approve","deny","refine"],"host_only":true},
   "publishing":{"col":"C","y":940,"cls":"host","title":"publishing","desc":"Host I/O behind the approval: publish the generation (atomic selector swap = commit point) and consume the capability leases. The only route to a met terminal."},
   "complete":{"col":"C","y":1080,"cls":"done","title":"complete","badge":"TERM","desc":"Terminal, met = true. Reachable ONLY from publishing (completion gate). Carries the published generation id + counts."},
@@ -125,6 +128,12 @@ const N = {
 };
 const E = [
   {"from":"start","to":"ingest","s1":"bottom","s2":"left","kind":"fwd","label":"initialize — claim + admit (host)"},
+  {"from":"start","to":"compose","s1":"bottom","s2":"left","a2frac":0.3,"kind":"fwd","label":"initialize save — claim query answer (host)","bow":-60},
+  {"from":"start","to":"plan","s1":"right","s2":"top","kind":"fwd","label":"initialize promote — claim targets (host)"},
+  {"from":"plan","to":"patch","s1":"bottom","s2":"top","kind":"fwd","label":"promotion_plan (complete)"},
+  {"from":"patch","to":"awaiting_review","s1":"bottom","s2":"right","kind":"fwd","label":"promotion_patch — host verify + gate"},
+  {"from":"plan","to":"plan","s1":"right","s2":"right","kind":"loop","label":"malformed_result (bounded)","bow":110},
+  {"from":"patch","to":"patch","s1":"right","s2":"right","kind":"loop","label":"malformed_result (bounded)","bow":110},
   {"from":"ingest","to":"compose","s1":"bottom","s2":"top","kind":"fwd","label":"claims (complete)"},
   {"from":"compose","to":"lint","s1":"bottom","s2":"top","kind":"fwd","label":"page_draft (complete)"},
   {"from":"lint","to":"verify","s1":"bottom","s2":"top","kind":"fwd","label":"lint_report (no error findings)"},

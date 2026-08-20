@@ -22,6 +22,8 @@
 import { RunArtifactStore } from "./run-artifacts.js";
 import { sourcesFromCapabilities } from "./gate.js";
 import { KbModelClient, type KbAgentRunner } from "./kb-model-client.js";
+import { checkChildModelIdentity } from "./policy.js";
+import { recheckAdmittedPolicy } from "./workflows.js";
 import type { KbPhaseInvocation } from "./session-tools.js";
 import type {
   AgentCompletion,
@@ -58,6 +60,23 @@ export interface KbWorkerClientOptions {
   readonly sourceCapabilityIds: readonly string[];
   readonly modelOverride?: string;
   readonly workerExtensions?: readonly InlineExtension[];
+  /**
+   * The policy digest this run was admitted under (§5.3). When present, every
+   * child creation rechecks exact equality and refuses `policy_changed` on
+   * drift, and the resolved child identity is admitted against that policy
+   * before a session exists. Omitted only by tests that inject a runner.
+   */
+  readonly admittedPolicySha256?: string;
+  /**
+   * Cross-run inputs this run is allowed to read, keyed by the phase slot they
+   * fill (§5.8 "read an allowed prior run artifact").
+   *
+   * A `save` composes from the sealed `query_answer` of the query run its claim
+   * names, so `ingest` is seeded with that artifact instead of being produced by
+   * an extraction phase. The allowlist is exact: one run id, one artifact id,
+   * decided by the host when the claim was taken.
+   */
+  readonly seedPhaseOutputs?: Readonly<Record<string, { runId: string; artifactId: string }>>;
   /** Injectable agent runner (tests substitute deterministic bodies). */
   readonly agentRunner?: KbAgentRunner;
 }
@@ -98,12 +117,29 @@ export class KbWorkerClient implements ModelClient {
     const contentBySourceId = new Map(sources.map((src) => [src.sourceId, src.content]));
     const sourceAllowlist = [...contentBySourceId.keys()];
 
+    // §5.3 child admission, evaluated per child creation:
+    //   1. the policy must still be EXACTLY the one this run was admitted under;
+    //   2. the RESOLVED child identity must match the child allowlist.
+    // Both run inside the pre-session hook, so a denial creates no session.
+    const admittedSha = this.options.admittedPolicySha256;
+    const admitModel =
+      admittedSha === undefined
+        ? undefined
+        : (resolved: { provider: string; model: string }): void => {
+            const policy = recheckAdmittedPolicy({
+              kbRoot: this.options.kbRoot,
+              admittedPolicySha256: admittedSha,
+            });
+            checkChildModelIdentity(policy, resolved);
+          };
+
     const phaseInvocation: KbPhaseInvocation = {
       agent: invocation.agent,
       stateId: phase,
       phaseBrief: invocation.task,
       sourceAllowlist,
       priorPhaseAllowlist: PRIOR_PHASES[phase] ?? [],
+      ...(admitModel ? { admitModel } : {}),
       readSource: (sourceId: string): string => {
         const content = contentBySourceId.get(sourceId);
         if (content === undefined) {
@@ -112,6 +148,17 @@ export class KbWorkerClient implements ModelClient {
         return content;
       },
       readPhaseOutput: (stateId: string): string => {
+        // A host-seeded cross-run input (the claimed query answer for a save)
+        // takes precedence: it is the exact artifact the claim authorized.
+        const seed = this.options.seedPhaseOutputs?.[stateId];
+        if (seed !== undefined) {
+          const seedStore = new RunArtifactStore(this.options.kbRoot, seed.runId);
+          try {
+            return seedStore.read(seed.artifactId).content;
+          } finally {
+            seedStore.close();
+          }
+        }
         // A prior phase's latest staged (or sealed) artifact, by state id.
         const handles = this.store.listByState(stateId);
         const latest = handles[handles.length - 1];

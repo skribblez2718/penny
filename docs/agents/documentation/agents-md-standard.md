@@ -8,7 +8,7 @@ Exactly two grammars exist, and exactly one file uses the first.
 
 ## Grammar 1 — the repository-root `AGENTS.md` (bootstrap)
 
-The root is the **sole bounded exception**. Pi loads it by walking *up* from the working
+The root is the **sole bounded exception**. Pi loads it by walking _up_ from the working
 directory, so it is always in context, on every turn, multiplied into every subagent. It is
 the entry point of the index chain and may therefore carry a small amount of instruction —
 but only these four things:

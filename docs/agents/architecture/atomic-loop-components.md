@@ -1,10 +1,10 @@
 # Atomic Loop Components
 
-How to build Python-orchestrated loops that comply with the [Bitter-Lesson Doctrine](bitter-lesson.md): instead of one universal loop, a small set of atomic components arranged per task. This is the **construction** companion to the doctrine — the doctrine says _ratchet on capabilities, prune constraints_; this doc says _here are the parts that are capabilities and the parts that are constraints, and here is how to assemble them._ Full derivation, close reading of Sutton's essay, and reference Python live in `research/atomic-loop-components/`.
+How to build TypeScript-orchestrated loops that comply with the [Bitter-Lesson Doctrine](bitter-lesson.md): instead of one universal loop, a small set of atomic components arranged per task. This is the **construction** companion to the doctrine — the doctrine says _ratchet on capabilities, prune constraints_; this doc says _here are the parts that are capabilities and the parts that are constraints, and here is how to assemble them._ Full derivation, close reading of Sutton's essay, and historical reference implementations live in `research/atomic-loop-components/`.
 
 ## The one structural law
 
-> **Intelligence is confined to exactly two atoms (`Decide`, `Critique`). Every other atom is deterministic, model-agnostic Python.**
+> **Intelligence is confined to exactly two atoms (`Decide`, `Critique`). Every other atom is deterministic, model-agnostic host code.**
 
 Consequences that make the whole approach compliant:
 
@@ -99,7 +99,7 @@ Every arrangement must hold all seven; violating any one is non-compliant regard
 
 The master design lever, and what makes the strategy age well:
 
-> **Who owns the control flow — your Python or the model?** Not binary; a dial. The Bitter-Lesson-correct direction is to turn it toward the model over model releases.
+> **Who owns the control flow — host code or the model?** Not binary; a dial. The Bitter-Lesson-correct direction is to turn it toward the model over model releases.
 
 | Dial position                     | Who decides the path                              | When correct                                                 | Atoms emphasized                                        |
 | --------------------------------- | ------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------- |
@@ -208,22 +208,22 @@ COMPLIANCE HYGIENE
 
 The atoms are not a rewrite target — they are a **lens** for reading and evolving the existing engine. The mapping (fuller version in `research/atomic-loop-components/`):
 
-| Atom                              | Penny mechanism                                                                                                                              |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Thread / Checkpoint / Workspace   | `RunContext`, durable `run_id` checkpointer + `recover_pending`, MemPalace + git                                                             |
-| Decide / Critique                 | `invoke_agent` (pi subagent) / Vera (objective) + Carren (subjective)                                                                        |
-| Verify / Budget / Gate / Escalate | `done_predicate` + evidence `summary_contract` / `max_iterations` + `learn_exhausted` / `GATE_STATES` / UNCERTAIN → `awaiting_clarification` |
-| Fan / Compact                     | parallel fan-out with weakest-confidence fan-in / context discipline                                                                         |
-| Recall                            | explicit agent/tool retrieval when prior context could matter; no engine-level memory injection                                              |
-| Observe / Ablate                  | observability events / the eval ratchet                                                                                                      |
+| Atom                              | Penny mechanism                                                                                 |
+| --------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Thread / Checkpoint / Workspace   | `RunContext`, durable exact-`run_id` Node SQLite checkpoint, immutable artifacts + git          |
+| Decide / Critique                 | `invoke_agent` Pi SDK workers / Vera (objective) + Carren (subjective)                          |
+| Verify / Budget / Gate / Escalate | state-specific schemas + `CompletionGateV1` / bounded repairs / `await_user`                    |
+| Fan / Compact                     | bounded branch-ID fan-out / context discipline and exact-ref compaction                         |
+| Recall                            | explicit agent/tool retrieval when prior context could matter; no engine-level memory injection |
+| Observe / Ablate                  | observability events / the eval ratchet                                                         |
 
 Penny has no automatic L6 outcome-ledger/compression/amendment pipeline. Durable knowledge is written value-conditionally and retrieved explicitly; workflow-session drawers remain transport/state rather than automatically promoted learning.
 
-Of the four gaps this framing sharpened (see [loops.md](../skills/loops.md)), three are now closed at the engine level (2026-07-14): strategy-delta enforcement and stall detection are **default-on** (the base `progress_check` + engine-recorded iteration digests, opt-out via `LOOP_GUARDS = False`), and evidence-grounded verify contracts are enforced (`contracts.py`). The engine also carries a LOAN registry with Ablate toggles (`loans.py`, invariant 6), an honest-exhaustion backstop on the iteration budget, runtime-emitted fan topology (`parallel_spec` seam), and model-owned routing as a small edit (`fire_model_route`). The remaining open gap is **verifier-gaming hardening** (dual-verifier agreement at high-stakes gates).
+The TypeScript engine protects the durable parts of this framing: closed evidence contracts, bounded repair, exact checkpoints, host-owned consequence gates, branch-ID fan-out, explicit memory separation, and a LOAN registry. Verifier-gaming hardening remains empirical: prefer independent tools and sources, and add model diversity only where measured benefit justifies it.
 
 ## Related
 
 - [Bitter-Lesson Doctrine](bitter-lesson.md) — the LEVERAGE/SAFETY/KNOWLEDGE-CONSTRAINT triage and the ratchet this framework operationalizes
 - [Agentic Loops — Reference](../skills/loops.md) — the L1–L7 loop classes (arrangements of these atoms) and per-class design rules
 - [Atomic Loop Components (Human)](../../humans/architecture/atomic-loop-components.md) — conceptual overview and rationale
-- Full research pack: `research/atomic-loop-components/` (essay reading, compliance rules, reference Python, prompt-rewrite change map)
+- Full research pack: `research/atomic-loop-components/` (essay reading, compliance rules, historical references, prompt-rewrite change map)

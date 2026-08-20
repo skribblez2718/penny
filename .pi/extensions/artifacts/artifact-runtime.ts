@@ -118,7 +118,7 @@ function hasUnpairedSurrogate(value: string): boolean {
   return false;
 }
 
-function isPythonWhitespace(codePoint: number): boolean {
+function isDisallowedBoundaryWhitespace(codePoint: number): boolean {
   return (
     (codePoint >= 0x0009 && codePoint <= 0x000d) ||
     (codePoint >= 0x001c && codePoint <= 0x0020) ||
@@ -147,7 +147,7 @@ function canonicalString(value: unknown, name: string): string {
   const lastCharacter = Array.from(value).at(-1);
   const first = value.codePointAt(0) ?? -1;
   const last = lastCharacter?.codePointAt(0) ?? -1;
-  if (isPythonWhitespace(first) || isPythonWhitespace(last)) {
+  if (isDisallowedBoundaryWhitespace(first) || isDisallowedBoundaryWhitespace(last)) {
     throw new ArtifactReadError("ARTIFACT_CONFIG_INVALID", `${name} is invalid`);
   }
   return value;
@@ -251,7 +251,7 @@ function nonnegativeInteger(value: unknown, name: string): number {
   return value as number;
 }
 
-/** Compute Python's stable owner identity for the canonical artifact identity tuple. */
+/** Compute the stable owner identity for the canonical artifact identity tuple. */
 export function canonicalArtifactId(
   identity: Pick<
     ArtifactRef,
@@ -657,7 +657,7 @@ function validateGrant(
   return grant;
 }
 
-/** Resolve a canonical store URI to Python's sharded objects/sha256 path. */
+/** Resolve a canonical store URI to the sharded objects/sha256 path. */
 export function resolveArtifactObjectPath(root: string, storeRef: string): string {
   if (!STORE_REF_PATTERN.test(storeRef)) {
     throw new ArtifactReadError("ARTIFACT_CONFIG_INVALID", "Artifact store_ref is invalid");

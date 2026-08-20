@@ -12,7 +12,7 @@
  * disk, so recovery can always find and clean up orphaned artifacts.
  */
 
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -23,14 +23,12 @@ import {
   openSync,
   readFileSync,
   renameSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 
 import {
-  canonicalJson,
   sha256Hex,
   type Sha256Hex,
   type ArtifactKind,

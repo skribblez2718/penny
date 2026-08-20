@@ -105,7 +105,7 @@ completed. Corrections:
 | §3/§5 item | Status now | Where |
 |---|---|---|
 | "**Vera `validating` state was REMOVED** … **REGRESSION** — the generator now self-validates" (§3) / §5.1 Independent VERIFY step | **SHIPPED.** `validating` (vera) is the final gate before `report_writing` in ALL three modes, evidence-gated, with a bounded re-grounding loop, honest exhaustion and stall escalation. | `playbooks/research.py` `validating` state + `validate_*` transitions; `resources/reference.md` |
-| §5.3 Dedicated citation/grounding pass — "no claim→source verification" | **SHIPPED.** That is exactly what the `validating` gate does; `assets/prompts/vera.md` ranks *executed* re-fetch of cited sources above rules above judgement. | `assets/prompts/vera.md` |
+| §5.3 Dedicated citation/grounding pass — "no claim→source verification" | **SHIPPED.** That is exactly what the `validating` gate does; `assets/prompts/vera-validating.md` ranks *executed* re-fetch of cited sources above rules above judgement. | `assets/prompts/vera-validating.md` |
 | "`researching` is a single echo researching all sub-queries … no per-sub-query fan-out" (§3, §6) | **SHIPPED.** `researching` is a dynamic fan — one read-only echo branch per sub-query (arrangement 4), bounded by `max_fan_width`; only the explicit-quick fast-path is single-agent. | `_research_branches`, `route_after("planning")` |
 | "quick/standard modes have zero verification" (§4) | **FIXED.** The validation gate runs in every mode, including quick. | as above |
 | Per-mode `max_sub_queries` 1/3/4 (§5) | **REPLACED** by one budget the model spends within (default 4, clamped to fan width). The keyword `detect_mode` router was likewise deleted; mode is caller- or model-declared. | `initial_transition`, `MODES` |

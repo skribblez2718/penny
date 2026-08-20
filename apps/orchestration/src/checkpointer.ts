@@ -430,7 +430,7 @@ export class Checkpointer implements Disposable {
       run_id: row.run_id,
       session_id: row.session_id,
       playbook: row.playbook,
-      engine_owner: row.engine_owner as "typescript" | "python",
+      engine_owner: row.engine_owner as "typescript",
     });
   }
 

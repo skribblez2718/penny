@@ -9,11 +9,11 @@ observing an outcome, the "gate" measures nothing — it just describes whatever
 Each is therefore fixed in an explicit, operator-approved, independently reviewed decision receipt,
 written before its boundary and digest-recorded:
 
-| Receipt | Approved | Must predate |
-|---|---|---|
-| Package surface | After G2 | The first app-package source write |
-| Retrieval baseline | After G6 | Any retrieval implementation, tuning, or result run |
-| Research observation | After G5 | The first canary result |
+| Receipt              | Approved | Must predate                                        |
+| -------------------- | -------- | --------------------------------------------------- |
+| Package surface      | After G2 | The first app-package source write                  |
+| Retrieval baseline   | After G6 | Any retrieval implementation, tuning, or result run |
+| Research observation | After G5 | The first canary result                             |
 
 Receipts are strict canonical JSON in an ignored, owner-only store. The approver and the independent
 reviewer must be **different** identities, and the review hashes the complete decision. A
@@ -63,20 +63,20 @@ Privacy incidents, recovery failures, and unexplained parity mismatches all have
 
 ## The gate ladder
 
-| Gate | Established |
-|---|---|
-| G0 | External dirty-worktree baseline; no project mutation |
-| G1 | Root bootstrap grammar and repository-wide nested `AGENTS.md` purity |
-| G2 | Canonical KB docs, exact five-file scaffold, privacy admission; no executable KB claim |
-| G3 | Compiled Node TypeScript shell and durable checkpointer; Python state untouched |
-| G4 | Complete Python research suite machine-mapped and green; TypeScript parity green |
-| G5 | Typed terminating results are the sole control boundary; no prose parsing |
-| G6 | One thin two-tool adapter; research canary, rollback, owner-stickiness, privacy |
-| G7 | Profiles, policy, capabilities, storage, generations, retrieval floor, lint floor |
-| G8 | Artifact plane, stateful flows, skill, semantic lint, prepare-only end-to-end |
-| G9 | Signed host-only promotion apply; package and copy-surface hardening |
-| G10 | Research cutover, owner drain, fresh consumer inventory, evidence-mapped retirement |
-| G11 | Clean-clone release and capability ratchet |
+| Gate | Established                                                                            |
+| ---- | -------------------------------------------------------------------------------------- |
+| G0   | External dirty-worktree baseline; no project mutation                                  |
+| G1   | Root bootstrap grammar and repository-wide nested `AGENTS.md` purity                   |
+| G2   | Canonical KB docs, exact five-file scaffold, privacy admission; no executable KB claim |
+| G3   | Compiled Node TypeScript shell and durable checkpointer                                |
+| G4   | Frozen research contract/trace parity and complete legacy-test disposition             |
+| G5   | Typed terminating results are the sole control boundary; no prose parsing              |
+| G6   | One thin two-tool adapter; research canary, rollback, owner-stickiness, privacy        |
+| G7   | Profiles, policy, capabilities, storage, generations, retrieval floor, lint floor      |
+| G8   | Artifact plane, stateful flows, skill, semantic lint, prepare-only end-to-end          |
+| G9   | Signed host-only promotion apply; package and copy-surface hardening                   |
+| G10  | Research cutover, owner drain, fresh consumer inventory, evidence-mapped retirement    |
+| G11  | Clean-clone release and capability ratchet                                             |
 
 **G6 is non-negotiable.** No stateful KB source, test, workflow, or implementation begins before it.
 The reason is ordering, not ceremony: the KB inherits the orchestration engine's typed result

@@ -8,7 +8,7 @@
 - [Memory](memory/AGENTS.md): Primary-only durable recall/curation, default-off advisory log, supervised HTTP hub, temporal KG, and retention
 - [Orchestration](orchestration/AGENTS.md): Shared FSM engine, exact artifact contracts, durable checkpoints, and recovery
 - [Capabilities](capabilities/AGENTS.md): Artifact-first skills, primary tiered memory, observability, and verification states
-- [State Management](state-management/AGENTS.md): python-statemachine reference, orchestration integration, and skill patterns
+- [State Management](state-management/AGENTS.md): TypeScript playbook reference, orchestration integration, and skill patterns
 - [Architecture](architecture/AGENTS.md): Canonical implementations, Pi alignment deviations, case studies, and coding standards
 - [Documentation](documentation/AGENTS.md): Rules for AGENTS.md files — indexes only, never content
 - [Coding](coding/AGENTS.md): Python and TypeScript best practices, security anti-patterns

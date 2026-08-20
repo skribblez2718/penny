@@ -1,161 +1,64 @@
-# State Machine Reference — FSMs on the orchestration engine
+# State Machine Reference — TypeScript playbooks
 
 ## What
 
-Agent reference for the finite-state machine at the core of every Penny skill. A skill's FSM is a plain `statemachine.StateMachine` (states + transition events) that lives **inside a `BasePlaybook` subclass** in the installed `orchestration` package — `apps/orchestration/src/orchestration/playbooks/<skill>.py`. The engine drives the machine; the machine only declares phases and legal transitions. Use this document when declaring states, transition events, routing, and error/terminal states for a skill.
+A Penny workflow is a TypeScript playbook behind `PlaybookCoreV1`. The playbook uses
+explicit state IDs and successor tables; the shared engine owns requests, checkpoints,
+workers, receipts, gates, recovery, and terminals.
 
-## Why
+## Core interface
 
-Skills have non-trivial workflows (red-green-refactor, gather-analyze-synthesize, frame-explore-evaluate-decide). An explicit FSM replaces nested conditionals with named phases and valid transitions, which makes routing, escalation, crash-resume, and testing straightforward.
-
-**There is ONE orchestration engine.** Every skill shares `apps/orchestration/` (an installed package). A skill does NOT ship its own runtime, its own persistence, or a generated state machine. It ships:
-
-- a `StateMachine` subclass (the states/events),
-- a `BasePlaybook` subclass (the behavior: primitives per state, routing, gates, done predicate),
-- registration in `playbooks/__init__.py`,
-- a ~5-line `scripts/orchestrate.py` delegate,
-- an engine `SKILL.md` (`metadata.penny.engine: orchestration`) and `assets/prompts/`.
-
-The current reference implementation is `orchestration/playbooks/research.py`.
+A playbook implements initialization, dispatch, resume/cancel behavior, state-specific
+result validation, accepted-result routing, and pending-directive rebind. Optional
+capabilities add fan aggregation, malformed-result reissue, and typed gap classification.
+The engine probes capabilities structurally, never by playbook name.
 
 ## Rules
 
-1. **The FSM is a `statemachine.StateMachine`.** `from statemachine import State, StateMachine`. Declare it as `machine_cls` on the playbook.
-2. **States are custom-named for the domain.** Use meaningful phase names (`exploring`, `analyzing`, `planning`, `implementing`, `verifying`, `learning`), not generic `idle/working/done`.
-3. **Include the engine's control states.** A migrated machine has `unknown` + `awaiting_clarification` (escalation seam) and terminal `complete` (final) and `error` (final).
-4. **The machine holds NO business data.** Compact routing fields and selected canonical artifact refs live on `RunContext`; exact stage payload bytes remain in the artifact plane. The machine tracks only the current state.
-5. **Do not persist manually.** State is saved by the engine to a durable `run_id`-keyed SQLite checkpointer after every step. There is NO `/tmp` session file, NO `--state` argv, NO `extract_state`/`restore_state`.
-6. **Routing lives in `route_after`, not in guards.** The playbook inspects the agent SUMMARY and calls `self.sm.send("<event>")`. Guards on the machine, if any, must be side-effect free.
-7. **Every loop is bounded.** Retry loops honor `ctx.max_iterations`; exhaustion routes to a terminal state and reports the outcome HONESTLY (`met=False`), never a fabricated success.
-8. **Work happens in workers, not callbacks.** The machine does not run tools, write files, or call agents. The engine dispatches the worker named by the state's `PrimitiveSpec` with owner-selected exact inputs and an output contract.
+1. Use domain-named states and one canonical state→agent table.
+2. Keep business/product bytes out of the machine; checkpoint compact fields and refs.
+3. Put routing in explicit successor/repair tables and playbook methods.
+4. Make host/deterministic states idempotent or split prepare from apply.
+5. Bound every repair; exhaustion is an honest negative or unresolved result.
+6. Use `await_user` for planned gates and blocking clarification.
+7. Export a `*_FLOW` descriptor and drift-test it against `resources/flow.html`.
+8. Declare terminal requirements through `CompletionGateV1`.
+9. Register construction through `playbooks/registry.ts`; unknown names fail closed.
 
-### What the FSM should and should NOT do
+## State data
 
-| Should                                                                                             | Should NOT                                       |
-| -------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| Declare named phases and legal transition events                                                   | Execute code, run tests, or write files          |
-| Provide the escalation seam (`unknown` → `awaiting_clarification`) and terminal `complete`/`error` | Store business data or cross-run knowledge       |
-| Let `route_after` pick the next event from a SUMMARY                                               | Persist itself to `/tmp` or an argv blob         |
-| Model bounded retry loops with an exhaustion edge                                                  | Fabricate success when a loop runs out of budget |
+`RunContext` contains immutable identity, current/previous state, budgets, compact
+playbook data, selected artifacts, pending branches/directive, and terminal directive.
+It serializes to schema-v2 JSON in Node SQLite. Exact artifact bodies never enter it.
 
-## Procedure/Constraints
+## Typical routing
 
-### The machine (states + events)
-
-```python
-from statemachine import State, StateMachine
-
-class ExampleMachine(StateMachine):
-    intake = State(initial=True)
-    gathering = State()
-    synthesizing = State()
-    validating = State()
-    unknown = State()
-    awaiting_clarification = State()
-    complete = State(final=True)
-    error = State(final=True)
-
-    start = intake.to(gathering)
-    gathered = gathering.to(synthesizing)
-    synthesized = synthesizing.to(validating)
-    validate_pass = validating.to(complete)
-    validate_retry = validating.to(synthesizing)
-    validate_exhausted = validating.to(complete)  # honest met=False outcome
-
-    to_unknown = gathering.to(unknown) | synthesizing.to(unknown) | validating.to(unknown)
-    escalate = unknown.to(awaiting_clarification)
-    clarify = awaiting_clarification.to(gathering)
-    abort = intake.to(error) | gathering.to(error) | synthesizing.to(error) | validating.to(error)
+```ts
+const NEXT_STATE = {
+  gathering: "synthesizing",
+  synthesizing: "verifying",
+  verifying: "complete",
+} as const;
 ```
 
-Use `final=True` for terminal states. A denial edge from a planned review gate to `error` is legitimate; denial and exhaustion end explicitly rather than looping silently.
+A verifier failure returns a typed `EvaluationResultV1` whose `target_state` identifies
+the repair producer. The engine routes that typed cause under the playbook’s budget;
+it does not infer repairs from prose.
 
-### The playbook binds behavior to states
+## Recovery
 
-The `BasePlaybook` subclass names the machine and maps each working state to a `PrimitiveSpec` (which agent + which SUMMARY contract the engine validates):
-
-```python
-class ExamplePlaybook(BasePlaybook):
-    NAME = "example"
-    machine_cls = ExampleMachine
-    PRIMITIVE_BY_STATE = {
-        "gathering": EXAMPLE_GATHER,
-        "synthesizing": EXAMPLE_SYNTHESIZE,
-        "validating": EXAMPLE_VALIDATE,
-    }
-    ESCALATABLE_STATES = frozenset({"gathering", "synthesizing", "validating"})
-```
-
-Optional capabilities are declared the same way:
-
-| Capability                                | Declared by                                            | Also implement                            |
-| ----------------------------------------- | ------------------------------------------------------ | ----------------------------------------- |
-| Planned HITL gate                         | `GATE_STATES`                                          | `gate_questions`, `route_user`            |
-| Parallel fan-out                          | `PARALLEL_BY_STATE = {"exploring": ParallelSpec(...)}` | —                                         |
-| Deterministic in-process state (no agent) | `TOOL_STATES`                                          | `run_tool_state` (must be safe to re-run) |
-| Confidence/stall escalation               | `ESCALATABLE_STATES`                                   | `progress_check` (optional)               |
-
-### Routing on the agent SUMMARY
-
-The engine validates the agent's SUMMARY against the state's contract, then calls `route_after`. The playbook reads the summary and fires the next event:
-
-```python
-def route_after(self, state, ctx, summary):
-    if state == "gathering":
-        self.sm.send("gathered")
-    elif state == "synthesizing":
-        self.sm.send("synthesized")
-    elif state == "validating":
-        ctx.verify_verdict = summary["verdict"]
-        if summary["verdict"] == "PASS":
-            self.sm.send("validate_pass")
-        elif ctx.iteration + 1 < ctx.max_iterations:
-            ctx.iteration += 1
-            self.sm.send("validate_retry")
-        else:
-            self.sm.send("validate_exhausted")
-```
-
-`done_predicate(ctx)` decides whether `complete` means success. It reads `ctx`/`ctx.extras`, never the machine:
-
-```python
-def done_predicate(self, ctx):
-    return ctx.verify_verdict == "PASS"
-```
-
-### Escalation (no state blob)
-
-When an agent emits `confidence=UNCERTAIN` (or `progress_check` returns a reason) in an `ESCALATABLE_STATES` state, the engine drives the machine to `unknown` → `awaiting_clarification` and pauses the run. The user's answer resumes it via `step --agent user` — routed back into the flow by the machine's `clarify` edge. No `orchestrator_state`, no `previous_state` payload.
-
-### Persistence & crash-resume
-
-State is durable in the checkpointer keyed by `run_id`:
-
-- After each step the engine calls `checkpointer.save(run_id, session_id, playbook, current_state_id, ...)`.
-- A fresh subprocess rehydrates by `run_id` — there is no argv state, no replay file.
-- A run interrupted mid-step is recovered automatically (`recover_pending` / the engine `recover` CLI) by re-issuing that step. States must therefore be **idempotent to re-enter**; `TOOL_STATES` handlers especially must be safe to re-run.
-
-There is NO `extract_state()`/`restore_state()`, NO `/tmp/<skill>-<session_id>.json`, NO `/tmp/skill-checkpoints`. If you see those in older code or docs, they are pre-engine legacy and removed.
-
-### Bounded loops & honest exhaustion
-
-Every retry edge is capped by `ctx.max_iterations` and the global `STEP_CAP`. When the cap is hit, route to a terminal state and let `done_predicate` report `met=False`. A VERIFY state with an available oracle must require non-empty captured evidence so a bare pass assertion is rejected.
+The checkpointer stores the pending directive and selected refs under exact `run_id`.
+`recover` rebinds output revision metadata when necessary and reissues pending work.
+Existing runs never change owner or database. Compaction reads exact v2 rows by supplied
+run ID.
 
 ## Verification
 
-- [ ] The FSM is a `statemachine.StateMachine` with domain-named states, declared as the playbook's `machine_cls`.
-- [ ] The machine carries no business data; per-run data is on `RunContext`.
-- [ ] Escalation seam (`unknown` → `awaiting_clarification`) and terminal `complete`/`error` states exist.
-- [ ] Routing is in `route_after` (reads SUMMARY, calls `self.sm.send`); guards, if any, are pure.
-- [ ] No manual persistence: no `/tmp` file, no `--state`, no `extract_state`/`restore_state`.
-- [ ] Every retry loop is capped by `ctx.max_iterations` and ends in a terminal state that reports `met` honestly.
-- [ ] Oracle-backed VERIFY states require real evidence in their SUMMARY contract.
+- [ ] State vocabulary and state/agent binding are exact-set pinned.
+- [ ] Every edge has a named trigger and bounded repairs are identified.
+- [ ] Result schemas are closed and state-specific.
+- [ ] Gate and terminal routes are independently tested.
+- [ ] Recovery and cancellation preserve honest terminal truth.
 
-## Files
-
-| File                                                         | Purpose                                                                        |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| `docs/agents/state-management/state-machine-reference.md`    | This reference                                                                 |
-| `docs/agents/state-management/orchestration-integration.md`  | How the engine drives the machine (start/step/gates/escalation)                |
-| `docs/agents/state-management/skill-patterns.md`             | Reusable playbook workflow shapes                                              |
-| `apps/orchestration/src/orchestration/playbooks/research.py` | Current reference playbook (dynamic fan-out, critique, validation, escalation) |
+Reference: `apps/orchestration/src/playbooks/research.ts` and
+`apps/orchestration/src/playbooks/knowledge-base.ts`.

@@ -12,7 +12,6 @@ export interface SkillDiscovery {
   name: string;
   description: string;
   path: string;
-  hasOrchestrate: boolean;
   disableModelInvocation: boolean;
 }
 
@@ -39,7 +38,6 @@ export function discoverSkillsFromDirectory(
 
     const skillPath = path.join(skillsDir, entry.name);
     const skillMdPath = path.join(skillPath, "SKILL.md");
-    const orchestratePath = path.join(skillPath, "scripts", "orchestrate.py");
     if (!fs.existsSync(skillMdPath)) continue;
 
     let name = entry.name;
@@ -65,7 +63,6 @@ export function discoverSkillsFromDirectory(
       name,
       description,
       path: skillPath,
-      hasOrchestrate: fs.existsSync(orchestratePath),
       disableModelInvocation,
     });
   }

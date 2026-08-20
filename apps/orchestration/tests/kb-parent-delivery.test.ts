@@ -39,6 +39,10 @@ const NOW = Date.now();
 const LATER = new Date(NOW + 30 * 60_000).toISOString();
 const PAST = new Date(NOW - 60_000).toISOString();
 const HOST = { session_id: SESSION, invocation_id: INVOCATION };
+// §5.3: the exact provider/model the runtime reports for the active parent.
+// This suite pins the GRANT binding matrix, so it holds the parent identity and
+// grounding acknowledgement fixed; those two gates are pinned in kb-answer-quality.
+const PARENT = { provider: "ollama", model: "qwen327b:latest" };
 
 function baseRequest(overrides: Record<string, unknown> = {}): QueryKbRequest {
   return validateQueryRequest({
@@ -47,6 +51,7 @@ function baseRequest(overrides: Record<string, unknown> = {}): QueryKbRequest {
     kb_profile_id: PROFILE,
     query: "What did we decide about the gate ladder?",
     answer_delivery: "parent_tool_result",
+    verify_grounding: false,
     ...overrides,
   });
 }
@@ -54,11 +59,18 @@ function baseRequest(overrides: Record<string, unknown> = {}): QueryKbRequest {
 function allowingPolicy(maxUtf8Bytes = 8192): KbPolicy {
   return {
     ...defaultDenyPolicy("kbp-parent-grant-test"),
-    parent_result: { derived_query_answer: "allow_explicit_derived_answer", max_utf8_bytes: maxUtf8Bytes },
+    allowed_parent_models: [{ ...PARENT, locality: "local" }],
+    parent_result: {
+      derived_query_answer: "allow_explicit_derived_answer",
+      max_utf8_bytes: maxUtf8Bytes,
+    },
   };
 }
 
-function grantFor(request: QueryKbRequest, overrides: Record<string, unknown> = {}): { grant; store; file } {
+function grantFor(
+  request: QueryKbRequest,
+  overrides: Record<string, unknown> = {}
+): { grant; store; file } {
   const dir = mkdtempSync(path.join(os.tmpdir(), "kb-parent-grant-"));
   const store = new ParentDeliveryGrantStore(dir);
   const grant = mintParentDeliveryGrant({
@@ -78,7 +90,13 @@ function grantFor(request: QueryKbRequest, overrides: Record<string, unknown> = 
 describe("parent delivery — request canonicalization (§5.6)", () => {
   it("binds SHA-256(JCS(request)) and is independent of key order", () => {
     const a = baseRequest();
-    const b = validateQueryRequest(Object.fromEntries(Object.keys(a).sort((x, y) => y.localeCompare(x)).map((k) => [k, (a as unknown as Record<string, unknown>)[k]])));
+    const b = validateQueryRequest(
+      Object.fromEntries(
+        Object.keys(a)
+          .sort((x, y) => y.localeCompare(x))
+          .map((k) => [k, (a as unknown as Record<string, unknown>)[k]])
+      )
+    );
     expect(computeRequestSha256(a)).toEqual(computeRequestSha256(b));
     expect(computeRequestSha256(a)).toBe(sha256Hex(canonicalJson(a)));
     // A different query is a different digest.
@@ -89,14 +107,18 @@ describe("parent delivery — request canonicalization (§5.6)", () => {
   it("admits closed requests and refuses open/malformed ones", () => {
     expect(baseRequest()).toBeDefined();
     // extra key
-    expect(() => validateQueryRequest({ ...baseRequest(), page_ids: ["x"] as never, extra: 1 })).toThrow();
+    expect(() =>
+      validateQueryRequest({ ...baseRequest(), page_ids: ["x"] as never, extra: 1 })
+    ).toThrow();
     // wrong action
     expect(() => validateQueryRequest({ ...baseRequest(), action: "save" })).toThrow();
     // empty/oversized query
     expect(() => validateQueryRequest({ ...baseRequest(), query: "" })).toThrow();
     expect(() => validateQueryRequest({ ...baseRequest(), query: "x".repeat(32_769) })).toThrow();
     // bad answer_delivery
-    expect(() => validateQueryRequest({ ...baseRequest(), answer_delivery: "parent_tool_result!" })).toThrow();
+    expect(() =>
+      validateQueryRequest({ ...baseRequest(), answer_delivery: "parent_tool_result!" })
+    ).toThrow();
   });
 });
 
@@ -107,6 +129,7 @@ describe("parent delivery — eligibility matrix", () => {
     const { file } = grantFor(request);
     const out = evaluateParentDelivery({
       grant: file,
+      parentIdentity: PARENT,
       request,
       host: { session_id: SESSION, invocation_id: INVOCATION },
       policy,
@@ -119,6 +142,7 @@ describe("parent delivery — eligibility matrix", () => {
     const tighter = allowingPolicy(1024);
     const out2 = evaluateParentDelivery({
       grant: file,
+      parentIdentity: PARENT,
       request,
       host: { session_id: SESSION, invocation_id: INVOCATION },
       policy: tighter,
@@ -132,29 +156,60 @@ describe("parent delivery — eligibility matrix", () => {
     const request = baseRequest();
     const { file } = grantFor(request);
     const policy = allowingPolicy();
-    const base = { request, policy, answerUtf8Bytes: 100, now: NOW, host: HOST };
+    const base = {
+      request,
+      policy,
+      answerUtf8Bytes: 100,
+      now: NOW,
+      host: HOST,
+      parentIdentity: PARENT,
+    };
 
     expect(evaluateParentDelivery({ ...base, grant: null })).toMatchObject({
       status: "refused",
       public_code: REFUSED_PARENT_DELIVERY,
       reason_code: "grant_missing",
     });
-    expect(evaluateParentDelivery({ ...base, grant: file, host: { session_id: "sess_other", invocation_id: INVOCATION } })).toMatchObject({
+    expect(
+      evaluateParentDelivery({
+        ...base,
+        grant: file,
+        host: { session_id: "sess_other", invocation_id: INVOCATION },
+      })
+    ).toMatchObject({
       status: "refused",
       reason_code: "grant_mismatch_session",
     });
-    expect(evaluateParentDelivery({ ...base, grant: file, host: { session_id: SESSION, invocation_id: "inv_other" } })).toMatchObject({
+    expect(
+      evaluateParentDelivery({
+        ...base,
+        grant: file,
+        host: { session_id: SESSION, invocation_id: "inv_other" },
+      })
+    ).toMatchObject({
       status: "refused",
       reason_code: "grant_mismatch_invocation",
     });
-    expect(evaluateParentDelivery({ ...base, grant: file, request: baseRequest({ kb_profile_id: "kbp_other" }) })).toMatchObject({
+    expect(
+      evaluateParentDelivery({
+        ...base,
+        grant: file,
+        request: baseRequest({ kb_profile_id: "kbp_other" }),
+      })
+    ).toMatchObject({
       status: "refused",
       reason_code: "grant_mismatch_profile",
     });
     expect(
-      evaluateParentDelivery({ ...base, grant: file, request: baseRequest({ query: "a different question" }) })
+      evaluateParentDelivery({
+        ...base,
+        grant: file,
+        request: baseRequest({ query: "a different question" }),
+      })
     ).toMatchObject({ status: "refused", reason_code: "grant_mismatch_request_digest" });
-    expect(evaluateParentDelivery({ ...base, grant: file, policy: defaultDenyPolicy("kbp-x") })).toMatchObject({
+    expect(
+      evaluateParentDelivery({ ...base, grant: file, policy: defaultDenyPolicy("kbp-x") })
+    ).toMatchObject({
       status: "refused",
       reason_code: "policy_denies",
     });
@@ -195,7 +250,11 @@ describe("parent delivery — atomic single-use and store integrity", () => {
       answerUtf8Bytes: 100,
       now: NOW,
     });
-    expect(again).toMatchObject({ status: "refused", public_code: REFUSED_PARENT_DELIVERY, reason_code: "grant_consumed" });
+    expect(again).toMatchObject({
+      status: "refused",
+      public_code: REFUSED_PARENT_DELIVERY,
+      reason_code: "grant_consumed",
+    });
     expect(() => store.consume(grant, "kb-run-retry")).toThrow(/not available|state: consumed/);
   });
 

@@ -74,7 +74,8 @@ describe("worker-read memory grant (composition: app seam + memory factory)", ()
     }
 
     // Every read tool is available to the worker ...
-    for (const tool of expectedRead) expect(tools.has(tool), `read tool missing: ${tool}`).toBe(true);
+    for (const tool of expectedRead)
+      expect(tools.has(tool), `read tool missing: ${tool}`).toBe(true);
     // ... and NO write-capable tool is available (blocked by non-registration).
     for (const tool of expectedWrite) {
       expect(tools.has(tool), `write tool must be absent: ${tool}`).toBe(false);

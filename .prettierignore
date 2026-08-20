@@ -8,6 +8,9 @@ node_modules/
 *.min.ts
 package-lock.json
 
+# Strict JSON frontmatter template; Markdown formatting adds a trailing comma.
+docs/kb/templates/page.md
+
 # Non-production research artifacts and test fixtures (mirrors the eslint ignore list).
 research/
 **/tests/fixtures/

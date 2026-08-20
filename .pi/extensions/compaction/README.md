@@ -23,7 +23,7 @@ Compaction collects exact run IDs from two places only:
 
 It then opens the orchestration SQLite checkpointer with `readOnly: true`, enables `PRAGMA query_only`, and selects only those run IDs. It never scans pending rows or correlates by session name/recency.
 
-For each resumable checkpoint, `extras.artifact_protocol` must be strict schema v2. Every `selected_refs` entry must be a strict artifact-ref v1 value with canonical identity, run binding, store URI, and digest consistency before it can enter the appendix. Invalid refs are omitted while the exact run ref remains recoverable. Artifact bytes are not opened during compaction, so a missing or corrupt artifact object cannot block run recovery.
+For each resumable TypeScript v2 checkpoint, every `selected_artifacts` entry must be a strict artifact-ref v1 value with canonical identity, run binding, store URI, and digest consistency before it can enter the appendix. Invalid refs are omitted while the exact run ref remains recoverable. Artifact bytes are not opened during compaction, so a missing or corrupt artifact object cannot block run recovery.
 
 ## Failure Policy
 
@@ -53,7 +53,7 @@ session_before_compact
   ├─ merge evicted + split-turn-prefix messages
   ├─ collect exact run IDs from trusted result metadata + prior v2 refs
   ├─ readExactCheckpoints(run IDs) using read-only SQLite
-  │    └─ validate artifact_protocol.selected_refs
+  │    └─ validate RunContext.selected_artifacts
   ├─ detect conversational pending state (message-only)
   ├─ build + strictly validate compact artifact 3.0.0
   ├─ model prose, or deterministic LOAN fallback
@@ -76,17 +76,17 @@ The removed raw memory bridge has no replacement: memory is not a recovery prere
 
 ## Environment
 
-| Variable                                        | Purpose                                  | Default                                 |
-| ----------------------------------------------- | ---------------------------------------- | --------------------------------------- |
-| `PENNY_ORCH_DB`                                 | Absolute orchestration checkpointer path | `$PROJECT_ROOT/.penny/orchestration.db` |
-| `PI_OBSERVABILITY_REST_URL`                     | Optional archive endpoint                | `http://localhost:8765`                 |
-| `PI_OBSERVABILITY_API_KEY`                      | Optional archive bearer token            | unset                                   |
-| `PI_COMPACTION_SUMMARY_MODEL`                   | Optional `provider/model-id` override    | current session model                   |
-| `PI_COMPACTION_SUMMARY_TIMEOUT_MS`              | Model summarization timeout              | `30000`                                 |
-| `PENNY_TOOL_RESULT_MAX_BYTES`                   | Shared lower byte cap                    | shared hard default                     |
-| `PENNY_TOOL_RESULT_MAX_CHARACTERS`              | Shared lower character cap               | shared hard default                     |
-| `PENNY_TOOL_RESULT_MAX_TOKENS`                  | Shared lower estimated-token cap         | shared hard default                     |
-| `PENNY_ABLATE_COMPACTION_DETERMINISTIC_SUMMARY` | Disable deterministic fallback when `1`  | off                                     |
+| Variable                                        | Purpose                                 | Default                                    |
+| ----------------------------------------------- | --------------------------------------- | ------------------------------------------ |
+| `PENNY_ORCH_V2_DB`                              | Absolute TypeScript checkpointer path   | `$PROJECT_ROOT/.penny/orchestration-v2.db` |
+| `PI_OBSERVABILITY_REST_URL`                     | Optional archive endpoint               | `http://localhost:8765`                    |
+| `PI_OBSERVABILITY_API_KEY`                      | Optional archive bearer token           | unset                                      |
+| `PI_COMPACTION_SUMMARY_MODEL`                   | Optional `provider/model-id` override   | current session model                      |
+| `PI_COMPACTION_SUMMARY_TIMEOUT_MS`              | Model summarization timeout             | `30000`                                    |
+| `PENNY_TOOL_RESULT_MAX_BYTES`                   | Shared lower byte cap                   | shared hard default                        |
+| `PENNY_TOOL_RESULT_MAX_CHARACTERS`              | Shared lower character cap              | shared hard default                        |
+| `PENNY_TOOL_RESULT_MAX_TOKENS`                  | Shared lower estimated-token cap        | shared hard default                        |
+| `PENNY_ABLATE_COMPACTION_DETERMINISTIC_SUMMARY` | Disable deterministic fallback when `1` | off                                        |
 
 Exact checkpoint refs require a Node runtime that provides `node:sqlite` (Node 22.5+; current Pi runtime recommended). On an older runtime, prose compaction still succeeds but the unavailable checkpointer read yields no refs.
 

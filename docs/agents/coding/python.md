@@ -2,7 +2,7 @@
 
 ## What
 
-All Python code in this project follows these conventions. Applies to skill orchestrators, tool wrappers, watchers, and scripts.
+All retained Python utilities, services, watchers, and scripts follow these conventions. Skill orchestration is TypeScript-only.
 
 ## Why
 
@@ -13,7 +13,7 @@ Consistent style reduces cognitive load when reading code across skills. Agents 
 1. **Lint passes with zero errors.** `flake8 . --max-line-length=120 --extend-ignore=E203,E501,W503,W504`
 2. **Format passes.** `black . --config pyproject.toml`
 3. **Typecheck passes.** `mypy . --config-file pyproject.toml`
-4. **Use `python-statemachine` for state machines.** Canonical implementation. No custom FSM.
+4. **Do not implement skill workflows in Python.** `python-statemachine` remains permitted only for an independently owned Python subsystem such as the memory-canary authority FSM.
 5. **Use `pathlib.Path` for filesystem paths.** Not `os.path` or string concatenation.
 6. **Use dataclasses for state containers.** Not dicts with string keys.
 7. **Type hints on all public functions.** Return types required.

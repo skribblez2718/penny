@@ -45,4 +45,4 @@ The pause is fully recoverable. What Penny was doing, why it paused, and your ev
 ## Learn more
 
 - Implementation notes: `docs/agents/capabilities/unknown-state/unknown-state.md`
-- Engine: `apps/orchestration/src/orchestration/engine.py` (`_escalate`, `_resume`, `progress_check`)
+- Engine: `apps/orchestration/src/engine.ts` (`respond`, `recover`, checkpointed `await_user`)

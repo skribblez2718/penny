@@ -204,8 +204,12 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}) {
 
       const workerAdapter = new MemoryAdapter(workerConfig, options);
       const workerTelemetry: MemoryTelemetry = {
-        info(event, context) { logger.info(event, context); },
-        warn(event, context) { logger.warn(event, context); },
+        info(event, context) {
+          logger.info(event, context);
+        },
+        warn(event, context) {
+          logger.warn(event, context);
+        },
       };
 
       for (const tool of createPrimaryMemoryTools({

@@ -11,33 +11,12 @@
  * all-or-none claim protocol, snapshot I/O, and crash recovery are also here.
  */
 
-import { createHash, randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  closeSync,
-  existsSync,
-  fsyncSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 
-import {
-  canonicalJson,
-  sha256Hex,
-  Sha256HexSchema,
-  OpaqueIdSchema,
-  validateKbContract,
-  type KbProfile,
-  type Sha256Hex,
-} from "./contracts.js";
+import { canonicalJson, sha256Hex, type Sha256Hex } from "./contracts.js";
 
 // ── Types (§5.2) ────────────────────────────────────────────────────────────
 

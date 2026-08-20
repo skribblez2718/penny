@@ -39,7 +39,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 
-import { canonicalJson, sha256Hex, type SourceType, type Sha256Hex } from "./contracts.js";
+import { canonicalJson, sha256Hex, type SourceType } from "./contracts.js";
 import { readCurrent } from "./filesystem.js";
 import { readSelectedGeneration } from "./generations.js";
 import { approveIngest, type IngestSource, type PendingIngest } from "./ingest.js";
@@ -293,10 +293,14 @@ function buildPending(gate: GateState): PendingIngest {
     if (a === undefined) throw new GateStorageError(`gate has no '${kind}' artifact`);
     return a.artifact_id;
   };
+  // `claims` exists only for an ingest: a save composes from a claimed query
+  // answer rather than extracting from sources, so its sealed set has no claims
+  // artifact. Publication does not read it either way.
+  const claims = gate.artifacts.find((x) => x.artifact_kind === "claims")?.artifact_id;
   return {
     runId: gate.run_id,
     sourceIds: [...gate.source_ids],
-    claimsArtifactId: byKind("claims"),
+    ...(claims !== undefined ? { claimsArtifactId: claims } : {}),
     pageDraftArtifactId: byKind("page_draft"),
     lintReportArtifactId: byKind("lint_report"),
     verificationArtifactId: byKind("verification_report"),
@@ -419,7 +423,7 @@ function assertRegularFile(p: string): void {
   if (!st.isFile()) throw new GateStorageError(`not a regular file: ${p}`);
 }
 
-function loadEnvelope(kbRoot: string, capabilityId: string): CapabilityEnvelope {
+export function loadEnvelope(kbRoot: string, capabilityId: string): CapabilityEnvelope {
   const regPath = path.join(kbRoot, "capabilities", `${capabilityId}.json`);
   if (!existsSync(regPath)) {
     throw new GateStorageError(`capability '${capabilityId}' not found in registry`);

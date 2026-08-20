@@ -22,6 +22,21 @@ import { RunContext } from "../src/context.js";
 import { KnowledgeBasePlaybook } from "../src/playbooks/knowledge-base.js";
 import { defaultKbIngestPlane, resolveKbRoot } from "../src/kb/ingest-plane.js";
 import { initKb } from "../src/kb/workflows.js";
+import { readPolicy, writePolicy } from "../src/kb/filesystem.js";
+
+/** The active parent identity these runs execute under (§5.3). */
+const PARENT = { provider: "ollama", model: "qwen327b:latest" };
+
+/** The §5.3 out-of-band policy install a default-deny KB requires. */
+function installTestPolicy(kbRoot: string): void {
+  const policy = readPolicy(kbRoot);
+  writePolicy(kbRoot, {
+    ...policy,
+    processing_mode: "local_only",
+    allowed_parent_models: [{ ...PARENT, locality: "local" }],
+    allowed_child_models: [{ ...PARENT, locality: "local" }],
+  });
+}
 import { RunArtifactStore } from "../src/kb/run-artifacts.js";
 import { findGateForRun, mintSourceCapability } from "../src/kb/gate.js";
 import { CapabilityStore } from "../src/kb/capabilities.js";
@@ -71,6 +86,7 @@ function seedRun(): Fixture {
   const kbRoot = resolveKbRoot(projectRoot, PROFILE);
   const runId = `run_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
   initKb({ kbRoot, profileId: PROFILE, runId: `${runId}_init` }, "Integration KB");
+  installTestPolicy(kbRoot);
   const capabilityIds = [
     mintSource(kbRoot, projectRoot, "a.md", "Quorum requires two of three acknowledgements."),
     mintSource(kbRoot, projectRoot, "b.md", "Replay was fixed by a monotonic sequence number."),
@@ -84,7 +100,12 @@ function seedRun(): Fixture {
       engine_owner: "typescript",
     },
     goal: "ingest two admitted sources",
-    constraints: { action: "ingest", kb_profile_id: PROFILE, source_capability_ids: capabilityIds },
+    constraints: {
+      action: "ingest",
+      kb_profile_id: PROFILE,
+      source_capability_ids: capabilityIds,
+      parent_identity: { ...PARENT },
+    },
     projectRoot,
     trustProfile: "hardened-untrusted",
     maxSteps: 40,

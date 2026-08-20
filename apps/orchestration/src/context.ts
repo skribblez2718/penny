@@ -189,6 +189,7 @@ export class RunContext {
     projectRoot: string;
     trustProfile: TrustProfile;
     maxSteps: number;
+    initialArtifacts?: readonly ArtifactRef[];
   }): RunContext {
     const identity = validateContract(RunIdentitySchema, input.identity, "run identity");
     if (identity.engine_owner !== "typescript") {
@@ -216,7 +217,7 @@ export class RunContext {
       clarification_text: "",
       met: false,
       research: emptyResearchData(),
-      selected_artifacts: [],
+      selected_artifacts: clone([...(input.initialArtifacts ?? [])]),
       // playbook_data is intentionally omitted here; it materializes only when a
       // playbook writes to it, keeping research snapshots byte-identical.
       pending_directive: null,

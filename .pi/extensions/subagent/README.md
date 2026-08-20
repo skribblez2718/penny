@@ -114,7 +114,7 @@ The `skillContext` parameter injects skill-specific prompt content into the suba
 subagent({
   agent: "echo",
   task: "Research authentication migration evidence for the current session.",
-  skillContext: ".pi/skills/research/assets/prompts/echo.md",
+  skillContext: ".pi/skills/research/assets/prompts/echo-researching.md",
 });
 
 // Parallel mode with per-task skill context
@@ -123,12 +123,12 @@ subagent({
     {
       agent: "echo",
       task: "Research standards evidence",
-      skillContext: ".pi/skills/research/assets/prompts/echo.md",
+      skillContext: ".pi/skills/research/assets/prompts/echo-researching.md",
     },
     {
       agent: "echo",
       task: "Research implementation evidence",
-      skillContext: ".pi/skills/research/assets/prompts/echo.md",
+      skillContext: ".pi/skills/research/assets/prompts/echo-researching.md",
     },
   ],
 });

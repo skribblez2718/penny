@@ -13,12 +13,12 @@ A result carries the action, host-generated `run_id`, optional `kb_id`, status, 
 and counts, path-free artifact handles, safe evidence references, bounded warnings and unresolved
 items, and a `next` step. Cross-fields are closed:
 
-| Status | `met` | `next` |
-|---|---|---|
-| `running` | false | `resume` |
-| `awaiting_user` | false | `review` |
-| `refused`, `error`, `exhausted` | false | `none` |
-| `complete` | true for a satisfied action, false for a completed deny or unsupported answer | `none` |
+| Status                          | `met`                                                                         | `next`   |
+| ------------------------------- | ----------------------------------------------------------------------------- | -------- |
+| `running`                       | false                                                                         | `resume` |
+| `awaiting_user`                 | false                                                                         | `review` |
+| `refused`, `error`, `exhausted` | false                                                                         | `none`   |
+| `complete`                      | true for a satisfied action, false for a completed deny or unsupported answer | `none`   |
 
 An **artifact handle is path-free**: an ID, kind, digest, media type, and byte length. It has no
 path, relative path, logical filename, root, or locator. `answer_delivery: "artifact_ref"` means the
@@ -34,7 +34,7 @@ control-plane file so they survive restart. They are never returned or logged, a
 in the KB root or the control database.
 
 The same session and invocation with the same digest returns the original run and its exact stored
-replay projection, with no second side effect. The same pair with a *different* digest is a
+replay projection, with no second side effect. The same pair with a _different_ digest is a
 mismatch and is refused. A previously delivered derived answer is never persisted and never
 redelivered; a new derived delivery needs a new invocation and a new grant.
 
@@ -51,11 +51,90 @@ redelivered; a new derived delivery needs a new invocation and a new grant.
 - **`save`** — an explicit prior query run → Synthia composes → deterministic, semantic, and
   grounding checks → **human content-review gate** → publish a generation. A useful query does not
   authorize a save; the save must claim that exact query run.
+
+### The save claim
+
+What authorizes a save is not the request but a **single-use claim** over one query run's sealed
+answer. A completed query with a sealed answer creates exactly one claim, and the claim ratchets
+one way:
+
+```text
+  available ──claim──> claimed ──reserve──> commit_reserved ──selector──> consumed
+      ^                   │                        │
+      └──deny/abort───────┘                        └──pre-selector abort──> invalidated
+       (only while the sealed answer is still valid)
+```
+
+- Claiming is the **first** side effect of a save, before any compose, read, or write, so a
+  drifted, consumed, cross-profile, or concurrently-claimed answer stops the run at the door.
+- The claim binds the answer's digest. If the sealed answer is not the one the claim was minted
+  over, the claim is invalidated rather than published.
+- `commit_reserved` is the point of no return: it can never return to `available` and never
+  transfers to another save run. A publish that fails after reservation invalidates, because the
+  host cannot prove from outside whether the selector moved — and re-saving a possibly published
+  answer is worse than refusing a legitimate retry.
+- **Refine retains** the claim; **deny releases** it back to `available` while the sealed answer is
+  still valid, so the operator may compose a different page from the same query.
+
+A save composes from that claimed answer instead of extracting from sources: it enters the machine
+at `compose`, reads the sealed answer as its one allowed prior-run artifact, and admits no new
+sources. Publication carries the KB's existing pages and sources forward, so a save adds a page
+rather than replacing the knowledge base.
+
 - **`lint`** — deterministic first; malformed structure blocks semantic work. Reports findings and
   **candidate** conflicts only. Publishes nothing.
 - **`promote`** — prepare and verify only. See [Privacy and Promotion](privacy-and-promotion.md).
 
 `status` and `resume` are profile-safe control operations that expose no root and no body.
+
+## Query delivery
+
+`answer_delivery` is a closed field with exactly one bounded parent-facing outcome per outcome class:
+
+- **`artifact_ref`** (default) — the result carries the answer artifact handle only. The tool
+  result itself never carries derived content.
+- **`parent_tool_result`** — the result may carry one bounded derived answer, and only when the
+  policy permits it and exactly one host-minted grant matches.
+
+The grant rule is closed and fails closed. A grant is owner-only, minted for one Pi session — its
+session and invocation fields both carry the operator's session id — with a single-use byte cap
+and an expiry. Admission requires **exactly one** matching unconsumed grant whose profile, exact
+request digest (SHA-256 over the closed request), and byte cap all match and which is unexpired;
+two matching candidates are an ambiguity refusal, never a coin flip. The delivered run consumes
+the grant atomically; a retry is refused rather than redelivered; and a grant refused for any
+other reason (policy denial, byte cap, malformed answer, mismatch) is _retained_ for a future
+eligible run.
+
+The grant is not the only condition. Delivery additionally requires an **exact parent allowlist
+match**: the provider and model the runtime reports for the active parent context must appear in
+the policy's `allowed_parent_models`, and under `local_only` the matched rule must itself declare
+`locality: "local"`. The host never guesses locality — it reads the operator's own declaration for
+that exact provider/model. An empty allowlist denies, and a parent identity the host cannot
+establish denies. The grant says the operator approved this _request_; the allowlist says the
+operator approved this _parent_ to receive derived private content.
+
+Delivery also requires the answer to be what the request asked for. `verify_grounding` defaults
+true, and the query flow is deterministic retrieval with no grounding phase, so a request that
+asks for verification is refused for parent delivery and its artifact result carries a
+`grounding_not_verified` warning. An operator who wants delivery today must mint over a request
+that explicitly records `verify_grounding: false` — so the digest itself carries the fact that an
+unverified answer was accepted. `page_ids` and `source_ids` are honored as retrieval filters
+(page set, and pages whose claim evidence cites an allowed source).
+
+The delivered answer is closed: advisory-only, non-empty text, one or more opaque
+page/claim/source citations (never locators), a contradictions array, an unknowns array, and
+`canonical_verification_required: true`. It may never present itself as canonical current state,
+and no raw private body may ever appear in the tool result.
+
+On any miss the parent sees its safe handle result plus exactly one bounded warning code,
+`refused_parent_delivery` — never the answer, the diagnostic reason, or grant internals. The host
+logs a bounded reason for the operator (missing/mismatched/expired/consumed/ambiguous grant,
+policy denial, byte-cap miss, malformed answer) and never returns one to the model.
+
+The decision core and its fail-closed behavior live in the KB modules of the orchestration app
+(`kb/parent-delivery`; the adapter only builds the closed request and surfaces the decision), and
+the shape, sealed-answer extraction, and every refusal reason are pinned by the
+`test:kb-answer-quality` suite alongside the parent-delivery suite.
 
 ## Execution architecture (TypeScript path)
 
@@ -101,7 +180,7 @@ opening message.
 state, allowed kinds, profile, and resolved root. The model submits a closed JSON payload — never a
 path, run, state, or profile field. The host strict-parses it, rejects duplicate and unknown keys,
 validates it, canonicalizes to JCS, applies policy byte and count limits, allocates the ID and keys
-itself, records a durable `prepared` row *before* writing bytes, writes a mode-`0600` no-follow
+itself, records a durable `prepared` row _before_ writing bytes, writes a mode-`0600` no-follow
 temporary file, fsyncs, atomically renames, then marks the row `staged` and returns a path-free
 handle.
 
@@ -152,6 +231,6 @@ leaking source bytes.
 
 ## Engine ownership
 
-Each run carries an **immutable** engine owner. Python and TypeScript engines use separate database
-files and schemas and never convert rows. A pending run is finished by the engine that started it,
-or explicitly abandoned and recorded — a flag change affects only new runs.
+Each run carries immutable `engine_owner: "typescript"` identity and schema version 2. The active
+runtime never converts or resumes retired checkpoint rows; historical bytes remain private archive
+evidence only.

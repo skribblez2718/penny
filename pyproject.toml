@@ -11,7 +11,7 @@ dependencies = [
     # must be a deliberate, migration-aware step — not a silent `pip -U`.
     # Recover a corrupted palace with scripts/system/bridge/repair_palace.py.
     "chromadb>=1.5.9,<1.6",
-    "python-statemachine>=2.0",   # FSM library — orchestration engine
+    "python-statemachine>=2.0",   # retained by the independent memory-canary authority FSM
     "tiktoken>=0.11.0",           # canonical SYSTEM.md token-budget counter
     # Word and PowerPoint extension runtimes. These are first-class locked
     # dependencies so an exact `uv sync` preserves document generation.
@@ -24,15 +24,13 @@ dependencies = [
     # (fastapi, uvicorn, aiosqlite, python-dotenv, pydantic, apscheduler, …)
     # arrive transitively — do NOT duplicate them here.
     "penny-observability",        # apps/observability — observability backend
-    "orchestration",              # apps/orchestration — shared FSM engine
 ]
 
 [tool.uv.workspace]
-members = ["apps/observability", "apps/orchestration"]
+members = ["apps/observability"]
 
 [tool.uv.sources]
 penny-observability = { workspace = true }
-orchestration = { workspace = true }
 
 [project.optional-dependencies]
 dev = [
@@ -98,7 +96,7 @@ exclude = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = [".pi/extensions/*/tests", "scripts/system/*/tests", "scripts/system/tests", "apps/orchestration/tests"]
+testpaths = [".pi/extensions/*/tests", "scripts/system/*/tests", "scripts/system/tests"]
 python_files = ["*.test.py", "test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"

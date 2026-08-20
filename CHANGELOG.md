@@ -16,8 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`$XDG_STATE_HOME/penny/artifact-grants/<sha256(session)>.json`, `0600`) after
   it has already persisted and verified exact bytes, and the primary runtime
   resolves them by exact artifact ID. The grant root is a sibling of the
-  artifact root, never inside it: both artifact stores claim the artifact root
-  exclusively and refuse to operate if it holds any unmanaged entry.
+  artifact root, never inside it: the TypeScript artifact owner treats the artifact
+  root as its managed persistence boundary.
   - Resolution stays exact-ID only — no list, search, or probing oracle. An
     ungranted ID returns `ARTIFACT_NOT_GRANTED`, as it does for a worker.
   - The owner presents `penny-primary:owner`, distinct from every worker
@@ -70,6 +70,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Removed
 
+- **Python orchestration runtime and fallback.** All skill modes now run through
+  `@penny/orchestration`: single, parallel, chain, and chain resume. Removed the
+  Python runtime/package/tests, per-skill delegate, engine selector, Python artifact
+  child, and legacy workspace dependency. Exact chain handoff is imported into the
+  target TypeScript run; compaction reads the v2 checkpoint directly. Existing Python
+  checkpoint bytes were archived privately without conversion or runtime fallback.
 - **Self-Improvement Loop, Ambient Watchers, Weekly Digest, Prompt Efficacy, and
   Judgment Calibration — removed in full.** Penny's improvement work is driven by
   the `.pi/prompts/*-audit` prompt family from here on: simpler, more reliable, and

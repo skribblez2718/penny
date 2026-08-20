@@ -9,10 +9,8 @@
  * (host-only gate decisions, host-only approval, the documented cancel seam,
  * bounded repairs, honest exhaustion).
  *
- * The Python-side guard (test_flow_diagrams.py) covers the Python research
- * machine; this test covers the TS machine. Both enforce the same rule:
- * a stale diagram is a hard failure, and the diagram updates in the same
- * change that changes the machine.
+ * The TypeScript descriptors are the sole machine authority. A stale diagram is
+ * a hard failure, and the diagram updates in the same change as the machine.
  */
 
 import { readFileSync } from "node:fs";
@@ -26,10 +24,19 @@ import {
   KB_FLOW,
   KNOWLEDGE_BASE_SKILL_CONTRACT,
 } from "../src/playbooks/knowledge-base.js";
+import { RESEARCH_FLOW } from "../src/playbooks/research.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(here, "../../..");
 const FLOW_HTML = path.join(REPO_ROOT, ".pi", "skills", "knowledge-base", "resources", "flow.html");
+const RESEARCH_FLOW_HTML = path.join(
+  REPO_ROOT,
+  ".pi",
+  "skills",
+  "research",
+  "resources",
+  "flow.html"
+);
 
 interface DiagramNode {
   title?: string;
@@ -83,7 +90,9 @@ function extractConst(source: string, name: string): string {
     }
   }
   if (!opened || depth !== 0) {
-    throw new Error(`could not find the balanced 'const ${name}' value; it must be a single JSON literal`);
+    throw new Error(
+      `could not find the balanced 'const ${name}' value; it must be a single JSON literal`
+    );
   }
   const raw = source.slice(start + marker.length, i + 1);
   try {
@@ -117,9 +126,10 @@ describe("flow-diagrams (KB, §5.12)", () => {
     for (const edge of E) {
       expect(nodeIds, `edge ${edgeKey(edge)}: '${edge.from}' has no node`).toContain(edge.from);
       expect(nodeIds, `edge ${edgeKey(edge)}: '${edge.to}' has no node`).toContain(edge.to);
-      expect(["fwd", "gate", "loop", "exit", "abort"], `edge ${edgeKey(edge)}: unknown kind '${edge.kind}'`).toContain(
-        edge.kind
-      );
+      expect(
+        ["fwd", "gate", "loop", "exit", "abort"],
+        `edge ${edgeKey(edge)}: unknown kind '${edge.kind}'`
+      ).toContain(edge.kind);
     }
   });
 
@@ -144,14 +154,18 @@ describe("flow-diagrams (KB, §5.12)", () => {
     const diagramKinds: Record<string, string> = { forward: "fwd", repair: "loop", gate: "gate" };
     for (const edge of E) {
       const expected = kindMap.get(edgeKey(edge));
-      expect(expected, `described edge ${edgeKey(edge)} has no kind in the descriptor`).toBeDefined();
+      expect(
+        expected,
+        `described edge ${edgeKey(edge)} has no kind in the descriptor`
+      ).toBeDefined();
       const allowed =
         expected === "terminal"
           ? ["exit", "abort"] // the two terminal routes (publish / deny)
           : [diagramKinds[expected]];
-      expect(allowed, `edge ${edgeKey(edge)} drawn as '${edge.kind}', descriptor says '${expected}'`).toContain(
-        edge.kind
-      );
+      expect(
+        allowed,
+        `edge ${edgeKey(edge)} drawn as '${edge.kind}', descriptor says '${expected}'`
+      ).toContain(edge.kind);
     }
   });
 
@@ -197,7 +211,10 @@ describe("flow-diagrams (KB, §5.12)", () => {
     }
     // Every agent phase can reissue itself on an incomplete result.
     for (const phase of KB_AGENT_PHASES) {
-      expect(repairs.some((r) => r.from === phase && r.to === phase), `missing self-repair at '${phase}'`).toBe(true);
+      expect(
+        repairs.some((r) => r.from === phase && r.to === phase),
+        `missing self-repair at '${phase}'`
+      ).toBe(true);
     }
   });
 
@@ -209,7 +226,10 @@ describe("flow-diagrams (KB, §5.12)", () => {
       // A met terminal's only route is the required publication state.
       if (terminal.met) {
         expect(requiredStates).toContain(terminal.route_from);
-        expect(drawn.every((e) => e.from === terminal.route_from), "a met terminal must be reachable only from the required state").toBe(true);
+        expect(
+          drawn.every((e) => e.from === terminal.route_from),
+          "a met terminal must be reachable only from the required state"
+        ).toBe(true);
       }
       expect(
         drawn.every((e) => e.kind === "exit" || e.kind === "abort" || e.kind === "gate"),
@@ -232,7 +252,8 @@ describe("flow-diagrams (KB, §5.12)", () => {
   it("is self-contained (no network, no external assets, no script execution of private data)", () => {
     expect(html).not.toMatch(/<script[^>]+src\s*=/i);
     expect(html).not.toMatch(/<link[^>]+href\s*=/i);
-    const scripts = html.match(/<script\b(?! type="application\/json")[^>]*>[\s\S]*?<\/script>/g) ?? [];
+    const scripts =
+      html.match(/<script\b(?! type="application\/json")[^>]*>[\s\S]*?<\/script>/g) ?? [];
     expect(scripts.length, "at most the one inline rendering script").toBe(1);
     const inline = scripts.join("\n");
     expect(inline).not.toMatch(/fetch\(|XMLHttpRequest|import\s+[\w"']/);
@@ -242,5 +263,29 @@ describe("flow-diagrams (KB, §5.12)", () => {
       urls.filter((u) => !u.startsWith("http://www.w3.org/2000/svg")),
       `external URLs in the inline script: ${urls.join(", ")}`
     ).toEqual([]);
+  });
+});
+
+const researchHtml = readFileSync(RESEARCH_FLOW_HTML, "utf8");
+function researchDiagram(): { states: Set<string>; edges: Set<string> } {
+  const nodeSegment = researchHtml.split("const N", 2)[1]?.split("const E", 1)[0] ?? "";
+  const edgeSegment = researchHtml.split("const E", 2)[1]?.split("];", 1)[0] ?? "";
+  const states = new Set(
+    [...nodeSegment.matchAll(/^\s{2,}([A-Za-z_]\w*)\s*:\s*\{/gm)].map((match) => match[1])
+  );
+  const from = [...edgeSegment.matchAll(/\bfrom\s*:\s*'([A-Za-z_]\w*)'/g)].map((match) => match[1]);
+  const to = [...edgeSegment.matchAll(/\bto\s*:\s*'([A-Za-z_]\w*)'/g)].map((match) => match[1]);
+  if (from.length !== to.length) throw new Error("research flow has an unpaired edge");
+  return { states, edges: new Set(from.map((source, index) => `${source}→${to[index]}`)) };
+}
+
+describe("flow-diagrams (research)", () => {
+  it("draws exactly the TypeScript research descriptor states", () => {
+    expect([...researchDiagram().states].sort()).toEqual([...RESEARCH_FLOW.states].sort());
+  });
+
+  it("draws exactly the TypeScript research descriptor edges", () => {
+    const expected = RESEARCH_FLOW.edges.map(([from, to]) => `${from}→${to}`).sort();
+    expect([...researchDiagram().edges].sort()).toEqual(expected);
   });
 });

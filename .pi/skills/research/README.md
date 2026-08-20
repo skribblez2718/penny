@@ -1,82 +1,80 @@
 # Research Skill
 
-Structured Quick / Standard / Deep research: decompose a query, gather cited evidence, synthesize and critique a thematic report, validate citation grounding, and produce final report files.
+Structured Quick / Standard / Deep research: decompose a query, gather cited evidence,
+synthesize and critique a thematic report, validate citation grounding, and produce final
+report files.
 
 ## Architecture
 
-`ResearchPlaybook` / `ResearchMachine` lives in `apps/orchestration/src/orchestration/playbooks/research.py`; `scripts/orchestrate.py` is the thin delegate to the shared engine.
+`ResearchPlaybook` lives in `apps/orchestration/src/playbooks/research.ts` and is
+constructed through the TypeScript playbook registry. The skill directory contains no
+executable delegate.
 
-- SQLite checkpoint state is keyed by `run_id`; there is no argv state blob or temporary state file.
-- Exact agent output lives in the immutable artifact plane, not in run context.
-- Every agent directive carries task-provided `input_artifacts` and an owner `output_artifact` contract.
-- Agents read exact predecessors with `artifact_read`; their complete response is owner-captured before the routing-only SUMMARY is accepted.
-- Recovery reissues the pending state from checkpointed exact refs.
-- The entire workflow operates with no memory endpoint or memory extension.
+- Node SQLite checkpoint state is keyed by `run_id`.
+- Exact agent output lives in the immutable artifact plane, never in run context.
+- Every worker receives exact `input_artifacts` and an owner `output_artifact` contract.
+- Agents read predecessors with `artifact_read`; complete response bytes are persisted
+  before routing fields are accepted.
+- Recovery reissues the pending TypeScript directive from checkpointed refs.
+- Single, parallel, chain, and chain-resume invocations all use TypeScript.
+- The workflow remains correct without durable memory.
 
 ## States
 
 | State | Agent | Role |
 |---|---|---|
-| `intake` | — | Validate goal, resolve budgets, route explicit quick or planning. |
-| `planning` | Piper | Decompose query; declare mode when caller did not. |
+| `planning` | Piper | Decompose the query; declare mode when the caller did not. |
 | `critiquing_plan` | Carren | Evidence-gated plan critique when `critique_passes >= 2`. |
-| `researching` | Echo × N | Dynamic branch fan; single-agent explicit-quick; re-entered for evidence seeking. |
-| `synthesizing` | Synthia | Synthesize exact branch artifacts into a cited report. |
+| `researching` | Echo × N | Bounded dynamic research fan; single-agent explicit quick. |
+| `synthesizing` | Synthia | Integrate exact findings into a cited report. |
 | `critiquing_report` | Carren | Evidence-gated report critique when `critique_passes >= 1`. |
 | `validating` | Vera | Citation-grounding gate in every mode. |
-| `report_writing` | Skribble | Write and return complete report products. |
-| `unknown` / `awaiting_clarification` | — | HITL staging and durable pause. |
-| `complete` / `error` | — | Terminal states. |
+| `report_writing` | Skribble | Write and return the complete report products. |
 
 ## Mode flows
 
-- **Quick:** `intake → researching → synthesizing → validating → report_writing → complete`
-- **Standard:** `intake → planning → researching → synthesizing → validating → report_writing → complete`
-- **Deep:** `intake → planning → critiquing_plan → researching → synthesizing → critiquing_report → validating → report_writing → complete`
+- **Quick:** `researching → synthesizing → validating → report_writing → complete`
+- **Standard:** `planning → researching → synthesizing → validating → report_writing → complete`
+- **Deep:** `planning → critiquing_plan → researching → synthesizing → critiquing_report → validating → report_writing → complete`
 
-Mode expands to a verification budget rather than directly gating edges. There is no per-mode sub-query count. `max_sub_queries` is one budget, clamped by `max_fan_width`; one Echo artifact is captured per branch and fan-in maps by exact `branch_id`.
+Mode expands to verification budgets rather than hardcoded topology. `max_sub_queries`
+is clamped by `max_fan_width`; the model chooses how much of the ceiling to spend.
 
-## Exact handoff by phase
+## Exact handoff and composition
 
-The generic engine retains selected refs; the playbook chooses all exact predecessors needed by each consumer:
+The playbook selects the exact predecessor refs each state needs. Payload bytes never
+enter `RunContext`; retries, clarification, recovery, and fan-in retain selected refs.
+A malformed routing result creates an explicit output revision rather than advancing.
 
-- planning revision: prior plan + plan critique;
-- initial research: plan and any plan critique;
-- synthesis: all selected research branches plus relevant prior synthesis/critique/validation;
-- report critique: research evidence + current synthesis;
-- validation: all research evidence + current synthesis + report critique when present;
-- report writing: all research evidence + current synthesis + validation.
+When research is a later skill-chain step, the owner copies exact predecessor bytes into
+an immutable target-run `chain_input` artifact. Only the actual research entry states may
+consume it. No `{previous}` payload substitution occurs.
 
-Payload bytes never enter `RunContext`. A malformed SUMMARY retry creates an explicit artifact revision. Clarification and fresh-process recovery preserve the same selected refs.
+## Honest outcomes
 
-## Loops and honest outcomes
+Critique and validation repairs are bounded. Exhaustion records warnings and unresolved
+issues rather than inventing approval. Vera may name `evidence_needed`, which drives a
+bounded Echo research round followed by re-synthesis and re-validation.
 
-Plan critique, report critique, and validation revision loops are bounded by `max_iterations`. Repeated identical issues escalate instead of consuming the remaining budget. On exhaustion the run proceeds with warnings and unresolved issues rather than inventing approval.
-
-When Vera returns researchable `evidence_needed`, validation can route through a bounded additional Echo fan and Synthia re-synthesis. Branch numbering continues across rounds, so each selected branch has a distinct artifact identity. When no round remains, the workflow re-grounds from existing evidence and eventually exhausts honestly.
-
-`met` records report delivery; `grounded` records Vera's final verdict. These are intentionally separate.
-
-## Clarification and restart
-
-Escalation is driven by `needs_clarification`, incomplete stage flags, `UNCERTAIN`, or a stalled loop. Resume uses the same run and returns to the producer that can act on the answer: planning, researching, or synthesizing. The next directive includes the clarification and exact checkpointed inputs.
-
-`recover_pending` re-presents a clarification or reissues only pending work. Parallel partial recovery keeps accepted sibling refs and redispatches only missing branch IDs.
+`met` records report delivery; `grounded` records Vera’s final verdict. Surface both.
 
 ## Products
 
-Skribble writes to `$PROJECT_ROOT/research/<slug>-<digest>`:
+Skribble writes beneath `$PROJECT_ROOT/research/<slug>-<digest>`:
 
 - `report.md`
 - `sources.md`
 - `README.md`
 
-Skribble also returns the complete contents of all three in the final response. The execution owner captures those bytes as the `report_writing` `agent-output`; the terminal result exposes that exact checkpointed ref as `output_artifact_ref`. The files remain user-facing product files.
+The owner-captured `report_writing` artifact is returned as `output_artifact_ref`; the
+files remain user-facing products.
 
 ## Verification surfaces
 
-- `apps/orchestration/tests/test_research_playbook.py` — control flow and non-memory enhancements.
-- `apps/orchestration/tests/test_research_artifact_handoff.py` — exact handoff and memory-absent conformance.
-- `apps/orchestration/tests/test_contract_prompt_drift.py` — SUMMARY and semantic-handoff source guards.
-- `resources/reference.md` — state, transition, contract, artifact, and terminal reference.
-- `resources/flow.html` — state diagram checked against the FSM.
+- `apps/orchestration/tests/research-parity.test.ts`
+- `apps/orchestration/tests/research-parity-pin.test.ts`
+- `apps/orchestration/tests/core-runtime.test.ts`
+- `apps/orchestration/tests/initial-artifacts.test.ts`
+- `apps/orchestration/tests/prompt-guidance-contract.test.ts`
+- `resources/reference.md`
+- `resources/flow.html`

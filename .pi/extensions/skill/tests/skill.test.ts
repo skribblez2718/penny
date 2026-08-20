@@ -1,7 +1,7 @@
 /**
  * Skill Extension Tests
  *
- * Tests the skill invocation logic with mocked subagent and Python calls:
+ * Tests skill invocation data shaping and result formatting:
  * - Skill discovery
  * - Orchestration loop (start → agent → step → complete)
  * - Summary parsing
@@ -379,7 +379,7 @@ describe("onUpdate Progress Callbacks", () => {
     // - Starting the skill
     // - Each iteration of the action loop
     // - Before/after agent invocation
-    // - Before Python step calls
+    // - Before engine step calls
     // - On completion or timeout
     const progressMessages: string[] = [];
     const mockOnUpdate = (partial: {

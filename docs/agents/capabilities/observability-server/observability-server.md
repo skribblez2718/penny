@@ -169,7 +169,7 @@ Events the server expects on `ws://host:port/ws`:
 | `GET`  | `/orchestration/runs/{run_id}/events`                 | Fetch a run's event stream                                                                                                                            |
 | `GET`  | `/sessions/{session_id}/orchestration`                | All orchestration activity for a session                                                                                                              |
 
-There is no `/checkpoints` endpoint: the engine's durable checkpointer is a separate local SQLite DB (`.penny/orchestration.db`, override `PENNY_ORCH_DB`) that the engine and the compaction extension read directly. Observability's `orchestration_runs`/`orchestration_events` tables are the reporting mirror, not the source of truth.
+There is no `/checkpoints` endpoint: the engine's durable checkpointer is the separate local TypeScript SQLite DB (`.penny/orchestration-v2.db`, override `PENNY_ORCH_V2_DB`) that the engine and compaction extension read directly. Observability's `orchestration_runs`/`orchestration_events` tables are the reporting mirror, not the source of truth.
 
 ## Constraints
 

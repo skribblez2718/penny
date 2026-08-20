@@ -124,23 +124,23 @@ describe("W6 guidance resolution", () => {
     expect(source).not.toMatch(/"skills",\s*\n?\s*"research"/);
   });
 
-  it("reproduces the exact pre-refactor path when no contract is supplied", () => {
+  it("follows research's phase-specific convention when no contract is supplied", () => {
     const resolved = resolveDomainGuidancePath({
       projectRoot: "/proj",
       agent: "echo",
       stateId: "researching",
     });
-    expect(resolved).toBe("/proj/.pi/skills/research/assets/prompts/echo.md");
+    expect(resolved).toBe("/proj/.pi/skills/research/assets/prompts/echo-researching.md");
   });
 
-  it("resolves per_agent from the research contract identically", () => {
+  it("resolves per_agent_phase from the research contract identically", () => {
     const resolved = resolveDomainGuidancePath({
       projectRoot: "/proj",
       agent: "synthia",
       stateId: "synthesizing",
       guidance: RESEARCH_SKILL_CONTRACT.guidance,
     });
-    expect(resolved).toBe("/proj/.pi/skills/research/assets/prompts/synthia.md");
+    expect(resolved).toBe("/proj/.pi/skills/research/assets/prompts/synthia-synthesizing.md");
   });
 
   it("resolves per_agent_phase, the shape the knowledge-base prompts require", () => {

@@ -117,10 +117,10 @@ Agent Definition (.pi/agents/carren.md)
     "I am Carren. I review work products for quality.
      I am READ-ONLY, EVIDENCE-BASED, CONSTRUCTIVE."
 
-Domain Guidance (.pi/skills/research/assets/prompts/carren.md)
+Domain Guidance (.pi/skills/research/assets/prompts/carren-critiquing_report.md)
     ↓
-    "In this skill context, review research artifacts for grounding,
-     coverage, bias, and unsupported claims."
+    "In this skill context, review the research report for completeness,
+     calibration, balance, bias, and uncertainty honesty."
 
 Task Message
     ↓

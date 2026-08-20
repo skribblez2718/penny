@@ -4,16 +4,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  persistArtifactOutput,
-  readArtifactOutput,
-  type OutputArtifactMetadata,
-} from "../../artifact-client.js";
+import { ArtifactStore, type OutputArtifactMetadata } from "@penny/orchestration/source";
+
+import { readArtifactOutput } from "../../artifact-client.js";
 import { persistSkillChainHandoff, skillChainInput } from "../../skill-chain-artifacts.js";
 
 const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..");
-const PYTHON = join(PROJECT_ROOT, ".venv", "bin", "python");
 const CHAIN_RUN = "chain-00000000-0000-4000-8000-000000000002";
+const TARGET_RUN = "research-00000000-0000-4000-8000-000000000003";
 const roots: string[] = [];
 
 function root(): string {
@@ -22,12 +20,17 @@ function root(): string {
   return value;
 }
 
+function persistTerminal(artifactRoot: string, metadata: OutputArtifactMetadata, output: string) {
+  using store = new ArtifactStore(artifactRoot);
+  return store.persist({ metadata, content: output });
+}
+
 afterEach(() => {
   while (roots.length > 0) rmSync(roots.pop() as string, { recursive: true, force: true });
 });
 
 describe("skill-chain exact terminal handoff", () => {
-  it("projects exact large multibyte terminal bytes into a next-step chain grant", async () => {
+  it("imports exact large multibyte terminal bytes into the next TypeScript run", async () => {
     const artifactRoot = root();
     const env = { ...process.env, PENNY_ARTIFACT_ROOT: artifactRoot };
     const output = `TERMINAL-EXACT\n${"🙂漢é".repeat(12_000)}`;
@@ -45,28 +48,23 @@ describe("skill-chain exact terminal handoff", () => {
       parent_ref: null,
       upstream_refs: [],
     };
-    const terminalRef = await persistArtifactOutput({
-      pythonPath: PYTHON,
-      metadata: terminalMetadata,
-      output,
-      cwd: PROJECT_ROOT,
-      env,
-    });
+    const terminalRef = persistTerminal(artifactRoot, terminalMetadata, output);
     const handoffRef = await persistSkillChainHandoff({
-      pythonPath: PYTHON,
       chainRunId: CHAIN_RUN,
       completedStepIndex: 0,
-      nextStepIndex: 1,
+      targetRunId: TARGET_RUN,
       skillName: "research",
       terminalRef,
-      cwd: PROJECT_ROOT,
+      projectRoot: PROJECT_ROOT,
       env,
     });
-    const input = skillChainInput({ chainRunId: CHAIN_RUN, stepIndex: 1, handoffRef });
+    const input = skillChainInput({ targetRunId: TARGET_RUN, handoffRef });
 
-    expect(handoffRef.run_id).toBe(CHAIN_RUN);
+    expect(handoffRef.run_id).toBe(TARGET_RUN);
+    expect(handoffRef.phase).toBe("chain_input");
     expect(handoffRef.content_digest).toBe(terminalRef.content_digest);
     expect(handoffRef.byte_length).toBe(terminalRef.byte_length);
+    expect(input.run_id).toBe(TARGET_RUN);
     expect(input.artifacts[0]?.ref).toEqual(handoffRef);
     expect((await readArtifactOutput({ ref: handoffRef, env })).toString("utf8")).toBe(output);
   });
@@ -88,13 +86,7 @@ describe("skill-chain exact terminal handoff", () => {
       parent_ref: null,
       upstream_refs: [],
     };
-    const terminalRef = await persistArtifactOutput({
-      pythonPath: PYTHON,
-      metadata: terminalMetadata,
-      output: "removed",
-      cwd: PROJECT_ROOT,
-      env,
-    });
+    const terminalRef = persistTerminal(artifactRoot, terminalMetadata, "removed");
     unlinkSync(
       join(
         artifactRoot,
@@ -107,19 +99,18 @@ describe("skill-chain exact terminal handoff", () => {
 
     await expect(
       persistSkillChainHandoff({
-        pythonPath: PYTHON,
         chainRunId: CHAIN_RUN,
         completedStepIndex: 0,
-        nextStepIndex: 1,
+        targetRunId: TARGET_RUN,
         skillName: "research",
         terminalRef,
-        cwd: PROJECT_ROOT,
+        projectRoot: PROJECT_ROOT,
         env,
       })
     ).rejects.toMatchObject({ code: "ARTIFACT_MISSING" });
 
-    expect(() =>
-      skillChainInput({ chainRunId: CHAIN_RUN, stepIndex: 1, handoffRef: terminalRef })
-    ).toThrow(/directive run/);
+    expect(() => skillChainInput({ targetRunId: TARGET_RUN, handoffRef: terminalRef })).toThrow(
+      /directive run/
+    );
   });
 });

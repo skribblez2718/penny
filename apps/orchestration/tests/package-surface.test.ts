@@ -38,18 +38,24 @@ function jcs(value: unknown): string {
 }
 
 const receiptExists = existsSync(receiptPath);
+const receipt = receiptExists
+  ? (JSON.parse(readFileSync(receiptPath, "utf8")) as Record<string, unknown> & {
+      review_sha256: string;
+      approved_by_subject_id: string;
+      reviewed_by_subject_id: string;
+      expected_pack_files: string[];
+      exports: Record<string, unknown>;
+      bin: Record<string, string>;
+      scripts: Record<string, string>;
+      ordering_note?: string;
+    })
+  : null;
 
 describe.skipIf(!receiptExists)("§5.13 package-surface receipt", () => {
-  const receipt = JSON.parse(readFileSync(receiptPath, "utf8")) as Record<string, unknown> & {
-    review_sha256: string;
-    approved_by_subject_id: string;
-    reviewed_by_subject_id: string;
-    expected_pack_files: string[];
-    exports: Record<string, unknown>;
-    bin: Record<string, string>;
-    scripts: Record<string, string>;
-    ordering_note?: string;
-  };
+  if (receipt === null) {
+    it.skip("requires the private operator receipt", () => {});
+    return;
+  }
   const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as Record<string, unknown>;
 
   it("has a valid review hash over the decision with review_sha256 omitted", () => {

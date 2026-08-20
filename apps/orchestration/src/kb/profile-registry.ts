@@ -10,8 +10,6 @@
  */
 
 import { readFileSync, existsSync, lstatSync } from "node:fs";
-import path from "node:path";
-
 import {
   KbProfileRegistrySchema,
   KbProfileSchema,

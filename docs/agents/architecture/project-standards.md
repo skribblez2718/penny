@@ -12,15 +12,15 @@ Without canonical standards, every skill and extension invents its own patterns.
 
 ### Canonical Implementations — No Alternatives
 
-| Concern          | Standard                                                                                            | Rejected                                                                                                     |
-| ---------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| State management | Shared orchestration engine (`apps/orchestration/`) — durable SQLite checkpointer keyed by `run_id` | Per-skill `python-statemachine` in `orchestrate.py`, `--state` argv, `/tmp` session files, custom JSON state |
-| Memory           | Mempalace (`memory_*` tools)                                                                        | Custom JSON caches, localStorage                                                                             |
-| Agent tooling    | YAML frontmatter `tools:` field                                                                     | Hardcoded lists, env vars                                                                                    |
-| Extensions       | Always loaded (`--no-extensions` never used)                                                        | `--no-extensions` flag                                                                                       |
-| User input       | `questionnaire` extension                                                                           | stdin multi-turn, custom UI                                                                                  |
-| TypeScript       | Per-extension `tsconfig.json` with `noEmit: true`                                                   | Shared root tsconfig                                                                                         |
-| Package manager  | `bun`                                                                                               | `npm`, `package-lock.json`                                                                                   |
+| Concern          | Standard                                                                                                            | Rejected                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| State management | Shared TypeScript orchestration engine (`apps/orchestration/`) — durable Node SQLite checkpointer keyed by `run_id` | Per-skill runtimes/delegates, argv state, temporary session files, custom JSON state |
+| Memory           | Mempalace (`memory_*` tools)                                                                                        | Custom JSON caches, localStorage                                                     |
+| Agent tooling    | YAML frontmatter `tools:` field                                                                                     | Hardcoded lists, env vars                                                            |
+| Extensions       | Always loaded (`--no-extensions` never used)                                                                        | `--no-extensions` flag                                                               |
+| User input       | `questionnaire` extension                                                                                           | stdin multi-turn, custom UI                                                          |
+| TypeScript       | Per-extension `tsconfig.json` with `noEmit: true`                                                                   | Shared root tsconfig                                                                 |
+| Package manager  | `bun`                                                                                                               | `npm`, `package-lock.json`                                                           |
 
 ### The Bitter-Lesson Gate — before adding scaffolding
 

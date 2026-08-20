@@ -22,7 +22,7 @@ import {
 
 describe("normalizeEscalationQuestions", () => {
   it("defaults a MISSING options key to [] (the charter-gate crash case)", () => {
-    // Mirrors orchestrate.py _charter_questions(): free-text questions have
+    // Free-text gate questions legitimately have
     // no `options` key at all.
     const questions = [
       { id: "out_of_scope", label: "Out-of-scope", prompt: "List paths." },

@@ -21,14 +21,11 @@ MODULES = {
     "register_artifact": "scripts/system/tests",
 }
 
-# Engine model: `scripts/orchestrate.py` is a ~5-line delegate into the shared
-# orchestration engine; playbook FSM + tests live in apps/orchestration/. A per-skill
-# `scripts/__init__.py` and `tests/` dir are OPTIONAL (only skills with their own
-# domain tooling carry them), so they are not required here.
+# TypeScript engine model: playbook FSM + tests live in apps/orchestration/.
+# Skills carry no executable delegate; per-skill domain tooling remains optional.
 SKILL_REQUIRED_FILES = [
     "SKILL.md",
     "README.md",
-    "scripts/orchestrate.py",
     "assets/prompts",
     "resources/reference.md",
 ]

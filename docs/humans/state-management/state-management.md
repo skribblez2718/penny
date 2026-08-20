@@ -1,9 +1,9 @@
 # Skill State Management
 
 Penny's shared orchestration engine stores run control state in a durable SQLite
-checkpointer keyed by `run_id`. Each skill contributes a `BasePlaybook` with
-states, contracts, routing, gates, and terminal truth. The skill-directory script
-is only a delegate.
+checkpointer keyed by `run_id`. Each skill contributes a registered TypeScript playbook
+with states, contracts, routing, gates, and terminal truth. Skill directories contain no
+executable delegate.
 
 ## Three data planes
 

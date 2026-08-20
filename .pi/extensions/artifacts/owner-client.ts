@@ -1,16 +1,16 @@
 import { createHash } from "crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, realpathSync, statSync } from "node:fs";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
+import {
+  ArtifactStore,
+  type OutputArtifactMetadata as TypeScriptOutputArtifactMetadata,
+} from "@penny/orchestration/source";
+
 export const OUTPUT_ARTIFACT_SCHEMA_VERSION = 1 as const;
 export const RESULT_PROTOCOL_VERSION = 2 as const;
 export const MAX_ARTIFACT_METADATA_BYTES = 64 * 1024;
-const MAX_ARTIFACT_CLI_STDOUT_BYTES = 64 * 1024;
-const MAX_ARTIFACT_CLI_STDERR_BYTES = 16 * 1024;
-const DEFAULT_ARTIFACT_CLI_TIMEOUT_MS = 300_000;
 
 const ARTIFACT_ID = /^art_[0-9a-f]{64}$/;
 const DIGEST = /^[0-9a-f]{64}$/;
@@ -440,19 +440,6 @@ export function stableArtifactReceiptId(metadataValue: OutputArtifactMetadata | 
   return `artifact-receipt:${digest}`;
 }
 
-function cliErrorMessage(stderr: Buffer): string {
-  const text = stderr.toString("utf8").trim();
-  if (!text) return "artifact CLI failed without diagnostic metadata";
-  try {
-    const parsed = JSON.parse(text) as Record<string, unknown>;
-    return typeof parsed.message === "string" && parsed.message
-      ? parsed.message
-      : "artifact CLI returned invalid diagnostic metadata";
-  } catch {
-    return "artifact CLI returned malformed diagnostic metadata";
-  }
-}
-
 function resolveArtifactRoot(
   env: Readonly<Record<string, string | undefined>> = process.env
 ): string {
@@ -552,172 +539,39 @@ export async function readArtifactOutput(input: {
   return content;
 }
 
-/** Resolve the configured artifact-owner Python without hardcoded project paths. */
-export function resolveArtifactPythonPath(
-  cwd: string,
-  env: Readonly<Record<string, string | undefined>> = process.env
-): string {
-  const candidates = [
-    env.PI_VENV_PYTHON,
-    env.PROJECT_ROOT ? join(env.PROJECT_ROOT, ".venv", "bin", "python") : undefined,
-    join(cwd, ".venv", "bin", "python"),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-  for (const candidate of candidates) {
-    try {
-      if (!existsSync(candidate)) continue;
-      const canonical = realpathSync(candidate);
-      const stats = statSync(canonical);
-      if (stats.isFile() && (stats.mode & 0o111) !== 0) return candidate;
-    } catch {
-      // Try the next owner-supplied or platform-derived candidate.
-    }
-  }
-  return "python";
-}
-
+/** Persist exact output bytes through the TypeScript artifact owner. */
 export async function persistArtifactOutput(input: {
-  pythonPath: string;
   metadata: OutputArtifactMetadata | unknown;
   output: string | Buffer;
-  cwd: string;
+  cwd?: string;
   env?: NodeJS.ProcessEnv;
-  timeoutMs?: number;
 }): Promise<ArtifactRef> {
   const metadata = parseOutputArtifactMetadata(input.metadata);
-  const metadataJson = canonicalArtifactJson(metadata);
-  if (Buffer.byteLength(metadataJson, "utf8") > MAX_ARTIFACT_METADATA_BYTES) {
-    contractError(`output_artifact metadata exceeds ${MAX_ARTIFACT_METADATA_BYTES} UTF-8 bytes`);
+  if (metadata.kind !== "agent-output") {
+    contractError("TypeScript artifact persistence accepts agent-output artifacts only");
   }
   const outputBytes = Buffer.isBuffer(input.output)
     ? Buffer.from(input.output)
     : Buffer.from(input.output, "utf8");
-  const timeoutMs = input.timeoutMs ?? DEFAULT_ARTIFACT_CLI_TIMEOUT_MS;
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
-    contractError("artifact CLI timeout must be a positive integer");
-  }
-
-  return new Promise<ArtifactRef>((resolve, reject) => {
-    let settled = false;
-    let stdoutLength = 0;
-    let stderrLength = 0;
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let child: ChildProcessWithoutNullStreams;
-    try {
-      child = spawn(
-        input.pythonPath,
-        ["-m", "orchestration.artifact_cli", "put", "--metadata-json", metadataJson],
-        {
-          cwd: input.cwd,
-          env: input.env ?? process.env,
-          shell: false,
-          stdio: ["pipe", "pipe", "pipe"],
-        }
-      );
-    } catch {
-      reject(
-        new ArtifactClientError("ARTIFACT_PERSIST_FAILED", "artifact CLI could not be started", {
-          operationId: metadata.operation_id,
-          version: metadata.version,
-        })
-      );
-      return;
+  try {
+    using store = new ArtifactStore(resolveArtifactRoot(input.env));
+    const ref = parseArtifactRef(
+      store.persist({
+        metadata: metadata as TypeScriptOutputArtifactMetadata,
+        content: outputBytes,
+      })
+    );
+    const expected = expectedArtifactRef(metadata, outputBytes);
+    if (canonicalArtifactJson(ref) !== canonicalArtifactJson(expected)) {
+      refError("TypeScript artifact owner returned a ref that does not match exact output bytes");
     }
-
-    const finish = (error?: ArtifactClientError, ref?: ArtifactRef) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) reject(error);
-      else resolve(ref as ArtifactRef);
-    };
-
-    const timer = setTimeout(() => {
-      child.kill();
-      finish(
-        new ArtifactClientError("ARTIFACT_PERSIST_TIMEOUT", "artifact persistence timed out", {
-          operationId: metadata.operation_id,
-          version: metadata.version,
-        })
-      );
-    }, timeoutMs);
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdoutLength += chunk.length;
-      if (stdoutLength > MAX_ARTIFACT_CLI_STDOUT_BYTES) {
-        child.kill();
-        finish(
-          new ArtifactClientError(
-            "ARTIFACT_REF_INVALID",
-            "artifact CLI stdout exceeded the canonical-ref limit"
-          )
-        );
-        return;
-      }
-      stdout.push(Buffer.from(chunk));
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      if (stderrLength >= MAX_ARTIFACT_CLI_STDERR_BYTES) return;
-      const remaining = MAX_ARTIFACT_CLI_STDERR_BYTES - stderrLength;
-      const bounded = Buffer.from(chunk).subarray(0, remaining);
-      stderrLength += bounded.length;
-      stderr.push(bounded);
-    });
-    child.on("error", () => {
-      finish(
-        new ArtifactClientError("ARTIFACT_PERSIST_FAILED", "artifact CLI could not be started", {
-          operationId: metadata.operation_id,
-          version: metadata.version,
-        })
-      );
-    });
-    child.stdin.on("error", () => {
-      finish(
-        new ArtifactClientError("ARTIFACT_PERSIST_FAILED", "artifact CLI rejected exact stdin", {
-          operationId: metadata.operation_id,
-          version: metadata.version,
-        })
-      );
-    });
-    child.on("close", (code) => {
-      if (settled) return;
-      const stderrBytes = Buffer.concat(stderr);
-      if (code !== 0) {
-        finish(
-          new ArtifactClientError("ARTIFACT_PERSIST_FAILED", cliErrorMessage(stderrBytes), {
-            exitCode: code,
-            operationId: metadata.operation_id,
-            version: metadata.version,
-          })
-        );
-        return;
-      }
-      const stdoutText = Buffer.concat(stdout).toString("utf8");
-      try {
-        const parsed = JSON.parse(stdoutText) as unknown;
-        const ref = parseArtifactRef(parsed);
-        const canonical = `${canonicalArtifactJson(ref)}\n`;
-        if (stdoutText !== canonical)
-          refError("artifact CLI stdout is not canonical ArtifactRef JSON");
-        const expected = expectedArtifactRef(metadata, outputBytes);
-        if (canonicalArtifactJson(ref) !== canonicalArtifactJson(expected)) {
-          refError(
-            "artifact CLI returned a ref that does not match exact output bytes and metadata"
-          );
-        }
-        finish(undefined, ref);
-      } catch (error) {
-        finish(
-          error instanceof ArtifactClientError
-            ? error
-            : new ArtifactClientError(
-                "ARTIFACT_REF_INVALID",
-                "artifact CLI returned invalid ArtifactRef JSON"
-              )
-        );
-      }
-    });
-
-    child.stdin.end(outputBytes);
-  });
+    return ref;
+  } catch (error) {
+    if (error instanceof ArtifactClientError) throw error;
+    throw new ArtifactClientError(
+      "ARTIFACT_PERSIST_FAILED",
+      "TypeScript artifact persistence failed",
+      { operationId: metadata.operation_id, version: metadata.version }
+    );
+  }
 }

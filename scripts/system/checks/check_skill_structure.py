@@ -19,12 +19,9 @@ from typing import List, Tuple
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 SKILLS_DIR = PROJECT_ROOT / ".pi" / "skills"
 
-# Canonical structure (relative to skill root), engine model.
-# A migrated skill's `scripts/orchestrate.py` is a ~5-line delegate into the shared
-# orchestration engine (apps/orchestration/); its FSM is a BasePlaybook subclass in
-# the engine package and its playbook tests live in apps/orchestration/tests/. So a
-# per-skill `tests/` dir, `requirements.txt`, and `scripts/__init__.py` are OPTIONAL
-# (only skills with their own domain tooling carry them).
+# Canonical structure (relative to skill root), TypeScript engine model.
+# Engine-backed skills dispatch through the TypeScript playbook registry; no
+# per-skill executable delegate exists. Domain-only tooling and tests remain optional.
 REQUIRED_DIRS = ["assets/prompts", "resources"]
 REQUIRED_FILES = [
     "SKILL.md",
@@ -67,12 +64,10 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
     is_delegate = "delegates_to:" in content
 
     if not is_delegate:
-        # Detect entrypoint type: pi-tool skills don't need scripts/orchestrate.py
-        import re
-        fm_match = re.search(r'^---\n(.*?)\n---', content, re.DOTALL)
-        entrypoint = "python-delegate"  # default for legacy skills
+        fm_match = re.search(r"^---\n(.*?)\n---", content, re.DOTALL)
+        entrypoint = "typescript-playbook"
         if fm_match:
-            ep_match = re.search(r'entrypoint:\s*(\S+)', fm_match.group(1))
+            ep_match = re.search(r"entrypoint:\s*(\S+)", fm_match.group(1))
             if ep_match:
                 entrypoint = ep_match.group(1)
 
@@ -92,14 +87,9 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
             elif not full_path.is_file():
                 issues.append(("ERROR", f"Not a file: {rel_file}"))
 
-        # pi-tool skills don't need scripts/orchestrate.py; python-delegate skills do
-        if entrypoint == "python-delegate":
-            delegate_path = skill_dir / "scripts" / "orchestrate.py"
-            if not delegate_path.exists():
-                issues.append(("ERROR", "Missing file: scripts/orchestrate.py"))
-        elif entrypoint == "pi-tool":
+        if entrypoint == "pi-tool":
             # pi-tool skills need a non-empty metadata.penny.tool
-            if not re.search(r'tool:\s*\S+', content):
+            if not re.search(r"tool:\s*\S+", content):
                 issues.append(("ERROR", "pi-tool skill missing metadata.penny.tool"))
 
         # Flow diagram: resources/flow.html is THE standard. Require a diagram; a skill
@@ -118,27 +108,6 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
                     "standard) and delete the .mmd (see docs/agents/skills/flow-diagrams.md)",
                 )
             )
-
-        # Check for test files in tests/
-        tests_dir = skill_dir / "tests"
-        if tests_dir.exists() and tests_dir.is_dir():
-            test_files = list(tests_dir.glob("test_*.py"))
-            if not test_files:
-                issues.append(("WARN", "No test_*.py files in tests/"))
-        elif tests_dir.exists():
-            issues.append(("ERROR", "tests/ exists but is not a directory"))
-
-        # Check that test files are NOT in scripts/
-        scripts_dir = skill_dir / "scripts"
-        if scripts_dir.exists() and scripts_dir.is_dir():
-            misplaced_tests = list(scripts_dir.glob("test_*.py"))
-            if misplaced_tests:
-                issues.append(
-                    (
-                        "ERROR",
-                        f"Test files found in scripts/: {[f.name for f in misplaced_tests]} — move to tests/",
-                    )
-                )
 
         # Check for prompt files in assets/prompts/
         prompts_dir = skill_dir / "assets" / "prompts"

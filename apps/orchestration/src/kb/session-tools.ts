@@ -32,6 +32,12 @@ export interface KbPhaseInvocation {
   readonly readSource: (sourceId: string) => string;
   /** Host closure: read one prior phase's output (by state id). */
   readonly readPhaseOutput: (stateId: string) => string;
+  /**
+   * §5.3 child admission. Called with the RESOLVED provider/model immediately
+   * before the session is created; throwing denies the phase with no session
+   * created and no private body read.
+   */
+  readonly admitModel?: (resolved: { provider: string; model: string }) => void;
 }
 
 export type KbAgentRunner = (invocation: KbPhaseInvocation) => Promise<string>;

@@ -114,7 +114,6 @@ export function directChainEnvironment(
 }
 
 export async function persistDirectChainOutput(options: {
-  pythonPath: string;
   metadata: OutputArtifactMetadata;
   output: string;
   cwd: string;

@@ -1,92 +1,39 @@
-# Skill Standard — Artifact-first engine workflows
+# Skill Standard — TypeScript artifact-first workflows
 
 ## Required architecture
 
-1. **Manifest:** `.pi/skills/<name>/SKILL.md` with `name`, trigger-rich
-   description, `metadata.penny.engine: orchestration`, optional
-   `metadata.penny.mempalace`, and the worker roles.
-2. **Playbook:** one registered `BasePlaybook` subclass in
-   `apps/orchestration/src/orchestration/playbooks/<name>.py`.
-3. **Delegate:** the skill's `scripts/orchestrate.py` contains only:
+1. **Manifest:** `.pi/skills/<name>/SKILL.md` with trigger-rich description and
+   `metadata.penny.engine: orchestration`.
+2. **Playbook:** one registered TypeScript `PlaybookCoreV1` implementation under
+   `apps/orchestration/src/playbooks/`.
+3. **Contract:** closed `SkillContractV1`, validated before construction.
+4. **Domain Guidance:** one static `<agent>-<state>.md` prompt per cognitive state.
+5. **Resources:** `README.md`, reference material, and drift-tested `resources/flow.html`.
+6. **Tests:** playbook, artifact handoff, receipts, gates, composition, recovery, and source guards.
 
-   ```python
-   #!/usr/bin/env python3
-   from orchestration.cli import main
-
-   if __name__ == "__main__":
-       raise SystemExit(main(default_playbook="<name>"))
-   ```
-
-4. **Domain Guidance:** one static prompt per worker/state under
-   `assets/prompts/`. Prompts define Mission, Exact Artifact Handoff,
-   domain-specific guidance, non-negotiables, complete stage output, and routing
-   SUMMARY.
-5. **Resources:** `README.md`, reference material, and a drift-tested
-   `resources/flow.html`.
-6. **Tests:** playbook, artifact handoff, recovery, contracts, and source guards.
-
-A live skill does not require a memory room or an entry in
-`scripts/system/tiered_memory/skill_rooms.json`. That file classifies historical
-legacy corpus only.
+Skill directories contain no executable delegate. The skill extension invokes the TypeScript
+registry in-process.
 
 ## Exact artifact handoff
 
-Every cognitive directive declares execution-owner `input_artifacts` and an
-`output_artifact` contract. The playbook selects all exact predecessors needed by
-the current consumer. The runner grants only those refs; the worker reads each
-with `artifact_read` through complete typed continuation, then returns complete
-stage content followed by any required routing SUMMARY.
+Every cognitive directive declares owner-selected `input_artifacts` and an
+`output_artifact` contract. Workers read every granted ref through complete continuation,
+return complete stage output, and keep routing fields separate from product bytes. The owner
+persists and verifies exact bytes before advancing.
 
-The owner persists and verifies exact bytes before SUMMARY parsing. Selected refs
-survive retry, clarification, restart, parallel partial recovery, and compaction.
-Payload bytes never enter `RunContext`. Parallel branches are keyed by stable
-`branch_id` and receive no sibling grants.
-
-Workers and skill drivers have no durable-memory tools or instructions. The
-unmarked primary runtime may use optional durable recall or curation outside the
-workflow transport contract.
-
-## Manifest example
-
-```yaml
----
-name: skill-name
-description: "One sentence. Use when … Do not use when …"
-license: MIT
-metadata:
-  penny:
-    engine: orchestration
-    mempalace: false
-    subagents: [echo, vera]
----
-```
-
-`mempalace` describes optional primary durable-memory integration, not handoff.
-Artifact-first skills normally set it to `false`; omitting memory must not change
-workflow correctness.
-
-## Design and control-flow rules
-
-- Prove the workflow manually; every state/order rule names the failure it prevents.
-- Prefer the lowest-complexity shape and model-owned topology where appropriate.
-- Keep heuristics as tagged, measured LOANs with ablation paths.
-- Keep prompts goal/constraint/capability shaped, not reasoning scripts.
-- Require captured evidence for objective verification.
-- Bound loops, require strategy change on retry, and report exhaustion honestly.
-- Place planned human gates at reversibility cliffs.
-- Keep deterministic tool states idempotent because recovery may reissue them.
+Selected refs survive retries, clarification, restart, fan recovery, compaction, and skill
+composition. Payload bytes and semantic memory never enter `RunContext`.
 
 ## Directory shape
 
 ```text
-apps/orchestration/src/orchestration/playbooks/<name>.py
-apps/orchestration/tests/test_<name>_playbook.py
+apps/orchestration/src/playbooks/<name>.ts
+apps/orchestration/tests/<name>-playbook.test.ts
 
 .pi/skills/<name>/
 ├── SKILL.md
 ├── README.md
-├── scripts/orchestrate.py
-├── assets/prompts/*.md
+├── assets/prompts/<agent>-<state>.md
 └── resources/
     ├── reference.md
     └── flow.html
@@ -96,33 +43,32 @@ apps/orchestration/tests/test_<name>_playbook.py
 
 A worker prompt must:
 
-- say that the task supplies `input_artifacts`;
-- require `artifact_read` for every granted ref and complete continuation;
-- forbid predecessor discovery through another channel;
-- require complete stage content in the response;
+- identify the state-specific mission and consequence boundary;
+- require `artifact_read` for every granted predecessor;
+- prohibit predecessor discovery through another channel;
+- require complete stage content;
 - state that the owner captures output and the worker must not claim persistence;
-- keep SUMMARY as routing data only;
-- preserve role consequence boundaries and escalation fields.
+- carry the exact typed routing contract;
+- preserve role boundaries and clarification fields.
 
-It must not mention session-room read/write, duplicate prechecks, model-authored
-memory drawer IDs, routine KG links, or claims that full output lives in memory.
+## Control-flow rules
+
+- Prove the workflow manually before encoding it.
+- Every state/order rule names the failure it prevents.
+- Place human gates at reversibility cliffs.
+- Split prepare from apply for consequential effects.
+- Bound repairs; strategy-free repetition escalates or exhausts honestly.
+- Require captured evidence for objective verification.
+- Keep deterministic host operations idempotent.
+- Export a flow descriptor and update it with the machine.
 
 ## Verification
 
-- [ ] Structure checker passes without a room-manifest requirement.
-- [ ] Contract/prompt and source guards pass.
-- [ ] Owner capture happens before routing for single and parallel stages.
-- [ ] Memory-absent start/step/fan-in/retry/clarification/restart/terminal tests pass.
-- [ ] `RunContext` stores refs, not payload bytes.
-- [ ] Flow diagram and reference match the FSM.
-- [ ] Full engine regression suite passes.
-
-## Files
-
-| File                                                 | Purpose            |
-| ---------------------------------------------------- | ------------------ |
-| `docs/agents/skills/design-methodology.md`           | Workflow design    |
-| `docs/agents/skills/orchestration.md`                | Execution protocol |
-| `docs/agents/skills/skill-md-format.md`              | Manifest format    |
-| `docs/agents/skills/testing.md`                      | Test requirements  |
-| `docs/agents/architecture/atomic-loop-components.md` | Loop doctrine      |
+- [ ] Registry and contract reject unknown/malformed skills.
+- [ ] Prompt directory exactly matches cognitive states.
+- [ ] Owner capture and receipt validation precede routing.
+- [ ] `RunContext` stores refs, not payloads.
+- [ ] Single, parallel, chain, resume, clarification, and cancellation paths are covered.
+- [ ] Memory-absent execution remains correct.
+- [ ] Flow descriptor and HTML agree.
+- [ ] Full TypeScript engine and extension suites pass.

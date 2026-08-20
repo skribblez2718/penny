@@ -50,14 +50,14 @@ profiles must equal its `tools:` list exactly.
 
 #### Flat profiles
 
-| Profile           | Tools                                  | Count |
-| ----------------- | -------------------------------------- | ----: |
-| `shell.unbounded` | `bash`                                 |     1 |
-| `web.search`      | `web_search`, `web_fetch`              |     2 |
-| `web.transcript`  | `youtube_transcript`                   |     1 |
-| `docgen`          | `word_generate`, `powerpoint_generate` |     2 |
-| `artifact`        | `artifact_read`                        |     1 |
-| `memory.read`     | `memory_search`, `memory_smart_search`, `memory_get_drawer`, `memory_list_drawers`, `memory_get_taxonomy`, `memory_check_duplicate`, `memory_kg_query`, `memory_kg_timeline`, `memory_kg_stats`, `memory_diary_read` | 10 |
+| Profile           | Tools                                                                                                                                                                                                                | Count |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----: |
+| `shell.unbounded` | `bash`                                                                                                                                                                                                               |     1 |
+| `web.search`      | `web_search`, `web_fetch`                                                                                                                                                                                            |     2 |
+| `web.transcript`  | `youtube_transcript`                                                                                                                                                                                                 |     1 |
+| `docgen`          | `word_generate`, `powerpoint_generate`                                                                                                                                                                               |     2 |
+| `artifact`        | `artifact_read`                                                                                                                                                                                                      |     1 |
+| `memory.read`     | `memory_search`, `memory_smart_search`, `memory_get_drawer`, `memory_list_drawers`, `memory_get_taxonomy`, `memory_check_duplicate`, `memory_kg_query`, `memory_kg_timeline`, `memory_kg_stats`, `memory_diary_read` |    10 |
 
 <!-- END GENERATED -->
 
@@ -80,18 +80,18 @@ keeps the gap visible in the metadata instead of disguising it behind a calm lab
 
 <!-- BEGIN GENERATED: per-agent assignment -->
 
-| Agent      | Authority | Profiles                                                                                              | Tools |
-| ---------- | --------- | ----------------------------------------------------------------------------------------------------- | ----: |
-| `annie`    | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `browser.observe`, `artifact`, `memory.read`  |    44 |
-| `carren`   | `read`    | `filesystem.observe`, `shell.unbounded`, `artifact`, `memory.read`                                    |    16 |
-| `demetri`  | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `artifact`, `memory.read`                      |    18 |
-| `echo`     | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `web.transcript`, `browser.reveal`, `artifact`, `memory.read` | 49 |
-| `ida`      | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `artifact`, `memory.read`                      |    18 |
-| `piper`    | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `artifact`, `memory.read`                      |    18 |
-| `skribble` | `write`   | `filesystem.write`, `shell.unbounded`, `web.search`, `docgen`, `artifact`, `memory.read`              |    22 |
-| `synthia`  | `read`    | `filesystem.read`, `shell.unbounded`, `artifact`, `memory.read`                                       |    13 |
-| `tabitha`  | `read`    | `filesystem.observe`, `shell.unbounded`, `artifact`, `memory.read`                                    |    16 |
-| `vera`     | `inspect` | `filesystem.observe`, `shell.unbounded`, `web.search`, `web.transcript`, `browser.reveal`, `artifact`, `memory.read` | 49 |
+| Agent      | Authority | Profiles                                                                                                             | Tools |
+| ---------- | --------- | -------------------------------------------------------------------------------------------------------------------- | ----: |
+| `annie`    | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `browser.observe`, `artifact`, `memory.read`                  |    44 |
+| `carren`   | `read`    | `filesystem.observe`, `shell.unbounded`, `artifact`, `memory.read`                                                   |    16 |
+| `demetri`  | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `artifact`, `memory.read`                                     |    18 |
+| `echo`     | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `web.transcript`, `browser.reveal`, `artifact`, `memory.read` |    49 |
+| `ida`      | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `artifact`, `memory.read`                                     |    18 |
+| `piper`    | `read`    | `filesystem.observe`, `shell.unbounded`, `web.search`, `artifact`, `memory.read`                                     |    18 |
+| `skribble` | `write`   | `filesystem.write`, `shell.unbounded`, `web.search`, `docgen`, `artifact`, `memory.read`                             |    22 |
+| `synthia`  | `read`    | `filesystem.read`, `shell.unbounded`, `artifact`, `memory.read`                                                      |    13 |
+| `tabitha`  | `read`    | `filesystem.observe`, `shell.unbounded`, `artifact`, `memory.read`                                                   |    16 |
+| `vera`     | `inspect` | `filesystem.observe`, `shell.unbounded`, `web.search`, `web.transcript`, `browser.reveal`, `artifact`, `memory.read` |    49 |
 
 <!-- END GENERATED -->
 

@@ -2,8 +2,8 @@
 //
 // Compaction never lists pending runs or searches by session semantics. Callers
 // supply exact run IDs already present in trusted tool-result metadata or a
-// prior RESUME-REFS block. The SQLite database is opened read-only and every
-// selected artifact reference is validated before it can enter model context.
+// prior RESUME-REFS block. The TypeScript v2 SQLite database is opened read-only
+// and every selected artifact reference is validated before it can enter model context.
 
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -22,12 +22,6 @@ import { asRecord, asString } from "./pi-messages.js";
 const logger = createLogger("compaction-checkpointer");
 const MAX_EXACT_RUN_IDS = 20;
 const MAX_SELECTED_REFS_PER_RUN = 100;
-const ARTIFACT_PROTOCOL_FIELDS = new Set([
-  "schema_version",
-  "selected_refs",
-  "state_inputs",
-  "parallel_fan_in",
-]);
 
 export interface CheckpointReadResult {
   runs: EngineRunRef[];
@@ -46,10 +40,10 @@ function canonicalRunId(value: unknown): string | null {
 }
 
 function configuredDatabasePath(projectRoot?: string): string | null {
-  const configured = process.env.PENNY_ORCH_DB?.trim();
+  const configured = process.env.PENNY_ORCH_V2_DB?.trim();
   if (configured) return isAbsolute(configured) ? resolve(configured) : null;
   const root = projectRoot || process.env.PROJECT_ROOT || process.cwd();
-  return resolve(join(root, ".penny", "orchestration.db"));
+  return resolve(join(root, ".penny", "orchestration-v2.db"));
 }
 
 function artifactIdentity(ref: ArtifactRef): string {
@@ -79,56 +73,30 @@ export function parseSelectedArtifactRef(value: unknown, runId: string): Artifac
   return ref;
 }
 
-function parseArtifactProtocol(
+function parseSelectedArtifacts(
   context: Record<string, unknown>,
   runId: string
 ): { refs: ArtifactRef[]; issues: string[] } {
-  const extras = asRecord(context.extras);
-  const raw = extras.artifact_protocol;
+  const raw = context.selected_artifacts;
   if (raw === undefined || raw === null) return { refs: [], issues: [] };
-
-  const protocol = asRecord(raw);
-  const issues: string[] = [];
-  const keys = Object.keys(protocol);
-  if (
-    keys.length !== ARTIFACT_PROTOCOL_FIELDS.size ||
-    keys.some((key) => !ARTIFACT_PROTOCOL_FIELDS.has(key))
-  ) {
-    return {
-      refs: [],
-      issues: [`run ${runId}: artifact_protocol has missing or unknown fields`],
-    };
+  if (!Array.isArray(raw)) {
+    return { refs: [], issues: [`run ${runId}: selected_artifacts is not an array`] };
   }
-  if (protocol.schema_version !== 2) {
+  if (raw.length > MAX_SELECTED_REFS_PER_RUN) {
     return {
       refs: [],
-      issues: [`run ${runId}: unsupported artifact_protocol schema version`],
-    };
-  }
-  if (
-    !Array.isArray(protocol.selected_refs) ||
-    asRecord(protocol.state_inputs) !== protocol.state_inputs ||
-    asRecord(protocol.parallel_fan_in) !== protocol.parallel_fan_in
-  ) {
-    return {
-      refs: [],
-      issues: [`run ${runId}: artifact_protocol fields have invalid types`],
-    };
-  }
-  if (protocol.selected_refs.length > MAX_SELECTED_REFS_PER_RUN) {
-    return {
-      refs: [],
-      issues: [`run ${runId}: artifact_protocol selected_refs exceeds the strict limit`],
+      issues: [`run ${runId}: selected_artifacts exceeds the strict limit`],
     };
   }
 
   const refs: ArtifactRef[] = [];
-  for (let index = 0; index < protocol.selected_refs.length; index += 1) {
+  const issues: string[] = [];
+  for (let index = 0; index < raw.length; index += 1) {
     try {
-      refs.push(parseSelectedArtifactRef(protocol.selected_refs[index], runId));
+      refs.push(parseSelectedArtifactRef(raw[index], runId));
     } catch (error) {
       issues.push(
-        `run ${runId}: selected_refs[${index}] rejected: ${error instanceof Error ? error.message : String(error)}`
+        `run ${runId}: selected_artifacts[${index}] rejected: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
@@ -178,11 +146,11 @@ function parseCheckpointRow(rowValue: unknown): {
     };
   }
 
-  const artifactProtocol = parseArtifactProtocol(context, runId);
+  const selectedArtifacts = parseSelectedArtifacts(context, runId);
   return {
     run: parsedRun.data,
-    refs: artifactProtocol.refs,
-    issues: artifactProtocol.issues,
+    refs: selectedArtifacts.refs,
+    issues: selectedArtifacts.issues,
   };
 }
 
@@ -215,7 +183,7 @@ export function readExactCheckpoints(
     const placeholders = exactIds.map(() => "?").join(",");
     const rows = database
       .prepare(
-        "SELECT run_id, session_id, playbook, current_state_id, status, updated_at, context_json " +
+        "SELECT run_id, session_id, playbook, state_id AS current_state_id, status, updated_at, context_json " +
           `FROM runs WHERE run_id IN (${placeholders})`
       )
       .all(...exactIds);

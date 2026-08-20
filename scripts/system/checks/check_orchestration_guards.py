@@ -1,59 +1,62 @@
 #!/usr/bin/env python3
-"""check_orchestration_guards.py — CI guards for the orchestration package.
+"""Fail-closed source guards for TypeScript-only orchestration."""
 
-Enforces the overhaul's invariants (pack 06-technical-reference.md §16):
-  * ZERO ``_force_state`` in apps/orchestration/src (no transition-replay).
-  * ZERO ``--state`` argv handling in apps/orchestration/src (state lives in the
-    durable checkpointer, keyed by run_id).
-
-Exits 0 if clean, 1 on any violation. Scans .py sources only (ignores caches).
-"""
+from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-SRC = ROOT / "apps" / "orchestration" / "src"
+APP = ROOT / "apps" / "orchestration"
+RUNTIME = APP / "src"
+SKILL = ROOT / ".pi" / "extensions" / "skill"
 
-# Literal tokens that must never appear in the package source.
 FORBIDDEN = {
-    "_force_state": r"_force_state",
-    "--state": r"--state",
+    "legacy state replay": r"_force_state",
+    "argv state transport": r"--state",
+    "Python orchestration import": r"(?:from|import)\s+orchestration\b",
+    "Python delegate": r"orchestrate\.py",
+    "Python artifact child": r"orchestration\.artifact_cli",
+    "legacy database selector": r"PENNY_ORCH_DB",
 }
 
 
 def main() -> int:
-    if not SRC.exists():
-        print(f"ERROR: orchestration src not found: {SRC}")
-        return 1
-
     violations: list[str] = []
-    for py in sorted(SRC.rglob("*.py")):
-        if "__pycache__" in py.parts:
+    python_runtime = (
+        sorted((RUNTIME / "orchestration").rglob("*.py"))
+        if (RUNTIME / "orchestration").exists()
+        else []
+    )
+    for path in python_runtime:
+        violations.append(f"{path.relative_to(ROOT)}: Python orchestration runtime remains")
+
+    files = [*RUNTIME.rglob("*.ts"), *SKILL.rglob("*.ts")]
+    for path in sorted(files):
+        if "node_modules" in path.parts or "tests" in path.parts:
             continue
-        text = py.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
         for label, pattern in FORBIDDEN.items():
-            for i, line in enumerate(text.splitlines(), 1):
+            for line_number, line in enumerate(text.splitlines(), 1):
                 if re.search(pattern, line):
-                    rel = py.relative_to(ROOT)
-                    violations.append(f"{rel}:{i}: forbidden '{label}' -> {line.strip()}")
+                    violations.append(
+                        f"{path.relative_to(ROOT)}:{line_number}: forbidden {label}: {line.strip()}"
+                    )
+
+    delegate = ROOT / ".pi" / "skills" / "research" / "scripts" / "orchestrate.py"
+    if delegate.exists():
+        violations.append(f"{delegate.relative_to(ROOT)}: executable delegate remains")
 
     if violations:
-        print("❌ orchestration CI guards FAILED:")
-        for v in violations:
-            print(f"   {v}")
-        print(
-            "\nState must live in the durable checkpointer (keyed by run_id); "
-            "never reintroduce --state argv transport or _force_state replay."
-        )
+        print("FAIL: TypeScript-only orchestration guard")
+        for violation in violations:
+            print(f"  {violation}")
         return 1
-
     print(
-        "✅ orchestration CI guards passed (zero _force_state, zero --state in apps/orchestration/src)"
+        "PASS: orchestration is TypeScript-only; no delegate, Python child, or legacy DB selector"
     )
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

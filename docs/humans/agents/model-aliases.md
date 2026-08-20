@@ -140,25 +140,11 @@ in `~/.pi/agent/models.json`. The 10 agent files never change.
 "modelOverrides": { "gpt-5.7-sol": { "name": "sol" } }   // was gpt-5.6-sol
 ```
 
-**Caveat — the roster tripwire cannot see this.** `apps/orchestration/src/orchestration/roster.py`
-hashes the _alias_ set read from agent frontmatter. Upgrading the model behind an unchanged
-alias does **not** move that hash, so the independence/loan review triggers will not fire.
-Swapping tiers or providers in frontmatter does move it. See "Roster baseline" below.
-
-## Roster baseline
-
-`BASELINE_ROSTER` is duplicated in `independence.py` and `loans.py` and is asserted equal to
-the live fleet hash by `tests/test_roster.py::test_recorded_baseline_matches_the_live_fleet`.
-Changing any agent's `model:` will fail that test **by design** — the failure means every
-same-model exception and borrowed-scaffolding loan is due for re-measurement.
-
-Per that test's own docstring: \*re-measure, then update the constant. **Do NOT just re-type
-the new hash.\***
-
-| Fleet          | Hash           |
-| -------------- | -------------- |
-| `opus, sonnet` | `0504ae3f4c3e` |
-| `sol, terra`   | `4e55bff3547d` |
+**Caveat:** upgrading the concrete model behind an unchanged alias is intentionally
+invisible to agent frontmatter. `check_tool_profiles.py` verifies the declared SSOT tool/model
+shape, but it does not treat alias-target changes as orchestration state. Re-run relevant model
+smokes and ablations when alias targets change; do not maintain a duplicate fleet hash in the
+workflow engine.
 
 ## What is deliberately NOT aliased (do not "fix" these)
 

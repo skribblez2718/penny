@@ -6,13 +6,13 @@ private content.
 
 Five files are tracked here and nothing else:
 
-| File | Purpose |
-|---|---|
-| `.gitignore` | Default-deny: ignore everything, re-include exactly these five paths |
-| `README.md` | This file |
-| `manifest.example.json` | Shape reference for a KB `manifest.json` — not a live manifest |
-| `templates/page.md` | Shape reference for a published page revision |
-| `templates/source.json` | Shape reference for an immutable source provenance record |
+| File                    | Purpose                                                              |
+| ----------------------- | -------------------------------------------------------------------- |
+| `.gitignore`            | Default-deny: ignore everything, re-include exactly these five paths |
+| `README.md`             | This file                                                            |
+| `manifest.example.json` | Shape reference for a KB `manifest.json` — not a live manifest       |
+| `templates/page.md`     | Shape reference for a published page revision                        |
+| `templates/source.json` | Shape reference for an immutable source provenance record            |
 
 ## What lives here at runtime — and why you will not see it
 

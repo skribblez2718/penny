@@ -58,7 +58,7 @@ and ratcheting noise trains the baseline on luck.
 
 ### Capability invariants (the leverage spine)
 
-`eval_invariants.py` makes the Bitter-Lesson doctrine self-enforcing
+`eval_invariants.py` makes the Bitter-Lesson doctrine self-enforcing through the TypeScript orchestration test surface
 (`docs/agents/architecture/bitter-lesson.md`). It asserts the protected
 capabilities — evidence-grounded VERIFY, separate verification (generator ≠
 judge — model-diverse review; the `invariants.independent_verification` check

@@ -42,7 +42,7 @@ Penny's prompt system uses five **named layers** each with a single responsibili
 | **Project Index**      | Where things are                                    | `AGENTS.md` files                  |
 | **Invocation Context** | What to do now                                      | Task message + runtime             |
 
-The current workflow skill is `research`. It runs as a `BasePlaybook` subclass on the shared `orchestration` engine with durable, checkpointed run state (`run_id`-keyed SQLite), so an interrupted run can resume. The execution owner stores each exact agent output before accepting its routing SUMMARY; downstream phases receive validated artifact refs and bounded `artifact_read` access. Workflows do not require memory. Track-A recovery is forward-only: `PENNY_ARTIFACT_DISPATCH_MODE=paused` halts new agent/tool/fan-out dispatch while status and exact artifact reads remain available; returning to `active` resumes from the unchanged checkpoint and refs, never semantic-memory fallback.
+The current workflow skill is `research`. It runs as a registered TypeScript playbook on the shared `orchestration` engine with durable, checkpointed run state (`run_id`-keyed Node SQLite), so an interrupted run can resume. The execution owner stores each exact agent output before accepting its routing SUMMARY; downstream phases receive validated artifact refs and bounded `artifact_read` access. Workflows do not require memory. Track-A recovery is forward-only: `PENNY_ARTIFACT_DISPATCH_MODE=paused` halts new agent/tool/fan-out dispatch while status and exact artifact reads remain available; returning to `active` resumes from the unchanged checkpoint and refs, never semantic-memory fallback.
 
 ## Capability Roles
 

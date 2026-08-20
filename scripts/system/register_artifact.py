@@ -216,7 +216,7 @@ receive durable-memory tools.
 
 ## How It Works
 
-The workflow runs as a `BasePlaybook` subclass. Exact current-run stage output
+The workflow runs as a registered TypeScript playbook. Exact current-run stage output
 moves through execution-owner artifacts: workers read granted predecessors with
 `artifact_read`, return complete stage content, and append only the routing
 `SUMMARY` required by the state contract.
@@ -257,8 +257,8 @@ continuation. The worker has no durable-memory tools.
 
 ## Architecture
 
-- `BasePlaybook` owns the state machine and routing.
-- The skill delegate routes `start`, `step`, `status`, and `recover`.
+- A registered TypeScript playbook owns states and routing.
+- `OrchestrationService` handles the closed request vocabulary in-process.
 - Each cognitive directive declares exact `input_artifacts` and an owner
   `output_artifact` contract.
 - Workers use `artifact_read` for granted inputs and return complete stage

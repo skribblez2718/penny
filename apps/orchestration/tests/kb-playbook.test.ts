@@ -37,6 +37,8 @@ function newContext(constraints: Record<string, JsonValue> = {}): RunContext {
       action: "ingest",
       kb_profile_id: "kbp_test",
       source_capability_ids: ["cap_a", "cap_b"],
+      // §5.3: host-supplied, never model-supplied. Admission denies without it.
+      parent_identity: { provider: "ollama", model: "qwen327b:latest" },
       ...constraints,
     },
     projectRoot: PROJECT_ROOT,
@@ -46,6 +48,9 @@ function newContext(constraints: Record<string, JsonValue> = {}): RunContext {
 }
 
 interface PlaneCalls {
+  /** §5.3 admission, and the order it happened in relative to private I/O. */
+  admitRuns: Array<{ parentIdentity: { provider: string; model: string } | undefined }>;
+  order: string[];
   claims: Array<{ runId: string; capabilityIds: readonly string[] }>;
   admits: Array<{ runId: string; capabilityIds: readonly string[] }>;
   seals: Array<{ runId: string; artifactIds: readonly string[] }>;
@@ -60,14 +65,49 @@ interface PlaneCalls {
  * WHEN, and the integration test below proves the real plane satisfies the same
  * contract.
  */
-function fakePlane(): { plane: KbIngestPlaneV1; calls: PlaneCalls } {
-  const calls: PlaneCalls = { claims: [], admits: [], seals: [], gates: [], approvals: [], denials: [] };
+function fakePlane(options: { denyAdmission?: boolean } = {}): {
+  plane: KbIngestPlaneV1;
+  calls: PlaneCalls;
+} {
+  const calls: PlaneCalls = {
+    admitRuns: [],
+    order: [],
+    claims: [],
+    admits: [],
+    seals: [],
+    gates: [],
+    approvals: [],
+    denials: [],
+  };
   const plane: KbIngestPlaneV1 = {
+    admitRun(input) {
+      calls.admitRuns.push({ parentIdentity: input.parentIdentity });
+      calls.order.push("admitRun");
+      if (options.denyAdmission === true || input.parentIdentity === undefined) {
+        throw new Error("policy refusal: parent identity is not admitted");
+      }
+      return { policy_sha256: "a".repeat(64) };
+    },
     claim(input) {
+      calls.order.push("claim");
       calls.claims.push({ runId: input.runId, capabilityIds: input.capabilityIds });
     },
     admit(input) {
+      calls.order.push("admit");
       calls.admits.push({ runId: input.runId, capabilityIds: input.capabilityIds });
+    },
+    claimSave() {
+      return { answerArtifactId: "art_claimed_answer" };
+    },
+    reserveSave() {
+      calls.order.push("reserveSave");
+    },
+    settleSave(input: { outcome: string }) {
+      calls.order.push(`settleSave:${input.outcome}`);
+    },
+    verifyPromotion() {
+      calls.order.push("verifyPromotion");
+      return { artifactId: "art_promo_verification", verified: true };
     },
     seal(input) {
       calls.seals.push({ runId: input.runId, artifactIds: input.artifactIds });
@@ -159,13 +199,17 @@ function driveTo(
 }
 
 describe("KB playbook — state vocabulary", () => {
-  it("declares the ingest machine's states in order", () => {
-    expect([...KB_AGENT_PHASES]).toEqual(["ingest", "compose", "lint", "verify"]);
+  it("declares the machine's states in order, across all three actions", () => {
+    // ingest: ingest→compose→lint→verify; save enters at compose;
+    // promote: plan→patch. All three converge on the same review gate.
+    expect([...KB_AGENT_PHASES]).toEqual(["ingest", "compose", "lint", "verify", "plan", "patch"]);
     expect([...KB_STATES]).toEqual([
       "ingest",
       "compose",
       "lint",
       "verify",
+      "plan",
+      "patch",
       "awaiting_review",
       "publishing",
     ]);
@@ -181,6 +225,52 @@ describe("KB playbook — state vocabulary", () => {
 
   it("implements the typed-feedback capability", () => {
     expect(hasGapClassification(newPlaybook())).toBe(true);
+  });
+});
+
+describe("KB playbook — §5.3 deny before session", () => {
+  it("admits the run BEFORE claiming or admitting any source", () => {
+    const { plane, calls } = fakePlane();
+    const context = newContext();
+    new KnowledgeBasePlaybook(undefined, plane).initialize(context);
+    // Ordering is the guarantee: admission must precede every private read.
+    expect(calls.order[0]).toBe("admitRun");
+    expect(calls.order.slice(0, 3)).toEqual(["admitRun", "claim", "admit"]);
+    expect(calls.admitRuns[0]?.parentIdentity).toEqual({
+      provider: "ollama",
+      model: "qwen327b:latest",
+    });
+    expect(context.playbookData.admitted_policy_sha256).toBe("a".repeat(64));
+  });
+
+  it("a denied run claims nothing, admits nothing, and dispatches no agent", () => {
+    const { plane, calls } = fakePlane({ denyAdmission: true });
+    const context = newContext();
+    expect(() => new KnowledgeBasePlaybook(undefined, plane).initialize(context)).toThrow(
+      /policy refusal/i
+    );
+    // The whole point of deny-before-session: zero private I/O on the denial path.
+    expect(calls.claims).toEqual([]);
+    expect(calls.admits).toEqual([]);
+    expect(calls.seals).toEqual([]);
+    expect(context.pendingDirective).toBeNull();
+  });
+
+  it("refuses when the host cannot establish the parent identity", () => {
+    const { plane, calls } = fakePlane();
+    // Host could not report a parent tuple — absence is a denial, not a pass.
+    const context = newContext({ parent_identity: null });
+    expect(() => new KnowledgeBasePlaybook(undefined, plane).initialize(context)).toThrow();
+    expect(calls.claims).toEqual([]);
+    expect(calls.admits).toEqual([]);
+  });
+
+  it("ignores a model-shaped parent identity that is not a proper tuple", () => {
+    const { plane, calls } = fakePlane();
+    const context = newContext({ parent_identity: { provider: "ollama" } });
+    expect(() => new KnowledgeBasePlaybook(undefined, plane).initialize(context)).toThrow();
+    expect(calls.admitRuns[0]?.parentIdentity).toBeUndefined();
+    expect(calls.claims).toEqual([]);
   });
 });
 
@@ -216,8 +306,33 @@ describe("KB playbook — dispatch", () => {
   });
 
   it("refuses an unimplemented action rather than running the ingest machine", () => {
-    const context = newContext({ action: "promote" });
+    // ingest, save, and promote are implemented; anything else must refuse
+    // rather than silently running a machine under the wrong contract.
+    const context = newContext({ action: "rebuild-everything" });
     expect(() => newPlaybook().initialize(context)).toThrow(/not implemented/);
+  });
+
+  it("refuses a promote run with no canonical target capability", () => {
+    const context = newContext({ action: "promote", canonical_target_capability_ids: [] });
+    expect(() => newPlaybook().initialize(context)).toThrow(/at least one canonical target/);
+  });
+
+  it("refuses to APPLY a promotion through the public gate (G9 is host-only)", () => {
+    const { plane, calls } = fakePlane();
+    const context = newContext({
+      action: "promote",
+      canonical_target_capability_ids: ["cap_target_1"],
+      page_revisions: [{ page_id: "page_a", revision_id: "rev_1" }],
+    });
+    const playbook = new KnowledgeBasePlaybook(undefined, plane);
+    playbook.initialize(context);
+    expect(context.stateId).toBe("plan");
+
+    // Drive to the gate, then try to approve: preparing is allowed, applying is not.
+    context.stateId = "awaiting_review";
+    playbook.dispatch(context);
+    expect(() => playbook.resume(context, "approve")).toThrow(/host-only|not implemented/i);
+    expect(calls.approvals).toEqual([]); // nothing published, nothing applied
   });
 
   it("refuses an ingest run with no admitted sources", () => {

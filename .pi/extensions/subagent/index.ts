@@ -41,11 +41,7 @@ import {
   formatModelVisibleAgentCatalog,
   snapshotAgentCatalog,
 } from "./agents.js";
-import {
-  ArtifactClientError,
-  resolveArtifactPythonPath,
-  type ArtifactRef,
-} from "../artifacts/owner-client.js";
+import { ArtifactClientError, type ArtifactRef } from "../artifacts/owner-client.js";
 import { registerOwnerArtifactGrants } from "../artifacts/owner-grants.js";
 import { createLogger } from "../../lib/logger/logger.js";
 import { resolveToolResultBudget } from "../lib/tool-result-budget.js";
@@ -387,7 +383,6 @@ export default function (pi: ExtensionAPI) {
    * a persistence failure must not discard a completed agent result.
    */
   const persistOwnerOutput = async (options: {
-    pythonPath: string;
     runId: string;
     index: number;
     agent: string;
@@ -397,7 +392,6 @@ export default function (pi: ExtensionAPI) {
     if (!options.output) return undefined;
     try {
       return await persistDirectChainOutput({
-        pythonPath: options.pythonPath,
         metadata: directAgentOutputMetadata({
           runId: options.runId,
           index: options.index,
@@ -427,21 +421,9 @@ export default function (pi: ExtensionAPI) {
     runId: string;
     cwd: string;
   }): Promise<void> => {
-    let pythonPath: string;
-    try {
-      pythonPath = resolveArtifactPythonPath(options.cwd, process.env);
-    } catch (error) {
-      logger.warn("subagent_artifact_python_unavailable", {
-        errorCode: "SUBAGENT_OUTPUT_PERSIST_FAILED",
-        reason: error instanceof Error ? error.message : "unknown",
-      });
-      return;
-    }
-
     const persisted = await Promise.all(
       options.results.map((result, index) =>
         persistOwnerOutput({
-          pythonPath,
           runId: options.runId,
           index,
           agent: result.agent,
@@ -596,7 +578,6 @@ export default function (pi: ExtensionAPI) {
       if (params.chain && params.chain.length > 0) {
         const results: SingleResult[] = [];
         artifactRunId = `subagent-chain:${randomUUID()}`;
-        const pythonPath = resolveArtifactPythonPath(ctx.cwd, process.env);
         let previousRef: ArtifactRef | undefined;
 
         for (let i = 0; i < params.chain.length; i++) {
@@ -655,7 +636,6 @@ export default function (pi: ExtensionAPI) {
           let stepOutputRef: ArtifactRef;
           try {
             const persisted = await persistDirectChainOutput({
-              pythonPath,
               metadata: outputMetadata,
               output: exactOutput,
               cwd: ctx.cwd,

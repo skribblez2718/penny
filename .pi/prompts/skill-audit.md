@@ -83,7 +83,7 @@ Every Bitter Lesson violation reported later must cite both the relevant source-
 Resolve every repository path below relative to the repository root. Read the following before making substantive findings:
 
 - Every file discovered under `.pi/skills/$1/`, including `SKILL.md`, `README.md`, scripts, prompts, assets, resources, templates, and configuration.
-- The shared Python orchestration framework under `apps/orchestration/`, to the depth needed to understand how this skill’s phases, gates, agents, retries, state, and outputs actually execute.
+- The shared TypeScript orchestration framework under `apps/orchestration/`, to the depth needed to understand how this skill’s phases, gates, agents, retries, state, and outputs actually execute.
 - Any other skill or component directly imported, invoked, or explicitly required by `$1`, but not unrelated skills or merely transitive dependencies.
 
 Produce a **coverage ledger** with one row for every discovered skill file and every other relevant surface. Mark each row as:

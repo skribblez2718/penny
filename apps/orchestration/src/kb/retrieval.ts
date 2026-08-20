@@ -108,7 +108,8 @@ export function meanReciprocalRank(
   for (const r of results) {
     const expected = new Set(r.expected.map((e) => e.page_id));
     for (let i = 0; i < r.candidates.length; i++) {
-      if (expected.has(r.candidates[i]!.page_id)) {
+      const candidate = r.candidates[i];
+      if (candidate !== undefined && expected.has(candidate.page_id)) {
         sum += 1 / (i + 1);
         break;
       }

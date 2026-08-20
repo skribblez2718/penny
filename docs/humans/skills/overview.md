@@ -4,9 +4,9 @@ Skills are established workflows that run on Penny's shared orchestration engine
 A skill earns its overhead when durable checkpoints, gates, retries, fan-out, or
 resume behavior materially improve reliability.
 
-Each skill has a registered `BasePlaybook` for states and routing plus a small
-`.pi/skills/<name>/` package for discovery, Domain Guidance, and resources. The
-local delegate contains no state-machine logic.
+Each skill has a registered TypeScript playbook for states and routing plus a small
+`.pi/skills/<name>/` package for discovery, Domain Guidance, and resources. Skill
+directories contain no executable delegate.
 
 ## Artifact-first handoff
 

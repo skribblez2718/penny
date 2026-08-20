@@ -29,10 +29,10 @@ function ref(runId: string, kind: string, operationId: string) {
     kind,
     operation_id: operationId,
     version: 1,
-    producer: kind === "skill-output" ? "skill:research" : "agent:skribble",
-    consumer_scope: [
-      kind === "skill-output" ? `skill-chain:${CHAIN_ID}:step:0002` : "state:report_writing",
-    ],
+    producer: operationId.startsWith("handoff") ? "skill:research" : "agent:skribble",
+    consumer_scope: operationId.startsWith("handoff")
+      ? ["skill-start:research-2", "state:planning", "state:researching"]
+      : ["state:report_writing"],
     media_type: "text/markdown; charset=utf-8",
     parent_ref: null,
     upstream_refs: [],
@@ -40,7 +40,7 @@ function ref(runId: string, kind: string, operationId: string) {
   return expectedArtifactRef(metadata, "exact terminal bytes");
 }
 
-function checkpoint(handoffRun = CHAIN_ID): ChainCheckpoint {
+function checkpoint(handoffRun = "research-2"): ChainCheckpoint {
   const now = "2026-08-15T12:00:00.000Z";
   return {
     schema_version: 1,
@@ -56,7 +56,7 @@ function checkpoint(handoffRun = CHAIN_ID): ChainCheckpoint {
         status: "complete",
         result_preview: "display only",
         output_artifact_ref: ref("skill-run-1", "agent-output", "terminal-1"),
-        handoff_artifact_ref: ref(handoffRun, "skill-output", "handoff-1"),
+        handoff_artifact_ref: ref(handoffRun, "agent-output", "handoff-1"),
       },
       {
         index: 1,
@@ -112,7 +112,7 @@ describe("durable skill-chain checkpoints", () => {
   it("rejects a wrong-run handoff ref and distinguishes a missing checkpoint", () => {
     const xdg = root();
     const env = { XDG_STATE_HOME: xdg };
-    expect(() => saveChainCheckpoint(checkpoint("chain-other"), env)).toThrow(/another run/);
+    expect(() => saveChainCheckpoint(checkpoint("chain-other"), env)).toThrow(/target run/);
     expect(readChainCheckpoint("chain-missing", env)).toBeNull();
   });
 });

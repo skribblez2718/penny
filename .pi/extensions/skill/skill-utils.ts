@@ -22,13 +22,13 @@ export interface SkillResult {
   steps_total: number;
   agents_invoked: string[];
   errors: string[];
-  /** Complete Python engine terminal result, preserved without reconstruction. */
+  /** Complete TypeScript engine terminal result, preserved without reconstruction. */
   result?: Record<string, unknown>;
   /** Exact terminal output selected by the skill's execution owner. */
   output_artifact_ref?: ArtifactRef;
   /** Owner dispatch pause is non-success and safe to retry from the same checkpoint. */
   retriable?: boolean;
-  /** Closed Python/driver pause contract retained verbatim for operator tooling. */
+  /** Closed TypeScript dispatch-pause contract retained for operator tooling. */
   dispatch_pause?: ArtifactDispatchPause;
   /** Exact forward-recovery instruction associated with a dispatch pause. */
   recovery?: ArtifactDispatchRecovery;
@@ -97,7 +97,7 @@ export interface EscalationQuestion {
  * questionnaire tool expects, defensively defaulting a missing/empty `options`
  * array and stripping empty `description` fields.
  *
- * Root-cause fix for the sca charter-gate crash: the Python orchestrator emits
+ * Root-cause fix for charter gates whose playbook emits
  * free-text gate questions WITHOUT an `options` key, but the consumer used to
  * call `q.options.map(...)` unconditionally (TypeError: reading 'map' of
  * undefined). This pure helper (matching the already-safe `q.options || []`

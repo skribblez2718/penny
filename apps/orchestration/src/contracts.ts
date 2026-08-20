@@ -18,7 +18,7 @@ export const ConfidenceSchema = Type.Union([
 ]);
 export type Confidence = Static<typeof ConfidenceSchema>;
 
-export const EngineOwnerSchema = Type.Union([Type.Literal("python"), Type.Literal("typescript")]);
+export const EngineOwnerSchema = Type.Literal("typescript");
 export type EngineOwner = Static<typeof EngineOwnerSchema>;
 
 export const TrustProfileSchema = Type.Union([
@@ -159,6 +159,8 @@ export const StartRequestSchema = Type.Object(
     constraints: Type.Record(Type.String(), JsonValueSchema),
     project_root: Type.String({ minLength: 1 }),
     trust_profile: TrustProfileSchema,
+    /** Optional owner-persisted inputs seeded before the first playbook state. */
+    input_artifacts: Type.Optional(InputArtifactsSchema),
   },
   { additionalProperties: false }
 );
@@ -464,9 +466,9 @@ export const SkillContractSchema = Type.Object(
         /** Domain-guidance root, relative to the project root. */
         skill_root: Type.String({ minLength: 1, maxLength: 256 }),
         /**
-         * `per_agent` -> `<agent>.md` (research today).
-         * `per_agent_phase` -> `<agent>-<phase>.md`, required by the knowledge-base
-         * prompt shape in agents-md-research §4.6.
+         * `per_agent` -> `<agent>.md` for legacy/simple skills.
+         * `per_agent_phase` -> `<agent>-<phase>.md`, the shared convention when an
+         * agent can serve distinct states.
          */
         resolution: Type.Union([Type.Literal("per_agent"), Type.Literal("per_agent_phase")]),
       },

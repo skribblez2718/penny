@@ -9,7 +9,6 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "orchestration",
     "penny",
     "penny-observability",
 ]
@@ -1263,30 +1262,6 @@ wheels = [
 ]
 
 [[package]]
-name = "orchestration"
-version = "0.1.0"
-source = { editable = "apps/orchestration" }
-dependencies = [
-    { name = "python-statemachine" },
-    { name = "typing-extensions" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "python-statemachine", specifier = ">=2.0" },
-    { name = "typing-extensions", specifier = ">=4.0" },
-]
-provides-extras = ["dev"]
-
-[[package]]
 name = "orjson"
 version = "3.11.8"
 source = { registry = "https://pypi.org/simple" }
@@ -1375,7 +1350,6 @@ dependencies = [
     { name = "lxml" },
     { name = "markdown-it-py" },
     { name = "mempalace" },
-    { name = "orchestration" },
     { name = "penny-observability" },
     { name = "pillow" },
     { name = "python-docx" },
@@ -1408,7 +1382,6 @@ requires-dist = [
     { name = "markdown-it-py", specifier = ">=4,<5" },
     { name = "mempalace", specifier = "==3.7.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10.0" },
-    { name = "orchestration", editable = "apps/orchestration" },
     { name = "penny-observability", editable = "apps/observability" },
     { name = "pillow", specifier = ">=12,<13" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.0" },

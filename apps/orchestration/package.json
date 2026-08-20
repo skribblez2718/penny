@@ -38,8 +38,7 @@
     "test:integration": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts 'tests/**/*.integration.test.ts'",
     "test:parity": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/research-parity.test.ts",
     "test:all": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
-    "test:kb-core": "echo 'KB core tests not yet implemented (G7+); skipping'",
-    "verify:python-map": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/python-parity-map.test.ts",
+    "test:kb-core": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts 'tests/kb-*.test.ts'",
     "pending": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts --grep pending",
     "smoke:research": "echo 'Smoke: set PENNY_RESEARCH_DEFAULT_MODEL and pipe a start request to dist/cli.js --execute'"
   },

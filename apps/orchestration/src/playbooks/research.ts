@@ -3,7 +3,7 @@ import path from "node:path";
 import { Type, type TSchema } from "typebox";
 
 import type { ArtifactRevisionLookup } from "../artifact-store.js";
-import { canonicalJson, sha256 } from "../checkpointer.js";
+import { sha256 } from "../checkpointer.js";
 import type {
   FanAggregateCapabilityV1,
   GapClassificationCapabilityV1,
@@ -102,6 +102,40 @@ const AGENT_BY_STATE = {
 } as const;
 
 type ResearchState = keyof typeof AGENT_BY_STATE;
+
+/** Machine-readable documentation descriptor for the research flow diagram. */
+export const RESEARCH_FLOW = {
+  states: [
+    "intake",
+    ...Object.keys(AGENT_BY_STATE),
+    "unknown",
+    "awaiting_clarification",
+    "complete",
+    "error",
+  ],
+  edges: [
+    ["intake", "planning"],
+    ["intake", "researching"],
+    ["planning", "critiquing_plan"],
+    ["planning", "researching"],
+    ["critiquing_plan", "planning"],
+    ["critiquing_plan", "researching"],
+    ["researching", "synthesizing"],
+    ["synthesizing", "critiquing_report"],
+    ["synthesizing", "validating"],
+    ["critiquing_report", "synthesizing"],
+    ["critiquing_report", "validating"],
+    ["validating", "researching"],
+    ["validating", "synthesizing"],
+    ["validating", "report_writing"],
+    ["report_writing", "complete"],
+    ["researching", "unknown"],
+    ["unknown", "awaiting_clarification"],
+    ["awaiting_clarification", "planning"],
+    ["awaiting_clarification", "researching"],
+    ["awaiting_clarification", "synthesizing"],
+  ],
+} as const;
 
 const SUMMARY_SCHEMA_BY_STATE: Record<ResearchState, TSchema> = {
   planning: PlanningSummarySchema,
@@ -250,6 +284,10 @@ const SUCCESSORS_BY_STATE: Record<ResearchState, readonly string[]> = {
 
 function selectedInputRefs(context: RunContext, state: ResearchState): ArtifactRef[] {
   const phases = new Set(INPUT_PHASES_BY_STATE[state]);
+  // A skill-chain predecessor is imported into this run as an owner-persisted
+  // `chain_input` artifact. Only the actual entry states consume it; subsequent
+  // phases inherit its information through the first accepted phase output.
+  if (state === "planning" || state === "researching") phases.add("chain_input");
   return context.selectedArtifacts
     .filter((artifact) => phases.has(artifact.phase))
     .sort((left, right) =>
@@ -358,7 +396,7 @@ export const RESEARCH_SKILL_CONTRACT: SkillContract = {
   },
   guidance: {
     skill_root: ".pi/skills/research/assets/prompts",
-    resolution: "per_agent",
+    resolution: "per_agent_phase",
   },
   feedback_kinds: ["evidence_gap", "synthesis_gap", "validation_gap", "malformed_result"],
   budgets: {

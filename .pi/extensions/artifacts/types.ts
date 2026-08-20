@@ -18,7 +18,7 @@ export type ArtifactErrorCode =
   | "ARTIFACT_RESULT_BUDGET_EXCEEDED"
   | "ARTIFACT_MATERIALIZATION_FAILED";
 
-/** Exact schema-v1 transport reference accepted by the Python artifact plane. */
+/** Exact schema-v1 transport reference accepted by the artifact plane. */
 export interface ArtifactRef {
   schema_version: 1;
   artifact_id: string;
@@ -36,7 +36,7 @@ export interface ArtifactRef {
   store_ref: string;
 }
 
-/** Exact schema-v1 manifest envelope accepted by the Python artifact plane. */
+/** Exact schema-v1 manifest envelope accepted by the artifact plane. */
 export interface ArtifactEnvelope extends ArtifactRef {
   created_at: string;
   parent_ref: ArtifactRef | null;

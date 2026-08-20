@@ -56,16 +56,16 @@ UTF-8 bytes, so a digest over the bytes is a digest over the meaning. Raw source
 preserve their admitted bytes exactly.
 
 **Source record.** Opaque host-minted `source_id` (ULID or UUID), type, capture and publication
-time, title, authors, media type, the raw-byte `sha256`, an `object_ref` derived *exactly* from
+time, title, authors, media type, the raw-byte `sha256`, an `object_ref` derived _exactly_ from
 that hash, and provenance including the capability digest and originating run.
 
 Three values do distinct jobs and are never conflated:
 
-| Value | Role |
-|---|---|
-| `source_id` | Stable opaque reference identity. Never a digest, never caller-supplied |
-| `sha256` / `object_ref` | Content address of the raw bytes; deduplicates and integrity-checks |
-| Catalog record hash | JCS digest of the complete record; detects record change and exact duplicates |
+| Value                   | Role                                                                          |
+| ----------------------- | ----------------------------------------------------------------------------- |
+| `source_id`             | Stable opaque reference identity. Never a digest, never caller-supplied       |
+| `sha256` / `object_ref` | Content address of the raw bytes; deduplicates and integrity-checks           |
+| Catalog record hash     | JCS digest of the complete record; detects record change and exact duplicates |
 
 Every canonical metadata field copies byte-exactly from the host-reviewed capability envelope. No
 child, model, or filename parser supplies source metadata.
@@ -102,6 +102,28 @@ Readers start from one validated selector and use only that generation. They nev
 directory scan with a different generation, and they never mix a new page with an old catalog. That
 single rule is what makes a crash produce either the complete old view or the complete new view and
 nothing in between.
+
+### Publication accumulates
+
+Because a generation is _complete_, publication carries the selected generation's pages, source
+records, source objects, and conflicts forward and layers the run's own entries on top. Four rules
+keep that from being a blind copy:
+
+- **Catalog-level, never a re-copy.** Carried entries are already-published immutable files at
+  their existing keys, so the next catalog references them and a publish writes only genuinely new
+  bytes however large the KB grows.
+- **Re-verified while carried.** Each carried page's bytes are re-hashed against the base catalog's
+  digests. Drift, a missing revision, or unreadable frontmatter refuses the publish — nothing is
+  published and the selector does not move — so every publish re-attests the whole selected set.
+- **Supersede by id.** Re-publishing a `page_id` replaces that entry with the newer revision, one
+  entry rather than two; the prior revision stays immutable and reachable through the generation
+  that selected it.
+- **No deletion path.** A page leaves circulation through a `superseded` or `archived` lifecycle
+  revision, never by being dropped from a catalog.
+
+A publish may admit **zero new sources** — a `save` derives its page from already-published sources
+and carries them forward. `ingest` separately requires at least one source capability, enforced
+where capabilities are claimed.
 
 Publication therefore has exactly **one commit point**: the atomic replacement of `current.json`.
 Everything before it is staging that can be discarded; everything after it is finalization that can

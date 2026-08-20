@@ -42,7 +42,7 @@
     "test": "bun run test:unit",
     "test:unit": "set -e; for dir in .pi/extensions/*/; do (cd \"$dir\" && bun run test:unit); done; (cd apps/orchestration && bun run test:unit); (cd apps/platform-memory && bun run test:unit)",
     "test:integration": "set -e; for dir in .pi/extensions/*/; do if grep -q '\"test:integration\"' \"$dir/package.json\"; then (cd \"$dir\" && bun run test:integration); fi; done; (cd apps/platform-memory && bun run test:integration && bun run test:clean-machine)",
-    "test:python": ".venv/bin/python -m pytest apps/orchestration/tests scripts/system/memory/tests -p no:cacheprovider --tb=short -q",
+    "test:python": ".venv/bin/python -m pytest scripts/system/memory/tests scripts/system/tests -p no:cacheprovider --tb=short -q",
     "test:all": "bun run lint && bun run format:check && bun run py:lint && bun run py:format:check && bun run test:unit && bun run test:integration && bun run test:python"
   },
   "devDependencies": {

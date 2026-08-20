@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@penny/orchestration": "workspace:*",
     "@sinclair/typebox": "^0.34.49"
   },
   "devDependencies": {

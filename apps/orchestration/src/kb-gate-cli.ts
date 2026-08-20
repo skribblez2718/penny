@@ -24,7 +24,6 @@
  *   No command prints any source or page body to stdout.
  */
 
-import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 
@@ -35,7 +34,6 @@ import type { Directive, JsonValue } from "./contracts.js";
 import { envelopeDigest, CapabilityStore } from "./kb/capabilities.js";
 import {
   ParentDeliveryGrantStore,
-  computeRequestSha256,
   mintParentDeliveryGrant,
   validateQueryRequest,
 } from "./kb/parent-delivery.js";
@@ -114,14 +112,21 @@ function cmdParentGrantMint(args: Args): void {
   }
   const request = validateQueryRequest(rawRequest);
   if (request.kb_profile_id !== args.profile) {
-    fail(`--profile is ${args.profile} but the request names ${request.kb_profile_id}; they must match`);
+    fail(
+      `--profile is ${args.profile} but the request names ${request.kb_profile_id}; they must match`
+    );
   }
   if (request.answer_delivery !== undefined && request.answer_delivery !== "parent_tool_result") {
     fail("a grant request must use answer_delivery: parent_tool_result (or omit it)");
   }
   const maxBytes = Number(args["max-bytes"] ?? 16384);
   const ttlMinutes = Number(args["ttl-minutes"] ?? 15);
-  if (!Number.isFinite(maxBytes) || !Number.isFinite(ttlMinutes) || ttlMinutes < 1 || ttlMinutes > 10080) {
+  if (
+    !Number.isFinite(maxBytes) ||
+    !Number.isFinite(ttlMinutes) ||
+    ttlMinutes < 1 ||
+    ttlMinutes > 10080
+  ) {
     fail("--max-bytes must be a positive integer (≤ 32768) and --ttl-minutes 1–10080");
   }
   const now = new Date();
@@ -156,7 +161,9 @@ function cmdParentGrantMint(args: Args): void {
 function cmdParentGrantList(args: Args): void {
   const store = new ParentDeliveryGrantStore(grantStoreDir(args));
   const { grants, skipped_malformed } = store.list();
-  process.stdout.write(JSON.stringify({ schema_version: 1, grants, skipped_malformed }, null, 2) + "\n");
+  process.stdout.write(
+    JSON.stringify({ schema_version: 1, grants, skipped_malformed }, null, 2) + "\n"
+  );
 }
 
 function cmdCapabilityMint(args: Args): void {
@@ -332,7 +339,9 @@ function cmdRefine(args: Args): void {
   // refinement path, and we refuse rather than guess one.
   const directive = decisionViaEngine(args.projectRoot, gate.run_id, "refine");
   if (directive === undefined) {
-    throw new Error("refine applies only to engine-driven runs; this gate is not owned by an engine run");
+    throw new Error(
+      "refine applies only to engine-driven runs; this gate is not owned by an engine run"
+    );
   }
   const d = directive as { action: string; gate_id?: string; status?: string };
   if (d.action === "await_user") {

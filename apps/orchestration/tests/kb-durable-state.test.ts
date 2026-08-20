@@ -47,6 +47,7 @@ function newContext(constraints: Record<string, JsonValue> = {}): RunContext {
       kb_profile_id: "kbp_test",
       source_capability_ids: ["cap_a", "cap_b"],
       max_iterations: 3,
+      parent_identity: { provider: "ollama", model: "qwen327b:latest" },
       ...constraints,
     },
     projectRoot: PROJECT_ROOT,
@@ -99,6 +100,10 @@ interface FakePlaneCalls {
 
 function fakePlane(calls: FakePlaneCalls) {
   return {
+    admitRun() {
+      // §5.3 admission; this suite asserts durable state, not the policy matrix.
+      return { policy_sha256: "a".repeat(64) };
+    },
     claim(i: { runId: string; capabilityIds: readonly string[] }) {
       calls.claims.push(i.runId);
     },

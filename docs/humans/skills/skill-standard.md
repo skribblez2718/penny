@@ -3,7 +3,7 @@
 A well-formed Penny skill has:
 
 1. a trigger-rich `SKILL.md` manifest with `engine: orchestration`;
-2. a registered `BasePlaybook` and thin delegate;
+2. a registered TypeScript playbook and no executable delegate;
 3. static Domain Guidance for each worker/state;
 4. exact input/output artifact contracts for every cognitive stage;
 5. complete stage output before a routing-only SUMMARY;

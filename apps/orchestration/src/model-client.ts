@@ -38,9 +38,21 @@ export interface AgentInvocation {
   readonly signal?: AbortSignal;
   readonly modelOverride?: string;
   /**
+   * Pre-session admission hook.
+   *
+   * Called with the model the runtime actually RESOLVED, immediately before the
+   * session is created. Throwing denies the invocation with no session created
+   * and no private input read — which is what lets a caller enforce a policy
+   * that must hold "before `createAgentSession`" rather than after it.
+   *
+   * A resolved identity is required whenever this hook is supplied: if no model
+   * could be resolved there is nothing to admit, and the invocation is denied
+   * rather than run on an unadmitted default.
+   */
+  readonly admitResolvedModel?: (resolved: { provider: string; model: string }) => void;
+  /**
    * W6: the active skill's guidance declaration. Optional so existing callers keep
-   * working; when absent, resolution falls back to research's layout, which is exactly
-   * what the hardcoded path did before.
+   * working; when absent, resolution follows the reference research contract.
    */
   readonly guidance?: SkillContract["guidance"];
   /**
@@ -93,21 +105,20 @@ export interface WorkerPostureV1 {
  * Default guidance declaration.
  *
  * Before W6 the domain-guidance path was the string literal
- * `.pi/skills/research/assets/prompts/<agent>.md`. Keeping research's values as the
- * fallback is what makes W6 a pure parameterization: with no contract supplied, the
- * resolver produces byte-identical paths to the pre-refactor code.
+ * `.pi/skills/research/assets/prompts/<agent>.md`. Research has since migrated to the
+ * phase-specific convention shared with KB, so the no-contract fallback follows the
+ * reference skill's declared guidance contract.
  */
 export const DEFAULT_GUIDANCE: SkillContract["guidance"] = {
   skill_root: ".pi/skills/research/assets/prompts",
-  resolution: "per_agent",
+  resolution: "per_agent_phase",
 };
 
 /**
  * W6 — resolve the domain-guidance file for one agent in one phase.
  *
- * `per_agent` yields `<agent>.md` (research today). `per_agent_phase` yields
- * `<agent>-<phase>.md`, which is the shape the knowledge-base prompts require
- * (agents-md-research §4.6) and is why the phase dimension exists now rather than later.
+ * `per_agent` yields `<agent>.md` for legacy/simple skills. `per_agent_phase` yields
+ * `<agent>-<phase>.md`, the shared convention for agents that can serve distinct states.
  */
 export function resolveDomainGuidancePath(input: {
   projectRoot: string;
@@ -462,8 +473,8 @@ export class PiAgentClient implements ModelClient {
     const agentGuidance = await optionalText(
       path.join(invocation.projectRoot, ".pi", "agents", `${invocation.agent}.md`)
     );
-    // W6: contract-resolved, not hardcoded. With no contract supplied this produces the
-    // exact path the previous string literal produced.
+    // W6: contract-resolved, not hardcoded. With no contract supplied this follows the
+    // reference research skill's current guidance declaration.
     const domainGuidance = await optionalText(
       resolveDomainGuidancePath({
         projectRoot: invocation.projectRoot,
@@ -528,6 +539,19 @@ export class PiAgentClient implements ModelClient {
         }
         sessionOptions.modelRuntime = runtime;
       }
+    }
+
+    if (invocation.admitResolvedModel !== undefined) {
+      const resolved = sessionOptions.model as { provider?: unknown; id?: unknown } | undefined;
+      const provider = typeof resolved?.provider === "string" ? resolved.provider : "";
+      const id = typeof resolved?.id === "string" ? resolved.id : "";
+      if (provider.length === 0 || id.length === 0) {
+        throw new Error(
+          `agent '${invocation.agent}' state '${invocation.stateId}': no resolved model identity to admit; refusing to create a session`
+        );
+      }
+      // Throws on denial. Nothing below this line may run for a denied model.
+      invocation.admitResolvedModel({ provider, model: id });
     }
 
     const { session } = await createAgentSession(sessionOptions);

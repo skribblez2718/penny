@@ -48,10 +48,15 @@ import type { RunContext } from "../context.js";
 import type { ArtifactRevisionLookup } from "../artifact-store.js";
 import type { GapClassificationCapabilityV1, PlaybookCoreV1 } from "./playbook.js";
 import { buildOutputArtifactMetadata } from "./artifact-metadata.js";
-import { defaultKbIngestPlane, resolveKbRoot, type KbIngestPlaneV1 } from "../kb/ingest-plane.js";
+import {
+  defaultKbIngestPlane,
+  resolveKbRoot,
+  type KbIngestPlaneV1,
+  type KbPublishOutcome,
+} from "../kb/ingest-plane.js";
 
 /** The agent phases of an ingest run, in order. */
-export const KB_AGENT_PHASES = ["ingest", "compose", "lint", "verify"] as const;
+export const KB_AGENT_PHASES = ["ingest", "compose", "lint", "verify", "plan", "patch"] as const;
 export type KbAgentPhase = (typeof KB_AGENT_PHASES)[number];
 
 /** Every non-terminal state of the KB machine. */
@@ -63,6 +68,10 @@ const AGENT_BY_PHASE: Record<KbAgentPhase, string> = {
   compose: "synthia",
   lint: "carren",
   verify: "vera",
+  // Promotion prepares only: Piper plans the transition, Skribble scopes the
+  // patch. Neither can apply anything — they produce advisory artifacts.
+  plan: "piper",
+  patch: "skribble",
 };
 
 /** Successor state for each phase on the happy path. */
@@ -71,6 +80,8 @@ const NEXT_STATE: Record<KbState, KbState | "complete"> = {
   compose: "lint",
   lint: "verify",
   verify: "awaiting_review",
+  plan: "patch",
+  patch: "awaiting_review",
   awaiting_review: "publishing",
   publishing: "complete",
 };
@@ -81,6 +92,8 @@ const PRIOR_PHASES: Record<KbAgentPhase, readonly KbAgentPhase[]> = {
   compose: ["ingest"],
   lint: ["compose"],
   verify: ["compose"],
+  plan: [],
+  patch: ["plan"],
 };
 
 // ── exported flow descriptor (§5.12) ─────────────────────────────────────────
@@ -132,12 +145,14 @@ export const KB_FLOW: KbFlowDescriptor = {
   schema_version: 1,
   playbook: "knowledge-base",
   states: [
-    ...KB_AGENT_PHASES.map((p): KbFlowState => ({
-      id: p,
-      kind: "agent",
-      agent: AGENT_BY_PHASE[p],
-      guidance: `${AGENT_BY_PHASE[p]}-${p}.md`,
-    })),
+    ...KB_AGENT_PHASES.map(
+      (p): KbFlowState => ({
+        id: p,
+        kind: "agent",
+        agent: AGENT_BY_PHASE[p],
+        guidance: `${AGENT_BY_PHASE[p]}-${p}.md`,
+      })
+    ),
     { id: "awaiting_review", kind: "gate" },
     { id: "publishing", kind: "host" },
     { id: "complete", kind: "terminal" },
@@ -145,12 +160,33 @@ export const KB_FLOW: KbFlowDescriptor = {
   ],
   edges: [
     { from: "start", to: "ingest", kind: "forward", trigger: "initialize (claim + admit sources)" },
+    // A `save` enters at compose: it has no extraction phase, because it
+    // composes from the sealed answer of the query run its claim names.
+    {
+      from: "start",
+      to: "compose",
+      kind: "forward",
+      trigger: "initialize save (claim the query answer)",
+    },
+    // A `promote` prepares only: plan and patch, then the review gate. It has no
+    // publishing edge, because the public tool can never apply a promotion.
+    {
+      from: "start",
+      to: "plan",
+      kind: "forward",
+      trigger: "initialize promote (claim targets, prepare only)",
+    },
     // Happy path, derived from the machine's own transition table.
     ...Object.entries(NEXT_STATE)
       .filter(([state]) => isAgentPhase(state))
       .map(([from, to]) => ({ from, to, kind: "forward" as const, trigger: "phase_complete" })),
     // Gate decisions — exactly what `resume` accepts.
-    { from: "awaiting_review", to: "publishing", kind: "gate", trigger: "approve (host-authenticated)" },
+    {
+      from: "awaiting_review",
+      to: "publishing",
+      kind: "gate",
+      trigger: "approve (host-authenticated)",
+    },
     { from: "awaiting_review", to: "incomplete", kind: "terminal", trigger: "deny" },
     { from: "awaiting_review", to: "compose", kind: "repair", trigger: "refine", bounded: true },
     // publishing → complete is the machine's happy-path successor table entry,
@@ -274,6 +310,25 @@ function stringList(value: JsonValue | undefined): string[] {
     : [];
 }
 
+/**
+ * The active parent identity as the host supplied it (§5.3).
+ *
+ * Never model-supplied: the adapter reads it from the runtime and puts it in
+ * constraints. A malformed or absent value yields `undefined`, which
+ * {@link admitKbRun} treats as a denial rather than a pass.
+ */
+function readParentIdentity(
+  value: JsonValue | undefined
+): { provider: string; model: string } | undefined {
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, JsonValue>;
+  const provider = typeof record.provider === "string" ? record.provider : "";
+  const model = typeof record.model === "string" ? record.model : "";
+  return provider.length > 0 && model.length > 0 ? { provider, model } : undefined;
+}
+
 function counter(details: Record<string, JsonValue>, key: string): number {
   const value = details[key];
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
@@ -301,6 +356,8 @@ function validatePhaseDetails(
     compose: "page_draft",
     lint: "lint_report",
     verify: "verification_report",
+    plan: "promotion_plan",
+    patch: "promotion_patch",
   };
   if (kind !== expected[phase]) {
     throw new Error(
@@ -352,14 +409,11 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
       throw new Error(`KnowledgeBasePlaybook cannot run playbook '${context.identity.playbook}'`);
     }
     const action = String(context.constraints.action ?? "ingest");
-    if (action !== "ingest") {
-      // save/promote reuse this machine and land in later slices. Refusing is the
-      // honest answer until they do; silently running the ingest machine for a
-      // different action would publish under the wrong contract.
+    if (action !== "ingest" && action !== "save" && action !== "promote") {
       throw new Error(`KB playbook action '${action}' is not implemented yet`);
     }
     const sourceCapabilityIds = stringList(context.constraints.source_capability_ids as JsonValue);
-    if (sourceCapabilityIds.length === 0) {
+    if (action === "ingest" && sourceCapabilityIds.length === 0) {
       throw new Error("KB ingest requires at least one admitted source capability");
     }
     context.playbookData.action = action;
@@ -367,6 +421,67 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     context.playbookData.profile_id = String(context.constraints.kb_profile_id ?? "");
     const kbRoot = this.kbRoot(context);
     const runId = context.identity.run_id;
+
+    // §5.3 deny-before-session. The profile and root are already resolved above;
+    // this validates the policy and the ACTIVE parent identity, and binds the
+    // digest the run is admitted under. It must precede claim/admit, because
+    // admitting a source object reads private bytes — a denial after that point
+    // would be a denial that already leaked.
+    const parentIdentity = readParentIdentity(context.constraints.parent_identity as JsonValue);
+    const admitted = this.plane.admitRun({ kbRoot, parentIdentity });
+    context.playbookData.admitted_policy_sha256 = admitted.policy_sha256;
+
+    if (action === "promote") {
+      // §5.11 prepare only. The targets are claimed all-or-none before any child
+      // runs, exactly as ingest claims sources — but nothing here can apply,
+      // sign, or mutate a canonical target. That is a host-only path at G9.
+      const targetIds = stringList(
+        context.constraints.canonical_target_capability_ids as JsonValue
+      );
+      if (targetIds.length === 0) {
+        throw new Error("KB promote requires at least one canonical target capability");
+      }
+      const pageRevisions = context.constraints.page_revisions as JsonValue;
+      if (!Array.isArray(pageRevisions) || pageRevisions.length === 0) {
+        throw new Error("KB promote requires at least one page revision to promote");
+      }
+      context.playbookData.target_capability_ids = targetIds as unknown as JsonValue;
+      context.playbookData.page_revisions = pageRevisions;
+      this.plane.claim({ kbRoot, capabilityIds: targetIds, runId });
+      context.transition("plan");
+      return this.dispatch(context);
+    }
+
+    if (action === "save") {
+      // §5.6: a useful query does not authorize a save. The save must name its
+      // query run, and claiming that run's answer is the FIRST side effect —
+      // before any compose, read, or write — so a drifted, consumed, or
+      // concurrently-claimed answer stops the run here.
+      const queryRunId = String(context.constraints.query_run_id ?? "");
+      if (queryRunId.length === 0) {
+        throw new Error(
+          "KB save requires the query_run_id whose sealed answer it proposes to save"
+        );
+      }
+      const transactionId = `tx_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+      const { answerArtifactId } = this.plane.claimSave({
+        projectRoot: context.projectRoot,
+        profileId: String(context.playbookData.profile_id ?? ""),
+        kbRoot,
+        queryRunId,
+        saveRunId: runId,
+        transactionId,
+      });
+      context.playbookData.query_run_id = queryRunId;
+      context.playbookData.save_transaction_id = transactionId;
+      context.playbookData.answer_artifact_id = answerArtifactId;
+      context.playbookData.page_kind = String(context.constraints.page_kind ?? "synthesis");
+      context.playbookData.title = String(context.constraints.title ?? "");
+      // A save composes from the claimed answer; there is no extraction phase.
+      context.transition("compose");
+      return this.dispatch(context);
+    }
+
     // All-or-none, before any agent reads a source.
     this.plane.claim({
       kbRoot,
@@ -556,6 +671,8 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
       compose: ["claim_count"],
       lint: ["finding_count", "error_count", "candidate_conflict_count"],
       verify: ["supported", "partially_supported", "unsupported"],
+      plan: ["step_count", "target_count"],
+      patch: ["hunk_count", "target_count"],
     };
     const counts: Record<string, number> = {};
     for (const key of keys[state]) {
@@ -570,6 +687,7 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
    */
   private awaitReview(context: RunContext): Directive {
     const phases = phaseRecords(context);
+    const isPromote = String(context.playbookData.action ?? "ingest") === "promote";
     // Seal the exact candidate set and persist the gate BEFORE presenting it. A gate
     // offered before its candidates are frozen could be approved against a set that
     // changed afterwards.
@@ -578,14 +696,38 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
       const artifactIds = KB_AGENT_PHASES.map((phase) => phases[phase]?.kb_artifact_id).filter(
         (id): id is string => typeof id === "string" && id.length > 0
       );
+      if (isPromote) {
+        // §5.11: the host's OWN verification, not a child's claim — re-resolve
+        // every target, capture its current preimage, and confirm the named
+        // revisions are the ones actually selected. The finding is sealed into
+        // the packet alongside the plan and patch.
+        const verification = this.plane.verifyPromotion({
+          kbRoot,
+          runId: context.identity.run_id,
+          profileId: String(context.playbookData.profile_id ?? ""),
+          pageRevisions: (context.playbookData.page_revisions ?? []) as JsonValue,
+          targetCapabilityIds: stringList(context.playbookData.target_capability_ids),
+        });
+        artifactIds.push(verification.artifactId);
+        context.playbookData.promotion_verified = verification.verified;
+        if (!verification.verified) {
+          const unresolved = stringList(context.playbookData.unresolved);
+          context.playbookData.unresolved = [
+            ...unresolved,
+            "promotion verification did not pass; the packet is evidence, not authority",
+          ] as unknown as JsonValue;
+        }
+      }
       this.plane.seal({ kbRoot, runId: context.identity.run_id, artifactIds });
-      const capabilityIds = stringList(context.playbookData.source_ids);
+      const capabilityIds = isPromote
+        ? stringList(context.playbookData.target_capability_ids)
+        : stringList(context.playbookData.source_ids);
       const gate = this.plane.persistGate({
         kbRoot,
         profileId: String(context.playbookData.profile_id ?? ""),
         runId: context.identity.run_id,
         artifactIds,
-        sourceIds: capabilityIds,
+        sourceIds: isPromote ? [] : capabilityIds,
         capabilityIds,
       });
       context.playbookData.gate_id = gate.gate_id;
@@ -626,20 +768,53 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     }
     const decision = this.readDecision(response);
     context.playbookData.review_decision = decision;
+    const isSave = String(context.playbookData.action ?? "ingest") === "save";
+    const saveClaim = {
+      projectRoot: context.projectRoot,
+      profileId: String(context.playbookData.profile_id ?? ""),
+      kbRoot: this.kbRoot(context),
+      queryRunId: String(context.playbookData.query_run_id ?? ""),
+      saveRunId: context.identity.run_id,
+    };
     if (decision === "approve") {
+      if (String(context.playbookData.action ?? "ingest") === "promote") {
+        // §5.11 / PRD acceptance 9: the public tool prepares only. Applying a
+        // promotion needs the host-only signed approval path, which is G9 and
+        // does not exist yet. Refusing here is the honest answer — publishing a
+        // KB generation would be the WRONG action entirely, and pretending to
+        // apply would be worse.
+        throw new Error(
+          "promotion apply is host-only and not implemented (G9); the public gate prepares and verifies only"
+        );
+      }
       context.transition("publishing");
+      // §5.6/§5.10: reserve the claim immediately before publication. After this
+      // the claim can only be consumed or invalidated — never returned to
+      // available — so a failure here cannot become a second save.
+      if (isSave) this.plane.reserveSave(saveClaim);
       // Publication is the deterministic host step this state exists for. The gate
       // is CAS-guarded and the selector swap is atomic underneath, so a crash
       // between publishing and checkpointing cannot double-publish.
-      const published = this.plane.approve({
-        kbRoot: this.kbRoot(context),
-        runId: context.identity.run_id,
-      });
+      let published: KbPublishOutcome;
+      try {
+        published = this.plane.approve({
+          kbRoot: this.kbRoot(context),
+          runId: context.identity.run_id,
+        });
+      } catch (err) {
+        // The host cannot prove from out here whether the selector moved, and
+        // re-saving a possibly-published answer is worse than refusing a
+        // legitimate retry. Fail closed.
+        if (isSave) this.plane.settleSave({ ...saveClaim, outcome: "invalidated" });
+        throw err;
+      }
+      if (isSave) this.plane.settleSave({ ...saveClaim, outcome: "consumed" });
       context.playbookData.published_generation_id = published.generationId;
       context.playbookData.published_counts = published.counts as unknown as JsonValue;
       return this.terminal(context, "complete", true, stringList(context.playbookData.unresolved));
     }
     if (decision === "refine") {
+      // Refine RETAINS the claim (§5.6): the same save transaction continues.
       const unresolvedRefine = stringList(context.playbookData.unresolved);
       context.playbookData.unresolved = [
         ...unresolvedRefine,
@@ -651,6 +826,10 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     }
     // Denial publishes nothing and is an honest negative terminal, not an error.
     this.plane.deny({ kbRoot: this.kbRoot(context), runId: context.identity.run_id });
+    // §5.6: a denied save returns its claim to available while the sealed answer
+    // is still valid, so the operator may compose a different page from the same
+    // query; otherwise the claim is invalidated.
+    if (isSave) this.plane.settleSave({ ...saveClaim, outcome: "released" });
     const unresolved = [
       ...stringList(context.playbookData.unresolved),
       "reviewer denied publication",

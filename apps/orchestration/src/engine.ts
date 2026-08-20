@@ -157,6 +157,22 @@ export class OrchestrationEngine {
             `project_root mismatch: engine owns '${this.projectRoot}', request supplied '${request.project_root}'`
           );
         }
+        const initialArtifacts = request.input_artifacts;
+        if (initialArtifacts !== undefined) {
+          if (initialArtifacts.run_id !== request.identity.run_id) {
+            throw new Error("initial input_artifacts belongs to another run");
+          }
+          for (const binding of initialArtifacts.artifacts) {
+            if (binding.ref.run_id !== request.identity.run_id) {
+              throw new Error("initial artifact ref belongs to another run");
+            }
+            if (!binding.ref.consumer_scope.includes(initialArtifacts.consumer)) {
+              throw new Error(
+                `initial artifact '${binding.ref.artifact_id}' does not grant '${initialArtifacts.consumer}'`
+              );
+            }
+          }
+        }
         const context = RunContext.create({
           identity: request.identity,
           goal: request.goal,
@@ -164,6 +180,9 @@ export class OrchestrationEngine {
           projectRoot: this.projectRoot,
           trustProfile: request.trust_profile,
           maxSteps: this.maxSteps,
+          ...(initialArtifacts
+            ? { initialArtifacts: initialArtifacts.artifacts.map((binding) => binding.ref) }
+            : {}),
         });
         const next = this.playbook.initialize(context);
         this.checkpointer.createRun(context, "run_started", {

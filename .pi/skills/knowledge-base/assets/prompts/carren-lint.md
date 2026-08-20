@@ -47,7 +47,7 @@ No prose result is accepted; a session that ends without this submission fails t
 ## Non-negotiables
 
 - **Candidate conflicts only.** You report conflicts; you never resolve them and never
-  publish. `claim_refs` must point at claims of *this* candidate page.
+  publish. `claim_refs` must point at claims of _this_ candidate page.
 - If there are no conflicts, `candidate_conflicts` is `[]`. An empty list is a real
   finding, not a gap to fill.
 - Judge the page against its own evidence, not against what you happen to believe. A claim

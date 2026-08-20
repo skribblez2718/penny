@@ -32,7 +32,7 @@ function makeSkillsDirectory(): string {
 
 function writeSkill(root: string, name: string, disabled: boolean): void {
   const skillDirectory = path.join(root, name);
-  fs.mkdirSync(path.join(skillDirectory, "scripts"), { recursive: true });
+  fs.mkdirSync(skillDirectory, { recursive: true });
   fs.writeFileSync(
     path.join(skillDirectory, "SKILL.md"),
     [
@@ -45,7 +45,6 @@ function writeSkill(root: string, name: string, disabled: boolean): void {
       `# ${name}`,
     ].join("\n")
   );
-  fs.writeFileSync(path.join(skillDirectory, "scripts", "orchestrate.py"), "");
 }
 
 afterEach(() => {
@@ -63,10 +62,7 @@ describe("skill discovery model visibility", () => {
     const discovered = discoverSkillsFromDirectory(skillsDirectory);
     const hidden = discovered.find((skill) => skill.name === "hidden-skill");
 
-    expect(hidden).toMatchObject({
-      disableModelInvocation: true,
-      hasOrchestrate: true,
-    });
+    expect(hidden).toMatchObject({ disableModelInvocation: true });
     expect(modelInvocableSkills(discovered).map((skill) => skill.name)).toEqual(["enabled-skill"]);
   });
 });

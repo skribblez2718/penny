@@ -1,96 +1,75 @@
-# Skill Orchestration — Engine and exact-artifact protocol
+# Skill Orchestration — TypeScript engine and exact artifacts
 
 ## Architecture
 
-Every workflow skill is owned by a registered playbook. The playbook owns its
-named states, result contracts, input selection, routing, gates, fan-out, and
-terminal result. The shared engine owns protocol validation, checkpointing,
-recovery, artifact metadata, budgets, and observability. Python remains the
-default and uses the skill-directory `orchestrate.py` thin delegate. During the
-migration pilot, only a single `research` invocation may explicitly select the
-TypeScript v2 host; no default changes before the M7 approval gate.
+Every workflow skill is a registered TypeScript playbook. The playbook owns states,
+result contracts, input selection, routing, repairs, gates, fan-out, and terminal truth.
+The shared engine owns request validation, authority, checkpoints, artifacts, receipts,
+budgets, recovery, and observability. Skill directories contain no executable runtime.
 
-## Protocol rules
+## Protocol
 
-1. Python uses `start`, `step`, `status`, and `recover` through `orchestration.cli`. TypeScript v2 additionally defines `respond` and `cancel` through its closed service/CLI request schema.
-2. Persist run control state in the SQLite checkpointer keyed by `run_id`; never
-   serialize it to argv, a temporary file, an artifact, or durable memory.
-3. Emit one JSON directive per CLI invocation.
-4. Every cognitive directive carries strict `input_artifacts` plus an owner
-   `output_artifact` contract.
-5. Grant only the selected current-state refs. An output scope contains the
-   same-state retry/fan-in consumer, actual non-control FSM successors, and only
-   explicitly declared retained-input consumers whose graph reachability validates.
-   Never use the full playbook state registry as a scope. Workers use
-   `artifact_read`, follow continuation until complete, and return the complete
-   stage output.
-6. Canonical finalized output is all `text` parts in the final assistant message,
-   concatenated in order without an inserted separator. Preserve part whitespace;
-   exclude thinking/reasoning and tool calls; never fall back to an earlier turn.
-   Persist and verify those exact UTF-8 bytes before parsing the model-authored
-   `SUMMARY`; artifact failure prevents `step`.
-7. Keep payload bytes out of `RunContext`. Store only compact routing fields,
-   canonical refs, branch identities, warnings, and terminal metadata.
-8. Workers and skill drivers receive no durable-memory tools. Memory availability
-   cannot affect start, retry, fan-in, clarification, restart, or completion.
+1. Closed requests: `start`, `step`, `status`, `recover`, `respond`, `cancel`.
+2. Persist control state in the Node SQLite checkpointer keyed by exact `run_id`.
+3. Every cognitive directive carries strict input grants and output metadata.
+4. Grant only current-state refs authorized by canonical consumer scope.
+5. Persist complete finalized worker bytes before routing fields can advance the run.
+6. Keep payload bytes out of `RunContext`; retain exact selected refs.
+7. Use branch IDs—not completion order—for fan-in and partial recovery.
+8. Workers and skill drivers receive no workflow-memory transport.
+9. Evaluate the playbook’s completion gate before admitting a positive terminal.
 
 ## Directives
 
-| Action                   | Required handoff                                                                 |
-| ------------------------ | -------------------------------------------------------------------------------- |
-| `invoke_agent`           | Agent, state/run/session IDs, task, exact input slots, output contract.          |
-| `invoke_agents_parallel` | Branch-ID keyed tasks; each branch gets only its own grants and output contract. |
-| `escalate_to_user`       | Persisted prior state and questions; no state blob.                              |
-| `complete`               | Honest result with selected exact product ref, warnings, unresolved issues.      |
-| `paused`                 | Typed non-terminal/retriable dispatch stop plus exact `recover` instruction.     |
-| `error`                  | Typed errors and run identity.                                                   |
-| `status`                 | Current persisted state and completion status.                                   |
+| Action                    | Meaning                                                      |
+| ------------------------- | ------------------------------------------------------------ |
+| `invoke_agent`            | One worker assignment with exact inputs and output contract  |
+| `invoke_agents_parallel`  | Bounded branch assignments with independent output contracts |
+| `await_user`              | Persisted human/clarification gate                           |
+| `paused`                  | Retriable owner dispatch stop; checkpoint unchanged          |
+| `complete` / `incomplete` | Honest terminal truth plus selected product ref              |
+| `cancelled` / `error`     | Typed negative terminal                                      |
+| `status`                  | Safe persisted-state projection                              |
 
-## Recovery and continuation
+## Composition
 
-- Crash recovery reissues only pending work from the checkpointer.
-- Track A is forward-only. `PENNY_ARTIFACT_DISPATCH_MODE=paused` blocks new agent, deterministic-tool, and fan-out dispatch before selected refs or the pending checkpoint can change. The default is `active`; unknown values fail closed as typed retriable pauses.
-- Status and exact artifact reads remain available while paused. After reactivation, a fresh-process `recover` reissues the identical pending state, selected input refs, and output metadata, or the next explicit compatible revision.
-- Accepted sibling refs survive partial parallel recovery.
-- Clarification resumes the producer state selected by the playbook with the
-  exact checkpointed predecessor refs.
-- Malformed SUMMARY retry creates a versioned owner artifact rather than
-  replacing exact handoff with semantic discovery; the retry/fan-in state is an
-  explicit legal consumer without authorizing unrelated phases.
-- Large artifact inputs use typed UTF-8 continuation until `truncated` is false.
-- `[RESUME-REFS v2]` after compaction supplies code-owned exact addresses;
-  recover control state from the run ref and read artifacts only when granted.
+- Single and parallel modes create TypeScript runs directly.
+- Chain mode persists prior terminal bytes as a target-run `chain_input` artifact.
+- `{previous}` names the exact grant; it never carries predecessor payload text.
+- Chain resume reloads an owner-only checkpoint and reuses the exact ingress ref.
 
-## Safety and truth
+## Recovery
 
-States must be safe to reissue. Bounded loops end with honest `met=False` and
-unresolved issues when the goal was not met. Verification states require
-captured evidence. Skill-invoked workers have separate context and tool
-allowlists but no filesystem/process sandbox.
+`PENNY_ARTIFACT_DISPATCH_MODE=paused` blocks new dispatch before selected refs or
+pending state can change. `active` recovery reissues the exact pending directive or next
+compatible revision. Compaction reads caller-supplied run IDs from the TypeScript v2
+database; it never scans sessions or semantic memory.
+
+## Safety
+
+- Reissued states must be idempotent or split prepare/apply.
+- Repairs are bounded and must report honest exhaustion.
+- Verifiers require captured evidence where the contract declares it.
+- Model diversity is supplementary review, not independent proof.
+- Worker context/tool boundaries are not an OS sandbox.
 
 ## Verification
 
-- [ ] Delegate is the canonical engine stub.
-- [ ] Directive and result protocols validate exact refs and signed owner receipts.
-- [ ] Pairwise wrong legitimate phases, stale checkpoints, retries, loops,
-      clarification re-entry, and dynamic fan-in fail closed under least-authority scopes.
-- [ ] Ordinary output, persisted bytes, byte length, and digest use the same
-      multipart final-assistant text sequence.
-- [ ] Artifact persistence/ref verification precedes SUMMARY parsing.
-- [ ] Fan-in is branch-ID based, not completion-order based.
-- [ ] RunContext contains no artifact payloads or retrieved memory.
-- [ ] Recovery and compaction continuation are exact-ref based.
-- [ ] Memory-absent integration paths pass.
-- [ ] Pause/unpause drills prove no dispatch, unchanged manifest/object and memory-sentinel hashes, and same-ref forward recovery without semantic rooms or payload injection.
+- [ ] Playbook is registered and its contract validates.
+- [ ] Wrong-run, wrong-state, stale, and malformed refs fail closed.
+- [ ] Owner capture and receipt verification precede routing.
+- [ ] Single, parallel, chain, resume, clarification, and crash recovery are covered.
+- [ ] Compaction reconstructs TypeScript run/artifact refs by exact ID.
+- [ ] Payload bytes and durable memory never enter checkpoint control state.
+- [ ] Flow descriptor and `resources/flow.html` agree exactly.
 
 ## Files
 
-| File                                                         | Purpose                                        |
-| ------------------------------------------------------------ | ---------------------------------------------- |
-| `apps/orchestration/src/orchestration/engine.py`             | Shared engine                                  |
-| `apps/orchestration/src/orchestration/artifacts.py`          | Immutable artifact store                       |
-| `apps/orchestration/src/orchestration/checkpointer.py`       | Durable run state                              |
-| `apps/orchestration/src/orchestration/playbooks/research.py` | Corrected Python workflow reference            |
-| `apps/orchestration/src/playbooks/research.ts`               | Opt-in TypeScript v2 research playbook         |
-| `apps/orchestration/src/service.ts`                          | TypeScript host adapter                        |
-| `.pi/extensions/skill/README.md`                             | Skill owner loop and explicit engine selection |
+| File                                       | Purpose                          |
+| ------------------------------------------ | -------------------------------- |
+| `apps/orchestration/src/engine.ts`         | Shared protocol and admission    |
+| `apps/orchestration/src/service.ts`        | In-process host                  |
+| `apps/orchestration/src/checkpointer.ts`   | Durable state                    |
+| `apps/orchestration/src/artifact-store.ts` | Immutable artifact owner         |
+| `apps/orchestration/src/playbooks/*.ts`    | Registered playbooks             |
+| `.pi/extensions/skill/README.md`           | Skill composition and invocation |

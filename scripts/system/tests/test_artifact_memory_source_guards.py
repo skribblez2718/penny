@@ -170,9 +170,9 @@ def test_skill_room_file_is_legacy_classification_not_deletion_authority() -> No
 
 def test_track_a_dispatch_control_is_forward_only_and_documented() -> None:
     runtime_paths = (
-        ROOT / "apps" / "orchestration" / "src" / "orchestration" / "contracts.py",
-        ROOT / "apps" / "orchestration" / "src" / "orchestration" / "engine.py",
-        ROOT / "apps" / "orchestration" / "src" / "orchestration" / "recovery.py",
+        ROOT / "apps" / "orchestration" / "src" / "contracts.ts",
+        ROOT / "apps" / "orchestration" / "src" / "engine.ts",
+        ROOT / "apps" / "orchestration" / "src" / "checkpointer.ts",
         ROOT / ".pi" / "extensions" / "skill" / "dispatch-control.ts",
         ROOT / ".pi" / "extensions" / "skill" / "index.ts",
     )

@@ -6,8 +6,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   checkChildModel,
+  checkChildModelIdentity,
   checkDerivedAnswerDelivery,
   checkParentModel,
+  checkParentModelIdentity,
   enforceBeforeSession,
   PolicyRefusal,
   type ProviderModelTuple,
@@ -113,5 +115,52 @@ describe("KB §5.3 derived answer delivery", () => {
       },
     });
     expect(() => checkDerivedAnswerDelivery(policy)).not.toThrow();
+  });
+});
+
+describe("§5.3 identity-based admission (resolved tuples, never aliases)", () => {
+  const PARENT = { provider: "ollama", model: "qwen327b:latest" };
+  const base = (over: Partial<KbPolicy> = {}): KbPolicy => ({
+    ...defaultDenyPolicy("kbp-identity"),
+    allowed_parent_models: [{ ...PARENT, locality: "local" }],
+    allowed_child_models: [{ ...PARENT, locality: "local" }],
+    ...over,
+  });
+
+  it("admits an exact parent/child identity and reads locality from the operator's rule", () => {
+    expect(() => checkParentModelIdentity(base(), PARENT)).not.toThrow();
+    expect(() => checkChildModelIdentity(base(), PARENT)).not.toThrow();
+  });
+
+  it("denies empty allowlists, unknown tuples, and incomplete identities", () => {
+    for (const check of [checkParentModelIdentity, checkChildModelIdentity]) {
+      expect(() =>
+        check(base({ allowed_parent_models: [], allowed_child_models: [] }), PARENT)
+      ).toThrow(PolicyRefusal);
+      expect(() => check(base(), { provider: "anthropic", model: "claude-x" })).toThrow(
+        PolicyRefusal
+      );
+      expect(() => check(base(), { provider: "", model: "x" })).toThrow(PolicyRefusal);
+      expect(() => check(base(), { provider: "ollama", model: "" })).toThrow(PolicyRefusal);
+    }
+  });
+
+  it("enforces local_only against the matched rule's declared locality", () => {
+    const remote = base({
+      processing_mode: "local_only",
+      allowed_parent_models: [{ ...PARENT, locality: "remote" }],
+      allowed_child_models: [{ ...PARENT, locality: "remote" }],
+    });
+    expect(() => checkParentModelIdentity(remote, PARENT)).toThrow(/local_only/);
+    expect(() => checkChildModelIdentity(remote, PARENT)).toThrow(/local_only/);
+  });
+
+  it("does not admit a near-miss (provider or model differing by one segment)", () => {
+    expect(() =>
+      checkParentModelIdentity(base(), { provider: "ollama", model: "qwen327b" })
+    ).toThrow(PolicyRefusal);
+    expect(() =>
+      checkChildModelIdentity(base(), { provider: "ollama2", model: "qwen327b:latest" })
+    ).toThrow(PolicyRefusal);
   });
 });

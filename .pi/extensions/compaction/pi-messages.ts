@@ -7,8 +7,8 @@
  *      ExtensionAPI), so these interfaces capture exactly the fields this
  *      code reads. Every field is optional because the boundary makes no
  *      guarantees; call sites narrow before use.
- *   2. The Python memory bridge / engine checkpointer responses, which are
- *      arbitrary parsed JSON. The `as*` helpers narrow `unknown` to a
+ *   2. TypeScript engine checkpoint rows and tool results, which are
+ *      arbitrary parsed JSON at this extension boundary. The `as*` helpers narrow `unknown` to a
  *      concrete shape at each use site instead of trusting a blanket cast.
  */
 

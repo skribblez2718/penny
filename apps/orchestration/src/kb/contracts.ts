@@ -485,18 +485,169 @@ export type Rfc3339Utc = Static<typeof Rfc3339UtcSchema>;
  * request, never a grant: `parent_tool_result` additionally requires an exact
  * unconsumed `ParentDeliveryGrantV1` plus the policy allowance.
  */
-export const QueryKbRequestSchema = Type.Object({
-  schema_version: Type.Literal(1),
-  action: Type.Literal("query"),
-  kb_profile_id: OpaqueIdSchema,
-  query: Type.String({ minLength: 1, maxLength: 32_768 }),
-  page_ids: Type.Optional(Type.Array(OpaqueIdSchema, { minItems: 1, maxItems: 256, uniqueItems: true })),
-  source_ids: Type.Optional(Type.Array(OpaqueIdSchema, { minItems: 1, maxItems: 256, uniqueItems: true })),
-  max_candidates: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
-  verify_grounding: Type.Optional(Type.Boolean()),
-  answer_delivery: Type.Optional(AnswerDeliverySchema),
-}, { additionalProperties: false });
+export const QueryKbRequestSchema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    action: Type.Literal("query"),
+    kb_profile_id: OpaqueIdSchema,
+    query: Type.String({ minLength: 1, maxLength: 32_768 }),
+    page_ids: Type.Optional(
+      Type.Array(OpaqueIdSchema, { minItems: 1, maxItems: 256, uniqueItems: true })
+    ),
+    source_ids: Type.Optional(
+      Type.Array(OpaqueIdSchema, { minItems: 1, maxItems: 256, uniqueItems: true })
+    ),
+    max_candidates: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+    verify_grounding: Type.Optional(Type.Boolean()),
+    answer_delivery: Type.Optional(AnswerDeliverySchema),
+  },
+  { additionalProperties: false }
+);
 export type QueryKbRequest = Static<typeof QueryKbRequestSchema>;
+
+/**
+ * §5.6 `SaveKbRequestV1` — the closed public `save` request.
+ *
+ * `save` is not authorized by a useful query: it must name the exact prior query
+ * run whose sealed answer it is proposing to publish, and that run's claim is
+ * what actually authorizes the save.
+ *
+ * `promotion_candidate` is absent from `SavePageKindV1` by contract — a save can
+ * never mint a promotion candidate, because promotion is an authority
+ * transition rather than a KB write.
+ */
+export const SavePageKindSchema = Type.Union([
+  Type.Literal("concept"),
+  Type.Literal("decision"),
+  Type.Literal("synthesis"),
+  Type.Literal("question"),
+]);
+export type SavePageKind = Static<typeof SavePageKindSchema>;
+
+export const SaveKbRequestSchema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    action: Type.Literal("save"),
+    kb_profile_id: OpaqueIdSchema,
+    query_run_id: OpaqueIdSchema,
+    page_kind: SavePageKindSchema,
+    title: Type.String({ minLength: 1, maxLength: 256 }),
+  },
+  { additionalProperties: false }
+);
+export type SaveKbRequest = Static<typeof SaveKbRequestSchema>;
+
+/**
+ * §5.6 `SaveQueryClaimV1` — the single-use right to save one query's answer.
+ *
+ * A complete query with a sealed answer creates exactly one claim. The states
+ * are a one-way ratchet toward a terminal:
+ *
+ * ```text
+ *   available ──claim──> claimed ──reserve──> commit_reserved ──selector──> consumed
+ *       ^                   │                        │
+ *       └──deny/abort──────┘                        └──pre-selector abort──> invalidated
+ *        (only while the sealed answer is still valid)
+ * ```
+ *
+ * `commit_reserved` can never return to `available` or transfer to another save
+ * run — that is what makes a save single-use across crashes and retries.
+ */
+export const SaveQueryClaimStateSchema = Type.Union([
+  Type.Literal("available"),
+  Type.Literal("claimed"),
+  Type.Literal("commit_reserved"),
+  Type.Literal("consumed"),
+  Type.Literal("invalidated"),
+]);
+export type SaveQueryClaimState = Static<typeof SaveQueryClaimStateSchema>;
+
+export const SaveQueryClaimSchema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    query_run_id: OpaqueIdSchema,
+    kb_profile_id: OpaqueIdSchema,
+    kb_id: OpaqueIdSchema,
+    answer_artifact_id: OpaqueIdSchema,
+    answer_sha256: Sha256HexSchema,
+    state: SaveQueryClaimStateSchema,
+    save_run_id: Type.Optional(OpaqueIdSchema),
+    save_transaction_id: Type.Optional(OpaqueIdSchema),
+    created_at: Type.String({ minLength: 20, maxLength: 40 }),
+    updated_at: Type.String({ minLength: 20, maxLength: 40 }),
+  },
+  { additionalProperties: false }
+);
+export type SaveQueryClaim = Static<typeof SaveQueryClaimSchema>;
+
+/**
+ * §5.6 `PromoteKbRequestV1` — the closed public `promote` request.
+ *
+ * `promote` always means prepare/verify/gate. This request names an exact page
+ * revision set and exact host-minted canonical-target capability IDs; it cannot
+ * carry a target path, an approval decision, a receipt, or an intent to apply.
+ * Approval and apply are host-only paths (§5.11), not fields.
+ */
+export const PageRevisionRefSchema = Type.Object(
+  {
+    page_id: OpaqueIdSchema,
+    revision_id: OpaqueIdSchema,
+  },
+  { additionalProperties: false }
+);
+export type PageRevisionRef = Static<typeof PageRevisionRefSchema>;
+
+export const PromoteKbRequestSchema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    action: Type.Literal("promote"),
+    kb_profile_id: OpaqueIdSchema,
+    page_revisions: Type.Array(PageRevisionRefSchema, { minItems: 1, maxItems: 64 }),
+    canonical_target_capability_ids: Type.Array(OpaqueIdSchema, {
+      minItems: 1,
+      maxItems: 64,
+      uniqueItems: true,
+    }),
+  },
+  { additionalProperties: false }
+);
+export type PromoteKbRequest = Static<typeof PromoteKbRequestSchema>;
+
+/**
+ * §5.11 promotion verification — the host's own finding, not an agent's.
+ *
+ * The plan and patch are advisory artifacts produced by children. What makes a
+ * promotion packet trustworthy is this: the host independently re-resolved every
+ * target capability, captured each target's CURRENT preimage digest, and
+ * confirmed each named page revision is actually selected. `verified: false`
+ * with a bounded reason is a normal, honest outcome — the packet is still
+ * returned, and it still cannot apply anything.
+ */
+export const PromotionVerificationSchema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    artifact_kind: Type.Literal("verification_report"),
+    verified: Type.Boolean(),
+    page_revisions: Type.Array(PageRevisionRefSchema, { maxItems: 64 }),
+    targets: Type.Array(
+      Type.Object(
+        {
+          capability_id: OpaqueIdSchema,
+          // Absent when the capability did not resolve: an empty string would be a
+          // fabricated authority root, and "" is not a root.
+          authority_root: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
+          preimage_sha256: Type.Optional(Sha256HexSchema),
+          exists: Type.Boolean(),
+        },
+        { additionalProperties: false }
+      ),
+      { maxItems: 64 }
+    ),
+    findings: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 64 }),
+  },
+  { additionalProperties: false }
+);
+export type PromotionVerification = Static<typeof PromotionVerificationSchema>;
 
 // ── §5.1 parent delivery grant (host-minted, single-use) ─────────────────────
 
@@ -507,18 +658,21 @@ export type QueryKbRequest = Static<typeof QueryKbRequestSchema>;
  * the host invocation context admits derived parent delivery; the grant store
  * then atomically consumes it by the returned run, and retries never redeliver.
  */
-export const ParentDeliveryGrantSchema = Type.Object({
-  schema_version: Type.Literal(1),
-  grant_id: OpaqueIdSchema,
-  session_id: OpaqueIdSchema,
-  invocation_id: OpaqueIdSchema,
-  action: Type.Literal("query"),
-  kb_profile_id: OpaqueIdSchema,
-  request_sha256: Sha256HexSchema,
-  max_utf8_bytes: Type.Integer({ minimum: 1, maximum: 32_768 }),
-  issued_at: Rfc3339UtcSchema,
-  expires_at: Rfc3339UtcSchema,
-}, { additionalProperties: false });
+export const ParentDeliveryGrantSchema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    grant_id: OpaqueIdSchema,
+    session_id: OpaqueIdSchema,
+    invocation_id: OpaqueIdSchema,
+    action: Type.Literal("query"),
+    kb_profile_id: OpaqueIdSchema,
+    request_sha256: Sha256HexSchema,
+    max_utf8_bytes: Type.Integer({ minimum: 1, maximum: 32_768 }),
+    issued_at: Rfc3339UtcSchema,
+    expires_at: Rfc3339UtcSchema,
+  },
+  { additionalProperties: false }
+);
 export type ParentDeliveryGrant = Static<typeof ParentDeliveryGrantSchema>;
 
 export const ParentDeliveryGrantStateSchema = Type.Union([
@@ -530,20 +684,69 @@ export const ParentDeliveryGrantStateSchema = Type.Union([
 export type ParentDeliveryGrantState = Static<typeof ParentDeliveryGrantStateSchema>;
 
 /** `ParentDeliveryGrantStoreRecordV1` (§5.1) — the durable state row. */
-export const ParentDeliveryGrantStoreRecordSchema = Type.Object({
-  schema_version: Type.Literal(1),
-  grant_id: OpaqueIdSchema,
-  grant_sha256: Sha256HexSchema,
-  state: ParentDeliveryGrantStateSchema,
-  run_id: Type.Optional(OpaqueIdSchema),
-  updated_at: Rfc3339UtcSchema,
-}, { additionalProperties: false });
+export const ParentDeliveryGrantStoreRecordSchema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    grant_id: OpaqueIdSchema,
+    grant_sha256: Sha256HexSchema,
+    state: ParentDeliveryGrantStateSchema,
+    run_id: Type.Optional(OpaqueIdSchema),
+    updated_at: Rfc3339UtcSchema,
+  },
+  { additionalProperties: false }
+);
 export type ParentDeliveryGrantStoreRecord = Static<typeof ParentDeliveryGrantStoreRecordSchema>;
 
 /** The owner-only grant file: the state record plus the full grant. */
-export const ParentDeliveryGrantFileSchema = Type.Object({
-  schema_version: Type.Literal(1),
-  record: ParentDeliveryGrantStoreRecordSchema,
-  grant: ParentDeliveryGrantSchema,
-}, { additionalProperties: false });
+export const ParentDeliveryGrantFileSchema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    record: ParentDeliveryGrantStoreRecordSchema,
+    grant: ParentDeliveryGrantSchema,
+  },
+  { additionalProperties: false }
+);
 export type ParentDeliveryGrantFile = Static<typeof ParentDeliveryGrantFileSchema>;
+
+// ── §5.6 derived answer (parent delivery payload only) ──────────────────────
+
+/** `DerivedCitationV1` — exactly one union shape per citation object. */
+export const DerivedCitationSchema = Type.Union([
+  Type.Object(
+    { kind: Type.Literal("page"), page_id: OpaqueIdSchema, revision_id: OpaqueIdSchema },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal("claim"),
+      page_id: OpaqueIdSchema,
+      revision_id: OpaqueIdSchema,
+      claim_id: OpaqueIdSchema,
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    { kind: Type.Literal("source"), source_id: OpaqueIdSchema },
+    { additionalProperties: false }
+  ),
+]);
+export type DerivedCitation = Static<typeof DerivedCitationSchema>;
+
+/**
+ * `DerivedQueryAnswerV1` — the ONLY content a parent may receive for a query.
+ * Advisory authority, bounded text, opaque-ID citations, bounded advisory
+ * uncertainty entries, and a mandatory canonical-verification reminder. Raw
+ * source/page/claim/artifact/report/patch bodies never return.
+ */
+export const DerivedQueryAnswerSchema = Type.Object(
+  {
+    authority: Type.Literal("advisory"),
+    text: Type.String({ minLength: 1, maxLength: 32_768 }),
+    citations: Type.Array(DerivedCitationSchema, { minItems: 1, maxItems: 64, uniqueItems: true }),
+    contradictions: Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { maxItems: 16 }),
+    unknowns: Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { maxItems: 16 }),
+    canonical_verification_required: Type.Literal(true),
+  },
+  { additionalProperties: false }
+);
+export type DerivedQueryAnswer = Static<typeof DerivedQueryAnswerSchema>;

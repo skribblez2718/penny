@@ -68,12 +68,12 @@ For `query` and `lint`, "no-write" means **no publication and no KB content publ
 not mean a byte-frozen filesystem. Conflating the two produces tests that either fail spuriously or
 pass vacuously, so the planes are separated explicitly:
 
-| Plane | Paths | `query` / `lint` |
-|---|---|---|
-| **Publication** | `sources/objects`, `sources/records`, `pages`, `conflicts`, `.kb/generations`, `.kb/current.json`, `index.md` | **Must not change** |
-| **Control** | Orchestration control DB: run, state, safe handles, bounded failure metadata | Allowed |
-| **Same-run work** | That run's bounded artifacts under `work/<run_id>/` | Allowed |
-| **Receipt** | Append-only content-free receipts under the trusted ignored receipt root | Allowed |
+| Plane             | Paths                                                                                                         | `query` / `lint`    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------- | ------------------- |
+| **Publication**   | `sources/objects`, `sources/records`, `pages`, `conflicts`, `.kb/generations`, `.kb/current.json`, `index.md` | **Must not change** |
+| **Control**       | Orchestration control DB: run, state, safe handles, bounded failure metadata                                  | Allowed             |
+| **Same-run work** | That run's bounded artifacts under `work/<run_id>/`                                                           | Allowed             |
+| **Receipt**       | Append-only content-free receipts under the trusted ignored receipt root                                      | Allowed             |
 
 The oracle enforcing this snapshots path existence, type, and bytes recursively across exactly the
 publication plane, before and after **successful, refused, failed, and resumed** runs. Every

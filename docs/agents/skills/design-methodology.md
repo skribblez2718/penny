@@ -46,11 +46,11 @@ An evidence-grounded verifier state (vera: scripted checks, recomputation, whole
 
 ### 7. Split knowledge into three layers by volatility
 
-| Layer                      | Holds                                                                                                             | Lifetime                                             |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `resources/*.md`           | The durable domain spec — the distilled, generalized "how this domain is done well" (checklists, canons, layouts) | Survives skill redesigns; reusable outside the skill |
-| `assets/prompts/<role>.md` | Per-state role guidance: mission, exact artifact handoff, non-negotiables, complete output, SUMMARY contract      | Changes when the workflow changes                    |
-| Task builders (playbook)   | Run-specific context: exact input slots/refs, paths, unit index, prior-round violations                           | Per invocation                                       |
+| Layer                               | Holds                                                                                                             | Lifetime                                             |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `resources/*.md`                    | The durable domain spec — the distilled, generalized "how this domain is done well" (checklists, canons, layouts) | Survives skill redesigns; reusable outside the skill |
+| `assets/prompts/<agent>-<state>.md` | Per-state role guidance: mission, exact artifact handoff, non-negotiables, complete output, SUMMARY contract      | Changes when the workflow changes                    |
+| Task builders (playbook)            | Run-specific context: exact input slots/refs, paths, unit index, prior-round violations                           | Per invocation                                       |
 
 Prompts stay thin and reference resources; resources never contain run-specific detail. When one agent serves multiple states with different jobs, use per-state prompt files via the `skill_context()` hook (`<agent>-<state>.md`), not one bloated prompt.
 
@@ -101,11 +101,11 @@ After the skill ships, keep durable design rationale in the requested project do
 
 ## Files
 
-| File                                                         | Purpose                                    |
-| ------------------------------------------------------------ | ------------------------------------------ |
-| `docs/agents/skills/quick-reference.md`                      | The build checklist this methodology feeds |
-| `docs/agents/skills/skill-standard.md`                       | Structure and compliance specification     |
-| `docs/agents/skills/loops.md`                                | Loop taxonomy, gates, verifier design      |
-| `docs/agents/skills/testing.md`                              | Playbook test requirements                 |
-| `apps/orchestration/src/orchestration/playbooks/research.py` | Current engine-backed playbook example     |
-| `.pi/skills/research/README.md`                              | Current skill documentation example        |
+| File                                           | Purpose                                    |
+| ---------------------------------------------- | ------------------------------------------ |
+| `docs/agents/skills/quick-reference.md`        | The build checklist this methodology feeds |
+| `docs/agents/skills/skill-standard.md`         | Structure and compliance specification     |
+| `docs/agents/skills/loops.md`                  | Loop taxonomy, gates, verifier design      |
+| `docs/agents/skills/testing.md`                | Playbook test requirements                 |
+| `apps/orchestration/src/playbooks/research.ts` | Current engine-backed playbook example     |
+| `.pi/skills/research/README.md`                | Current skill documentation example        |

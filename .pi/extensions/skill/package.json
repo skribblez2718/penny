@@ -1,7 +1,7 @@
 {
   "name": "pi-skill-extension",
   "version": "0.1.0",
-  "description": "Pi extension for Python-based skill orchestration with state machine workflows",
+  "description": "Pi extension for durable TypeScript skill orchestration and composition",
   "type": "module",
   "scripts": {
     "lint": "eslint . --ext .ts",

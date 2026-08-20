@@ -1,82 +1,89 @@
 import { createHash } from "node:crypto";
 
 import {
+  ArtifactStore,
+  loadRuntimeConfig,
+  type OutputArtifactMetadata as TypeScriptOutputArtifactMetadata,
+} from "@penny/orchestration/source";
+
+import {
   canonicalArtifactJson,
-  persistArtifactOutput,
+  parseArtifactRef,
   readArtifactOutput,
   type ArtifactRef,
-  type OutputArtifactMetadata,
 } from "./artifact-client.js";
 import { singleArtifactInput, type InputArtifactsV1 } from "./input-artifacts.js";
 
 const SKILL_CHAIN_MEDIA_TYPE = "text/markdown; charset=utf-8";
+const RESEARCH_ENTRY_CONSUMERS = ["state:planning", "state:researching"] as const;
 
-export function skillChainConsumer(chainRunId: string, stepIndex: number): string {
-  return `skill-chain:${chainRunId}:step:${(stepIndex + 1).toString().padStart(4, "0")}`;
+/** Owner consumer used only while seeding a new TypeScript skill run. */
+export function skillRunStartConsumer(targetRunId: string): string {
+  return `skill-start:${targetRunId}`;
 }
 
 export function skillChainInput(options: {
-  chainRunId: string;
-  stepIndex: number;
+  targetRunId: string;
   handoffRef: ArtifactRef;
 }): InputArtifactsV1 {
   return singleArtifactInput({
-    runId: options.chainRunId,
-    consumer: skillChainConsumer(options.chainRunId, options.stepIndex),
+    runId: options.targetRunId,
+    consumer: skillRunStartConsumer(options.targetRunId),
     slot: "previous-skill-terminal-output",
     ref: options.handoffRef,
   });
 }
 
 /**
- * Re-register exact terminal bytes under the chain owner's run so the next
- * skill receives a correctly run/consumer-bound grant. The original terminal
- * ref remains the checkpoint authority; the chain ref is a content-addressed,
- * immutable handoff projection with the same digest and length.
+ * Import exact predecessor bytes into the next TypeScript run.
+ *
+ * The original terminal ref remains checkpoint authority. This target-run ref is
+ * an immutable, content-addressed ingress artifact whose consumer scope admits
+ * only the research entry states and the owner start seam. The TypeScript
+ * ArtifactStore is the sole persistence owner; no Python child is spawned.
  */
 export async function persistSkillChainHandoff(options: {
-  pythonPath: string;
   chainRunId: string;
   completedStepIndex: number;
-  nextStepIndex: number;
+  targetRunId: string;
   skillName: string;
   terminalRef: ArtifactRef;
-  cwd: string;
+  projectRoot: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<ArtifactRef> {
   const exactBytes = await readArtifactOutput({ ref: options.terminalRef, env: options.env });
-  const phase = `skill-chain-step-${(options.completedStepIndex + 1).toString().padStart(4, "0")}`;
   const operationDigest = createHash("sha256")
     .update(
       canonicalArtifactJson({
         chain_run_id: options.chainRunId,
         completed_step: options.completedStepIndex,
         source_artifact_id: options.terminalRef.artifact_id,
+        target_run_id: options.targetRunId,
       }),
       "utf8"
     )
     .digest("hex");
-  const metadata: OutputArtifactMetadata = {
+  const consumerScope = [
+    skillRunStartConsumer(options.targetRunId),
+    ...RESEARCH_ENTRY_CONSUMERS,
+  ].sort();
+  const metadata: TypeScriptOutputArtifactMetadata = {
     schema_version: 1,
-    run_id: options.chainRunId,
-    phase,
+    run_id: options.targetRunId,
+    phase: "chain_input",
     branch_id: null,
-    kind: "skill-output",
+    kind: "agent-output",
     operation_id: `skill-chain-operation:${operationDigest}`,
     version: 1,
     producer: `skill:${options.skillName}`,
-    consumer_scope: [skillChainConsumer(options.chainRunId, options.nextStepIndex)],
+    consumer_scope: consumerScope,
     media_type: SKILL_CHAIN_MEDIA_TYPE,
     parent_ref: null,
     upstream_refs: [],
   };
-  return persistArtifactOutput({
-    pythonPath: options.pythonPath,
-    metadata,
-    output: exactBytes,
-    cwd: options.cwd,
-    env: options.env,
-  });
+  const config = loadRuntimeConfig(options.projectRoot, options.env ?? process.env);
+  using store = new ArtifactStore(config.artifactRoot);
+  return parseArtifactRef(store.persist({ metadata, content: exactBytes }));
 }
 
 /** Validate that a durable checkpoint ref still resolves to the exact bytes. */

@@ -36,7 +36,7 @@ skill({
 
 ## Engine and exact artifacts
 
-`ResearchPlaybook` is a `BasePlaybook` subclass in `apps/orchestration/src/orchestration/playbooks/research.py`; the skill delegate contains no FSM logic. SQLite checkpoint state is keyed by `run_id`.
+`ResearchPlaybook` is a registered TypeScript playbook in `apps/orchestration/src/playbooks/research.ts`. The skill directory contains no executable delegate; Node SQLite checkpoint state is keyed by `run_id`.
 
 Every cognitive directive supplies strict `input_artifacts` and `output_artifact` contracts. A worker reads every task-provided ref with `artifact_read`, follows typed continuation until complete, and returns complete stage content. The execution owner persists exact response bytes before parsing the final SUMMARY line. Workers have no durable-memory tools, never claim artifact registration, and payloads never enter `RunContext`.
 
@@ -68,7 +68,7 @@ Terminal fields distinguish delivery and verification:
 
 ## Verification
 
-- `test_research_playbook.py`: standard/deep, dynamic fan, critique, re-research, clarification, and honest terminal semantics.
-- `test_research_artifact_handoff.py`: protocol-v2 exact refs and memory-absent start/step/parallel/retry/clarification/restart/terminal paths.
-- `test_contract_prompt_drift.py`: SUMMARY alignment and source guards against semantic workflow transport.
-- `test_reference_drift.py` and `test_flow_diagrams.py`: reference/diagram FSM parity.
+- `research-parity.test.ts`: mode traces, dynamic fan, critique, re-research, clarification, recovery, and terminal truth.
+- `core-runtime.test.ts`: exact artifacts, receipts, malformed reissue, and memory-absent execution.
+- `prompt-guidance-contract.test.ts`: complete phase-prompt alignment.
+- `flow-diagrams.test.ts`: descriptor/diagram parity.

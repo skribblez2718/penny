@@ -53,8 +53,10 @@ describe("bounded retention", () => {
     const cp = new Checkpointer(db, undefined, { maxRetainedRuns: 3 });
     for (let i = 0; i < 5; i++) mkRun(cp, `run-${i}`, "complete", `2026-01-0${i + 1}T00:00:00Z`);
     cp.pruneTerminalRuns();
-    const remaining = (cp as unknown as { db: { prepare: (s: string) => { all: () => Array<{ run_id: string }> } } })
-      .db.prepare("SELECT run_id FROM runs ORDER BY run_id")
+    const remaining = (
+      cp as unknown as { db: { prepare: (s: string) => { all: () => Array<{ run_id: string }> } } }
+    ).db
+      .prepare("SELECT run_id FROM runs ORDER BY run_id")
       .all()
       .map((r) => r.run_id);
     expect(remaining.length).toBe(3);
@@ -75,8 +77,10 @@ describe("bounded retention", () => {
     mkRun(cp, "running-1", "running", "2026-01-03T00:00:00Z");
     mkRun(cp, "awaiting-1", "awaiting_user", "2026-01-04T00:00:00Z");
     cp.pruneTerminalRuns();
-    const remaining = (cp as unknown as { db: { prepare: (s: string) => { all: () => Array<{ run_id: string }> } } })
-      .db.prepare("SELECT run_id FROM runs")
+    const remaining = (
+      cp as unknown as { db: { prepare: (s: string) => { all: () => Array<{ run_id: string }> } } }
+    ).db
+      .prepare("SELECT run_id FROM runs")
       .all()
       .map((r) => r.run_id);
     // Only 2 terminal runs, cap is 1, so 1 terminal is pruned. Non-terminals are untouched.
@@ -99,8 +103,10 @@ describe("bounded retention", () => {
     mkRun(cp, "run-b", "complete", "2026-01-02T00:00:00Z");
     cp.pruneTerminalRuns();
     // run-a was older, so it was pruned; its event must be gone (cascade).
-    const events = (cp as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } })
-      .db.prepare("SELECT * FROM events WHERE run_id='run-a'")
+    const events = (
+      cp as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db
+      .prepare("SELECT * FROM events WHERE run_id='run-a'")
       .all();
     expect(events.length).toBe(0);
     cp.close();

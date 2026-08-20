@@ -97,7 +97,7 @@ export function secureWrite(filePath: string, content: string): void {
 }
 
 /** Read and validate a file as JCS-canonical JSON. */
-function readJson<T>(filePath: string): string {
+function readJson(filePath: string): string {
   assertCustody(filePath, "file");
   return readFileSync(filePath, "utf8");
 }

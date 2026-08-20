@@ -49,7 +49,7 @@ skill({
 | `session_id` | no | Generated when omitted. |
 | `project_root` | no | Target root; defaults to cwd. |
 | `constraints` | no | Run budgets and shaping instructions below. |
-| `engine` | no | Stable default is `python`. `typescript` is an explicit single-run pilot until the M7 approval gate. |
+| `model` | no | Optional per-invocation test/caller override for every worker; production defaults remain in agent SSOT frontmatter. |
 
 ### Constraints
 

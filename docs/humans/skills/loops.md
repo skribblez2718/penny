@@ -36,7 +36,7 @@ Loops are not alternatives — they **nest**. A production system layers seven c
 | **L2** | Verifier / critic gate   | Separate evaluation decides: converge or cycle back          | `done_predicate`, Vera/Carren split, SUMMARY contracts     |
 | **L3** | Retry / repair (bounded) | On failure, repair and retry under a budget                  | `max_iterations`, `learn_retry`/`learn_exhausted`          |
 | **L4** | Human-in-the-loop gates  | Planned checkpoints for approval or escalation               | Planned gates, UNCERTAIN → `awaiting_clarification`        |
-| **L5** | Orchestration FSM        | Explicit states, typed transitions, checkpointing, resume    | `BasePlaybook` engine + durable checkpointer               |
+| **L5** | Orchestration FSM        | Explicit states, typed transitions, checkpointing, resume    | TypeScript playbook + durable checkpointer                 |
 | **L6** | Reflection / memory      | Optional, gated learning between runs without weight updates | Primary-only durable recall/curation; never worker handoff |
 | **L7** | Background / scheduled   | Time-triggered polling, monitoring, maintenance              | Heartbeats                                                 |
 
@@ -87,7 +87,7 @@ Match the loop stack to the task's verifiability and step-predictability:
 
 Penny's architecture is already aligned with what the research prescribes:
 
-1. **The universal shape is methodology, not a base class.** The six operations (FRAME→PLAN→ACT⇄VERIFY→LEARN) are documented in SYSTEM.md as guidance. Each skill implements its own specialized loop as a `BasePlaybook` subclass with domain-named states. This is the correct split: universality at the shape level, specialization at the instance level.
+1. **The universal shape is methodology, not a base class.** The six operations (FRAME→PLAN→ACT⇄VERIFY→LEARN) are guidance. Each skill implements its own specialized TypeScript playbook with domain-named states behind the common interface.
 
 2. **The engine owns continuity, not the model.** Sessions are memoryless. The durable `run_id` checkpointer persists state after every step. `recover_pending` auto-resumes interrupted runs. Everything routing-relevant lives in `RunContext`, never in an agent's context window.
 

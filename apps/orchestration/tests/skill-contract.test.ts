@@ -39,11 +39,10 @@ describe("W3 research reference contract", () => {
     );
   });
 
-  it("declares research's real guidance root and per-agent resolution", () => {
-    // Must match the path the worker actually uses today; W6 parameterizes the lookup
-    // without changing where research's prompts live.
+  it("declares research's real guidance root and per-agent-phase resolution", () => {
+    // Research uses the same unambiguous agent/state convention as other universal skills.
     expect(RESEARCH_SKILL_CONTRACT.guidance.skill_root).toBe(".pi/skills/research/assets/prompts");
-    expect(RESEARCH_SKILL_CONTRACT.guidance.resolution).toBe("per_agent");
+    expect(RESEARCH_SKILL_CONTRACT.guidance.resolution).toBe("per_agent_phase");
   });
 
   it("declares budgets matching the pinned budget-constraint surface", () => {

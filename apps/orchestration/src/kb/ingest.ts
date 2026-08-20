@@ -23,16 +23,17 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 import {
   canonicalJson,
   sha256Hex,
-  ClaimsSidecarSchema,
   type ClaimsSidecar,
   type ConflictRecord as ConflictRecordT,
   type PageKind,
   type PageLifecycle,
   type PageRevisionFrontmatter,
+  type GenerationCatalog,
   type Sha256Hex,
   type SourceRecord,
   type SourceType,
@@ -40,6 +41,8 @@ import {
 import {
   readManifest,
   readPolicy,
+  pageClaimsPath,
+  pageMarkdownPath,
   writeConflictRecord,
   writePageRevision,
   writeSourceObject,
@@ -57,7 +60,7 @@ import { type KbResult, type KbStatus, type KbWorkflowContext } from "./workflow
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
-import type { KbAgentRunner, KbPhaseInvocation } from "./kb-model-client.js";
+import type { KbAgentRunner } from "./kb-model-client.js";
 
 /** API continuity: the workflow's runner type is the client's contract. */
 export type AgentRunner = KbAgentRunner;
@@ -84,7 +87,15 @@ interface PublishablePage {
 export interface PendingIngest {
   readonly runId: string;
   readonly sourceIds: readonly string[];
-  readonly claimsArtifactId: string;
+  /**
+   * Present for an ingest, absent for a `save`.
+   *
+   * A save has no extraction phase — it composes from a claimed query answer —
+   * so there is no `claims` artifact to seal. Publication never reads this id
+   * (it republishes from the sealed page draft and lint report), so requiring it
+   * would reject a valid save for an artifact nothing consumes.
+   */
+  readonly claimsArtifactId?: string;
   readonly pageDraftArtifactId: string;
   readonly lintReportArtifactId: string;
   readonly verificationArtifactId: string;
@@ -386,6 +397,113 @@ function asStringArray(value: unknown): string[] {
  * Refuses (no publication) on schema failure — malformed bytes are never
  * published.
  */
+/** Carried publication state failed its integrity recheck; nothing is published. */
+export class IngestDriftError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IngestDriftError";
+  }
+}
+
+/**
+ * A generation is a COMPLETE view of the KB, not a diff.
+ *
+ * Publication therefore carries the selected generation's entries forward into
+ * the next catalog and layers this run's entries on top. Three properties make
+ * that safe rather than a blind copy:
+ *
+ * - **Catalog-level, never a re-copy.** Carried pages/sources/conflicts are
+ *   already-published immutable files at their existing keys; the next catalog
+ *   references them. §5.10's preallocated planned file set therefore stays
+ *   bounded to genuinely new bytes instead of growing with the KB every publish.
+ * - **Re-verified while carried.** Every carried entry's on-disk bytes are
+ *   re-hashed against the base catalog's digest. A mismatch is drift or
+ *   tampering and refuses the publish, so each publish re-attests the whole
+ *   selected set rather than trusting it.
+ * - **Supersede by id.** This run's entries replace carried ones with the same
+ *   `page_id`/`source_id`/`conflict_id`; the prior revision stays immutable on
+ *   disk and reachable through the older generation.
+ *
+ * Removal is deliberately not expressible here: a page leaves circulation by
+ * publishing a revision whose lifecycle is `superseded`/`archived`, never by
+ * being dropped from a catalog. Omission-as-delete is exactly the failure this
+ * function exists to prevent.
+ */
+function carryForward(
+  root: string,
+  base: GenerationCatalog
+): {
+  pages: Map<string, { revision_id: string; page_sha256: Sha256Hex; claims_sha256: Sha256Hex }>;
+  sourceRecords: Map<string, Sha256Hex>;
+  sourceObjects: Set<Sha256Hex>;
+  conflicts: Map<string, Sha256Hex>;
+  indexPages: Map<string, { revision_id: string; title: string; summary: string; body: string }>;
+} {
+  const pages = new Map<
+    string,
+    { revision_id: string; page_sha256: Sha256Hex; claims_sha256: Sha256Hex }
+  >();
+  const indexPages = new Map<
+    string,
+    { revision_id: string; title: string; summary: string; body: string }
+  >();
+
+  for (const [pageId, entry] of Object.entries(base.pages)) {
+    const mdPath = pageMarkdownPath(root, pageId, entry.revision_id);
+    const claimsFile = pageClaimsPath(root, pageId, entry.revision_id);
+    let pageContent: string;
+    let claimsContent: string;
+    try {
+      pageContent = readFileSync(mdPath, "utf8");
+      claimsContent = readFileSync(claimsFile, "utf8");
+    } catch {
+      throw new IngestDriftError(
+        `carried page '${pageId}' revision '${entry.revision_id}' is missing from the publication plane`
+      );
+    }
+    // page.md is written as exactly `---\n<JCS(frontmatter)>\n---\n\n<markdown>`
+    // and its catalog digest covers those same bytes, so the check is a direct
+    // byte comparison rather than a re-derivation that could drift.
+    if (sha256Hex(pageContent) !== entry.page_sha256) {
+      throw new IngestDriftError(`carried page '${pageId}' does not match its catalog digest`);
+    }
+    if (sha256Hex(claimsContent) !== entry.claims_sha256) {
+      throw new IngestDriftError(
+        `carried claims for '${pageId}' do not match their catalog digest`
+      );
+    }
+    pages.set(pageId, {
+      revision_id: entry.revision_id,
+      page_sha256: entry.page_sha256,
+      claims_sha256: entry.claims_sha256,
+    });
+
+    // The per-generation index is derived, so it is rebuilt over the union. The
+    // reads that feed it are the same reads that just re-verified the bytes.
+    const fmMatch = pageContent.match(/^---\n([\s\S]*?)\n---\n\n?/u);
+    const body = fmMatch ? pageContent.slice(fmMatch[0].length) : pageContent;
+    let title = pageId;
+    let summary = "";
+    try {
+      const fm = JSON.parse(fmMatch?.[1] ?? "{}") as { title?: unknown; summary?: unknown };
+      if (typeof fm.title === "string") title = fm.title;
+      if (typeof fm.summary === "string") summary = fm.summary;
+    } catch {
+      // A carried page whose frontmatter will not parse is drift, not a default.
+      throw new IngestDriftError(`carried page '${pageId}' has unreadable frontmatter`);
+    }
+    indexPages.set(pageId, { revision_id: entry.revision_id, title, summary, body });
+  }
+
+  return {
+    pages,
+    sourceRecords: new Map(Object.entries(base.source_records)),
+    sourceObjects: new Set(base.source_objects),
+    conflicts: new Map(Object.entries(base.conflict_records)),
+    indexPages,
+  };
+}
+
 export function approveIngest(
   ctx: KbWorkflowContext,
   sources: readonly IngestSource[],
@@ -402,7 +520,10 @@ export function approveIngest(
   const policy = readPolicy(root);
   void policy;
 
-  if (sources.length === 0) return fail("ingest requires at least one source");
+  // Zero NEW sources is legal: a `save` publishes a page derived from an
+  // existing query over already-published sources, and the generation carries
+  // those sources forward. The ingest action's own ≥1 capability requirement is
+  // enforced upstream, where the capabilities are claimed.
   if (!sources.every((s) => s.sourceId !== "")) return fail("source ids must be non-empty");
 
   // Re-read the sealed candidate bytes.
@@ -435,6 +556,16 @@ export function approveIngest(
   const rawPages = Array.isArray(pageDraftRaw?.pages) ? (pageDraftRaw.pages as unknown[]) : [];
   if (rawPages.length === 0) {
     return fail("page_draft artifact contains no pages; nothing published");
+  }
+
+  // Carry the selected generation forward (and re-verify it) BEFORE writing
+  // anything new, so an integrity failure refuses with nothing published.
+  let carried: ReturnType<typeof carryForward>;
+  try {
+    carried = carryForward(root, selected.catalog);
+  } catch (err) {
+    if (err instanceof IngestDriftError) return fail(`${err.message}; nothing published`);
+    throw err;
   }
 
   const now = new Date().toISOString();
@@ -560,11 +691,27 @@ export function approveIngest(
   }[] = [];
   for (const page of pages) {
     writePageRevision(root, page.frontmatter, page.markdown, page.claims);
-    pageEntries.push({
-      page_id: page.frontmatter.page_id,
+    const pageId = page.frontmatter.page_id;
+    const entry = {
+      page_id: pageId,
       revision_id: page.frontmatter.revision_id,
       page_sha256: sha256Hex(`---\n${canonicalJson(page.frontmatter)}\n---\n\n${page.markdown}`),
       claims_sha256: sha256Hex(canonicalJson(page.claims)),
+    };
+    pageEntries.push(entry);
+    // Supersede by page_id: this revision becomes the one this generation
+    // selects. The prior revision stays immutable and reachable through the
+    // generation that selected it.
+    carried.pages.set(pageId, {
+      revision_id: entry.revision_id,
+      page_sha256: entry.page_sha256,
+      claims_sha256: entry.claims_sha256,
+    });
+    carried.indexPages.set(pageId, {
+      revision_id: page.frontmatter.revision_id,
+      title: page.frontmatter.title,
+      summary: page.frontmatter.summary,
+      body: page.markdown,
     });
   }
 
@@ -575,10 +722,10 @@ export function approveIngest(
     const record = sourceRecordFor(src, ctx.runId);
     writeSourceRecord(root, record);
     objectDigests.add(record.sha256);
-    sourceRecordEntries.push({
-      source_id: src.sourceId,
-      record_sha256: sha256Hex(canonicalJson(record)),
-    });
+    const recordDigest = sha256Hex(canonicalJson(record));
+    sourceRecordEntries.push({ source_id: src.sourceId, record_sha256: recordDigest });
+    carried.sourceRecords.set(src.sourceId, recordDigest);
+    carried.sourceObjects.add(record.sha256);
   }
 
   // Conflict records from the sealed lint report.
@@ -624,27 +771,33 @@ export function approveIngest(
     };
     // writeConflictRecord validates against ConflictRecordSchema; empty claim_refs are legal.
     writeConflictRecord(root, conflict);
-    conflictEntries.push({
-      conflict_id: conflictId,
-      conflict_sha256: sha256Hex(canonicalJson(conflict)),
-    });
+    const conflictDigest = sha256Hex(canonicalJson(conflict));
+    conflictEntries.push({ conflict_id: conflictId, conflict_sha256: conflictDigest });
+    carried.conflicts.set(conflictId, conflictDigest);
   }
 
-  // Build the deterministic index (index.sqlite) from the published pages,
-  // then the catalog anchored to its canonical-content digest, then publish.
+  // Build the deterministic index (index.sqlite) from the UNION of carried and
+  // newly published pages, then the catalog anchored to its canonical-content
+  // digest, then publish. A generation is complete: it lists everything the KB
+  // selects, not just what this run produced.
   const generationId = newGenerationId();
+  const unionPages = [...carried.pages.entries()]
+    .map(([page_id, e]) => ({ page_id, ...e }))
+    .sort((a, b) => (a.page_id < b.page_id ? -1 : a.page_id > b.page_id ? 1 : 0));
   const { index_sha256 } = buildGenerationIndex(
     root,
     generationId,
     manifest.kb_id,
-    pages.map((p) => ({
-      page_id: p.frontmatter.page_id,
-      revision_id: p.frontmatter.revision_id,
-      title: p.frontmatter.title,
-      summary: p.frontmatter.summary,
-      body_sha256: sha256Hex(p.markdown),
-      body: p.markdown,
-    }))
+    [...carried.indexPages.entries()]
+      .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+      .map(([page_id, p]) => ({
+        page_id,
+        revision_id: p.revision_id,
+        title: p.title,
+        summary: p.summary,
+        body_sha256: sha256Hex(p.body),
+        body: p.body,
+      }))
   );
   const catalog = buildCatalog({
     generation_id: generationId,
@@ -652,10 +805,14 @@ export function approveIngest(
     parent_generation_id: selected.selector.generation_id,
     manifest,
     policy,
-    pages: pageEntries,
-    source_records: sourceRecordEntries,
-    source_objects: [...objectDigests],
-    conflicts: conflictEntries,
+    pages: unionPages,
+    source_records: [...carried.sourceRecords.entries()]
+      .map(([source_id, record_sha256]) => ({ source_id, record_sha256 }))
+      .sort((a, b) => (a.source_id < b.source_id ? -1 : a.source_id > b.source_id ? 1 : 0)),
+    source_objects: [...carried.sourceObjects].sort(),
+    conflicts: [...carried.conflicts.entries()]
+      .map(([conflict_id, conflict_sha256]) => ({ conflict_id, conflict_sha256 }))
+      .sort((a, b) => (a.conflict_id < b.conflict_id ? -1 : a.conflict_id > b.conflict_id ? 1 : 0)),
     index_sha256,
   });
   const selector = publishGeneration(root, catalog);
@@ -664,9 +821,14 @@ export function approveIngest(
     kb_id: manifest.kb_id,
     ids: [generationId, ...pageEntries.map((p) => p.page_id)],
     counts: {
+      // What this run contributed …
       sources: sources.length,
       pages: pageEntries.length,
       conflicts: conflictEntries.length,
+      // … and what the generation now selects in total.
+      total_pages: unionPages.length,
+      total_sources: carried.sourceRecords.size,
+      total_conflicts: carried.conflicts.size,
       generations: 1,
       selector: 1,
     },

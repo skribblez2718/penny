@@ -23,6 +23,7 @@
       "name": "@penny/artifacts-extension",
       "version": "1.0.0",
       "dependencies": {
+        "@penny/orchestration": "workspace:*",
         "@sinclair/typebox": "^0.34.49",
       },
       "devDependencies": {
@@ -153,6 +154,7 @@
       "version": "0.1.0",
       "bin": {
         "penny-orchestration": "./dist/cli.js",
+        "penny-kb-gate": "./dist/kb-gate-cli.js",
       },
       "dependencies": {
         "@earendil-works/pi-coding-agent": "0.84.1",

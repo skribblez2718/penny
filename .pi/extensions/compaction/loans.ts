@@ -1,12 +1,11 @@
 /**
- * LOAN registry (TypeScript side) — tagged KNOWLEDGE-CONSTRAINT scaffolding
- * with Ablate hooks, mirroring the engine's `apps/orchestration/.../loans.py`.
+ * Compaction LOAN registry — tagged KNOWLEDGE-CONSTRAINT scaffolding with Ablate hooks.
  *
  * Doctrine (docs/agents/architecture/atomic-loop-components.md, assembly
  * invariant 6): any mechanism that exists because the CURRENT model is weak
  * (or unreachable) is a LOAN — tagged, toggleable, and scheduled for
- * re-measurement. The recurring Bitter-Lesson pass inventories BOTH the Python
- * registry and this one.
+ * re-measurement. The recurring Bitter-Lesson pass inventories this registry
+ * alongside `apps/orchestration/src/loans.ts`.
  *
  * Setting `PENNY_ABLATE_<LOAN_ID>=1` turns the mechanism OFF for a scaffold-ON
  * vs scaffold-OFF ablation run. Querying an unregistered id throws — a

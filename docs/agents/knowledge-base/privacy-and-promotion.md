@@ -6,13 +6,13 @@ A model may **name** an opaque ID it has been granted. It may never **supply** a
 source path or locator, canonical root or target, provider choice, approval decision, or receipt
 body. Every one of those is host-owned, resolved out of band, and validated before use.
 
-| Host owns | Model may reference |
-|---|---|
-| Profile registry mapping profile → KB root | `kb_profile_id` |
-| Source capability envelopes (path, digest, metadata) | `source_capability_ids` |
+| Host owns                                                                | Model may reference               |
+| ------------------------------------------------------------------------ | --------------------------------- |
+| Profile registry mapping profile → KB root                               | `kb_profile_id`                   |
+| Source capability envelopes (path, digest, metadata)                     | `source_capability_ids`           |
 | Canonical-target capability envelopes (target, authority root, preimage) | `canonical_target_capability_ids` |
-| Processing policy, parent/child model allowlists | nothing |
-| Content-review and promotion approval decisions | nothing |
+| Processing policy, parent/child model allowlists                         | nothing                           |
+| Content-review and promotion approval decisions                          | nothing                           |
 
 ### Profiles
 
@@ -31,7 +31,7 @@ redirect a run: identity is re-derived, not remembered.
 
 ### Repository admission is default-deny
 
-A root outside any Git worktree is the normal case. A root *inside* a worktree is admitted only as
+A root outside any Git worktree is the normal case. A root _inside_ a worktree is admitted only as
 the exact allowlisted scaffold, and only when every live path is untracked and ignored, no
 containing or nested repository or worktree changes containment, and no component is a symlink or
 special file. Otherwise the operation fails **before** session creation or any filesystem mutation.
@@ -105,6 +105,21 @@ matter most: error text and test output are where private content most often esc
 prepares: it re-reads current canonical sources, verifies advisory claims, resolves exact target
 capabilities, captures current preimages, and returns an `awaiting_user` gate packet. The packet is
 not authority.
+
+The prepare flow is two advisory agent phases plus the host's own verification. Piper produces a
+`promotion_plan` and Skribble a scoped `promotion_patch`, both over the §5.8 reader posture — they
+see claimed targets through a host-closed reader, never a path. Then the **host itself** verifies:
+every target capability is re-resolved and required to be a `canonical_target` carrying the
+`promote` operation, each target's current bytes are hashed into a **preimage digest**, and every
+named page revision must be the one the selected generation actually selects. That finding is
+sealed into the packet as the third handle beside the plan and the patch.
+
+A failed check is a bounded finding with `verified: false`, not an error. An honest "this cannot be
+promoted as stated" is a legitimate result of preparing, and the packet is still returned — it
+still applies nothing.
+
+The machine has **no publishing edge for promote**, and approving a promote gate through the public
+path is refused outright: apply requires the host-only signed approval path below.
 
 Everything after that is host-only:
 

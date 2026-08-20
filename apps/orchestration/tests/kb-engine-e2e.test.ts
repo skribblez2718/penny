@@ -19,6 +19,28 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { initKb, queryKb } from "../src/kb/workflows.js";
+import { readPolicy, writePolicy } from "../src/kb/filesystem.js";
+
+/** The active parent identity these runs execute under (§5.3). */
+const E2E_PARENT = { provider: "ollama", model: "qwen327b:latest" };
+
+/**
+ * The out-of-band policy install §5.3 requires.
+ *
+ * A freshly created KB is default-deny with empty model lists, so it cannot
+ * process private content until an operator edits the ignored policy file out of
+ * band. These integration tests perform exactly that host operation — they do
+ * not weaken the check, they satisfy it.
+ */
+function installTestPolicy(kbRoot: string): void {
+  const policy = readPolicy(kbRoot);
+  writePolicy(kbRoot, {
+    ...policy,
+    processing_mode: "local_only",
+    allowed_parent_models: [{ ...E2E_PARENT, locality: "local" }],
+    allowed_child_models: [{ ...E2E_PARENT, locality: "local" }],
+  });
+}
 import { findGateForRun, mintSourceCapability } from "../src/kb/gate.js";
 import { readSelectedGeneration } from "../src/kb/generations.js";
 import { CapabilityStore } from "../src/kb/capabilities.js";
@@ -251,6 +273,8 @@ async function driveToGate(stack: Stack, capIds: readonly string[]): Promise<Dir
         action: "ingest",
         kb_profile_id: PROFILE,
         source_capability_ids: [...capIds],
+        // §5.3: host-supplied active parent identity. Admission denies without it.
+        parent_identity: { ...E2E_PARENT },
       },
       project_root: stack.projectRoot,
       trust_profile: "hardened-untrusted",
@@ -280,6 +304,7 @@ describe("KB through the engine (step 4)", () => {
     const projectRoot = tmpRoot();
     const kbRoot = path.join(projectRoot, ".penny", "kb", PROFILE);
     initKb({ kbRoot, profileId: PROFILE, runId: "kb-init-e2e" }, "E2E KB");
+    installTestPolicy(kbRoot);
     const capIds = seedSources(kbRoot);
     const stack = buildStack(projectRoot, capIds, fakeBodies(capIds));
 
@@ -347,6 +372,7 @@ describe("KB through the engine (step 4)", () => {
     const projectRoot = tmpRoot();
     const kbRoot = path.join(projectRoot, ".penny", "kb", PROFILE);
     initKb({ kbRoot, profileId: PROFILE, runId: "kb-init-e2e" }, "E2E KB deny");
+    installTestPolicy(kbRoot);
     const capIds = seedSources(kbRoot);
     const stack = buildStack(projectRoot, capIds, fakeBodies(capIds));
     const selectorBefore = readSelectedGeneration(kbRoot)?.selector?.generation_id;

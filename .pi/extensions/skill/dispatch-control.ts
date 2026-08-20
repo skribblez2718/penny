@@ -112,7 +112,7 @@ const PAUSE_FIELDS = new Set([
   "recovery",
 ]);
 
-/** Validate the closed Python paused-directive schema before exposing it as a result. */
+/** Validate the closed dispatch-pause schema before exposing it as a result. */
 export function parseArtifactDispatchPause(value: unknown): ArtifactDispatchPause {
   if (!isRecord(value) || Object.keys(value).some((key) => !PAUSE_FIELDS.has(key))) {
     throw new Error("artifact dispatch pause has unknown or malformed fields");

@@ -11,7 +11,7 @@
  *   - separate transport registries -> "Trusted questionnaire capability is invalid
  *     or stale" on every gate answer;
  *   - separate owner keys -> the questionnaire would sign trusted_human_event with a
- *     different key than the one handed to the Python orchestrator, so even a shared
+ *     different key than the one used by the trusted gate transport, so even a shared
  *     registry would then fail as "signature is missing or invalid".
  *
  * Every P0 gate was therefore unsatisfiable, which blocked every standalone code-skill
@@ -46,14 +46,14 @@ describe("execution-owner realm singleton", () => {
     const b = await freshInstance("key-b");
 
     // The key is never exposed directly; withExecutionOwnerEnvironment is the only
-    // sanctioned way it leaves the module, and it is what the Python child receives.
+    // sanctioned way it leaves the module, and it is what trusted gate transport receives.
     const envA = a.withExecutionOwnerEnvironment({});
     const envB = b.withExecutionOwnerEnvironment({});
 
     expect(envA.PENNY_RECEIPT_HMAC_KEY).toBeTruthy();
     expect(envA.PENNY_RECEIPT_HMAC_KEY).toMatch(/^[0-9a-f]{64}$/);
     // THE assertion: two instances, one identity. Before the realm fix these differed,
-    // so the questionnaire signed with a key Python would reject.
+    // so the questionnaire is signed with a key the transport would reject.
     expect(envB.PENNY_RECEIPT_HMAC_KEY).toBe(envA.PENNY_RECEIPT_HMAC_KEY);
     expect(envB.PENNY_APPROVAL_HMAC_KEY).toBe(envA.PENNY_APPROVAL_HMAC_KEY);
   });

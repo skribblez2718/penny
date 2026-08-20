@@ -36,12 +36,14 @@ import path from "node:path";
 import { Value } from "typebox/value";
 
 import {
+  DerivedQueryAnswerSchema,
   ParentDeliveryGrantFileSchema,
   ParentDeliveryGrantSchema,
   QueryKbRequestSchema,
   canonicalJson,
   sha256Hex,
   validateKbContract,
+  type DerivedQueryAnswer,
   type KbPolicy,
   type ParentDeliveryGrant,
   type ParentDeliveryGrantFile,
@@ -51,7 +53,7 @@ import {
   type Rfc3339Utc,
   type Sha256Hex,
 } from "./contracts.js";
-import { checkDerivedAnswerDelivery } from "./policy.js";
+import { checkDerivedAnswerDelivery, checkParentModelIdentity } from "./policy.js";
 
 // ── bounded, content-free outcome codes ──────────────────────────────────────
 
@@ -66,6 +68,7 @@ export const REFUSED_PARENT_DELIVERY = "refused_parent_delivery";
 /** Host-side reason codes (never emitted to the parent). Bounded set. */
 export type ParentDeliveryReasonCode =
   | "grant_missing"
+  | "grant_ambiguous"
   | "grant_malformed"
   | "grant_consumed"
   | "grant_invalidated"
@@ -76,11 +79,19 @@ export type ParentDeliveryReasonCode =
   | "grant_mismatch_action"
   | "grant_mismatch_request_digest"
   | "policy_denies"
-  | "answer_exceeds_byte_cap";
+  | "parent_identity_unknown"
+  | "parent_model_not_allowed"
+  | "grounding_unverified"
+  | "answer_exceeds_byte_cap"
+  | "answer_malformed";
 
 export type ParentDeliveryEvaluation =
   | { status: "eligible"; byte_cap: number }
-  | { status: "refused"; public_code: typeof REFUSED_PARENT_DELIVERY; reason_code: ParentDeliveryReasonCode };
+  | {
+      status: "refused";
+      public_code: typeof REFUSED_PARENT_DELIVERY;
+      reason_code: ParentDeliveryReasonCode;
+    };
 
 // ── request canonicalization ─────────────────────────────────────────────────
 
@@ -115,7 +126,11 @@ export function mintParentDeliveryGrant(input: {
   expires_at: Rfc3339Utc;
   grant_id?: string;
 }): ParentDeliveryGrant {
-  if (!Number.isInteger(input.max_utf8_bytes) || input.max_utf8_bytes < 1 || input.max_utf8_bytes > 32_768) {
+  if (
+    !Number.isInteger(input.max_utf8_bytes) ||
+    input.max_utf8_bytes < 1 ||
+    input.max_utf8_bytes > 32_768
+  ) {
     throw new Error("max_utf8_bytes must be an integer 1–32,768");
   }
   const grant: ParentDeliveryGrant = {
@@ -148,7 +163,8 @@ function assertSafeDir(dir: string): void {
   if (!st.isDirectory()) throw new Error(`grant store directory is not a directory: ${dir}`);
   if (st.mode & 0o022) throw new Error("grant store directory is group/other writable");
   const uid = ownerUid();
-  if (uid !== undefined && st.uid !== uid) throw new Error("grant store directory is not current-user-owned");
+  if (uid !== undefined && st.uid !== uid)
+    throw new Error("grant store directory is not current-user-owned");
 }
 
 function assertSafeFile(file: string): void {
@@ -189,12 +205,17 @@ export interface StoredGrantProjection {
  * broadened mode.
  */
 export class ParentDeliveryGrantStore {
-  private readonly dir: string;
+  private readonly dirPath: string;
 
   constructor(dir: string) {
-    this.dir = dir;
+    this.dirPath = dir;
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     assertSafeDir(dir);
+  }
+
+  /** The owner-only store directory (host state; never a KB root). */
+  get dir(): string {
+    return this.dirPath;
   }
 
   /** Store a newly minted (never-before-seen) grant as `available`. */
@@ -378,6 +399,12 @@ export function evaluateParentDelivery(input: {
   request: QueryKbRequest;
   host: HostInvocationIdentity;
   policy: KbPolicy;
+  /**
+   * The exact provider/model the runtime reports for the ACTIVE parent context
+   * (§5.3 "exact parent allowlist match"). `undefined` means the host could not
+   * establish who the parent is, which is a refusal — never a pass.
+   */
+  parentIdentity: { provider: string; model: string } | undefined;
   answerUtf8Bytes: number;
   now?: number;
 }): ParentDeliveryEvaluation {
@@ -401,13 +428,32 @@ export function evaluateParentDelivery(input: {
   if (record.state === "consumed") return refused("grant_consumed");
   if (record.state === "invalidated") return refused("grant_invalidated");
   const now = input.now ?? Date.now();
-  if (record.state === "expired" || Date.parse(g.expires_at) <= now) return refused("grant_expired");
+  if (record.state === "expired" || Date.parse(g.expires_at) <= now)
+    return refused("grant_expired");
 
   try {
     checkDerivedAnswerDelivery(input.policy);
   } catch {
     return refused("policy_denies");
   }
+
+  // §5.3: parent delivery additionally requires an EXACT parent allowlist match.
+  // The grant says the operator approved this request; the allowlist says the
+  // operator approved this *parent* to receive private derived content.
+  if (input.parentIdentity === undefined) return refused("parent_identity_unknown");
+  try {
+    checkParentModelIdentity(input.policy, input.parentIdentity);
+  } catch {
+    return refused("parent_model_not_allowed");
+  }
+
+  // §5.6 `verify_grounding` defaults TRUE. The query flow is deterministic
+  // retrieval today — there is no grounding phase — so a request that asks for
+  // verification cannot be delivered as if it were verified. The operator can
+  // still deliver by minting a grant over a request that explicitly carries
+  // `verify_grounding: false`, which records in the digest that they accepted
+  // an unverified answer. Flip this once the query grounding phase lands.
+  if (input.request.verify_grounding !== false) return refused("grounding_unverified");
 
   const policyCap = input.policy.parent_result.max_utf8_bytes;
   const byte_cap = Math.min(g.max_utf8_bytes, policyCap);
@@ -417,4 +463,96 @@ export function evaluateParentDelivery(input: {
   if (input.answerUtf8Bytes > byte_cap) return refused("answer_exceeds_byte_cap");
 
   return { status: "eligible", byte_cap };
+}
+
+// ── end-to-end decision (store selection + eligibility + single-use) ─────────
+
+/** The one decision the KB surface makes before a parent sees derived content. */
+export type ParentDeliveryDecision =
+  | { outcome: "delivered"; derived_answer: DerivedQueryAnswer }
+  | { outcome: "refused"; reason_code: ParentDeliveryReasonCode };
+
+/**
+ * Decide parent delivery for one completed query result.
+ *
+ * Admission requires EXACTLY ONE unconsumed grant matching (profile, request
+ * digest, unexpired) for this host invocation — zero is `grant_missing`, more
+ * than one is `grant_ambiguous` (never a coin flip). Session and invocation are
+ * checked inside `evaluateParentDelivery`; the policy allowance and the lesser
+ * of the grant/policy byte bounds still apply. On delivery the grant is
+ * atomically consumed by the run and the VALIDATED derived answer is returned
+ * for attachment to the result; on any refusal the caller retains only the
+ * artifact result and emits the single public code
+ * `refused_parent_delivery`.
+ *
+ * The derived answer is validated against the closed §5.6 shape BEFORE any
+ * grant is selected or consumed: open/malformed content is never delivered and
+ * never consumes a grant.
+ */
+export function decideParentDelivery(input: {
+  storeDir: string;
+  host: HostInvocationIdentity;
+  request: QueryKbRequest;
+  policy: KbPolicy;
+  /** Exact provider/model of the active parent context (§5.3); `undefined` refuses. */
+  parentIdentity: { provider: string; model: string } | undefined;
+  runId: string;
+  /** The `answer` sub-object of the sealed `query_answer` artifact (raw unknown). */
+  answer: unknown;
+}): ParentDeliveryDecision {
+  let answer: DerivedQueryAnswer;
+  try {
+    answer = validateKbContract(DerivedQueryAnswerSchema, input.answer, "derived answer");
+  } catch {
+    return { outcome: "refused", reason_code: "answer_malformed" };
+  }
+
+  const store = new ParentDeliveryGrantStore(input.storeDir);
+  const { grants } = store.list();
+  const digest = computeRequestSha256(input.request);
+  const now = Date.now();
+  const matching = grants.filter(
+    (g) => g.kb_profile_id === input.request.kb_profile_id && g.request_sha256 === digest
+  );
+  // The EXACTLY-ONE rule applies to USABLE grants: an operator may mint one
+  // grant per planned invocation; a grant already consumed by an earlier
+  // invocation does not make the next one ambiguous. Two usable grants for
+  // the same invitation are a coin flip the host refuses.
+  const usable = matching.filter((g) => g.state === "available" && Date.parse(g.expires_at) > now);
+  if (usable.length > 1) return { outcome: "refused", reason_code: "grant_ambiguous" };
+  const single = usable[0];
+  if (single === undefined) {
+    if (matching.some((g) => g.state === "available" && Date.parse(g.expires_at) <= now)) {
+      return { outcome: "refused", reason_code: "grant_expired" };
+    }
+    if (matching.some((g) => g.state === "consumed")) {
+      return { outcome: "refused", reason_code: "grant_consumed" };
+    }
+    if (matching.some((g) => g.state === "invalidated")) {
+      return { outcome: "refused", reason_code: "grant_invalidated" };
+    }
+    return { outcome: "refused", reason_code: "grant_missing" };
+  }
+
+  let file: ParentDeliveryGrantFile;
+  try {
+    file = store.load(single.grant_id);
+  } catch {
+    return { outcome: "refused", reason_code: "grant_malformed" };
+  }
+
+  const evaluation = evaluateParentDelivery({
+    grant: file,
+    request: input.request,
+    host: input.host,
+    policy: input.policy,
+    parentIdentity: input.parentIdentity,
+    answerUtf8Bytes: Buffer.byteLength(answer.text, "utf8"),
+    now,
+  });
+  if (evaluation.status === "refused")
+    return { outcome: "refused", reason_code: evaluation.reason_code };
+
+  store.consume(single.grant_id, input.runId);
+  return { outcome: "delivered", derived_answer: answer };
 }

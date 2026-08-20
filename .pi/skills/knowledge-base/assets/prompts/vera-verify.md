@@ -48,4 +48,4 @@ No prose result is accepted; a session that ends without this submission fails t
 - `supported` means the cited source states or directly entails the claim. If it merely
   gestures in that direction, it is `partially_supported`.
 - `unsupported` is a useful, expected result. Do not soften it to keep a page publishable.
-- `notes` must say *why* — quote or name the part of the source that decided the verdict.
+- `notes` must say _why_ — quote or name the part of the source that decided the verdict.

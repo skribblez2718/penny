@@ -10,15 +10,15 @@ Every credible source describes the same abstract cycle: **gather context → ta
 FRAME → PLAN → ACT ⇄ VERIFY → LEARN → (repeat or complete)
 ```
 
-This shape is a **methodology** documented in SYSTEM.md, not a base class. Each skill implements its own specialized concrete loop as a `BasePlaybook` subclass with domain-named states. The engine provides the universal machinery (stepping, checkpointing, contracts, budgets, gates, recovery); each playbook writes its own specialized sentence in that grammar.
+This shape is a **methodology** documented in SYSTEM.md, not a base class. Each skill implements its own specialized concrete loop as a TypeScript `PlaybookCoreV1` implementation with domain-named states. The engine provides the universal machinery (stepping, checkpointing, contracts, budgets, gates, recovery); each playbook writes its own specialized sentence in that grammar.
 
-**Key principle:** universality at the shape level, specialization at the instance level. Do not create a `StandardCyclePlaybook` base class — each skill subclasses `BasePlaybook` directly with custom-named states.
+**Key principle:** universality at the shape level, specialization at the instance level. Do not create a universal procedural base class; each playbook owns its domain-named topology behind the shared interface.
 
 ## The Parts Beneath the Loop Classes (Atomic Components)
 
 The seven loop classes below are not primitive — they are **arrangements of a smaller set of atomic components**. Before designing a loop, read [Atomic Loop Components](../architecture/atomic-loop-components.md): 16 atoms in 7 families, with the one structural law that keeps every loop [Bitter-Lesson](../architecture/bitter-lesson.md)-compliant:
 
-> **Intelligence is confined to exactly two atoms (`Decide`, `Critique`). Every other atom is deterministic, model-agnostic Python.** The procedure for solving a task is never coded — it is `Decide`'s runtime output.
+> **Intelligence is confined to exactly two atoms (`Decide`, `Critique`). Every other atom is deterministic, model-agnostic host code.** The procedure for solving a task is never coded — it is `Decide`'s runtime output.
 
 The loop classes map directly onto the atoms and the six canonical _arrangements_ of them:
 
@@ -74,20 +74,20 @@ Loops are not alternatives — they **nest**. A production system layers them:
 
 **Load-bearing, not optional:** Removing Voyager's critic caused a **−73% drop** in discovered items — the most impactful feedback component in the system.
 
-**In Penny:** The `done_predicate` + verify states (Vera for objective PASS/FAIL, Carren for subjective critique), verify⇄learn edges in playbooks, cross-model VERIFY discipline, and the SUMMARY contract gatekeeper.
+**In Penny:** Completion gates plus verify states (Vera for objective PASS/FAIL, Carren for subjective critique), repair edges in playbooks, model-diverse review where useful, and closed phase-result contracts.
 
 **Design rules:**
 
 - **External, grounded feedback beats self-critique.** Pure LLM self-critique hallucinates violations and over-corrects. Rules-based feedback (lint, tests, schema validation, environment state) is the strongest verifier. LLM-as-judge is valid but weak.
 - **Position the LLM verifier as an interpreter of external evidence, not as the evidence itself.** Vera's `evidence` field MUST contain captured output of verification commands actually run — not assertions.
-- **Cross-model verification:** a different model verifies than the one that acted — enforced by `orchestration/independence.py`, not just policy (registered same-model exceptions are review-dated).
+- **Model-diverse verification:** a different model may supplement the evidence check when it improves measured catch rate; diversity is never independent proof by itself.
 - **Per-domain verifier contracts** are where loop quality will be won or lost. Each skill's VERIFY `summary_contract` defines what evidence is required.
 
 ### L3 — Retry / Repair Loop (Bounded)
 
 **What:** On verifier failure, repair and retry — under an explicit budget.
 
-**In Penny:** `ctx.max_iterations`, explicit round budgets, honest exhaustion routes, and `_retry_or_fail` bounded retries for malformed SUMMARYs.
+**In Penny:** `RunContext.maxIterations`, explicit round budgets, honest exhaustion routes, and bounded malformed-result reissue.
 
 **Design rules:**
 
@@ -99,7 +99,7 @@ Loops are not alternatives — they **nest**. A production system layers them:
 
 **What:** Planned checkpoints where the agent pauses for approval, refinement, or denial — plus unplanned escalation when blocked or uncertain.
 
-**In Penny:** Planned gates (`GATE_STATES`, `gate_questions`, `route_user`) and the unplanned escalation loop (UNCERTAIN confidence → `awaiting_clarification` → resume).
+**In Penny:** Playbook-emitted `await_user` gates plus clarification escalation and exact `respond`/`recover` requests.
 
 **Design rules:**
 
@@ -111,11 +111,11 @@ Loops are not alternatives — they **nest**. A production system layers them:
 
 **What:** The outer, engine-owned loop: explicit states, typed transitions, guard conditions, checkpointing, resume.
 
-**In Penny:** `BasePlaybook` — python-statemachine FSMs, durable `run_id` checkpointer, `recover_pending` crash-resume, `STEP_CAP`, observability events, parallel fan-out with weakest-confidence fan-in.
+**In Penny:** Registered TypeScript playbooks, durable `run_id` checkpoints, exact `recover`, a hard `max_steps` ceiling, observability events, and bounded parallel fan-out.
 
 **Design rules:**
 
-- **The graph bounds the blast radius.** An FSM whose only edges are the intended loop edges cannot wander into an unintended cycle. The engine gets this for free from python-statemachine's declared transitions.
+- **The graph bounds the blast radius.** A playbook whose successor tables and flow descriptor contain only intended edges cannot wander into an unintended cycle; drift tests pin both.
 - **The engine owns continuity, not the model.** Long-horizon loops must be reconstructed each session from persisted external state, because sessions are memoryless. Everything routing-relevant lives in `RunContext`, never implicitly in an agent's context.
 - **States must be safe to re-run** (crash-resume re-issues the pending step). An ACT-style state must be idempotent or split author/apply.
 
@@ -152,11 +152,11 @@ From the research, in order of strength:
 
 | #   | Control                        | What It Does                                                 | Penny Mechanism                                   |
 | --- | ------------------------------ | ------------------------------------------------------------ | ------------------------------------------------- |
-| 1   | Verifier-gated success         | Success termination only when a verifier passes              | `done_predicate`                                  |
+| 1   | Verifier-gated success         | Success termination only when required gates pass            | `CompletionGateV1`                                |
 | 2   | Bounded iteration budgets      | Hard cap on retries; exhaustion is a legitimate outcome      | `max_iterations`, `learn_exhausted` → `met=False` |
 | 3   | Structured completion criteria | Written before the work; checked at the end                  | FRAME⇄VERIFY design spine; IDEAL_STATE            |
 | 4   | Human-in-the-loop checkpoints  | Escape hatch for paralysis and gate for irreversible actions | Planned gates, escalation                         |
-| 5   | Global step caps               | Backstop of last resort                                      | `STEP_CAP` (default 50)                           |
+| 5   | Global step caps               | Backstop of last resort                                      | `max_steps` (default 96)                          |
 
 ## Failure Modes
 
@@ -207,7 +207,7 @@ Same-model self-critique is the degenerate critic and must not be the sole gate.
 
 1. **External, grounded feedback beats self-critique.** Pure LLM self-critique hallucinates violations and over-corrects. Without an oracle, LLMs cannot reliably self-correct.
 2. **Position the LLM verifier as an interpreter of external evidence, not as the evidence itself.** Vera produces PASS/FAIL — the PASS must be backed by captured tool output, not by the model's say-so.
-3. **Cross-model verification — now an enforced invariant.** A different model verifies than the one that acted. `orchestration/independence.py` pins this at model granularity: same-model bare-judgement verify edges must be registered, review-dated exceptions (see Rec 5).
+3. **Model diversity is supplementary.** Use a different verifier model when measured benefit justifies it, but bind verdicts to sources, tools, or other independent evidence.
 4. **Demand evidence artifacts in VERIFY contracts.** Each skill's VERIFY `summary_contract` should require an evidence field containing captured output (test output, lint result, PoC transcript), not assertions. The contract validator should fail-loud if the evidence field is a bare claim.
 5. **Harden against verifier gaming (highest incentive: security skills).** Keep cross-model discipline; for high-stakes gates, add a second independent verifier and require agreement. Prefer evidence the actor cannot fabricate (executed output over asserted output).
 
@@ -235,17 +235,17 @@ Four concrete recommendations from the research, ordered by leverage. Current en
 
 ### Rec 2 — Add a stall / progress-assessment gate (meta-cognition)
 
-The same default-on base `progress_check` compares successive recorded iterations' `gaps`: identical non-empty gaps across the window mean no measurable progress, and the run escalates to the human (L4) rather than burning the remaining budget. Backing it up, the engine's iteration-budget backstop forces **honest exhaustion** (complete, `met=False`, `exhausted` reason in the result) on any playbook that routes past its `max_iterations` — never a fake pass, never a silent spin to `STEP_CAP`.
+The same default-on base `progress_check` compares successive recorded iterations' `gaps`: identical non-empty gaps across the window mean no measurable progress, and the run escalates to the human (L4) rather than burning the remaining budget. Backing it up, the engine's iteration-budget backstop forces **honest exhaustion** (complete, `met=False`, `exhausted` reason in the result) on any playbook that routes past its `max_iterations` — never a fake pass, never a silent spin to the global `max_steps` ceiling.
 
 ### Rec 3 — Require externally-grounded evidence in VERIFY contracts
 
-A state contract may declare `evidence` fields; the validator fails loud when they are empty (a PASS on a bare claim is a contract violation). The engine additionally captures any non-empty SUMMARY `evidence` into `ctx.verify_evidence`.
+A state contract may declare `evidence` fields; the validator fails loud when they are empty, so a PASS on a bare claim is a contract violation.
 
 **The contract check is non-emptiness only, not authenticity.** The validator cannot distinguish a captured transcript from a plausible fabrication. Prefer evidence generated by an independent tool or authoritative source and bind the verifier's verdict to that evidence. Contract non-emptiness is the floor; independently reproducible evidence is the defense.
 
 ### Rec 4 — Harden verifiers against gaming
 
-Model diversity is supplementary scrutiny, not independent evidence. The research playbook exposes `validate_model` so its citation gate can use a different model from synthesis, while `orchestration/independence.py` records and reviews that edge. The stronger controls remain captured source checks, deterministic contract validation, reproducible tool output, and honest unresolved-claim reporting.
+Model diversity is supplementary scrutiny, not independent evidence. The research playbook exposes `validate_model` so its citation gate can use a different model from synthesis. The stronger controls remain captured source checks, deterministic contract validation, reproducible tool output, and honest unresolved-claim reporting.
 
 Open questions remain empirical: when a second verifier materially improves catch rate, when disagreement should escalate instead of hard-fail, and which evidence can be generated outside the actor's control. Measure those choices before turning them into permanent scaffolding.
 

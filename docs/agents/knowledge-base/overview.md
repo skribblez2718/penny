@@ -5,10 +5,10 @@ beside the `AGENTS.md` documentation tree; it does not replace, flatten, or comp
 
 Two routes coexist deliberately:
 
-| Route | Answers | Authority |
-|---|---|---|
-| `AGENTS.md` index chain | "What is the current, canonical behavior?" | **Canonical.** Deterministic navigation to verified current documentation |
-| Knowledge base | "What do the sources say, where do they disagree, and what is still unknown?" | **Advisory.** Cited synthesis that must be verified before it is treated as current |
+| Route                   | Answers                                                                       | Authority                                                                           |
+| ----------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `AGENTS.md` index chain | "What is the current, canonical behavior?"                                    | **Canonical.** Deterministic navigation to verified current documentation           |
+| Knowledge base          | "What do the sources say, where do they disagree, and what is still unknown?" | **Advisory.** Cited synthesis that must be verified before it is treated as current |
 
 Nothing becomes canonical by being stored, queried, linted, or proposed. Promotion into a
 canonical document is a separate, explicitly approved authority transition, never an automatic
@@ -19,16 +19,16 @@ consequence of KB work.
 The model-visible surface is exactly eight actions on one typed `knowledge_base` tool. There is
 no ninth action, and in particular there is **no public approve or apply action**.
 
-| Action | Behavior |
-|---|---|
-| `init` | Validate an already-granted profile and, when host policy permits, create or validate the KB. Cannot register a root, choose a path, or change policy |
-| `ingest` | Consume host-minted source capabilities; capture immutable evidence; extract, compose, check, review; publish only after an explicit content-review approval |
-| `query` | Read one selected immutable generation and return an advisory, cited, bounded result. Returns an artifact reference by default; never a raw body |
-| `save` | Turn an explicit prior query run into a proposed advisory revision, through the same review gate |
-| `lint` | Deterministic validation first; bounded semantic review only after that floor passes. Reports findings and candidate conflicts; repairs and publishes nothing |
-| `promote` | Prepare and verify a candidate only. Never applies a canonical change through the public tool |
-| `status` | Safe projection of a run after profile and identity revalidation. Cannot reveal roots or bodies |
-| `resume` | Continue a compatible run after profile re-resolution and guard checks. Cannot carry an approval |
+| Action    | Behavior                                                                                                                                                      |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `init`    | Validate an already-granted profile and, when host policy permits, create or validate the KB. Cannot register a root, choose a path, or change policy         |
+| `ingest`  | Consume host-minted source capabilities; capture immutable evidence; extract, compose, check, review; publish only after an explicit content-review approval  |
+| `query`   | Read one selected immutable generation and return an advisory, cited, bounded result. Returns an artifact reference by default; never a raw body              |
+| `save`    | Turn an explicit prior query run into a proposed advisory revision, through the same review gate                                                              |
+| `lint`    | Deterministic validation first; bounded semantic review only after that floor passes. Reports findings and candidate conflicts; repairs and publishes nothing |
+| `promote` | Prepare and verify a candidate only. Never applies a canonical change through the public tool                                                                 |
+| `status`  | Safe projection of a run after profile and identity revalidation. Cannot reveal roots or bodies                                                               |
+| `resume`  | Continue a compatible run after profile re-resolution and guard checks. Cannot carry an approval                                                              |
 
 `init`, `ingest`, `query`, `save`, `lint`, and `promote` are **start actions**; each creates a run
 with durable idempotency bound to the host session and invocation. `status` and `resume` operate on
@@ -62,7 +62,7 @@ Every load-bearing statement on a page is a claim with a stable ID, a kind (`fac
 `speculation`, `unknown`), a state (`supported`, `contested`, `superseded`, `unverified_current`),
 a confidence, and evidence cited to source records. Disagreement is preserved rather than resolved
 away: contradictions become explicit conflict records, and uncertainty is stated instead of
-smoothed over. A synthesis with no supported citation completes as *unmet* with the evidence gap
+smoothed over. A synthesis with no supported citation completes as _unmet_ with the evidence gap
 named — it does not fabricate an answer.
 
 ## Where the exact contracts live

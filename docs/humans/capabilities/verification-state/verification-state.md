@@ -72,5 +72,5 @@ are no temp state files and no state passed on the command line.
 ## Files
 
 - Agent notes: `docs/agents/capabilities/verification-state/verification-state.md`
-- Engine gatekeeper: `apps/orchestration/src/orchestration/contracts.py` (`validate_summary_contract`)
-- Concrete example: `apps/orchestration/src/orchestration/playbooks/research.py` (`RESEARCH_VALIDATE`)
+- Engine contracts: `apps/orchestration/src/contracts.ts`
+- Concrete example: `apps/orchestration/src/playbooks/research.ts` (`validating`)

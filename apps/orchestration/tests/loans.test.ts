@@ -3,13 +3,13 @@ import { describe, expect, it } from "vitest";
 import { COMPATIBILITY_LOANS, loanReviewState, loansNeedingReview } from "../src/loans.js";
 
 describe("TypeScript orchestration compatibility loans", () => {
-  it("registers the corrected Python research compatibility loans", () => {
+  it("registers the active TypeScript research compatibility loans", () => {
     expect(COMPATIBILITY_LOANS.map((loan) => loan.id)).toEqual([
       "research-mode-presets",
       "research-fixed-topology",
       "research-three-file-output",
-      // Foundation stage / agents-md G5: the typed terminating result is primary; this
-      // records the prose fallback that the Python parity oracle still exercises.
+      // The typed terminating result is primary; this records the bounded
+      // compatibility fallback for custom or text-only model clients.
       "prose-summary-fallback",
       "research-verifier-model-default",
     ]);

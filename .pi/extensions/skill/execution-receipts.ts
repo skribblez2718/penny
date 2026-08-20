@@ -11,7 +11,7 @@ import { canonicalArtifactJson, parseArtifactRef, type ArtifactRef } from "./art
  * SEPARATE module-level state. That silently broke every P0 human gate:
  *
  *   - the skill extension registers a questionnaire transport and mints the owner
- *     key it hands to the Python orchestrator;
+ *     key it uses for trusted gate transport;
  *   - the questionnaire extension resolves that transport and signs the
  *     trusted_human_event with the owner key.
  *

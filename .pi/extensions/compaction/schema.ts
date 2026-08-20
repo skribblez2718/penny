@@ -3,7 +3,7 @@
  *
  * Version 3 removes semantic memory/session discovery. Recovery state is a
  * strict set of exact orchestration run IDs and immutable artifact references
- * read from those runs' artifact_protocol.selected_refs checkpoints.
+ * read from TypeScript v2 RunContext.selected_artifacts checkpoints.
  */
 
 import { createHash } from "node:crypto";

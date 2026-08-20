@@ -52,7 +52,7 @@ knowledge_base({schema_version: 1, action: "init", kb_profile_id: "kbp_demo", cr
 knowledge_base({schema_version: 1, action: "ingest", kb_profile_id: "kbp_demo", source_capability_ids: ["src_cap_1"]})
 knowledge_base({schema_version: 1, action: "query", kb_profile_id: "kbp_demo", query: "...", answer_delivery: "artifact_ref"})
 knowledge_base({schema_version: 1, action: "query", kb_profile_id: "kbp_demo", query: "...", answer_delivery: "parent_tool_result"})
-knowledge_base({schema_version: 1, action: "save", kb_profile_id: "kbp_demo", query_run_id: "run_1", page_kind: "synthesis", title: "..."})
+knowledge_base({schema_version: 1, action: "save", kb_profile_id: "kbp_demo", query_run_id: "run_1", page_kind: "synthesis", title: "..."})  // requires that query run's single-use claim
 knowledge_base({schema_version: 1, action: "lint", kb_profile_id: "kbp_demo", mode: "deterministic_and_semantic"})
 knowledge_base({schema_version: 1, action: "promote", kb_profile_id: "kbp_demo", page_revisions: [{page_id: "page_1", revision_id: "rev_1"}], canonical_target_capability_ids: ["target_cap_1"]})
 knowledge_base({schema_version: 1, action: "status", kb_profile_id: "kbp_demo", run_id: "run_1"})
@@ -73,6 +73,15 @@ The model may name an opaque `kb_profile_id` and, where applicable, opaque capab
 ## Outputs
 
 Expected outputs are safe action status, opaque IDs/counts, bounded warnings/unresolved items, evidence or artifact handles, and — only for an explicitly host-granted, policy-permitted query — a bounded derived advisory answer with citations, uncertainty, contradictions, and a canonical-verification reminder. No output may contain a raw private body.
+
+Parent delivery contract (`answer_delivery: "parent_tool_result"`):
+
+- The operator mints exactly one grant per planned parent delivery, keyed to their own Pi session id and the exact query-request digest. Admission requires exactly one matching unconsumed grant plus policy permission.
+- Delivery also requires an exact parent allowlist match: the active parent's provider/model must be allowlisted in policy (empty list denies; `local_only` requires the matched rule to declare `local`).
+- `verify_grounding` defaults true and the query flow cannot verify grounding, so a default request is refused for parent delivery; delivery requires a request that explicitly records `verify_grounding: false`. Results carry a `grounding_not_verified` warning whenever verification did not happen.
+- The grant is single-use: the delivered run consumes it; retries are refused rather than redelivered.
+- On any miss the parent sees its safe result with the single bounded warning code `refused_parent_delivery`, and nothing else; the host logs a bounded diagnostic reason (missing/mismatched/expired/consumed/ambiguous grant, policy denial, byte-cap miss, malformed answer) and retains the grant whenever the miss is not a delivery.
+- The derived answer is advisory-only, cited, and flagged `canonical_verification_required: true`. It may never be presented as canonical current state.
 
 ## Refusals
 

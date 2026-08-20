@@ -38,10 +38,13 @@ describe("Skill E2E — Extension Discovery", () => {
     expect(fs.existsSync(path.join(extDir, "tsconfig.json"))).toBe(true);
   });
 
-  it("should have the research skill with orchestrate script", () => {
+  it("should have the research skill with a TypeScript registry playbook", () => {
     const skillDir = path.join(PROJECT_ROOT, ".pi/skills/research");
     expect(fs.existsSync(path.join(skillDir, "SKILL.md"))).toBe(true);
-    expect(fs.existsSync(path.join(skillDir, "scripts/orchestrate.py"))).toBe(true);
+    expect(fs.existsSync(path.join(skillDir, "scripts/orchestrate.py"))).toBe(false);
+    expect(
+      fs.existsSync(path.join(PROJECT_ROOT, "apps/orchestration/src/playbooks/research.ts"))
+    ).toBe(true);
   });
 
   it("round-trips a long selected-artifact gate without executable terminal controls", () => {
