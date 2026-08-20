@@ -42,8 +42,10 @@ import { findGateForRun, mintSourceCapability } from "../src/kb/gate.js";
 import { CapabilityStore } from "../src/kb/capabilities.js";
 import { readSelectedGeneration } from "../src/kb/generations.js";
 import type { Confidence, JsonValue } from "../src/contracts.js";
+import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 
 const PROFILE = "kbp_integration";
+const SESSION = "sess_integration";
 const roots: string[] = [];
 
 afterEach(() => {
@@ -83,7 +85,14 @@ interface Fixture {
 
 function seedRun(): Fixture {
   const projectRoot = tmpProject();
-  const kbRoot = resolveKbRoot(projectRoot, PROFILE);
+  const configuredRoot = path.join(projectRoot, "private-kb");
+  installGrantedProfile({
+    projectRoot,
+    kbRoot: configuredRoot,
+    profileId: PROFILE,
+    sessionId: SESSION,
+  });
+  const kbRoot = resolveKbRoot(projectRoot, PROFILE, SESSION);
   const runId = `run_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
   initKb({ kbRoot, profileId: PROFILE, runId: `${runId}_init` }, "Integration KB");
   installTestPolicy(kbRoot);
@@ -95,7 +104,7 @@ function seedRun(): Fixture {
     identity: {
       schema_version: 2,
       run_id: runId,
-      session_id: "sess_integration",
+      session_id: SESSION,
       playbook: "knowledge-base",
       engine_owner: "typescript",
     },

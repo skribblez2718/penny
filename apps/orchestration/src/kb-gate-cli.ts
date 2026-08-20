@@ -37,6 +37,8 @@ import {
   mintParentDeliveryGrant,
   validateQueryRequest,
 } from "./kb/parent-delivery.js";
+import { KbSessionProfileGrantStore } from "./kb/profile-grants.js";
+import { resolveRegisteredProfile } from "./kb/profile-registry.js";
 import {
   approveGate,
   denyGate,
@@ -54,7 +56,7 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-  const multi = new Set(["author"]);
+  const multi = new Set(["author", "grant-profile"]);
   const out: Record<string, unknown> = {};
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -82,7 +84,11 @@ function parseArgs(argv: string[]): Args {
 
 function kbRootFor(args: Args): string {
   if (args.profile.length === 0) throw new Error("--profile is required");
-  return path.join(path.resolve(args.projectRoot), ".penny", "kb", args.profile);
+  const projectRoot = path.resolve(args.projectRoot);
+  return resolveRegisteredProfile({
+    profileId: args.profile,
+    registryPath: path.join(projectRoot, ".penny", "kb-profiles.json"),
+  }).resolvedRoot;
 }
 
 function fail(message: string): never {
@@ -94,6 +100,56 @@ function fail(message: string): never {
 
 function grantStoreDir(args: Args): string {
   return path.join(path.resolve(args.projectRoot), ".penny", "kb-parent-grants");
+}
+
+function profileGrantStoreDir(args: Args): string {
+  return path.join(path.resolve(args.projectRoot), ".penny", "kb-host-grants", "profile-grants");
+}
+
+function cmdProfileGrantMint(args: Args): void {
+  const sessionId = String(args["session"] ?? "");
+  const profileIds =
+    (args["grant-profile"] as string[] | undefined) ??
+    (args.profile.length > 0 ? [args.profile] : []);
+  const ttlMinutes = Number(args["ttl-minutes"] ?? 60);
+  if (sessionId.length === 0 || profileIds.length === 0) {
+    fail("profile-grant-mint requires --session and --profile or --grant-profile");
+  }
+  if (!Number.isInteger(ttlMinutes) || ttlMinutes < 1 || ttlMinutes > 10080) {
+    fail("--ttl-minutes must be an integer from 1 to 10080");
+  }
+  for (const profileId of profileIds) {
+    resolveRegisteredProfile({
+      profileId,
+      registryPath: path.join(path.resolve(args.projectRoot), ".penny", "kb-profiles.json"),
+    });
+  }
+  const now = new Date();
+  const grant = new KbSessionProfileGrantStore(profileGrantStoreDir(args)).mint({
+    session_id: sessionId,
+    allowed_kb_profile_ids: profileIds,
+    issued_at: now.toISOString(),
+    expires_at: new Date(now.getTime() + ttlMinutes * 60_000).toISOString(),
+  });
+  process.stdout.write(
+    JSON.stringify(
+      {
+        schema_version: 1,
+        grant_id: grant.grant_id,
+        session_id: grant.session_id,
+        allowed_kb_profile_ids: grant.allowed_kb_profile_ids,
+        issued_at: grant.issued_at,
+        expires_at: grant.expires_at,
+      },
+      null,
+      2
+    ) + "\n"
+  );
+}
+
+function cmdProfileGrantList(args: Args): void {
+  const grants = new KbSessionProfileGrantStore(profileGrantStoreDir(args)).list();
+  process.stdout.write(JSON.stringify({ schema_version: 1, grants }, null, 2) + "\n");
 }
 
 function cmdParentGrantMint(args: Args): void {
@@ -438,6 +494,8 @@ function main(argv: string[]): void {
         "  approve [--run RUN_ID]",
         "  deny [--run RUN_ID]",
         "  refine [--run RUN_ID]",
+        "  profile-grant-mint --session S (--profile P | --grant-profile P ...) [--ttl-minutes 60]",
+        "  profile-grant-list",
         "  parent-grant-mint --profile P --session S --invocation I --request '<json>' [--max-bytes 16384] [--ttl-minutes 15]",
         "  parent-grant-list",
         "",
@@ -466,6 +524,12 @@ function main(argv: string[]): void {
         break;
       case "refine":
         cmdRefine(args);
+        break;
+      case "profile-grant-mint":
+        cmdProfileGrantMint(args);
+        break;
+      case "profile-grant-list":
+        cmdProfileGrantList(args);
         break;
       case "parent-grant-mint":
         cmdParentGrantMint(args);

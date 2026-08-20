@@ -29,8 +29,10 @@ import { approveIngest } from "../src/kb/ingest.js";
 import { ingestKb } from "../src/kb/ingest.js";
 import type { KbPhaseInvocation } from "../src/kb/session-tools.js";
 import type { Directive } from "../src/contracts.js";
+import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 
 const PROFILE = "kbp_save_e2e";
+const SESSION = "sess_save";
 const PARENT = { provider: "ollama", model: "qwen327b:latest" };
 
 const dirs: string[] = [];
@@ -102,7 +104,8 @@ function saveBodies(seen: { composeInput?: string }): Record<string, string> {
 /** A KB with one published page, plus a completed query that minted a claim. */
 async function kbWithQuery() {
   const projectRoot = tmp("penny-kb-save");
-  const kbRoot = path.join(projectRoot, ".penny", "kb", PROFILE);
+  const kbRoot = path.join(projectRoot, "private-kb");
+  installGrantedProfile({ projectRoot, kbRoot, profileId: PROFILE, sessionId: SESSION });
   initKb({ kbRoot, profileId: PROFILE, runId: "run_init" }, "Save E2E KB");
   installPolicy(kbRoot);
 
@@ -223,7 +226,7 @@ async function driveSaveToGate(input: {
       identity: {
         schema_version: 2,
         run_id: input.runId,
-        session_id: "sess_save",
+        session_id: SESSION,
         playbook: "knowledge-base",
         engine_owner: "typescript",
       },

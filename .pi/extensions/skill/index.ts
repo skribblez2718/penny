@@ -80,6 +80,111 @@ interface SkillConfig {
   skillsDir: string;
 }
 
+const KbOpaqueId = Type.String({
+  minLength: 1,
+  maxLength: 128,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+});
+const KbProfileField = { schema_version: Type.Literal(1), kb_profile_id: KbOpaqueId };
+const KnowledgeBaseParameters = Type.Union([
+  Type.Object(
+    {
+      ...KbProfileField,
+      action: Type.Literal("init"),
+      create: Type.Literal(true),
+      title: Type.String({ minLength: 1, maxLength: 256 }),
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      ...KbProfileField,
+      action: Type.Literal("init"),
+      create: Type.Literal(false),
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      ...KbProfileField,
+      action: Type.Literal("ingest"),
+      source_capability_ids: Type.Array(KbOpaqueId, {
+        minItems: 1,
+        maxItems: 64,
+        uniqueItems: true,
+      }),
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      ...KbProfileField,
+      action: Type.Literal("query"),
+      query: Type.String({ minLength: 1, maxLength: 32768 }),
+      page_ids: Type.Optional(Type.Array(KbOpaqueId, { maxItems: 256, uniqueItems: true })),
+      source_ids: Type.Optional(Type.Array(KbOpaqueId, { maxItems: 256, uniqueItems: true })),
+      max_candidates: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+      verify_grounding: Type.Optional(Type.Boolean()),
+      answer_delivery: Type.Optional(
+        Type.Union([Type.Literal("artifact_ref"), Type.Literal("parent_tool_result")])
+      ),
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      ...KbProfileField,
+      action: Type.Literal("save"),
+      query_run_id: KbOpaqueId,
+      page_kind: Type.Union([
+        Type.Literal("concept"),
+        Type.Literal("decision"),
+        Type.Literal("synthesis"),
+        Type.Literal("question"),
+      ]),
+      title: Type.String({ minLength: 1, maxLength: 256 }),
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      ...KbProfileField,
+      action: Type.Literal("lint"),
+      mode: Type.Union([Type.Literal("deterministic"), Type.Literal("deterministic_and_semantic")]),
+      page_ids: Type.Optional(Type.Array(KbOpaqueId, { maxItems: 256, uniqueItems: true })),
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      ...KbProfileField,
+      action: Type.Literal("promote"),
+      page_revisions: Type.Array(
+        Type.Object(
+          { page_id: KbOpaqueId, revision_id: KbOpaqueId },
+          { additionalProperties: false }
+        ),
+        { minItems: 1, maxItems: 64, uniqueItems: true }
+      ),
+      canonical_target_capability_ids: Type.Array(KbOpaqueId, {
+        minItems: 1,
+        maxItems: 64,
+        uniqueItems: true,
+      }),
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    { ...KbProfileField, action: Type.Literal("status"), run_id: KbOpaqueId },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    { ...KbProfileField, action: Type.Literal("resume"), run_id: KbOpaqueId },
+    { additionalProperties: false }
+  ),
+]);
+type KnowledgeBaseParams = Static<typeof KnowledgeBaseParameters>;
+
 let config: SkillConfig;
 
 // ============================================================
@@ -1091,9 +1196,17 @@ export default function skillExtension(pi: ExtensionAPI): void {
       "Do not use for canonical current-state lookup without verification, automatic",
       "research ingestion, arbitrary filesystem access, or unapproved canonical writes.",
     ].join(" "),
-    execute: async (rawParams: Record<string, unknown>) => {
-      const action = String(rawParams["action"] ?? "");
-      const profileId = String(rawParams["kb_profile_id"] ?? "");
+    parameters: KnowledgeBaseParameters,
+    execute: async (
+      _toolCallId: string,
+      typedParams: KnowledgeBaseParams,
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      toolContext: ExtensionCommandContext
+    ) => {
+      const rawParams = typedParams as unknown as Record<string, unknown>;
+      const action = typedParams.action;
+      const profileId = typedParams.kb_profile_id;
       if (profileId.length === 0) {
         return {
           content: [
@@ -1113,16 +1226,101 @@ export default function skillExtension(pi: ExtensionAPI): void {
         };
       }
       const runId = `kb-${Date.now()}-${randomUUID().slice(0, 8)}`;
-      // Module scope: the extension root is the operator's project (the pi
-      // process cwd), never an injected variable.
-      const projectRoot = process.cwd();
-      const kbRoot = path.join(projectRoot, ".penny", "kb", profileId);
+      const projectRoot = path.resolve(
+        process.env.PROJECT_ROOT || toolContext?.cwd || process.cwd()
+      );
       const orch = await import("@penny/orchestration/source");
+      const hostSessionId = currentSessionId ?? "";
+      let resolvedProfile;
+      try {
+        resolvedProfile = orch.resolveGrantedProfile({
+          profileId,
+          sessionId: hostSessionId,
+          registryPath: path.join(projectRoot, ".penny", "kb-profiles.json"),
+          grantStoreDir: path.join(projectRoot, ".penny", "kb-host-grants", "profile-grants"),
+        });
+      } catch (error) {
+        logger.warn("kb_profile_admission_refused", {
+          errorCode: "KB_PROFILE_ADMISSION_REFUSED",
+          reason: error instanceof Error ? error.message : "unknown",
+        });
+        const refused = {
+          schema_version: 1,
+          action,
+          run_id: runId,
+          status: "refused",
+          met: false,
+          ids: [],
+          counts: {},
+          artifacts: [],
+          evidence: [],
+          warnings: ["profile_not_authorized"],
+          unresolved: [],
+          next: "none",
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(refused) }],
+          details: refused,
+        };
+      }
+      const kbRoot = resolvedProfile.resolvedRoot;
       const wfCtx = { kbRoot, profileId, runId };
       let kbResult;
+      try {
+        const current = orch.readCurrent(kbRoot);
+        if (action === "init") {
+          const create = rawParams["create"] === true;
+          if (create && !resolvedProfile.profile.allow_create) {
+            throw new Error("profile does not authorize KB creation");
+          }
+          if (create && typeof rawParams["title"] !== "string") {
+            throw new Error("title is required when create is true");
+          }
+          if (!create && rawParams["title"] !== undefined) {
+            throw new Error("title is forbidden when create is false");
+          }
+          if (!create && current === undefined) {
+            throw new Error("KB is not initialized and create was not authorized");
+          }
+        } else if (current === undefined) {
+          throw new Error("KB is not initialized for this profile");
+        }
+        if (current !== undefined && resolvedProfile.profile.expected_kb_id !== undefined) {
+          const manifest = orch.readManifest(kbRoot);
+          if (manifest.kb_id !== resolvedProfile.profile.expected_kb_id) {
+            throw new Error("profile KB identity does not match the current manifest");
+          }
+        }
+      } catch (error) {
+        const refused = {
+          schema_version: 1,
+          action,
+          run_id: runId,
+          status: "refused",
+          met: false,
+          ids: [],
+          counts: {},
+          artifacts: [],
+          evidence: [],
+          warnings: ["profile_state_refused"],
+          unresolved: [],
+          next: "none",
+        };
+        logger.warn("kb_profile_state_refused", {
+          errorCode: "KB_PROFILE_STATE_REFUSED",
+          reason: error instanceof Error ? error.message : "unknown",
+        });
+        return {
+          content: [{ type: "text", text: JSON.stringify(refused) }],
+          details: refused,
+        };
+      }
       switch (action) {
         case "init": {
-          kbResult = orch.initKb(wfCtx, String(rawParams["title"] ?? "Advisory KB"));
+          kbResult = orch.initKb(
+            wfCtx,
+            typeof rawParams["title"] === "string" ? rawParams["title"] : "Advisory KB"
+          );
           break;
         }
         case "query": {
@@ -1327,7 +1525,7 @@ export default function skillExtension(pi: ExtensionAPI): void {
               identity: {
                 schema_version: 2,
                 run_id: runId,
-                session_id: `kb_${Date.now().toString(36)}`,
+                session_id: hostSessionId,
                 playbook: "knowledge-base",
                 engine_owner: "typescript",
               },
@@ -1447,39 +1645,101 @@ export default function skillExtension(pi: ExtensionAPI): void {
           break;
         }
         case "resume": {
-          const pending = orch.latestPendingGate(kbRoot);
-          if (pending === undefined) {
-            kbResult = {
-              schema_version: 1,
-              action,
-              run_id: runId,
-              status: "refused",
-              met: false,
-              ids: [],
-              counts: {},
-              artifacts: [],
-              evidence: [],
-              warnings: ["no pending content-review gate to resume"],
-              unresolved: [],
-              next: "none",
-            };
-          } else {
-            kbResult = {
-              schema_version: 1,
-              action: "resume",
-              run_id: pending.run_id,
-              status: "awaiting_user",
-              met: false,
-              ids: [pending.run_id],
-              counts: { artifacts: pending.artifacts.length },
-              artifacts: pending.artifacts,
-              evidence: [],
-              warnings: [
-                "re-presenting pending human content-review gate; approve/deny is a host decision (penny-kb-gate approve|deny)",
-              ],
-              unresolved: [],
-              next: "review",
-            };
+          const requestedRunId = String(rawParams["run_id"] ?? "");
+          const resumeService = new OrchestrationService({
+            projectRoot,
+            playbookName: "knowledge-base",
+          });
+          try {
+            const run = resumeService.checkpointer.loadRunById(requestedRunId);
+            if (
+              run === undefined ||
+              run.identity.playbook !== "knowledge-base" ||
+              run.identity.session_id !== currentSessionId ||
+              String(run.playbookData.profile_id ?? "") !== profileId
+            ) {
+              kbResult = {
+                schema_version: 1,
+                action: "resume",
+                run_id: requestedRunId,
+                status: "refused",
+                met: false,
+                ids: [],
+                counts: {},
+                artifacts: [],
+                evidence: [],
+                warnings: ["run_not_available_for_session_profile"],
+                unresolved: [],
+                next: "none",
+              };
+              break;
+            }
+            const pending = orch.findGateForRun(kbRoot, requestedRunId);
+            if (run.status === "awaiting_user" && pending?.status === "awaiting") {
+              kbResult = {
+                schema_version: 1,
+                action: "resume",
+                run_id: requestedRunId,
+                status: "awaiting_user",
+                met: false,
+                ids: [requestedRunId],
+                counts: { artifacts: pending.artifacts.length },
+                artifacts: pending.artifacts,
+                evidence: [],
+                warnings: [
+                  "re-presenting pending human content-review gate; approve/deny/refine is a host decision",
+                ],
+                unresolved: [],
+                next: "review",
+              };
+            } else if (run.status === "complete") {
+              kbResult = {
+                schema_version: 1,
+                action: "resume",
+                run_id: requestedRunId,
+                status: "complete",
+                met: run.met,
+                ids: [requestedRunId],
+                counts: {},
+                artifacts: [],
+                evidence: [],
+                warnings: [],
+                unresolved: run.met ? [] : ["run completed without satisfying its goal"],
+                next: "none",
+              };
+            } else if (["incomplete", "cancelled", "error"].includes(run.status)) {
+              kbResult = {
+                schema_version: 1,
+                action: "resume",
+                run_id: requestedRunId,
+                status: "error",
+                met: false,
+                ids: [requestedRunId],
+                counts: {},
+                artifacts: [],
+                evidence: [],
+                warnings: ["run is terminal and cannot be resumed"],
+                unresolved: [],
+                next: "none",
+              };
+            } else {
+              kbResult = {
+                schema_version: 1,
+                action: "resume",
+                run_id: requestedRunId,
+                status: "running",
+                met: false,
+                ids: [requestedRunId],
+                counts: {},
+                artifacts: [],
+                evidence: [],
+                warnings: ["run is not at a public resumable boundary"],
+                unresolved: [],
+                next: "resume",
+              };
+            }
+          } finally {
+            resumeService.close();
           }
           break;
         }
@@ -1598,7 +1858,7 @@ export default function skillExtension(pi: ExtensionAPI): void {
               identity: {
                 schema_version: 2,
                 run_id: runId,
-                session_id: `kb_${Date.now().toString(36)}`,
+                session_id: hostSessionId,
                 playbook: "knowledge-base",
                 engine_owner: "typescript",
               },
@@ -1783,7 +2043,7 @@ export default function skillExtension(pi: ExtensionAPI): void {
               identity: {
                 schema_version: 2,
                 run_id: runId,
-                session_id: `kb_${Date.now().toString(36)}`,
+                session_id: hostSessionId,
                 playbook: "knowledge-base",
                 engine_owner: "typescript",
               },
@@ -1887,16 +2147,65 @@ export default function skillExtension(pi: ExtensionAPI): void {
           break;
         }
         case "status": {
-          kbResult = orch.statusKb(wfCtx);
-          // Safe projection of any pending gate (no bodies, no paths).
-          const pending = orch.latestPendingGate(kbRoot);
-          if (pending !== undefined) {
-            (kbResult as { pending_gate?: unknown }).pending_gate = {
-              run_id: pending.run_id,
-              issued_at: pending.issued_at,
-              expires_at: pending.expires_at,
-              artifact_kinds: pending.artifacts.map((a) => a.artifact_kind),
+          const requestedRunId = String(rawParams["run_id"] ?? "");
+          const statusService = new OrchestrationService({
+            projectRoot,
+            playbookName: "knowledge-base",
+          });
+          try {
+            const run = statusService.checkpointer.loadRunById(requestedRunId);
+            if (
+              run === undefined ||
+              run.identity.playbook !== "knowledge-base" ||
+              run.identity.session_id !== currentSessionId ||
+              String(run.playbookData.profile_id ?? "") !== profileId
+            ) {
+              kbResult = {
+                schema_version: 1,
+                action: "status",
+                run_id: requestedRunId,
+                status: "refused",
+                met: false,
+                ids: [],
+                counts: {},
+                artifacts: [],
+                evidence: [],
+                warnings: ["run_not_available_for_session_profile"],
+                unresolved: [],
+                next: "none",
+              };
+              break;
+            }
+            const pending = orch.findGateForRun(kbRoot, requestedRunId);
+            const publicStatus =
+              run.status === "complete"
+                ? "complete"
+                : run.status === "awaiting_user"
+                  ? "awaiting_user"
+                  : run.status === "running"
+                    ? "running"
+                    : "error";
+            kbResult = {
+              schema_version: 1,
+              action: "status",
+              run_id: requestedRunId,
+              status: publicStatus,
+              met: run.status === "complete" ? run.met : false,
+              ids: [requestedRunId],
+              counts: {},
+              artifacts: pending?.status === "awaiting" ? pending.artifacts : [],
+              evidence: [],
+              warnings: [],
+              unresolved: [],
+              next:
+                publicStatus === "awaiting_user"
+                  ? "review"
+                  : publicStatus === "running"
+                    ? "resume"
+                    : "none",
             };
+          } finally {
+            statusService.close();
           }
           break;
         }

@@ -44,7 +44,8 @@ describe("KB §5.1 profile registry", () => {
   it("loads and validates a correct registry", () => {
     const dir = tmp();
     const regPath = path.join(dir, "kb-profiles.json");
-    writeFileSync(regPath, JSON.stringify(REGISTRY));
+    writeFileSync(regPath, JSON.stringify(REGISTRY), { mode: 0o600 });
+    chmodSync(regPath, 0o600);
     const loaded = loadProfileRegistry(regPath);
     expect(loaded.profiles.length).toBe(1);
     expect(loaded.profiles[0].kb_profile_id).toBe("kbp_demo");

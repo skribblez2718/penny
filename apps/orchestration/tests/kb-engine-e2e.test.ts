@@ -51,8 +51,10 @@ import { OrchestrationEngine } from "../src/engine.js";
 import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
 import type { KbPhaseInvocation } from "../src/kb/session-tools.js";
 import type { Directive } from "../src/contracts.js";
+import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 
 const PROFILE = "kbp_e2e";
+const SESSION = "sess_e2e";
 
 const dirs: string[] = [];
 function tmpRoot(label = "penny-kb-e2e"): string {
@@ -219,7 +221,7 @@ function buildStack(
   bodies: Record<string, string>
 ): Stack {
   const runId = `kb-e2e-${Math.random().toString(16).slice(2, 10)}`;
-  const kbRoot = path.join(projectRoot, ".penny", "kb", PROFILE);
+  const kbRoot = path.join(projectRoot, "private-kb");
   const dbPath = path.join(projectRoot, ".penny", "orchestration-e2e.db");
   const artifactRoot = path.join(projectRoot, ".penny", "e2e-artifacts");
   mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
@@ -264,7 +266,7 @@ async function driveToGate(stack: Stack, capIds: readonly string[]): Promise<Dir
       identity: {
         schema_version: 2,
         run_id: stack.runId,
-        session_id: "sess_e2e",
+        session_id: SESSION,
         playbook: "knowledge-base",
         engine_owner: "typescript",
       },
@@ -302,7 +304,8 @@ function respond(stack: Stack, response: "approve" | "deny"): Directive {
 describe("KB through the engine (step 4)", () => {
   it("runs all four phases, stops at the review gate, and approves host-side", async () => {
     const projectRoot = tmpRoot();
-    const kbRoot = path.join(projectRoot, ".penny", "kb", PROFILE);
+    const kbRoot = path.join(projectRoot, "private-kb");
+    installGrantedProfile({ projectRoot, kbRoot, profileId: PROFILE, sessionId: SESSION });
     initKb({ kbRoot, profileId: PROFILE, runId: "kb-init-e2e" }, "E2E KB");
     installTestPolicy(kbRoot);
     const capIds = seedSources(kbRoot);
@@ -370,7 +373,8 @@ describe("KB through the engine (step 4)", () => {
 
   it("denies host-side: no publication, leases invalidated, honest incomplete terminal", async () => {
     const projectRoot = tmpRoot();
-    const kbRoot = path.join(projectRoot, ".penny", "kb", PROFILE);
+    const kbRoot = path.join(projectRoot, "private-kb");
+    installGrantedProfile({ projectRoot, kbRoot, profileId: PROFILE, sessionId: SESSION });
     initKb({ kbRoot, profileId: PROFILE, runId: "kb-init-e2e" }, "E2E KB deny");
     installTestPolicy(kbRoot);
     const capIds = seedSources(kbRoot);

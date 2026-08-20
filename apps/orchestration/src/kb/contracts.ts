@@ -478,6 +478,24 @@ export const Rfc3339UtcSchema = Type.String({
 });
 export type Rfc3339Utc = Static<typeof Rfc3339UtcSchema>;
 
+/** Host-owned, time-bounded grant binding one Pi session to specific KB profiles. */
+export const KbSessionProfileGrantSchema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    grant_id: OpaqueIdSchema,
+    session_id: OpaqueIdSchema,
+    allowed_kb_profile_ids: Type.Array(OpaqueIdSchema, {
+      minItems: 1,
+      maxItems: 64,
+      uniqueItems: true,
+    }),
+    issued_at: Rfc3339UtcSchema,
+    expires_at: Rfc3339UtcSchema,
+  },
+  { additionalProperties: false }
+);
+export type KbSessionProfileGrant = Static<typeof KbSessionProfileGrantSchema>;
+
 /**
  * `QueryKbRequestV1` (§5.6). Closed validation: query 1–32,768; filter ID sets
  * 0–256 and unique; `max_candidates` 1–100; `verify_grounding` and

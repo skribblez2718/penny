@@ -391,7 +391,12 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
 
   constructor(
     private readonly revisions?: ArtifactRevisionLookup,
-    plane?: KbIngestPlaneV1
+    plane?: KbIngestPlaneV1,
+    private readonly rootResolver: (
+      projectRoot: string,
+      profileId: string,
+      sessionId: string
+    ) => string = resolveKbRoot
   ) {
     // The real plane by default: an optional-I/O playbook could silently run
     // without persisting anything, which is precisely the failure mode that lets a
@@ -401,7 +406,11 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
 
   /** Host-resolved, never caller-supplied. */
   private kbRoot(context: RunContext): string {
-    return resolveKbRoot(context.projectRoot, String(context.playbookData.profile_id ?? ""));
+    return this.rootResolver(
+      context.projectRoot,
+      String(context.playbookData.profile_id ?? ""),
+      context.identity.session_id
+    );
   }
 
   initialize(context: RunContext): Directive {

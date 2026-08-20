@@ -18,15 +18,14 @@
  *
  * ## Roots are resolved here, never accepted
  *
- * `resolveKbRoot` derives the root from the project root and a **validated** profile
- * id. A profile id reaches this code from a model-facing tool parameter, so it is
- * validated against the opaque-id contract before it is ever used as a path segment;
- * a root supplied by a caller is ignored rather than trusted.
+ * `resolveKbRoot` resolves the opaque profile id through the owner-only registry and
+ * requires an unexpired grant for the active Pi session. A root supplied by a caller
+ * is never accepted or reconstructed from the profile id.
  */
 
 import path from "node:path";
 
-import { isValidProfileId } from "./profile-registry.js";
+import { resolveGrantedProfile } from "./profile-registry.js";
 import {
   approveGate,
   claimCapabilities,
@@ -180,11 +179,13 @@ export interface KbIngestPlaneV1 {
  * Throws on an invalid profile id rather than normalizing it: an id that fails the
  * opaque-id contract is a refusal, not something to sanitize into a path.
  */
-export function resolveKbRoot(projectRoot: string, profileId: string): string {
-  if (!isValidProfileId(profileId)) {
-    throw new Error(`kb_profile_id '${profileId}' is not a valid opaque profile id`);
-  }
-  return path.join(projectRoot, ".penny", "kb", profileId);
+export function resolveKbRoot(projectRoot: string, profileId: string, sessionId: string): string {
+  return resolveGrantedProfile({
+    profileId,
+    sessionId,
+    registryPath: path.join(projectRoot, ".penny", "kb-profiles.json"),
+    grantStoreDir: path.join(projectRoot, ".penny", "kb-host-grants", "profile-grants"),
+  }).resolvedRoot;
 }
 
 /** The real plane, over the existing KB modules. */

@@ -31,6 +31,8 @@ import {
 import type { Confidence, Directive, JsonValue } from "../src/contracts.js";
 
 const PROJECT_ROOT = "/tmp/penny-kb-durable";
+const TEST_ROOT_RESOLVER = (projectRoot: string, profileId: string): string =>
+  `${projectRoot}/.penny/kb/${profileId}`;
 
 function newContext(constraints: Record<string, JsonValue> = {}): RunContext {
   return RunContext.create({
@@ -160,7 +162,7 @@ describe("KB durable state — checkpoint round trip at every phase boundary", (
         approvals: [],
         denials: [],
       };
-      const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls));
+      const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls), TEST_ROOT_RESOLVER);
       const context = newContext();
       driveTo(playbook, context, phase);
 
@@ -193,7 +195,7 @@ describe("KB durable state — rebindPendingDirective (the recover path)", () =>
       approvals: [],
       denials: [],
     };
-    const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls));
+    const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls), TEST_ROOT_RESOLVER);
     const context = newContext();
     const original = playbook.initialize(context) as Directive;
     expect(original.action).toBe("invoke_agent");
@@ -220,7 +222,7 @@ describe("KB durable state — rebindPendingDirective (the recover path)", () =>
       approvals: [],
       denials: [],
     };
-    const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls));
+    const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls), TEST_ROOT_RESOLVER);
     const context = newContext();
     const directive = driveTo(playbook, context, "awaiting_review");
     expect(directive.action).toBe("await_user");
@@ -244,7 +246,7 @@ describe("KB durable state — rebindPendingDirective (the recover path)", () =>
       approvals: [],
       denials: [],
     };
-    const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls));
+    const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls), TEST_ROOT_RESOLVER);
     const context = newContext();
     driveTo(playbook, context, "awaiting_review");
     playbook.resume(context, "approve");
@@ -271,7 +273,7 @@ describe("KB durable state — rebindPendingDirective (the recover path)", () =>
       approvals: [],
       denials: [],
     };
-    const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls));
+    const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls), TEST_ROOT_RESOLVER);
     const context = newContext();
     const directive = driveTo(playbook, context, "awaiting_review");
     expect(directive.action).toBe("await_user");
@@ -293,7 +295,7 @@ describe("KB durable state — status projection", () => {
       approvals: [],
       denials: [],
     };
-    const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls));
+    const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls), TEST_ROOT_RESOLVER);
     const context = newContext();
     driveTo(playbook, context, "awaiting_review");
     const terminal = playbook.resume(context, "approve");
@@ -332,7 +334,7 @@ describe("KB durable state — status projection", () => {
       approvals: [],
       denials: [],
     };
-    const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls));
+    const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls), TEST_ROOT_RESOLVER);
     const context = newContext();
     driveTo(playbook, context, "awaiting_review");
     const terminal = playbook.resume(context, "deny");
@@ -361,7 +363,7 @@ describe("KB durable state — revision chain integrity across recovery", () => 
       approvals: [],
       denials: [],
     };
-    const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls));
+    const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls), TEST_ROOT_RESOLVER);
     const context = newContext();
     playbook.initialize(context);
     const first = playbook.rebindPendingDirective(context)!;

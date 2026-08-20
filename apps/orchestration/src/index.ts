@@ -15,9 +15,11 @@ export * from "./kb/kb-model-client.js";
 export * from "./kb/gate.js";
 export * from "./kb/ingest-plane.js";
 export * from "./kb/parent-delivery.js";
+export * from "./kb/profile-grants.js";
+export * from "./kb/profile-registry.js";
 export * from "./kb/save-claim.js";
 export * from "./kb/promote.js";
-export { readPolicy } from "./kb/filesystem.js";
+export { readCurrent, readManifest, readPolicy } from "./kb/filesystem.js";
 export {
   PolicyRefusal,
   checkParentModelIdentity,

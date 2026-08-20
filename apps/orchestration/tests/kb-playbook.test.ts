@@ -22,6 +22,12 @@ import type { Confidence, Directive, JsonValue } from "../src/contracts.js";
 import type { KbIngestPlaneV1 } from "../src/kb/ingest-plane.js";
 
 const PROJECT_ROOT = "/tmp/penny-kb-playbook";
+const TEST_ROOT_RESOLVER = (projectRoot: string, profileId: string): string => {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(profileId)) {
+    throw new Error(`kb_profile_id '${profileId}' is not a valid opaque profile id`);
+  }
+  return `${projectRoot}/.penny/kb/${profileId}`;
+};
 
 function newContext(constraints: Record<string, JsonValue> = {}): RunContext {
   return RunContext.create({
@@ -142,7 +148,7 @@ function fakePlane(options: { denyAdmission?: boolean } = {}): {
 }
 
 function newPlaybook(plane?: KbIngestPlaneV1): KnowledgeBasePlaybook {
-  return new KnowledgeBasePlaybook(undefined, plane ?? fakePlane().plane);
+  return new KnowledgeBasePlaybook(undefined, plane ?? fakePlane().plane, TEST_ROOT_RESOLVER);
 }
 
 const DETAILS: Record<string, Record<string, JsonValue>> = {
@@ -232,7 +238,7 @@ describe("KB playbook — §5.3 deny before session", () => {
   it("admits the run BEFORE claiming or admitting any source", () => {
     const { plane, calls } = fakePlane();
     const context = newContext();
-    new KnowledgeBasePlaybook(undefined, plane).initialize(context);
+    new KnowledgeBasePlaybook(undefined, plane, TEST_ROOT_RESOLVER).initialize(context);
     // Ordering is the guarantee: admission must precede every private read.
     expect(calls.order[0]).toBe("admitRun");
     expect(calls.order.slice(0, 3)).toEqual(["admitRun", "claim", "admit"]);
@@ -246,9 +252,9 @@ describe("KB playbook — §5.3 deny before session", () => {
   it("a denied run claims nothing, admits nothing, and dispatches no agent", () => {
     const { plane, calls } = fakePlane({ denyAdmission: true });
     const context = newContext();
-    expect(() => new KnowledgeBasePlaybook(undefined, plane).initialize(context)).toThrow(
-      /policy refusal/i
-    );
+    expect(() =>
+      new KnowledgeBasePlaybook(undefined, plane, TEST_ROOT_RESOLVER).initialize(context)
+    ).toThrow(/policy refusal/i);
     // The whole point of deny-before-session: zero private I/O on the denial path.
     expect(calls.claims).toEqual([]);
     expect(calls.admits).toEqual([]);
@@ -260,7 +266,9 @@ describe("KB playbook — §5.3 deny before session", () => {
     const { plane, calls } = fakePlane();
     // Host could not report a parent tuple — absence is a denial, not a pass.
     const context = newContext({ parent_identity: null });
-    expect(() => new KnowledgeBasePlaybook(undefined, plane).initialize(context)).toThrow();
+    expect(() =>
+      new KnowledgeBasePlaybook(undefined, plane, TEST_ROOT_RESOLVER).initialize(context)
+    ).toThrow();
     expect(calls.claims).toEqual([]);
     expect(calls.admits).toEqual([]);
   });
@@ -268,7 +276,9 @@ describe("KB playbook — §5.3 deny before session", () => {
   it("ignores a model-shaped parent identity that is not a proper tuple", () => {
     const { plane, calls } = fakePlane();
     const context = newContext({ parent_identity: { provider: "ollama" } });
-    expect(() => new KnowledgeBasePlaybook(undefined, plane).initialize(context)).toThrow();
+    expect(() =>
+      new KnowledgeBasePlaybook(undefined, plane, TEST_ROOT_RESOLVER).initialize(context)
+    ).toThrow();
     expect(calls.admitRuns[0]?.parentIdentity).toBeUndefined();
     expect(calls.claims).toEqual([]);
   });
@@ -324,7 +334,7 @@ describe("KB playbook — dispatch", () => {
       canonical_target_capability_ids: ["cap_target_1"],
       page_revisions: [{ page_id: "page_a", revision_id: "rev_1" }],
     });
-    const playbook = new KnowledgeBasePlaybook(undefined, plane);
+    const playbook = new KnowledgeBasePlaybook(undefined, plane, TEST_ROOT_RESOLVER);
     playbook.initialize(context);
     expect(context.stateId).toBe("plan");
 
