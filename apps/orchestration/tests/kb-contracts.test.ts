@@ -152,13 +152,13 @@ describe("KB §5.5 source record", () => {
   });
 
   it("rejects an object_ref that does not match the sha256", () => {
-    const bad = { ...sourceRecord, object_ref: "sources/objects/abc" };
+    const bad = { ...sourceRecord, object_ref: `sources/objects/${"1".repeat(64)}` };
     expect(() => validateKbContract(SourceRecordSchema, bad, "source")).toThrow();
   });
 
-  it("rejects an empty authors array", () => {
-    const bad = { ...sourceRecord, authors: [] };
-    expect(() => validateKbContract(SourceRecordSchema, bad, "source")).toThrow();
+  it("accepts the plan-authorized empty authors array", () => {
+    const record = { ...sourceRecord, authors: [] };
+    expect(() => validateKbContract(SourceRecordSchema, record, "source")).not.toThrow();
   });
 });
 

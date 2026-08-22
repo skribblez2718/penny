@@ -6,18 +6,9 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
-    "./cli": {
-      "types": "./dist/cli.d.ts",
-      "import": "./dist/cli.js"
-    },
-    "./source": {
-      "types": "./src/index.ts",
-      "import": "./src/index.ts"
-    }
+    ".": "./dist/index.js",
+    "./cli": "./dist/cli.js",
+    "./source": "./src/index.ts"
   },
   "bin": {
     "penny-orchestration": "./dist/cli.js",
@@ -28,7 +19,7 @@
     "src"
   ],
   "scripts": {
-    "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.json",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && node ./node_modules/typescript/bin/tsc -p tsconfig.json",
     "typecheck": "node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
     "test": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "test:unit": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
@@ -38,7 +29,23 @@
     "test:integration": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts 'tests/**/*.integration.test.ts'",
     "test:parity": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/research-parity.test.ts",
     "test:all": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
-    "test:kb-core": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts 'tests/kb-*.test.ts'",
+    "test:kb-core": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-*.test.ts",
+    "test:kb-policy": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-policy.test.ts tests/kb-model-policy.test.ts tests/kb-profile-registry.test.ts tests/kb-profile-grants.test.ts",
+    "test:kb-generations": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-generations.test.ts tests/kb-generation-carryforward.test.ts",
+    "test:kb-retrieval-core": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-retrieval.test.ts",
+    "test:run-artifacts": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/run-artifacts.test.ts tests/kb-private-inputs.test.ts",
+    "test:kb-workflows": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-workflows.test.ts tests/kb-ingest.test.ts tests/kb-save-e2e.test.ts tests/kb-query-start.test.ts",
+    "test:kb-loader-policy": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-loader-policy.test.ts tests/ssot-session.test.ts tests/worker-posture.test.ts tests/kb-model-policy.test.ts",
+    "test:flow-diagrams": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/flow-diagrams.test.ts tests/prompt-guidance-contract.test.ts",
+    "test:kb-answer-quality": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-answer-quality.test.ts tests/kb-parent-delivery.test.ts",
+    "test:kb-resume": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-resume.test.ts tests/kb-durable-state.test.ts",
+    "test:kb-e2e-prepare": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-e2e-prepare.test.ts",
+    "test:kb-promotion": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-promote.test.ts tests/kb-promotion.test.ts",
+    "test:kb-e2e": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-e2e.test.ts",
+    "test:kb-privacy": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-privacy.test.ts tests/safety.test.ts",
+    "test:kb-model-smoke-contract": "env -u PENNY_KB_MODEL_SMOKE node ./node_modules/vitest/vitest.mjs run --config vitest.kb-model-smoke.config.ts smoke/kb-model-smoke-contract.test.ts",
+    "typecheck:kb-model-smoke": "node ./node_modules/typescript/bin/tsc -p tsconfig.kb-model-smoke.json --noEmit",
+    "test:kb-model-smoke": "test \"${PENNY_KB_MODEL_SMOKE:-}\" = \"1\" || { echo 'Set PENNY_KB_MODEL_SMOKE=1 to run the one predeclared live KB model cohort.' >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.kb-model-smoke.config.ts",
     "pending": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts --grep pending",
     "smoke:research": "echo 'Smoke: set PENNY_RESEARCH_DEFAULT_MODEL and pipe a start request to dist/cli.js --execute'"
   },

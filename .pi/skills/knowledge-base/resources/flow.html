@@ -1,196 +1,497 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>knowledge-base skill — ingest flow</title>
-<style>
-  :root{
-    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2a3341;
-    --ink:#e6edf3; --muted:#8b949e; --desc:#b3bdc9;
-    --echo:#22d3ee; --synthia:#f472b6; --carren:#fb7185; --vera:#4ade80; --piper:#7c5cff; --skribble:#c77dff;
-    --start:#94a3b8; --gate:#e3b341; --host:#a78bfa;
-    --done:#3fb950; --error:#f85149;
-    --fwd:#8b98a9; --exit:#3fb950; --loop:#e3a52e; --gatec:#e3b341; --abort:#f85149;
-  }
-  *{box-sizing:border-box}
-  html,body{margin:0;background:var(--bg);color:var(--ink);
-    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-  header{padding:22px 28px 8px}
-  h1{margin:0;font-size:22px;letter-spacing:-.01em}
-  .sub{color:var(--muted);margin-top:4px;font-size:13px;max-width:1180px}
-  .callout{margin:14px 28px;padding:12px 14px;border-left:4px solid var(--gate);
-    background:#211d10;border-radius:6px;font-size:13px;color:#e8d9a8}
-  .callout b{color:#f0c657}
-  .legend{display:flex;flex-wrap:wrap;gap:18px 26px;padding:10px 28px 16px;font-size:12.5px;color:#c9d3df}
-  .legend .grp{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
-  .chip{display:inline-flex;align-items:center;gap:6px}
-  .dot{width:12px;height:12px;border-radius:3px;display:inline-block}
-  .aline{width:26px;height:0;border-top:3px solid var(--fwd);display:inline-block}
-  #wrap{position:relative;margin:8px 20px 40px;width:1120px;height:1240px}
-  svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
-  .node{position:absolute;background:var(--panel);border:1px solid var(--border);border-radius:10px;
-    box-shadow:0 1px 2px rgba(0,0,0,.35),0 2px 8px rgba(0,0,0,.25);padding:10px 12px}
-  .node .t{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:7px}
-  .node .t .who{font-weight:600;color:var(--muted);font-size:11.5px}
-  .node .d{color:var(--desc);font-size:12px;margin-top:5px}
-  .node::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;border-radius:10px 0 0 10px}
-  .node.echo::before{background:var(--echo)} .node.synthia::before{background:var(--synthia)}
-  .node.carren::before{background:var(--carren)} .node.vera::before{background:var(--vera)}
-  .node.start::before{background:var(--start)} .node.host::before{background:var(--host)}
-  .node.piper::before{background:var(--piper)} .node.skribble::before{background:var(--skribble)}
-  .node.gate{background:#211d10;border-color:#4d3f1a}.node.gate::before{background:var(--gate)}
-  .node.done{background:#0f2417;border-color:#1f5136}.node.done::before{background:var(--done)}
-  .node.err{background:#2a1517;border-color:#5c2a2a}.node.err::before{background:var(--error)}
-  .node .badge{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.04em;
-    text-transform:uppercase;color:#0d1117;padding:2px 6px;border-radius:999px}
-  .badge.hitl{background:var(--gate)} .badge.term{background:#5b6675;color:#e6edf3}
-  .badge.bnd{background:var(--loop)}
-  .lbl{position:absolute;transform:translate(-50%,-50%);background:var(--panel2);
-    border:1px solid #313c4a;color:#c9d3df;font-size:11px;padding:1px 6px;border-radius:999px;
-    white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.35)}
-  .foot{margin:0 28px 48px;font-size:12.5px;color:#c3cdd9;max-width:1120px}
-  .foot h3{font-size:13px;margin:18px 0 6px;color:#e6edf3}
-  .foot ul{margin:6px 0;padding-left:18px} .foot li{margin:3px 0}
-  .foot b{color:#e6edf3}
-  code{background:#22293a;color:#cdd6e3;padding:1px 5px;border-radius:4px;font-size:12px}
-</style>
-</head>
-<body>
-<header>
-  <h1>knowledge-base skill — ingest execution flow</h1>
-  <div class="sub">Mirrors <code>apps/orchestration/src/playbooks/knowledge-base.ts</code> (<code>KnowledgeBasePlaybook</code>, exported as <code>KB_FLOW</code>). Engine-driven run: four agent phases over host-closed readers, a sealed candidate set, and a <b>host-authenticated</b> content-review gate. Drift-guarded by <code>apps/orchestration/tests/flow-diagrams.test.ts</code> against the exported descriptor — the <code>N</code>/<code>E</code> data below is the machine-readable half of this diagram.</div>
-</header>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>knowledge-base skill — execution flows</title>
+    <style>
+      :root {
+        --bg: #0d1117;
+        --panel: #161b22;
+        --panel2: #1c2230;
+        --border: #2a3341;
+        --ink: #e6edf3;
+        --muted: #8b949e;
+        --desc: #b3bdc9;
+        --echo: #22d3ee;
+        --synthia: #f472b6;
+        --carren: #fb7185;
+        --vera: #4ade80;
+        --piper: #7c5cff;
+        --skribble: #c77dff;
+        --start: #94a3b8;
+        --gate: #e3b341;
+        --host: #a78bfa;
+        --done: #3fb950;
+        --error: #f85149;
+        --fwd: #8b98a9;
+        --exit: #3fb950;
+        --loop: #e3a52e;
+        --gatec: #e3b341;
+        --abort: #f85149;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          14px/1.45 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          Helvetica,
+          Arial,
+          sans-serif;
+      }
+      header {
+        padding: 22px 28px 8px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 22px;
+        letter-spacing: -0.01em;
+      }
+      .sub {
+        color: var(--muted);
+        margin-top: 4px;
+        font-size: 13px;
+        max-width: 1180px;
+      }
+      .callout {
+        margin: 14px 28px;
+        padding: 12px 14px;
+        border-left: 4px solid var(--gate);
+        background: #211d10;
+        border-radius: 6px;
+        font-size: 13px;
+        color: #e8d9a8;
+      }
+      .callout b {
+        color: #f0c657;
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 18px 26px;
+        padding: 10px 28px 16px;
+        font-size: 12.5px;
+        color: #c9d3df;
+      }
+      .legend .grp {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 16px;
+        align-items: center;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 3px;
+        display: inline-block;
+      }
+      .aline {
+        width: 26px;
+        height: 0;
+        border-top: 3px solid var(--fwd);
+        display: inline-block;
+      }
+      #wrap {
+        position: relative;
+        margin: 8px 20px 40px;
+        width: 1120px;
+        height: 1240px;
+      }
+      svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        overflow: visible;
+      }
+      .node {
+        position: absolute;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        box-shadow:
+          0 1px 2px rgba(0, 0, 0, 0.35),
+          0 2px 8px rgba(0, 0, 0, 0.25);
+        padding: 10px 12px;
+      }
+      .node .t {
+        font-weight: 700;
+        font-size: 13.5px;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .node .t .who {
+        font-weight: 600;
+        color: var(--muted);
+        font-size: 11.5px;
+      }
+      .node .d {
+        color: var(--desc);
+        font-size: 12px;
+        margin-top: 5px;
+      }
+      .node::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 5px;
+        border-radius: 10px 0 0 10px;
+      }
+      .node.echo::before {
+        background: var(--echo);
+      }
+      .node.synthia::before {
+        background: var(--synthia);
+      }
+      .node.carren::before {
+        background: var(--carren);
+      }
+      .node.vera::before {
+        background: var(--vera);
+      }
+      .node.start::before {
+        background: var(--start);
+      }
+      .node.host::before {
+        background: var(--host);
+      }
+      .node.piper::before {
+        background: var(--piper);
+      }
+      .node.skribble::before {
+        background: var(--skribble);
+      }
+      .node.gate {
+        background: #211d10;
+        border-color: #4d3f1a;
+      }
+      .node.gate::before {
+        background: var(--gate);
+      }
+      .node.done {
+        background: #0f2417;
+        border-color: #1f5136;
+      }
+      .node.done::before {
+        background: var(--done);
+      }
+      .node.err {
+        background: #2a1517;
+        border-color: #5c2a2a;
+      }
+      .node.err::before {
+        background: var(--error);
+      }
+      .node .badge {
+        margin-left: auto;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #0d1117;
+        padding: 2px 6px;
+        border-radius: 999px;
+      }
+      .badge.hitl {
+        background: var(--gate);
+      }
+      .badge.term {
+        background: #5b6675;
+        color: #e6edf3;
+      }
+      .badge.bnd {
+        background: var(--loop);
+      }
+      .lbl {
+        position: absolute;
+        transform: translate(-50%, -50%);
+        background: var(--panel2);
+        border: 1px solid #313c4a;
+        color: #c9d3df;
+        font-size: 11px;
+        padding: 1px 6px;
+        border-radius: 999px;
+        white-space: nowrap;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+      }
+      .foot {
+        margin: 0 28px 48px;
+        font-size: 12.5px;
+        color: #c3cdd9;
+        max-width: 1120px;
+      }
+      .foot h3 {
+        font-size: 13px;
+        margin: 18px 0 6px;
+        color: #e6edf3;
+      }
+      .foot ul {
+        margin: 6px 0;
+        padding-left: 18px;
+      }
+      .foot li {
+        margin: 3px 0;
+      }
+      .foot b {
+        color: #e6edf3;
+      }
+      code {
+        background: #22293a;
+        color: #cdd6e3;
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>knowledge-base skill — execution flows</h1>
+      <div class="sub">
+        Mirrors
+        <code>apps/orchestration/src/playbooks/knowledge-base.ts</code>
+        (<code>KnowledgeBasePlaybook</code>, exported as <code>KB_FLOW</code>). Engine-driven
+        ingest/save/promote plus query grounding: all private inputs arrive through host-closed
+        readers; publication remains behind authenticated host authority. Promotion apply is a
+        signed internal continuation, never a public action. Drift-guarded by
+        <code>apps/orchestration/tests/flow-diagrams.test.ts</code> against the exported descriptor
+        — the <code>N</code>/<code>E</code> data below is the machine-readable half of this diagram.
+      </div>
+    </header>
 
-<div class="callout">
-  <b>The gate is the only write authority:</b> publication happens ONLY after the host approves the sealed candidate set (<code>penny-kb-gate approve</code> → engine gate response). Denial is an <b>honest incomplete terminal</b> (met = false), not an error. A <code>met: true</code> terminal is reachable <b>only from <code>publishing</code></b> — pinned by the contract's <code>completion_gate</code>. Approval, denial, and refinement are never model-visible actions.
-</div>
+    <div class="callout">
+      <b>Authority transitions stay host-only:</b> ingest/save publish only after authenticated
+      content review. Promotion applies only after approval-DB-first packet custody, a strict-JCS
+      HMAC-signed single-use receipt, all-target reservation, and journaled postimage verification.
+      Grounded queries publish nothing: default-true requests run <b>Synthia → Vera</b>.
+    </div>
 
-<div class="legend">
-  <div class="grp">
-    <span class="chip"><span class="dot" style="background:var(--echo)"></span>echo · ingest (claims)</span>
-    <span class="chip"><span class="dot" style="background:var(--synthia)"></span>synthia · compose (page draft)</span>
-    <span class="chip"><span class="dot" style="background:var(--carren)"></span>carren · lint (semantic report)</span>
-    <span class="chip"><span class="dot" style="background:var(--vera)"></span>vera · verify (grounding)</span>
-    <span class="chip"><span class="dot" style="background:var(--host)"></span>host · publishing</span>
-  </div>
-  <div class="grp">
-    <span class="chip"><span class="dot" style="background:var(--done)"></span>complete (met)</span>
-    <span class="chip"><span class="dot" style="background:var(--error)"></span>incomplete (met = false)</span>
-    <span class="chip"><span class="aline" style="border-color:var(--fwd)"></span>forward</span>
-    <span class="chip"><span class="aline" style="border-color:var(--gatec)"></span>gate decision (host)</span>
-    <span class="chip"><span class="aline" style="border-color:var(--loop)"></span>bounded repair</span>
-    <span class="chip"><span class="aline" style="border-color:var(--abort)"></span>deny (host)</span>
-  </div>
-</div>
+    <div class="legend">
+      <div class="grp">
+        <span class="chip"
+          ><span class="dot" style="background: var(--echo)"></span>echo · ingest (claims)</span
+        >
+        <span class="chip"
+          ><span class="dot" style="background: var(--synthia)"></span>synthia · compose / query
+          synthesis</span
+        >
+        <span class="chip"
+          ><span class="dot" style="background: var(--carren)"></span>carren · lint (semantic
+          report)</span
+        >
+        <span class="chip"
+          ><span class="dot" style="background: var(--vera)"></span>vera · claim / citation
+          grounding</span
+        >
+        <span class="chip"
+          ><span class="dot" style="background: var(--host)"></span>host · publishing</span
+        >
+      </div>
+      <div class="grp">
+        <span class="chip"
+          ><span class="dot" style="background: var(--done)"></span>complete (met)</span
+        >
+        <span class="chip"
+          ><span class="dot" style="background: var(--error)"></span>incomplete (met = false)</span
+        >
+        <span class="chip"
+          ><span class="aline" style="border-color: var(--fwd)"></span>forward</span
+        >
+        <span class="chip"
+          ><span class="aline" style="border-color: var(--gatec)"></span>gate decision (host)</span
+        >
+        <span class="chip"
+          ><span class="aline" style="border-color: var(--loop)"></span>bounded repair</span
+        >
+        <span class="chip"
+          ><span class="aline" style="border-color: var(--abort)"></span>deny (host)</span
+        >
+      </div>
+    </div>
 
-<div id="wrap">
-  <svg id="edges"><defs>
-    <marker id="ah" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L8,3 L0,6 Z" fill="context-stroke"></path>
-    </marker>
-  </defs></svg>
-</div>
+    <div id="wrap">
+      <svg id="edges">
+        <defs>
+          <marker
+            id="ah"
+            markerWidth="10"
+            markerHeight="10"
+            refX="8"
+            refY="3"
+            orient="auto"
+            markerUnits="strokeWidth"
+          >
+            <path d="M0,0 L8,3 L0,6 Z" fill="context-stroke"></path>
+          </marker>
+        </defs>
+      </svg>
+    </div>
 
-<div class="foot">
-  <h3>Bounded repairs &amp; honest exhaustion</h3>
-  <ul>
-    <li>Repairs fire on the <b>result</b>, never on a label: <b>lint → compose</b> on an error-severity finding (<code>synthesis_gap</code>), <b>verify → compose</b> on an unsupported claim (<code>validation_gap</code>), and any agent phase <b>→ itself</b> on an incomplete result (<code>malformed_result</code>). Each is bounded by the run's iteration budget.</li>
-    <li><b>Budget spent → no fake pass.</b> The finding is carried forward as <b>unresolved</b> and the machine proceeds on the forward path; the gate still sees an honest candidate set.</li>
-    <li><b>refine</b> (host, at the gate) re-enters at <b>compose</b> — the candidate must change where it can change, and is re-linted and re-verified before the gate is offered again.</li>
-  </ul>
-  <h3>Authority &amp; privacy seams</h3>
-  <ul>
-    <li><b>Uniform seam (arrows omitted for legibility):</b> operator cancellation from any non-terminal state ends the run at the <code>cancelled</code> terminal (met = false). Same documented-omission convention as the research diagram's abort seam.</li>
-    <li><b>initialize</b> (engine, before <code>ingest</code>): claims the source capabilities and admits the source objects — all-or-none, so the approval path publishes exactly what the agents saw. A drifted source refuses here, before any agent read.</li>
-    <li><b>Child sessions read only through host-closed readers</b> (phase brief, admitted source snapshot, allowed prior-phase output) and submit exactly one typed result; a path, root, or approval decision never reaches a child, and no private body returns to the parent.</li>
-  </ul>
-</div>
+    <div class="foot">
+      <h3>Bounded repairs &amp; honest exhaustion</h3>
+      <ul>
+        <li>
+          Repairs fire on the <b>result</b>, never on a label: ingest/save <b>lint → compose</b> on
+          a blocking-severity finding (<code>synthesis_gap</code>), ingest/save
+          <b>verify → compose</b> on an unsupported claim (<code>validation_gap</code>), and any
+          agent phase <b>→ itself</b> on an incomplete result (<code>malformed_result</code>). A
+          failed query report completes honestly as unmet and creates no claim.
+        </li>
+        <li>
+          <b>Budget spent → no fake pass.</b> The finding is carried forward as
+          <b>unresolved</b> and the machine proceeds on the forward path; the gate still sees an
+          honest candidate set.
+        </li>
+        <li>
+          <b>refine</b> (host, at the gate) re-enters at <b>compose</b> for content review or
+          <b>plan</b> for promotion; each route creates a fresh packet/challenge while retaining
+          only its exact eligible claims.
+        </li>
+      </ul>
+      <h3>Authority &amp; privacy seams</h3>
+      <ul>
+        <li>
+          <b>Uniform seam (arrows omitted for legibility):</b> operator cancellation from any
+          non-terminal state ends the run at the <code>cancelled</code> terminal (met = false). Same
+          documented-omission convention as the research diagram's abort seam.
+        </li>
+        <li>
+          <b>initialize</b> (engine, before <code>ingest</code>): claims the source capabilities and
+          admits the source objects — all-or-none, so the approval path publishes exactly what the
+          agents saw. A drifted source refuses here, before any agent read.
+        </li>
+        <li>
+          <b>Child sessions read only through host-closed readers.</b> Query phases add a
+          no-argument private-request reader, request-closed selected-generation search,
+          candidate-page reader, candidate-evidence source reader, and exact prior output. The
+          request and bodies never enter control state or an opening prompt.
+        </li>
+      </ul>
+    </div>
 
-<script>
-const COLS = { Louter:30, C:430, Rmid:800 };
-const W = { C:300, side:245 };
-// Machine-readable state/edge data — drift-guarded by apps/orchestration/tests/flow-diagrams.test.ts
-// against the exported KB_FLOW descriptor in playbooks/knowledge-base.ts.
-// "start" is a virtual entry point (the engine's initialize), not a machine state.
-const N = {
-  "start":{"col":"Louter","y":40,"cls":"start","title":"start","desc":"Virtual entry point. Engine initialize. For ingest: claim source capabilities + admit source objects (host I/O, all-or-none) before the first agent read. For save: CAS the named query run's answer claim available→claimed before any side effect. Both follow §5.3 admission (policy + active parent identity, before any private read or child session)."},
-  "ingest":{"col":"C","y":120,"cls":"echo","title":"ingest","who":"echo","desc":"Extract materially distinct claims from the admitted source snapshots (host-closed readers). Submit one typed `claims` artifact naming every source read."},
-  "compose":{"col":"C","y":280,"cls":"synthia","title":"compose","who":"synthia","desc":"Compose the page revision pair (frontmatter + markdown + claims sidecar) over the claims. Submit one typed `page_draft` artifact."},
-  "lint":{"col":"C","y":440,"cls":"carren","title":"lint","who":"carren","desc":"Semantic lint of the candidate page: structure, coherence, candidate conflicts. Submit a `lint_report`; error-severity findings route back to compose (bounded)."},
-  "verify":{"col":"C","y":600,"cls":"vera","title":"verify","who":"vera","desc":"Grounding check — every claim supported by its cited, admitted evidence. Submit a `verification_report`; unsupported claims route back to compose (bounded)."},
-  "plan":{"col":"Rmid","y":200,"cls":"piper","title":"plan","who":"piper","desc":"PREPARE ONLY. Plan the canonical transition for the named page revisions against the claimed canonical-target capabilities. Submit one typed `promotion_plan`. Cannot apply, sign, or mutate anything."},
-  "patch":{"col":"Rmid","y":380,"cls":"skribble","title":"patch","who":"skribble","desc":"PREPARE ONLY. Scope the exact promotion patch from the plan. Submit one typed `promotion_patch`. The host independently verifies targets and captures current preimages before the gate; apply is host-only at G9."},
-  "awaiting_review":{"col":"C","y":780,"cls":"gate","title":"awaiting_review","badge":"HITL","desc":"Human content-review gate (await_user). The sealed candidate set is frozen BEFORE the gate is offered; its payload digest binds the exact candidate set. Decisions are host-authenticated only.","decisions":["approve","deny","refine"],"host_only":true},
-  "publishing":{"col":"C","y":940,"cls":"host","title":"publishing","desc":"Host I/O behind the approval: publish the generation (atomic selector swap = commit point) and consume the capability leases. The only route to a met terminal."},
-  "complete":{"col":"C","y":1080,"cls":"done","title":"complete","badge":"TERM","desc":"Terminal, met = true. Reachable ONLY from publishing (completion gate). Carries the published generation id + counts."},
-  "incomplete":{"col":"Louter","y":780,"cls":"err","title":"incomplete","badge":"TERM","desc":"Terminal, met = false. Denial is an honest negative terminal, not an error. Nothing is published; leases are invalidated."}
-};
-const E = [
-  {"from":"start","to":"ingest","s1":"bottom","s2":"left","kind":"fwd","label":"initialize — claim + admit (host)"},
-  {"from":"start","to":"compose","s1":"bottom","s2":"left","a2frac":0.3,"kind":"fwd","label":"initialize save — claim query answer (host)","bow":-60},
-  {"from":"start","to":"plan","s1":"right","s2":"top","kind":"fwd","label":"initialize promote — claim targets (host)"},
-  {"from":"plan","to":"patch","s1":"bottom","s2":"top","kind":"fwd","label":"promotion_plan (complete)"},
-  {"from":"patch","to":"awaiting_review","s1":"bottom","s2":"right","kind":"fwd","label":"promotion_patch — host verify + gate"},
-  {"from":"plan","to":"plan","s1":"right","s2":"right","kind":"loop","label":"malformed_result (bounded)","bow":110},
-  {"from":"patch","to":"patch","s1":"right","s2":"right","kind":"loop","label":"malformed_result (bounded)","bow":110},
-  {"from":"ingest","to":"compose","s1":"bottom","s2":"top","kind":"fwd","label":"claims (complete)"},
-  {"from":"compose","to":"lint","s1":"bottom","s2":"top","kind":"fwd","label":"page_draft (complete)"},
-  {"from":"lint","to":"verify","s1":"bottom","s2":"top","kind":"fwd","label":"lint_report (no error findings)"},
-  {"from":"verify","to":"awaiting_review","s1":"bottom","s2":"top","kind":"fwd","label":"verification_report — seal + gate"},
-  {"from":"awaiting_review","to":"publishing","s1":"bottom","s2":"top","kind":"gate","label":"approve — host only"},
-  {"from":"awaiting_review","to":"incomplete","s1":"left","s2":"right","kind":"abort","label":"deny — host only"},
-  {"from":"awaiting_review","to":"compose","s1":"right","s2":"right","a2frac":0.7,"kind":"loop","label":"refine (host, bounded)","bow":-170},
-  {"from":"publishing","to":"complete","s1":"bottom","s2":"top","kind":"exit","label":"publish generation"},
-  {"from":"lint","to":"compose","s1":"right","s2":"right","a2frac":0.55,"kind":"loop","label":"error findings — synthesis_gap","bow":-120},
-  {"from":"verify","to":"compose","s1":"right","s2":"right","a2frac":0.4,"kind":"loop","label":"unsupported claims — validation_gap","bow":-70},
-  {"from":"ingest","to":"ingest","s1":"left","s2":"left","kind":"loop","label":"incomplete result — malformed_result","bow":90},
-  {"from":"compose","to":"compose","s1":"left","s2":"left","kind":"loop","label":"incomplete result — malformed_result","bow":90},
-  {"from":"lint","to":"lint","s1":"left","s2":"left","kind":"loop","label":"incomplete result — malformed_result","bow":90},
-  {"from":"verify","to":"verify","s1":"left","s2":"left","kind":"loop","label":"incomplete result — malformed_result","bow":90}
-];
-const KIND = {fwd:'#8b98a9',exit:'#3fb950',loop:'#e3a52e',gate:'#e3b341',abort:'#f85149'};
+    <script>
+      const COLS = { Louter: 30, C: 430, Rmid: 800 };
+      const W = { C: 300, side: 245 };
+      // Machine-readable state/edge data — drift-guarded by apps/orchestration/tests/flow-diagrams.test.ts
+      // against the exported KB_FLOW descriptor in playbooks/knowledge-base.ts.
+      // "start" is a virtual entry point (the engine's initialize), not a machine state.
+      // prettier-ignore
+      const N = {"start":{"col":"Louter","y":40,"cls":"start","title":"start","desc":"Virtual engine initialize. Ingest claims and admits sources; save claims a verified query answer; promote claims targets; query reads its private request only through host custody, binds one selected generation, then chooses grounded agents or deterministic unverified retrieval."},"ingest":{"col":"C","y":120,"cls":"echo","title":"ingest","who":"echo","desc":"Extract materially distinct claims from admitted source snapshots. Submit one typed `claims` artifact."},"compose":{"col":"C","y":280,"cls":"synthia","title":"compose","who":"synthia","desc":"Compose the page revision pair over extracted claims or a claimed verified query answer. Submit one typed `page_draft` artifact."},"query":{"col":"Louter","y":400,"cls":"synthia","title":"query","who":"synthia","desc":"Default-true query synthesis. Read the private request, deterministic candidate search, selected pages, and candidate evidence only through host-closed readers. Submit one cited `query_answer`."},"lint":{"col":"C","y":440,"cls":"carren","title":"lint","who":"carren","desc":"Semantic lint of a candidate page. Blocking-severity findings route back to compose within the bounded repair budget."},"verify":{"col":"C","y":600,"cls":"vera","title":"verify","who":"vera","desc":"Ingest/save: verify every page claim. Query: independently verify every answer citation against the bound candidates and evidence. A query passes only when the host validates the exact supported finding set."},"plan":{"col":"Rmid","y":200,"cls":"piper","title":"plan","who":"piper","desc":"PREPARE ONLY. Plan the canonical transition for named page revisions and claimed targets. Cannot apply, sign, or mutate anything."},"patch":{"col":"Rmid","y":380,"cls":"skribble","title":"patch","who":"skribble","desc":"PREPARE ONLY. Scope the exact promotion patch. The host independently verifies targets and captures preimages; public apply remains unavailable."},"awaiting_review":{"col":"C","y":780,"cls":"gate","title":"awaiting_review","badge":"HITL","desc":"Authenticated host gate. Ingest/save use control-DB content review; promotion uses approval-DB-first packet custody and a signed internal apply continuation. Public respond/resume cannot decide.","decisions":["approve","deny","refine"],"host_only":true},"publishing":{"col":"C","y":940,"cls":"host","title":"publishing","desc":"Host publication after approval: atomic selector swap and capability settlement. Query never enters this state."},"complete":{"col":"C","y":1080,"cls":"done","title":"complete","badge":"TERM","desc":"Terminal, met = true. Publication arrives from publishing; a grounded query arrives from Vera only after supported citations, a passing report, and save-claim creation. The deterministic unverified host path has no downstream authority."},"incomplete":{"col":"Louter","y":900,"cls":"err","title":"incomplete","badge":"TERM","desc":"Terminal, met = false. Covers denial, refusal/empty retrieval, failed query verification, or unavailable claim authority. No publication occurs."}};
+      // prettier-ignore
+      const E = [{"from":"start","to":"ingest","s1":"bottom","s2":"left","kind":"fwd","label":"initialize — claim + admit (host)"},{"from":"start","to":"query","s1":"bottom","s2":"left","kind":"fwd","label":"verify true — bind candidates"},{"from":"start","to":"complete","s1":"right","s2":"left","kind":"exit","label":"verify false — deterministic, unverified","bow":-60},{"from":"start","to":"incomplete","s1":"left","s2":"left","kind":"abort","label":"refused or empty query","bow":40},{"from":"start","to":"compose","s1":"bottom","s2":"left","a2frac":0.3,"kind":"fwd","label":"initialize save — claim query answer (host)","bow":-60},{"from":"start","to":"plan","s1":"right","s2":"top","kind":"fwd","label":"initialize promote — claim targets (host)"},{"from":"ingest","to":"compose","s1":"bottom","s2":"top","kind":"fwd","label":"claims (complete)"},{"from":"compose","to":"lint","s1":"bottom","s2":"top","kind":"fwd","label":"page_draft (complete)"},{"from":"query","to":"verify","s1":"right","s2":"left","kind":"fwd","label":"query_answer (complete)"},{"from":"lint","to":"verify","s1":"bottom","s2":"top","kind":"fwd","label":"lint_report (no errors)"},{"from":"verify","to":"awaiting_review","s1":"bottom","s2":"top","kind":"fwd","label":"page verification — seal + gate"},{"from":"plan","to":"patch","s1":"bottom","s2":"top","kind":"fwd","label":"promotion_plan (complete)"},{"from":"patch","to":"awaiting_review","s1":"bottom","s2":"right","kind":"fwd","label":"promotion_patch — host verify + gate"},{"from":"awaiting_review","to":"publishing","s1":"bottom","s2":"top","kind":"gate","label":"content-review approve — host only"},{"from":"awaiting_review","to":"complete","s1":"right","s2":"right","kind":"exit","label":"signed apply verified — internal only","bow":-90},{"from":"awaiting_review","to":"incomplete","s1":"left","s2":"right","kind":"abort","label":"deny — host only"},{"from":"awaiting_review","to":"compose","s1":"right","s2":"right","a2frac":0.7,"kind":"loop","label":"content refine (bounded)","bow":-170},{"from":"awaiting_review","to":"plan","s1":"right","s2":"right","kind":"loop","label":"promotion refine (bounded)","bow":-130},{"from":"publishing","to":"complete","s1":"bottom","s2":"top","kind":"exit","label":"publish generation"},{"from":"verify","to":"complete","s1":"right","s2":"left","kind":"exit","label":"query report passes + claim created","bow":70},{"from":"verify","to":"incomplete","s1":"left","s2":"right","kind":"abort","label":"query report/claim fails","bow":45},{"from":"lint","to":"compose","s1":"right","s2":"right","a2frac":0.55,"kind":"loop","label":"error findings — synthesis_gap","bow":-120},{"from":"verify","to":"compose","s1":"right","s2":"right","a2frac":0.4,"kind":"loop","label":"unsupported page claims — validation_gap","bow":-70},{"from":"ingest","to":"ingest","s1":"left","s2":"left","kind":"loop","label":"incomplete result — malformed_result","bow":90},{"from":"compose","to":"compose","s1":"left","s2":"left","kind":"loop","label":"incomplete result — malformed_result","bow":90},{"from":"query","to":"query","s1":"left","s2":"left","kind":"loop","label":"incomplete result — malformed_result","bow":90},{"from":"lint","to":"lint","s1":"left","s2":"left","kind":"loop","label":"incomplete result — malformed_result","bow":90},{"from":"verify","to":"verify","s1":"left","s2":"left","kind":"loop","label":"incomplete result — malformed_result","bow":90},{"from":"plan","to":"plan","s1":"right","s2":"right","kind":"loop","label":"malformed_result (bounded)","bow":110},{"from":"patch","to":"patch","s1":"right","s2":"right","kind":"loop","label":"malformed_result (bounded)","bow":110}];
+      const KIND = {
+        fwd: "#8b98a9",
+        exit: "#3fb950",
+        loop: "#e3a52e",
+        gate: "#e3b341",
+        abort: "#f85149",
+      };
 
-const wrap=document.getElementById('wrap'), svg=document.getElementById('edges');
-for(const id in N){const n=N[id];const w=(n.col==='C')?W.C:W.side;
-  const el=document.createElement('div');el.className='node '+n.cls;el.id='n_'+id;
-  el.style.left=COLS[n.col]+'px';el.style.top=n.y+'px';el.style.width=w+'px';
-  const who=n.who?`<span class="who">· ${n.who}</span>`:'';
-  const bc=n.badge==='TERM'?'term':(n.badge==='HITL'?'hitl':'bnd');
-  const badge=n.badge?`<span class="badge ${bc}">${n.badge}</span>`:'';
-  el.innerHTML=`<div class="t">${n.title}${who}${badge}</div><div class="d">${n.desc}</div>`;
-  wrap.appendChild(el);}
-const base=wrap.getBoundingClientRect();
-function rect(id){const r=document.getElementById('n_'+id).getBoundingClientRect();
-  return{left:r.left-base.left,top:r.top-base.top,width:r.width,height:r.height};}
-function anchor(r,side,frac){const f=(frac==null?0.5:frac);switch(side){
-  case'top':return{x:r.left+r.width*f,y:r.top};
-  case'bottom':return{x:r.left+r.width*f,y:r.top+r.height};
-  case'left':return{x:r.left,y:r.top+r.height*f};
-  case'right':return{x:r.left+r.width,y:r.top+r.height*f};}}
-function ctrl(p,side,bow){const k=64,b=bow||0;switch(side){
-  case'top':return{x:p.x+b,y:p.y-k};
-  case'bottom':return{x:p.x+b,y:p.y+k};
-  case'left':return{x:p.x-k-Math.abs(b),y:p.y};
-  case'right':return{x:p.x+k+Math.abs(b),y:p.y};}}
-const SVGNS='http://www.w3.org/2000/svg';
-for(const e of E){
-  const ra=rect(e.from),rb=rect(e.to);
-  const p1=anchor(ra,e.s1,e.a1frac),p2=anchor(rb,e.s2,e.a2frac);
-  const c1=ctrl(p1,e.s1,e.bow);
-  const c2=ctrl(p2,e.s2,e.kind==='exit'?-(e.bow||0):e.bow);
-  const path=document.createElementNS(SVGNS,'path');
-  path.setAttribute('d',`M ${p1.x} ${p1.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${p2.x} ${p2.y}`);
-  path.setAttribute('fill','none');path.setAttribute('stroke',KIND[e.kind]);
-  path.setAttribute('stroke-width','2');path.setAttribute('marker-end','url(#ah)');
-  if(e.kind==='loop')path.setAttribute('stroke-dasharray','5 4');
-  svg.appendChild(path);
-  if(e.label){const t=0.5,mt=1-t;
-    const x=mt*mt*mt*p1.x+3*mt*mt*t*c1.x+3*mt*t*t*c2.x+t*t*t*p2.x;
-    const y=mt*mt*mt*p1.y+3*mt*mt*t*c1.y+3*mt*t*t*c2.y+t*t*t*p2.y;
-    const l=document.createElement('div');l.className='lbl';l.textContent=e.label;
-    l.style.left=x+'px';l.style.top=y+'px';wrap.appendChild(l);}
-}
-</script>
-</body>
+      const wrap = document.getElementById("wrap"),
+        svg = document.getElementById("edges");
+      for (const id in N) {
+        const n = N[id];
+        const w = n.col === "C" ? W.C : W.side;
+        const el = document.createElement("div");
+        el.className = "node " + n.cls;
+        el.id = "n_" + id;
+        el.style.left = COLS[n.col] + "px";
+        el.style.top = n.y + "px";
+        el.style.width = w + "px";
+        const who = n.who ? `<span class="who">· ${n.who}</span>` : "";
+        const bc = n.badge === "TERM" ? "term" : n.badge === "HITL" ? "hitl" : "bnd";
+        const badge = n.badge ? `<span class="badge ${bc}">${n.badge}</span>` : "";
+        el.innerHTML = `<div class="t">${n.title}${who}${badge}</div><div class="d">${n.desc}</div>`;
+        wrap.appendChild(el);
+      }
+      const base = wrap.getBoundingClientRect();
+      function rect(id) {
+        const r = document.getElementById("n_" + id).getBoundingClientRect();
+        return {
+          left: r.left - base.left,
+          top: r.top - base.top,
+          width: r.width,
+          height: r.height,
+        };
+      }
+      function anchor(r, side, frac) {
+        const f = frac == null ? 0.5 : frac;
+        switch (side) {
+          case "top":
+            return { x: r.left + r.width * f, y: r.top };
+          case "bottom":
+            return { x: r.left + r.width * f, y: r.top + r.height };
+          case "left":
+            return { x: r.left, y: r.top + r.height * f };
+          case "right":
+            return { x: r.left + r.width, y: r.top + r.height * f };
+        }
+      }
+      function ctrl(p, side, bow) {
+        const k = 64,
+          b = bow || 0;
+        switch (side) {
+          case "top":
+            return { x: p.x + b, y: p.y - k };
+          case "bottom":
+            return { x: p.x + b, y: p.y + k };
+          case "left":
+            return { x: p.x - k - Math.abs(b), y: p.y };
+          case "right":
+            return { x: p.x + k + Math.abs(b), y: p.y };
+        }
+      }
+      const SVGNS = "http://www.w3.org/2000/svg";
+      for (const e of E) {
+        const ra = rect(e.from),
+          rb = rect(e.to);
+        const p1 = anchor(ra, e.s1, e.a1frac),
+          p2 = anchor(rb, e.s2, e.a2frac);
+        const c1 = ctrl(p1, e.s1, e.bow);
+        const c2 = ctrl(p2, e.s2, e.kind === "exit" ? -(e.bow || 0) : e.bow);
+        const path = document.createElementNS(SVGNS, "path");
+        path.setAttribute(
+          "d",
+          `M ${p1.x} ${p1.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${p2.x} ${p2.y}`
+        );
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke", KIND[e.kind]);
+        path.setAttribute("stroke-width", "2");
+        path.setAttribute("marker-end", "url(#ah)");
+        if (e.kind === "loop") path.setAttribute("stroke-dasharray", "5 4");
+        svg.appendChild(path);
+        if (e.label) {
+          const t = 0.5,
+            mt = 1 - t;
+          const x =
+            mt * mt * mt * p1.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * p2.x;
+          const y =
+            mt * mt * mt * p1.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * p2.y;
+          const l = document.createElement("div");
+          l.className = "lbl";
+          l.textContent = e.label;
+          l.style.left = x + "px";
+          l.style.top = y + "px";
+          wrap.appendChild(l);
+        }
+      }
+    </script>
+  </body>
 </html>

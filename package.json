@@ -39,6 +39,7 @@
     "test:orchestration": "(cd apps/orchestration && bun run test)",
     "test:orchestration:integration": "(cd apps/orchestration && bun run test:integration)",
     "test:orchestration:parity": "(cd apps/orchestration && bun run test:parity)",
+    "test:kb-model-smoke": "(cd apps/orchestration && bun run test:kb-model-smoke)",
     "test": "bun run test:unit",
     "test:unit": "set -e; for dir in .pi/extensions/*/; do (cd \"$dir\" && bun run test:unit); done; (cd apps/orchestration && bun run test:unit); (cd apps/platform-memory && bun run test:unit)",
     "test:integration": "set -e; for dir in .pi/extensions/*/; do if grep -q '\"test:integration\"' \"$dir/package.json\"; then (cd \"$dir\" && bun run test:integration); fi; done; (cd apps/platform-memory && bun run test:integration && bun run test:clean-machine)",

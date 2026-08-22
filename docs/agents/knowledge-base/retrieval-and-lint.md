@@ -24,9 +24,11 @@ that path-free handle and nothing else.
 
 A derived answer reaches the parent tool result **only** when all of the following hold: the host
 supplied an exact, unexpired, single-use delivery grant matching the session, invocation, action,
-profile, request digest, and byte bound; the parent model matches the policy allowlist; and policy
-explicitly permits a derived answer. Missing any condition returns a refusal — it never silently
-downgrades or returns partial content.
+profile, request digest, and byte bound; the parent model matches the policy allowlist; policy
+explicitly permits a derived answer; and the complete/met answer has supported citations plus a
+passing same-run Vera report. Missing any condition returns a refusal — it never silently
+downgrades or returns partial content. Explicit `verify_grounding:false` remains deterministic and
+visibly unverified, but it creates neither a save claim nor parent-delivery eligibility.
 
 Even an approved derived answer contains only the derived text, citations by opaque ID,
 authority and uncertainty, and a canonical-verification reminder. Raw source, page, claim, report,

@@ -21,11 +21,13 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   approveIngest,
+  createTestOnlyIngestBodyRunner,
   ingestKb,
   type IngestSource,
   type PendingIngest,
 } from "../src/kb/ingest.js";
 import { initKb } from "../src/kb/workflows.js";
+import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 import { readSelectedGeneration } from "../src/kb/generations.js";
 import { pageMarkdownPath } from "../src/kb/filesystem.js";
 
@@ -36,11 +38,13 @@ function tmpRoot(): string {
   return d;
 }
 afterEach(() => {
+  closeKbArtifactControls();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
 const SRC_A: IngestSource = {
   sourceId: "src_alpha",
+  capabilityDigest: "1".repeat(64),
   title: "Alpha notes",
   authors: ["Ada"],
   content:
@@ -52,12 +56,18 @@ const SRC_A: IngestSource = {
 const SRC_B: IngestSource = {
   ...SRC_A,
   sourceId: "src_beta",
+  capabilityDigest: "2".repeat(64),
   title: "Beta notes",
   content: "Replay was fixed by a monotonic sequence number carried in every acknowledgement.",
 };
 
 function ctx(root: string, runId: string) {
-  return { kbRoot: root, profileId: "kbp_test", runId };
+  return {
+    kbRoot: root,
+    profileId: "kbp_test",
+    runId,
+    checkpointer: kbArtifactControl({ root, runId, profileId: "kbp_test" }),
+  };
 }
 
 function draft(pageId: string, revisionId: string, title: string, body: string): string {
@@ -103,6 +113,7 @@ const PHASE_BODIES = (composeBody: string): Record<string, string> => ({
   verify: JSON.stringify({
     schema_version: 1,
     artifact_kind: "verification_report",
+    verified_artifact_ids: [],
     claim_findings: [],
   }),
 });
@@ -114,23 +125,34 @@ async function publish(
   composeBody: string,
   sources: IngestSource[] = [SRC_A, SRC_B]
 ) {
+  // Host source IDs are immutable publication identities, not reusable names.
+  // A later ingest of equivalent evidence receives fresh IDs; raw object bytes
+  // still deduplicate by digest.
+  const admittedSources =
+    runId === "run_one"
+      ? sources
+      : sources.map((source) => ({ ...source, sourceId: `${source.sourceId}_${runId}` }));
   const bodies = PHASE_BODIES(composeBody);
-  const gated = await ingestKb(ctx(root, runId), sources, async (inv) => {
-    const out = bodies[inv.stateId];
-    if (out === undefined) throw new Error(`no body for ${inv.stateId}`);
-    return out;
-  });
+  const gated = await ingestKb(
+    ctx(root, runId),
+    admittedSources,
+    createTestOnlyIngestBodyRunner(async (inv) => {
+      const out = bodies[inv.stateId];
+      if (out === undefined) throw new Error(`no body for ${inv.stateId}`);
+      return out;
+    })
+  );
   expect(gated.status).toBe("awaiting_user");
   const byKind = Object.fromEntries(gated.artifacts.map((a) => [a.artifact_kind, a.artifact_id]));
   const pending: PendingIngest = {
     runId,
-    sourceIds: sources.map((s) => s.sourceId),
+    sourceIds: admittedSources.map((s) => s.sourceId),
     claimsArtifactId: byKind.claims!,
     pageDraftArtifactId: byKind.page_draft!,
     lintReportArtifactId: byKind.lint_report!,
     verificationArtifactId: byKind.verification_report!,
   };
-  return approveIngest(ctx(root, runId), sources, pending);
+  return approveIngest(ctx(root, runId), admittedSources, pending);
 }
 
 describe("generations accumulate (the regression that motivated this suite)", () => {
@@ -170,11 +192,15 @@ describe("generations accumulate (the regression that motivated this suite)", ()
     // own rule, enforced upstream), so this exercises the publication path the
     // way `save` will drive it — straight into approveIngest with no sources.
     const bodies = PHASE_BODIES(draft("page_saved", "rev_1", "Saved", "from a query"));
-    const gated = await ingestKb(ctx(root, "run_save"), [SRC_A, SRC_B], async (inv) => {
-      const out = bodies[inv.stateId];
-      if (out === undefined) throw new Error(`no body for ${inv.stateId}`);
-      return out;
-    });
+    const gated = await ingestKb(
+      ctx(root, "run_save"),
+      [SRC_A, SRC_B],
+      createTestOnlyIngestBodyRunner(async (inv) => {
+        const out = bodies[inv.stateId];
+        if (out === undefined) throw new Error(`no body for ${inv.stateId}`);
+        return out;
+      })
+    );
     const byKind = Object.fromEntries(gated.artifacts.map((a) => [a.artifact_kind, a.artifact_id]));
     const saved = approveIngest(ctx(root, "run_save"), [], {
       runId: "run_save",

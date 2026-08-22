@@ -30,7 +30,7 @@ Two files are static host-owned configuration. A content transaction never rewri
 ├── conflicts/<conflict_record_id>.json            # immutable conflict event/record
 ├── work/<run_id>/                                 # same-root private staging/content plane
 │   ├── artifacts/<state_id>/<artifact_id>
-│   ├── transaction/
+│   ├── transaction/sources/<source_id>        # immutable pre-review source snapshot
 │   └── promotion/
 └── .kb/
     ├── policy.json                                # static exact processing policy
@@ -57,7 +57,8 @@ preserve their admitted bytes exactly.
 
 **Source record.** Opaque host-minted `source_id` (ULID or UUID), type, capture and publication
 time, title, authors, media type, the raw-byte `sha256`, an `object_ref` derived _exactly_ from
-that hash, and provenance including the capability digest and originating run.
+that hash, and provenance including the capability digest and originating run. The reference is the
+physical root-relative immutable key `sources/objects/<sha256>`; there is no sharded-path alias.
 
 Three values do distinct jobs and are never conflated:
 
@@ -85,6 +86,10 @@ supersession, and creation time. Conflicts are advisory events; they record that
 and sequence, profile, action, event, input digests, safe output references, generation IDs, policy
 digest, and safe metrics. Receipts live in a **separate host-owned audit plane** and are never
 generation-selected — audit history is not KB content.
+
+Page, revision, and stable claim IDs are host-minted, never child-selected. Before composition the
+control DB freezes the all-and-only identity pool and either a null new-page bound or one exact
+selected page/revision supersede bound; draft conversion cannot widen it.
 
 A changed page or claim creates a **new revision directory**. No `page.md`, `claims.json`, source
 object or record, conflict record, receipt, catalog, or index is ever overwritten in place.

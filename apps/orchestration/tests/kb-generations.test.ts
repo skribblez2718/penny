@@ -2,7 +2,7 @@
  * KB generations tests (G7, §5.10).
  */
 
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { chmodSync, linkSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -23,6 +23,7 @@ import {
   writeSourceRecord,
   writePageRevision,
   writeConflictRecord,
+  generationIndexPath,
   type GenerationCatalog,
 } from "../src/kb/filesystem.js";
 import {
@@ -171,6 +172,69 @@ describe("KB §5.10 generation publication", () => {
     const selected = readSelectedGeneration(root);
     expect(selected!.selector.generation_id).toBe(gen2.generation_id);
     expect(selected!.catalog.parent_generation_id).toBe(gen1.generation_id);
+  });
+
+  it("rejects a generation index with a non-0600 mode", () => {
+    const root = tmpRoot();
+    const { manifest, policy } = seedKb(root);
+    const genId = newGenerationId();
+    const indexSha256 = buildGenerationIndex(root, genId, "kb_001", []).index_sha256;
+    const catalog = buildCatalog({
+      generation_id: genId,
+      kb_id: "kb_001",
+      manifest,
+      policy,
+      pages: [],
+      source_records: [],
+      source_objects: [],
+      conflicts: [],
+      index_sha256: indexSha256,
+    });
+    publishGeneration(root, catalog);
+    chmodSync(generationIndexPath(root, genId), 0o400);
+    expect(() => readSelectedGeneration(root)).toThrow(GenerationError);
+  });
+
+  it("rejects a hard-linked generation index", () => {
+    const root = tmpRoot();
+    const { manifest, policy } = seedKb(root);
+    const genId = newGenerationId();
+    const indexSha256 = buildGenerationIndex(root, genId, "kb_001", []).index_sha256;
+    const catalog = buildCatalog({
+      generation_id: genId,
+      kb_id: "kb_001",
+      manifest,
+      policy,
+      pages: [],
+      source_records: [],
+      source_objects: [],
+      conflicts: [],
+      index_sha256: indexSha256,
+    });
+    publishGeneration(root, catalog);
+    linkSync(generationIndexPath(root, genId), path.join(root, "linked-index.sqlite"));
+    expect(() => readSelectedGeneration(root)).toThrow(GenerationError);
+  });
+
+  it("rejects generation index bytes that do not verify", () => {
+    const root = tmpRoot();
+    const { manifest, policy } = seedKb(root);
+    const genId = newGenerationId();
+    const indexSha256 = buildGenerationIndex(root, genId, "kb_001", []).index_sha256;
+    const catalog = buildCatalog({
+      generation_id: genId,
+      kb_id: "kb_001",
+      manifest,
+      policy,
+      pages: [],
+      source_records: [],
+      source_objects: [],
+      conflicts: [],
+      index_sha256: indexSha256,
+    });
+    publishGeneration(root, catalog);
+    writeFileSync(generationIndexPath(root, genId), "not a sqlite index", { mode: 0o600 });
+    expect(() => readSelectedGeneration(root)).toThrow();
   });
 
   it("the catalog digest in the selector matches the catalog", () => {

@@ -41,16 +41,26 @@ function installTestPolicy(kbRoot: string): void {
     allowed_child_models: [{ ...E2E_PARENT, locality: "local" }],
   });
 }
-import { findGateForRun, mintSourceCapability } from "../src/kb/gate.js";
+import { mintSourceCapability } from "../src/kb/gate.js";
+import {
+  ContentReviewService,
+  authenticateLocalContentReviewer,
+} from "../src/kb/content-review.js";
 import { readSelectedGeneration } from "../src/kb/generations.js";
 import { CapabilityStore } from "../src/kb/capabilities.js";
 import { KbWorkerClient } from "../src/kb/kb-worker-client.js";
 import { Checkpointer } from "../src/checkpointer.js";
+import { RunContext } from "../src/context.js";
+import { admitOperationStart } from "../src/kb/operation-starts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { OrchestrationEngine } from "../src/engine.js";
 import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
-import type { KbPhaseInvocation } from "../src/kb/session-tools.js";
+import {
+  createTestOnlyArtifactBodyRunner,
+  type KbPhaseInvocation,
+} from "../src/kb/session-tools.js";
 import type { Directive } from "../src/contracts.js";
+import { kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 
 const PROFILE = "kbp_e2e";
@@ -67,7 +77,7 @@ afterEach(() => {
 });
 
 /** Two admitted sources, minted under the profile (same path the CLI uses). */
-function seedSources(kbRoot: string): string[] {
+function seedSources(projectRoot: string): string[] {
   const srcDir = tmpRoot("penny-kb-e2e-src");
   writeFileSync(
     path.join(srcDir, "source-a.md"),
@@ -80,8 +90,10 @@ function seedSources(kbRoot: string): string[] {
     { mode: 0o600 }
   );
   const capA = mintSourceCapability({
-    kbRoot,
+    projectRoot,
     kbProfileId: PROFILE,
+    sessionId: SESSION,
+    allowedOperation: "ingest",
     absolutePath: path.join(srcDir, "source-a.md"),
     title: "Quorum note",
     authors: ["Ada Lovelace"],
@@ -89,8 +101,10 @@ function seedSources(kbRoot: string): string[] {
     mediaType: "text/markdown",
   });
   const capB = mintSourceCapability({
-    kbRoot,
+    projectRoot,
     kbProfileId: PROFILE,
+    sessionId: SESSION,
+    allowedOperation: "ingest",
     absolutePath: path.join(srcDir, "source-b.md"),
     title: "Sealing note",
     authors: ["Grace Hopper"],
@@ -109,24 +123,18 @@ function fakeBodies(capIds: readonly string[]): Record<string, string> {
     source_ids: [...capIds],
     claims: [
       {
-        claim_id: "clm_e2e_1",
+        provisional_id: "candidate_e2e_1",
         text: "Two of three acknowledgements satisfy quorum when the chair abstains.",
         kind: "fact",
-        state: "supported",
         confidence: "PROBABLE",
-        evidence: [{ source_id: capA }],
-        contradicts_claim_ids: [],
-        canonical_verification_refs: [],
+        evidence: [{ source_id: capA, locator: "line 1" }],
       },
       {
-        claim_id: "clm_e2e_2",
+        provisional_id: "candidate_e2e_2",
         text: "A sealed candidate set is the smallest unit of publication review.",
         kind: "fact",
-        state: "supported",
         confidence: "PROBABLE",
-        evidence: [{ source_id: capB }],
-        contradicts_claim_ids: [],
-        canonical_verification_refs: [],
+        evidence: [{ source_id: capB, locator: "line 1" }],
       },
     ],
   });
@@ -164,6 +172,8 @@ function fakeBodies(capIds: readonly string[]): Record<string, string> {
               state: "supported",
               confidence: "PROBABLE",
               evidence: [{ source_id: capA, locator: "line 1" }],
+              contradicts_claim_ids: [],
+              canonical_verification_refs: [],
             },
             {
               claim_id: "clm_e2e_2",
@@ -172,6 +182,8 @@ function fakeBodies(capIds: readonly string[]): Record<string, string> {
               state: "supported",
               confidence: "PROBABLE",
               evidence: [{ source_id: capB, locator: "line 1" }],
+              contradicts_claim_ids: [],
+              canonical_verification_refs: [],
             },
           ],
         },
@@ -190,14 +202,18 @@ function fakeBodies(capIds: readonly string[]): Record<string, string> {
     verified_artifact_ids: [],
     claim_findings: [
       {
-        claim_ref: { page_id: "page_e2e", revision_id: "rev_e2e", claim_id: "clm_e2e_1" },
+        page_id: "page_e2e",
+        revision_id: "rev_e2e",
+        claim_id: "clm_e2e_1",
         verdict: "supported",
-        notes: "cited to the admitted quorum note",
+        evidence: [{ evidence_id: "evidence_e2e_quorum", kind: "source", ref: capA }],
       },
       {
-        claim_ref: { page_id: "page_e2e", revision_id: "rev_e2e", claim_id: "clm_e2e_2" },
+        page_id: "page_e2e",
+        revision_id: "rev_e2e",
+        claim_id: "clm_e2e_2",
         verdict: "supported",
-        notes: "cited to the admitted sealing note",
+        evidence: [{ evidence_id: "evidence_e2e_sealing", kind: "source", ref: capB }],
       },
     ],
   });
@@ -235,17 +251,67 @@ function buildStack(
     artifactRevisions: artifacts,
     playbookName: "knowledge-base",
   });
+  let composeAllocation:
+    | {
+        page_id: string;
+        revision_id: string;
+        lifecycle: "draft";
+        claim_allocations: Array<{ claim_id: string }>;
+        supersedes: null | { revision_id: string };
+      }
+    | undefined;
   const worker = new KbWorkerClient({
     projectRoot,
+    checkpointer,
     kbRoot,
     runId,
+    sessionId: SESSION,
     profileId: PROFILE,
+    operation: "ingest",
     sourceCapabilityIds: capIds,
-    agentRunner: (async (inv: KbPhaseInvocation) => {
-      const body = bodies[inv.stateId];
+    testOnlyAgentRunner: createTestOnlyArtifactBodyRunner(async (inv: KbPhaseInvocation) => {
+      const body = fakeBodies(inv.sourceAllowlist)[inv.stateId];
       if (body === undefined) throw new Error(`e2e: no body for ${inv.stateId}`);
+      if (inv.stateId === "compose") {
+        const brief = JSON.parse(inv.readPhaseBrief?.() ?? "{}") as {
+          compose_authority?: { allocations?: Array<NonNullable<typeof composeAllocation>> };
+        };
+        composeAllocation = brief.compose_authority?.allocations?.[0];
+        if (composeAllocation === undefined) throw new Error("e2e compose allocation is absent");
+        const parsed = JSON.parse(body) as {
+          pages: Array<{
+            frontmatter: Record<string, unknown>;
+            claims: {
+              page_id: string;
+              revision_id: string;
+              claims: Array<Record<string, unknown>>;
+            };
+          }>;
+        };
+        const page = parsed.pages[0]!;
+        page.frontmatter.page_id = composeAllocation.page_id;
+        page.frontmatter.revision_id = composeAllocation.revision_id;
+        page.frontmatter.lifecycle = composeAllocation.lifecycle;
+        page.claims.page_id = composeAllocation.page_id;
+        page.claims.revision_id = composeAllocation.revision_id;
+        for (const [index, claim] of page.claims.claims.entries()) {
+          claim.claim_id = composeAllocation.claim_allocations[index]!.claim_id;
+        }
+        return JSON.stringify(parsed);
+      }
+      if (inv.stateId === "verify" && composeAllocation !== undefined) {
+        const parsed = JSON.parse(body) as {
+          claim_findings: Array<Record<string, unknown>>;
+        };
+        for (const [index, finding] of parsed.claim_findings.entries()) {
+          finding.page_id = composeAllocation.page_id;
+          finding.revision_id = composeAllocation.revision_id;
+          finding.claim_id = composeAllocation.claim_allocations[index]!.claim_id;
+        }
+        return JSON.stringify(parsed);
+      }
       return body;
-    }) as never,
+    }),
   });
   return { projectRoot, runId, kbRoot, checkpointer, engine, worker, artifactRoot };
 }
@@ -259,25 +325,53 @@ async function driveToGate(stack: Stack, capIds: readonly string[]): Promise<Dir
   });
   workers.setReceiptAuthority(stack.engine.receiptAuthority);
   const runner = new OrchestrationRunner(stack.engine, workers);
+  const identity = {
+    schema_version: 2 as const,
+    run_id: stack.runId,
+    session_id: SESSION,
+    playbook: "knowledge-base",
+    engine_owner: "typescript" as const,
+  };
+  const goal = "Ingest the admitted sources and produce a reviewable candidate page set.";
+  const constraints = {
+    action: "ingest",
+    kb_profile_id: PROFILE,
+    source_capability_ids: [...capIds],
+    // §5.3: host-supplied active parent identity. Admission denies without it.
+    parent_identity: { ...E2E_PARENT },
+  };
+  const context = RunContext.create({
+    identity,
+    goal,
+    constraints,
+    projectRoot: stack.projectRoot,
+    trustProfile: "hardened-untrusted",
+    maxSteps: 40,
+  });
+  context.playbookData.action = "ingest";
+  context.playbookData.profile_id = PROFILE;
+  admitOperationStart({
+    projectRoot: stack.projectRoot,
+    checkpointer: stack.checkpointer,
+    context,
+    session_id: SESSION,
+    invocation_id: `call_${stack.runId}`,
+    action: "ingest",
+    profile_id: PROFILE,
+    request: {
+      schema_version: 1,
+      action: "ingest",
+      kb_profile_id: PROFILE,
+      source_capability_ids: [...capIds],
+    },
+  });
   return runner.runUntilBoundary(
     stack.engine.handle({
       schema_version: 2,
       action: "start",
-      identity: {
-        schema_version: 2,
-        run_id: stack.runId,
-        session_id: SESSION,
-        playbook: "knowledge-base",
-        engine_owner: "typescript",
-      },
-      goal: "Ingest the admitted sources and produce a reviewable candidate page set.",
-      constraints: {
-        action: "ingest",
-        kb_profile_id: PROFILE,
-        source_capability_ids: [...capIds],
-        // §5.3: host-supplied active parent identity. Admission denies without it.
-        parent_identity: { ...E2E_PARENT },
-      },
+      identity,
+      goal,
+      constraints,
       project_root: stack.projectRoot,
       trust_profile: "hardened-untrusted",
     }),
@@ -285,20 +379,14 @@ async function driveToGate(stack: Stack, capIds: readonly string[]): Promise<Dir
   );
 }
 
-/** The host decision path, exactly as the CLI drives it (engine respond). */
+/** The host decision path, exactly as the CLI drives the authenticated facade. */
 function respond(stack: Stack, response: "approve" | "deny"): Directive {
-  const run = stack.checkpointer.loadRunById(stack.runId);
-  if (run === undefined) throw new Error("e2e: run missing");
-  const pending = run.pendingDirective;
-  if (pending?.action !== "await_user") throw new Error("e2e: not at the gate");
-  return stack.engine.handle({
-    schema_version: 2,
-    action: "respond",
-    identity: run.identity,
-    gate_id: pending.gate_id,
-    challenge: pending.challenge,
-    response,
-  });
+  return new ContentReviewService({
+    projectRoot: stack.projectRoot,
+    checkpointer: stack.checkpointer,
+    engine: stack.engine,
+    reviewer: authenticateLocalContentReviewer(),
+  }).decide({ runId: stack.runId, decision: response });
 }
 
 describe("KB through the engine (step 4)", () => {
@@ -308,7 +396,7 @@ describe("KB through the engine (step 4)", () => {
     installGrantedProfile({ projectRoot, kbRoot, profileId: PROFILE, sessionId: SESSION });
     initKb({ kbRoot, profileId: PROFILE, runId: "kb-init-e2e" }, "E2E KB");
     installTestPolicy(kbRoot);
-    const capIds = seedSources(kbRoot);
+    const capIds = seedSources(projectRoot);
     const stack = buildStack(projectRoot, capIds, fakeBodies(capIds));
 
     const directive = await driveToGate(stack, capIds);
@@ -318,18 +406,25 @@ describe("KB through the engine (step 4)", () => {
     const run = stack.checkpointer.loadRunById(stack.runId);
     expect(run?.status).toBe("awaiting_user");
 
-    // The gate row is pending, bound to the four sealed candidate artifacts and
-    // to the admitted capability ids.
-    const gate = findGateForRun(kbRoot, stack.runId);
-    expect(gate?.status).toBe("awaiting");
-    expect(gate?.artifacts).toHaveLength(4);
-    expect(gate?.source_capability_ids).toEqual(capIds);
+    // The canonical control-DB packet is pending and binds the exact three
+    // review artifacts plus the admitted source-record map.
+    const gate = stack.checkpointer.contentReviewForRun(stack.runId);
+    expect(gate?.state).toBe("awaiting");
+    expect(gate?.packet.candidate_artifacts).toHaveLength(3);
+    const admittedSourceIds = (run?.playbookData.source_ids ?? []) as string[];
+    expect(Object.keys(gate?.packet.candidate_source_record_digests ?? {})).toEqual(
+      [...admittedSourceIds].sort()
+    );
+    for (const sourceId of admittedSourceIds) {
+      expect(sourceId).toMatch(/^src_[a-f0-9]{32}$/);
+      expect(capIds).not.toContain(sourceId);
+    }
 
-    // Admitted source objects exist (the plane admitted before any agent work).
-    expect(existsSync(path.join(kbRoot, "sources", "objects"))).toBe(true);
+    // Review has work-plane snapshots only: no source publication path exists.
+    expect(existsSync(path.join(kbRoot, "sources"))).toBe(false);
 
     // Capability leases are still claimed (approval has not happened).
-    const capStore = new CapabilityStore(kbRoot);
+    const capStore = new CapabilityStore(projectRoot);
     try {
       for (const capId of capIds) {
         expect(capStore.lease(capId)?.state).toBe("claimed");
@@ -351,10 +446,19 @@ describe("KB through the engine (step 4)", () => {
 
     // Publication is real: the selector advanced; the page is queryable.
     expect(readSelectedGeneration(kbRoot)?.selector?.generation_id).toBe(genId);
-    const q = queryKb({ kbRoot, profileId: PROFILE, runId: "kb-e2e-q" }, "quorum acknowledgement");
+    const queryControl = kbArtifactControl({
+      root: projectRoot,
+      runId: "kb-e2e-q",
+      profileId: PROFILE,
+      action: "query",
+    });
+    const q = queryKb(
+      { kbRoot, profileId: PROFILE, runId: "kb-e2e-q", checkpointer: queryControl },
+      "quorum acknowledgement"
+    );
     expect(q.met).toBe(true);
 
-    const capStore2 = new CapabilityStore(kbRoot);
+    const capStore2 = new CapabilityStore(projectRoot);
     try {
       for (const capId of capIds) {
         expect(capStore2.lease(capId)?.state).toBe("consumed");
@@ -362,12 +466,37 @@ describe("KB through the engine (step 4)", () => {
     } finally {
       capStore2.close();
     }
-    expect(findGateForRun(kbRoot, stack.runId)?.status).toBe("approved");
+    expect(stack.checkpointer.contentReviewForRun(stack.runId)?.state).toBe("consumed");
 
     // A second decision on the same run is refused (terminal, gate decided).
     expect(() => respond(stack, "approve")).toThrow();
 
     stack.worker.close();
+    stack.checkpointer.close();
+  });
+
+  it("refuses gate continuation when the admitted policy changes", async () => {
+    const projectRoot = tmpRoot();
+    const kbRoot = path.join(projectRoot, "private-kb");
+    installGrantedProfile({ projectRoot, kbRoot, profileId: PROFILE, sessionId: SESSION });
+    initKb({ kbRoot, profileId: PROFILE, runId: "kb-init-e2e" }, "E2E KB drift");
+    installTestPolicy(kbRoot);
+    const capIds = seedSources(projectRoot);
+    const stack = buildStack(projectRoot, capIds, fakeBodies(capIds));
+    const selectorBefore = readSelectedGeneration(kbRoot)?.selector?.generation_id;
+    await driveToGate(stack, capIds);
+
+    const changed = readPolicy(kbRoot);
+    writePolicy(kbRoot, {
+      ...changed,
+      reader_limits: { ...changed.reader_limits, max_calls_per_phase: 15 },
+    });
+    expect(() => respond(stack, "approve")).toThrow(/policy changed after review/);
+    const terminal = stack.checkpointer.loadRunById(stack.runId)?.terminalDirective;
+    expect(terminal?.action).toBe("incomplete");
+    expect(terminal?.met).toBe(false);
+    expect(terminal?.unresolved).toContain("content_review_drift");
+    expect(readSelectedGeneration(kbRoot)?.selector?.generation_id).toBe(selectorBefore);
     stack.checkpointer.close();
   });
 
@@ -377,7 +506,7 @@ describe("KB through the engine (step 4)", () => {
     installGrantedProfile({ projectRoot, kbRoot, profileId: PROFILE, sessionId: SESSION });
     initKb({ kbRoot, profileId: PROFILE, runId: "kb-init-e2e" }, "E2E KB deny");
     installTestPolicy(kbRoot);
-    const capIds = seedSources(kbRoot);
+    const capIds = seedSources(projectRoot);
     const stack = buildStack(projectRoot, capIds, fakeBodies(capIds));
     const selectorBefore = readSelectedGeneration(kbRoot)?.selector?.generation_id;
 
@@ -392,7 +521,7 @@ describe("KB through the engine (step 4)", () => {
     expect(readSelectedGeneration(kbRoot)?.selector?.generation_id).toBe(selectorBefore);
     expect(existsSync(path.join(kbRoot, "pages"))).toBe(false);
 
-    const capStore = new CapabilityStore(kbRoot);
+    const capStore = new CapabilityStore(projectRoot);
     try {
       for (const capId of capIds) {
         expect(capStore.lease(capId)?.state).toBe("invalidated");
@@ -400,7 +529,7 @@ describe("KB through the engine (step 4)", () => {
     } finally {
       capStore.close();
     }
-    expect(findGateForRun(kbRoot, stack.runId)?.status).toBe("denied");
+    expect(stack.checkpointer.contentReviewForRun(stack.runId)?.state).toBe("denied");
 
     // A late approval of a denied run is refused.
     expect(() => respond(stack, "approve")).toThrow();

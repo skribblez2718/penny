@@ -43,9 +43,10 @@ redelivered; a new derived delivery needs a new invocation and a new grant.
 - **`init`** — validate profile and create authority → admit an existing empty or exact-scaffold
   root → stage manifest, default-deny policy, layout, first empty catalog and index → commit the
   selector → receipt. This is the only base-none transaction.
-- **`ingest`** — profile, policy, and source capabilities → immutable objects and records → Echo
-  extracts claims → Synthia composes a page revision pair → deterministic lint → Carren semantic
-  report → Vera grounding check → **human content-review gate** → publish a generation.
+- **`ingest`** — profile, policy, and source capabilities → immutable same-run source snapshots →
+  Echo extracts claims → Synthia composes a page revision pair → deterministic lint → Carren
+  semantic report → Vera grounding check → **human content-review gate** → publish source
+  objects/records and a generation.
 - **`query`** — read one selected generation → deterministic bounded retrieval → optional synthesis
   and grounding → a same-run answer artifact handle. No publication-plane change.
 - **`save`** — an explicit prior query run → Synthia composes → deterministic, semantic, and
@@ -55,8 +56,8 @@ redelivered; a new derived delivery needs a new invocation and a new grant.
 ### The save claim
 
 What authorizes a save is not the request but a **single-use claim** over one query run's sealed
-answer. A completed query with a sealed answer creates exactly one claim, and the claim ratchets
-one way:
+answer. Only a `complete`/`met:true` grounded query whose citations are supported by a passing
+same-run Vera report creates exactly one claim, and the claim ratchets one way:
 
 ```text
   available ──claim──> claimed ──reserve──> commit_reserved ──selector──> consumed
@@ -96,30 +97,33 @@ rather than replacing the knowledge base.
 - **`parent_tool_result`** — the result may carry one bounded derived answer, and only when the
   policy permits it and exactly one host-minted grant matches.
 
-The grant rule is closed and fails closed. A grant is owner-only, minted for one Pi session — its
-session and invocation fields both carry the operator's session id — with a single-use byte cap
-and an expiry. Admission requires **exactly one** matching unconsumed grant whose profile, exact
-request digest (SHA-256 over the closed request), and byte cap all match and which is unexpired;
-two matching candidates are an ambiguity refusal, never a coin flip. The delivered run consumes
-the grant atomically; a retry is refused rather than redelivered; and a grant refused for any
-other reason (policy denial, byte cap, malformed answer, mismatch) is _retained_ for a future
-eligible run.
+The grant rule is closed and fails closed. A parent-delivery grant is owner-only and binds one
+exact Pi session, host tool invocation ID, profile, closed-request digest, current policy digest,
+and runtime-reported parent provider/model, with a single-use byte cap and expiry. The host grant
+authority enforces one issuance per session/invocation transactionally; a byte-identical retry of
+the same grant ID is idempotent, while a competing issuance loses before delivery can become
+ambiguous. The delivered run consumes the grant atomically; an exact run retry observes the same
+consumption but never redelivers, and another run loses. A grant refused for any other reason
+(policy/model drift, byte cap, malformed answer, mismatch) is retained in its original state.
 
-The grant is not the only condition. Delivery additionally requires an **exact parent allowlist
-match**: the provider and model the runtime reports for the active parent context must appear in
-the policy's `allowed_parent_models`, and under `local_only` the matched rule must itself declare
-`locality: "local"`. The host never guesses locality — it reads the operator's own declaration for
-that exact provider/model. An empty allowlist denies, and a parent identity the host cannot
-establish denies. The grant says the operator approved this _request_; the allowlist says the
-operator approved this _parent_ to receive derived private content.
+The grant is not the only condition. Delivery re-hashes the current policy and requires both the
+grant's exact provider/model binding and an **exact parent allowlist match**: the provider and model
+the runtime reports for the active parent context must appear in `allowed_parent_models`, and under
+`local_only` the matched rule must itself declare `locality: "local"`. The host never guesses
+locality. An empty allowlist, policy drift, or an identity the host cannot establish denies.
 
 Delivery also requires the answer to be what the request asked for. `verify_grounding` defaults
-true, and the query flow is deterministic retrieval with no grounding phase, so a request that
-asks for verification is refused for parent delivery and its artifact result carries a
-`grounding_not_verified` warning. An operator who wants delivery today must mint over a request
-that explicitly records `verify_grounding: false` — so the digest itself carries the fact that an
-unverified answer was accepted. `page_ids` and `source_ids` are honored as retrieval filters
-(page set, and pages whose claim evidence cites an allowed source).
+true: deterministic retrieval binds one selected generation and candidate set, Synthia synthesizes
+through the no-argument private-request and selected-generation readers, and Vera independently
+checks every answer citation through the same closed page/source posture. The host requires exact
+citation/finding equality, all findings supported, a passing report, and a durably created save
+claim before the run can be `complete`/`met:true` or parent-deliverable. A request flag or boolean
+report by itself has no authority.
+
+An explicit `verify_grounding: false` request retains the deterministic answer path, records
+`grounding_not_verified`, creates no save claim, and is not parent-deliverable. `page_ids` and
+`source_ids` are honored as retrieval filters (page set, and pages whose claim evidence cites an
+allowed source).
 
 The delivered answer is closed: advisory-only, non-empty text, one or more opaque
 page/claim/source citations (never locators), a contradictions array, an unknowns array, and
@@ -140,22 +144,38 @@ the shape, sealed-answer extraction, and every refusal reason are pinned by the
 
 The agent-driven flows run on the orchestration engine, not on standalone workflow calls: the
 `knowledge_base` tool starts an engine run named `knowledge-base`, and the KB playbook drives the
-state machine — `initialize` claims the source capabilities and admits the source objects (host
-I/O, all-or-none, before any agent read), then the four agent phases (echo → synthia → carren →
-vera) each producing a typed artifact on the run's content plane, then the run stops at the human
+state machine — `initialize` preindexes independent opaque source IDs and exact temp/final keys,
+claims the source capabilities all-or-none, and streams each external file once into an immutable
+same-run snapshot before any agent read. The ingest phases (echo → synthia → carren → vera) then
+produce typed artifacts on the run's content plane, and the run stops at the human
 content-review gate (`await_user`).
 
-The gate decision is a **host-authenticated response on the run**: `penny-kb-gate approve|deny|refine`
-reads the run's pending gate (challenge and all) and submits it through the engine's respond
-protocol. The run's own state machine performs the publication (or the honest denial, or the
-bounded refinement re-entry into compose) behind the decision, so the terminal or re-gated state
-can never disagree with what happened on disk. `refine` re-enters compose, re-lints and re-verifies, and
-re-offers the gate; it is a host decision exactly like approve and deny. The model-facing
-tool never carries an approval decision — it only starts runs, re-presents the pending gate, and
+The gate decision enters through the **authenticated host content-review service**.
+`penny-kb-gate approve|deny|refine` is one local-OS-authenticated caller of that facade; it is not
+the decision store. Before `await_user` becomes durable, the checkpointer stores the complete
+canonical packet and atomically binds it to the run's generic gate in the orchestration control DB.
+The callback constructs a complete receipt by copying the exact run, session, challenge, profile,
+KB, action, base selector/generation, policy, query claim (for save), artifact/source maps, and
+conflict allocations from those stored bytes. One control-DB transaction stores the exact receipt
+JCS/digest and changes the run/gate binding. Only a byte-identical receipt digest is an idempotent
+duplicate; another receipt is a conflict.
+
+The service then invokes the private internal content-review resume. Approve publishes, deny
+publishes nothing, and refine re-enters compose and requires a fresh packet/challenge after
+re-linting and re-verification. A crash after the decision transaction but before internal resume is
+reconciled from the stored receipt; generic engine `respond` is refused for ingest/save, and the
+model-facing tool remains decision-free. It only starts runs, re-presents the pending gate, and
 returns safe projections (counts and opaque IDs, never bodies, paths, challenges, or digests).
 
-The deterministic host I/O the playbook performs between phases (claim, admit, seal, persist the
-gate, approve, deny) is behind one interface — the KB ingest plane — so the state machine stays
+A default-true query uses the same engine and worker seams for Synthia → Vera, but terminates
+without a publication gate. Its private request, selected pages, and sources are available only
+through host-closed readers; the control state carries only counts, opaque IDs, handles, and the
+selected-generation binding. Explicitly unverified queries remain deterministic and spawn no
+child session.
+
+The deterministic host I/O the playbook performs between phases (preindex/claim/snapshot,
+verify admission, seal, query finalization, persist the gate, approve, deny) is behind one
+interface — the KB ingest plane — so the state machine stays
 testable without a filesystem and the KB's privacy rules stay in the KB modules. The agent runner
 is injectable behind the worker client, which is what lets the full pipeline be tested with
 deterministic bodies and no model.
@@ -176,6 +196,14 @@ read an allowed selected page, and read a claimed canonical target. No reader ac
 locator, arbitrary query, or provider field. No private body is embedded in a system prompt or
 opening message.
 
+Before `compose`, the host freezes a body-free identity allocation in the control DB. It binds the
+run, phase, session, profile, KB, exact base generation/catalog, private-input digest, admitted
+policy, prior handles, source bounds, and all-and-only page/revision/claim IDs. A null supersede
+bound means the allocated page ID is new; a non-null bound names the exact selected page revision
+that may be replaced. Save has exactly one page allocation. The pool is exposed only by the
+no-argument private phase brief. Draft staging and publication conversion both reject invented,
+duplicate, omitted, or out-of-bound identities and supersede attempts.
+
 **Output** leaves a child only through `stage_run_artifact`, which is closed over the current run,
 state, allowed kinds, profile, and resolved root. The model submits a closed JSON payload — never a
 path, run, state, or profile field. The host strict-parses it, rejects duplicate and unknown keys,
@@ -185,8 +213,10 @@ temporary file, fsyncs, atomically renames, then marks the row `staged` and retu
 handle.
 
 The phase then makes **exactly one** `submit_phase_result` call with a typed, state-specific result
-referencing only handles issued to that run and state. It stores content-free details, terminates,
-and closes the session. There is **no prose `SUMMARY` parser** — assistant text is never a result.
+referencing only handles issued to that run and state. The same control-DB transaction stores the
+content-free result, seals its artifact, and closes the frozen operands; restart can replay the
+result but no session can reuse the allocation pool. It then terminates and closes the session.
+There is **no prose `SUMMARY` parser** — assistant text is never a result.
 
 Artifact lifecycle is `prepared → staged → sealed → consumed`, with `discarding → discarded` for
 cleanup. Recovery uses only the exact index row and keys: a `prepared` row with no file is
@@ -198,7 +228,31 @@ builtin tools off, and exactly the custom tools for that phase — listed by nam
 filtering would otherwise remove custom tools. No project or global extension, skill, prompt,
 setting, or `AGENTS.md` content discovered around the working directory reaches a child.
 
-## Publication and recovery
+## Current callback/recovery boundary
+
+The content-review **control-DB** boundary is implemented: packet + waiting-run insertion,
+complete decision receipt custody, duplicate-digest enforcement, decision/run/gate transition,
+expiry/base/policy/artifact/source/query revalidation, and restart after a committed callback all
+use the owner-only FULL-synchronous orchestration database. Ingest and save use this path; the old
+KB-root JSON gate is not content-review authority.
+
+Promotion uses the separate approval-DB-first G9 boundary. The complete target-presentation packet
+is stored in the approval DB before the control run can become `awaiting_user`. The host records an
+exact approve/refine/deny intent; approve creates a signed single-use receipt and private internal
+resume applies through the journal, while refine returns to plan/patch with the same claims and deny
+invalidates them. Public `respond` and ordinary `resume` remain decision-free. Restart classifies
+targets by preimage/postimage hashes and performs only same-transaction resume, restore, safe block,
+or cross-store finalization.
+
+The §5.10 publication transaction is implemented for `init`, approved ingest, and approved save.
+The control DB preindexes the exact all-and-only file manifest and selector JCS before publication
+I/O, binds it to the reviewed base plus profile/root/KB identity, and records the authority
+reservations and selector evidence under one transaction ID. Publication reopens and hashes every
+catalog-mapped file through owner/no-follow/single-link custody immediately before the commit.
+Therefore a process death after selector replacement is classified as same-transaction success and
+is finalize-only; a foreign selector is drift and is never adopted or overwritten.
+
+## Publication and recovery contract
 
 Candidate preparation and human review happen **without** the writer lock, so a long review does not
 hold the KB. Before any publication byte is written, the control DB preallocates the candidate

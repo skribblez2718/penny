@@ -104,18 +104,20 @@ export function checkParentModel(policy: KbPolicy, tuple: ProviderModelTuple): v
  * Use {@link checkParentModel} instead when the caller genuinely knows the
  * locality of the tuple (for example a child session the host selected).
  */
-export function checkParentModelIdentity(
+export function resolveParentModelRule(
   policy: KbPolicy,
   identity: { provider: string; model: string }
-): void {
+): ProviderModelTuple {
   if (policy.allowed_parent_models.length === 0) {
     throw new PolicyRefusal(
       "empty_model_lists",
       "parent model allowlist is empty — denied by default"
     );
   }
-  const provider = identity.provider.trim().slice(0, 256);
-  const model = identity.model.trim().slice(0, 256);
+  // The runtime tuple is authority input. Never trim, slice, classify, or infer
+  // it into a near match: only the exact current validated policy rule supplies
+  // locality for this exact provider/model pair.
+  const { provider, model } = identity;
   if (provider.length === 0 || model.length === 0) {
     throw new PolicyRefusal(
       "parent_model_denied",
@@ -137,6 +139,14 @@ export function checkParentModelIdentity(
       "processing_mode is local_only but the allowlisted parent rule is remote"
     );
   }
+  return { provider: matched.provider, model: matched.model, locality: matched.locality };
+}
+
+export function checkParentModelIdentity(
+  policy: KbPolicy,
+  identity: { provider: string; model: string }
+): void {
+  resolveParentModelRule(policy, identity);
 }
 
 /**

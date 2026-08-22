@@ -8,9 +8,6 @@ describe("TypeScript orchestration compatibility loans", () => {
       "research-mode-presets",
       "research-fixed-topology",
       "research-three-file-output",
-      // The typed terminating result is primary; this records the bounded
-      // compatibility fallback for custom or text-only model clients.
-      "prose-summary-fallback",
       "research-verifier-model-default",
     ]);
   });

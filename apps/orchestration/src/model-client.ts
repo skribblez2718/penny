@@ -9,6 +9,7 @@ import {
   defineTool,
   getAgentDir,
   resolveModelScopeWithDiagnostics,
+  type AgentSessionEvent,
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 export type { InlineExtension };
@@ -26,6 +27,7 @@ import { researchSummarySchema } from "./playbooks/research.js";
 
 type CreateSessionOptions = NonNullable<Parameters<typeof createAgentSession>[0]>;
 type PiModel = NonNullable<CreateSessionOptions["model"]>;
+export type SessionThinkingLevel = NonNullable<CreateSessionOptions["thinkingLevel"]>;
 
 export interface AgentInvocation {
   readonly agent: string;
@@ -78,10 +80,18 @@ export interface AgentInvocation {
  * about their domain.
  */
 export interface AgentSessionSpecV1 {
-  /** Grant no built-in tool authority; only `customTools` are exposed. */
-  readonly noTools?: "builtin";
+  /** Explicit SDK suppression posture. Private KB sessions require `all`. */
+  readonly noTools?: "all" | "builtin";
+  /** Exact active tool-name allowlist; required with KB `noTools: "all"`. */
+  readonly tools?: readonly string[];
   /** Host-closed tools replacing the default result/artifact pair. */
-  readonly customTools?: readonly unknown[];
+  readonly customTools?: readonly { readonly name: string }[];
+  /**
+   * Exact isolated system content. When present, the runner creates an
+   * in-memory-settings ResourceLoader with no extensions, skills, templates,
+   * themes, context files, project settings, or global settings.
+   */
+  readonly isolatedSystemPrompt?: string;
   /** Complete opening prompt, replacing the default research opening. */
   readonly opening?: string;
   /**
@@ -92,6 +102,14 @@ export interface AgentSessionSpecV1 {
   readonly readResult?: () => string | undefined;
   /** Failure text used when `readResult` yields nothing. */
   readonly requireResultMessage?: string;
+  /** Suppress assistant-text diagnostics because the child can see private bodies. */
+  readonly sensitiveOutput?: boolean;
+  /**
+   * Content-free lifecycle diagnostic sink. The runner projects Pi events into
+   * the closed trace record below before invoking it; raw events are never
+   * exposed because they contain tool arguments, content, and reasoning.
+   */
+  readonly trace?: AgentSessionTraceSink;
 }
 
 /** W6 — the resolved worker posture. Tool authority still comes from the agent SSOT. */
@@ -153,13 +171,160 @@ export interface ModelClient {
  * (the frontmatter `tools:` field is the control plane). The app stays agnostic
  * about the capability's domain.
  */
+export interface AgentSessionTokenCountsV1 {
+  readonly input: number;
+  readonly output: number;
+  readonly cache_read: number;
+  readonly cache_write: number;
+  readonly total: number;
+}
+
+export const AGENT_SESSION_PROTOCOL_ERROR_CODES = [
+  "schema_invalid",
+  "handle_mismatch",
+  "reader_ordering",
+  "unknown_tool",
+  "timeout",
+] as const;
+export type AgentSessionProtocolErrorCodeV1 = (typeof AGENT_SESSION_PROTOCOL_ERROR_CODES)[number];
+
+/**
+ * Closed content-free session trace record.
+ *
+ * Deliberately absent: tool call IDs/arguments/results, message content,
+ * reasoning, provider bodies, raw errors, costs, paths, run IDs, and private data.
+ * Error classification can emit only the fixed protocol-code allowlist above.
+ */
+export type AgentSessionTraceRecordV1 =
+  | {
+      readonly kind: "tool";
+      readonly name: string;
+      readonly outcome: "success" | "error";
+      readonly error_code?: AgentSessionProtocolErrorCodeV1;
+    }
+  | {
+      readonly kind: "turn";
+      readonly name: string;
+      readonly outcome: "success" | "error";
+      readonly stop_reason:
+        | "pending"
+        | "stop"
+        | "length"
+        | "toolUse"
+        | "error"
+        | "aborted"
+        | "deferred";
+      readonly token_counts: AgentSessionTokenCountsV1;
+    }
+  | {
+      readonly kind: "protocol_error";
+      readonly error_code: AgentSessionProtocolErrorCodeV1;
+    };
+
+export type AgentSessionTraceSink = (record: AgentSessionTraceRecordV1) => void;
+
+function boundedProtocolErrorSignal(value: unknown, depth = 0): string {
+  if (depth > 3) return "";
+  if (typeof value === "string") return value.slice(0, 4_096).toLowerCase();
+  if (value instanceof Error) return `${value.name} ${value.message}`.slice(0, 4_096).toLowerCase();
+  if (value === null || typeof value !== "object") return "";
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, 16)
+      .map((entry) => boundedProtocolErrorSignal(entry, depth + 1))
+      .join(" ")
+      .slice(0, 4_096);
+  }
+  const record = value as Record<string, unknown>;
+  return ["code", "message", "error", "content"]
+    .map((key) => boundedProtocolErrorSignal(record[key], depth + 1))
+    .join(" ")
+    .slice(0, 4_096);
+}
+
+/** Classify a raw failure into a fixed content-free protocol code, or omit it. */
+export function contentFreeSessionProtocolErrorCode(
+  value: unknown
+): AgentSessionProtocolErrorCodeV1 | undefined {
+  const signal = boundedProtocolErrorSignal(value);
+  if (/unknown[_ -]tool|tool[^\n]{0,80}(unknown|not found)/u.test(signal)) {
+    return "unknown_tool";
+  }
+  if (/artifact[_ -]handle[_ -]mismatch|handle[_ -]mismatch/u.test(signal)) {
+    return "handle_mismatch";
+  }
+  if (
+    /reader[_ -]ordering|read[_ -]phase[_ -]brief[_ -]first|before[^\n]{0,80}read[_ -]phase[_ -]brief|after[_ -]submit/u.test(
+      signal
+    )
+  ) {
+    return "reader_ordering";
+  }
+  if (/schema[_ -]invalid|schema validation|invalid[^\n]{0,80}(schema|arguments)/u.test(signal)) {
+    return "schema_invalid";
+  }
+  if (/timed out|timeout/u.test(signal)) return "timeout";
+  return undefined;
+}
+
+/** Project a non-event session failure without retaining its raw error. */
+export function contentFreeSessionProtocolErrorRecord(
+  value: unknown
+): AgentSessionTraceRecordV1 | undefined {
+  const errorCode = contentFreeSessionProtocolErrorCode(value);
+  return errorCode === undefined ? undefined : { kind: "protocol_error", error_code: errorCode };
+}
+
+/** Project one Pi event onto the closed content-free trace vocabulary. */
+export function contentFreeSessionTraceRecord(
+  event: AgentSessionEvent,
+  allowedToolNames?: ReadonlySet<string>
+): AgentSessionTraceRecordV1 | undefined {
+  if (event.type === "tool_execution_end") {
+    const unknownTool = allowedToolNames !== undefined && !allowedToolNames.has(event.toolName);
+    const errorCode = unknownTool
+      ? "unknown_tool"
+      : event.isError
+        ? contentFreeSessionProtocolErrorCode(event.result)
+        : undefined;
+    return {
+      kind: "tool",
+      // Provider-emitted unknown names are model-authored. Never forward one to
+      // diagnostics when the host supplied an exact active-tool set.
+      name: unknownTool ? "unknown_tool" : event.toolName,
+      outcome: unknownTool || event.isError ? "error" : "success",
+      ...(errorCode === undefined ? {} : { error_code: errorCode }),
+    };
+  }
+  if (event.type !== "turn_end" || event.message.role !== "assistant") return undefined;
+  const { stopReason, usage } = event.message;
+  return {
+    kind: "turn",
+    name: "turn",
+    outcome: stopReason === "error" || stopReason === "aborted" ? "error" : "success",
+    stop_reason: stopReason,
+    token_counts: {
+      input: usage.input,
+      output: usage.output,
+      cache_read: usage.cacheRead,
+      cache_write: usage.cacheWrite,
+      total: usage.totalTokens,
+    },
+  };
+}
+
 export interface PiAgentClientOptions {
   readonly resolveModel?: (modelId: string) => Promise<PiModel> | PiModel;
   readonly readArtifact?: (ref: ArtifactRef, consumer: string) => Promise<Buffer> | Buffer;
   readonly workerExtensions?: readonly InlineExtension[];
+  /**
+   * TEST-ONLY. Production omits this so settings/model defaults remain the
+   * authority. Live compatibility smokes may pin a level without editing SSOT.
+   */
+  readonly testOnlyThinkingLevelOverride?: SessionThinkingLevel;
 }
 
-interface ParsedSummary {
+interface CapturedRoutingResult {
   readonly confidence: Confidence;
   readonly details: Record<string, JsonValue>;
 }
@@ -169,61 +334,6 @@ function objectValue(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`${label} must be a JSON object`);
   }
   return value as Record<string, unknown>;
-}
-
-function balancedObject(text: string, start: number): string | undefined {
-  let depth = 0;
-  let quoted = false;
-  let escaped = false;
-  for (let index = start; index < text.length; index += 1) {
-    const character = text[index];
-    if (quoted) {
-      if (escaped) {
-        escaped = false;
-      } else if (character === "\\") {
-        escaped = true;
-      } else if (character === '"') {
-        quoted = false;
-      }
-      continue;
-    }
-    if (character === '"') {
-      quoted = true;
-    } else if (character === "{") {
-      depth += 1;
-    } else if (character === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return text.slice(start, index + 1);
-      }
-    }
-  }
-  return undefined;
-}
-
-export function parseSummaryFromText(text: string): ParsedSummary {
-  const marker = text.lastIndexOf("SUMMARY:");
-  if (marker < 0) {
-    throw new Error("agent output is missing a SUMMARY: JSON object");
-  }
-  const objectStart = text.indexOf("{", marker + "SUMMARY:".length);
-  if (objectStart < 0) {
-    throw new Error("agent SUMMARY does not contain a JSON object");
-  }
-  const json = balancedObject(text, objectStart);
-  if (json === undefined) {
-    throw new Error("agent SUMMARY JSON object is incomplete");
-  }
-  const parsed = objectValue(JSON.parse(json), "agent SUMMARY");
-  const confidence = validateContract(
-    ConfidenceSchema,
-    parsed.confidence ?? "UNCERTAIN",
-    "agent confidence"
-  );
-  const details = Object.fromEntries(
-    Object.entries(parsed).filter(([key]) => key !== "confidence")
-  ) as Record<string, JsonValue>;
-  return { confidence, details };
 }
 
 export function canonicalAssistantText(messages: readonly unknown[]): string {
@@ -351,6 +461,40 @@ export async function createWorkerResourceLoader(
   return loader;
 }
 
+/**
+ * Purpose-built private-child loader. In-memory settings prevent project/global
+ * package configuration from re-enabling resources; every discoverable ambient
+ * resource class is disabled and then defensively projected to an empty set.
+ */
+export async function createPrivateSessionResourceLoader(input: {
+  projectRoot: string;
+  systemPrompt: string;
+  agentDir?: string;
+}) {
+  const settingsManager = SettingsManager.inMemory();
+  const loader = new DefaultResourceLoader({
+    cwd: input.projectRoot,
+    agentDir: input.agentDir ?? getAgentDir(),
+    settingsManager,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+    systemPrompt: input.systemPrompt,
+    appendSystemPrompt: [],
+    extensionsOverride: (base) => ({ ...base, extensions: [], errors: [] }),
+    skillsOverride: () => ({ skills: [], diagnostics: [] }),
+    promptsOverride: () => ({ prompts: [], diagnostics: [] }),
+    themesOverride: () => ({ themes: [], diagnostics: [] }),
+    agentsFilesOverride: () => ({ agentsFiles: [] }),
+    systemPromptOverride: () => input.systemPrompt,
+    appendSystemPromptOverride: () => [],
+  });
+  await loader.reload();
+  return { resourceLoader: loader, settingsManager };
+}
+
 async function optionalText(filePath: string): Promise<string> {
   try {
     return await readFile(filePath, "utf8");
@@ -385,7 +529,7 @@ export class PiAgentClient implements ModelClient {
       },
       { additionalProperties: false }
     );
-    let captured: ParsedSummary | undefined;
+    let captured: CapturedRoutingResult | undefined;
     const readArtifact = this.options.readArtifact;
     const resultTool = defineTool({
       name: "submit_orchestration_result",
@@ -470,41 +614,64 @@ export class PiAgentClient implements ModelClient {
       },
     });
 
-    const agentGuidance = await optionalText(
-      path.join(invocation.projectRoot, ".pi", "agents", `${invocation.agent}.md`)
-    );
-    // W6: contract-resolved, not hardcoded. With no contract supplied this follows the
-    // reference research skill's current guidance declaration.
-    const domainGuidance = await optionalText(
-      resolveDomainGuidancePath({
-        projectRoot: invocation.projectRoot,
-        agent: invocation.agent,
-        stateId: invocation.stateId,
-        ...(invocation.guidance ? { guidance: invocation.guidance } : {}),
-      })
-    );
-    // The worker's tool authority comes from the SSOT (.pi/agents/<agent>.md),
-    // not from a private table in the app. The result tool is always added. Under
-    // hardened-untrusted, built-in execution/mutation tools are stripped.
-    const ssotTools = parseSsotTools(agentGuidance, invocation.agent);
-    const allowed = (
-      invocation.trustProfile === "hardened-untrusted"
-        ? ssotTools.filter((tool) => !HARDENED_STRIP.has(tool))
-        : [...ssotTools]
-    ).concat("submit_orchestration_result");
-    const resourceLoader = await createWorkerResourceLoader(
-      invocation.projectRoot,
-      this.options.workerExtensions ?? []
-    );
+    const isolatedSystemPrompt = spec?.isolatedSystemPrompt;
+    const isolated = isolatedSystemPrompt !== undefined;
+    const agentGuidance = isolated
+      ? ""
+      : await optionalText(
+          path.join(invocation.projectRoot, ".pi", "agents", `${invocation.agent}.md`)
+        );
+    // W6: contract-resolved, not hardcoded. Private sessions already carry the
+    // exact resolved guidance in their isolated system prompt, so they never
+    // rediscover a project/global prompt here.
+    const domainGuidance = isolated
+      ? ""
+      : await optionalText(
+          resolveDomainGuidancePath({
+            projectRoot: invocation.projectRoot,
+            agent: invocation.agent,
+            stateId: invocation.stateId,
+            ...(invocation.guidance ? { guidance: invocation.guidance } : {}),
+          })
+        );
+    const allowed = isolated
+      ? [...(spec?.tools ?? [])]
+      : (invocation.trustProfile === "hardened-untrusted"
+          ? parseSsotTools(agentGuidance, invocation.agent).filter(
+              (tool) => !HARDENED_STRIP.has(tool)
+            )
+          : [...parseSsotTools(agentGuidance, invocation.agent)]
+        ).concat("submit_orchestration_result");
+    if (isolated && allowed.length === 0) {
+      throw new Error("private session has no exact tool-name allowlist");
+    }
+    const isolatedResources =
+      isolatedSystemPrompt === undefined
+        ? undefined
+        : await createPrivateSessionResourceLoader({
+            projectRoot: invocation.projectRoot,
+            systemPrompt: isolatedSystemPrompt,
+          });
+    const resourceLoader =
+      isolatedResources?.resourceLoader ??
+      (await createWorkerResourceLoader(
+        invocation.projectRoot,
+        this.options.workerExtensions ?? []
+      ));
     const sessionOptions: CreateSessionOptions = {
       cwd: invocation.projectRoot,
       sessionManager: SessionManager.inMemory(invocation.projectRoot),
       resourceLoader,
-      ...(spec?.noTools === "builtin" ? { noTools: "builtin" as const } : { tools: allowed }),
+      ...(isolatedResources ? { settingsManager: isolatedResources.settingsManager } : {}),
+      ...(spec?.noTools !== undefined ? { noTools: spec.noTools } : {}),
+      tools: allowed,
       customTools: (spec?.customTools ?? [
         resultTool,
         ...(invocation.inputArtifacts.length > 0 ? [artifactTool] : []),
       ]) as NonNullable<CreateSessionOptions["customTools"]>,
+      ...(this.options.testOnlyThinkingLevelOverride === undefined
+        ? {}
+        : { thinkingLevel: this.options.testOnlyThinkingLevelOverride }),
     };
     if (invocation.modelOverride !== undefined) {
       if (this.options.resolveModel !== undefined) {
@@ -555,6 +722,20 @@ export class PiAgentClient implements ModelClient {
     }
 
     const { session } = await createAgentSession(sessionOptions);
+    const traceToolNames = new Set(allowed);
+    const unsubscribeTrace =
+      spec?.trace === undefined
+        ? undefined
+        : session.subscribe((event) => {
+            const record = contentFreeSessionTraceRecord(event, traceToolNames);
+            if (record === undefined) return;
+            try {
+              spec.trace?.(record);
+            } catch {
+              // Diagnostics are observational and may not alter session authority
+              // or completion semantics.
+            }
+          });
     const abort = (): void => {
       void session.abort();
     };
@@ -586,15 +767,19 @@ export class PiAgentClient implements ModelClient {
         if (body === undefined) {
           // Fail loudly. Accepting prose here would silently convert a contract
           // violation into a result the workflow would then act on.
+          const message =
+            spec.requireResultMessage ??
+            `agent '${invocation.agent}' ended without submitting a typed result`;
+          if (spec.sensitiveOutput === true) {
+            throw new Error(`${message}. Private assistant output omitted.`);
+          }
           let tail = "(no assistant text)";
           try {
             tail = canonicalAssistantText(session.messages).slice(0, 400);
           } catch {
             /* diagnostics only */
           }
-          throw new Error(
-            `${spec.requireResultMessage ?? `agent '${invocation.agent}' ended without submitting a typed result`}. Assistant tail: ${tail}`
-          );
+          throw new Error(`${message}. Assistant tail: ${tail}`);
         }
         return { text: body };
       }
@@ -611,6 +796,7 @@ export class PiAgentClient implements ModelClient {
       };
     } finally {
       invocation.signal?.removeEventListener("abort", abort);
+      unsubscribeTrace?.();
       session.dispose();
     }
   }

@@ -12,18 +12,18 @@ delegates.
 
 ## Components
 
-| Module                        | Role                                                                               |
-| ----------------------------- | ---------------------------------------------------------------------------------- |
-| `engine.ts`                   | Closed request handling, playbook dispatch, transitions, receipts, gates, recovery |
-| `service.ts`                  | Engine/checkpointer/artifact/worker composition                                    |
-| `checkpointer.ts`             | Owner-only Node SQLite state keyed by exact `run_id`                               |
-| `artifact-store.ts`           | Immutable manifest and content-addressed exact-byte objects                        |
-| `worker.ts`                   | Bounded Pi SDK execution, owner capture, fan-out, signed receipts                  |
-| `model-client.ts`             | Agent SSOT tools/models, trust posture, phase guidance                             |
-| `playbooks/registry.ts`       | Fail-closed playbook construction                                                  |
-| `playbooks/research.ts`       | Research machine                                                                   |
-| `playbooks/knowledge-base.ts` | Knowledge-base machine and host-only gates                                         |
-| `observability.ts`            | Best-effort metadata/digest events                                                 |
+| Module                        | Role                                                                                               |
+| ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| `engine.ts`                   | Closed request handling, playbook dispatch, transitions, receipts, gates, recovery                 |
+| `service.ts`                  | Engine/checkpointer/artifact/worker composition                                                    |
+| `checkpointer.ts`             | Owner-only Node SQLite state keyed by exact `run_id`; canonical content-review packet/receipt rows |
+| `artifact-store.ts`           | Immutable manifest and content-addressed exact-byte objects                                        |
+| `worker.ts`                   | Bounded Pi SDK execution, owner capture, fan-out, signed receipts                                  |
+| `model-client.ts`             | Agent SSOT tools/models, trust posture, phase guidance                                             |
+| `playbooks/registry.ts`       | Fail-closed playbook construction                                                                  |
+| `playbooks/research.ts`       | Research machine                                                                                   |
+| `playbooks/knowledge-base.ts` | Knowledge-base machine and host-only gates                                                         |
+| `observability.ts`            | Best-effort metadata/digest events                                                                 |
 
 ## Rules
 
@@ -47,7 +47,7 @@ Durable chain checkpoints retain terminal and ingress refs across restart.
 
 ## Persistence
 
-- Database: `$PROJECT_ROOT/.penny/orchestration-v2.db` unless `PENNY_ORCH_V2_DB` is set.
+- Database: `$PROJECT_ROOT/.penny/orchestration-v2.db` unless `PENNY_ORCH_V2_DB` is set. It uses WAL, `synchronous=FULL`, bounded busy timeout, and co-locates ingest/save content-review packets and receipts with their runs/gates.
 - Artifacts: `PENNY_ARTIFACT_ROOT`, otherwise XDG/platform state.
 - Retired checkpoints are archived separately, not converted and not used as fallback.
 

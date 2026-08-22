@@ -12,7 +12,7 @@ import {
   validateContract,
 } from "./contracts.js";
 import { OrchestrationEngine } from "./engine.js";
-import { parseSummaryFromText, type ModelClient } from "./model-client.js";
+import type { ModelClient } from "./model-client.js";
 import { ReceiptAuthority, trustedInvocationDigest } from "./receipts.js";
 
 interface Assignment {
@@ -195,22 +195,15 @@ export class WorkerExecutor {
       output_artifact_ref: artifact,
       trusted_invocation_digest: invocationDigest,
     });
-    let routing;
-    if (completion.confidence !== undefined && completion.details !== undefined) {
-      routing = {
-        confidence: completion.confidence,
-        details: completion.details,
-      };
-    } else {
-      try {
-        routing = parseSummaryFromText(completion.text);
-      } catch {
-        // Persisted exact bytes remain authoritative. The engine accepts the signed
-        // owner wrapper, records a malformed-result event, and reissues a versioned
-        // output contract without trusting invented domain defaults.
-        routing = { confidence: "UNCERTAIN" as const, details: {} };
-      }
-    }
+    // Persisted exact assistant bytes remain authoritative evidence, but routing
+    // metadata is accepted only from the typed terminating tool. Prose is never
+    // parsed into control state. A missing typed result is deliberately malformed
+    // so the engine can reissue the versioned output contract without inventing
+    // domain values.
+    const routing =
+      completion.confidence !== undefined && completion.details !== undefined
+        ? { confidence: completion.confidence, details: completion.details }
+        : { confidence: "UNCERTAIN" as const, details: {} };
     return validateContract(
       PhaseResultSchema,
       {

@@ -2,18 +2,18 @@
  * KB ingest workflow — §5.6 ingest action.
  *
  * The ingest pipeline:
- *   1. Admit sources (host reads files, creates source objects + records)
+ *   1. Read immutable same-run source snapshots (external paths are already closed)
  *   2. Echo extracts claims from the sources         → `claims` artifact
  *   3. Synthia composes a page revision from claims  → `page_draft` artifact
  *   4. Carren semantically lints the page draft      → `lint_report` artifact
  *   5. Vera verifies claim grounding against sources → `verification_report` artifact
  *   6. Content-review gate: run status `awaiting_user`, next: "review"
- *   7. On approval (`approveIngest`): publish a new generation with the
- *      source records, page revision pairs, and converted conflict records.
+ *   7. On approval (`approveIngest`): publish source objects/records and a new
+ *      generation with page revision pairs and converted conflict records.
  *
- * Agent invocation is pluggable via an `AgentRunner` callback. Deterministic
- * tests provide a mock runner; the live E2E provides a runner that creates
- * real Pi SDK sessions pinned to `ollama/qwen3.8:latest` (kb-model-client).
+ * This pure publication-machine fixture accepts only an explicitly branded
+ * test adapter for deterministic phase bodies. Live child execution never uses
+ * this callback: it runs through KbWorkerClient's stage/submit tool boundary.
  *
  * Custody invariants (§5.2/§5.6):
  * - Every artifact staged by a phase is sealed before the gate is presented.
@@ -23,12 +23,20 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import path from "node:path";
+
+import type { Checkpointer } from "../checkpointer.js";
 
 import {
   canonicalJson,
   sha256Hex,
+  type CandidateConflictAllocation,
   type ClaimsSidecar,
+  ConflictRecordSchema,
+  PageRevisionFrontmatterSchema,
+  ClaimsSidecarSchema,
+  SourceRecordSchema,
+  validateKbContract,
   type ConflictRecord as ConflictRecordT,
   type PageKind,
   type PageLifecycle,
@@ -40,40 +48,62 @@ import {
 } from "./contracts.js";
 import {
   readManifest,
+  readPageRevision,
   readPolicy,
+  conflictPath,
   pageClaimsPath,
   pageMarkdownPath,
-  writeConflictRecord,
-  writePageRevision,
-  writeSourceObject,
-  writeSourceRecord,
+  sourceObjectPath,
+  sourceObjectRef,
+  sourceRecordPath,
 } from "./filesystem.js";
 import {
   buildCatalog,
-  buildGenerationIndex,
-  newGenerationId,
-  publishGeneration,
+  generationIndexDigest,
+  openStandalonePublicationCheckpointer,
+  publishGenerationTransaction,
   readSelectedGeneration,
+  standalonePublicationTransactionId,
+  type PublicationAuthorityHooks,
+  type PublicationImmutableInput,
 } from "./generations.js";
 import { RunArtifactStore, type ArtifactHandle } from "./run-artifacts.js";
 import { type KbResult, type KbStatus, type KbWorkflowContext } from "./workflows.js";
+import { conflictRecordForAllocation } from "./content-review.js";
+import { claimCandidateBodies, validatePageDraftAuthority } from "./composition-authority.js";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
-import type { KbAgentRunner } from "./kb-model-client.js";
+import type { KbPhaseInvocation } from "./session-tools.js";
 
-/** API continuity: the workflow's runner type is the client's contract. */
-export type AgentRunner = KbAgentRunner;
+/** Explicit test-only adapter; production cannot pass a raw body callback accidentally. */
+export interface TestOnlyIngestBodyRunner {
+  readonly test_only: true;
+  readonly run: (invocation: KbPhaseInvocation) => Promise<string>;
+}
+
+export function createTestOnlyIngestBodyRunner(
+  run: (invocation: KbPhaseInvocation) => Promise<string> | string
+): TestOnlyIngestBodyRunner {
+  return {
+    test_only: true,
+    run: async (invocation) => run(invocation),
+  };
+}
 
 /** A source to ingest, supplied by the host (capability envelope already resolved). */
 export interface IngestSource {
   readonly sourceId: string;
+  /** Exact JCS digest of the owner-stored source capability envelope. */
+  readonly capabilityDigest: Sha256Hex;
   readonly title: string;
   readonly authors: readonly string[];
   readonly content: string;
   readonly mediaType: "text/plain" | "text/markdown" | "application/json";
   readonly sourceType: SourceType;
   readonly capturedAt: string;
+  readonly publishedAt?: string;
+  readonly redactedLocator?: string;
 }
 
 /** A page revision to publish (agent output, host-normalized). */
@@ -99,6 +129,23 @@ export interface PendingIngest {
   readonly pageDraftArtifactId: string;
   readonly lintReportArtifactId: string;
   readonly verificationArtifactId: string;
+  /** Exact all-and-only conflict allocations frozen in the canonical packet. */
+  readonly candidateConflictAllocations?: readonly CandidateConflictAllocation[];
+  /** Packet issue time copied into every allocated conflict record. */
+  readonly reviewIssuedAt?: string;
+}
+
+/** Production-only control/authority bindings for the selector transaction. */
+export interface ApprovedPublicationContext {
+  readonly checkpointer: Checkpointer;
+  readonly transactionId: string;
+  readonly baseGenerationId: string;
+  readonly baseSelectorSha256: Sha256Hex;
+  readonly action: "ingest" | "save";
+  readonly publishedAt: string;
+  readonly authority?: PublicationAuthorityHooks;
+  readonly requireContentReview?: boolean;
+  readonly awaitOperationReceipt?: boolean;
 }
 
 // ── Local helpers ───────────────────────────────────────────────────────────
@@ -106,7 +153,7 @@ export interface PendingIngest {
 type Next = "resume" | "review" | "none";
 
 function result(
-  action: string,
+  action: "ingest",
   runId: string,
   status: KbStatus,
   met: boolean,
@@ -137,15 +184,17 @@ export function sourceRecordFor(src: IngestSource, runId: string): SourceRecord 
     source_id: src.sourceId,
     source_type: src.sourceType,
     captured_at: src.capturedAt,
+    ...(src.publishedAt !== undefined ? { published_at: src.publishedAt } : {}),
     title: src.title,
     authors: [...src.authors],
     media_type: src.mediaType,
     sha256: sha256Hex(src.content),
-    object_ref: `sources/objects/${sha256Hex(src.content)}`,
+    object_ref: sourceObjectRef(sha256Hex(src.content)),
     provenance: {
-      source_capability_digest: sha256Hex(canonicalJson({ source_id: src.sourceId })),
+      source_capability_digest: src.capabilityDigest,
       supplied_by: "host_capability" as const,
       originating_run_id: runId,
+      ...(src.redactedLocator !== undefined ? { redacted_locator: src.redactedLocator } : {}),
     },
   };
   return record; // validated by writeSourceRecord against SourceRecordSchema
@@ -157,8 +206,8 @@ const ECHO_BRIEF = [
   "Phase: ingest (evidence extraction).",
   "Read each admitted source with read_source_snapshot (by its source_id) and extract the key claims.",
   "Submit EXACTLY ONE JSON object via submit_phase_result with this shape:",
-  '{"schema_version":1,"artifact_kind":"claims","source_ids":[...],"claims":[{"claim_id":"clm_<unique>","text":"...","kind":"fact|inference|speculation|unknown","state":"supported|contested|superseded|unverified_current","confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","evidence":[{"source_id":"<src id>"}],"contradicts_claim_ids":[],"canonical_verification_refs":[]}]}',
-  "Rules: claim_id unique per claim; evidence.source_id must be one of the admitted sources you read; one claim per materially distinct statement.",
+  '{"schema_version":1,"artifact_kind":"claims","source_ids":[...],"claims":[{"provisional_id":"candidate_<unique>","text":"...","kind":"fact|inference|speculation|unknown","confidence":"CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN","evidence":[{"source_id":"<src id>"}]}]}',
+  "Rules: provisional_id is transient and unique; never choose a stable claim_id. evidence.source_id must be one of the admitted sources you read; one candidate per materially distinct statement.",
 ].join("\n");
 
 const SYNTHIA_BRIEF = [
@@ -170,8 +219,8 @@ const SYNTHIA_BRIEF = [
   "## Tensions and unknowns",
   "## Related",
   "Submit EXACTLY ONE JSON object via submit_phase_result with this shape:",
-  '{"schema_version":1,"artifact_kind":"page_draft","pages":[{"frontmatter":{"schema_version":1,"page_id":"page_<unique>","revision_id":"rev_<unique>","kind":"synthesis","title":"...","summary":"...","authority":"advisory","lifecycle":"draft","created_at":"<ISO-8601 Z>","derived_from":[],"related_page_ids":[]},"markdown":"...","claims":{"schema_version":1,"page_id":"<same page_id>","revision_id":"<same revision_id>","claims":[<the claim objects, verbatim from the prior phase>]}}]}',
-  "The sidecar claims array must reuse the claim objects exactly as provided (same claim_id, text, evidence).",
+  '{"schema_version":1,"artifact_kind":"page_draft","pages":[{"frontmatter":{"schema_version":1,"page_id":"<host allocation>","revision_id":"<host allocation>","kind":"synthesis","title":"...","summary":"...","authority":"advisory","lifecycle":"draft","created_at":"<ISO-8601 Z>","derived_from":[],"related_page_ids":[]},"markdown":"...","claims":{"schema_version":1,"page_id":"<same allocated page_id>","revision_id":"<same allocated revision_id>","claims":[<each candidate using its host-allocated claim_id>]}}]}',
+  "Production composition consumes every host allocation exactly once; this direct workflow is an explicit deterministic test adapter only.",
 ].join("\n");
 
 const CARREN_BRIEF = [
@@ -180,7 +229,7 @@ const CARREN_BRIEF = [
   "Review for unsupported claims, missing evidence, contradictions, and overclaims.",
   "For every material conflict between claims (or between a claim and its evidence), emit a candidate conflict whose claim_refs point at the involved claims of THIS candidate page.",
   "Submit EXACTLY ONE JSON object via submit_phase_result with this shape:",
-  '{"schema_version":1,"artifact_kind":"lint_report","findings":[{"finding_id":"fnd_<unique>","severity":"warning|error","summary":"...","evidence":[]}],"candidate_conflicts":[{"candidate_conflict_id":"cfl_<unique>","claim_refs":[{"page_id":"...","revision_id":"...","claim_id":"..."}],"summary":"...","evidence_refs":[]}]}',
+  '{"schema_version":1,"artifact_kind":"lint_report","findings":[{"finding_id":"fnd_<unique>","severity":"info|warning|blocking","summary":"...","evidence":[{"evidence_id":"ev_<unique>","kind":"artifact|test|source|gate|digest","ref":"<opaque_ref>"}]}],"candidate_conflicts":[{"candidate_conflict_id":"cfl_<unique>","claim_refs":[{"page_id":"...","revision_id":"...","claim_id":"..."}],"summary":"...","evidence_refs":[{"evidence_id":"ev_<unique>","kind":"artifact|test|source|gate|digest","ref":"<opaque_ref>"}]}]}',
   "If there are no conflicts, candidate_conflicts must be [].",
 ].join("\n");
 
@@ -189,7 +238,7 @@ const VERA_BRIEF = [
   "Read the candidate page with read_phase_output (phase=compose) and the admitted sources with read_source_snapshot.",
   "For each claim in the candidate page's sidecar, decide whether the cited source supports it.",
   "Submit EXACTLY ONE JSON object via submit_phase_result with this shape:",
-  '{"schema_version":1,"artifact_kind":"verification_report","verified_artifact_ids":[],"claim_findings":[{"claim_ref":{"page_id":"...","revision_id":"...","claim_id":"..."},"verdict":"supported|partially_supported|unsupported","notes":"..."}]}',
+  '{"schema_version":1,"artifact_kind":"verification_report","verified_artifact_ids":[],"claim_findings":[{"page_id":"...","revision_id":"...","claim_id":"...","verdict":"supported|partially_supported|unsupported","evidence":[{"evidence_id":"ev_<unique>","kind":"artifact|test|source|gate|digest","ref":"<opaque_ref>"}]}]}',
 ].join("\n");
 
 function makeNoPriorPhases() {
@@ -209,8 +258,9 @@ function makeNoPriorPhases() {
 export async function ingestKb(
   ctx: KbWorkflowContext,
   sources: readonly IngestSource[],
-  agentRunner: AgentRunner
+  testRunner: TestOnlyIngestBodyRunner
 ): Promise<KbResult> {
+  const agentRunner = testRunner.run;
   const root = ctx.kbRoot;
   const selected = readSelectedGeneration(root);
   if (selected === undefined) {
@@ -223,22 +273,12 @@ export async function ingestKb(
       warnings: ["ingest requires at least one source"],
     });
   }
-  for (const s of sources) {
-    if (s.authors.length === 0) {
-      return result("ingest", ctx.runId, "error", false, "none", {
-        warnings: [`source '${s.sourceId}' has no authors; supply at least one`],
-      });
-    }
+  // Source bytes are already immutable same-run snapshots (or explicit test
+  // fixtures). The publication plane remains untouched until approved review.
+  if (ctx.checkpointer === undefined) {
+    throw new Error("KB artifact work requires the orchestration control DB");
   }
-
-  // 1. Admit sources: content-addressed objects + records (publication plane,
-  //    pre-gate staging; nothing is selected/generated until approval).
-  for (const src of sources) {
-    writeSourceObject(root, sha256Hex(src.content), Buffer.from(src.content, "utf8"));
-    writeSourceRecord(root, sourceRecordFor(src, ctx.runId));
-  }
-
-  const store = new RunArtifactStore(root, ctx.runId);
+  const store = new RunArtifactStore(root, ctx.runId, ctx.checkpointer);
   const admittedContent = new Map<string, string>(
     sources.map((src) => [src.sourceId, src.content])
   );
@@ -383,7 +423,22 @@ interface RawCandidateConflict {
 
 function asStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((v): v is string => typeof v === "string");
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+function asEvidenceIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (
+      entry === null ||
+      typeof entry !== "object" ||
+      Array.isArray(entry) ||
+      typeof (entry as { evidence_id?: unknown }).evidence_id !== "string"
+    ) {
+      return [];
+    }
+    return [(entry as { evidence_id: string }).evidence_id];
+  });
 }
 
 /**
@@ -449,16 +504,18 @@ function carryForward(
   >();
 
   for (const [pageId, entry] of Object.entries(base.pages)) {
-    const mdPath = pageMarkdownPath(root, pageId, entry.revision_id);
-    const claimsFile = pageClaimsPath(root, pageId, entry.revision_id);
     let pageContent: string;
     let claimsContent: string;
     try {
-      pageContent = readFileSync(mdPath, "utf8");
-      claimsContent = readFileSync(claimsFile, "utf8");
+      const revision = readPageRevision(root, pageId, entry.revision_id, {
+        pageSha256: entry.page_sha256,
+        claimsSha256: entry.claims_sha256,
+      });
+      pageContent = revision.page_markdown;
+      claimsContent = canonicalJson(revision.claims);
     } catch {
       throw new IngestDriftError(
-        `carried page '${pageId}' revision '${entry.revision_id}' is missing from the publication plane`
+        `carried page '${pageId}' revision '${entry.revision_id}' failed custody or catalog digest validation`
       );
     }
     // page.md is written as exactly `---\n<JCS(frontmatter)>\n---\n\n<markdown>`
@@ -507,7 +564,8 @@ function carryForward(
 export function approveIngest(
   ctx: KbWorkflowContext,
   sources: readonly IngestSource[],
-  pending: PendingIngest
+  pending: PendingIngest,
+  publicationContext?: ApprovedPublicationContext
 ): KbResult {
   const root = ctx.kbRoot;
   const fail = (warning: string): KbResult =>
@@ -515,10 +573,16 @@ export function approveIngest(
 
   const selected = readSelectedGeneration(root);
   if (selected === undefined) return fail("No KB is initialized at this profile");
+  if (
+    publicationContext !== undefined &&
+    (selected.selector.generation_id !== publicationContext.baseGenerationId ||
+      sha256Hex(canonicalJson(selected.selector)) !== publicationContext.baseSelectorSha256)
+  ) {
+    return fail("reviewed base selector drifted; nothing published");
+  }
 
   const manifest = readManifest(root);
   const policy = readPolicy(root);
-  void policy;
 
   // Zero NEW sources is legal: a `save` publishes a page derived from an
   // existing query over already-published sources, and the generation carries
@@ -527,7 +591,10 @@ export function approveIngest(
   if (!sources.every((s) => s.sourceId !== "")) return fail("source ids must be non-empty");
 
   // Re-read the sealed candidate bytes.
-  const store = new RunArtifactStore(root, pending.runId);
+  if (ctx.checkpointer === undefined) {
+    throw new Error("KB artifact work requires the orchestration control DB");
+  }
+  const store = new RunArtifactStore(root, pending.runId, ctx.checkpointer);
   let pageDraftRaw: RawPageDraft;
   let candidateConflicts: RawCandidateConflict[] = [];
   try {
@@ -551,6 +618,70 @@ export function approveIngest(
     }
   } finally {
     store.close();
+  }
+
+  const composeOperands = ctx.checkpointer.kbPhaseOperandsRecord(pending.runId, "compose");
+  const composeAuthority = composeOperands?.operands.compose_authority;
+  if (publicationContext?.requireContentReview === true && composeAuthority === undefined) {
+    return fail("reviewed page draft has no host compose allocation; nothing published");
+  }
+  if (composeAuthority !== undefined) {
+    const privateInput = ctx.checkpointer.getPrivateInput(pending.runId);
+    const currentPolicySha256 = sha256Hex(canonicalJson(policy));
+    if (
+      composeOperands?.lifecycle !== "closed" ||
+      composeOperands.operands.run_id !== pending.runId ||
+      composeOperands.operands.state_id !== "compose" ||
+      composeOperands.operands.kb_profile_id !== ctx.profileId ||
+      composeOperands.operands.operation !==
+        (publicationContext?.action ?? (sources.length === 0 ? "save" : "ingest")) ||
+      composeOperands.operands.admitted_policy_sha256 !== currentPolicySha256 ||
+      composeAuthority.kb_id !== manifest.kb_id ||
+      privateInput?.state !== "active" ||
+      composeAuthority.private_input_sha256 !== privateInput.request_sha256
+    ) {
+      return fail("reviewed page draft compose authority drifted; nothing published");
+    }
+    try {
+      const claimCandidates =
+        composeOperands.operands.operation === "ingest"
+          ? (() => {
+              const prior = composeOperands.operands.allowed_prior_artifacts[0];
+              if (
+                prior === undefined ||
+                prior.run_id !== pending.runId ||
+                prior.state_id !== "ingest" ||
+                prior.handle.artifact_kind !== "claims"
+              ) {
+                throw new Error("compose claim candidate operand is absent");
+              }
+              const priorStore = new RunArtifactStore(root, prior.run_id, ctx.checkpointer!);
+              try {
+                return claimCandidateBodies(
+                  JSON.parse(
+                    priorStore.read(prior.handle.artifact_id, {
+                      expected_state_id: prior.state_id,
+                      expected_handle: prior.handle,
+                      required_lifecycle: "sealed",
+                    }).content
+                  ) as unknown
+                );
+              } finally {
+                priorStore.close();
+              }
+            })()
+          : undefined;
+      pageDraftRaw = validatePageDraftAuthority({
+        document: pageDraftRaw,
+        authority: composeAuthority,
+        selectedGenerationId: selected.selector.generation_id,
+        selectedCatalogSha256: selected.selector.catalog_sha256,
+        selectedCatalog: selected.catalog,
+        ...(claimCandidates === undefined ? {} : { claimCandidates }),
+      }) as RawPageDraft;
+    } catch {
+      return fail("page_draft identity allocation is invalid; nothing published");
+    }
   }
 
   const rawPages = Array.isArray(pageDraftRaw?.pages) ? (pageDraftRaw.pages as unknown[]) : [];
@@ -588,11 +719,18 @@ export function approveIngest(
     const pageId =
       typeof fmSrc.page_id === "string" && /^page_[A-Za-z0-9._:-]+$/.test(fmSrc.page_id)
         ? fmSrc.page_id
-        : `page_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+        : composeAuthority === undefined
+          ? `page_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+          : "";
     const revisionId =
       typeof fmSrc.revision_id === "string" && /^rev_[A-Za-z0-9._:-]+$/.test(fmSrc.revision_id)
         ? fmSrc.revision_id
-        : `rev_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+        : composeAuthority === undefined
+          ? `rev_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+          : "";
+    if (pageId.length === 0 || revisionId.length === 0) {
+      return fail("page_draft omitted a host-allocated identity; nothing published");
+    }
     const kinds: PageKind[] = [
       "concept",
       "decision",
@@ -610,6 +748,9 @@ export function approveIngest(
       schema_version: 1,
       page_id: pageId,
       revision_id: revisionId,
+      ...(typeof fmSrc.previous_revision_id === "string"
+        ? { previous_revision_id: fmSrc.previous_revision_id }
+        : {}),
       kind,
       title:
         typeof fmSrc.title === "string" && fmSrc.title.trim().length > 0
@@ -641,7 +782,9 @@ export function approveIngest(
         claim_id:
           typeof c.claim_id === "string" && c.claim_id.length >= 1
             ? c.claim_id.slice(0, 128)
-            : `clm_${randomUUID().replace(/-/g, "").slice(0, 12)}`,
+            : composeAuthority === undefined
+              ? `clm_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+              : "",
         text:
           typeof c.text === "string" && c.text.trim().length > 0
             ? c.text.slice(0, 8192)
@@ -682,7 +825,12 @@ export function approveIngest(
     pages.push({ frontmatter, markdown, claims });
   }
 
-  // Publish page revision pairs (validated by writePageRevision).
+  // Build page revision pairs. Production stages these bytes only after their
+  // complete file rows are durable; the standalone fixture keeps the legacy
+  // direct writer for tests without a control DB.
+  const immutableFiles: PublicationImmutableInput[] = [];
+  const relativeKey = (absolute: string): string =>
+    path.relative(root, absolute).split(path.sep).join("/");
   const pageEntries: {
     page_id: string;
     revision_id: string;
@@ -690,13 +838,32 @@ export function approveIngest(
     claims_sha256: Sha256Hex;
   }[] = [];
   for (const page of pages) {
-    writePageRevision(root, page.frontmatter, page.markdown, page.claims);
+    validateKbContract(PageRevisionFrontmatterSchema, page.frontmatter, "publication frontmatter");
+    validateKbContract(ClaimsSidecarSchema, page.claims, "publication claims");
+    const pageBytes = `---\n${canonicalJson(page.frontmatter)}\n---\n\n${page.markdown}`;
+    const claimsBytes = canonicalJson(page.claims);
+    immutableFiles.push(
+      {
+        role: "page_markdown",
+        final_key: relativeKey(
+          pageMarkdownPath(root, page.frontmatter.page_id, page.frontmatter.revision_id)
+        ),
+        bytes: pageBytes,
+      },
+      {
+        role: "claims",
+        final_key: relativeKey(
+          pageClaimsPath(root, page.frontmatter.page_id, page.frontmatter.revision_id)
+        ),
+        bytes: claimsBytes,
+      }
+    );
     const pageId = page.frontmatter.page_id;
     const entry = {
       page_id: pageId,
       revision_id: page.frontmatter.revision_id,
-      page_sha256: sha256Hex(`---\n${canonicalJson(page.frontmatter)}\n---\n\n${page.markdown}`),
-      claims_sha256: sha256Hex(canonicalJson(page.claims)),
+      page_sha256: sha256Hex(pageBytes),
+      claims_sha256: sha256Hex(claimsBytes),
     };
     pageEntries.push(entry);
     // Supersede by page_id: this revision becomes the one this generation
@@ -715,90 +882,187 @@ export function approveIngest(
     });
   }
 
-  // Source records (objects already admitted during ingest; records re-stamped).
+  // Approved-review publication is the first moment source objects/records may
+  // enter the KB publication tree. Bytes come only from immutable snapshots.
   const sourceRecordEntries: { source_id: string; record_sha256: Sha256Hex }[] = [];
-  const objectDigests = new Set<Sha256Hex>();
+  // The publication plan contains only genuinely new object bytes; a digest
+  // already selected by the carried base is re-opened at the selector cliff,
+  // not redundantly reallocated as a new file row.
+  const objectDigests = new Set<Sha256Hex>(carried.sourceObjects);
   for (const src of sources) {
-    const record = sourceRecordFor(src, ctx.runId);
-    writeSourceRecord(root, record);
+    const record = validateKbContract(
+      SourceRecordSchema,
+      sourceRecordFor(src, ctx.runId),
+      "publication source record"
+    );
+    const objectBytes = Buffer.from(src.content, "utf8");
+    const recordBytes = canonicalJson(record);
+    if (!objectDigests.has(record.sha256)) {
+      immutableFiles.push({
+        role: "source_object",
+        final_key: relativeKey(sourceObjectPath(root, record.sha256)),
+        bytes: objectBytes,
+      });
+    }
+    immutableFiles.push({
+      role: "source_record",
+      final_key: relativeKey(sourceRecordPath(root, record.source_id)),
+      bytes: recordBytes,
+    });
     objectDigests.add(record.sha256);
-    const recordDigest = sha256Hex(canonicalJson(record));
+    const recordDigest = sha256Hex(recordBytes);
     sourceRecordEntries.push({ source_id: src.sourceId, record_sha256: recordDigest });
     carried.sourceRecords.set(src.sourceId, recordDigest);
     carried.sourceObjects.add(record.sha256);
   }
 
-  // Conflict records from the sealed lint report.
+  // Conflict records from the sealed lint report. On the authenticated review
+  // path the packet preallocates all-and-only IDs/digests and fixes created_at;
+  // publication reconstructs and verifies those exact bytes rather than making
+  // a fresh post-approval choice.
   const conflictEntries: { conflict_id: string; conflict_sha256: Sha256Hex }[] = [];
-  for (const cc of candidateConflicts) {
-    const conflictId =
-      typeof cc.candidate_conflict_id === "string" &&
-      /^cfl_[A-Za-z0-9._:-]+$/.test(cc.candidate_conflict_id)
-        ? cc.candidate_conflict_id
-        : `cfl_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
-    const claimRefsRaw = Array.isArray(cc.claim_refs) ? (cc.claim_refs as unknown[]) : [];
-    const pageIds = pages.map((p) => p.frontmatter.page_id);
-    const revIds = pages.map((p) => p.frontmatter.revision_id);
-    const allClaimIds = pages.flatMap((p) => p.claims.claims.map((c) => c.claim_id));
-    const validRefs = claimRefsRaw
-      .filter(
-        (r): r is Record<string, unknown> =>
-          typeof r === "object" &&
-          r !== null &&
-          pageIds.includes((r as Record<string, unknown>).page_id as string) &&
-          revIds.includes((r as Record<string, unknown>).revision_id as string) &&
-          allClaimIds.includes((r as Record<string, unknown>).claim_id as string)
+  const allocations = pending.candidateConflictAllocations;
+  const orderedCandidates =
+    allocations === undefined
+      ? candidateConflicts
+      : [...candidateConflicts].sort((left, right) =>
+          String(left.candidate_conflict_id).localeCompare(String(right.candidate_conflict_id))
+        );
+  if (
+    allocations !== undefined &&
+    (allocations.length !== orderedCandidates.length || pending.reviewIssuedAt === undefined)
+  ) {
+    return fail("content-review conflict allocation set is incomplete; nothing published");
+  }
+  const allowedClaimRefs = new Set([
+    ...pages.flatMap((page) =>
+      page.claims.claims.map(
+        (claim) =>
+          `${page.frontmatter.page_id}\u0000${page.frontmatter.revision_id}\u0000${claim.claim_id}`
       )
-      .slice(0, 64);
-    const summaryRaw =
-      typeof cc.summary === "string" && cc.summary.trim().length > 0
-        ? cc.summary
-        : "Candidate conflict";
-    const conflict: ConflictRecordT = {
-      schema_version: 1,
-      conflict_record_id: conflictId,
-      claim_refs: validRefs.map((r) => ({
-        page_id: String(r.page_id),
-        revision_id: String(r.revision_id),
-        claim_id: String(r.claim_id),
-      })),
-      state: "open",
-      summary: summaryRaw.slice(0, 4096),
-      evidence_refs: asStringArray(cc.evidence_refs)
-        .map((e) => e.slice(0, 128))
-        .slice(0, 32),
-      created_at: now,
-    };
-    // writeConflictRecord validates against ConflictRecordSchema; empty claim_refs are legal.
-    writeConflictRecord(root, conflict);
-    const conflictDigest = sha256Hex(canonicalJson(conflict));
-    conflictEntries.push({ conflict_id: conflictId, conflict_sha256: conflictDigest });
-    carried.conflicts.set(conflictId, conflictDigest);
+    ),
+    ...Object.entries(selected.catalog.pages).flatMap(([pageId, entry]) =>
+      readPageRevision(root, pageId, entry.revision_id, {
+        pageSha256: entry.page_sha256,
+        claimsSha256: entry.claims_sha256,
+      }).claims.claims.map((claim) => `${pageId}\u0000${entry.revision_id}\u0000${claim.claim_id}`)
+    ),
+  ]);
+  for (let index = 0; index < orderedCandidates.length; index += 1) {
+    const cc = orderedCandidates[index]!;
+    let conflict: ConflictRecordT;
+    if (allocations !== undefined) {
+      const allocation = allocations[index]!;
+      if (String(cc.candidate_conflict_id) !== allocation.candidate_conflict_id) {
+        return fail("content-review conflict allocation identity changed; nothing published");
+      }
+      try {
+        conflict = conflictRecordForAllocation({
+          candidate: cc,
+          allocation,
+          issuedAt: pending.reviewIssuedAt!,
+          allowedClaimRefs,
+        }) as unknown as ConflictRecordT;
+      } catch {
+        return fail("content-review conflict allocation no longer validates; nothing published");
+      }
+      if (sha256Hex(canonicalJson(conflict)) !== allocation.conflict_record_sha256) {
+        return fail("content-review conflict allocation digest changed; nothing published");
+      }
+    } else {
+      const conflictId =
+        typeof cc.candidate_conflict_id === "string" &&
+        /^cfl_[A-Za-z0-9._:-]+$/.test(cc.candidate_conflict_id)
+          ? cc.candidate_conflict_id
+          : `cfl_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+      const claimRefsRaw = Array.isArray(cc.claim_refs) ? (cc.claim_refs as unknown[]) : [];
+      const pageIds = pages.map((p) => p.frontmatter.page_id);
+      const revIds = pages.map((p) => p.frontmatter.revision_id);
+      const allClaimIds = pages.flatMap((p) => p.claims.claims.map((c) => c.claim_id));
+      const validRefs = claimRefsRaw
+        .filter(
+          (r): r is Record<string, unknown> =>
+            typeof r === "object" &&
+            r !== null &&
+            pageIds.includes((r as Record<string, unknown>).page_id as string) &&
+            revIds.includes((r as Record<string, unknown>).revision_id as string) &&
+            allClaimIds.includes((r as Record<string, unknown>).claim_id as string)
+        )
+        .slice(0, 64);
+      const summaryRaw =
+        typeof cc.summary === "string" && cc.summary.trim().length > 0
+          ? cc.summary
+          : "Candidate conflict";
+      conflict = {
+        schema_version: 1,
+        conflict_record_id: conflictId,
+        claim_refs: validRefs.map((r) => ({
+          page_id: String(r.page_id),
+          revision_id: String(r.revision_id),
+          claim_id: String(r.claim_id),
+        })),
+        state: "open",
+        summary: summaryRaw.slice(0, 4096),
+        evidence_refs: asEvidenceIds(cc.evidence_refs)
+          .map((e) => e.slice(0, 128))
+          .slice(0, 32),
+        created_at: now,
+      };
+    }
+    conflict = validateKbContract(ConflictRecordSchema, conflict, "publication conflict record");
+    const conflictBytes = canonicalJson(conflict);
+    immutableFiles.push({
+      role: "conflict",
+      final_key: relativeKey(conflictPath(root, conflict.conflict_record_id)),
+      bytes: conflictBytes,
+    });
+    const conflictDigest = sha256Hex(conflictBytes);
+    conflictEntries.push({
+      conflict_id: conflict.conflict_record_id,
+      conflict_sha256: conflictDigest,
+    });
+    carried.conflicts.set(conflict.conflict_record_id, conflictDigest);
   }
 
   // Build the deterministic index (index.sqlite) from the UNION of carried and
   // newly published pages, then the catalog anchored to its canonical-content
   // digest, then publish. A generation is complete: it lists everything the KB
   // selects, not just what this run produced.
-  const generationId = newGenerationId();
+  let ownedCheckpointer: Checkpointer | undefined;
+  const standaloneAction = sources.length === 0 ? "save" : "ingest";
+  const transactionId =
+    publicationContext?.transactionId ??
+    standalonePublicationTransactionId(ctx.runId, standaloneAction);
+  const checkpointer =
+    publicationContext?.checkpointer ??
+    (ownedCheckpointer = openStandalonePublicationCheckpointer({
+      root,
+      runId: ctx.runId,
+      profileId: ctx.profileId,
+      action: standaloneAction,
+    }));
+  const priorPublication = checkpointer.kbPublication(transactionId);
+  const publishedAt =
+    priorPublication?.created_at ??
+    publicationContext?.publishedAt ??
+    pending.reviewIssuedAt ??
+    now;
+  const generationId =
+    priorPublication?.candidate_generation_id ?? `gen_${sha256Hex(transactionId).slice(0, 40)}`;
   const unionPages = [...carried.pages.entries()]
     .map(([page_id, e]) => ({ page_id, ...e }))
     .sort((a, b) => (a.page_id < b.page_id ? -1 : a.page_id > b.page_id ? 1 : 0));
-  const { index_sha256 } = buildGenerationIndex(
-    root,
-    generationId,
-    manifest.kb_id,
-    [...carried.indexPages.entries()]
-      .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
-      .map(([page_id, p]) => ({
-        page_id,
-        revision_id: p.revision_id,
-        title: p.title,
-        summary: p.summary,
-        body_sha256: sha256Hex(p.body),
-        body: p.body,
-      }))
-  );
+  const indexPages = [...carried.indexPages.entries()]
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([page_id, p]) => ({
+      page_id,
+      revision_id: p.revision_id,
+      title: p.title,
+      summary: p.summary,
+      body_sha256: sha256Hex(p.body),
+      body: p.body,
+    }));
+  const index_sha256 = generationIndexDigest(generationId, manifest.kb_id, indexPages);
   const catalog = buildCatalog({
     generation_id: generationId,
     kb_id: manifest.kb_id,
@@ -814,8 +1078,33 @@ export function approveIngest(
       .map(([conflict_id, conflict_sha256]) => ({ conflict_id, conflict_sha256 }))
       .sort((a, b) => (a.conflict_id < b.conflict_id ? -1 : a.conflict_id > b.conflict_id ? 1 : 0)),
     index_sha256,
+    created_at: publishedAt,
   });
-  const selector = publishGeneration(root, catalog);
+  let selector;
+  try {
+    selector = publishGenerationTransaction({
+      root,
+      checkpointer,
+      run_id: ctx.runId,
+      transaction_id: transactionId,
+      kb_profile_id: ctx.profileId,
+      action: publicationContext?.action ?? standaloneAction,
+      base_generation_id: publicationContext?.baseGenerationId ?? selected.selector.generation_id,
+      base_selector_sha256:
+        publicationContext?.baseSelectorSha256 ?? sha256Hex(canonicalJson(selected.selector)),
+      catalog,
+      index_pages: indexPages,
+      immutable_files: immutableFiles,
+      published_at: publishedAt,
+      ...(publicationContext?.authority !== undefined
+        ? { authority: publicationContext.authority }
+        : {}),
+      require_content_review: publicationContext?.requireContentReview ?? false,
+      await_operation_receipt: publicationContext?.awaitOperationReceipt ?? false,
+    }).selector;
+  } finally {
+    ownedCheckpointer?.close();
+  }
 
   return result("ingest", ctx.runId, "complete", true, "none", {
     kb_id: manifest.kb_id,
@@ -832,6 +1121,13 @@ export function approveIngest(
       generations: 1,
       selector: 1,
     },
-    evidence: [{ evidence_id: selector.generation_id, kind: "generation", ref: "current" }],
+    evidence: [
+      {
+        evidence_id: selector.generation_id,
+        kind: "digest",
+        ref: selector.generation_id,
+        sha256: selector.catalog_sha256,
+      },
+    ],
   });
 }

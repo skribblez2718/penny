@@ -58,7 +58,7 @@ interface PlaneCalls {
   admitRuns: Array<{ parentIdentity: { provider: string; model: string } | undefined }>;
   order: string[];
   claims: Array<{ runId: string; capabilityIds: readonly string[] }>;
-  admits: Array<{ runId: string; capabilityIds: readonly string[] }>;
+  admits: Array<{ runId: string; sourceIds: readonly string[] }>;
   seals: Array<{ runId: string; artifactIds: readonly string[] }>;
   gates: Array<{ runId: string; artifacts: number }>;
   approvals: string[];
@@ -92,21 +92,20 @@ function fakePlane(options: { denyAdmission?: boolean } = {}): {
       if (options.denyAdmission === true || input.parentIdentity === undefined) {
         throw new Error("policy refusal: parent identity is not admitted");
       }
-      return { policy_sha256: "a".repeat(64) };
+      return { policy_sha256: "a".repeat(64), kb_id: "kb_test" };
     },
+    recheckPolicy() {},
     claim(input) {
       calls.order.push("claim");
       calls.claims.push({ runId: input.runId, capabilityIds: input.capabilityIds });
+      return input.capabilityIds.map((_, index) => `src_test_${index + 1}`);
     },
     admit(input) {
       calls.order.push("admit");
-      calls.admits.push({ runId: input.runId, capabilityIds: input.capabilityIds });
+      calls.admits.push({ runId: input.runId, sourceIds: input.sourceIds });
     },
     claimSave() {
       return { answerArtifactId: "art_claimed_answer" };
-    },
-    reserveSave() {
-      calls.order.push("reserveSave");
     },
     settleSave(input: { outcome: string }) {
       calls.order.push(`settleSave:${input.outcome}`);
@@ -118,8 +117,50 @@ function fakePlane(options: { denyAdmission?: boolean } = {}): {
     seal(input) {
       calls.seals.push({ runId: input.runId, artifactIds: input.artifactIds });
     },
-    persistGate(input) {
+    prepareContentReview(input) {
       calls.gates.push({ runId: input.runId, artifacts: input.artifactIds.length });
+      const issuedAt = new Date().toISOString();
+      const handles = [
+        { artifact_id: "art_compose", artifact_kind: "page_draft" as const },
+        { artifact_id: "art_lint", artifact_kind: "lint_report" as const },
+        { artifact_id: "art_verify", artifact_kind: "verification_report" as const },
+      ].map((artifact) => ({
+        schema_version: 1 as const,
+        ...artifact,
+        sha256: "b".repeat(64),
+        media_type: "application/json" as const,
+        byte_length: 2,
+      }));
+      return {
+        schema_version: 1,
+        run_id: input.runId,
+        session_id: input.sessionId,
+        challenge_id: input.challengeId,
+        kb_profile_id: input.profileId,
+        kb_id: "kb_test",
+        action: input.action,
+        base_generation_id: "gen_base",
+        base_selector_sha256: "c".repeat(64),
+        ...(input.action === "save" ? { query_run_id: input.queryRunId! } : {}),
+        candidate_artifacts: handles,
+        candidate_artifact_digests: Object.fromEntries(
+          handles.map((artifact) => [artifact.artifact_id, artifact.sha256])
+        ),
+        candidate_source_record_digests:
+          input.action === "ingest"
+            ? Object.fromEntries(input.sourceIds.map((sourceId) => [sourceId, "d".repeat(64)]))
+            : {},
+        candidate_conflict_allocations: [],
+        policy_sha256: input.policySha256,
+        issued_at: issuedAt,
+        expires_at: new Date(new Date(issuedAt).getTime() + 3_600_000).toISOString(),
+      };
+    },
+    preparePromotionGate(input) {
+      calls.gates.push({ runId: input.runId, artifacts: input.artifactIds.length });
+      return { challengeId: input.challengeId, packetSha256: "e".repeat(64) };
+    },
+    persistGate(input) {
       return {
         schema_version: 1,
         gate_id: "gate_fake01",
@@ -172,7 +213,7 @@ const DETAILS: Record<string, Record<string, JsonValue>> = {
     artifact_kind: "lint_report",
     complete: true,
     finding_count: 1,
-    error_count: 0,
+    blocking_count: 0,
     candidate_conflict_count: 0,
   },
   verify: {
@@ -205,13 +246,22 @@ function driveTo(
 }
 
 describe("KB playbook — state vocabulary", () => {
-  it("declares the machine's states in order, across all three actions", () => {
+  it("declares the machine's states in order across the engine-owned actions", () => {
     // ingest: ingest→compose→lint→verify; save enters at compose;
-    // promote: plan→patch. All three converge on the same review gate.
-    expect([...KB_AGENT_PHASES]).toEqual(["ingest", "compose", "lint", "verify", "plan", "patch"]);
+    // query: query→verify; promote: plan→patch. Mutating content converges on review.
+    expect([...KB_AGENT_PHASES]).toEqual([
+      "ingest",
+      "compose",
+      "query",
+      "lint",
+      "verify",
+      "plan",
+      "patch",
+    ]);
     expect([...KB_STATES]).toEqual([
       "ingest",
       "compose",
+      "query",
       "lint",
       "verify",
       "plan",
@@ -389,11 +439,11 @@ describe("KB playbook — result contracts", () => {
 });
 
 describe("KB playbook — typed feedback routing (W5)", () => {
-  it("routes error-severity lint findings back to compose", () => {
+  it("routes blocking-severity lint findings back to compose", () => {
     const playbook = newPlaybook();
     const context = newContext();
     driveTo(playbook, context, "lint");
-    const failing = { ...DETAILS.lint!, error_count: 2 };
+    const failing = { ...DETAILS.lint!, blocking_count: 2 };
     const gap = playbook.classifyGap(context, "lint", failing);
     expect(gap?.kind).toBe("synthesis_gap");
     expect(gap?.target_state).toBe("compose");
@@ -479,7 +529,7 @@ describe("KB playbook — review gate and terminal truth", () => {
         gate,
         terminalStatus: "complete",
         met: true,
-        fromState: "verify",
+        fromState: "compose",
         unresolvedCount: 0,
       })
     ).toMatch(/requires terminating from/);
@@ -536,7 +586,8 @@ describe("KB playbook — deterministic host I/O (§6.2 step 2)", () => {
       "art_verify",
     ]);
     expect(calls.gates[0]!.artifacts).toBe(4);
-    expect(context.playbookData.gate_id).toBe("gate_fake01");
+    expect(context.playbookData.gate_id).toBe(context.playbookData.content_review_challenge_id);
+    expect(context.playbookData.content_review_packet_sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("publishes on approval and reports the generation", () => {
@@ -620,10 +671,9 @@ describe("KB playbook — deterministic host I/O (§6.2 step 2)", () => {
     const context = newContext();
     playbook.initialize(context);
     // Admit follows claim (all-or-none first) and precedes any seal/gate — the
-    // approval path publishes what this admitted, so agents must see exactly
-    // what will publish.
+    // The verification seam receives independent admitted snapshot identities.
     expect(calls.admits).toHaveLength(1);
-    expect(calls.admits[0]!.capabilityIds).toEqual(["cap_a", "cap_b"]);
+    expect(calls.admits[0]!.sourceIds).toEqual(["src_test_1", "src_test_2"]);
     expect(calls.admits[0]!.runId).toBe(context.identity.run_id);
     expect(calls.seals).toEqual([]);
     expect(calls.gates).toEqual([]);

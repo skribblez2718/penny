@@ -116,6 +116,7 @@
       "dependencies": {
         "@penny/memory-extension": "workspace:*",
         "@penny/orchestration": "workspace:*",
+        "typebox": "1.3.7",
       },
     },
     ".pi/extensions/statusline": {

@@ -56,6 +56,19 @@ The TypeScript database defaults to `$PROJECT_ROOT/.penny/orchestration-v2.db`. 
 runs remain owner-sticky by `run_id`; retired Python checkpoints are archived outside the
 runtime and are never converted.
 
+## KB host-grant authority
+
+Profile-session and parent-delivery grants share the owner-only
+`$PROJECT_ROOT/.penny/kb-host-grants/grants.sqlite` WAL/FULL database. There is no JSON or
+secondary-directory fallback. Unexpected legacy fragments block the authority rather than being
+scanned or adopted.
+
+`penny-kb-gate profile-grant-mint|list|revoke|expire` manages reusable, expiring exact
+session/profile grants. Each adapter call consumes an immutable use bound to Pi's exact tool-call
+ID, action, request digest, and observed policy digest. Parent delivery additionally uses
+`parent-grant-mint|list|revoke|expire`; mint requires the exact invocation ID, provider, model, and
+query request, and the resulting grant remains exact single-use by one delivered run.
+
 ## Parameters
 
 | Parameter                    | Scope       | Description                                      |

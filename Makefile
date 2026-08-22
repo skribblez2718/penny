@@ -55,7 +55,7 @@ test:
 	@echo ""
 	@bash -c 'set -uo pipefail; source .venv/bin/activate; \
 	  export PYTEST_TIMEOUT=$(PYTEST_TIMEOUT); rc=0; \
-	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests apps/orchestration/tests apps/observability/tests apps/observability/src/observability/tests .pi/extensions/powerpoint/tests/python .pi/extensions/word/tests/python; do \
+	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests apps/observability/tests apps/observability/src/observability/tests .pi/extensions/powerpoint/tests/python .pi/extensions/word/tests/python; do \
 	    [ -d "$$d" ] || continue; \
 	    echo "==================== pytest $$d ===================="; \
 	    python -m pytest "$$d" -p no:cacheprovider -m "$(PYTEST_MARKERS)" --tb=short -q || rc=1; \

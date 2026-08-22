@@ -223,13 +223,14 @@ describe("flow-diagrams (KB, §5.12)", () => {
     for (const terminal of KB_FLOW.terminals) {
       const drawn = E.filter((e) => e.to === terminal.id);
       expect(drawn.length, `terminal '${terminal.id}' must be reachable`).toBeGreaterThan(0);
-      // A met terminal's only route is the required publication state.
+      expect(new Set(drawn.map((edge) => edge.from))).toEqual(new Set(terminal.routes_from));
+      // Agent-produced met terminals are admitted only from a completion-gate
+      // state. `start` is the documented deterministic verify_grounding:false
+      // host path; it creates no save claim and is not parent-deliverable.
       if (terminal.met) {
-        expect(requiredStates).toContain(terminal.route_from);
-        expect(
-          drawn.every((e) => e.from === terminal.route_from),
-          "a met terminal must be reachable only from the required state"
-        ).toBe(true);
+        for (const route of terminal.routes_from.filter((state) => state !== "start")) {
+          expect(requiredStates).toContain(route);
+        }
       }
       expect(
         drawn.every((e) => e.kind === "exit" || e.kind === "abort" || e.kind === "gate"),

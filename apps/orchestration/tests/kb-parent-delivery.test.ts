@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import {
   ParentDeliveryGrantStore,
   REFUSED_PARENT_DELIVERY,
+  buildKbHostInvocationContext,
   computeRequestSha256,
   evaluateParentDelivery,
   mintParentDeliveryGrant,
@@ -26,9 +27,12 @@ import {
   defaultDenyPolicy,
   canonicalJson,
   sha256Hex,
+  validateKbHostInvocationContext,
   type KbPolicy,
   type QueryKbRequest,
 } from "../src/kb/contracts.js";
+import { KbSessionProfileGrantStore } from "../src/kb/profile-grants.js";
+import { crashAuthorityTransaction, runAuthorityRace } from "./fixtures/authority-race-harness.js";
 
 const PROFILE = "kbp_parent_grant";
 const SESSION = "sess_op_1";
@@ -41,8 +45,16 @@ const PAST = new Date(NOW - 60_000).toISOString();
 const HOST = { session_id: SESSION, invocation_id: INVOCATION };
 // §5.3: the exact provider/model the runtime reports for the active parent.
 // This suite pins the GRANT binding matrix, so it holds the parent identity and
-// grounding acknowledgement fixed; those two gates are pinned in kb-answer-quality.
+// grounding verification fixed; those two gates are pinned in kb-answer-quality.
 const PARENT = { provider: "ollama", model: "qwen327b:latest" };
+
+function database(pathname: string): import("node:sqlite").DatabaseSync {
+  const module = process.getBuiltinModule("node:" + "sqlite") as
+    | typeof import("node:sqlite")
+    | undefined;
+  if (module === undefined) throw new Error("node:sqlite is unavailable");
+  return new module.DatabaseSync(pathname);
+}
 
 function baseRequest(overrides: Record<string, unknown> = {}): QueryKbRequest {
   return validateQueryRequest({
@@ -51,7 +63,6 @@ function baseRequest(overrides: Record<string, unknown> = {}): QueryKbRequest {
     kb_profile_id: PROFILE,
     query: "What did we decide about the gate ladder?",
     answer_delivery: "parent_tool_result",
-    verify_grounding: false,
     ...overrides,
   });
 }
@@ -69,7 +80,8 @@ function allowingPolicy(maxUtf8Bytes = 8192): KbPolicy {
 
 function grantFor(
   request: QueryKbRequest,
-  overrides: Record<string, unknown> = {}
+  overrides: Record<string, unknown> = {},
+  policy: KbPolicy = allowingPolicy()
 ): { grant; store; file } {
   const dir = mkdtempSync(path.join(os.tmpdir(), "kb-parent-grant-"));
   const store = new ParentDeliveryGrantStore(dir);
@@ -77,6 +89,9 @@ function grantFor(
     session_id: SESSION,
     invocation_id: INVOCATION,
     request,
+    policy_sha256: sha256Hex(canonicalJson(policy)),
+    parent_provider: PARENT.provider,
+    parent_model: PARENT.model,
     max_utf8_bytes: 4096,
     issued_at: new Date(NOW - 3_600_000).toISOString(),
     expires_at: LATER,
@@ -86,6 +101,95 @@ function grantFor(
   const file = store.load(grant.grant_id);
   return { grant, store, file };
 }
+
+describe("KB host invocation context boundary (§5.1)", () => {
+  it("constructs one closed context and derives locality only from the exact policy rule", () => {
+    const request = baseRequest();
+    const policy = allowingPolicy();
+    const { grant } = grantFor(request, {}, policy);
+    const context = buildKbHostInvocationContext({
+      sessionId: SESSION,
+      invocationId: INVOCATION,
+      parentIdentity: PARENT,
+      currentPolicy: policy,
+      allowedProfileIds: [PROFILE],
+      request,
+      parentDeliveryGrant: grant,
+      now: NOW,
+    });
+    expect(context).toEqual({
+      schema_version: 1,
+      session_id: SESSION,
+      invocation_id: INVOCATION,
+      parent_provider: PARENT.provider,
+      parent_model: PARENT.model,
+      parent_locality: "local",
+      allowed_kb_profile_ids: [PROFILE],
+      parent_delivery_grant: grant,
+    });
+    expect(() =>
+      validateKbHostInvocationContext({ ...context, model_visible_authority: true })
+    ).toThrow();
+
+    const remotePolicy = {
+      ...policy,
+      processing_mode: "provider_permitted" as const,
+      allowed_parent_models: [{ ...PARENT, locality: "remote" as const }],
+    };
+    const remote = buildKbHostInvocationContext({
+      sessionId: SESSION,
+      invocationId: INVOCATION,
+      parentIdentity: PARENT,
+      currentPolicy: remotePolicy,
+      allowedProfileIds: [PROFILE],
+      request: { ...request, answer_delivery: "artifact_ref" },
+      now: NOW,
+    });
+    expect(remote.parent_locality).toBe("remote");
+    expect(() =>
+      buildKbHostInvocationContext({
+        sessionId: SESSION,
+        invocationId: INVOCATION,
+        parentIdentity: { ...PARENT, model: ` ${PARENT.model}` },
+        currentPolicy: policy,
+        allowedProfileIds: [PROFILE],
+        request,
+        now: NOW,
+      })
+    ).toThrow(/allowlist/i);
+  });
+
+  it("rejects profile, request, policy, and parent tuple drift in the bundled grant", () => {
+    const request = baseRequest();
+    const policy = allowingPolicy();
+    const { grant } = grantFor(request, {}, policy);
+    const base = {
+      sessionId: SESSION,
+      invocationId: INVOCATION,
+      parentIdentity: PARENT,
+      currentPolicy: policy,
+      allowedProfileIds: [PROFILE],
+      request,
+      parentDeliveryGrant: grant,
+      now: NOW,
+    };
+    expect(() =>
+      buildKbHostInvocationContext({ ...base, allowedProfileIds: ["another_profile"] })
+    ).toThrow(/requested profile/i);
+    expect(() =>
+      buildKbHostInvocationContext({
+        ...base,
+        currentPolicy: { ...policy, parent_result: { ...policy.parent_result, max_utf8_bytes: 7 } },
+      })
+    ).toThrow(/grant/i);
+    expect(() =>
+      buildKbHostInvocationContext({
+        ...base,
+        parentDeliveryGrant: { ...grant, parent_model: "another-model" },
+      })
+    ).toThrow(/host invocation|provider\/model/i);
+  });
+});
 
 describe("parent delivery — request canonicalization (§5.6)", () => {
   it("binds SHA-256(JCS(request)) and is independent of key order", () => {
@@ -134,19 +238,23 @@ describe("parent delivery — eligibility matrix", () => {
       host: { session_id: SESSION, invocation_id: INVOCATION },
       policy,
       answerUtf8Bytes: 4096,
+      groundingVerified: true,
       now: NOW,
     });
     expect(out).toEqual({ status: "eligible", byte_cap: 4096 }); // min(4096 grant, 8192 policy)
 
-    // policy cap lower than grant: the policy bound wins
+    // policy cap lower than grant: a grant minted over that exact policy uses
+    // the lower policy bound.
     const tighter = allowingPolicy(1024);
+    const { file: tighterFile } = grantFor(request, { grant_id: "pgt-tighter" }, tighter);
     const out2 = evaluateParentDelivery({
-      grant: file,
+      grant: tighterFile,
       parentIdentity: PARENT,
       request,
       host: { session_id: SESSION, invocation_id: INVOCATION },
       policy: tighter,
       answerUtf8Bytes: 1024,
+      groundingVerified: true,
       now: NOW,
     });
     expect(out2).toEqual({ status: "eligible", byte_cap: 1024 });
@@ -160,6 +268,7 @@ describe("parent delivery — eligibility matrix", () => {
       request,
       policy,
       answerUtf8Bytes: 100,
+      groundingVerified: true,
       now: NOW,
       host: HOST,
       parentIdentity: PARENT,
@@ -211,8 +320,23 @@ describe("parent delivery — eligibility matrix", () => {
       evaluateParentDelivery({ ...base, grant: file, policy: defaultDenyPolicy("kbp-x") })
     ).toMatchObject({
       status: "refused",
+      reason_code: "grant_mismatch_policy",
+    });
+    const deniedPolicy = defaultDenyPolicy("kbp-x");
+    const { file: deniedFile } = grantFor(request, { grant_id: "pgt-policy-denied" }, deniedPolicy);
+    expect(
+      evaluateParentDelivery({ ...base, grant: deniedFile, policy: deniedPolicy })
+    ).toMatchObject({
+      status: "refused",
       reason_code: "policy_denies",
     });
+    expect(
+      evaluateParentDelivery({
+        ...base,
+        grant: file,
+        parentIdentity: { provider: PARENT.provider, model: "another-model" },
+      })
+    ).toMatchObject({ status: "refused", reason_code: "grant_mismatch_parent_model" });
     expect(evaluateParentDelivery({ ...base, grant: file, answerUtf8Bytes: 4097 })).toMatchObject({
       status: "refused",
       reason_code: "answer_exceeds_byte_cap",
@@ -226,27 +350,123 @@ describe("parent delivery — eligibility matrix", () => {
   });
 });
 
-describe("parent delivery — atomic single-use and store integrity", () => {
-  it("consumes exactly once and never redelivers on retry", () => {
+describe("parent delivery — transactional single-use and store integrity", () => {
+  it("co-locates profile-session and parent-delivery tables in one WAL/FULL authority", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "kb-shared-host-grants-"));
+    const profileStore = new KbSessionProfileGrantStore(dir);
+    const profileGrant = profileStore.mint({
+      session_id: SESSION,
+      kb_profile_id: PROFILE,
+      issued_at: new Date(NOW - 1_000).toISOString(),
+      expires_at: LATER,
+      grant_id: "kpg-shared-authority",
+    });
+    profileStore.close();
+
+    const parentStore = new ParentDeliveryGrantStore(dir);
+    const parentGrant = mintParentDeliveryGrant({
+      session_id: SESSION,
+      invocation_id: INVOCATION,
+      request: baseRequest(),
+      policy_sha256: sha256Hex(canonicalJson(allowingPolicy())),
+      parent_provider: PARENT.provider,
+      parent_model: PARENT.model,
+      max_utf8_bytes: 4096,
+      issued_at: new Date(NOW - 1_000).toISOString(),
+      expires_at: LATER,
+      grant_id: "pgt-shared-authority",
+    });
+    parentStore.mint(parentGrant);
+    parentStore.close();
+
+    const db = database(path.join(dir, "grants.sqlite"));
+    const tables = db
+      .prepare(
+        `SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name IN ('profile_session_grants','parent_delivery_grants')
+         ORDER BY name`
+      )
+      .all()
+      .map((row) => String(row.name));
+    expect(tables).toEqual(["parent_delivery_grants", "profile_session_grants"]);
+    expect(Number(db.prepare("PRAGMA synchronous").get()?.synchronous)).toBe(2);
+    db.close();
+
+    const reopenedProfile = new KbSessionProfileGrantStore(dir);
+    expect(reopenedProfile.load(profileGrant.grant_id).grant).toEqual(profileGrant);
+    reopenedProfile.close();
+    const reopenedParent = new ParentDeliveryGrantStore(dir);
+    expect(reopenedParent.load(parentGrant.grant_id).grant).toEqual(parentGrant);
+    reopenedParent.close();
+  });
+
+  it("synchronizes issuance so only an exact idempotent retry can share an invocation", async () => {
+    const exactRoot = mkdtempSync(path.join(os.tmpdir(), "kb-parent-issue-exact-"));
+    new ParentDeliveryGrantStore(exactRoot).close();
+    const exactGrant = mintParentDeliveryGrant({
+      session_id: SESSION,
+      invocation_id: "inv-issue-exact",
+      request: baseRequest(),
+      policy_sha256: sha256Hex(canonicalJson(allowingPolicy())),
+      parent_provider: PARENT.provider,
+      parent_model: PARENT.model,
+      max_utf8_bytes: 4096,
+      issued_at: new Date(NOW - 1_000).toISOString(),
+      expires_at: LATER,
+      grant_id: "pgt-issue-exact",
+    });
+    const exact = await runAuthorityRace([
+      {
+        operation: "parent-mint",
+        storeDir: exactRoot,
+        input: { grant: exactGrant, grantId: exactGrant.grant_id },
+      },
+      {
+        operation: "parent-mint",
+        storeDir: exactRoot,
+        input: { grant: exactGrant, grantId: exactGrant.grant_id },
+      },
+    ]);
+    expect(exact.every((result) => result.ok === true)).toBe(true);
+
+    const competingRoot = mkdtempSync(path.join(os.tmpdir(), "kb-parent-issue-race-"));
+    new ParentDeliveryGrantStore(competingRoot).close();
+    const competitor = (grantId: string) => ({ ...exactGrant, grant_id: grantId });
+    const competing = await runAuthorityRace([
+      {
+        operation: "parent-mint",
+        storeDir: competingRoot,
+        input: { grant: competitor("pgt-issue-a"), grantId: "pgt-issue-a" },
+      },
+      {
+        operation: "parent-mint",
+        storeDir: competingRoot,
+        input: { grant: competitor("pgt-issue-b"), grantId: "pgt-issue-b" },
+      },
+    ]);
+    expect(competing.filter((result) => result.ok === true)).toHaveLength(1);
+    expect(competing.filter((result) => result.ok === false)).toHaveLength(1);
+  });
+
+  it("consumes exactly once, makes exact retry idempotent, and rejects another run", () => {
     const request = baseRequest();
-    const { store, grant } = ((): { store: ParentDeliveryGrantStore; grant: string } => {
-      const g = grantFor(request);
-      return { store: g.store, grant: g.grant.grant_id };
-    })();
+    const { store, grant } = grantFor(request);
     const host = { session_id: SESSION, invocation_id: INVOCATION };
     const policy = allowingPolicy();
 
-    store.consume(grant, RUN_ID);
-    const consumed = store.load(grant);
+    store.consume(grant.grant_id, RUN_ID);
+    const consumed = store.load(grant.grant_id);
     expect(consumed.record.state).toBe("consumed");
     expect(consumed.record.run_id).toBe(RUN_ID);
+    expect(store.consume(grant.grant_id, RUN_ID)).toEqual(consumed);
 
-    // A retry of the same invocation is refused — no reuse (contract §5.1).
     const again = evaluateParentDelivery({
       grant: consumed,
       request,
       host,
       policy,
+      parentIdentity: PARENT,
+      groundingVerified: true,
       answerUtf8Bytes: 100,
       now: NOW,
     });
@@ -255,129 +475,185 @@ describe("parent delivery — atomic single-use and store integrity", () => {
       public_code: REFUSED_PARENT_DELIVERY,
       reason_code: "grant_consumed",
     });
-    expect(() => store.consume(grant, "kb-run-retry")).toThrow(/not available|state: consumed/);
+    expect(() => store.consume(grant.grant_id, "kb-run-retry")).toThrow(/another run/);
+    store.close();
   });
 
-  it("invalidation is operator-driven and irreversible", () => {
-    const { store, grant: g } = grantFor(baseRequest());
-    store.invalidate(g.grant_id);
-    expect(store.load(g.grant_id).record.state).toBe("invalidated");
-    expect(() => store.consume(g.grant_id, RUN_ID)).toThrow(/not available|invalidated/);
+  it("synchronizes competing multiprocess consumes so exactly one run wins", async () => {
+    const { store, grant } = grantFor(baseRequest());
+    const dir = store.dir;
+    store.close();
+    const results = await runAuthorityRace([
+      {
+        operation: "parent-consume",
+        storeDir: dir,
+        input: { grantId: grant.grant_id, runId: "run-race-a" },
+      },
+      {
+        operation: "parent-consume",
+        storeDir: dir,
+        input: { grantId: grant.grant_id, runId: "run-race-b" },
+      },
+    ]);
+    expect(results.filter((result) => result.ok === true)).toHaveLength(1);
+    expect(results.filter((result) => result.ok === false)).toHaveLength(1);
+
+    const reopened = new ParentDeliveryGrantStore(dir);
+    const winner = reopened.load(grant.grant_id).record.run_id!;
+    expect(["run-race-a", "run-race-b"]).toContain(winner);
+    expect(reopened.consume(grant.grant_id, winner).record.run_id).toBe(winner);
+    const loser = winner === "run-race-a" ? "run-race-b" : "run-race-a";
+    expect(() => reopened.consume(grant.grant_id, loser)).toThrow(/another run/);
+    reopened.close();
   });
 
-  it("detects a tampered grant file (never silently accepts)", () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "kb-parent-tamper-"));
-    const store = new ParentDeliveryGrantStore(dir);
-    const { grant: g, file } = grantFor(baseRequest());
-    void g;
-    void file;
-    // Re-mint in this dir: grantFor used its own dir; build one here instead.
-    const grant = mintParentDeliveryGrant({
-      session_id: SESSION,
-      invocation_id: INVOCATION,
-      request: baseRequest(),
-      max_utf8_bytes: 4096,
-      issued_at: new Date(NOW - 3_600_000).toISOString(),
-      expires_at: LATER,
+  it("rolls back an uncommitted consume when a process crashes", async () => {
+    const { store, grant } = grantFor(baseRequest());
+    const dir = store.dir;
+    store.close();
+    await crashAuthorityTransaction({
+      operation: "parent-crash-uncommitted",
+      storeDir: dir,
+      input: { grantId: grant.grant_id, runId: "run-crashed" },
     });
-    store.mint(grant);
-    const file0 = store.load(grant.grant_id);
-    // Tamper with the byte cap in the stored grant body.
-    const tampered = {
-      schema_version: 1,
-      record: file0.record,
-      grant: { ...file0.grant, max_utf8_bytes: 999999 },
-    };
-    const p = path.join(dir, `${grant.grant_id}.json`);
-    writeFileSync(p, JSON.stringify(tampered), { mode: 0o600 });
-    expect(() => store.load(grant.grant_id)).toThrow(/digest mismatch|closed validation/);
+    const reopened = new ParentDeliveryGrantStore(dir);
+    expect(reopened.load(grant.grant_id).record.state).toBe("available");
+    expect(reopened.consume(grant.grant_id, RUN_ID).record.state).toBe("consumed");
+    reopened.close();
   });
 
-  it("keeps the store owner-only (0700 dir / 0600 files)", () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "kb-parent-modes-"));
-    const store = new ParentDeliveryGrantStore(dir);
-    const { grant: g } = grantFor(baseRequest());
-    void g;
-    const grant = mintParentDeliveryGrant({
-      session_id: SESSION,
-      invocation_id: INVOCATION,
-      request: baseRequest(),
-      max_utf8_bytes: 4096,
-      issued_at: new Date(NOW - 3_600_000).toISOString(),
-      expires_at: LATER,
-    });
-    store.mint(grant);
-    const dirSt = lstatSync(dir);
-    expect(dirSt.mode & 0o777).toBe(0o700);
-    const fSt = lstatSync(path.join(dir, `${grant.grant_id}.json`));
-    expect(fSt.mode & 0o777).toBe(0o600);
-  });
-
-  it("lists grants as a safe projection and reports malformed entries explicitly", () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "kb-parent-list-"));
-    const store = new ParentDeliveryGrantStore(dir);
+  it("expires once under a synchronized multiprocess retry", async () => {
     const request = baseRequest();
+    const dir = mkdtempSync(path.join(os.tmpdir(), "kb-parent-expiry-race-"));
+    const store = new ParentDeliveryGrantStore(dir);
     const grant = mintParentDeliveryGrant({
       session_id: SESSION,
       invocation_id: INVOCATION,
       request,
+      policy_sha256: sha256Hex(canonicalJson(allowingPolicy())),
+      parent_provider: PARENT.provider,
+      parent_model: PARENT.model,
       max_utf8_bytes: 4096,
-      issued_at: new Date(NOW - 3_600_000).toISOString(),
-      expires_at: LATER,
+      issued_at: new Date(NOW - 120_000).toISOString(),
+      expires_at: PAST,
+      grant_id: "pgt-expiry-race",
     });
     store.mint(grant);
-    store.consume(grant.grant_id, RUN_ID);
-    // A broken entry must be visible, not silently dropped.
-    writeFileSync(path.join(dir, "pgt-broken.json"), "{ not json\n", { mode: 0o600 });
+    store.close();
+    const expiryNow = new Date(NOW).toISOString();
+    const results = await runAuthorityRace([
+      {
+        operation: "parent-expire",
+        storeDir: dir,
+        input: { grantId: grant.grant_id, now: expiryNow },
+      },
+      {
+        operation: "parent-expire",
+        storeDir: dir,
+        input: { grantId: grant.grant_id, now: expiryNow },
+      },
+    ]);
+    expect(results.every((result) => result.ok === true)).toBe(true);
+    const reopened = new ParentDeliveryGrantStore(dir);
+    expect(reopened.load(grant.grant_id).record.state).toBe("expired");
+    expect(() => reopened.consume(grant.grant_id, RUN_ID)).toThrow(/expired/);
+    reopened.close();
+  });
+
+  it("makes invalidation owner-driven, irreversible, and exactly retryable", () => {
+    const { store, grant } = grantFor(baseRequest());
+    const invalidated = store.invalidate(grant.grant_id);
+    expect(invalidated.record.state).toBe("invalidated");
+    expect(store.invalidate(grant.grant_id)).toEqual(invalidated);
+    expect(() => store.consume(grant.grant_id, RUN_ID)).toThrow(/not available|invalidated/);
+    store.close();
+  });
+
+  it("detects a tampered SQLite row digest and never accepts it", () => {
+    const { store, grant } = grantFor(baseRequest());
+    const db = database(path.join(store.dir, "grants.sqlite"));
+    db.prepare("UPDATE parent_delivery_grants SET request_sha256 = ? WHERE grant_id = ?").run(
+      "f".repeat(64),
+      grant.grant_id
+    );
+    db.close();
+    expect(() => store.load(grant.grant_id)).toThrow(/disagrees|digest mismatch/);
+    store.close();
+  });
+
+  it("keeps the WAL store owner-only (0700 directory and 0600 DB/sidecars)", () => {
+    const { store } = grantFor(baseRequest());
+    expect(lstatSync(store.dir).mode & 0o777).toBe(0o700);
+    for (const suffix of ["", "-wal", "-shm"]) {
+      const file = path.join(store.dir, `grants.sqlite${suffix}`);
+      try {
+        expect(lstatSync(file).mode & 0o777).toBe(0o600);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    store.close();
+  });
+
+  it("lists only validated SQL rows and reports logical tamper explicitly", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "kb-parent-list-"));
+    const store = new ParentDeliveryGrantStore(dir);
+    for (const grantId of ["pgt-list-good", "pgt-list-bad"]) {
+      store.mint(
+        mintParentDeliveryGrant({
+          session_id: SESSION,
+          invocation_id: `${INVOCATION}-${grantId}`,
+          request: baseRequest(),
+          policy_sha256: sha256Hex(canonicalJson(allowingPolicy())),
+          parent_provider: PARENT.provider,
+          parent_model: PARENT.model,
+          max_utf8_bytes: 4096,
+          issued_at: new Date(NOW - 3_600_000).toISOString(),
+          expires_at: LATER,
+          grant_id: grantId,
+        })
+      );
+    }
+    store.consume("pgt-list-good", RUN_ID);
+    const db = database(path.join(dir, "grants.sqlite"));
+    db.prepare(
+      "UPDATE parent_delivery_grants SET record_sha256 = ? WHERE grant_id = 'pgt-list-bad'"
+    ).run("0".repeat(64));
+    db.close();
 
     const { grants, skipped_malformed } = store.list();
     expect(skipped_malformed).toBe(1);
     expect(grants).toHaveLength(1);
-    const [g] = grants;
-    expect(g).toMatchObject({ state: "consumed", run_id: RUN_ID, kb_profile_id: PROFILE });
-    // Safe projection: no private body, no session/invocation pairing text.
-    expect(JSON.stringify(g)).not.toContain("gate ladder");
-    expect(g).not.toHaveProperty("session_id");
-    expect(g).not.toHaveProperty("invocation_id");
+    const [projection] = grants;
+    expect(projection).toMatchObject({
+      grant_id: "pgt-list-good",
+      state: "consumed",
+      run_id: RUN_ID,
+      kb_profile_id: PROFILE,
+    });
+    expect(JSON.stringify(projection)).not.toContain("gate ladder");
+    expect(projection).not.toHaveProperty("session_id");
+    expect(projection).not.toHaveProperty("invocation_id");
+    store.close();
   });
 
-  it("refuses to open a grant file that is a symlink or group-writable", () => {
+  it("fails closed on legacy JSON authority instead of scanning or adopting it", () => {
+    const { store, grant } = grantFor(baseRequest());
+    writeFileSync(path.join(store.dir, `${grant.grant_id}.json`), "{}", { mode: 0o600 });
+    expect(() => store.load(grant.grant_id)).toThrow(/scan\/adoption is forbidden/);
+    store.close();
+  });
+
+  it("refuses a symlink database and a non-owner-only store directory", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "kb-parent-hostile-"));
-    const store = new ParentDeliveryGrantStore(dir);
-    const good = {
-      schema_version: 1,
-      record: {
-        schema_version: 1,
-        grant_id: "pgt-hostile",
-        grant_sha256: sha256Hex(canonicalJson({ s: 1 })),
-        state: "available",
-        updated_at: "2026-08-19T11:00:00Z",
-      },
-      grant: {
-        schema_version: 1,
-        grant_id: "pgt-hostile",
-        session_id: SESSION,
-        invocation_id: INVOCATION,
-        action: "query",
-        kb_profile_id: PROFILE,
-        request_sha256: sha256Hex(canonicalJson("x")),
-        max_utf8_bytes: 100,
-        issued_at: new Date(NOW - 3_600_000).toISOString(),
-        expires_at: LATER,
-      },
-    };
-    const target = path.join(dir, "pgt-hostile-target.json");
-    writeFileSync(target, JSON.stringify(good), { mode: 0o600 });
-    const link = path.join(dir, "pgt-hostile.json");
-    // A symlink entry for the grant id must be refused (no-follow stance).
-    try {
-      symlinkSync(target, link);
-    } catch {
-      /* platform without symlink support — the safe-file refusal is still asserted via the load throw below */
-    }
-    expect(() => store.load("pgt-hostile")).toThrow();
-    // Group-writable directory is refused on the safe-dir check.
-    chmodSync(dir, 0o775);
-    expect(() => new ParentDeliveryGrantStore(dir)).toThrow(/group\/other writable/);
+    const targetRoot = mkdtempSync(path.join(os.tmpdir(), "kb-parent-hostile-target-"));
+    const target = path.join(targetRoot, "target.sqlite");
+    writeFileSync(target, "not sqlite", { mode: 0o600 });
+    symlinkSync(target, path.join(dir, "grants.sqlite"));
+    expect(() => new ParentDeliveryGrantStore(dir)).toThrow(/non-symlink|regular/);
+
+    const broad = mkdtempSync(path.join(os.tmpdir(), "kb-parent-broad-"));
+    chmodSync(broad, 0o775);
+    expect(() => new ParentDeliveryGrantStore(broad)).toThrow(/exactly 0700/);
   });
 });

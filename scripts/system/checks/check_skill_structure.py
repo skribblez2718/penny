@@ -14,7 +14,9 @@ import argparse
 import re
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 SKILLS_DIR = PROJECT_ROOT / ".pi" / "skills"
@@ -33,6 +35,129 @@ REQUIRED_FILES = [
 # deprecated (WARN). Other resource files have NO mandated filename.
 FLOW_DIAGRAM_HTML = "resources/flow.html"
 FLOW_DIAGRAM_MMD = "resources/flow.mmd"
+DESCRIPTION_HARD_LIMIT = 1024
+DESCRIPTION_PREFERRED_LIMIT = 500
+
+KB_DESCRIPTION = (
+    "Private advisory knowledge-base workflows. Use when the operator explicitly asks to "
+    "initialize, ingest approved sources, query, save, lint, inspect, resume, or prepare "
+    "promotion for a configured KB profile. Do not use for canonical current-state lookup "
+    "without verification, automatic research ingestion, arbitrary filesystem access, or "
+    "unapproved canonical writes."
+)
+KB_ACTIONS = ["init", "ingest", "query", "save", "lint", "promote", "status", "resume"]
+KB_SUBAGENTS = ["echo", "synthia", "carren", "vera", "piper", "skribble"]
+KB_INVOCATION_FIXTURES = [
+    'knowledge_base({schema_version: 1, action: "init", kb_profile_id: "kbp_demo", create: true, title: "Demo advisory KB"})',
+    'knowledge_base({schema_version: 1, action: "ingest", kb_profile_id: "kbp_demo", source_capability_ids: ["src_cap_1"]})',
+    'knowledge_base({schema_version: 1, action: "query", kb_profile_id: "kbp_demo", query: "...", answer_delivery: "artifact_ref"})',
+    'knowledge_base({schema_version: 1, action: "query", kb_profile_id: "kbp_demo", query: "...", answer_delivery: "parent_tool_result"}) // requires exact ParentDeliveryGrantV1 + policy',
+    'knowledge_base({schema_version: 1, action: "save", kb_profile_id: "kbp_demo", query_run_id: "run_1", page_kind: "synthesis", title: "..."})',
+    'knowledge_base({schema_version: 1, action: "lint", kb_profile_id: "kbp_demo", mode: "deterministic_and_semantic"})',
+    'knowledge_base({schema_version: 1, action: "promote", kb_profile_id: "kbp_demo", page_revisions: [{page_id: "page_1", revision_id: "rev_1"}], canonical_target_capability_ids: ["target_cap_1"]})',
+    'knowledge_base({schema_version: 1, action: "status", kb_profile_id: "kbp_demo", run_id: "run_1"})',
+    'knowledge_base({schema_version: 1, action: "resume", kb_profile_id: "kbp_demo", run_id: "run_1"})',
+]
+
+
+def parse_frontmatter(content: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    match = re.match(r"^---\n(.*?)\n---(?:\n|$)", content, re.DOTALL)
+    if match is None:
+        return None, "SKILL.md missing or malformed YAML frontmatter"
+    try:
+        parsed = yaml.safe_load(match.group(1))
+    except yaml.YAMLError as error:
+        return None, f"SKILL.md frontmatter is invalid YAML: {error}"
+    if not isinstance(parsed, dict):
+        return None, "SKILL.md frontmatter must be a YAML mapping"
+    return parsed, None
+
+
+def nested_mapping(value: object, *keys: str) -> Optional[Dict[str, Any]]:
+    current: object = value
+    for key in keys:
+        if not isinstance(current, dict) or key not in current:
+            return None
+        current = current[key]
+    return current if isinstance(current, dict) else None
+
+
+def check_kb_pi_tool_contract(
+    skill_dir: Path, content: str, frontmatter: Dict[str, Any]
+) -> List[Tuple[str, str]]:
+    issues: List[Tuple[str, str]] = []
+    penny = nested_mapping(frontmatter, "metadata", "penny")
+    expected = {
+        "name": "knowledge-base",
+        "description": KB_DESCRIPTION,
+        "license": "MIT",
+        "metadata": {
+            "version": "1.0.0",
+            "penny": {
+                "engine": "orchestration",
+                "entrypoint": "pi-tool",
+                "tool": "knowledge_base",
+                "mempalace": "metadata-only",
+                "subagents": KB_SUBAGENTS,
+                "actions": KB_ACTIONS,
+            },
+        },
+    }
+    if frontmatter != expected:
+        issues.append(
+            (
+                "ERROR",
+                "knowledge_base pi-tool frontmatter fields/values are not the exact Section 5.12 contract",
+            )
+        )
+    if list(frontmatter.keys()) != ["name", "description", "license", "metadata"]:
+        issues.append(("ERROR", "knowledge_base frontmatter top-level field order changed"))
+    if penny is not None and list(penny.keys()) != [
+        "engine",
+        "entrypoint",
+        "tool",
+        "mempalace",
+        "subagents",
+        "actions",
+    ]:
+        issues.append(("ERROR", "knowledge_base metadata.penny field order changed"))
+
+    invocation = re.search(
+        r"^## Invocation\s*$.*?^```ts\n(.*?)\n```",
+        content,
+        re.MULTILINE | re.DOTALL,
+    )
+    actual = [] if invocation is None else invocation.group(1).splitlines()
+    if actual != KB_INVOCATION_FIXTURES:
+        issues.append(
+            (
+                "ERROR",
+                "knowledge_base invocation fixtures/field order are not the exact Section 5.12 sequence",
+            )
+        )
+
+    readme_path = skill_dir / "README.md"
+    if readme_path.is_file():
+        readme = readme_path.read_text(encoding="utf-8")
+        table = re.search(
+            r"^## Order rules and prevented failure modes\s*$\n\n"
+            r"\|\s*Order rule\s*\|\s*Failure mode it prevents\s*\|\n"
+            r"\|[-: ]+\|[-: ]+\|\n"
+            r"((?:\|[^\n]+\|\n?)+)",
+            readme,
+            re.MULTILINE,
+        )
+        if (
+            table is None
+            or len([line for line in table.group(1).splitlines() if line.strip()]) == 0
+        ):
+            issues.append(
+                (
+                    "ERROR",
+                    "knowledge_base README missing the required order-rule to failure-mode table",
+                )
+            )
+    return issues
 
 
 def discover_skills() -> List[Path]:
@@ -59,17 +184,19 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
     if not skill_md.exists():
         return issues  # Not a skill — silently skip
 
-    # Detect delegate skills (thin wrappers that delegate to another skill)
+    # Parse YAML once; substring matching is not a contract validator.
     content = skill_md.read_text(encoding="utf-8")
-    is_delegate = "delegates_to:" in content
+    frontmatter, frontmatter_error = parse_frontmatter(content)
+    if frontmatter_error is not None:
+        issues.append(("ERROR", frontmatter_error))
+    is_delegate = frontmatter is not None and "delegates_to" in frontmatter
 
     if not is_delegate:
-        fm_match = re.search(r"^---\n(.*?)\n---", content, re.DOTALL)
-        entrypoint = "typescript-playbook"
-        if fm_match:
-            ep_match = re.search(r"entrypoint:\s*(\S+)", fm_match.group(1))
-            if ep_match:
-                entrypoint = ep_match.group(1)
+        penny = nested_mapping(frontmatter or {}, "metadata", "penny")
+        entrypoint_value = None if penny is None else penny.get("entrypoint")
+        entrypoint = (
+            entrypoint_value if isinstance(entrypoint_value, str) else "typescript-playbook"
+        )
 
         # Check required directories (only for full skills, not delegates)
         for rel_dir in REQUIRED_DIRS:
@@ -88,9 +215,12 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
                 issues.append(("ERROR", f"Not a file: {rel_file}"))
 
         if entrypoint == "pi-tool":
-            # pi-tool skills need a non-empty metadata.penny.tool
-            if not re.search(r"tool:\s*\S+", content):
+            # pi-tool skills need a non-empty metadata.penny.tool.
+            tool = None if penny is None else penny.get("tool")
+            if not isinstance(tool, str) or not tool:
                 issues.append(("ERROR", "pi-tool skill missing metadata.penny.tool"))
+            elif tool == "knowledge_base" and frontmatter is not None:
+                issues.extend(check_kb_pi_tool_contract(skill_dir, content, frontmatter))
 
         # Flow diagram: resources/flow.html is THE standard. Require a diagram; a skill
         # still shipping only the legacy resources/flow.mmd gets a WARN to migrate.
@@ -118,82 +248,91 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
         elif prompts_dir.exists():
             issues.append(("ERROR", "assets/prompts/ exists but is not a directory"))
 
-    # Check SKILL.md YAML frontmatter has required fields
-    skill_md = skill_dir / "SKILL.md"
-    if skill_md.exists():
-        content = skill_md.read_text(encoding="utf-8")
-        if not content.startswith("---"):
-            issues.append(("ERROR", "SKILL.md missing YAML frontmatter"))
+    # Check parsed SKILL.md YAML frontmatter has required fields.
+    if frontmatter is not None:
+        for field in ("name", "description"):
+            if field not in frontmatter:
+                issues.append(("ERROR", f"SKILL.md frontmatter missing '{field}:'"))
+
+        declared_name = frontmatter.get("name")
+        if isinstance(declared_name, str):
+            if not re.match(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", declared_name):
+                issues.append(
+                    (
+                        "ERROR",
+                        f"SKILL.md name '{declared_name}' contains invalid characters (must be lowercase a-z, 0-9, hyphens only)",
+                    )
+                )
+            elif declared_name != name:
+                issues.append(
+                    (
+                        "ERROR",
+                        f"SKILL.md name '{declared_name}' does not match directory name '{name}'",
+                    )
+                )
         else:
-            for field in ("name:", "description:"):
-                if field not in content:
-                    issues.append(("ERROR", f"SKILL.md frontmatter missing '{field}'"))
+            issues.append(("ERROR", "SKILL.md: name field must be a string"))
 
-            # Validate name format: lowercase a-z, 0-9, hyphens only
-            name_match = re.search(r"^name:\s*(\S+)", content, re.MULTILINE)
-            if name_match:
-                declared_name = name_match.group(1)
-                if not re.match(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", declared_name):
-                    issues.append(
-                        (
-                            "ERROR",
-                            f"SKILL.md name '{declared_name}' contains invalid characters (must be lowercase a-z, 0-9, hyphens only)",
-                        )
+        # Engine model: a full (non-delegate) skill must route through the shared
+        # orchestration engine. The legacy `state_machine` key is removed.
+        if not is_delegate:
+            penny = nested_mapping(frontmatter, "metadata", "penny")
+            if penny is None or penny.get("engine") != "orchestration":
+                issues.append(
+                    (
+                        "ERROR",
+                        "SKILL.md frontmatter missing 'metadata.penny.engine: orchestration' "
+                        "(the routing key for engine-backed skills)",
                     )
-                elif declared_name != name:
-                    issues.append(
-                        (
-                            "ERROR",
-                            f"SKILL.md name '{declared_name}' does not match directory name '{name}'",
-                        )
+                )
+            if penny is not None and "state_machine" in penny:
+                issues.append(
+                    (
+                        "ERROR",
+                        "SKILL.md frontmatter has legacy 'state_machine' — removed; use "
+                        "'engine: orchestration'",
                     )
-            else:
-                issues.append(("ERROR", "SKILL.md: could not parse name field"))
+                )
 
-            # Engine model: a full (non-delegate) skill must route through the shared
-            # orchestration engine. The legacy `state_machine: true` marker is removed.
-            if not is_delegate:
-                if "engine: orchestration" not in content:
-                    issues.append(
-                        (
-                            "ERROR",
-                            "SKILL.md frontmatter missing 'metadata.penny.engine: orchestration' "
-                            "(the routing key for engine-backed skills)",
-                        )
+        # Validate description follows the canonical trigger pattern.
+        description = frontmatter.get("description")
+        if isinstance(description, str):
+            desc = description
+            if len(desc) > DESCRIPTION_HARD_LIMIT:
+                issues.append(
+                    (
+                        "ERROR",
+                        f"SKILL.md description is {len(desc)} chars, above the hard limit of "
+                        f"{DESCRIPTION_HARD_LIMIT}",
                     )
-                if re.search(r"^\s*state_machine:\s*true", content, re.MULTILINE):
-                    issues.append(
-                        (
-                            "ERROR",
-                            "SKILL.md frontmatter has legacy 'state_machine: true' — removed; use "
-                            "'engine: orchestration'",
-                        )
+                )
+            elif len(desc) > DESCRIPTION_PREFERRED_LIMIT:
+                issues.append(
+                    (
+                        "WARN",
+                        f"SKILL.md description is {len(desc)} chars, above the preferred "
+                        f"target of {DESCRIPTION_PREFERRED_LIMIT}; retain the extra text only "
+                        "when it improves routing",
                     )
-
-            # Validate description follows canonical trigger pattern:
-            # "[sentence]. Use when [trigger conditions + signal phrases]. Do not use when [anti-cases]."
-            desc_match = re.search(r"^description:\s*(.+)", content, re.MULTILINE)
-            if desc_match:
-                desc = desc_match.group(1).strip().strip('"')
-                if "use when" not in desc.lower():
-                    issues.append(
-                        (
-                            "ERROR",
-                            "SKILL.md description missing 'Use when' — must follow: '[sentence]. Use when [trigger conditions + signal phrases]. Do not use when [anti-cases].'",
-                        )
+                )
+            if "use when" not in desc.lower():
+                issues.append(
+                    (
+                        "ERROR",
+                        "SKILL.md description missing 'Use when' — must follow: '[sentence]. Use when [trigger conditions + signal phrases]. Do not use when [anti-cases].'",
                     )
-                # Anti-case clause: accept any natural phrasing of "do not use …"
-                # ("do not use when/for/to/on/if …", "don't use …"), not just the
-                # exact trigram — the clause's presence is what matters, not its wording.
-                anti_case_markers = ("do not use", "don't use", "do not apply", "avoid using")
-                if not any(marker in desc.lower() for marker in anti_case_markers):
-                    issues.append(
-                        (
-                            "ERROR",
-                            "SKILL.md description missing an anti-case clause — include 'Do not use …' "
-                            "(e.g. 'Do not use when/for/to …') describing when NOT to use this skill.",
-                        )
+                )
+            anti_case_markers = ("do not use", "don't use", "do not apply", "avoid using")
+            if not any(marker in desc.lower() for marker in anti_case_markers):
+                issues.append(
+                    (
+                        "ERROR",
+                        "SKILL.md description missing an anti-case clause — include 'Do not use …' "
+                        "(e.g. 'Do not use when/for/to …') describing when NOT to use this skill.",
                     )
+                )
+        elif "description" in frontmatter:
+            issues.append(("ERROR", "SKILL.md description field must be a string"))
 
         # ── Content section validation ──
         # Check required sections exist (case-insensitive header match)

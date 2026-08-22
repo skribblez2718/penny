@@ -16,12 +16,18 @@ import pytest
 
 from checks.check_kb_privacy import (
     LIVE_PATH_CLASSES,
+    PRIVATE_SENTINEL,
+    RAW_SENTINEL_KINDS,
     SCAFFOLD_FILES,
     SCAFFOLD_REL,
+    _sentinel_errors,
+    _surface_file_errors,
     admit_root,
+    check_archive_surface,
     check_no_tracked_live_paths,
     check_scaffold_ignores,
     check_scaffold_shape,
+    check_tracked_sentinel_surface,
     is_ignored,
 )
 
@@ -103,6 +109,74 @@ def test_weakened_ignore_grammar_fails(repo: Path) -> None:
     (repo / SCAFFOLD_REL / ".gitignore").write_text("!README.md\n", encoding="utf-8")
     errors = check_scaffold_ignores(repo)
     assert len(errors) >= len(LIVE_PATH_CLASSES)
+
+
+def _raw_sentinel(kind: str, suffix: str) -> str:
+    # Assembly from fragments ensures the test source is not itself a tracked sentinel.
+    return "_".join(("RAW", kind, "SENTINEL", suffix))
+
+
+def _derived_sentinel(suffix: str) -> str:
+    return "_".join(("DERIVED", "ANSWER", "SENTINEL", suffix))
+
+
+def test_every_private_marker_class_is_detected_independently() -> None:
+    markers = [_raw_sentinel(kind, f"PY_{index}") for index, kind in enumerate(RAW_SENTINEL_KINDS)]
+    markers.append(_derived_sentinel("GRANTED_PY"))
+    payload = "\n".join(markers).encode()
+
+    assert all(PRIVATE_SENTINEL.fullmatch(marker.encode()) for marker in markers)
+    errors = _sentinel_errors(payload, "synthetic output")
+    for kind in (*[item.lower() for item in RAW_SENTINEL_KINDS], "derived-answer"):
+        assert any(kind in error for error in errors), kind
+
+
+def test_copy_surface_rejects_every_sentinel_private_paths_and_symlinks(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "safe.js").write_text("export const safe = true;\n", encoding="utf-8")
+    leak_names: list[str] = []
+    for index, kind in enumerate(RAW_SENTINEL_KINDS):
+        name = f"leak-{kind.lower()}.js"
+        (package / name).write_text(_raw_sentinel(kind, f"COPY_{index}"), encoding="utf-8")
+        leak_names.append(name)
+    derived_name = "leak-derived.js"
+    (package / derived_name).write_text(_derived_sentinel("GRANTED_COPY"), encoding="utf-8")
+    leak_names.append(derived_name)
+    (package / "receipts.sqlite").write_bytes(b"not-a-real-db")
+    (package / "link.js").symlink_to(package / "safe.js")
+
+    assert _surface_file_errors(package, ["safe.js"], "fixture package") == []
+    errors = _surface_file_errors(
+        package,
+        [*leak_names, "receipts.sqlite", "link.js", "../escape"],
+        "fixture package",
+    )
+    for kind in (*[item.lower() for item in RAW_SENTINEL_KINDS], "derived-answer"):
+        assert any(kind in error for error in errors), kind
+    assert any("private runtime file" in error for error in errors)
+    assert any("non-regular/symlink" in error for error in errors)
+    assert any("traversal" in error for error in errors)
+
+
+def test_tracked_and_archive_scanners_catch_all_marker_classes(repo: Path) -> None:
+    _git(repo, "commit", "-qm", "safe scaffold")
+    assert check_tracked_sentinel_surface(repo) == []
+    assert check_archive_surface(repo) == []
+
+    markers = [_raw_sentinel(kind, f"GIT_{index}") for index, kind in enumerate(RAW_SENTINEL_KINDS)]
+    markers.append(_derived_sentinel("GRANTED_GIT"))
+    leaked = repo / "synthetic-leak.txt"
+    leaked.write_text("\n".join(markers), encoding="utf-8")
+    _git(repo, "add", "synthetic-leak.txt")
+    tracked_errors = check_tracked_sentinel_surface(repo)
+    for kind in (*[item.lower() for item in RAW_SENTINEL_KINDS], "derived-answer"):
+        assert any(kind in error for error in tracked_errors), kind
+
+    _git(repo, "commit", "-qm", "synthetic leak")
+    archive_errors = check_archive_surface(repo)
+    for kind in (*[item.lower() for item in RAW_SENTINEL_KINDS], "derived-answer"):
+        assert any(kind in error for error in archive_errors), kind
 
 
 # --------------------------------------------------------------------- root admission

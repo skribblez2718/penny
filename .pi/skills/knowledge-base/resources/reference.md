@@ -17,9 +17,13 @@ planes. No executable skill delegate exists.
 ## Capabilities and policy
 
 Capabilities are opaque host-minted IDs with bounded operations, targets, expiry, and
-single-use semantics. Children receive private readers scoped to admitted source or prior
-phase IDs; they never receive filesystem paths, capability stores, policy files, selectors,
-or apply credentials. Model identity is admitted before a child session starts.
+single-use semantics. Complete envelopes and leases remain in the owner-only host SQLite store,
+never in the KB tree. Source admission allocates independent opaque source IDs and immutable
+same-run snapshots before child work; every child/refinement/review source read uses those snapshots.
+Children receive private readers scoped to admitted source or prior phase IDs; they never receive
+filesystem paths, capability stores, policy files, selectors, or apply credentials. Source
+objects/records publish only after content approval. Model identity is admitted before a child
+session starts.
 
 ## Workflows
 
@@ -37,16 +41,28 @@ publication path. Claims prevent duplicate concurrent saves and are returned on 
 
 ### Query
 
-Query is a read-only selected-generation operation. Deterministic ranking and safe projections
-return evidence without mutating KB state.
+Query never mutates the publication plane. `verify_grounding` defaults true: deterministic ranking
+binds one selected generation and candidate set, Synthia produces a cited `query_answer`, and Vera
+produces a closed finding for every citation. The host admits `complete/met:true` claim/delivery
+authority only when citations belong to that bound set, every finding is supported, the report
+passes, and the save claim is durably created. Explicit `verify_grounding:false` remains
+deterministic, carries `grounding_not_verified`, and creates no save or parent-delivery authority.
 
-### Promote preparation
+### Promote preparation and host-only apply
 
-`plan → patch → awaiting_review`
+`plan → patch → awaiting_review` (public prepare machine)
 
 The host independently re-resolves targets, checks capability operation/kind, captures current
 preimage digests, and verifies named page revisions against the selected generation. Failure is
 a bounded `verified:false` finding. The public path has no publishing edge and cannot apply.
+
+Before `awaiting_review`, the exact target-presentation packet is durable in the approval DB.
+Authenticated host decisions create one exact approve/refine/deny intent. Approve signs a strict
+JCS receipt with HMAC-SHA-256 and an active raw 32-byte key; the private apply resume captures and
+fsyncs all preimages, atomically reserves receipt + complete target set under the host mutex,
+performs same-directory fsync/rename writes, verifies all postimages, and finalizes approval DB →
+capability store → control DB. Owned failure restores in reverse order; a third-party byte state is
+never overwritten and ends `blocked_external_drift`. Apply never commits or pushes.
 
 ## Prompt and flow contracts
 
@@ -54,6 +70,7 @@ Cognitive prompts are exactly:
 
 - `echo-ingest.md`
 - `synthia-compose.md`
+- `synthia-query.md`
 - `carren-lint.md`
 - `vera-verify.md`
 - `piper-plan.md`

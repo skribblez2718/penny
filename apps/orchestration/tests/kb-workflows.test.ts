@@ -10,13 +10,14 @@
  * knowledge_base tool; these are the deterministic tests that pin the behavior.
  */
 
-import { mkdtempSync, rmSync, existsSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { initKb, queryKb, lintKb, statusKb, type KbWorkflowContext } from "../src/kb/workflows.js";
+import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 
 const dirs: string[] = [];
 function tmpRoot(): string {
@@ -25,11 +26,17 @@ function tmpRoot(): string {
   return d;
 }
 afterEach(() => {
+  closeKbArtifactControls();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
 function ctx(root: string, runId = `kb-e2e-${Date.now()}`): KbWorkflowContext {
-  return { kbRoot: root, profileId: "kbp_test", runId };
+  return {
+    kbRoot: root,
+    profileId: "kbp_test",
+    runId,
+    checkpointer: kbArtifactControl({ root, runId, profileId: "kbp_test" }),
+  };
 }
 
 describe("KB E2E: init → query → lint → status", () => {
@@ -60,6 +67,14 @@ describe("KB E2E: init → query → lint → status", () => {
     expect(existsSync(path.join(root, "index.md"))).toBe(true);
   });
 
+  it("init preserves a non-writable public mode on an already-admitted root", () => {
+    const root = tmpRoot();
+    chmodSync(root, 0o755);
+
+    expect(initKb(ctx(root), "Public scaffold KB").status).toBe("complete");
+    expect(statSync(root).mode & 0o777).toBe(0o755);
+  });
+
   it("init is idempotent — second call validates existing state", () => {
     const root = tmpRoot();
     const c = ctx(root);
@@ -82,7 +97,7 @@ describe("KB E2E: init → query → lint → status", () => {
     expect(result.status).toBe("complete");
     expect(result.met).toBe(false);
     expect(result.counts.candidates).toBe(0);
-    expect(result.warnings).toContain("No matching pages found");
+    expect(result.warnings).toContain("No supported matching claims found");
     // An answer artifact was still produced (work plane only, no publication)
     expect(result.artifacts.length).toBe(1);
     expect(result.artifacts[0].artifact_kind).toBe("query_answer");

@@ -2,11 +2,25 @@
  * KB filesystem tests (G7, §§5.4–5.5).
  */
 
-import { mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  chownSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
+
+import { KbCoreReadError, readContainedKbFile } from "../src/kb/core-read.js";
 
 import {
   canonicalJson,
@@ -56,8 +70,6 @@ function tmpRoot(): string {
 afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
-
-import { chmodSync } from "node:fs";
 
 const NOW = "2026-01-01T00:00:00Z";
 const ZERO = "0".repeat(64);
@@ -111,6 +123,7 @@ describe("KB §5.5 source objects (content-addressed)", () => {
     const content = "test source content";
     const digest = sha256Hex(content);
     writeSourceObject(root, digest, Buffer.from(content));
+    expect(sourceObjectPath(root, digest)).toBe(path.join(root, "sources", "objects", digest));
     expect(statSync(sourceObjectPath(root, digest)).mode & 0o777).toBe(0o600);
     expect(readSourceObject(root, digest).toString("utf8")).toBe(content);
   });
@@ -136,6 +149,9 @@ describe("KB §5.5 source objects (content-addressed)", () => {
 describe("KB §5.5 source records", () => {
   it("writes and reads a source record with mode 0600", () => {
     const root = tmpRoot();
+    const objectBytes = Buffer.from("source record object", "utf8");
+    const objectDigest = sha256Hex(objectBytes.toString("utf8"));
+    writeSourceObject(root, objectDigest, objectBytes);
     const record: SourceRecord = {
       schema_version: 1,
       source_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -144,8 +160,8 @@ describe("KB §5.5 source records", () => {
       title: "Test source",
       authors: ["Author"],
       media_type: "text/markdown",
-      sha256: ZERO,
-      object_ref: `sources/objects/${ZERO}`,
+      sha256: objectDigest,
+      object_ref: `sources/objects/${objectDigest}`,
       provenance: {
         source_capability_digest: ZERO,
         supplied_by: "host_capability",
@@ -155,6 +171,54 @@ describe("KB §5.5 source records", () => {
     writeSourceRecord(root, record);
     expect(statSync(sourceRecordPath(root, record.source_id)).mode & 0o777).toBe(0o600);
     expect(readSourceRecord(root, record.source_id)).toEqual(record);
+  });
+
+  it("rejects a source record whose exact object_ref does not resolve", () => {
+    const root = tmpRoot();
+    const digest = sha256Hex("missing physical object");
+    const record: SourceRecord = {
+      schema_version: 1,
+      source_id: "01ARZ3NDEKTSV4RRFFQ69G5FAA",
+      source_type: "file",
+      captured_at: NOW,
+      title: "Missing",
+      authors: ["A"],
+      media_type: "text/plain",
+      sha256: digest,
+      object_ref: `sources/objects/${digest}`,
+      provenance: {
+        source_capability_digest: ZERO,
+        supplied_by: "host_capability",
+        originating_run_id: "run_001",
+      },
+    };
+    expect(() => writeSourceRecord(root, record)).toThrow(KbFilesystemError);
+  });
+
+  it("rejects a source record when its resolved object no longer hash-matches", () => {
+    const root = tmpRoot();
+    const content = "immutable source";
+    const digest = sha256Hex(content);
+    writeSourceObject(root, digest, Buffer.from(content));
+    const record: SourceRecord = {
+      schema_version: 1,
+      source_id: "01ARZ3NDEKTSV4RRFFQ69G5FAB",
+      source_type: "file",
+      captured_at: NOW,
+      title: "Tampered",
+      authors: ["A"],
+      media_type: "text/plain",
+      sha256: digest,
+      object_ref: `sources/objects/${digest}`,
+      provenance: {
+        source_capability_digest: ZERO,
+        supplied_by: "host_capability",
+        originating_run_id: "run_001",
+      },
+    };
+    writeSourceRecord(root, record);
+    writeFileSync(sourceObjectPath(root, digest), "changed bytes", { mode: 0o600 });
+    expect(() => readSourceRecord(root, record.source_id)).toThrow(KbFilesystemError);
   });
 
   it("rejects a record whose object_ref does not match sha256", () => {
@@ -248,9 +312,6 @@ describe("KB §5.5 page revision pairs", () => {
   });
 });
 
-// Need readFileSync at top level for the page.md assertion
-import { readFileSync } from "node:fs";
-
 describe("KB §5.5 conflict records", () => {
   it("writes a conflict record with mode 0600", () => {
     const root = tmpRoot();
@@ -310,6 +371,116 @@ describe("KB §5.5 current selector + generation catalog", () => {
 });
 
 describe("KB custody enforcement", () => {
+  it("rejects a hard-linked authority file", () => {
+    const root = tmpRoot();
+    writeManifest(root, MANIFEST);
+    linkSync(manifestPath(root), path.join(root, "manifest-copy.json"));
+    expect(() => readManifest(root)).toThrow(KbFilesystemError);
+  });
+
+  it("rejects a symlink in the admitted root's absolute ancestor chain", () => {
+    const outer = tmpRoot();
+    const actualRoot = path.join(outer, "real", "kb");
+    writeManifest(actualRoot, MANIFEST);
+    const alias = path.join(outer, "alias");
+    symlinkSync(path.join(outer, "real"), alias, "dir");
+    expect(() => readManifest(path.join(alias, "kb"))).toThrow(KbFilesystemError);
+  });
+
+  it("rejects a symlinked parent directory", () => {
+    const root = tmpRoot();
+    writePolicy(root, defaultDenyPolicy("kb_001"));
+    const moved = path.join(root, ".kb-real");
+    renameSync(path.join(root, ".kb"), moved);
+    symlinkSync(moved, path.join(root, ".kb"), "dir");
+    expect(() => readPolicy(root)).toThrow(KbFilesystemError);
+  });
+
+  it("rejects owner-only but non-0600 file mode", () => {
+    const root = tmpRoot();
+    writeManifest(root, MANIFEST);
+    chmodSync(manifestPath(root), 0o400);
+    expect(() => readManifest(root)).toThrow(KbFilesystemError);
+  });
+
+  it("allows a non-writable public read/execute mode on the already-admitted root", () => {
+    const root = tmpRoot();
+    writeManifest(root, MANIFEST);
+    chmodSync(root, 0o755);
+    expect(readManifest(root)).toEqual(MANIFEST);
+  });
+
+  it("rejects a group-writable admitted root", () => {
+    const root = tmpRoot();
+    writeManifest(root, MANIFEST);
+    chmodSync(root, 0o775);
+    expect(() => readManifest(root)).toThrow(KbFilesystemError);
+  });
+
+  it("rejects a public-mode live directory beneath the admitted root", () => {
+    const root = tmpRoot();
+    writePolicy(root, defaultDenyPolicy("kb_001"));
+    chmodSync(path.join(root, ".kb"), 0o755);
+    expect(() => readPolicy(root)).toThrow(KbFilesystemError);
+  });
+
+  it("rejects bytes that do not match a known digest", () => {
+    const root = tmpRoot();
+    writeManifest(root, MANIFEST);
+    expect(() => readManifest(root, ZERO as never)).toThrow(KbFilesystemError);
+  });
+
+  it("detects a pathname replacement after descriptor open", () => {
+    const root = tmpRoot();
+    writeManifest(root, MANIFEST);
+    const file = manifestPath(root);
+    const openedName = path.join(root, "opened-manifest.json");
+    expect(() =>
+      readContainedKbFile(root, file, {
+        label: "manifest replacement race",
+        testOnlyAfterOpen() {
+          renameSync(file, openedName);
+          writeFileSync(file, canonicalJson({ ...MANIFEST, title: "replacement" }), {
+            mode: 0o600,
+          });
+        },
+      })
+    ).toThrow(KbCoreReadError);
+  });
+
+  it("detects admitted-root replacement after descriptor open", () => {
+    const root = tmpRoot();
+    const openedRoot = `${root}-opened`;
+    dirs.push(openedRoot);
+    writeManifest(root, MANIFEST);
+    chmodSync(root, 0o755);
+    expect(() =>
+      readContainedKbFile(root, manifestPath(root), {
+        label: "root replacement race",
+        testOnlyAfterOpen() {
+          renameSync(root, openedRoot);
+          mkdirSync(root, { mode: 0o755 });
+          chmodSync(root, 0o755);
+          writeFileSync(
+            manifestPath(root),
+            canonicalJson({ ...MANIFEST, title: "replacement root" }),
+            { mode: 0o600 }
+          );
+        },
+      })
+    ).toThrow(/root identity changed/);
+  });
+
+  it.skipIf(typeof process.getuid !== "function" || process.getuid() !== 0)(
+    "rejects a wrong-owner authority file when the test process can change ownership",
+    () => {
+      const root = tmpRoot();
+      writeManifest(root, MANIFEST);
+      chownSync(manifestPath(root), 1, 1);
+      expect(() => readManifest(root)).toThrow(KbFilesystemError);
+    }
+  );
+
   it("rejects a symlinked file", () => {
     const root = tmpRoot();
     const real = path.join(root, "real.json");

@@ -20,6 +20,17 @@ export interface RetrievalCandidate {
   excerpt: string;
 }
 
+export interface ContradictionEndpoint {
+  readonly page_id: string;
+  readonly revision_id: string;
+  readonly claim_id: string;
+}
+
+export interface ExpectedContradiction {
+  readonly left: ContradictionEndpoint;
+  readonly right: ContradictionEndpoint;
+}
+
 /**
  * Rank pages from a generation catalog by lexical match against a query.
  *
@@ -34,7 +45,10 @@ export interface RetrievalCandidate {
 export function rankPages(input: {
   catalog: GenerationCatalog;
   query: string;
-  pageContents: ReadonlyMap<string, { title: string; summary: string; markdown: string }>;
+  pageContents: ReadonlyMap<
+    string,
+    { title: string; summary: string; markdown: string; claim_ids?: readonly string[] }
+  >;
   maxCandidates?: number;
 }): RetrievalCandidate[] {
   const terms = input.query
@@ -58,7 +72,7 @@ export function rankPages(input: {
       page_id: pageId,
       revision_id: entry.revision_id,
       score,
-      claim_ids: [],
+      claim_ids: [...(content.claim_ids ?? [])],
       excerpt: content.summary,
     });
   }
@@ -116,4 +130,50 @@ export function meanReciprocalRank(
     }
   }
   return sum / results.length;
+}
+
+function candidateContainsEndpoint(
+  candidates: readonly RetrievalCandidate[],
+  endpoint: ContradictionEndpoint,
+  k: number
+): boolean {
+  return candidates
+    .slice(0, k)
+    .some(
+      (candidate) =>
+        candidate.page_id === endpoint.page_id &&
+        candidate.revision_id === endpoint.revision_id &&
+        candidate.claim_ids.includes(endpoint.claim_id)
+    );
+}
+
+/**
+ * Compute micro contradiction recall: the fraction of all labeled pairs whose
+ * two exact page/revision/claim endpoints both occur in that case's top-k.
+ *
+ * A zero-label fixture is invalid at the receipt/oracle boundary. Returning 0
+ * here keeps this metric total while ensuring an empty label set cannot pass a
+ * positive floor accidentally.
+ */
+export function microContradictionRecallAtK(
+  results: ReadonlyArray<{
+    candidates: readonly RetrievalCandidate[];
+    expectedContradictions: readonly ExpectedContradiction[];
+  }>,
+  k: number
+): number {
+  let labeledPairs = 0;
+  let retrievedPairs = 0;
+  for (const result of results) {
+    for (const pair of result.expectedContradictions) {
+      labeledPairs += 1;
+      if (
+        candidateContainsEndpoint(result.candidates, pair.left, k) &&
+        candidateContainsEndpoint(result.candidates, pair.right, k)
+      ) {
+        retrievedPairs += 1;
+      }
+    }
+  }
+  return labeledPairs === 0 ? 0 : retrievedPairs / labeledPairs;
 }

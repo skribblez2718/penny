@@ -18,9 +18,13 @@
  * durable-state half independently.
  */
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { canonicalJson, sha256 } from "../src/checkpointer.js";
+import { Checkpointer, canonicalJson, sha256 } from "../src/checkpointer.js";
 import { RunContext } from "../src/context.js";
 import { evaluateCompletionGate } from "../src/playbooks/playbook.js";
 import {
@@ -33,6 +37,14 @@ import type { Confidence, Directive, JsonValue } from "../src/contracts.js";
 const PROJECT_ROOT = "/tmp/penny-kb-durable";
 const TEST_ROOT_RESOLVER = (projectRoot: string, profileId: string): string =>
   `${projectRoot}/.penny/kb/${profileId}`;
+
+function database(file: string) {
+  const sqlite = process.getBuiltinModule("node:sqlite") as
+    | typeof import("node:sqlite")
+    | undefined;
+  if (sqlite === undefined) throw new Error("node:sqlite unavailable");
+  return new sqlite.DatabaseSync(file);
+}
 
 function newContext(constraints: Record<string, JsonValue> = {}): RunContext {
   return RunContext.create({
@@ -79,7 +91,7 @@ const DETAILS: Record<string, Record<string, JsonValue>> = {
     artifact_kind: "lint_report",
     complete: true,
     finding_count: 1,
-    error_count: 0,
+    blocking_count: 0,
     candidate_conflict_count: 0,
   },
   verify: {
@@ -104,10 +116,12 @@ function fakePlane(calls: FakePlaneCalls) {
   return {
     admitRun() {
       // §5.3 admission; this suite asserts durable state, not the policy matrix.
-      return { policy_sha256: "a".repeat(64) };
+      return { policy_sha256: "a".repeat(64), kb_id: "kb_test" };
     },
+    recheckPolicy() {},
     claim(i: { runId: string; capabilityIds: readonly string[] }) {
       calls.claims.push(i.runId);
+      return i.capabilityIds.map((_, index) => `src_restart_${index + 1}`);
     },
     admit() {
       // Deterministic host step; this test asserts claim→seal→gate ordering.
@@ -115,8 +129,55 @@ function fakePlane(calls: FakePlaneCalls) {
     seal(i: { runId: string; artifactIds: readonly string[] }) {
       calls.seals.push([...i.artifactIds]);
     },
-    persistGate(i: { runId: string; artifactIds: readonly string[] }) {
+    prepareContentReview(i: {
+      runId: string;
+      sessionId: string;
+      challengeId: string;
+      profileId: string;
+      action: "ingest" | "save";
+      queryRunId?: string;
+      sourceIds: readonly string[];
+      policySha256: string;
+    }) {
       calls.gates.push(i.runId);
+      const issuedAt = new Date().toISOString();
+      const handles = [
+        { artifact_id: "art_compose", artifact_kind: "page_draft" as const },
+        { artifact_id: "art_lint", artifact_kind: "lint_report" as const },
+        { artifact_id: "art_verify", artifact_kind: "verification_report" as const },
+      ].map((artifact) => ({
+        schema_version: 1 as const,
+        ...artifact,
+        sha256: "b".repeat(64),
+        media_type: "application/json" as const,
+        byte_length: 2,
+      }));
+      return {
+        schema_version: 1 as const,
+        run_id: i.runId,
+        session_id: i.sessionId,
+        challenge_id: i.challengeId,
+        kb_profile_id: i.profileId,
+        kb_id: "kb_test",
+        action: i.action,
+        base_generation_id: "gen_base",
+        base_selector_sha256: "c".repeat(64),
+        ...(i.action === "save" ? { query_run_id: i.queryRunId! } : {}),
+        candidate_artifacts: handles,
+        candidate_artifact_digests: Object.fromEntries(
+          handles.map((artifact) => [artifact.artifact_id, artifact.sha256])
+        ),
+        candidate_source_record_digests:
+          i.action === "ingest"
+            ? Object.fromEntries(i.sourceIds.map((sourceId) => [sourceId, "d".repeat(64)]))
+            : {},
+        candidate_conflict_allocations: [],
+        policy_sha256: i.policySha256,
+        issued_at: issuedAt,
+        expires_at: new Date(new Date(issuedAt).getTime() + 3_600_000).toISOString(),
+      };
+    },
+    persistGate(i: { runId: string; artifactIds: readonly string[] }) {
       return {
         gate_id: "gate_fake01",
         base_generation_id: "gen_base",
@@ -171,7 +232,8 @@ describe("KB durable state — checkpoint round trip at every phase boundary", (
       expect(restored.status).toBe(context.status);
       expect(restored.identity.run_id).toBe(context.identity.run_id);
       expect(restored.playbookData.action).toBe("ingest");
-      expect(restored.playbookData.source_ids).toEqual(["cap_a", "cap_b"]);
+      expect(restored.playbookData.source_capability_ids).toEqual(["cap_a", "cap_b"]);
+      expect(restored.playbookData.source_ids).toEqual(["src_restart_1", "src_restart_2"]);
 
       // Phase metadata survived (phases before the current one are recorded)
       const phases = (restored.playbookData.phases ?? {}) as Record<string, unknown>;
@@ -351,6 +413,60 @@ describe("KB durable state — status projection", () => {
         unresolvedCount: 1,
       })
     ).toBeNull();
+  });
+});
+
+describe("KB closed durable projection", () => {
+  it("validates every save/load and persists no absolute project/root path", () => {
+    const projectRoot = mkdtempSync(path.join(tmpdir(), "penny-kb-durable-projection-"));
+    const dbPath = path.join(projectRoot, "control.db");
+    const checkpointer = new Checkpointer(dbPath);
+    try {
+      const context = RunContext.create({
+        identity: {
+          schema_version: 2,
+          run_id: "run_closed_projection",
+          session_id: "session_closed_projection",
+          playbook: "knowledge-base",
+          engine_owner: "typescript",
+        },
+        goal: "Synthetic path-free KB control projection.",
+        constraints: { action: "ingest", kb_profile_id: "profile_projection" },
+        projectRoot,
+        trustProfile: "hardened-untrusted",
+        maxSteps: 8,
+      });
+      context.playbookData.action = "ingest";
+      context.playbookData.profile_id = "profile_projection";
+      context.playbookData.admitted_policy_sha256 = "a".repeat(64);
+      checkpointer.createRun(context, "projection_created", {});
+      context.playbookData.kb_id = "kb_projection";
+      checkpointer.saveRun(context, "projection_saved", { run_id: context.identity.run_id });
+
+      const raw = database(dbPath);
+      const row = raw
+        .prepare("SELECT context_json FROM runs WHERE run_id=?")
+        .get(context.identity.run_id) as { context_json: string };
+      expect(row.context_json).not.toContain(projectRoot);
+      const projection = JSON.parse(row.context_json) as Record<string, unknown>;
+      expect(projection.durable_schema_version).toBe(1);
+      expect(projection).not.toHaveProperty("project_root");
+      expect(checkpointer.loadRunById(context.identity.run_id)?.projectRoot).toBe(projectRoot);
+
+      raw
+        .prepare("UPDATE runs SET context_json=? WHERE run_id=?")
+        .run(
+          canonicalJson({ ...projection, project_root: "/forbidden/root" }),
+          context.identity.run_id
+        );
+      raw.close();
+      expect(() => checkpointer.loadRunById(context.identity.run_id)).toThrow(
+        /durable projection/i
+      );
+    } finally {
+      checkpointer.close();
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
   });
 });
 

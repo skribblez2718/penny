@@ -16,9 +16,12 @@ import {
   KbProfileRegistrySchema,
   KbProfileSchema,
   OpaqueIdSchema,
+  canonicalJson,
+  sha256Hex,
   validateKbContract,
   type KbProfile,
   type KbProfileRegistry,
+  type Sha256Hex,
 } from "./contracts.js";
 import { KbSessionProfileGrantStore } from "./profile-grants.js";
 
@@ -72,7 +75,28 @@ export function loadProfileRegistry(registryPath: string): KbProfileRegistry {
   } catch {
     throw new ProfileRegistryError("profile registry is not valid JSON");
   }
-  return validateKbContract(KbProfileRegistrySchema, parsed, "profile registry");
+  const parsedProfiles =
+    parsed !== null &&
+    typeof parsed === "object" &&
+    Array.isArray((parsed as { profiles?: unknown }).profiles)
+      ? (parsed as { profiles: unknown[] }).profiles
+      : [];
+  const parsedProfileIds = parsedProfiles.flatMap((profile) =>
+    profile !== null &&
+    typeof profile === "object" &&
+    typeof (profile as { kb_profile_id?: unknown }).kb_profile_id === "string"
+      ? [(profile as { kb_profile_id: string }).kb_profile_id]
+      : []
+  );
+  if (new Set(parsedProfileIds).size !== parsedProfileIds.length) {
+    throw new ProfileRegistryError("profile registry contains a duplicate profile id");
+  }
+  const registry = validateKbContract(KbProfileRegistrySchema, parsed, "profile registry");
+  const profileIds = registry.profiles.map((profile) => profile.kb_profile_id);
+  if (new Set(profileIds).size !== profileIds.length) {
+    throw new ProfileRegistryError("profile registry contains a duplicate profile id");
+  }
+  return registry;
 }
 
 /**
@@ -157,22 +181,29 @@ function assertRootCustody(root: string, publicScaffold: boolean): void {
   }
 }
 
-function assertNoNestedRepository(root: string): void {
+function listScaffoldEntries(root: string): string[] {
+  const entries: string[] = [];
   const stack = [root];
   while (stack.length > 0) {
     const directory = stack.pop();
     if (directory === undefined) break;
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const child = path.join(directory, entry.name);
+      const relative = path.relative(root, child).split(path.sep).join("/");
       if (entry.name === ".git") {
         throw new ProfileRegistryError("nested repository or worktree changes profile containment");
       }
       if (entry.isSymbolicLink()) {
         throw new ProfileRegistryError("profile root contains a symlink component");
       }
+      if (!entry.isDirectory() && !entry.isFile()) {
+        throw new ProfileRegistryError("profile scaffold contains a special filesystem entry");
+      }
+      entries.push(relative);
       if (entry.isDirectory()) stack.push(child);
     }
   }
+  return entries.sort();
 }
 
 function assertScaffoldGitBoundary(worktree: string, root: string): void {
@@ -197,16 +228,38 @@ function assertScaffoldGitBoundary(worktree: string, root: string): void {
       throw new ProfileRegistryError("profile scaffold contains tracked live content");
     }
   }
-  for (const livePath of LIVE_PATH_CLASSES) {
-    const candidate = `${relativeRoot}/${livePath}`;
-    let ignored = false;
+  const isIgnored = (candidate: string): boolean => {
     try {
       execFileSync("git", ["-C", worktree, "check-ignore", "-q", "--no-index", "--", candidate]);
-      ignored = true;
+      return true;
     } catch {
-      ignored = false;
+      return false;
     }
-    if (!ignored) throw new ProfileRegistryError("profile scaffold live paths are not ignored");
+  };
+  for (const livePath of LIVE_PATH_CLASSES) {
+    if (!isIgnored(`${relativeRoot}/${livePath}`)) {
+      throw new ProfileRegistryError("profile scaffold live paths are not ignored");
+    }
+  }
+
+  const publicEntries = new Set([
+    ".gitignore",
+    "README.md",
+    "manifest.example.json",
+    "templates",
+    "templates/page.md",
+    "templates/source.json",
+  ]);
+  const trackedSet = new Set(tracked.split("\n").filter(Boolean));
+  for (const relative of listScaffoldEntries(root)) {
+    const worktreeRelative = `${relativeRoot}/${relative}`;
+    if (publicEntries.has(relative)) continue;
+    if (trackedSet.has(worktreeRelative)) {
+      throw new ProfileRegistryError("profile scaffold contains tracked live content");
+    }
+    if (!isIgnored(worktreeRelative)) {
+      throw new ProfileRegistryError("an existing profile live path is not ignored");
+    }
   }
 }
 
@@ -239,7 +292,6 @@ export function resolveRegisteredProfile(input: {
       throw new ProfileRegistryError("profile does not resolve to the exact allowlisted scaffold");
     }
     assertRootCustody(resolvedRoot, true);
-    assertNoNestedRepository(resolvedRoot);
     assertScaffoldGitBoundary(expectedWorktree, resolvedRoot);
     for (const liveDirectory of [".kb", "sources", "pages", "conflicts", "work"]) {
       const candidate = path.join(resolvedRoot, liveDirectory);
@@ -250,6 +302,34 @@ export function resolveRegisteredProfile(input: {
   }
 
   return { profile, resolvedRoot };
+}
+
+/**
+ * Commit the complete normalized host registry entry without persisting its
+ * absolute paths in orchestration state. Re-resolution of another root or
+ * repository-admission mapping necessarily produces another digest.
+ */
+export function normalizedProfileCommitment(input: ResolvedProfile): Sha256Hex {
+  const repositoryAdmission =
+    input.profile.repository_admission.mode === "outside_worktree"
+      ? { mode: "outside_worktree" as const }
+      : {
+          mode: "inside_allowlisted_scaffold" as const,
+          worktree_root: realpathSync(input.profile.repository_admission.worktree_root),
+          scaffold_root: realpathSync(input.profile.repository_admission.scaffold_root),
+        };
+  return sha256Hex(
+    canonicalJson({
+      schema_version: 1,
+      kb_profile_id: input.profile.kb_profile_id,
+      kb_root: input.resolvedRoot,
+      ...(input.profile.expected_kb_id === undefined
+        ? {}
+        : { expected_kb_id: input.profile.expected_kb_id }),
+      allow_create: input.profile.allow_create,
+      repository_admission: repositoryAdmission,
+    })
+  );
 }
 
 /** Resolve one currently session-granted profile without accepting a model-selected path. */
@@ -265,9 +345,13 @@ export function resolveGrantedProfile(input: {
   if (!isValidProfileId(input.sessionId)) {
     throw new ProfileRegistryError("host session identity is unavailable");
   }
-  const allowed = new KbSessionProfileGrantStore(input.grantStoreDir).allowedProfiles(
-    input.sessionId
-  );
+  const grantStore = new KbSessionProfileGrantStore(input.grantStoreDir);
+  let allowed: ReadonlySet<string>;
+  try {
+    allowed = grantStore.allowedProfiles(input.sessionId);
+  } finally {
+    grantStore.close();
+  }
   if (!allowed.has(input.profileId)) {
     throw new ProfileRegistryError("profile is not granted to the active host session");
   }

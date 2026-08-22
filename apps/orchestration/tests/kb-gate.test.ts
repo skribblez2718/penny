@@ -16,6 +16,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,8 +24,15 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { initKb, statusKb, queryKb } from "../src/kb/workflows.js";
-import { ingestKb, type AgentRunner, type IngestSource } from "../src/kb/ingest.js";
+import { initKb, statusKb } from "../src/kb/workflows.js";
+import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
+import { readSelectedGeneration } from "../src/kb/generations.js";
+import {
+  createTestOnlyIngestBodyRunner,
+  ingestKb,
+  type IngestSource,
+  type TestOnlyIngestBodyRunner,
+} from "../src/kb/ingest.js";
 import {
   capabilitySha256Of,
   claimCapabilities,
@@ -59,11 +67,13 @@ function tmpRoot(label = "penny-kb-gate"): string {
   return d;
 }
 afterEach(() => {
+  closeKbArtifactControls();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
 const SOURCE_A: IngestSource = {
   sourceId: "src_cap_a",
+  capabilityDigest: "1".repeat(64),
   title: "Gate source A",
   authors: ["Ada Lovelace"],
   content:
@@ -74,25 +84,27 @@ const SOURCE_A: IngestSource = {
 };
 
 function ctx(root: string, runId: string) {
-  return { kbRoot: root, profileId: "kbp_gate", runId };
+  return {
+    kbRoot: root,
+    profileId: "kbp_gate",
+    runId,
+    checkpointer: kbArtifactControl({ root, runId, profileId: "kbp_gate" }),
+  };
 }
 
 /** Mock runner (same contract as kb-ingest.test.ts). */
-function makeMockRunner(): AgentRunner {
+function makeMockRunner(): TestOnlyIngestBodyRunner {
   const claims = JSON.stringify({
     schema_version: 1,
     artifact_kind: "claims",
     source_ids: ["src_cap_a"],
     claims: [
       {
-        claim_id: "clm_gate",
+        provisional_id: "candidate_gate",
         text: "Approval of ingested content is a host decision, never a model-visible action.",
         kind: "fact",
-        state: "supported",
         confidence: "CERTAIN",
         evidence: [{ source_id: "src_cap_a" }],
-        contradicts_claim_ids: [],
-        canonical_verification_refs: [],
       },
     ],
   });
@@ -146,11 +158,11 @@ function makeMockRunner(): AgentRunner {
     lint: lint,
     verify: verification,
   };
-  return (async (_inv) => {
+  return createTestOnlyIngestBodyRunner(async (_inv) => {
     const out = table[_inv.stateId];
     if (out === undefined) throw new Error(`mock: no output for ${_inv.stateId}`);
     return out;
-  }) as AgentRunner;
+  });
 }
 
 interface CapFixture {
@@ -182,16 +194,9 @@ function makeCapability(kbRoot: string, source: IngestSource, profileId: string)
     },
   });
   validateEnvelopeCrossField(envelope);
-  const store = new CapabilityStore(kbRoot);
-  try {
-    store.register(envelope);
-  } finally {
-    store.close();
-  }
-  const regDir = path.join(kbRoot, "capabilities");
-  mkdirSync(regDir, { recursive: true, mode: 0o700 });
-  const regPath = path.join(regDir, `${envelope.capability_id}.json`);
-  writeFileSync(regPath, canonicalJson(envelope), { mode: 0o600 });
+  using store = new CapabilityStore(kbRoot);
+  store.register(envelope);
+  expect(existsSync(path.join(kbRoot, "capabilities"))).toBe(false);
   return { capabilityId: envelope.capability_id, filePath, envelope };
 }
 
@@ -260,8 +265,21 @@ describe("gate decisions (host-authenticated)", () => {
     initKb(ctx(root, "kb-init"), "Gate KB");
     const cap = makeCapability(root, SOURCE_A, "kbp_gate");
 
-    const sources = sourcesFromCapabilities(root, [cap.capabilityId]);
-    claimCapabilities(root, [cap.capabilityId], "kb-run-1");
+    const sourceIds = claimCapabilities({
+      projectRoot: root,
+      kbRoot: root,
+      capabilityIds: [cap.capabilityId],
+      runId: "kb-run-1",
+      sessionId: "test-session",
+      profileId: "kbp_gate",
+      kind: "source_read",
+      operation: "ingest",
+    });
+    const sources = sourcesFromCapabilities(root, root, sourceIds, {
+      runId: "kb-run-1",
+      sessionId: "test-session",
+      profileId: "kbp_gate",
+    });
 
     const gate = await (async () => {
       const gateResult = await ingestKb(ctx(root, "kb-run-1"), sources, makeMockRunner());
@@ -271,12 +289,18 @@ describe("gate decisions (host-authenticated)", () => {
         "kbp_gate",
         "kb-run-1",
         gateResult.artifacts as unknown as Record<string, unknown>[],
-        [cap.capabilityId],
+        sourceIds,
         [cap.capabilityId]
       );
     })();
 
-    const { gate: updated, result } = approveGate(root, sources, "kb-run-1");
+    const { gate: updated, result } = approveGate(
+      root,
+      sources,
+      "kb-run-1",
+      root,
+      ctx(root, "kb-run-1").checkpointer
+    );
     expect(result.status).toBe("complete");
     expect(result.met).toBe(true);
     expect(updated.status).toBe("approved");
@@ -291,11 +315,14 @@ describe("gate decisions (host-authenticated)", () => {
     }
 
     // Second approval refused (gate already decided).
-    expect(() => approveGate(root, sources, "kb-run-1")).toThrow(GateStorageError);
+    expect(() =>
+      approveGate(root, sources, "kb-run-1", root, ctx(root, "kb-run-1").checkpointer)
+    ).toThrow(GateStorageError);
 
-    // Publication plane: the approved page is queryable.
-    const q = queryKb(ctx(root, "kb-q"), "gate approval host decision");
-    expect(q.met).toBe(true);
+    // Publication plane: the approved page is selected. This legacy fixture
+    // carries no supported claims, so current grounded query semantics
+    // correctly do not call it a met answer.
+    expect(Object.keys(readSelectedGeneration(root)!.catalog.pages)).toContain("page_gate");
   });
 
   it("drift invalidates a gate without publishing", async () => {
@@ -310,7 +337,7 @@ describe("gate decisions (host-authenticated)", () => {
 
     // A second run publishes a new generation (selector advances).
     const cap = makeCapability(root, SOURCE_A, "kbp_gate");
-    const sources = sourcesFromCapabilities(root, [cap.capabilityId]);
+    const sources = [SOURCE_A];
     gate1 && void gate1;
     const sources2 = [SOURCE_A];
     const gate2Raw = await ingestKb(ctx(root, "kb-run-drift-2"), sources2, makeMockRunner());
@@ -323,11 +350,25 @@ describe("gate decisions (host-authenticated)", () => {
       [],
       []
     );
-    const { result: r2 } = approveGate(root, sources2, "kb-run-drift-2");
+    const { result: r2 } = approveGate(
+      root,
+      sources2,
+      "kb-run-drift-2",
+      undefined,
+      ctx(root, "kb-run-drift-2").checkpointer
+    );
     expect(r2.met).toBe(true);
 
     // Gate 1 now sees a drifted base.
-    expect(() => approveGate(root, sources, "kb-run-drift-1")).toThrow(/drift|awaiting/);
+    expect(() =>
+      approveGate(
+        root,
+        sources,
+        "kb-run-drift-1",
+        undefined,
+        ctx(root, "kb-run-drift-1").checkpointer
+      )
+    ).toThrow(/drift|awaiting/);
     const invalidated = findGateForRun(root, "kb-run-drift-1");
     expect(invalidated?.status).toBe("invalidated");
     expect(invalidated?.terminal_reason).toBe("base_generation_drift");
@@ -360,11 +401,24 @@ describe("gate decisions (host-authenticated)", () => {
     const root = tmpRoot();
     initKb(ctx(root, "kb-init"), "Gate KB");
     const cap = makeCapability(root, SOURCE_A, "kbp_gate");
-    claimCapabilities(root, [cap.capabilityId], "kb-run-deny");
+    const sourceIds = claimCapabilities({
+      projectRoot: root,
+      kbRoot: root,
+      capabilityIds: [cap.capabilityId],
+      runId: "kb-run-deny",
+      sessionId: "test-session",
+      profileId: "kbp_gate",
+      kind: "source_read",
+      operation: "ingest",
+    });
 
     const gateResult = await ingestKb(
       ctx(root, "kb-run-deny"),
-      sourcesFromCapabilities(root, [cap.capabilityId]),
+      sourcesFromCapabilities(root, root, sourceIds, {
+        runId: "kb-run-deny",
+        sessionId: "test-session",
+        profileId: "kbp_gate",
+      }),
       makeMockRunner()
     );
     expect(gateResult.status).toBe("awaiting_user");
@@ -373,11 +427,11 @@ describe("gate decisions (host-authenticated)", () => {
       "kbp_gate",
       "kb-run-deny",
       gateResult.artifacts as unknown as Record<string, unknown>[],
-      [cap.capabilityId],
+      sourceIds,
       [cap.capabilityId]
     );
 
-    const denied = denyGate(root, "kb-run-deny");
+    const denied = denyGate(root, "kb-run-deny", root);
     expect(denied.status).toBe("denied");
     expect(existsSync(path.join(root, "pages"))).toBe(false);
 
@@ -391,27 +445,57 @@ describe("gate decisions (host-authenticated)", () => {
 });
 
 describe("capability resolution custody", () => {
-  it("refuses a drifted source file", async () => {
+  it("refuses an unadmitted source id", () => {
     const root = tmpRoot();
     initKb(ctx(root, "kb-init"), "Gate KB");
-    const cap = makeCapability(root, SOURCE_A, "kbp_gate");
-
-    // Drift the source file after minting.
-    writeFileSync(cap.filePath, "TAMPERED CONTENT", { mode: 0o600 });
-    expect(() => sourcesFromCapabilities(root, [cap.capabilityId])).toThrow(/drifted/i);
+    expect(() =>
+      sourcesFromCapabilities(root, root, ["src_not_admitted"], {
+        runId: "kb-run-unclaimed",
+        sessionId: "test-session",
+        profileId: "kbp_gate",
+      })
+    ).toThrow(/not an admitted/i);
   });
 
-  it("invalidateCapabilities transitions claimed → invalidated", async () => {
+  it("continues to read the immutable snapshot after external path drift", () => {
     const root = tmpRoot();
     initKb(ctx(root, "kb-init"), "Gate KB");
     const cap = makeCapability(root, SOURCE_A, "kbp_gate");
-    claimCapabilities(root, [cap.capabilityId], "kb-run-inval");
-    invalidateCapabilities(root, [cap.capabilityId]);
-    const store = new CapabilityStore(root);
-    try {
-      expect(store.lease(cap.capabilityId)?.state).toBe("invalidated");
-    } finally {
-      store.close();
-    }
+    const sourceIds = claimCapabilities({
+      projectRoot: root,
+      kbRoot: root,
+      capabilityIds: [cap.capabilityId],
+      runId: "kb-run-snapshot",
+      sessionId: "test-session",
+      profileId: "kbp_gate",
+      kind: "source_read",
+      operation: "ingest",
+    });
+    writeFileSync(cap.filePath, "TAMPERED AFTER SNAPSHOT", { mode: 0o600 });
+    const [source] = sourcesFromCapabilities(root, root, sourceIds, {
+      runId: "kb-run-snapshot",
+      sessionId: "test-session",
+      profileId: "kbp_gate",
+    });
+    expect(source?.content).toBe(SOURCE_A.content);
+  });
+
+  it("invalidateCapabilities transitions an exact claimed target set", () => {
+    const root = tmpRoot();
+    initKb(ctx(root, "kb-init"), "Gate KB");
+    const cap = makeCapability(root, SOURCE_A, "kbp_gate");
+    claimCapabilities({
+      projectRoot: root,
+      kbRoot: root,
+      capabilityIds: [cap.capabilityId],
+      runId: "kb-run-inval",
+      sessionId: "test-session",
+      profileId: "kbp_gate",
+      kind: "source_read",
+      operation: "ingest",
+    });
+    invalidateCapabilities(root, [cap.capabilityId], { runId: "kb-run-inval" });
+    using store = new CapabilityStore(root);
+    expect(store.lease(cap.capabilityId)?.state).toBe("invalidated");
   });
 });

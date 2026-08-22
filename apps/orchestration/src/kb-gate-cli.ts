@@ -4,9 +4,9 @@
  * content-review gate.
  *
  * The model-facing `knowledge_base` tool CANNOT approve or deny; decisions
- * reach the KB only through this host binary (the §5.1 "authenticated
- * callback" in the single-host trust domain: owner-only state under the KB
- * root, digests re-verified on every decision).
+ * reach the KB only through the authenticated host service facade. This CLI
+ * is one local-OS-authenticated caller of that facade; canonical packet and
+ * complete receipt bytes live in the orchestration control DB.
  *
  * Commands:
  *   capability-mint    Mint a source_read capability envelope (operator action)
@@ -17,37 +17,47 @@
  *   refine             Request a refinement round (host decision; re-enters compose, re-gates)
  *   parent-grant-mint  Mint a single-use derived-answer grant (§5.1; operator action)
  *   parent-grant-list  List parent-delivery grants (safe projection; no bodies)
+ *   promotion-list     Present stored promotion packets from the approval DB
+ *   promotion-key-rotate  Create/activate one raw 32-byte signing key
+ *   promotion-approve Record signed host approval (never a public tool action)
+ *   promotion-refine  Close the challenge and resume planning with the same targets
+ *   promotion-deny    Close the challenge and invalidate its target claims
+ *   promotion-apply   Internally resume one signed receipt and journaled apply
  *
  * Conventions:
  *   --project-root  Defaults to cwd. KB root = <project-root>/.penny/kb/<profile>.
- *   Grant store     <project-root>/.penny/kb-parent-grants/ (host state, not the KB).
+ *   Grant authority <project-root>/.penny/kb-host-grants/grants.sqlite (WAL/FULL).
+ *   Capability DB   <project-root>/.penny/kb-capabilities/capabilities.sqlite.
  *   No command prints any source or page body to stdout.
  */
 
-import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import { Checkpointer } from "./checkpointer.js";
 import { OrchestrationEngine } from "./engine.js";
 import { loadRuntimeConfig } from "./config.js";
 import type { Directive, JsonValue } from "./contracts.js";
+import { canonicalJson, sha256Hex } from "./kb/contracts.js";
 import { envelopeDigest, CapabilityStore } from "./kb/capabilities.js";
 import {
   ParentDeliveryGrantStore,
   mintParentDeliveryGrant,
   validateQueryRequest,
 } from "./kb/parent-delivery.js";
+import { hostGrantAuthorityDir } from "./kb/owner-sqlite.js";
 import { KbSessionProfileGrantStore } from "./kb/profile-grants.js";
+import { readPolicy } from "./kb/filesystem.js";
 import { resolveRegisteredProfile } from "./kb/profile-registry.js";
+import { resolveKbRoot } from "./kb/ingest-plane.js";
+import { recheckAdmittedPolicy } from "./kb/workflows.js";
 import {
-  approveGate,
-  denyGate,
-  findGateForRun,
-  listGates,
-  latestPendingGate,
-  mintSourceCapability,
-  sourcesFromCapabilities,
-} from "./kb/gate.js";
+  PromotionApprovalStore,
+  type PromotionApplyOutcome,
+  type PromotionDecisionOutcome,
+} from "./kb/promotion.js";
+import { mintSourceCapability } from "./kb/gate.js";
+import { ContentReviewService, authenticateLocalContentReviewer } from "./kb/content-review.js";
+import { promotionApplyOperationSourceIdentity } from "./kb/operation-receipts.js";
 
 interface Args {
   projectRoot: string;
@@ -99,11 +109,7 @@ function fail(message: string): never {
 // ── capability-mint ─────────────────────────────────────────────────────────
 
 function grantStoreDir(args: Args): string {
-  return path.join(path.resolve(args.projectRoot), ".penny", "kb-parent-grants");
-}
-
-function profileGrantStoreDir(args: Args): string {
-  return path.join(path.resolve(args.projectRoot), ".penny", "kb-host-grants", "profile-grants");
+  return hostGrantAuthorityDir(args.projectRoot);
 }
 
 function cmdProfileGrantMint(args: Args): void {
@@ -125,31 +131,57 @@ function cmdProfileGrantMint(args: Args): void {
     });
   }
   const now = new Date();
-  const grant = new KbSessionProfileGrantStore(profileGrantStoreDir(args)).mint({
-    session_id: sessionId,
-    allowed_kb_profile_ids: profileIds,
-    issued_at: now.toISOString(),
-    expires_at: new Date(now.getTime() + ttlMinutes * 60_000).toISOString(),
-  });
-  process.stdout.write(
-    JSON.stringify(
-      {
-        schema_version: 1,
-        grant_id: grant.grant_id,
-        session_id: grant.session_id,
-        allowed_kb_profile_ids: grant.allowed_kb_profile_ids,
-        issued_at: grant.issued_at,
-        expires_at: grant.expires_at,
-      },
-      null,
-      2
-    ) + "\n"
-  );
+  const store = new KbSessionProfileGrantStore(grantStoreDir(args));
+  try {
+    const grants = profileIds.map((profileId) =>
+      store.mint({
+        session_id: sessionId,
+        kb_profile_id: profileId,
+        issued_at: now.toISOString(),
+        expires_at: new Date(now.getTime() + ttlMinutes * 60_000).toISOString(),
+      })
+    );
+    process.stdout.write(JSON.stringify({ schema_version: 1, grants }, null, 2) + "\n");
+  } finally {
+    store.close();
+  }
 }
 
 function cmdProfileGrantList(args: Args): void {
-  const grants = new KbSessionProfileGrantStore(profileGrantStoreDir(args)).list();
-  process.stdout.write(JSON.stringify({ schema_version: 1, grants }, null, 2) + "\n");
+  const store = new KbSessionProfileGrantStore(grantStoreDir(args));
+  try {
+    const { grants, skipped_malformed } = store.list();
+    process.stdout.write(
+      JSON.stringify({ schema_version: 1, grants, skipped_malformed }, null, 2) + "\n"
+    );
+  } finally {
+    store.close();
+  }
+}
+
+function cmdProfileGrantState(args: Args, operation: "revoke" | "expire"): void {
+  const grantId = String(args["grant"] ?? "");
+  if (grantId.length === 0) fail(`profile-grant-${operation} requires --grant GRANT_ID`);
+  const store = new KbSessionProfileGrantStore(grantStoreDir(args));
+  try {
+    const document = operation === "revoke" ? store.revoke(grantId) : store.expire(grantId);
+    process.stdout.write(
+      JSON.stringify(
+        {
+          schema_version: 1,
+          grant_id: document.grant.grant_id,
+          state: document.record.state,
+          session_id: document.grant.session_id,
+          kb_profile_id: document.grant.kb_profile_id,
+          updated_at: document.record.updated_at,
+        },
+        null,
+        2
+      ) + "\n"
+    );
+  } finally {
+    store.close();
+  }
 }
 
 function cmdParentGrantMint(args: Args): void {
@@ -172,70 +204,128 @@ function cmdParentGrantMint(args: Args): void {
       `--profile is ${args.profile} but the request names ${request.kb_profile_id}; they must match`
     );
   }
-  if (request.answer_delivery !== undefined && request.answer_delivery !== "parent_tool_result") {
-    fail("a grant request must use answer_delivery: parent_tool_result (or omit it)");
+  if (request.answer_delivery !== "parent_tool_result") {
+    fail("a grant request must explicitly use answer_delivery: parent_tool_result");
   }
+  const parentProvider = String(args["parent-provider"] ?? "");
+  const parentModel = String(args["parent-model"] ?? "");
   const maxBytes = Number(args["max-bytes"] ?? 16384);
   const ttlMinutes = Number(args["ttl-minutes"] ?? 15);
+  if (parentProvider.length === 0 || parentModel.length === 0) {
+    fail("parent-grant-mint requires --parent-provider and --parent-model");
+  }
   if (
-    !Number.isFinite(maxBytes) ||
-    !Number.isFinite(ttlMinutes) ||
+    !Number.isInteger(maxBytes) ||
+    maxBytes < 1 ||
+    maxBytes > 32768 ||
+    !Number.isInteger(ttlMinutes) ||
     ttlMinutes < 1 ||
     ttlMinutes > 10080
   ) {
-    fail("--max-bytes must be a positive integer (≤ 32768) and --ttl-minutes 1–10080");
+    fail("--max-bytes must be an integer 1–32768 and --ttl-minutes an integer 1–10080");
   }
+  const policy = readPolicy(kbRootFor(args));
   const now = new Date();
   const grant = mintParentDeliveryGrant({
     session_id: sessionId,
     invocation_id: invocationId,
     request,
-    max_utf8_bytes: Math.max(1, Math.min(32768, Math.trunc(maxBytes))),
+    policy_sha256: sha256Hex(canonicalJson(policy)),
+    parent_provider: parentProvider,
+    parent_model: parentModel,
+    max_utf8_bytes: maxBytes,
     issued_at: now.toISOString(),
     expires_at: new Date(now.getTime() + ttlMinutes * 60_000).toISOString(),
   });
   const store = new ParentDeliveryGrantStore(grantStoreDir(args));
-  store.mint(grant);
-  process.stdout.write(
-    JSON.stringify(
-      {
-        schema_version: 1,
-        grant_id: grant.grant_id,
-        kb_profile_id: grant.kb_profile_id,
-        request_sha256: grant.request_sha256,
-        max_utf8_bytes: grant.max_utf8_bytes,
-        issued_at: grant.issued_at,
-        expires_at: grant.expires_at,
-        note: "single-use; consumed atomically by the matching approved run. See parent-grant-list.",
-      },
-      null,
-      2
-    ) + "\n"
-  );
+  try {
+    store.mint(grant);
+    process.stdout.write(
+      JSON.stringify(
+        {
+          schema_version: 1,
+          grant_id: grant.grant_id,
+          kb_profile_id: grant.kb_profile_id,
+          request_sha256: grant.request_sha256,
+          policy_sha256: grant.policy_sha256,
+          parent_provider: grant.parent_provider,
+          parent_model: grant.parent_model,
+          max_utf8_bytes: grant.max_utf8_bytes,
+          issued_at: grant.issued_at,
+          expires_at: grant.expires_at,
+          note: "single-use; consumed atomically by the exact matching invocation and run.",
+        },
+        null,
+        2
+      ) + "\n"
+    );
+  } finally {
+    store.close();
+  }
 }
 
 function cmdParentGrantList(args: Args): void {
   const store = new ParentDeliveryGrantStore(grantStoreDir(args));
-  const { grants, skipped_malformed } = store.list();
-  process.stdout.write(
-    JSON.stringify({ schema_version: 1, grants, skipped_malformed }, null, 2) + "\n"
-  );
+  try {
+    const { grants, skipped_malformed } = store.list();
+    process.stdout.write(
+      JSON.stringify({ schema_version: 1, grants, skipped_malformed }, null, 2) + "\n"
+    );
+  } finally {
+    store.close();
+  }
+}
+
+function cmdParentGrantState(args: Args, operation: "revoke" | "expire"): void {
+  const grantId = String(args["grant"] ?? "");
+  if (grantId.length === 0) fail(`parent-grant-${operation} requires --grant GRANT_ID`);
+  const store = new ParentDeliveryGrantStore(grantStoreDir(args));
+  try {
+    const document = operation === "revoke" ? store.invalidate(grantId) : store.expire(grantId);
+    process.stdout.write(
+      JSON.stringify(
+        {
+          schema_version: 1,
+          grant_id: document.grant.grant_id,
+          state: document.record.state,
+          run_id: document.record.run_id ?? null,
+          updated_at: document.record.updated_at,
+        },
+        null,
+        2
+      ) + "\n"
+    );
+  } finally {
+    store.close();
+  }
 }
 
 function cmdCapabilityMint(args: Args): void {
-  const kbRoot = kbRootFor(args);
+  void kbRootFor(args);
   const filePath = String(args["path"] ?? "");
   const title = String(args["title"] ?? "");
   const authors = (args["author"] as string[] | undefined) ?? [];
-  if (filePath.length === 0 || title.length === 0 || authors.length === 0) {
-    fail("capability-mint requires --path, --title, and at least one --author");
+  const sessionId = String(args["session"] ?? "");
+  const operation = String(args["operation"] ?? "");
+  if (
+    filePath.length === 0 ||
+    title.length === 0 ||
+    authors.length === 0 ||
+    sessionId.length === 0 ||
+    operation !== "ingest"
+  ) {
+    fail(
+      "capability-mint requires --path, --title, at least one --author, --session, and --operation ingest"
+    );
   }
   const absolute = path.resolve(args.projectRoot, filePath);
 
   const envelope = mintSourceCapability({
-    kbRoot,
+    projectRoot: path.resolve(args.projectRoot),
     kbProfileId: args.profile,
     absolutePath: absolute,
+    sessionId,
+    allowedOperation: "ingest",
     title,
     authors,
     ...(args["source-type"] !== undefined
@@ -255,7 +345,6 @@ function cmdCapabilityMint(args: Args): void {
             | "application/json",
         }
       : {}),
-    ...(args["session-id"] !== undefined ? { sessionId: String(args["session-id"]) } : {}),
     ...(args["captured-at"] !== undefined ? { capturedAt: String(args["captured-at"]) } : {}),
     ...(args["expires-hours"] !== undefined ? { expiresHours: Number(args["expires-hours"]) } : {}),
   });
@@ -264,7 +353,6 @@ function cmdCapabilityMint(args: Args): void {
     JSON.stringify({
       schema_version: 1,
       capability_id: envelope.capability_id,
-      source_id: envelope.capability_id,
       envelope_sha256: envelopeDigest(envelope),
       expected_sha256: envelope.expected_sha256,
       expires_at: envelope.expires_at,
@@ -276,189 +364,296 @@ function cmdCapabilityMint(args: Args): void {
 // ── listings (safe projections; no bodies) ──────────────────────────────────
 
 function cmdCapabilityList(args: Args): void {
-  const kbRoot = kbRootFor(args);
-  const store = new CapabilityStore(kbRoot);
-  try {
-    const dir = path.join(kbRoot, "capabilities");
-    const ids = existsSync(dir)
-      ? readdirSync(dir)
-          .filter((f) => f.endsWith(".json"))
-          .map((f) => f.slice(0, -5))
-          .sort()
-      : [];
-    const out = ids.map((id) => ({
-      capability_id: id,
-      lease: store.lease(id) ?? null,
-    }));
-    process.stdout.write(JSON.stringify(out, null, 2) + "\n");
-  } finally {
-    store.close();
-  }
+  void kbRootFor(args);
+  using store = new CapabilityStore(path.resolve(args.projectRoot));
+  const out = store.list(args.profile).map(({ envelope, lease }) => ({
+    capability_id: envelope.capability_id,
+    kind: envelope.kind,
+    lease,
+  }));
+  process.stdout.write(JSON.stringify(out, null, 2) + "\n");
 }
 
-function cmdGateList(args: Args): void {
-  const kbRoot = kbRootFor(args);
-  const gates = listGates(kbRoot);
-  process.stdout.write(
-    JSON.stringify(
-      gates.map((g) => ({
-        gate_id: g.gate_id,
-        run_id: g.run_id,
-        status: g.status,
-        issued_at: g.issued_at,
-        expires_at: g.expires_at,
-        source_ids: g.source_ids,
-        artifact_kinds: g.artifacts.map((a) => a.artifact_kind),
-        terminal_reason: g.terminal_reason ?? null,
-        published_generation_id: g.published_generation_id ?? null,
-      })),
-      null,
-      2
-    ) + "\n"
-  );
-}
-
-// ── operator decisions ──────────────────────────────────────────────────────
-
-function resolveGate(args: Args) {
-  const kbRoot = kbRootFor(args);
-  const runId = args["run"] !== undefined ? String(args["run"]) : undefined;
-  const gate = (runId !== undefined && findGateForRun(kbRoot, runId)) || latestPendingGate(kbRoot);
-  if (gate === undefined) throw new Error("no pending content-review gate");
-  return { kbRoot, gate };
-}
-
-function cmdApprove(args: Args): void {
-  const { kbRoot, gate } = resolveGate(args);
-  if (gate.source_capability_ids.length === 0) {
-    throw new Error("gate is not bound to source capabilities; refusing blind approval");
-  }
-  // Engine-driven run: the canonical path terminates the run behind the publish
-  // (the gate decision is the run's gate response, and the run's state machine
-  // performs the publication behind it — one consistent outcome).
-  const engineTerminal = decisionViaEngine(args.projectRoot, gate.run_id, "approve");
-  if (engineTerminal !== undefined) {
-    process.stdout.write(
-      JSON.stringify(terminalProjection(engineTerminal, { run_id: gate.run_id }), null, 2) + "\n"
-    );
-    return;
-  }
-  // Legacy gate (no engine run owns it, e.g. pre-refactor): publish directly.
-  const sources = sourcesFromCapabilities(kbRoot, gate.source_capability_ids);
-  const { gate: updatedGate, result } = approveGate(kbRoot, sources, gate.run_id);
-  process.stdout.write(
-    JSON.stringify(
-      {
-        schema_version: 1,
-        gate_id: updatedGate.gate_id,
-        run_id: updatedGate.run_id,
-        gate_status: updatedGate.status,
-        published_generation_id: updatedGate.published_generation_id ?? null,
-        counts: result.counts,
-        warnings: result.warnings,
-      },
-      null,
-      2
-    ) + "\n"
-  );
-}
-
-function cmdDeny(args: Args): void {
-  const { kbRoot, gate } = resolveGate(args);
-  const engineTerminal = decisionViaEngine(args.projectRoot, gate.run_id, "deny");
-  if (engineTerminal !== undefined) {
-    process.stdout.write(
-      JSON.stringify(terminalProjection(engineTerminal, { run_id: gate.run_id }), null, 2) + "\n"
-    );
-    return;
-  }
-  const denied = denyGate(kbRoot, gate.run_id);
-  process.stdout.write(
-    JSON.stringify(
-      {
-        schema_version: 1,
-        gate_id: denied.gate_id,
-        run_id: denied.run_id,
-        gate_status: denied.status,
-        published: false,
-      },
-      null,
-      2
-    ) + "\n"
-  );
-}
-
-function cmdRefine(args: Args): void {
-  const { gate } = resolveGate(args);
-  // refine is an engine path: the run's own machine re-enters compose, re-lints,
-  // re-verifies, and re-offers the gate. Non-engine (legacy) gates have no
-  // refinement path, and we refuse rather than guess one.
-  const directive = decisionViaEngine(args.projectRoot, gate.run_id, "refine");
-  if (directive === undefined) {
-    throw new Error(
-      "refine applies only to engine-driven runs; this gate is not owned by an engine run"
-    );
-  }
-  const d = directive as { action: string; gate_id?: string; status?: string };
-  if (d.action === "await_user") {
-    // The refinement round completed and the re-reviewed candidate is gated again.
-    process.stdout.write(
-      JSON.stringify(
-        {
-          schema_version: 1,
-          status: "awaiting_user",
-          gate_id: d.gate_id ?? null,
-          run_id: gate.run_id,
-          note: "refinement round executed; the re-reviewed candidate is pending at the gate again (use gate-list to inspect)",
-        },
-        null,
-        2
-      ) + "\n"
-    );
-    return;
-  }
-  // The refinement round hit a budget limit or the run terminated; project safely.
-  process.stdout.write(
-    JSON.stringify(terminalProjection(directive, { run_id: gate.run_id }), null, 2) + "\n"
-  );
-}
-
-/**
- * The canonical decision path for engine-driven runs (§5.12 "host-authenticated
- * callback"): the decision is a gate response on the run; the run's own state
- * machine performs the publish/denial behind it, so the run's terminal state
- * can never disagree with what happened on disk. Returns undefined when no
- * engine run owns this gate, and the caller uses the direct-plane fallback.
- */
-function decisionViaEngine(
-  projectRoot: string,
-  gateRunId: string,
-  response: "approve" | "deny" | "refine"
-): Directive | undefined {
-  const config = loadRuntimeConfig(projectRoot, process.env);
+function withContentReviewHost<T>(args: Args, operation: (host: ContentReviewService) => T): T {
+  // Resolve the configured profile first; the control DB never supplies a root.
+  void kbRootFor(args);
+  const config = loadRuntimeConfig(args.projectRoot, process.env);
   const checkpointer = new Checkpointer(config.dbPath);
   try {
-    const run = checkpointer.loadRunById(gateRunId);
-    const pending = run?.pendingDirective;
-    if (run === undefined || run.status !== "awaiting_user" || pending?.action !== "await_user") {
-      return undefined;
-    }
     const engine = new OrchestrationEngine(checkpointer, {
       projectRoot: config.projectRoot,
       maxSteps: config.maxSteps,
       playbookName: "knowledge-base",
     });
-    return engine.handle({
-      schema_version: 2,
-      action: "respond",
-      identity: run.identity,
-      gate_id: pending.gate_id,
-      challenge: pending.challenge,
-      response,
-    });
+    return operation(
+      new ContentReviewService({
+        projectRoot: config.projectRoot,
+        checkpointer,
+        engine,
+        reviewer: authenticateLocalContentReviewer(),
+      })
+    );
   } finally {
     checkpointer.close();
   }
+}
+
+function cmdGateList(args: Args): void {
+  const output = withContentReviewHost(args, (host) =>
+    host.list(args.profile).map((record) => ({
+      gate_id: record.challenge_id,
+      run_id: record.run_id,
+      action: record.packet.action,
+      status: record.state,
+      issued_at: record.packet.issued_at,
+      expires_at: record.packet.expires_at,
+      packet_sha256: record.packet_sha256,
+      source_ids: Object.keys(record.packet.candidate_source_record_digests),
+      query_run_id: record.packet.query_run_id ?? null,
+      artifact_kinds: record.packet.candidate_artifacts.map((artifact) => artifact.artifact_kind),
+      receipt_id: record.receipt_id ?? null,
+      receipt_sha256: record.decision_receipt_sha256 ?? null,
+    }))
+  );
+  process.stdout.write(JSON.stringify(output, null, 2) + "\n");
+}
+
+// ── operator decisions ──────────────────────────────────────────────────────
+
+function cmdDecision(args: Args, decision: "approve" | "deny" | "refine"): void {
+  const projected = withContentReviewHost(args, (host) => {
+    const runArg = args["run"] !== undefined ? String(args["run"]) : undefined;
+    const candidates = host
+      .list(args.profile)
+      .filter((record) => runArg === undefined || record.run_id === runArg);
+    const selected =
+      [...candidates].reverse().find((record) => record.state === "awaiting") ?? candidates.at(-1);
+    if (selected === undefined) throw new Error("no content-review packet for this profile/run");
+
+    // A command retry after a crash reconciles the already-stored exact receipt;
+    // it does not synthesize a second callback. A contrary decision conflicts.
+    let next: Directive;
+    if (selected.decision_receipt !== undefined) {
+      if (selected.decision_receipt.decision !== decision) {
+        throw new Error(
+          `content review already recorded '${selected.decision_receipt.decision}', not '${decision}'`
+        );
+      }
+      next = host.resume(selected.run_id);
+    } else {
+      next = host.decide({ runId: selected.run_id, decision });
+    }
+    const final = host.list(args.profile).find((record) => record.run_id === selected.run_id);
+    return terminalProjection(next, {
+      run_id: selected.run_id,
+      gate_id: selected.challenge_id,
+      receipt_id: final?.receipt_id ?? null,
+      receipt_sha256: final?.decision_receipt_sha256 ?? null,
+    });
+  });
+  process.stdout.write(JSON.stringify(projected, null, 2) + "\n");
+}
+
+function cmdApprove(args: Args): void {
+  cmdDecision(args, "approve");
+}
+
+function cmdDeny(args: Args): void {
+  cmdDecision(args, "deny");
+}
+
+function cmdRefine(args: Args): void {
+  cmdDecision(args, "refine");
+}
+
+// ── signed promotion approval/apply (host-only; never Pi tool actions) ───────
+
+function withPromotionHost<T>(
+  args: Args,
+  operation: (input: {
+    store: PromotionApprovalStore;
+    engine: OrchestrationEngine;
+    checkpointer: Checkpointer;
+    kbRoot: string;
+  }) => T
+): T {
+  const kbRoot = kbRootFor(args);
+  const config = loadRuntimeConfig(args.projectRoot, process.env);
+  const checkpointer = new Checkpointer(config.dbPath);
+  const store = new PromotionApprovalStore({
+    projectRoot: config.projectRoot,
+    kbRoot,
+    controlBindingForRun: (runId) => checkpointer.promotionApprovalBinding(runId),
+    reserveApplyOperation: (input) => {
+      checkpointer.reserveOperationEventGroup({
+        run_id: input.runId,
+        session_id: input.sessionId,
+        transaction_id: input.transactionId,
+        action: "promote",
+        source_kind: "promotion_apply",
+        source_identity_sha256: promotionApplyOperationSourceIdentity({
+          approval_receipt_sha256: input.receiptSha256,
+          transaction_id: input.transactionId,
+        }),
+      });
+    },
+  });
+  try {
+    const engine = new OrchestrationEngine(checkpointer, {
+      projectRoot: config.projectRoot,
+      maxSteps: config.maxSteps,
+      playbookName: "knowledge-base",
+    });
+    return operation({ store, engine, checkpointer, kbRoot });
+  } finally {
+    store.close();
+    checkpointer.close();
+  }
+}
+
+function selectPromotionGate(
+  store: PromotionApprovalStore,
+  profileId: string,
+  runArg: string | undefined
+) {
+  const candidates = store
+    .listGates(profileId)
+    .filter((record) => runArg === undefined || record.run_id === runArg);
+  const selected = candidates.at(-1);
+  if (selected === undefined) throw new Error("no stored promotion packet for this profile/run");
+  return selected;
+}
+
+function cmdPromotionKeyRotate(args: Args): void {
+  const output = withPromotionHost(args, ({ store }) => {
+    const keyId = store.rotateKey();
+    return { schema_version: 1, key_id: keyId, state: "active" };
+  });
+  process.stdout.write(JSON.stringify(output, null, 2) + "\n");
+}
+
+function cmdPromotionList(args: Args): void {
+  const output = withPromotionHost(args, ({ store }) =>
+    store.listGates(args.profile).map((record) => ({
+      schema_version: 1,
+      run_id: record.run_id,
+      challenge_id: record.challenge_id,
+      state: record.state,
+      packet_sha256: record.packet_sha256,
+      page_revisions: record.packet.page_revisions,
+      target_presentations: record.packet.target_presentations,
+      issued_at: record.packet.issued_at,
+      expires_at: record.packet.expires_at,
+      decision_or_receipt_id: record.decision_or_receipt_id ?? null,
+    }))
+  );
+  process.stdout.write(JSON.stringify(output, null, 2) + "\n");
+}
+
+function cmdPromotionDecision(args: Args, decision: "approve" | "refine" | "deny"): void {
+  const output = withPromotionHost(args, ({ store, engine, checkpointer, kbRoot }) => {
+    const runArg = args["run"] !== undefined ? String(args["run"]) : undefined;
+    const gate = selectPromotionGate(store, args.profile, runArg);
+    const resolved = resolveKbRoot(
+      path.resolve(args.projectRoot),
+      gate.packet.kb_profile_id,
+      gate.packet.session_id
+    );
+    if (path.resolve(resolved) !== path.resolve(kbRoot)) {
+      throw new Error("promotion profile/session resolved to a different KB root");
+    }
+    const run = checkpointer.loadRunById(gate.run_id);
+    if (run === undefined) {
+      store.invalidateOrphanedGate(gate.challenge_id);
+      throw new Error("promotion packet is orphaned from its control run and was invalidated");
+    }
+    recheckAdmittedPolicy({
+      kbRoot,
+      admittedPolicySha256: String(run.playbookData.admitted_policy_sha256 ?? ""),
+    });
+    let decided: PromotionDecisionOutcome;
+    if (gate.decision_intent !== undefined) {
+      if (gate.decision_intent.decision !== decision) {
+        throw new Error(
+          `promotion already recorded '${gate.decision_intent.decision}', not '${decision}'`
+        );
+      }
+      decided = store.decide(gate.decision_intent);
+    } else {
+      const ttlMinutes = Number(args["ttl-minutes"] ?? 10);
+      if (!Number.isInteger(ttlMinutes) || ttlMinutes < 1 || ttlMinutes > 60) {
+        throw new Error("--ttl-minutes must be an integer from 1 to 60");
+      }
+      decided = store.decide(
+        store.buildDecisionIntent({
+          challengeId: gate.challenge_id,
+          decision,
+          reviewerSubjectId: authenticateLocalContentReviewer().subjectId,
+          ...(decision === "approve" ? { ttlMs: ttlMinutes * 60_000 } : {}),
+        })
+      );
+    }
+    const intentSha = decided.gate.decision_intent_sha256;
+    if (intentSha === undefined) throw new Error("promotion decision has no durable intent digest");
+    const next = engine.recordPromotionDecision({
+      runId: decided.gate.run_id,
+      challengeId: decided.gate.challenge_id,
+      decision,
+      intentSha256: intentSha,
+      packetSha256: decided.gate.packet_sha256,
+      ...(decided.receipt !== undefined
+        ? {
+            receiptId: decided.receipt.receipt_id,
+            receiptSha256: decided.receipt_sha256!,
+          }
+        : {}),
+    });
+    return {
+      schema_version: 1,
+      run_id: decided.gate.run_id,
+      challenge_id: decided.gate.challenge_id,
+      decision,
+      state: decided.gate.state,
+      intent_sha256: intentSha,
+      receipt_id: decided.receipt?.receipt_id ?? null,
+      receipt_sha256: decided.receipt_sha256 ?? null,
+      control_action: next.action,
+    };
+  });
+  process.stdout.write(JSON.stringify(output, null, 2) + "\n");
+}
+
+function reconcilePromotionApply(
+  store: PromotionApprovalStore,
+  runId: string
+): PromotionApplyOutcome {
+  return store.reconcileApprovedPromotion(runId);
+}
+
+function cmdPromotionApply(args: Args): void {
+  const output = withPromotionHost(args, ({ store, engine }) => {
+    const runId = String(args["run"] ?? "");
+    if (runId.length === 0) throw new Error("promotion-apply requires --run RUN_ID");
+    const outcome = reconcilePromotionApply(store, runId);
+    const terminal = engine.finalizeApprovedPromotion({
+      runId: outcome.run_id,
+      status: outcome.status,
+      receiptId: outcome.receipt_id,
+      receiptSha256: outcome.receipt_sha256,
+      transactionId: outcome.transaction_id,
+      targetCount: outcome.target_count,
+      postApplyVerified: outcome.post_apply_verified,
+    });
+    return {
+      schema_version: 1,
+      run_id: outcome.run_id,
+      apply_status: outcome.status,
+      post_apply_verified: outcome.post_apply_verified,
+      target_count: outcome.target_count,
+      control_action: terminal.action,
+    };
+  });
+  process.stdout.write(JSON.stringify(output, null, 2) + "\n");
 }
 
 /** Safe terminal projection for stdout: status, generation id, counts — no bodies. */
@@ -488,7 +683,7 @@ function main(argv: string[]): void {
         "Usage: penny-kb-gate <command> --profile <id> [--project-root PATH] [opts]",
         "",
         "Commands:",
-        "  capability-mint --path FILE --title T --author A [--author B] [--source-type manual] [--media-type text/plain] [--expires-hours 72] [--session-id S] [--captured-at ISO]",
+        "  capability-mint --path FILE --title T --author A --session S --operation ingest [--author B] [--source-type manual] [--media-type text/plain] [--expires-hours 72] [--captured-at ISO]",
         "  capability-list",
         "  gate-list",
         "  approve [--run RUN_ID]",
@@ -496,8 +691,18 @@ function main(argv: string[]): void {
         "  refine [--run RUN_ID]",
         "  profile-grant-mint --session S (--profile P | --grant-profile P ...) [--ttl-minutes 60]",
         "  profile-grant-list",
-        "  parent-grant-mint --profile P --session S --invocation I --request '<json>' [--max-bytes 16384] [--ttl-minutes 15]",
+        "  profile-grant-revoke --grant GRANT_ID",
+        "  profile-grant-expire --grant GRANT_ID",
+        "  parent-grant-mint --profile P --session S --invocation I --parent-provider P --parent-model M --request '<json>' [--max-bytes 16384] [--ttl-minutes 15]",
         "  parent-grant-list",
+        "  parent-grant-revoke --grant GRANT_ID",
+        "  parent-grant-expire --grant GRANT_ID",
+        "  promotion-list --profile P",
+        "  promotion-key-rotate --profile P",
+        "  promotion-approve --profile P [--run RUN_ID] [--ttl-minutes 10]",
+        "  promotion-refine --profile P [--run RUN_ID]",
+        "  promotion-deny --profile P [--run RUN_ID]",
+        "  promotion-apply --profile P --run RUN_ID",
         "",
       ].join("\n")
     );
@@ -531,11 +736,41 @@ function main(argv: string[]): void {
       case "profile-grant-list":
         cmdProfileGrantList(args);
         break;
+      case "profile-grant-revoke":
+        cmdProfileGrantState(args, "revoke");
+        break;
+      case "profile-grant-expire":
+        cmdProfileGrantState(args, "expire");
+        break;
       case "parent-grant-mint":
         cmdParentGrantMint(args);
         break;
       case "parent-grant-list":
         cmdParentGrantList(args);
+        break;
+      case "parent-grant-revoke":
+        cmdParentGrantState(args, "revoke");
+        break;
+      case "parent-grant-expire":
+        cmdParentGrantState(args, "expire");
+        break;
+      case "promotion-list":
+        cmdPromotionList(args);
+        break;
+      case "promotion-key-rotate":
+        cmdPromotionKeyRotate(args);
+        break;
+      case "promotion-approve":
+        cmdPromotionDecision(args, "approve");
+        break;
+      case "promotion-refine":
+        cmdPromotionDecision(args, "refine");
+        break;
+      case "promotion-deny":
+        cmdPromotionDecision(args, "deny");
+        break;
+      case "promotion-apply":
+        cmdPromotionApply(args);
         break;
       default:
         fail(`unknown command: ${cmd}`);

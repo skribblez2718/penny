@@ -1,8 +1,24 @@
 import path from "node:path";
 
 import type { ArtifactRevisionLookup } from "./artifact-store.js";
-import { Checkpointer, ReceiptConflictError, canonicalJson, sha256 } from "./checkpointer.js";
+import {
+  Checkpointer,
+  CheckpointIdentityError,
+  ReceiptConflictError,
+  canonicalJson,
+  sha256,
+  type ReserveOperationEventGroupInput,
+} from "./checkpointer.js";
+import { readRunInput, settleRunInput } from "./private-inputs.js";
 import { RunContext } from "./context.js";
+import {
+  OperationReceiptStore,
+  externalOperationSourceIdentity,
+  promotionApplyOperationSourceIdentity,
+  promotionDecisionOperationSourceIdentity,
+  replayableResultFromRun,
+} from "./kb/operation-receipts.js";
+import type { OperationEventGroup } from "./kb/contracts.js";
 import {
   ContractValidationError,
   OrchestrationRequestSchema,
@@ -103,6 +119,7 @@ export class OrchestrationEngine {
     private readonly checkpointer: Checkpointer,
     options: EngineOptions
   ) {
+    this.checkpointer.bindKbRuntimeProjectRoot(options.projectRoot);
     this.registry = options.playbookRegistry ?? PLAYBOOK_REGISTRY;
     const playbookName = options.playbookName ?? SOLE_PRODUCTION_PLAYBOOK;
     // Construct through the registry. The engine imports no concrete playbook class.
@@ -115,6 +132,21 @@ export class OrchestrationEngine {
     this.contract = validateRegistrationContract(registration);
     this.playbook = registration.construct({
       ...(options.artifactRevisions ? { artifactRevisions: options.artifactRevisions } : {}),
+      checkpointer: this.checkpointer,
+      /**
+       * The private-input custody seam (§5.6), bound to THIS engine's control DB
+       * and project root. Playbooks that never declare the capability (research)
+       * never receive bodies through it; the engine itself does not parse them.
+       */
+      privateInput: {
+        read: (runId: string) =>
+          readRunInput({
+            projectRoot: path.resolve(options.projectRoot),
+            checkpointer: this.checkpointer,
+            runId,
+          }),
+        sha256: (runId: string) => this.checkpointer.getPrivateInput(runId)?.request_sha256,
+      },
     });
     this.projectRoot = path.resolve(options.projectRoot);
     this.maxSteps = options.maxSteps;
@@ -133,12 +165,14 @@ export class OrchestrationEngine {
             `project_root mismatch: engine owns '${this.projectRoot}', request supplied '${request.project_root}'`
           );
         }
+        // An admitted start already owns a durable run row; pausing preserves it
+        // rather than claiming it was never created.
         return this.pausedDirective(
           request.identity,
           "intake",
           dispatch.code,
           dispatch.reason,
-          false
+          this.checkpointer.runExists(request.identity.run_id)
         );
       }
       const context = this.checkpointer.loadRun(request.identity);
@@ -156,6 +190,33 @@ export class OrchestrationEngine {
           throw new Error(
             `project_root mismatch: engine owns '${this.projectRoot}', request supplied '${request.project_root}'`
           );
+        }
+        // §5.6 start actions admitted before the engine: the control DB already
+        // holds the durable run row, the idempotency record, and the private-input
+        // index (one transaction, before any bytes). The engine now owns the
+        // state transition — initialize performs the run's (deterministic or
+        // agent-driven) first step and the checkpoint records the result.
+        // A run that is already terminal replays its exact terminal directive
+        // and performs no second side effect.
+        if (this.checkpointer.runExists(request.identity.run_id)) {
+          const admitted = this.checkpointer.loadRun(request.identity);
+          if (admitted.terminalDirective !== null) {
+            return admitted.terminalDirective;
+          }
+          if (admitted.stateId !== "intake") {
+            // Frozen run contract (research parity): a start of a run that is
+            // already advancing is an identity violation — the host resumes it
+            // through `step`/`recover`, never by starting it again.
+            throw new CheckpointIdentityError(
+              `run '${request.identity.run_id}' is in state '${admitted.stateId}'; it cannot be started again`
+            );
+          }
+          const next = this.playbook.initialize(admitted);
+          this.checkpointer.saveRun(admitted, "run_admitted", {
+            ...metadata(request.identity),
+            state_id: admitted.stateId,
+          });
+          return next;
         }
         const initialArtifacts = request.input_artifacts;
         if (initialArtifacts !== undefined) {
@@ -184,6 +245,29 @@ export class OrchestrationEngine {
             ? { initialArtifacts: initialArtifacts.artifacts.map((binding) => binding.ref) }
             : {}),
         });
+        const operationGroup = this.externalStartOperationGroup(context);
+        if (operationGroup !== undefined) {
+          // Receipt-producing KB starts reserve their run + globally unique
+          // source group + sequence in one transaction BEFORE initialize may
+          // claim a capability, read a body, create a child, or write a file.
+          this.checkpointer.createRun(
+            context,
+            "run_started",
+            {
+              ...metadata(request.identity),
+              goal_sha256: sha256(request.goal),
+              goal_bytes: Buffer.byteLength(request.goal, "utf8"),
+              state_id: context.stateId,
+            },
+            operationGroup
+          );
+          const next = this.playbook.initialize(context);
+          this.checkpointer.saveRun(context, "run_admitted", {
+            ...metadata(request.identity),
+            state_id: context.stateId,
+          });
+          return next;
+        }
         const next = this.playbook.initialize(context);
         this.checkpointer.createRun(context, "run_started", {
           ...metadata(request.identity),
@@ -201,6 +285,15 @@ export class OrchestrationEngine {
         return this.recover(request.identity);
       case "respond": {
         const context = this.checkpointer.loadRun(request.identity);
+        const kbAction = String(context.playbookData.action ?? "");
+        if (
+          context.identity.playbook === "knowledge-base" &&
+          (kbAction === "ingest" || kbAction === "save" || kbAction === "promote")
+        ) {
+          throw new Error(
+            "KB content/promotion review is host-only through the authenticated host callback service; generic respond is decision-free for this run"
+          );
+        }
         const pending = context.pendingDirective;
         if (
           context.status !== "awaiting_user" ||
@@ -244,6 +337,338 @@ export class OrchestrationEngine {
         return next;
       }
     }
+  }
+
+  /**
+   * Internal host continuation after §5.1 accepted complete receipt bytes.
+   * This is deliberately not part of `OrchestrationRequestSchema`: models and
+   * ordinary resume/respond callers cannot reach it.
+   */
+  resumeContentReviewedRun(input: {
+    runId: string;
+    receiptSha256: string;
+    transactionId: string;
+  }): Directive {
+    const review = this.checkpointer.claimContentReview(input);
+    if (review.decision_receipt === undefined) {
+      throw new Error(`content-review run '${input.runId}' has no decision receipt`);
+    }
+    const context = this.checkpointer.loadRunById(input.runId);
+    const pending = context?.pendingDirective;
+    if (
+      context === undefined ||
+      context.identity.playbook !== "knowledge-base" ||
+      context.stateId !== "awaiting_review" ||
+      pending?.action !== "await_user" ||
+      pending.gate_id !== review.challenge_id ||
+      String(context.playbookData.review_receipt_sha256 ?? "") !== input.receiptSha256
+    ) {
+      throw new Error(
+        `run '${input.runId}' is not bound to decided content-review challenge '${review.challenge_id}'`
+      );
+    }
+    // The host callback transaction owns any approved selector commit and the
+    // eventual `published` operation receipt. It is never accepted from model
+    // input; the checkpointer already bound it to the exact decision receipt.
+    context.playbookData.publication_transaction_id = input.transactionId;
+    const next = this.playbook.resume(context, review.decision_receipt.decision);
+    this.checkpointer.finishContentReview({
+      context,
+      receiptSha256: input.receiptSha256,
+      transactionId: input.transactionId,
+    });
+    return next;
+  }
+
+  /**
+   * Approval-DB-first promotion decision reconciliation. Only the host approval
+   * facade calls this method; `OrchestrationRequestSchema` has no counterpart.
+   */
+  recordPromotionDecision(input: {
+    runId: string;
+    challengeId: string;
+    decision: "approve" | "refine" | "deny";
+    intentSha256: string;
+    packetSha256?: string;
+    receiptId?: string;
+    receiptSha256?: string;
+  }): Directive {
+    const context = this.checkpointer.loadRunById(input.runId);
+    const packetSha256 =
+      input.packetSha256 ?? String(context?.playbookData.promotion_packet_sha256 ?? "");
+    if (
+      context === undefined ||
+      context.identity.playbook !== "knowledge-base" ||
+      String(context.playbookData.action ?? "") !== "promote" ||
+      !/^[a-f0-9]{64}$/.test(packetSha256) ||
+      !/^[a-f0-9]{64}$/.test(input.intentSha256)
+    ) {
+      throw new Error(
+        `run '${input.runId}' is not bound to promotion challenge '${input.challengeId}'`
+      );
+    }
+    if (
+      input.decision === "approve" &&
+      (input.receiptId === undefined || input.receiptSha256 === undefined)
+    ) {
+      throw new Error(
+        "approved promotion control reconciliation requires receipt id/digest metadata"
+      );
+    }
+    // Approval DB is already durable. Reserve the control-side callback group
+    // before any gate/run transition; retry finds this exact source identity.
+    const sourceIdentity = promotionDecisionOperationSourceIdentity({
+      packet_sha256: packetSha256,
+      decision_intent_sha256: input.intentSha256,
+    });
+    const operationStore = new OperationReceiptStore({
+      projectRoot: this.projectRoot,
+      checkpointer: this.checkpointer,
+    });
+    const reserved = operationStore.reserve({
+      run_id: input.runId,
+      session_id: context.identity.session_id,
+      transaction_id: `pdec_${input.intentSha256.slice(0, 32)}`,
+      action: "promote",
+      source_kind: "promotion_decision",
+      source_identity_sha256: sourceIdentity,
+    });
+    if (reserved.group.state !== "reserved") {
+      operationStore.finish(reserved.group.request_event_group_id);
+      return this.currentDirective(this.checkpointer.loadRunById(input.runId)!);
+    }
+    if (String(context.playbookData.promotion_challenge_id ?? "") !== input.challengeId) {
+      throw new Error(
+        `run '${input.runId}' is not bound to promotion challenge '${input.challengeId}'`
+      );
+    }
+
+    const alreadyReconciled =
+      String(context.playbookData.promotion_decision_intent_sha256 ?? "") === input.intentSha256 &&
+      String(context.playbookData.review_decision ?? "") === input.decision;
+    let next: Directive;
+    if (alreadyReconciled) {
+      next = this.currentDirective(context);
+    } else {
+      const pending = context.pendingDirective;
+      if (
+        context.stateId !== "awaiting_review" ||
+        pending?.action !== "await_user" ||
+        pending.gate_id !== input.challengeId ||
+        pending.payload_digest !== packetSha256
+      ) {
+        throw new Error(
+          `run '${input.runId}' is not awaiting promotion challenge '${input.challengeId}'`
+        );
+      }
+      context.playbookData.review_decision = input.decision;
+      context.playbookData.promotion_decision_intent_sha256 = input.intentSha256;
+      if (input.receiptId !== undefined)
+        context.playbookData.promotion_receipt_id = input.receiptId;
+      if (input.receiptSha256 !== undefined) {
+        context.playbookData.promotion_receipt_sha256 = input.receiptSha256;
+      }
+      next = input.decision === "approve" ? pending : this.playbook.resume(context, input.decision);
+      this.checkpointer.saveGateResponse(
+        context,
+        pending.gate_id,
+        pending.challenge,
+        {
+          decision: input.decision,
+          intent_sha256: input.intentSha256,
+          ...(input.receiptId !== undefined ? { receipt_id: input.receiptId } : {}),
+          ...(input.receiptSha256 !== undefined ? { receipt_sha256: input.receiptSha256 } : {}),
+        },
+        "promotion_decision_reconciled",
+        {
+          run_id: input.runId,
+          gate_id: input.challengeId,
+          decision: input.decision,
+          intent_sha256: input.intentSha256,
+        }
+      );
+    }
+    const durable = this.checkpointer.loadRunById(input.runId)!;
+    const replay = replayableResultFromRun({
+      action: "promote",
+      run: durable,
+      checkpointer: this.checkpointer,
+    });
+    operationStore.complete({
+      request_event_group_id: reserved.group.request_event_group_id,
+      kb_profile_id: String(durable.playbookData.profile_id ?? ""),
+      kb_id: String(durable.playbookData.kb_id ?? ""),
+      result: replay,
+      input_digests: [
+        packetSha256,
+        input.intentSha256,
+        ...(input.receiptSha256 !== undefined ? [input.receiptSha256] : []),
+      ],
+      output_refs: input.receiptId === undefined ? [] : [input.receiptId],
+      policy_sha256: String(durable.playbookData.admitted_policy_sha256 ?? ""),
+      safe_metrics: replay.counts,
+    });
+    return next;
+  }
+
+  /** Reserve apply only after the signed receipt + journal transaction is durable. */
+  reservePromotionApplyOperation(input: {
+    runId: string;
+    sessionId: string;
+    receiptSha256: string;
+    transactionId: string;
+  }): OperationEventGroup {
+    const sourceIdentity = promotionApplyOperationSourceIdentity({
+      approval_receipt_sha256: input.receiptSha256,
+      transaction_id: input.transactionId,
+    });
+    return new OperationReceiptStore({
+      projectRoot: this.projectRoot,
+      checkpointer: this.checkpointer,
+    }).reserve({
+      run_id: input.runId,
+      session_id: input.sessionId,
+      transaction_id: input.transactionId,
+      action: "promote",
+      source_kind: "promotion_apply",
+      source_identity_sha256: sourceIdentity,
+    }).group;
+  }
+
+  /** Final control-store commit after approval and capability stores are terminal. */
+  finalizeApprovedPromotion(input: {
+    runId: string;
+    status: "complete" | "failed" | "blocked_external_drift";
+    receiptId: string;
+    receiptSha256: string;
+    transactionId: string;
+    targetCount: number;
+    postApplyVerified: boolean;
+  }): Directive {
+    const context = this.checkpointer.loadRunById(input.runId);
+    if (context === undefined || context.identity.playbook !== "knowledge-base") {
+      throw new Error(`unknown KB promotion run '${input.runId}'`);
+    }
+    const group = this.reservePromotionApplyOperation({
+      runId: input.runId,
+      sessionId: context.identity.session_id,
+      receiptSha256: input.receiptSha256,
+      transactionId: input.transactionId,
+    });
+    const operationStore = new OperationReceiptStore({
+      projectRoot: this.projectRoot,
+      checkpointer: this.checkpointer,
+    });
+    if (group.state === "committed") {
+      operationStore.finish(group.request_event_group_id);
+      settleRunInput({
+        projectRoot: this.projectRoot,
+        checkpointer: this.checkpointer,
+        runId: input.runId,
+      });
+      return this.currentDirective(context);
+    }
+    const approvalBinding = this.checkpointer.promotionApprovalBinding(input.runId);
+    if (
+      approvalBinding === undefined ||
+      approvalBinding.receipt_id !== input.receiptId ||
+      approvalBinding.receipt_sha256 !== input.receiptSha256
+    ) {
+      throw new Error(
+        "promotion finalization requires the exact control-side approved receipt binding"
+      );
+    }
+    let next: Directive;
+    if (context.terminalDirective !== null) {
+      if (
+        String(context.playbookData.promotion_apply_transaction_id ?? "") === input.transactionId &&
+        String(context.playbookData.promotion_apply_status ?? "") === input.status
+      ) {
+        next = context.terminalDirective;
+      } else {
+        throw new Error("promotion run is terminal under another apply transaction");
+      }
+    } else {
+      const completer = this.playbook as PlaybookV1 & {
+        completeApprovedPromotion?: (
+          run: RunContext,
+          outcome: {
+            status: "complete" | "failed" | "blocked_external_drift";
+            receiptId: string;
+            receiptSha256: string;
+            transactionId: string;
+            targetCount: number;
+            postApplyVerified: boolean;
+          }
+        ) => Directive;
+      };
+      if (completer.completeApprovedPromotion === undefined) {
+        throw new Error("the active KB playbook cannot finalize an approved promotion");
+      }
+      next = completer.completeApprovedPromotion(context, input);
+      this.checkpointer.saveRun(context, "promotion_apply_reconciled", {
+        run_id: input.runId,
+        receipt_id: input.receiptId,
+        receipt_sha256: input.receiptSha256,
+        transaction_id: input.transactionId,
+        apply_status: input.status,
+        target_count: input.targetCount,
+        post_apply_verified: input.postApplyVerified,
+      });
+    }
+    const durable = this.checkpointer.loadRunById(input.runId)!;
+    const replay = replayableResultFromRun({
+      action: "promote",
+      run: durable,
+      checkpointer: this.checkpointer,
+      status_override: input.status === "complete" ? "complete" : "error",
+    });
+    operationStore.complete({
+      request_event_group_id: group.request_event_group_id,
+      kb_profile_id: String(durable.playbookData.profile_id ?? ""),
+      kb_id: String(durable.playbookData.kb_id ?? ""),
+      result: replay,
+      input_digests: [input.receiptSha256],
+      output_refs: [input.receiptId],
+      policy_sha256: String(durable.playbookData.admitted_policy_sha256 ?? ""),
+      safe_metrics: {
+        target_count: input.targetCount,
+        post_apply_verified: input.postApplyVerified ? 1 : 0,
+      },
+    });
+    settleRunInput({
+      projectRoot: this.projectRoot,
+      checkpointer: this.checkpointer,
+      runId: input.runId,
+    });
+    return next;
+  }
+
+  /** Fail-closed expiry/drift terminalization for an unpublishable challenge. */
+  invalidateContentReviewedRun(input: {
+    runId: string;
+    receiptSha256?: string;
+    reason: string;
+    state: "invalidated" | "expired";
+  }): Directive {
+    const context = this.checkpointer.loadRunById(input.runId);
+    if (context === undefined || context.identity.playbook !== "knowledge-base") {
+      throw new Error(`unknown KB content-review run '${input.runId}'`);
+    }
+    const invalidator = this.playbook as PlaybookV1 & {
+      invalidateReview?: (run: RunContext, reason: string) => Directive;
+    };
+    if (invalidator.invalidateReview === undefined) {
+      throw new Error("the active KB playbook cannot invalidate content review");
+    }
+    const next = invalidator.invalidateReview(context, input.reason);
+    this.checkpointer.invalidateContentReview({
+      context,
+      ...(input.receiptSha256 !== undefined ? { receiptSha256: input.receiptSha256 } : {}),
+      reason: input.reason,
+      state: input.state,
+    });
+    return next;
   }
 
   private step(identity: RunIdentity, result: PhaseResult): Directive {
@@ -613,6 +1038,49 @@ export class OrchestrationEngine {
       });
     }
     return this.currentDirective(context);
+  }
+
+  private externalStartOperationGroup(
+    context: RunContext
+  ): ReserveOperationEventGroupInput | undefined {
+    if (context.identity.playbook !== "knowledge-base") return undefined;
+    const raw = context.constraints.operation_event_group;
+    if (raw === undefined) return undefined;
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error("KB operation_event_group metadata must be an object");
+    }
+    const record = raw as Record<string, JsonValue>;
+    const keys = Object.keys(record).sort();
+    if (
+      canonicalJson(keys) !== canonicalJson(["invocation_id", "request_sha256", "transaction_id"])
+    ) {
+      throw new Error("KB operation_event_group metadata has unknown or missing fields");
+    }
+    const invocationId = String(record.invocation_id ?? "");
+    const requestSha256 = String(record.request_sha256 ?? "");
+    const transactionId = String(record.transaction_id ?? "");
+    const action = String(context.constraints.action ?? "");
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(invocationId) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(transactionId) ||
+      !/^[a-f0-9]{64}$/.test(requestSha256) ||
+      !["init", "ingest", "query", "save", "lint", "promote"].includes(action)
+    ) {
+      throw new Error("KB operation_event_group metadata is invalid");
+    }
+    return {
+      run_id: context.identity.run_id,
+      session_id: context.identity.session_id,
+      transaction_id: transactionId,
+      action: action as ReserveOperationEventGroupInput["action"],
+      source_kind: "external_start",
+      source_identity_sha256: externalOperationSourceIdentity({
+        session_id: context.identity.session_id,
+        invocation_id: invocationId,
+        action: action as ReserveOperationEventGroupInput["action"],
+        request_sha256: requestSha256,
+      }),
+    };
   }
 
   private dispatchState(): {

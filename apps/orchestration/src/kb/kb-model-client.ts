@@ -28,7 +28,8 @@ import {
   resolveDomainGuidancePath,
   ssotBody,
   ssotModel,
-  type InlineExtension,
+  type AgentSessionTraceSink,
+  type SessionThinkingLevel,
 } from "../model-client.js";
 import { KNOWLEDGE_BASE_SKILL_CONTRACT } from "../playbooks/knowledge-base.js";
 import { kbSessionSpec, type KbAgentRunner, type KbPhaseInvocation } from "./session-tools.js";
@@ -52,7 +53,10 @@ export interface KbModelClientOptions {
    * Production leaves this unset; the per-agent SSOT `model:` field wins.
    */
   readonly modelOverride?: string;
-  readonly workerExtensions?: readonly InlineExtension[];
+  /** TEST-ONLY; production preserves the Pi/settings thinking default. */
+  readonly testOnlyThinkingLevelOverride?: SessionThinkingLevel;
+  /** Optional content-free lifecycle diagnostics; raw session events never escape PiAgentClient. */
+  readonly sessionTrace?: AgentSessionTraceSink;
 }
 
 export class KbModelClient {
@@ -60,7 +64,9 @@ export class KbModelClient {
 
   constructor(private readonly options: KbModelClientOptions) {
     this.client = new PiAgentClient({
-      ...(options.workerExtensions ? { workerExtensions: options.workerExtensions } : {}),
+      ...(options.testOnlyThinkingLevelOverride === undefined
+        ? {}
+        : { testOnlyThinkingLevelOverride: options.testOnlyThinkingLevelOverride }),
     });
   }
 
@@ -80,7 +86,6 @@ export class KbModelClient {
         `KB phase '${invocation.stateId}': agent '${invocation.agent}' has an empty SSOT body; refusing to run`
       );
     }
-
     // W6: the phase's guidance comes from the contract's prompt root, not from a
     // literal in this file. Missing guidance is a refusal: an inline fallback is
     // how the prompts drifted out of the skill in the first place.
@@ -105,6 +110,19 @@ export class KbModelClient {
         `KB phase '${invocation.stateId}': agent '${invocation.agent}' declares no 'model:' in its SSOT frontmatter; refusing to guess a model`
       );
     }
+    const cognitiveFrame = await optionalText(path.join(projectRoot, ".pi", "SYSTEM.md"));
+    if (cognitiveFrame.trim().length === 0) {
+      throw new Error(
+        `KB phase '${invocation.stateId}': Cognitive Frame is unavailable; refusing to build a partial private session`
+      );
+    }
+
+    const session = kbSessionSpec({
+      invocation,
+      cognitiveFrame,
+      agentBody: body,
+      phaseGuidance,
+    });
 
     const completion = await this.client.runAgent({
       agent: invocation.agent,
@@ -119,7 +137,10 @@ export class KbModelClient {
       // §5.3: the alias above is not an identity. The runtime resolves it, then
       // this hook admits the resolved tuple BEFORE any session exists.
       ...(invocation.admitModel ? { admitResolvedModel: invocation.admitModel } : {}),
-      session: kbSessionSpec({ invocation, agentBody: body, phaseGuidance }),
+      session:
+        this.options.sessionTrace === undefined
+          ? session
+          : { ...session, trace: this.options.sessionTrace },
     });
     return completion.text;
   };

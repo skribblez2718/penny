@@ -18,7 +18,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { KbModelClient, ssotModel } from "../src/kb/kb-model-client.js";
 import { resolveDomainGuidancePath } from "../src/model-client.js";
 import { KNOWLEDGE_BASE_SKILL_CONTRACT } from "../src/playbooks/knowledge-base.js";
-import { type AgentRunner, type IngestSource } from "../src/kb/ingest.js";
+import { type IngestSource } from "../src/kb/ingest.js";
 
 const projectRoot = path.resolve(__dirname, "..", "..", "..");
 const agentFile = (name: string): string =>
@@ -27,6 +27,9 @@ const agentFile = (name: string): string =>
 /** Seed a tmp project with one agent SSOT and (optionally) its phase guidance. */
 function seedAgent(root: string, name: string, frontmatter: string, withGuidance = true): void {
   mkdirSync(path.join(root, ".pi", "agents"), { recursive: true });
+  writeFileSync(path.join(root, ".pi", "SYSTEM.md"), "# Test Cognitive Frame\n", {
+    mode: 0o600,
+  });
   writeFileSync(path.join(root, ".pi", "agents", `${name}.md`), frontmatter, { mode: 0o600 });
   if (withGuidance) {
     const prompts = path.join(root, ".pi", "skills", "knowledge-base", "assets", "prompts");
@@ -88,24 +91,36 @@ describe("KbModelClient model policy", () => {
   it("accepts an explicit test-only override even when the SSOT has none", async () => {
     const root = tmpProject();
     seedAgent(root, "modelless", "---\nname: modelless\ntools: read\n---\n\nA body.\n");
+    const prompts = path.join(root, ".pi", "skills", "knowledge-base", "assets", "prompts");
+    writeFileSync(path.join(prompts, "modelless-ingest.md"), "# guidance\n", { mode: 0o600 });
     const client = new KbModelClient({
       projectRoot: root,
       modelOverride: "definitely/not-a-real-model",
     });
-    // The override is honored (parsing passes) and fails at resolution time,
-    // which proves the override path is taken rather than the SSOT refusal.
+    // The complete private-session boundary is present, so failure reaches the
+    // explicit model override rather than falling through to any default model.
     await expect(
       client.run({
         agent: "modelless",
-        stateId: "phase_test",
+        stateId: "ingest",
+        runId: "run_model_override",
+        profileId: "kbp_model_override",
+        expectedArtifactKind: "claims",
         phaseBrief: "brief",
         sourceAllowlist: [],
         priorPhaseAllowlist: [],
+        allowedPriorArtifacts: [],
         readSource: () => {
           throw new Error("no sources");
         },
-        readPhaseOutput: () => {
+        readRunArtifact: () => {
           throw new Error("no priors");
+        },
+        stageArtifact: () => {
+          throw new Error("model resolution must happen first");
+        },
+        submitPhaseResult: () => {
+          throw new Error("model resolution must happen first");
         },
       })
     ).rejects.toThrow(/definitely\/not-a-real-model/);

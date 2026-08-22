@@ -25,7 +25,8 @@ const {
 
 vi.mock("node:child_process", () => ({ spawn: mockSpawn }));
 vi.mock("child_process", () => ({ spawn: mockSpawn }));
-vi.mock("@penny/orchestration/source", () => ({
+vi.mock("@penny/orchestration/source", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@penny/orchestration/source")>()),
   OrchestrationService: class {
     artifacts = { read: mockArtifactRead };
     checkpointer = {

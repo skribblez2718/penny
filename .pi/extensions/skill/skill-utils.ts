@@ -557,68 +557,6 @@ export function formatResult(
 }
 
 /**
- * Parse SUMMARY block from agent output.
- * Agents are instructed to emit inline JSON SUMMARY blocks via their
- * skill context prompts. The orchestrator receives only this summary,
- * not the full agent output.
- *
- * Standard format: SUMMARY:{"key":"value",...}
- * - Single line of valid JSON (no newlines in the JSON)
- * - Starts with SUMMARY: followed immediately by {
- * - Must handle nested braces (arrays of objects)
- */
-export function parseSummaryFromOutput(output: string): Record<string, unknown> {
-  if (!output || !output.trim()) return {};
-
-  const summaryIdx = output.indexOf("SUMMARY:");
-  if (summaryIdx === -1) return {};
-
-  const braceIdx = output.indexOf("{", summaryIdx);
-  if (braceIdx === -1) return {};
-
-  // --- L3 FIX: Line-aware JSON parse first ---
-  // Agents are instructed to emit SUMMARY on a single line.
-  // Try parsing the rest of the line as JSON before falling back to brace counting.
-  // This correctly handles strings containing { or }.
-  const lineStart = output.indexOf("SUMMARY:", summaryIdx);
-  const lineContent = output.slice(lineStart + 8); // after "SUMMARY:"
-  const newlineIdx = lineContent.indexOf("\n");
-  const lineCandidate = newlineIdx === -1 ? lineContent : lineContent.slice(0, newlineIdx);
-  const lineTrimmed = lineCandidate.trim();
-  if (lineTrimmed.startsWith("{") && lineTrimmed.endsWith("}")) {
-    try {
-      return JSON.parse(lineTrimmed);
-    } catch {
-      // Fall through to brace-counting fallback
-    }
-  }
-
-  // --- L3 FALLBACK: Brace-counting (handles multi-line JSON) ---
-  // NOTE: This is inherently fragile for strings with unbalanced braces.
-  let depth = 0;
-  let endIdx = -1;
-  for (let i = braceIdx; i < output.length; i++) {
-    if (output[i] === "{") depth++;
-    else if (output[i] === "}") {
-      depth--;
-      if (depth === 0) {
-        endIdx = i;
-        break;
-      }
-    }
-  }
-
-  if (endIdx === -1) return {};
-
-  const jsonStr = output.slice(braceIdx, endIdx + 1);
-  try {
-    return JSON.parse(jsonStr);
-  } catch {
-    return {};
-  }
-}
-
-/**
  * Build an optional bounded display preview for chain status/checkpoints.
  *
  * The preview is never handoff authority; exact terminal/handoff ArtifactRefs

@@ -17,17 +17,21 @@ file, a non-ignored live path, a nested repository, or a symlinked component all
 admission even where Git would have ignored the path. Ignore rules are one layer of
 several; see ``docs/agents/knowledge-base/privacy-and-promotion.md``.
 
-The checker never opens private content. It reasons about paths, tracked status, ignore
-status, file type, and permission bits only.
+The checker never opens a configured private KB root. Admission checks use path/type/mode
+metadata only; requested package/log checks open only the declared public package files and
+synthetic/local log surfaces in order to detect private sentinel escape.
 """
 
 from __future__ import annotations
 
 import argparse
+import io
 import os
+import re
 import stat
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 SCAFFOLD_REL = "docs/kb"
@@ -61,6 +65,46 @@ LIVE_PATH_CLASSES = (
 
 # Live directory names that must never appear as tracked entries anywhere in the repository.
 LIVE_DIR_NAMES = ("sources", "pages", "conflicts", "work", ".kb")
+
+# Runtime fixtures assemble these values from fragments so no exact sentinel is itself a
+# tracked test literal. Raw markers are forbidden on every copy surface. The separately
+# marked derived-answer value is also forbidden everywhere except the exact in-memory parent
+# result whose grant + policy gate is asserted by the TypeScript privacy suite.
+RAW_SENTINEL_KINDS = ("SOURCE", "CLAIM", "PAGE", "QUERY", "REPORT", "PATCH")
+PRIVATE_SENTINEL = re.compile(
+    rb"(?:(?:PRIVATE|RAW)_(?:SOURCE|CLAIM|PAGE|QUERY|REPORT|PATCH|TARGET|BODY)"
+    rb"|DERIVED_ANSWER)_SENTINEL_[A-Za-z0-9_-]+"
+)
+
+PACKAGE_ROOTS = (Path("apps/orchestration"), Path(".pi/extensions/skill"))
+PRIVATE_PACKAGE_PARTS = {".penny", ".mempalace", "work", "preimages"}
+PRIVATE_PACKAGE_NAMES = {
+    "artifacts.db",
+    "capabilities.sqlite",
+    "orchestration-v2.db",
+    "promotion-apply.mutex",
+    "receipts.sqlite",
+    "request.json",
+}
+LOG_SURFACE_ROOTS = (Path(".penny/logs"), Path(".penny/observability"))
+LOG_TEST_COMMANDS = (
+    (
+        "orchestration privacy test output",
+        ("bun", "run", "--cwd", "apps/orchestration", "test:kb-privacy"),
+    ),
+    (
+        "orchestration promotion E2E output",
+        ("bun", "run", "--cwd", "apps/orchestration", "test:kb-e2e"),
+    ),
+    (
+        "registered adapter E2E output",
+        ("bun", "run", "--cwd", ".pi/extensions/skill", "test:knowledge-base-e2e"),
+    ),
+    (
+        "adapter registration test output",
+        ("bun", "run", "--cwd", ".pi/extensions/skill", "test:registration"),
+    ),
+)
 
 
 def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -115,6 +159,43 @@ def check_no_tracked_live_paths(root: Path) -> list[str]:
             errors.append(f"live KB file is tracked (force-added?): {path}")
         if path.startswith(f"{SCAFFOLD_REL}/") and any(p in LIVE_DIR_NAMES for p in parts[2:-1]):
             errors.append(f"live KB directory content is tracked (force-added?): {path}")
+    return errors
+
+
+def _sentinel_errors(data: bytes, label: str) -> list[str]:
+    """Return one content-free finding for every independently matched marker class."""
+    findings: list[str] = []
+    seen: set[str] = set()
+    for match in PRIVATE_SENTINEL.finditer(data):
+        marker = match.group(0)
+        if marker.startswith(b"DERIVED_ANSWER_"):
+            kind = "derived-answer"
+        else:
+            fields = marker.split(b"_", maxsplit=3)
+            kind = fields[1].decode("ascii", errors="strict").lower()
+        if kind not in seen:
+            findings.append(f"{label} contains a {kind} privacy sentinel")
+            seen.add(kind)
+    return findings
+
+
+def check_tracked_sentinel_surface(root: Path) -> list[str]:
+    """Scan current worktree bytes for every Git-indexed path, without following symlinks."""
+    errors: list[str] = []
+    for relative in tracked_under(root, "."):
+        candidate = root / relative
+        if not candidate.exists() and not candidate.is_symlink():
+            errors.append(f"tracked path is missing from the worktree: {relative}")
+            continue
+        info = candidate.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            data = os.readlink(candidate).encode("utf-8", errors="strict")
+        elif stat.S_ISREG(info.st_mode):
+            data = candidate.read_bytes()
+        else:
+            # Gitlinks and other non-regular tracked objects have no local file body to open.
+            continue
+        errors.extend(_sentinel_errors(data, f"tracked file {relative}"))
     return errors
 
 
@@ -247,18 +328,154 @@ def _unignored_live_path_errors(worktree: Path, resolved: Path) -> list[str]:
 
 
 def check_archive_surface(root: Path) -> list[str]:
-    """No live KB path may appear in a Git archive of the tracked tree."""
-    out = _git(root, "archive", "--format=tar", "HEAD", check=False)
+    """Inspect both member names and bytes in the Git ``HEAD`` archive."""
+    out = subprocess.run(
+        ["git", "-C", str(root), "archive", "--format=tar", "HEAD"],
+        capture_output=True,
+        check=False,
+    )
     if out.returncode != 0:
-        return []
-    names = subprocess.run(
-        ["tar", "-tf", "-"], input=out.stdout, capture_output=True, text=True
-    ).stdout.splitlines()
+        return ["Git archive generation failed"]
+
     errors: list[str] = []
-    for name in names:
-        parts = Path(name).parts
-        if name.startswith(f"{SCAFFOLD_REL}/") and any(p in LIVE_DIR_NAMES for p in parts[2:]):
-            errors.append(f"archive contains a live KB path: {name}")
+    try:
+        with tarfile.open(fileobj=io.BytesIO(out.stdout), mode="r:") as archive:
+            for member in archive.getmembers():
+                name = member.name
+                parts = Path(name).parts
+                if name.startswith(f"{SCAFFOLD_REL}/") and any(
+                    part in LIVE_DIR_NAMES for part in parts[2:]
+                ):
+                    errors.append(f"archive contains a live KB path: {name}")
+                if member.issym() or member.islnk():
+                    errors.extend(
+                        _sentinel_errors(
+                            member.linkname.encode("utf-8", errors="strict"),
+                            f"archive link {name}",
+                        )
+                    )
+                elif member.isfile():
+                    extracted = archive.extractfile(member)
+                    if extracted is None:
+                        errors.append(f"archive member could not be read: {name}")
+                    else:
+                        errors.extend(_sentinel_errors(extracted.read(), f"archive member {name}"))
+    except (tarfile.TarError, UnicodeError):
+        return ["Git archive is not a valid strict tar stream"]
+    return errors
+
+
+def _pack_file_list(root: Path, package_root: Path) -> tuple[list[str], list[str]]:
+    """Parse one Bun dry-run without creating an archive in the repository."""
+    if not (root / package_root).is_dir():
+        return [], [f"package root is absent: {package_root.as_posix()}"]
+    result = subprocess.run(
+        ["bun", "pm", "pack", "--cwd", str(package_root), "--dry-run"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    label = f"package dry-run {package_root.as_posix()}"
+    errors = _sentinel_errors(
+        f"{result.stdout}\n{result.stderr}".encode("utf-8", errors="strict"), label
+    )
+    if result.returncode != 0:
+        return [], [*errors, f"package dry-run failed for {package_root.as_posix()}"]
+    files: list[str] = []
+    for line in result.stdout.splitlines():
+        match = re.match(r"^packed\s+\S+\s+(.+)$", line)
+        if match:
+            files.append(match.group(1))
+    if not files:
+        errors.append(f"package dry-run returned no files for {package_root.as_posix()}")
+    if len(set(files)) != len(files):
+        errors.append(f"package dry-run returned duplicate files for {package_root.as_posix()}")
+    return files, errors
+
+
+def _surface_file_errors(base: Path, relative_files: list[str], label: str) -> list[str]:
+    """Inspect only declared public package/log files, never a configured private KB root."""
+    errors: list[str] = []
+    resolved_base = base.resolve()
+    for relative in relative_files:
+        rel = Path(relative)
+        if rel.is_absolute() or ".." in rel.parts:
+            errors.append(f"{label} contains an absolute/traversal path: {relative}")
+            continue
+        if any(part in PRIVATE_PACKAGE_PARTS for part in rel.parts):
+            errors.append(f"{label} contains a private runtime directory: {relative}")
+        if rel.name in PRIVATE_PACKAGE_NAMES or rel.suffix in {".key", ".sqlite", ".db"}:
+            errors.append(f"{label} contains a private runtime file: {relative}")
+        candidate = resolved_base / rel
+        resolved_candidate = candidate.resolve()
+        if (
+            resolved_candidate.parent != resolved_base
+            and resolved_base not in resolved_candidate.parents
+        ):
+            errors.append(f"{label} file escapes its declared root: {relative}")
+            continue
+        if not candidate.exists() and not candidate.is_symlink():
+            errors.append(f"{label} names a missing file: {relative}")
+            continue
+        info = candidate.lstat()
+        if not stat.S_ISREG(info.st_mode) or candidate.is_symlink():
+            errors.append(f"{label} contains a non-regular/symlink file: {relative}")
+            continue
+        errors.extend(_sentinel_errors(candidate.read_bytes(), f"{label} file {relative}"))
+    return errors
+
+
+def check_package_surface(root: Path) -> list[str]:
+    errors: list[str] = []
+    for package_root in PACKAGE_ROOTS:
+        files, pack_errors = _pack_file_list(root, package_root)
+        errors.extend(pack_errors)
+        if files:
+            errors.extend(
+                _surface_file_errors(
+                    root / package_root, files, f"package {package_root.as_posix()}"
+                )
+            )
+    return errors
+
+
+def check_log_surface(root: Path) -> list[str]:
+    """Run no-model app/adapter paths and scan output plus declared local log roots."""
+    errors: list[str] = []
+    command_environment = os.environ.copy()
+    command_environment.update(
+        {
+            "PI_OBSERVABILITY_ENABLED": "false",
+            "PI_OBSERVABILITY_AUTO_START": "false",
+        }
+    )
+    for label, command in LOG_TEST_COMMANDS:
+        result = subprocess.run(
+            list(command),
+            cwd=root,
+            capture_output=True,
+            check=False,
+            env=command_environment,
+        )
+        errors.extend(_sentinel_errors(result.stdout, label))
+        errors.extend(_sentinel_errors(result.stderr, label))
+        if result.returncode != 0:
+            errors.append(f"{label} failed while validating copy-surface privacy")
+
+    for relative_root in LOG_SURFACE_ROOTS:
+        log_root = root / relative_root
+        if not log_root.exists():
+            continue
+        if log_root.is_symlink() or not log_root.is_dir():
+            errors.append(f"log surface root is not a regular directory: {relative_root}")
+            continue
+        files = [
+            item.relative_to(log_root).as_posix()
+            for item in log_root.rglob("*")
+            if item.is_file() or item.is_symlink()
+        ]
+        errors.extend(_surface_file_errors(log_root, files, f"log surface {relative_root}"))
     return errors
 
 
@@ -270,6 +487,7 @@ def run_checks(root: Path, args: argparse.Namespace) -> list[str]:
     failures += check_scaffold_shape(root)
     failures += check_scaffold_ignores(root)
     failures += check_no_tracked_live_paths(root)
+    failures += check_tracked_sentinel_surface(root)
 
     scaffold = root / SCAFFOLD_REL
     # The scaffold itself is the one in-repository root that may be admitted, and only when
@@ -280,6 +498,10 @@ def run_checks(root: Path, args: argparse.Namespace) -> list[str]:
 
     if args.clean_archive:
         failures += check_archive_surface(root)
+    if args.package:
+        failures += check_package_surface(root)
+    if args.logs:
+        failures += check_log_surface(root)
 
     return failures
 
@@ -298,13 +520,6 @@ def main() -> int:
     args = parser.parse_args()
     root = Path(args.root).resolve()
 
-    deferred = [name for name, on in (("--package", args.package), ("--logs", args.logs)) if on]
-    if deferred:
-        # Fail loudly rather than passing vacuously: these surfaces only exist once the app
-        # and adapter are built, so a silent success here would be a false gate at G9/G11.
-        print(f"FAIL: {', '.join(deferred)} surface scanning requires the G9 app/adapter build")
-        return 2
-
     failures = run_checks(root, args)
     if failures:
         print(f"FAIL: {len(failures)} knowledge-base privacy violation(s)")
@@ -314,7 +529,8 @@ def main() -> int:
 
     print(
         f"OK: scaffold is exactly {len(SCAFFOLD_FILES)} tracked files, "
-        f"{len(LIVE_PATH_CLASSES)} live path classes are ignored, and root admission is default-deny."
+        f"{len(LIVE_PATH_CLASSES)} live path classes are ignored, root admission is default-deny, "
+        f"and tracked plus requested archive/package/log surfaces are sentinel-clean."
     )
     return 0
 

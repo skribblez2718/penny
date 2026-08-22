@@ -2,57 +2,57 @@
 
 ## Mission
 
-Extract the claims carried by the admitted sources for this ingest run, so later phases
-compose and verify against evidence rather than recollection.
+Extract the claims carried by every admitted source. This is a private-reader session: there are no
+built-in, filesystem, search, network, memory, or extension tools.
 
-## How inputs reach you
+## Inputs and required order
 
-This is a private-reader session. You hold no built-in tools and no file access. Every
-input arrives through purpose-built readers:
+1. **Start with `read_phase_brief({schema_version:1})` before any other action.** It returns the exact run/state
+   binding and admitted source IDs. Do not plan or answer in assistant prose first.
+2. Call `read_source_snapshot({schema_version:1,source_id})` for every admitted source ID. It never accepts a path.
+3. Assume nothing outside those reader results.
 
-- `read_phase_brief()` — this run's brief: the admitted `source_id` values you may read.
-- `read_source_snapshot({source_id})` — the full content of one admitted source. It
-  accepts a `source_id` only, never a path, and refuses any id outside this phase's
-  admission allowlist.
+Do not stage until every required reader has succeeded. If a reader returns a bounded schema or
+validation error, correct only the closed arguments from the brief and retry; do not stop in prose.
 
-Read **every** admitted source before extracting. Nothing else is available, and nothing
-else may be assumed.
+## Exact terminating protocol
 
-## Output contract
-
-Call `submit_phase_result` **exactly once** with one JSON object:
+1. Build one closed `claims` payload with `schema_version: 1`, `artifact_kind: "claims"`, every
+   admitted `source_id`, and extracted candidates. Each candidate has only `provisional_id`, `text`,
+   `kind`, `confidence`, and `evidence`. A provisional ID is a transient correlation key, never an
+   advisory claim identity; the host allocates stable claim IDs before compose.
+2. Call `stage_run_artifact` with exactly:
 
 ```json
 {
   "schema_version": 1,
   "artifact_kind": "claims",
-  "source_ids": ["<every source_id you read>"],
-  "claims": [
-    {
-      "claim_id": "clm_<unique>",
-      "text": "<one materially distinct statement>",
-      "kind": "fact|inference|speculation|unknown",
-      "state": "supported|contested|superseded|unverified_current",
-      "confidence": "CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN",
-      "evidence": [{ "source_id": "<an admitted source you read>" }],
-      "contradicts_claim_ids": [],
-      "canonical_verification_refs": []
-    }
-  ]
+  "media_type": "application/json",
+  "encoding": "utf8",
+  "content": "<JSON string containing the complete claims payload>"
 }
 ```
 
-No prose result is accepted; a session that ends without this submission fails the phase.
+3. On success, retain the complete object at the returned `artifact` field exactly. Do not retype,
+   reconstruct, recompute, or substitute any handle field. If staging returns a bounded schema or
+   payload-validation error before success, correct the closed payload and retry.
+4. Terminate **only** by calling `submit_phase_result` with its closed schema and these values:
+   - exact `run_id` from `read_phase_brief`;
+   - `state_id: "ingest"`, `agent: "echo"`, `result_kind: "ingest_extraction"`;
+   - an allowed verdict and confidence; body-free evidence/warning/unresolved metadata;
+   - every admitted `source_id` and the exact extracted candidate count;
+   - `claims_artifact`: the complete returned `artifact` object copied exactly.
+
+Never use a placeholder handle or guessed byte length. Never put `content`, an artifact body,
+private text, prose, or a path in `submit_phase_result`. If submit returns a bounded schema error,
+correct the closed metadata and retry with the same exact returned handle. An accepted
+`submit_phase_result` is the only successful termination; assistant prose is not a result.
 
 ## Non-negotiables
 
-- One claim per materially distinct statement. Do not merge two assertions into one claim,
-  and do not split one assertion into near-duplicates.
-- Every `evidence.source_id` must be a source you actually read this phase.
-- `claim_id` is unique within the submission.
-- Distinguish what a source **states** (`fact`) from what you **conclude** (`inference`).
-  Marking an inference as a fact is the failure this phase exists to prevent.
-- Record contradictions between sources rather than silently choosing a winner: set
-  `state` to `contested` and name the opposing claim in `contradicts_claim_ids`.
-- An admitted source that supports nothing worth carrying forward is a real result. Say so
-  with fewer claims; do not manufacture coverage.
+- One candidate per materially distinct statement; provisional correlation IDs are unique.
+- Never emit `claim_id`, `state`, contradiction IDs, or canonical-verification refs; stable claim
+  identity is host-owned.
+- Every evidence source is one you actually read.
+- Distinguish source statements from inference and preserve contradictions.
+- Empty or sparse extraction is valid; never manufacture coverage.

@@ -14,3 +14,5 @@ docs/kb/templates/page.md
 # Non-production research artifacts and test fixtures (mirrors the eslint ignore list).
 research/
 **/tests/fixtures/
+# Exact-JCS reviewed smoke cohort manifest
+apps/orchestration/smoke/g8-qwen3.8-cohort.jcs.json

@@ -1,221 +1,1227 @@
 /**
- * KB worker client — bridges the engine's `ModelClient` surface to the KB's
- * §5.8 private-reader sessions.
+ * KB worker client — the engine bridge for the exact §§5.7–5.8 child boundary.
  *
- * The engine's `WorkerExecutor` calls `ModelClient.runAgent(invocation)` for every
- * `invoke_agent` directive. Research gets a `PiAgentClient` (default posture +
- * result/artifact tools). KB gets this client instead: it builds the §5.8 session
- * spec (no built-in tools, four host-closed readers) for the phase named by the
- * directive, runs the agent, stages the typed result body into the KB content
- * plane, and returns routing metadata as `details`.
+ * Production children never return artifact bodies to this client. They stage
+ * one validated/JCS artifact through `stage_run_artifact`, then return exactly
+ * one body-free typed `submit_phase_result`. The engine receipt chain receives
+ * only that metadata; private bytes exist only in RunArtifactStore.
  *
- * Privacy: the phase body (claims, page draft, reports) lands in TWO owner-only
- * stores — the KB content plane (authoritative; sealed and approved by the host)
- * and the engine's artifact store (the engine's receipt chain requires it).
- * Neither is model-visible: the tool's result to the parent carries only counts
- * and ids, and the KB reader closures serve only allowlisted content.
- *
- * The agent runner is injectable (`agentRunner`) so tests can drive the entire
- * engine pipeline with deterministic bodies and no model.
+ * Deterministic tests use `createTestOnlyArtifactBodyRunner` explicitly. There
+ * is no production fallback that interprets assistant text as an artifact.
  */
 
-import { RunArtifactStore } from "./run-artifacts.js";
-import { sourcesFromCapabilities } from "./gate.js";
+import { strictParseJson } from "./approval-receipts.js";
+import { sourcesFromAdmissions } from "./gate.js";
+import { CapabilityStore } from "./capabilities.js";
+import { readManifest, readPageRevision, readPolicy } from "./filesystem.js";
 import { KbModelClient, type KbAgentRunner } from "./kb-model-client.js";
 import { checkChildModelIdentity } from "./policy.js";
+import { createPromotionReader } from "./promotion-reader.js";
+import { KbQueryReader } from "./query-reader.js";
+import { assessQueryVerification } from "./query-verification.js";
+import {
+  RunArtifactStore,
+  type ArtifactHandle,
+  type StageRunArtifactInput,
+} from "./run-artifacts.js";
+import { findSaveClaim } from "./save-claim.js";
+import { createSaveEvidenceReader } from "./save-evidence-reader.js";
+import {
+  canonicalJson,
+  sha256Hex,
+  validateKbContract,
+  ClaimsArtifactSchema,
+  KbPhaseBriefSchema,
+  QueryAnswerArtifactSchema,
+  ReadPhaseBriefResultSchema,
+  QueryVerificationReportSchema,
+  type ArtifactKind,
+  type ClaimsArtifact,
+  type KbComposeAuthority,
+  type QueryAnswerArtifact,
+} from "./contracts.js";
+import { validatePhaseResult, type KbPhaseInvocation, type KbPhaseState } from "./session-tools.js";
 import { recheckAdmittedPolicy } from "./workflows.js";
-import type { KbPhaseInvocation } from "./session-tools.js";
+import { readSelectedGeneration } from "./generations.js";
+import {
+  allocateComposeAuthority,
+  claimCandidateBodies,
+  validatePageDraftAuthority,
+  type ComposePageCandidate,
+} from "./composition-authority.js";
+import { type Checkpointer, type KbPhaseOperands } from "../checkpointer.js";
+import type { Confidence, JsonValue } from "../contracts.js";
+import type { RunContext } from "../context.js";
 import type {
   AgentCompletion,
   AgentInvocation,
-  InlineExtension,
+  AgentSessionTraceSink,
   ModelClient,
+  SessionThinkingLevel,
 } from "../model-client.js";
-import type { JsonValue } from "../contracts.js";
+import { readRunInput } from "../private-inputs.js";
 
-/** Prior phase state-ids each KB phase may read (mirrors the playbook's). */
-const PRIOR_PHASES: Record<string, readonly string[]> = {
+const PRIOR_PHASES: Readonly<Record<KbPhaseState, readonly KbPhaseState[]>> = {
   ingest: [],
   compose: ["ingest"],
+  query: [],
   lint: ["compose"],
   verify: ["compose"],
+  plan: [],
+  patch: ["plan"],
 };
 
-const PHASE_ARTIFACT_KIND: Record<
-  string,
-  "claims" | "page_draft" | "lint_report" | "verification_report"
+const PHASE_CONTRACT: Readonly<
+  Record<
+    KbPhaseState,
+    { agent: KbPhaseOperands["agent"]; artifactKind: ArtifactKind; artifactField: string }
+  >
 > = {
-  ingest: "claims",
-  compose: "page_draft",
-  lint: "lint_report",
-  verify: "verification_report",
+  ingest: { agent: "echo", artifactKind: "claims", artifactField: "claims_artifact" },
+  compose: {
+    agent: "synthia",
+    artifactKind: "page_draft",
+    artifactField: "page_revision_artifact",
+  },
+  query: { agent: "synthia", artifactKind: "query_answer", artifactField: "answer_artifact" },
+  lint: { agent: "carren", artifactKind: "lint_report", artifactField: "report_artifact" },
+  verify: {
+    agent: "vera",
+    artifactKind: "verification_report",
+    artifactField: "report_artifact",
+  },
+  plan: { agent: "piper", artifactKind: "promotion_plan", artifactField: "plan_artifact" },
+  patch: {
+    agent: "skribble",
+    artifactKind: "promotion_patch",
+    artifactField: "patch_artifact",
+  },
 };
+
+function phaseState(value: string): KbPhaseState {
+  if (Object.hasOwn(PHASE_CONTRACT, value)) return value as KbPhaseState;
+  throw new Error(`KbWorkerClient cannot serve KB phase '${value}'`);
+}
+
+function object(value: unknown, code: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(code);
+  return value as Record<string, unknown>;
+}
 
 export interface KbWorkerClientOptions {
   readonly projectRoot: string;
+  /** The exact orchestration control DB that owns this durable run. */
+  readonly checkpointer?: Checkpointer;
   readonly kbRoot: string;
   readonly runId: string;
+  readonly sessionId: string;
   readonly profileId: string;
-  /** The capability ids (= source ids) admitted for this run. */
-  readonly sourceCapabilityIds: readonly string[];
+  readonly operation: "ingest" | "query" | "save" | "promote";
+  readonly sourceIds?: readonly string[];
+  /** @deprecated Source capabilities are public inputs, never child source identities. */
+  readonly sourceCapabilityIds?: readonly string[];
+  /** TEST-ONLY exact model override. Production uses agent SSOT frontmatter. */
   readonly modelOverride?: string;
-  readonly workerExtensions?: readonly InlineExtension[];
-  /**
-   * The policy digest this run was admitted under (§5.3). When present, every
-   * child creation rechecks exact equality and refuses `policy_changed` on
-   * drift, and the resolved child identity is admitted against that policy
-   * before a session exists. Omitted only by tests that inject a runner.
-   */
-  readonly admittedPolicySha256?: string;
-  /**
-   * Cross-run inputs this run is allowed to read, keyed by the phase slot they
-   * fill (§5.8 "read an allowed prior run artifact").
-   *
-   * A `save` composes from the sealed `query_answer` of the query run its claim
-   * names, so `ingest` is seeded with that artifact instead of being produced by
-   * an extraction phase. The allowlist is exact: one run id, one artifact id,
-   * decided by the host when the claim was taken.
-   */
+  /** TEST-ONLY thinking override. Production preserves Pi/settings defaults. */
+  readonly testOnlyThinkingLevelOverride?: SessionThinkingLevel;
+  /** Optional content-free lifecycle diagnostics from the shared Pi runner. */
+  readonly sessionTrace?: AgentSessionTraceSink;
+  readonly admittedPolicySha256?: string | (() => string);
   readonly seedPhaseOutputs?: Readonly<Record<string, { runId: string; artifactId: string }>>;
-  /** Injectable agent runner (tests substitute deterministic bodies). */
-  readonly agentRunner?: KbAgentRunner;
+  /** Exact private phase brief (save uses this for title/page kind). */
+  readonly readPhaseBrief?: () => string;
+  readonly queryReader?: {
+    readonly readRequest: () => string;
+    readonly selectedPageRefs?: () => Array<{ page_id: string; revision_id: string }>;
+    readonly searchSelectedKb: () => string;
+    readonly readSelectedPage: (pageId: string, revisionId: string) => string;
+    readonly readSelectedSource: (sourceId: string) => string;
+  };
+  readonly evidenceReader?: {
+    readonly allowedSelectedPages?: () => Array<{ page_id: string; revision_id: string }>;
+    readonly readSelectedPage: (pageId: string, revisionId: string) => string;
+    readonly readSelectedSource: (sourceId: string) => string;
+  };
+  readonly promotionReader?: {
+    readonly allowedSelectedPages?: () => Array<{ page_id: string; revision_id: string }>;
+    readonly readPhaseBrief: () => string;
+    readonly readSelectedPage: (pageId: string, revisionId: string) => string;
+    readonly readCanonicalTarget: (capabilityId: string) => string;
+  };
+  /** TEST-ONLY. Must itself use the explicit test artifact-body adapter. */
+  readonly testOnlyAgentRunner?: KbAgentRunner;
+}
+
+interface AllowedArtifact {
+  readonly handle: ArtifactHandle;
+  readonly runId: string;
+  readonly stateId: string;
+}
+
+const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const RESUMABLE_PHASES = {
+  ingest: new Set<KbPhaseState>(["ingest", "compose", "lint", "verify"]),
+  query: new Set<KbPhaseState>(["query", "verify"]),
+  save: new Set<KbPhaseState>(["compose", "lint", "verify"]),
+  promote: new Set<KbPhaseState>(["plan", "patch"]),
+} as const;
+
+/** Bounded failure when durable state cannot reconstruct one exact worker posture. */
+export class KbWorkerPostureError extends Error {
+  readonly code = "resume_worker_posture_invalid";
+
+  constructor() {
+    super("the durable KB run does not define a valid resumable worker posture");
+    this.name = "KbWorkerPostureError";
+  }
+}
+
+function postureError(): never {
+  throw new KbWorkerPostureError();
+}
+
+function metadataString(run: RunContext, key: string): string {
+  const value = run.playbookData[key];
+  return typeof value === "string" && OPAQUE_ID.test(value) ? value : postureError();
+}
+
+function metadataStringList(run: RunContext, key: string): string[] {
+  const value = run.playbookData[key];
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((item) => typeof item !== "string" || !OPAQUE_ID.test(item))
+  ) {
+    return postureError();
+  }
+  const values = value as string[];
+  if (new Set(values).size !== values.length) return postureError();
+  return [...values];
+}
+
+function metadataPageRevisions(run: RunContext): Array<{ page_id: string; revision_id: string }> {
+  const value = run.playbookData.page_revisions;
+  if (!Array.isArray(value) || value.length === 0) return postureError();
+  return value.map((item) => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      return postureError();
+    }
+    const record = item as Record<string, JsonValue>;
+    if (
+      canonicalJson(Object.keys(record).sort()) !== canonicalJson(["page_id", "revision_id"]) ||
+      typeof record.page_id !== "string" ||
+      !OPAQUE_ID.test(record.page_id) ||
+      typeof record.revision_id !== "string" ||
+      !OPAQUE_ID.test(record.revision_id)
+    ) {
+      return postureError();
+    }
+    return { page_id: record.page_id, revision_id: record.revision_id };
+  });
+}
+
+function assertDurableActionBinding(
+  run: RunContext,
+  action: KbWorkerClientOptions["operation"],
+  profileId: string
+): void {
+  if (
+    run.identity.playbook !== "knowledge-base" ||
+    run.status !== "running" ||
+    run.terminalDirective !== null ||
+    String(run.constraints.action ?? "") !== action ||
+    String(run.constraints.kb_profile_id ?? "") !== profileId ||
+    String(run.playbookData.action ?? "") !== action
+  ) {
+    postureError();
+  }
+  const pending = run.pendingDirective;
+  if (
+    pending?.action !== "invoke_agent" ||
+    pending.state_id !== run.stateId ||
+    !RESUMABLE_PHASES[action].has(phaseState(pending.state_id))
+  ) {
+    postureError();
+  }
+}
+
+export interface KbWorkerResumeInput {
+  readonly projectRoot: string;
+  readonly kbRoot: string;
+  readonly checkpointer: Checkpointer;
+  readonly run: RunContext;
+  /** TEST-ONLY. Must itself use the explicit test artifact-body adapter. */
+  readonly testOnlyAgentRunner?: KbAgentRunner;
+}
+
+/**
+ * Reconstruct the one private-reader posture a durable running KB action owns.
+ *
+ * The caller must first revalidate the authenticated session/profile, KB
+ * identity, and admitted policy. This function then derives every authority
+ * input from the checkpoint and owner stores: never from a new public request.
+ */
+export function kbWorkerClientOptionsFromRun(input: KbWorkerResumeInput): KbWorkerClientOptions {
+  const { run } = input;
+  const action = String(run.playbookData.action ?? "") as KbWorkerClientOptions["operation"];
+  if (!Object.hasOwn(RESUMABLE_PHASES, action)) return postureError();
+  const profileId = metadataString(run, "profile_id");
+  const admittedPolicySha256 = String(run.playbookData.admitted_policy_sha256 ?? "");
+  if (!/^[a-f0-9]{64}$/.test(admittedPolicySha256)) return postureError();
+  assertDurableActionBinding(run, action, profileId);
+
+  const base: KbWorkerClientOptions = {
+    projectRoot: input.projectRoot,
+    checkpointer: input.checkpointer,
+    kbRoot: input.kbRoot,
+    runId: run.identity.run_id,
+    sessionId: run.identity.session_id,
+    profileId,
+    operation: action,
+    sourceIds: [],
+    admittedPolicySha256: () => {
+      const current = input.checkpointer.loadRunById(run.identity.run_id);
+      if (
+        current === undefined ||
+        current.identity.session_id !== run.identity.session_id ||
+        String(current.playbookData.profile_id ?? "") !== profileId ||
+        String(current.playbookData.action ?? "") !== action
+      ) {
+        return "";
+      }
+      return String(current.playbookData.admitted_policy_sha256 ?? "");
+    },
+    ...(input.testOnlyAgentRunner ? { testOnlyAgentRunner: input.testOnlyAgentRunner } : {}),
+  };
+
+  if (action === "ingest") {
+    const sourceCapabilityIds = metadataStringList(run, "source_capability_ids");
+    const sourceIds = metadataStringList(run, "source_ids");
+    if (
+      canonicalJson(sourceCapabilityIds) !== canonicalJson(run.constraints.source_capability_ids)
+    ) {
+      return postureError();
+    }
+    return { ...base, sourceIds };
+  }
+
+  if (action === "query") {
+    return {
+      ...base,
+      queryReader: new KbQueryReader({
+        kbRoot: input.kbRoot,
+        profileId,
+        readRequest: () =>
+          readRunInput({
+            projectRoot: input.projectRoot,
+            checkpointer: input.checkpointer,
+            runId: run.identity.run_id,
+          }),
+        selectedGenerationId: () =>
+          String(
+            input.checkpointer.loadRunById(run.identity.run_id)?.playbookData
+              .selected_generation_id ?? ""
+          ),
+      }),
+    };
+  }
+
+  if (action === "save") {
+    const queryRunId = metadataString(run, "query_run_id");
+    const answerArtifactId = metadataString(run, "answer_artifact_id");
+    const claim = findSaveClaim(input.projectRoot, profileId, queryRunId);
+    if (
+      String(run.constraints.query_run_id ?? "") !== queryRunId ||
+      claim?.state !== "claimed" ||
+      claim.kb_profile_id !== profileId ||
+      claim.save_run_id !== run.identity.run_id ||
+      claim.answer_artifact_id !== answerArtifactId
+    ) {
+      return postureError();
+    }
+    let evidence: ReturnType<typeof createSaveEvidenceReader> | undefined;
+    const requireEvidence = (): ReturnType<typeof createSaveEvidenceReader> => {
+      evidence ??= createSaveEvidenceReader({
+        kbRoot: input.kbRoot,
+        queryRunId,
+        answerArtifactId,
+        checkpointer: input.checkpointer,
+      });
+      return evidence;
+    };
+    return {
+      ...base,
+      readPhaseBrief: () =>
+        canonicalJson(
+          readRunInput({
+            projectRoot: input.projectRoot,
+            checkpointer: input.checkpointer,
+            runId: run.identity.run_id,
+          })
+        ),
+      evidenceReader: {
+        allowedSelectedPages: () => requireEvidence().allowedSelectedPages(),
+        readSelectedPage: (pageId, revisionId) =>
+          requireEvidence().readSelectedPage(pageId, revisionId),
+        readSelectedSource: (sourceId) => requireEvidence().readSelectedSource(sourceId),
+      },
+      seedPhaseOutputs: {
+        ingest: { runId: queryRunId, artifactId: answerArtifactId },
+      },
+    };
+  }
+
+  const pageRevisions = metadataPageRevisions(run);
+  const targetCapabilityIds = metadataStringList(run, "target_capability_ids");
+  if (
+    canonicalJson(pageRevisions) !== canonicalJson(run.constraints.page_revisions) ||
+    canonicalJson(targetCapabilityIds) !==
+      canonicalJson(run.constraints.canonical_target_capability_ids)
+  ) {
+    return postureError();
+  }
+  return {
+    ...base,
+    promotionReader: createPromotionReader({
+      projectRoot: input.projectRoot,
+      kbRoot: input.kbRoot,
+      runId: run.identity.run_id,
+      sessionId: run.identity.session_id,
+      profileId,
+      operation: "promote",
+      pageRevisions,
+      targetCapabilityIds,
+    }),
+  };
+}
+
+/** Build the production worker bridge for one already-authorized recovery. */
+export function createKbWorkerClientForResume(input: KbWorkerResumeInput): KbWorkerClient {
+  return new KbWorkerClient(kbWorkerClientOptionsFromRun(input));
 }
 
 export class KbWorkerClient implements ModelClient {
   private kbClient?: KbModelClient;
   private readonly runner: KbAgentRunner;
-  private readonly store: RunArtifactStore;
+  private store!: RunArtifactStore;
+  private artifactCheckpointer!: Checkpointer;
+  private controlBound = false;
 
   constructor(private readonly options: KbWorkerClientOptions) {
-    this.store = new RunArtifactStore(options.kbRoot, options.runId);
+    if (options.checkpointer !== undefined) this.bindCheckpointer(options.checkpointer);
     this.runner =
-      options.agentRunner ??
+      options.testOnlyAgentRunner ??
       ((invocation: KbPhaseInvocation) => {
         if (this.kbClient === undefined) {
           this.kbClient = new KbModelClient({
             projectRoot: options.projectRoot,
             ...(options.modelOverride ? { modelOverride: options.modelOverride } : {}),
-            ...(options.workerExtensions ? { workerExtensions: options.workerExtensions } : {}),
+            ...(options.testOnlyThinkingLevelOverride === undefined
+              ? {}
+              : {
+                  testOnlyThinkingLevelOverride: options.testOnlyThinkingLevelOverride,
+                }),
+            ...(options.sessionTrace === undefined ? {} : { sessionTrace: options.sessionTrace }),
           });
         }
         return this.kbClient.run(invocation);
       });
   }
 
+  /** Bind the worker to the service's exact control DB before dispatch. */
+  bindCheckpointer(checkpointer: Checkpointer): void {
+    if (this.controlBound && this.artifactCheckpointer === checkpointer) return;
+    if (this.controlBound) this.store.close();
+    this.artifactCheckpointer = checkpointer;
+    this.store = new RunArtifactStore(
+      this.options.kbRoot,
+      this.options.runId,
+      this.artifactCheckpointer
+    );
+    this.controlBound = true;
+  }
+
   async runAgent(invocation: AgentInvocation): Promise<AgentCompletion> {
-    const phase = invocation.stateId;
-    const artifactKind = PHASE_ARTIFACT_KIND[phase];
-    if (artifactKind === undefined) {
-      throw new Error(`KbWorkerClient cannot serve KB phase '${phase}'`);
+    if (!this.controlBound) throw new KbWorkerPostureError();
+    const phase = phaseState(invocation.stateId);
+    const contract = PHASE_CONTRACT[phase];
+    if (invocation.agent !== contract.agent) throw new Error("kb_phase_producer_mismatch");
+    const durableResult = this.store.phaseResult(phase);
+    if (durableResult !== undefined) {
+      return this.completionFromResult(phase, contract, durableResult.result_jcs);
     }
 
-    // Resolve the admitted sources once, at dispatch: the readers serve exactly
-    // what the plane admitted, keyed by the same ids (source id = capability id).
-    // A capability that no longer resolves here means the source drifted after
-    // admission — refuse the phase rather than serve partial truth.
-    const sources = sourcesFromCapabilities(this.options.kbRoot, this.options.sourceCapabilityIds);
-    const contentBySourceId = new Map(sources.map((src) => [src.sourceId, src.content]));
-    const sourceAllowlist = [...contentBySourceId.keys()];
+    let admittedSourceIds = [...(this.options.sourceIds ?? [])];
+    if (this.options.operation === "ingest" && admittedSourceIds.length === 0) {
+      using capabilities = new CapabilityStore(this.options.projectRoot);
+      admittedSourceIds = capabilities
+        .admissionsForTransaction(this.options.runId, this.options.runId)
+        .filter((record) => record.state === "admitted")
+        .map((record) => record.source_id);
+    }
+    if (admittedSourceIds.length > 0 && this.options.operation !== "ingest") {
+      throw new Error("only an ingest worker may receive admitted source ids");
+    }
+    const sources = sourcesFromAdmissions(
+      this.options.projectRoot,
+      this.options.kbRoot,
+      admittedSourceIds,
+      {
+        runId: this.options.runId,
+        transactionId: this.options.runId,
+        sessionId: this.options.sessionId,
+        profileId: this.options.profileId,
+      }
+    );
+    const sourceById = new Map(sources.map((source) => [source.sourceId, source]));
+    const currentSourceAllowlist = [...sourceById.keys()];
 
-    // §5.3 child admission, evaluated per child creation:
-    //   1. the policy must still be EXACTLY the one this run was admitted under;
-    //   2. the RESOLVED child identity must match the child allowlist.
-    // Both run inside the pre-session hook, so a denial creates no session.
     const admittedSha = this.options.admittedPolicySha256;
     const admitModel =
       admittedSha === undefined
         ? undefined
         : (resolved: { provider: string; model: string }): void => {
+            const resolvedSha = typeof admittedSha === "function" ? admittedSha() : admittedSha;
+            if (resolvedSha.length === 0)
+              throw new Error("the KB run has no admitted policy binding");
             const policy = recheckAdmittedPolicy({
               kbRoot: this.options.kbRoot,
-              admittedPolicySha256: admittedSha,
+              admittedPolicySha256: resolvedSha,
             });
             checkChildModelIdentity(policy, resolved);
           };
 
+    const queryReader = this.options.queryReader;
+    const evidenceReader = this.options.evidenceReader;
+    const promotionReader = this.options.promotionReader;
+    const isQueryPhase = queryReader !== undefined && (phase === "query" || phase === "verify");
+    const isPromotionPhase =
+      promotionReader !== undefined && (phase === "plan" || phase === "patch");
+    const selectedPageReader = isQueryPhase
+      ? queryReader?.readSelectedPage
+      : isPromotionPhase
+        ? promotionReader?.readSelectedPage
+        : evidenceReader?.readSelectedPage;
+    const selectedSourceReader =
+      queryReader?.readSelectedSource ?? evidenceReader?.readSelectedSource;
+    const priorStates =
+      isQueryPhase && phase === "verify" ? (["query"] as const) : PRIOR_PHASES[phase];
+    const phasePolicy = readPolicy(this.options.kbRoot);
+    const resolvedAdmittedPolicySha256 =
+      typeof admittedSha === "function"
+        ? admittedSha()
+        : (admittedSha ?? sha256Hex(canonicalJson(phasePolicy)));
+    const currentAllowedArtifacts =
+      this.store.phaseOperands(phase) === undefined ? this.allowedArtifacts(priorStates) : [];
+    const operands = this.resolvePhaseOperands({
+      phase,
+      contract,
+      sourceIds: currentSourceAllowlist,
+      priorStates,
+      allowedArtifacts: currentAllowedArtifacts,
+      allowedSelectedPages: this.selectedPageOperands(phase, priorStates),
+      privateInputSha256: this.verifiedPrivateInputSha256(),
+      admittedPolicySha256: resolvedAdmittedPolicySha256,
+    });
+    const assertLiveOperands = (): void => this.assertPhaseOperandsCurrent(operands);
+    const sourceAllowlist = [...operands.source_ids];
+    const composeSelectedPages = new Map(
+      (operands.compose_authority?.selected_pages ?? []).map((page) => [
+        page.page_id,
+        page.revision_id,
+      ])
+    );
+    const allowedArtifacts: AllowedArtifact[] = operands.allowed_prior_artifacts.map((entry) => ({
+      handle: entry.handle,
+      runId: entry.run_id,
+      stateId: entry.state_id,
+    }));
+    const allowedById = new Map(allowedArtifacts.map((entry) => [entry.handle.artifact_id, entry]));
+
     const phaseInvocation: KbPhaseInvocation = {
       agent: invocation.agent,
       stateId: phase,
+      runId: this.options.runId,
+      profileId: this.options.profileId,
+      expectedArtifactKind: contract.artifactKind,
+      readerLimits: phasePolicy.reader_limits,
       phaseBrief: invocation.task,
+      readPhaseBrief: () => {
+        assertLiveOperands();
+        return this.phaseBrief(operands);
+      },
       sourceAllowlist,
-      priorPhaseAllowlist: PRIOR_PHASES[phase] ?? [],
+      priorPhaseAllowlist: priorStates,
+      allowedPriorArtifacts: allowedArtifacts.map((entry) => entry.handle),
       ...(admitModel ? { admitModel } : {}),
       readSource: (sourceId: string): string => {
-        const content = contentBySourceId.get(sourceId);
-        if (content === undefined) {
-          throw new Error(`source '${sourceId}' is not admitted for this run; refusing`);
+        assertLiveOperands();
+        const source = sourceById.get(sourceId);
+        if (source !== undefined) {
+          return canonicalJson({
+            schema_version: 1,
+            source_id: source.sourceId,
+            sha256: sha256Hex(source.content),
+            media_type: source.mediaType,
+            content_utf8: source.content,
+          });
         }
-        return content;
+        if (selectedSourceReader === undefined) {
+          throw new Error("read_source_snapshot_not_allowed");
+        }
+        return selectedSourceReader(sourceId);
       },
-      readPhaseOutput: (stateId: string): string => {
-        // A host-seeded cross-run input (the claimed query answer for a save)
-        // takes precedence: it is the exact artifact the claim authorized.
-        const seed = this.options.seedPhaseOutputs?.[stateId];
-        if (seed !== undefined) {
-          const seedStore = new RunArtifactStore(this.options.kbRoot, seed.runId);
-          try {
-            return seedStore.read(seed.artifactId).content;
-          } finally {
-            seedStore.close();
+      ...(selectedPageReader === undefined
+        ? {}
+        : {
+            readSelectedPage: (pageId: string, revisionId: string): string => {
+              assertLiveOperands();
+              if (
+                phase === "compose" &&
+                operands.compose_authority !== undefined &&
+                composeSelectedPages.get(pageId) !== revisionId
+              ) {
+                throw new Error("read_selected_page_not_in_compose_allocation");
+              }
+              return selectedPageReader(pageId, revisionId);
+            },
+          }),
+      ...(isQueryPhase && queryReader !== undefined
+        ? {
+            searchSelectedKb: () => {
+              assertLiveOperands();
+              return queryReader.searchSelectedKb();
+            },
+          }
+        : {}),
+      ...(isPromotionPhase && promotionReader !== undefined
+        ? {
+            readCanonicalTarget: (capabilityId: string) => {
+              assertLiveOperands();
+              return promotionReader.readCanonicalTarget(capabilityId);
+            },
+          }
+        : {}),
+      ...(selectedSourceReader === undefined
+        ? {}
+        : {
+            readSelectedSource: (sourceId: string) => {
+              assertLiveOperands();
+              const content = selectedSourceReader(sourceId);
+              return canonicalJson({
+                schema_version: 1,
+                source_id: sourceId,
+                sha256: sha256Hex(content),
+                media_type: "text/plain",
+                content_utf8: content,
+              });
+            },
+          }),
+      readRunArtifact: (artifactId: string): string => {
+        assertLiveOperands();
+        const allowed = allowedById.get(artifactId);
+        if (allowed === undefined) throw new Error("read_run_artifact_not_allowed");
+        const store =
+          allowed.runId === this.options.runId
+            ? this.store
+            : new RunArtifactStore(this.options.kbRoot, allowed.runId, this.artifactCheckpointer);
+        try {
+          const read = store.read(artifactId, {
+            expected_state_id: allowed.stateId,
+            expected_handle: allowed.handle,
+            required_lifecycle: "sealed",
+          });
+          const payload = strictParseJson(read.content);
+          return canonicalJson({
+            schema_version: 1,
+            artifact: read.handle,
+            payload,
+          });
+        } finally {
+          if (store !== this.store) store.close();
+        }
+      },
+      stageArtifact: (toolInput) => {
+        assertLiveOperands();
+        if (phase === "compose") this.validateComposeArtifact(toolInput, operands);
+        const policy = readPolicy(this.options.kbRoot);
+        return this.store.stageFromTool({
+          state_id: phase,
+          kb_profile_id: this.options.profileId,
+          producer: invocation.agent,
+          expected_producer: contract.agent,
+          expected_kind: contract.artifactKind,
+          expected_media_type: "application/json",
+          max_bytes: policy.artifact_limits.max_artifact_utf8_bytes,
+          max_artifacts: Math.min(policy.artifact_limits.max_artifacts_per_phase, 1),
+          tool_input: toolInput,
+        });
+      },
+      submitPhaseResult: (rawResult) => {
+        assertLiveOperands();
+        const result = validatePhaseResult(phaseInvocation, rawResult);
+        if (phase === "compose") {
+          const allocatedPageIds = (operands.compose_authority?.allocations ?? [])
+            .map((allocation) => allocation.page_id)
+            .sort();
+          const resultPageIds = [...((result.page_ids ?? []) as string[])].sort();
+          if (canonicalJson(resultPageIds) !== canonicalJson(allocatedPageIds)) {
+            throw new Error("submit_phase_result_compose_allocation_mismatch");
           }
         }
-        // A prior phase's latest staged (or sealed) artifact, by state id.
-        const handles = this.store.listByState(stateId);
-        const latest = handles[handles.length - 1];
-        if (latest === undefined) {
-          throw new Error(
-            `phase '${stateId}' has no staged output for run '${this.options.runId}'; refusing read_phase_output`
-          );
-        }
-        return this.store.read(latest.artifact_id).content;
+        const handle = result[contract.artifactField] as ArtifactHandle;
+        this.store.sealWithPhaseResult({
+          state_id: phase,
+          kb_profile_id: this.options.profileId,
+          result,
+          handles: [handle],
+        });
+        return canonicalJson(result);
+      },
+      // Legacy fields exist only for old deterministic workflow type continuity;
+      // exact production sessions never register/read these tool names.
+      readPhaseOutput: () => {
+        throw new Error("read_phase_output_is_not_a_private_session_tool");
       },
     };
 
-    const body = await this.runner(phaseInvocation);
-
-    // Stage the body into the KB content plane (authoritative copy), then derive
-    // body-free routing metadata for the engine.
-    const handle = this.store.stage({
-      state_id: phase,
-      kb_profile_id: this.options.profileId,
-      artifact_kind: artifactKind,
-      content: body,
-    });
-    const parsed = (JSON.parse(body) ?? {}) as Record<string, JsonValue>;
-    const details: Record<string, JsonValue> = {
-      artifact_kind: artifactKind,
-      complete: true,
-      kb_artifact_id: handle.artifact_id,
-      ...this.phaseDetails(phase, parsed),
-    };
-    return { text: body, confidence: "CERTAIN", details };
+    const resultJcs = await this.runner(phaseInvocation);
+    return this.completionFromResult(phase, contract, resultJcs, phaseInvocation);
   }
 
-  /** Body-free routing metadata, per the playbook's per-phase details contract. */
+  private completionFromResult(
+    phase: KbPhaseState,
+    contract: (typeof PHASE_CONTRACT)[KbPhaseState],
+    resultJcs: string,
+    invocation?: KbPhaseInvocation
+  ): AgentCompletion {
+    let resultValue: unknown;
+    try {
+      resultValue = strictParseJson(resultJcs);
+    } catch {
+      throw new Error("kb_phase_result_invalid");
+    }
+    const validationInvocation =
+      invocation ??
+      ({
+        agent: contract.agent,
+        stateId: phase,
+        runId: this.options.runId,
+        phaseBrief: "",
+        sourceAllowlist: [],
+        priorPhaseAllowlist: [],
+        readSource: () => {
+          throw new Error("durable phase replay has no source reader");
+        },
+      } satisfies KbPhaseInvocation);
+    const phaseResult = validatePhaseResult(validationInvocation, resultValue);
+    if (
+      phaseResult["run_id"] !== this.options.runId ||
+      phaseResult["state_id"] !== phase ||
+      phaseResult["agent"] !== contract.agent
+    ) {
+      throw new Error("kb_phase_result_binding_invalid");
+    }
+    const handle = phaseResult[contract.artifactField] as ArtifactHandle;
+    const artifact = this.store.read(handle.artifact_id, {
+      expected_state_id: phase,
+      expected_profile_id: this.options.profileId,
+      expected_handle: handle,
+      required_lifecycle: "sealed",
+    });
+    const payload = object(strictParseJson(artifact.content), "kb_artifact_payload_invalid");
+    if (phase === "query") {
+      validateKbContract(QueryAnswerArtifactSchema, payload, "query answer artifact");
+    }
+    if (this.options.queryReader !== undefined && phase === "verify") {
+      validateKbContract(QueryVerificationReportSchema, payload, "query verification report");
+    }
+    return {
+      text: resultJcs,
+      confidence: phaseResult["confidence"] as Confidence,
+      details: {
+        artifact_kind: contract.artifactKind,
+        complete: true,
+        kb_artifact_id: handle.artifact_id,
+        ...this.phaseDetails(phase, payload),
+      },
+    };
+  }
+
+  private selectedPageOperands(
+    _phase: KbPhaseState,
+    priorStates: readonly KbPhaseState[]
+  ): Array<{ page_id: string; revision_id: string }> {
+    const inherited = priorStates
+      .map((state) => this.store.phaseOperands(state))
+      .find(
+        (operands) => (operands?.allowed_selected_pages.length ?? 0) > 0
+      )?.allowed_selected_pages;
+    let pages: readonly { page_id: string; revision_id: string }[] = inherited ?? [];
+    if (pages.length === 0 && this.options.queryReader !== undefined) {
+      if (this.options.queryReader.selectedPageRefs !== undefined) {
+        pages = this.options.queryReader.selectedPageRefs();
+      } else {
+        const result = strictParseJson(this.options.queryReader.searchSelectedKb()) as {
+          candidates?: Array<{ page_id?: unknown; revision_id?: unknown }>;
+        };
+        pages = (result.candidates ?? []).flatMap((candidate) =>
+          typeof candidate.page_id === "string" && typeof candidate.revision_id === "string"
+            ? [{ page_id: candidate.page_id, revision_id: candidate.revision_id }]
+            : []
+        );
+      }
+    }
+    if (pages.length === 0 && this.options.evidenceReader?.allowedSelectedPages !== undefined) {
+      pages = this.options.evidenceReader.allowedSelectedPages();
+    }
+    if (pages.length === 0 && this.options.promotionReader !== undefined) {
+      if (this.options.promotionReader.allowedSelectedPages !== undefined) {
+        pages = this.options.promotionReader.allowedSelectedPages();
+      } else {
+        const brief = strictParseJson(this.options.promotionReader.readPhaseBrief()) as {
+          page_revisions?: Array<{ page_id?: unknown; revision_id?: unknown }>;
+        };
+        pages = (brief.page_revisions ?? []).flatMap((candidate) =>
+          typeof candidate.page_id === "string" && typeof candidate.revision_id === "string"
+            ? [{ page_id: candidate.page_id, revision_id: candidate.revision_id }]
+            : []
+        );
+      }
+    }
+    const exact = pages.map((page) => ({ page_id: page.page_id, revision_id: page.revision_id }));
+    const keys = exact.map((page) => `${page.page_id}\u0000${page.revision_id}`);
+    if (
+      exact.length > 64 ||
+      new Set(keys).size !== keys.length ||
+      exact.some((page) => !OPAQUE_ID.test(page.page_id) || !OPAQUE_ID.test(page.revision_id))
+    ) {
+      throw new KbWorkerPostureError();
+    }
+    // Every phase freezes one deterministic order; inherited pages preserve the
+    // exact prior phase order, while first-phase callbacks already expose their
+    // host-selected order.
+    return exact;
+  }
+
+  private resolvePhaseOperands(input: {
+    phase: KbPhaseState;
+    contract: (typeof PHASE_CONTRACT)[KbPhaseState];
+    sourceIds: readonly string[];
+    priorStates: readonly KbPhaseState[];
+    allowedArtifacts: readonly AllowedArtifact[];
+    allowedSelectedPages: readonly { page_id: string; revision_id: string }[];
+    privateInputSha256: string;
+    admittedPolicySha256: string;
+  }): KbPhaseOperands {
+    const existing = this.store.phaseOperands(input.phase);
+    if (existing !== undefined) {
+      if (
+        existing.session_id !== this.options.sessionId ||
+        existing.kb_profile_id !== this.options.profileId ||
+        existing.operation !== this.options.operation ||
+        existing.agent !== input.contract.agent ||
+        existing.expected_artifact_kind !== input.contract.artifactKind ||
+        existing.expected_media_type !== "application/json" ||
+        existing.admitted_policy_sha256 !== input.admittedPolicySha256 ||
+        canonicalJson(existing.source_ids) !== canonicalJson(input.sourceIds) ||
+        canonicalJson(existing.prior_state_ids) !== canonicalJson(input.priorStates) ||
+        canonicalJson(existing.allowed_selected_pages) !==
+          canonicalJson(input.allowedSelectedPages) ||
+        existing.private_input_sha256 !== input.privateInputSha256
+      ) {
+        throw new KbWorkerPostureError();
+      }
+      this.assertPhaseOperandsCurrent(existing);
+      return existing;
+    }
+    const composeAuthority =
+      input.phase === "compose"
+        ? this.allocateComposeAuthority(
+            input.allowedArtifacts,
+            input.sourceIds,
+            input.privateInputSha256
+          )
+        : undefined;
+    const allowedSelectedPages =
+      composeAuthority?.selected_pages.map((page) => ({
+        page_id: page.page_id,
+        revision_id: page.revision_id,
+      })) ?? input.allowedSelectedPages;
+    return this.store.bindPhaseOperands({
+      schema_version: 1,
+      run_id: this.options.runId,
+      state_id: input.phase,
+      session_id: this.options.sessionId,
+      kb_profile_id: this.options.profileId,
+      operation: this.options.operation,
+      agent: input.contract.agent,
+      expected_artifact_kind: input.contract.artifactKind,
+      expected_media_type: "application/json",
+      source_ids: [...input.sourceIds],
+      prior_state_ids: [...input.priorStates],
+      allowed_prior_artifacts: input.allowedArtifacts.map((entry) => ({
+        run_id: entry.runId,
+        state_id: entry.stateId,
+        handle: entry.handle,
+      })),
+      allowed_selected_pages: allowedSelectedPages,
+      private_input_sha256: input.privateInputSha256,
+      admitted_policy_sha256: input.admittedPolicySha256,
+      ...(composeAuthority === undefined ? {} : { compose_authority: composeAuthority }),
+    });
+  }
+
+  private readAllowedArtifact(entry: AllowedArtifact): unknown {
+    const store =
+      entry.runId === this.options.runId
+        ? this.store
+        : new RunArtifactStore(this.options.kbRoot, entry.runId, this.artifactCheckpointer);
+    try {
+      return strictParseJson(
+        store.read(entry.handle.artifact_id, {
+          expected_state_id: entry.stateId,
+          expected_handle: entry.handle,
+          required_lifecycle: "sealed",
+        }).content
+      );
+    } finally {
+      if (store !== this.store) store.close();
+    }
+  }
+
+  private verifiedPrivateInputSha256(): string {
+    const record = this.artifactCheckpointer.getPrivateInput(this.options.runId);
+    if (record === undefined || record.state !== "active") {
+      throw new KbWorkerPostureError();
+    }
+    // The body is deliberately discarded here. Reading it verifies exact
+    // owner-file custody and digest equality before allocation/reuse.
+    readRunInput({
+      projectRoot: this.options.projectRoot,
+      checkpointer: this.artifactCheckpointer,
+      runId: this.options.runId,
+    });
+    return record.request_sha256;
+  }
+
+  private selectedComposeBase() {
+    const selected = readSelectedGeneration(this.options.kbRoot);
+    const manifest = readManifest(this.options.kbRoot);
+    if (selected === undefined || selected.catalog.kb_id !== manifest.kb_id) {
+      throw new KbWorkerPostureError();
+    }
+    return { selected, manifest };
+  }
+
+  private saveEvidenceBounds(answer: QueryAnswerArtifact): {
+    sourceIds: string[];
+    selectedPages: Array<{
+      page_id: string;
+      revision_id: string;
+      page_sha256: string;
+      claims_sha256: string;
+    }>;
+  } {
+    const { selected } = this.selectedComposeBase();
+    const sourceIds = new Set<string>();
+    const selectedPages = new Map<
+      string,
+      { page_id: string; revision_id: string; page_sha256: string; claims_sha256: string }
+    >();
+    for (const citation of answer.answer.citations) {
+      if (citation.kind === "source") {
+        if (selected.catalog.source_records[citation.source_id] === undefined) {
+          throw new KbWorkerPostureError();
+        }
+        sourceIds.add(citation.source_id);
+        continue;
+      }
+      const page = selected.catalog.pages[citation.page_id];
+      if (page === undefined || page.revision_id !== citation.revision_id) {
+        throw new KbWorkerPostureError();
+      }
+      selectedPages.set(citation.page_id, {
+        page_id: citation.page_id,
+        revision_id: page.revision_id,
+        page_sha256: page.page_sha256,
+        claims_sha256: page.claims_sha256,
+      });
+      const revision = readPageRevision(
+        this.options.kbRoot,
+        citation.page_id,
+        citation.revision_id,
+        { pageSha256: page.page_sha256, claimsSha256: page.claims_sha256 }
+      );
+      const claims =
+        citation.kind === "claim"
+          ? revision.claims.claims.filter((claim) => claim.claim_id === citation.claim_id)
+          : revision.claims.claims;
+      if (citation.kind === "claim" && claims.length !== 1) {
+        throw new KbWorkerPostureError();
+      }
+      for (const claim of claims) {
+        for (const evidence of claim.evidence) sourceIds.add(evidence.source_id);
+      }
+    }
+    return {
+      sourceIds: [...sourceIds].sort(),
+      selectedPages: [...selectedPages.values()].sort((left, right) =>
+        left.page_id.localeCompare(right.page_id)
+      ),
+    };
+  }
+
+  private allocateComposeAuthority(
+    allowedArtifacts: readonly AllowedArtifact[],
+    sourceIds: readonly string[],
+    privateInputSha256: string
+  ): KbComposeAuthority {
+    if (
+      allowedArtifacts.length !== 1 ||
+      (this.options.operation !== "ingest" && this.options.operation !== "save")
+    ) {
+      throw new KbWorkerPostureError();
+    }
+    const prior = allowedArtifacts[0]!;
+    let candidate: ComposePageCandidate;
+    let selectedPages: ReturnType<KbWorkerClient["saveEvidenceBounds"]>["selectedPages"] = [];
+    if (this.options.operation === "ingest") {
+      const claims = validateKbContract(
+        ClaimsArtifactSchema,
+        this.readAllowedArtifact(prior),
+        "compose claims input"
+      ) as ClaimsArtifact;
+      const claimCandidateRefs = claims.claims.map((claim) => claim.provisional_id);
+      if (
+        new Set(claimCandidateRefs).size !== claimCandidateRefs.length ||
+        canonicalJson([...claims.source_ids].sort()) !== canonicalJson([...sourceIds].sort())
+      ) {
+        throw new KbWorkerPostureError();
+      }
+      candidate = {
+        candidate_ref: `cmp_${sha256Hex(
+          canonicalJson({ run_id: this.options.runId, prior_artifact: prior.handle })
+        ).slice(0, 32)}`,
+        source_ids: [...sourceIds].sort(),
+        claim_candidate_refs: claimCandidateRefs,
+      };
+    } else {
+      const answer = validateKbContract(
+        QueryAnswerArtifactSchema,
+        this.readAllowedArtifact(prior),
+        "compose query answer input"
+      ) as QueryAnswerArtifact;
+      const evidenceBounds = this.saveEvidenceBounds(answer);
+      selectedPages = evidenceBounds.selectedPages;
+      candidate = {
+        candidate_ref: `cmp_${sha256Hex(
+          canonicalJson({ run_id: this.options.runId, prior_artifact: prior.handle })
+        ).slice(0, 32)}`,
+        source_ids: evidenceBounds.sourceIds,
+        claim_candidate_refs: [prior.handle.artifact_id],
+      };
+    }
+    const { selected, manifest } = this.selectedComposeBase();
+    return allocateComposeAuthority({
+      runId: this.options.runId,
+      operation: this.options.operation,
+      kbId: manifest.kb_id,
+      baseGenerationId: selected.selector.generation_id,
+      baseCatalogSha256: selected.selector.catalog_sha256,
+      privateInputSha256,
+      baseCatalog: selected.catalog,
+      selectedPages,
+      candidates: [candidate],
+    });
+  }
+
+  private assertPhaseOperandsCurrent(operands: KbPhaseOperands): void {
+    const open = this.store.requireOpenPhaseOperands(operands.state_id);
+    if (canonicalJson(open) !== canonicalJson(operands)) throw new KbWorkerPostureError();
+    recheckAdmittedPolicy({
+      kbRoot: this.options.kbRoot,
+      admittedPolicySha256: operands.admitted_policy_sha256,
+    });
+    if (operands.private_input_sha256 !== this.verifiedPrivateInputSha256()) {
+      throw new KbWorkerPostureError();
+    }
+    const authority = operands.compose_authority;
+    if (authority === undefined) return;
+    const { selected, manifest } = this.selectedComposeBase();
+    if (
+      authority.kb_id !== manifest.kb_id ||
+      authority.base_generation_id !== selected.selector.generation_id ||
+      authority.base_catalog_sha256 !== selected.selector.catalog_sha256 ||
+      authority.private_input_sha256 !== this.verifiedPrivateInputSha256()
+    ) {
+      throw new KbWorkerPostureError();
+    }
+    for (const bound of authority.selected_pages) {
+      const page = selected.catalog.pages[bound.page_id];
+      if (
+        page === undefined ||
+        page.revision_id !== bound.revision_id ||
+        page.page_sha256 !== bound.page_sha256 ||
+        page.claims_sha256 !== bound.claims_sha256
+      ) {
+        throw new KbWorkerPostureError();
+      }
+    }
+  }
+
+  private validateComposeArtifact(
+    toolInput: StageRunArtifactInput,
+    operands: KbPhaseOperands
+  ): void {
+    if (
+      toolInput.artifact_kind !== "page_draft" ||
+      toolInput.media_type !== "application/json" ||
+      toolInput.encoding !== "utf8" ||
+      operands.compose_authority === undefined
+    ) {
+      throw new Error("compose_artifact_allocation_missing");
+    }
+    const { selected } = this.selectedComposeBase();
+    const claimCandidates =
+      operands.operation === "ingest"
+        ? claimCandidateBodies(
+            this.readAllowedArtifact({
+              runId: operands.allowed_prior_artifacts[0]!.run_id,
+              stateId: operands.allowed_prior_artifacts[0]!.state_id,
+              handle: operands.allowed_prior_artifacts[0]!.handle,
+            })
+          )
+        : undefined;
+    validatePageDraftAuthority({
+      document: strictParseJson(toolInput.content),
+      authority: operands.compose_authority,
+      selectedGenerationId: selected.selector.generation_id,
+      selectedCatalogSha256: selected.selector.catalog_sha256,
+      selectedCatalog: selected.catalog,
+      ...(claimCandidates === undefined ? {} : { claimCandidates }),
+    });
+  }
+
+  private phaseBrief(operands: KbPhaseOperands): string {
+    let privateRequest: Record<string, unknown>;
+    try {
+      const raw =
+        this.options.readPhaseBrief?.() ??
+        (this.options.queryReader !== undefined
+          ? this.options.queryReader.readRequest()
+          : this.options.promotionReader !== undefined
+            ? this.options.promotionReader.readPhaseBrief()
+            : this.options.operation === "save"
+              ? canonicalJson(
+                  readRunInput({
+                    projectRoot: this.options.projectRoot,
+                    checkpointer: this.artifactCheckpointer,
+                    runId: this.options.runId,
+                  })
+                )
+              : canonicalJson({ schema_version: 1, action: "ingest" }));
+      privateRequest = object(strictParseJson(raw), "kb_phase_brief_invalid");
+    } catch {
+      throw new Error("kb_phase_brief_invalid");
+    }
+
+    let brief: unknown;
+    if (this.options.operation === "ingest") {
+      brief = { action: "ingest", source_ids: [...operands.source_ids] };
+    } else if (this.options.operation === "query") {
+      brief = {
+        action: "query",
+        query: privateRequest.query,
+        page_ids: Array.isArray(privateRequest.page_ids) ? privateRequest.page_ids : [],
+        source_ids: Array.isArray(privateRequest.source_ids) ? privateRequest.source_ids : [],
+        max_candidates:
+          typeof privateRequest.max_candidates === "number" ? privateRequest.max_candidates : 20,
+        verify_grounding:
+          typeof privateRequest.verify_grounding === "boolean"
+            ? privateRequest.verify_grounding
+            : true,
+      };
+    } else if (this.options.operation === "save") {
+      brief = {
+        action: "save",
+        query_run_id: privateRequest.query_run_id,
+        page_kind: privateRequest.page_kind,
+        title: privateRequest.title,
+      };
+    } else {
+      brief = {
+        action: "promote",
+        page_revisions: privateRequest.page_revisions,
+        target_capability_ids: privateRequest.target_capability_ids,
+      };
+    }
+    const validatedBrief = validateKbContract(KbPhaseBriefSchema, brief, "KB private phase brief");
+    const result = {
+      schema_version: 1,
+      run_id: operands.run_id,
+      state_id: operands.state_id,
+      brief: validatedBrief,
+      allowed_prior_artifacts: operands.allowed_prior_artifacts.map((entry) => entry.handle),
+      allowed_selected_pages: operands.allowed_selected_pages,
+      ...(operands.compose_authority === undefined
+        ? {}
+        : { compose_authority: operands.compose_authority }),
+    };
+    return canonicalJson(
+      validateKbContract(ReadPhaseBriefResultSchema, result, "read_phase_brief result")
+    );
+  }
+
+  private allowedArtifacts(priorStates: readonly KbPhaseState[]): AllowedArtifact[] {
+    return priorStates.flatMap((stateId) => {
+      const seed = this.options.seedPhaseOutputs?.[stateId];
+      if (seed !== undefined) {
+        const seedStore = new RunArtifactStore(
+          this.options.kbRoot,
+          seed.runId,
+          this.artifactCheckpointer
+        );
+        try {
+          const read = seedStore.read(seed.artifactId, { required_lifecycle: "sealed" });
+          return [
+            {
+              handle: read.handle,
+              runId: seed.runId,
+              stateId: seedStore.getIndexRecord(seed.artifactId).state_id,
+            },
+          ];
+        } finally {
+          seedStore.close();
+        }
+      }
+      const handles = this.store.listByState(stateId, "sealed");
+      const latest = handles[handles.length - 1];
+      return latest === undefined ? [] : [{ handle: latest, runId: this.options.runId, stateId }];
+    });
+  }
+
+  /** Body-free engine routing metadata derived from the validated staged artifact. */
   private phaseDetails(
-    phase: string,
-    parsed: Record<string, JsonValue>
+    phase: KbPhaseState,
+    parsed: Record<string, unknown>
   ): Record<string, JsonValue> {
     if (phase === "ingest") {
-      const claims = Array.isArray(parsed.claims) ? (parsed.claims as unknown[]) : [];
+      const claims = Array.isArray(parsed.claims) ? parsed.claims : [];
       const sourceIds = Array.isArray(parsed.source_ids)
-        ? (parsed.source_ids as unknown[]).filter((s): s is string => typeof s === "string")
+        ? parsed.source_ids.filter((source): source is string => typeof source === "string")
         : [];
       return { claim_count: claims.length, source_ids: sourceIds };
     }
     if (phase === "compose") {
       const pages = Array.isArray(parsed.pages)
-        ? (parsed.pages as Array<Record<string, JsonValue>>)
+        ? (parsed.pages as Array<Record<string, unknown>>)
         : [];
       const first = pages[0] ?? {};
-      const frontmatter =
-        typeof first.frontmatter === "object" && first.frontmatter !== null
-          ? (first.frontmatter as Record<string, JsonValue>)
-          : {};
+      const frontmatter = object(first.frontmatter ?? {}, "page_frontmatter_invalid");
       const claimCount = pages.reduce((sum, page) => {
-        const claims = page.claims as Record<string, JsonValue> | undefined;
-        const list = claims && Array.isArray(claims.claims) ? (claims.claims as unknown[]) : [];
-        return sum + list.length;
+        const claims = object(page.claims ?? {}, "page_claims_invalid");
+        return sum + (Array.isArray(claims.claims) ? claims.claims.length : 0);
       }, 0);
       return {
         page_id: typeof frontmatter.page_id === "string" ? frontmatter.page_id : "page_unknown",
@@ -224,31 +1230,77 @@ export class KbWorkerClient implements ModelClient {
         claim_count: claimCount,
       };
     }
-    if (phase === "lint") {
-      const findings = Array.isArray(parsed.findings)
-        ? (parsed.findings as Array<Record<string, JsonValue>>)
-        : [];
-      const conflicts = Array.isArray(parsed.candidate_conflicts)
-        ? (parsed.candidate_conflicts as unknown[])
+    if (phase === "query") {
+      const answer = object(parsed.answer ?? {}, "query_answer_invalid");
+      const citations = Array.isArray(answer.citations)
+        ? (answer.citations as Array<Record<string, unknown>>)
         : [];
       return {
+        citation_count: citations.length,
+        cited_page_ids: [
+          ...new Set(
+            citations.flatMap((citation) =>
+              typeof citation.page_id === "string" ? [citation.page_id] : []
+            )
+          ),
+        ],
+      };
+    }
+    if (phase === "plan" || phase === "patch") {
+      const targetIds =
+        phase === "plan"
+          ? Array.isArray(parsed.target_capability_ids)
+            ? parsed.target_capability_ids.filter((id): id is string => typeof id === "string")
+            : []
+          : Array.isArray(parsed.targets)
+            ? (parsed.targets as Array<Record<string, unknown>>).flatMap((target) =>
+                typeof target.target_capability_id === "string" ? [target.target_capability_id] : []
+              )
+            : [];
+      return { target_capability_ids: targetIds, target_count: targetIds.length };
+    }
+    if (phase === "lint") {
+      const findings = Array.isArray(parsed.findings)
+        ? (parsed.findings as Array<Record<string, unknown>>)
+        : [];
+      const conflicts = Array.isArray(parsed.candidate_conflicts) ? parsed.candidate_conflicts : [];
+      return {
         finding_count: findings.length,
-        error_count: findings.filter((f) => f.severity === "error").length,
+        blocking_count: findings.filter((finding) => finding.severity === "blocking").length,
         candidate_conflict_count: conflicts.length,
       };
     }
-    // verify
+    if (this.options.queryReader !== undefined) {
+      const findings = Array.isArray(parsed.citation_findings)
+        ? (parsed.citation_findings as Array<Record<string, unknown>>)
+        : [];
+      const answerHandle = this.store.listByState("query", "sealed").at(-1);
+      const answerDocument =
+        answerHandle === undefined
+          ? null
+          : strictParseJson(this.store.read(answerHandle.artifact_id).content);
+      const assessment = assessQueryVerification(answerDocument, parsed, answerHandle);
+      return {
+        supported: findings.filter((finding) => finding.verdict === "supported").length,
+        partially_supported: 0,
+        unsupported: findings.filter((finding) => finding.verdict === "unsupported").length,
+        verification_passed: assessment.passed,
+      };
+    }
     const verdicts = Array.isArray(parsed.claim_findings)
-      ? (parsed.claim_findings as Array<Record<string, JsonValue>>).map((f) => String(f.verdict))
+      ? (parsed.claim_findings as Array<Record<string, unknown>>).map((finding) =>
+          String(finding.verdict)
+        )
       : [];
     return {
-      supported: verdicts.filter((v) => v === "supported").length,
-      partially_supported: verdicts.filter((v) => v === "partially_supported").length,
-      unsupported: verdicts.filter((v) => v === "unsupported").length,
+      supported: verdicts.filter((verdict) => verdict === "supported").length,
+      partially_supported: verdicts.filter((verdict) => verdict === "partially_supported").length,
+      unsupported: verdicts.filter((verdict) => verdict === "unsupported").length,
     };
   }
 
   close(): void {
-    this.store.close();
+    if (this.controlBound) this.store.close();
+    this.controlBound = false;
   }
 }

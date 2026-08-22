@@ -1,7 +1,7 @@
 /**
  * KB ingest workflow tests (G8.1).
  *
- * Deterministic coverage of the full ingest pipeline with a mock AgentRunner:
+ * Deterministic coverage of the full ingest pipeline with the explicit test-only body adapter:
  *   init → ingest (4 phases, sealed candidate set, awaiting_user) →
  *   approveIngest (strict normalization, publication) → query/status invariants.
  *
@@ -18,17 +18,20 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   approveIngest,
+  createTestOnlyIngestBodyRunner,
   ingestKb,
-  type AgentRunner,
   type IngestSource,
+  type TestOnlyIngestBodyRunner,
   type PendingIngest,
 } from "../src/kb/ingest.js";
 import { initKb, queryKb, statusKb } from "../src/kb/workflows.js";
+import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
 const SRC_A = {
   sourceId: "src_quorum_notes",
+  capabilityDigest: "1".repeat(64),
   title: "Quorum protocol notes",
   authors: ["Ada Lovelace"],
   content:
@@ -40,6 +43,7 @@ const SRC_A = {
 
 const SRC_B = {
   sourceId: "src_incident_rca",
+  capabilityDigest: "2".repeat(64),
   title: "2024 replay incident RCA",
   authors: ["Grace Hopper", "Linus T."],
   content:
@@ -94,7 +98,15 @@ const CLAIMS = [
   },
 ];
 
-function claimJson(claims = CLAIMS) {
+const EXTRACTED_CLAIMS = CLAIMS.map((claim) => ({
+  provisional_id: `provisional_${claim.claim_id}`,
+  text: claim.text,
+  kind: claim.kind,
+  confidence: claim.confidence,
+  evidence: claim.evidence,
+}));
+
+function claimJson(claims = EXTRACTED_CLAIMS) {
   return JSON.stringify({
     schema_version: 1,
     artifact_kind: "claims",
@@ -145,7 +157,13 @@ function lintJson() {
         severity: "warning",
         summary:
           "Deployment status of the sequence fix is asserted in synthesis but only RCA-dated.",
-        evidence: ["clm_deployment_unknown"],
+        evidence: [
+          {
+            evidence_id: "evidence_deployment_unknown",
+            kind: "artifact",
+            ref: "clm_deployment_unknown",
+          },
+        ],
       },
     ],
     candidate_conflicts: [
@@ -159,7 +177,14 @@ function lintJson() {
           },
         ],
         summary: "RCA says fix promoted 2024; no later source confirms it is still deployed.",
-        evidence_refs: ["clm_sequence_fix", "clm_deployment_unknown"],
+        evidence_refs: [
+          { evidence_id: "evidence_sequence_fix", kind: "artifact", ref: "clm_sequence_fix" },
+          {
+            evidence_id: "evidence_deployment_conflict",
+            kind: "artifact",
+            ref: "clm_deployment_unknown",
+          },
+        ],
       },
     ],
   });
@@ -172,31 +197,25 @@ function verificationJson() {
     verified_artifact_ids: [],
     claim_findings: [
       {
-        claim_ref: {
-          page_id: "page_quorum_sync",
-          revision_id: "rev_0001",
-          claim_id: "clm_quorum_two_of_three",
-        },
+        page_id: "page_quorum_sync",
+        revision_id: "rev_0001",
+        claim_id: "clm_quorum_two_of_three",
         verdict: "supported",
-        notes: "Directly stated in src_quorum_notes.",
+        evidence: [{ evidence_id: "evidence_quorum", kind: "source", ref: "src_quorum_notes" }],
       },
       {
-        claim_ref: {
-          page_id: "page_quorum_sync",
-          revision_id: "rev_0001",
-          claim_id: "clm_sequence_fix",
-        },
+        page_id: "page_quorum_sync",
+        revision_id: "rev_0001",
+        claim_id: "clm_sequence_fix",
         verdict: "supported",
-        notes: "Stated in src_incident_rca.",
+        evidence: [{ evidence_id: "evidence_sequence", kind: "source", ref: "src_incident_rca" }],
       },
       {
-        claim_ref: {
-          page_id: "page_quorum_sync",
-          revision_id: "rev_0001",
-          claim_id: "clm_deployment_unknown",
-        },
+        page_id: "page_quorum_sync",
+        revision_id: "rev_0001",
+        claim_id: "clm_deployment_unknown",
         verdict: "unsupported",
-        notes: "No source confirms current deployment; correctly flagged as unknown.",
+        evidence: [],
       },
     ],
   });
@@ -204,11 +223,11 @@ function verificationJson() {
 
 /** Mock runner: schema-complete outputs for each KB phase. */
 function makeMockRunner(overrides: Partial<Record<string, string>> = {}): {
-  runner: AgentRunner;
+  runner: TestOnlyIngestBodyRunner;
   calls: { agent: string; stateId: string }[];
 } {
   const calls: { agent: string; stateId: string }[] = [];
-  const runner: AgentRunner = async (inv) => {
+  const runner = createTestOnlyIngestBodyRunner(async (inv) => {
     calls.push({ agent: inv.agent, stateId: inv.stateId });
     // Probe the host-closed readers exactly as a live agent would: every
     // allowlisted source and every allowlisted prior-phase output must resolve.
@@ -233,7 +252,7 @@ function makeMockRunner(overrides: Partial<Record<string, string>> = {}): {
     const out = overrides[inv.stateId] ?? table[inv.stateId];
     if (out === undefined) throw new Error(`mock runner: no output for ${inv.stateId}`);
     return out;
-  };
+  });
   return { runner, calls };
 }
 
@@ -246,19 +265,22 @@ function tmpRoot(): string {
   return d;
 }
 afterEach(() => {
+  closeKbArtifactControls();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-function ctx(
-  root: string,
-  runId = "kb-ingest-run"
-): { kbRoot: string; profileId: string; runId: string } {
-  return { kbRoot: root, profileId: "kbp_test", runId };
+function ctx(root: string, runId = "kb-ingest-run") {
+  return {
+    kbRoot: root,
+    profileId: "kbp_test",
+    runId,
+    checkpointer: kbArtifactControl({ root, runId, profileId: "kbp_test" }),
+  };
 }
 
 async function ingestPending(
   root: string,
-  runner: AgentRunner,
+  runner: TestOnlyIngestBodyRunner,
   sources: IngestSource[] = [SRC_A, SRC_B]
 ) {
   const result = await ingestKb(ctx(root, "kb-ingest-run"), sources, runner);
@@ -310,6 +332,7 @@ describe("ingest: gate (no publication)", () => {
 
     // Nothing published: selector still points at the init generation; no pages.
     expect(readCurrent(root).generation_id).toBe(baseGen);
+    expect(existsSync(path.join(root, "sources"))).toBe(false);
     expect(existsSync(path.join(root, "pages"))).toBe(false);
     expect(existsSync(path.join(root, "conflicts"))).toBe(false);
 
@@ -394,7 +417,7 @@ describe("approveIngest: publication", () => {
     expect(Object.keys(catalog.conflict_records)).toEqual(["cfl_0001"]);
   });
 
-  it("never publishes a malformed page draft even after the gate was presented", async () => {
+  it("rejects a malformed page draft at staging before any gate or publication", async () => {
     const root = tmpRoot();
     initKb(ctx(root), "Ingest Test KB");
     const baseGen = readCurrent(root).generation_id;
@@ -402,13 +425,7 @@ describe("approveIngest: publication", () => {
     const { runner } = makeMockRunner({
       compose: "I composed the page but here is prose without JSON. Sorry!",
     });
-    const { pending } = await ingestPending(root, runner);
-
-    let approval: unknown;
-    expect(() => {
-      approval = approveIngest(ctx(root), [SRC_A, SRC_B], pending);
-    }).not.toThrow();
-    expect((approval as { status: string }).status).toBe("refused");
+    await expect(ingestPending(root, runner)).rejects.toThrow();
 
     const current = readCurrent(root);
     expect(current.generation_id).toBe(baseGen);
@@ -421,7 +438,10 @@ describe("approveIngest: publication", () => {
     const { runner } = makeMockRunner();
     const dupA = { ...SRC_A };
     const dupB = { ...SRC_B, content: SRC_A.content };
-    await ingestPending(root, runner, [dupA, dupB]);
+    const { pending } = await ingestPending(root, runner, [dupA, dupB]);
+    // Pre-review snapshots are work-plane bytes, never publication objects.
+    expect(existsSync(path.join(root, "sources"))).toBe(false);
+    approveIngest(ctx(root), [dupA, dupB], pending);
 
     const objects = listFilesRecursive(path.join(root, "sources", "objects"));
     expect(objects).toHaveLength(1);

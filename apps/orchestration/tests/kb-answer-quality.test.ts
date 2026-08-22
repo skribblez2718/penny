@@ -6,10 +6,11 @@
  *   - the closed `DerivedQueryAnswerV1` shape (advisory-only, cited, verified);
  *   - sealed-answer extraction (`readSealedAnswer`) failing closed;
  *   - `decideParentDelivery`: the EXACTLY-ONE unconsumed exact-grant rule,
- *     session-scoped invocation pairing, policy + lesser byte bound, atomic
+ *     exact host-invocation/model/policy binding, lesser byte bound, atomic
  *     single-use consumption, and bounded refusal with the grant RETAINED.
- * No agent is invoked in this suite; the agent-facing behavior is covered by
- * the engine E2E suites, and the adapter glue is a thin call into this path.
+ * The focused delivery tests below invoke no agent. The imported frozen G8
+ * oracle uses only explicit test-only synthetic Synthia/Vera agents; no model
+ * or provider is called.
  */
 
 import { mkdtempSync } from "node:fs";
@@ -18,9 +19,13 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import "./fixtures/kb-answer-quality-oracle.js";
+
 import {
   DerivedQueryAnswerSchema,
+  canonicalJson,
   defaultDenyPolicy,
+  sha256Hex,
   validateKbContract,
   type KbPolicy,
   type QueryKbRequest,
@@ -33,8 +38,10 @@ import {
   mintParentDeliveryGrant,
   validateQueryRequest,
 } from "../src/kb/parent-delivery.js";
+import { assessQueryVerification } from "../src/kb/query-verification.js";
 import { readSealedAnswer } from "../src/kb/workflows.js";
 import { RunArtifactStore } from "../src/kb/run-artifacts.js";
+import { kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 
 const PROFILE = "kbp_answer_quality";
 const SESSION = "sess_oq_1";
@@ -59,10 +66,6 @@ function request(overrides: Record<string, unknown> = {}): QueryKbRequest {
     kb_profile_id: PROFILE,
     query: "What did we decide about the gate ladder?",
     answer_delivery: "parent_tool_result",
-    // §5.6 defaults verify_grounding true; this flow cannot verify grounding, so
-    // a deliverable request must explicitly record that the operator accepted an
-    // unverified answer. See the grounding test below for the default case.
-    verify_grounding: false,
     ...overrides,
   });
 }
@@ -89,15 +92,67 @@ function validAnswer(text = "The gate ladder requires review before publication 
   };
 }
 
+function validAnswerHandle(answer = validAnswer()) {
+  const artifact = { schema_version: 1, artifact_kind: "query_answer", answer } as const;
+  const jcs = canonicalJson(artifact);
+  return {
+    schema_version: 1,
+    artifact_id: "artifact_answer_quality",
+    artifact_kind: "query_answer" as const,
+    sha256: sha256Hex(jcs),
+    media_type: "application/json" as const,
+    byte_length: Buffer.byteLength(jcs, "utf8"),
+  };
+}
+
+function validVerification(answer = validAnswer(), handle = validAnswerHandle(answer)) {
+  return {
+    schema_version: 1,
+    artifact_kind: "verification_report",
+    passed: true,
+    answer_artifact_id: handle.artifact_id,
+    answer_sha256: handle.sha256,
+    answer_verdict: "supported" as const,
+    citation_findings: answer.citations.map((citation) => ({
+      citation,
+      verdict: "supported" as const,
+      notes: "The selected page directly supports this cited statement.",
+    })),
+  };
+}
+
+function decideVerifiedParentDelivery(
+  input: Parameters<typeof decideParentDelivery>[0]
+): ReturnType<typeof decideParentDelivery> {
+  const answer = input.answer as ReturnType<typeof validAnswer>;
+  const answerHandle = input.answerHandle ?? validAnswerHandle(answer);
+  return decideParentDelivery({
+    ...input,
+    answerHandle,
+    verificationReport:
+      input.verificationReport ??
+      validVerification(answer, answerHandle as ReturnType<typeof validAnswerHandle>),
+    queryCompleteAndMet: input.queryCompleteAndMet ?? true,
+  });
+}
+
 function freshStore() {
   return new ParentDeliveryGrantStore(mkdtempSync(path.join(os.tmpdir(), "kb-answer-quality-")));
 }
 
-function mintFor(store: ParentDeliveryGrantStore, req: QueryKbRequest, grantId: string) {
+function mintFor(
+  store: ParentDeliveryGrantStore,
+  req: QueryKbRequest,
+  grantId: string,
+  policy: KbPolicy = allowingPolicy()
+) {
   const grant = mintParentDeliveryGrant({
     session_id: SESSION,
     invocation_id: SESSION,
     request: req,
+    policy_sha256: sha256Hex(canonicalJson(policy)),
+    parent_provider: PARENT.provider,
+    parent_model: PARENT.model,
     max_utf8_bytes: 4096,
     issued_at: nowIso(),
     expires_at: laterIso(),
@@ -106,6 +161,37 @@ function mintFor(store: ParentDeliveryGrantStore, req: QueryKbRequest, grantId: 
   store.mint(grant);
   return grant;
 }
+
+describe("answer quality — closed query verification binding", () => {
+  it("binds the exact sealed answer id and complete artifact JCS digest, never text alone", () => {
+    const answer = validAnswer();
+    const artifact = { schema_version: 1, artifact_kind: "query_answer", answer };
+    const answerHandle = validAnswerHandle(answer);
+    const report = validVerification(answer, answerHandle);
+    expect(assessQueryVerification(artifact, report, answerHandle)).toMatchObject({ passed: true });
+    expect(
+      assessQueryVerification(
+        artifact,
+        { ...report, answer_artifact_id: "artifact_other" },
+        answerHandle
+      )
+    ).toMatchObject({ passed: false, reason: "answer_artifact_id_mismatch" });
+    expect(
+      assessQueryVerification(
+        artifact,
+        { ...report, answer_sha256: sha256Hex(answer.text) },
+        answerHandle
+      )
+    ).toMatchObject({ passed: false, reason: "answer_digest_mismatch" });
+    expect(
+      assessQueryVerification(
+        { ...artifact, answer: { ...answer, unknowns: ["changed complete JCS"] } },
+        report,
+        answerHandle
+      )
+    ).toMatchObject({ passed: false, reason: "answer_handle_malformed" });
+  });
+});
 
 describe("answer quality — closed derived answer (§5.6)", () => {
   it("admits advisory, cited, canonical-verified answers", () => {
@@ -132,13 +218,15 @@ describe("answer quality — closed derived answer (§5.6)", () => {
         "derived answer"
       )
     ).toThrow();
+    // Empty citations are valid only for a private unmet answer artifact;
+    // parent delivery separately refuses them as not complete/met.
     expect(() =>
       validateKbContract(
         DerivedQueryAnswerSchema,
         { ...validAnswer(), citations: [] },
         "derived answer"
       )
-    ).toThrow();
+    ).not.toThrow();
     expect(() =>
       validateKbContract(
         DerivedQueryAnswerSchema,
@@ -157,9 +245,11 @@ describe("answer quality — closed derived answer (§5.6)", () => {
         "derived answer"
       )
     ).toThrow();
+    // Empty answer text remains valid for an honest unmet private artifact;
+    // met parent delivery is rejected by result/delivery cross-field checks.
     expect(() =>
       validateKbContract(DerivedQueryAnswerSchema, { ...validAnswer(), text: "" }, "derived answer")
-    ).toThrow();
+    ).not.toThrow();
   });
 });
 
@@ -169,22 +259,24 @@ describe("answer quality — sealed answer extraction fails closed", () => {
     const runId = RUN_ID;
     const doc = { schema_version: 1, artifact_kind: "query_answer", answer: validAnswer() };
     let handle;
-    using store = new RunArtifactStore(root, runId);
+    const checkpointer = kbArtifactControl({ root, runId, profileId: PROFILE, action: "query" });
+    using store = new RunArtifactStore(root, runId, checkpointer);
     handle = store.stage({
-      state_id: "synthia_query",
+      state_id: "query",
       kb_profile_id: PROFILE,
       artifact_kind: "query_answer",
       content: JSON.stringify(doc),
     });
-    expect(readSealedAnswer(root, runId, handle)).toEqual(validAnswer());
+    expect(readSealedAnswer(root, runId, handle, checkpointer)).toEqual(validAnswer());
   });
 
   it("returns null for a missing artifact or the wrong kind (never throws into the result path)", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "kb-answer-read2-"));
     const runId = RUN_ID;
-    expect(readSealedAnswer(root, runId, { artifact_id: "art_missing" })).toBeNull();
+    const checkpointer = kbArtifactControl({ root, runId, profileId: PROFILE, action: "query" });
+    expect(readSealedAnswer(root, runId, { artifact_id: "art_missing" }, checkpointer)).toBeNull();
 
-    using store = new RunArtifactStore(root, runId);
+    using store = new RunArtifactStore(root, runId, checkpointer);
     const other = store.stage({
       state_id: "carren_lint",
       kb_profile_id: PROFILE,
@@ -192,10 +284,11 @@ describe("answer quality — sealed answer extraction fails closed", () => {
       content: JSON.stringify({
         schema_version: 1,
         artifact_kind: "lint_report",
-        answer: validAnswer(),
+        findings: [],
+        candidate_conflicts: [],
       }),
     });
-    expect(readSealedAnswer(root, runId, other)).toBeNull();
+    expect(readSealedAnswer(root, runId, other, checkpointer)).toBeNull();
   });
 });
 
@@ -206,7 +299,7 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
     mintFor(store, req, "pgt-oq-deliver");
     const dir = store.dir;
 
-    const decision = decideParentDelivery({
+    const decision = decideVerifiedParentDelivery({
       storeDir: dir,
       host: HOST,
       request: req,
@@ -226,7 +319,7 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
     expect(consumed.record.run_id).toBe(RUN_ID);
 
     // A retry of the same invocation is refused — the grant is single-use.
-    const again = decideParentDelivery({
+    const again = decideVerifiedParentDelivery({
       storeDir: dir,
       host: HOST,
       request: req,
@@ -248,7 +341,7 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
       const store = freshStore();
       const dir = store.dir;
       expect(
-        decideParentDelivery({
+        decideVerifiedParentDelivery({
           storeDir: dir,
           host: HOST,
           request: req,
@@ -267,6 +360,9 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
         session_id: "sess_other",
         invocation_id: "sess_other",
         request: req,
+        policy_sha256: sha256Hex(canonicalJson(policy)),
+        parent_provider: PARENT.provider,
+        parent_model: PARENT.model,
         max_utf8_bytes: 4096,
         issued_at: nowIso(),
         expires_at: laterIso(),
@@ -274,7 +370,7 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
       });
       store.mint(grant);
       const dir = store.dir;
-      const out = decideParentDelivery({
+      const out = decideVerifiedParentDelivery({
         storeDir: dir,
         host: HOST,
         request: req,
@@ -283,20 +379,21 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
         runId: RUN_ID,
         answer,
       });
-      expect(out).toEqual({ outcome: "refused", reason_code: "grant_mismatch_session" });
+      expect(out).toEqual({ outcome: "refused", reason_code: "grant_missing" });
       expect(store.load("pgt-oq-sess").record.state).toBe("available"); // retained
     }
 
     // Policy denies: the grant survives for a future, policy-permitted run.
     {
       const store = freshStore();
-      mintFor(store, req, "pgt-oq-policy");
+      const deniedPolicy = defaultDenyPolicy("kbp-x");
+      mintFor(store, req, "pgt-oq-policy", deniedPolicy);
       const dir = store.dir;
-      const out = decideParentDelivery({
+      const out = decideVerifiedParentDelivery({
         storeDir: dir,
         host: HOST,
         request: req,
-        policy: defaultDenyPolicy("kbp-x"),
+        policy: deniedPolicy,
         parentIdentity: PARENT,
         runId: RUN_ID,
         answer,
@@ -309,9 +406,9 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
     // the answer is not truncated — it is refused, and the grant is retained.
     {
       const store = freshStore();
-      mintFor(store, req, "pgt-oq-cap");
+      mintFor(store, req, "pgt-oq-cap", allowingPolicy(4096));
       const dir = store.dir;
-      const out = decideParentDelivery({
+      const out = decideVerifiedParentDelivery({
         storeDir: dir,
         host: HOST,
         request: req,
@@ -324,6 +421,28 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
       expect(store.load("pgt-oq-cap").record.state).toBe("available");
     }
 
+    // The cap covers the complete canonical derived-answer payload, not only
+    // answer.text: large bounded uncertainty arrays also refuse.
+    {
+      const store = freshStore();
+      mintFor(store, req, "pgt-oq-payload-cap", allowingPolicy(4096));
+      const oversizedPayload = {
+        ...validAnswer("short answer"),
+        unknowns: Array.from({ length: 8 }, (_, index) => `${index}:${"u".repeat(1000)}`),
+      };
+      const out = decideVerifiedParentDelivery({
+        storeDir: store.dir,
+        host: HOST,
+        request: req,
+        policy: allowingPolicy(4096),
+        parentIdentity: PARENT,
+        runId: RUN_ID,
+        answer: oversizedPayload,
+      });
+      expect(out).toEqual({ outcome: "refused", reason_code: "answer_exceeds_byte_cap" });
+      expect(store.load("pgt-oq-payload-cap").record.state).toBe("available");
+    }
+
     // An expired grant is refused, not delivered.
     {
       const store = freshStore();
@@ -331,6 +450,9 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
         session_id: SESSION,
         invocation_id: SESSION,
         request: req,
+        policy_sha256: sha256Hex(canonicalJson(policy)),
+        parent_provider: PARENT.provider,
+        parent_model: PARENT.model,
         max_utf8_bytes: 4096,
         issued_at: new Date(Date.now() - 120_000).toISOString(),
         expires_at: new Date(Date.now() - 60_000).toISOString(),
@@ -339,7 +461,7 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
       store.mint(grant);
       const dir = store.dir;
       expect(
-        decideParentDelivery({
+        decideVerifiedParentDelivery({
           storeDir: dir,
           host: HOST,
           request: req,
@@ -356,7 +478,7 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
       const store = freshStore();
       mintFor(store, req, "pgt-oq-malformed");
       const dir = store.dir;
-      const out = decideParentDelivery({
+      const out = decideVerifiedParentDelivery({
         storeDir: dir,
         host: HOST,
         request: req,
@@ -370,24 +492,12 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
     }
   });
 
-  it("never coin-flips: two exact candidates are an ambiguity refusal, both retained", () => {
+  it("never creates a coin flip: competing issuance for one invocation loses", () => {
     const store = freshStore();
     const req = request();
-    mintFor(store, req, "pgt-oq-amb-1");
-    mintFor(store, req, "pgt-oq-amb-2");
-    const dir = store.dir;
-    const out = decideParentDelivery({
-      storeDir: dir,
-      host: HOST,
-      request: req,
-      policy: allowingPolicy(),
-      parentIdentity: PARENT,
-      runId: RUN_ID,
-      answer: validAnswer(),
-    });
-    expect(out).toEqual({ outcome: "refused", reason_code: "grant_ambiguous" });
-    expect(store.load("pgt-oq-amb-1").record.state).toBe("available");
-    expect(store.load("pgt-oq-amb-2").record.state).toBe("available");
+    mintFor(store, req, "pgt-oq-unique-1");
+    expect(() => mintFor(store, req, "pgt-oq-unique-2")).toThrow();
+    expect(store.load("pgt-oq-unique-1").record.state).toBe("available");
   });
 
   it("refuses unless the ACTIVE parent identity is an exact allowlist match (§5.3)", () => {
@@ -398,7 +508,7 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
     {
       const store = freshStore();
       mintFor(store, req, "pgt-oq-noident");
-      const out = decideParentDelivery({
+      const out = decideVerifiedParentDelivery({
         storeDir: store.dir,
         host: HOST,
         request: req,
@@ -415,7 +525,7 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
     {
       const store = freshStore();
       mintFor(store, req, "pgt-oq-otherparent");
-      const out = decideParentDelivery({
+      const out = decideVerifiedParentDelivery({
         storeDir: store.dir,
         host: HOST,
         request: req,
@@ -424,15 +534,15 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
         runId: RUN_ID,
         answer,
       });
-      expect(out).toEqual({ outcome: "refused", reason_code: "parent_model_not_allowed" });
+      expect(out).toEqual({ outcome: "refused", reason_code: "grant_mismatch_parent_model" });
     }
 
     // Empty allowlist denies even when the delivery key says allow (§5.3).
     {
       const store = freshStore();
-      mintFor(store, req, "pgt-oq-emptylist");
       const policy = { ...allowingPolicy(), allowed_parent_models: [] };
-      const out = decideParentDelivery({
+      mintFor(store, req, "pgt-oq-emptylist", policy);
+      const out = decideVerifiedParentDelivery({
         storeDir: store.dir,
         host: HOST,
         request: req,
@@ -447,13 +557,13 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
     // local_only + the operator's own rule declares the parent remote.
     {
       const store = freshStore();
-      mintFor(store, req, "pgt-oq-remote");
       const policy = {
         ...allowingPolicy(),
         processing_mode: "local_only" as const,
         allowed_parent_models: [{ ...PARENT, locality: "remote" as const }],
       };
-      const out = decideParentDelivery({
+      mintFor(store, req, "pgt-oq-remote", policy);
+      const out = decideVerifiedParentDelivery({
         storeDir: store.dir,
         host: HOST,
         request: req,
@@ -466,10 +576,9 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
     }
   });
 
-  it("refuses to deliver an answer whose grounding was never verified (§5.6)", () => {
-    // verify_grounding defaults TRUE and this flow has no grounding phase, so
-    // the default request is NOT deliverable — the operator must mint over a
-    // request that explicitly records `verify_grounding: false`.
+  it("refuses to deliver the deterministic answer whose grounding was never verified (§5.6)", () => {
+    // `verify_grounding:false` preserves deterministic retrieval, but the
+    // absence of a passing same-run Vera report makes it ineligible for parent delivery.
     const store = freshStore();
     const defaulted = validateQueryRequest({
       schema_version: 1,
@@ -477,6 +586,7 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
       kb_profile_id: PROFILE,
       query: "What did we decide about the gate ladder?",
       answer_delivery: "parent_tool_result",
+      verify_grounding: false,
     });
     mintFor(store, defaulted, "pgt-oq-grounding");
     const out = decideParentDelivery({
@@ -490,6 +600,26 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
     });
     expect(out).toEqual({ outcome: "refused", reason_code: "grounding_unverified" });
     expect(store.load("pgt-oq-grounding").record.state).toBe("available");
+  });
+
+  it("refuses a passing report when the host terminal is not complete/met:true", () => {
+    const store = freshStore();
+    const req = request();
+    mintFor(store, req, "pgt-oq-unmet");
+    const answer = validAnswer();
+    const out = decideParentDelivery({
+      storeDir: store.dir,
+      host: HOST,
+      request: req,
+      policy: allowingPolicy(),
+      parentIdentity: PARENT,
+      runId: RUN_ID,
+      answer,
+      verificationReport: validVerification(answer),
+      queryCompleteAndMet: false,
+    });
+    expect(out).toEqual({ outcome: "refused", reason_code: "grounding_unverified" });
+    expect(store.load("pgt-oq-unmet").record.state).toBe("available");
   });
 
   it("the public refusal surface is exactly one bounded code", () => {

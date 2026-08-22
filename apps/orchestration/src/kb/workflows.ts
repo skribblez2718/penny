@@ -10,51 +10,39 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
+import type { Checkpointer } from "../checkpointer.js";
 import { PolicyRefusal, checkParentModelIdentity } from "./policy.js";
-import { SaveQueryClaimStore } from "./save-claim.js";
 import type { JsonValue } from "../contracts.js";
 import {
   canonicalJson,
   defaultDenyPolicy,
   sha256Hex,
+  type KbAction,
   type KbManifest,
   type KbPolicy,
+  type KnowledgeBaseResult,
+  type RunStatus,
+  type Sha256Hex,
 } from "./contracts.js";
-import { writeManifest, writePolicy, readManifest, readPolicy, readCurrent } from "./filesystem.js";
+import { readManifest, readPolicy, readCurrent } from "./filesystem.js";
 import {
   buildCatalog,
-  buildGenerationIndex,
-  newGenerationId,
-  publishGeneration,
+  generationIndexDigest,
+  openStandalonePublicationCheckpointer,
+  publishGenerationTransaction,
   readSelectedGeneration,
+  standalonePublicationTransactionId,
 } from "./generations.js";
-import { rankPages } from "./retrieval.js";
 import { lintDeterministic } from "./lint.js";
-import { RunArtifactStore, type ArtifactHandle } from "./run-artifacts.js";
+import { selectQueryCandidates } from "./query-reader.js";
+import { RunArtifactStore } from "./run-artifacts.js";
 
 // ── Result type (§5.6) ──────────────────────────────────────────────────────
 
-export type KbStatus = "running" | "awaiting_user" | "complete" | "refused" | "error" | "exhausted";
-
-export interface KbResult {
-  schema_version: 1;
-  action: string;
-  run_id: string;
-  kb_id?: string;
-  status: KbStatus;
-  met: boolean;
-  ids: string[];
-  counts: Record<string, number>;
-  artifacts: ArtifactHandle[];
-  evidence: { evidence_id: string; kind: string; ref: string }[];
-  warnings: string[];
-  unresolved: string[];
-  derived_answer?: unknown;
-  next: "resume" | "review" | "none";
-}
+export type KbStatus = RunStatus;
+export type KbResult = KnowledgeBaseResult;
 
 // ── Workflow context ────────────────────────────────────────────────────────
 
@@ -62,10 +50,19 @@ export interface KbWorkflowContext {
   readonly kbRoot: string;
   readonly profileId: string;
   readonly runId: string;
+  /** Required by actions that create or read KB work-plane artifacts. */
+  readonly checkpointer?: Checkpointer;
+}
+
+function artifactControl(ctx: KbWorkflowContext): Checkpointer {
+  if (ctx.checkpointer === undefined) {
+    throw new Error("KB artifact work requires the orchestration control DB");
+  }
+  return ctx.checkpointer;
 }
 
 function result(
-  action: string,
+  action: KbAction,
   runId: string,
   status: KbStatus,
   met: boolean,
@@ -95,23 +92,84 @@ function result(
  * Initialize a KB: validate the profile, create the manifest + default-deny
  * policy + layout, and publish the first empty generation.
  */
-export function initKb(ctx: KbWorkflowContext, title: string): KbResult {
+export function initKb(
+  ctx: KbWorkflowContext,
+  title: string,
+  planned?: {
+    kb_id: string;
+    generation_id: string;
+    created_at: string;
+    transaction_id?: string;
+    checkpointer?: Checkpointer;
+    request_sha256?: Sha256Hex;
+    profile_commitment_sha256?: Sha256Hex;
+  }
+): KbResult {
   const root = ctx.kbRoot;
 
-  // Check if already initialized
+  // Check if already initialized. A transaction with a durable base-none
+  // reservation must always re-enter the same publisher, even after a remap or
+  // a crash-after-link; an unrelated ordinary init only validates the selected
+  // KB and creates no reservation/generation.
   const existing = readCurrent(root);
-  if (existing !== undefined) {
-    const manifest = readManifest(root);
+  const recoveringPublication =
+    planned?.checkpointer !== undefined && planned.transaction_id !== undefined
+      ? planned.checkpointer.kbPublication(planned.transaction_id)
+      : undefined;
+  const recoveringReservation =
+    planned?.checkpointer !== undefined && planned.transaction_id !== undefined
+      ? planned.checkpointer.kbInitReservationByTransaction(planned.transaction_id)
+      : undefined;
+  if (
+    existing !== undefined &&
+    recoveringPublication === undefined &&
+    recoveringReservation === undefined
+  ) {
+    const existingManifest = readManifest(root);
     return result("init", ctx.runId, "complete", true, "none", {
-      kb_id: manifest.kb_id,
+      kb_id: existingManifest.kb_id,
       counts: { generations: 1 },
       warnings: ["KB already initialized; validated existing state"],
     });
   }
+  if (
+    recoveringReservation !== undefined &&
+    (recoveringPublication === undefined || recoveringPublication.run_id !== ctx.runId)
+  ) {
+    throw new Error("base-none init reservation lost its exact publication transaction");
+  }
 
-  // Create the layout
-  const kbId = `kb_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
-  const now = new Date().toISOString();
+  let ownedCheckpointer: Checkpointer | undefined;
+  const transactionId =
+    planned?.transaction_id ?? standalonePublicationTransactionId(ctx.runId, "init");
+  const checkpointer =
+    planned?.checkpointer ??
+    (ownedCheckpointer = openStandalonePublicationCheckpointer({
+      root,
+      runId: ctx.runId,
+      profileId: ctx.profileId,
+      action: "init",
+    }));
+  const priorPublication = checkpointer.kbPublication(transactionId);
+  const priorReservation = checkpointer.kbInitReservationByTransaction(transactionId);
+  if (
+    planned !== undefined &&
+    priorReservation !== undefined &&
+    (planned.kb_id !== priorReservation.kb_id ||
+      planned.generation_id !== priorReservation.generation_id)
+  ) {
+    ownedCheckpointer?.close();
+    throw new Error("base-none init KB/generation identity changed across recovery");
+  }
+
+  // Create the layout from the transaction's already-frozen identities on
+  // recovery; no timestamp/id is silently regenerated.
+  const kbId =
+    priorReservation?.kb_id ??
+    priorPublication?.kb_id ??
+    planned?.kb_id ??
+    `kb_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+  const now = priorPublication?.created_at ?? planned?.created_at ?? new Date().toISOString();
 
   const manifest: KbManifest = {
     schema_version: 1,
@@ -134,14 +192,16 @@ export function initKb(ctx: KbWorkflowContext, title: string): KbResult {
     },
     created_at: now,
   };
-  writeManifest(root, manifest);
-
   const policy = defaultDenyPolicy(kbId);
-  writePolicy(root, policy);
 
-  // Publish the first empty generation (with its real, verified index)
-  const genId = newGenerationId();
-  const { index_sha256 } = buildGenerationIndex(root, genId, kbId, []);
+  // Publish the first empty generation through the same transaction-owned path
+  // for host actions and standalone workflow fixtures.
+  const genId =
+    priorReservation?.generation_id ??
+    priorPublication?.candidate_generation_id ??
+    planned?.generation_id ??
+    `gen_${sha256Hex(transactionId).slice(0, 40)}`;
+  const index_sha256 = generationIndexDigest(genId, kbId, []);
   const catalog = buildCatalog({
     generation_id: genId,
     kb_id: kbId,
@@ -152,8 +212,57 @@ export function initKb(ctx: KbWorkflowContext, title: string): KbResult {
     source_objects: [],
     conflicts: [],
     index_sha256,
+    created_at: now,
   });
-  publishGeneration(root, catalog);
+  const requestSha256 =
+    planned?.request_sha256 ??
+    priorReservation?.request_sha256 ??
+    sha256Hex(
+      canonicalJson({
+        schema_version: 1,
+        action: "init",
+        kb_profile_id: ctx.profileId,
+        create: true,
+        title,
+      })
+    );
+  const profileCommitmentSha256 =
+    planned?.profile_commitment_sha256 ??
+    priorReservation?.profile_commitment_sha256 ??
+    sha256Hex(
+      canonicalJson({
+        schema_version: 1,
+        kb_profile_id: ctx.profileId,
+        kb_root: path.resolve(root),
+        repository_admission: { mode: "standalone_fixture" },
+      })
+    );
+  try {
+    publishGenerationTransaction({
+      root,
+      checkpointer,
+      run_id: ctx.runId,
+      transaction_id: transactionId,
+      kb_profile_id: ctx.profileId,
+      action: "init",
+      base_generation_id: null,
+      base_selector_sha256: null,
+      catalog,
+      index_pages: [],
+      immutable_files: [
+        { role: "manifest", final_key: "manifest.json", bytes: canonicalJson(manifest) },
+        { role: "policy", final_key: ".kb/policy.json", bytes: canonicalJson(policy) },
+      ],
+      published_at: now,
+      init_reservation: {
+        request_sha256: requestSha256,
+        profile_commitment_sha256: profileCommitmentSha256,
+      },
+      await_operation_receipt: planned?.checkpointer !== undefined,
+    });
+  } finally {
+    ownedCheckpointer?.close();
+  }
 
   return result("init", ctx.runId, "complete", true, "none", {
     kb_id: kbId,
@@ -180,153 +289,78 @@ export function queryKb(
     pageIds?: readonly string[];
     /** §5.6 `source_ids` — restrict retrieval to pages citing at least one of these sources. */
     sourceIds?: readonly string[];
-    /** §5.6 `verify_grounding` (defaults true) — recorded honestly, see below. */
+    /** Explicitly false on the deterministic path. No direct workflow call verifies grounding. */
     verifyGrounding?: boolean;
-    /**
-     * Owner-only claim store directory (§5.6). When supplied, a complete query
-     * with a sealed answer creates exactly one `SaveQueryClaimV1` — the single
-     * right that a later `save` must claim. Omitted only by callers that are
-     * not offering the answer for saving (deterministic tests, probes).
-     */
-    claimStoreDir?: string;
   }
 ): KbResult {
-  const root = ctx.kbRoot;
-  const selected = readSelectedGeneration(root);
-  if (selected === undefined) {
+  const request = {
+    schema_version: 1 as const,
+    action: "query" as const,
+    kb_profile_id: ctx.profileId,
+    query,
+    ...(options?.maxCandidates !== undefined ? { max_candidates: options.maxCandidates } : {}),
+    ...(options?.pageIds !== undefined ? { page_ids: [...options.pageIds] } : {}),
+    ...(options?.sourceIds !== undefined ? { source_ids: [...options.sourceIds] } : {}),
+    verify_grounding: false,
+  };
+  const selection = selectQueryCandidates({ kbRoot: ctx.kbRoot, request });
+  if (selection === undefined) {
     return result("query", ctx.runId, "refused", false, "none", {
       warnings: ["No KB is initialized at this profile"],
     });
   }
 
-  const { catalog } = selected;
-  const pageFilter = options?.pageIds === undefined ? undefined : new Set(options.pageIds);
-  const sourceFilter = options?.sourceIds === undefined ? undefined : new Set(options.sourceIds);
-  const unresolved: string[] = [];
-  if (pageFilter !== undefined) {
-    for (const requested of pageFilter) {
-      if (!Object.hasOwn(catalog.pages, requested)) unresolved.push("unknown page filter id");
-    }
-  }
-
-  // Build page contents from the catalog (in a real system, this reads from disk)
-  // For now, we read the page markdown and frontmatter from the filesystem
-  const pageContents = new Map<string, { title: string; summary: string; markdown: string }>();
-  for (const [pageId, entry] of Object.entries(catalog.pages)) {
-    if (pageFilter !== undefined && !pageFilter.has(pageId)) continue;
-    try {
-      const revId = entry.revision_id;
-      const pageMdPath = path.join(root, "pages", pageId, "revisions", revId, "page.md");
-      const claimsPath = path.join(root, "pages", pageId, "revisions", revId, "claims.json");
-      if (existsSync(pageMdPath) && existsSync(claimsPath)) {
-        const md = readFileSync(pageMdPath, "utf8");
-        const claims = JSON.parse(readFileSync(claimsPath, "utf8"));
-        // §5.6 source filter: keep only pages whose claims cite an allowed source.
-        if (sourceFilter !== undefined && !claimsCiteAnySource(claims, sourceFilter)) continue;
-        // Extract title and summary from the frontmatter in the markdown
-        const fmMatch = md.match(/^---\n([\s\S]*?)\n---/);
-        let title = pageId;
-        let summary = "";
-        const fmText = fmMatch?.[1];
-        if (typeof fmText === "string") {
-          try {
-            const fm = JSON.parse(fmText);
-            title = fm.title ?? pageId;
-            summary = fm.summary ?? "";
-          } catch {
-            // fall through with defaults
-          }
-        }
-        pageContents.set(pageId, { title, summary, markdown: md });
-      }
-    } catch {
-      // skip unreadable pages
-    }
-  }
-
-  const candidates = rankPages({
-    catalog,
-    query,
-    pageContents,
-    maxCandidates: options?.maxCandidates ?? 20,
-  });
-
-  // Produce a same-run answer artifact (work plane only, no publication)
-  using store = new RunArtifactStore(root, ctx.runId);
+  const candidates = selection.candidates;
+  using store = new RunArtifactStore(ctx.kbRoot, ctx.runId, artifactControl(ctx));
   const answerContent = JSON.stringify({
     schema_version: 1,
     artifact_kind: "query_answer",
     answer: {
       authority: "advisory" as const,
-      text: `Found ${candidates.length} candidate(s) for query: "${query}"`,
-      citations: candidates.slice(0, 5).map((c) => ({
-        kind: "page" as const,
-        page_id: c.page_id,
-        revision_id: c.revision_id,
-      })),
+      text:
+        candidates.length > 0
+          ? `Found ${candidates.length} candidate(s) with supported claims.`
+          : "No supported claim matched the request.",
+      citations: candidates.slice(0, 5).flatMap((candidate) =>
+        (selection.pages.get(candidate.page_id)?.supported_claims ?? [])
+          .slice(0, 1)
+          .map((claim) => ({
+            kind: "claim" as const,
+            page_id: candidate.page_id,
+            revision_id: candidate.revision_id,
+            claim_id: claim.claim_id,
+          }))
+      ),
       contradictions: [],
       unknowns: candidates.length === 0 ? ["No matching pages found"] : [],
       canonical_verification_required: true as const,
     },
   });
   const handle = store.stage({
-    state_id: "synthia_query",
+    state_id: "query",
     kb_profile_id: ctx.profileId,
     artifact_kind: "query_answer",
     content: answerContent,
   });
-  // Seal it: the answer a save may later claim must be frozen, and the claim
-  // binds its digest so a drifted answer can never be published as the one the
-  // operator reviewed.
   store.seal([handle.artifact_id]);
 
-  if (options?.claimStoreDir !== undefined && candidates.length > 0) {
-    // Exactly one claim per completed query with a sealed answer (§5.6). A
-    // failure here must not fail the query — the answer is still valid and
-    // readable; only the right to save it is unavailable, and a save without a
-    // claim refuses honestly rather than proceeding.
-    try {
-      new SaveQueryClaimStore(options.claimStoreDir).create({
-        query_run_id: ctx.runId,
-        kb_profile_id: ctx.profileId,
-        kb_id: catalog.kb_id,
-        answer_artifact_id: handle.artifact_id,
-        answer_sha256: handle.sha256,
-      });
-    } catch {
-      // Already-claimed (a retry of the same run) or an unwritable store.
-    }
-  }
-
   return result("query", ctx.runId, "complete", candidates.length > 0, "none", {
-    kb_id: catalog.kb_id,
-    ids: candidates.map((c) => c.page_id),
+    kb_id: selection.kbId,
+    ids: candidates.map((candidate) => candidate.page_id),
     counts: { candidates: candidates.length },
     artifacts: [handle],
     warnings: [
-      ...(candidates.length === 0 ? ["No matching pages found"] : []),
-      // Honest capability statement: this flow ranks and cites; it does not run
-      // a grounding phase. Saying so is what keeps `verify_grounding` from
-      // being a silent no-op, and parent delivery refuses on it (§5.6).
-      ...(options?.verifyGrounding === false ? [] : ["grounding_not_verified"]),
+      ...(candidates.length === 0 ? ["No supported matching claims found"] : []),
+      // Deterministic retrieval is intentionally retained for an explicit
+      // `verify_grounding:false` request, but it has no save or delivery
+      // authority and must always name that fact.
+      "grounding_not_verified",
     ],
-    unresolved: [...unresolved, ...(candidates.length === 0 ? ["empty result set"] : [])],
+    unresolved: [
+      ...selection.unresolved,
+      ...(candidates.length === 0 ? ["empty supported result set"] : []),
+    ],
   });
-}
-
-/** True when any claim's evidence cites one of the requested source IDs (§5.6 filter). */
-function claimsCiteAnySource(claims: unknown, allowed: ReadonlySet<string>): boolean {
-  const list = (claims as { claims?: unknown })?.claims;
-  if (!Array.isArray(list)) return false;
-  for (const claim of list) {
-    const evidence = (claim as { evidence?: unknown })?.evidence;
-    if (!Array.isArray(evidence)) continue;
-    for (const entry of evidence) {
-      const sourceId = (entry as { source_id?: unknown })?.source_id;
-      if (typeof sourceId === "string" && allowed.has(sourceId)) return true;
-    }
-  }
-  return false;
 }
 
 // ── §5.3 run admission (deny before session) ─────────────────────────────
@@ -350,7 +384,7 @@ function claimsCiteAnySource(claims: unknown, allowed: ReadonlySet<string>): boo
 export function admitKbRun(input: {
   kbRoot: string;
   parentIdentity: { provider: string; model: string } | undefined;
-}): { policy: KbPolicy; policy_sha256: string } {
+}): { policy: KbPolicy; policy_sha256: string; kb_id: string } {
   const policy = readPolicy(input.kbRoot);
   if (input.parentIdentity === undefined) {
     throw new PolicyRefusal(
@@ -359,7 +393,11 @@ export function admitKbRun(input: {
     );
   }
   checkParentModelIdentity(policy, input.parentIdentity);
-  return { policy, policy_sha256: sha256Hex(canonicalJson(policy as unknown as JsonValue)) };
+  return {
+    policy,
+    policy_sha256: sha256Hex(canonicalJson(policy as unknown as JsonValue)),
+    kb_id: policy.kb_id,
+  };
 }
 
 /**
@@ -394,14 +432,38 @@ export function recheckAdmittedPolicy(input: {
 export function readSealedAnswer(
   root: string,
   runId: string,
-  handle: { artifact_id: string }
+  handle: { artifact_id: string },
+  checkpointer: Checkpointer
 ): unknown {
-  using store = new RunArtifactStore(root, runId);
+  using store = new RunArtifactStore(root, runId, checkpointer);
   try {
     const { content } = store.read(handle.artifact_id);
     const doc = JSON.parse(content) as { artifact_kind?: unknown; answer?: unknown };
     if (doc.artifact_kind !== "query_answer" || doc.answer === undefined) return null;
     return doc.answer;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the one sealed same-run Vera report for an answer. The parent decision
+ * re-validates the pair; this reader only refuses ambiguity, wrong lifecycle,
+ * wrong kind, and unreadable bytes.
+ */
+export function readSealedQueryVerification(
+  root: string,
+  runId: string,
+  answerHandle: { artifact_id: string },
+  checkpointer: Checkpointer
+): unknown {
+  using store = new RunArtifactStore(root, runId, checkpointer);
+  try {
+    const answer = store.read(answerHandle.artifact_id);
+    if (answer.handle.artifact_kind !== "query_answer") return null;
+    const reports = store.listByState("verify", "sealed");
+    if (reports.length !== 1 || reports[0]?.artifact_kind !== "verification_report") return null;
+    return JSON.parse(store.read(reports[0].artifact_id).content) as unknown;
   } catch {
     return null;
   }
@@ -427,9 +489,11 @@ export function lintKb(ctx: KbWorkflowContext): KbResult {
     });
   }
 
-  // Produce a same-run lint-report artifact (work plane only)
-  using store = new RunArtifactStore(root, ctx.runId);
-  const reportContent = JSON.stringify({
+  // Produce a same-run lint-report artifact (work plane only). A process death
+  // after staging but before the control checkpoint reuses the exact indexed
+  // artifact on retry; it never creates a second report for the same run.
+  using store = new RunArtifactStore(root, ctx.runId, artifactControl(ctx));
+  const reportContent = canonicalJson({
     schema_version: 1,
     artifact_kind: "lint_report",
     findings: findings.map((f) => ({
@@ -440,12 +504,24 @@ export function lintKb(ctx: KbWorkflowContext): KbResult {
     })),
     candidate_conflicts: [],
   });
-  const handle = store.stage({
-    state_id: "lint",
-    kb_profile_id: ctx.profileId,
-    artifact_kind: "lint_report",
-    content: reportContent,
-  });
+  const existing = store.listByState("lint");
+  if (existing.length > 1) {
+    throw new Error("lint run has more than one indexed report artifact");
+  }
+  const prior = existing[0];
+  const handle =
+    prior === undefined
+      ? store.stage({
+          state_id: "lint",
+          kb_profile_id: ctx.profileId,
+          artifact_kind: "lint_report",
+          content: reportContent,
+        })
+      : store.read(prior.artifact_id).content === reportContent
+        ? prior
+        : (() => {
+            throw new Error("lint run report bytes changed across recovery");
+          })();
 
   return result("lint", ctx.runId, "complete", true, "none", {
     counts: { findings: findings.length, warnings: warnings.length, blocking: 0 },

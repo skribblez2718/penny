@@ -47,12 +47,13 @@ metadata:
 
 Invoke through the `knowledge_base` tool:
 
-```
+<!-- prettier-ignore -->
+```ts
 knowledge_base({schema_version: 1, action: "init", kb_profile_id: "kbp_demo", create: true, title: "Demo advisory KB"})
 knowledge_base({schema_version: 1, action: "ingest", kb_profile_id: "kbp_demo", source_capability_ids: ["src_cap_1"]})
 knowledge_base({schema_version: 1, action: "query", kb_profile_id: "kbp_demo", query: "...", answer_delivery: "artifact_ref"})
-knowledge_base({schema_version: 1, action: "query", kb_profile_id: "kbp_demo", query: "...", answer_delivery: "parent_tool_result"})
-knowledge_base({schema_version: 1, action: "save", kb_profile_id: "kbp_demo", query_run_id: "run_1", page_kind: "synthesis", title: "..."})  // requires that query run's single-use claim
+knowledge_base({schema_version: 1, action: "query", kb_profile_id: "kbp_demo", query: "...", answer_delivery: "parent_tool_result"}) // requires exact ParentDeliveryGrantV1 + policy
+knowledge_base({schema_version: 1, action: "save", kb_profile_id: "kbp_demo", query_run_id: "run_1", page_kind: "synthesis", title: "..."})
 knowledge_base({schema_version: 1, action: "lint", kb_profile_id: "kbp_demo", mode: "deterministic_and_semantic"})
 knowledge_base({schema_version: 1, action: "promote", kb_profile_id: "kbp_demo", page_revisions: [{page_id: "page_1", revision_id: "rev_1"}], canonical_target_capability_ids: ["target_cap_1"]})
 knowledge_base({schema_version: 1, action: "status", kb_profile_id: "kbp_demo", run_id: "run_1"})
@@ -61,28 +62,23 @@ knowledge_base({schema_version: 1, action: "resume", kb_profile_id: "kbp_demo", 
 
 ## Authority
 
-The model may name an opaque `kb_profile_id` and, where applicable, opaque capability IDs the host already minted. It may never supply a filesystem root, source path, canonical target, provider choice, approval decision, or receipt body. Those are host-owned.
+The model may name an opaque `kb_profile_id` and, where applicable, opaque capability IDs the host already minted. It may never supply a filesystem root, source path, canonical target, provider choice, approval decision, or receipt body. Those are host-owned. Profile-session and parent-delivery grants live only in the owner-only `$PROJECT_ROOT/.penny/kb-host-grants/grants.sqlite` WAL/FULL authority; no JSON or secondary-directory fallback exists.
 
 ## Gates
 
 - Profile/policy/capability checks before private reads.
 - Deterministic validation before semantic work.
 - Content review before ingest/save publication.
-- Signed host approval before canonical apply.
+- Signed host approval before canonical apply: strict JCS, HMAC-SHA-256, unpadded base64url,
+  active/verification-only raw-key rotation, single use, expiry, exact target/preimage/patch/evidence binding,
+  journaled postimage verification, and restore-or-safe-block recovery.
 
 ## Outputs
 
 Expected outputs are safe action status, opaque IDs/counts, bounded warnings/unresolved items, evidence or artifact handles, and — only for an explicitly host-granted, policy-permitted query — a bounded derived advisory answer with citations, uncertainty, contradictions, and a canonical-verification reminder. No output may contain a raw private body.
 
-Parent delivery contract (`answer_delivery: "parent_tool_result"`):
-
-- The operator mints exactly one grant per planned parent delivery, keyed to their own Pi session id and the exact query-request digest. Admission requires exactly one matching unconsumed grant plus policy permission.
-- Delivery also requires an exact parent allowlist match: the active parent's provider/model must be allowlisted in policy (empty list denies; `local_only` requires the matched rule to declare `local`).
-- `verify_grounding` defaults true and the query flow cannot verify grounding, so a default request is refused for parent delivery; delivery requires a request that explicitly records `verify_grounding: false`. Results carry a `grounding_not_verified` warning whenever verification did not happen.
-- The grant is single-use: the delivered run consumes it; retries are refused rather than redelivered.
-- On any miss the parent sees its safe result with the single bounded warning code `refused_parent_delivery`, and nothing else; the host logs a bounded diagnostic reason (missing/mismatched/expired/consumed/ambiguous grant, policy denial, byte-cap miss, malformed answer) and retains the grant whenever the miss is not a delivery.
-- The derived answer is advisory-only, cited, and flagged `canonical_verification_required: true`. It may never be presented as canonical current state.
+Parent delivery is exceptional. It requires the exact host-owned `ParentDeliveryGrantV1`, current policy permission, exact parent-model admission, a complete grounded answer, and the lesser grant/policy byte bound. Delivery atomically consumes the grant; replay never redelivers. On any miss, the parent receives only the path-free artifact result plus `refused_parent_delivery`. A delivered answer remains advisory, cited, and marked `canonical_verification_required: true`.
 
 ## Refusals
 
-Refuse rather than guess when: the profile is ungranted, missing, changed, or unsafe; a source/target capability is invalid; policy/model checks fail; a request supplies forbidden authority-shaped input; a requested parent answer lacks host grant or policy; a phase cannot return the required typed result; or promotion approval/apply is requested through the public tool.
+Refuse rather than guess when: the profile is ungranted, missing, changed, or unsafe; a source/target capability is invalid; policy/model checks fail; a request supplies forbidden authority-shaped input; a requested parent answer lacks host grant or policy; a phase cannot return the required typed result; or promotion approval/apply is requested through the public tool. An authenticated operator uses the separate `penny-kb-gate promotion-list|promotion-key-rotate|promotion-approve|promotion-refine|promotion-deny|promotion-apply` host surface; no receipt body is accepted from the model.

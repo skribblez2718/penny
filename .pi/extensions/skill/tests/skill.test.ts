@@ -4,7 +4,6 @@
  * Tests skill invocation data shaping and result formatting:
  * - Skill discovery
  * - Orchestration loop (start → agent → step → complete)
- * - Summary parsing
  * - Default summary generation
  * - Error handling
  * - Formatting
@@ -13,11 +12,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
-import {
-  parseSummaryFromOutput,
-  formatResult,
-  normalizeEscalationQuestions,
-} from "../skill-utils.js";
+import { formatResult, normalizeEscalationQuestions } from "../skill-utils.js";
 
 // Mock fs module
 vi.mock("fs", () => ({
@@ -309,50 +304,6 @@ Content here`);
         expect(formatted).toContain(`\\u${codePoint.toString(16).padStart(4, "0")}`);
       }
     });
-  });
-});
-
-// ============================================================
-// Summary Parsing Tests — using REAL production implementation
-// ============================================================
-
-describe("parseSummaryFromOutput", () => {
-  it("should parse inline JSON summary", () => {
-    const output = 'Some text\nSUMMARY:{"findings_count":5,"explore_complete":true}\nMore text';
-    const result = parseSummaryFromOutput(output);
-    expect(result.findings_count).toBe(5);
-    expect(result.explore_complete).toBe(true);
-  });
-
-  it("should return empty object for no SUMMARY", () => {
-    const output = "Just regular text without any summary";
-    const result = parseSummaryFromOutput(output);
-    expect(Object.keys(result)).toHaveLength(0);
-  });
-
-  it("should return empty object for empty string", () => {
-    const result = parseSummaryFromOutput("");
-    expect(Object.keys(result)).toHaveLength(0);
-  });
-
-  it("should return empty object for whitespace-only string", () => {
-    const result = parseSummaryFromOutput("   \n\t  ");
-    expect(Object.keys(result)).toHaveLength(0);
-  });
-
-  it("should handle nested JSON with arrays and objects", () => {
-    const output =
-      'SUMMARY:{"plan_steps":[{"step":1,"title":"A"},{"step":2,"title":"B"}],"plan_complete":true}';
-    const result = parseSummaryFromOutput(output);
-    expect(Array.isArray(result.plan_steps)).toBe(true);
-    expect((result.plan_steps as any[]).length).toBe(2);
-    expect(result.plan_complete).toBe(true);
-  });
-
-  it("should handle SUMMARY with no JSON brace", () => {
-    const output = "Some text\nSUMMARY:\nNo JSON here\nMore text";
-    const result = parseSummaryFromOutput(output);
-    expect(Object.keys(result)).toHaveLength(0);
   });
 });
 

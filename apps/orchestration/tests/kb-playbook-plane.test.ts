@@ -38,7 +38,9 @@ function installTestPolicy(kbRoot: string): void {
   });
 }
 import { RunArtifactStore } from "../src/kb/run-artifacts.js";
-import { findGateForRun, mintSourceCapability } from "../src/kb/gate.js";
+import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
+import { mintSourceCapability } from "../src/kb/gate.js";
+import { validateContentReviewPacket } from "../src/kb/content-review.js";
 import { CapabilityStore } from "../src/kb/capabilities.js";
 import { readSelectedGeneration } from "../src/kb/generations.js";
 import type { Confidence, JsonValue } from "../src/contracts.js";
@@ -49,6 +51,7 @@ const SESSION = "sess_integration";
 const roots: string[] = [];
 
 afterEach(() => {
+  closeKbArtifactControls();
   for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -64,8 +67,10 @@ function mintSource(kbRoot: string, projectRoot: string, name: string, content: 
   const file = path.join(projectRoot, name);
   writeFileSync(file, content, { mode: 0o600 });
   return mintSourceCapability({
-    kbRoot,
+    projectRoot,
     kbProfileId: PROFILE,
+    sessionId: SESSION,
+    allowedOperation: "ingest",
     absolutePath: file,
     title: `Source ${name}`,
     authors: ["P. Operator"],
@@ -81,6 +86,7 @@ interface Fixture {
   capabilityIds: string[];
   context: RunContext;
   playbook: KnowledgeBasePlaybook;
+  checkpointer: ReturnType<typeof kbArtifactControl>;
 }
 
 function seedRun(): Fixture {
@@ -119,36 +125,56 @@ function seedRun(): Fixture {
     trustProfile: "hardened-untrusted",
     maxSteps: 40,
   });
+  const checkpointer = kbArtifactControl({
+    root: projectRoot,
+    runId,
+    profileId: PROFILE,
+    sessionId: SESSION,
+  });
   return {
     projectRoot,
     kbRoot,
     runId,
     capabilityIds,
     context,
-    playbook: new KnowledgeBasePlaybook(undefined, defaultKbIngestPlane()),
+    checkpointer,
+    playbook: new KnowledgeBasePlaybook(
+      undefined,
+      defaultKbIngestPlane(checkpointer, { testOnlyLegacyReview: true })
+    ),
   };
 }
 
 const PAGE_ID = "page_int_0001";
 const REVISION_ID = "rev_int_0001";
 
+function stableClaims(sourceIds: readonly string[]) {
+  return [
+    {
+      claim_id: "clm_0001",
+      text: "Quorum requires two of three acknowledgements.",
+      kind: "fact",
+      state: "supported",
+      confidence: "PROBABLE",
+      evidence: [{ source_id: sourceIds[0]! }],
+      contradicts_claim_ids: [],
+      canonical_verification_refs: [],
+    },
+  ];
+}
+
 function claimsBody(sourceIds: readonly string[]): string {
   return JSON.stringify({
     schema_version: 1,
     artifact_kind: "claims",
     source_ids: [...sourceIds],
-    claims: [
-      {
-        claim_id: "clm_0001",
-        text: "Quorum requires two of three acknowledgements.",
-        kind: "fact",
-        state: "supported",
-        confidence: "PROBABLE",
-        evidence: [{ source_id: sourceIds[0]! }],
-        contradicts_claim_ids: [],
-        canonical_verification_refs: [],
-      },
-    ],
+    claims: stableClaims(sourceIds).map((claim) => ({
+      provisional_id: "candidate_0001",
+      text: claim.text,
+      kind: claim.kind,
+      confidence: claim.confidence,
+      evidence: claim.evidence,
+    })),
   });
 }
 
@@ -177,7 +203,7 @@ function pageBody(sourceIds: readonly string[]): string {
           schema_version: 1,
           page_id: PAGE_ID,
           revision_id: REVISION_ID,
-          claims: JSON.parse(claimsBody(sourceIds)).claims,
+          claims: stableClaims(sourceIds),
         },
       },
     ],
@@ -186,7 +212,8 @@ function pageBody(sourceIds: readonly string[]): string {
 
 /** Stage the four phase bodies the way the executor will, returning their details. */
 function stagePhases(fixture: Fixture): Record<string, Record<string, JsonValue>> {
-  const store = new RunArtifactStore(fixture.kbRoot, fixture.runId);
+  const sourceIds = fixture.context.playbookData.source_ids as string[];
+  const store = new RunArtifactStore(fixture.kbRoot, fixture.runId, fixture.checkpointer);
   try {
     const stage = (stateId: string, kind: string, content: string): string =>
       store.stage({
@@ -196,8 +223,8 @@ function stagePhases(fixture: Fixture): Record<string, Record<string, JsonValue>
         content,
       }).artifact_id;
 
-    const ingestId = stage("ingest", "claims", claimsBody(fixture.capabilityIds));
-    const composeId = stage("compose", "page_draft", pageBody(fixture.capabilityIds));
+    const ingestId = stage("ingest", "claims", claimsBody(sourceIds));
+    const composeId = stage("compose", "page_draft", pageBody(sourceIds));
     const lintId = stage(
       "lint",
       "lint_report",
@@ -217,9 +244,11 @@ function stagePhases(fixture: Fixture): Record<string, Record<string, JsonValue>
         verified_artifact_ids: [],
         claim_findings: [
           {
-            claim_ref: { page_id: PAGE_ID, revision_id: REVISION_ID, claim_id: "clm_0001" },
+            page_id: PAGE_ID,
+            revision_id: REVISION_ID,
+            claim_id: "clm_0001",
             verdict: "supported",
-            notes: "Source A states it.",
+            evidence: [{ evidence_id: "evidence_source_a", kind: "source", ref: sourceIds[0]! }],
           },
         ],
       })
@@ -230,7 +259,7 @@ function stagePhases(fixture: Fixture): Record<string, Record<string, JsonValue>
         artifact_kind: "claims",
         complete: true,
         claim_count: 1,
-        source_ids: [...fixture.capabilityIds],
+        source_ids: [...sourceIds],
       },
       compose: {
         kb_artifact_id: composeId,
@@ -245,7 +274,7 @@ function stagePhases(fixture: Fixture): Record<string, Record<string, JsonValue>
         artifact_kind: "lint_report",
         complete: true,
         finding_count: 0,
-        error_count: 0,
+        blocking_count: 0,
         candidate_conflict_count: 0,
       },
       verify: {
@@ -264,8 +293,8 @@ function stagePhases(fixture: Fixture): Record<string, Record<string, JsonValue>
 
 /** Drive the machine to the review gate using staged real artifacts. */
 function driveToGate(fixture: Fixture): void {
-  const details = stagePhases(fixture);
   fixture.playbook.initialize(fixture.context);
+  const details = stagePhases(fixture);
   for (let guard = 0; guard < 10 && fixture.context.stateId !== "awaiting_review"; guard += 1) {
     const phase = fixture.context.stateId;
     const phaseDetails = details[phase];
@@ -273,6 +302,7 @@ function driveToGate(fixture: Fixture): void {
     fixture.playbook.validateDetails(phase, phaseDetails);
     fixture.playbook.acceptSummary(fixture.context, phaseDetails, "PROBABLE" as Confidence);
   }
+  fixture.checkpointer.saveRun(fixture.context, "test_content_review_waiting", {});
 }
 
 describe("KB playbook ↔ real ingest plane", () => {
@@ -282,12 +312,17 @@ describe("KB playbook ↔ real ingest plane", () => {
     driveToGate(fixture);
 
     expect(fixture.context.stateId).toBe("awaiting_review");
-    // eslint-disable-next-line no-console
-    const gate = findGateForRun(fixture.kbRoot, fixture.runId);
-    expect(gate).toBeDefined();
-    expect(gate!.status).toBe("awaiting");
-    expect(gate!.base_generation_id).toBe(base!.selector.generation_id);
-    expect(String(fixture.context.playbookData.gate_id)).toBe(gate!.gate_id);
+    const packet = validateContentReviewPacket(
+      JSON.parse(String(fixture.context.playbookData.content_review_packet_jcs))
+    );
+    expect(packet.base_generation_id).toBe(base!.selector.generation_id);
+    expect(packet.action).toBe("ingest");
+    expect(packet.candidate_artifacts.map((artifact) => artifact.artifact_kind)).toEqual([
+      "page_draft",
+      "lint_report",
+      "verification_report",
+    ]);
+    expect(String(fixture.context.playbookData.gate_id)).toBe(packet.challenge_id);
   });
 
   it("approval publishes a generation and consumes the capability leases", () => {
@@ -305,7 +340,7 @@ describe("KB playbook ↔ real ingest plane", () => {
     );
     expect(Object.keys(selected!.catalog.pages)).toContain(PAGE_ID);
 
-    const store = new CapabilityStore(fixture.kbRoot);
+    const store = new CapabilityStore(fixture.projectRoot);
     try {
       for (const id of fixture.capabilityIds) {
         expect(store.lease(id)?.state).toBe("consumed");
@@ -313,7 +348,7 @@ describe("KB playbook ↔ real ingest plane", () => {
     } finally {
       store.close();
     }
-    expect(findGateForRun(fixture.kbRoot, fixture.runId)!.status).toBe("approved");
+    expect(fixture.context.playbookData.review_decision).toBe("approve");
   });
 
   it("denial publishes nothing and leaves the selector untouched", () => {
@@ -326,7 +361,7 @@ describe("KB playbook ↔ real ingest plane", () => {
 
     const selected = readSelectedGeneration(fixture.kbRoot);
     expect(selected!.selector.generation_id).toBe(base!.selector.generation_id);
-    expect(findGateForRun(fixture.kbRoot, fixture.runId)!.status).toBe("denied");
+    expect(fixture.context.playbookData.review_decision).toBe("deny");
     expect(fixture.context.playbookData.published_generation_id).toBeUndefined();
   });
 
@@ -335,8 +370,17 @@ describe("KB playbook ↔ real ingest plane", () => {
     driveToGate(fixture);
     fixture.playbook.resume(fixture.context, "approve");
     // The gate is terminal; a second approval must not publish again.
+    const packet = validateContentReviewPacket(
+      JSON.parse(String(fixture.context.playbookData.content_review_packet_jcs))
+    );
     expect(() =>
-      defaultKbIngestPlane().approve({ kbRoot: fixture.kbRoot, runId: fixture.runId })
+      defaultKbIngestPlane().approve({
+        projectRoot: fixture.projectRoot,
+        kbRoot: fixture.kbRoot,
+        runId: fixture.runId,
+        packet,
+        capabilityIds: fixture.capabilityIds,
+      })
     ).toThrow();
   });
 });

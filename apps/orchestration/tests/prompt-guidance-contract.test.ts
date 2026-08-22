@@ -82,5 +82,36 @@ describe("closed prompt-guidance surfaces", () => {
       )
       .map((state) => ({ agent: state.agent, phase: state.id }));
     expectClosedPromptSurface(KNOWLEDGE_BASE_SKILL_CONTRACT, phases);
+    expect(phases).toContainEqual({ agent: "synthia", phase: "query" });
+
+    const promptRoot = path.join(
+      PROJECT_ROOT,
+      ...KNOWLEDGE_BASE_SKILL_CONTRACT.guidance.skill_root.split("/")
+    );
+    const queryPrompt = readFileSync(path.join(promptRoot, "synthia-query.md"), "utf8");
+    expect(queryPrompt).toContain("read_phase_brief({schema_version:1})");
+    expect(queryPrompt).toContain("search_selected_kb({schema_version:1})");
+    expect(queryPrompt).toContain("read_selected_page");
+    expect(queryPrompt).not.toContain("read_query_request");
+    expect(queryPrompt).not.toContain("search_selected_generation");
+    const veraPrompt = readFileSync(path.join(promptRoot, "vera-verify.md"), "utf8");
+    expect(veraPrompt).toContain("citation_findings");
+    expect(veraPrompt).toContain("`citation_findings` entry per answer citation");
+
+    for (const file of actualPromptFiles(KNOWLEDGE_BASE_SKILL_CONTRACT)) {
+      const prompt = readFileSync(path.join(promptRoot, file), "utf8");
+      expect(prompt).toContain("stage_run_artifact");
+      expect(prompt).toContain("submit_phase_result");
+      expect(prompt).toContain("body-free");
+      expect(prompt).toContain(
+        "Start with `read_phase_brief({schema_version:1})` before any other action"
+      );
+      expect(prompt).toContain("returned `artifact`");
+      expect(prompt).toContain("copied exactly");
+      expect(prompt).toMatch(/bounded schema or\s+validation\s+error/u);
+      expect(prompt).toContain("only successful termination");
+      expect(prompt).not.toContain('"byte_length": 0');
+      expect(prompt).not.toContain("read_phase_output");
+    }
   });
 });

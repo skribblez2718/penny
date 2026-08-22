@@ -36,9 +36,14 @@ export function installGrantedProfile(input: {
     { encoding: "utf8", mode: 0o600 }
   );
   chmodSync(registryPath, 0o600);
-  new KbSessionProfileGrantStore(path.join(penny, "kb-host-grants", "profile-grants")).mint({
-    session_id: input.sessionId,
-    allowed_kb_profile_ids: [input.profileId],
-    expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
-  });
+  const grantStore = new KbSessionProfileGrantStore(path.join(penny, "kb-host-grants"));
+  try {
+    grantStore.mint({
+      session_id: input.sessionId,
+      kb_profile_id: input.profileId,
+      expires_at: new Date(Date.now() + 60 * 60_000).toISOString(),
+    });
+  } finally {
+    grantStore.close();
+  }
 }

@@ -9,12 +9,9 @@
  *
  * What is deliberately ABSENT is the point of the module: no approval decision,
  * no signature, no apply journal, no write, no commit, no push. Those live
- * behind the host-only approval path at G9. A packet produced here is evidence
+ * behind the separate host-only G9 approval/apply service. A packet produced here is evidence
  * for a human, never authority.
  */
-
-import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
 
 import {
   validateKbContract,
@@ -25,7 +22,7 @@ import {
   type PromotionVerification,
   type Sha256Hex,
 } from "./contracts.js";
-import { loadEnvelope } from "./gate.js";
+import { readClaimedCanonicalTarget } from "./gate.js";
 import { readSelectedGeneration } from "./generations.js";
 
 /** §5.6 closed validation for the public `promote` request. */
@@ -55,10 +52,6 @@ export function validatePromoteRequest(raw: unknown): PromoteKbRequest {
   };
 }
 
-function sha256Of(bytes: Buffer): Sha256Hex {
-  return createHash("sha256").update(bytes).digest("hex") as Sha256Hex;
-}
-
 /**
  * The host's independent verification of a promotion candidate.
  *
@@ -76,37 +69,37 @@ function sha256Of(bytes: Buffer): Sha256Hex {
  * legitimate result of preparing.
  */
 export function verifyPromotionCandidate(input: {
+  projectRoot: string;
   kbRoot: string;
+  runId: string;
+  sessionId: string;
+  profileId: string;
+  operation: "promote";
   pageRevisions: readonly PageRevisionRef[];
   targetCapabilityIds: readonly string[];
 }): PromotionVerification {
   const findings: string[] = [];
   const targets: PromotionVerification["targets"] = [];
 
-  for (const capId of input.targetCapabilityIds) {
-    let authorityRoot: string | undefined;
-    let exists = false;
+  if (new Set(input.targetCapabilityIds).size !== input.targetCapabilityIds.length) {
+    throw new Error("promotion verification target capability ids are duplicated");
+  }
+  const orderedTargetIds = [...input.targetCapabilityIds];
+
+  for (const capId of orderedTargetIds) {
     let preimage: Sha256Hex | undefined;
     try {
-      const env = loadEnvelope(input.kbRoot, capId);
-      if (env.kind !== "canonical_target") {
-        findings.push(`capability '${capId}' is not a canonical_target capability`);
+      if (input.operation !== "promote") {
+        throw new Error("promotion verification has the wrong operation binding");
       }
-      if (env.allowed_operation !== "promote") {
-        findings.push(`capability '${capId}' does not allow the promote operation`);
-      }
-      authorityRoot = env.authority_root;
-      if (authorityRoot === undefined || authorityRoot.length === 0) {
-        findings.push(`capability '${capId}' carries no authority_root`);
-      }
-      // Capture the CURRENT preimage: what an apply would have to still find.
-      const target = env.resolved_path;
-      if (existsSync(target) && lstatSync(target).isFile()) {
-        exists = true;
-        preimage = sha256Of(readFileSync(target));
-      } else {
-        findings.push(`target for '${capId}' does not currently exist as a regular file`);
-      }
+      const target = readClaimedCanonicalTarget({
+        projectRoot: input.projectRoot,
+        capabilityId: capId,
+        runId: input.runId,
+        sessionId: input.sessionId,
+        profileId: input.profileId,
+      });
+      preimage = target.sha256 as Sha256Hex;
     } catch (err) {
       findings.push(
         `target capability '${capId}' did not resolve: ${String((err as Error).message ?? err).slice(0, 200)}`
@@ -114,10 +107,6 @@ export function verifyPromotionCandidate(input: {
     }
     targets.push({
       capability_id: capId,
-      ...(authorityRoot !== undefined && authorityRoot.length > 0
-        ? { authority_root: authorityRoot }
-        : {}),
-      exists,
       ...(preimage !== undefined ? { preimage_sha256: preimage } : {}),
     });
   }
@@ -147,5 +136,17 @@ export function verifyPromotionCandidate(input: {
     targets,
     findings: findings.slice(0, 64),
   };
-  return validateKbContract(PromotionVerificationSchema, report, "promotion verification");
+  const validated = validateKbContract(
+    PromotionVerificationSchema,
+    report,
+    "promotion verification"
+  );
+  if (
+    validated.targets.map((target) => target.capability_id).join("\u0000") !==
+      orderedTargetIds.join("\u0000") ||
+    (validated.verified && validated.targets.some((target) => target.preimage_sha256 === undefined))
+  ) {
+    throw new Error("promotion verification targets are not the exact ordered request projection");
+  }
+  return validated;
 }

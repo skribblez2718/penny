@@ -20,12 +20,7 @@ import {
   validateContract,
 } from "../src/contracts.js";
 import { OrchestrationEngine } from "../src/engine.js";
-import {
-  parseSummaryFromText,
-  type AgentCompletion,
-  type AgentInvocation,
-  type ModelClient,
-} from "../src/model-client.js";
+import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
 import { researchSummarySchema } from "../src/playbooks/research.js";
 import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
 
@@ -659,24 +654,5 @@ describe("research behavioral parity", () => {
     expect(terminal.action).toBe("complete");
     expect(maximum).toBe(2);
     checkpointer.close();
-  });
-});
-
-describe("live summary parsing", () => {
-  it("extracts the final balanced SUMMARY object without leaking body text", () => {
-    const parsed = parseSummaryFromText(
-      'Body with {braces}.\nSUMMARY: {"explore_complete":true,"confidence":"PROBABLE"}\n'
-    );
-    expect(parsed).toEqual({
-      confidence: "PROBABLE",
-      details: { explore_complete: true },
-    });
-  });
-
-  it("fails closed on malformed or invalid-confidence summaries", () => {
-    expect(() => parseSummaryFromText("no summary")).toThrow("missing");
-    expect(() =>
-      parseSummaryFromText('SUMMARY: {"explore_complete":true,"confidence":"likely"}')
-    ).toThrow();
   });
 });

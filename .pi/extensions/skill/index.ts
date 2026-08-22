@@ -28,8 +28,17 @@ import type {
   AgentToolUpdateCallback,
 } from "@mariozechner/pi-coding-agent";
 import { Container, Spacer, Text } from "@mariozechner/pi-tui";
-import { Type, type Static } from "@sinclair/typebox";
-import { OrchestrationService } from "@penny/orchestration/source";
+import { Type, type Static } from "typebox";
+import {
+  KnowledgeBaseRequestSchema,
+  OrchestrationService,
+  validateKnowledgeBaseRequest,
+  type Checkpointer,
+  type KbAgentRunner,
+  type KnowledgeBaseRequest,
+  type ReplayableKnowledgeBaseResult,
+  type RunContext,
+} from "@penny/orchestration/source";
 import {
   SkillResult,
   formatResult,
@@ -80,110 +89,9 @@ interface SkillConfig {
   skillsDir: string;
 }
 
-const KbOpaqueId = Type.String({
-  minLength: 1,
-  maxLength: 128,
-  pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
-});
-const KbProfileField = { schema_version: Type.Literal(1), kb_profile_id: KbOpaqueId };
-const KnowledgeBaseParameters = Type.Union([
-  Type.Object(
-    {
-      ...KbProfileField,
-      action: Type.Literal("init"),
-      create: Type.Literal(true),
-      title: Type.String({ minLength: 1, maxLength: 256 }),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      ...KbProfileField,
-      action: Type.Literal("init"),
-      create: Type.Literal(false),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      ...KbProfileField,
-      action: Type.Literal("ingest"),
-      source_capability_ids: Type.Array(KbOpaqueId, {
-        minItems: 1,
-        maxItems: 64,
-        uniqueItems: true,
-      }),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      ...KbProfileField,
-      action: Type.Literal("query"),
-      query: Type.String({ minLength: 1, maxLength: 32768 }),
-      page_ids: Type.Optional(Type.Array(KbOpaqueId, { maxItems: 256, uniqueItems: true })),
-      source_ids: Type.Optional(Type.Array(KbOpaqueId, { maxItems: 256, uniqueItems: true })),
-      max_candidates: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
-      verify_grounding: Type.Optional(Type.Boolean()),
-      answer_delivery: Type.Optional(
-        Type.Union([Type.Literal("artifact_ref"), Type.Literal("parent_tool_result")])
-      ),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      ...KbProfileField,
-      action: Type.Literal("save"),
-      query_run_id: KbOpaqueId,
-      page_kind: Type.Union([
-        Type.Literal("concept"),
-        Type.Literal("decision"),
-        Type.Literal("synthesis"),
-        Type.Literal("question"),
-      ]),
-      title: Type.String({ minLength: 1, maxLength: 256 }),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      ...KbProfileField,
-      action: Type.Literal("lint"),
-      mode: Type.Union([Type.Literal("deterministic"), Type.Literal("deterministic_and_semantic")]),
-      page_ids: Type.Optional(Type.Array(KbOpaqueId, { maxItems: 256, uniqueItems: true })),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      ...KbProfileField,
-      action: Type.Literal("promote"),
-      page_revisions: Type.Array(
-        Type.Object(
-          { page_id: KbOpaqueId, revision_id: KbOpaqueId },
-          { additionalProperties: false }
-        ),
-        { minItems: 1, maxItems: 64, uniqueItems: true }
-      ),
-      canonical_target_capability_ids: Type.Array(KbOpaqueId, {
-        minItems: 1,
-        maxItems: 64,
-        uniqueItems: true,
-      }),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    { ...KbProfileField, action: Type.Literal("status"), run_id: KbOpaqueId },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    { ...KbProfileField, action: Type.Literal("resume"), run_id: KbOpaqueId },
-    { additionalProperties: false }
-  ),
-]);
-type KnowledgeBaseParams = Static<typeof KnowledgeBaseParameters>;
+/** Public KB tool wire is owned solely by apps/orchestration/src/kb/contracts.ts. */
+const KnowledgeBaseParameters = KnowledgeBaseRequestSchema;
+type KnowledgeBaseParams = KnowledgeBaseRequest;
 
 let config: SkillConfig;
 
@@ -1112,7 +1020,19 @@ async function executeSkillsChain(
 // Extension Registration
 // ============================================================
 
-export default function skillExtension(pi: ExtensionAPI): void {
+export interface SkillExtensionTestDependencies {
+  /**
+   * TEST-ONLY deterministic KB phase runner. The registered adapter still builds
+   * the production KbWorkerClient, private readers, artifact store, worker
+   * executor, and engine; this seam replaces only the live provider call.
+   */
+  readonly kbAgentRunner?: KbAgentRunner;
+}
+
+export default function skillExtension(
+  pi: ExtensionAPI,
+  testDependencies: SkillExtensionTestDependencies = {}
+): void {
   config = {
     skillsDir:
       process.env.PENNY_SKILLS_DIR ||
@@ -1198,15 +1118,16 @@ export default function skillExtension(pi: ExtensionAPI): void {
     ].join(" "),
     parameters: KnowledgeBaseParameters,
     execute: async (
-      _toolCallId: string,
+      toolCallId: string,
       typedParams: KnowledgeBaseParams,
       _signal: AbortSignal | undefined,
       _onUpdate: unknown,
       toolContext: ExtensionCommandContext
     ) => {
-      const rawParams = typedParams as unknown as Record<string, unknown>;
-      const action = typedParams.action;
-      const profileId = typedParams.kb_profile_id;
+      const request = validateKnowledgeBaseRequest(typedParams);
+      const rawParams = request as unknown as Record<string, unknown>;
+      const action = request.action;
+      const profileId = request.kb_profile_id;
       if (profileId.length === 0) {
         return {
           content: [
@@ -1231,18 +1152,23 @@ export default function skillExtension(pi: ExtensionAPI): void {
       );
       const orch = await import("@penny/orchestration/source");
       const hostSessionId = currentSessionId ?? "";
+      const hostInvocationId =
+        typeof toolCallId === "string" && toolCallId.length > 0
+          ? toolCallId
+          : `call-${randomUUID()}`;
+      const hostGrantRoot = path.join(projectRoot, ".penny", "kb-host-grants");
       let resolvedProfile;
       try {
         resolvedProfile = orch.resolveGrantedProfile({
           profileId,
           sessionId: hostSessionId,
           registryPath: path.join(projectRoot, ".penny", "kb-profiles.json"),
-          grantStoreDir: path.join(projectRoot, ".penny", "kb-host-grants", "profile-grants"),
+          grantStoreDir: hostGrantRoot,
         });
       } catch (error) {
         logger.warn("kb_profile_admission_refused", {
           errorCode: "KB_PROFILE_ADMISSION_REFUSED",
-          reason: error instanceof Error ? error.message : "unknown",
+          reason: error instanceof Error ? error.name : "unknown",
         });
         const refused = {
           schema_version: 1,
@@ -1264,10 +1190,12 @@ export default function skillExtension(pi: ExtensionAPI): void {
         };
       }
       const kbRoot = resolvedProfile.resolvedRoot;
-      const wfCtx = { kbRoot, profileId, runId };
       let kbResult;
+      let currentSelector: { generation_id: string } | undefined;
+      let currentPolicy: ReturnType<typeof orch.readPolicy> | undefined;
       try {
-        const current = orch.readCurrent(kbRoot);
+        currentSelector = orch.readCurrent(kbRoot);
+        currentPolicy = currentSelector === undefined ? undefined : orch.readPolicy(kbRoot);
         if (action === "init") {
           const create = rawParams["create"] === true;
           if (create && !resolvedProfile.profile.allow_create) {
@@ -1279,13 +1207,13 @@ export default function skillExtension(pi: ExtensionAPI): void {
           if (!create && rawParams["title"] !== undefined) {
             throw new Error("title is forbidden when create is false");
           }
-          if (!create && current === undefined) {
+          if (!create && currentSelector === undefined) {
             throw new Error("KB is not initialized and create was not authorized");
           }
-        } else if (current === undefined) {
+        } else if (currentSelector === undefined) {
           throw new Error("KB is not initialized for this profile");
         }
-        if (current !== undefined && resolvedProfile.profile.expected_kb_id !== undefined) {
+        if (currentSelector !== undefined && resolvedProfile.profile.expected_kb_id !== undefined) {
           const manifest = orch.readManifest(kbRoot);
           if (manifest.kb_id !== resolvedProfile.profile.expected_kb_id) {
             throw new Error("profile KB identity does not match the current manifest");
@@ -1308,24 +1236,433 @@ export default function skillExtension(pi: ExtensionAPI): void {
         };
         logger.warn("kb_profile_state_refused", {
           errorCode: "KB_PROFILE_STATE_REFUSED",
-          reason: error instanceof Error ? error.message : "unknown",
+          reason: error instanceof Error ? error.name : "unknown",
         });
         return {
           content: [{ type: "text", text: JSON.stringify(refused) }],
           details: refused,
         };
       }
+      // Bind this exact host invocation to the session/profile and the policy
+      // observed before work. A create-init against an exact uninitialized root
+      // binds `null`; an idempotent retry reuses that immutable original use.
+      const profileGrantStore = new orch.KbSessionProfileGrantStore(hostGrantRoot);
+      let allowedKbProfileIds: string[] = [];
+      try {
+        allowedKbProfileIds = [...profileGrantStore.allowedProfiles(hostSessionId)].sort();
+        if (!allowedKbProfileIds.includes(profileId)) {
+          throw new Error("requested profile is absent from the authenticated session authority");
+        }
+        const priorUse = profileGrantStore.useForInvocation(hostSessionId, hostInvocationId);
+        const observedPolicySha256 =
+          currentPolicy === undefined ? null : orch.sha256(orch.canonicalJson(currentPolicy));
+        profileGrantStore.consume({
+          session_id: hostSessionId,
+          invocation_id: hostInvocationId,
+          kb_profile_id: profileId,
+          action,
+          request_sha256: orch.sha256(orch.canonicalJson(request)),
+          policy_sha256: priorUse?.policy_sha256 ?? observedPolicySha256,
+        });
+      } catch (error) {
+        logger.warn("kb_profile_invocation_refused", {
+          errorCode: "KB_PROFILE_INVOCATION_REFUSED",
+          reason: error instanceof Error ? error.name : "unknown",
+        });
+        const refused = {
+          schema_version: 1,
+          action,
+          run_id: runId,
+          status: "refused",
+          met: false,
+          ids: [],
+          counts: {},
+          artifacts: [],
+          evidence: [],
+          warnings: ["profile_invocation_not_authorized"],
+          unresolved: [],
+          next: "none",
+        };
+        return {
+          content: [{ type: "text", text: JSON.stringify(refused) }],
+          details: refused,
+        };
+      } finally {
+        profileGrantStore.close();
+      }
+
+      // Every initialized-KB app dispatch receives one closed host context.
+      // Its fields come only from the authenticated Pi session, the shared
+      // profile/parent-grant SQLite authority, and the exact current validated
+      // policy rule. The model request contributes no authority field.
+      let hostContext: import("@penny/orchestration/source").KbHostInvocationContextV1 | undefined;
+      if (currentPolicy !== undefined) {
+        try {
+          let parentDeliveryGrant;
+          if (request.action === "query" && request.answer_delivery === "parent_tool_result") {
+            try {
+              parentDeliveryGrant = orch.loadParentDeliveryGrantForHostContext({
+                storeDir: hostGrantRoot,
+                sessionId: hostSessionId,
+                invocationId: hostInvocationId,
+                request,
+              });
+            } catch (error) {
+              // A malformed/ambiguous delivery grant denies only derived parent
+              // delivery. The safe artifact query still proceeds with a closed
+              // context that carries no grant.
+              logger.warn("kb_parent_grant_context_refused", {
+                errorCode: "KB_PARENT_GRANT_CONTEXT_REFUSED",
+                reason: error instanceof Error ? error.name : "unknown",
+              });
+            }
+          }
+          if (currentParentIdentity === undefined) {
+            throw new Error("authenticated parent identity is unavailable");
+          }
+          hostContext = orch.buildKbHostInvocationContext({
+            sessionId: hostSessionId,
+            invocationId: hostInvocationId,
+            parentIdentity: currentParentIdentity,
+            currentPolicy,
+            allowedProfileIds: allowedKbProfileIds,
+            request,
+            ...(parentDeliveryGrant === undefined ? {} : { parentDeliveryGrant }),
+          });
+        } catch (error) {
+          logger.warn("kb_host_context_refused", {
+            errorCode: "KB_HOST_CONTEXT_REFUSED",
+            reason: error instanceof Error ? error.name : "unknown",
+          });
+          const refused = {
+            schema_version: 1,
+            action,
+            run_id: runId,
+            status: "refused",
+            met: false,
+            ids: [],
+            counts: {},
+            artifacts: [],
+            evidence: [],
+            warnings: ["host_context_not_authorized"],
+            unresolved: [],
+            next: "none",
+          };
+          return {
+            content: [{ type: "text", text: JSON.stringify(refused) }],
+            details: refused,
+          };
+        }
+      }
+      const hostParentIdentity =
+        hostContext === undefined
+          ? currentParentIdentity
+          : { provider: hostContext.parent_provider, model: hostContext.parent_model };
+      const corruptTerminalQueryProjection = (
+        projectedAction: "status" | "resume",
+        requestedRunId: string
+      ): ReplayableKnowledgeBaseResult =>
+        orch.toReplayableKnowledgeBaseResult({
+          schema_version: 1,
+          action: projectedAction,
+          run_id: requestedRunId,
+          status: "error",
+          met: false,
+          ids: [requestedRunId],
+          counts: {},
+          artifacts: [],
+          evidence: [],
+          warnings: ["required_query_answer_corrupt"],
+          unresolved: [],
+          next: "none",
+        });
+      const projectRunForStatusOrResume = (input: {
+        projectedAction: "status" | "resume";
+        run: RunContext;
+        checkpointer: Checkpointer;
+      }): ReplayableKnowledgeBaseResult => {
+        let projected: ReplayableKnowledgeBaseResult;
+        try {
+          const replayAction = (
+            input.projectedAction === "resume"
+              ? "resume"
+              : String(input.run.playbookData.action ?? "")
+          ) as Parameters<typeof orch.replayableResultFromRun>[0]["action"];
+          const replay = orch.replayableResultFromRun({
+            action: replayAction,
+            run: input.run,
+            checkpointer: input.checkpointer,
+          });
+          projected =
+            input.projectedAction === "status"
+              ? orch.toReplayableKnowledgeBaseResult({ ...replay, action: "status" })
+              : replay;
+        } catch (error) {
+          if (
+            String(input.run.playbookData.action ?? "") === "query" &&
+            input.run.terminalDirective !== null
+          ) {
+            return corruptTerminalQueryProjection(input.projectedAction, input.run.identity.run_id);
+          }
+          throw error;
+        }
+        if (
+          String(input.run.playbookData.action ?? "") !== "query" ||
+          projected.status !== "complete"
+        ) {
+          return projected;
+        }
+        try {
+          if (
+            projected.artifacts.length !== 1 ||
+            projected.artifacts[0]?.artifact_kind !== "query_answer"
+          ) {
+            throw new Error("terminal query requires exactly one answer artifact");
+          }
+          const expected = projected.artifacts[0];
+          const store = new orch.RunArtifactStore(
+            kbRoot,
+            input.run.identity.run_id,
+            input.checkpointer
+          );
+          try {
+            const checked = store.read(expected.artifact_id, {
+              expected_state_id: "query",
+              expected_profile_id: profileId,
+              expected_handle: expected,
+              required_lifecycle: "sealed",
+            });
+            if (checked.handle.artifact_kind !== "query_answer") {
+              throw new Error("terminal query answer kind changed");
+            }
+            return orch.toReplayableKnowledgeBaseResult({
+              ...projected,
+              artifacts: [checked.handle],
+            });
+          } finally {
+            store.close();
+          }
+        } catch {
+          return corruptTerminalQueryProjection(input.projectedAction, input.run.identity.run_id);
+        }
+      };
+
       switch (action) {
         case "init": {
-          kbResult = orch.initKb(
-            wfCtx,
-            typeof rawParams["title"] === "string" ? rawParams["title"] : "Advisory KB"
-          );
+          const initRequest = {
+            schema_version: 1 as const,
+            action: "init" as const,
+            kb_profile_id: profileId,
+            create: rawParams["create"] === true,
+            ...(typeof rawParams["title"] === "string" ? { title: rawParams["title"] } : {}),
+          };
+          const invocationId = hostInvocationId;
+          const profileCommitmentSha256 = orch.normalizedProfileCommitment(resolvedProfile);
+          const planned = {
+            kb_id:
+              resolvedProfile.profile.expected_kb_id ??
+              `kb_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+            generation_id: `gen_${randomUUID().replace(/-/g, "")}`,
+            created_at: new Date().toISOString(),
+          };
+          const custody = new orch.OrchestrationService({
+            projectRoot,
+            env: process.env,
+            playbookName: "knowledge-base",
+          });
+          try {
+            const admissionContext = orch.RunContext.create({
+              identity: {
+                schema_version: 2,
+                run_id: runId,
+                session_id: hostSessionId,
+                playbook: "knowledge-base",
+                engine_owner: "typescript",
+              },
+              goal: "Initialize or validate the admitted advisory KB profile.",
+              constraints: {
+                action: "init",
+                kb_profile_id: profileId,
+                create: initRequest.create,
+              },
+              projectRoot,
+              trustProfile: "hardened-untrusted",
+              maxSteps: custody.config.maxSteps,
+            });
+            admissionContext.playbookData.action = "init";
+            admissionContext.playbookData.profile_id = profileId;
+            admissionContext.playbookData.planned_kb_id = planned.kb_id;
+            admissionContext.playbookData.planned_generation_id = planned.generation_id;
+            admissionContext.playbookData.planned_created_at = planned.created_at;
+            admissionContext.playbookData.init_profile_commitment_sha256 = profileCommitmentSha256;
+            admissionContext.playbookData.planned_base_generation_id =
+              currentSelector?.generation_id ?? "";
+            const admitted = orch.admitOperationStart({
+              projectRoot,
+              checkpointer: custody.checkpointer,
+              context: admissionContext,
+              session_id: hostSessionId,
+              invocation_id: invocationId,
+              action: "init",
+              profile_id: profileId,
+              request: initRequest,
+            });
+            if (admitted.replay !== undefined) {
+              kbResult = admitted.replay.replay_result;
+              break;
+            }
+            let result: unknown = admitted.recovered_result;
+            const durable = custody.checkpointer.loadRunById(admitted.run_id);
+            if (durable === undefined) throw new Error("admitted init run is absent");
+            const admittedProfileCommitment = String(
+              durable.playbookData.init_profile_commitment_sha256 ?? ""
+            );
+            if (admittedProfileCommitment !== profileCommitmentSha256) {
+              throw new Error("profile_remapped");
+            }
+            const durablePlanned = {
+              kb_id: String(durable.playbookData.planned_kb_id ?? planned.kb_id),
+              generation_id: String(
+                durable.playbookData.planned_generation_id ?? planned.generation_id
+              ),
+              created_at: String(durable.playbookData.planned_created_at ?? planned.created_at),
+              transaction_id: admitted.transaction_id,
+              checkpointer: custody.checkpointer,
+              request_sha256: admitted.request_sha256,
+              profile_commitment_sha256: profileCommitmentSha256,
+            };
+            const plannedBaseGenerationId = String(
+              durable.playbookData.planned_base_generation_id ?? ""
+            );
+            if (result === undefined) {
+              result = orch.initKb(
+                { kbRoot, profileId, runId: admitted.run_id },
+                initRequest.title ?? "Advisory KB",
+                durablePlanned
+              );
+            }
+            const manifest = orch.readManifest(kbRoot);
+            const policySha = orch.sha256(orch.canonicalJson(orch.readPolicy(kbRoot)));
+            const afterSelector = orch.readCurrent(kbRoot);
+            const replay = orch.checkpointDirectOperationResult({
+              checkpointer: custody.checkpointer,
+              run_id: admitted.run_id,
+              result,
+              kb_id: manifest.kb_id,
+              policy_sha256: policySha,
+            });
+            const published =
+              plannedBaseGenerationId.length === 0 &&
+              afterSelector?.generation_id === durablePlanned.generation_id;
+            const publicationEvidence = published
+              ? custody.checkpointer.kbPublicationSelectorEvidence({
+                  transaction_id: admitted.transaction_id,
+                  run_id: admitted.run_id,
+                  candidate_generation_id: durablePlanned.generation_id,
+                })
+              : undefined;
+            kbResult = orch.completeOperationStart({
+              projectRoot,
+              checkpointer: custody.checkpointer,
+              group_id: admitted.group.request_event_group_id,
+              profile_id: profileId,
+              result: replay,
+              input_digests: [admitted.request_sha256],
+              kb_id: manifest.kb_id,
+              ...(published ? { candidate_generation_id: durablePlanned.generation_id } : {}),
+              policy_sha256: policySha,
+              safe_metrics: replay.counts,
+              ...(publicationEvidence?.selector_sha256 !== undefined
+                ? {
+                    selector_evidence: {
+                      transaction_id: admitted.transaction_id,
+                      candidate_generation_id: durablePlanned.generation_id,
+                      selector_sha256: publicationEvidence.selector_sha256,
+                    },
+                  }
+                : {}),
+            }).replay_result;
+          } catch (error) {
+            if (error instanceof orch.StartAdmissionMismatchError) {
+              kbResult = {
+                schema_version: 1,
+                action: "init",
+                run_id: runId,
+                status: "refused",
+                met: false,
+                ids: [],
+                counts: {},
+                artifacts: [],
+                evidence: [],
+                warnings: ["idempotency_mismatch"],
+                unresolved: [],
+                next: "none",
+              };
+              break;
+            }
+            const sourceIdentity = orch.externalOperationSourceIdentity({
+              session_id: hostSessionId,
+              invocation_id: invocationId,
+              action: "init",
+              request_sha256: orch.sha256(orch.canonicalJson(initRequest)),
+            });
+            const group = custody.checkpointer.operationEventGroupBySource(
+              "external_start",
+              sourceIdentity
+            );
+            if (group === undefined) throw error;
+            const failed = {
+              schema_version: 1,
+              action: "init",
+              run_id: group.run_id,
+              status: "error",
+              met: false,
+              ids: [],
+              counts: {},
+              artifacts: [],
+              evidence: [],
+              warnings: ["init_run_failed"],
+              unresolved: [],
+              next: "none",
+            };
+            orch.checkpointDirectOperationResult({
+              checkpointer: custody.checkpointer,
+              run_id: group.run_id,
+              result: failed,
+            });
+            kbResult = orch.completeOperationStart({
+              projectRoot,
+              checkpointer: custody.checkpointer,
+              group_id: group.request_event_group_id,
+              profile_id: profileId,
+              result: failed,
+              input_digests: [orch.sha256(orch.canonicalJson(initRequest))],
+            }).replay_result;
+          } finally {
+            custody.close();
+          }
           break;
         }
         case "query": {
-          // §5.6 closed admission: the request is a closed object, and exactly
-          // those bytes bind the grant digest (SHA-256(JCS(request))).
+          // §5.6 — the ENGINE-OWNED deterministic start action:
+          //
+          //   closed request validation (host)
+          //   → ONE control-DB transaction: durable run row + idempotency
+          //     record + `preparing` private-input index (exact host-allocated
+          //     keys) — before any byte is written
+          //   → owner-only temp/fsync/rename of the request bytes → CAS active
+          //   → the engine binds deterministic retrieval to one generation;
+          //     explicit verify_grounding:false seals an unverified answer with
+          //     no claim, while default true runs Synthia → Vera through
+          //     host-closed request/page/source readers and creates a claim only
+          //     after the host validates every citation and the passing report
+          //   → terminal checkpoint → the host settles the idempotency record
+          //     with the replay result digest and discards the exact indexed
+          //     bytes (metadata survives, the body does not).
+          //
+          // The query text therefore enters no control row, event, prompt, or
+          // public result; the run id is status-addressable through the shared
+          // checkpointer — the same single authoritative run store.
           let request;
           try {
             request = orch.validateQueryRequest({
@@ -1347,7 +1684,7 @@ export default function skillExtension(pi: ExtensionAPI): void {
                 ? { answer_delivery: rawParams["answer_delivery"] }
                 : {}),
             });
-          } catch (err) {
+          } catch {
             kbResult = {
               schema_version: 1,
               action,
@@ -1358,39 +1695,416 @@ export default function skillExtension(pi: ExtensionAPI): void {
               counts: {},
               artifacts: [],
               evidence: [],
-              warnings: [
-                `query request failed closed validation: ${String((err as Error).message ?? err).slice(0, 200)}`,
-              ],
+              warnings: ["query_request_invalid"],
               unresolved: [],
               next: "none",
             };
             break;
           }
-          const delivery = request.answer_delivery ?? ("artifact_ref" as const);
-          kbResult = orch.queryKb(wfCtx, request.query, {
-            maxCandidates: request.max_candidates ?? 20,
-            ...(request.page_ids !== undefined ? { pageIds: request.page_ids } : {}),
-            ...(request.source_ids !== undefined ? { sourceIds: request.source_ids } : {}),
-            ...(request.verify_grounding !== undefined
-              ? { verifyGrounding: request.verify_grounding }
-              : {}),
+
+          // Policy refusal is a pre-admission outcome: no run, operation
+          // group, receipt, or private-input row is created for it.
+          try {
+            orch.admitKbRun({ kbRoot, parentIdentity: hostParentIdentity });
+          } catch {
+            kbResult = {
+              schema_version: 1,
+              action,
+              run_id: runId,
+              status: "refused",
+              met: false,
+              ids: [],
+              counts: {},
+              artifacts: [],
+              evidence: [],
+              warnings: ["query_admission_refused"],
+              unresolved: [],
+              next: "none",
+            };
+            break;
+          }
+
+          // Host-issued idempotency identity — never from model or caller
+          // fields. The tool call id IS the host invocation identity: a
+          // replayed call with the same digest gets the original run back, a
+          // mutated body is `idempotency_mismatch`, and a fresh call is a
+          // fresh invocation.
+          const invocationId = hostInvocationId;
+          const transactionId = `tx_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+          const requestSha = orch.computeRequestSha256(request);
+          const queryGoal =
+            "Answer the stored private request from the selected generation. " +
+            "Advisory only; no publication.";
+          const queryConstraints: Record<string, unknown> = {
+            action: "query",
+            kb_profile_id: profileId,
+            // §5.3: derived from the one validated private host context.
+            parent_identity: hostParentIdentity ?? null,
+          };
+          let queryRunId = runId;
+          let queryOperationGroupId: string | undefined;
+          let queryInvocationReplay = false;
+          const querySourceIdentity = orch.externalOperationSourceIdentity({
+            session_id: hostSessionId,
+            invocation_id: invocationId,
+            action: "query",
+            request_sha256: requestSha,
           });
+          const custodyService = new orch.OrchestrationService({
+            projectRoot,
+            env: process.env,
+            playbookName: "knowledge-base",
+          });
+          let executionService: InstanceType<typeof orch.OrchestrationService> | undefined;
+          let queryWorker: InstanceType<typeof orch.KbWorkerClient> | undefined;
+          const settleFailedQuery = (failureRunId: string, warningCode: string): void => {
+            const failed = custodyService.checkpointer.loadRunById(failureRunId);
+            if (failed === undefined || failed.terminalDirective !== null) return;
+            failed.status = "error";
+            failed.previousState = failed.stateId;
+            failed.stateId = "query_failed";
+            failed.met = false;
+            failed.playbookData.action = "query";
+            failed.playbookData.profile_id = profileId;
+            failed.playbookData.public_status = "refused";
+            failed.playbookData.warnings = [warningCode];
+            const result = {
+              action: "query",
+              public_status: "refused",
+              met: false,
+              warnings: [warningCode],
+              unresolved_issues: [],
+            };
+            failed.terminalDirective = orch.validateDirective({
+              schema_version: 2,
+              action: "error",
+              identity: failed.identity,
+              status: "error",
+              met: false,
+              result,
+              artifacts: [],
+              unresolved: [],
+            });
+            custodyService.checkpointer.saveRun(failed, "query_start_failed", {
+              run_id: failureRunId,
+              warning_code: warningCode,
+            });
+            // Operation-receipt finalization below atomically binds the exact
+            // public replay + receipt before private-input cleanup. Settling the
+            // admission here would bind a different internal directive result.
+          };
+          try {
+            // Index FIRST: the durable run row, the idempotency record, and
+            // the `preparing` private-input index commit together, before any
+            // byte of the request touches disk.
+            const admissionContext = orch.RunContext.create({
+              identity: {
+                schema_version: 2,
+                run_id: runId,
+                session_id: hostSessionId,
+                playbook: "knowledge-base",
+                engine_owner: "typescript",
+              },
+              goal: queryGoal,
+              constraints: queryConstraints as never,
+              projectRoot,
+              trustProfile: "hardened-untrusted",
+              maxSteps: custodyService.config.maxSteps,
+            });
+            admissionContext.playbookData.action = "query";
+            admissionContext.playbookData.profile_id = profileId;
+            const admission = custodyService.checkpointer.admitStartRun(admissionContext, {
+              session_id: hostSessionId,
+              invocation_id: invocationId,
+              request_sha256: requestSha,
+              action: "query",
+              profile_id: profileId,
+              transaction_id: transactionId,
+              private_input_id: `pri_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
+              // Exact §5.6 keys under the trusted input root.
+              storage_key: `${runId}/request.json`,
+              temporary_storage_key: `${runId}/.${transactionId}.tmp`,
+            });
+            queryRunId = admission.kind === "created" ? runId : admission.run_id;
+            queryInvocationReplay = admission.kind === "replay";
+            const operationGroup = custodyService.checkpointer.operationEventGroupBySource(
+              "external_start",
+              querySourceIdentity
+            );
+            if (operationGroup === undefined || operationGroup.run_id !== queryRunId) {
+              throw new Error("query admission lost its operation event group");
+            }
+            queryOperationGroupId = operationGroup.request_event_group_id;
+            const admittedRun = custodyService.checkpointer.loadRunById(queryRunId);
+            const terminalReplay = admittedRun?.terminalDirective != null;
+            // Byte lifecycle: exact temp (0600, no-follow) → fsync → rename
+            // → fsync parent → CAS `preparing → active`. A terminal replay has
+            // already discarded its private bytes and must never rematerialize
+            // them; an unfinished replay resumes from its indexed lifecycle.
+            if (!terminalReplay) {
+              orch.materializeRunInput({
+                projectRoot,
+                checkpointer: custodyService.checkpointer,
+                runId: queryRunId,
+                request,
+                requestSha256: requestSha,
+              });
+            }
+            const queryReader = new orch.KbQueryReader({
+              kbRoot,
+              profileId,
+              readRequest: () =>
+                orch.readRunInput({
+                  projectRoot,
+                  checkpointer: custodyService.checkpointer,
+                  runId: queryRunId,
+                }),
+              selectedGenerationId: () =>
+                String(
+                  executionService?.checkpointer.loadRunById(queryRunId)?.playbookData
+                    .selected_generation_id ?? ""
+                ),
+            });
+            queryWorker = new orch.KbWorkerClient({
+              projectRoot,
+              kbRoot,
+              runId: queryRunId,
+              sessionId: hostSessionId,
+              profileId,
+              operation: "query",
+              sourceCapabilityIds: [],
+              admittedPolicySha256: () =>
+                String(
+                  executionService?.checkpointer.loadRunById(queryRunId)?.playbookData
+                    .admitted_policy_sha256 ?? ""
+                ),
+              queryReader,
+              ...(testDependencies.kbAgentRunner
+                ? { testOnlyAgentRunner: testDependencies.kbAgentRunner }
+                : {}),
+            });
+            executionService = new orch.OrchestrationService({
+              projectRoot,
+              env: process.env,
+              playbookName: "knowledge-base",
+              modelClient: queryWorker,
+            });
+            const directive = await executionService.execute({
+              schema_version: 2,
+              action: "start",
+              identity: {
+                schema_version: 2,
+                run_id: queryRunId,
+                session_id: hostSessionId,
+                playbook: "knowledge-base",
+                engine_owner: "typescript",
+              },
+              goal: queryGoal,
+              constraints: queryConstraints as never,
+              project_root: projectRoot,
+              trust_profile: "hardened-untrusted",
+            });
+            if (
+              directive.action === "complete" ||
+              directive.action === "incomplete" ||
+              directive.action === "cancelled"
+            ) {
+              const terminal = directive as {
+                met?: boolean;
+                result?: Record<string, unknown>;
+              };
+              const result = (terminal.result ?? {}) as Record<string, unknown>;
+              // The exact PUBLIC replay is bound with the receipt in the
+              // operation-plane finalizer below; private bytes are discarded
+              // only after that atomic control commit.
+              const met = terminal.met === true;
+              const pageIds = Array.isArray(result["query_page_ids"])
+                ? (result["query_page_ids"] as string[])
+                : [];
+              const handle = (result["answer_handle"] ?? null) as { artifact_id?: unknown } | null;
+              const answerArtifactId = String(result["answer_artifact_id"] ?? "");
+              kbResult = {
+                schema_version: 1,
+                action: "query",
+                run_id: queryRunId,
+                // §5.6 result matrix: `met` → `complete`; an unmet run is the
+                // public status the terminal projection recorded (refused for
+                // an unadmissible state, `complete` with `met:false` for a
+                // finished query with no supported answer).
+                status: met
+                  ? "complete"
+                  : String(result["public_status"] === "refused" ? "refused" : "complete"),
+                met,
+                ids: [
+                  queryRunId,
+                  ...pageIds,
+                  ...(answerArtifactId.length > 0 ? [answerArtifactId] : []),
+                ],
+                counts: { candidates: Number(result["candidate_count"] ?? 0) },
+                artifacts:
+                  handle !== null && typeof handle.artifact_id === "string"
+                    ? ([handle as never] as never[])
+                    : [],
+                evidence: [],
+                warnings: Array.isArray(result["warnings"]) ? (result["warnings"] as string[]) : [],
+                unresolved: Array.isArray(result["unresolved_issues"])
+                  ? (result["unresolved_issues"] as string[])
+                  : [],
+                next: "none",
+              };
+            } else {
+              // Not terminal: honest nonterminal projection (durable run, no
+              // fabricated success).
+              kbResult = {
+                schema_version: 1,
+                action: "query",
+                run_id: queryRunId,
+                status: "running",
+                met: false,
+                ids: [queryRunId],
+                counts: {},
+                artifacts: [],
+                evidence: [],
+                warnings: ["query run is not yet terminal; status it by run id"],
+                unresolved: [],
+                next: "resume",
+              };
+            }
+          } catch (err) {
+            if (err instanceof orch.StartAdmissionMismatchError) {
+              logger.warn("kb_query_idempotency_mismatch", {
+                errorCode: "KB_QUERY_IDEMPOTENCY_MISMATCH",
+                reason: err.message.slice(0, 200),
+              });
+              kbResult = {
+                schema_version: 1,
+                action: "query",
+                run_id: runId,
+                status: "refused",
+                met: false,
+                ids: [],
+                counts: {},
+                artifacts: [],
+                evidence: [],
+                warnings: ["idempotency_mismatch"],
+                unresolved: [],
+                next: "none",
+              };
+            } else if (err instanceof orch.PolicyRefusal || err instanceof orch.PrivateInputError) {
+              settleFailedQuery(queryRunId, err.code);
+              logger.warn("kb_query_start_refused", {
+                errorCode: "KB_QUERY_START_REFUSED",
+                reason: err.code,
+              });
+              kbResult = {
+                schema_version: 1,
+                action: "query",
+                run_id: queryRunId,
+                status: "refused",
+                met: false,
+                ids: [],
+                counts: {},
+                artifacts: [],
+                evidence: [],
+                warnings: [`query refused: ${err.code}`],
+                unresolved: [],
+                next: "none",
+              };
+            } else {
+              settleFailedQuery(queryRunId, "query_start_failed");
+              logger.warn("kb_query_start_failed", {
+                errorCode: "KB_QUERY_START_FAILED",
+                reason: String((err as Error)?.name ?? "error"),
+              });
+              kbResult = {
+                schema_version: 1,
+                action: "query",
+                run_id: queryRunId,
+                status: "error",
+                met: false,
+                ids: [],
+                counts: {},
+                artifacts: [],
+                evidence: [],
+                warnings: ["query_run_failed"],
+                unresolved: [],
+                next: "none",
+              };
+            }
+          } finally {
+            try {
+              if (queryOperationGroupId !== undefined && kbResult !== undefined) {
+                const durable = custodyService.checkpointer.loadRunById(queryRunId);
+                const kbId = String(durable?.playbookData.kb_id ?? "");
+                const policySha = String(durable?.playbookData.admitted_policy_sha256 ?? "");
+                const completion = new orch.OperationReceiptStore({
+                  projectRoot,
+                  checkpointer: custodyService.checkpointer,
+                }).complete({
+                  request_event_group_id: queryOperationGroupId,
+                  kb_profile_id: profileId,
+                  result: kbResult,
+                  input_digests: [requestSha],
+                  ...(kbId.length > 0 ? { kb_id: kbId } : {}),
+                  ...(policySha.length > 0 ? { policy_sha256: policySha } : {}),
+                  safe_metrics: kbResult.counts ?? {},
+                });
+                kbResult = completion.replay_result;
+                if (kbResult.status !== "running" && kbResult.status !== "awaiting_user") {
+                  orch.settleRunInput({
+                    projectRoot,
+                    checkpointer: custodyService.checkpointer,
+                    runId: queryRunId,
+                  });
+                }
+              }
+            } finally {
+              executionService?.close();
+              queryWorker?.close();
+              custodyService.close();
+            }
+          }
           // Parent delivery — the only path where a parent may see derived
           // content: request + policy + exactly one unconsumed exact grant.
           // The grant is atomically consumed by the delivered run; on any miss
-          // the artifact result is retained and the single public code is warned.
+          // the artifact result is retained and the single public code is
+          // warned.
+          const delivery = request.answer_delivery ?? ("artifact_ref" as const);
           if (
+            !queryInvocationReplay &&
             delivery === "parent_tool_result" &&
             kbResult.status === "complete" &&
             kbResult.met === true &&
             Array.isArray(kbResult.artifacts) &&
             kbResult.artifacts.length > 0
           ) {
-            const answer = orch.readSealedAnswer(
-              kbRoot,
-              runId,
-              kbResult.artifacts[0] as { artifact_id: string }
-            );
+            const answerHandle = kbResult.artifacts[0] as { artifact_id: string };
+            // The execution/custody services above are deliberately closed before
+            // parent delivery. Reopen one bounded owner handle rather than reading
+            // the artifact index through a closed Checkpointer.
+            const deliveryCustody = new orch.OrchestrationService({
+              projectRoot,
+              env: process.env,
+              playbookName: "knowledge-base",
+            });
+            let answer;
+            let verificationReport;
+            try {
+              answer = orch.readSealedAnswer(
+                kbRoot,
+                queryRunId,
+                answerHandle,
+                deliveryCustody.checkpointer
+              );
+              verificationReport = orch.readSealedQueryVerification(
+                kbRoot,
+                queryRunId,
+                answerHandle,
+                deliveryCustody.checkpointer
+              );
+            } finally {
+              deliveryCustody.close();
+            }
             let policy: ReturnType<typeof orch.readPolicy> | undefined;
             try {
               policy = orch.readPolicy(kbRoot);
@@ -1406,17 +2120,15 @@ export default function skillExtension(pi: ExtensionAPI): void {
               break;
             }
             const decision = orch.decideParentDelivery({
-              storeDir: path.join(projectRoot, ".penny", "kb-parent-grants"),
-              // Session-scoped invocation pairing (operator decision 2026-08-19):
-              // invocation_id := the Pi session id; the operator mints both
-              // fields with their session, and admission requires EXACTLY ONE
-              // unconsumed matching grant (never a coin flip).
-              host: { session_id: currentSessionId ?? "", invocation_id: currentSessionId ?? "" },
+              storeDir: hostGrantRoot,
+              ...(hostContext === undefined ? {} : { hostContext }),
               request,
               policy,
-              parentIdentity: currentParentIdentity,
-              runId,
+              runId: queryRunId,
               answer,
+              answerHandle,
+              verificationReport,
+              queryCompleteAndMet: kbResult.status === "complete" && kbResult.met === true,
             });
             if (decision.outcome === "delivered") {
               kbResult = { ...kbResult, derived_answer: decision.derived_answer };
@@ -1434,14 +2146,171 @@ export default function skillExtension(pi: ExtensionAPI): void {
           break;
         }
         case "lint": {
-          kbResult = orch.lintKb(wfCtx);
+          let lintAdmission: ReturnType<typeof orch.admitKbRun>;
+          try {
+            lintAdmission = orch.admitKbRun({
+              kbRoot,
+              parentIdentity: hostParentIdentity,
+            });
+          } catch {
+            kbResult = {
+              schema_version: 1,
+              action: "lint",
+              run_id: runId,
+              status: "refused",
+              met: false,
+              ids: [],
+              counts: {},
+              artifacts: [],
+              evidence: [],
+              warnings: ["lint_admission_refused"],
+              unresolved: [],
+              next: "none",
+            };
+            break;
+          }
+          const lintRequest = {
+            schema_version: 1 as const,
+            action: "lint" as const,
+            kb_profile_id: profileId,
+            mode: rawParams["mode"],
+            ...(rawParams["page_ids"] !== undefined ? { page_ids: rawParams["page_ids"] } : {}),
+          };
+          const invocationId = hostInvocationId;
+          const custody = new orch.OrchestrationService({
+            projectRoot,
+            env: process.env,
+            playbookName: "knowledge-base",
+          });
+          try {
+            const admissionContext = orch.RunContext.create({
+              identity: {
+                schema_version: 2,
+                run_id: runId,
+                session_id: hostSessionId,
+                playbook: "knowledge-base",
+                engine_owner: "typescript",
+              },
+              goal: "Lint the selected advisory KB generation without publication.",
+              constraints: { action: "lint", kb_profile_id: profileId },
+              projectRoot,
+              trustProfile: "hardened-untrusted",
+              maxSteps: custody.config.maxSteps,
+            });
+            admissionContext.playbookData.action = "lint";
+            admissionContext.playbookData.profile_id = profileId;
+            admissionContext.playbookData.kb_id = lintAdmission.kb_id;
+            admissionContext.playbookData.admitted_policy_sha256 = lintAdmission.policy_sha256;
+            const admitted = orch.admitOperationStart({
+              projectRoot,
+              checkpointer: custody.checkpointer,
+              context: admissionContext,
+              session_id: hostSessionId,
+              invocation_id: invocationId,
+              action: "lint",
+              profile_id: profileId,
+              request: lintRequest,
+            });
+            if (admitted.replay !== undefined) {
+              kbResult = admitted.replay.replay_result;
+              break;
+            }
+            const result =
+              admitted.recovered_result ??
+              orch.lintKb({
+                kbRoot,
+                profileId,
+                runId: admitted.run_id,
+                checkpointer: custody.checkpointer,
+              });
+            const replay = orch.checkpointDirectOperationResult({
+              checkpointer: custody.checkpointer,
+              run_id: admitted.run_id,
+              result,
+              kb_id: lintAdmission.kb_id,
+              policy_sha256: lintAdmission.policy_sha256,
+            });
+            kbResult = orch.completeOperationStart({
+              projectRoot,
+              checkpointer: custody.checkpointer,
+              group_id: admitted.group.request_event_group_id,
+              profile_id: profileId,
+              result: replay,
+              input_digests: [admitted.request_sha256],
+              kb_id: lintAdmission.kb_id,
+              policy_sha256: lintAdmission.policy_sha256,
+              safe_metrics: replay.counts,
+            }).replay_result;
+          } catch (error) {
+            if (error instanceof orch.StartAdmissionMismatchError) {
+              kbResult = {
+                schema_version: 1,
+                action: "lint",
+                run_id: runId,
+                status: "refused",
+                met: false,
+                ids: [],
+                counts: {},
+                artifacts: [],
+                evidence: [],
+                warnings: ["idempotency_mismatch"],
+                unresolved: [],
+                next: "none",
+              };
+              break;
+            }
+            const sourceIdentity = orch.externalOperationSourceIdentity({
+              session_id: hostSessionId,
+              invocation_id: invocationId,
+              action: "lint",
+              request_sha256: orch.sha256(orch.canonicalJson(lintRequest)),
+            });
+            const group = custody.checkpointer.operationEventGroupBySource(
+              "external_start",
+              sourceIdentity
+            );
+            if (group === undefined) throw error;
+            const failed = {
+              schema_version: 1,
+              action: "lint",
+              run_id: group.run_id,
+              status: "error",
+              met: false,
+              ids: [],
+              counts: {},
+              artifacts: [],
+              evidence: [],
+              warnings: ["lint_run_failed"],
+              unresolved: [],
+              next: "none",
+            };
+            orch.checkpointDirectOperationResult({
+              checkpointer: custody.checkpointer,
+              run_id: group.run_id,
+              result: failed,
+              kb_id: lintAdmission.kb_id,
+              policy_sha256: lintAdmission.policy_sha256,
+            });
+            kbResult = orch.completeOperationStart({
+              projectRoot,
+              checkpointer: custody.checkpointer,
+              group_id: group.request_event_group_id,
+              profile_id: profileId,
+              result: failed,
+              input_digests: [orch.sha256(orch.canonicalJson(lintRequest))],
+              kb_id: lintAdmission.kb_id,
+              policy_sha256: lintAdmission.policy_sha256,
+            }).replay_result;
+          } finally {
+            custody.close();
+          }
           break;
         }
         case "ingest": {
           const capIds = Array.isArray(rawParams["source_capability_ids"])
             ? (rawParams["source_capability_ids"] as unknown[])
-                .map((x) => String(x))
-                .filter((x) => x.length > 0)
+                .map((value) => String(value))
+                .filter((value) => value.length > 0)
             : [];
           if (capIds.length === 0) {
             kbResult = {
@@ -1454,28 +2323,19 @@ export default function skillExtension(pi: ExtensionAPI): void {
               counts: {},
               artifacts: [],
               evidence: [],
-              warnings: [
-                "ingest requires 'source_capability_ids' — mint with: penny-kb-gate capability-mint --profile \"" +
-                  profileId +
-                  '" --path <file> --title <t> --author <a>',
-              ],
+              warnings: ["ingest_request_invalid"],
               unresolved: [],
               next: "none",
             };
             break;
           }
-          // §5.3 deny-before-session. Admit the run HERE too, so an unadmitted
-          // parent or an un-editable policy is a clean bounded refusal instead of
-          // an engine exception — and so the run never starts. The playbook
-          // re-admits inside `initialize`; that duplication is deliberate defense
-          // in depth, and the digest below binds what the children run under.
-          let admittedPolicySha256: string;
+          let ingestAdmission: ReturnType<typeof orch.admitKbRun>;
           try {
-            admittedPolicySha256 = orch.admitKbRun({
+            ingestAdmission = orch.admitKbRun({
               kbRoot,
-              parentIdentity: currentParentIdentity,
-            }).policy_sha256;
-          } catch (err) {
+              parentIdentity: hostParentIdentity,
+            });
+          } catch {
             kbResult = {
               schema_version: 1,
               action,
@@ -1486,42 +2346,29 @@ export default function skillExtension(pi: ExtensionAPI): void {
               counts: {},
               artifacts: [],
               evidence: [],
-              warnings: [
-                `ingest refused before any private read: ${String((err as Error).message ?? err).slice(0, 200)}`,
-              ],
+              warnings: ["ingest_admission_refused"],
               unresolved: [],
               next: "none",
             };
             break;
           }
-          // Engine-driven ingest (§6.2 step 4). The KB playbook is the run's state
-          // machine: initialize claims + admits the sources (host I/O), four agent
-          // phases produce and seal their typed artifacts, and the run stops at the
-          // human content-review gate. Approval/denial is a HOST decision that
-          // reaches the KB through `penny-kb-gate`, never through this tool.
-          const goal =
-            `Ingest the admitted sources into KB profile '${profileId}' and produce a ` +
-            `reviewable candidate page set for human review.`;
-          const service = new orch.OrchestrationService({
+          const ingestRequest = {
+            schema_version: 1 as const,
+            action: "ingest" as const,
+            kb_profile_id: profileId,
+            source_capability_ids: capIds,
+          };
+          const invocationId = hostInvocationId;
+          const goal = "Ingest the admitted source capabilities and prepare human content review.";
+          const custody = new orch.OrchestrationService({
             projectRoot,
             env: process.env,
             playbookName: "knowledge-base",
-            modelClient: new orch.KbWorkerClient({
-              projectRoot,
-              kbRoot,
-              runId,
-              profileId,
-              sourceCapabilityIds: capIds,
-              admittedPolicySha256,
-              ...(rawParams["model"] !== undefined
-                ? { modelOverride: String(rawParams["model"]) }
-                : {}),
-            }),
           });
+          let service: InstanceType<typeof orch.OrchestrationService> | undefined;
+          let admitted: ReturnType<typeof orch.admitOperationStart> | undefined;
           try {
-            const directive = await service.execute({
-              schema_version: 2,
-              action: "start",
+            const admissionContext = orch.RunContext.create({
               identity: {
                 schema_version: 2,
                 run_id: runId,
@@ -1534,8 +2381,69 @@ export default function skillExtension(pi: ExtensionAPI): void {
                 action: "ingest",
                 kb_profile_id: profileId,
                 source_capability_ids: capIds,
-                // Host-supplied, never model-supplied (§5.3).
-                parent_identity: currentParentIdentity ?? null,
+                parent_identity: hostParentIdentity ?? null,
+              },
+              projectRoot,
+              trustProfile: "hardened-untrusted",
+              maxSteps: custody.config.maxSteps,
+            });
+            admissionContext.playbookData.action = "ingest";
+            admissionContext.playbookData.profile_id = profileId;
+            admissionContext.playbookData.kb_id = ingestAdmission.kb_id;
+            admissionContext.playbookData.admitted_policy_sha256 = ingestAdmission.policy_sha256;
+            admitted = orch.admitOperationStart({
+              projectRoot,
+              checkpointer: custody.checkpointer,
+              context: admissionContext,
+              session_id: hostSessionId,
+              invocation_id: invocationId,
+              action: "ingest",
+              profile_id: profileId,
+              request: ingestRequest,
+            });
+            if (admitted.replay !== undefined) {
+              kbResult = admitted.replay.replay_result;
+              break;
+            }
+            if (admitted.recovered_result !== undefined) {
+              kbResult = admitted.recovered_result;
+              break;
+            }
+            const ingestRunId = admitted.run_id;
+            service = new orch.OrchestrationService({
+              projectRoot,
+              env: process.env,
+              playbookName: "knowledge-base",
+              modelClient: new orch.KbWorkerClient({
+                projectRoot,
+                kbRoot,
+                runId: ingestRunId,
+                sessionId: hostSessionId,
+                profileId,
+                operation: "ingest",
+                sourceCapabilityIds: capIds,
+                admittedPolicySha256: ingestAdmission.policy_sha256,
+                ...(testDependencies.kbAgentRunner
+                  ? { testOnlyAgentRunner: testDependencies.kbAgentRunner }
+                  : {}),
+              }),
+            });
+            const directive = await service.execute({
+              schema_version: 2,
+              action: "start",
+              identity: {
+                schema_version: 2,
+                run_id: ingestRunId,
+                session_id: hostSessionId,
+                playbook: "knowledge-base",
+                engine_owner: "typescript",
+              },
+              goal,
+              constraints: {
+                action: "ingest",
+                kb_profile_id: profileId,
+                source_capability_ids: capIds,
+                parent_identity: hostParentIdentity ?? null,
               },
               project_root: projectRoot,
               trust_profile: "hardened-untrusted",
@@ -1543,121 +2451,159 @@ export default function skillExtension(pi: ExtensionAPI): void {
             if (
               directive.action === "complete" ||
               directive.action === "incomplete" ||
-              directive.action === "cancelled"
+              directive.action === "cancelled" ||
+              directive.action === "error"
             ) {
-              const terminal = directive as {
-                action: string;
-                status?: string;
-                met?: boolean;
-                result?: Record<string, unknown>;
-              };
-              const result = (terminal.result ?? {}) as Record<string, unknown>;
+              const durable = service.checkpointer.loadRunById(ingestRunId);
+              if (durable === undefined) throw new Error("admitted ingest run is absent");
+              kbResult = orch.replayableResultFromRun({ action: "ingest", run: durable });
+            } else {
+              const durable = service.checkpointer.loadRunById(ingestRunId);
+              if (durable === undefined) throw new Error("admitted ingest run is absent");
+              kbResult = orch.replayableResultFromRun({
+                action: "ingest",
+                run: durable,
+                checkpointer: service.checkpointer,
+                status_override: "awaiting_user",
+              });
+            }
+          } catch (error) {
+            if (error instanceof orch.StartAdmissionMismatchError) {
               kbResult = {
                 schema_version: 1,
-                action,
+                action: "ingest",
                 run_id: runId,
-                status: String(terminal.status ?? terminal.action),
-                met: Boolean(terminal.met),
-                ids: [runId, ...(Array.isArray(result.ids) ? (result.ids as string[]) : [])],
-                counts: (result.counts ?? {}) as Record<string, number>,
-                artifacts: (result.artifacts ?? []) as unknown[],
-                evidence: (result.evidence ?? []) as unknown[],
-                warnings: Array.isArray(result.warnings) ? (result.warnings as string[]) : [],
-                unresolved: Array.isArray(result.unresolved) ? (result.unresolved as string[]) : [],
+                status: "refused",
+                met: false,
+                ids: [],
+                counts: {},
+                artifacts: [],
+                evidence: [],
+                warnings: ["idempotency_mismatch"],
+                unresolved: [],
                 next: "none",
               };
-            } else {
-              // await_user at the content-review gate. Safe projection only: counts
-              // and ids, never the candidate bodies, the gate challenge, or the
-              // payload digest — approval is a host decision via penny-kb-gate.
-              const gate = orch.findGateForRun(kbRoot, runId) ?? orch.latestPendingGate(kbRoot);
-              const run = service.checkpointer.loadRunById(runId);
-              const playbookData = (run?.playbookData as Record<string, unknown> | undefined) ?? {};
-              const phases =
-                (playbookData["phases"] as
-                  | Record<string, { kb_artifact_id?: string; counts?: Record<string, number> }>
-                  | undefined) ?? {};
-              const artifactIds = Object.values(phases)
-                .map((phaseRecord) => phaseRecord?.kb_artifact_id)
-                .filter((id): id is string => typeof id === "string" && id.length > 0);
-              kbResult = {
-                schema_version: 1,
-                action,
-                run_id: runId,
-                status: "waiting_for_review",
-                met: false,
-                ids: [runId, ...artifactIds],
-                counts: {
-                  admitted_sources: capIds.length,
-                  ...Object.fromEntries(
-                    Object.entries(phases).map(([phase, record]) => [phase, record?.counts ?? {}])
-                  ),
-                },
-                artifacts: (gate !== undefined
-                  ? gate.artifacts.map((a) => ({
-                      artifact_id: String(
-                        (a as { artifact_id?: string } | undefined)?.artifact_id ?? ""
-                      ),
-                      artifact_kind: String(
-                        (a as { artifact_kind?: string } | undefined)?.artifact_kind ?? ""
-                      ),
-                      status: "sealed",
-                    }))
-                  : artifactIds.map((id) => ({
-                      artifact_id: id,
-                      artifact_kind: "unknown",
-                      status: "sealed",
-                    }))) as unknown[],
-                evidence: [],
-                warnings: [
-                  "human content-review gate is pending; approve or deny on the host: " +
-                    `penny-kb-gate approve --profile ${profileId} --run ${runId}  |  penny-kb-gate deny --profile ${profileId} --run ${runId}`,
-                ],
-                unresolved: [],
-                next: "review",
+              break;
+            }
+            if (admitted === undefined) {
+              const requestSha256 = orch.sha256(orch.canonicalJson(ingestRequest));
+              const sourceIdentity = orch.externalOperationSourceIdentity({
+                session_id: hostSessionId,
+                invocation_id: invocationId,
+                action: "ingest",
+                request_sha256: requestSha256,
+              });
+              const group = custody.checkpointer.operationEventGroupBySource(
+                "external_start",
+                sourceIdentity
+              );
+              if (group === undefined) throw error;
+              admitted = {
+                run_id: group.run_id,
+                request_sha256: requestSha256,
+                transaction_id: group.transaction_id,
+                group,
               };
             }
-          } catch (err) {
-            // Refused mid-initialize (drifted source, expired capability, invalid
-            // profile): the run never started; release any claims that were bound.
             try {
               orch.invalidateCapabilities(kbRoot, capIds);
             } catch {
-              // best effort — claims also expire by TTL
+              // best effort; capability claims also expire
             }
-            kbResult = {
-              schema_version: 1,
-              action,
-              run_id: runId,
-              status: "error",
-              met: false,
-              ids: [],
-              counts: {},
-              artifacts: [],
-              evidence: [],
-              warnings: [String((err as Error)?.message ?? err).slice(0, 300)],
-              unresolved: [],
-              next: "none",
-            };
+            kbResult = orch.checkpointDirectOperationResult({
+              checkpointer: custody.checkpointer,
+              run_id: admitted.run_id,
+              kb_id: ingestAdmission.kb_id,
+              policy_sha256: ingestAdmission.policy_sha256,
+              result: {
+                schema_version: 1,
+                action: "ingest",
+                run_id: admitted.run_id,
+                status: "error",
+                met: false,
+                ids: [],
+                counts: {},
+                artifacts: [],
+                evidence: [],
+                warnings: ["ingest_run_failed"],
+                unresolved: [],
+                next: "none",
+              },
+            });
           } finally {
-            service.close();
+            try {
+              if (admitted !== undefined && kbResult !== undefined) {
+                kbResult = orch.completeOperationStart({
+                  projectRoot,
+                  checkpointer: custody.checkpointer,
+                  group_id: admitted.group.request_event_group_id,
+                  profile_id: profileId,
+                  result: kbResult,
+                  input_digests: [admitted.request_sha256],
+                  kb_id: ingestAdmission.kb_id,
+                  policy_sha256: ingestAdmission.policy_sha256,
+                  safe_metrics: kbResult.counts ?? {},
+                }).replay_result;
+              }
+            } finally {
+              service?.close();
+              custody.close();
+            }
           }
           break;
         }
         case "resume": {
           const requestedRunId = String(rawParams["run_id"] ?? "");
-          const resumeService = new OrchestrationService({
+          const resumeCustody = new OrchestrationService({
             projectRoot,
+            env: process.env,
             playbookName: "knowledge-base",
           });
+          let executionService: InstanceType<typeof orch.OrchestrationService> | undefined;
+          let resumeWorker: InstanceType<typeof orch.KbWorkerClient> | undefined;
+          let resumeOperationGroupId: string | undefined;
+          const resumeRequestSha = orch.sha256(
+            orch.canonicalJson({
+              schema_version: 1,
+              action: "resume",
+              kb_profile_id: profileId,
+              run_id: requestedRunId,
+            })
+          );
+          const projectResumeResult = (
+            durable: NonNullable<ReturnType<typeof resumeCustody.checkpointer.loadRunById>>
+          ): ReplayableKnowledgeBaseResult => {
+            let projected = projectRunForStatusOrResume({
+              projectedAction: "resume",
+              run: durable,
+              checkpointer: resumeCustody.checkpointer,
+            });
+            if (projected.status === "awaiting_user") {
+              const pending = orch.findGateForRun(kbRoot, requestedRunId);
+              projected = orch.toReplayableKnowledgeBaseResult({
+                ...projected,
+                counts: {
+                  ...projected.counts,
+                  ...(pending === undefined ? {} : { artifacts: pending.artifacts.length }),
+                },
+                artifacts: pending?.artifacts ?? [],
+                warnings: [...projected.warnings, "review_pending"],
+              });
+            }
+            return projected;
+          };
           try {
-            const run = resumeService.checkpointer.loadRunById(requestedRunId);
-            if (
-              run === undefined ||
-              run.identity.playbook !== "knowledge-base" ||
-              run.identity.session_id !== currentSessionId ||
-              String(run.playbookData.profile_id ?? "") !== profileId
-            ) {
+            const candidate = resumeCustody.checkpointer.loadRunById(requestedRunId);
+            let run;
+            try {
+              run = orch.requireKbRunAccess(candidate, {
+                runId: requestedRunId,
+                sessionId: hostSessionId,
+                profileId,
+              });
+              orch.requireKbRunIdentityCurrent(run, kbRoot);
+            } catch (error) {
+              if (!(error instanceof orch.KbRunAccessError)) throw error;
               kbResult = {
                 schema_version: 1,
                 action: "resume",
@@ -1674,79 +2620,161 @@ export default function skillExtension(pi: ExtensionAPI): void {
               };
               break;
             }
-            const pending = orch.findGateForRun(kbRoot, requestedRunId);
-            if (run.status === "awaiting_user" && pending?.status === "awaiting") {
+            try {
+              orch.requireKbCurrentParent(kbRoot, hostParentIdentity);
+              orch.requireKbRunPolicyCurrent(run, kbRoot);
+            } catch (error) {
+              if (!(error instanceof orch.PolicyRefusal)) throw error;
               kbResult = {
                 schema_version: 1,
                 action: "resume",
                 run_id: requestedRunId,
-                status: "awaiting_user",
+                status: "refused",
                 met: false,
-                ids: [requestedRunId],
-                counts: { artifacts: pending.artifacts.length },
-                artifacts: pending.artifacts,
-                evidence: [],
-                warnings: [
-                  "re-presenting pending human content-review gate; approve/deny/refine is a host decision",
-                ],
-                unresolved: [],
-                next: "review",
-              };
-            } else if (run.status === "complete") {
-              kbResult = {
-                schema_version: 1,
-                action: "resume",
-                run_id: requestedRunId,
-                status: "complete",
-                met: run.met,
-                ids: [requestedRunId],
+                ids: [],
                 counts: {},
                 artifacts: [],
                 evidence: [],
-                warnings: [],
-                unresolved: run.met ? [] : ["run completed without satisfying its goal"],
-                next: "none",
-              };
-            } else if (["incomplete", "cancelled", "error"].includes(run.status)) {
-              kbResult = {
-                schema_version: 1,
-                action: "resume",
-                run_id: requestedRunId,
-                status: "error",
-                met: false,
-                ids: [requestedRunId],
-                counts: {},
-                artifacts: [],
-                evidence: [],
-                warnings: ["run is terminal and cannot be resumed"],
+                warnings: [error.code],
                 unresolved: [],
                 next: "none",
               };
-            } else {
-              kbResult = {
-                schema_version: 1,
-                action: "resume",
-                run_id: requestedRunId,
-                status: "running",
-                met: false,
-                ids: [requestedRunId],
-                counts: {},
-                artifacts: [],
-                evidence: [],
-                warnings: ["run is not at a public resumable boundary"],
-                unresolved: [],
-                next: "resume",
-              };
+              break;
             }
+            const resumeInvocationId =
+              typeof toolCallId === "string" && toolCallId.length > 0
+                ? toolCallId
+                : `call-${randomUUID()}`;
+            const resumeSourceIdentity = orch.externalOperationSourceIdentity({
+              session_id: hostSessionId,
+              invocation_id: resumeInvocationId,
+              action: "resume",
+              request_sha256: resumeRequestSha,
+            });
+            const operationStore = new orch.OperationReceiptStore({
+              projectRoot,
+              checkpointer: resumeCustody.checkpointer,
+            });
+            const resumeGroup = operationStore.reserve({
+              run_id: requestedRunId,
+              session_id: hostSessionId,
+              transaction_id: `tx_resume_${resumeSourceIdentity.slice(0, 24)}`,
+              action: "resume",
+              source_kind: "external_resume",
+              source_identity_sha256: resumeSourceIdentity,
+            }).group;
+            resumeOperationGroupId = resumeGroup.request_event_group_id;
+            if (resumeGroup.state === "committed") {
+              kbResult = operationStore.finish(resumeGroup.request_event_group_id).replay_result;
+              break;
+            }
+
+            let durable = run;
+            if (run.status === "running") {
+              resumeWorker = orch.createKbWorkerClientForResume({
+                projectRoot,
+                kbRoot,
+                checkpointer: resumeCustody.checkpointer,
+                run,
+                ...(testDependencies.kbAgentRunner
+                  ? { testOnlyAgentRunner: testDependencies.kbAgentRunner }
+                  : {}),
+              });
+              executionService = new orch.OrchestrationService({
+                projectRoot,
+                env: process.env,
+                playbookName: "knowledge-base",
+                modelClient: resumeWorker,
+              });
+              await executionService.execute(
+                {
+                  schema_version: 2,
+                  action: "recover",
+                  identity: run.identity,
+                },
+                _signal
+              );
+              const recovered = executionService.checkpointer.loadRunById(requestedRunId);
+              durable = orch.requireKbRunAccess(recovered, {
+                runId: requestedRunId,
+                sessionId: hostSessionId,
+                profileId,
+              });
+              orch.requireKbRunIdentityCurrent(durable, kbRoot);
+              orch.requireKbRunPolicyCurrent(durable, kbRoot);
+            }
+
+            if (["complete", "incomplete", "cancelled", "error"].includes(durable.status)) {
+              orch.verifyAndSettleTerminalStart({
+                projectRoot,
+                checkpointer: resumeCustody.checkpointer,
+                run: durable,
+              });
+            }
+            kbResult = projectResumeResult(durable);
+          } catch (error) {
+            if (resumeOperationGroupId === undefined) throw error;
+            const refused =
+              error instanceof orch.KbRunAccessError ||
+              error instanceof orch.PolicyRefusal ||
+              error instanceof orch.PrivateInputError;
+            const warning =
+              error instanceof orch.KbRunAccessError
+                ? error.code
+                : error instanceof orch.PolicyRefusal
+                  ? error.code
+                  : error instanceof orch.PrivateInputError
+                    ? "terminal_result_digest_mismatch"
+                    : error instanceof orch.KbWorkerPostureError
+                      ? error.code
+                      : "resume_run_failed";
+            kbResult = {
+              schema_version: 1,
+              action: "resume",
+              run_id: requestedRunId,
+              status: refused ? "refused" : "error",
+              met: false,
+              ids: [requestedRunId],
+              counts: {},
+              artifacts: [],
+              evidence: [],
+              warnings: [warning],
+              unresolved: [],
+              next: "none",
+            };
           } finally {
-            resumeService.close();
+            try {
+              if (resumeOperationGroupId !== undefined && kbResult !== undefined) {
+                const durable = resumeCustody.checkpointer.loadRunById(requestedRunId);
+                const completion = new orch.OperationReceiptStore({
+                  projectRoot,
+                  checkpointer: resumeCustody.checkpointer,
+                }).complete({
+                  request_event_group_id: resumeOperationGroupId,
+                  kb_profile_id: profileId,
+                  result: kbResult,
+                  input_digests: [resumeRequestSha],
+                  ...(String(durable?.playbookData.kb_id ?? "").length > 0
+                    ? { kb_id: String(durable?.playbookData.kb_id) }
+                    : {}),
+                  ...(String(durable?.playbookData.admitted_policy_sha256 ?? "").length > 0
+                    ? {
+                        policy_sha256: String(durable?.playbookData.admitted_policy_sha256),
+                      }
+                    : {}),
+                  safe_metrics: kbResult.counts ?? {},
+                });
+                kbResult = completion.replay_result;
+              }
+            } finally {
+              executionService?.close();
+              resumeWorker?.close();
+              resumeCustody.close();
+            }
           }
           break;
         }
         case "save": {
-          // §5.6: a useful query does not authorize a save. The request must name
-          // the exact prior query run, and that run's claim — not this request —
-          // is what authorizes publication.
           let saveRequest;
           try {
             saveRequest = orch.validateSaveRequest({
@@ -1757,7 +2785,7 @@ export default function skillExtension(pi: ExtensionAPI): void {
               page_kind: String(rawParams["page_kind"] ?? "synthesis"),
               title: String(rawParams["title"] ?? ""),
             });
-          } catch (err) {
+          } catch {
             kbResult = {
               schema_version: 1,
               action,
@@ -1768,23 +2796,19 @@ export default function skillExtension(pi: ExtensionAPI): void {
               counts: {},
               artifacts: [],
               evidence: [],
-              warnings: [
-                `save request failed closed validation: ${String((err as Error).message ?? err).slice(0, 200)}`,
-              ],
+              warnings: ["save_request_invalid"],
               unresolved: [],
               next: "none",
             };
             break;
           }
-
-          // §5.3 admission before the run starts, exactly as ingest does.
-          let savePolicySha: string;
+          let saveAdmission: ReturnType<typeof orch.admitKbRun>;
           try {
-            savePolicySha = orch.admitKbRun({
+            saveAdmission = orch.admitKbRun({
               kbRoot,
-              parentIdentity: currentParentIdentity,
-            }).policy_sha256;
-          } catch (err) {
+              parentIdentity: hostParentIdentity,
+            });
+          } catch {
             kbResult = {
               schema_version: 1,
               action,
@@ -1795,17 +2819,12 @@ export default function skillExtension(pi: ExtensionAPI): void {
               counts: {},
               artifacts: [],
               evidence: [],
-              warnings: [
-                `save refused before any private read: ${String((err as Error).message ?? err).slice(0, 200)}`,
-              ],
+              warnings: ["save_admission_refused"],
               unresolved: [],
               next: "none",
             };
             break;
           }
-
-          // The claim names the exact sealed answer this save may compose from;
-          // the worker is allowed to read that one artifact from that one run.
           const claim = orch.findSaveClaim(projectRoot, profileId, saveRequest.query_run_id);
           if (claim === undefined) {
             kbResult = {
@@ -1818,43 +2837,23 @@ export default function skillExtension(pi: ExtensionAPI): void {
               counts: {},
               artifacts: [],
               evidence: [],
-              warnings: [
-                `no saveable answer exists for query run '${saveRequest.query_run_id}' in this profile`,
-              ],
+              warnings: ["save_claim_unavailable"],
               unresolved: [],
               next: "none",
             };
             break;
           }
-
-          const saveService = new orch.OrchestrationService({
+          const invocationId = hostInvocationId;
+          const goal = "Compose the claimed query answer into a reviewable advisory page.";
+          const custody = new orch.OrchestrationService({
             projectRoot,
             env: process.env,
             playbookName: "knowledge-base",
-            modelClient: new orch.KbWorkerClient({
-              projectRoot,
-              kbRoot,
-              runId,
-              profileId,
-              sourceCapabilityIds: [],
-              admittedPolicySha256: savePolicySha,
-              // §5.8 "read an allowed prior run artifact": compose reads exactly
-              // the claimed sealed answer, in place of an extraction phase.
-              seedPhaseOutputs: {
-                ingest: {
-                  runId: saveRequest.query_run_id,
-                  artifactId: claim.answer_artifact_id,
-                },
-              },
-              ...(rawParams["model"] !== undefined
-                ? { modelOverride: String(rawParams["model"]) }
-                : {}),
-            }),
           });
+          let service: InstanceType<typeof orch.OrchestrationService> | undefined;
+          let admitted: ReturnType<typeof orch.admitOperationStart> | undefined;
           try {
-            const directive = await saveService.execute({
-              schema_version: 2,
-              action: "start",
+            const admissionContext = orch.RunContext.create({
               identity: {
                 schema_version: 2,
                 run_id: runId,
@@ -1862,102 +2861,184 @@ export default function skillExtension(pi: ExtensionAPI): void {
                 playbook: "knowledge-base",
                 engine_owner: "typescript",
               },
-              goal:
-                `Compose an advisory '${saveRequest.page_kind}' page titled '${saveRequest.title}' from the ` +
-                `claimed answer of query run '${saveRequest.query_run_id}', for human review.`,
+              goal,
               constraints: {
                 action: "save",
                 kb_profile_id: profileId,
                 query_run_id: saveRequest.query_run_id,
                 page_kind: saveRequest.page_kind,
-                title: saveRequest.title,
-                parent_identity: currentParentIdentity ?? null,
+                parent_identity: hostParentIdentity ?? null,
+              },
+              projectRoot,
+              trustProfile: "hardened-untrusted",
+              maxSteps: custody.config.maxSteps,
+            });
+            admissionContext.playbookData.action = "save";
+            admissionContext.playbookData.profile_id = profileId;
+            admissionContext.playbookData.kb_id = saveAdmission.kb_id;
+            admissionContext.playbookData.admitted_policy_sha256 = saveAdmission.policy_sha256;
+            admitted = orch.admitOperationStart({
+              projectRoot,
+              checkpointer: custody.checkpointer,
+              context: admissionContext,
+              session_id: hostSessionId,
+              invocation_id: invocationId,
+              action: "save",
+              profile_id: profileId,
+              request: saveRequest,
+            });
+            if (admitted.replay !== undefined) {
+              kbResult = admitted.replay.replay_result;
+              break;
+            }
+            if (admitted.recovered_result !== undefined) {
+              kbResult = admitted.recovered_result;
+              break;
+            }
+            const saveRunId = admitted.run_id;
+            service = new orch.OrchestrationService({
+              projectRoot,
+              env: process.env,
+              playbookName: "knowledge-base",
+              modelClient: new orch.KbWorkerClient({
+                projectRoot,
+                kbRoot,
+                runId: saveRunId,
+                sessionId: hostSessionId,
+                profileId,
+                operation: "save",
+                sourceCapabilityIds: [],
+                admittedPolicySha256: saveAdmission.policy_sha256,
+                readPhaseBrief: () => JSON.stringify(saveRequest),
+                evidenceReader: orch.createSaveEvidenceReader({
+                  kbRoot,
+                  queryRunId: saveRequest.query_run_id,
+                  answerArtifactId: claim.answer_artifact_id,
+                  checkpointer: custody.checkpointer,
+                }),
+                seedPhaseOutputs: {
+                  ingest: {
+                    runId: saveRequest.query_run_id,
+                    artifactId: claim.answer_artifact_id,
+                  },
+                },
+                ...(testDependencies.kbAgentRunner
+                  ? { testOnlyAgentRunner: testDependencies.kbAgentRunner }
+                  : {}),
+              }),
+            });
+            const directive = await service.execute({
+              schema_version: 2,
+              action: "start",
+              identity: {
+                schema_version: 2,
+                run_id: saveRunId,
+                session_id: hostSessionId,
+                playbook: "knowledge-base",
+                engine_owner: "typescript",
+              },
+              goal,
+              constraints: {
+                action: "save",
+                kb_profile_id: profileId,
+                query_run_id: saveRequest.query_run_id,
+                page_kind: saveRequest.page_kind,
+                parent_identity: hostParentIdentity ?? null,
               },
               project_root: projectRoot,
               trust_profile: "hardened-untrusted",
             });
             if (directive.action === "await_user") {
-              // Same safe projection as ingest: counts and ids only. Approval is
-              // a host decision through penny-kb-gate, never this tool.
-              const gate = orch.findGateForRun(kbRoot, runId) ?? orch.latestPendingGate(kbRoot);
-              const run = saveService.checkpointer.loadRunById(runId);
-              const playbookData = (run?.playbookData as Record<string, unknown> | undefined) ?? {};
-              const phases =
-                (playbookData["phases"] as
-                  | Record<string, { kb_artifact_id?: string; counts?: Record<string, number> }>
-                  | undefined) ?? {};
-              const artifactIds = Object.values(phases)
-                .map((phaseRecord) => phaseRecord?.kb_artifact_id)
-                .filter((id): id is string => typeof id === "string" && id.length > 0);
-              kbResult = {
-                schema_version: 1,
-                action,
-                run_id: runId,
-                status: "waiting_for_review",
-                met: false,
-                ids: [runId, ...artifactIds],
-                counts: {
-                  claimed_query_runs: 1,
-                  ...Object.fromEntries(
-                    Object.entries(phases).map(([phase, record]) => [phase, record?.counts ?? {}])
-                  ),
-                },
-                artifacts: (gate !== undefined
-                  ? gate.artifacts.map((a) => ({
-                      artifact_id: String(
-                        (a as { artifact_id?: string } | undefined)?.artifact_id ?? ""
-                      ),
-                      artifact_kind: String(
-                        (a as { artifact_kind?: string } | undefined)?.artifact_kind ?? ""
-                      ),
-                      status: "sealed",
-                    }))
-                  : artifactIds.map((id) => ({
-                      artifact_id: id,
-                      artifact_kind: "unknown",
-                      status: "sealed",
-                    }))) as unknown[],
-                evidence: [],
-                warnings: [
-                  "human content-review gate is pending; approve or deny on the host: " +
-                    `penny-kb-gate approve --profile ${profileId} --run ${runId}  |  penny-kb-gate deny --profile ${profileId} --run ${runId}`,
-                ],
-                unresolved: [],
-                next: "review",
-              };
+              const durable = service.checkpointer.loadRunById(saveRunId);
+              if (durable === undefined) throw new Error("admitted save run is absent");
+              kbResult = orch.replayableResultFromRun({
+                action: "save",
+                run: durable,
+                checkpointer: service.checkpointer,
+                status_override: "awaiting_user",
+              });
             } else {
+              const durable = service.checkpointer.loadRunById(saveRunId);
+              if (durable === undefined) throw new Error("admitted save run is absent");
+              kbResult = orch.replayableResultFromRun({ action: "save", run: durable });
+            }
+          } catch (error) {
+            if (error instanceof orch.StartAdmissionMismatchError) {
               kbResult = {
                 schema_version: 1,
-                action,
+                action: "save",
                 run_id: runId,
-                status: directive.action === "complete" ? "complete" : "error",
-                met: directive.action === "complete",
-                ids: [runId],
+                status: "refused",
+                met: false,
+                ids: [],
                 counts: {},
                 artifacts: [],
                 evidence: [],
-                warnings: [],
+                warnings: ["idempotency_mismatch"],
                 unresolved: [],
                 next: "none",
               };
+              break;
             }
-          } catch (err) {
-            kbResult = {
-              schema_version: 1,
-              action,
-              run_id: runId,
-              status: "error",
-              met: false,
-              ids: [],
-              counts: {},
-              artifacts: [],
-              evidence: [],
-              warnings: [`save run failed: ${String((err as Error).message ?? err).slice(0, 200)}`],
-              unresolved: [],
-              next: "none",
-            };
+            if (admitted === undefined) {
+              const requestSha256 = orch.sha256(orch.canonicalJson(saveRequest));
+              const sourceIdentity = orch.externalOperationSourceIdentity({
+                session_id: hostSessionId,
+                invocation_id: invocationId,
+                action: "save",
+                request_sha256: requestSha256,
+              });
+              const group = custody.checkpointer.operationEventGroupBySource(
+                "external_start",
+                sourceIdentity
+              );
+              if (group === undefined) throw error;
+              admitted = {
+                run_id: group.run_id,
+                request_sha256: requestSha256,
+                transaction_id: group.transaction_id,
+                group,
+              };
+            }
+            kbResult = orch.checkpointDirectOperationResult({
+              checkpointer: custody.checkpointer,
+              run_id: admitted.run_id,
+              kb_id: saveAdmission.kb_id,
+              policy_sha256: saveAdmission.policy_sha256,
+              result: {
+                schema_version: 1,
+                action: "save",
+                run_id: admitted.run_id,
+                status: "error",
+                met: false,
+                ids: [],
+                counts: {},
+                artifacts: [],
+                evidence: [],
+                warnings: ["save_run_failed"],
+                unresolved: [],
+                next: "none",
+              },
+            });
           } finally {
-            saveService.close();
+            try {
+              if (admitted !== undefined && kbResult !== undefined) {
+                kbResult = orch.completeOperationStart({
+                  projectRoot,
+                  checkpointer: custody.checkpointer,
+                  group_id: admitted.group.request_event_group_id,
+                  profile_id: profileId,
+                  result: kbResult,
+                  input_digests: [admitted.request_sha256],
+                  kb_id: saveAdmission.kb_id,
+                  policy_sha256: saveAdmission.policy_sha256,
+                  safe_metrics: kbResult.counts ?? {},
+                }).replay_result;
+              }
+            } finally {
+              service?.close();
+              custody.close();
+            }
           }
           break;
         }
@@ -1974,7 +3055,7 @@ export default function skillExtension(pi: ExtensionAPI): void {
               page_revisions: rawParams["page_revisions"] ?? [],
               canonical_target_capability_ids: rawParams["canonical_target_capability_ids"] ?? [],
             });
-          } catch (err) {
+          } catch {
             kbResult = {
               schema_version: 1,
               action,
@@ -1985,9 +3066,7 @@ export default function skillExtension(pi: ExtensionAPI): void {
               counts: {},
               artifacts: [],
               evidence: [],
-              warnings: [
-                `promote request failed closed validation: ${String((err as Error).message ?? err).slice(0, 200)}`,
-              ],
+              warnings: ["promote_request_invalid"],
               unresolved: [],
               next: "none",
             };
@@ -1998,9 +3077,9 @@ export default function skillExtension(pi: ExtensionAPI): void {
           try {
             promotePolicySha = orch.admitKbRun({
               kbRoot,
-              parentIdentity: currentParentIdentity,
+              parentIdentity: hostParentIdentity,
             }).policy_sha256;
-          } catch (err) {
+          } catch {
             kbResult = {
               schema_version: 1,
               action,
@@ -2011,15 +3090,27 @@ export default function skillExtension(pi: ExtensionAPI): void {
               counts: {},
               artifacts: [],
               evidence: [],
-              warnings: [
-                `promote refused before any private read: ${String((err as Error).message ?? err).slice(0, 200)}`,
-              ],
+              warnings: ["promote_admission_refused"],
               unresolved: [],
               next: "none",
             };
             break;
           }
 
+          const promoteInvocationId =
+            typeof toolCallId === "string" && toolCallId.length > 0
+              ? toolCallId
+              : `call-${randomUUID()}`;
+          const promoteRequestSha = orch.sha256(orch.canonicalJson(promoteRequest));
+          const promoteSourceIdentity = orch.externalOperationSourceIdentity({
+            session_id: hostSessionId,
+            invocation_id: promoteInvocationId,
+            action: "promote",
+            request_sha256: promoteRequestSha,
+          });
+          const promoteRunId = `kb-${promoteSourceIdentity.slice(0, 24)}`;
+          const promoteTransactionId = `tx_start_${promoteSourceIdentity.slice(0, 24)}`;
+          let promoteOperationGroupId: string | undefined;
           const promoteService = new orch.OrchestrationService({
             projectRoot,
             env: process.env,
@@ -2027,95 +3118,165 @@ export default function skillExtension(pi: ExtensionAPI): void {
             modelClient: new orch.KbWorkerClient({
               projectRoot,
               kbRoot,
-              runId,
+              runId: promoteRunId,
+              sessionId: hostSessionId,
               profileId,
+              operation: "promote",
               sourceCapabilityIds: [],
               admittedPolicySha256: promotePolicySha,
-              ...(rawParams["model"] !== undefined
-                ? { modelOverride: String(rawParams["model"]) }
+              promotionReader: orch.createPromotionReader({
+                projectRoot,
+                kbRoot,
+                runId: promoteRunId,
+                sessionId: hostSessionId,
+                profileId,
+                operation: "promote",
+                pageRevisions: promoteRequest.page_revisions,
+                targetCapabilityIds: promoteRequest.canonical_target_capability_ids,
+              }),
+              ...(testDependencies.kbAgentRunner
+                ? { testOnlyAgentRunner: testDependencies.kbAgentRunner }
                 : {}),
             }),
           });
+          const promoteGoal =
+            `Prepare and verify a promotion candidate for ${promoteRequest.page_revisions.length} page ` +
+            `revision(s) against ${promoteRequest.canonical_target_capability_ids.length} claimed ` +
+            `canonical target(s). Prepare only — never apply.`;
+          const promoteConstraints = {
+            action: "promote",
+            kb_profile_id: profileId,
+            page_revisions: promoteRequest.page_revisions as unknown as never,
+            canonical_target_capability_ids: [...promoteRequest.canonical_target_capability_ids],
+            parent_identity: hostParentIdentity ?? null,
+          };
+          const promoteAdmissionContext = orch.RunContext.create({
+            identity: {
+              schema_version: 2,
+              run_id: promoteRunId,
+              session_id: hostSessionId,
+              playbook: "knowledge-base",
+              engine_owner: "typescript",
+            },
+            goal: promoteGoal,
+            constraints: promoteConstraints,
+            projectRoot,
+            trustProfile: "hardened-untrusted",
+            maxSteps: promoteService.config.maxSteps,
+          });
+          promoteAdmissionContext.playbookData.action = "promote";
+          promoteAdmissionContext.playbookData.profile_id = profileId;
+          promoteAdmissionContext.playbookData.admitted_policy_sha256 = promotePolicySha;
+          const promoteAdmission = promoteService.checkpointer.admitStartRun(
+            promoteAdmissionContext,
+            {
+              session_id: hostSessionId,
+              invocation_id: promoteInvocationId,
+              request_sha256: promoteRequestSha,
+              action: "promote",
+              profile_id: profileId,
+              transaction_id: promoteTransactionId,
+              private_input_id: `pri_${promoteSourceIdentity.slice(0, 24)}`,
+              storage_key: `${promoteRunId}/request.json`,
+              temporary_storage_key: `${promoteRunId}/.${promoteTransactionId}.tmp`,
+            }
+          );
+          const admittedPromoteRun = promoteService.checkpointer.loadRunById(
+            promoteAdmission.run_id
+          );
+          if (admittedPromoteRun?.terminalDirective === null) {
+            orch.materializeRunInput({
+              projectRoot,
+              checkpointer: promoteService.checkpointer,
+              runId: promoteAdmission.run_id,
+              request: promoteRequest,
+              requestSha256: promoteRequestSha,
+            });
+          }
+          const existingPromoteGroup = promoteService.checkpointer.operationEventGroupBySource(
+            "external_start",
+            promoteSourceIdentity
+          );
+          if (existingPromoteGroup !== undefined && existingPromoteGroup.state !== "reserved") {
+            kbResult = new orch.OperationReceiptStore({
+              projectRoot,
+              checkpointer: promoteService.checkpointer,
+            }).finish(existingPromoteGroup.request_event_group_id).replay_result;
+            promoteService.close();
+            break;
+          }
+          if (existingPromoteGroup?.state === "reserved") {
+            const recoveredRun = promoteService.checkpointer.loadRunById(
+              existingPromoteGroup.run_id
+            );
+            if (recoveredRun !== undefined && recoveredRun.stateId !== "intake") {
+              const recoveredResult = orch.replayableResultFromRun({
+                action: "promote",
+                run: recoveredRun,
+              });
+              kbResult = new orch.OperationReceiptStore({
+                projectRoot,
+                checkpointer: promoteService.checkpointer,
+              }).complete({
+                request_event_group_id: existingPromoteGroup.request_event_group_id,
+                kb_profile_id: profileId,
+                result: recoveredResult,
+                input_digests: [promoteRequestSha],
+                ...(String(recoveredRun.playbookData.kb_id ?? "").length > 0
+                  ? { kb_id: String(recoveredRun.playbookData.kb_id) }
+                  : {}),
+                ...(String(recoveredRun.playbookData.admitted_policy_sha256 ?? "").length > 0
+                  ? {
+                      policy_sha256: String(recoveredRun.playbookData.admitted_policy_sha256),
+                    }
+                  : {}),
+                safe_metrics: recoveredResult.counts,
+              }).replay_result;
+              promoteService.close();
+              break;
+            }
+          }
           try {
             const directive = await promoteService.execute({
               schema_version: 2,
               action: "start",
               identity: {
                 schema_version: 2,
-                run_id: runId,
+                run_id: promoteRunId,
                 session_id: hostSessionId,
                 playbook: "knowledge-base",
                 engine_owner: "typescript",
               },
-              goal:
-                `Prepare and verify a promotion candidate for ${promoteRequest.page_revisions.length} page ` +
-                `revision(s) against ${promoteRequest.canonical_target_capability_ids.length} claimed ` +
-                `canonical target(s). Prepare only — never apply.`,
-              constraints: {
-                action: "promote",
-                kb_profile_id: profileId,
-                page_revisions: promoteRequest.page_revisions as unknown as never,
-                canonical_target_capability_ids: [
-                  ...promoteRequest.canonical_target_capability_ids,
-                ],
-                parent_identity: currentParentIdentity ?? null,
-              },
+              goal: promoteGoal,
+              constraints: promoteConstraints,
               project_root: projectRoot,
               trust_profile: "hardened-untrusted",
             });
+            const reserved = promoteService.checkpointer.operationEventGroupBySource(
+              "external_start",
+              promoteSourceIdentity
+            );
+            if (reserved === undefined || reserved.run_id !== promoteRunId) {
+              throw new Error("promotion start lost its operation event group");
+            }
+            promoteOperationGroupId = reserved.request_event_group_id;
             if (directive.action === "await_user") {
-              const gate = orch.findGateForRun(kbRoot, runId) ?? orch.latestPendingGate(kbRoot);
-              const run = promoteService.checkpointer.loadRunById(runId);
-              const playbookData = (run?.playbookData as Record<string, unknown> | undefined) ?? {};
-              const phases =
-                (playbookData["phases"] as
-                  | Record<string, { kb_artifact_id?: string; counts?: Record<string, number> }>
-                  | undefined) ?? {};
-              const verified = playbookData["promotion_verified"] === true;
-              kbResult = {
-                schema_version: 1,
-                action,
-                run_id: runId,
-                status: "awaiting_user",
-                met: false,
-                ids: [runId],
-                counts: {
-                  page_revisions: promoteRequest.page_revisions.length,
-                  targets: promoteRequest.canonical_target_capability_ids.length,
-                  ...Object.fromEntries(
-                    Object.entries(phases).map(([phase, record]) => [phase, record?.counts ?? {}])
-                  ),
-                },
-                // The exact plan / patch / verification handles (§5.6).
-                artifacts: (gate?.artifacts ?? []).map((a) => ({
-                  artifact_id: String(
-                    (a as { artifact_id?: string } | undefined)?.artifact_id ?? ""
-                  ),
-                  artifact_kind: String(
-                    (a as { artifact_kind?: string } | undefined)?.artifact_kind ?? ""
-                  ),
-                  status: "sealed",
-                })) as unknown[],
-                evidence: [],
-                warnings: [
-                  "promotion is PREPARED and VERIFIED only; this tool cannot apply it",
-                  ...(verified
-                    ? []
-                    : [
-                        "host verification did not pass — read the verification report before deciding",
-                      ]),
-                ],
-                unresolved: verified ? [] : ["promotion verification did not pass"],
-                next: "review",
-              };
+              const run = promoteService.checkpointer.loadRunById(promoteRunId);
+              if (run === undefined) throw new Error("admitted promotion run is absent");
+              kbResult = orch.replayableResultFromRun({
+                action: "promote",
+                run,
+                checkpointer: promoteService.checkpointer,
+                status_override: "awaiting_user",
+              });
             } else {
               kbResult = {
                 schema_version: 1,
                 action,
-                run_id: runId,
+                run_id: promoteRunId,
                 status: "error",
                 met: false,
-                ids: [runId],
+                ids: [promoteRunId],
                 counts: {},
                 artifacts: [],
                 evidence: [],
@@ -2124,25 +3285,56 @@ export default function skillExtension(pi: ExtensionAPI): void {
                 next: "none",
               };
             }
-          } catch (err) {
+          } catch {
             kbResult = {
               schema_version: 1,
               action,
-              run_id: runId,
+              run_id: promoteRunId,
               status: "error",
               met: false,
               ids: [],
               counts: {},
               artifacts: [],
               evidence: [],
-              warnings: [
-                `promote run failed: ${String((err as Error).message ?? err).slice(0, 200)}`,
-              ],
+              warnings: ["promote_run_failed"],
               unresolved: [],
               next: "none",
             };
           } finally {
-            promoteService.close();
+            try {
+              const reserved =
+                promoteOperationGroupId === undefined
+                  ? promoteService.checkpointer.operationEventGroupBySource(
+                      "external_start",
+                      promoteSourceIdentity
+                    )
+                  : promoteService.checkpointer.operationEventGroup(promoteOperationGroupId);
+              if (reserved !== undefined && kbResult !== undefined) {
+                promoteOperationGroupId = reserved.request_event_group_id;
+                const durable = promoteService.checkpointer.loadRunById(promoteRunId);
+                const completion = new orch.OperationReceiptStore({
+                  projectRoot,
+                  checkpointer: promoteService.checkpointer,
+                }).complete({
+                  request_event_group_id: reserved.request_event_group_id,
+                  kb_profile_id: profileId,
+                  result: kbResult,
+                  input_digests: [promoteRequestSha],
+                  ...(String(durable?.playbookData.kb_id ?? "").length > 0
+                    ? { kb_id: String(durable?.playbookData.kb_id) }
+                    : {}),
+                  ...(String(durable?.playbookData.admitted_policy_sha256 ?? "").length > 0
+                    ? {
+                        policy_sha256: String(durable?.playbookData.admitted_policy_sha256),
+                      }
+                    : {}),
+                  safe_metrics: kbResult.counts ?? {},
+                });
+                kbResult = completion.replay_result;
+              }
+            } finally {
+              promoteService.close();
+            }
           }
           break;
         }
@@ -2153,13 +3345,17 @@ export default function skillExtension(pi: ExtensionAPI): void {
             playbookName: "knowledge-base",
           });
           try {
-            const run = statusService.checkpointer.loadRunById(requestedRunId);
-            if (
-              run === undefined ||
-              run.identity.playbook !== "knowledge-base" ||
-              run.identity.session_id !== currentSessionId ||
-              String(run.playbookData.profile_id ?? "") !== profileId
-            ) {
+            const candidate = statusService.checkpointer.loadRunById(requestedRunId);
+            let run;
+            try {
+              run = orch.requireKbRunAccess(candidate, {
+                runId: requestedRunId,
+                sessionId: hostSessionId,
+                profileId,
+              });
+              orch.requireKbRunIdentityCurrent(run, kbRoot);
+            } catch (error) {
+              if (!(error instanceof orch.KbRunAccessError)) throw error;
               kbResult = {
                 schema_version: 1,
                 action: "status",
@@ -2176,34 +3372,62 @@ export default function skillExtension(pi: ExtensionAPI): void {
               };
               break;
             }
-            const pending = orch.findGateForRun(kbRoot, requestedRunId);
-            const publicStatus =
-              run.status === "complete"
-                ? "complete"
-                : run.status === "awaiting_user"
-                  ? "awaiting_user"
-                  : run.status === "running"
-                    ? "running"
-                    : "error";
-            kbResult = {
-              schema_version: 1,
-              action: "status",
-              run_id: requestedRunId,
-              status: publicStatus,
-              met: run.status === "complete" ? run.met : false,
-              ids: [requestedRunId],
-              counts: {},
-              artifacts: pending?.status === "awaiting" ? pending.artifacts : [],
-              evidence: [],
-              warnings: [],
-              unresolved: [],
-              next:
-                publicStatus === "awaiting_user"
-                  ? "review"
-                  : publicStatus === "running"
-                    ? "resume"
-                    : "none",
-            };
+            try {
+              orch.requireKbCurrentParent(kbRoot, hostParentIdentity);
+              orch.requireKbRunPolicyCurrent(run, kbRoot);
+            } catch (error) {
+              if (!(error instanceof orch.PolicyRefusal)) throw error;
+              kbResult = {
+                schema_version: 1,
+                action: "status",
+                run_id: requestedRunId,
+                status: "refused",
+                met: false,
+                ids: [],
+                counts: {},
+                artifacts: [],
+                evidence: [],
+                warnings: [error.code],
+                unresolved: [],
+                next: "none",
+              };
+              break;
+            }
+            const isQueryRun = String(run.playbookData.action ?? "") === "query";
+            const isTerminalRun = ["complete", "incomplete", "cancelled", "error"].includes(
+              run.status
+            );
+            if (isQueryRun && isTerminalRun) {
+              try {
+                orch.verifyAndSettleTerminalStart({
+                  projectRoot,
+                  checkpointer: statusService.checkpointer,
+                  run,
+                });
+              } catch (error) {
+                if (!(error instanceof orch.PrivateInputError)) throw error;
+                kbResult = {
+                  schema_version: 1,
+                  action: "status",
+                  run_id: requestedRunId,
+                  status: "refused",
+                  met: false,
+                  ids: [],
+                  counts: {},
+                  artifacts: [],
+                  evidence: [],
+                  warnings: ["terminal_result_digest_mismatch"],
+                  unresolved: [],
+                  next: "none",
+                };
+                break;
+              }
+            }
+            kbResult = projectRunForStatusOrResume({
+              projectedAction: "status",
+              run,
+              checkpointer: statusService.checkpointer,
+            });
           } finally {
             statusService.close();
           }

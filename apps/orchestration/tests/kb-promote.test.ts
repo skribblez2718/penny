@@ -18,13 +18,16 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { validatePromoteRequest, verifyPromotionCandidate } from "../src/kb/promote.js";
 import { initKb } from "../src/kb/workflows.js";
-import { mintSourceCapability } from "../src/kb/gate.js";
-import { mintEnvelope } from "../src/kb/capabilities.js";
-import { canonicalJson, sha256Hex } from "../src/kb/contracts.js";
+import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
+import { claimCapabilities, mintSourceCapability } from "../src/kb/gate.js";
+import { CapabilityStore, envelopeDigest, mintEnvelope } from "../src/kb/capabilities.js";
+import { sha256Hex } from "../src/kb/contracts.js";
 import { readSelectedGeneration } from "../src/kb/generations.js";
-import { approveIngest, ingestKb } from "../src/kb/ingest.js";
+import { approveIngest, createTestOnlyIngestBodyRunner, ingestKb } from "../src/kb/ingest.js";
 
 const PROFILE = "kbp_promote";
+const SESSION = "sess_promote";
+const PROMOTE_RUN = "run_promote";
 const dirs: string[] = [];
 function tmp(label: string): string {
   const d = mkdtempSync(path.join(tmpdir(), `${label}-`));
@@ -32,6 +35,7 @@ function tmp(label: string): string {
   return d;
 }
 afterEach(() => {
+  closeKbArtifactControls();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
@@ -82,7 +86,7 @@ describe("promote request (§5.6 closed shape)", () => {
           { page_id: "page_a", revision_id: "rev_1" },
         ],
       })
-    ).toThrow(/unique/);
+    ).toThrow(/schema validation/);
     // Ids are opaque, never locators.
     expect(() =>
       validatePromoteRequest({
@@ -103,16 +107,20 @@ async function kbWithPageAndTarget() {
   const srcPath = path.join(srcDir, "a.md");
   writeFileSync(srcPath, "Quorum requires two of three acknowledgements.", { mode: 0o600 });
   const cap = mintSourceCapability({
-    kbRoot,
+    projectRoot,
     kbProfileId: PROFILE,
+    sessionId: SESSION,
+    allowedOperation: "ingest",
     absolutePath: srcPath,
     title: "Quorum note",
     authors: ["Ada"],
     sourceType: "manual",
     mediaType: "text/markdown",
   });
+  const sourceId = "src_promote_seed";
   const source = {
-    sourceId: cap.capability_id,
+    sourceId,
+    capabilityDigest: envelopeDigest(cap),
     title: "Quorum note",
     authors: ["Ada"],
     content: "Quorum requires two of three acknowledgements.",
@@ -124,7 +132,7 @@ async function kbWithPageAndTarget() {
     ingest: JSON.stringify({
       schema_version: 1,
       artifact_kind: "claims",
-      source_ids: [cap.capability_id],
+      source_ids: [sourceId],
       claims: [],
     }),
     compose: JSON.stringify({
@@ -159,22 +167,33 @@ async function kbWithPageAndTarget() {
     verify: JSON.stringify({
       schema_version: 1,
       artifact_kind: "verification_report",
+      verified_artifact_ids: [],
       claim_findings: [],
     }),
   };
+  const checkpointer = kbArtifactControl({
+    root: kbRoot,
+    runId: "run_seed",
+    profileId: PROFILE,
+  });
   const gated = await ingestKb(
-    { kbRoot, profileId: PROFILE, runId: "run_seed" },
+    {
+      kbRoot,
+      profileId: PROFILE,
+      runId: "run_seed",
+      checkpointer,
+    },
     [source],
-    async (inv) => {
+    createTestOnlyIngestBodyRunner(async (inv) => {
       const b = bodies[inv.stateId];
       if (b === undefined) throw new Error(`no body for ${inv.stateId}`);
       return b;
-    }
+    })
   );
   const byKind = Object.fromEntries(gated.artifacts.map((a) => [a.artifact_kind, a.artifact_id]));
-  approveIngest({ kbRoot, profileId: PROFILE, runId: "run_seed" }, [source], {
+  approveIngest({ kbRoot, profileId: PROFILE, runId: "run_seed", checkpointer }, [source], {
     runId: "run_seed",
-    sourceIds: [cap.capability_id],
+    sourceIds: [sourceId],
     claimsArtifactId: byKind.claims!,
     pageDraftArtifactId: byKind.page_draft!,
     lintReportArtifactId: byKind.lint_report!,
@@ -187,7 +206,7 @@ async function kbWithPageAndTarget() {
   writeFileSync(targetPath, "# Canonical\n\nExisting guidance.\n", { mode: 0o600 });
   const targetEnv = mintEnvelope({
     kind: "canonical_target",
-    session_id: "sess_promote",
+    session_id: SESSION,
     kb_profile_id: PROFILE,
     resolved_path: targetPath,
     expected_sha256: sha256Hex(readFileSync(targetPath, "utf8")),
@@ -196,11 +215,18 @@ async function kbWithPageAndTarget() {
     expires_at: new Date(Date.now() + 3_600_000).toISOString(),
     authority_root: targetDir,
   });
-  // Persist into the KB capability registry exactly as minting does.
-  const regDir = path.join(kbRoot, "capabilities");
-  mkdirSync(regDir, { recursive: true, mode: 0o700 });
-  writeFileSync(path.join(regDir, `${targetEnv.capability_id}.json`), canonicalJson(targetEnv), {
-    mode: 0o600,
+  const capabilities = new CapabilityStore(projectRoot);
+  capabilities.register(targetEnv);
+  capabilities.close();
+  claimCapabilities({
+    projectRoot,
+    kbRoot,
+    capabilityIds: [targetEnv.capability_id],
+    runId: PROMOTE_RUN,
+    sessionId: SESSION,
+    profileId: PROFILE,
+    kind: "canonical_target",
+    operation: "promote",
   });
 
   return { projectRoot, kbRoot, targetPath, targetDir, targetCapId: targetEnv.capability_id };
@@ -210,7 +236,12 @@ describe("host verification (§5.11) — the host's own finding, not a child's c
   it("verifies a real target and captures its CURRENT preimage", async () => {
     const kb = await kbWithPageAndTarget();
     const report = verifyPromotionCandidate({
+      projectRoot: kb.projectRoot,
       kbRoot: kb.kbRoot,
+      runId: PROMOTE_RUN,
+      sessionId: SESSION,
+      profileId: PROFILE,
+      operation: "promote",
       pageRevisions: [{ page_id: "page_quorum", revision_id: "rev_1" }],
       targetCapabilityIds: [kb.targetCapId],
     });
@@ -218,17 +249,22 @@ describe("host verification (§5.11) — the host's own finding, not a child's c
     expect(report.verified).toBe(true);
     expect(report.findings).toEqual([]);
     const target = report.targets[0]!;
-    expect(target.exists).toBe(true);
+    expect(Object.keys(target).sort()).toEqual(["capability_id", "preimage_sha256"]);
     // The preimage is what a later apply would have to still find in place.
     const actual = createHash("sha256").update(readFileSync(kb.targetPath)).digest("hex");
     expect(target.preimage_sha256).toBe(actual);
-    expect(target.authority_root).toBe(kb.targetDir);
+    expect(JSON.stringify(target)).not.toContain(kb.targetDir);
   });
 
   it("refuses to verify a revision the selected generation does not select", async () => {
     const kb = await kbWithPageAndTarget();
     const superseded = verifyPromotionCandidate({
+      projectRoot: kb.projectRoot,
       kbRoot: kb.kbRoot,
+      runId: PROMOTE_RUN,
+      sessionId: SESSION,
+      profileId: PROFILE,
+      operation: "promote",
       pageRevisions: [{ page_id: "page_quorum", revision_id: "rev_999" }],
       targetCapabilityIds: [kb.targetCapId],
     });
@@ -236,7 +272,12 @@ describe("host verification (§5.11) — the host's own finding, not a child's c
     expect(superseded.findings.join(" ")).toMatch(/different revision/i);
 
     const absent = verifyPromotionCandidate({
+      projectRoot: kb.projectRoot,
       kbRoot: kb.kbRoot,
+      runId: PROMOTE_RUN,
+      sessionId: SESSION,
+      profileId: PROFILE,
+      operation: "promote",
       pageRevisions: [{ page_id: "page_absent", revision_id: "rev_1" }],
       targetCapabilityIds: [kb.targetCapId],
     });
@@ -247,7 +288,12 @@ describe("host verification (§5.11) — the host's own finding, not a child's c
   it("records an unresolvable or missing target as a finding, not an exception", async () => {
     const kb = await kbWithPageAndTarget();
     const report = verifyPromotionCandidate({
+      projectRoot: kb.projectRoot,
       kbRoot: kb.kbRoot,
+      runId: PROMOTE_RUN,
+      sessionId: SESSION,
+      profileId: PROFILE,
+      operation: "promote",
       pageRevisions: [{ page_id: "page_quorum", revision_id: "rev_1" }],
       targetCapabilityIds: ["cap_does_not_exist"],
     });
@@ -255,15 +301,51 @@ describe("host verification (§5.11) — the host's own finding, not a child's c
     // preparing — the packet is still produced, and it still applies nothing.
     expect(report.verified).toBe(false);
     expect(report.findings.join(" ")).toMatch(/did not resolve/i);
-    expect(report.targets[0]!.exists).toBe(false);
-    expect(report.targets[0]!.preimage_sha256).toBeUndefined();
+    expect(report.targets[0]).toEqual({ capability_id: "cap_does_not_exist" });
+  });
+
+  it("projects all and only target ids/preimages in request order without host paths", async () => {
+    const kb = await kbWithPageAndTarget();
+    const requested = ["cap_does_not_exist", kb.targetCapId];
+    const report = verifyPromotionCandidate({
+      projectRoot: kb.projectRoot,
+      kbRoot: kb.kbRoot,
+      runId: PROMOTE_RUN,
+      sessionId: SESSION,
+      profileId: PROFILE,
+      operation: "promote",
+      pageRevisions: [{ page_id: "page_quorum", revision_id: "rev_1" }],
+      targetCapabilityIds: requested,
+    });
+    expect(report.targets.map((target) => target.capability_id)).toEqual(requested);
+    expect(report.targets[0]).toEqual({ capability_id: "cap_does_not_exist" });
+    expect(report.targets[1]?.preimage_sha256).toBe(sha256Hex(readFileSync(kb.targetPath)));
+    expect(JSON.stringify(report)).not.toContain(kb.targetDir);
+    expect(JSON.stringify(report)).not.toContain(kb.targetPath);
+    expect(() =>
+      verifyPromotionCandidate({
+        projectRoot: kb.projectRoot,
+        kbRoot: kb.kbRoot,
+        runId: PROMOTE_RUN,
+        sessionId: SESSION,
+        profileId: PROFILE,
+        operation: "promote",
+        pageRevisions: [{ page_id: "page_quorum", revision_id: "rev_1" }],
+        targetCapabilityIds: [kb.targetCapId, kb.targetCapId],
+      })
+    ).toThrow(/duplicated/);
   });
 
   it("never mutates the canonical target while preparing", async () => {
     const kb = await kbWithPageAndTarget();
     const before = readFileSync(kb.targetPath, "utf8");
     verifyPromotionCandidate({
+      projectRoot: kb.projectRoot,
       kbRoot: kb.kbRoot,
+      runId: PROMOTE_RUN,
+      sessionId: SESSION,
+      profileId: PROFILE,
+      operation: "promote",
       pageRevisions: [{ page_id: "page_quorum", revision_id: "rev_1" }],
       targetCapabilityIds: [kb.targetCapId],
     });

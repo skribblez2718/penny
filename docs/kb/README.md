@@ -26,8 +26,10 @@ before any mutation.
 **`.gitignore` alone is not the privacy control.** It is one layer. The host separately
 proves, before every mutation, that the resolved root is admissible: outside any Git
 worktree, or exactly this allowlisted scaffold with every live path untracked and ignored,
-no nested repository or worktree, no symlink component, and owner-only permissions. A
-force-added live file, a non-ignored live path, or an unexpected root fails closed.
+no nested repository or worktree, and no symlink component. An outside-worktree root and
+all live descendant directories are owner-only; this public scaffold root may retain
+non-group/other-writable read/execute modes such as `0755`. A force-added live file, a
+non-ignored live path, or an unexpected root fails closed.
 
 ## Authority
 

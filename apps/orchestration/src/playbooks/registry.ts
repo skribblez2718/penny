@@ -36,6 +36,7 @@
  */
 
 import { SkillContractSchema, validateContract, type SkillContract } from "../contracts.js";
+import type { Checkpointer } from "../checkpointer.js";
 import type { ArtifactRevisionLookup } from "../artifact-store.js";
 import type { PlaybookV1 } from "./playbook.js";
 import { RESEARCH_SKILL_CONTRACT, ResearchPlaybook } from "./research.js";
@@ -43,6 +44,18 @@ import { KNOWLEDGE_BASE_SKILL_CONTRACT, KnowledgeBasePlaybook } from "./knowledg
 
 export interface PlaybookConstructionOptionsV1 {
   readonly artifactRevisions?: ArtifactRevisionLookup;
+  readonly checkpointer?: Checkpointer;
+  /**
+   * Optional custody seam for private start inputs (§5.6): playbooks whose start
+   * actions carry private request bodies in host-allocated files read them back
+   * through this capability, which the engine binds to its own control DB. The
+   * capability is read-only and scoped to one run id — no write surface — and a
+   * playbook that never declares the capability never sees these bodies.
+   */
+  readonly privateInput?: {
+    readonly read: (runId: string) => unknown;
+    readonly sha256: (runId: string) => string | undefined;
+  };
 }
 
 export interface PlaybookRegistrationV1 {
@@ -74,7 +87,14 @@ const RESEARCH_REGISTRATION: PlaybookRegistrationV1 = {
 const KNOWLEDGE_BASE_REGISTRATION: PlaybookRegistrationV1 = {
   name: "knowledge-base",
   contract: KNOWLEDGE_BASE_SKILL_CONTRACT,
-  construct: (options) => new KnowledgeBasePlaybook(options.artifactRevisions),
+  construct: (options) =>
+    new KnowledgeBasePlaybook(
+      options.artifactRevisions,
+      undefined,
+      undefined,
+      options.privateInput,
+      options.checkpointer
+    ),
 };
 
 /**

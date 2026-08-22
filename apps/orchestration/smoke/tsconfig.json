@@ -1,0 +1,4 @@
+{
+  "extends": "../tsconfig.kb-model-smoke.json",
+  "include": ["./*.ts"]
+}

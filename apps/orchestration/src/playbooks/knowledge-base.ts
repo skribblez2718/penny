@@ -35,7 +35,7 @@
 
 import { randomUUID } from "node:crypto";
 
-import { canonicalJson, sha256 } from "../checkpointer.js";
+import { canonicalJson, type Checkpointer } from "../checkpointer.js";
 import {
   validateDirective,
   type Confidence,
@@ -47,6 +47,13 @@ import {
 import type { RunContext } from "../context.js";
 import type { ArtifactRevisionLookup } from "../artifact-store.js";
 import type { GapClassificationCapabilityV1, PlaybookCoreV1 } from "./playbook.js";
+import { PolicyRefusal } from "../kb/policy.js";
+import {
+  packetDigest as contentReviewPacketDigest,
+  packetJcs as contentReviewPacketJcs,
+  validateContentReviewPacket,
+} from "../kb/content-review.js";
+import type { ContentReviewGatePacket } from "../kb/contracts.js";
 import { buildOutputArtifactMetadata } from "./artifact-metadata.js";
 import {
   defaultKbIngestPlane,
@@ -55,8 +62,26 @@ import {
   type KbPublishOutcome,
 } from "../kb/ingest-plane.js";
 
+/**
+ * The custody seam the engine offers for §5.6 private start inputs. Read-only,
+ * scoped to one run: the playbook never sees a store or a path, only the
+ * bound digest and the parsed request document for its own run.
+ */
+export interface PrivateInputCapabilityV1 {
+  readonly read: (runId: string) => unknown;
+  readonly sha256: (runId: string) => string | undefined;
+}
+
 /** The agent phases of an ingest run, in order. */
-export const KB_AGENT_PHASES = ["ingest", "compose", "lint", "verify", "plan", "patch"] as const;
+export const KB_AGENT_PHASES = [
+  "ingest",
+  "compose",
+  "query",
+  "lint",
+  "verify",
+  "plan",
+  "patch",
+] as const;
 export type KbAgentPhase = (typeof KB_AGENT_PHASES)[number];
 
 /** Every non-terminal state of the KB machine. */
@@ -66,6 +91,7 @@ export type KbState = (typeof KB_STATES)[number];
 const AGENT_BY_PHASE: Record<KbAgentPhase, string> = {
   ingest: "echo",
   compose: "synthia",
+  query: "synthia",
   lint: "carren",
   verify: "vera",
   // Promotion prepares only: Piper plans the transition, Skribble scopes the
@@ -78,6 +104,7 @@ const AGENT_BY_PHASE: Record<KbAgentPhase, string> = {
 const NEXT_STATE: Record<KbState, KbState | "complete"> = {
   ingest: "compose",
   compose: "lint",
+  query: "verify",
   lint: "verify",
   verify: "awaiting_review",
   plan: "patch",
@@ -90,8 +117,9 @@ const NEXT_STATE: Record<KbState, KbState | "complete"> = {
 const PRIOR_PHASES: Record<KbAgentPhase, readonly KbAgentPhase[]> = {
   ingest: [],
   compose: ["ingest"],
+  query: [],
   lint: ["compose"],
-  verify: ["compose"],
+  verify: ["compose", "query"],
   plan: [],
   patch: ["plan"],
 };
@@ -130,7 +158,7 @@ export interface KbFlowGate {
 export interface KbFlowTerminal {
   readonly id: string;
   readonly met: boolean;
-  readonly route_from: string;
+  readonly routes_from: readonly string[];
 }
 export interface KbFlowDescriptor {
   readonly schema_version: 1;
@@ -160,6 +188,27 @@ export const KB_FLOW: KbFlowDescriptor = {
   ],
   edges: [
     { from: "start", to: "ingest", kind: "forward", trigger: "initialize (claim + admit sources)" },
+    // A verified `query` enters Synthia only after deterministic retrieval has
+    // bound one selected generation and a non-empty candidate allowlist. An
+    // explicit verify_grounding:false query stays on the deterministic host path.
+    {
+      from: "start",
+      to: "query",
+      kind: "forward",
+      trigger: "initialize query (verify_grounding true; bind candidates)",
+    },
+    {
+      from: "start",
+      to: "complete",
+      kind: "terminal",
+      trigger: "deterministic query (verify_grounding false; explicitly unverified)",
+    },
+    {
+      from: "start",
+      to: "incomplete",
+      kind: "terminal",
+      trigger: "query refused or no supported candidates",
+    },
     // A `save` enters at compose: it has no extraction phase, because it
     // composes from the sealed answer of the query run its claim names.
     {
@@ -168,8 +217,9 @@ export const KB_FLOW: KbFlowDescriptor = {
       kind: "forward",
       trigger: "initialize save (claim the query answer)",
     },
-    // A `promote` prepares only: plan and patch, then the review gate. It has no
-    // publishing edge, because the public tool can never apply a promotion.
+    // A public `promote` prepares only: plan and patch, then review. The signed
+    // host-internal continuation may later terminalize from that gate; it never
+    // gives the public tool a publishing/apply edge.
     {
       from: "start",
       to: "plan",
@@ -185,19 +235,51 @@ export const KB_FLOW: KbFlowDescriptor = {
       from: "awaiting_review",
       to: "publishing",
       kind: "gate",
-      trigger: "approve (host-authenticated)",
+      trigger: "content-review approve (host-authenticated)",
+    },
+    {
+      from: "awaiting_review",
+      to: "complete",
+      kind: "terminal",
+      trigger: "signed promotion apply verified (host-internal only)",
     },
     { from: "awaiting_review", to: "incomplete", kind: "terminal", trigger: "deny" },
-    { from: "awaiting_review", to: "compose", kind: "repair", trigger: "refine", bounded: true },
-    // publishing → complete is the machine's happy-path successor table entry,
-    // realized by the host publication behind the approval.
+    {
+      from: "awaiting_review",
+      to: "compose",
+      kind: "repair",
+      trigger: "content-review refine",
+      bounded: true,
+    },
+    {
+      from: "awaiting_review",
+      to: "plan",
+      kind: "repair",
+      trigger: "promotion refine (host-authenticated)",
+      bounded: true,
+    },
+    // publishing → complete is the publication happy path. A query may reach
+    // the same met terminal only from Vera after host validation of the closed
+    // citation report and save-claim creation.
     { from: "publishing", to: "complete", kind: "terminal", trigger: "publish (host I/O)" },
+    {
+      from: "verify",
+      to: "complete",
+      kind: "terminal",
+      trigger: "verified query (supported citations + passing report + save claim)",
+    },
+    {
+      from: "verify",
+      to: "incomplete",
+      kind: "terminal",
+      trigger: "query verification failed or save claim unavailable",
+    },
     // Repairs — the same routes `classifyGap` produces (bounded by the budget).
     {
       from: "lint",
       to: "compose",
       kind: "repair",
-      trigger: "error-severity finding(s)",
+      trigger: "blocking-severity finding(s)",
       bounded: true,
       feedback_kind: "synthesis_gap",
     },
@@ -222,16 +304,21 @@ export const KB_FLOW: KbFlowDescriptor = {
     {
       state: "awaiting_review",
       decisions: ["approve", "deny", "refine"],
-      // Approval/denial/refinement reach the run only as a gate response from the
-      // host (penny-kb-gate → engine respond); the model-facing tool cannot decide.
+      // Decisions reach the run only through authenticated host facades. Content
+      // review and signed promotion approval are distinct stores/callbacks.
       host_only: true,
     },
   ],
   terminals: [
-    // The completion gate pins these: a `met: true` terminal is reachable only
-    // from publishing (KNOWLEDGE_BASE_SKILL_CONTRACT.completion_gate).
-    { id: "complete", met: true, route_from: "publishing" },
-    { id: "incomplete", met: false, route_from: "awaiting_review" },
+    // The completion gate admits agent-produced met terminals from publication
+    // or query verification. `start` is the deterministic unverified host path
+    // and has no save or parent-delivery authority.
+    {
+      id: "complete",
+      met: true,
+      routes_from: ["start", "awaiting_review", "publishing", "verify"],
+    },
+    { id: "incomplete", met: false, routes_from: ["start", "awaiting_review", "verify"] },
   ],
 };
 
@@ -246,9 +333,10 @@ function isAgentPhase(value: string): value is KbAgentPhase {
 /**
  * The KB skill contract.
  *
- * `completion_gate` is live rather than decorative: a `met: true` terminal must be
- * reached from `publishing`, so no ingest run can report success without an approved
- * publication behind it.
+ * `completion_gate` is live rather than decorative: an agent-produced `met:true`
+ * terminal must come from `publishing` or query `verify`. Ingest/save therefore
+ * cannot report success without approved publication, and a grounded query cannot
+ * report success before Vera plus host finalization.
  */
 export const KNOWLEDGE_BASE_SKILL_CONTRACT: SkillContract = {
   schema_version: 1,
@@ -274,8 +362,9 @@ export const KNOWLEDGE_BASE_SKILL_CONTRACT: SkillContract = {
   completion_gate: {
     schema_version: 1,
     required_receipts: [],
-    // Publication is the only route to a met ingest terminal.
-    required_states: ["publishing"],
+    // Publication admits ingest/save; Vera admits grounded query; awaiting_review
+    // admits only the separate signed promotion finalizer (not ordinary resume).
+    required_states: ["awaiting_review", "publishing", "verify"],
   },
 };
 
@@ -334,6 +423,15 @@ function counter(details: Record<string, JsonValue>, key: string): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+/** The query's candidate count as safe metadata for the replay projection. */
+function candidateCountOf(context: RunContext): number {
+  const counts = context.playbookData.query_counts as unknown as
+    | { candidates?: unknown }
+    | undefined;
+  const value = counts?.candidates;
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 function directive<T>(value: T): Directive {
   return validateDirective(value);
 }
@@ -354,6 +452,7 @@ function validatePhaseDetails(
   const expected: Record<KbAgentPhase, string> = {
     ingest: "claims",
     compose: "page_draft",
+    query: "query_answer",
     lint: "lint_report",
     verify: "verification_report",
     plan: "promotion_plan",
@@ -396,12 +495,14 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
       projectRoot: string,
       profileId: string,
       sessionId: string
-    ) => string = resolveKbRoot
+    ) => string = resolveKbRoot,
+    private readonly privateInput?: PrivateInputCapabilityV1,
+    private readonly checkpointer?: Checkpointer
   ) {
     // The real plane by default: an optional-I/O playbook could silently run
     // without persisting anything, which is precisely the failure mode that lets a
     // "successful" ingest publish nothing.
-    this.plane = plane ?? defaultKbIngestPlane();
+    this.plane = plane ?? defaultKbIngestPlane(checkpointer);
   }
 
   /** Host-resolved, never caller-supplied. */
@@ -418,7 +519,7 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
       throw new Error(`KnowledgeBasePlaybook cannot run playbook '${context.identity.playbook}'`);
     }
     const action = String(context.constraints.action ?? "ingest");
-    if (action !== "ingest" && action !== "save" && action !== "promote") {
+    if (action !== "ingest" && action !== "save" && action !== "promote" && action !== "query") {
       throw new Error(`KB playbook action '${action}' is not implemented yet`);
     }
     const sourceCapabilityIds = stringList(context.constraints.source_capability_ids as JsonValue);
@@ -426,19 +527,50 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
       throw new Error("KB ingest requires at least one admitted source capability");
     }
     context.playbookData.action = action;
-    context.playbookData.source_ids = sourceCapabilityIds as unknown as JsonValue;
+    context.playbookData.source_capability_ids = sourceCapabilityIds as unknown as JsonValue;
     context.playbookData.profile_id = String(context.constraints.kb_profile_id ?? "");
     const kbRoot = this.kbRoot(context);
     const runId = context.identity.run_id;
 
-    // §5.3 deny-before-session. The profile and root are already resolved above;
-    // this validates the policy and the ACTIVE parent identity, and binds the
-    // digest the run is admitted under. It must precede claim/admit, because
-    // admitting a source object reads private bytes — a denial after that point
-    // would be a denial that already leaked.
+    // §5.3 deny-before-session. The profile and root are already resolved
+    // above; admission validates the policy and the ACTIVE parent identity
+    // and binds the digest the run is admitted under.
     const parentIdentity = readParentIdentity(context.constraints.parent_identity as JsonValue);
+
+    if (action === "query") {
+      // §5.6 engine-owned query start, with no publication. The request body
+      // arrives ONLY through the private-input custody seam — never via the
+      // goal, constraints, prompt, or control state. Explicitly unverified
+      // requests terminate on the deterministic path; default-true requests
+      // bind candidates and enter Synthia → Vera through private readers.
+      // Status/recover address both through the engine's one checkpointer.
+      //
+      // §5.3 admission is the FIRST phase for the query too. A policy refusal
+      // is a DURABLE, ADDRESSABLE terminal state (public `refused`) — the run
+      // is recorded, never leaked — not an exception. A host misconfiguration
+      // (the granted root is not a KB at all) is not a refusal: it propagates
+      // and the recorded run stays incomplete for the operator to address.
+      try {
+        const admitted = this.plane.admitRun({ kbRoot, parentIdentity });
+        context.playbookData.admitted_policy_sha256 = admitted.policy_sha256;
+        context.playbookData.kb_id = admitted.kb_id;
+        return this.initializeQuery(context, kbRoot);
+      } catch (error) {
+        if (error instanceof PolicyRefusal) {
+          context.playbookData.public_status = "refused";
+          context.playbookData.warnings = [error.code] as unknown as JsonValue;
+          return this.terminal(context, "incomplete", false, [`policy refusal: ${error.code}`]);
+        }
+        throw error;
+      }
+    }
+
+    // §5.3 deny-before-session (ingest/save/promote). Admission must precede
+    // claim/admit, because admitting a source object reads private bytes — a
+    // denial after that point would be a denial that already leaked.
     const admitted = this.plane.admitRun({ kbRoot, parentIdentity });
     context.playbookData.admitted_policy_sha256 = admitted.policy_sha256;
+    context.playbookData.kb_id = admitted.kb_id;
 
     if (action === "promote") {
       // §5.11 prepare only. The targets are claimed all-or-none before any child
@@ -456,7 +588,15 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
       }
       context.playbookData.target_capability_ids = targetIds as unknown as JsonValue;
       context.playbookData.page_revisions = pageRevisions;
-      this.plane.claim({ kbRoot, capabilityIds: targetIds, runId });
+      this.plane.claim({
+        projectRoot: context.projectRoot,
+        kbRoot,
+        capabilityIds: targetIds,
+        runId,
+        sessionId: context.identity.session_id,
+        profileId: String(context.playbookData.profile_id ?? ""),
+        operation: "promote",
+      });
       context.transition("plan");
       return this.dispatch(context);
     }
@@ -484,28 +624,154 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
       context.playbookData.query_run_id = queryRunId;
       context.playbookData.save_transaction_id = transactionId;
       context.playbookData.answer_artifact_id = answerArtifactId;
-      context.playbookData.page_kind = String(context.constraints.page_kind ?? "synthesis");
-      context.playbookData.title = String(context.constraints.title ?? "");
+      if (this.privateInput === undefined || this.plane.readSaveStartRequest === undefined) {
+        throw new Error(
+          "KB save requires the private-input custody seam; its title is never taken from run state"
+        );
+      }
+      const expectedSha256 = this.privateInput.sha256(runId);
+      if (expectedSha256 === undefined) {
+        throw new Error(`save run '${runId}' has no indexed private-input digest`);
+      }
+      const saveRequest = this.plane.readSaveStartRequest({
+        request: this.privateInput.read(runId),
+        expectedSha256,
+      });
+      if (saveRequest.query_run_id !== queryRunId) {
+        throw new Error("the claimed query run does not match the stored save request");
+      }
+      // The title remains only in the private request/phase brief; control state
+      // carries the opaque query binding and claim metadata, never body text.
       // A save composes from the claimed answer; there is no extraction phase.
       context.transition("compose");
       return this.dispatch(context);
     }
 
     // All-or-none, before any agent reads a source.
-    this.plane.claim({
+    const admittedSourceIds = this.plane.claim({
+      projectRoot: context.projectRoot,
       kbRoot,
       capabilityIds: sourceCapabilityIds,
       runId,
+      sessionId: context.identity.session_id,
+      profileId: String(context.playbookData.profile_id ?? ""),
+      operation: "ingest",
     });
-    // Admit the source objects before any agent work: the approval path publishes
-    // what this admitted, so the agents must see exactly what will publish.
+    context.playbookData.source_ids = [...admittedSourceIds] as unknown as JsonValue;
+    // Verification-only: claim() has already created every immutable snapshot.
     this.plane.admit({
+      projectRoot: context.projectRoot,
       kbRoot,
-      capabilityIds: sourceCapabilityIds,
+      sourceIds: admittedSourceIds,
       runId,
+      sessionId: context.identity.session_id,
+      profileId: String(context.playbookData.profile_id ?? ""),
+      operation: "ingest",
     });
     context.transition("ingest");
     return this.dispatch(context);
+  }
+
+  /**
+   * Query initialization (§5.6).
+   *
+   * Order: §5.3 admission → digest-verified private-input read → deterministic
+   * retrieval bound to one selected generation. `verify_grounding:false` then
+   * seals an explicitly unverified answer and terminates. Default true enters
+   * the purpose-built `query` (Synthia) and `verify` (Vera) states; only their
+   * host-validated citation/report pair may create a save claim and terminate
+   * met:true. Control state receives metadata and handles only.
+   */
+  private initializeQuery(context: RunContext, kbRoot: string): Directive {
+    const runId = context.identity.run_id;
+    const profileId = String(context.playbookData.profile_id ?? "");
+    if (profileId.length === 0) {
+      throw new Error("KB query requires the host-supplied kb_profile_id constraint");
+    }
+    if (this.privateInput === undefined) {
+      throw new Error(
+        "KB query requires the private-input custody seam; the request body is never taken from run state"
+      );
+    }
+    const expectedSha256 = this.privateInput.sha256(runId);
+    if (expectedSha256 === undefined) {
+      throw new Error(
+        `run '${runId}' has no indexed private input; a query body is never taken from run state`
+      );
+    }
+    if (this.plane.readStartRequest === undefined || this.plane.runQuery === undefined) {
+      throw new Error(
+        "the KB plane does not declare the §5.6 query capability; refusing to start a query run"
+      );
+    }
+    const request = this.plane.readStartRequest({
+      request: this.privateInput.read(runId),
+      expectedSha256,
+    });
+    const outcome = this.plane.runQuery({
+      projectRoot: context.projectRoot,
+      kbRoot,
+      profileId,
+      runId,
+      request,
+    });
+    // Safe metadata only: counts, opaque page ids, one path-free handle. The
+    // request body never enters control state, a prompt, or a public result.
+    context.playbookData.kb_id = outcome.kbId ?? "";
+    context.playbookData.query_page_ids = [...outcome.pageIds] as unknown as JsonValue;
+    context.playbookData.query_counts = {
+      candidates: outcome.candidateCount,
+    } as unknown as JsonValue;
+    context.playbookData.selected_generation_id = outcome.selectedGenerationId ?? "";
+    context.playbookData.warnings = [...outcome.warnings] as unknown as JsonValue;
+    if (outcome.answerHandle !== undefined) {
+      context.playbookData.answer_artifact_id = outcome.answerHandle.artifact_id;
+      context.playbookData.answer_handle = outcome.answerHandle as unknown as JsonValue;
+    }
+    const unresolved = [...stringList(context.playbookData.unresolved), ...outcome.unresolved];
+    context.playbookData.unresolved = unresolved as unknown as JsonValue;
+    if (outcome.status === "refused") {
+      context.playbookData.public_status = "refused";
+      return this.terminal(context, "incomplete", false, unresolved);
+    }
+    context.playbookData.public_status = "complete";
+    if (outcome.groundingRequired) {
+      if (this.plane.finalizeVerifiedQuery === undefined) {
+        throw new Error(
+          "the KB plane cannot finalize a grounded query; refusing to bypass the verification seam"
+        );
+      }
+      context.transition("query");
+      return this.dispatch(context);
+    }
+    if (outcome.met === true) {
+      return this.terminal(context, "complete", true, unresolved);
+    }
+    // §5.6 result matrix: a completed query with no supported answer is
+    // `complete` but `met: false` — a satisfied flow, an honest negative
+    // outcome. The engine terminal action for an unmet run is `incomplete`
+    // (engine truth contract); the public projection maps it via
+    // `public_status` back to §5.6's `complete`/`met:false`.
+    return this.terminal(
+      context,
+      "incomplete",
+      false,
+      unresolved.length > 0 ? unresolved : ["empty result set"]
+    );
+  }
+
+  private readStoredQueryRequest(context: RunContext) {
+    if (this.privateInput === undefined || this.plane.readStartRequest === undefined) {
+      throw new Error("the grounded query lost its private-input reader seam");
+    }
+    const expectedSha256 = this.privateInput.sha256(context.identity.run_id);
+    if (expectedSha256 === undefined) {
+      throw new Error("the grounded query has no indexed private-input digest");
+    }
+    return this.plane.readStartRequest({
+      request: this.privateInput.read(context.identity.run_id),
+      expectedSha256,
+    });
   }
 
   dispatch(context: RunContext): Directive {
@@ -568,8 +834,21 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
    * readers — never through this string, which is control-plane data.
    */
   private phaseTask(context: RunContext, phase: KbAgentPhase): string {
-    const sources = stringList(context.playbookData.source_ids);
     const revision = context.iteration > 0 ? ` (revision ${context.iteration})` : "";
+    const action = String(context.playbookData.action ?? "");
+    if (action === "query") {
+      return `Execute the knowledge-base '${phase}' phase${revision} through the host-closed query readers. Follow the phase guidance and submit the typed result.`;
+    }
+    if (action === "promote") {
+      const pageRevisions = Array.isArray(context.playbookData.page_revisions)
+        ? context.playbookData.page_revisions
+        : [];
+      const targetIds = stringList(context.playbookData.target_capability_ids);
+      return `Execute the knowledge-base '${phase}' phase${revision} for page revisions ${canonicalJson(
+        pageRevisions
+      )} and target capability ids ${canonicalJson(targetIds)}. Read them only through the host-closed promotion readers; prepare only and submit the typed result.`;
+    }
+    const sources = stringList(context.playbookData.source_ids);
     return `Execute the knowledge-base '${phase}' phase${revision} over ${sources.length} admitted source(s). Follow the phase guidance and submit the typed result.`;
   }
 
@@ -602,16 +881,20 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     details: Record<string, JsonValue>
   ): EvaluationResult | null {
     const exhausted = context.iteration >= context.maxIterations;
-    if (state === "lint" && counter(details, "error_count") > 0) {
+    if (state === "lint" && counter(details, "blocking_count") > 0) {
       return {
         schema_version: 1,
         kind: "synthesis_gap",
-        detail: `semantic lint reported ${counter(details, "error_count")} error-severity finding(s)`,
+        detail: `semantic lint reported ${counter(details, "blocking_count")} blocking-severity finding(s)`,
         target_state: "compose",
         exhausted,
       };
     }
-    if (state === "verify" && counter(details, "unsupported") > 0) {
+    if (
+      state === "verify" &&
+      String(context.playbookData.action ?? "") !== "query" &&
+      counter(details, "unsupported") > 0
+    ) {
       return {
         schema_version: 1,
         kind: "validation_gap",
@@ -648,6 +931,10 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
       ...(typeof details.verdict === "string" ? { verdict: details.verdict } : {}),
     });
 
+    if (state === "verify" && String(context.playbookData.action ?? "") === "query") {
+      return this.finishVerifiedQuery(context);
+    }
+
     const gap = this.classifyGap(context, state, details);
     if (gap !== null && !gap.exhausted && gap.target_state !== undefined) {
       const warnings = stringList(context.playbookData.warnings);
@@ -671,6 +958,50 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     return this.dispatch(context);
   }
 
+  private finishVerifiedQuery(context: RunContext): Directive {
+    if (this.plane.finalizeVerifiedQuery === undefined) {
+      throw new Error("the KB plane cannot finalize a verified query");
+    }
+    const phases = phaseRecords(context);
+    const answerArtifactId = phases.query?.kb_artifact_id ?? "";
+    const verificationArtifactId = phases.verify?.kb_artifact_id ?? "";
+    const selectedGenerationId = String(context.playbookData.selected_generation_id ?? "");
+    if (
+      answerArtifactId.length === 0 ||
+      verificationArtifactId.length === 0 ||
+      selectedGenerationId.length === 0
+    ) {
+      throw new Error("the grounded query is missing its bound answer, report, or generation");
+    }
+    const outcome = this.plane.finalizeVerifiedQuery({
+      projectRoot: context.projectRoot,
+      kbRoot: this.kbRoot(context),
+      profileId: String(context.playbookData.profile_id ?? ""),
+      runId: context.identity.run_id,
+      request: this.readStoredQueryRequest(context),
+      selectedGenerationId,
+      answerArtifactId,
+      verificationArtifactId,
+    });
+    context.playbookData.kb_id = outcome.kbId ?? "";
+    context.playbookData.query_page_ids = [...outcome.pageIds] as unknown as JsonValue;
+    context.playbookData.query_counts = {
+      candidates: outcome.candidateCount,
+    } as unknown as JsonValue;
+    context.playbookData.answer_artifact_id = outcome.answerHandle?.artifact_id ?? "";
+    context.playbookData.answer_handle = (outcome.answerHandle ?? null) as unknown as JsonValue;
+    context.playbookData.verification_artifact_id = outcome.verificationArtifactId;
+    context.playbookData.grounding_verified = outcome.met;
+    const warnings = [...stringList(context.playbookData.warnings), ...outcome.warnings];
+    const unresolved = [...stringList(context.playbookData.unresolved), ...outcome.unresolved];
+    context.playbookData.warnings = warnings as unknown as JsonValue;
+    context.playbookData.unresolved = unresolved as unknown as JsonValue;
+    context.playbookData.public_status = "complete";
+    return outcome.met
+      ? this.terminal(context, "complete", true, unresolved)
+      : this.terminal(context, "incomplete", false, unresolved);
+  }
+
   private countsFor(
     state: KbAgentPhase,
     details: Record<string, JsonValue>
@@ -678,7 +1009,8 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     const keys: Record<KbAgentPhase, readonly string[]> = {
       ingest: ["claim_count"],
       compose: ["claim_count"],
-      lint: ["finding_count", "error_count", "candidate_conflict_count"],
+      query: ["citation_count"],
+      lint: ["finding_count", "blocking_count", "candidate_conflict_count"],
       verify: ["supported", "partially_supported", "unsupported"],
       plan: ["step_count", "target_count"],
       patch: ["hunk_count", "target_count"],
@@ -696,24 +1028,37 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
    */
   private awaitReview(context: RunContext): Directive {
     const phases = phaseRecords(context);
-    const isPromote = String(context.playbookData.action ?? "ingest") === "promote";
-    // Seal the exact candidate set and persist the gate BEFORE presenting it. A gate
-    // offered before its candidates are frozen could be approved against a set that
-    // changed afterwards.
-    if (context.playbookData.gate_id === undefined) {
+    const action = String(context.playbookData.action ?? "ingest");
+    const isPromote = action === "promote";
+    const isContentReview = action === "ingest" || action === "save";
+    let engineGateId = String(
+      isPromote
+        ? (context.playbookData.promotion_challenge_id ?? "")
+        : (context.playbookData.content_review_challenge_id ?? "")
+    );
+    if (engineGateId.length === 0) engineGateId = randomUUID();
+
+    // Seal the exact candidate set and construct its authority packet BEFORE
+    // presenting it. Checkpointer.persistPendingGate stores the packet and the
+    // run/generic gate in one control-DB transaction.
+    if (
+      (isContentReview && context.playbookData.content_review_packet_jcs === undefined) ||
+      (isPromote && context.playbookData.promotion_packet_sha256 === undefined)
+    ) {
       const kbRoot = this.kbRoot(context);
       const artifactIds = KB_AGENT_PHASES.map((phase) => phases[phase]?.kb_artifact_id).filter(
         (id): id is string => typeof id === "string" && id.length > 0
       );
       if (isPromote) {
-        // §5.11: the host's OWN verification, not a child's claim — re-resolve
-        // every target, capture its current preimage, and confirm the named
-        // revisions are the ones actually selected. The finding is sealed into
-        // the packet alongside the plan and patch.
+        // Prepare remains non-authority evidence. The separate G9 approval DB
+        // may sign/apply only after this host verification artifact is sealed.
         const verification = this.plane.verifyPromotion({
+          projectRoot: context.projectRoot,
           kbRoot,
           runId: context.identity.run_id,
+          sessionId: context.identity.session_id,
           profileId: String(context.playbookData.profile_id ?? ""),
+          operation: "promote",
           pageRevisions: (context.playbookData.page_revisions ?? []) as JsonValue,
           targetCapabilityIds: stringList(context.playbookData.target_capability_ids),
         });
@@ -728,28 +1073,73 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
         }
       }
       this.plane.seal({ kbRoot, runId: context.identity.run_id, artifactIds });
+      context.playbookData.review_artifact_ids = [...artifactIds];
       const capabilityIds = isPromote
         ? stringList(context.playbookData.target_capability_ids)
-        : stringList(context.playbookData.source_ids);
-      const gate = this.plane.persistGate({
-        kbRoot,
-        profileId: String(context.playbookData.profile_id ?? ""),
-        runId: context.identity.run_id,
-        artifactIds,
-        sourceIds: isPromote ? [] : capabilityIds,
-        capabilityIds,
-      });
-      context.playbookData.gate_id = gate.gate_id;
-      context.playbookData.base_generation_id = gate.base_generation_id ?? "";
+        : stringList(context.playbookData.source_capability_ids);
+      const sourceIds =
+        isContentReview && action === "ingest" ? stringList(context.playbookData.source_ids) : [];
+      if (isContentReview) {
+        const admittedPolicySha256 = String(context.playbookData.admitted_policy_sha256 ?? "");
+        if (admittedPolicySha256.length === 0) {
+          throw new Error("content-review packet requires the admitted policy digest");
+        }
+        const packet = this.plane.prepareContentReview({
+          projectRoot: context.projectRoot,
+          kbRoot,
+          profileId: String(context.playbookData.profile_id ?? ""),
+          runId: context.identity.run_id,
+          artifactIds,
+          sourceIds,
+          capabilityIds,
+          sessionId: context.identity.session_id,
+          challengeId: engineGateId,
+          action,
+          ...(action === "save"
+            ? { queryRunId: String(context.playbookData.query_run_id ?? "") }
+            : {}),
+          policySha256: admittedPolicySha256,
+        });
+        context.playbookData.content_review_challenge_id = engineGateId;
+        context.playbookData.content_review_packet_jcs = contentReviewPacketJcs(packet);
+        context.playbookData.content_review_packet_sha256 = contentReviewPacketDigest(packet);
+        context.playbookData.gate_id = engineGateId;
+        context.playbookData.base_generation_id = packet.base_generation_id;
+      } else if (isPromote) {
+        if (this.plane.preparePromotionGate === undefined) {
+          throw new Error(
+            "promotion cannot reach awaiting_user without the approval-DB-first packet service"
+          );
+        }
+        const pageRevisions = Array.isArray(context.playbookData.page_revisions)
+          ? (context.playbookData.page_revisions as Array<{
+              page_id: string;
+              revision_id: string;
+            }>)
+          : [];
+        const stored = this.plane.preparePromotionGate({
+          projectRoot: context.projectRoot,
+          kbRoot,
+          profileId: String(context.playbookData.profile_id ?? ""),
+          runId: context.identity.run_id,
+          artifactIds,
+          sourceIds: [],
+          capabilityIds,
+          sessionId: context.identity.session_id,
+          challengeId: engineGateId,
+          pageRevisions,
+        });
+        context.playbookData.promotion_challenge_id = stored.challengeId;
+        context.playbookData.promotion_packet_sha256 = stored.packetSha256;
+        context.playbookData.gate_id = stored.challengeId;
+      } else {
+        throw new Error(`KB action '${action}' cannot enter the review gate`);
+      }
     }
-    const summary = {
-      sources: stringList(context.playbookData.source_ids).length,
-      phases,
-      gate_id: String(context.playbookData.gate_id ?? ""),
-      unresolved: stringList(context.playbookData.unresolved),
-    };
-    const gateId = randomUUID();
-    const challenge = randomUUID();
+    const gateId = isContentReview
+      ? String(context.playbookData.content_review_challenge_id ?? engineGateId)
+      : String(context.playbookData.promotion_challenge_id ?? engineGateId);
+    const challenge = isPromote ? gateId : randomUUID();
     context.status = "awaiting_user";
     const next = directive({
       schema_version: 2,
@@ -758,12 +1148,15 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
       state_id: "awaiting_review",
       gate_id: gateId,
       challenge,
-      payload_digest: sha256(canonicalJson(summary as unknown as JsonValue)),
+      payload_digest: isContentReview
+        ? String(context.playbookData.content_review_packet_sha256 ?? "")
+        : String(context.playbookData.promotion_packet_sha256 ?? ""),
       questions: [
         {
           id: "content-review-1",
-          prompt:
-            "Approve publication of the reviewed candidate page(s) into the knowledge base? Answer 'approve', 'deny', or 'refine'.",
+          prompt: isPromote
+            ? "Review the stored promotion packet through the authenticated host approval surface. Public responses cannot approve or apply it."
+            : "Approve publication of the reviewed candidate page(s) into the knowledge base? Answer 'approve', 'deny', or 'refine'.",
         },
       ],
     });
@@ -771,9 +1164,56 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     return next;
   }
 
+  private storedContentReviewPacket(context: RunContext): ContentReviewGatePacket {
+    const raw = context.playbookData.content_review_packet_jcs;
+    if (typeof raw !== "string") {
+      throw new Error("the run has no canonical content-review packet in control state");
+    }
+    return validateContentReviewPacket(JSON.parse(raw) as unknown);
+  }
+
   resume(context: RunContext, response: JsonValue): Directive {
     if (context.stateId !== "awaiting_review") {
       throw new Error(`KB run is not at a review gate (state '${context.stateId}')`);
+    }
+    const kbRoot = this.kbRoot(context);
+    const admittedPolicySha256 = String(context.playbookData.admitted_policy_sha256 ?? "");
+    if (admittedPolicySha256.length === 0) {
+      throw new PolicyRefusal("policy_changed", "the run has no admitted policy binding");
+    }
+    try {
+      this.plane.recheckPolicy({ kbRoot, admittedPolicySha256 });
+    } catch (error) {
+      if (!(error instanceof PolicyRefusal)) throw error;
+      const action = String(context.playbookData.action ?? "ingest");
+      const packet =
+        action === "ingest" || action === "save"
+          ? this.storedContentReviewPacket(context)
+          : undefined;
+      this.plane.deny({
+        projectRoot: context.projectRoot,
+        kbRoot,
+        runId: context.identity.run_id,
+        action: action as "ingest" | "save" | "promote",
+        ...(packet !== undefined ? { packet } : {}),
+        capabilityIds:
+          action === "promote"
+            ? stringList(context.playbookData.target_capability_ids)
+            : stringList(context.playbookData.source_capability_ids),
+      });
+      if (action === "save") {
+        this.plane.settleSave({
+          projectRoot: context.projectRoot,
+          profileId: String(context.playbookData.profile_id ?? ""),
+          kbRoot,
+          queryRunId: String(context.playbookData.query_run_id ?? ""),
+          saveRunId: context.identity.run_id,
+          outcome: "invalidated",
+        });
+      }
+      context.playbookData.public_status = "refused";
+      context.playbookData.warnings = [error.code] as unknown as JsonValue;
+      return this.terminal(context, "incomplete", false, [error.code]);
     }
     const decision = this.readDecision(response);
     context.playbookData.review_decision = decision;
@@ -781,43 +1221,38 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     const saveClaim = {
       projectRoot: context.projectRoot,
       profileId: String(context.playbookData.profile_id ?? ""),
-      kbRoot: this.kbRoot(context),
+      kbRoot,
       queryRunId: String(context.playbookData.query_run_id ?? ""),
       saveRunId: context.identity.run_id,
     };
     if (decision === "approve") {
       if (String(context.playbookData.action ?? "ingest") === "promote") {
-        // §5.11 / PRD acceptance 9: the public tool prepares only. Applying a
-        // promotion needs the host-only signed approval path, which is G9 and
-        // does not exist yet. Refusing here is the honest answer — publishing a
-        // KB generation would be the WRONG action entirely, and pretending to
-        // apply would be worse.
+        // The signed G9 path calls `completeApprovedPromotion` only after the
+        // approval DB and apply journal have settled. Generic/public gate resume
+        // is never allowed to turn this string into canonical-write authority.
         throw new Error(
-          "promotion apply is host-only and not implemented (G9); the public gate prepares and verifies only"
+          "promotion approve/apply is host-only; public gate responses cannot carry approval authority"
         );
       }
       context.transition("publishing");
-      // §5.6/§5.10: reserve the claim immediately before publication. After this
-      // the claim can only be consumed or invalidated — never returned to
-      // available — so a failure here cannot become a second save.
-      if (isSave) this.plane.reserveSave(saveClaim);
-      // Publication is the deterministic host step this state exists for. The gate
-      // is CAS-guarded and the selector swap is atomic underneath, so a crash
-      // between publishing and checkpointing cannot double-publish.
-      let published: KbPublishOutcome;
-      try {
-        published = this.plane.approve({
-          kbRoot: this.kbRoot(context),
-          runId: context.identity.run_id,
-        });
-      } catch (err) {
-        // The host cannot prove from out here whether the selector moved, and
-        // re-saving a possibly-published answer is worse than refusing a
-        // legitimate retry. Fail closed.
-        if (isSave) this.plane.settleSave({ ...saveClaim, outcome: "invalidated" });
-        throw err;
+      const publicationTransactionId = String(
+        context.playbookData.publication_transaction_id ??
+          (this.checkpointer === undefined ? context.identity.run_id : "")
+      );
+      if (publicationTransactionId.length === 0) {
+        throw new Error("approved publication has no host-owned callback transaction");
       }
-      if (isSave) this.plane.settleSave({ ...saveClaim, outcome: "consumed" });
+      // Reservation, selector commit, and selector-proven authority consumption
+      // are one transaction-owned host step inside the writer lock. The
+      // playbook must not reserve early or guess after an ambiguous exception.
+      const published: KbPublishOutcome = this.plane.approve({
+        projectRoot: context.projectRoot,
+        kbRoot,
+        runId: context.identity.run_id,
+        transactionId: publicationTransactionId,
+        packet: this.storedContentReviewPacket(context),
+        capabilityIds: stringList(context.playbookData.source_capability_ids),
+      });
       context.playbookData.published_generation_id = published.generationId;
       context.playbookData.published_counts = published.counts as unknown as JsonValue;
       return this.terminal(context, "complete", true, stringList(context.playbookData.unresolved));
@@ -830,11 +1265,41 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
         "reviewer requested refinement",
       ] as unknown as JsonValue;
       context.iteration += 1;
-      context.transition("compose");
+      // Refine closes this challenge. Revised artifacts must produce a fresh
+      // packet/challenge; retaining these keys would silently re-offer old bytes.
+      delete context.playbookData.content_review_challenge_id;
+      delete context.playbookData.content_review_packet_jcs;
+      delete context.playbookData.content_review_packet_sha256;
+      delete context.playbookData.promotion_challenge_id;
+      delete context.playbookData.promotion_packet_sha256;
+      delete context.playbookData.review_receipt_id;
+      delete context.playbookData.review_receipt_sha256;
+      delete context.playbookData.gate_id;
+      const isPromotion = String(context.playbookData.action ?? "") === "promote";
+      if (isPromotion) {
+        const retainedPhases = { ...phaseRecords(context) };
+        delete retainedPhases.plan;
+        delete retainedPhases.patch;
+        context.playbookData.phases = retainedPhases as unknown as JsonValue;
+      }
+      context.transition(isPromotion ? "plan" : "compose");
       return this.dispatch(context);
     }
     // Denial publishes nothing and is an honest negative terminal, not an error.
-    this.plane.deny({ kbRoot: this.kbRoot(context), runId: context.identity.run_id });
+    const deniedAction = String(context.playbookData.action ?? "ingest");
+    this.plane.deny({
+      projectRoot: context.projectRoot,
+      kbRoot,
+      runId: context.identity.run_id,
+      action: deniedAction as "ingest" | "save" | "promote",
+      ...(deniedAction === "ingest" || deniedAction === "save"
+        ? { packet: this.storedContentReviewPacket(context) }
+        : {}),
+      capabilityIds:
+        deniedAction === "promote"
+          ? stringList(context.playbookData.target_capability_ids)
+          : stringList(context.playbookData.source_capability_ids),
+    });
     // §5.6: a denied save returns its claim to available while the sealed answer
     // is still valid, so the operator may compose a different page from the same
     // query; otherwise the claim is invalidated.
@@ -845,6 +1310,82 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     ];
     context.status = "running";
     return this.terminal(context, "incomplete", false, unresolved);
+  }
+
+  /**
+   * Host-only terminal reconciliation after the signed apply service settles its
+   * approval DB first and target-capability DB second. This method has no public
+   * request representation and receives metadata only—never a receipt body.
+   */
+  completeApprovedPromotion(
+    context: RunContext,
+    outcome: {
+      status: "complete" | "failed" | "blocked_external_drift";
+      receiptId: string;
+      receiptSha256: string;
+      transactionId: string;
+      targetCount: number;
+      postApplyVerified: boolean;
+    }
+  ): Directive {
+    if (
+      context.stateId !== "awaiting_review" ||
+      String(context.playbookData.action ?? "") !== "promote"
+    ) {
+      throw new Error("run is not awaiting host-only promotion apply finalization");
+    }
+    context.playbookData.review_decision = "approve";
+    context.playbookData.promotion_receipt_id = outcome.receiptId;
+    context.playbookData.promotion_receipt_sha256 = outcome.receiptSha256;
+    context.playbookData.promotion_apply_transaction_id = outcome.transactionId;
+    context.playbookData.promotion_apply_status = outcome.status;
+    context.playbookData.promotion_post_apply_verified = outcome.postApplyVerified;
+    context.playbookData.promotion_target_count = outcome.targetCount;
+    if (outcome.status === "complete" && outcome.postApplyVerified) {
+      return this.terminal(context, "complete", true, stringList(context.playbookData.unresolved));
+    }
+    const unresolved = [
+      ...stringList(context.playbookData.unresolved),
+      outcome.status === "blocked_external_drift"
+        ? "promotion apply blocked on external target drift"
+        : "promotion apply failed and owned target bytes were restored",
+    ];
+    return this.terminal(context, "incomplete", false, unresolved);
+  }
+
+  /** Host-only expiry/drift invalidation; no decision is invented. */
+  invalidateReview(context: RunContext, reason: string): Directive {
+    if (context.stateId !== "awaiting_review") {
+      throw new Error(`KB run is not at a review gate (state '${context.stateId}')`);
+    }
+    const action = String(context.playbookData.action ?? "ingest");
+    const kbRoot = this.kbRoot(context);
+    this.plane.deny({
+      projectRoot: context.projectRoot,
+      kbRoot,
+      runId: context.identity.run_id,
+      action: action as "ingest" | "save" | "promote",
+      ...(action === "ingest" || action === "save"
+        ? { packet: this.storedContentReviewPacket(context) }
+        : {}),
+      capabilityIds:
+        action === "promote"
+          ? stringList(context.playbookData.target_capability_ids)
+          : stringList(context.playbookData.source_capability_ids),
+    });
+    if (action === "save") {
+      this.plane.settleSave({
+        projectRoot: context.projectRoot,
+        profileId: String(context.playbookData.profile_id ?? ""),
+        kbRoot,
+        queryRunId: String(context.playbookData.query_run_id ?? ""),
+        saveRunId: context.identity.run_id,
+        outcome: "invalidated",
+      });
+    }
+    context.playbookData.public_status = "refused";
+    context.playbookData.warnings = [reason] as unknown as JsonValue;
+    return this.terminal(context, "incomplete", false, [reason]);
   }
 
   private readDecision(response: JsonValue): "approve" | "deny" | "refine" {
@@ -862,6 +1403,17 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
   }
 
   cancel(context: RunContext, reason: string): Directive {
+    const action = String(context.playbookData.action ?? "");
+    const capabilities = stringList(context.playbookData.source_capability_ids);
+    if (action === "ingest" && capabilities.length > 0) {
+      this.plane.deny({
+        projectRoot: context.projectRoot,
+        kbRoot: this.kbRoot(context),
+        runId: context.identity.run_id,
+        action: "ingest",
+        capabilityIds: capabilities,
+      });
+    }
     return this.terminal(context, "cancelled", false, [reason]);
   }
 
@@ -915,6 +1467,24 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
         published_generation_id: String(context.playbookData.published_generation_id ?? ""),
         published_counts: (context.playbookData.published_counts ?? {}) as JsonValue,
         review_decision: String(context.playbookData.review_decision ?? ""),
+        // §5.6 query replay metadata — safe metadata only: the §5.6 public
+        // status for the result matrix (complete|refused), opaque page ids,
+        // counts, and the ONE path-free `query_answer` handle. Never the
+        // request body, a path, or the answer text.
+        kb_id: String(context.playbookData.kb_id ?? ""),
+        public_status: String(context.playbookData.public_status ?? ""),
+        candidate_count: candidateCountOf(context),
+        query_page_ids: stringList(context.playbookData.query_page_ids),
+        answer_artifact_id: String(context.playbookData.answer_artifact_id ?? ""),
+        answer_handle: (context.playbookData.answer_handle ?? null) as JsonValue,
+        verification_artifact_id: String(context.playbookData.verification_artifact_id ?? ""),
+        grounding_verified: context.playbookData.grounding_verified === true,
+        promotion_apply_status: String(context.playbookData.promotion_apply_status ?? ""),
+        promotion_post_apply_verified: context.playbookData.promotion_post_apply_verified === true,
+        promotion_target_count:
+          typeof context.playbookData.promotion_target_count === "number"
+            ? context.playbookData.promotion_target_count
+            : 0,
         warnings: stringList(context.playbookData.warnings),
         unresolved_issues: unresolved,
       },

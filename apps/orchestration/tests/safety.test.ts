@@ -380,7 +380,7 @@ describe("artifact and receipt safety", () => {
     checkpointer.close();
   });
 
-  it("persists exact output before fallback SUMMARY parsing", async () => {
+  it("persists exact output but never parses prose into routing control", async () => {
     const root = temporaryRoot();
     const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
     const engine = new OrchestrationEngine(checkpointer, {

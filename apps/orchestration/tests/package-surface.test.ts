@@ -1,23 +1,26 @@
 /**
- * §5.13 package-surface oracle (G3).
+ * §5.13 package-surface decision/oracle.
  *
- * Deep-compares the live package.json and the actual `bun pm pack --dry-run` file
- * list against the operator-approved, independently reviewed decision receipt.
- * Any extra or missing field or file fails.
- *
- * The receipt is POST-HOC by explicit operator decision (2026-08-18): the plan
- * required it to predate the first app-package source write, which had already
- * happened. The ordering violation is recorded in the receipt's `ordering_note`
- * and asserted here so it can never be quietly dropped.
+ * The current private receipt is intentionally not ratcheted by this batch. Its
+ * exact live-oracle failure is the expected G9/G11 package receipt drift.
  */
 
-import { createHash } from "node:crypto";
-import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
+
+import {
+  GateDecisionError,
+  assertPackageSurfaceDecision,
+  bunPackFilesFromExecution,
+  parseBunPackDryRun,
+  parseGateDecisionReceiptJcs,
+  runBunPackDryRun,
+  validatePackageSurfaceDecision,
+} from "../src/kb/gate-decisions.js";
+import { canonicalJson, sha256Hex, type PackageSurfaceDecisionV1 } from "../src/kb/contracts.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../../..");
@@ -25,101 +28,129 @@ const receiptPath = path.join(
   repoRoot,
   ".penny/plan-gates/hybrid-kb-ts-plan-2026-08-13/package_surface.json"
 );
-const pkgPath = path.join(repoRoot, "apps/orchestration/package.json");
+const packagePath = path.join(repoRoot, "apps/orchestration/package.json");
 
-/** RFC 8785 JCS canonical JSON. */
-function jcs(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(jcs).join(",")}]`;
-  const entries = Object.keys(value as Record<string, unknown>)
-    .sort()
-    .map((k) => `${JSON.stringify(k)}:${jcs((value as Record<string, unknown>)[k])}`);
-  return `{${entries.join(",")}}`;
+function rereviewPackageDecision(
+  decision: PackageSurfaceDecisionV1,
+  patch: Partial<PackageSurfaceDecisionV1>
+): PackageSurfaceDecisionV1 {
+  const { review_sha256: _review, ...base } = { ...decision, ...patch };
+  return { ...base, review_sha256: sha256Hex(canonicalJson(base)) };
 }
 
-const receiptExists = existsSync(receiptPath);
-const receipt = receiptExists
-  ? (JSON.parse(readFileSync(receiptPath, "utf8")) as Record<string, unknown> & {
-      review_sha256: string;
-      approved_by_subject_id: string;
-      reviewed_by_subject_id: string;
-      expected_pack_files: string[];
-      exports: Record<string, unknown>;
-      bin: Record<string, string>;
-      scripts: Record<string, string>;
-      ordering_note?: string;
-    })
-  : null;
+function reviewedPackageDecision(): PackageSurfaceDecisionV1 {
+  const unreviewed = {
+    schema_version: 1 as const,
+    plan_id: "hybrid-kb-ts-plan-2026-08-13" as const,
+    decision_id: "package_fixture",
+    approved_by_subject_id: "operator",
+    approved_at: "2026-08-01T00:00:00Z",
+    reviewed_by_subject_id: "agent:vera",
+    reviewed_at: "2026-08-01T00:01:00Z",
+    evidence_refs: [],
+    decision_kind: "package_surface" as const,
+    package_name: "@penny/fixture",
+    package_version: "1.0.0",
+    package_private: true as const,
+    exports: { ".": "./dist/index.js" },
+    bin: { fixture: "./dist/cli.js" },
+    scripts: { build: "tsc" },
+    expected_pack_files: ["dist/cli.js", "dist/index.js", "package.json"],
+  };
+  return {
+    ...unreviewed,
+    review_sha256: sha256Hex(canonicalJson(unreviewed)),
+  };
+}
 
-describe.skipIf(!receiptExists)("§5.13 package-surface receipt", () => {
-  if (receipt === null) {
-    it.skip("requires the private operator receipt", () => {});
-    return;
-  }
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as Record<string, unknown>;
-
-  it("has a valid review hash over the decision with review_sha256 omitted", () => {
-    const { review_sha256, ...rest } = receipt;
-    const recomputed = createHash("sha256").update(jcs(rest), "utf8").digest("hex");
-    expect(recomputed).toBe(review_sha256);
+describe("§5.13 package-surface contract/oracle", () => {
+  it("accepts exact closed JCS and exact live fields/files", () => {
+    const decision = reviewedPackageDecision();
+    const parsed = parseGateDecisionReceiptJcs(canonicalJson(decision));
+    expect(parsed).toEqual(decision);
+    expect(() =>
+      assertPackageSurfaceDecision({
+        decision,
+        packageJson: {
+          name: "@penny/fixture",
+          version: "1.0.0",
+          private: true,
+          exports: { ".": "./dist/index.js" },
+          bin: { fixture: "./dist/cli.js" },
+          scripts: { build: "tsc" },
+          unrelated_package_metadata: "not part of the reviewed projection",
+        },
+        packFiles: ["package.json", "dist/index.js", "dist/cli.js"],
+      })
+    ).not.toThrow();
   });
 
-  it("has distinct approver and reviewer identities", () => {
-    expect(receipt.approved_by_subject_id).not.toBe(receipt.reviewed_by_subject_id);
+  it("rejects duplicate members, unknown receipt keys, non-JCS, unsafe lists, and drift", () => {
+    const decision = reviewedPackageDecision();
+    const jcs = canonicalJson(decision);
+    expect(() =>
+      parseGateDecisionReceiptJcs(jcs.replace('{"approved_at"', '{"approved_at":"x","approved_at"'))
+    ).toThrow(/duplicate/u);
+    expect(() =>
+      parseGateDecisionReceiptJcs(jcs.replace(/\}$/u, ',"ordering_note":"not a contract field"}'))
+    ).toThrow();
+    expect(() => parseGateDecisionReceiptJcs(JSON.stringify(decision, null, 2))).toThrow(
+      /exact JCS/u
+    );
+    expect(() =>
+      validatePackageSurfaceDecision(
+        rereviewPackageDecision(decision, {
+          expected_pack_files: ["../escape", "dist/index.js"],
+        })
+      )
+    ).toThrow(/relative path/u);
+    expect(() =>
+      assertPackageSurfaceDecision({
+        decision,
+        packageJson: {
+          name: "@penny/fixture",
+          version: "1.0.1",
+          private: true,
+          exports: { ".": "./dist/index.js" },
+          bin: { fixture: "./dist/cli.js" },
+          scripts: { build: "tsc" },
+        },
+        packFiles: decision.expected_pack_files,
+      })
+    ).toThrow(/does not exactly match/u);
   });
 
-  it("records the post-hoc ordering violation rather than hiding it", () => {
-    expect(receipt.ordering_note).toBeDefined();
-    expect(receipt.ordering_note).toMatch(/POST-HOC/);
-    expect(receipt.ordering_note).toMatch(/VIOLATED/);
+  it("treats unavailable/unparseable/duplicate bun pack evidence as hard failure", () => {
+    expect(() =>
+      bunPackFilesFromExecution({
+        status: null,
+        stdout: "",
+        stderr: "",
+        error: new Error("bun unavailable"),
+      })
+    ).toThrow(/bun unavailable/u);
+    expect(() =>
+      bunPackFilesFromExecution({
+        status: 1,
+        stdout: "",
+        stderr: "pack failed",
+      })
+    ).toThrow(/pack failed/u);
+    expect(() => parseBunPackDryRun("bun: command not found\n")).toThrow(GateDecisionError);
+    expect(() => parseBunPackDryRun("package packed successfully\n")).toThrow(/zero files/u);
+    expect(() =>
+      parseBunPackDryRun("packed 1KB dist/index.js\npacked 1KB dist/index.js\n")
+    ).toThrow(/duplicate/u);
   });
 
-  it("deep-compares name, version, private, exports, bin, and scripts", () => {
-    expect(pkg.name).toBe(receipt.package_name);
-    expect(pkg.version).toBe(receipt.package_version);
-    expect(pkg.private).toBe(receipt.package_private);
-    expect(jcs(pkg.exports)).toBe(jcs(receipt.exports));
-    expect(jcs(pkg.bin)).toBe(jcs(receipt.bin));
-    expect(jcs(pkg.scripts)).toBe(jcs(receipt.scripts));
-  });
-
-  it("expected_pack_files is non-empty, unique, sorted, relative, traversal-free", () => {
-    const files = receipt.expected_pack_files;
-    expect(files.length).toBeGreaterThan(0);
-    expect(new Set(files).size).toBe(files.length);
-    expect(files).toEqual([...files].sort());
-    for (const f of files) {
-      expect(f.startsWith("/"), `absolute path: ${f}`).toBe(false);
-      expect(f.split("/").includes(".."), `traversal: ${f}`).toBe(false);
+  it("matches the current reviewed package decision and actual bun pack exactly", () => {
+    // Expected to remain red until the authorized G9/G11 candidate+ratchet.
+    const decision = parseGateDecisionReceiptJcs(readFileSync(receiptPath));
+    if (decision.decision_kind !== "package_surface") {
+      throw new Error("package receipt has the wrong decision kind");
     }
-  });
-
-  it("matches the actual pack dry-run file list exactly", () => {
-    let output: string;
-    try {
-      output = execSync("bun pm pack --cwd apps/orchestration --dry-run 2>&1", {
-        cwd: repoRoot,
-        encoding: "utf8",
-        timeout: 60_000,
-      });
-    } catch {
-      // bun unavailable in this environment; the static assertions above still hold.
-      return;
-    }
-    const actual = [
-      ...new Set(
-        output
-          .split("\n")
-          .map((line) => line.match(/^packed\s+[\d.]+\w+\s+(.+)$/))
-          .filter((m): m is RegExpMatchArray => m !== null)
-          .map((m) => m[1].trim())
-      ),
-    ].sort();
-    if (actual.length === 0) return; // parse produced nothing; do not assert vacuously
-    const expected = receipt.expected_pack_files;
-    const missing = expected.filter((f) => !actual.includes(f));
-    const extra = actual.filter((f) => !expected.includes(f));
-    expect(missing, `missing from pack: ${missing.slice(0, 5).join(", ")}`).toEqual([]);
-    expect(extra, `extra in pack: ${extra.slice(0, 5).join(", ")}`).toEqual([]);
+    const packageJson = JSON.parse(readFileSync(packagePath, "utf8")) as unknown;
+    const packFiles = runBunPackDryRun(repoRoot);
+    assertPackageSurfaceDecision({ decision, packageJson, packFiles });
   });
 });

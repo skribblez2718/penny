@@ -3,6 +3,7 @@ import { Checkpointer } from "./checkpointer.js";
 import { loadRuntimeConfig, type RuntimeConfig } from "./config.js";
 import type { Directive } from "./contracts.js";
 import { OrchestrationEngine } from "./engine.js";
+import { KbWorkerClient } from "./kb/kb-worker-client.js";
 import { PiAgentClient, type ModelClient, type InlineExtension } from "./model-client.js";
 import { ObservabilityClient } from "./observability.js";
 import { OrchestrationRunner, WorkerExecutor } from "./worker.js";
@@ -54,6 +55,7 @@ export class OrchestrationService implements Disposable {
         readArtifact: (ref, consumer) => this.artifacts.read(ref, consumer),
         ...(options.workerExtensions ? { workerExtensions: options.workerExtensions } : {}),
       });
+    if (client instanceof KbWorkerClient) client.bindCheckpointer(this.checkpointer);
     this.workers = new WorkerExecutor(client, this.artifacts, {
       projectRoot: this.config.projectRoot,
       parallelConcurrency: this.config.parallelConcurrency,
