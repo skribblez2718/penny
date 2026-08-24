@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   clampMaxResults,
   DEFAULT_BASE_URL,
@@ -26,6 +26,22 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function requestJson(init: RequestInit): unknown {
+  if (typeof init.body !== "string") throw new Error("expected a string request body");
+  const value: unknown = JSON.parse(init.body);
+  return value;
+}
+
+async function searchApiError(operation: Promise<unknown>): Promise<SearchApiError> {
+  try {
+    await operation;
+  } catch (error: unknown) {
+    if (error instanceof SearchApiError) return error;
+    throw error;
+  }
+  throw new Error("expected a SearchApiError");
 }
 
 describe("resolveConfig", () => {
@@ -102,9 +118,9 @@ describe("validateHttpUrl", () => {
 
 describe("webSearch", () => {
   it("posts query and bearer token, returns results", async () => {
-    let captured: { input: string; init: RequestInit } | null = null;
+    const capturedRequests: Array<{ input: string; init: RequestInit }> = [];
     const fetchImpl: FetchLike = async (input, init) => {
-      captured = { input, init };
+      capturedRequests.push({ input, init });
       return jsonResponse({
         results: [{ title: "T", url: "https://x.com", content: "C" }],
       });
@@ -113,21 +129,64 @@ describe("webSearch", () => {
     const response = await webSearch("test query", 3, CONFIG, undefined, fetchImpl);
 
     expect(response.results).toEqual([{ title: "T", url: "https://x.com", content: "C" }]);
-    expect(captured!.input).toBe("https://ollama.com/api/web_search");
-    expect(captured!.init.method).toBe("POST");
-    expect((captured!.init.headers as Record<string, string>).Authorization).toBe(
-      "Bearer test-key"
-    );
-    expect(JSON.parse(captured!.init.body as string)).toEqual({
+    const captured = capturedRequests[0];
+    if (captured === undefined) throw new Error("web search request was not captured");
+    expect(captured.input).toBe("https://ollama.com/api/web_search");
+    expect(captured.init.method).toBe("POST");
+    expect(new Headers(captured.init.headers).get("Authorization")).toBe("Bearer test-key");
+    expect(requestJson(captured.init)).toEqual({
       query: "test query",
       max_results: 3,
     });
   });
 
-  it("normalizes a missing results array", async () => {
-    const fetchImpl: FetchLike = async () => jsonResponse({});
+  it("normalizes missing and wrong-type results containers", async () => {
+    for (const body of [{}, { results: "not-an-array" }, { results: null }]) {
+      const fetchImpl: FetchLike = async () => jsonResponse(body);
+      const response = await webSearch("q", 5, CONFIG, undefined, fetchImpl);
+      expect(response.results).toEqual([]);
+    }
+  });
+
+  it("accepts open response objects and preserves result extras", async () => {
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({
+        request_id: "ignored-at-envelope",
+        results: [
+          {
+            title: "T",
+            url: "https://x.com",
+            content: "C",
+            score: 0.9,
+          },
+        ],
+      });
     const response = await webSearch("q", 5, CONFIG, undefined, fetchImpl);
-    expect(response.results).toEqual([]);
+    expect(response).toEqual({
+      results: [{ title: "T", url: "https://x.com", content: "C", score: 0.9 }],
+    });
+  });
+
+  it("rejects malformed top-level responses with the existing server error class", async () => {
+    for (const body of [null, [], "response"]) {
+      const fetchImpl: FetchLike = async () => jsonResponse(body);
+      const error = await searchApiError(webSearch("q", 5, CONFIG, undefined, fetchImpl));
+      expect(error.kind).toBe("server_error");
+      expect(error.status).toBe(200);
+      expect(error.message).toMatch(/malformed response/);
+    }
+  });
+
+  it("rejects result entries with missing or wrong-type known fields", async () => {
+    for (const result of [
+      { title: "T", url: "https://x.com" },
+      { title: "T", url: 42, content: "C" },
+    ]) {
+      const fetchImpl: FetchLike = async () => jsonResponse({ results: [result] });
+      const error = await searchApiError(webSearch("q", 5, CONFIG, undefined, fetchImpl));
+      expect(error.kind).toBe("server_error");
+      expect(error.message).toMatch(/title, url, and content/);
+    }
   });
 
   it("throws api_key_missing without calling fetch when key is empty", async () => {
@@ -136,74 +195,105 @@ describe("webSearch", () => {
       called = true;
       return jsonResponse({});
     };
-    const err = await webSearch("q", 5, { ...CONFIG, apiKey: "" }, undefined, fetchImpl).catch(
-      (e: unknown) => e
+    const error = await searchApiError(
+      webSearch("q", 5, { ...CONFIG, apiKey: "" }, undefined, fetchImpl)
     );
-    expect(err).toBeInstanceOf(SearchApiError);
-    expect((err as SearchApiError).kind).toBe("api_key_missing");
+    expect(error.kind).toBe("api_key_missing");
     expect(called).toBe(false);
   });
 
   it("maps 401 to client_error with an auth hint", async () => {
     const fetchImpl: FetchLike = async () => jsonResponse({ error: "unauthorized" }, 401);
-    const err = await webSearch("q", 5, CONFIG, undefined, fetchImpl).catch((e: unknown) => e);
-    expect((err as SearchApiError).kind).toBe("client_error");
-    expect((err as SearchApiError).message).toMatch(/OLLAMA_API_KEY/);
-    expect((err as SearchApiError).status).toBe(401);
+    const error = await searchApiError(webSearch("q", 5, CONFIG, undefined, fetchImpl));
+    expect(error.kind).toBe("client_error");
+    expect(error.message).toMatch(/OLLAMA_API_KEY/);
+    expect(error.status).toBe(401);
   });
 
   it("maps 500 to server_error", async () => {
     const fetchImpl: FetchLike = async () => jsonResponse({ error: "boom" }, 500);
-    const err = await webSearch("q", 5, CONFIG, undefined, fetchImpl).catch((e: unknown) => e);
-    expect((err as SearchApiError).kind).toBe("server_error");
+    const error = await searchApiError(webSearch("q", 5, CONFIG, undefined, fetchImpl));
+    expect(error.kind).toBe("server_error");
   });
 
   it("maps fetch rejection to network_error", async () => {
     const fetchImpl: FetchLike = async () => {
       throw new Error("connection refused");
     };
-    const err = await webSearch("q", 5, CONFIG, undefined, fetchImpl).catch((e: unknown) => e);
-    expect((err as SearchApiError).kind).toBe("network_error");
-    expect((err as SearchApiError).message).toMatch(/connection refused/);
+    const error = await searchApiError(webSearch("q", 5, CONFIG, undefined, fetchImpl));
+    expect(error.kind).toBe("network_error");
+    expect(error.message).toMatch(/connection refused/);
   });
 
   it("maps AbortError to aborted", async () => {
     const fetchImpl: FetchLike = async () => {
-      const e = new Error("aborted");
-      e.name = "AbortError";
-      throw e;
+      const error = new Error("aborted");
+      error.name = "AbortError";
+      throw error;
     };
-    const err = await webSearch("q", 5, CONFIG, undefined, fetchImpl).catch((e: unknown) => e);
-    expect((err as SearchApiError).kind).toBe("aborted");
+    const error = await searchApiError(webSearch("q", 5, CONFIG, undefined, fetchImpl));
+    expect(error.kind).toBe("aborted");
   });
 });
 
 describe("webFetch", () => {
   it("posts url and returns normalized page data", async () => {
-    let captured: { input: string; init: RequestInit } | null = null;
+    const capturedRequests: Array<{ input: string; init: RequestInit }> = [];
     const fetchImpl: FetchLike = async (input, init) => {
-      captured = { input, init };
+      capturedRequests.push({ input, init });
       return jsonResponse({ title: "Page", content: "Body", links: ["https://a.com"] });
     };
 
     const page = await webFetch("https://example.com", CONFIG, undefined, fetchImpl);
 
     expect(page).toEqual({ title: "Page", content: "Body", links: ["https://a.com"] });
-    expect(captured!.input).toBe("https://ollama.com/api/web_fetch");
-    expect(JSON.parse(captured!.init.body as string)).toEqual({ url: "https://example.com" });
+    const captured = capturedRequests[0];
+    if (captured === undefined) throw new Error("web fetch request was not captured");
+    expect(captured.input).toBe("https://ollama.com/api/web_fetch");
+    expect(requestJson(captured.init)).toEqual({ url: "https://example.com" });
   });
 
-  it("normalizes missing fields", async () => {
-    const fetchImpl: FetchLike = async () => jsonResponse({});
+  it("normalizes missing and wrong-type fields", async () => {
+    for (const body of [{}, { title: 1, content: false, links: "not-an-array" }]) {
+      const fetchImpl: FetchLike = async () => jsonResponse(body);
+      const page = await webFetch("https://example.com", CONFIG, undefined, fetchImpl);
+      expect(page).toEqual({ title: "", content: "", links: [] });
+    }
+
+    const malformedLinks: FetchLike = async () =>
+      jsonResponse({ title: "Page", content: "Body", links: ["https://a.com", 42] });
+    const page = await webFetch("https://example.com", CONFIG, undefined, malformedLinks);
+    expect(page).toEqual({ title: "Page", content: "Body", links: [] });
+  });
+
+  it("accepts extra fields but returns only the documented fetch fields", async () => {
+    const fetchImpl: FetchLike = async () =>
+      jsonResponse({
+        title: "Page",
+        content: "Body",
+        links: ["https://a.com"],
+        request_id: "ignored",
+      });
     const page = await webFetch("https://example.com", CONFIG, undefined, fetchImpl);
-    expect(page).toEqual({ title: "", content: "", links: [] });
+    expect(page).toEqual({ title: "Page", content: "Body", links: ["https://a.com"] });
+  });
+
+  it("rejects malformed top-level responses with the existing server error class", async () => {
+    const fetchImpl: FetchLike = async () => jsonResponse(null);
+    const error = await searchApiError(
+      webFetch("https://example.com", CONFIG, undefined, fetchImpl)
+    );
+    expect(error.kind).toBe("server_error");
+    expect(error.status).toBe(200);
   });
 
   it("throws server_error on invalid JSON", async () => {
     const fetchImpl: FetchLike = async () => new Response("<html>not json</html>", { status: 200 });
-    const err = await webFetch("https://example.com", CONFIG, undefined, fetchImpl).catch(
-      (e: unknown) => e
+    const error = await searchApiError(
+      webFetch("https://example.com", CONFIG, undefined, fetchImpl)
     );
-    expect((err as SearchApiError).kind).toBe("server_error");
+    expect(error.kind).toBe("server_error");
+    expect(error.status).toBe(200);
+    expect(error.message).toMatch(/invalid JSON/);
   });
 });

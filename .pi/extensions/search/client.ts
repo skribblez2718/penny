@@ -109,13 +109,81 @@ function combineSignals(timeoutMs: number, signal?: AbortSignal): AbortSignal {
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-async function postJson<T>(
+interface JsonResponse {
+  readonly value: unknown;
+  readonly status: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function malformedResponse(path: string, status: number, detail: string): SearchApiError {
+  return new SearchApiError(
+    `Ollama API ${path} returned a malformed response: ${detail}`,
+    "server_error",
+    status
+  );
+}
+
+function isWebSearchResult(value: unknown): value is WebSearchResult {
+  return (
+    isRecord(value) &&
+    typeof value.title === "string" &&
+    typeof value.url === "string" &&
+    typeof value.content === "string"
+  );
+}
+
+function parseWebSearchResponse(response: JsonResponse): WebSearchResponse {
+  if (!isRecord(response.value)) {
+    throw malformedResponse("/api/web_search", response.status, "expected a JSON object");
+  }
+  const value = response.value.results;
+  if (value === undefined || !Array.isArray(value)) return { results: [] };
+
+  const results: WebSearchResult[] = [];
+  for (const [index, result] of value.entries()) {
+    if (!isWebSearchResult(result)) {
+      throw malformedResponse(
+        "/api/web_search",
+        response.status,
+        `results[${index}] must contain string title, url, and content fields`
+      );
+    }
+    results.push(result);
+  }
+  return { results };
+}
+
+function stringArrayOrDefault(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const strings: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") return [];
+    strings.push(item);
+  }
+  return strings;
+}
+
+function parseWebFetchResponse(response: JsonResponse): WebFetchResponse {
+  if (!isRecord(response.value)) {
+    throw malformedResponse("/api/web_fetch", response.status, "expected a JSON object");
+  }
+  return {
+    title: typeof response.value.title === "string" ? response.value.title : "",
+    content: typeof response.value.content === "string" ? response.value.content : "",
+    links: stringArrayOrDefault(response.value.links),
+  };
+}
+
+async function postJson(
   config: SearchConfig,
   path: string,
   body: Record<string, unknown>,
   signal: AbortSignal | undefined,
   fetchImpl: FetchLike
-): Promise<T> {
+): Promise<JsonResponse> {
   if (!config.apiKey) {
     throw new SearchApiError(
       "OLLAMA_API_KEY is not set. Web search and web fetch use Ollama's cloud API — " +
@@ -136,15 +204,16 @@ async function postJson<T>(
       signal: combineSignals(config.timeoutMs, signal),
     });
   } catch (e: unknown) {
-    const err = e as Error;
-    if (err.name === "AbortError" || err.name === "TimeoutError") {
+    const name = e instanceof Error ? e.name : "";
+    if (name === "AbortError" || name === "TimeoutError") {
       throw new SearchApiError(
         `Request to ${path} aborted or timed out after ${config.timeoutMs}ms`,
         "aborted"
       );
     }
+    const message = e instanceof Error && e.message ? e.message : String(e);
     throw new SearchApiError(
-      `Network error calling ${config.baseUrl}${path}: ${err.message || String(e)}`,
+      `Network error calling ${config.baseUrl}${path}: ${message}`,
       "network_error"
     );
   }
@@ -166,7 +235,8 @@ async function postJson<T>(
   }
 
   try {
-    return (await response.json()) as T;
+    const value: unknown = await response.json();
+    return { value, status: response.status };
   } catch {
     throw new SearchApiError(
       `Ollama API ${path} returned invalid JSON`,
@@ -185,14 +255,14 @@ export async function webSearch(
   signal?: AbortSignal,
   fetchImpl: FetchLike = fetch
 ): Promise<WebSearchResponse> {
-  const data = await postJson<WebSearchResponse>(
+  const response = await postJson(
     config,
     "/api/web_search",
     { query, max_results: maxResults },
     signal,
     fetchImpl
   );
-  return { results: Array.isArray(data.results) ? data.results : [] };
+  return parseWebSearchResponse(response);
 }
 
 export async function webFetch(
@@ -201,16 +271,6 @@ export async function webFetch(
   signal?: AbortSignal,
   fetchImpl: FetchLike = fetch
 ): Promise<WebFetchResponse> {
-  const data = await postJson<WebFetchResponse>(
-    config,
-    "/api/web_fetch",
-    { url },
-    signal,
-    fetchImpl
-  );
-  return {
-    title: typeof data.title === "string" ? data.title : "",
-    content: typeof data.content === "string" ? data.content : "",
-    links: Array.isArray(data.links) ? data.links : [],
-  };
+  const response = await postJson(config, "/api/web_fetch", { url }, signal, fetchImpl);
+  return parseWebFetchResponse(response);
 }
