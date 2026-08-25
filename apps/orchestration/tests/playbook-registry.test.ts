@@ -18,7 +18,7 @@ import { Checkpointer } from "../src/checkpointer.js";
 import type { Confidence, Directive, JsonValue, RunIdentity } from "../src/contracts.js";
 import { RunContext } from "../src/context.js";
 import { OrchestrationEngine } from "../src/engine.js";
-import type { PlaybookCoreV1, PlaybookV1 } from "../src/playbooks/playbook.js";
+import type { PlaybookCoreV1 } from "../src/playbooks/playbook.js";
 import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
 import {
   assertExpectedRegistrations,
@@ -51,21 +51,34 @@ function identity(playbook: string, runId = "run-registry-001"): RunIdentity {
     session_id: "session-registry",
     playbook,
     engine_owner: "typescript",
-  } as RunIdentity;
+  } satisfies RunIdentity;
+}
+
+function terminal(met: boolean): Directive {
+  return {
+    schema_version: 2,
+    action: met ? "complete" : "cancelled",
+    identity: identity("double-playbook"),
+    status: met ? "complete" : "cancelled",
+    met,
+    result: {},
+    artifacts: [],
+    unresolved: [],
+  } satisfies Directive;
 }
 
 class DoublePlaybook implements PlaybookCoreV1 {
   initialize(): Directive {
-    return { action: "complete", met: true } as unknown as Directive;
+    return terminal(true);
   }
   dispatch(): Directive {
-    return { action: "complete", met: true } as unknown as Directive;
+    return terminal(true);
   }
   resume(_c: RunContext, _r: JsonValue): Directive {
     return this.dispatch();
   }
   cancel(): Directive {
-    return { action: "complete", met: false } as unknown as Directive;
+    return terminal(false);
   }
   validateDetails(_s: string, d: Record<string, JsonValue>): Record<string, JsonValue> {
     return d;
@@ -157,15 +170,13 @@ describe("W2 fail-closed on an unregistered playbook", () => {
       schema_version: 2,
       action: "recover",
       identity: unknown,
-    } as never) as unknown as Directive & {
-      result?: Record<string, JsonValue>;
-      unresolved?: string[];
-    };
+    });
 
     expect(directive.action).toBe("error");
-    expect(directive.result?.code).toBe("PLAYBOOK_UNAVAILABLE");
-    expect(directive.result?.checkpoint_unchanged).toBe(true);
-    expect(directive.result?.playbook).toBe("nonexistent-playbook");
+    if (!("result" in directive)) throw new Error("expected terminal error directive");
+    expect(directive.result.code).toBe("PLAYBOOK_UNAVAILABLE");
+    expect(directive.result.checkpoint_unchanged).toBe(true);
+    expect(directive.result.playbook).toBe("nonexistent-playbook");
     checkpointer.close();
   });
 });
@@ -175,7 +186,7 @@ describe("W2 multi-playbook dispatch — injected double only", () => {
     const registration: PlaybookRegistrationV1 = {
       name: SOLE_PRODUCTION_PLAYBOOK,
       contract: RESEARCH_SKILL_CONTRACT,
-      construct: () => new DoublePlaybook() as PlaybookV1,
+      construct: () => new DoublePlaybook(),
     };
     const injected: PlaybookRegistryV1 = new Map([[registration.name, registration]]);
     const root = temporaryDirectory();

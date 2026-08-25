@@ -152,8 +152,33 @@ export interface KbPhaseInvocation {
 /** A production runner returns only canonical, body-free phase-result metadata. */
 export type KbAgentRunner = (invocation: KbPhaseInvocation) => Promise<string>;
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function unknownRecords(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isUnknownRecord) : [];
+}
+
+function parseJsonValue(source: string): unknown {
+  const value: unknown = JSON.parse(source);
+  return value;
+}
+
+function isPhaseState(value: string): value is KbPhaseState {
+  return (
+    value === "ingest" ||
+    value === "compose" ||
+    value === "query" ||
+    value === "lint" ||
+    value === "verify" ||
+    value === "plan" ||
+    value === "patch"
+  );
+}
+
 function phaseState(value: string): KbPhaseState {
-  if (Object.hasOwn(KB_PHASE_TOOL_MATRIX, value)) return value as KbPhaseState;
+  if (isPhaseState(value)) return value;
   throw new Error("kb_phase_unknown");
 }
 
@@ -276,8 +301,10 @@ export function validatePhaseResult(
   value: unknown
 ): Record<string, unknown> {
   const schema = phaseResultSchema(invocation);
-  if (!Value.Check(schema, value)) throw new Error("submit_phase_result_schema_invalid");
-  return value as Record<string, unknown>;
+  if (!Value.Check(schema, value) || !isUnknownRecord(value)) {
+    throw new Error("submit_phase_result_schema_invalid");
+  }
+  return value;
 }
 
 function resultArtifact(
@@ -285,7 +312,11 @@ function resultArtifact(
   result: Record<string, unknown>
 ): ArtifactHandle {
   const state = phaseState(invocation.stateId);
-  return result[EXPECTED_ARTIFACT_FIELD[state]] as ArtifactHandle;
+  return validateKbContract(
+    KbArtifactHandleSchema,
+    result[EXPECTED_ARTIFACT_FIELD[state]],
+    "phase result artifact handle"
+  );
 }
 
 function requireBoundary(invocation: KbPhaseInvocation): asserts invocation is KbPhaseInvocation & {
@@ -314,7 +345,6 @@ function requireBoundary(invocation: KbPhaseInvocation): asserts invocation is K
 export function kbSessionSpec(input: {
   invocation: KbPhaseInvocation;
   cognitiveFrame: string;
-  agentBody: string;
   phaseGuidance: string;
 }): AgentSessionSpecV1 {
   const { invocation } = input;
@@ -589,13 +619,12 @@ export function kbSessionSpec(input: {
     customTools,
     isolatedSystemPrompt: [
       input.cognitiveFrame,
-      "ROLE DEFINITION:",
-      input.agentBody,
-      "WORKFLOW GUIDANCE:",
+      "ANONYMOUS PRIVATE KB PHASE GUIDANCE:",
       input.phaseGuidance,
+      "This is not a catalog-agent invocation and must not claim a catalog role.",
     ].join("\n\n"),
     opening: [
-      `Execute the '${invocation.agent}' knowledge-base phase '${invocation.stateId}'.`,
+      `Execute the anonymous private knowledge-base phase '${invocation.stateId}'.`,
       "Your first action must be read_phase_brief with {schema_version: 1}. Do not plan, answer, or stop in assistant prose before it succeeds.",
       "Read every private input through the available host-closed readers, using only IDs and exact pairs they return.",
       "After all required reads, successfully stage exactly one artifact with stage_run_artifact and retain the complete returned artifact object exactly.",
@@ -629,7 +658,9 @@ export function createTestOnlyArtifactBodyRunner(
     });
     let payload: Record<string, unknown>;
     try {
-      payload = JSON.parse(content) as Record<string, unknown>;
+      const value = parseJsonValue(content);
+      if (!isUnknownRecord(value)) throw new Error("test_only_artifact_body_invalid");
+      payload = value;
     } catch {
       throw new Error("test_only_artifact_body_invalid");
     }
@@ -675,12 +706,12 @@ function testOnlyPhaseResult(
     };
   }
   if (state === "compose") {
-    const pages = Array.isArray(payload.pages)
-      ? (payload.pages as Array<Record<string, unknown>>)
-      : [];
+    const pages = unknownRecords(payload["pages"]);
     const pageIds = pages.flatMap((page) => {
-      const frontmatter = page.frontmatter as Record<string, unknown> | undefined;
-      return typeof frontmatter?.page_id === "string" ? [frontmatter.page_id] : [];
+      const frontmatter = page["frontmatter"];
+      return isUnknownRecord(frontmatter) && typeof frontmatter["page_id"] === "string"
+        ? [frontmatter["page_id"]]
+        : [];
     });
     return {
       ...base,
@@ -690,10 +721,9 @@ function testOnlyPhaseResult(
     };
   }
   if (state === "query") {
-    const answer = payload.answer as Record<string, unknown> | undefined;
-    const citations = Array.isArray(answer?.citations)
-      ? (answer.citations as Array<Record<string, unknown>>)
-      : [];
+    const answerValue = payload["answer"];
+    const answer = isUnknownRecord(answerValue) ? answerValue : undefined;
+    const citations = unknownRecords(answer?.["citations"]);
     return {
       ...base,
       result_kind: EXPECTED_RESULT_KIND[state],
@@ -709,9 +739,7 @@ function testOnlyPhaseResult(
     };
   }
   if (state === "lint") {
-    const findings = Array.isArray(payload.findings)
-      ? (payload.findings as Array<Record<string, unknown>>)
-      : [];
+    const findings = unknownRecords(payload["findings"]);
     return {
       ...base,
       result_kind: EXPECTED_RESULT_KIND[state],
@@ -723,12 +751,8 @@ function testOnlyPhaseResult(
     };
   }
   if (state === "verify") {
-    const claimFindings = Array.isArray(payload.claim_findings)
-      ? (payload.claim_findings as Array<Record<string, unknown>>)
-      : [];
-    const citationFindings = Array.isArray(payload.citation_findings)
-      ? (payload.citation_findings as Array<Record<string, unknown>>)
-      : [];
+    const claimFindings = unknownRecords(payload["claim_findings"]);
+    const citationFindings = unknownRecords(payload["citation_findings"]);
     const unsupportedClaimIds = [
       ...claimFindings.flatMap((finding) =>
         finding.verdict !== "supported" && typeof finding.claim_id === "string"
@@ -736,9 +760,11 @@ function testOnlyPhaseResult(
           : []
       ),
       ...citationFindings.flatMap((finding) => {
-        if (finding.verdict === "supported") return [];
-        const citation = finding.citation as Record<string, unknown> | undefined;
-        return typeof citation?.claim_id === "string" ? [citation.claim_id] : [];
+        if (finding["verdict"] === "supported") return [];
+        const citation = finding["citation"];
+        return isUnknownRecord(citation) && typeof citation["claim_id"] === "string"
+          ? [citation["claim_id"]]
+          : [];
       }),
     ];
     return {
@@ -762,9 +788,7 @@ function testOnlyPhaseResult(
       plan_artifact: handle,
     };
   }
-  const targets = Array.isArray(payload.targets)
-    ? (payload.targets as Array<Record<string, unknown>>)
-    : [];
+  const targets = unknownRecords(payload["targets"]);
   return {
     ...base,
     result_kind: EXPECTED_RESULT_KIND[state],

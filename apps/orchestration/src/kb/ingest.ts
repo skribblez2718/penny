@@ -410,15 +410,96 @@ interface RawPageDraft {
   pages?: unknown;
 }
 interface RawPage {
-  frontmatter?: Record<string, unknown>;
+  frontmatter?: unknown;
   markdown?: unknown;
-  claims?: Record<string, unknown>;
+  claims?: unknown;
 }
 interface RawCandidateConflict {
   candidate_conflict_id?: unknown;
   claim_refs?: unknown;
   summary?: unknown;
   evidence_refs?: unknown;
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function unknownRecords(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isUnknownRecord) : [];
+}
+
+function parseJsonValue(source: string): unknown {
+  const value: unknown = JSON.parse(source);
+  return value;
+}
+
+function rawPageDraft(value: unknown): RawPageDraft {
+  if (!isUnknownRecord(value)) return {};
+  return {
+    schema_version: value["schema_version"],
+    artifact_kind: value["artifact_kind"],
+    pages: value["pages"],
+  };
+}
+
+function rawCandidateConflicts(value: unknown): RawCandidateConflict[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) =>
+    isUnknownRecord(candidate)
+      ? [
+          {
+            candidate_conflict_id: candidate["candidate_conflict_id"],
+            claim_refs: candidate["claim_refs"],
+            summary: candidate["summary"],
+            evidence_refs: candidate["evidence_refs"],
+          },
+        ]
+      : []
+  );
+}
+
+function pageKind(value: unknown): PageKind {
+  return value === "concept" ||
+    value === "decision" ||
+    value === "synthesis" ||
+    value === "question" ||
+    value === "promotion_candidate"
+    ? value
+    : "synthesis";
+}
+
+function pageLifecycle(value: unknown): PageLifecycle {
+  return value === "draft" ||
+    value === "validated" ||
+    value === "superseded" ||
+    value === "archived"
+    ? value
+    : "validated";
+}
+
+function claimKind(value: unknown): ClaimsSidecar["claims"][number]["kind"] {
+  return value === "fact" || value === "inference" || value === "speculation" || value === "unknown"
+    ? value
+    : "unknown";
+}
+
+function claimState(value: unknown): ClaimsSidecar["claims"][number]["state"] {
+  return value === "supported" ||
+    value === "contested" ||
+    value === "superseded" ||
+    value === "unverified_current"
+    ? value
+    : "unverified_current";
+}
+
+function confidence(value: unknown): ClaimsSidecar["claims"][number]["confidence"] {
+  return value === "CERTAIN" ||
+    value === "PROBABLE" ||
+    value === "POSSIBLE" ||
+    value === "UNCERTAIN"
+    ? value
+    : "UNCERTAIN";
 }
 
 function asStringArray(value: unknown): string[] {
@@ -429,15 +510,8 @@ function asStringArray(value: unknown): string[] {
 function asEvidenceIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry) => {
-    if (
-      entry === null ||
-      typeof entry !== "object" ||
-      Array.isArray(entry) ||
-      typeof (entry as { evidence_id?: unknown }).evidence_id !== "string"
-    ) {
-      return [];
-    }
-    return [(entry as { evidence_id: string }).evidence_id];
+    if (!isUnknownRecord(entry) || typeof entry["evidence_id"] !== "string") return [];
+    return [entry["evidence_id"]];
   });
 }
 
@@ -542,9 +616,11 @@ function carryForward(
     let title = pageId;
     let summary = "";
     try {
-      const fm = JSON.parse(fmMatch?.[1] ?? "{}") as { title?: unknown; summary?: unknown };
-      if (typeof fm.title === "string") title = fm.title;
-      if (typeof fm.summary === "string") summary = fm.summary;
+      const fm = parseJsonValue(fmMatch?.[1] ?? "{}");
+      if (isUnknownRecord(fm)) {
+        if (typeof fm["title"] === "string") title = fm["title"];
+        if (typeof fm["summary"] === "string") summary = fm["summary"];
+      }
     } catch {
       // A carried page whose frontmatter will not parse is drift, not a default.
       throw new IngestDriftError(`carried page '${pageId}' has unreadable frontmatter`);
@@ -600,7 +676,7 @@ export function approveIngest(
   try {
     const pageDraft = store.read(pending.pageDraftArtifactId);
     try {
-      pageDraftRaw = JSON.parse(pageDraft.content) as RawPageDraft;
+      pageDraftRaw = rawPageDraft(parseJsonValue(pageDraft.content));
     } catch {
       return fail("page_draft artifact is not valid JSON; nothing published");
     }
@@ -609,10 +685,10 @@ export function approveIngest(
     }
     try {
       const lint = store.read(pending.lintReportArtifactId);
-      const parsed = JSON.parse(lint.content) as { candidate_conflicts?: unknown };
-      if (Array.isArray(parsed.candidate_conflicts)) {
-        candidateConflicts = parsed.candidate_conflicts as RawCandidateConflict[];
-      }
+      const parsed = parseJsonValue(lint.content);
+      candidateConflicts = rawCandidateConflicts(
+        isUnknownRecord(parsed) ? parsed["candidate_conflicts"] : undefined
+      );
     } catch {
       candidateConflicts = []; // a malformed lint report cannot block approval of the page
     }
@@ -626,7 +702,11 @@ export function approveIngest(
     return fail("reviewed page draft has no host compose allocation; nothing published");
   }
   if (composeAuthority !== undefined) {
-    const privateInput = ctx.checkpointer.getPrivateInput(pending.runId);
+    const checkpointer = ctx.checkpointer;
+    if (checkpointer === undefined) {
+      return fail("reviewed page draft has no trusted artifact checkpointer; nothing published");
+    }
+    const privateInput = checkpointer.getPrivateInput(pending.runId);
     const currentPolicySha256 = sha256Hex(canonicalJson(policy));
     if (
       composeOperands?.lifecycle !== "closed" ||
@@ -655,16 +735,16 @@ export function approveIngest(
               ) {
                 throw new Error("compose claim candidate operand is absent");
               }
-              const priorStore = new RunArtifactStore(root, prior.run_id, ctx.checkpointer!);
+              const priorStore = new RunArtifactStore(root, prior.run_id, checkpointer);
               try {
                 return claimCandidateBodies(
-                  JSON.parse(
+                  parseJsonValue(
                     priorStore.read(prior.handle.artifact_id, {
                       expected_state_id: prior.state_id,
                       expected_handle: prior.handle,
                       required_lifecycle: "sealed",
                     }).content
-                  ) as unknown
+                  )
                 );
               } finally {
                 priorStore.close();
@@ -678,13 +758,13 @@ export function approveIngest(
         selectedCatalogSha256: selected.selector.catalog_sha256,
         selectedCatalog: selected.catalog,
         ...(claimCandidates === undefined ? {} : { claimCandidates }),
-      }) as RawPageDraft;
+      });
     } catch {
       return fail("page_draft identity allocation is invalid; nothing published");
     }
   }
 
-  const rawPages = Array.isArray(pageDraftRaw?.pages) ? (pageDraftRaw.pages as unknown[]) : [];
+  const rawPages = Array.isArray(pageDraftRaw.pages) ? pageDraftRaw.pages : [];
   if (rawPages.length === 0) {
     return fail("page_draft artifact contains no pages; nothing published");
   }
@@ -702,15 +782,15 @@ export function approveIngest(
   const now = new Date().toISOString();
   const pages: PublishablePage[] = [];
   for (const raw of rawPages) {
-    const rp = raw as RawPage;
-    const fmSrc =
-      typeof rp.frontmatter === "object" && rp.frontmatter !== null
-        ? (rp.frontmatter as Record<string, unknown>)
-        : {};
-    const claimsSrc =
-      typeof rp.claims === "object" && rp.claims !== null
-        ? (rp.claims as Record<string, unknown>)
-        : {};
+    const rp: RawPage = isUnknownRecord(raw)
+      ? {
+          frontmatter: raw["frontmatter"],
+          markdown: raw["markdown"],
+          claims: raw["claims"],
+        }
+      : {};
+    const fmSrc = isUnknownRecord(rp.frontmatter) ? rp.frontmatter : {};
+    const claimsSrc = isUnknownRecord(rp.claims) ? rp.claims : {};
     const markdown = typeof rp.markdown === "string" ? rp.markdown : "";
     if (markdown.trim().length === 0) {
       return fail("page_draft contains an empty page body; nothing published");
@@ -731,18 +811,8 @@ export function approveIngest(
     if (pageId.length === 0 || revisionId.length === 0) {
       return fail("page_draft omitted a host-allocated identity; nothing published");
     }
-    const kinds: PageKind[] = [
-      "concept",
-      "decision",
-      "synthesis",
-      "question",
-      "promotion_candidate",
-    ];
-    const kind = kinds.includes(fmSrc.kind as PageKind) ? (fmSrc.kind as PageKind) : "synthesis";
-    const lifecycles: PageLifecycle[] = ["draft", "validated", "superseded", "archived"];
-    const lifecycle = lifecycles.includes(fmSrc.lifecycle as PageLifecycle)
-      ? (fmSrc.lifecycle as PageLifecycle)
-      : "validated";
+    const kind = pageKind(fmSrc["kind"]);
+    const lifecycle = pageLifecycle(fmSrc["lifecycle"]);
 
     const frontmatter: PageRevisionFrontmatter = {
       schema_version: 1,
@@ -771,9 +841,7 @@ export function approveIngest(
       related_page_ids: asStringArray(fmSrc.related_page_ids).slice(0, 64),
     };
 
-    const rawClaims = Array.isArray(claimsSrc.claims)
-      ? (claimsSrc.claims as Array<Record<string, unknown>>)
-      : [];
+    const rawClaims = unknownRecords(claimsSrc["claims"]);
     const claims: ClaimsSidecar = {
       schema_version: 1,
       page_id: pageId,
@@ -789,34 +857,22 @@ export function approveIngest(
           typeof c.text === "string" && c.text.trim().length > 0
             ? c.text.slice(0, 8192)
             : `Claim ${i + 1} (normalized from ingest)`,
-        kind: (["fact", "inference", "speculation", "unknown"].includes(c.kind as string)
-          ? c.kind
-          : "unknown") as "fact" | "inference" | "speculation" | "unknown",
-        state: (["supported", "contested", "superseded", "unverified_current"].includes(
-          c.state as string
-        )
-          ? c.state
-          : "unverified_current") as
-          | "supported"
-          | "contested"
-          | "superseded"
-          | "unverified_current",
-        confidence: (["CERTAIN", "PROBABLE", "POSSIBLE", "UNCERTAIN"].includes(
-          c.confidence as string
-        )
-          ? c.confidence
-          : "UNCERTAIN") as "CERTAIN" | "PROBABLE" | "POSSIBLE" | "UNCERTAIN",
-        evidence: Array.isArray(c.evidence)
-          ? (c.evidence as Array<Record<string, unknown>>)
-              .filter((e) => typeof e.source_id === "string")
-              .slice(0, 32)
-              .map((e) => ({
-                source_id: (e.source_id as string).slice(0, 128),
-                ...(typeof e.locator === "string"
-                  ? { locator: (e.locator as string).slice(0, 1024) }
-                  : {}),
-              }))
-          : [],
+        kind: claimKind(c["kind"]),
+        state: claimState(c["state"]),
+        confidence: confidence(c["confidence"]),
+        evidence: unknownRecords(c["evidence"])
+          .flatMap((entry) => {
+            const sourceId = entry["source_id"];
+            if (typeof sourceId !== "string") return [];
+            const locator = entry["locator"];
+            return [
+              {
+                source_id: sourceId.slice(0, 128),
+                ...(typeof locator === "string" ? { locator: locator.slice(0, 1024) } : {}),
+              },
+            ];
+          })
+          .slice(0, 32),
         contradicts_claim_ids: asStringArray(c.contradicts_claim_ids).slice(0, 32),
         canonical_verification_refs: asStringArray(c.canonical_verification_refs).slice(0, 32),
       })),
@@ -949,10 +1005,17 @@ export function approveIngest(
     ),
   ]);
   for (let index = 0; index < orderedCandidates.length; index += 1) {
-    const cc = orderedCandidates[index]!;
+    const cc = orderedCandidates[index];
+    if (cc === undefined) {
+      return fail("content-review conflict candidate set is incomplete; nothing published");
+    }
     let conflict: ConflictRecordT;
     if (allocations !== undefined) {
-      const allocation = allocations[index]!;
+      const allocation = allocations[index];
+      const issuedAt = pending.reviewIssuedAt;
+      if (allocation === undefined || issuedAt === undefined) {
+        return fail("content-review conflict allocation set is incomplete; nothing published");
+      }
       if (String(cc.candidate_conflict_id) !== allocation.candidate_conflict_id) {
         return fail("content-review conflict allocation identity changed; nothing published");
       }
@@ -960,9 +1023,9 @@ export function approveIngest(
         conflict = conflictRecordForAllocation({
           candidate: cc,
           allocation,
-          issuedAt: pending.reviewIssuedAt!,
+          issuedAt,
           allowedClaimRefs,
-        }) as unknown as ConflictRecordT;
+        });
       } catch {
         return fail("content-review conflict allocation no longer validates; nothing published");
       }
@@ -975,19 +1038,25 @@ export function approveIngest(
         /^cfl_[A-Za-z0-9._:-]+$/.test(cc.candidate_conflict_id)
           ? cc.candidate_conflict_id
           : `cfl_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
-      const claimRefsRaw = Array.isArray(cc.claim_refs) ? (cc.claim_refs as unknown[]) : [];
+      const claimRefsRaw = Array.isArray(cc.claim_refs) ? cc.claim_refs : [];
       const pageIds = pages.map((p) => p.frontmatter.page_id);
       const revIds = pages.map((p) => p.frontmatter.revision_id);
       const allClaimIds = pages.flatMap((p) => p.claims.claims.map((c) => c.claim_id));
       const validRefs = claimRefsRaw
-        .filter(
-          (r): r is Record<string, unknown> =>
-            typeof r === "object" &&
-            r !== null &&
-            pageIds.includes((r as Record<string, unknown>).page_id as string) &&
-            revIds.includes((r as Record<string, unknown>).revision_id as string) &&
-            allClaimIds.includes((r as Record<string, unknown>).claim_id as string)
-        )
+        .flatMap((ref) => {
+          if (!isUnknownRecord(ref)) return [];
+          const pageId = ref["page_id"];
+          const revisionId = ref["revision_id"];
+          const claimId = ref["claim_id"];
+          return typeof pageId === "string" &&
+            typeof revisionId === "string" &&
+            typeof claimId === "string" &&
+            pageIds.includes(pageId) &&
+            revIds.includes(revisionId) &&
+            allClaimIds.includes(claimId)
+            ? [{ page_id: pageId, revision_id: revisionId, claim_id: claimId }]
+            : [];
+        })
         .slice(0, 64);
       const summaryRaw =
         typeof cc.summary === "string" && cc.summary.trim().length > 0
@@ -996,11 +1065,7 @@ export function approveIngest(
       conflict = {
         schema_version: 1,
         conflict_record_id: conflictId,
-        claim_refs: validRefs.map((r) => ({
-          page_id: String(r.page_id),
-          revision_id: String(r.revision_id),
-          claim_id: String(r.claim_id),
-        })),
+        claim_refs: validRefs,
         state: "open",
         summary: summaryRaw.slice(0, 4096),
         evidence_refs: asEvidenceIds(cc.evidence_refs)

@@ -20,7 +20,7 @@ const run = {
 };
 
 const selectedArtifact: ArtifactRef = {
-  schema_version: 1,
+  schema_version: 2,
   artifact_id: `art_${"a".repeat(64)}`,
   run_id: run.run_id,
   phase: "observing",
@@ -29,7 +29,6 @@ const selectedArtifact: ArtifactRef = {
   operation_id: "observe-1",
   version: 1,
   producer: "agent:echo",
-  consumer_scope: ["state:framing"],
   media_type: "text/markdown; charset=utf-8",
   byte_length: 42,
   content_digest: "b".repeat(64),

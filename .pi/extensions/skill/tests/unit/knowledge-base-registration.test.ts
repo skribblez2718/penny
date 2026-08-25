@@ -6,6 +6,42 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { Value } from "typebox/value";
 
 import { setGlobalLogTransport } from "../../../../lib/logger/logger.js";
+import {
+  createTestExtensionApi,
+  isRecord,
+  requireFunction,
+  requireString,
+} from "../../../../lib/tests/test-narrowers.js";
+
+type OrchestrationModule = typeof import("@penny/orchestration/source");
+type AdmitOperationStartInput = Parameters<OrchestrationModule["admitOperationStart"]>[0];
+type CompleteOperationStartInput = Parameters<OrchestrationModule["completeOperationStart"]>[0];
+type CheckpointDirectOperationInput = Parameters<
+  OrchestrationModule["checkpointDirectOperationResult"]
+>[0];
+type BuildHostContextInput = Parameters<OrchestrationModule["buildKbHostInvocationContext"]>[0];
+type ReplayRunInput = Parameters<OrchestrationModule["replayableResultFromRun"]>[0];
+type RunContextCreateInput = Parameters<OrchestrationModule["RunContext"]["create"]>[0];
+type ProfileGrantStore = InstanceType<OrchestrationModule["KbSessionProfileGrantStore"]>;
+type ConsumeProfileGrantInput = Parameters<ProfileGrantStore["consume"]>[0];
+type RequireKbRun = Parameters<OrchestrationModule["requireKbRunAccess"]>[0];
+type RequireKbRunExpected = Parameters<OrchestrationModule["requireKbRunAccess"]>[1];
+type ExtensionEventHandler = (...args: unknown[]) => unknown;
+
+interface RecoveryRequest {
+  action: string;
+  identity: { run_id: string; session_id: string };
+}
+
+interface MutableDurableRun {
+  identity: { run_id: string; session_id: string; playbook: "knowledge-base" };
+  constraints: { action: string; kb_profile_id: string };
+  playbookData: Record<string, unknown>;
+  stateId: string;
+  status: string;
+  met: boolean;
+  terminalDirective: null;
+}
 
 const capturedLogs: string[] = [];
 setGlobalLogTransport((entry) => capturedLogs.push(entry));
@@ -31,12 +67,12 @@ const {
   }),
   mockLoadRun: vi.fn(),
   mockFindGate: vi.fn(),
-  mockExecute: vi.fn(),
+  mockExecute: vi.fn<(request: RecoveryRequest) => Promise<unknown>>(),
   mockReserveOperation: vi.fn(() => ({
     group: { request_event_group_id: "opg_resume", state: "reserved" },
   })),
   mockAdmitRun: vi.fn(() => ({ policy_sha256: "a".repeat(64), kb_id: "kb_1" })),
-  mockAdmitStart: vi.fn((input: any) => ({
+  mockAdmitStart: vi.fn((input: AdmitOperationStartInput) => ({
     run_id: input.context.identity.run_id,
     request_sha256: "c".repeat(64),
     transaction_id: "tx_start_mock",
@@ -44,14 +80,14 @@ const {
   })),
   mockRequirePolicy: vi.fn(),
   mockCreateResumeWorker: vi.fn(() => ({ close: vi.fn() })),
-  mockConsumeProfileGrant: vi.fn((input: any) => ({
+  mockConsumeProfileGrant: vi.fn((input: ConsumeProfileGrantInput) => ({
     ...input,
     schema_version: 1,
     grant_id: "kpg_mock",
     grant_sha256: "d".repeat(64),
     consumed_at: "2026-08-21T00:00:00.000Z",
   })),
-  mockBuildHostContext: vi.fn((input: any) => ({
+  mockBuildHostContext: vi.fn((input: BuildHostContextInput) => ({
     schema_version: 1,
     session_id: input.sessionId,
     invocation_id: input.invocationId,
@@ -64,7 +100,7 @@ const {
       : { parent_delivery_grant: input.parentDeliveryGrant }),
   })),
   mockLoadParentGrant: vi.fn(() => undefined),
-  mockReplayRun: vi.fn(({ action, run }: any) => {
+  mockReplayRun: vi.fn(({ action, run }: ReplayRunInput) => {
     const status =
       run.status === "awaiting_user"
         ? "awaiting_user"
@@ -124,11 +160,11 @@ const {
   mockServiceOptions: vi.fn(),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   withFileMutationQueue: vi.fn((_path: string, operation: () => unknown) => operation()),
   parseFrontmatter: vi.fn(() => ({ frontmatter: {}, body: "" })),
 }));
-vi.mock("@mariozechner/pi-tui", () => ({
+vi.mock("@earendil-works/pi-tui", () => ({
   Container: class {},
   Spacer: class {},
   Text: class {},
@@ -161,15 +197,17 @@ vi.mock("@penny/orchestration/source", async (importOriginal) => {
       close() {}
     },
     RunContext: {
-      create: vi.fn((input: any) => ({
+      create: vi.fn((input: RunContextCreateInput) => ({
         identity: input.identity,
         constraints: input.constraints,
         playbookData: {},
       })),
     },
     admitOperationStart: mockAdmitStart,
-    completeOperationStart: vi.fn((input: any) => ({ replay_result: input.result })),
-    checkpointDirectOperationResult: vi.fn((input: any) => input.result),
+    completeOperationStart: vi.fn((input: CompleteOperationStartInput) => ({
+      replay_result: input.result,
+    })),
+    checkpointDirectOperationResult: vi.fn((input: CheckpointDirectOperationInput) => input.result),
     OperationReceiptStore: class {
       reserve = mockReserveOperation;
       finish() {
@@ -185,6 +223,14 @@ vi.mock("@penny/orchestration/source", async (importOriginal) => {
     KbWorkerClient: class {},
     createKbWorkerClientForResume: mockCreateResumeWorker,
     admitKbRun: mockAdmitRun,
+    resolvePennyProjectState: vi.fn(() => ({
+      paths: {
+        knowledgeBase: {
+          profiles: "/tmp/penny-test-state/kb/profiles.json",
+          hostGrants: "/tmp/penny-test-state/kb/host-grants",
+        },
+      },
+    })),
     resolveGrantedProfile: mockResolveProfile,
     KbSessionProfileGrantStore: class {
       allowedProfiles() {
@@ -205,7 +251,7 @@ vi.mock("@penny/orchestration/source", async (importOriginal) => {
     invalidateCapabilities: vi.fn(),
     KbRunAccessError,
     StartAdmissionMismatchError,
-    requireKbRunAccess: vi.fn((run: any, expected: any) => {
+    requireKbRunAccess: vi.fn((run: RequireKbRun, expected: RequireKbRunExpected) => {
       if (
         run === undefined ||
         run.identity?.run_id !== expected.runId ||
@@ -244,6 +290,15 @@ interface RegisteredTool {
   execute: (...args: unknown[]) => Promise<{ details?: unknown }>;
 }
 
+function object(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("expected an object");
+  return value;
+}
+
+function schemaProperties(schema: unknown): Record<string, unknown> {
+  return object(object(schema)["properties"]);
+}
+
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -274,37 +329,53 @@ function assertPrivateMarkersAbsent(
   markers: readonly string[]
 ): void {
   const text = typeof value === "string" ? value : JSON.stringify(value);
-  for (let index = 0; index < markers.length; index += 1) {
-    if (text.includes(markers[index]!)) {
+  for (const [index, marker] of markers.entries()) {
+    if (text.includes(marker)) {
       throw new Error(`raw privacy sentinel ${index} escaped into ${label}`);
     }
   }
 }
 
+function isRegisteredTool(value: unknown): value is RegisteredTool {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.description === "string" &&
+    value.parameters !== undefined &&
+    typeof value.execute === "function"
+  );
+}
+
 async function loadTools(
   sessionId?: string,
-  handlers: Map<string, (...args: any[]) => unknown> = new Map()
+  handlers: Map<string, ExtensionEventHandler> = new Map()
 ): Promise<RegisteredTool[]> {
   const tools: RegisteredTool[] = [];
   const extension = (await import("../../index.js")).default;
-  extension({
-    registerTool(tool: unknown) {
-      tools.push(tool as RegisteredTool);
-    },
-    on(event: string, handler: (...args: any[]) => unknown) {
-      handlers.set(event, handler);
-      if (event === "session_start" && sessionId !== undefined) {
-        void handler(
-          {},
-          {
-            sessionManager: { getSessionId: () => sessionId },
-            model: { provider: "ollama", id: "qwen3.8:latest" },
-          }
+  extension(
+    createTestExtensionApi({
+      onRegisterTool(tool) {
+        if (!isRegisteredTool(tool)) throw new Error("skill registered an invalid tool");
+        tools.push(tool);
+      },
+      onEvent(event, handler) {
+        const registeredHandler = requireFunction(
+          handler,
+          `skill registered an invalid ${event} handler`
         );
-      }
-    },
-    registerCommand() {},
-  } as never);
+        handlers.set(event, registeredHandler);
+        if (event === "session_start" && sessionId !== undefined) {
+          void registeredHandler(
+            {},
+            {
+              sessionManager: { getSessionId: () => sessionId },
+              model: { provider: "ollama", id: "qwen3.8:latest" },
+            }
+          );
+        }
+      },
+    })
+  );
   return tools;
 }
 
@@ -314,8 +385,40 @@ describe("knowledge_base registration and closed authority surface", () => {
     expect(tools.filter((tool) => tool.name === "knowledge_base")).toHaveLength(1);
     expect(tools.filter((tool) => tool.name === "skill")).toHaveLength(1);
     const kb = tools.find((tool) => tool.name === "knowledge_base");
+    const skill = tools.find((tool) => tool.name === "skill");
     const { KnowledgeBaseRequestSchema } = await import("@penny/orchestration/source");
     expect(kb?.parameters).toBe(KnowledgeBaseRequestSchema);
+    expect(skill?.description).toContain("<available_skills>");
+    expect(skill?.description).not.toContain("Available skills:");
+    const properties = schemaProperties(skill?.parameters);
+    expect(properties).toHaveProperty("input_artifacts");
+    expect(schemaProperties(object(properties["skills"])["items"])).toHaveProperty(
+      "input_artifacts"
+    );
+    expect(schemaProperties(object(properties["chain"])["items"])).toHaveProperty(
+      "input_artifacts"
+    );
+    expect(object(properties["input_artifacts"])["maxItems"]).toBeUndefined();
+  });
+
+  it("wires the native skill instruction replacement into prompt assembly", async () => {
+    const handlers = new Map<string, ExtensionEventHandler>();
+    await loadTools(undefined, handlers);
+    const beforeAgentStart = handlers.get("before_agent_start");
+    expect(beforeAgentStart).toBeDefined();
+    if (beforeAgentStart === undefined) {
+      throw new Error("before_agent_start handler was not registered");
+    }
+
+    const result = object(
+      beforeAgentStart({
+        systemPrompt:
+          "Use the read tool to load a skill's file when the task matches its description.",
+      })
+    );
+    const systemPrompt = requireString(result.systemPrompt, "prompt hook omitted systemPrompt");
+    expect(systemPrompt).toContain("invoke its registered entrypoint");
+    expect(systemPrompt).not.toContain("Use the read tool to load");
   });
 
   it("accepts the eight closed request variants and rejects authority-shaped extras", async () => {
@@ -392,19 +495,16 @@ describe("knowledge_base registration and closed authority surface", () => {
       policy_sha256: "a".repeat(64),
     });
     expect(mockBuildHostContext).toHaveBeenCalledTimes(1);
-    expect(mockBuildHostContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId,
-        invocationId: "call_ingest",
-        parentIdentity: { provider: "ollama", model: "qwen3.8:latest" },
-        allowedProfileIds: ["kbp_demo"],
-        request: expect.objectContaining({ action: "ingest", kb_profile_id: "kbp_demo" }),
-      })
-    );
-    const builtInput = mockBuildHostContext.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(builtInput).not.toHaveProperty("root");
-    expect(builtInput).not.toHaveProperty("path");
-    expect(builtInput).not.toHaveProperty("parent_locality");
+    const builtInput = mockBuildHostContext.mock.calls[0]?.[0];
+    if (builtInput === undefined) throw new Error("KB host context input was not captured");
+    expect(builtInput.sessionId).toBe(sessionId);
+    expect(builtInput.invocationId).toBe("call_ingest");
+    expect(builtInput.parentIdentity).toEqual({ provider: "ollama", model: "qwen3.8:latest" });
+    expect(builtInput.allowedProfileIds).toEqual(["kbp_demo"]);
+    expect(builtInput.request).toMatchObject({ action: "ingest", kb_profile_id: "kbp_demo" });
+    expect("root" in builtInput).toBe(false);
+    expect("path" in builtInput).toBe(false);
+    expect("parent_locality" in builtInput).toBe(false);
   });
 
   it("binds status and resume to the exact run, active session, and profile", async () => {
@@ -520,7 +620,7 @@ describe("knowledge_base registration and closed authority surface", () => {
     ] as const;
     for (const outcome of outcomes) {
       const runId = `run_${outcome.action}_recover`;
-      const durable: any = {
+      const durable: MutableDurableRun = {
         identity: { run_id: runId, session_id: sessionId, playbook: "knowledge-base" },
         constraints: { action: outcome.action, kb_profile_id: "kbp_demo" },
         playbookData: {
@@ -536,7 +636,7 @@ describe("knowledge_base registration and closed authority surface", () => {
         terminalDirective: null,
       };
       mockLoadRun.mockImplementation(() => durable);
-      mockExecute.mockImplementationOnce(async (request: any) => {
+      mockExecute.mockImplementationOnce(async (request) => {
         expect(request).toMatchObject({
           action: "recover",
           identity: { run_id: runId, session_id: sessionId },
@@ -570,12 +670,11 @@ describe("knowledge_base registration and closed authority surface", () => {
           run: durable,
         })
       );
-      expect(mockServiceOptions).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          playbookName: "knowledge-base",
-          modelClient: expect.any(Object),
-        })
-      );
+      const serviceOptions: unknown = mockServiceOptions.mock.calls.at(-1)?.[0];
+      if (!isRecord(serviceOptions))
+        throw new Error("orchestration service options were not captured");
+      expect(serviceOptions.playbookName).toBe("knowledge-base");
+      expect(isRecord(serviceOptions.modelClient)).toBe(true);
     }
     expect(mockCreateResumeWorker).toHaveBeenCalledTimes(outcomes.length);
     expect(mockReserveOperation).toHaveBeenCalledTimes(outcomes.length);

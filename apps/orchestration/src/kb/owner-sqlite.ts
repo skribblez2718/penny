@@ -24,22 +24,29 @@ const HOST_GRANT_AUTHORITY_FILES = new Set([
   `${HOST_GRANT_DATABASE_NAME}-shm`,
 ]);
 
-/** Default ignored host authority root; never a model-visible argument or KB root. */
-export function hostGrantAuthorityDir(projectRoot: string): string {
-  return path.join(path.resolve(projectRoot), ".penny", "kb-host-grants");
-}
-
 /** Refuse every non-SQLite fragment instead of scanning or adopting legacy authority. */
 export function isUnsafeHostGrantFragment(name: string): boolean {
   return !HOST_GRANT_AUTHORITY_FILES.has(name);
 }
 
+function isSqliteModule(value: unknown): value is typeof import("node:sqlite") {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "DatabaseSync" in value &&
+    typeof value.DatabaseSync === "function"
+  );
+}
+
 function sqliteModule(): typeof import("node:sqlite") {
-  const module = process.getBuiltinModule("node:" + "sqlite") as
-    | typeof import("node:sqlite")
-    | undefined;
-  if (module === undefined) throw new Error("Node.js runtime does not provide node:sqlite");
+  const module: unknown = process.getBuiltinModule("node:" + "sqlite");
+  if (!isSqliteModule(module)) throw new Error("Node.js runtime does not provide node:sqlite");
   return module;
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object" || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
 }
 
 function currentUid(): number | undefined {
@@ -51,7 +58,7 @@ function pathExistsNoFollow(candidate: string): boolean {
     lstatSync(candidate);
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    if (errorCode(error) === "ENOENT") return false;
     throw error;
   }
 }
@@ -102,7 +109,7 @@ function createOwnerFile(file: string, directory: string, label: string): void {
       OWNER_FILE_MODE
     );
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+    if (errorCode(error) === "EEXIST") {
       assertOwnerFile(file, label);
       return;
     }

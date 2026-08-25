@@ -12,15 +12,19 @@
   },
   "bin": {
     "penny-orchestration": "./dist/cli.js",
-    "penny-kb-gate": "./dist/kb-gate-cli.js"
+    "penny-kb-gate": "./dist/kb-gate-cli.js",
+    "penny-state": "./dist/state-cli.js"
   },
   "files": [
     "dist",
     "src"
   ],
   "scripts": {
-    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && node ./node_modules/typescript/bin/tsc -p tsconfig.json",
-    "typecheck": "node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "typecheck": "bun run typecheck:source && bun run typecheck:tests && bun run typecheck:smoke",
+    "typecheck:source": "tsc -p tsconfig.typecheck.json",
+    "typecheck:tests": "tsc -p tsconfig.test.json",
+    "typecheck:smoke": "tsc -p tsconfig.kb-model-smoke.json",
     "test": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "test:unit": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "test:node-unit": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
@@ -28,7 +32,7 @@
     "test:research-parity": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/research-parity.test.ts",
     "test:integration": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts 'tests/**/*.integration.test.ts'",
     "test:parity": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/research-parity.test.ts",
-    "test:all": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
+    "test:all": "bun run typecheck && bun run test && bun run test:kb-model-smoke:aggregate",
     "test:kb-core": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-*.test.ts",
     "test:kb-policy": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-policy.test.ts tests/kb-model-policy.test.ts tests/kb-profile-registry.test.ts tests/kb-profile-grants.test.ts",
     "test:kb-generations": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-generations.test.ts tests/kb-generation-carryforward.test.ts",
@@ -43,20 +47,21 @@
     "test:kb-promotion": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-promote.test.ts tests/kb-promotion.test.ts",
     "test:kb-e2e": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-e2e.test.ts",
     "test:kb-privacy": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-privacy.test.ts tests/safety.test.ts",
-    "test:kb-model-smoke-contract": "env -u PENNY_KB_MODEL_SMOKE node ./node_modules/vitest/vitest.mjs run --config vitest.kb-model-smoke.config.ts smoke/kb-model-smoke-contract.test.ts",
-    "typecheck:kb-model-smoke": "node ./node_modules/typescript/bin/tsc -p tsconfig.kb-model-smoke.json --noEmit",
+    "test:kb-model-smoke-contract": "env -u PENNY_KB_MODEL_SMOKE node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts smoke/kb-model-smoke-contract.test.ts",
+    "typecheck:kb-model-smoke": "bun run typecheck:smoke",
+    "test:kb-model-smoke:aggregate": "if test \"${PENNY_KB_MODEL_SMOKE:-}\" = \"1\"; then bun run test:kb-model-smoke; else echo 'Skipping opt-in live KB model smoke; set PENNY_KB_MODEL_SMOKE=1 to authorize it.'; fi",
     "test:kb-model-smoke": "test \"${PENNY_KB_MODEL_SMOKE:-}\" = \"1\" || { echo 'Set PENNY_KB_MODEL_SMOKE=1 to run the one predeclared live KB model cohort.' >&2; exit 1; }; node ./node_modules/vitest/vitest.mjs run --config vitest.kb-model-smoke.config.ts",
     "pending": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts --grep pending",
     "smoke:research": "echo 'Smoke: set PENNY_RESEARCH_DEFAULT_MODEL and pipe a start request to dist/cli.js --execute'"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@earendil-works/pi-coding-agent": "0.84.2",
     "typebox": "1.3.7"
   },
   "devDependencies": {
     "@types/node": "25.9.1",
-    "typescript": "5.9.3",
-    "vitest": "2.1.9"
+    "typescript": "^6.0.3",
+    "vitest": "^2.1.0"
   },
   "engines": {
     "node": ">=22.19.0"

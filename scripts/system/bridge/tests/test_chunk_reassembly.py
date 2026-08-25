@@ -7,11 +7,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from chunk_reassembly import reassemble_rows  # noqa: E402
 
-_CHUNK_SIZE = 2000  # mirrors memory_bridge._CHUNK_SIZE
+_CHUNK_SIZE = 2000  # the legacy bridge's chunk size (retired)
 
 
 def _chunk(text, size=_CHUNK_SIZE):
-    """Clean, non-overlapping split identical to memory_bridge._chunk_text."""
+    """Clean, non-overlapping split identical to the legacy bridge's _chunk_text."""
     return [text[i : i + size] for i in range(0, len(text), size)]
 
 

@@ -5,8 +5,13 @@
  * Displays: Model, directory, skills, extensions, prompts, context bar
  */
 
-import type { ExtensionAPI, Theme } from "@mariozechner/pi-coding-agent";
-import { truncateToWidth } from "@mariozechner/pi-tui";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  SessionStartEvent,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 
 // ============================================================================
 // ANSI-AWARE TEXT WRAPPING
@@ -23,12 +28,6 @@ function visibleWidth(str: string): number {
 import { readdir, stat, readFile } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
-
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
-
-const DA_NAME = process.env.DA_NAME || "Penny";
 
 // ============================================================================
 // ICONS
@@ -54,6 +53,10 @@ const ICONS = {
  * when unset. This only seeds the initial display — the live value is kept
  * current at runtime via the ``thinking_level_select`` event.
  */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 async function readConfiguredEffort(): Promise<string> {
   const candidates = [
     join(process.cwd(), ".pi/settings.json"),
@@ -61,10 +64,12 @@ async function readConfiguredEffort(): Promise<string> {
   ];
   for (const path of candidates) {
     try {
-      const parsed = JSON.parse(await readFile(path, "utf-8")) as {
-        defaultThinkingLevel?: string;
-      };
-      if (typeof parsed?.defaultThinkingLevel === "string" && parsed.defaultThinkingLevel) {
+      const parsed: unknown = JSON.parse(await readFile(path, "utf-8"));
+      if (
+        isRecord(parsed) &&
+        typeof parsed.defaultThinkingLevel === "string" &&
+        parsed.defaultThinkingLevel
+      ) {
         return parsed.defaultThinkingLevel;
       }
     } catch {
@@ -91,19 +96,20 @@ async function scanDirectory(dir: string): Promise<string[]> {
           const indexJs = join(subPath, "index.js");
           const skillMd = join(subPath, "SKILL.md");
 
-          // Check for index.ts, index.js, or SKILL.md (uppercase - case-sensitive on Linux)
+          // An entry point is required, matching Pi's own discovery contract:
+          // extensions are `<dir>/index.ts` (or .js) and skills are `<dir>/SKILL.md`.
+          // Uppercase SKILL.md matters - the filesystem is case-sensitive on Linux.
+          //
+          // There is deliberately no "directory contains some .ts file" fallback. That
+          // heuristic counted shared libraries as extensions: `.pi/extensions/lib` is a
+          // plain TypeScript package (@penny/extension-lib) that Pi never loads, but it
+          // has a top-level .ts file, so it was reported in the extension count.
           const hasIndexTs = await stat(indexTs).catch(() => null);
           const hasIndexJs = await stat(indexJs).catch(() => null);
           const hasSkillMd = await stat(skillMd).catch(() => null);
 
           if (hasIndexTs || hasIndexJs || hasSkillMd) {
             names.push(entry.name);
-          } else {
-            const files = await readdir(subPath).catch(() => []);
-            const hasTs = files.some((f) => f.endsWith(".ts"));
-            if (hasTs) {
-              names.push(entry.name);
-            }
           }
         } catch {
           // Skip invalid entries
@@ -244,13 +250,14 @@ const COLORS = {
 // ============================================================================
 
 function formatLine1(
+  agentName: string,
   modelName: string,
   dirName: string,
   skillsCount: number,
   extensionsCount: number,
   promptsCount: number
 ): string {
-  return `${COLORS.purple}${DA_NAME}${COLORS.reset} here, running on ${COLORS.orange}${ICONS.robot} ${modelName}${COLORS.reset} in ${COLORS.cyan}${ICONS.folder} ${dirName}${COLORS.reset}, wielding: ${COLORS.white}${ICONS.target} ${skillsCount}${COLORS.reset} ${COLORS.darkBlue}Skills${COLORS.reset}, ${COLORS.white}${ICONS.plug} ${extensionsCount}${COLORS.reset} ${COLORS.darkBlue}Extensions${COLORS.reset}, and ${COLORS.white}${ICONS.prompt} ${promptsCount}${COLORS.reset} ${COLORS.darkBlue}Prompts${COLORS.reset}`;
+  return `${COLORS.purple}${agentName}${COLORS.reset} here, running on ${COLORS.orange}${ICONS.robot} ${modelName}${COLORS.reset} in ${COLORS.cyan}${ICONS.folder} ${dirName}${COLORS.reset}, wielding: ${COLORS.white}${ICONS.target} ${skillsCount}${COLORS.reset} ${COLORS.darkBlue}Skills${COLORS.reset}, ${COLORS.white}${ICONS.plug} ${extensionsCount}${COLORS.reset} ${COLORS.darkBlue}Extensions${COLORS.reset}, and ${COLORS.white}${ICONS.prompt} ${promptsCount}${COLORS.reset} ${COLORS.darkBlue}Prompts${COLORS.reset}`;
 }
 
 function formatItemList(items: string[], icon: string, label: string, width: number): string[] {
@@ -289,24 +296,8 @@ function formatItemList(items: string[], icon: string, label: string, width: num
 // ============================================================================
 // PI SDK BOUNDARY SHAPES
 // ============================================================================
-// The Pi SDK exposes its extension surface as `any` (see pi-types.d.ts), so we
-// describe the exact shapes this extension relies on. These are structural
-// contracts against the untyped runtime, not casts to `any`.
-
-interface ModelInfo {
-  id?: string;
-  contextWindow?: number;
-}
-
-interface ContextUsage {
-  tokens?: number;
-}
-
-/** Fired when the reasoning/effort level changes (user cycles thinking level). */
-interface ThinkingLevelSelectEvent {
-  level: string;
-  previousLevel?: string;
-}
+// Pi provides the event and theme contracts. These narrow structural shapes
+// describe only the footer interfaces this extension consumes.
 
 /** The live TUI handle passed to a footer factory. */
 interface TuiHandle {
@@ -326,25 +317,13 @@ interface FooterRenderer {
   render(width: number): string[];
 }
 
-type FooterFactory = (tui: TuiHandle, theme: Theme, footerData: FooterData) => FooterRenderer;
-
-interface FooterUI {
-  setFooter(factory: FooterFactory): void;
-}
-
-/** Context passed to a `session_start` handler. */
-interface SessionStartContext {
-  hasUI: boolean;
-  ui: FooterUI;
-  model?: ModelInfo;
-  getContextUsage(): ContextUsage | undefined;
-}
-
 // ============================================================================
 // EXTENSION FACTORY
 // ============================================================================
 
 export default function (pi: ExtensionAPI) {
+  const agentName = process.env.DA_NAME || "Penny";
+
   // Cache skills, agents, extensions, and prompts (populated async)
   let cachedSkills: string[] = [];
   let cachedAgents: string[] = [];
@@ -362,7 +341,7 @@ export default function (pi: ExtensionAPI) {
   const cwd = process.cwd();
   const dirName = cwd.split("/").pop() || cwd;
 
-  pi.on("session_start", async (_event: unknown, ctx: SessionStartContext) => {
+  pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext) => {
     if (!ctx.hasUI) return;
 
     // Load cache asynchronously
@@ -375,7 +354,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Keep the effort readout live when the user cycles the thinking level.
-  pi.on("thinking_level_select", (event: ThinkingLevelSelectEvent) => {
+  pi.on("thinking_level_select", (event) => {
     if (event?.level) {
       currentEffort = event.level;
       tuiRef?.requestRender();
@@ -383,7 +362,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Custom footer with context bar and item lists
-  pi.on("session_start", async (_event: unknown, ctx: SessionStartContext) => {
+  pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext) => {
     if (!ctx.hasUI) return;
 
     ctx.ui.setFooter((tui: TuiHandle, theme: Theme, footerData: FooterData): FooterRenderer => {
@@ -403,6 +382,7 @@ export default function (pi: ExtensionAPI) {
           const modelId = ctx.model?.id || "unknown";
           lines.push(
             formatLine1(
+              agentName,
               modelId,
               dirName,
               cachedSkills.length,

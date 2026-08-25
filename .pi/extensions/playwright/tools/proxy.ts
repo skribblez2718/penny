@@ -1,3 +1,4 @@
+import { registerTool } from "../../../lib/pi-tool-registration.js";
 /**
  * Proxy Tools
  *
@@ -9,8 +10,8 @@
  * corporate proxy, verify that proxy, and return to direct browsing.
  */
 
-import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PlaywrightConfig, ProxyConfig } from "../types.js";
 import { BrowserManager } from "../browser.js";
 
@@ -18,17 +19,12 @@ export function registerProxyTools(pi: ExtensionAPI, config: PlaywrightConfig) {
   // ==========================================================================
   // playwright_get_proxy_info
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_get_proxy_info",
     label: "Get Proxy Info",
     description:
       "Return the currently configured proxy settings for Playwright browser traffic. Returns server URL, username (if any), bypass list (if any), and a sanitized summary safe to log. Does NOT include the password in the response.",
     promptSnippet: "Get current proxy configuration",
-    promptGuidelines: [
-      "Use playwright_get_proxy_info to verify the proxy is configured before relying on HTTP history capture.",
-      "The response is safe to log — the password is never returned.",
-      "If proxy is null, browser traffic is direct (no proxy).",
-    ],
     parameters: Type.Object({}),
     async execute(_toolCallId, _params) {
       const proxy = BrowserManager.getEffectiveProxy(config);
@@ -77,17 +73,12 @@ export function registerProxyTools(pi: ExtensionAPI, config: PlaywrightConfig) {
   // ==========================================================================
   // playwright_check_proxy_reachable
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_check_proxy_reachable",
     label: "Check Proxy Reachability",
     description:
-      "Check whether the configured proxy is currently reachable. Returns latency in milliseconds and reachable status.",
+      "Check whether the configured proxy is currently reachable before relying on proxied browser traffic. Returns latency and reachability, or an explanation when no proxy is configured.",
     promptSnippet: "Check if proxy is reachable",
-    promptGuidelines: [
-      "Use playwright_check_proxy_reachable to verify the proxy is up before assuming HTTP history will be captured.",
-      "Returns reachable (boolean), latencyMs, and error if unreachable.",
-      "If no proxy is configured, returns reachable=false with explanation.",
-    ],
     parameters: Type.Object({}),
     async execute(_toolCallId, _params) {
       const proxy = BrowserManager.getEffectiveProxy(config);
@@ -183,49 +174,38 @@ export function registerProxyTools(pi: ExtensionAPI, config: PlaywrightConfig) {
   // ==========================================================================
   // playwright_set_proxy — runtime toggle (off | custom)
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_set_proxy",
     label: "Set Browser Proxy",
     description:
-      "Route Playwright browser traffic through a custom proxy, or turn the proxy OFF (direct), at runtime. The running browser is closed so the change applies on the next navigation.",
+      "Route Playwright browser traffic through an explicit custom proxy, or turn the proxy off for direct traffic. The current browser, pages, and tabs are closed; navigate again and use playwright_check_proxy_reachable before relying on the new proxy.",
     promptSnippet: "Toggle the browser proxy: off | custom",
-    promptGuidelines: [
-      "Playwright runs DIRECT by default. Call with action='custom' and an explicit server to enable a proxy, then action='off' to return to direct.",
-      "The current browser/page/tabs are closed so the next navigate relaunches with the new proxy.",
-      "After configuring a proxy, use playwright_check_proxy_reachable before relying on it.",
-    ],
-    parameters: Type.Object({
-      action: Type.Union([Type.Literal("off"), Type.Literal("custom")], {
-        description: "off = direct (no proxy); custom = a server you provide",
+    parameters: Type.Union([
+      Type.Object({
+        action: Type.Literal("off", { description: "Use direct browser traffic without a proxy" }),
       }),
-      server: Type.Optional(
-        Type.String({
-          description: "Proxy server URL for action='custom', e.g. http://127.0.0.1:8080",
-        })
-      ),
-      username: Type.Optional(Type.String({ description: "Proxy auth username (optional)" })),
-      password: Type.Optional(Type.String({ description: "Proxy auth password (optional)" })),
-      bypass: Type.Optional(
-        Type.String({ description: "Comma-separated hosts that bypass the proxy (optional)" })
-      ),
-    }),
+      Type.Object({
+        action: Type.Literal("custom", { description: "Use the supplied proxy server" }),
+        server: Type.String({
+          minLength: 1,
+          description: "Proxy server URL, e.g. http://127.0.0.1:8080",
+        }),
+        username: Type.Optional(Type.String({ description: "Proxy auth username (optional)" })),
+        password: Type.Optional(Type.String({ description: "Proxy auth password (optional)" })),
+        bypass: Type.Optional(
+          Type.String({ description: "Comma-separated hosts that bypass the proxy (optional)" })
+        ),
+      }),
+    ]),
     async execute(_toolCallId, params) {
-      const p = params as {
-        action: "off" | "custom";
-        server?: string;
-        username?: string;
-        password?: string;
-        bypass?: string;
-      };
-
       let proxy: ProxyConfig | null;
       let summary: string;
 
-      if (p.action === "off") {
+      if (params.action === "off") {
         proxy = null;
         summary = "Proxy disabled — browser traffic is direct.";
       } else {
-        const server = (p.server || "").trim();
+        const server = (params.server || "").trim();
         if (!server) {
           return {
             isError: true,
@@ -242,9 +222,9 @@ export function registerProxyTools(pi: ExtensionAPI, config: PlaywrightConfig) {
           };
         }
         proxy = { server };
-        if (p.username) proxy.username = p.username;
-        if (p.password) proxy.password = p.password;
-        if (p.bypass) proxy.bypass = p.bypass;
+        if (params.username) proxy.username = params.username;
+        if (params.password) proxy.password = params.password;
+        if (params.bypass) proxy.bypass = params.bypass;
         summary = `Browser traffic will route through proxy: ${server}`;
       }
 

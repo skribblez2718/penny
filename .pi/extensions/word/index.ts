@@ -1,27 +1,26 @@
+import { registerTool } from "../../lib/pi-tool-registration.js";
 /**
  * Word Extension
  *
  * Generate professionally styled Word documents from Markdown. TypeScript owns
- * tool validation and process lifecycle; generate_docx.py owns rendering,
- * structural validation, and atomic publication.
+ * validation, rendering, OOXML validation, and atomic publication in process.
  */
 
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type, type Static } from "typebox";
 import { createLogger, setSessionId } from "../../lib/logger/logger.js";
+import { generate, type GeneratorHooks, type WordGenerationResult } from "./renderer.js";
 
 const logger = createLogger("word");
 
 export const WORD_THEMES = ["executive", "modern", "minimal", "editorial", "tech"] as const;
 
 const DEFAULT_TIMEOUT_MS = 90_000;
-const MAX_STDERR_CHARS = 16_000;
 const MAX_STAGING_ATTEMPTS = 10;
 const EXTENSION_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DISCOVERED_PROJECT_ROOT = path.resolve(EXTENSION_DIR, "../../..");
@@ -32,33 +31,9 @@ export function getExtensionDir(): string {
   return EXTENSION_DIR;
 }
 
-export function getGeneratorScript(): string {
-  return path.join(EXTENSION_DIR, "generate_docx.py");
-}
-
 export function getProjectRoot(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env.PROJECT_ROOT?.trim();
   return configured ? path.resolve(configured) : DISCOVERED_PROJECT_ROOT;
-}
-
-export function venvPythonCandidates(
-  root: string,
-  platform: NodeJS.Platform = process.platform
-): string[] {
-  const unix = path.join(root, ".venv", "bin", "python");
-  const windows = path.join(root, ".venv", "Scripts", "python.exe");
-  return platform === "win32" ? [windows, unix] : [unix, windows];
-}
-
-export function getVenvPython(
-  root = getProjectRoot(),
-  env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform
-): string {
-  const override = env.PI_VENV_PYTHON?.trim();
-  if (override) return path.resolve(override);
-  const candidates = venvPythonCandidates(root, platform);
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
 }
 
 /** Lowercase, alphanumeric-and-dash slug for filenames; never empty. */
@@ -84,8 +59,6 @@ export function defaultOutputPath(title: string | undefined, now: Date = new Dat
     String(now.getMinutes()).padStart(2, "0"),
     String(now.getSeconds()).padStart(2, "0"),
   ].join("");
-  // Sibling tool calls can execute concurrently. Milliseconds plus randomness
-  // prevent silent overwrites when two calls share the same title and second.
   const unique = `${String(now.getMilliseconds()).padStart(3, "0")}${Math.random()
     .toString(36)
     .slice(2, 6)}`;
@@ -118,7 +91,7 @@ export function reserveStagingPath(outputPath: string): string {
       fs.closeSync(descriptor);
       return candidate;
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
+      const code = error instanceof Error && "code" in error ? error.code : undefined;
       if (code !== "EEXIST") throw error;
     }
   }
@@ -129,12 +102,12 @@ export function reserveStagingPath(outputPath: string): string {
 
 export interface GeneratorOutcome {
   cancelled: boolean;
-  result?: Record<string, unknown>;
+  result?: WordGenerationResult;
 }
 
 export interface GeneratorRunOptions {
-  pythonPath?: string;
   timeoutMs?: number;
+  hooks?: GeneratorHooks;
 }
 
 function generatorTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
@@ -142,146 +115,47 @@ function generatorTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
 }
 
-function boundedAppend(current: string, chunk: Buffer, limit: number): string {
-  const appended = current + chunk.toString();
-  return appended.length <= limit ? appended : appended.slice(-limit);
-}
-
-export function runGenerator(
-  scriptPath: string,
+export async function runGenerator(
   spec: Record<string, unknown>,
   signal: AbortSignal | undefined,
   options: GeneratorRunOptions = {}
 ): Promise<GeneratorOutcome> {
-  if (signal?.aborted) return Promise.resolve({ cancelled: true });
-
-  const projectRoot = getProjectRoot();
-  const configuredOverride = process.env.PI_VENV_PYTHON?.trim();
-  const attempted = options.pythonPath
-    ? [path.resolve(options.pythonPath)]
-    : configuredOverride
-      ? [path.resolve(configuredOverride)]
-      : venvPythonCandidates(projectRoot);
-  const python = options.pythonPath ? path.resolve(options.pythonPath) : getVenvPython(projectRoot);
-
-  if (!fs.existsSync(python)) {
-    throw new Error(
-      `Python interpreter not found. Attempted: ${attempted.join(", ")}. ` +
-        "Run `uv sync --extra dev --frozen` or set PI_VENV_PYTHON."
-    );
-  }
-  if (!fs.existsSync(scriptPath)) {
-    throw new Error(`Word generator script not found: ${scriptPath}`);
-  }
+  if (signal?.aborted) return { cancelled: true };
 
   const outputPath = spec.output_path;
   if (typeof outputPath !== "string" || outputPath.length === 0) {
     throw new Error("Document generator spec requires output_path");
   }
+
   const stagingPath = reserveStagingPath(outputPath);
   const preparedSpec = { ...spec, staging_path: stagingPath };
   const timeoutMs = options.timeoutMs ?? generatorTimeoutMs();
-  return new Promise((resolve, reject) => {
-    const startedAt = Date.now();
-    const proc = spawn(python, [scriptPath], { stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let aborted = false;
-    let timedOut = false;
-    let settled = false;
-    const lifecycle: { timer?: ReturnType<typeof setTimeout> } = {};
+  const internalController = new AbortController();
+  let timedOut = false;
 
-    const cleanup = () => {
-      if (lifecycle.timer !== undefined) clearTimeout(lifecycle.timer);
-      signal?.removeEventListener("abort", onAbort);
-      fs.rmSync(stagingPath, { force: true });
-    };
-    const settleResolve = (outcome: GeneratorOutcome) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(outcome);
-    };
-    const settleReject = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    };
+  const forwardAbort = () => internalController.abort();
+  signal?.addEventListener("abort", forwardAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    internalController.abort();
+  }, timeoutMs);
 
-    const onAbort = () => {
-      aborted = true;
-      if (!proc.kill("SIGKILL")) settleResolve({ cancelled: true });
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-
-    lifecycle.timer = setTimeout(() => {
-      timedOut = true;
-      if (!proc.kill("SIGKILL")) {
-        settleReject(new Error(`Document generator timed out after ${timeoutMs}ms`));
-      }
-    }, timeoutMs);
-
-    proc.stdout.on("data", (data: Buffer) => {
-      stdout += data.toString();
-    });
-    proc.stderr.on("data", (data: Buffer) => {
-      stderr = boundedAppend(stderr, data, MAX_STDERR_CHARS);
-    });
-
-    proc.on("close", (code) => {
-      const durationMs = Date.now() - startedAt;
-      if (timedOut) {
-        settleReject(
-          new Error(
-            `Document generator timed out after ${timeoutMs}ms ` +
-              `(python=${python}, script=${scriptPath}, durationMs=${durationMs})`
-          )
-        );
-        return;
-      }
-      if (aborted) {
-        settleResolve({ cancelled: true });
-        return;
-      }
-      if (code !== 0) {
-        const diagnostic = stderr.trim() || `Document generator exited with code ${code}`;
-        settleReject(
-          new Error(
-            `${diagnostic}\n` +
-              `(python=${python}, script=${scriptPath}, exitCode=${String(code)}, durationMs=${durationMs})`
-          )
-        );
-        return;
-      }
-      try {
-        settleResolve({ cancelled: false, result: JSON.parse(stdout) as Record<string, unknown> });
-      } catch {
-        settleReject(
-          new Error(
-            `Document generator returned invalid JSON: ${stdout.slice(0, 500)} ` +
-              `(python=${python}, script=${scriptPath}, durationMs=${durationMs})`
-          )
-        );
-      }
-    });
-
-    proc.on("error", (error) => {
-      settleReject(
-        new Error(
-          `Unable to start document generator: ${error.message} ` +
-            `(python=${python}, script=${scriptPath})`
-        )
-      );
-    });
-
-    // A child that exits before reading stdin can produce EPIPE. The close/error
-    // handlers above own the actual result; swallowing this socket error prevents
-    // an unhandled event from terminating the Pi process.
-    proc.stdin.on("error", () => {});
-    proc.stdin.write(JSON.stringify(preparedSpec));
-    proc.stdin.end();
-  });
+  try {
+    const result = await generate(preparedSpec, internalController.signal, options.hooks ?? {});
+    return { cancelled: false, result };
+  } catch (error) {
+    if (timedOut) {
+      throw new Error(`Document generator timed out after ${timeoutMs}ms`);
+    }
+    if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+      return { cancelled: true };
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", forwardAbort);
+    fs.rmSync(stagingPath, { force: true });
+  }
 }
 
 // ── Tool parameters ────────────────────────────────────────────────────────
@@ -428,53 +302,34 @@ const wordGenerateParams = Type.Object({
   ),
 });
 
-export interface WordGenerateParams {
-  markdown?: string;
-  markdown_path?: string;
-  title?: string;
-  subtitle?: string;
-  author?: string;
-  date?: string;
-  theme?: string;
-  accent_color?: string;
-  font_size_pt?: number;
-  line_spacing?: number;
-  line_break_mode?: string;
-  margin_inches?: number;
-  orientation?: string;
-  page_size?: string;
-  title_mode?: string;
-  cover_page?: boolean;
-  include_toc?: boolean;
-  include_page_numbers?: boolean;
-  header_text?: string;
-  footer_text?: string;
-  table_style?: string;
-  table_layout?: string;
-  output_path?: string;
-}
+export type WordGenerateParams = Static<typeof wordGenerateParams>;
 
-export function buildSpec(
-  params: WordGenerateParams,
-  projectRoot: string
-): Record<string, unknown> {
+export type WordGeneratorSpec = WordGenerateParams & {
+  markdown_path?: string;
+  output_path: string;
+  project_root: string;
+  staging_path?: string;
+};
+
+export function buildSpec(params: WordGenerateParams, projectRoot: string): WordGeneratorSpec {
   const hasInline = typeof params.markdown === "string" && params.markdown.trim().length > 0;
-  const hasFile = typeof params.markdown_path === "string" && params.markdown_path.length > 0;
+  const markdownPathInput = params.markdown_path;
+  const hasFile = typeof markdownPathInput === "string" && markdownPathInput.length > 0;
   if (hasInline === hasFile) {
     throw new Error("Provide exactly one of 'markdown' or 'markdown_path'.");
   }
 
   let markdownPath: string | undefined;
   if (hasFile) {
-    markdownPath = path.isAbsolute(params.markdown_path as string)
-      ? (params.markdown_path as string)
-      : path.join(projectRoot, params.markdown_path as string);
+    markdownPath = path.isAbsolute(markdownPathInput)
+      ? markdownPathInput
+      : path.join(projectRoot, markdownPathInput);
     if (!fs.existsSync(markdownPath)) {
       throw new Error(`Markdown file not found: ${markdownPath}`);
     }
   }
 
-  const spec: Record<string, unknown> = {
+  const spec: WordGeneratorSpec = {
     ...params,
     markdown_path: markdownPath,
     output_path: resolveOutputPath(params.output_path, params.title, projectRoot),
@@ -487,17 +342,17 @@ export function buildSpec(
 // ── Registration ───────────────────────────────────────────────────────────
 
 export default function wordExtension(pi: ExtensionAPI): void {
-  pi.on("session_start", async (_event: unknown, ctx: unknown) => {
-    const sessionContext = ctx as { sessionManager: { getSessionId(): string } };
-    setSessionId(sessionContext.sessionManager.getSessionId());
+  pi.on("session_start", async (_event, ctx) => {
+    setSessionId(ctx.sessionManager.getSessionId());
   });
 
-  pi.registerTool({
+  registerTool(pi, {
     name: "word_generate",
     label: "Generate Word Document",
     description:
-      "Render Markdown into a professionally styled, structurally validated Word (.docx) " +
-      "document. The generator preserves intentional line breaks by default, uses inherited " +
+      "Render Markdown into a professionally styled, structurally validated Word (.docx) document. " +
+      "Use when the requested deliverable is an editable Word document; do not use for plain-text answers or PowerPoint output. " +
+      "The generator preserves intentional line breaks by default, uses inherited " +
       "Word styles and a contrast-safe palette, sizes tables by content, validates the OOXML " +
       "package, and atomically publishes the result. A leading H1 can become title matter; " +
       "title_mode='none' retains it in the body. Five themes, covers, TOCs, headers/footers, " +
@@ -505,13 +360,7 @@ export default function wordExtension(pi: ExtensionAPI): void {
     promptSnippet:
       "word_generate: render Markdown into a validated, professionally styled Word document",
     parameters: wordGenerateParams,
-    async execute(
-      _toolCallId: string,
-      params: WordGenerateParams,
-      signal: AbortSignal | undefined,
-      _onUpdate: unknown,
-      _ctx: unknown
-    ) {
+    async execute(_toolCallId, params, signal) {
       if (signal?.aborted) {
         return {
           content: [{ type: "text" as const, text: "Cancelled" }],
@@ -523,9 +372,9 @@ export default function wordExtension(pi: ExtensionAPI): void {
       try {
         const projectRoot = getProjectRoot();
         const spec = buildSpec(params, projectRoot);
-        fs.mkdirSync(path.dirname(spec.output_path as string), { recursive: true });
+        fs.mkdirSync(path.dirname(spec.output_path), { recursive: true });
 
-        const outcome = await runGenerator(getGeneratorScript(), spec, signal);
+        const outcome = await runGenerator(spec, signal);
         if (outcome.cancelled) {
           return {
             content: [{ type: "text" as const, text: "Cancelled" }],
@@ -533,7 +382,10 @@ export default function wordExtension(pi: ExtensionAPI): void {
           };
         }
 
-        const result = outcome.result as Record<string, unknown>;
+        if (!outcome.result) {
+          throw new Error("Word generator completed without a result");
+        }
+        const result = outcome.result;
         logger.info("Word document generated", {
           path: result.path,
           theme: result.theme,

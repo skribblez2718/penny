@@ -40,7 +40,9 @@ SKILL_FLOW_DIAGRAM_ANY = [
 ]
 
 
-def run(cmd: list[str], cwd: str = ".", extra_env=None) -> tuple[bool, str]:
+def run(
+    cmd: list[str], cwd: str = ".", extra_env: dict[str, str] | None = None
+) -> tuple[bool, str]:
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)

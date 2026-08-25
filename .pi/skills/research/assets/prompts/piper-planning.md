@@ -8,7 +8,7 @@ Declare the **mode** unless the caller fixed it: `quick` (narrow question, no cr
 
 ## Exact artifact handoff
 
-The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` before working; an empty list means there is no predecessor. On revision, the exact prior plan and critique artifacts contain the material to revise. Do not discover predecessors through another channel.
+The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` before working; an empty list means there is no predecessor. On revision, the exact prior plan and critique artifacts contain the material to revise. Do not discover predecessors through another channel. If a required ID/path is absent, return `missing_input:`.
 
 Put the complete plan and rationale in your response. The execution owner captures that response as the stage artifact. Do not claim artifact persistence or registration. `SUMMARY` is routing data only.
 

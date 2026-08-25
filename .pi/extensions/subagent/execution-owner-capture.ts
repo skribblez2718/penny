@@ -5,6 +5,10 @@ import * as path from "node:path";
 
 const MAX_OWNER_CAPTURE_BYTES = 16 * 1024 * 1024;
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 /**
  * Copy truncated bash output into the trusted parent event before the agent can
  * issue another command that changes or deletes Pi's temporary output file.
@@ -13,12 +17,9 @@ export function captureToolResultForExecutionOwner(
   message: Record<string, unknown>
 ): Record<string, unknown> {
   if (message.role !== "toolResult" || message.toolName !== "bash") return message;
-  const details =
-    message.details && typeof message.details === "object"
-      ? { ...(message.details as Record<string, unknown>) }
-      : {};
+  const details = isObjectRecord(message.details) ? { ...message.details } : {};
   delete details.executionOwnerCapture;
-  const truncation = details.truncation as Record<string, unknown> | undefined;
+  const truncation = isObjectRecord(details.truncation) ? details.truncation : undefined;
   if (truncation?.truncated !== true) return { ...message, details };
 
   const withCapture = (capture: Record<string, unknown>): Record<string, unknown> => {

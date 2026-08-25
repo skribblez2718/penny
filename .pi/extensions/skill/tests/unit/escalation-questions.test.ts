@@ -19,15 +19,16 @@ import {
   renderedQuestionsDigest,
   resolveTrustedQuestionnaireTransport,
 } from "../../execution-receipts.js";
+import { requireString } from "../../../../lib/tests/test-narrowers.js";
 
 describe("normalizeEscalationQuestions", () => {
   it("defaults a MISSING options key to [] (the charter-gate crash case)", () => {
     // Free-text gate questions legitimately have
     // no `options` key at all.
-    const questions = [
+    const questions: EscalationQuestion[] = [
       { id: "out_of_scope", label: "Out-of-scope", prompt: "List paths." },
       { id: "scope", label: "Scope", prompt: "Narrow the scope." },
-    ] as unknown as EscalationQuestion[];
+    ];
 
     expect(() => normalizeEscalationQuestions(questions)).not.toThrow();
     const out = normalizeEscalationQuestions(questions);
@@ -64,7 +65,7 @@ describe("normalizeEscalationQuestions", () => {
   });
 
   it("handles a MIXED list (options + optionless) — the real charter gate shape", () => {
-    const questions = [
+    const questions: EscalationQuestion[] = [
       {
         id: "p0_charter_gate",
         label: "Approve",
@@ -74,7 +75,7 @@ describe("normalizeEscalationQuestions", () => {
       },
       { id: "out_of_scope", label: "Out-of-scope", prompt: "Paths?", allowOther: true },
       { id: "scope", label: "Scope", prompt: "Scope?", allowOther: true },
-    ] as unknown as EscalationQuestion[];
+    ];
 
     const out = normalizeEscalationQuestions(questions);
     expect(out).toHaveLength(3);
@@ -113,8 +114,13 @@ describe("normalizeEscalationQuestions", () => {
     const payload = prepareQuestionnairePayload([question]);
     expect(payload).toHaveProperty("trustedTransportCapability");
     expect(JSON.stringify(payload)).not.toContain("challenge-1");
-    const capability = (payload as { trustedTransportCapability: string })
-      .trustedTransportCapability;
+    if (!("trustedTransportCapability" in payload)) {
+      throw new Error("questionnaire payload omitted trusted transport capability");
+    }
+    const capability = requireString(
+      payload.trustedTransportCapability,
+      "questionnaire payload transport capability was not text"
+    );
     expect(resolveTrustedQuestionnaireTransport(capability)).toEqual({
       questions: normalized,
       binding: {
@@ -166,7 +172,7 @@ describe("normalizeEscalationQuestions", () => {
     expect(prepareQuestionnairePayload([raw])).toHaveProperty("trustedTransportCapability");
 
     // Pre-normalized questions -> binding is gone, so NO capability (the bug).
-    const prenormalized = normalizeEscalationQuestions([raw]) as EscalationQuestion[];
+    const prenormalized: EscalationQuestion[] = normalizeEscalationQuestions([raw]);
     expect(prenormalized[0].approval_challenge).toBeUndefined();
     expect(prenormalized[0].questionnaire_transport_ref).toBeUndefined();
     const brokenPayload = prepareQuestionnairePayload(prenormalized);

@@ -1,3 +1,4 @@
+import { requireSqlite } from "./helpers/narrowing.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -14,11 +15,12 @@ afterEach(() => {
 describe("Node SQLite runtime spike", () => {
   it("supports WAL, transactions, foreign keys, and a second connection", () => {
     // Vite 5 predates node:sqlite, so resolve the built-in through Node itself.
-    const sqlite = process.getBuiltinModule("node:" + "sqlite") as
-      | typeof import("node:sqlite")
-      | undefined;
+    const sqlite = process.getBuiltinModule("node:sqlite");
     expect(sqlite).toBeDefined();
-    const DatabaseSync = sqlite!.DatabaseSync;
+    const DatabaseSync = requireSqlite(
+      sqlite,
+      "apps/orchestration/tests/node-sqlite.integration.test.ts:21"
+    ).DatabaseSync;
     const directory = mkdtempSync(path.join(tmpdir(), "penny-orch-sqlite-"));
     tempDirectories.push(directory);
     const dbPath = path.join(directory, "orchestration-v2.db");

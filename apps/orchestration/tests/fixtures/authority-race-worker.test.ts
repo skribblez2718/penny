@@ -1,3 +1,11 @@
+import {
+  errorCode,
+  parseJson,
+  requireError,
+  requireRecord,
+  requireString,
+  requireValue,
+} from "../helpers/narrowing.js";
 import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
@@ -6,7 +14,13 @@ import { describe, it } from "vitest";
 import { ParentDeliveryGrantStore } from "../../src/kb/parent-delivery.js";
 import { KbSessionProfileGrantStore } from "../../src/kb/profile-grants.js";
 import { SaveQueryClaimStore } from "../../src/kb/save-claim.js";
-import type { ParentDeliveryGrant, Sha256Hex } from "../../src/kb/contracts.js";
+import {
+  ParentDeliveryGrantSchema,
+  Sha256HexSchema,
+  validateKbContract,
+  type ParentDeliveryGrant,
+  type Sha256Hex,
+} from "../../src/kb/contracts.js";
 
 interface WorkerJob {
   readonly operation: string;
@@ -32,9 +46,7 @@ async function waitForGo(pathname: string): Promise<void> {
 }
 
 function database(pathname: string): import("node:sqlite").DatabaseSync {
-  const module = process.getBuiltinModule("node:" + "sqlite") as
-    | typeof import("node:sqlite")
-    | undefined;
+  const module = process.getBuiltinModule("node:sqlite");
   if (module === undefined) throw new Error("node:sqlite is unavailable");
   return new module.DatabaseSync(pathname);
 }
@@ -45,9 +57,56 @@ function required(job: WorkerJob, field: string): string {
   return value;
 }
 
+function nullableString(job: WorkerJob, field: string): string | null {
+  const value = job.input[field];
+  if (value !== null && typeof value !== "string") {
+    throw new Error(`worker input '${field}' must be a string or null`);
+  }
+  return value;
+}
+
+function parseWorkerJob(value: unknown): WorkerJob {
+  const job = requireRecord(value, "authority worker job");
+  return {
+    operation: requireString(job["operation"], "authority worker job.operation"),
+    storeDir: requireString(job["storeDir"], "authority worker job.storeDir"),
+    readyPath: requireString(job["readyPath"], "authority worker job.readyPath"),
+    resultPath: requireString(job["resultPath"], "authority worker job.resultPath"),
+    goPath: requireString(job["goPath"], "authority worker job.goPath"),
+    input: requireRecord(job["input"], "authority worker job.input"),
+  };
+}
+
+function profileAction(value: string): Parameters<KbSessionProfileGrantStore["consume"]>[0]["action"] {
+  switch (value) {
+    case "init":
+    case "ingest":
+    case "query":
+    case "save":
+    case "lint":
+    case "promote":
+    case "status":
+    case "resume":
+      return value;
+    default:
+      throw new Error(`invalid profile action: ${value}`);
+  }
+}
+
+function sha256Value(value: unknown, label: string): Sha256Hex {
+  return validateKbContract(Sha256HexSchema, value, label);
+}
+
 describe("authority race subprocess", () => {
   it.skipIf(rawJob === undefined)("executes one synchronized store operation", async () => {
-    const job = JSON.parse(rawJob!) as WorkerJob;
+    const job = parseWorkerJob(
+      parseJson(
+        requireValue(
+          rawJob,
+          "apps/orchestration/tests/fixtures/authority-race-worker.test.ts:58"
+        )
+      )
+    );
 
     if (job.operation === "parent-crash-uncommitted") {
       const db = database(path.join(job.storeDir, "grants.sqlite"));
@@ -62,10 +121,12 @@ describe("authority race subprocess", () => {
     if (job.operation === "profile-crash-uncommitted") {
       const db = database(path.join(job.storeDir, "grants.sqlite"));
       db.exec("PRAGMA busy_timeout=5000; BEGIN IMMEDIATE;");
-      const grant = db
-        .prepare("SELECT grant_id, grant_sha256 FROM profile_session_grants WHERE grant_id = ?")
-        .get(required(job, "grantId")) as { grant_id: string; grant_sha256: string } | undefined;
-      if (grant === undefined) throw new Error("profile crash grant is absent");
+      const grant = requireRecord(
+        db
+          .prepare("SELECT grant_id, grant_sha256 FROM profile_session_grants WHERE grant_id = ?")
+          .get(required(job, "grantId")),
+        "profile crash grant"
+      );
       db.prepare(
         `INSERT INTO profile_session_grant_uses (
            session_id, invocation_id, grant_id, grant_sha256, kb_profile_id,
@@ -74,12 +135,12 @@ describe("authority race subprocess", () => {
       ).run(
         required(job, "session_id"),
         required(job, "invocation_id"),
-        grant.grant_id,
-        grant.grant_sha256,
+        requireString(grant["grant_id"], "profile crash grant.grant_id"),
+        requireString(grant["grant_sha256"], "profile crash grant.grant_sha256"),
         required(job, "kb_profile_id"),
         required(job, "action"),
         required(job, "request_sha256"),
-        job.input.policy_sha256 ?? null,
+        nullableString(job, "policy_sha256"),
         new Date().toISOString(),
         "0".repeat(64)
       );
@@ -129,20 +190,12 @@ describe("authority race subprocess", () => {
             session_id: required(job, "session_id"),
             invocation_id: required(job, "invocation_id"),
             kb_profile_id: required(job, "kb_profile_id"),
-            action: required(job, "action") as
-              | "init"
-              | "ingest"
-              | "query"
-              | "save"
-              | "lint"
-              | "promote"
-              | "status"
-              | "resume",
-            request_sha256: required(job, "request_sha256") as Sha256Hex,
+            action: profileAction(required(job, "action")),
+            request_sha256: sha256Value(job.input["request_sha256"], "request_sha256"),
             policy_sha256:
               job.input.policy_sha256 === null
                 ? null
-                : (required(job, "policy_sha256") as Sha256Hex),
+                : sha256Value(job.input["policy_sha256"], "policy_sha256"),
           });
         }
         if (job.operation === "profile-expire") {
@@ -155,7 +208,12 @@ describe("authority race subprocess", () => {
       close = () => store.close();
       operation = () => {
         if (job.operation === "parent-mint") {
-          store.mint(job.input.grant as unknown as ParentDeliveryGrant);
+          const grant: ParentDeliveryGrant = validateKbContract(
+            ParentDeliveryGrantSchema,
+            job.input["grant"],
+            "parent delivery grant"
+          );
+          store.mint(grant);
           return store.load(required(job, "grantId"));
         }
         if (job.operation === "parent-consume") {
@@ -176,7 +234,7 @@ describe("authority race subprocess", () => {
             kb_profile_id: required(job, "profileId"),
             kb_id: required(job, "kbId"),
             answer_artifact_id: required(job, "artifactId"),
-            answer_sha256: required(job, "answerSha256") as Sha256Hex,
+            answer_sha256: sha256Value(job.input["answerSha256"], "answerSha256"),
           });
         }
         if (job.operation === "save-claim") {
@@ -185,7 +243,7 @@ describe("authority race subprocess", () => {
             kb_profile_id: required(job, "profileId"),
             save_run_id: required(job, "saveRunId"),
             save_transaction_id: required(job, "transactionId"),
-            answer_sha256: required(job, "answerSha256") as Sha256Hex,
+            answer_sha256: sha256Value(job.input["answerSha256"], "answerSha256"),
           });
         }
         if (job.operation === "save-reserve") {
@@ -204,7 +262,10 @@ describe("authority race subprocess", () => {
           return store.release({
             query_run_id: required(job, "queryRunId"),
             save_run_id: required(job, "saveRunId"),
-            answer_sha256: job.input.answerSha256 as Sha256Hex | undefined,
+            answer_sha256:
+              job.input.answerSha256 === undefined
+                ? undefined
+                : sha256Value(job.input.answerSha256, "answerSha256"),
           });
         }
         throw new Error(`unknown save worker operation '${job.operation}'`);
@@ -217,13 +278,13 @@ describe("authority race subprocess", () => {
     try {
       result = { ok: true, value: operation() };
     } catch (error) {
+      const caught = requireError(error, "authority worker failure");
+      const code = errorCode(error);
       result = {
         ok: false,
-        name: (error as Error).name,
-        message: (error as Error).message,
-        ...("code" in (error as object)
-          ? { errorCode: (error as Error & { code?: string }).code }
-          : {}),
+        name: caught.name,
+        message: caught.message,
+        ...(typeof code === "string" ? { errorCode: code } : {}),
       };
     } finally {
       close?.();

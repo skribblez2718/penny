@@ -1,27 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { Type } from "typebox";
+
+import { createTestExtensionApi, isRecord } from "../../../../lib/tests/test-narrowers.js";
 
 // Mock external dependencies so index.ts can load in the test environment
-vi.mock("@mariozechner/pi-ai", () => ({
-  StringEnum: (values: readonly string[], _opts?: any) => ({
+vi.mock("@earendil-works/pi-ai", () => ({
+  StringEnum: (values: readonly string[], _opts?: Record<string, unknown>) => ({
     anyOf: values.map((v: string) => ({ type: "string", const: v })),
   }),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@earendil-works/pi-coding-agent")>()),
   getMarkdownTheme: () => ({}),
-  parseFrontmatter: <T extends Record<string, string>>(content: string) => {
-    const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-    if (!fmMatch) return { frontmatter: {} as T, body: content };
-    const fm: Record<string, string> = {};
-    for (const line of fmMatch[1].split("\n")) {
-      const m = line.match(/^(\w+):\s*(.+)$/);
-      if (m) fm[m[1]] = m[2].trim();
-    }
-    return { frontmatter: fm as T, body: content.replace(/^---\n[\s\S]*?\n---\n?/, "") };
-  },
 }));
 
-vi.mock("@mariozechner/pi-tui", () => ({
+vi.mock("@earendil-works/pi-tui", () => ({
   Container: class ContainerMock {
     addChild() {}
   },
@@ -32,17 +26,73 @@ vi.mock("@mariozechner/pi-tui", () => ({
   },
 }));
 
-// Capture the tool definition when registerTool is called
-let registeredTool: Record<string, unknown> | undefined;
+interface RegisteredToolResult {
+  isError?: boolean;
+  content: Array<{ type: string; text: string }>;
+}
 
-function createMockPi(): any {
+interface RegisteredSubagentTool {
+  name: string;
+  promptSnippet: string;
+  description: string;
+  promptGuidelines?: unknown;
+  parameters: unknown;
+  execute: (...args: unknown[]) => Promise<RegisteredToolResult>;
+}
+
+// Capture the tool definition when registerTool is called.
+let registeredTool: RegisteredSubagentTool | undefined;
+
+function isRegisteredSubagentTool(value: unknown): value is RegisteredSubagentTool {
+  if (!isRecord(value)) return false;
+  const candidate = value;
+  return (
+    candidate["name"] === "subagent" &&
+    typeof candidate["promptSnippet"] === "string" &&
+    typeof candidate["description"] === "string" &&
+    typeof candidate["execute"] === "function" &&
+    candidate["parameters"] !== undefined
+  );
+}
+
+function createMockPi(providerNames?: string[]) {
   registeredTool = undefined;
-  return {
-    registerTool: (def: Record<string, unknown>) => {
-      registeredTool = def;
+  return createTestExtensionApi({
+    onRegisterTool(definition) {
+      if (!isRegisteredSubagentTool(definition)) {
+        throw new Error("subagent registered an invalid tool");
+      }
+      registeredTool = definition;
     },
-    on: () => {},
-  };
+    getAllTools: providerNames
+      ? () =>
+          providerNames.map((name) => ({
+            name,
+            description: "provider fixture",
+            parameters: Type.Object({}),
+            sourceInfo: {
+              path: `/fixture/${name}`,
+              source: "subagent-test",
+              scope: "project",
+              origin: "top-level",
+            },
+          }))
+      : undefined,
+  });
+}
+
+function subagentTool(): RegisteredSubagentTool {
+  if (registeredTool === undefined) throw new Error("subagent tool was not registered");
+  return registeredTool;
+}
+
+function object(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("expected an object");
+  return value;
+}
+
+function schemaProperties(schema: unknown): Record<string, unknown> {
+  return object(object(schema)["properties"]);
 }
 
 describe("subagent tool registration", () => {
@@ -56,8 +106,7 @@ describe("subagent tool registration", () => {
     const pi = createMockPi();
     mod.default(pi);
 
-    expect(registeredTool).toBeDefined();
-    const snippet = registeredTool!.promptSnippet as string;
+    const snippet = subagentTool().promptSnippet;
     expect(snippet).toContain("echo");
     expect(snippet).toContain("skribble");
     expect(snippet).toContain("piper");
@@ -74,24 +123,40 @@ describe("subagent tool registration", () => {
     const pi = createMockPi();
     mod.default(pi);
 
-    expect(registeredTool).toBeDefined();
     const agents = discoverAgents(process.cwd(), "project").agents;
     const expectedCatalog = formatModelVisibleAgentCatalog(agents);
-    const description = registeredTool!.description as string;
+    const description = subagentTool().description;
     expect(description).toContain(expectedCatalog);
     for (const agent of agents) expect(expectedCatalog).toContain(`${agent.name}:`);
   });
 
-  it("registers with promptGuidelines containing routing and anti-pattern guidance", async () => {
+  it("keeps routing and anti-use guidance in the provider-visible description", async () => {
     const mod = await import("../../index.js");
     const pi = createMockPi();
     mod.default(pi);
 
-    expect(registeredTool).toBeDefined();
-    const guidelines = registeredTool!.promptGuidelines as string[];
-    expect(guidelines.length).toBeGreaterThanOrEqual(5);
-    expect(guidelines.some((g) => g.toLowerCase().includes("anti-pattern"))).toBe(true);
-    expect(guidelines.some((g) => g.toLowerCase().includes("skill tool"))).toBe(true);
+    expect(subagentTool().promptGuidelines).toBeUndefined();
+    const description = subagentTool().description;
+    expect(description).toContain("Use when");
+    expect(description).toContain("Do not use");
+    expect(description).toContain("use the skill tool instead");
+    expect(description).toContain("cannot see the parent conversation");
+  });
+
+  it("fails before spawn when one YAML-declared provider is unregistered", async () => {
+    const mod = await import("../../index.js");
+    const pi = createMockPi(["read"]);
+    mod.default(pi);
+    const result = await subagentTool().execute(
+      "call",
+      { agent: "carren", task: "review" },
+      undefined,
+      undefined,
+      { cwd: process.cwd(), hasUI: false }
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("TOOL_PROVIDER_MISSING");
+    expect(result.content[0].text).toContain("artifact_read");
   });
 
   it("agent parameter schema references discovered agent names", async () => {
@@ -99,9 +164,8 @@ describe("subagent tool registration", () => {
     const pi = createMockPi();
     mod.default(pi);
 
-    expect(registeredTool).toBeDefined();
-    const params = registeredTool!.parameters as any;
-    const agentProp = params?.properties?.agent;
+    const properties = schemaProperties(subagentTool().parameters);
+    const agentProp = properties["agent"];
     expect(agentProp).toBeDefined();
 
     // StringEnum produces an anyOf array of const schemas in our mock.
@@ -110,6 +174,13 @@ describe("subagent tool registration", () => {
     expect(schemaText).toContain("echo");
     expect(schemaText).toContain("skribble");
     expect(schemaText).toContain("piper");
+    expect(object(properties["input_artifacts"])["maxItems"]).toBeUndefined();
+    expect(schemaProperties(object(properties["tasks"])["items"])).toHaveProperty(
+      "input_artifacts"
+    );
+    expect(schemaProperties(object(properties["chain"])["items"])).toHaveProperty(
+      "input_artifacts"
+    );
   });
 });
 
@@ -133,13 +204,11 @@ describe("subagent tool registration with empty agent discovery", () => {
     const pi = createMockPi();
     mod.default(pi);
 
-    expect(registeredTool).toBeDefined();
-    const snippet = registeredTool!.promptSnippet as string;
+    const snippet = subagentTool().promptSnippet;
     expect(snippet).toContain("no agents discovered");
-    expect(registeredTool!.description as string).toContain("Available agents: none discovered.");
+    expect(subagentTool().description).toContain("Available agents: none discovered.");
 
-    const params = registeredTool!.parameters as any;
-    const agentProp = params?.properties?.agent;
+    const agentProp = schemaProperties(subagentTool().parameters)["agent"];
     const schemaText = JSON.stringify(agentProp);
     expect(schemaText).toContain("no-agents-found");
 

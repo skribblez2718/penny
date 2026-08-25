@@ -1,12 +1,10 @@
 # Compaction Resume Protocol
 
-Execute this protocol once when a compaction summary containing a `[RESUME-REFS v2]` block appears in context. The prose brief is the primary orientation. The appendix contains exact recovery addresses selected from read-only orchestration checkpoints; it is not a search hint.
+Execute this protocol once when a compaction summary contains `[RESUME-REFS v2]`.
+The prose brief is the primary orientation. The appendix contains code-owned exact
+current-session recovery addresses, never semantic search hints.
 
-Once processed, do not re-execute it in the same session.
-
-## 1. Validate the Appendix
-
-The only supported format is:
+## 1. Validate the block
 
 ```text
 [RESUME-REFS v2]
@@ -16,68 +14,53 @@ memory:<durable_memory_id>
 [/RESUME-REFS]
 ```
 
-Rules:
+- `artifact_id` is `art_` plus 64 lowercase hex characters.
+- Unknown versions, malformed lines, placeholders, duplicates, or an unclosed block make
+  the whole appendix invalid; do not partially repair it.
+- Never derive a run/artifact from a name, goal similarity, recency, memory, or a global
+  manifest scan.
 
-- `run:` and `artifact:` are exact addresses, not names or search terms.
-- `memory:` is optional and appears only when an owner had already supplied that exact durable ID.
-- Every artifact ID is `art_` followed by 64 lowercase hexadecimal characters.
-- Every artifact digest is exactly 64 lowercase hexadecimal characters.
-- Unknown versions, malformed lines, duplicate refs, placeholders, and unclosed blocks are invalid. Do not partially reinterpret or repair them.
-- Never derive a run from a session name, room name, recency, goal similarity, or memory search.
+## 2. Reorient from prose
 
-If the block is invalid, continue from the prose and report the invalid appendix only when it affects the requested work.
+Read Goal, Current Work, In-Flight Runs, Pending, Next Steps, constraints, unresolved
+errors, and touched files. A newer user goal supersedes older completed-skill context.
+The prose is sufficient for ordinary continuation; dereference only when detail is needed.
 
-## 2. Reorient from the Prose
+## 3. Resume exact runs
 
-Read the brief top to bottom: latest goal, current work, exact in-flight runs, pending user questions, next steps, constraints, unresolved errors, and touched files.
+For each needed `run:<run_id>`, use the orchestration owner's exact recovery path.
+Rehydrate checkpoint state; never reconstruct FSM state from prose, artifact payloads, or
+memory. If the row is missing or terminal, treat it as stale and continue from prose.
 
-- `## Goal` is the latest substantive intent, not the first-seen intent.
-- `## Active Skill` may be marked `superseded by a newer request`; in that case the newer `## Goal` controls.
-- `## Current Work` and `## Next Steps` describe the immediate continuation.
-- `## Pending` preserves conversational escalation state. An exact awaiting-user checkpoint remains authoritative when present.
+## 4. Read exact artifacts
 
-The prose is sufficient for ordinary continuation. Dereference only when missing detail is needed.
+For `artifact:<id>@sha256:<digest>`:
 
-## 3. Resume Exact Runs
+1. Call `artifact_read({ artifact: "<id>" })`.
+2. Verify the returned ID and digest.
+3. Repeat with `next_range` until `truncated` is false.
 
-For each `run:<run_id>` needed by the current goal:
+Reads are direct and non-expiring. Missing, malformed, or digest-mismatched artifacts do
+not authorize broad discovery; report the issue if content is required.
 
-1. Use the orchestration owner's exact run-ID recovery path.
-2. Rehydrate the persisted checkpoint; do not reconstruct FSM state from prose, artifact text, durable memory, or session metadata.
-3. If the checkpoint is `awaiting_user`, present its still-open question and submit the answer through the owner's resume path.
-4. If it is running, continue from the persisted state.
-5. If the exact row is absent or terminal, treat the ref as stale and continue from the prose; never search for a “similar” active run.
+A ref may identify a `handoff-index` artifact. Its JSON records are the complete exact
+current-session communication set that could not fit inline. Page through it, choose the
+needed ID by its producer/branch/step metadata, and pass that exact ID downstream.
 
-## 4. Read Exact Artifacts on Demand
+## 5. Optional durable memory
 
-For `artifact:<artifact_id>@sha256:<digest>`:
+A `memory:<id>` line may be read directly when needed. Do not perform semantic memory
+search to replace an absent workflow ID. Memory service absence never blocks exact run or
+artifact recovery.
 
-- Use `artifact_read` only when the execution owner has granted that exact artifact to the current consumer.
-- Verify that the returned artifact ID and `content_digest` exactly match the appendix before relying on content.
-- Follow typed continuation cursors for paged content; do not list, search, guess, or broaden grants.
-- Missing, ungranted, stale, malformed, or digest-mismatched artifacts do **not** block run recovery. Continue with the exact run checkpoint and prose, and report the artifact issue if its content is required.
+## 6. Exact-source invariant
 
-The run checkpoint owns control state. Artifacts own immutable bytes and evidence. Neither is reconstructed from the other.
+Compaction preserves only IDs proven to come from current-session completed `subagent` or
+`skill` result metadata, IDs explicitly passed later through `input_artifacts`, or a prior
+code-owned current-session resume block/index. It never scans historical artifacts, grant
+state, memory, or task-text names.
 
-## 5. Optional Durable Memory
-
-A `memory:<durable_memory_id>` line may be dereferenced directly when its detail is needed. Do not perform broad or semantic memory searches to replace an absent ID.
-
-Memory service absence, an unavailable memory ID, or no memory refs at all never blocks recovery. Continue from prose, run checkpoints, and exact artifacts.
-
-## 6. Budget Awareness
-
-The final summary is fitted with the shared model-visible result budget. The
-estimator charges one token per serialized UTF-8 byte, so the unchanged 8,192
-estimated-token cap limits the complete envelope to at most 8,192 bytes. Byte
-and character caps remain independent. Release minimum context headroom is
-16,384 tokens, leaving at least 8,192 tokens reserved after one conforming
-result.
-
-- `[prose truncated to fit the shared result budget]` means lower-priority prose was shortened at a UTF-8 boundary.
-- `[N resume refs omitted by the shared result budget]` means complete ref lines were omitted, artifacts before runs. Never infer the omitted addresses.
-- A rendered v2 block is always structurally complete; raw byte truncation is not valid.
-
-Compaction metadata carries `not_evaluated` session/run correlation keys for a
-later telemetry join. Their presence does not claim a live supported-model
-trial, causation, or a no-compaction result.
+When direct lines exceed the shared result budget, compaction persists one immutable
+handoff index and emits only its ID. If that index cannot be persisted and re-read, the
+custom enhancement yields to Pi's default compaction rather than guessing or silently
+omitting communication refs.

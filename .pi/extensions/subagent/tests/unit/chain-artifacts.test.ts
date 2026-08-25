@@ -1,125 +1,80 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
-import { expectedArtifactRef } from "../../../artifacts/owner-client.js";
-import { OWNER_CONSUMER_REF, withOwnerConsumer } from "../../../artifacts/owner-grants.js";
-import { resolveToolResultBudget } from "../../../lib/tool-result-budget.js";
 import {
-  directChainEnvironment,
+  directAgentOutputMetadata,
   directChainInput,
   directChainOutputMetadata,
   directChainTask,
 } from "../../chain-artifacts.js";
+import { artifactIdFor, type ArtifactRef } from "../../../artifacts/owner-client.js";
+import { DEFAULT_TOOL_RESULT_BUDGET } from "../../../lib/tool-result-budget.js";
 
-const RUN_ID = "subagent-chain:00000000-0000-4000-8000-000000000001";
+function ref(runId: string, operationId: string): ArtifactRef {
+  const identity = {
+    run_id: runId,
+    phase: "phase",
+    branch_id: null,
+    kind: "agent-output",
+    operation_id: operationId,
+    version: 1,
+  };
+  const digest = createHash("sha256").update(operationId).digest("hex");
+  return {
+    schema_version: 2,
+    artifact_id: artifactIdFor(identity),
+    ...identity,
+    producer: "agent:fixture",
+    media_type: "text/plain",
+    byte_length: 1,
+    content_digest: digest,
+    store_ref: `artifact://sha256/${digest}`,
+  };
+}
 
-describe("direct chain exact-artifact handoff", () => {
-  it("keeps large multibyte prior bytes out of the next task and grants only their exact ref", () => {
-    const largePrevious = `PRIVATE-MULTIBYTE-${"🙂漢é".repeat(10_000)}`;
+describe("direct chain artifacts", () => {
+  it("combines automatic previous output with arbitrary cross-run explicit inputs", () => {
+    const previous = ref("run-a", "operation-a");
+    const extra = ref("run-b", "operation-b");
+    const input = directChainInput({ previousRef: previous, additionalRefs: [extra] });
+    expect(input.schema_version).toBe(2);
+    expect(input.artifacts.map((binding) => binding.ref.artifact_id)).toEqual([
+      previous.artifact_id,
+      extra.artifact_id,
+    ]);
+    expect(input).not.toHaveProperty("consumer");
+    expect(input).not.toHaveProperty("run_id");
+  });
+
+  it("uses all exact inputs as lineage with schema-v2 metadata", () => {
+    const upstream = [ref("run-a", "operation-a"), ref("run-b", "operation-b")];
     const metadata = directChainOutputMetadata({
-      runId: RUN_ID,
-      stepIndex: 0,
-      totalSteps: 2,
-      agent: "echo",
-    });
-    const ref = expectedArtifactRef(metadata, largePrevious);
-    const input = directChainInput({ runId: RUN_ID, stepIndex: 1, previousRef: ref });
-    const task = directChainTask({
-      task: "Review {previous} exactly.",
-      input,
-      budget: resolveToolResultBudget({
-        PENNY_TOOL_RESULT_MAX_BYTES: "2048",
-        PENNY_TOOL_RESULT_MAX_CHARACTERS: "2048",
-        PENNY_TOOL_RESULT_MAX_TOKENS: "2048",
-      }),
-    });
-    const environment = directChainEnvironment(input, "invocation-2");
-    const invocation = JSON.parse(environment.PENNY_ARTIFACT_INVOCATION_JSON as string);
-
-    expect(task).toContain("artifact_read");
-    expect(task).toContain(ref.artifact_id);
-    expect(task).not.toContain("{previous}");
-    expect(task).not.toContain("PRIVATE-MULTIBYTE");
-    expect(task).not.toContain("🙂漢é");
-    expect(Buffer.byteLength(task, "utf8")).toBeLessThan(2048);
-    expect(invocation.caller).toMatchObject({
-      run_id: RUN_ID,
-      consumer_ref: "state:chain-step-0002",
-    });
-    expect(
-      invocation.grants.map(
-        (grant: { artifact: { artifact_id: string } }) => grant.artifact.artifact_id
-      )
-    ).toEqual([ref.artifact_id]);
-  });
-
-  it("binds every step identity to one owner run and rejects a wrong-run predecessor", () => {
-    const first = directChainOutputMetadata({
-      runId: RUN_ID,
-      stepIndex: 0,
-      totalSteps: 2,
-      agent: "echo",
-    });
-    const ref = expectedArtifactRef(first, "exact");
-    const second = directChainOutputMetadata({
-      runId: RUN_ID,
+      runId: "chain-run",
       stepIndex: 1,
-      totalSteps: 2,
       agent: "synthia",
-      previousRef: ref,
+      upstreamRefs: upstream,
     });
-
-    expect(second.upstream_refs).toEqual([ref]);
-    expect(second.consumer_scope).toEqual(["subagent-chain:caller"]);
-    // The predecessor must grant exactly `state:{consuming phase}`, which is
-    // what both artifact stores enforce for any put declaring upstream_refs.
-    expect(first.consumer_scope).toEqual([`state:${second.phase}`]);
-    expect(() =>
-      directChainInput({
-        runId: "subagent-chain:other",
-        stepIndex: 1,
-        previousRef: ref,
-      })
-    ).toThrow(/directive run/);
+    expect(metadata.schema_version).toBe(2);
+    expect(metadata.upstream_refs).toEqual(upstream);
+    expect(metadata).not.toHaveProperty("consumer_scope");
   });
 
-  it("forwards the stored envelope, never the owner-granted one, as the next step's upstream", () => {
-    // Regression: the chain loop used to forward `grantToOwner(persisted)` as
-    // `previousRef`. That envelope carries an extra `penny-primary:owner`
-    // consumer, so it no longer matches stored manifest metadata byte-for-byte
-    // and both stores reject the put with an exact-match integrity error --
-    // every step after the first died with ARTIFACT_PERSIST_FAILED.
-    const first = directChainOutputMetadata({
-      runId: RUN_ID,
-      stepIndex: 0,
-      totalSteps: 2,
-      agent: "echo",
+  it("replaces {previous} with an ID-based instruction, never payload bytes", () => {
+    const previous = ref("run-a", "operation-a");
+    const task = directChainTask({
+      task: "Review {previous}",
+      input: directChainInput({ previousRef: previous }),
+      budget: DEFAULT_TOOL_RESULT_BUDGET,
     });
-    const stored = expectedArtifactRef(first, "exact");
-    const granted = withOwnerConsumer(stored);
+    expect(task).toContain(previous.artifact_id);
+    expect(task).toContain("artifact_read");
+    expect(task).not.toContain("{previous}");
+  });
 
-    // The grant is a genuinely different envelope, identical in identity only.
-    expect(granted.artifact_id).toBe(stored.artifact_id);
-    expect(granted.consumer_scope).toContain(OWNER_CONSUMER_REF);
-    expect(granted.consumer_scope).not.toEqual(stored.consumer_scope);
-
-    const fromStored = directChainOutputMetadata({
-      runId: RUN_ID,
-      stepIndex: 1,
-      totalSteps: 2,
-      agent: "annie",
-      previousRef: stored,
-    });
-    const fromGranted = directChainOutputMetadata({
-      runId: RUN_ID,
-      stepIndex: 1,
-      totalSteps: 2,
-      agent: "annie",
-      previousRef: granted,
-    });
-
-    // Only the stored envelope round-trips as an upstream.
-    expect(fromStored.upstream_refs).toEqual([stored]);
-    expect(fromGranted.upstream_refs).not.toEqual([stored]);
-    expect(fromGranted.upstream_refs[0]?.consumer_scope).toContain(OWNER_CONSUMER_REF);
+  it("builds single/parallel output metadata on schema v2", () => {
+    const metadata = directAgentOutputMetadata({ runId: "run", index: 0, agent: "annie" });
+    expect(metadata.schema_version).toBe(2);
+    expect(metadata).not.toHaveProperty("consumer_scope");
   });
 });

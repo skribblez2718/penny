@@ -1,3 +1,4 @@
+import { requireValue } from "./helpers/narrowing.js";
 import {
   chmodSync,
   existsSync,
@@ -32,6 +33,8 @@ import {
   toReplayableKnowledgeBaseResult,
 } from "../src/kb/operation-receipts.js";
 import { jcsCanonicalize } from "../src/kb/approval-receipts.js";
+import { OperationActionSchema, validateKbContract } from "../src/kb/contracts.js";
+import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 
 const roots: string[] = [];
 const SESSION = "session_receipt_1";
@@ -41,9 +44,10 @@ const POLICY = "a".repeat(64);
 
 function root(): string {
   const value = path.join(os.tmpdir(), `penny-kb-operation-${randomUUID()}`);
-  mkdirSync(path.join(value, ".penny"), { recursive: true, mode: 0o700 });
-  chmodSync(path.join(value, ".penny"), 0o700);
+  mkdirSync(value, { recursive: true, mode: 0o700 });
+  chmodSync(value, 0o700);
   roots.push(value);
+  installTestProjectState(value);
   return value;
 }
 
@@ -101,7 +105,10 @@ function admitted(input: {
     action: "query",
     request_sha256: requestSha,
   });
-  const group = input.checkpointer.operationEventGroupBySource("external_start", source)!;
+  const group = requireValue(
+    input.checkpointer.operationEventGroupBySource("external_start", source),
+    "apps/orchestration/tests/kb-operation-receipts.test.ts:106"
+  );
   return { request, requestSha, source, group };
 }
 
@@ -249,7 +256,10 @@ function commitSelectorEvidence(
       next,
     });
   }
-  const selectorFile = files.find((file) => file.role === "selector")!;
+  const selectorFile = requireValue(
+    files.find((file) => file.role === "selector"),
+    "apps/orchestration/tests/kb-operation-receipts.test.ts:254"
+  );
   checkpointer.commitKbPublicationSelector(input.transactionId, selectorFile.publication_file_id);
   checkpointer.advanceKbPublication({
     transaction_id: input.transactionId,
@@ -334,19 +344,16 @@ describe("§5.5 operation group reservation", () => {
       source_identity_sha256: operationSourceIdentitySha256({ ordinal: 2 }),
     });
     expect(duplicate.kind).toBe("existing");
-    expect(duplicate.group.request_event_group_id).toBe(groups[2]!.request_event_group_id);
+    expect(duplicate.group.request_event_group_id).toBe(
+      requireValue(groups[2], "apps/orchestration/tests/kb-operation-receipts.test.ts:339")
+        .request_event_group_id
+    );
     expect(checkpointer.operationEventGroups(run.identity.run_id)).toHaveLength(3);
 
     // `status` is intentionally outside OperationAction and never reserves a row.
+    const malformedAction: unknown = "status";
     expect(() =>
-      store.reserve({
-        run_id: run.identity.run_id,
-        session_id: SESSION,
-        transaction_id: "tx_status",
-        action: "status" as never,
-        source_kind: "external_resume",
-        source_identity_sha256: operationSourceIdentitySha256({ status: true }),
-      })
+      validateKbContract(OperationActionSchema, malformedAction, "operation action")
     ).toThrow();
     expect(checkpointer.operationEventGroups(run.identity.run_id)).toHaveLength(3);
     checkpointer.close();
@@ -466,12 +473,23 @@ describe("§5.5 preindexed receipt filesystem recovery", () => {
         })
       ).toThrow(`crash:${boundary}`);
 
-      const mid = checkpointer.operationEventGroup(prepared.group.request_event_group_id)!;
+      const mid = requireValue(
+        checkpointer.operationEventGroup(prepared.group.request_event_group_id),
+        "apps/orchestration/tests/kb-operation-receipts.test.ts:471"
+      );
       expect(mid.state === "outcome_preparing" || mid.state === "committed").toBe(true);
       if (boundary === "after_outcome_preindexed") {
-        const row = checkpointer.operationReceipt(mid.receipt_id!)!;
+        const row = requireValue(
+          checkpointer.operationReceipt(
+            requireValue(
+              mid.receipt_id,
+              "apps/orchestration/tests/kb-operation-receipts.test.ts:474"
+            )
+          ),
+          "apps/orchestration/tests/kb-operation-receipts.test.ts:474"
+        );
         expect(row.state).toBe("preparing");
-        expect(existsSync(operationReceiptRoot(projectRoot))).toBe(false);
+        expect(existsSync(operationReceiptRoot(projectRoot))).toBe(true);
       }
 
       const recovered = new OperationReceiptStore({ projectRoot, checkpointer }).finish(
@@ -642,7 +660,10 @@ describe("external init/ingest/save/lint start integrations", () => {
               selector_evidence: {
                 transaction_id: admittedStart.transaction_id,
                 candidate_generation_id: candidate,
-                selector_sha256: selectorSha!,
+                selector_sha256: requireValue(
+                  selectorSha,
+                  "apps/orchestration/tests/kb-operation-receipts.test.ts:647"
+                ),
               },
             }
           : {}),

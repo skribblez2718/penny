@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { extractToolCalls, extractToolErrorRecovery, isToolResultError } from "../../index.js";
+import type { SessionMessage } from "../../pi-messages.js";
 
 // ============================================================
 // Fixtures
@@ -86,7 +87,8 @@ describe("isToolResultError", () => {
 
   it("returns false for non-toolResult messages", () => {
     expect(isToolResultError({ role: "assistant", content: "Error: nope" })).toBe(false);
-    expect(isToolResultError(null)).toBe(false);
+    // Exercise malformed JavaScript boundary input even though typed callers cannot provide null.
+    expect(Reflect.apply(isToolResultError, undefined, [null])).toBe(false);
   });
 });
 
@@ -159,9 +161,9 @@ describe("extractToolErrorRecovery", () => {
     expect(pairs[0]).toMatchObject({
       tool: "edit",
       failed_params: { path: "" },
-      error_message: expect.stringContaining("Validation failed"),
       corrected_params: { path: "/tmp/test.md", edits: [{ oldText: "x", newText: "y" }] },
     });
+    expect(pairs[0].error_message).toContain("Validation failed");
   });
 
   it("ignores success-only sequences", () => {
@@ -193,7 +195,7 @@ describe("extractToolErrorRecovery", () => {
   });
 
   it("respects maxPairs limit", () => {
-    const msgs = [];
+    const msgs: SessionMessage[] = [];
     for (let i = 0; i < 10; i++) {
       msgs.push(
         { role: "assistant", content: [{ type: "toolCall", name: "edit", arguments: { i } }] },

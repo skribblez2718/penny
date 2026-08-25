@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 chromadb = pytest.importorskip("chromadb")
 
-from memory_bridge import HNSW_TUNING  # noqa: E402
+from scripts.system.memory.hnsw import HNSW_TUNING  # noqa: E402
 import repair_palace  # noqa: E402
 
 
@@ -91,21 +91,3 @@ def test_chromadb_rejects_malformed_tuning_outright(tmp_path, monkeypatch):
     monkeypatch.setattr(repair_palace, "_hnsw_tuning", lambda: {"hnsw:sync_threshold": "64"})
     with pytest.raises(Exception, match="hnsw parameters"):
         repair_palace._build(tmp_path / "bad", "mempalace_drawers", ["a"], ["doc"], [{"wing": "w"}])
-
-
-def test_bridge_creates_collections_with_tuning(tmp_path, monkeypatch):
-    """The bridge's own create path must be tuned too — a palace created by a
-    plain `add_drawer` on a fresh machine must not be born defective."""
-    import memory_bridge
-
-    class _Cfg:  # MempalaceConfig.palace_path is a read-only property
-        palace_path = str(tmp_path)
-
-    monkeypatch.setattr(memory_bridge, "_config", _Cfg())
-    col = memory_bridge._get_collection(create=True)
-    assert col is not None, "bridge failed to create the collection"
-    col.add(ids=["seed"], documents=["seed doc"])
-
-    stored = _stored_tuning(tmp_path)
-    for key, expected in HNSW_TUNING.items():
-        assert stored.get(key) == expected, f"bridge created collection without {key}"

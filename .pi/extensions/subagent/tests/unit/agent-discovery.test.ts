@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the pi-coding-agent parseFrontmatter to return valid agent data
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   parseFrontmatter: (content: string) => {
     const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
     if (!fmMatch) return { frontmatter: {}, body: content };
@@ -104,23 +104,29 @@ describe("discoverAgents", () => {
     expect(result.projectAgentsDir).toBeNull();
   });
 
-  it("excludes invalid or missing frontmatter deterministically", () => {
+  it("fails discovery on missing, empty, or duplicate tools instead of ambient fallback", () => {
     const projectRoot = fs.mkdtempSync(path.join("/tmp", "penny-agent-discovery-"));
     const agentsDir = path.join(projectRoot, ".pi", "agents");
     fs.mkdirSync(agentsDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(agentsDir, "valid.md"),
-      "---\nname: valid\ndescription: Valid fixture\n---\nPrompt"
-    );
-    fs.writeFileSync(
-      path.join(agentsDir, "missing-description.md"),
-      "---\nname: missing-description\n---\nPrompt"
-    );
-    fs.writeFileSync(path.join(agentsDir, "invalid.md"), "No frontmatter");
-
     try {
-      const result = discoverAgents(projectRoot, "project");
-      expect(result.agents.map((agent) => agent.name)).toEqual(["valid"]);
+      fs.writeFileSync(
+        path.join(agentsDir, "invalid.md"),
+        "---\nname: invalid\ndescription: Invalid fixture\n---\nPrompt"
+      );
+      expect(() => discoverAgents(projectRoot, "project")).toThrow(/non-empty tools/);
+      fs.writeFileSync(
+        path.join(agentsDir, "invalid.md"),
+        "---\nname: invalid\ndescription: Invalid fixture\ntools: read, read\n---\nPrompt"
+      );
+      expect(() => discoverAgents(projectRoot, "project")).toThrow(/duplicate tool 'read'/);
+      fs.writeFileSync(
+        path.join(agentsDir, "invalid.md"),
+        "---\nname: invalid\ndescription: Valid fixture\ntools: read, artifact_read\n---\nPrompt"
+      );
+      expect(discoverAgents(projectRoot, "project").agents[0]?.tools).toEqual([
+        "read",
+        "artifact_read",
+      ]);
     } finally {
       fs.rmSync(projectRoot, { recursive: true, force: true });
     }
@@ -144,6 +150,7 @@ describe("discoverAgents", () => {
       name: `agent-${index}`,
       description: `specialty-${index}\n${"x".repeat(MODEL_VISIBLE_AGENT_DESCRIPTION_LIMIT + 100)}`,
       systemPrompt: "test",
+      tools: ["read"],
       source: "project" as const,
       filePath: `/tmp/agent-${index}.md`,
     }));
@@ -171,9 +178,12 @@ describe("discoverAgents", () => {
     );
 
     expect(remainder).not.toBeNull();
+    if (remainder === null) {
+      throw new Error("catalog must report the number of omitted agents");
+    }
     expect(listed).toBeGreaterThan(0);
     expect(listed).toBeLessThanOrEqual(MODEL_VISIBLE_AGENT_LIMIT);
-    expect(listed + Number(remainder![1])).toBe(agents.length);
+    expect(listed + Number(remainder[1])).toBe(agents.length);
     // The first omitted agent must not appear.
     expect(catalog).not.toContain(`agent-${listed}:`);
   });

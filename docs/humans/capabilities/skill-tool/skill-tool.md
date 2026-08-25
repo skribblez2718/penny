@@ -14,7 +14,7 @@ mode turns that exact product into the sole handoff grant for the next skill's
 first worker. `{previous}` points to the grant; it is not an inline copy of the
 prior result.
 
-Workers use `artifact_read` and follow typed continuation until the exact content
+Workers use `artifact_read` and repeat with `next_range` until the exact content
 is complete. Checkpoints persist terminal and handoff refs in an owner-only state
 root with atomic replacement, so process restart does not depend on temporary
 files or memory rooms.

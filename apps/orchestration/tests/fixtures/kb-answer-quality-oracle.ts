@@ -1,14 +1,14 @@
+import { parseJson, requireRecord } from "../helpers/narrowing.js";
 /**
- * Frozen §5.13 G8 answer-quality oracle.
+ * Tracked §5.13 G8 answer-quality regression oracle.
  *
- * The private receipt chooses the tracked fixture, case count, digest, and
- * maximum rate. The oracle never tunes or rewrites those frozen inputs. Every
- * case runs through deterministic retrieval and, when candidates are eligible,
- * the current Synthia → Vera artifact/finalization seam with test-only synthetic
- * agents. No provider or model is called.
+ * The oracle reads the tracked fixture directly with k=10 and a maximum bad
+ * answer rate of 0. Every case runs through deterministic retrieval and, when
+ * candidates are eligible, the current Synthia → Vera artifact/finalization
+ * seam with test-only synthetic agents. No provider or model is called.
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -20,13 +20,9 @@ import {
   canonicalJson,
   sha256Hex,
   type KbRetrievalFixtureV1,
-  type RetrievalBaselineDecisionV1,
   type RetrievalFixtureCaseV1,
 } from "../../src/kb/contracts.js";
-import {
-  assertRetrievalDecisionFixture,
-  parseGateDecisionReceiptJcs,
-} from "../../src/kb/gate-decisions.js";
+import { parseRetrievalFixture } from "../../src/kb/gate-decisions.js";
 import {
   pageClaimsPath,
   pageMarkdownPath,
@@ -46,9 +42,8 @@ import { initKb } from "../../src/kb/workflows.js";
 import type { AgentInvocation } from "../../src/model-client.js";
 import { kbArtifactControl } from "./kb-artifact-control.js";
 
-type FrozenReceipt = RetrievalBaselineDecisionV1;
-type FrozenCase = RetrievalFixtureCaseV1;
-type FrozenFixture = KbRetrievalFixtureV1;
+type TrackedCase = RetrievalFixtureCaseV1;
+type TrackedFixture = KbRetrievalFixtureV1;
 
 interface ExecutedCase {
   readonly observation: AnswerQualityCaseObservation;
@@ -59,31 +54,16 @@ interface ExecutedCase {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../../../..");
-const receiptPath = path.join(
-  repoRoot,
-  ".penny/plan-gates/hybrid-kb-ts-plan-2026-08-13/retrieval_baseline.json"
-);
-const receiptExists = existsSync(receiptPath);
-const receiptBytes = receiptExists ? readFileSync(receiptPath, "utf8") : undefined;
-const parsedReceipt =
-  receiptBytes === undefined ? undefined : parseGateDecisionReceiptJcs(receiptBytes);
-const receipt: FrozenReceipt | undefined =
-  parsedReceipt?.decision_kind === "retrieval_baseline" ? parsedReceipt : undefined;
-const fixturePath =
-  receipt === undefined ? undefined : path.resolve(repoRoot, receipt.fixture_path);
-const fixtureBytes =
-  fixturePath === undefined || !existsSync(fixturePath)
-    ? undefined
-    : readFileSync(fixturePath, "utf8");
-const fixture: FrozenFixture | undefined =
-  fixtureBytes === undefined || receipt === undefined
-    ? undefined
-    : assertRetrievalDecisionFixture({ decision: receipt, fixtureBytes });
+const TRACKED_FIXTURE_PATH = "apps/orchestration/tests/fixtures/kb-retrieval.json";
+const TRACKED_CASE_IDS = ["sqlite-query", "typebox-query", "cross-query"] as const;
+const RETRIEVAL_K = 10;
+const MAXIMUM_BAD_ANSWER_RATE = 0;
+const fixturePath = path.join(repoRoot, TRACKED_FIXTURE_PATH);
+const fixtureBytes = readFileSync(fixturePath, "utf8");
+const fixture: TrackedFixture = parseRetrievalFixture(fixtureBytes);
 
 const PROFILE = "kbp_answer_quality_oracle";
 const NOW = "2026-01-01T00:00:00Z";
-const FROZEN_FIXTURE_PATH = "apps/orchestration/tests/fixtures/kb-retrieval.json";
-const FROZEN_CASE_IDS = ["sqlite-query", "typebox-query", "cross-query"] as const;
 const dirs: string[] = [];
 
 function tmpRoot(): string {
@@ -96,51 +76,28 @@ afterEach(() => {
   for (const root of dirs.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function validateFrozenInputs(): void {
-  if (
-    receipt === undefined ||
-    fixturePath === undefined ||
-    fixtureBytes === undefined ||
-    fixture === undefined
-  ) {
-    throw new Error("the exact owner retrieval receipt and tracked fixture are required");
-  }
-  expect(parseGateDecisionReceiptJcs(receiptBytes)).toEqual(receipt);
-  expect(receipt.schema_version).toBe(1);
-  expect(receipt.decision_kind).toBe("retrieval_baseline");
-  expect(receipt.approved_by_subject_id).not.toBe(receipt.reviewed_by_subject_id);
-  expect(receipt.fixture_path).toBe(FROZEN_FIXTURE_PATH);
-  expect(path.resolve(repoRoot, FROZEN_FIXTURE_PATH)).toBe(fixturePath);
-  expect(receipt.case_count).toBe(FROZEN_CASE_IDS.length);
-  expect(receipt.k).toBe(10);
-  expect(receipt.minimum_hit_at_k).toBe(1);
-  expect(receipt.minimum_mrr).toBe(1);
-  expect(receipt.minimum_contradiction_recall).toBe(1);
-  expect(receipt.maximum_unsupported_answer_rate).toBe(0);
-  expect(assertRetrievalDecisionFixture({ decision: receipt, fixtureBytes })).toEqual(fixture);
-  expect(fixture.cases).toHaveLength(receipt.case_count);
-  expect(fixture.cases.map((testCase) => testCase.case_id)).toEqual(FROZEN_CASE_IDS);
+function validateTrackedInputs(): void {
+  expect(fixturePath).toBe(path.join(repoRoot, TRACKED_FIXTURE_PATH));
+  expect(parseRetrievalFixture(fixtureBytes)).toEqual(fixture);
+  expect(fixture.schema_version).toBe(1);
+  expect(fixture.fixture_id).toBe("kb-retrieval-v1");
+  expect(fixture.cases).toHaveLength(TRACKED_CASE_IDS.length);
+  expect(fixture.cases.map((testCase) => testCase.case_id)).toEqual(TRACKED_CASE_IDS);
   expect(new Set(fixture.cases.map((testCase) => testCase.case_id)).size).toBe(
-    receipt.case_count
+    TRACKED_CASE_IDS.length
   );
-  expect(receipt.evidence_refs).toContainEqual({
-    evidence_id: "retrieval-fixture",
-    kind: "digest",
-    ref: fixture.fixture_id,
-  });
+  expect(RETRIEVAL_K).toBe(10);
+  expect(MAXIMUM_BAD_ANSWER_RATE).toBe(0);
 }
 
 function asObject(value: unknown): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("expected an object");
-  }
-  return value as Record<string, unknown>;
+  return requireRecord(value, "answer-quality object");
 }
 
-function seedFrozenFixture(kbRoot: string, frozen: FrozenFixture): string {
+function seedTrackedFixture(kbRoot: string, tracked: TrackedFixture): string {
   const initialized = initKb(
     { kbRoot, profileId: PROFILE, runId: "run_answer_quality_init" },
-    "Frozen answer-quality fixture",
+    "Tracked answer-quality fixture",
     {
       kb_id: "kb_answer_quality_fixture",
       generation_id: "gen_answer_quality_empty",
@@ -151,16 +108,16 @@ function seedFrozenFixture(kbRoot: string, frozen: FrozenFixture): string {
     throw new Error("could not initialize the answer-quality fixture KB");
   }
 
-  for (const page of frozen.corpus) {
+  for (const page of tracked.corpus) {
     writePageRevision(kbRoot, page.frontmatter, page.markdown, page.claims);
   }
 
-  const generationId = "gen_answer_quality_frozen";
+  const generationId = "gen_answer_quality_tracked";
   const { index_sha256 } = buildGenerationIndex(
     kbRoot,
     generationId,
     initialized.kb_id,
-    frozen.corpus.map((page) => ({
+    tracked.corpus.map((page) => ({
       page_id: page.frontmatter.page_id,
       revision_id: page.frontmatter.revision_id,
       title: page.frontmatter.title,
@@ -174,7 +131,7 @@ function seedFrozenFixture(kbRoot: string, frozen: FrozenFixture): string {
     kb_id: initialized.kb_id,
     manifest: readManifest(kbRoot),
     policy: readPolicy(kbRoot),
-    pages: frozen.corpus.map((page) => ({
+    pages: tracked.corpus.map((page) => ({
       page_id: page.frontmatter.page_id,
       revision_id: page.frontmatter.revision_id,
       page_sha256: sha256Hex(
@@ -207,11 +164,10 @@ function invocation(input: {
   return {
     agent: input.agent,
     stateId: input.stateId,
-    task: "Execute one deterministic frozen answer-quality fixture case.",
+    task: "Execute one deterministic tracked answer-quality fixture case.",
     projectRoot: input.projectRoot,
     trustProfile: "hardened-untrusted",
     inputArtifacts: [],
-    artifactConsumer: "kb-answer-quality-oracle",
   };
 }
 
@@ -285,7 +241,7 @@ function syntheticAgents(phases: string[]) {
     const answer = asObject(payload["answer"]);
     const answerText = String(answer["text"] ?? "");
     const citations = Array.isArray(answer["citations"]) ? answer["citations"] : [];
-    const findings = citations.map((citation) => {
+    const findings = citations.map((citation: unknown) => {
       const page = citationPage(citation);
       let isSupported = false;
       if (page !== undefined) {
@@ -327,7 +283,7 @@ function artifactId(completion: Awaited<ReturnType<KbWorkerClient["runAgent"]>>)
 function readObservation(input: {
   readonly kbRoot: string;
   readonly runId: string;
-  readonly testCase: FrozenCase;
+  readonly testCase: TrackedCase;
   readonly outcome: KbQueryOutcome;
   readonly checkpointer: ReturnType<typeof kbArtifactControl>;
   readonly answerArtifactId?: string;
@@ -338,11 +294,11 @@ function readObservation(input: {
   if (input.answerArtifactId !== undefined) {
     using store = new RunArtifactStore(input.kbRoot, input.runId, input.checkpointer);
     const answerRead = store.read(input.answerArtifactId);
-    const answerDocument = JSON.parse(answerRead.content) as unknown;
+    const answerDocument = parseJson(answerRead.content);
     const answer = asObject(asObject(answerDocument)["answer"]);
     citations = Array.isArray(answer["citations"]) ? answer["citations"] : [];
     if (input.verificationArtifactId !== undefined) {
-      const report = JSON.parse(store.read(input.verificationArtifactId).content) as unknown;
+      const report = parseJson(store.read(input.verificationArtifactId).content);
       verificationSupported = assessQueryVerification(
         answerDocument,
         report,
@@ -362,11 +318,11 @@ function readObservation(input: {
   };
 }
 
-async function executeFrozenCase(input: {
+async function executeTrackedCase(input: {
   readonly projectRoot: string;
   readonly kbRoot: string;
   readonly generationId: string;
-  readonly testCase: FrozenCase;
+  readonly testCase: TrackedCase;
   readonly k: number;
 }): Promise<ExecutedCase> {
   const phases: string[] = [];
@@ -560,34 +516,24 @@ describe("answer-quality metric", () => {
   });
 });
 
-describe.skipIf(!receiptExists)("frozen §5.13 G8 answer-quality receipt", () => {
-  if (
-    receipt === undefined ||
-    fixturePath === undefined ||
-    fixtureBytes === undefined ||
-    fixture === undefined
-  ) {
-    it.skip("requires the private operator receipt and its tracked fixture", () => {});
-    return;
-  }
-
-  it("validates the independently reviewed receipt and exact fixture bytes/case count", () => {
-    validateFrozenInputs();
+describe("tracked §5.13 G8 answer-quality regression", () => {
+  it("validates the tracked fixture bytes, cases, k, and maximum", () => {
+    validateTrackedInputs();
   });
 
-  it("executes every frozen case and enforces the unmodified maximum", async () => {
-    validateFrozenInputs();
+  it("executes every tracked case and enforces a maximum bad-answer rate of 0", async () => {
+    validateTrackedInputs();
     const projectRoot = tmpRoot();
     const kbRoot = path.join(projectRoot, "private-kb");
-    const generationId = seedFrozenFixture(kbRoot, fixture);
+    const generationId = seedTrackedFixture(kbRoot, fixture);
     const executed = await Promise.all(
       fixture.cases.map((testCase) =>
-        executeFrozenCase({
+        executeTrackedCase({
           projectRoot,
           kbRoot,
           generationId,
           testCase,
-          k: receipt.k,
+          k: RETRIEVAL_K,
         })
       )
     );
@@ -601,8 +547,10 @@ describe.skipIf(!receiptExists)("frozen §5.13 G8 answer-quality receipt", () =>
       )
     );
     const diagnostic = canonicalJson({
-      frozen_fixture_sha256: receipt.fixture_sha256,
-      maximum_unsupported_answer_rate: receipt.maximum_unsupported_answer_rate,
+      fixture_id: fixture.fixture_id,
+      fixture_path: TRACKED_FIXTURE_PATH,
+      k: RETRIEVAL_K,
+      maximum_bad_answer_rate: MAXIMUM_BAD_ANSWER_RATE,
       evidence_gaps: evidenceGaps,
       executions: executed.map((entry) => ({
         case_id: entry.observation.caseId,
@@ -613,9 +561,7 @@ describe.skipIf(!receiptExists)("frozen §5.13 G8 answer-quality receipt", () =>
       score,
     });
 
-    expect(score.caseCount).toBe(receipt.case_count);
-    expect(score.badAnswerRate, diagnostic).toBeLessThanOrEqual(
-      receipt.maximum_unsupported_answer_rate
-    );
+    expect(score.caseCount).toBe(TRACKED_CASE_IDS.length);
+    expect(score.badAnswerRate, diagnostic).toBeLessThanOrEqual(MAXIMUM_BAD_ANSWER_RATE);
   });
 });

@@ -13,8 +13,10 @@ describe("detectPendingState (message scanning)", () => {
       },
     ]);
     expect(pending).not.toBeNull();
-    expect(pending!.state).toBe("awaiting_clarification");
-    expect(pending!.turn_id).toBe("turn-1");
+    expect(pending).toMatchObject({
+      state: "awaiting_clarification",
+      turn_id: "turn-1",
+    });
   });
 
   it("detects verification language in assistant messages", async () => {
@@ -27,7 +29,7 @@ describe("detectPendingState (message scanning)", () => {
       },
     ]);
     expect(pending).not.toBeNull();
-    expect(pending!.state).toBe("verification_required");
+    expect(pending).toMatchObject({ state: "verification_required" });
   });
 
   it("detects UNKNOWN_STATE language in assistant messages", async () => {
@@ -39,7 +41,7 @@ describe("detectPendingState (message scanning)", () => {
       },
     ]);
     expect(pending).not.toBeNull();
-    expect(pending!.state).toBe("UNKNOWN_STATE");
+    expect(pending).toMatchObject({ state: "UNKNOWN_STATE" });
   });
 
   it("returns null when no escalation signals present", async () => {

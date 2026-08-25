@@ -1,64 +1,94 @@
 import eslint from "@eslint/js";
-import tseslint from "typescript-eslint";
 import prettier from "eslint-config-prettier";
+import tseslint from "typescript-eslint";
+import { TYPE_AWARE_LINT_TARGETS } from "./scripts/system/checks/typescript-lint.mjs";
+
+const TYPE_SCRIPT_EXTENSIONS = ["ts", "tsx", "mts", "cts"];
+const TYPE_AWARE_FILES = [
+  ".pi/extensions/**/*.{ts,tsx,mts,cts}",
+  ".pi/lib/**/*.{ts,tsx,mts,cts}",
+  "apps/observability/**/*.{ts,tsx,mts,cts}",
+  "apps/orchestration/**/*.{ts,tsx,mts,cts}",
+  "apps/platform-memory/**/*.{ts,tsx,mts,cts}",
+];
+const MANDATORY_RULES = {
+  "@typescript-eslint/no-explicit-any": "error",
+  "@typescript-eslint/no-non-null-assertion": "error",
+  "@typescript-eslint/no-unsafe-assignment": "error",
+  "@typescript-eslint/no-unsafe-argument": "error",
+  "@typescript-eslint/no-unsafe-call": "error",
+  "@typescript-eslint/no-unsafe-member-access": "error",
+  "@typescript-eslint/no-unsafe-return": "error",
+  "@typescript-eslint/no-unsafe-enum-comparison": "error",
+  "@typescript-eslint/no-unsafe-unary-minus": "error",
+  "@typescript-eslint/no-unsafe-type-assertion": "error",
+};
+
+function lintPatterns(target) {
+  return [
+    ...target.prefixes.flatMap((prefix) =>
+      TYPE_SCRIPT_EXTENSIONS.map((extension) => `${prefix}/**/*.${extension}`)
+    ),
+    ...target.exactFiles,
+  ];
+}
+
+function ignoredPatterns(target) {
+  return target.excludedPrefixes.map((prefix) => `${prefix}/**`);
+}
+
+const typeCheckedRules = tseslint.configs.recommended.map((config) => ({
+  ...config,
+  files: TYPE_AWARE_FILES,
+}));
+const projectMappings = TYPE_AWARE_LINT_TARGETS.map((target) => ({
+  name: `penny/type-aware-project/${target.id}`,
+  files: lintPatterns(target),
+  ignores: ignoredPatterns(target),
+  languageOptions: {
+    parserOptions: {
+      project: [target.project],
+      tsconfigRootDir: import.meta.dirname,
+    },
+  },
+}));
 
 export default tseslint.config(
-  eslint.configs.recommended,
-  ...tseslint.configs.recommended,
-  prettier,
   {
     ignores: [
-      "node_modules/**",
-      ".venv/**",
       "**/node_modules/**",
+      ".venv/**",
       "**/dist/**",
+      "**/build/**",
+      "**/out/**",
+      "**/coverage/**",
+      "**/.cache/**",
       "**/.mempalace/**",
-      "**/*.test.ts",
-      "**/*.spec.ts",
-      "**/*.config.ts",
-      ".pi/types/**",
       "plans/**",
-      "docs/**",
       "ideas/**",
-      // Non-production research artifacts and test fixtures are not runtime code.
       "research/**",
-      "**/tests/fixtures/**",
     ],
+    linterOptions: {
+      reportUnusedDisableDirectives: "error",
+    },
   },
+  eslint.configs.recommended,
+  ...typeCheckedRules,
+  ...projectMappings,
   {
+    name: "penny/owned-typescript-contracts",
+    files: TYPE_AWARE_FILES,
     rules: {
-      // TypeScript-specific rules
+      ...MANDATORY_RULES,
       "@typescript-eslint/no-unused-vars": [
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" },
       ],
       "@typescript-eslint/explicit-function-return-type": "off",
-      "@typescript-eslint/no-explicit-any": "warn",
-      "@typescript-eslint/no-non-null-assertion": "warn",
-
-      // General rules
       "no-console": "off",
       "prefer-const": "error",
       "no-var": "error",
     },
   },
-  {
-    // Type-aware linting requires a tsconfig.json in every directory that
-    // contains .ts files. The ignore list above exempts directories that
-    // do not need type-aware linting:
-    //   - test configs (vitest.config.ts)
-    //   - ambient type declarations (.pi/types/)
-    //   - design docs and schema sketches (plans/, docs/)
-    //   - test files themselves (*.test.ts, *.spec.ts)
-    //
-    // For directories that DO contain runtime TypeScript (extensions,
-    // .pi/test-utils/), either add a tsconfig.json or add to ignores.
-    // See docs/agents/architecture/project-standards.md.
-    files: ["**/*.ts"],
-    languageOptions: {
-      parserOptions: {
-        project: true,
-      },
-    },
-  }
+  prettier
 );

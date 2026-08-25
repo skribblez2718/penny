@@ -7,10 +7,9 @@
  * - Event handling
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock fs/promises before importing the extension
-const mockFiles: Record<string, string> = {};
 const mockAccess = vi.fn();
 const mockReadFile = vi.fn();
 
@@ -78,7 +77,7 @@ function substituteEnvVars(content: string, config: Record<string, string | unde
   }
 
   // Substitute remaining ${VAR} from process.env (except CURRENT_DATE which is always from config)
-  result = result.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, varName) => {
+  result = result.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match: string, varName: string) => {
     // CURRENT_DATE should always come from config (system clock), not process.env
     if (varName === "CURRENT_DATE") {
       return config.CURRENT_DATE ?? "";

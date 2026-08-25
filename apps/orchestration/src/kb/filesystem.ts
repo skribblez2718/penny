@@ -109,7 +109,8 @@ function tryFilesystemRead(root: string, filePath: string, label: string): Buffe
 
 function parseJson(bytes: Buffer, label: string): unknown {
   try {
-    return JSON.parse(bytes.toString("utf8")) as unknown;
+    const value: unknown = JSON.parse(bytes.toString("utf8"));
+    return value;
   } catch {
     throw new KbFilesystemError(`${label} is not valid JSON`);
   }
@@ -121,8 +122,16 @@ function assertCanonicalJson(value: unknown, bytes: Buffer, label: string): void
   }
 }
 
+function isSha256Hex(value: string): value is Sha256Hex {
+  return /^[0-9a-f]{64}$/.test(value);
+}
+
 function bytesDigest(bytes: Buffer): Sha256Hex {
-  return createHash("sha256").update(bytes).digest("hex") as Sha256Hex;
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  if (!isSha256Hex(digest)) {
+    throw new KbFilesystemError("SHA-256 digest encoding is invalid");
+  }
+  return digest;
 }
 
 // ── Layout paths (§5.4, singular) ───────────────────────────────────────────

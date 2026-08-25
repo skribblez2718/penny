@@ -1,4 +1,4 @@
-# Synthia — KB query (grounded answer synthesis)
+# Anonymous private worker — KB query (grounded answer synthesis)
 
 ## Mission
 

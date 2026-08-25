@@ -11,8 +11,26 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
-import * as path from "path";
-import { formatResult, normalizeEscalationQuestions } from "../skill-utils.js";
+import { formatResult, normalizeEscalationQuestions, type SkillResult } from "../skill-utils.js";
+
+function fakeDirent(name: string, kind: "directory" | "file"): fs.Dirent {
+  return {
+    name,
+    parentPath: "",
+    isDirectory: () => kind === "directory",
+    isFile: () => kind === "file",
+    isBlockDevice: () => false,
+    isCharacterDevice: () => false,
+    isSymbolicLink: () => false,
+    isFIFO: () => false,
+    isSocket: () => false,
+  };
+}
+
+interface ProgressUpdate {
+  content: Array<{ type: string; text: string }>;
+  details: unknown;
+}
 
 // Mock fs module
 vi.mock("fs", () => ({
@@ -53,21 +71,15 @@ describe("Skill Extension", () => {
 
     it("should discover skills with SKILL.md files", () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readdirSync).mockReturnValue([
-        { name: "plan", isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false },
-        {
-          name: "implement-feature",
-          isDirectory: () => true,
-          isFile: () => false,
-          isSymbolicLink: () => false,
-        },
-        {
-          name: "not-a-skill.txt",
-          isDirectory: () => false,
-          isFile: () => true,
-          isSymbolicLink: () => false,
-        },
-      ] as any);
+      const readdirSyncWithStringNames: (
+        path: fs.PathLike,
+        options: { withFileTypes: true }
+      ) => fs.Dirent[] = fs.readdirSync;
+      vi.mocked(readdirSyncWithStringNames).mockReturnValue([
+        fakeDirent("plan", "directory"),
+        fakeDirent("implement-feature", "directory"),
+        fakeDirent("not-a-skill.txt", "file"),
+      ]);
 
       vi.mocked(fs.readFileSync).mockReturnValue(`---
 name: plan
@@ -83,14 +95,18 @@ Content here`);
   describe("Skill Parameters", () => {
     it("should have correct TypeBox schema", () => {
       const expectedParams = {
-        skill_name: expect.any(String),
-        goal: expect.any(String),
-        session_id: expect.any(String),
-        project_root: expect.any(String),
-        constraints: expect.any(Object),
+        skill_name: String,
+        goal: String,
+        session_id: String,
+        constraints: Object,
       };
 
-      expect(expectedParams).toBeDefined();
+      expect(Object.keys(expectedParams)).toEqual([
+        "skill_name",
+        "goal",
+        "session_id",
+        "constraints",
+      ]);
     });
   });
 
@@ -129,7 +145,7 @@ Content here`);
 
     it("should format escalation with explicit questionnaire tool call", () => {
       const mockTheme = (color: string, text: string) => text;
-      const result = {
+      const result: SkillResult = {
         success: false,
         session_id: "test-003",
         skill_name: "plan",
@@ -157,7 +173,7 @@ Content here`);
         },
       };
 
-      const formatted = formatResult(result as any, mockTheme);
+      const formatted = formatResult(result, mockTheme);
 
       // Must contain the explicit questionnaire tool call, not vague instructions
       expect(formatted).toContain("questionnaire({");
@@ -205,7 +221,7 @@ Content here`);
           prompt: "Free text only",
         },
       ];
-      const result = {
+      const result: SkillResult = {
         success: false,
         session_id: "test-long-gate",
         skill_name: "code",
@@ -220,7 +236,7 @@ Content here`);
         },
       };
 
-      const formatted = formatResult(result as any, mockTheme);
+      const formatted = formatResult(result, mockTheme);
       const argumentStart = formatted.indexOf("questionnaire(") + "questionnaire(".length;
       const argumentEnd = formatted.indexOf("\n  )", argumentStart);
       expect(argumentStart).toBeGreaterThanOrEqual("questionnaire(".length);
@@ -276,7 +292,7 @@ Content here`);
         ...Array.from({ length: 4 }, (_, offset) => String.fromCodePoint(0x2066 + offset)),
       ];
       const unknownReason = `unsafe${unsafeCharacters.join("")}tail`;
-      const result = {
+      const result: SkillResult = {
         success: false,
         session_id: "test-unsafe-reason",
         skill_name: "code",
@@ -292,7 +308,7 @@ Content here`);
         },
       };
 
-      const formatted = formatResult(result as any, mockTheme);
+      const formatted = formatResult(result, mockTheme);
 
       // formatResult itself uses LF as its structural line separator; every other
       // C0 plus all DEL/C1/bidi controls must be absent from the whole output.
@@ -416,7 +432,10 @@ describe("onUpdate Progress Callbacks", () => {
     // emitProgress and agentOnUpdate should be no-ops.
     // This test verifies that calling emitProgress with no onUpdate
     // does not throw.
-    const emitProgress = (message: string, onUpdate?: ((partial: any) => void) | undefined) => {
+    const emitProgress = (
+      message: string,
+      onUpdate?: ((partial: ProgressUpdate) => void) | undefined
+    ) => {
       onUpdate?.({ content: [{ type: "text", text: message }], details: undefined });
     };
 

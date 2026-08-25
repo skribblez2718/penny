@@ -28,6 +28,8 @@ import {
   sha256Hex,
   type ClaimsSidecar,
   type ConflictRecord,
+  type CurrentGeneration,
+  type GenerationCatalog,
   type KbManifest,
   type PageRevisionFrontmatter,
   type SourceRecord,
@@ -56,8 +58,6 @@ import {
   writePolicy,
   writeSourceObject,
   writeSourceRecord,
-  type CurrentGeneration,
-  type GenerationCatalog,
 } from "../src/kb/filesystem.js";
 
 const dirs: string[] = [];
@@ -72,7 +72,7 @@ afterEach(() => {
 });
 
 const NOW = "2026-01-01T00:00:00Z";
-const ZERO = "0".repeat(64);
+const ZERO = sha256Hex("wrong fixture digest");
 
 const MANIFEST: KbManifest = {
   schema_version: 1,
@@ -427,7 +427,7 @@ describe("KB custody enforcement", () => {
   it("rejects bytes that do not match a known digest", () => {
     const root = tmpRoot();
     writeManifest(root, MANIFEST);
-    expect(() => readManifest(root, ZERO as never)).toThrow(KbFilesystemError);
+    expect(() => readManifest(root, ZERO)).toThrow(KbFilesystemError);
   });
 
   it("detects a pathname replacement after descriptor open", () => {

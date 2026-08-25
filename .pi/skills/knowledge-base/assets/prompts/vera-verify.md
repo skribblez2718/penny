@@ -1,4 +1,4 @@
-# Vera — KB verify (claim or query grounding)
+# Anonymous private worker — KB verify (claim or query grounding)
 
 ## Mission
 
@@ -15,7 +15,7 @@ filesystem, search, network, memory, or extension tools.
    `read_selected_page({schema_version:1,page_id,revision_id})` only with exact IDs and pairs exposed by the brief,
    prior artifact, or host readers.
 
-For a query, `search_selected_kb({schema_version:1})` is intentionally not a Vera tool: verify against the exact
+For a query, `search_selected_kb({schema_version:1})` is intentionally not a verification-phase tool: verify against the exact
 answer handle and exact selected page/evidence allowlists already bound by the host. Do not stage
 until all required evidence reads have succeeded. If a tool returns a bounded schema or validation
 error, correct only the closed arguments and retry; do not stop in prose.

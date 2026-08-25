@@ -6,6 +6,7 @@
  * no network, no pi subprocess.
  */
 
+import type { InputEvent, InputEventResult } from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import enhance, {
   FLAG_RE,
@@ -13,41 +14,101 @@ import enhance, {
   acceptableRewrite,
   buildEnhancerInput,
   stripFlag,
+  type CompleteFn,
 } from "../../index.js";
+import {
+  createTestExtensionApi,
+  isRecord,
+  requireFunction,
+} from "../../../../lib/tests/test-narrowers.js";
+
+const compatBoundary = vi.hoisted(() => ({
+  complete: vi.fn(),
+  failImport: false,
+  malformed: false,
+}));
+
+vi.mock("@earendil-works/pi-ai/compat", () => {
+  if (compatBoundary.failImport) throw new Error("compat unavailable");
+  return {
+    get complete() {
+      return compatBoundary.malformed ? null : compatBoundary.complete;
+    },
+  };
+});
 
 // A plain request WITH the trailing enhancement flag.
 const FLAGGED = "refactor the auth module so sessions expire after inactivity -i";
 const RAW = "refactor the auth module so sessions expire after inactivity";
 
-type Handler = (event: any, ctx: any) => Promise<any>;
+type Handler = (event: InputEvent, ctx: FakeExtensionContext) => Promise<InputEventResult>;
+
+interface EnhanceEntryData {
+  original: string;
+  enhanced: string;
+  model: string;
+  latencyMs: number;
+  contextEntries: number;
+  contextChars: number;
+  contextTruncated: boolean;
+}
 
 interface CapturedPi {
-  pi: any;
+  pi: ReturnType<typeof createTestExtensionApi>;
   inputHandler: () => Handler;
-  entries: Array<{ customType: string; data: any }>;
+  entries: Array<{ customType: string; data: EnhanceEntryData }>;
+}
+
+function isEnhanceEntryData(value: unknown): value is EnhanceEntryData {
+  return (
+    isRecord(value) &&
+    typeof value.original === "string" &&
+    typeof value.enhanced === "string" &&
+    typeof value.model === "string" &&
+    typeof value.latencyMs === "number" &&
+    typeof value.contextEntries === "number" &&
+    typeof value.contextChars === "number" &&
+    typeof value.contextTruncated === "boolean"
+  );
+}
+
+function isInputEventResult(value: unknown): value is InputEventResult {
+  if (!isRecord(value)) return false;
+  if (value.action === "continue") return true;
+  return value.action === "transform" && typeof value.text === "string";
 }
 
 function capturePi(): CapturedPi {
-  const handlers = new Map<string, any>();
-  const entries: Array<{ customType: string; data: any }> = [];
-  const pi = {
-    on: (event: string, handler: any) => handlers.set(event, handler),
-    registerCommand: (name: string, def: any) => void [name, def],
-    appendEntry: (customType: string, data: any) => entries.push({ customType, data }),
-  };
+  const handlers = new Map<string, unknown>();
+  const entries: Array<{ customType: string; data: EnhanceEntryData }> = [];
+  const pi = createTestExtensionApi({
+    onEvent: (event, handler) => handlers.set(event, handler),
+    onAppendEntry: (customType, data) => {
+      if (!isEnhanceEntryData(data)) throw new Error("enhance appended an invalid audit entry");
+      entries.push({ customType, data });
+    },
+  });
   return {
     pi,
     inputHandler: () => {
-      const handler = handlers.get("input");
-      if (!handler) throw new Error("input handler not registered");
-      return handler;
+      const handler = requireFunction(handlers.get("input"), "input handler not registered");
+      return async (event, ctx) => {
+        const result = await handler(event, ctx);
+        if (!isInputEventResult(result))
+          throw new Error("input handler returned an invalid result");
+        return result;
+      };
     },
     entries,
   };
 }
 
 /** A session manager exposing the compaction-aware active entry list. */
-function fakeSession(texts: string[]) {
+interface FakeSessionManager {
+  buildContextEntries(): unknown[];
+}
+
+function fakeSession(texts: string[]): FakeSessionManager {
   return {
     buildContextEntries: () =>
       texts.map((text) => ({
@@ -67,16 +128,32 @@ interface FakeAuth {
   error?: string;
 }
 
-function fakeCtx(overrides: Record<string, unknown> = {}) {
-  return {
+interface FakeModel {
+  provider: string;
+  id: string;
+}
+
+interface FakeExtensionContext {
+  hasUI: boolean;
+  ui: { notify(message: string, level: string): void };
+  sessionManager: FakeSessionManager;
+  model: FakeModel;
+  modelRegistry: {
+    find(provider: string, modelId: string): FakeModel | undefined;
+    getApiKeyAndHeaders(model: FakeModel): Promise<FakeAuth>;
+  };
+}
+
+function fakeCtx(overrides: Partial<FakeExtensionContext> = {}): FakeExtensionContext {
+  const base: FakeExtensionContext = {
     hasUI: true,
     ui: { notify: vi.fn() },
     sessionManager: fakeSession([]),
     model: { provider: "ollama", id: "glm-5.2:cloud" },
     modelRegistry: {
-      find: vi.fn((): { provider: string; id: string } | undefined => undefined),
+      find: vi.fn((_provider: string, _modelId: string): FakeModel | undefined => undefined),
       getApiKeyAndHeaders: vi.fn(
-        async (): Promise<FakeAuth> => ({
+        async (_model: FakeModel): Promise<FakeAuth> => ({
           ok: true,
           apiKey: "ollama",
           headers: {},
@@ -84,21 +161,41 @@ function fakeCtx(overrides: Record<string, unknown> = {}) {
         })
       ),
     },
-    ...overrides,
   };
+  return { ...base, ...overrides };
 }
 
 // Three declared params so `.mock.calls[n][1]` (the request) is typed.
 function fakeComplete(text: string, stopReason = "stop") {
-  return vi.fn(async (_model: unknown, _request: unknown, _options: unknown) => ({
+  const complete: CompleteFn = async (_model, _request, _options) => ({
     content: [{ type: "text", text }],
     stopReason,
-  }));
+  });
+  return vi.fn(complete);
+}
+
+function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
+}
+
+function enhancerPrompt(request: { messages: unknown[] }): string {
+  const message = request.messages[0];
+  if (!isRecord(message) || !isUnknownArray(message.content)) {
+    throw new Error("enhancer request is missing message content");
+  }
+  const content = message.content[0];
+  if (!isRecord(content) || typeof content.text !== "string") {
+    throw new Error("enhancer request is missing prompt text");
+  }
+  return content.text;
 }
 
 beforeEach(() => {
   delete process.env.PENNY_ENHANCE_MODEL;
   delete process.env.PENNY_ENHANCE_TIMEOUT_MS;
+  compatBoundary.complete.mockReset();
+  compatBoundary.failImport = false;
+  compatBoundary.malformed = false;
 });
 
 // ── Pure helpers ────────────────────────────────────────────────────────────
@@ -181,10 +278,9 @@ describe("input handler", () => {
     expect(cap.entries[0].data.original).toBe(FLAGGED);
     expect(cap.entries[0].data.enhanced).toContain("Goal: refactor");
     // The raw prompt the model saw must NOT contain the flag.
-    expect((completeFn.mock.calls[0][1] as any).messages[0].content[0].text).toContain(RAW);
-    expect((completeFn.mock.calls[0][1] as any).messages[0].content[0].text).not.toMatch(
-      /-i\s*<\/raw_prompt>/
-    );
+    const sent = enhancerPrompt(completeFn.mock.calls[0][1]);
+    expect(sent).toContain(RAW);
+    expect(sent).not.toMatch(/-i\s*<\/raw_prompt>/);
   });
 
   it("passes an unflagged prompt through untouched", async () => {
@@ -241,12 +337,90 @@ describe("input handler", () => {
     const completeFn = vi.fn(async () => {
       throw new Error("provider down");
     });
-    enhance(cap.pi, { completeFn: completeFn as any });
+    enhance(cap.pi, { completeFn });
     const result = await cap.inputHandler()(
       { type: "input", text: FLAGGED, source: "interactive" },
       fakeCtx()
     );
     expect(result).toEqual({ action: "transform", text: RAW });
+    expect(cap.entries).toHaveLength(0);
+  });
+
+  it("falls back to the flag-stripped prompt when the compat dynamic import fails", async () => {
+    compatBoundary.failImport = true;
+    const cap = capturePi();
+    enhance(cap.pi);
+
+    const result = await cap.inputHandler()(
+      { type: "input", text: FLAGGED, source: "interactive" },
+      fakeCtx()
+    );
+
+    expect(result).toEqual({ action: "transform", text: RAW });
+    expect(cap.entries).toHaveLength(0);
+  });
+
+  it("uses the lazily imported compat complete export when no test dependency is injected", async () => {
+    compatBoundary.complete.mockResolvedValue({
+      content: [{ type: "text", text: "Goal: imported enhancement" }],
+      stopReason: "stop",
+    });
+    const cap = capturePi();
+    enhance(cap.pi);
+
+    const result = await cap.inputHandler()(
+      { type: "input", text: FLAGGED, source: "interactive" },
+      fakeCtx()
+    );
+
+    expect(result).toEqual({ action: "transform", text: "Goal: imported enhancement" });
+    expect(compatBoundary.complete).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to the flag-stripped prompt when the compat import is malformed", async () => {
+    compatBoundary.malformed = true;
+    const cap = capturePi();
+    enhance(cap.pi);
+
+    const result = await cap.inputHandler()(
+      { type: "input", text: FLAGGED, source: "interactive" },
+      fakeCtx()
+    );
+
+    expect(result).toEqual({ action: "transform", text: RAW });
+    expect(cap.entries).toHaveLength(0);
+  });
+
+  it("falls back when imported compat returns a malformed response", async () => {
+    compatBoundary.complete.mockResolvedValue({
+      content: [{ type: "text", text: 42 }],
+      stopReason: "stop",
+    });
+    const cap = capturePi();
+    enhance(cap.pi);
+
+    const result = await cap.inputHandler()(
+      { type: "input", text: FLAGGED, source: "interactive" },
+      fakeCtx()
+    );
+
+    expect(result).toEqual({ action: "transform", text: RAW });
+    expect(cap.entries).toHaveLength(0);
+  });
+
+  it("preserves imported compat cancellation as a raw-prompt fallback", async () => {
+    const cancellation = new DOMException("cancelled", "AbortError");
+    compatBoundary.complete.mockRejectedValue(cancellation);
+    const cap = capturePi();
+    enhance(cap.pi);
+
+    const result = await cap.inputHandler()(
+      { type: "input", text: FLAGGED, source: "interactive" },
+      fakeCtx()
+    );
+
+    expect(result).toEqual({ action: "transform", text: RAW });
+    expect(compatBoundary.complete).toHaveBeenCalledOnce();
     expect(cap.entries).toHaveLength(0);
   });
 
@@ -314,7 +488,7 @@ describe("input handler", () => {
       { type: "input", text: "fix that bug -i", source: "interactive" },
       ctx
     );
-    const sent = (completeFn.mock.calls[0][1] as any).messages[0].content[0].text as string;
+    const sent = enhancerPrompt(completeFn.mock.calls[0][1]);
     expect(sent).toContain("look at auth.ts");
     expect(sent).toContain("there is a null deref on line 40");
     expect(sent).toContain("<raw_prompt>\nfix that bug\n</raw_prompt>");

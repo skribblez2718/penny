@@ -8,12 +8,12 @@ receipts, workers, and recovery.
 
 1. The playbook selects exact predecessor refs.
 2. The engine emits a closed worker directive.
-3. The worker reads each grant through complete continuation.
-4. The owner persists complete output bytes and signs a receipt.
+3. The worker reads each needed exact ID through `next_range`.
+4. The owner persists/re-reads complete output bytes and signs a receipt.
 5. Only then may routing fields advance the checkpoint.
 
-Parallel work uses branch IDs. Chain composition persists exact terminal bytes as an
-immutable input artifact in the next run; `{previous}` never transports payload text.
+Parallel work uses branch IDs. Chain composition verifies and forwards the exact terminal
+ID directly into the next run; `{previous}` never transports payload text.
 
 ## Recovery
 

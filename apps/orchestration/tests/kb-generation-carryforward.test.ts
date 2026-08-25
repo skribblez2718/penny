@@ -1,3 +1,4 @@
+import { requireValue } from "./helpers/narrowing.js";
 /**
  * Generations are COMPLETE views, not diffs (PRD acceptance 4; §§5.4–5.5).
  *
@@ -147,10 +148,22 @@ async function publish(
   const pending: PendingIngest = {
     runId,
     sourceIds: admittedSources.map((s) => s.sourceId),
-    claimsArtifactId: byKind.claims!,
-    pageDraftArtifactId: byKind.page_draft!,
-    lintReportArtifactId: byKind.lint_report!,
-    verificationArtifactId: byKind.verification_report!,
+    claimsArtifactId: requireValue(
+      byKind.claims,
+      "apps/orchestration/tests/kb-generation-carryforward.test.ts:150"
+    ),
+    pageDraftArtifactId: requireValue(
+      byKind.page_draft,
+      "apps/orchestration/tests/kb-generation-carryforward.test.ts:151"
+    ),
+    lintReportArtifactId: requireValue(
+      byKind.lint_report,
+      "apps/orchestration/tests/kb-generation-carryforward.test.ts:152"
+    ),
+    verificationArtifactId: requireValue(
+      byKind.verification_report,
+      "apps/orchestration/tests/kb-generation-carryforward.test.ts:153"
+    ),
   };
   return approveIngest(ctx(root, runId), admittedSources, pending);
 }
@@ -161,7 +174,10 @@ describe("generations accumulate (the regression that motivated this suite)", ()
     initKb(ctx(root, "r0"), "Carry-forward KB");
 
     await publish(root, "run_one", draft("page_alpha", "rev_1", "Alpha", "first page"));
-    const gen1 = readSelectedGeneration(root)!;
+    const gen1 = requireValue(
+      readSelectedGeneration(root),
+      "apps/orchestration/tests/kb-generation-carryforward.test.ts:164"
+    );
     expect(Object.keys(gen1.catalog.pages)).toEqual(["page_alpha"]);
 
     const second = await publish(
@@ -170,7 +186,10 @@ describe("generations accumulate (the regression that motivated this suite)", ()
       draft("page_beta", "rev_1", "Beta", "second page")
     );
     expect(second.status).toBe("complete");
-    const gen2 = readSelectedGeneration(root)!;
+    const gen2 = requireValue(
+      readSelectedGeneration(root),
+      "apps/orchestration/tests/kb-generation-carryforward.test.ts:173"
+    );
 
     // The exact assertion the old implementation failed.
     expect(Object.keys(gen2.catalog.pages).sort()).toEqual(["page_alpha", "page_beta"]);
@@ -184,7 +203,10 @@ describe("generations accumulate (the regression that motivated this suite)", ()
     const root = tmpRoot();
     initKb(ctx(root, "r0"), "Carry-forward KB");
     await publish(root, "run_one", draft("page_alpha", "rev_1", "Alpha", "first"));
-    const gen1 = readSelectedGeneration(root)!;
+    const gen1 = requireValue(
+      readSelectedGeneration(root),
+      "apps/orchestration/tests/kb-generation-carryforward.test.ts:187"
+    );
     expect(Object.keys(gen1.catalog.source_records).sort()).toEqual(["src_alpha", "src_beta"]);
 
     // A save-shaped publish: a new page derived from existing material, with no
@@ -205,15 +227,30 @@ describe("generations accumulate (the regression that motivated this suite)", ()
     const saved = approveIngest(ctx(root, "run_save"), [], {
       runId: "run_save",
       sourceIds: [],
-      claimsArtifactId: byKind.claims!,
-      pageDraftArtifactId: byKind.page_draft!,
-      lintReportArtifactId: byKind.lint_report!,
-      verificationArtifactId: byKind.verification_report!,
+      claimsArtifactId: requireValue(
+        byKind.claims,
+        "apps/orchestration/tests/kb-generation-carryforward.test.ts:208"
+      ),
+      pageDraftArtifactId: requireValue(
+        byKind.page_draft,
+        "apps/orchestration/tests/kb-generation-carryforward.test.ts:209"
+      ),
+      lintReportArtifactId: requireValue(
+        byKind.lint_report,
+        "apps/orchestration/tests/kb-generation-carryforward.test.ts:210"
+      ),
+      verificationArtifactId: requireValue(
+        byKind.verification_report,
+        "apps/orchestration/tests/kb-generation-carryforward.test.ts:211"
+      ),
     });
 
     expect(saved.status).toBe("complete");
     expect(saved.counts.sources).toBe(0); // admitted nothing of its own …
-    const gen2 = readSelectedGeneration(root)!;
+    const gen2 = requireValue(
+      readSelectedGeneration(root),
+      "apps/orchestration/tests/kb-generation-carryforward.test.ts:216"
+    );
     expect(Object.keys(gen2.catalog.pages).sort()).toEqual(["page_alpha", "page_saved"]);
     // … and the KB's sources survive it.
     expect(Object.keys(gen2.catalog.source_records).sort()).toEqual(["src_alpha", "src_beta"]);
@@ -226,7 +263,10 @@ describe("generations accumulate (the regression that motivated this suite)", ()
     await publish(root, "run_one", draft("page_alpha", "rev_1", "Alpha v1", "first"));
     await publish(root, "run_two", draft("page_alpha", "rev_2", "Alpha v2", "revised"));
 
-    const gen = readSelectedGeneration(root)!;
+    const gen = requireValue(
+      readSelectedGeneration(root),
+      "apps/orchestration/tests/kb-generation-carryforward.test.ts:229"
+    );
     expect(Object.keys(gen.catalog.pages)).toEqual(["page_alpha"]);
     expect(gen.catalog.pages.page_alpha?.revision_id).toBe("rev_2");
   });
@@ -235,7 +275,10 @@ describe("generations accumulate (the regression that motivated this suite)", ()
     const root = tmpRoot();
     initKb(ctx(root, "r0"), "Carry-forward KB");
     await publish(root, "run_one", draft("page_alpha", "rev_1", "Alpha", "first"));
-    const gen1 = readSelectedGeneration(root)!;
+    const gen1 = requireValue(
+      readSelectedGeneration(root),
+      "apps/orchestration/tests/kb-generation-carryforward.test.ts:238"
+    );
 
     // Tamper with an already-published page's bytes.
     writeFileSync(pageMarkdownPath(root, "page_alpha", "rev_1"), "---\n{}\n---\n\ntampered", {
@@ -248,7 +291,10 @@ describe("generations accumulate (the regression that motivated this suite)", ()
     expect(blocked.warnings.join(" ")).toMatch(/catalog digest.*nothing published/i);
 
     // The selector never moved: the KB still selects the pre-tamper generation.
-    const after = readSelectedGeneration(root)!;
+    const after = requireValue(
+      readSelectedGeneration(root),
+      "apps/orchestration/tests/kb-generation-carryforward.test.ts:251"
+    );
     expect(after.selector.generation_id).toBe(gen1.selector.generation_id);
   });
 
@@ -260,7 +306,10 @@ describe("generations accumulate (the regression that motivated this suite)", ()
 
     // The catalog is anchored to the index digest, and readSelectedGeneration
     // verifies it — so a stale index would fail this read outright.
-    const gen = readSelectedGeneration(root)!;
+    const gen = requireValue(
+      readSelectedGeneration(root),
+      "apps/orchestration/tests/kb-generation-carryforward.test.ts:263"
+    );
     expect(gen.catalog.index_sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(Object.keys(gen.catalog.pages).sort()).toEqual(["page_alpha", "page_beta"]);
   });

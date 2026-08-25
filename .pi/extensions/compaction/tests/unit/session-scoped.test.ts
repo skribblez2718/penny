@@ -5,12 +5,16 @@ import {
   evictArray,
   applyEviction,
 } from "../../index.js";
+import type { PennyCompactArtifact } from "../../schema.js";
 
 // ============================================================
 // detectDominantSkill — real function, real pairing rules
 // ============================================================
 
-function skillCall(goal: string, opts: { id?: string; skill?: string; constraints?: any } = {}) {
+function skillCall(
+  goal: string,
+  opts: { id?: string; skill?: string; constraints?: Record<string, unknown> } = {}
+) {
   return {
     role: "assistant",
     content: [
@@ -56,7 +60,7 @@ describe("detectDominantSkill", () => {
     // addresses — empty string is the honest value.
     const dominant = detectDominantSkill([skillCall("Do the thing")]);
     expect(dominant).not.toBeNull();
-    expect(dominant!.session_id).toBe("");
+    expect(dominant).toMatchObject({ session_id: "" });
   });
 
   it("pairs a call with ITS result via toolCallId, not any skill result", () => {
@@ -68,8 +72,10 @@ describe("detectDominantSkill", () => {
       skillResult("plan-stale", true, "tc-old"),
       skillResult("plan-new", true, "tc-new"),
     ]);
-    expect(dominant!.goal).toBe("New goal");
-    expect(dominant!.session_id).toBe("plan-new");
+    expect(dominant).toMatchObject({
+      goal: "New goal",
+      session_id: "plan-new",
+    });
   });
 
   it("most recent invocation wins", () => {
@@ -79,7 +85,7 @@ describe("detectDominantSkill", () => {
       skillCall("New work", { id: "b" }),
       skillResult("plan-2", true, "b"),
     ]);
-    expect(dominant!.goal).toBe("New work");
+    expect(dominant).toMatchObject({ goal: "New work" });
   });
 
   it("returns null when no skill tool call exists (no user-intent guessing)", () => {
@@ -96,7 +102,7 @@ describe("detectDominantSkill", () => {
       skillCall("Build it", { id: "c", constraints: { language: "python" } }),
       skillResult("code-9", true, "c"),
     ]);
-    expect(dominant!.constraints).toEqual({ language: "python" });
+    expect(dominant).toMatchObject({ constraints: { language: "python" } });
   });
 });
 
@@ -253,9 +259,15 @@ describe("eviction", () => {
   });
 
   it("scale tightens caps but floors at 1", () => {
-    const artifact: any = {
+    const artifact: PennyCompactArtifact = {
+      schema_version: "3.0.0",
+      session_id: "session-1",
+      compaction_seq: 0,
+      compaction_timestamp: "2026-08-23T00:00:00.000Z",
+      goal: "Exercise scaled eviction",
       constraints: Array.from({ length: 20 }, (_, i) => `c${i}`),
       preferences: [],
+      pending: null,
       errors: [],
       engine_runs: [],
       artifact_refs: [],

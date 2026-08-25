@@ -179,6 +179,16 @@ def test_tracked_and_archive_scanners_catch_all_marker_classes(repo: Path) -> No
         assert any(kind in error for error in archive_errors), kind
 
 
+def test_deleted_worktree_path_has_no_current_byte_surface(repo: Path) -> None:
+    """An intentional deletion is evaluated by the final staged candidate, not read as a file."""
+    removed = repo / "removed.txt"
+    removed.write_text("safe\n", encoding="utf-8")
+    _git(repo, "add", "removed.txt")
+    removed.unlink()
+
+    assert check_tracked_sentinel_surface(repo) == []
+
+
 # --------------------------------------------------------------------- root admission
 
 

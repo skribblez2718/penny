@@ -1,3 +1,4 @@
+import { registerTool } from "../../../lib/pi-tool-registration.js";
 /**
  * Testing Assertion Tools
  *
@@ -7,8 +8,8 @@
  * Translated from MCP: verify.ts, snapshot.ts (generate_locator)
  */
 
-import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BrowserManager } from "../browser.js";
 import type { PlaywrightConfig } from "../types.js";
 
@@ -18,17 +19,12 @@ export function registerTestingTools(pi: ExtensionAPI, _config: PlaywrightConfig
   // ==========================================================================
   // playwright_verify_element_visible
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_verify_element_visible",
     label: "Verify Element Visible",
     description:
       "Assert that an element is visible on the page. Returns success/failure with details.",
     promptSnippet: "Check if an element is visible",
-    promptGuidelines: [
-      "Use playwright_verify_element_visible to confirm elements are present.",
-      "For vulnerability validation: confirm that injected content actually renders.",
-      "Returns element details when found.",
-    ],
     parameters: Type.Object({
       selector: Type.String({
         description: "CSS selector for the element to verify",
@@ -37,13 +33,13 @@ export function registerTestingTools(pi: ExtensionAPI, _config: PlaywrightConfig
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const selector = params.selector as string;
+      const selector = params.selector;
 
       try {
         const locator = page.locator(selector).first();
         await locator.waitFor({
           state: "visible",
-          timeout: (params.timeout as number) ?? 5000,
+          timeout: params.timeout ?? 5000,
         });
 
         const tagName = await locator.evaluate((el) => el.tagName.toLowerCase());
@@ -82,16 +78,11 @@ export function registerTestingTools(pi: ExtensionAPI, _config: PlaywrightConfig
   // ==========================================================================
   // playwright_verify_text_visible
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_verify_text_visible",
     label: "Verify Text Visible",
     description: "Assert that specific text is visible on the page.",
     promptSnippet: "Check if text appears on the page",
-    promptGuidelines: [
-      "Use playwright_verify_text_visible to confirm expected text rendered.",
-      "For vulnerability validation: verify alert messages or injected content displays.",
-      "Text matching is case-sensitive and looks at visible text content.",
-    ],
     parameters: Type.Object({
       text: Type.String({
         description: "Text to search for on the page",
@@ -100,7 +91,7 @@ export function registerTestingTools(pi: ExtensionAPI, _config: PlaywrightConfig
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const text = params.text as string;
+      const text = params.text;
 
       try {
         await page
@@ -108,7 +99,7 @@ export function registerTestingTools(pi: ExtensionAPI, _config: PlaywrightConfig
           .first()
           .waitFor({
             state: "visible",
-            timeout: (params.timeout as number) ?? 5000,
+            timeout: params.timeout ?? 5000,
           });
 
         return {
@@ -154,15 +145,11 @@ export function registerTestingTools(pi: ExtensionAPI, _config: PlaywrightConfig
   // ==========================================================================
   // playwright_verify_value
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_verify_value",
     label: "Verify Input Value",
     description: "Assert that an input element has a specific value.",
     promptSnippet: "Check an input element's value",
-    promptGuidelines: [
-      "Use playwright_verify_value to verify form fields are filled correctly.",
-      "For security testing: verify injected values appear in form fields.",
-    ],
     parameters: Type.Object({
       selector: Type.String({
         description: "CSS selector for the input element",
@@ -173,8 +160,8 @@ export function registerTestingTools(pi: ExtensionAPI, _config: PlaywrightConfig
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const selector = params.selector as string;
-      const expected = params.expectedValue as string;
+      const selector = params.selector;
+      const expected = params.expectedValue;
 
       try {
         const actual = await page.locator(selector).first().inputValue();

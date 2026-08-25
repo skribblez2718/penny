@@ -180,12 +180,16 @@ def _sentinel_errors(data: bytes, label: str) -> list[str]:
 
 
 def check_tracked_sentinel_surface(root: Path) -> list[str]:
-    """Scan current worktree bytes for every Git-indexed path, without following symlinks."""
+    """Scan current worktree bytes for every Git-indexed path, without following symlinks.
+
+    A tracked path that is deleted from the worktree has no current public byte surface.
+    It is intentionally skipped here: the final candidate-tree scan evaluates the reviewed
+    index after `git add -A`, where that deletion is represented explicitly.
+    """
     errors: list[str] = []
     for relative in tracked_under(root, "."):
         candidate = root / relative
         if not candidate.exists() and not candidate.is_symlink():
-            errors.append(f"tracked path is missing from the worktree: {relative}")
             continue
         info = candidate.lstat()
         if stat.S_ISLNK(info.st_mode):

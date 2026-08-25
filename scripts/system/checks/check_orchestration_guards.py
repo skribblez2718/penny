@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[3]
 APP = ROOT / "apps" / "orchestration"
 RUNTIME = APP / "src"
 SKILL = ROOT / ".pi" / "extensions" / "skill"
+OBSERVABILITY_APP = ROOT / "apps" / "observability"
+OBSERVABILITY_EXTENSION = ROOT / ".pi" / "extensions" / "observability"
 RETIREMENT_COMMIT = "d6c1ae96191e81aeaae7ff6e275b88e465483eaf"
 
 FORBIDDEN = {
@@ -21,8 +23,7 @@ FORBIDDEN = {
     "Python orchestration import": r"(?:from|import)\s+orchestration\b",
     "Python delegate": r"orchestrate\.py",
     "Python artifact child": r"orchestration\.artifact_cli",
-    "legacy database selector": r"PENNY_ORCH_DB",
-    "prose control parser": r"parseSummaryFrom(?:Output|Text)",
+    "legacy unpersisted prose control parser": r"parseSummaryFrom(?:Output|Text)",
 }
 
 RETIRED_PATHS = (
@@ -34,7 +35,7 @@ RETIRED_PATHS = (
 )
 
 
-def source_violations() -> list[str]:
+def source_violations() -> list[str]:  # noqa: C901 - one deterministic source audit
     violations: list[str] = []
     python_runtime = (
         sorted((RUNTIME / "orchestration").rglob("*.py"))
@@ -45,6 +46,7 @@ def source_violations() -> list[str]:
         violations.append(f"{path.relative_to(ROOT)}: Python orchestration runtime remains")
 
     files = [*RUNTIME.rglob("*.ts"), *SKILL.rglob("*.ts")]
+    retired_selectors = ("PENNY_ORCH_DB", "PENNY_ORCH_V2_DB", "PENNY_ARTIFACT_ROOT")
     for path in sorted(files):
         if "node_modules" in path.parts or "tests" in path.parts:
             continue
@@ -55,20 +57,58 @@ def source_violations() -> list[str]:
                     violations.append(
                         f"{path.relative_to(ROOT)}:{line_number}: forbidden {label}: {line.strip()}"
                     )
+        for selector in retired_selectors:
+            if selector not in text:
+                continue
+            if path == RUNTIME / "config.ts":
+                continue
+            violations.append(
+                f"{path.relative_to(ROOT)}: retired state selector remains outside config refusal"
+            )
+        for line_number, line in enumerate(text.splitlines(), 1):
+            if ".penny" in line:
+                violations.append(
+                    f"{path.relative_to(ROOT)}:{line_number}: project-local .penny runtime path remains"
+                )
 
     for relative in RETIRED_PATHS:
         if (ROOT / relative).exists():
             violations.append(f"{relative}: retired orchestration surface remains")
 
-    app_python_tests = sorted(
-        str(path.relative_to(ROOT)) for path in (APP / "tests").rglob("*.py")
-    )
+    app_python_tests = sorted(str(path.relative_to(ROOT)) for path in (APP / "tests").rglob("*.py"))
     for relative in app_python_tests:
         violations.append(f"{relative}: Python orchestration test remains")
 
+    observability_python = sorted(OBSERVABILITY_APP.rglob("*.py"))
+    for path in observability_python:
+        violations.append(f"{path.relative_to(ROOT)}: retired Python observability remains")
+    observability_sources = [
+        *OBSERVABILITY_APP.rglob("*.ts"),
+        *OBSERVABILITY_EXTENSION.rglob("*.ts"),
+    ]
+    for path in observability_sources:
+        if "tests" in path.parts or "dist" in path.parts or "node_modules" in path.parts:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for retired in (
+            "PI_OBSERVABILITY_URL",
+            "PI_OBSERVABILITY_DATA_DIR",
+            "WebSocket",
+            "/orchestration/runs",
+            "/orchestration/events",
+        ):
+            if retired in text:
+                violations.append(
+                    f"{path.relative_to(ROOT)}: retired observability surface remains: {retired}"
+                )
+
     root_pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     if re.search(r"apps/orchestration", root_pyproject):
-        violations.append("pyproject.toml: orchestration remains a Python workspace/package consumer")
+        violations.append(
+            "pyproject.toml: orchestration remains a Python workspace/package consumer"
+        )
+    if "penny-observability" in root_pyproject or "apps/observability" in root_pyproject:
+        violations.append("pyproject.toml: retired Python observability workspace remains")
     return violations
 
 
@@ -151,7 +191,7 @@ def main() -> int:
     else:
         print(
             "PASS: orchestration is TypeScript-only; no delegate, Python child, "
-            "prose control parser, or legacy DB selector"
+            "legacy unpersisted prose parser, legacy DB selector, or Python/WebSocket observability"
         )
 
     if args.inventory_output is not None:

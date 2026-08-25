@@ -1,11 +1,12 @@
+import { registerTool } from "../../../lib/pi-tool-registration.js";
 /**
  * Storage Tools — localStorage, sessionStorage, Cookies
  *
  * Translated from MCP: webstorage.ts, cookies.ts, storage.ts
  */
 
-import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BrowserManager } from "../browser.js";
 import type { PlaywrightConfig } from "../types.js";
 
@@ -15,16 +16,11 @@ export function registerStorageTools(pi: ExtensionAPI, _config: PlaywrightConfig
   // ==========================================================================
   // playwright_local_storage
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_local_storage",
     label: "Local Storage",
     description: "Get, set, or list localStorage entries for the current page origin.",
     promptSnippet: "Read/write browser localStorage",
-    promptGuidelines: [
-      "Use playwright_local_storage to inspect or modify localStorage.",
-      "For security testing: check for sensitive data stored in localStorage (tokens, user data).",
-      "Each origin has its own isolated localStorage.",
-    ],
     parameters: Type.Object({
       action: Type.Union(
         [
@@ -49,26 +45,44 @@ export function registerStorageTools(pi: ExtensionAPI, _config: PlaywrightConfig
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const action = params.action as string;
+      const { action } = params;
 
       try {
         let result: string;
         switch (action) {
           case "get": {
-            const val = await page.evaluate((k) => localStorage.getItem(k), params.key as string);
+            if (params.key === undefined) {
+              return {
+                content: [{ type: "text", text: "A key is required for get." }],
+                isError: true,
+              };
+            }
+            const val = await page.evaluate((key) => localStorage.getItem(key), params.key);
             result = val !== null ? val : `[not found: ${params.key}]`;
             break;
           }
           case "set": {
-            await page.evaluate(({ k, v }) => localStorage.setItem(k, v), {
-              k: params.key,
-              v: params.value,
+            if (params.key === undefined || params.value === undefined) {
+              return {
+                content: [{ type: "text", text: "A key and value are required for set." }],
+                isError: true,
+              };
+            }
+            await page.evaluate(({ key, value }) => localStorage.setItem(key, value), {
+              key: params.key,
+              value: params.value,
             });
             result = `Set "${params.key}"`;
             break;
           }
           case "remove": {
-            await page.evaluate((k) => localStorage.removeItem(k), params.key as string);
+            if (params.key === undefined) {
+              return {
+                content: [{ type: "text", text: "A key is required for remove." }],
+                isError: true,
+              };
+            }
+            await page.evaluate((key) => localStorage.removeItem(key), params.key);
             result = `Removed "${params.key}"`;
             break;
           }
@@ -114,15 +128,11 @@ export function registerStorageTools(pi: ExtensionAPI, _config: PlaywrightConfig
   // ==========================================================================
   // playwright_session_storage
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_session_storage",
     label: "Session Storage",
     description: "Get, set, or list sessionStorage entries for the current page origin.",
     promptSnippet: "Read/write browser sessionStorage",
-    promptGuidelines: [
-      "Use playwright_session_storage to inspect sessionStorage.",
-      "sessionStorage is cleared when the tab is closed.",
-    ],
     parameters: Type.Object({
       action: Type.Union(
         [
@@ -139,7 +149,7 @@ export function registerStorageTools(pi: ExtensionAPI, _config: PlaywrightConfig
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const action = params.action as string;
+      const action = params.action;
       const storage = "sessionStorage";
 
       try {
@@ -175,7 +185,7 @@ export function registerStorageTools(pi: ExtensionAPI, _config: PlaywrightConfig
                 return `Unknown action: ${a}`;
             }
           },
-          { s: storage, a: action, k: params.key as string, v: params.value as string }
+          { s: storage, a: action, k: params.key, v: params.value }
         );
 
         return {
@@ -199,15 +209,11 @@ export function registerStorageTools(pi: ExtensionAPI, _config: PlaywrightConfig
   // ==========================================================================
   // playwright_cookies
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_cookies",
     label: "Browser Cookies",
     description: "List, get, set, or clear browser cookies for the current page.",
     promptSnippet: "Read/write browser cookies",
-    promptGuidelines: [
-      "Use playwright_cookies to inspect or manage cookies.",
-      "For security testing: check for HttpOnly, Secure flags, session tokens.",
-    ],
     parameters: Type.Object({
       action: Type.Union(
         [Type.Literal("list"), Type.Literal("get"), Type.Literal("set"), Type.Literal("clear")],
@@ -228,7 +234,7 @@ export function registerStorageTools(pi: ExtensionAPI, _config: PlaywrightConfig
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const action = params.action as string;
+      const action = params.action;
 
       try {
         let result: string;
@@ -248,10 +254,10 @@ export function registerStorageTools(pi: ExtensionAPI, _config: PlaywrightConfig
           case "set": {
             await context.addCookies([
               {
-                name: (params.name as string) || "",
-                value: (params.value as string) || "",
-                domain: (params.domain as string) || new URL(page.url()).hostname,
-                path: (params.path as string) || "/",
+                name: params.name || "",
+                value: params.value || "",
+                domain: params.domain || new URL(page.url()).hostname,
+                path: params.path || "/",
               },
             ]);
             result = `Cookie "${params.name}" set`;

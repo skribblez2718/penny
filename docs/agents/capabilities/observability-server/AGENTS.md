@@ -1,3 +1,3 @@
 # Observability Server — Capability Index
 
-- [Observability Server](observability-server.md): FastAPI + SQLite backend for log ingestion, session history queries, and watcher signal diagnostics
+- [Observability Server](observability-server.md): canonical TypeScript structured-log service and direct Pi JSONL history

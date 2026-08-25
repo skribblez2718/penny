@@ -2,22 +2,36 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
+import { Type, type Static } from "typebox";
 
 import { RunContext } from "./context.js";
+import { JsonValueSchema, PhaseResultSchema, validateContract } from "./contracts.js";
 import type { ExecutionReceipt, JsonValue, PhaseResult, RunIdentity } from "./contracts.js";
+import { CheckpointIdentityError, orchestrationDurableStateCodec } from "./durable-state.js";
+
+export { CheckpointIdentityError } from "./durable-state.js";
 import {
   packetDigest,
   validateContentReviewPacket,
   validateContentReviewReceipt,
 } from "./kb/content-review.js";
 import {
+  ArtifactKindSchema,
+  ArtifactMediaTypeSchema,
+  ContentReviewStoreStateSchema,
   CurrentGenerationSchema,
   InitReservationSchema,
   IdempotencyRecordSchema,
+  KbArtifactHandleSchema,
   KbComposeAuthoritySchema,
   KbPublicationTransactionSchema,
+  OpaqueIdSchema,
+  OperationEventGroupSchema,
+  OperationReceiptIndexRecordSchema,
   PrivateRunInputRecordSchema,
   PublicationFileRecordSchema,
+  ReplayableKnowledgeBaseResultSchema,
+  Sha256HexSchema,
   validateKbContract,
 } from "./kb/contracts.js";
 import type {
@@ -30,7 +44,6 @@ import type {
   PublicationFileRecord,
   PublicationLifecycle,
   OperationAction,
-  OperationEvent,
   OperationEventGroup,
   OperationEventSource,
   OperationReceiptIndexRecord,
@@ -45,6 +58,11 @@ import type {
   StartKbAction,
 } from "./kb/contracts.js";
 import type { PromotionControlApprovalBinding } from "./kb/promotion.js";
+import { PENNY_STATE_LAYOUT_VERSION, PROJECT_ID_PATTERN } from "./state/paths.js";
+
+export const ORCHESTRATION_DATABASE_SCHEMA_VERSION = 10 as const;
+
+const CheckpointEventPayloadSchema = Type.Record(Type.String(), JsonValueSchema);
 
 interface RunRow extends Record<string, SQLOutputValue> {
   run_id: string;
@@ -126,13 +144,6 @@ export interface CheckpointEvent {
   readonly createdAt: string;
 }
 
-export class CheckpointIdentityError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "CheckpointIdentityError";
-  }
-}
-
 export class ReceiptConflictError extends Error {
   constructor(message: string) {
     super(message);
@@ -145,6 +156,13 @@ export class GateConflictError extends Error {
     super(message);
     this.name = "GateConflictError";
   }
+}
+
+function requiredCheckpointValue<T>(value: T | undefined, label: string): T {
+  if (value === undefined) {
+    throw new ReceiptConflictError(`${label} is absent after its durable mutation`);
+  }
+  return value;
 }
 
 /**
@@ -305,13 +323,15 @@ interface KbPhaseResultRow extends Record<string, SQLOutputValue> {
   created_at: string;
 }
 
-export type KbArtifactLifecycle =
-  | "prepared"
-  | "staged"
-  | "sealed"
-  | "consumed"
-  | "discarding"
-  | "discarded";
+const KbArtifactLifecycleSchema = Type.Union([
+  Type.Literal("prepared"),
+  Type.Literal("staged"),
+  Type.Literal("sealed"),
+  Type.Literal("consumed"),
+  Type.Literal("discarding"),
+  Type.Literal("discarded"),
+]);
+export type KbArtifactLifecycle = Static<typeof KbArtifactLifecycleSchema>;
 
 /** Body-free authoritative metadata for bytes held in the KB work plane. */
 export interface KbArtifactIndexRecord {
@@ -331,32 +351,68 @@ export interface KbArtifactIndexRecord {
   readonly updated_at: string;
 }
 
-export interface KbPhaseArtifactOperand {
-  readonly run_id: string;
-  readonly state_id: string;
-  readonly handle: KbArtifactHandle;
-}
+const KbPhaseArtifactOperandSchema = Type.Object(
+  {
+    run_id: OpaqueIdSchema,
+    state_id: OpaqueIdSchema,
+    handle: KbArtifactHandleSchema,
+  },
+  { additionalProperties: false }
+);
+export type KbPhaseArtifactOperand = Readonly<Static<typeof KbPhaseArtifactOperandSchema>>;
+
+const KbPhaseSelectedPageSchema = Type.Object(
+  { page_id: OpaqueIdSchema, revision_id: OpaqueIdSchema },
+  { additionalProperties: false }
+);
 
 /** Closed, body-free operands frozen before one KB child phase is dispatched. */
-export interface KbPhaseOperands {
-  readonly schema_version: 1;
-  readonly run_id: string;
-  readonly state_id: string;
-  readonly session_id: string;
-  readonly kb_profile_id: string;
-  readonly operation: "ingest" | "query" | "save" | "promote";
-  readonly agent: "echo" | "synthia" | "carren" | "vera" | "piper" | "skribble";
-  readonly expected_artifact_kind: ArtifactKind;
-  readonly expected_media_type: ArtifactMediaType;
+const KbPhaseOperandsSchema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    run_id: OpaqueIdSchema,
+    state_id: OpaqueIdSchema,
+    session_id: OpaqueIdSchema,
+    kb_profile_id: OpaqueIdSchema,
+    operation: Type.Union([
+      Type.Literal("ingest"),
+      Type.Literal("query"),
+      Type.Literal("save"),
+      Type.Literal("promote"),
+    ]),
+    agent: Type.Union([
+      Type.Literal("echo"),
+      Type.Literal("synthia"),
+      Type.Literal("carren"),
+      Type.Literal("vera"),
+      Type.Literal("piper"),
+      Type.Literal("skribble"),
+    ]),
+    expected_artifact_kind: ArtifactKindSchema,
+    expected_media_type: ArtifactMediaTypeSchema,
+    source_ids: Type.Array(OpaqueIdSchema, { maxItems: 64 }),
+    prior_state_ids: Type.Array(OpaqueIdSchema, { maxItems: 8 }),
+    allowed_prior_artifacts: Type.Array(KbPhaseArtifactOperandSchema, { maxItems: 8 }),
+    allowed_selected_pages: Type.Array(KbPhaseSelectedPageSchema, { maxItems: 64 }),
+    private_input_sha256: Sha256HexSchema,
+    admitted_policy_sha256: Sha256HexSchema,
+    /** Present only for compose; all stable advisory identity authority lives here. */
+    compose_authority: Type.Optional(KbComposeAuthoritySchema),
+  },
+  { additionalProperties: false }
+);
+type KbPhaseOperandsContract = Static<typeof KbPhaseOperandsSchema>;
+export type KbPhaseOperands = Readonly<
+  Omit<
+    KbPhaseOperandsContract,
+    "source_ids" | "prior_state_ids" | "allowed_prior_artifacts" | "allowed_selected_pages"
+  >
+> & {
   readonly source_ids: readonly string[];
   readonly prior_state_ids: readonly string[];
   readonly allowed_prior_artifacts: readonly KbPhaseArtifactOperand[];
-  readonly allowed_selected_pages: readonly { page_id: string; revision_id: string }[];
-  readonly private_input_sha256: string;
-  readonly admitted_policy_sha256: string;
-  /** Present only for compose; all stable advisory identity authority lives here. */
-  readonly compose_authority?: KbComposeAuthority;
-}
+  readonly allowed_selected_pages: readonly Readonly<Static<typeof KbPhaseSelectedPageSchema>>[];
+};
 
 export interface KbPhaseOperandsRecord {
   readonly schema_version: 1;
@@ -409,23 +465,259 @@ export function operationSourceIdentitySha256(value: Record<string, unknown>): s
   return sha256(canonicalJson(value));
 }
 
-function sqliteModule(): typeof import("node:sqlite") {
-  const module = process.getBuiltinModule("node:" + "sqlite") as
-    | typeof import("node:sqlite")
-    | undefined;
-  if (module === undefined) {
+type SqliteRow = Record<string, SQLOutputValue>;
+
+interface SqliteRuntimeModule {
+  readonly DatabaseSync: typeof import("node:sqlite").DatabaseSync;
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item: unknown) => typeof item === "string");
+}
+
+function isSqliteRuntimeModule(value: unknown): value is SqliteRuntimeModule {
+  return isUnknownRecord(value) && typeof value["DatabaseSync"] === "function";
+}
+
+function sqliteModule(): SqliteRuntimeModule {
+  const module: unknown = process.getBuiltinModule("node:" + "sqlite");
+  if (!isSqliteRuntimeModule(module)) {
     throw new Error("Node.js runtime does not provide node:sqlite");
   }
   return module;
+}
+
+function malformedSqliteColumn(label: string, column: string): never {
+  throw new CheckpointIdentityError(`${label} has an invalid SQLite '${column}' column`);
+}
+
+function sqliteText(row: SqliteRow, column: string, label: string): string {
+  const value = row[column];
+  return typeof value === "string" ? value : malformedSqliteColumn(label, column);
+}
+
+function sqliteNullableText(row: SqliteRow, column: string, label: string): string | null {
+  const value = row[column];
+  return value === null || typeof value === "string" ? value : malformedSqliteColumn(label, column);
+}
+
+function sqliteInteger(row: SqliteRow, column: string, label: string): number {
+  const value = row[column];
+  const number = typeof value === "bigint" ? Number(value) : value;
+  return typeof number === "number" && Number.isSafeInteger(number)
+    ? number
+    : malformedSqliteColumn(label, column);
+}
+
+function runRow(row: SqliteRow): RunRow {
+  const label = "stored orchestration run";
+  return {
+    run_id: sqliteText(row, "run_id", label),
+    session_id: sqliteText(row, "session_id", label),
+    playbook: sqliteText(row, "playbook", label),
+    engine_owner: sqliteText(row, "engine_owner", label),
+    schema_version: sqliteInteger(row, "schema_version", label),
+    context_json: sqliteText(row, "context_json", label),
+  };
+}
+
+function receiptRow(row: SqliteRow): ReceiptRow {
+  const label = "stored execution receipt";
+  return {
+    receipt_id: sqliteText(row, "receipt_id", label),
+    result_json: sqliteText(row, "result_json", label),
+  };
+}
+
+function gateRow(row: SqliteRow): GateRow {
+  const label = "stored orchestration gate";
+  return {
+    gate_id: sqliteText(row, "gate_id", label),
+    challenge: sqliteText(row, "challenge", label),
+    status: sqliteText(row, "status", label),
+    response_json: sqliteNullableText(row, "response_json", label),
+  };
+}
+
+function contentReviewRow(row: SqliteRow): ContentReviewRow {
+  const label = "stored content review";
+  return {
+    challenge_id: sqliteText(row, "challenge_id", label),
+    run_id: sqliteText(row, "run_id", label),
+    packet_sha256: sqliteText(row, "packet_sha256", label),
+    packet_jcs: sqliteText(row, "packet_jcs", label),
+    state: sqliteText(row, "state", label),
+    decision_receipt_jcs: sqliteNullableText(row, "decision_receipt_jcs", label),
+    decision_receipt_sha256: sqliteNullableText(row, "decision_receipt_sha256", label),
+    receipt_id: sqliteNullableText(row, "receipt_id", label),
+    transaction_id: sqliteNullableText(row, "transaction_id", label),
+    updated_at: sqliteText(row, "updated_at", label),
+  };
+}
+
+function initReservationRow(row: SqliteRow): InitReservationRow {
+  const label = "stored KB init reservation";
+  return {
+    kb_profile_id: sqliteText(row, "kb_profile_id", label),
+    run_id: sqliteText(row, "run_id", label),
+    transaction_id: sqliteText(row, "transaction_id", label),
+    request_sha256: sqliteText(row, "request_sha256", label),
+    profile_commitment_sha256: sqliteText(row, "profile_commitment_sha256", label),
+    kb_id: sqliteText(row, "kb_id", label),
+    generation_id: sqliteText(row, "generation_id", label),
+    state: sqliteText(row, "state", label),
+    updated_at: sqliteText(row, "updated_at", label),
+  };
+}
+
+function admissionRow(row: SqliteRow): AdmissionRow {
+  const label = "stored start admission";
+  return {
+    run_id: sqliteText(row, "run_id", label),
+    session_id: sqliteText(row, "session_id", label),
+    invocation_id: sqliteText(row, "invocation_id", label),
+    request_sha256: sqliteText(row, "request_sha256", label),
+    action: sqliteText(row, "action", label),
+    profile_id: sqliteText(row, "profile_id", label),
+    transaction_id: sqliteText(row, "transaction_id", label),
+    state: sqliteText(row, "state", label),
+    terminal_result_id: sqliteNullableText(row, "terminal_result_id", label),
+    terminal_result_sha256: sqliteNullableText(row, "terminal_result_sha256", label),
+    created_at: sqliteText(row, "created_at", label),
+    updated_at: sqliteText(row, "updated_at", label),
+  };
+}
+
+function privateInputRow(row: SqliteRow): PrivateInputRow {
+  const label = "stored private run input";
+  return {
+    private_input_id: sqliteText(row, "private_input_id", label),
+    run_id: sqliteText(row, "run_id", label),
+    request_sha256: sqliteText(row, "request_sha256", label),
+    storage_key: sqliteText(row, "storage_key", label),
+    temporary_storage_key: sqliteNullableText(row, "temporary_storage_key", label),
+    state: sqliteText(row, "state", label),
+    created_at: sqliteText(row, "created_at", label),
+    updated_at: sqliteText(row, "updated_at", label),
+  };
+}
+
+function operationGroupRow(row: SqliteRow): OperationGroupRow {
+  const label = "stored operation event group";
+  return {
+    request_event_group_id: sqliteText(row, "request_event_group_id", label),
+    run_id: sqliteText(row, "run_id", label),
+    session_id: sqliteText(row, "session_id", label),
+    transaction_id: sqliteText(row, "transaction_id", label),
+    action: sqliteText(row, "action", label),
+    source_kind: sqliteText(row, "source_kind", label),
+    source_identity_sha256: sqliteText(row, "source_identity_sha256", label),
+    event_sequence: sqliteInteger(row, "event_sequence", label),
+    state: sqliteText(row, "state", label),
+    receipt_id: sqliteNullableText(row, "receipt_id", label),
+    replay_result_jcs: sqliteNullableText(row, "replay_result_jcs", label),
+    replay_result_sha256: sqliteNullableText(row, "replay_result_sha256", label),
+    created_at: sqliteText(row, "created_at", label),
+    updated_at: sqliteText(row, "updated_at", label),
+  };
+}
+
+function operationReceiptRow(row: SqliteRow): OperationReceiptRow {
+  const label = "stored operation receipt";
+  return {
+    receipt_id: sqliteText(row, "receipt_id", label),
+    run_id: sqliteText(row, "run_id", label),
+    session_id: sqliteText(row, "session_id", label),
+    kb_profile_id: sqliteText(row, "kb_profile_id", label),
+    kb_id: sqliteNullableText(row, "kb_id", label),
+    action: sqliteText(row, "action", label),
+    event: sqliteText(row, "event", label),
+    transaction_id: sqliteText(row, "transaction_id", label),
+    request_event_group_id: sqliteText(row, "request_event_group_id", label),
+    event_sequence: sqliteInteger(row, "event_sequence", label),
+    source_kind: sqliteText(row, "source_kind", label),
+    source_identity_sha256: sqliteText(row, "source_identity_sha256", label),
+    receipt_jcs: sqliteText(row, "receipt_jcs", label),
+    temporary_storage_key: sqliteNullableText(row, "temporary_storage_key", label),
+    final_storage_key: sqliteText(row, "final_storage_key", label),
+    sha256: sqliteText(row, "sha256", label),
+    byte_length: sqliteInteger(row, "byte_length", label),
+    state: sqliteText(row, "state", label),
+    created_at: sqliteText(row, "created_at", label),
+    updated_at: sqliteText(row, "updated_at", label),
+  };
+}
+
+function terminalResultRow(row: SqliteRow): TerminalResultRow {
+  const label = "stored terminal result";
+  return {
+    terminal_result_id: sqliteText(row, "terminal_result_id", label),
+    run_id: sqliteText(row, "run_id", label),
+    idempotency_transaction_id: sqliteText(row, "idempotency_transaction_id", label),
+    operation_receipt_id: sqliteText(row, "operation_receipt_id", label),
+    result_jcs: sqliteText(row, "result_jcs", label),
+    result_sha256: sqliteText(row, "result_sha256", label),
+    created_at: sqliteText(row, "created_at", label),
+  };
+}
+
+function kbArtifactRow(row: SqliteRow): KbArtifactRow {
+  const label = "stored KB artifact";
+  return {
+    artifact_id: sqliteText(row, "artifact_id", label),
+    run_id: sqliteText(row, "run_id", label),
+    state_id: sqliteText(row, "state_id", label),
+    kb_profile_id: sqliteText(row, "kb_profile_id", label),
+    artifact_kind: sqliteText(row, "artifact_kind", label),
+    media_type: sqliteText(row, "media_type", label),
+    sha256: sqliteText(row, "sha256", label),
+    byte_length: sqliteInteger(row, "byte_length", label),
+    storage_key: sqliteText(row, "storage_key", label),
+    temporary_storage_key: sqliteNullableText(row, "temporary_storage_key", label),
+    lifecycle: sqliteText(row, "lifecycle", label),
+    created_at: sqliteText(row, "created_at", label),
+    updated_at: sqliteText(row, "updated_at", label),
+  };
+}
+
+function kbPhaseOperandsRow(row: SqliteRow): KbPhaseOperandsRow {
+  const label = "stored KB phase operands";
+  return {
+    run_id: sqliteText(row, "run_id", label),
+    state_id: sqliteText(row, "state_id", label),
+    operands_jcs: sqliteText(row, "operands_jcs", label),
+    operands_sha256: sqliteText(row, "operands_sha256", label),
+    lifecycle: sqliteText(row, "lifecycle", label),
+    closed_result_sha256: sqliteNullableText(row, "closed_result_sha256", label),
+    created_at: sqliteText(row, "created_at", label),
+    closed_at: sqliteNullableText(row, "closed_at", label),
+  };
+}
+
+function kbPhaseResultRow(row: SqliteRow): KbPhaseResultRow {
+  const label = "stored KB phase result";
+  return {
+    phase_result_id: sqliteText(row, "phase_result_id", label),
+    run_id: sqliteText(row, "run_id", label),
+    state_id: sqliteText(row, "state_id", label),
+    result_jcs: sqliteText(row, "result_jcs", label),
+    result_sha256: sqliteText(row, "result_sha256", label),
+    artifact_ids_jcs: sqliteText(row, "artifact_ids_jcs", label),
+    created_at: sqliteText(row, "created_at", label),
+  };
 }
 
 function normalizeJson(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(normalizeJson);
   }
-  if (value !== null && typeof value === "object") {
+  if (isUnknownRecord(value)) {
     return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
+      Object.entries(value)
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([key, child]) => [key, normalizeJson(child)])
     );
@@ -451,7 +743,7 @@ function assertKbPhaseResultBodyFree(resultJcs: string): void {
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(resultJcs) as unknown;
+    parsed = JSON.parse(resultJcs);
   } catch {
     throw new ReceiptConflictError("KB phase result metadata is not JSON");
   }
@@ -474,8 +766,8 @@ function assertKbPhaseResultBodyFree(resultJcs: string): void {
       for (const item of value) visit(item);
       return;
     }
-    if (value === null || typeof value !== "object") return;
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (!isUnknownRecord(value)) return;
+    for (const [key, child] of Object.entries(value)) {
       if (forbidden.has(key)) {
         throw new ReceiptConflictError("KB phase result metadata contains a body or locator");
       }
@@ -485,7 +777,13 @@ function assertKbPhaseResultBodyFree(resultJcs: string): void {
   visit(parsed);
 }
 
-function validateKbPhaseOperandsMetadata(input: KbPhaseOperands): void {
+function validateKbPhaseOperandsMetadata(value: unknown): KbPhaseOperands {
+  let input: KbPhaseOperands;
+  try {
+    input = validateKbContract(KbPhaseOperandsSchema, value, "KB phase operands");
+  } catch {
+    throw new ReceiptConflictError("KB phase operands are not closed body-free metadata");
+  }
   const exactKeys = [
     "admitted_policy_sha256",
     "agent",
@@ -640,87 +938,11 @@ function validateKbPhaseOperandsMetadata(input: KbPhaseOperands): void {
       throw new ReceiptConflictError("KB phase prior-artifact operand is malformed");
     }
   }
+  return input;
 }
 
 function numberValue(value: number | bigint): number {
   return typeof value === "bigint" ? Number(value) : value;
-}
-
-const KB_DURABLE_PROJECTION_KEYS = [
-  "clarification_text",
-  "constraints",
-  "durable_schema_version",
-  "goal",
-  "identity",
-  "iteration",
-  "iteration_history",
-  "max_iterations",
-  "max_steps",
-  "met",
-  "pending_branches",
-  "pending_directive",
-  "playbook_data",
-  "previous_state",
-  "research",
-  "schema_version",
-  "selected_artifacts",
-  "state_id",
-  "status",
-  "step_count",
-  "terminal_directive",
-  "trust_profile",
-] as const;
-
-function assertNoAbsolutePathInKbProjection(value: unknown): void {
-  if (typeof value === "string") {
-    if (path.isAbsolute(value)) {
-      throw new CheckpointIdentityError("KB durable projection contains an absolute path");
-    }
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) assertNoAbsolutePathInKbProjection(item);
-    return;
-  }
-  if (value === null || typeof value !== "object") return;
-  for (const child of Object.values(value as Record<string, unknown>)) {
-    assertNoAbsolutePathInKbProjection(child);
-  }
-}
-
-function kbDurableProjection(context: RunContext): Record<string, unknown> {
-  const { project_root: _projectRoot, ...snapshot } = context.snapshot();
-  const projection = {
-    durable_schema_version: 1,
-    ...snapshot,
-    playbook_data: snapshot.playbook_data ?? {},
-  };
-  if (canonicalJson(Object.keys(projection).sort()) !== canonicalJson(KB_DURABLE_PROJECTION_KEYS)) {
-    throw new CheckpointIdentityError("KB durable projection fields are not closed");
-  }
-  assertNoAbsolutePathInKbProjection(projection);
-  return projection;
-}
-
-function contextFromKbDurableProjection(value: unknown, projectRoot: string): RunContext {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new CheckpointIdentityError("KB durable projection is not an object");
-  }
-  const record = value as Record<string, unknown>;
-  if (
-    canonicalJson(Object.keys(record).sort()) !== canonicalJson(KB_DURABLE_PROJECTION_KEYS) ||
-    record.durable_schema_version !== 1 ||
-    Object.hasOwn(record, "project_root")
-  ) {
-    throw new CheckpointIdentityError("KB durable projection fields or version are invalid");
-  }
-  assertNoAbsolutePathInKbProjection(record);
-  const { durable_schema_version: _version, ...snapshot } = record;
-  const context = RunContext.fromSnapshot({ ...snapshot, project_root: projectRoot });
-  if (context.identity.playbook !== "knowledge-base") {
-    throw new CheckpointIdentityError("KB durable projection has another playbook identity");
-  }
-  return context;
 }
 
 export class Checkpointer implements Disposable {
@@ -732,7 +954,7 @@ export class Checkpointer implements Disposable {
   constructor(
     dbPath: string,
     private readonly observer?: CheckpointObserver,
-    options: { maxRetainedRuns?: number } = {}
+    options: { maxRetainedRuns?: number; projectId?: string } = {}
   ) {
     this.dbPath = dbPath;
     this.maxRetainedRuns = options.maxRetainedRuns ?? 500;
@@ -746,7 +968,13 @@ export class Checkpointer implements Disposable {
     this.db.exec(
       "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;"
     );
-    this.migrate();
+    try {
+      this.migrate();
+      if (options.projectId !== undefined) this.bindProject(options.projectId);
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
     if (dbPath !== ":memory:") {
       for (const suffix of ["", "-wal", "-shm"]) {
         const databaseFile = `${dbPath}${suffix}`;
@@ -767,6 +995,10 @@ export class Checkpointer implements Disposable {
   }
 
   private migrate(): void {
+    const existingVersion = this.userVersion();
+    if (existingVersion > ORCHESTRATION_DATABASE_SCHEMA_VERSION) {
+      throw new Error(`orchestration schema ${existingVersion} is newer than supported`);
+    }
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS runs (
         run_id TEXT PRIMARY KEY,
@@ -840,11 +1072,15 @@ export class Checkpointer implements Disposable {
     if (this.userVersion() < 9) {
       this.migrateV9();
     }
+    if (this.userVersion() < 10) {
+      this.migrateV10();
+    }
   }
 
   private userVersion(): number {
-    const row = this.db.prepare("PRAGMA user_version").get() as Record<string, SQLOutputValue>;
-    return Number(row["user_version"]);
+    const row = this.db.prepare("PRAGMA user_version").get();
+    if (row === undefined) malformedSqliteColumn("SQLite user_version", "user_version");
+    return sqliteInteger(row, "user_version", "SQLite user_version");
   }
 
   /**
@@ -922,10 +1158,13 @@ export class Checkpointer implements Disposable {
    * audit files can never outlive their authoritative index by retention prune.
    */
   private migrateV5(): void {
-    const runColumns = this.db.prepare("PRAGMA table_info(runs)").all() as Array<{
-      name: string;
-    }>;
-    if (!runColumns.some((column) => String(column.name) === "last_operation_receipt_id")) {
+    const runColumns = this.db.prepare("PRAGMA table_info(runs)").all();
+    if (
+      !runColumns.some(
+        (column) =>
+          sqliteText(column, "name", "runs table metadata") === "last_operation_receipt_id"
+      )
+    ) {
       this.db.exec("ALTER TABLE runs ADD COLUMN last_operation_receipt_id TEXT");
     }
     this.db.exec(`
@@ -1159,10 +1398,10 @@ export class Checkpointer implements Disposable {
    * the body-free terminating phase result.
    */
   private migrateV9(): void {
-    const columns = this.db.prepare("PRAGMA table_info(kb_phase_operands)").all() as Array<{
-      name: string;
-    }>;
-    const names = new Set(columns.map((column) => String(column.name)));
+    const columns = this.db.prepare("PRAGMA table_info(kb_phase_operands)").all();
+    const names = new Set(
+      columns.map((column) => sqliteText(column, "name", "KB phase operands table metadata"))
+    );
     if (!names.has("lifecycle")) {
       this.db.exec(
         "ALTER TABLE kb_phase_operands ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'open' CHECK(lifecycle IN ('open','closed'))"
@@ -1194,6 +1433,44 @@ export class Checkpointer implements Disposable {
       );
       PRAGMA user_version=9;
     `);
+  }
+
+  /** v10 — bind one control database to one opaque Penny project partition. */
+  private migrateV10(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS store_metadata (
+        singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+        project_id TEXT NOT NULL,
+        state_layout_version INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      ) STRICT;
+      PRAGMA user_version=10;
+    `);
+  }
+
+  private bindProject(projectId: string): void {
+    if (!PROJECT_ID_PATTERN.test(projectId)) throw new Error("project ID is not canonical");
+    const row = this.db
+      .prepare("SELECT project_id, state_layout_version FROM store_metadata WHERE singleton = 1")
+      .get();
+    if (row === undefined) {
+      this.db
+        .prepare(
+          "INSERT INTO store_metadata(singleton, project_id, state_layout_version, created_at) " +
+            "VALUES(1, ?, ?, ?)"
+        )
+        .run(projectId, PENNY_STATE_LAYOUT_VERSION, new Date().toISOString());
+      return;
+    }
+    if (sqliteText(row, "project_id", "orchestration store metadata") !== projectId) {
+      throw new Error("orchestration database belongs to another Penny project");
+    }
+    if (
+      sqliteInteger(row, "state_layout_version", "orchestration store metadata") !==
+      PENNY_STATE_LAYOUT_VERSION
+    ) {
+      throw new Error("orchestration database has an unsupported state layout version");
+    }
   }
 
   private transaction<T>(operation: () => T): T {
@@ -1272,8 +1549,8 @@ export class Checkpointer implements Disposable {
   kbArtifact(artifactId: string): KbArtifactIndexRecord | undefined {
     const row = this.db
       .prepare("SELECT * FROM kb_run_artifacts WHERE artifact_id = ?")
-      .get(artifactId) as KbArtifactRow | undefined;
-    return row === undefined ? undefined : this.kbArtifactRecord(row);
+      .get(artifactId);
+    return row === undefined ? undefined : this.kbArtifactRecord(kbArtifactRow(row));
   }
 
   kbArtifacts(input: {
@@ -1292,14 +1569,13 @@ export class Checkpointer implements Disposable {
       clauses.push(`lifecycle IN (${input.lifecycles.map(() => "?").join(",")})`);
       values.push(...input.lifecycles);
     }
-    return (
-      this.db
-        .prepare(
-          `SELECT * FROM kb_run_artifacts WHERE ${clauses.join(" AND ")}
-           ORDER BY created_at,artifact_id`
-        )
-        .all(...values) as KbArtifactRow[]
-    ).map((row) => this.kbArtifactRecord(row));
+    return this.db
+      .prepare(
+        `SELECT * FROM kb_run_artifacts WHERE ${clauses.join(" AND ")}
+         ORDER BY created_at,artifact_id`
+      )
+      .all(...values)
+      .map((row) => this.kbArtifactRecord(kbArtifactRow(row)));
   }
 
   /**
@@ -1330,13 +1606,14 @@ export class Checkpointer implements Disposable {
       ) {
         throw new ReceiptConflictError("KB artifact prepared metadata or exact keys are invalid");
       }
-      const existing = this.db
+      const existingValue = this.db
         .prepare(
           `SELECT * FROM kb_run_artifacts
            WHERE run_id=? AND state_id=? AND artifact_kind=?
              AND lifecycle IN ('prepared','staged')`
         )
-        .get(input.run_id, input.state_id, input.artifact_kind) as KbArtifactRow | undefined;
+        .get(input.run_id, input.state_id, input.artifact_kind);
+      const existing = existingValue === undefined ? undefined : kbArtifactRow(existingValue);
       if (existing !== undefined) {
         const record = this.kbArtifactRecord(existing);
         if (
@@ -1354,8 +1631,9 @@ export class Checkpointer implements Disposable {
           `SELECT COUNT(*) AS count FROM kb_run_artifacts
            WHERE run_id=? AND state_id=? AND lifecycle='staged'`
         )
-        .get(input.run_id, input.state_id) as { count: number | bigint };
-      if (numberValue(count.count) >= maxArtifacts) {
+        .get(input.run_id, input.state_id);
+      if (count === undefined) malformedSqliteColumn("KB artifact phase count", "count");
+      if (sqliteInteger(count, "count", "KB artifact phase count") >= maxArtifacts) {
         throw new ReceiptConflictError("KB artifact phase count exceeded");
       }
       this.db
@@ -1379,7 +1657,10 @@ export class Checkpointer implements Disposable {
           input.created_at,
           input.updated_at
         );
-      return { kind: "created" as const, record: this.kbArtifact(input.artifact_id)! };
+      return {
+        kind: "created" as const,
+        record: requiredCheckpointValue(this.kbArtifact(input.artifact_id), "created KB artifact"),
+      };
     });
   }
 
@@ -1403,7 +1684,7 @@ export class Checkpointer implements Disposable {
       if (Number(changed.changes) !== 1) {
         throw new ReceiptConflictError("lost KB artifact staged CAS");
       }
-      return this.kbArtifact(artifactId)!;
+      return requiredCheckpointValue(this.kbArtifact(artifactId), "staged KB artifact");
     });
   }
 
@@ -1426,7 +1707,7 @@ export class Checkpointer implements Disposable {
       if (Number(changed.changes) !== 1) {
         throw new ReceiptConflictError("lost KB artifact discarding CAS");
       }
-      return this.kbArtifact(artifactId)!;
+      return requiredCheckpointValue(this.kbArtifact(artifactId), "discarding KB artifact");
     });
   }
 
@@ -1450,7 +1731,7 @@ export class Checkpointer implements Disposable {
       if (Number(changed.changes) !== 1) {
         throw new ReceiptConflictError("lost KB artifact discarded CAS");
       }
-      return this.kbArtifact(artifactId)!;
+      return requiredCheckpointValue(this.kbArtifact(artifactId), "discarded KB artifact");
     });
   }
 
@@ -1490,15 +1771,16 @@ export class Checkpointer implements Disposable {
   }
 
   kbPhaseOperandsRecord(runId: string, stateId: string): KbPhaseOperandsRecord | undefined {
-    const row = this.db
+    const rowValue = this.db
       .prepare("SELECT * FROM kb_phase_operands WHERE run_id=? AND state_id=?")
-      .get(runId, stateId) as KbPhaseOperandsRow | undefined;
-    if (row === undefined) return undefined;
+      .get(runId, stateId);
+    if (rowValue === undefined) return undefined;
+    const row = kbPhaseOperandsRow(rowValue);
     if (sha256(row.operands_jcs) !== row.operands_sha256) {
       throw new ReceiptConflictError("KB phase operands digest mismatch");
     }
-    const parsed = JSON.parse(row.operands_jcs) as KbPhaseOperands;
-    validateKbPhaseOperandsMetadata(parsed);
+    const parsedValue: unknown = JSON.parse(row.operands_jcs);
+    const parsed = validateKbPhaseOperandsMetadata(parsedValue);
     const lifecycle = String(row.lifecycle);
     const closedResultSha256 =
       row.closed_result_sha256 === null ? undefined : String(row.closed_result_sha256);
@@ -1561,9 +1843,10 @@ export class Checkpointer implements Disposable {
       if (
         durable.identity.playbook !== "knowledge-base" ||
         durable.identity.session_id !== input.session_id ||
-        String(durable.playbookData.profile_id ?? "") !== input.kb_profile_id ||
-        String(durable.playbookData.action ?? "") !== input.operation ||
-        String(durable.playbookData.admitted_policy_sha256 ?? "") !== input.admitted_policy_sha256
+        String(durable.knowledgeBaseData.profile_id ?? "") !== input.kb_profile_id ||
+        String(durable.knowledgeBaseData.action ?? "") !== input.operation ||
+        String(durable.knowledgeBaseData.admitted_policy_sha256 ?? "") !==
+          input.admitted_policy_sha256
       ) {
         throw new CheckpointIdentityError("KB phase operands exceed their durable run binding");
       }
@@ -1578,7 +1861,7 @@ export class Checkpointer implements Disposable {
       if (
         input.compose_authority !== undefined &&
         (input.compose_authority.private_input_sha256 !== input.private_input_sha256 ||
-          String(durable.playbookData.kb_id ?? "") !== input.compose_authority.kb_id)
+          String(durable.knowledgeBaseData.kb_id ?? "") !== input.compose_authority.kb_id)
       ) {
         throw new CheckpointIdentityError(
           "KB compose authority does not match the KB/private-input run binding"
@@ -1628,15 +1911,16 @@ export class Checkpointer implements Disposable {
   }
 
   kbPhaseResult(runId: string, stateId: string): KbPhaseResultRecord | undefined {
-    const row = this.db
+    const rowValue = this.db
       .prepare("SELECT * FROM kb_phase_results WHERE run_id=? AND state_id=?")
-      .get(runId, stateId) as KbPhaseResultRow | undefined;
-    if (row === undefined) return undefined;
+      .get(runId, stateId);
+    if (rowValue === undefined) return undefined;
+    const row = kbPhaseResultRow(rowValue);
     if (sha256(row.result_jcs) !== row.result_sha256) {
       throw new ReceiptConflictError("KB phase result digest mismatch");
     }
-    const ids = JSON.parse(row.artifact_ids_jcs) as unknown;
-    if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {
+    const ids: unknown = JSON.parse(row.artifact_ids_jcs);
+    if (!isStringArray(ids)) {
       throw new ReceiptConflictError("KB phase result artifact ids are invalid");
     }
     return {
@@ -1645,7 +1929,7 @@ export class Checkpointer implements Disposable {
       state_id: String(row.state_id),
       result_jcs: String(row.result_jcs),
       result_sha256: String(row.result_sha256),
-      artifact_ids: ids as string[],
+      artifact_ids: ids,
       created_at: String(row.created_at),
     };
   }
@@ -1749,28 +2033,43 @@ export class Checkpointer implements Disposable {
           throw new ReceiptConflictError("lost KB phase operand close CAS");
         }
       }
-      return this.kbPhaseResult(input.run_id, input.state_id)!;
+      return requiredCheckpointValue(
+        this.kbPhaseResult(input.run_id, input.state_id),
+        "sealed KB phase result"
+      );
     });
   }
 
   private kbArtifactRecord(row: KbArtifactRow): KbArtifactIndexRecord {
     const record: KbArtifactIndexRecord = {
       schema_version: 1,
-      artifact_id: String(row.artifact_id),
-      run_id: String(row.run_id),
-      state_id: String(row.state_id),
-      kb_profile_id: String(row.kb_profile_id),
-      artifact_kind: String(row.artifact_kind) as ArtifactKind,
-      media_type: String(row.media_type) as ArtifactMediaType,
-      sha256: String(row.sha256),
-      byte_length: Number(row.byte_length),
-      storage_key: String(row.storage_key),
+      artifact_id: row.artifact_id,
+      run_id: row.run_id,
+      state_id: row.state_id,
+      kb_profile_id: row.kb_profile_id,
+      artifact_kind: validateKbContract(
+        ArtifactKindSchema,
+        row.artifact_kind,
+        "stored KB artifact kind"
+      ),
+      media_type: validateKbContract(
+        ArtifactMediaTypeSchema,
+        row.media_type,
+        "stored KB artifact media type"
+      ),
+      sha256: row.sha256,
+      byte_length: row.byte_length,
+      storage_key: row.storage_key,
       ...(row.temporary_storage_key === null
         ? {}
-        : { temporary_storage_key: String(row.temporary_storage_key) }),
-      lifecycle: String(row.lifecycle) as KbArtifactLifecycle,
-      created_at: String(row.created_at),
-      updated_at: String(row.updated_at),
+        : { temporary_storage_key: row.temporary_storage_key }),
+      lifecycle: validateKbContract(
+        KbArtifactLifecycleSchema,
+        row.lifecycle,
+        "stored KB artifact lifecycle"
+      ),
+      created_at: row.created_at,
+      updated_at: row.updated_at,
     };
     const expectedFinal = `artifacts/${record.state_id}/${record.artifact_id}`;
     const expectedTemporary = `artifacts/${record.state_id}/.${record.artifact_id}.tmp`;
@@ -1799,15 +2098,15 @@ export class Checkpointer implements Disposable {
   kbInitReservation(profileId: string): InitReservation | undefined {
     const row = this.db
       .prepare("SELECT * FROM kb_init_reservations WHERE kb_profile_id=?")
-      .get(profileId) as InitReservationRow | undefined;
-    return row === undefined ? undefined : this.kbInitReservationRecord(row);
+      .get(profileId);
+    return row === undefined ? undefined : this.kbInitReservationRecord(initReservationRow(row));
   }
 
   kbInitReservationByTransaction(transactionId: string): InitReservation | undefined {
     const row = this.db
       .prepare("SELECT * FROM kb_init_reservations WHERE transaction_id=?")
-      .get(transactionId) as InitReservationRow | undefined;
-    return row === undefined ? undefined : this.kbInitReservationRecord(row);
+      .get(transactionId);
+    return row === undefined ? undefined : this.kbInitReservationRecord(initReservationRow(row));
   }
 
   private kbInitReservationRecord(row: InitReservationRow): InitReservation {
@@ -1881,7 +2180,10 @@ export class Checkpointer implements Disposable {
         reservation.generation_id,
         reservation.updated_at
       );
-    return this.kbInitReservation(reservation.kb_profile_id)!;
+    return requiredCheckpointValue(
+      this.kbInitReservation(reservation.kb_profile_id),
+      "created KB init reservation"
+    );
   }
 
   /**
@@ -2021,7 +2323,10 @@ export class Checkpointer implements Disposable {
           file.final_key
         );
       }
-      return this.kbPublication(planned.transaction_id)!;
+      return requiredCheckpointValue(
+        this.kbPublication(planned.transaction_id),
+        "planned KB publication"
+      );
     });
   }
 
@@ -2119,7 +2424,10 @@ export class Checkpointer implements Disposable {
       if (Number(changed.changes) !== 1) {
         throw new ReceiptConflictError("lost KB selector intent CAS");
       }
-      return this.kbPublication(input.transaction_id)!;
+      return requiredCheckpointValue(
+        this.kbPublication(input.transaction_id),
+        "stored KB selector intent"
+      );
     });
   }
 
@@ -2150,9 +2458,16 @@ export class Checkpointer implements Disposable {
       if (Number(changed.changes) !== 1) {
         throw new ReceiptConflictError("lost KB publication file staged CAS");
       }
-      return this.kbPublication(input.transaction_id)!.files.find(
-        (file) => file.publication_file_id === input.publication_file_id
-      )!;
+      const stagedPublication = requiredCheckpointValue(
+        this.kbPublication(input.transaction_id),
+        "staged KB publication"
+      );
+      return requiredCheckpointValue(
+        stagedPublication.files.find(
+          (file) => file.publication_file_id === input.publication_file_id
+        ),
+        "staged KB publication file"
+      );
     });
   }
 
@@ -2178,9 +2493,14 @@ export class Checkpointer implements Disposable {
       if (Number(changed.changes) !== 1) {
         throw new ReceiptConflictError("lost KB publication file published CAS");
       }
-      return this.kbPublication(transactionId)!.files.find(
-        (file) => file.publication_file_id === publicationFileId
-      )!;
+      const publishedPublication = requiredCheckpointValue(
+        this.kbPublication(transactionId),
+        "published KB publication"
+      );
+      return requiredCheckpointValue(
+        publishedPublication.files.find((file) => file.publication_file_id === publicationFileId),
+        "published KB publication file"
+      );
     });
   }
 
@@ -2206,7 +2526,7 @@ export class Checkpointer implements Disposable {
         selector.state === "published"
       ) {
         this.syncKbInitReservationInTransaction(publication, "selector_committed");
-        return this.kbPublication(transactionId)!;
+        return publication;
       }
       if (publication.lifecycle !== "generation_published" || selector.state !== "staged") {
         throw new ReceiptConflictError("KB selector is not at its exact commit CAS");
@@ -2238,12 +2558,16 @@ export class Checkpointer implements Disposable {
       if (Number(fileChanged.changes) !== 1 || Number(publicationChanged.changes) !== 1) {
         throw new ReceiptConflictError("lost KB selector/publication commit CAS");
       }
+      const committedPublication = requiredCheckpointValue(
+        this.kbPublication(transactionId),
+        "selector-committed KB publication"
+      );
       this.syncKbInitReservationInTransaction(
-        this.kbPublication(transactionId)!,
+        committedPublication,
         "selector_committed",
         timestamp
       );
-      return this.kbPublication(transactionId)!;
+      return committedPublication;
     });
   }
 
@@ -2305,7 +2629,7 @@ export class Checkpointer implements Disposable {
         } else if (input.next === "complete") {
           this.syncKbInitReservationInTransaction(current, "finalized");
         }
-        return this.kbPublication(input.transaction_id)!;
+        return current;
       }
       if (!input.expected.includes(current.lifecycle)) {
         throw new ReceiptConflictError(
@@ -2338,13 +2662,16 @@ export class Checkpointer implements Disposable {
       if (Number(changed.changes) !== 1) {
         throw new ReceiptConflictError("lost KB publication lifecycle CAS");
       }
-      const advanced = this.kbPublication(input.transaction_id)!;
+      const advanced = requiredCheckpointValue(
+        this.kbPublication(input.transaction_id),
+        "advanced KB publication"
+      );
       if (input.next === "selector_committed") {
         this.syncKbInitReservationInTransaction(advanced, "selector_committed");
       } else if (input.next === "complete") {
         this.syncKbInitReservationInTransaction(advanced, "finalized");
       }
-      return this.kbPublication(input.transaction_id)!;
+      return advanced;
     });
   }
 
@@ -2363,7 +2690,7 @@ export class Checkpointer implements Disposable {
           ? undefined
           : validateKbContract(
               CurrentGenerationSchema,
-              JSON.parse(publication.selector_jcs) as unknown,
+              JSON.parse(publication.selector_jcs),
               "publication selector evidence"
             );
     } catch {
@@ -2413,7 +2740,10 @@ export class Checkpointer implements Disposable {
       if (Number(changed.changes) !== 1) {
         throw new GateConflictError("lost content-review commit reservation CAS");
       }
-      return this.contentReviewForRun(runId)!;
+      return requiredCheckpointValue(
+        this.contentReviewForRun(runId),
+        "reserved content-review commit"
+      );
     });
   }
 
@@ -2436,7 +2766,10 @@ export class Checkpointer implements Disposable {
       if (Number(changed.changes) !== 1) {
         throw new GateConflictError("lost content-review abort CAS");
       }
-      return this.contentReviewForRun(runId)!;
+      return requiredCheckpointValue(
+        this.contentReviewForRun(runId),
+        "aborted content-review commit"
+      );
     });
   }
 
@@ -2459,7 +2792,10 @@ export class Checkpointer implements Disposable {
       if (Number(changed.changes) !== 1) {
         throw new GateConflictError("lost content-review consumed CAS");
       }
-      return this.contentReviewForRun(runId)!;
+      return requiredCheckpointValue(
+        this.contentReviewForRun(runId),
+        "consumed content-review commit"
+      );
     });
   }
 
@@ -2490,12 +2826,13 @@ export class Checkpointer implements Disposable {
     if (!/^[a-f0-9]{64}$/.test(input.source_identity_sha256)) {
       throw new CheckpointIdentityError("operation source identity digest is invalid");
     }
-    const existing = this.db
+    const existingValue = this.db
       .prepare(
         `SELECT * FROM operation_event_groups
          WHERE source_kind = ? AND source_identity_sha256 = ?`
       )
-      .get(input.source_kind, input.source_identity_sha256) as OperationGroupRow | undefined;
+      .get(input.source_kind, input.source_identity_sha256);
+    const existing = existingValue === undefined ? undefined : operationGroupRow(existingValue);
     if (existing !== undefined) {
       const group = this.operationGroupRecord(existing);
       if (
@@ -2524,8 +2861,11 @@ export class Checkpointer implements Disposable {
         `SELECT COALESCE(MAX(event_sequence), -1) + 1 AS next_sequence
          FROM operation_event_groups WHERE run_id = ?`
       )
-      .get(input.run_id) as { next_sequence: number | bigint };
-    const eventSequence = numberValue(sequenceRow.next_sequence);
+      .get(input.run_id);
+    if (sequenceRow === undefined) {
+      malformedSqliteColumn("operation event sequence", "next_sequence");
+    }
+    const eventSequence = sqliteInteger(sequenceRow, "next_sequence", "operation event sequence");
     const timestamp = now();
     const groupId = `opg_${randomUUID().replace(/-/g, "")}`;
     this.db
@@ -2549,15 +2889,18 @@ export class Checkpointer implements Disposable {
       );
     return {
       kind: "created",
-      group: this.operationEventGroup(groupId)!,
+      group: requiredCheckpointValue(
+        this.operationEventGroup(groupId),
+        "created operation event group"
+      ),
     };
   }
 
   operationEventGroup(groupId: string): OperationEventGroup | undefined {
     const row = this.db
       .prepare("SELECT * FROM operation_event_groups WHERE request_event_group_id = ?")
-      .get(groupId) as OperationGroupRow | undefined;
-    return row === undefined ? undefined : this.operationGroupRecord(row);
+      .get(groupId);
+    return row === undefined ? undefined : this.operationGroupRecord(operationGroupRow(row));
   }
 
   operationEventGroupBySource(
@@ -2569,16 +2912,15 @@ export class Checkpointer implements Disposable {
         `SELECT * FROM operation_event_groups
          WHERE source_kind = ? AND source_identity_sha256 = ?`
       )
-      .get(sourceKind, sourceIdentitySha256) as OperationGroupRow | undefined;
-    return row === undefined ? undefined : this.operationGroupRecord(row);
+      .get(sourceKind, sourceIdentitySha256);
+    return row === undefined ? undefined : this.operationGroupRecord(operationGroupRow(row));
   }
 
   operationEventGroups(runId: string): OperationEventGroup[] {
-    return (
-      this.db
-        .prepare("SELECT * FROM operation_event_groups WHERE run_id = ? ORDER BY event_sequence")
-        .all(runId) as OperationGroupRow[]
-    ).map((row) => this.operationGroupRecord(row));
+    return this.db
+      .prepare("SELECT * FROM operation_event_groups WHERE run_id = ? ORDER BY event_sequence")
+      .all(runId)
+      .map((row) => this.operationGroupRecord(operationGroupRow(row)));
   }
 
   private operationGroupRecord(row: OperationGroupRow): OperationEventGroup {
@@ -2586,7 +2928,7 @@ export class Checkpointer implements Disposable {
     const replayJcs = row.replay_result_jcs === null ? undefined : String(row.replay_result_jcs);
     const replaySha =
       row.replay_result_sha256 === null ? undefined : String(row.replay_result_sha256);
-    const state = String(row.state) as OperationEventGroup["state"];
+    const state = row.state;
     if (
       (state === "reserved" &&
         (receiptId !== undefined || replayJcs !== undefined || replaySha !== undefined)) ||
@@ -2600,23 +2942,27 @@ export class Checkpointer implements Disposable {
         `operation group '${row.request_event_group_id}' has inconsistent outcome fields`
       );
     }
-    return {
-      schema_version: 1,
-      request_event_group_id: String(row.request_event_group_id),
-      run_id: String(row.run_id),
-      session_id: String(row.session_id),
-      transaction_id: String(row.transaction_id),
-      action: String(row.action) as OperationAction,
-      source_kind: String(row.source_kind) as OperationEventSource,
-      source_identity_sha256: String(row.source_identity_sha256),
-      event_sequence: Number(row.event_sequence),
-      state,
-      ...(receiptId !== undefined ? { receipt_id: receiptId } : {}),
-      ...(replayJcs !== undefined ? { replay_result_jcs: replayJcs } : {}),
-      ...(replaySha !== undefined ? { replay_result_sha256: replaySha } : {}),
-      created_at: String(row.created_at),
-      updated_at: String(row.updated_at),
-    };
+    return validateKbContract(
+      OperationEventGroupSchema,
+      {
+        schema_version: 1,
+        request_event_group_id: row.request_event_group_id,
+        run_id: row.run_id,
+        session_id: row.session_id,
+        transaction_id: row.transaction_id,
+        action: row.action,
+        source_kind: row.source_kind,
+        source_identity_sha256: row.source_identity_sha256,
+        event_sequence: row.event_sequence,
+        state,
+        ...(receiptId !== undefined ? { receipt_id: receiptId } : {}),
+        ...(replayJcs !== undefined ? { replay_result_jcs: replayJcs } : {}),
+        ...(replaySha !== undefined ? { replay_result_sha256: replaySha } : {}),
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      },
+      "stored operation event group"
+    );
   }
 
   /** Atomically preindex receipt bytes/result before any receipt filesystem byte. */
@@ -2707,51 +3053,57 @@ export class Checkpointer implements Disposable {
       if (Number(changed.changes) !== 1) {
         throw new ReceiptConflictError("lost operation outcome preparation race");
       }
-      return this.operationEventGroup(current.request_event_group_id)!;
+      return requiredCheckpointValue(
+        this.operationEventGroup(current.request_event_group_id),
+        "prepared operation event group"
+      );
     });
   }
 
   operationReceipt(receiptId: string): OperationReceiptIndexRecord | undefined {
     const row = this.db
       .prepare("SELECT * FROM operation_receipt_index WHERE receipt_id = ?")
-      .get(receiptId) as OperationReceiptRow | undefined;
-    return row === undefined ? undefined : this.operationReceiptRecord(row);
+      .get(receiptId);
+    return row === undefined ? undefined : this.operationReceiptRecord(operationReceiptRow(row));
   }
 
   operationReceipts(runId: string): OperationReceiptIndexRecord[] {
-    return (
-      this.db
-        .prepare("SELECT * FROM operation_receipt_index WHERE run_id = ? ORDER BY event_sequence")
-        .all(runId) as OperationReceiptRow[]
-    ).map((row) => this.operationReceiptRecord(row));
+    return this.db
+      .prepare("SELECT * FROM operation_receipt_index WHERE run_id = ? ORDER BY event_sequence")
+      .all(runId)
+      .map((row) => this.operationReceiptRecord(operationReceiptRow(row)));
   }
 
   private operationReceiptRecord(row: OperationReceiptRow): OperationReceiptIndexRecord {
-    return {
-      schema_version: 1,
-      receipt_id: String(row.receipt_id),
-      run_id: String(row.run_id),
-      session_id: String(row.session_id),
-      kb_profile_id: String(row.kb_profile_id),
-      ...(row.kb_id === null ? {} : { kb_id: String(row.kb_id) }),
-      action: String(row.action) as OperationAction,
-      event: String(row.event) as OperationEvent,
-      transaction_id: String(row.transaction_id),
-      request_event_group_id: String(row.request_event_group_id),
-      event_sequence: Number(row.event_sequence),
-      source_kind: String(row.source_kind) as OperationEventSource,
-      source_identity_sha256: String(row.source_identity_sha256),
-      receipt_jcs: String(row.receipt_jcs),
-      ...(row.temporary_storage_key === null
-        ? {}
-        : { temporary_storage_key: String(row.temporary_storage_key) }),
-      final_storage_key: String(row.final_storage_key),
-      sha256: String(row.sha256),
-      byte_length: Number(row.byte_length),
-      state: String(row.state) as OperationReceiptIndexRecord["state"],
-      created_at: String(row.created_at),
-      updated_at: String(row.updated_at),
-    };
+    return validateKbContract(
+      OperationReceiptIndexRecordSchema,
+      {
+        schema_version: 1,
+        receipt_id: row.receipt_id,
+        run_id: row.run_id,
+        session_id: row.session_id,
+        kb_profile_id: row.kb_profile_id,
+        ...(row.kb_id === null ? {} : { kb_id: row.kb_id }),
+        action: row.action,
+        event: row.event,
+        transaction_id: row.transaction_id,
+        request_event_group_id: row.request_event_group_id,
+        event_sequence: row.event_sequence,
+        source_kind: row.source_kind,
+        source_identity_sha256: row.source_identity_sha256,
+        receipt_jcs: row.receipt_jcs,
+        ...(row.temporary_storage_key === null
+          ? {}
+          : { temporary_storage_key: row.temporary_storage_key }),
+        final_storage_key: row.final_storage_key,
+        sha256: row.sha256,
+        byte_length: row.byte_length,
+        state: row.state,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      },
+      "stored operation receipt"
+    );
   }
 
   operationReceiptMarkStaged(receiptId: string): OperationReceiptIndexRecord {
@@ -2768,7 +3120,7 @@ export class Checkpointer implements Disposable {
       if (Number(changed.changes) !== 1) {
         throw new ReceiptConflictError("lost operation receipt staged CAS");
       }
-      return this.operationReceipt(receiptId)!;
+      return requiredCheckpointValue(this.operationReceipt(receiptId), "staged operation receipt");
     });
   }
 
@@ -2811,14 +3163,26 @@ export class Checkpointer implements Disposable {
       this.db
         .prepare("UPDATE runs SET last_operation_receipt_id = ?, updated_at = ? WHERE run_id = ?")
         .run(receiptId, timestamp, group.run_id);
-      const replayJcs = group.replay_result_jcs!;
-      const replay = JSON.parse(replayJcs) as ReplayableKnowledgeBaseResult;
+      const replayJcs = requiredCheckpointValue(
+        group.replay_result_jcs,
+        "operation replay payload"
+      );
+      const replaySha256 = requiredCheckpointValue(
+        group.replay_result_sha256,
+        "operation replay digest"
+      );
+      const replay = validateKbContract(
+        ReplayableKnowledgeBaseResultSchema,
+        JSON.parse(replayJcs),
+        "stored operation replay result"
+      );
       const terminal = replay.status !== "running" && replay.status !== "awaiting_user";
       if (terminal) {
         const terminalId = `trm_${receiptId}`;
-        const existing = this.db
+        const existingValue = this.db
           .prepare("SELECT * FROM terminal_results WHERE run_id = ?")
-          .get(group.run_id) as TerminalResultRow | undefined;
+          .get(group.run_id);
+        const existing = existingValue === undefined ? undefined : terminalResultRow(existingValue);
         if (existing === undefined) {
           this.db
             .prepare(
@@ -2833,7 +3197,7 @@ export class Checkpointer implements Disposable {
               group.transaction_id,
               receiptId,
               replayJcs,
-              group.replay_result_sha256!,
+              replaySha256,
               timestamp
             );
         }
@@ -2842,55 +3206,70 @@ export class Checkpointer implements Disposable {
             .prepare(
               "SELECT state, transaction_id, terminal_result_id, terminal_result_sha256 FROM start_admissions WHERE run_id = ?"
             )
-            .get(group.run_id) as
-            | {
-                state: string;
-                transaction_id: string;
-                terminal_result_id: string | null;
-                terminal_result_sha256: string | null;
-              }
-            | undefined;
+            .get(group.run_id);
           if (admission !== undefined) {
-            if (admission.transaction_id !== group.transaction_id) {
+            const admissionState = sqliteText(admission, "state", "terminal start admission");
+            const admissionTransactionId = sqliteText(
+              admission,
+              "transaction_id",
+              "terminal start admission"
+            );
+            const admissionTerminalResultId = sqliteNullableText(
+              admission,
+              "terminal_result_id",
+              "terminal start admission"
+            );
+            const admissionTerminalResultSha256 = sqliteNullableText(
+              admission,
+              "terminal_result_sha256",
+              "terminal start admission"
+            );
+            if (admissionTransactionId !== group.transaction_id) {
               throw new ReceiptConflictError("terminal operation/admission transaction mismatch");
             }
-            if (admission.state === "running") {
+            if (admissionState === "running") {
               this.db
                 .prepare(
                   `UPDATE start_admissions
                    SET state = 'terminal', terminal_result_id = ?, terminal_result_sha256 = ?, updated_at = ?
                    WHERE run_id = ? AND state = 'running'`
                 )
-                .run(terminalId, group.replay_result_sha256!, timestamp, group.run_id);
+                .run(terminalId, replaySha256, timestamp, group.run_id);
             } else if (
-              admission.terminal_result_id !== terminalId ||
-              admission.terminal_result_sha256 !== group.replay_result_sha256
+              admissionTerminalResultId !== terminalId ||
+              admissionTerminalResultSha256 !== group.replay_result_sha256
             ) {
               throw new ReceiptConflictError("terminal start admission replay conflicts");
             }
           }
         }
       }
-      return this.operationEventGroup(group.request_event_group_id)!;
+      return requiredCheckpointValue(
+        this.operationEventGroup(group.request_event_group_id),
+        "committed operation event group"
+      );
     });
   }
 
   lastOperationReceiptId(runId: string): string | undefined {
     const row = this.db
       .prepare("SELECT last_operation_receipt_id FROM runs WHERE run_id = ?")
-      .get(runId) as { last_operation_receipt_id: string | null } | undefined;
-    return row?.last_operation_receipt_id === null || row === undefined
-      ? undefined
-      : String(row.last_operation_receipt_id);
+      .get(runId);
+    if (row === undefined) return undefined;
+    const receiptId = sqliteNullableText(row, "last_operation_receipt_id", "stored run receipt");
+    return receiptId === null ? undefined : receiptId;
   }
 
   terminalResult(runId: string): TerminalResultRecord | undefined {
-    const row = this.db.prepare("SELECT * FROM terminal_results WHERE run_id = ?").get(runId) as
-      | TerminalResultRow
-      | undefined;
-    if (row === undefined) return undefined;
-    const result = JSON.parse(String(row.result_jcs)) as ReplayableKnowledgeBaseResult;
-    if (sha256(String(row.result_jcs)) !== String(row.result_sha256)) {
+    const rowValue = this.db.prepare("SELECT * FROM terminal_results WHERE run_id = ?").get(runId);
+    if (rowValue === undefined) return undefined;
+    const row = terminalResultRow(rowValue);
+    const result = validateKbContract(
+      ReplayableKnowledgeBaseResultSchema,
+      JSON.parse(row.result_jcs),
+      "stored terminal result"
+    );
+    if (sha256(row.result_jcs) !== row.result_sha256) {
       throw new ReceiptConflictError(`terminal result for '${runId}' has a mismatched digest`);
     }
     return {
@@ -2962,12 +3341,10 @@ export class Checkpointer implements Disposable {
       request_sha256: admission.request_sha256,
     });
     return this.transaction(() => {
-      const existing = this.db
-        .prepare(
-          `SELECT run_id, session_id, invocation_id, request_sha256, action, profile_id, transaction_id
-           FROM start_admissions WHERE session_id = ? AND invocation_id = ?`
-        )
-        .get(admission.session_id, admission.invocation_id) as AdmissionRow | undefined;
+      const existingValue = this.db
+        .prepare(`SELECT * FROM start_admissions WHERE session_id = ? AND invocation_id = ?`)
+        .get(admission.session_id, admission.invocation_id);
+      const existing = existingValue === undefined ? undefined : admissionRow(existingValue);
       if (existing !== undefined) {
         const sameRequest =
           existing.request_sha256 === admission.request_sha256 &&
@@ -3111,10 +3488,9 @@ export class Checkpointer implements Disposable {
   }
 
   getStartAdmission(runId: string): StartAdmissionRecord | undefined {
-    const row = this.db.prepare("SELECT * FROM start_admissions WHERE run_id = ?").get(runId) as
-      | AdmissionRow
-      | undefined;
-    if (row === undefined) return undefined;
+    const rowValue = this.db.prepare("SELECT * FROM start_admissions WHERE run_id = ?").get(runId);
+    if (rowValue === undefined) return undefined;
+    const row = admissionRow(rowValue);
     let record: IdempotencyRecord;
     try {
       record = validateKbContract(
@@ -3156,10 +3532,9 @@ export class Checkpointer implements Disposable {
   }
 
   getPrivateInput(runId: string): PrivateInputRecord | undefined {
-    const row = this.db.prepare("SELECT * FROM private_inputs WHERE run_id = ?").get(runId) as
-      | PrivateInputRow
-      | undefined;
-    if (row === undefined) return undefined;
+    const rowValue = this.db.prepare("SELECT * FROM private_inputs WHERE run_id = ?").get(runId);
+    if (rowValue === undefined) return undefined;
+    const row = privateInputRow(rowValue);
     let record: PrivateRunInputRecord;
     try {
       record = validateKbContract(
@@ -3279,17 +3654,22 @@ export class Checkpointer implements Disposable {
         .prepare(
           "SELECT state, terminal_result_id, terminal_result_sha256 FROM start_admissions WHERE run_id = ?"
         )
-        .get(runId) as
-        | {
-            state: string;
-            terminal_result_id: string | null;
-            terminal_result_sha256: string | null;
-          }
-        | undefined;
+        .get(runId);
       if (row === undefined) {
         throw new CheckpointIdentityError(`run '${runId}' has no start admission record`);
       }
-      if (row.state === "running") {
+      const state = sqliteText(row, "state", "settled start admission");
+      const terminalResultId = sqliteNullableText(
+        row,
+        "terminal_result_id",
+        "settled start admission"
+      );
+      const terminalResultSha256 = sqliteNullableText(
+        row,
+        "terminal_result_sha256",
+        "settled start admission"
+      );
+      if (state === "running") {
         const result = this.db
           .prepare(
             `UPDATE start_admissions
@@ -3307,14 +3687,14 @@ export class Checkpointer implements Disposable {
         }
         return;
       }
-      if (row.state !== "terminal") {
+      if (state !== "terminal") {
         throw new CheckpointIdentityError(
-          `start admission for run '${runId}' is '${row.state}', not settleable`
+          `start admission for run '${runId}' is '${state}', not settleable`
         );
       }
       if (
-        row.terminal_result_id !== input.terminal_result_id ||
-        row.terminal_result_sha256 !== input.terminal_result_sha256
+        terminalResultId !== input.terminal_result_id ||
+        terminalResultSha256 !== input.terminal_result_sha256
       ) {
         throw new CheckpointIdentityError(
           `start admission for run '${runId}' was already settled with a different terminal result`
@@ -3327,18 +3707,19 @@ export class Checkpointer implements Disposable {
   contentReviewForRun(runId: string): ContentReviewRecord | undefined {
     const row = this.db
       .prepare("SELECT * FROM content_reviews WHERE run_id = ? ORDER BY rowid DESC LIMIT 1")
-      .get(runId) as ContentReviewRow | undefined;
-    return row === undefined ? undefined : this.contentReviewRecord(row);
+      .get(runId);
+    return row === undefined ? undefined : this.contentReviewRecord(contentReviewRow(row));
   }
 
   listContentReviews(): ContentReviewRecord[] {
-    return (
-      this.db.prepare("SELECT * FROM content_reviews ORDER BY rowid").all() as ContentReviewRow[]
-    ).map((row) => this.contentReviewRecord(row));
+    return this.db
+      .prepare("SELECT * FROM content_reviews ORDER BY rowid")
+      .all()
+      .map((row) => this.contentReviewRecord(contentReviewRow(row)));
   }
 
   private contentReviewRecord(row: ContentReviewRow): ContentReviewRecord {
-    const packet = validateContentReviewPacket(JSON.parse(String(row.packet_jcs)) as unknown);
+    const packet = validateContentReviewPacket(JSON.parse(row.packet_jcs));
     const digest = packetDigest(packet);
     if (digest !== String(row.packet_sha256)) {
       throw new GateConflictError(
@@ -3364,11 +3745,7 @@ export class Checkpointer implements Disposable {
           `content-review decision '${row.challenge_id}' has incomplete or mismatched stored bytes`
         );
       }
-      decision = validateContentReviewReceipt(
-        JSON.parse(decisionJcs) as unknown,
-        packet,
-        String(row.packet_sha256)
-      );
+      decision = validateContentReviewReceipt(JSON.parse(decisionJcs), packet, row.packet_sha256);
       if (canonicalJson(decision) !== decisionJcs) {
         throw new GateConflictError(
           `content-review decision '${row.challenge_id}' is not stored as canonical JSON`
@@ -3381,7 +3758,11 @@ export class Checkpointer implements Disposable {
       packet_sha256: String(row.packet_sha256),
       packet_jcs: String(row.packet_jcs),
       packet,
-      state: String(row.state) as ContentReviewStoreState,
+      state: validateKbContract(
+        ContentReviewStoreStateSchema,
+        row.state,
+        "stored content-review state"
+      ),
       ...(decisionJcs !== undefined ? { decision_receipt_jcs: decisionJcs } : {}),
       ...(decisionDigest !== undefined ? { decision_receipt_sha256: decisionDigest } : {}),
       ...(decision !== undefined ? { decision_receipt: decision } : {}),
@@ -3410,9 +3791,10 @@ export class Checkpointer implements Disposable {
     request_event_group_id: string;
   } {
     return this.transaction(() => {
-      const row = this.db
+      const rowValue = this.db
         .prepare("SELECT * FROM content_reviews WHERE challenge_id = ?")
-        .get(input.receipt.challenge_id) as ContentReviewRow | undefined;
+        .get(input.receipt.challenge_id);
+      const row = rowValue === undefined ? undefined : contentReviewRow(rowValue);
       if (row === undefined) {
         throw new GateConflictError(
           `unknown content-review challenge '${input.receipt.challenge_id}'`
@@ -3523,9 +3905,9 @@ export class Checkpointer implements Disposable {
         throw new GateConflictError(`generic gate '${record.challenge_id}' is not pending`);
       }
       context.status = "running";
-      context.playbookData.review_decision = receipt.decision;
-      context.playbookData.review_receipt_id = receipt.receipt_id;
-      context.playbookData.review_receipt_sha256 = input.receiptSha256;
+      context.knowledgeBaseData.review_decision = receipt.decision;
+      context.knowledgeBaseData.review_receipt_id = receipt.receipt_id;
+      context.knowledgeBaseData.review_receipt_sha256 = input.receiptSha256;
       this.updateRun(context);
       this.insertEvent(
         record.run_id,
@@ -3585,7 +3967,10 @@ export class Checkpointer implements Disposable {
       if (Number(changed.changes) !== 1) {
         throw new GateConflictError(`lost content-review claim race for '${record.challenge_id}'`);
       }
-      return this.contentReviewForRun(input.runId)!;
+      return requiredCheckpointValue(
+        this.contentReviewForRun(input.runId),
+        "claimed content-review record"
+      );
     });
   }
 
@@ -3636,7 +4021,7 @@ export class Checkpointer implements Disposable {
       );
     });
     this.observe(input.context, "content_review_resumed", {
-      gate_id: String(input.context.playbookData.content_review_challenge_id ?? ""),
+      gate_id: String(input.context.knowledgeBaseData.content_review_challenge_id ?? ""),
       receipt_sha256: input.receiptSha256,
     });
   }
@@ -3719,11 +4104,12 @@ export class Checkpointer implements Disposable {
     payload: Record<string, JsonValue>
   ): void {
     this.transaction(() => {
-      const row = this.db
+      const rowValue = this.db
         .prepare(
           "SELECT gate_id, challenge, status, response_json FROM gates WHERE run_id = ? AND gate_id = ?"
         )
-        .get(context.identity.run_id, gateId) as GateRow | undefined;
+        .get(context.identity.run_id, gateId);
+      const row = rowValue === undefined ? undefined : gateRow(rowValue);
       if (row === undefined) {
         throw new GateConflictError(`unknown gate '${gateId}'`);
       }
@@ -3779,17 +4165,17 @@ export class Checkpointer implements Disposable {
     if (
       context === undefined ||
       context.identity.playbook !== "knowledge-base" ||
-      String(context.playbookData.action ?? "") !== "promote" ||
+      String(context.knowledgeBaseData.action ?? "") !== "promote" ||
       (context.stateId !== "awaiting_review" && context.terminalDirective === null) ||
-      String(context.playbookData.review_decision ?? "") !== "approve"
+      String(context.knowledgeBaseData.review_decision ?? "") !== "approve"
     ) {
       return undefined;
     }
-    const challengeId = String(context.playbookData.promotion_challenge_id ?? "");
-    const packetSha256 = String(context.playbookData.promotion_packet_sha256 ?? "");
-    const intentSha256 = String(context.playbookData.promotion_decision_intent_sha256 ?? "");
-    const receiptId = String(context.playbookData.promotion_receipt_id ?? "");
-    const receiptSha256 = String(context.playbookData.promotion_receipt_sha256 ?? "");
+    const challengeId = String(context.knowledgeBaseData.promotion_challenge_id ?? "");
+    const packetSha256 = String(context.knowledgeBaseData.promotion_packet_sha256 ?? "");
+    const intentSha256 = String(context.knowledgeBaseData.promotion_decision_intent_sha256 ?? "");
+    const receiptId = String(context.knowledgeBaseData.promotion_receipt_id ?? "");
+    const receiptSha256 = String(context.knowledgeBaseData.promotion_receipt_sha256 ?? "");
     if (
       challengeId.length === 0 ||
       receiptId.length === 0 ||
@@ -3804,14 +4190,7 @@ export class Checkpointer implements Disposable {
         `SELECT challenge, payload_digest, status, response_json
          FROM gates WHERE run_id = ? AND gate_id = ?`
       )
-      .get(runId, challengeId) as
-      | {
-          challenge: string;
-          payload_digest: string;
-          status: string;
-          response_json: string | null;
-        }
-      | undefined;
+      .get(runId, challengeId);
     const expectedResponse = canonicalJson({
       decision: "approve",
       intent_sha256: intentSha256,
@@ -3820,11 +4199,12 @@ export class Checkpointer implements Disposable {
     });
     if (
       gate === undefined ||
-      gate.status !== "answered" ||
+      sqliteText(gate, "status", "promotion approval gate") !== "answered" ||
       (context.pendingDirective?.action === "await_user" &&
-        gate.challenge !== context.pendingDirective.challenge) ||
-      gate.payload_digest !== packetSha256 ||
-      gate.response_json !== expectedResponse
+        sqliteText(gate, "challenge", "promotion approval gate") !==
+          context.pendingDirective.challenge) ||
+      sqliteText(gate, "payload_digest", "promotion approval gate") !== packetSha256 ||
+      sqliteNullableText(gate, "response_json", "promotion approval gate") !== expectedResponse
     ) {
       return undefined;
     }
@@ -3841,13 +4221,14 @@ export class Checkpointer implements Disposable {
   }
 
   receiptResult(receipt: ExecutionReceipt): PhaseResult | undefined {
-    const row = this.db
+    const rowValue = this.db
       .prepare("SELECT receipt_id, result_json FROM receipts WHERE receipt_id = ?")
-      .get(receipt.receipt_id) as ReceiptRow | undefined;
-    if (row === undefined) {
+      .get(receipt.receipt_id);
+    if (rowValue === undefined) {
       return undefined;
     }
-    return JSON.parse(row.result_json) as PhaseResult;
+    const row = receiptRow(rowValue);
+    return validateContract(PhaseResultSchema, JSON.parse(row.result_json), "stored phase result");
   }
 
   events(runId: string): CheckpointEvent[] {
@@ -3855,12 +4236,16 @@ export class Checkpointer implements Disposable {
       .prepare(
         "SELECT sequence, event_type, payload_json, created_at FROM events WHERE run_id = ? ORDER BY sequence"
       )
-      .all(runId) as Array<Record<string, SQLOutputValue>>;
+      .all(runId);
     return rows.map((row) => ({
-      sequence: Number(row.sequence),
-      eventType: String(row.event_type),
-      payload: JSON.parse(String(row.payload_json)) as Record<string, JsonValue>,
-      createdAt: String(row.created_at),
+      sequence: sqliteInteger(row, "sequence", "stored checkpoint event"),
+      eventType: sqliteText(row, "event_type", "stored checkpoint event"),
+      payload: validateContract(
+        CheckpointEventPayloadSchema,
+        JSON.parse(sqliteText(row, "payload_json", "stored checkpoint event")),
+        "stored checkpoint event payload"
+      ),
+      createdAt: sqliteText(row, "created_at", "stored checkpoint event"),
     }));
   }
 
@@ -3902,8 +4287,8 @@ export class Checkpointer implements Disposable {
            ORDER BY updated_at DESC, rowid DESC
            LIMIT ?`
         )
-        .all(...terminalStatuses, this.maxRetainedRuns) as Array<{ run_id: string }>;
-      const keepIds = keep.map((r) => r.run_id);
+        .all(...terminalStatuses, this.maxRetainedRuns);
+      const keepIds = keep.map((row) => sqliteText(row, "run_id", "retained orchestration run"));
       const keepPlaceholders = keepIds.map(() => "?").join(", ");
       const excess = this.db
         .prepare(
@@ -3927,14 +4312,15 @@ export class Checkpointer implements Disposable {
                WHERE a.run_id = r.run_id
              )`
         )
-        .all(...terminalStatuses, ...keepIds) as Array<{ run_id: string }>;
+        .all(...terminalStatuses, ...keepIds)
+        .map((row) => sqliteText(row, "run_id", "prunable orchestration run"));
       if (excess.length === 0) {
         this.db.exec("COMMIT");
         return;
       }
       const deleteStmt = this.db.prepare("DELETE FROM runs WHERE run_id = ?");
-      for (const { run_id } of excess) {
-        deleteStmt.run(run_id);
+      for (const runId of excess) {
+        deleteStmt.run(runId);
       }
       this.db.exec("COMMIT");
     } catch (error) {
@@ -3944,46 +4330,52 @@ export class Checkpointer implements Disposable {
   }
 
   private durableContextJson(context: RunContext): string {
-    if (context.identity.playbook !== "knowledge-base") {
-      return canonicalJson(context.snapshot());
+    if (context.identity.playbook === "knowledge-base") {
+      this.bindKbRuntimeProjectRoot(context.projectRoot);
     }
-    this.bindKbRuntimeProjectRoot(context.projectRoot);
-    const projection = kbDurableProjection(context);
-    // Validate the exact bytes through the same path used after restart before
-    // they can enter SQLite.
-    contextFromKbDurableProjection(projection, this.kbRuntimeProjectRoot!);
-    return canonicalJson(projection);
+    const checkpoint = orchestrationDurableStateCodec.encodeCheckpoint(context.snapshot());
+    return canonicalJson(checkpoint);
   }
 
   private contextFromRunRow(row: RunRow): RunContext {
-    const parsed = JSON.parse(row.context_json) as unknown;
-    if (row.playbook !== "knowledge-base") return RunContext.fromSnapshot(parsed);
-    if (this.kbRuntimeProjectRoot === undefined) {
+    const parsed: unknown = JSON.parse(row.context_json);
+    if (row.playbook !== "knowledge-base") {
+      return RunContext.fromCheckpoint(parsed, { playbook: row.playbook });
+    }
+    const projectRoot = this.kbRuntimeProjectRoot;
+    if (projectRoot === undefined) {
       throw new CheckpointIdentityError(
         "KB durable projection cannot load without the current trusted project root"
       );
     }
-    const context = contextFromKbDurableProjection(parsed, this.kbRuntimeProjectRoot);
+    const context = RunContext.fromCheckpoint(parsed, {
+      playbook: row.playbook,
+      projectRoot,
+    });
     this.assertIdentityRow(context.identity, row);
     return context;
   }
 
   private selectRun(runId: string): RunRow | undefined {
-    return this.db
+    const row = this.db
       .prepare(
         `SELECT run_id, session_id, playbook, engine_owner, schema_version, context_json
          FROM runs WHERE run_id = ?`
       )
-      .get(runId) as RunRow | undefined;
+      .get(runId);
+    return row === undefined ? undefined : runRow(row);
   }
 
   private assertIdentityRow(identity: RunIdentity, row: RunRow): void {
+    if (row.schema_version !== 2 || row.engine_owner !== "typescript") {
+      throw new CheckpointIdentityError("stored checkpoint identity is not a TypeScript v2 run");
+    }
     this.assertIdentity(identity, {
-      schema_version: Number(row.schema_version) as 2,
+      schema_version: 2,
       run_id: row.run_id,
       session_id: row.session_id,
       playbook: row.playbook,
-      engine_owner: row.engine_owner as "typescript",
+      engine_owner: "typescript",
     });
   }
 
@@ -4050,9 +4442,10 @@ export class Checkpointer implements Disposable {
 
   private insertReceipt(receipt: ExecutionReceipt, result: PhaseResult, branchId: string): void {
     const resultJson = canonicalJson(result);
-    const existingById = this.db
+    const existingValue = this.db
       .prepare("SELECT receipt_id, result_json FROM receipts WHERE receipt_id = ?")
-      .get(receipt.receipt_id) as ReceiptRow | undefined;
+      .get(receipt.receipt_id);
+    const existingById = existingValue === undefined ? undefined : receiptRow(existingValue);
     if (existingById !== undefined) {
       if (existingById.result_json === resultJson) {
         return;
@@ -4138,15 +4531,12 @@ export class Checkpointer implements Disposable {
     // G8 §5.1: ingest/save waits are valid only when the complete canonical
     // packet is inserted in THIS transaction with the run/generic gate. A
     // waiting run without that row is corruption, not a recoverable empty gate.
-    const action = String(context.playbookData.action ?? "");
-    if (
-      context.identity.playbook !== "knowledge-base" ||
-      (action !== "ingest" && action !== "save")
-    ) {
-      return;
-    }
-    const packetJcs = context.playbookData.content_review_packet_jcs;
-    const expectedDigest = context.playbookData.content_review_packet_sha256;
+    if (context.identity.playbook !== "knowledge-base") return;
+    const knowledgeBaseData = context.knowledgeBaseData;
+    const action = String(knowledgeBaseData.action ?? "");
+    if (action !== "ingest" && action !== "save") return;
+    const packetJcs = knowledgeBaseData.content_review_packet_jcs;
+    const expectedDigest = knowledgeBaseData.content_review_packet_sha256;
     if (typeof packetJcs !== "string" || typeof expectedDigest !== "string") {
       throw new GateConflictError(
         `KB run '${context.identity.run_id}' reached content review without a canonical packet`
@@ -4154,7 +4544,7 @@ export class Checkpointer implements Disposable {
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(packetJcs) as unknown;
+      parsed = JSON.parse(packetJcs);
     } catch {
       throw new GateConflictError("content-review packet JCS is not valid JSON");
     }
@@ -4165,16 +4555,17 @@ export class Checkpointer implements Disposable {
       packet.run_id !== context.identity.run_id ||
       packet.session_id !== context.identity.session_id ||
       packet.challenge_id !== directive.gate_id ||
-      packet.kb_profile_id !== String(context.playbookData.profile_id ?? "") ||
+      packet.kb_profile_id !== String(knowledgeBaseData.profile_id ?? "") ||
       packet.action !== action
     ) {
       throw new GateConflictError(
         "content-review packet does not exactly bind the waiting run/gate"
       );
     }
-    const existing = this.db
+    const existingValue = this.db
       .prepare("SELECT * FROM content_reviews WHERE challenge_id = ?")
-      .get(packet.challenge_id) as ContentReviewRow | undefined;
+      .get(packet.challenge_id);
+    const existing = existingValue === undefined ? undefined : contentReviewRow(existingValue);
     if (existing !== undefined) {
       if (
         String(existing.packet_sha256) !== expectedDigest ||

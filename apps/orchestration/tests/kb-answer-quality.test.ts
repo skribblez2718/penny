@@ -23,12 +23,16 @@ import "./fixtures/kb-answer-quality-oracle.js";
 
 import {
   DerivedQueryAnswerSchema,
+  KbArtifactHandleSchema,
   canonicalJson,
   defaultDenyPolicy,
   sha256Hex,
   validateKbContract,
+  type DerivedQueryAnswer,
+  type KbArtifactHandle,
   type KbPolicy,
   type QueryKbRequest,
+  type QueryVerificationReport,
 } from "../src/kb/contracts.js";
 import {
   ParentDeliveryGrantStore,
@@ -81,7 +85,9 @@ function allowingPolicy(maxUtf8Bytes = 16_384): KbPolicy {
   };
 }
 
-function validAnswer(text = "The gate ladder requires review before publication (advisory).") {
+function validAnswer(
+  text = "The gate ladder requires review before publication (advisory)."
+): DerivedQueryAnswer {
   return {
     authority: "advisory",
     text,
@@ -89,10 +95,10 @@ function validAnswer(text = "The gate ladder requires review before publication 
     contradictions: [],
     unknowns: [],
     canonical_verification_required: true,
-  };
+  } satisfies DerivedQueryAnswer;
 }
 
-function validAnswerHandle(answer = validAnswer()) {
+function validAnswerHandle(answer = validAnswer()): KbArtifactHandle {
   const artifact = { schema_version: 1, artifact_kind: "query_answer", answer } as const;
   const jcs = canonicalJson(artifact);
   return {
@@ -102,10 +108,13 @@ function validAnswerHandle(answer = validAnswer()) {
     sha256: sha256Hex(jcs),
     media_type: "application/json" as const,
     byte_length: Buffer.byteLength(jcs, "utf8"),
-  };
+  } satisfies KbArtifactHandle;
 }
 
-function validVerification(answer = validAnswer(), handle = validAnswerHandle(answer)) {
+function validVerification(
+  answer = validAnswer(),
+  handle = validAnswerHandle(answer)
+): QueryVerificationReport {
   return {
     schema_version: 1,
     artifact_kind: "verification_report",
@@ -118,20 +127,37 @@ function validVerification(answer = validAnswer(), handle = validAnswerHandle(an
       verdict: "supported" as const,
       notes: "The selected page directly supports this cited statement.",
     })),
-  };
+  } satisfies QueryVerificationReport;
 }
 
 function decideVerifiedParentDelivery(
   input: Parameters<typeof decideParentDelivery>[0]
 ): ReturnType<typeof decideParentDelivery> {
-  const answer = input.answer as ReturnType<typeof validAnswer>;
-  const answerHandle = input.answerHandle ?? validAnswerHandle(answer);
+  let answer: DerivedQueryAnswer | undefined;
+  try {
+    answer = validateKbContract(DerivedQueryAnswerSchema, input.answer, "derived answer");
+  } catch {
+    answer = undefined;
+  }
+  const answerHandle =
+    input.answerHandle ?? (answer === undefined ? undefined : validAnswerHandle(answer));
+  let verifiedHandle: KbArtifactHandle | undefined;
+  if (answerHandle !== undefined) {
+    try {
+      verifiedHandle = validateKbContract(KbArtifactHandleSchema, answerHandle, "answer handle");
+    } catch {
+      verifiedHandle = undefined;
+    }
+  }
+  const verificationReport =
+    input.verificationReport ??
+    (answer === undefined || verifiedHandle === undefined
+      ? undefined
+      : validVerification(answer, verifiedHandle));
   return decideParentDelivery({
     ...input,
-    answerHandle,
-    verificationReport:
-      input.verificationReport ??
-      validVerification(answer, answerHandle as ReturnType<typeof validAnswerHandle>),
+    ...(answerHandle === undefined ? {} : { answerHandle }),
+    ...(verificationReport === undefined ? {} : { verificationReport }),
     queryCompleteAndMet: input.queryCompleteAndMet ?? true,
   });
 }
@@ -258,10 +284,9 @@ describe("answer quality — sealed answer extraction fails closed", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "kb-answer-read-"));
     const runId = RUN_ID;
     const doc = { schema_version: 1, artifact_kind: "query_answer", answer: validAnswer() };
-    let handle;
     const checkpointer = kbArtifactControl({ root, runId, profileId: PROFILE, action: "query" });
     using store = new RunArtifactStore(root, runId, checkpointer);
-    handle = store.stage({
+    const handle = store.stage({
       state_id: "query",
       kb_profile_id: PROFILE,
       artifact_kind: "query_answer",
@@ -513,7 +538,6 @@ describe("answer quality — parent delivery decision (§5.1 + §5.6)", () => {
         host: HOST,
         request: req,
         policy: allowingPolicy(),
-        parentIdentity: undefined,
         runId: RUN_ID,
         answer,
       });

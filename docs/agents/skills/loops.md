@@ -65,7 +65,7 @@ Loops are not alternatives — they **nest**. A production system layers them:
 
 - Each subagent invocation is one L1 cycle
 - The worker receives its task plus exact execution-owner input/output artifact contracts in the engine directive.
-- The worker reads granted predecessors with `artifact_read`, returns complete stage content, and appends the structured routing SUMMARY.
+- The worker reads supplied exact IDs with `artifact_read`/`next_range`, returns complete stage content, and appends the structured routing SUMMARY.
 - The owner persists and verifies exact output before the SUMMARY can advance the loop; payload bytes stay out of `RunContext`.
 
 ### L2 — Verifier / Critic Gate

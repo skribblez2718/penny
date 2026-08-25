@@ -7,6 +7,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import compactionExtension from "../../index.js";
+import { createMockCompactionPi } from "../fixtures/compaction-pi.js";
 
 vi.mock("../../checkpointer.js", () => ({
   readExactCheckpoints: vi.fn(() => ({ runs: [], artifactRefs: [], issues: [] })),
@@ -16,39 +17,23 @@ vi.mock("../../pending.js", () => ({
   detectPendingState: vi.fn(async () => null),
 }));
 
-function createMockPi() {
-  const handlers: Record<string, Array<(...args: any[]) => any>> = {};
-  const calls: Array<{ event: string; handler: Function }> = [];
-
-  return {
-    on: (event: string, handler: (...args: any[]) => any) => {
-      calls.push({ event, handler });
-      if (!handlers[event]) handlers[event] = [];
-      handlers[event].push(handler);
-    },
-    _handlers: handlers,
-    _calls: calls,
-  };
-}
-
 describe("compactionExtension hook registration", () => {
   it("registers pi.on('session_before_compact', ...) when extension loads", () => {
-    const pi = createMockPi() as any;
-    compactionExtension(pi);
+    const pi = createMockCompactionPi();
+    compactionExtension(pi.api);
 
-    expect(pi._calls.length).toBeGreaterThanOrEqual(1);
-    const sessionBeforeCompactCalls = pi._calls.filter(
-      (c: any) => c.event === "session_before_compact"
+    expect(pi.calls.length).toBeGreaterThanOrEqual(1);
+    const sessionBeforeCompactCalls = pi.calls.filter(
+      (call) => call.event === "session_before_compact"
     );
     expect(sessionBeforeCompactCalls.length).toBe(1);
     expect(typeof sessionBeforeCompactCalls[0].handler).toBe("function");
   });
 
   it("registers exactly one session_before_compact handler", () => {
-    const pi = createMockPi() as any;
-    compactionExtension(pi);
+    const pi = createMockCompactionPi();
+    compactionExtension(pi.api);
 
-    expect(pi._handlers["session_before_compact"]).toBeDefined();
-    expect(pi._handlers["session_before_compact"].length).toBe(1);
+    expect(pi.handlers).toHaveLength(1);
   });
 });

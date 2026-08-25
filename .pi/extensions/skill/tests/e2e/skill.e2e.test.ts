@@ -19,6 +19,7 @@ import {
   renderedQuestionsDigest,
   resolveTrustedQuestionnaireTransport,
 } from "../../execution-receipts.js";
+import { parseJson, requireRecord, requireString } from "../../../../lib/tests/test-narrowers.js";
 
 // Anchor to THIS file's location (invariant), not process.cwd() (ambient — set
 // by whichever directory the runner was launched from). This file lives at
@@ -50,7 +51,7 @@ describe("Skill E2E — Extension Discovery", () => {
   it("round-trips a long selected-artifact gate without executable terminal controls", () => {
     const tail = "END-OF-RECOVERED-PLAN";
     const prompt =
-      `selected artifact plan-7/v3/sha256:abc\\ndefinition \"quoted\" ` +
+      `selected artifact plan-7/v3/sha256:abc\\ndefinition "quoted" ` +
       `questionnaire({injected:true}) ${"step ".repeat(80)}${tail}\u001b\u202e`;
     const questions: EscalationQuestion[] = [
       {
@@ -94,12 +95,18 @@ describe("Skill E2E — Extension Discovery", () => {
     const formatted = formatResult(result, (_color, text) => text);
     const start = formatted.indexOf("questionnaire(") + "questionnaire(".length;
     const end = formatted.indexOf("\n  )", start);
-    const payload = JSON.parse(formatted.slice(start, end));
+    const payload = requireRecord(
+      parseJson(formatted.slice(start, end)),
+      "formatted questionnaire payload was not an object"
+    );
 
     expect(payload).toHaveProperty("trustedTransportCapability");
     expect(formatted).not.toContain("challenge-7");
     const transport = resolveTrustedQuestionnaireTransport(
-      payload.trustedTransportCapability as string
+      requireString(
+        payload.trustedTransportCapability,
+        "formatted questionnaire payload omitted transport capability"
+      )
     );
     expect(transport?.questions).toEqual(normalizeEscalationQuestions(questions));
     expect(transport?.questions[0].prompt).toContain(tail);

@@ -1,3 +1,4 @@
+import { requireValue } from "./helpers/narrowing.js";
 /**
  * KB capabilities tests (G7, §5.2).
  */
@@ -34,11 +35,13 @@ import {
   SimulatedSourceAdmissionCrash,
   sourcesFromAdmissions,
 } from "../src/kb/gate.js";
+import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 
 const dirs: string[] = [];
 function tmp(): string {
   const d = mkdtempSync(path.join(tmpdir(), "penny-kb-cap-"));
   dirs.push(d);
+  installTestProjectState(d);
   return d;
 }
 afterEach(() => {
@@ -50,9 +53,7 @@ const LATER = "2026-12-31T00:00:00Z";
 const ZERO = "0".repeat(64);
 
 function database(pathname: string): import("node:sqlite").DatabaseSync {
-  const module = process.getBuiltinModule("node:" + "sqlite") as
-    | typeof import("node:sqlite")
-    | undefined;
+  const module = process.getBuiltinModule("node:sqlite");
   if (module === undefined) throw new Error("node:sqlite is unavailable");
   return new module.DatabaseSync(pathname);
 }
@@ -166,7 +167,7 @@ describe("KB §5.2 envelope cross-field validation", () => {
 
   it("rejects source_read with unsupported media_type", () => {
     expect(() =>
-      validateEnvelopeCrossField(sourceEnvelope({ media_type: "application/pdf" }))
+      validateEnvelopeCrossField({ ...sourceEnvelope(), media_type: "application/pdf" })
     ).toThrow(CapabilityError);
   });
 
@@ -178,7 +179,13 @@ describe("KB §5.2 envelope cross-field validation", () => {
     expect(() =>
       validateEnvelopeCrossField({
         ...source,
-        source_metadata: { ...source.source_metadata!, invented_authority: true },
+        source_metadata: {
+          ...requireValue(
+            source.source_metadata,
+            "apps/orchestration/tests/kb-capabilities.test.ts:183"
+          ),
+          invented_authority: true,
+        },
       })
     ).toThrow(CapabilityError);
   });
@@ -188,7 +195,13 @@ describe("KB §5.2 envelope cross-field validation", () => {
     expect(() =>
       validateEnvelopeCrossField({
         ...source,
-        source_metadata: { ...source.source_metadata!, authors: [] },
+        source_metadata: {
+          ...requireValue(
+            source.source_metadata,
+            "apps/orchestration/tests/kb-capabilities.test.ts:193"
+          ),
+          authors: [],
+        },
       })
     ).not.toThrow();
   });
@@ -319,10 +332,14 @@ describe("KB §5.2 capability store", () => {
     });
     db = database(dbPath);
     db.prepare("UPDATE source_admissions SET storage_key='work/wrong' WHERE source_id=?").run(
-      admission!.source_id
+      requireValue(admission, "apps/orchestration/tests/kb-capabilities.test.ts:324").source_id
     );
     db.close();
-    expect(() => store.admission(admission!.source_id)).toThrow(/lifecycle|storage_key/i);
+    expect(() =>
+      store.admission(
+        requireValue(admission, "apps/orchestration/tests/kb-capabilities.test.ts:327").source_id
+      )
+    ).toThrow(/lifecycle|storage_key/i);
   });
 
   it("claims all-or-none: all available → all claimed", () => {
@@ -381,7 +398,13 @@ describe("KB §5.2 capability store", () => {
     store.register(env);
     const tampered: CapabilityEnvelope = {
       ...env,
-      source_metadata: { ...env.source_metadata!, title: "Tampered title" },
+      source_metadata: {
+        ...requireValue(
+          env.source_metadata,
+          "apps/orchestration/tests/kb-capabilities.test.ts:386"
+        ),
+        title: "Tampered title",
+      },
     };
     expect(() => claimSource(store, [tampered])).toThrow(/envelope|digest/i);
     expect(store.lease(env.capability_id)?.state).toBe("available");
@@ -486,7 +509,11 @@ describe("KB §5.2 capability store", () => {
       transactionId: "admission-transaction",
       now: NOW,
     });
-    store.admitSource(admission!.source_id, 0, NOW);
+    store.admitSource(
+      requireValue(admission, "apps/orchestration/tests/kb-capabilities.test.ts:491").source_id,
+      0,
+      NOW
+    );
     const settlementNow = "2026-06-01T00:00:00Z";
     store.reserveSourceCommitAll(
       [env.capability_id],
@@ -498,7 +525,9 @@ describe("KB §5.2 capability store", () => {
     const settle = () =>
       store.settlePublishedSources({
         capabilityIds: [env.capability_id],
-        sourceIds: [admission!.source_id],
+        sourceIds: [
+          requireValue(admission, "apps/orchestration/tests/kb-capabilities.test.ts:503").source_id,
+        ],
         runId: "run-1",
         transactionId: "publication-transaction",
         now: settlementNow,
@@ -508,7 +537,11 @@ describe("KB §5.2 capability store", () => {
       state: "consumed",
       transaction_id: "publication-transaction",
     });
-    expect(store.admission(admission!.source_id)).toMatchObject({
+    expect(
+      store.admission(
+        requireValue(admission, "apps/orchestration/tests/kb-capabilities.test.ts:513").source_id
+      )
+    ).toMatchObject({
       state: "published",
       transaction_id: "admission-transaction",
     });
@@ -563,7 +596,10 @@ describe("KB §5.2 immutable source admission", () => {
     const input = fixture("independent-id");
     const sourceIds = claimFixture(input);
     expect(sourceIds).toHaveLength(1);
-    const sourceId = sourceIds[0]!;
+    const sourceId = requireValue(
+      sourceIds[0],
+      "apps/orchestration/tests/kb-capabilities.test.ts:568"
+    );
     expect(sourceId).toMatch(/^src_[a-f0-9]{32}$/);
     expect(sourceId).not.toBe(input.envelope.capability_id);
     expect(sourceId).not.toBe(input.envelope.expected_sha256);
@@ -585,12 +621,17 @@ describe("KB §5.2 immutable source admission", () => {
     const input = fixture("external-change");
     const [sourceId] = claimFixture(input);
     writeFileSync(input.sourcePath, "changed after snapshot", { mode: 0o600 });
-    const [source] = sourcesFromAdmissions(input.projectRoot, input.kbRoot, [sourceId!], {
-      runId: "run-1",
-      transactionId: "txn-1",
-      sessionId: "session-1",
-      profileId: "kbp_demo",
-    });
+    const [source] = sourcesFromAdmissions(
+      input.projectRoot,
+      input.kbRoot,
+      [requireValue(sourceId, "apps/orchestration/tests/kb-capabilities.test.ts:590")],
+      {
+        runId: "run-1",
+        transactionId: "txn-1",
+        sessionId: "session-1",
+        profileId: "kbp_demo",
+      }
+    );
     expect(source?.content).toBe(input.original);
     expect(readFileSync(input.sourcePath, "utf8")).toBe("changed after snapshot");
   });
@@ -601,7 +642,10 @@ describe("KB §5.2 immutable source admission", () => {
       const input = fixture(boundary);
       expect(() => claimFixture(input, boundary)).toThrow(SimulatedSourceAdmissionCrash);
       using before = new CapabilityStore(input.projectRoot);
-      const preallocated = before.admissionsForTransaction("run-1", "txn-1")[0]!.source_id;
+      const preallocated = requireValue(
+        before.admissionsForTransaction("run-1", "txn-1")[0],
+        "apps/orchestration/tests/kb-capabilities.test.ts:606"
+      ).source_id;
       before.close();
       const sourceIds = claimFixture(input);
       expect(sourceIds).toEqual([preallocated]);
@@ -614,16 +658,23 @@ describe("KB §5.2 immutable source admission", () => {
       const input = fixture(boundary);
       expect(() => claimFixture(input, boundary)).toThrow(SimulatedSourceAdmissionCrash);
       using before = new CapabilityStore(input.projectRoot);
-      const preallocated = before.admissionsForTransaction("run-1", "txn-1")[0]!.source_id;
+      const preallocated = requireValue(
+        before.admissionsForTransaction("run-1", "txn-1")[0],
+        "apps/orchestration/tests/kb-capabilities.test.ts:619"
+      ).source_id;
       before.close();
       // A recovery at these boundaries must not need the external path again.
       rmSync(input.sourcePath);
       const sourceIds = claimFixture(input);
       expect(sourceIds).toEqual([preallocated]);
       using store = new CapabilityStore(input.projectRoot);
-      const admission = store.admission(sourceIds[0]!);
+      const admission = store.admission(
+        requireValue(sourceIds[0], "apps/orchestration/tests/kb-capabilities.test.ts:626")
+      );
       expect(admission?.state).toBe("admitted");
-      expect(admission?.storage_key).toBe(`work/run-1/transaction/sources/${sourceIds[0]!}`);
+      expect(admission?.storage_key).toBe(
+        `work/run-1/transaction/sources/${requireValue(sourceIds[0], "apps/orchestration/tests/kb-capabilities.test.ts:628")}`
+      );
       expect(admission?.temporary_storage_key).toBeUndefined();
     }
   );
@@ -632,7 +683,12 @@ describe("KB §5.2 immutable source admission", () => {
     const input = fixture("cleanup");
     const [sourceId] = claimFixture(input);
     using before = new CapabilityStore(input.projectRoot);
-    const admission = before.admission(sourceId!)!;
+    const admission = requireValue(
+      before.admission(
+        requireValue(sourceId, "apps/orchestration/tests/kb-capabilities.test.ts:637")
+      ),
+      "apps/orchestration/tests/kb-capabilities.test.ts:637"
+    );
     const snapshot = path.join(input.kbRoot, ...admission.storage_key.split("/"));
     expect(existsSync(snapshot)).toBe(true);
     before.close();
@@ -645,16 +701,27 @@ describe("KB §5.2 immutable source admission", () => {
       invalidateClaims: true,
     });
     using after = new CapabilityStore(input.projectRoot);
-    expect(after.admission(sourceId!)?.state).toBe("discarded");
+    expect(
+      after.admission(
+        requireValue(sourceId, "apps/orchestration/tests/kb-capabilities.test.ts:650")
+      )?.state
+    ).toBe("discarded");
     expect(after.lease(input.envelope.capability_id)?.state).toBe("invalidated");
     expect(existsSync(snapshot)).toBe(false);
   });
 
-  it.each([
+  interface ReplayOverrides {
+    sessionId?: string;
+    profileId?: string;
+    operation?: "ingest" | "promote";
+  }
+  const replayCases: readonly (readonly [string, ReplayOverrides, RegExp])[] = [
     ["session replay", { sessionId: "session-other" }, /another session/i],
     ["profile replay", { profileId: "kbp_other" }, /another profile/i],
-    ["operation replay", { operation: "promote" as const }, /authorize/i],
-  ])("rejects %s before source I/O", (_label, overrides, expected) => {
+    ["operation replay", { operation: "promote" }, /authorize/i],
+  ];
+
+  it.each(replayCases)("rejects %s before source I/O", (_label, overrides, expected) => {
     const input = fixture(String(_label));
     expect(() =>
       claimCapabilities({
@@ -677,12 +744,13 @@ describe("KB §5.2 immutable source admission", () => {
 
 describe("KB §5.2 capability-store custody", () => {
   it("fails closed on a symlinked custody root", () => {
-    const parent = tmp();
-    const real = path.join(parent, "real");
-    const link = path.join(parent, "link");
-    new CapabilityStore(real).close();
-    symlinkSync(real, link, "dir");
-    expect(() => new CapabilityStore(link)).toThrow(/symlink/i);
+    const projectRoot = tmp();
+    const authority = capabilityStoreDirectory(projectRoot);
+    const real = path.join(projectRoot, "real-capabilities");
+    rmSync(authority, { recursive: true, force: true });
+    mkdirSync(real, { mode: 0o700 });
+    symlinkSync(real, authority, "dir");
+    expect(() => new CapabilityStore(projectRoot)).toThrow(/symlink/i);
   });
 
   it("fails closed instead of repairing a broadened custody mode", () => {

@@ -4,7 +4,11 @@ import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 
-import { assertOwnerDirectory, pennyStatePaths, resolvePennyStateRoot } from "@penny/orchestration";
+import {
+  assertOwnerDirectory,
+  pennyStatePaths,
+  resolvePennyStateRoot,
+} from "@penny/orchestration/source";
 
 import { ObservabilityDatabase, type LogQuery } from "./database.js";
 
@@ -37,11 +41,17 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
   response.end(body);
 }
 
+function requestChunk(value: unknown): Buffer<ArrayBufferLike> {
+  if (typeof value === "string") return Buffer.from(value);
+  if (value instanceof Uint8Array) return Buffer.from(value);
+  throw new Error("request body contained a non-byte chunk");
+}
+
 async function readJson(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
+  const chunks: Buffer<ArrayBufferLike>[] = [];
   let size = 0;
-  for await (const chunk of request) {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  for await (const value of request) {
+    const bytes = requestChunk(value);
     size += bytes.length;
     if (size > MAX_REQUEST_BYTES) throw new Error("request body is too large");
     chunks.push(bytes);

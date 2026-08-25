@@ -4,7 +4,7 @@
  * Core TypeBox schemas, interfaces, and types shared across all tool modules.
  */
 
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 // ============================================================================
 // Browser State
@@ -194,26 +194,6 @@ export interface TabListResult {
 }
 
 // ============================================================================
-// Capability Types
-// ============================================================================
-
-export type CapabilityDomain =
-  | "core"
-  | "core-navigation"
-  | "core-tabs"
-  | "core-input"
-  | "network"
-  | "pdf"
-  | "storage"
-  | "testing"
-  | "vision"
-  | "devtools";
-
-export interface CapabilityMap {
-  [domain: string]: string[]; // domain -> list of tool names
-}
-
-// ============================================================================
 // Tool Registration Helper
 // ============================================================================
 
@@ -222,7 +202,6 @@ export interface ToolDefinition {
   label: string;
   description: string;
   promptSnippet: string;
-  promptGuidelines: string[];
   parameters: ReturnType<typeof Type.Object>;
   execute: (
     toolCallId: string,

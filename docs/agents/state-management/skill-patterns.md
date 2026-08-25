@@ -42,7 +42,7 @@ approval.
 ## Skill composition
 
 Parallel skills are independent TypeScript runs. Chains persist exact terminal bytes as
-target-run ingress artifacts. Chain resume reconstructs the failed step from its durable
+direct cross-run terminal IDs plus optional explicit fan-in. Chain resume reconstructs the failed step from its durable
 checkpoint and never substitutes payload text into `{previous}`.
 
 ## Testing

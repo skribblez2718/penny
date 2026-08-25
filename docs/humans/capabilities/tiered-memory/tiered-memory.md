@@ -21,7 +21,7 @@ state, a persistence receipt, or recovery input. Workers and skill drivers have
 no memory or advisory-log tools.
 
 Active workflow bytes live in owner artifacts, not memory. Workers read exact
-grants with `artifact_read` and typed continuation. Historical skill rooms are
+exact IDs with `artifact_read` and `next_range`. Historical skill rooms are
 legacy corpus and never deletion authority.
 
 Normal memory access uses one supervised MemPalace 3.7.1 HTTP hub with no raw

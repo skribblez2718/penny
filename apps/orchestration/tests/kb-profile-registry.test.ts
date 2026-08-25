@@ -52,7 +52,9 @@ describe("KB §5.1 profile registry", () => {
     chmodSync(regPath, 0o600);
     const loaded = loadProfileRegistry(regPath);
     expect(loaded.profiles.length).toBe(1);
-    expect(loaded.profiles[0].kb_profile_id).toBe("kbp_demo");
+    const profile = loaded.profiles[0];
+    if (profile === undefined) throw new Error("validated registry has no profile");
+    expect(profile.kb_profile_id).toBe("kbp_demo");
   });
 
   it("rejects a symlinked registry", () => {

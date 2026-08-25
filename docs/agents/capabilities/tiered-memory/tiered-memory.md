@@ -19,7 +19,7 @@ owner artifacts, and orchestration state uses the checkpointer.
 ## Operational rules
 
 - Search only when prior context could materially affect the task.
-- Start with bounded summaries; use exact reads and typed continuation only when needed.
+- Start with bounded summaries; use exact IDs and `next_range` only when needed.
 - Curate stable reusable results; skip routine/transient output.
 - Rely on write-path duplicate enforcement rather than a routine duplicate precheck.
 - Write the primary diary only from the primary runtime.

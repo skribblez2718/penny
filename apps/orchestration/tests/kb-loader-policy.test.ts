@@ -1,3 +1,4 @@
+import { requireValue } from "./helpers/narrowing.js";
 /** Hostile ambient-resource and exact private-session posture tests (§5.8). */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -8,7 +9,7 @@ import {
   SessionManager,
   createAgentSession,
   type AgentSessionEvent,
-  type ToolDefinition,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -37,6 +38,16 @@ function temporary(label: string): string {
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+const PHASE_STATES = [
+  "ingest",
+  "compose",
+  "query",
+  "lint",
+  "verify",
+  "plan",
+  "patch",
+] as const satisfies readonly KbPhaseState[];
 
 const CONTRACT: Readonly<Record<KbPhaseState, { agent: string; artifactKind: ArtifactKind }>> = {
   ingest: { agent: "echo", artifactKind: "claims" },
@@ -116,14 +127,28 @@ function spec(state: KbPhaseState): AgentSessionSpecV1 {
   return kbSessionSpec({
     invocation: invocation(state),
     cognitiveFrame: "TRUSTED_COGNITIVE_FRAME",
-    agentBody: `TRUSTED_ROLE_${state}`,
     phaseGuidance: `TRUSTED_GUIDANCE_${state}`,
   });
 }
 
+const unusedContextHost = new Proxy(
+  {},
+  {
+    get(_target, property) {
+      throw new Error(`KB test tool unexpectedly read ExtensionContext.${String(property)}`);
+    },
+  }
+);
+
+// Test-host exception rule: DOUBLE_ASSERTION. Rationale: Pi requires a complete ExtensionContext argument although these context-free KB tools do not read it.
+// Removal condition: Remove when Pi makes ExtensionContext optional for context-free tools or exports a supported test factory.
+// Focused test: apps/orchestration/tests/kb-loader-policy.test.ts#terminates on typed submit without host-context reads and rejects duplicate/body metadata
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Pi requires the complete host type at this guarded partial test seam.
+const UNUSED_EXTENSION_CONTEXT = unusedContextHost as unknown as ExtensionContext;
+
 describe("KB §5.8 purpose-built session", () => {
   it("uses noTools=all and the exact per-phase custom-tool matrix", () => {
-    for (const state of Object.keys(CONTRACT) as KbPhaseState[]) {
+    for (const state of PHASE_STATES) {
       const posture = spec(state);
       expect(posture.noTools).toBe("all");
       expect(posture.tools).toEqual(KB_PHASE_TOOL_MATRIX[state]);
@@ -133,8 +158,8 @@ describe("KB §5.8 purpose-built session", () => {
   });
 
   it("keeps provider-visible tool guidance explicit while every schema stays closed", () => {
-    for (const state of Object.keys(CONTRACT) as KbPhaseState[]) {
-      const tools = spec(state).customTools as ToolDefinition[];
+    for (const state of PHASE_STATES) {
+      const tools = requireValue(spec(state).customTools, `${state} custom tools`);
       for (const tool of tools) {
         expect(tool.promptSnippet).toBeTruthy();
         expect(tool.promptGuidelines?.length).toBeGreaterThan(0);
@@ -207,8 +232,17 @@ describe("KB §5.8 purpose-built session", () => {
         stopReason: "toolUse",
         timestamp: 1,
       },
-      toolResults: [{ content: privateSentinel }],
-    } as unknown as AgentSessionEvent);
+      toolResults: [
+        {
+          role: "toolResult",
+          toolCallId: "call_private",
+          toolName: "read_phase_brief",
+          content: [{ type: "text", text: privateSentinel }],
+          isError: false,
+          timestamp: 2,
+        },
+      ],
+    } satisfies AgentSessionEvent);
 
     expect(toolRecord).toEqual({
       kind: "tool",
@@ -319,7 +353,10 @@ describe("KB §5.8 purpose-built session", () => {
     const isolated = await createPrivateSessionResourceLoader({
       projectRoot,
       agentDir: temporary("penny-kb-sdk-global"),
-      systemPrompt: posture.isolatedSystemPrompt!,
+      systemPrompt: requireValue(
+        posture.isolatedSystemPrompt,
+        "apps/orchestration/tests/kb-loader-policy.test.ts:321"
+      ),
     });
     const { session } = await createAgentSession({
       cwd: projectRoot,
@@ -327,8 +364,10 @@ describe("KB §5.8 purpose-built session", () => {
       settingsManager: isolated.settingsManager,
       resourceLoader: isolated.resourceLoader,
       noTools: "all",
-      tools: [...posture.tools!],
-      customTools: posture.customTools as ToolDefinition[],
+      tools: [
+        ...requireValue(posture.tools, "apps/orchestration/tests/kb-loader-policy.test.ts:329"),
+      ],
+      customTools: [...requireValue(posture.customTools, "query custom tools")],
     });
     try {
       expect(session.getActiveToolNames()).toEqual([...KB_PHASE_TOOL_MATRIX.query]);
@@ -341,19 +380,15 @@ describe("KB §5.8 purpose-built session", () => {
     }
   });
 
-  it("terminates on one typed submit and rejects duplicate/body-bearing metadata", async () => {
+  it("terminates on typed submit without host-context reads and rejects duplicate/body metadata", async () => {
     const posture = spec("query");
-    const stage = posture.customTools?.find((tool) => tool.name === "stage_run_artifact") as
-      | ToolDefinition
-      | undefined;
-    const submit = posture.customTools?.find((tool) => tool.name === "submit_phase_result") as
-      | ToolDefinition
-      | undefined;
+    const stage = posture.customTools?.find((tool) => tool.name === "stage_run_artifact");
+    const submit = posture.customTools?.find((tool) => tool.name === "submit_phase_result");
     expect(stage).toBeDefined();
     expect(submit).toBeDefined();
 
     const artifact = handle("query_answer");
-    await stage!.execute(
+    await requireValue(stage, "apps/orchestration/tests/kb-loader-policy.test.ts:355").execute(
       "stage-1",
       {
         schema_version: 1,
@@ -375,7 +410,7 @@ describe("KB §5.8 purpose-built session", () => {
       },
       undefined,
       undefined,
-      {} as never
+      UNUSED_EXTENSION_CONTEXT
     );
     const metadata = {
       schema_version: 1,
@@ -392,23 +427,33 @@ describe("KB §5.8 purpose-built session", () => {
       citation_count: 0,
       answer_artifact: artifact,
     };
-    const accepted = await submit!.execute("submit-1", metadata, undefined, undefined, {} as never);
+    const accepted = await requireValue(
+      submit,
+      "apps/orchestration/tests/kb-loader-policy.test.ts:394"
+    ).execute("submit-1", metadata, undefined, undefined, UNUSED_EXTENSION_CONTEXT);
     expect((accepted as { terminate?: boolean }).terminate).toBe(true);
     await expect(
-      submit!.execute("submit-2", metadata, undefined, undefined, {} as never)
+      requireValue(submit, "apps/orchestration/tests/kb-loader-policy.test.ts:397").execute(
+        "submit-2",
+        metadata,
+        undefined,
+        undefined,
+        UNUSED_EXTENSION_CONTEXT
+      )
     ).rejects.toThrow(/duplicate/);
 
     const fresh = spec("query");
-    const freshSubmit = fresh.customTools?.find(
-      (tool) => tool.name === "submit_phase_result"
-    ) as ToolDefinition;
+    const freshSubmit = requireValue(
+      fresh.customTools?.find((tool) => tool.name === "submit_phase_result"),
+      "fresh submit_phase_result tool"
+    );
     await expect(
       freshSubmit.execute(
         "submit-body",
         { ...metadata, body: "PRIVATE RAW BODY" },
         undefined,
         undefined,
-        {} as never
+        UNUSED_EXTENSION_CONTEXT
       )
     ).rejects.toThrow(/schema/);
   });

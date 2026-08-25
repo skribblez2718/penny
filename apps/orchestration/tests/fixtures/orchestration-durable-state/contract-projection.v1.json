@@ -1,0 +1,131 @@
+{
+  "valid_phase_result": {
+    "result_keys": [
+      "agent",
+      "attempt",
+      "confidence",
+      "details",
+      "output_artifact",
+      "run_id",
+      "schema_version",
+      "state_id",
+      "worker_receipt"
+    ],
+    "details_keys": [
+      "mode",
+      "plan_complete",
+      "plan_steps"
+    ],
+    "output_artifact_keys": [
+      "artifact_id",
+      "branch_id",
+      "byte_length",
+      "content_digest",
+      "kind",
+      "media_type",
+      "operation_id",
+      "phase",
+      "producer",
+      "run_id",
+      "schema_version",
+      "store_ref",
+      "version"
+    ],
+    "worker_receipt_keys": [
+      "agent",
+      "attempt",
+      "branch_id",
+      "command",
+      "ended_at",
+      "executor",
+      "exit_code",
+      "model",
+      "output_artifact_ref",
+      "output_digest",
+      "receipt_id",
+      "run_id",
+      "schema_version",
+      "signature",
+      "started_at",
+      "state_id",
+      "trust_profile",
+      "trusted_invocation_digest",
+      "worker_id",
+      "working_directory"
+    ],
+    "next_action": "invoke_agents_parallel",
+    "persisted_equal": true
+  },
+  "missing_details": {
+    "error_name": "ContractValidationError",
+    "detail_issues": [
+      "/result: must have required properties details"
+    ],
+    "checkpoint_unchanged": true,
+    "receipt_persisted": false
+  },
+  "extra_details": {
+    "next_action": "invoke_agent",
+    "event_type": "phase_result_malformed",
+    "feedback_kind": "malformed_result",
+    "state_id": "planning",
+    "step_count": 2,
+    "persisted_equal": true
+  },
+  "recovery_fail_closed": {
+    "unavailable_playbook": {
+      "directive": {
+        "schema_version": 2,
+        "action": "error",
+        "identity": {
+          "schema_version": 2,
+          "run_id": "run_ts200_unknown_playbook",
+          "session_id": "session_ts200",
+          "playbook": "unregistered-playbook",
+          "engine_owner": "typescript"
+        },
+        "status": "error",
+        "met": false,
+        "result": {
+          "code": "PLAYBOOK_UNAVAILABLE",
+          "playbook": "unregistered-playbook",
+          "checkpoint_unchanged": true
+        },
+        "artifacts": [],
+        "unresolved": [
+          "Playbook 'unregistered-playbook' is unavailable in the TypeScript engine."
+        ]
+      },
+      "checkpoint_unchanged": true
+    },
+    "invalid_dispatch_mode": {
+      "directive": {
+        "schema_version": 2,
+        "action": "paused",
+        "identity": {
+          "schema_version": 2,
+          "run_id": "run_ts200_research_pending",
+          "session_id": "session_ts200",
+          "playbook": "research",
+          "engine_owner": "typescript"
+        },
+        "status": "running",
+        "state_id": "planning",
+        "code": "DISPATCH_MODE_INVALID",
+        "reason": "unknown artifact dispatch mode 'unexpected-mode'",
+        "retryable": true,
+        "recovery": {
+          "action": "recover",
+          "run_id": "run_ts200_research_pending",
+          "checkpoint_preserved": true
+        }
+      },
+      "checkpoint_unchanged": true
+    },
+    "missing_directive": {
+      "error_name": "Error",
+      "error_message": "checkpoint 'run_ts200_missing_directive' has no recoverable directive",
+      "checkpoint_unchanged": true
+    }
+  }
+}

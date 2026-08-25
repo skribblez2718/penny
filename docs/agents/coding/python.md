@@ -1,47 +1,50 @@
-# Python Coding Standards — Style, patterns, idioms, and testing
+# Python Coding Standards — Contracts, validation, and delivery gates
 
 ## What
 
-All retained Python utilities, services, watchers, and scripts follow these conventions. Skill orchestration is TypeScript-only.
+All retained Python utilities, services, watchers, and scripts use explicit, reviewable contracts. Type annotations, data models, validation, and tests reduce ambiguity for both human maintainers and AI-assisted changes. Skill orchestration remains TypeScript-only.
 
-## Why
+## Required toolchain
 
-Consistent style reduces cognitive load when reading code across skills. Agents writing Python must produce code that passes lint, format, and typecheck.
+1. **Lint passes with zero errors.** `bun run py:lint`
+2. **Format passes.** `bun run py:format:check`
+3. **Typecheck passes.** `bun run py:typecheck`
+4. **Tests pass.** Run focused pytest tests plus the applicable aggregate suite.
 
-## Rules
+Mypy is a delivery gate. Do not silence an error with an untyped definition, `Any`, or a blanket ignore when a concrete model or narrow protocol can express the contract.
 
-1. **Lint passes with zero errors.** `flake8 . --max-line-length=120 --extend-ignore=E203,E501,W503,W504`
-2. **Format passes.** `black . --config pyproject.toml`
-3. **Typecheck passes.** `mypy . --config-file pyproject.toml`
-4. **Do not implement skill workflows in Python.** `python-statemachine` remains permitted only for an independently owned Python subsystem such as the memory-canary authority FSM.
-5. **Use `pathlib.Path` for filesystem paths.** Not `os.path` or string concatenation.
-6. **Use dataclasses for state containers.** Not dicts with string keys.
-7. **Type hints on all public functions.** Return types required.
+## Type and model rules
 
-## Testing
+- Add parameter and return annotations to public functions, methods, and module-level callables. Annotate meaningful local boundaries when inference would hide a domain decision.
+- Use `@dataclass(frozen=True)` or a Pydantic model for durable domain/state records. Use `TypedDict` for dictionary-shaped interoperability data when a class model would add no behavior.
+- Model mutually exclusive states and results with tagged/discriminated unions (`Literal` tags plus dataclasses/Pydantic models), not a bag of optional dictionary keys.
+- Do not use `dict[str, Any]` as a substitute for a known model. If the shape is intentionally open, use `Mapping[str, object]` and document why.
+- Use `pathlib.Path` for filesystem paths, not `os.path` or string concatenation.
+- Do not implement skill workflows in Python. `python-statemachine` remains permitted only for independently owned Python subsystems such as the memory-canary authority FSM.
 
-- **pytest** for all Python tests
-- **Unit tests** per module in `tests/test_unit.py`
-- **Integration tests** in `tests/test_integration.py`
-- **E2E tests** in `tests/test_e2e.py`
-- **Run:** `python3 -m pytest tests/ -v`
+## Boundaries and validation
 
-## Constraints
+- Treat JSON, environment variables, subprocess output, files, HTTP payloads, queues, and plugin data as `object`/`Unknown` at entry.
+- Parse and validate once at the boundary with a Pydantic model, `TypeAdapter`, dataclass parser, or small explicit type guard. Return a contextual error on invalid input.
+- After validation, pass concrete domain models inward. Do not propagate unvalidated mappings through business logic.
+- `Any`, `typing.cast`, `# type: ignore`, and `# mypy: ignore-errors` are exceptional interoperability tools, not routine fixes. Keep an exception to one line or adapter, document its reason and removal condition, and add a test for the real boundary.
 
-- **No `console.log` equivalent.** Use the shared logger from `.pi/lib/logger/logger.ts` (TypeScript) or structured logging (Python).
-- **No hardcoded paths.** Use `pathlib.Path` relative to project root or configurable via env.
-- **No `sys.path` hacks for imports.** Use proper package structure.
+## Tests
+
+Test fakes should implement a narrow `Protocol` or a small concrete fake rather than a generic mock dictionary. Use real data models in fixtures when they cross a module boundary. A deliberately partial third-party fake is acceptable only at the test boundary and should name the unsupported surface.
+
+## Existing conventions
+
+- Use structured Python logging; do not use ad-hoc print debugging in retained runtime code.
+- Do not hardcode paths. Resolve them relative to project root or through explicit configuration.
+- Do not use `sys.path` hacks; use proper package structure.
 
 ## Verification
 
-- [ ] `flake8` passes with zero errors
-- [ ] `black --check` passes
-- [ ] `mypy` passes
-- [ ] All tests pass
-
-## Files
-
-| File             | Purpose                    |
-| ---------------- | -------------------------- |
-| `pyproject.toml` | Black, mypy, pytest config |
-| `.flake8`        | Flake8 config              |
+- [ ] `bun run py:lint` passes
+- [ ] `bun run py:format:check` passes
+- [ ] `bun run py:typecheck` passes
+- [ ] Focused pytest tests pass
+- [ ] Public APIs and durable state have explicit models/types
+- [ ] External data is validated before use
+- [ ] No broad `Any`, cast, or ignore bypasses a known contract

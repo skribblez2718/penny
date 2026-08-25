@@ -1,4 +1,4 @@
-"""Authorize only a synthetic copied/offline target for legacy bridge tests."""
+"""Authorize only a synthetic copied/offline target for the offline recovery tests."""
 
 from __future__ import annotations
 
@@ -40,7 +40,6 @@ for _name in (
     "PENNY_MEMORY_HUB_CONFIG",
 ):
     os.environ.pop(_name, None)
-os.environ["PENNY_MEMORY_BRIDGE_OFFLINE_COMPAT"] = "1"
 os.environ["PENNY_MEMORY_OFFLINE_TARGET"] = str(_OFFLINE_TARGET)
 os.environ["PENNY_MEMORY_OFFLINE_RECEIPT"] = str(_OFFLINE_RECEIPT)
 _SYSTEM_ROOT = str(Path(__file__).resolve().parents[2])

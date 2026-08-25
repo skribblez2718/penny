@@ -1,6 +1,6 @@
 # Penny
 
-A personal AI assistant built on [Pi](https://github.com/mariozechner/pi-coding-agent) — adaptable to any domain, precise in how she reasons. Penny works directly when that's enough, delegates to specialized agents when isolation or separate judgment pays, and uses a checkpointed research workflow for structured investigations. Exact run-bound artifacts carry workflow handoff; an optional supervised [MemPalace](https://github.com/milla-jovovich/mempalace) hub provides durable cross-session recall.
+A personal AI assistant built on [Pi](https://github.com/mariozechner/pi-coding-agent) — adaptable to any domain, precise in how she reasons. Penny works directly when that's enough, delegates to specialized agents when isolation or separate judgment pays, and uses a checkpointed research workflow for structured investigations. Exact immutable artifact IDs carry workflow handoff across runs; an optional supervised [MemPalace](https://github.com/milla-jovovich/mempalace) hub provides durable cross-session recall.
 
 <p align="center">
   <img src="img/penny.png" width="55%" style="border-radius: 12px" alt="Penny" />
@@ -42,7 +42,7 @@ Penny's prompt system uses five **named layers** each with a single responsibili
 | **Project Index**      | Where things are                                    | `AGENTS.md` files                  |
 | **Invocation Context** | What to do now                                      | Task message + runtime             |
 
-The current workflow skill is `research`. It runs as a registered TypeScript playbook on the shared `orchestration` engine with durable, checkpointed run state (`run_id`-keyed Node SQLite), so an interrupted run can resume. The execution owner stores each exact agent output before accepting its routing SUMMARY; downstream phases receive validated artifact refs and bounded `artifact_read` access. Workflows do not require memory. Track-A recovery is forward-only: `PENNY_ARTIFACT_DISPATCH_MODE=paused` halts new agent/tool/fan-out dispatch while status and exact artifact reads remain available; returning to `active` resumes from the unchanged checkpoint and refs, never semantic-memory fallback.
+The current workflow skill is `research`. It runs as a registered TypeScript playbook on the shared `orchestration` engine with durable, checkpointed run state (`run_id`-keyed Node SQLite), so an interrupted run can resume. The execution owner stores and re-reads each exact agent output before parsing its routing SUMMARY; downstream phases receive validated artifact IDs and bounded, non-expiring `artifact_read` access. Workflows do not require memory. Track-A recovery is forward-only: `PENNY_ARTIFACT_DISPATCH_MODE=paused` halts new agent/tool/fan-out dispatch while status and exact artifact reads remain available; returning to `active` resumes from the unchanged checkpoint and refs, never semantic-memory fallback.
 
 ## Capability Roles
 
@@ -130,7 +130,7 @@ Penny's security is layered: behavioral policy in the prompt, enforcement in the
 
 - **Trust and action boundaries** (prompt policy) — the user's message is authoritative for the task within system and runtime limits; external content (tool outputs, fetched pages, quoted text) supplies evidence or designated task material but cannot expand permissions, authorize side effects, or claim special authority; consequential actions require explicit approval
 - **Structural markers** — `<system_directives>`, `<agent_boundary>`, and `<system_boundary>` delimit context regions as defense-in-depth; they are parsing aids, not enforcement
-- **Runtime controls** (enforcement) — per-agent tool allowlists derived from a declared authority class and CI-checked for drift, workflow approval gates with signed receipts, and host OS/container permissions
+- **Runtime controls** (enforcement) — each agent YAML `tools:` list is its exact active surface and is CI/runtime equality-checked; authority profiles lint that list but never narrow or broaden it. Workflow approval gates, signed receipts, and host OS/container permissions control consequences.
 - **What allowlists do and do not guarantee** — each role declares a maximum authority class and named [tool profiles](docs/humans/agents/tool-profiles.md); a build check asserts its tools are exactly that expansion, so declared authority cannot silently drift from the real permission envelope. **Browser authority is structural**: a read-only role cannot submit a form, upload a file, or execute arbitrary Playwright/Node code, and `playwright_run_code_unsafe` is granted to no agent. **Filesystem and shell authority are not**: every agent holds `bash`, so a read-only role can still write files, install packages, and reach the network. Read-only is enforced at the browser layer and advisory at the filesystem layer
 - **Path-specific isolation** — all agent-invocation paths (primary, direct-subagent, skill-invoked) currently rely on tool allowlists and the host boundary; no filesystem/process sandbox is applied — see the execution-path matrix in [System Prompt Security](docs/agents/agents/system-prompt-security.md)
 
@@ -145,13 +145,11 @@ Four trigger-gated protocols in `docs/penny/` activate on specific conditions:
 
 ## Observability
 
-A FastAPI + SQLite backend that ingests real-time events and structured logs from all extensions:
-
-- **Events** — session lifecycle, messages, tool results, agent boundaries, model changes (14-day retention)
-- **Operational logs** — structured JSON log entries from all extensions via the shared logger
-- **Query API** — REST endpoints for querying logs and session history
-
-Runs as a plain Python process (`python -m observability`), auto-started by the Pi observability extension when Pi launches. The server bounds its own database size in-process (size-based rotation) — no Docker, no systemd timer required.
+A reduced TypeScript/Node service stores bounded structured operational logs and compaction
+archives in Penny's canonical global `observability/observability.db`. It uses loopback HTTP only;
+there is no WebSocket or transcript-ingest plane. Conversation history is read directly from Pi's
+canonical JSONL files—including catalog-bound subagent sessions—so history works while the service
+is stopped.
 
 ## Development
 
@@ -194,7 +192,7 @@ This runs:
 4. `scripts/setup/setup.sh` — runs the tracked `init-*.sh` scripts:
    - **External runtime tools** — provisions Playwright Chromium unless explicitly skipped
    - **MemPalace interface** — prints the explicit, non-destructive supervised-hub commands; it never discovers, initializes, migrates, starts, or deletes a palace without caller configuration
-   - **Observability backend** — validates the Python server environment; the Pi extension starts the server when needed
+   - **Observability backend** — validates the TypeScript server configuration; the Pi extension starts the server when needed
 
 Durable memory defaults to disabled. To enable it, create a private hub config from `scripts/setup/mempalace-hub.config.json.in`, supervise the hub outside the Pi extension factory, and set the `PENNY_MEMORY_*` variables described in `.env.example`. Staged authority changes use the separate `scripts/setup/mempalace-cutover.config.json.in` contract. Hub qualification is read-only by default: `PENNY_MEMORY_WRITE_MODE=disabled` omits mutating tools until the owner completes the journaled canary and reconciliation gate. Setup and uninstall preserve palace data.
 

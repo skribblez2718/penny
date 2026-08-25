@@ -20,19 +20,38 @@ import {
 } from "../src/playbooks/playbook.js";
 import { ResearchPlaybook } from "../src/playbooks/research.js";
 
+function terminal(met: boolean): Directive {
+  return {
+    schema_version: 2,
+    action: met ? "complete" : "cancelled",
+    identity: {
+      schema_version: 2,
+      run_id: "run_core_only",
+      session_id: "session_core_only",
+      playbook: "core-only",
+      engine_owner: "typescript",
+    },
+    status: met ? "complete" : "cancelled",
+    met,
+    result: { summary: met ? "core-only" : "cancelled" },
+    artifacts: [],
+    unresolved: [],
+  } satisfies Directive;
+}
+
 /** A playbook implementing the mandatory surface and nothing else. */
 class CoreOnlyPlaybook implements PlaybookCoreV1 {
   initialize(): Directive {
-    return { action: "complete", met: true, summary: "core-only" } as unknown as Directive;
+    return terminal(true);
   }
   dispatch(): Directive {
-    return { action: "complete", met: true, summary: "core-only" } as unknown as Directive;
+    return terminal(true);
   }
   resume(_context: RunContext, _response: JsonValue): Directive {
     return this.dispatch();
   }
   cancel(): Directive {
-    return { action: "complete", met: false, summary: "cancelled" } as unknown as Directive;
+    return terminal(false);
   }
   validateDetails(_state: string, details: Record<string, JsonValue>): Record<string, JsonValue> {
     return details;
@@ -49,15 +68,21 @@ class CoreOnlyPlaybook implements PlaybookCoreV1 {
   }
 }
 
+class AggregatingCorePlaybook extends CoreOnlyPlaybook {
+  aggregateBranches(): Record<string, JsonValue> {
+    return {};
+  }
+}
+
 describe("W1 capability probing", () => {
   it("detects both capabilities on the reference playbook", () => {
-    const research = new ResearchPlaybook() as PlaybookV1;
+    const research: PlaybookV1 = new ResearchPlaybook();
     expect(hasFanAggregate(research)).toBe(true);
     expect(hasMalformedReissue(research)).toBe(true);
   });
 
   it("detects the absence of both capabilities on a core-only playbook", () => {
-    const core = new CoreOnlyPlaybook() as PlaybookV1;
+    const core: PlaybookV1 = new CoreOnlyPlaybook();
     expect(hasFanAggregate(core)).toBe(false);
     expect(hasMalformedReissue(core)).toBe(false);
   });
@@ -65,10 +90,7 @@ describe("W1 capability probing", () => {
   it("probes structurally, never by playbook identity", () => {
     // A bare object with the right shape must satisfy the probe: the engine asks
     // "can you aggregate?", not "are you research?".
-    const duck = {
-      ...new CoreOnlyPlaybook(),
-      aggregateBranches: () => ({}),
-    } as unknown as PlaybookV1;
+    const duck: PlaybookV1 = new AggregatingCorePlaybook();
     expect(hasFanAggregate(duck)).toBe(true);
     expect(hasMalformedReissue(duck)).toBe(false);
   });

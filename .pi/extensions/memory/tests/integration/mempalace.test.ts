@@ -4,12 +4,43 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { MemoryMcpClient } from "../../index.js";
 import { MemoryLogstreamClient } from "../../logstream-client.js";
+import { isRecord, parseJson, requireDefined } from "../../../../lib/tests/test-narrowers.js";
 import { TEST_TOKEN, testConfig } from "../fixtures.js";
+
+interface McpRequestBody {
+  jsonrpc: "2.0";
+  id: unknown;
+  method: "tools/call";
+  params: {
+    name: string;
+    arguments: Record<string, unknown>;
+  };
+}
+
+function parseMcpRequestBody(text: string): McpRequestBody {
+  const value = parseJson(text);
+  if (
+    !isRecord(value) ||
+    value.jsonrpc !== "2.0" ||
+    value.method !== "tools/call" ||
+    !isRecord(value.params) ||
+    typeof value.params.name !== "string" ||
+    !isRecord(value.params.arguments)
+  ) {
+    throw new Error("fixture server received an invalid MCP request body");
+  }
+  return {
+    jsonrpc: value.jsonrpc,
+    id: value.id,
+    method: value.method,
+    params: { name: value.params.name, arguments: value.params.arguments },
+  };
+}
 
 interface SeenRequest {
   authorization?: string;
   path?: string;
-  body?: Record<string, any>;
+  body?: McpRequestBody;
 }
 
 let closeServer: (() => Promise<void>) | undefined;
@@ -20,9 +51,10 @@ beforeEach(async () => {
   seen = [];
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     const chunks: Buffer[] = [];
-    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
     request.on("end", () => {
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      // The local fixture server accepts only the MCP request emitted by the client under test.
+      const body = parseMcpRequestBody(Buffer.concat(chunks).toString("utf8"));
       seen.push({
         authorization: request.headers.authorization,
         path: request.url,
@@ -82,9 +114,10 @@ describe("hermetic HTTP-only MemPalace adapter integration", () => {
 
     expect(result.payload.results).toHaveLength(1);
     expect(seen).toHaveLength(1);
-    expect(seen[0]!.path).toBe("/mcp");
-    expect(seen[0]!.authorization).toBe(`Bearer ${TEST_TOKEN}`);
-    expect(seen[0]!.body).toMatchObject({
+    const request = requireDefined(seen[0], "memory search request was not received");
+    expect(request.path).toBe("/mcp");
+    expect(request.authorization).toBe(`Bearer ${TEST_TOKEN}`);
+    expect(request.body).toMatchObject({
       jsonrpc: "2.0",
       method: "tools/call",
       params: {
@@ -92,7 +125,8 @@ describe("hermetic HTTP-only MemPalace adapter integration", () => {
         arguments: { query: "fixture", limit: 1 },
       },
     });
-    expect(String(seen[0]!.body!.id)).toMatch(/^platform-memory-/);
+    const body = requireDefined(request.body, "memory search request body was absent");
+    expect(String(body.id)).toMatch(/^platform-memory-/);
   });
 
   it("posts the local advisory list surface through the same authenticated HTTP hub", async () => {
@@ -116,9 +150,10 @@ describe("hermetic HTTP-only MemPalace adapter integration", () => {
 
     expect(result.payload).toEqual({ events: [], count: 0 });
     expect(seen).toHaveLength(1);
-    expect(seen[0]!.path).toBe("/mcp");
-    expect(seen[0]!.authorization).toBe(`Bearer ${TEST_TOKEN}`);
-    expect(seen[0]!.body).toMatchObject({
+    const request = requireDefined(seen[0], "advisory list request was not received");
+    expect(request.path).toBe("/mcp");
+    expect(request.authorization).toBe(`Bearer ${TEST_TOKEN}`);
+    expect(request.body).toMatchObject({
       jsonrpc: "2.0",
       method: "tools/call",
       params: {
@@ -133,6 +168,7 @@ describe("hermetic HTTP-only MemPalace adapter integration", () => {
         },
       },
     });
-    expect(String(seen[0]!.body!.id)).toMatch(/^penny-memory-logstream-/);
+    const body = requireDefined(request.body, "advisory list request body was absent");
+    expect(String(body.id)).toMatch(/^penny-memory-logstream-/);
   });
 });

@@ -2,7 +2,7 @@ import { closeSync, chmodSync, existsSync, openSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync as DatabaseSyncType, SQLOutputValue } from "node:sqlite";
 
-import { assertOwnerDirectory, assertOwnerFile, fsyncDirectory } from "@penny/orchestration";
+import { assertOwnerDirectory, assertOwnerFile, fsyncDirectory } from "@penny/orchestration/source";
 
 const sqlite = process.getBuiltinModule("node:sqlite");
 

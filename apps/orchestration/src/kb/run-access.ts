@@ -26,7 +26,7 @@ export function requireKbRunAccess(
     run.identity.run_id !== expected.runId ||
     run.identity.playbook !== "knowledge-base" ||
     run.identity.session_id !== expected.sessionId ||
-    String(run.playbookData.profile_id ?? "") !== expected.profileId
+    String(run.knowledgeBaseData.profile_id ?? "") !== expected.profileId
   ) {
     throw new KbRunAccessError();
   }
@@ -35,7 +35,7 @@ export function requireKbRunAccess(
 
 /** Recheck that registry remapping cannot redirect a run to another KB identity. */
 export function requireKbRunIdentityCurrent(run: RunContext, kbRoot: string): void {
-  const admittedKbId = String(run.playbookData.kb_id ?? "");
+  const admittedKbId = String(run.knowledgeBaseData.kb_id ?? "");
   if (admittedKbId.length === 0 || readManifest(kbRoot).kb_id !== admittedKbId) {
     throw new KbRunAccessError();
   }
@@ -55,7 +55,7 @@ export function requireKbCurrentParent(
 /** Recheck the admitted policy for every nonterminal status/resume continuation. */
 export function requireKbRunPolicyCurrent(run: RunContext, kbRoot: string): void {
   if (["complete", "incomplete", "error", "cancelled"].includes(run.status)) return;
-  const admittedPolicySha256 = String(run.playbookData.admitted_policy_sha256 ?? "");
+  const admittedPolicySha256 = String(run.knowledgeBaseData.admitted_policy_sha256 ?? "");
   if (admittedPolicySha256.length === 0) {
     throw new PolicyRefusal("policy_changed", "the run has no admitted policy binding");
   }

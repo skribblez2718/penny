@@ -16,7 +16,9 @@ vi.mock("fs/promises", () => ({
   stat: vi.fn(),
 }));
 
-import { readdir, stat } from "fs/promises";
+import type { NonSharedBuffer } from "node:buffer";
+import type { Dirent } from "node:fs";
+import { readdir } from "fs/promises";
 
 // Color constants (Atom One Dark)
 const COLORS = {
@@ -56,6 +58,17 @@ function getContextBarColor(pct: number): string {
   }
 
   return `\x1b[38;2;${r};${g};${b}m`;
+}
+
+function expectAnsiTrueColor(color: string): void {
+  const prefix = "\x1b[38;2;";
+  expect(color.startsWith(prefix)).toBe(true);
+  expect(color.endsWith("m")).toBe(true);
+  const channels = color.slice(prefix.length, -1).split(";");
+  expect(channels).toHaveLength(3);
+  for (const channel of channels) {
+    expect(Number.isInteger(Number(channel))).toBe(true);
+  }
 }
 
 function formatTokens(count: number): string {
@@ -112,7 +125,7 @@ describe("getContextBarColor", () => {
   it("should return yellowish for medium context (50%)", () => {
     const color = getContextBarColor(50);
     // Should be in transition from green to yellow to red
-    expect(color).toMatch(/\x1b\[38;2;\d+;\d+;\d+m/);
+    expectAnsiTrueColor(color);
   });
 
   it("should return reddish for high context (100%)", () => {
@@ -126,9 +139,7 @@ describe("getContextBarColor", () => {
     const colors = [0, 25, 33, 50, 66, 75, 100].map((pct) => getContextBarColor(pct));
 
     // All should be valid ANSI color codes
-    colors.forEach((color) => {
-      expect(color).toMatch(/\x1b\[38;2;\d+;\d+;\d+m/);
-    });
+    colors.forEach(expectAnsiTrueColor);
   });
 });
 
@@ -262,30 +273,45 @@ describe("Directory Scanning", () => {
     vi.clearAllMocks();
   });
 
+  function fakeDirent(name: string, isDirectory: boolean): Dirent<NonSharedBuffer> {
+    return {
+      name: Buffer.from(name),
+      parentPath: "/test",
+      isDirectory: () => isDirectory,
+      isFile: () => !isDirectory,
+      isBlockDevice: () => false,
+      isCharacterDevice: () => false,
+      isSymbolicLink: () => false,
+      isFIFO: () => false,
+      isSocket: () => false,
+    };
+  }
+
   it("should identify skill directories", async () => {
     vi.mocked(readdir).mockResolvedValueOnce([
-      { name: "skill1", isDirectory: () => true } as any,
-      { name: "skill2", isDirectory: () => true } as any,
-      { name: "file.txt", isDirectory: () => false } as any,
+      fakeDirent("skill1", true),
+      fakeDirent("skill2", true),
+      fakeDirent("file.txt", false),
     ]);
 
-    vi.mocked(stat).mockResolvedValue({} as any);
-
     // Simulate scanning
-    const entries = await readdir("/test/skills");
-    const dirs = entries.filter((e: any) => e.isDirectory?.());
+    const entries = await readdir("/test/skills", { withFileTypes: true, encoding: "buffer" });
+    const dirs = entries.filter((entry) => entry.isDirectory());
     expect(dirs.length).toBe(2);
   });
 
   it("should identify extension directories", async () => {
     vi.mocked(readdir).mockResolvedValueOnce([
-      { name: "memory", isDirectory: () => true } as any,
-      { name: "search", isDirectory: () => true } as any,
-      { name: "index.ts", isDirectory: () => false } as any,
+      fakeDirent("memory", true),
+      fakeDirent("search", true),
+      fakeDirent("index.ts", false),
     ]);
 
-    const entries = await readdir("/test/extensions");
-    const dirs = entries.filter((e: any) => e.isDirectory?.());
+    const entries = await readdir("/test/extensions", {
+      withFileTypes: true,
+      encoding: "buffer",
+    });
+    const dirs = entries.filter((entry) => entry.isDirectory());
     expect(dirs.length).toBe(2);
   });
 

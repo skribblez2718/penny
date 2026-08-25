@@ -14,6 +14,16 @@ import {
 } from "../../src/index.js";
 import { ALPHA_TOKEN, isolatedConfig } from "../fixtures.js";
 
+function invokeUnchecked(
+  client: PlatformMemoryClientV1,
+  operation: string,
+  input: Record<string, unknown>
+): Promise<unknown> {
+  const result: unknown = Reflect.apply(client.invoke, client, [operation, input]);
+  if (!(result instanceof Promise)) throw new Error("platform memory invocation was not async");
+  return result;
+}
+
 describe("contract v1 configuration", () => {
   it("accepts only the three explicit modes and keeps none inert", async () => {
     const none = validatePlatformMemoryConfigV1({
@@ -168,9 +178,9 @@ describe("narrow operation policy", () => {
           return Promise.resolve(new Response("unexpected"));
         }) as typeof fetch,
       });
-      await expect(
-        client.invoke(operation as never, {} as Record<string, unknown>)
-      ).rejects.toMatchObject({ code: "MEMORY_OPERATION_FORBIDDEN" });
+      await expect(invokeUnchecked(client, operation, {})).rejects.toMatchObject({
+        code: "MEMORY_OPERATION_FORBIDDEN",
+      });
       expect(fetched).toBe(false);
     }
   );

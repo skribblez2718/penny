@@ -10,6 +10,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  createTestExtensionApi,
+  createTestToolInfos,
+  isRecord,
+} from "../../../../lib/tests/test-narrowers.js";
+
 const { mockSpawn } = vi.hoisted(() => ({
   mockSpawn: vi.fn(),
 }));
@@ -18,32 +24,20 @@ vi.mock("node:child_process", () => ({
   spawn: mockSpawn,
 }));
 
-vi.mock("@mariozechner/pi-ai", () => ({
+vi.mock("@earendil-works/pi-ai", () => ({
   StringEnum: (values: readonly string[], options?: Record<string, unknown>) => ({
     anyOf: values.map((value) => ({ type: "string", const: value })),
     ...options,
   }),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@earendil-works/pi-coding-agent")>()),
   getMarkdownTheme: () => ({}),
   withFileMutationQueue: vi.fn((_path: string, fn: () => unknown) => fn()),
-  parseFrontmatter: <T extends Record<string, string>>(content: string) => {
-    const match = content.match(/^---\n([\s\S]*?)\n---/);
-    if (!match) return { frontmatter: {} as T, body: content };
-    const frontmatter: Record<string, string> = {};
-    for (const line of match[1].split("\n")) {
-      const field = line.match(/^(\w+):\s*(.+)$/);
-      if (field) frontmatter[field[1]] = field[2].trim();
-    }
-    return {
-      frontmatter: frontmatter as T,
-      body: content.replace(/^---\n[\s\S]*?\n---\n?/, ""),
-    };
-  },
 }));
 
-vi.mock("@mariozechner/pi-tui", () => ({
+vi.mock("@earendil-works/pi-tui", () => ({
   Container: class ContainerMock {
     addChild() {}
   },
@@ -54,12 +48,26 @@ vi.mock("@mariozechner/pi-tui", () => ({
   },
 }));
 
+interface CatalogToolResult {
+  isError: boolean;
+  content: Array<{ type: string; text: string }>;
+  details: {
+    error: {
+      code: string;
+      kind: string;
+      retryable: boolean;
+      registeredCatalogDigest: string;
+      executionCatalogDigest: string;
+    };
+    results: unknown[];
+  };
+}
+
 type RegisteredTool = {
   description: string;
   promptSnippet: string;
-  promptGuidelines: string[];
   parameters: unknown;
-  execute: (...args: any[]) => Promise<any>;
+  execute: (...args: unknown[]) => Promise<CatalogToolResult>;
 };
 
 let projectRoot: string;
@@ -81,16 +89,29 @@ function writeAgent(name: string, description: string): void {
   );
 }
 
+function isRegisteredTool(value: unknown): value is RegisteredTool {
+  return (
+    isRecord(value) &&
+    typeof value.description === "string" &&
+    typeof value.promptSnippet === "string" &&
+    value.parameters !== undefined &&
+    typeof value.execute === "function"
+  );
+}
+
 async function reloadAndRegister(): Promise<RegisteredTool> {
   vi.resetModules();
   let registered: RegisteredTool | undefined;
   const extension = await import("../../index.js");
-  extension.default({
-    registerTool: (tool: RegisteredTool) => {
-      registered = tool;
-    },
-    on: () => {},
-  } as never);
+  extension.default(
+    createTestExtensionApi({
+      getAllTools: () => createTestToolInfos(["read", "grep"]),
+      onRegisterTool(tool) {
+        if (!isRegisteredTool(tool)) throw new Error("subagent registered an invalid tool");
+        registered = tool;
+      },
+    })
+  );
   if (!registered) throw new Error("subagent tool was not registered");
   return registered;
 }
@@ -114,14 +135,13 @@ afterEach(() => {
 });
 
 describe("catalog reload and re-registration", () => {
-  it("refreshes enum, provider description, snippet, and guidelines from a mutated catalog", async () => {
+  it("refreshes the enum, provider description, and snippet from a mutated catalog", async () => {
     const before = await reloadAndRegister();
 
     expect(schemaText(before)).toContain("alpha");
     expect(schemaText(before)).not.toContain("beta");
     expect(before.description).toContain("alpha: Initial alpha specialty");
     expect(before.promptSnippet).toContain("alpha");
-    expect(before.promptGuidelines.join("\n")).toContain("alpha: Initial alpha specialty");
 
     writeAgent("alpha", "Reloaded alpha specialty");
     writeAgent("beta", "New beta specialty");
@@ -135,8 +155,6 @@ describe("catalog reload and re-registration", () => {
     expect(after.description).not.toContain("Initial alpha specialty");
     expect(after.promptSnippet).toContain("alpha");
     expect(after.promptSnippet).toContain("beta");
-    expect(after.promptGuidelines.join("\n")).toContain("alpha: Reloaded alpha specialty");
-    expect(after.promptGuidelines.join("\n")).toContain("beta: New beta specialty");
   });
 
   it("returns a typed reload-required catalog-drift error before executing a newly added schema-rejected agent", async () => {

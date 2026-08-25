@@ -1,3 +1,4 @@
+import { registerTool } from "../../../lib/pi-tool-registration.js";
 /**
  * Evaluate & Wait Tools
  *
@@ -6,8 +7,8 @@
  * Translated from MCP: evaluate.ts, wait.ts
  */
 
-import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BrowserManager } from "../browser.js";
 import type { PlaywrightConfig } from "../types.js";
 
@@ -17,20 +18,12 @@ export function registerEvaluateTools(pi: ExtensionAPI, _config: PlaywrightConfi
   // ==========================================================================
   // playwright_evaluate
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_evaluate",
     label: "Evaluate JavaScript",
     description:
       "Execute JavaScript in the browser page context. Returns the result. Use for data extraction, DOM inspection, and interacting with page JavaScript. Runs in browser sandbox (no Node.js access).",
     promptSnippet: "Execute JavaScript in the page",
-    promptGuidelines: [
-      "Use playwright_evaluate to extract data, inspect the DOM, or interact with page JavaScript.",
-      "The expression runs in the browser context — use document, window, etc.",
-      "For extracting element data: document.querySelector('...').textContent",
-      "For structured data: JSON.parse(document.querySelector('#data').textContent)",
-      "Results are JSON-serialized. Functions and DOM elements become 'undefined'.",
-      "Security: browser sandbox only. Cannot access Node.js APIs or filesystem.",
-    ],
     parameters: Type.Object({
       expression: Type.String({
         description:
@@ -45,21 +38,25 @@ export function registerEvaluateTools(pi: ExtensionAPI, _config: PlaywrightConfi
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const expression = params.expression as string;
-      const selector = params.selector as string | undefined;
+      const expression = params.expression;
+      const selector = params.selector;
 
       try {
         let result: unknown;
         if (selector) {
           const locator = page.locator(selector).first();
           result = await locator.evaluate((el, expr) => {
-            const fn = eval(`(${expr})`);
-            return typeof fn === "function" ? fn(el) : fn;
+            const isCallable = (value: unknown): value is (...args: unknown[]) => unknown =>
+              typeof value === "function";
+            const evaluated: unknown = eval(`(${expr})`);
+            return isCallable(evaluated) ? evaluated(el) : evaluated;
           }, expression);
         } else {
           result = await page.evaluate((expr) => {
-            const fn = eval(`(${expr})`);
-            return typeof fn === "function" ? fn() : fn;
+            const isCallable = (value: unknown): value is (...args: unknown[]) => unknown =>
+              typeof value === "function";
+            const evaluated: unknown = eval(`(${expr})`);
+            return isCallable(evaluated) ? evaluated() : evaluated;
           }, expression);
         }
 
@@ -92,61 +89,58 @@ export function registerEvaluateTools(pi: ExtensionAPI, _config: PlaywrightConfi
   // ==========================================================================
   // playwright_wait_for
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_wait_for",
     label: "Wait For",
     description:
       "Wait for a condition on the page: an element to appear/disappear, text to appear, or a specified amount of time.",
     promptSnippet: "Wait for element or time on the page",
-    promptGuidelines: [
-      "Use playwright_wait_for to pause until the page is ready for interaction.",
-      "Wait for elements to appear after navigation or dynamic loading.",
-      "Use text mode to wait for specific content to appear/disappear.",
-      "Use time mode for simple delays (use sparingly — prefer element-based waiting).",
-    ],
-    parameters: Type.Object({
-      mode: Type.Union([Type.Literal("selector"), Type.Literal("text"), Type.Literal("time")], {
-        description: "Wait mode",
+    parameters: Type.Union([
+      Type.Object({
+        mode: Type.Literal("selector", { description: "Wait mode" }),
+        selector: Type.String({ description: "CSS selector to wait for" }),
+        state: Type.Optional(
+          Type.Union([
+            Type.Literal("visible"),
+            Type.Literal("hidden"),
+            Type.Literal("attached"),
+            Type.Literal("detached"),
+          ])
+        ),
+        timeout: Type.Optional(
+          Type.Number({ description: "Maximum wait timeout in ms (default: 30000)" })
+        ),
       }),
-      selector: Type.Optional(
-        Type.String({ description: "CSS selector to wait for (mode: selector)" })
-      ),
-      state: Type.Optional(
-        Type.Union([
-          Type.Literal("visible"),
-          Type.Literal("hidden"),
-          Type.Literal("attached"),
-          Type.Literal("detached"),
-        ])
-      ),
-      text: Type.Optional(
-        Type.String({ description: "Text to wait for to appear or disappear (mode: text)" })
-      ),
-      textGone: Type.Optional(
-        Type.Boolean({
-          description: "Wait for text to disappear (mode: text, default: false)",
-        })
-      ),
-      ms: Type.Optional(
-        Type.Number({
-          description: "Milliseconds to wait (mode: time, max: 60000)",
-          minimum: 0,
-          maximum: 60000,
-        })
-      ),
-      timeout: Type.Optional(
-        Type.Number({ description: "Maximum wait timeout in ms (default: 30000)" })
-      ),
-    }),
+      Type.Object({
+        mode: Type.Literal("text", { description: "Wait mode" }),
+        text: Type.String({ description: "Text to wait for to appear or disappear" }),
+        textGone: Type.Optional(
+          Type.Boolean({ description: "Wait for text to disappear (default: false)" })
+        ),
+        timeout: Type.Optional(
+          Type.Number({ description: "Maximum wait timeout in ms (default: 30000)" })
+        ),
+      }),
+      Type.Object({
+        mode: Type.Literal("time", { description: "Wait mode" }),
+        ms: Type.Optional(
+          Type.Number({
+            description: "Milliseconds to wait (default: 1000, max: 60000)",
+            minimum: 0,
+            maximum: 60000,
+          })
+        ),
+      }),
+    ]),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const mode = params.mode as string;
-      const timeout = (params.timeout as number) ?? 30000;
+      const mode = params.mode;
+      const timeout = "timeout" in params ? (params.timeout ?? 30000) : 30000;
       const start = Date.now();
 
       try {
         if (mode === "time") {
-          const ms = (params.ms as number) ?? 1000;
+          const ms = params.ms ?? 1000;
           await page.waitForTimeout(ms);
           return {
             content: [{ type: "text", text: `Waited ${ms}ms` }],
@@ -155,10 +149,10 @@ export function registerEvaluateTools(pi: ExtensionAPI, _config: PlaywrightConfi
         }
 
         if (mode === "selector") {
-          const selector = params.selector as string;
-          const state = (params.state as string) ?? "visible";
+          const selector = params.selector;
+          const state = params.state ?? "visible";
           await page.waitForSelector(selector, {
-            state: state as "attached" | "detached" | "visible" | "hidden",
+            state,
             timeout,
           });
           const elapsed = Date.now() - start;
@@ -174,8 +168,8 @@ export function registerEvaluateTools(pi: ExtensionAPI, _config: PlaywrightConfi
         }
 
         if (mode === "text") {
-          const text = params.text as string;
-          const gone = (params.textGone as boolean) ?? false;
+          const text = params.text;
+          const gone = params.textGone ?? false;
           if (gone) {
             await page.waitForFunction((t) => !document.body.textContent?.includes(t), text, {
               timeout,

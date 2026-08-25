@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   artifactDispatchControl,
+  isArtifactDispatchPause,
   localArtifactDispatchPause,
   parseArtifactDispatchPause,
 } from "../../dispatch-control.js";
@@ -32,7 +33,8 @@ describe("artifact dispatch control", () => {
       artifactDispatchControl({ PENNY_ARTIFACT_DISPATCH_MODE: "paused" }),
       { state_id: "researching", session_id: "session-1", run_id: "run-1" }
     );
-    expect(parseArtifactDispatchPause(pause)).toEqual(pause);
+    expect(isArtifactDispatchPause(pause)).toBe(true);
+    expect(parseArtifactDispatchPause(pause)).toBe(pause);
     expect(pause).toMatchObject({
       schema_version: 1,
       action: "paused",
@@ -57,11 +59,11 @@ describe("artifact dispatch control", () => {
     expect(() => parseArtifactDispatchPause({ ...pause, semantic_payload: "forbidden" })).toThrow(
       /unknown or malformed/
     );
-    expect(() =>
-      parseArtifactDispatchPause({
-        ...pause,
-        recovery: { ...pause.recovery, checkpoint_preserved: false },
-      })
-    ).toThrow(/recovery directive/);
+    const invalidRecovery = {
+      ...pause,
+      recovery: { ...pause.recovery, checkpoint_preserved: false },
+    };
+    expect(isArtifactDispatchPause(invalidRecovery)).toBe(false);
+    expect(() => parseArtifactDispatchPause(invalidRecovery)).toThrow(/recovery directive/);
   });
 });

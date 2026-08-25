@@ -6,7 +6,7 @@ Independently verify that every material claim in the synthesis is grounded in a
 
 ## Exact artifact handoff
 
-The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` before judging. Use the exact synthesis and research artifacts, plus any critique artifact supplied, as the complete predecessor set. Do not discover predecessors through another channel.
+The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` before judging. Use the exact synthesis and research artifacts, plus any critique artifact supplied, as the complete predecessor set. Do not discover predecessors through another channel. If a required ID/path is absent, return `missing_input:`.
 
 Put the complete claim-to-source verification report in your response. The execution owner captures that response as the stage artifact. Do not claim artifact persistence or registration. `SUMMARY` is routing data only.
 

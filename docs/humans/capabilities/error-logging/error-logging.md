@@ -38,7 +38,7 @@ Extension code calls createLogger("memory")
 Logger builds a structured entry with code, level, context
          │
          ▼
-Observability extension sends the entry over WebSocket as event: "log"
+Shared logger sends the entry to the loopback `/logs` HTTP endpoint
          │
          ▼
 Observability server receives, parses, and writes to SQLite logs table
@@ -47,11 +47,11 @@ Observability server receives, parses, and writes to SQLite logs table
 Logs become queryable via REST API and Penny tools
 ```
 
-The logger is transparent to the extension developer. Once an extension imports `createLogger`, every log call is automatically forwarded to the observability server whenever the WebSocket is connected.
+The logger is transparent to the extension developer. Once an extension imports `createLogger`, eligible entries use the bounded HTTP transport with a circuit breaker when the service is unavailable.
 
 ## Retention and Cleanup
 
-Logs are useful for days, not forever. The observability server keeps structured logs for a default retention period and runs scheduled cleanup to remove older entries. This balances investigative power with storage growth.
+The TypeScript service enforces a bounded row cap and bounded WAL. It prunes oldest structured logs in-process and checkpoints on clean shutdown.
 
 ## Querying Logs
 

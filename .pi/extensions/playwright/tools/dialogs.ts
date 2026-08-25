@@ -1,3 +1,4 @@
+import { registerTool } from "../../../lib/pi-tool-registration.js";
 /**
  * Dialogs, Console & Network Tools
  *
@@ -6,8 +7,8 @@
  * Translated from MCP: dialogs.ts, console.ts, network.ts
  */
 
-import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Dialog, ConsoleMessage, Request, Response } from "playwright";
 import { BrowserManager } from "../browser.js";
 import type { PlaywrightConfig } from "../types.js";
@@ -18,17 +19,12 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
   // ==========================================================================
   // playwright_handle_dialog
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_handle_dialog",
     label: "Handle Dialog",
     description:
       "Accept or dismiss a browser dialog (alert, confirm, prompt, beforeunload). Use this when the page shows a JavaScript dialog that blocks interaction.",
     promptSnippet: "Accept or dismiss a browser dialog",
-    promptGuidelines: [
-      "Use playwright_handle_dialog when the page shows an alert(), confirm(), or prompt() dialog.",
-      "Dialogs block page interaction — handle them before other tools will work.",
-      "For prompt dialogs, provide promptText to fill in the response.",
-    ],
     parameters: Type.Object({
       action: Type.Union([Type.Literal("accept"), Type.Literal("dismiss")], {
         description: "Accept or dismiss the dialog",
@@ -41,7 +37,7 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const action = params.action as string;
+      const action = params.action;
       const timeoutMs = 10000;
 
       try {
@@ -71,7 +67,7 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
               message: dialog.message(),
             };
             if (action === "accept") {
-              await dialog.accept((params.promptText as string) ?? "");
+              await dialog.accept(params.promptText ?? "");
             } else {
               await dialog.dismiss();
             }
@@ -97,7 +93,7 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
           },
         };
       } catch (err) {
-        if ((err as Error).message === "timeout") {
+        if (err instanceof Error && err.message === "timeout") {
           return {
             content: [
               {
@@ -124,18 +120,12 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
   // ==========================================================================
   // playwright_console_messages
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_console_messages",
     label: "Console Messages",
     description:
       "Capture console messages from the page (log, error, warn, info, debug). Use this for debugging JavaScript execution and viewing page errors.",
     promptSnippet: "View browser console messages",
-    promptGuidelines: [
-      "Use playwright_console_messages to see what the page's JavaScript logged.",
-      "Particularly useful for debugging JS errors and tracking execution.",
-      "Messages are captured from page load — call this after interactions to see new messages.",
-      "For security testing: check for JS errors that may indicate vulnerable code paths.",
-    ],
     parameters: Type.Object({
       level: Type.Optional(
         Type.Union([
@@ -156,8 +146,8 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const level = params.level as string | undefined;
-      const limit = (params.limit as number) ?? 50;
+      const level = params.level;
+      const limit = params.limit ?? 50;
 
       try {
         // Playwright doesn't expose past console messages via the API. Instead we
@@ -217,18 +207,12 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
   // ==========================================================================
   // playwright_network_requests
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_network_requests",
     label: "Network Requests",
     description:
-      "List network requests made by the page with filtering options. Use this to inspect API calls, track resources, and debug network activity.",
+      "Capture a brief, forward-looking sample of page network requests with optional resource-type filtering. Start this tool before the interaction whose API calls you need to observe; use playwright_network_request afterward for timing and size details of a discovered URL.",
     promptSnippet: "View page network requests",
-    promptGuidelines: [
-      "Use playwright_network_requests to inspect what API calls the page makes.",
-      "For security testing: look for sensitive data in request URLs, missing auth headers, etc.",
-      "Requests are captured from this point forward — call before interacting to capture all requests.",
-      "Filter by resource type to focus on XHR/fetch calls vs. images/scripts.",
-    ],
     parameters: Type.Object({
       resourceTypes: Type.Optional(
         Type.Array(
@@ -256,8 +240,8 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const types = params.resourceTypes as string[] | undefined;
-      const limit = (params.limit as number) ?? 50;
+      const types = params.resourceTypes;
+      const limit = params.limit ?? 50;
 
       try {
         const requests: Array<{
@@ -269,7 +253,7 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
 
         const handler = (request: Request) => {
           const resourceType = request.resourceType();
-          if (!types || types.includes(resourceType)) {
+          if (!types || types.some((type) => type === resourceType)) {
             requests.push({
               url: request.url(),
               method: request.method(),
@@ -330,17 +314,12 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
   // ==========================================================================
   // playwright_network_request (single request details)
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_network_request",
     label: "Network Request Details",
     description:
-      "Get detailed information about a specific network request, including headers, response body, and timing.",
+      "Return browser performance timing and transfer-size details for the first resource URL containing a pattern. Use playwright_network_requests first to discover the relevant URL; this tool does not return request headers or response bodies.",
     promptSnippet: "View details of a specific network request",
-    promptGuidelines: [
-      "Use playwright_network_requests first to find the request URL you want to inspect.",
-      "Provides full request/response headers and body preview.",
-      "For security testing: inspect auth tokens, session cookies, API response data.",
-    ],
     parameters: Type.Object({
       urlPattern: Type.String({
         description: "URL or pattern to match the request (partial match)",
@@ -348,13 +327,16 @@ export function registerDialogNetworkTools(pi: ExtensionAPI, _config: Playwright
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const urlPattern = params.urlPattern as string;
+      const urlPattern = params.urlPattern;
 
       try {
         const details = await page.evaluate((pattern) => {
           // Access performance API entries
-          const entries = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
-          const matches = entries.filter((e) => e.name.includes(pattern));
+          const entries = performance.getEntriesByType("resource");
+          const matches = entries.filter(
+            (entry): entry is PerformanceResourceTiming =>
+              entry instanceof PerformanceResourceTiming && entry.name.includes(pattern)
+          );
 
           if (matches.length === 0) return null;
 

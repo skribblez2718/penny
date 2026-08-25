@@ -31,9 +31,11 @@ import {
   type SaveQueryClaimState,
   type Sha256Hex,
 } from "./contracts.js";
+import { kbHostStatePaths } from "./host-state.js";
 import { OwnerSqliteDatabase } from "./owner-sqlite.js";
 
 const SAVE_CLAIM_DATABASE = "claims.sqlite";
+const PROFILE_ID = /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 
 type SaveClaimLastTransition = "release" | "invalidate" | "answer_drift";
 
@@ -68,6 +70,10 @@ export type SaveClaimRefusalCode =
 
 function isLegacySaveClaimAuthorityFile(name: string): boolean {
   return name.endsWith(".json") || name.includes(".json.tmp-");
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "undefined";
 }
 
 function requiredText(row: Record<string, SQLOutputValue>, field: string): string {
@@ -174,7 +180,7 @@ export class SaveQueryClaimStore implements Disposable {
       storage?.close();
       throw new SaveClaimError(
         "claim_malformed",
-        `save claim store failed closed: ${(error as Error).message}`
+        `save claim store failed closed: ${errorMessage(error)}`
       );
     }
     this.storage = storage;
@@ -554,7 +560,7 @@ export class SaveQueryClaimStore implements Disposable {
       if (error instanceof SaveClaimError) throw error;
       throw new SaveClaimError(
         "claim_malformed",
-        `save claim custody failed closed: ${(error as Error).message}`
+        `save claim custody failed closed: ${errorMessage(error)}`
       );
     }
   }
@@ -566,7 +572,7 @@ export class SaveQueryClaimStore implements Disposable {
       if (error instanceof SaveClaimError) throw error;
       throw new SaveClaimError(
         "claim_malformed",
-        `save claim transaction failed closed: ${(error as Error).message}`
+        `save claim transaction failed closed: ${errorMessage(error)}`
       );
     }
   }
@@ -590,7 +596,7 @@ export class SaveQueryClaimStore implements Disposable {
 
   private indexedFromRow(row: Record<string, SQLOutputValue>): IndexedSaveClaim {
     const queryRunId = requiredText(row, "query_run_id");
-    const state = requiredText(row, "state") as SaveQueryClaimState;
+    const stateValue = requiredText(row, "state");
     const saveRunId = optionalText(row, "save_run_id");
     const saveTransactionId = optionalText(row, "save_transaction_id");
     const lastSaveRunId = optionalText(row, "last_save_run_id");
@@ -620,12 +626,13 @@ export class SaveQueryClaimStore implements Disposable {
       kb_id: requiredText(row, "kb_id"),
       answer_artifact_id: requiredText(row, "answer_artifact_id"),
       answer_sha256: requiredText(row, "answer_sha256"),
-      state,
+      state: stateValue,
       ...(saveRunId !== undefined ? { save_run_id: saveRunId } : {}),
       ...(saveTransactionId !== undefined ? { save_transaction_id: saveTransactionId } : {}),
       created_at: requiredText(row, "created_at"),
       updated_at: requiredText(row, "updated_at"),
     });
+    const state: SaveQueryClaimState = claim.state;
     const ownedState = state === "claimed" || state === "commit_reserved" || state === "consumed";
     if (
       (ownedState && (saveRunId === undefined || saveTransactionId === undefined)) ||
@@ -712,9 +719,12 @@ export class SaveQueryClaimStore implements Disposable {
   }
 }
 
-/** The owner-only claim directory for one profile, outside the KB root. */
+/** The catalog-bound owner-only claim directory for one profile. */
 export function saveClaimStoreDir(projectRoot: string, profileId: string): string {
-  return path.join(projectRoot, ".penny", "kb-save-claims", profileId);
+  if (!PROFILE_ID.test(profileId)) {
+    throw new SaveClaimError("claim_malformed", "KB profile id is not canonical");
+  }
+  return path.join(kbHostStatePaths(projectRoot).saveClaims, profileId);
 }
 
 /** §5.6 closed validation for the public `save` request. */

@@ -17,11 +17,11 @@ Validates:
      on noise.
   5. NEIGHBOR COUNT    — at most 3, so descriptions carry semantic coordinates rather
      than an exhaustive negative enumeration of the whole roster.
-  6. DESCRIPTION BUDGET — hard fail above 1024 (the runtime truncates silently, which
-     removes the tail, which is exactly where the disambiguating anti-cases live);
-     warn above 600, because every description competes for the same model attention
-     during agent and skill selection.
-  7. TRANSFORMATION    — must be a domain-free `input → output` statement.
+  6. ROUTING DESCRIPTION — requires a positive use trigger and an anti-case clause.
+  7. DESCRIPTION BUDGET — hard fail above 1024 (the runtime truncates silently, which
+     removes the tail, exactly where disambiguating anti-cases live); warn above the
+     preferred 500-character target while allowing justified longer descriptions.
+  8. TRANSFORMATION    — must be a domain-free `input → output` statement.
 
 Exits 0 if all pass, 1 if any fail. Warnings do not fail the build.
 
@@ -41,8 +41,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 AGENTS_DIR = PROJECT_ROOT / ".pi" / "agents"
 
 DESCRIPTION_HARD_LIMIT = 1024
-DESCRIPTION_SOFT_LIMIT = 600
+DESCRIPTION_PREFERRED_LIMIT = 500
 MAX_NEIGHBORS = 3
+POSITIVE_TRIGGER = re.compile(r"\buse\s+(?:when|for|to|if|on)\b", re.IGNORECASE)
+ANTI_CASE = re.compile(r"\b(?:do not use|don't use|do not apply|avoid using)\b", re.IGNORECASE)
 
 REQUIRED = [
     "name",
@@ -110,19 +112,26 @@ def check_fields(agent: str, fm: Dict[str, str]) -> List[str]:
     return errors
 
 
-def check_description(agent: str, fm: Dict[str, str]) -> (List[str], List[str]):
+def check_description(agent: str, fm: Dict[str, str]) -> tuple[List[str], List[str]]:
     errors: List[str] = []
     warnings: List[str] = []
-    length = len(fm.get("description", ""))
+    description = fm.get("description", "")
+    length = len(description)
+    if not POSITIVE_TRIGGER.search(description):
+        errors.append(
+            f"{agent}: description needs a positive routing clause such as 'Use when/for/to …'"
+        )
+    if not ANTI_CASE.search(description):
+        errors.append(f"{agent}: description needs an anti-case clause such as 'Do not use …'")
     if length > DESCRIPTION_HARD_LIMIT:
         errors.append(
             f"{agent}: description is {length} chars, above the hard limit of "
             f"{DESCRIPTION_HARD_LIMIT} (the runtime truncates silently)"
         )
-    elif length > DESCRIPTION_SOFT_LIMIT:
+    elif length > DESCRIPTION_PREFERRED_LIMIT:
         warnings.append(
-            f"{agent}: description is {length} chars, above the soft target of "
-            f"{DESCRIPTION_SOFT_LIMIT}"
+            f"{agent}: description is {length} chars, above the preferred target of "
+            f"{DESCRIPTION_PREFERRED_LIMIT}; retain the extra text only when it improves routing"
         )
     return errors, warnings
 

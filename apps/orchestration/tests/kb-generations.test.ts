@@ -1,8 +1,17 @@
+import { requireValue } from "./helpers/narrowing.js";
 /**
  * KB generations tests (G7, §5.10).
  */
 
-import { chmodSync, linkSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  linkSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -14,25 +23,14 @@ import {
   sha256Hex,
   type KbManifest,
   type KbPolicy,
-  type Sha256Hex,
 } from "../src/kb/contracts.js";
-import {
-  writeManifest,
-  writePolicy,
-  writeSourceObject,
-  writeSourceRecord,
-  writePageRevision,
-  writeConflictRecord,
-  generationIndexPath,
-  type GenerationCatalog,
-} from "../src/kb/filesystem.js";
+import { writeManifest, writePolicy, generationIndexPath } from "../src/kb/filesystem.js";
 import {
   buildCatalog,
   buildGenerationIndex,
   newGenerationId,
   publishGeneration,
   readSelectedGeneration,
-  rebuildRootIndex,
   GenerationError,
 } from "../src/kb/generations.js";
 
@@ -47,7 +45,6 @@ afterEach(() => {
 });
 
 const NOW = "2026-01-01T00:00:00Z";
-const ZERO = "0".repeat(64);
 
 function seedKb(root: string): { manifest: KbManifest; policy: KbPolicy } {
   const manifest: KbManifest = {
@@ -101,8 +98,14 @@ describe("KB §5.10 generation publication", () => {
 
     const selected = readSelectedGeneration(root);
     expect(selected).toBeDefined();
-    expect(selected!.selector.generation_id).toBe(genId);
-    expect(selected!.catalog.generation_id).toBe(genId);
+    expect(
+      requireValue(selected, "apps/orchestration/tests/kb-generations.test.ts:104").selector
+        .generation_id
+    ).toBe(genId);
+    expect(
+      requireValue(selected, "apps/orchestration/tests/kb-generations.test.ts:105").catalog
+        .generation_id
+    ).toBe(genId);
   });
 
   it("returns undefined when no generation has been published", () => {
@@ -129,7 +132,7 @@ describe("KB §5.10 generation publication", () => {
     publishGeneration(root, catalog);
     const indexPath = path.join(root, "index.md");
     expect(statSync(indexPath).isFile()).toBe(true);
-    const content = require("node:fs").readFileSync(indexPath, "utf8");
+    const content = readFileSync(indexPath, "utf8");
     expect(content).toContain("kb_001");
     expect(content).toContain("Generation:");
   });
@@ -170,8 +173,14 @@ describe("KB §5.10 generation publication", () => {
     publishGeneration(root, gen2);
 
     const selected = readSelectedGeneration(root);
-    expect(selected!.selector.generation_id).toBe(gen2.generation_id);
-    expect(selected!.catalog.parent_generation_id).toBe(gen1.generation_id);
+    expect(
+      requireValue(selected, "apps/orchestration/tests/kb-generations.test.ts:173").selector
+        .generation_id
+    ).toBe(gen2.generation_id);
+    expect(
+      requireValue(selected, "apps/orchestration/tests/kb-generations.test.ts:174").catalog
+        .parent_generation_id
+    ).toBe(gen1.generation_id);
   });
 
   it("rejects a generation index with a non-0600 mode", () => {
@@ -255,6 +264,9 @@ describe("KB §5.10 generation publication", () => {
     });
     publishGeneration(root, catalog);
     const selected = readSelectedGeneration(root);
-    expect(selected!.selector.catalog_sha256).toBe(sha256Hex(canonicalJson(catalog)));
+    expect(
+      requireValue(selected, "apps/orchestration/tests/kb-generations.test.ts:258").selector
+        .catalog_sha256
+    ).toBe(sha256Hex(canonicalJson(catalog)));
   });
 });

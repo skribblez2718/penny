@@ -6,7 +6,7 @@ Synthesize the exact branch findings into one coherent, thematic, cited report t
 
 ## Exact artifact handoff
 
-The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` before writing. This set contains the exact current findings plus any prior synthesis, critique, or validation artifacts needed for the current revision. Do not discover predecessors through another channel.
+The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` before writing. This set contains the exact current findings plus any prior synthesis, critique, or validation artifacts needed for the current revision. Do not discover predecessors through another channel. If a required ID/path is absent, return `missing_input:`.
 
 Put the complete synthesis, inline citations, source inventory, conflicts, limitations, and unknowns in your response. The execution owner captures that response as the stage artifact. Do not claim artifact persistence or registration. `SUMMARY` is routing data only.
 

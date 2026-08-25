@@ -1,4 +1,4 @@
-# Carren — KB lint (semantic review)
+# Anonymous private worker — KB lint (semantic review)
 
 ## Mission
 

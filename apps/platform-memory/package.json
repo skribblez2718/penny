@@ -23,7 +23,7 @@
     "test:unit": "vitest run --config tests/vitest.config.ts",
     "test:integration": "vitest run --config tests/vitest.integration.config.ts",
     "test:clean-machine": "vitest run --config tests/vitest.clean-machine.config.ts",
-    "test:all": "bun run lint && bun run format:check && bun run typecheck && bun run test:unit && bun run test:integration && bun run test:clean-machine"
+    "test:all": "bun run typecheck && bun run lint && bun run format:check && bun run test:unit && bun run test:integration && bun run test:clean-machine"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

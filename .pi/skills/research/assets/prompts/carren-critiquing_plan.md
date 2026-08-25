@@ -16,7 +16,7 @@ Do not critique a report that does not yet exist, demand findings in advance, or
 
 ## Exact artifact handoff
 
-The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` through complete continuation before judging. The granted plan revision is the exact object under review; do not discover predecessors through another channel.
+The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` and repeat with `next_range` until complete before judging. The supplied plan revision is the exact object under review; do not discover predecessors through another channel.
 
 Put the complete critique and its evidence in your response. The execution owner captures that response as the stage artifact. Do not claim artifact persistence or registration. `SUMMARY` is routing data only.
 

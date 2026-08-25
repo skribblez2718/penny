@@ -13,6 +13,7 @@
  * a hard failure, and the diagram updates in the same change as the machine.
  */
 
+import { parseJson, requireArray, requireRecord } from "./helpers/narrowing.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -105,9 +106,71 @@ function extractConst(source: string, name: string): string {
   return raw;
 }
 
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalBoolean(value: unknown): value is boolean | undefined {
+  return value === undefined || typeof value === "boolean";
+}
+
+function isOptionalStringArray(value: unknown): value is string[] | undefined {
+  return (
+    value === undefined ||
+    (Array.isArray(value) && value.every((entry) => typeof entry === "string"))
+  );
+}
+
+function requireDiagramNode(value: unknown, label: string): DiagramNode {
+  const node = requireRecord(value, label);
+  if (
+    !isOptionalString(node["title"]) ||
+    !isOptionalString(node["desc"]) ||
+    !isOptionalString(node["who"]) ||
+    !isOptionalString(node["badge"]) ||
+    !isOptionalStringArray(node["decisions"]) ||
+    !isOptionalBoolean(node["host_only"])
+  ) {
+    throw new Error(`${label} has malformed node fields`);
+  }
+  return node;
+}
+
+function requireDiagramEdge(value: unknown, label: string): DiagramEdge {
+  const edge = requireRecord(value, label);
+  if (
+    typeof edge["from"] !== "string" ||
+    typeof edge["to"] !== "string" ||
+    typeof edge["kind"] !== "string" ||
+    !isOptionalString(edge["label"]) ||
+    !isOptionalBoolean(edge["bounded"])
+  ) {
+    throw new Error(`${label} has malformed edge fields`);
+  }
+  return {
+    ...edge,
+    from: edge["from"],
+    to: edge["to"],
+    kind: edge["kind"],
+    ...(edge["label"] === undefined ? {} : { label: edge["label"] }),
+    ...(edge["bounded"] === undefined ? {} : { bounded: edge["bounded"] }),
+  };
+}
+
 const html = readFileSync(FLOW_HTML, "utf8");
-const N = JSON.parse(extractConst(html, "N")) as Record<string, DiagramNode>;
-const E = JSON.parse(extractConst(html, "E")) as DiagramEdge[];
+const nodeDocument = requireRecord(parseJson(extractConst(html, "N")), "diagram nodes");
+const N: Record<string, DiagramNode> = Object.fromEntries(
+  Object.entries(nodeDocument).map(([id, value]) => [id, requireDiagramNode(value, `node ${id}`)])
+);
+const E: DiagramEdge[] = requireArray(parseJson(extractConst(html, "E")), "diagram edges").map(
+  (value, index) => requireDiagramEdge(value, `edge ${index}`)
+);
+
+function requireNode(id: string): DiagramNode {
+  const node = N[id];
+  if (node === undefined) throw new Error(`flow diagram node '${id}' is missing`);
+  return node;
+}
 
 const nodeIds = Object.keys(N);
 const edgeKey = (e: { from: string; to: string }): string => `${e.from}→${e.to}`;
@@ -120,8 +183,9 @@ describe("flow-diagrams (KB, §5.12)", () => {
     expect(nodeIds.length).toBe(new Set(nodeIds).size); // no duplicate states
     expect(E.length).toBeGreaterThan(0);
     for (const id of nodeIds) {
-      expect(N[id].title, `node '${id}' needs a title`).toBeTruthy();
-      expect(N[id].desc, `node '${id}' needs a description`).toBeTruthy();
+      const node = requireNode(id);
+      expect(node.title, `node '${id}' needs a title`).toBeTruthy();
+      expect(node.desc, `node '${id}' needs a description`).toBeTruthy();
     }
     for (const edge of E) {
       expect(nodeIds, `edge ${edgeKey(edge)}: '${edge.from}' has no node`).toContain(edge.from);
@@ -151,13 +215,16 @@ describe("flow-diagrams (KB, §5.12)", () => {
 
   it("classifies every edge with the descriptor's kind", () => {
     const kindMap = new Map(KB_FLOW.edges.map((e) => [edgeKey(e), e.kind]));
-    const diagramKinds: Record<string, string> = { forward: "fwd", repair: "loop", gate: "gate" };
+    const diagramKinds = {
+      forward: "fwd",
+      repair: "loop",
+      gate: "gate",
+    } as const satisfies Record<"forward" | "repair" | "gate", string>;
     for (const edge of E) {
       const expected = kindMap.get(edgeKey(edge));
-      expect(
-        expected,
-        `described edge ${edgeKey(edge)} has no kind in the descriptor`
-      ).toBeDefined();
+      if (expected === undefined) {
+        throw new Error(`described edge ${edgeKey(edge)} has no kind in the descriptor`);
+      }
       const allowed =
         expected === "terminal"
           ? ["exit", "abort"] // the two terminal routes (publish / deny)
@@ -171,22 +238,25 @@ describe("flow-diagrams (KB, §5.12)", () => {
 
   it("shows the gate node with its host-only decisions", () => {
     for (const gate of KB_FLOW.gates) {
-      const node = N[gate.state];
-      expect(node, `gate state '${gate.state}' is missing from the diagram`).toBeDefined();
-      expect(N[gate.state].badge).toBe("HITL");
-      expect([...(node.decisions ?? [])].sort()).toEqual([...gate.decisions].sort());
+      const node = requireNode(gate.state);
+      expect(node.badge).toBe("HITL");
+      if (node.decisions === undefined) {
+        throw new Error(`gate state '${gate.state}' has no decisions`);
+      }
+      expect([...node.decisions].sort()).toEqual([...gate.decisions].sort());
       expect(node.host_only).toBe(true);
     }
     // And exactly one gate state.
-    const gateNodes = nodeIds.filter((id) => N[id].badge === "HITL");
+    const gateNodes = nodeIds.filter((id) => requireNode(id).badge === "HITL");
     expect(gateNodes).toEqual(KB_FLOW.gates.map((g) => g.state));
   });
 
   it("binds every agent node to its SSOT agent", () => {
     for (const state of KB_FLOW.states) {
       if (state.kind !== "agent" || state.agent === undefined) continue;
-      expect(N[state.id].who, `node '${state.id}' must name its agent`).toBe(state.agent);
-      expect(N[state.id].cls).toBe(state.agent);
+      const node = requireNode(state.id);
+      expect(node.who, `node '${state.id}' must name its agent`).toBe(state.agent);
+      expect(node.cls).toBe(state.agent);
     }
   });
 
@@ -268,16 +338,43 @@ describe("flow-diagrams (KB, §5.12)", () => {
 });
 
 const researchHtml = readFileSync(RESEARCH_FLOW_HTML, "utf8");
+
+function requireCapture(match: RegExpMatchArray, label: string): string {
+  const capture = match[1];
+  if (capture === undefined) throw new Error(`research flow is missing ${label}`);
+  return capture;
+}
+
+function requireSegment(source: string, startMarker: string, endMarker: string): string {
+  const afterStart = source.split(startMarker, 2)[1];
+  if (afterStart === undefined) throw new Error(`research flow is missing '${startMarker}'`);
+  const segment = afterStart.split(endMarker, 1)[0];
+  if (segment === undefined) throw new Error(`research flow is missing '${endMarker}'`);
+  return segment;
+}
+
 function researchDiagram(): { states: Set<string>; edges: Set<string> } {
-  const nodeSegment = researchHtml.split("const N", 2)[1]?.split("const E", 1)[0] ?? "";
-  const edgeSegment = researchHtml.split("const E", 2)[1]?.split("];", 1)[0] ?? "";
+  const nodeSegment = requireSegment(researchHtml, "const N", "const E");
+  const edgeSegment = requireSegment(researchHtml, "const E", "];");
   const states = new Set(
-    [...nodeSegment.matchAll(/^\s{2,}([A-Za-z_]\w*)\s*:\s*\{/gm)].map((match) => match[1])
+    [...nodeSegment.matchAll(/^\s{2,}([A-Za-z_]\w*)\s*:\s*\{/gm)].map((match) =>
+      requireCapture(match, "node id")
+    )
   );
-  const from = [...edgeSegment.matchAll(/\bfrom\s*:\s*'([A-Za-z_]\w*)'/g)].map((match) => match[1]);
-  const to = [...edgeSegment.matchAll(/\bto\s*:\s*'([A-Za-z_]\w*)'/g)].map((match) => match[1]);
+  const from = [...edgeSegment.matchAll(/\bfrom\s*:\s*'([A-Za-z_]\w*)'/g)].map((match) =>
+    requireCapture(match, "edge source")
+  );
+  const to = [...edgeSegment.matchAll(/\bto\s*:\s*'([A-Za-z_]\w*)'/g)].map((match) =>
+    requireCapture(match, "edge target")
+  );
   if (from.length !== to.length) throw new Error("research flow has an unpaired edge");
-  return { states, edges: new Set(from.map((source, index) => `${source}→${to[index]}`)) };
+  const edges = new Set<string>();
+  for (const [index, source] of from.entries()) {
+    const target = to[index];
+    if (target === undefined) throw new Error(`research flow edge ${index} has no target`);
+    edges.add(`${source}→${target}`);
+  }
+  return { states, edges };
 }
 
 describe("flow-diagrams (research)", () => {

@@ -1,74 +1,85 @@
 # Dependency Management
 
-## Node.js (npm/bun)
+## JavaScript and TypeScript: one Bun workspace
 
-Each extension manages its own dependencies:
+Run dependency operations from the repository root so the root `bun.lock` remains authoritative:
 
 ```bash
-# Install dependencies for an extension
-cd .pi/extensions/memory
 bun install
-
-# Add a dependency
-bun install <package>
-
-# Add a dev dependency
-bun install -D <package>
+(cd .pi/extensions/<name> && bun add <package>)
+(cd .pi/extensions/<name> && bun add --dev <package>)
 ```
 
-## Python (uv)
+Do not use npm or Yarn and do not create an extension-local `package-lock.json`. Every extension is a
+root workspace package with its own `package.json`, even when it has no dependencies. The manifest
+prevents package commands from walking up to the workspace root and recursively invoking a root loop.
 
-Always use `uv` for Python dependency management:
+## Extension manifests
 
-```bash
-# Create virtual environment
-uv venv .venv
-
-# Activate virtual environment
-source .venv/bin/activate
-
-# Install dependencies
-uv pip install -r requirements.txt
-
-# Install dev dependencies
-uv pip install -r requirements-dev.txt
-
-# Install a package
-uv pip install <package>
-
-# Sync from requirements
-uv pip sync requirements.txt
-```
-
-### Why uv?
-
-- 10-100x faster than pip
-- Deterministic dependency resolution
-- Better error messages
-- Compatible with pip commands
-
-## package.json (Mandatory)
-
-Every extension **must** have its own `package.json` — even extensions with zero dependencies. This prevents `bun` from walking up to the workspace root and causing infinite recursion in workspace-level loop scripts. See [Extension Standard](extension-standard.md#why-packagejson-is-mandatory) for the full rationale.
-
-Each extension should have these scripts:
+Each extension manifest provides at least:
 
 ```json
 {
+  "name": "@penny/<name>-extension",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
   "scripts": {
-    "lint": "eslint . --ext .ts",
-    "lint:fix": "eslint . --ext .ts --fix",
-    "format": "prettier --write \"**/*.{ts,js,json,md}\"",
-    "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
-    "test": "vitest run --config tests/vitest.config.ts",
+    "typecheck": "tsc -p tsconfig.json",
     "test:unit": "vitest run --config tests/vitest.config.ts",
-    "test:integration": "vitest run --config tests/vitest.integration.config.ts",
-    "test:all": "bun run lint && bun run format:check && bun run test:unit",
-    "test:watch": "vitest --config tests/vitest.config.ts"
+    "test:all": "bun run typecheck && bun run test:unit"
   },
-  "devDependencies": {
-    "vitest": "^2.1.0",
-    "@sinclair/typebox": "^0.34.0"
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   }
 }
 ```
+
+The exact script names after `typecheck` vary with the suites a package actually owns. The permanent
+requirements are:
+
+- `test:all` runs typecheck before tests;
+- every test/smoke file is matched by a real Vitest configuration reachable from `test:all`;
+- every used supported Pi package and `typebox` appears in `peerDependencies` with the exact range
+  `"*"`;
+- those Pi/TypeBox peer packages do not also appear in the extension's `dependencies` or
+  `devDependencies`;
+- extension-owned runtime dependencies may remain in `dependencies`;
+- root `devDependencies` pin every used Pi SDK package, `typebox`, and TypeScript to exact versions for
+  workspace typechecking.
+
+The supported Pi packages are `@earendil-works/pi-agent-core`, `@earendil-works/pi-ai`,
+`@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui`. Import TypeBox from `typebox`, never
+`@sinclair/typebox`.
+
+The dynamic architecture guard checks imports, manifest placement, peer ranges, root pins,
+strict/no-emit projects, typecheck-first `test:all`, workspace files, and prohibited package locks.
+See the [Extension Standard](extension-standard.md) for the complete authoring contract.
+
+## Verification
+
+```bash
+bun run typescript:inventory
+bun run typescript:architecture
+bun run lint
+bun run typecheck
+bun run test:typescript
+```
+
+These commands discover the live owned TypeScript inventory; there is no static file count or normal
+migration baseline. Use `make verify-publication` for the aggregate local publication gate.
+
+## Python: uv
+
+Use `uv` and the repository lock/configuration for Python dependency management:
+
+```bash
+uv venv .venv
+uv sync --extra dev
+source .venv/bin/activate
+```
+
+Add or remove Python packages through `pyproject.toml`, then refresh `uv.lock` with `uv`. Do not install
+project packages globally or maintain parallel `requirements.txt` state unless a separately supported
+distribution surface requires it.

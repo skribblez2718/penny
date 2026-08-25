@@ -18,7 +18,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Sequence, Tuple
+from typing import Any, Callable, Optional, Sequence, Tuple, TypedDict
 
 _HERMETIC = [
     "--no-session",
@@ -30,6 +30,13 @@ _HERMETIC = [
     "--no-tools",
 ]
 _CONFIDENCE = ("CERTAIN", "PROBABLE", "POSSIBLE", "UNCERTAIN")
+
+
+class DetectionResult(TypedDict):
+    ok: bool
+    answer: object | None
+    evidence: list[str]
+    confidence: str
 
 
 def _split_spec(spec: str) -> Tuple[str, str]:
@@ -135,7 +142,7 @@ def detect(
     runner: Optional[Callable] = None,
     timeout_s: int = 45,
     max_artifact_chars: int = 8000,
-) -> Dict[str, Any]:
+) -> DetectionResult:
     """Detect an answer about ``artifact`` with a model (#8).
 
     Returns ``{"ok", "answer", "evidence", "confidence"}``. ``ok`` is False (and
@@ -143,7 +150,12 @@ def detect(
     When ``labels`` is given the model is offered that soft menu (plus "other").
     Never raises.
     """
-    fail = {"ok": False, "answer": None, "evidence": [], "confidence": "UNCERTAIN"}
+    fail: DetectionResult = {
+        "ok": False,
+        "answer": None,
+        "evidence": [],
+        "confidence": "UNCERTAIN",
+    }
     if not model_spec:
         return fail
     menu = ""

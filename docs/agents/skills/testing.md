@@ -42,6 +42,6 @@ bun run --cwd .pi/extensions/compaction test:unit
 - [ ] Exact artifact revisions and signed receipts
 - [ ] Restart and compaction recovery
 - [ ] Parallel branch identity and concurrency bounds
-- [ ] Chain target-run ingress artifacts
+- [ ] Direct cross-run terminal-ID handoff plus additional explicit fan-in IDs
 - [ ] Cancellation and dispatch pause
 - [ ] Package surface and clean pack

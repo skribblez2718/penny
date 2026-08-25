@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { isRecord } from "../../../../lib/tests/test-narrowers.js";
+
 import {
   HARD_MAX_ESTIMATED_TOKENS,
   HARD_MAX_RESULT_BYTES,
@@ -12,15 +14,67 @@ import {
 import { MemoryAdapter, createMemoryExtension } from "../../index.js";
 import { createPrimaryMemoryTools } from "../../tools.js";
 import {
+  asMemoryExtensionApi,
   extensionEnv,
   mcpResponse,
   mcpToolErrorResponse,
+  parseTextResult,
   requestBody,
+  requireDefined,
   testConfig,
+  type MemoryExtensionApiFake,
+  type MemoryExtensionHandler,
+  type RegisteredMemoryTool,
 } from "../fixtures.js";
 
-function parseResult(result: { content: Array<{ text: string }> }) {
-  return JSON.parse(result.content[0]!.text) as Record<string, any>;
+type RegisteredToolPayload =
+  | {
+      ok: false;
+      type: "memory_error";
+      error: { code: string; retryable: boolean };
+    }
+  | {
+      ok: true;
+      type: "memory_exact";
+      content: string;
+      truncated: false;
+    }
+  | {
+      ok: true;
+      type: "memory_exact";
+      content: string;
+      truncated: true;
+      continuation: { cursor: string };
+    };
+
+function isRegisteredToolPayload(value: unknown): value is RegisteredToolPayload {
+  if (!isRecord(value)) return false;
+  if (value.ok === false && value.type === "memory_error") {
+    return (
+      isRecord(value.error) &&
+      typeof value.error.code === "string" &&
+      typeof value.error.retryable === "boolean"
+    );
+  }
+  if (
+    value.ok !== true ||
+    value.type !== "memory_exact" ||
+    typeof value.content !== "string" ||
+    typeof value.truncated !== "boolean"
+  ) {
+    return false;
+  }
+  return (
+    value.truncated === false ||
+    (isRecord(value.continuation) && typeof value.continuation.cursor === "string")
+  );
+}
+
+function parseResult(result: { content: Array<{ type: "text"; text: string }> }) {
+  const value = parseTextResult(result);
+  if (!isRegisteredToolPayload(value))
+    throw new Error("registered memory tool returned invalid JSON");
+  return value;
 }
 
 describe("actual registered Pi tool result path", () => {
@@ -39,8 +93,9 @@ describe("actual registered Pi tool result path", () => {
       telemetry,
     }).find((tool) => tool.name === "memory_search");
     expect(search).toBeDefined();
+    const registeredSearch = requireDefined(search, "memory_search tool was not created");
 
-    const result = await search!.execute("tool-error", { query: "fixture" });
+    const result = await registeredSearch.execute("tool-error", { query: "fixture" });
     const payload = parseResult(result);
 
     expect(result.isError).toBe(true);
@@ -81,19 +136,23 @@ describe("actual registered Pi tool result path", () => {
       PENNY_TOOL_RESULT_MAX_CHARACTERS: String(HARD_MAX_RESULT_CHARACTERS),
       PENNY_TOOL_RESULT_MAX_TOKENS: String(HARD_MAX_ESTIMATED_TOKENS),
     });
-    const tools = new Map<string, any>();
-    const handlers = new Map<string, (...args: any[]) => Promise<void>>();
-    const pi = {
-      registerTool(tool: { name: string }) {
+    const tools = new Map<string, RegisteredMemoryTool>();
+    const handlers = new Map<string, MemoryExtensionHandler>();
+    const pi: MemoryExtensionApiFake = {
+      registerTool(tool) {
         tools.set(tool.name, tool);
       },
       registerCommand: vi.fn(),
-      on(event: string, handler: (...args: any[]) => Promise<void>) {
+      on(event, handler) {
         handlers.set(event, handler);
       },
     };
-    createMemoryExtension({ env, fetch: fetchSpy as typeof fetch })(pi as any);
-    await handlers.get("session_start")!(
+    createMemoryExtension({ env, fetch: fetchSpy as typeof fetch })(asMemoryExtensionApi(pi));
+    const sessionStart = requireDefined(
+      handlers.get("session_start"),
+      "session_start handler was not registered"
+    );
+    await sessionStart(
       {},
       {
         sessionManager: { getSessionId: () => "registered-tool-session" },
@@ -102,6 +161,7 @@ describe("actual registered Pi tool result path", () => {
 
     const get = tools.get("memory_get_drawer");
     expect(get).toBeDefined();
+    if (get === undefined) throw new Error("memory_get_drawer was not registered");
     const budget = resolveToolResultBudget(env);
     const chunks: Buffer[] = [];
     let maximumObservedTokens = 0;
@@ -123,6 +183,7 @@ describe("actual registered Pi tool result path", () => {
       );
       const page = parseResult(result);
       expect(page.type).toBe("memory_exact");
+      if (page.type !== "memory_exact") throw new Error("expected an exact memory page");
       chunks.push(Buffer.from(page.content, "utf8"));
       if (!page.truncated) break;
       cursor = page.continuation.cursor;

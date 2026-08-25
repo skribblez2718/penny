@@ -1,3 +1,4 @@
+import { requireValue } from "./helpers/narrowing.js";
 /**
  * §5.11 `promote` — prepare and verify only (§6.2A step 8).
  *
@@ -9,7 +10,7 @@
  * preimages captured, named revisions checked against the selected generation.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,6 +20,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { validatePromoteRequest, verifyPromotionCandidate } from "../src/kb/promote.js";
 import { initKb } from "../src/kb/workflows.js";
 import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
+import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 import { claimCapabilities, mintSourceCapability } from "../src/kb/gate.js";
 import { CapabilityStore, envelopeDigest, mintEnvelope } from "../src/kb/capabilities.js";
 import { sha256Hex } from "../src/kb/contracts.js";
@@ -100,6 +102,7 @@ describe("promote request (§5.6 closed shape)", () => {
 /** A KB with one published page, and a canonical target file + capability. */
 async function kbWithPageAndTarget() {
   const projectRoot = tmp("penny-kb-promote");
+  installTestProjectState(projectRoot);
   const kbRoot = path.join(projectRoot, ".penny", "kb", PROFILE);
   initKb({ kbRoot, profileId: PROFILE, runId: "run_init" }, "Promote KB");
 
@@ -194,10 +197,22 @@ async function kbWithPageAndTarget() {
   approveIngest({ kbRoot, profileId: PROFILE, runId: "run_seed", checkpointer }, [source], {
     runId: "run_seed",
     sourceIds: [sourceId],
-    claimsArtifactId: byKind.claims!,
-    pageDraftArtifactId: byKind.page_draft!,
-    lintReportArtifactId: byKind.lint_report!,
-    verificationArtifactId: byKind.verification_report!,
+    claimsArtifactId: requireValue(
+      byKind.claims,
+      "apps/orchestration/tests/kb-promote.test.ts:199"
+    ),
+    pageDraftArtifactId: requireValue(
+      byKind.page_draft,
+      "apps/orchestration/tests/kb-promote.test.ts:200"
+    ),
+    lintReportArtifactId: requireValue(
+      byKind.lint_report,
+      "apps/orchestration/tests/kb-promote.test.ts:201"
+    ),
+    verificationArtifactId: requireValue(
+      byKind.verification_report,
+      "apps/orchestration/tests/kb-promote.test.ts:202"
+    ),
   });
 
   // A canonical target the operator has authorized for promotion.
@@ -248,7 +263,10 @@ describe("host verification (§5.11) — the host's own finding, not a child's c
 
     expect(report.verified).toBe(true);
     expect(report.findings).toEqual([]);
-    const target = report.targets[0]!;
+    const target = requireValue(
+      report.targets[0],
+      "apps/orchestration/tests/kb-promote.test.ts:253"
+    );
     expect(Object.keys(target).sort()).toEqual(["capability_id", "preimage_sha256"]);
     // The preimage is what a later apply would have to still find in place.
     const actual = createHash("sha256").update(readFileSync(kb.targetPath)).digest("hex");
@@ -319,7 +337,11 @@ describe("host verification (§5.11) — the host's own finding, not a child's c
     });
     expect(report.targets.map((target) => target.capability_id)).toEqual(requested);
     expect(report.targets[0]).toEqual({ capability_id: "cap_does_not_exist" });
-    expect(report.targets[1]?.preimage_sha256).toBe(sha256Hex(readFileSync(kb.targetPath)));
+    const admittedTarget = report.targets[1];
+    if (admittedTarget === undefined) throw new Error("admitted target is missing from the report");
+    expect(admittedTarget.preimage_sha256).toBe(
+      createHash("sha256").update(readFileSync(kb.targetPath)).digest("hex")
+    );
     expect(JSON.stringify(report)).not.toContain(kb.targetDir);
     expect(JSON.stringify(report)).not.toContain(kb.targetPath);
     expect(() =>
@@ -351,6 +373,13 @@ describe("host verification (§5.11) — the host's own finding, not a child's c
     });
     expect(readFileSync(kb.targetPath, "utf8")).toBe(before);
     // And the KB's own selected generation is untouched by preparing.
-    expect(Object.keys(readSelectedGeneration(kb.kbRoot)!.catalog.pages)).toEqual(["page_quorum"]);
+    expect(
+      Object.keys(
+        requireValue(
+          readSelectedGeneration(kb.kbRoot),
+          "apps/orchestration/tests/kb-promote.test.ts:360"
+        ).catalog.pages
+      )
+    ).toEqual(["page_quorum"]);
   });
 });

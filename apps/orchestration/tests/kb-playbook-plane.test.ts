@@ -1,3 +1,4 @@
+import { requireValue } from "./helpers/narrowing.js";
 import { randomUUID } from "node:crypto";
 /**
  * KB playbook ↔ real ingest plane integration (§6.2 step 2).
@@ -12,7 +13,7 @@ import { randomUUID } from "node:crypto";
  * model.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -37,13 +38,14 @@ function installTestPolicy(kbRoot: string): void {
     allowed_child_models: [{ ...PARENT, locality: "local" }],
   });
 }
+import type { ArtifactKind } from "../src/kb/contracts.js";
 import { RunArtifactStore } from "../src/kb/run-artifacts.js";
 import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 import { mintSourceCapability } from "../src/kb/gate.js";
 import { validateContentReviewPacket } from "../src/kb/content-review.js";
 import { CapabilityStore } from "../src/kb/capabilities.js";
 import { readSelectedGeneration } from "../src/kb/generations.js";
-import type { Confidence, JsonValue } from "../src/contracts.js";
+import type { JsonValue } from "../src/contracts.js";
 import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 
 const PROFILE = "kbp_integration";
@@ -156,7 +158,14 @@ function stableClaims(sourceIds: readonly string[]) {
       kind: "fact",
       state: "supported",
       confidence: "PROBABLE",
-      evidence: [{ source_id: sourceIds[0]! }],
+      evidence: [
+        {
+          source_id: requireValue(
+            sourceIds[0],
+            "apps/orchestration/tests/kb-playbook-plane.test.ts:159"
+          ),
+        },
+      ],
       contradicts_claim_ids: [],
       canonical_verification_refs: [],
     },
@@ -212,14 +221,17 @@ function pageBody(sourceIds: readonly string[]): string {
 
 /** Stage the four phase bodies the way the executor will, returning their details. */
 function stagePhases(fixture: Fixture): Record<string, Record<string, JsonValue>> {
-  const sourceIds = fixture.context.playbookData.source_ids as string[];
+  const sourceIds = requireValue(
+    fixture.context.knowledgeBaseData.source_ids,
+    "playbook-plane source ids"
+  );
   const store = new RunArtifactStore(fixture.kbRoot, fixture.runId, fixture.checkpointer);
   try {
-    const stage = (stateId: string, kind: string, content: string): string =>
+    const stage = (stateId: string, kind: ArtifactKind, content: string): string =>
       store.stage({
         state_id: stateId,
         kb_profile_id: PROFILE,
-        artifact_kind: kind as Parameters<RunArtifactStore["stage"]>[0]["artifact_kind"],
+        artifact_kind: kind,
         content,
       }).artifact_id;
 
@@ -248,7 +260,16 @@ function stagePhases(fixture: Fixture): Record<string, Record<string, JsonValue>
             revision_id: REVISION_ID,
             claim_id: "clm_0001",
             verdict: "supported",
-            evidence: [{ evidence_id: "evidence_source_a", kind: "source", ref: sourceIds[0]! }],
+            evidence: [
+              {
+                evidence_id: "evidence_source_a",
+                kind: "source",
+                ref: requireValue(
+                  sourceIds[0],
+                  "apps/orchestration/tests/kb-playbook-plane.test.ts:251"
+                ),
+              },
+            ],
           },
         ],
       })
@@ -300,7 +321,7 @@ function driveToGate(fixture: Fixture): void {
     const phaseDetails = details[phase];
     if (phaseDetails === undefined) break;
     fixture.playbook.validateDetails(phase, phaseDetails);
-    fixture.playbook.acceptSummary(fixture.context, phaseDetails, "PROBABLE" as Confidence);
+    fixture.playbook.acceptSummary(fixture.context, phaseDetails, "PROBABLE");
   }
   fixture.checkpointer.saveRun(fixture.context, "test_content_review_waiting", {});
 }
@@ -315,7 +336,10 @@ describe("KB playbook ↔ real ingest plane", () => {
     const packet = validateContentReviewPacket(
       JSON.parse(String(fixture.context.playbookData.content_review_packet_jcs))
     );
-    expect(packet.base_generation_id).toBe(base!.selector.generation_id);
+    expect(packet.base_generation_id).toBe(
+      requireValue(base, "apps/orchestration/tests/kb-playbook-plane.test.ts:318").selector
+        .generation_id
+    );
     expect(packet.action).toBe("ingest");
     expect(packet.candidate_artifacts.map((artifact) => artifact.artifact_kind)).toEqual([
       "page_draft",
@@ -334,11 +358,23 @@ describe("KB playbook ↔ real ingest plane", () => {
     expect(terminal.action).toBe("complete");
 
     const selected = readSelectedGeneration(fixture.kbRoot);
-    expect(selected!.selector.generation_id).not.toBe(base!.selector.generation_id);
-    expect(String(fixture.context.playbookData.published_generation_id)).toBe(
-      selected!.selector.generation_id
+    expect(
+      requireValue(selected, "apps/orchestration/tests/kb-playbook-plane.test.ts:337").selector
+        .generation_id
+    ).not.toBe(
+      requireValue(base, "apps/orchestration/tests/kb-playbook-plane.test.ts:337").selector
+        .generation_id
     );
-    expect(Object.keys(selected!.catalog.pages)).toContain(PAGE_ID);
+    expect(String(fixture.context.playbookData.published_generation_id)).toBe(
+      requireValue(selected, "apps/orchestration/tests/kb-playbook-plane.test.ts:339").selector
+        .generation_id
+    );
+    expect(
+      Object.keys(
+        requireValue(selected, "apps/orchestration/tests/kb-playbook-plane.test.ts:341").catalog
+          .pages
+      )
+    ).toContain(PAGE_ID);
 
     const store = new CapabilityStore(fixture.projectRoot);
     try {
@@ -360,7 +396,13 @@ describe("KB playbook ↔ real ingest plane", () => {
     expect(terminal.action).toBe("incomplete");
 
     const selected = readSelectedGeneration(fixture.kbRoot);
-    expect(selected!.selector.generation_id).toBe(base!.selector.generation_id);
+    expect(
+      requireValue(selected, "apps/orchestration/tests/kb-playbook-plane.test.ts:363").selector
+        .generation_id
+    ).toBe(
+      requireValue(base, "apps/orchestration/tests/kb-playbook-plane.test.ts:363").selector
+        .generation_id
+    );
     expect(fixture.context.playbookData.review_decision).toBe("deny");
     expect(fixture.context.playbookData.published_generation_id).toBeUndefined();
   });

@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   parseFrontmatter: (content: string) => {
     const match = content.match(/^---\n([\s\S]*?)\n---/);
     if (!match) return { frontmatter: {}, body: content };

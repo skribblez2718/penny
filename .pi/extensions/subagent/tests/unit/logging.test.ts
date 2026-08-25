@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { createTestLogger } from "../../../../lib/logger/test-logger.js";
 
 // Ensure INFO-level logs are captured (default is WARN, which would filter out INFO)
 process.env.PI_LOG_LEVEL = "INFO";
 
 describe("agent-runner structured logging", () => {
-  let { logger, buffer, clear, setSessionId } = createTestLogger("agent-runner");
+  const { logger, buffer, clear, setSessionId } = createTestLogger("agent-runner");
 
   beforeEach(() => {
     clear();

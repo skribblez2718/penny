@@ -5,6 +5,7 @@ import {
   extractToolCalls,
   extractToolErrorRecovery,
 } from "../../index.js";
+import type { SessionMessage } from "../../pi-messages.js";
 
 // ============================================================
 // Split-turn coverage: every message-derived extraction path must read the
@@ -12,7 +13,10 @@ import {
 // exercise the merged array directly (the handler does the concatenation).
 // ============================================================
 
-function mergeWindows(messagesToSummarize: any[], turnPrefixMessages: any[]): any[] {
+function mergeWindows(
+  messagesToSummarize: SessionMessage[],
+  turnPrefixMessages: SessionMessage[]
+): SessionMessage[] {
   return [...messagesToSummarize, ...turnPrefixMessages];
 }
 
@@ -63,8 +67,10 @@ describe("split-turn merged-window extraction", () => {
     );
     const dominant = detectDominantSkill(merged);
     expect(dominant).not.toBeNull();
-    expect(dominant!.skill_name).toBe("code");
-    expect(dominant!.session_id).toBe("code-9");
+    expect(dominant).toMatchObject({
+      skill_name: "code",
+      session_id: "code-9",
+    });
   });
 
   it("extracts tool-call examples spanning both windows", () => {

@@ -10,9 +10,8 @@
 
 import { userInfo } from "node:os";
 import { randomUUID as cryptoRandomUUID } from "node:crypto";
-import path from "node:path";
 
-import type { Directive, JsonValue } from "../contracts.js";
+import type { Directive } from "../contracts.js";
 import type { Checkpointer } from "../checkpointer.js";
 import type { OrchestrationEngine } from "../engine.js";
 import { settleRunInput } from "../private-inputs.js";
@@ -27,6 +26,7 @@ import {
   type CandidateConflictAllocation,
   type ContentReviewDecisionReceipt,
   type ContentReviewGatePacket,
+  type ConflictRecord,
   type KbArtifactHandle,
 } from "./contracts.js";
 import { readCurrent, readManifest, readPageRevision, readPolicy } from "./filesystem.js";
@@ -40,6 +40,7 @@ import {
   type OperationCompletion,
 } from "./operation-receipts.js";
 import { RunArtifactStore } from "./run-artifacts.js";
+import { hostGrantAuthorityDir, kbProfileRegistryPath } from "./host-state.js";
 import { resolveGrantedProfile } from "./profile-registry.js";
 import { SaveQueryClaimStore, saveClaimStoreDir } from "./save-claim.js";
 
@@ -73,6 +74,13 @@ export class ContentReviewError extends Error {
     super(message);
     this.name = "ContentReviewError";
   }
+}
+
+function requiredContentReviewValue<T>(value: T | undefined, label: string): T {
+  if (value === undefined) {
+    throw new ContentReviewError("content_review_corrupt", `${label} is absent`);
+  }
+  return value;
 }
 
 function jsonEqual(left: unknown, right: unknown): boolean {
@@ -171,31 +179,57 @@ interface PageClaimScope {
   readonly refs: ReadonlySet<string>;
 }
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseJsonValue(source: string): unknown {
+  const value: unknown = JSON.parse(source);
+  return value;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function rawCandidateConflict(value: unknown): RawCandidateConflict {
+  if (!isUnknownRecord(value)) {
+    throw new ContentReviewError("content_review_corrupt", "candidate conflict is not an object");
+  }
+  return {
+    candidate_conflict_id: value["candidate_conflict_id"],
+    claim_refs: value["claim_refs"],
+    summary: value["summary"],
+    evidence_refs: value["evidence_refs"],
+  };
+}
+
 function refKey(value: { page_id: string; revision_id: string; claim_id: string }): string {
   return `${value.page_id}\u0000${value.revision_id}\u0000${value.claim_id}`;
 }
 
 function candidateClaimScope(pageDocument: unknown): PageClaimScope {
   const refs = new Set<string>();
-  const pages = (pageDocument as { pages?: unknown })?.pages;
+  const pages = isUnknownRecord(pageDocument) ? pageDocument["pages"] : undefined;
   if (!Array.isArray(pages)) return { refs };
   for (const rawPage of pages) {
-    const page = rawPage as Record<string, unknown>;
-    const frontmatter = (page.frontmatter ?? {}) as Record<string, unknown>;
-    const claims = ((page.claims ?? {}) as { claims?: unknown }).claims;
-    if (!Array.isArray(claims)) continue;
+    if (!isUnknownRecord(rawPage)) continue;
+    const frontmatter = rawPage["frontmatter"];
+    const claimsDocument = rawPage["claims"];
+    const claims = isUnknownRecord(claimsDocument) ? claimsDocument["claims"] : undefined;
+    if (!isUnknownRecord(frontmatter) || !Array.isArray(claims)) continue;
     for (const rawClaim of claims) {
-      const claim = rawClaim as Record<string, unknown>;
       if (
-        typeof frontmatter.page_id === "string" &&
-        typeof frontmatter.revision_id === "string" &&
-        typeof claim.claim_id === "string"
+        isUnknownRecord(rawClaim) &&
+        typeof frontmatter["page_id"] === "string" &&
+        typeof frontmatter["revision_id"] === "string" &&
+        typeof rawClaim["claim_id"] === "string"
       ) {
         refs.add(
           refKey({
-            page_id: frontmatter.page_id,
-            revision_id: frontmatter.revision_id,
-            claim_id: claim.claim_id,
+            page_id: frontmatter["page_id"],
+            revision_id: frontmatter["revision_id"],
+            claim_id: rawClaim["claim_id"],
           })
         );
       }
@@ -226,8 +260,8 @@ function evidenceIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const ids = value.flatMap((entry) => {
     if (typeof entry === "string") return [entry];
-    if (entry !== null && typeof entry === "object") {
-      const id = (entry as { evidence_id?: unknown }).evidence_id;
+    if (isUnknownRecord(entry)) {
+      const id = entry["evidence_id"];
       return typeof id === "string" ? [id] : [];
     }
     return [];
@@ -241,16 +275,14 @@ export function conflictRecordForAllocation(input: {
   allocation: CandidateConflictAllocation;
   issuedAt: string;
   allowedClaimRefs: ReadonlySet<string>;
-}): Record<string, JsonValue> {
-  const rawRefs = Array.isArray(input.candidate.claim_refs)
-    ? (input.candidate.claim_refs as unknown[])
-    : [];
+}): ConflictRecord {
+  const rawRefs = Array.isArray(input.candidate.claim_refs) ? input.candidate.claim_refs : [];
   const claimRefs = rawRefs.map((raw) => {
-    const ref = raw as Record<string, unknown>;
     if (
-      typeof ref.page_id !== "string" ||
-      typeof ref.revision_id !== "string" ||
-      typeof ref.claim_id !== "string"
+      !isUnknownRecord(raw) ||
+      typeof raw["page_id"] !== "string" ||
+      typeof raw["revision_id"] !== "string" ||
+      typeof raw["claim_id"] !== "string"
     ) {
       throw new ContentReviewError(
         "content_review_corrupt",
@@ -258,9 +290,9 @@ export function conflictRecordForAllocation(input: {
       );
     }
     const normalized = {
-      page_id: ref.page_id,
-      revision_id: ref.revision_id,
-      claim_id: ref.claim_id,
+      page_id: raw["page_id"],
+      revision_id: raw["revision_id"],
+      claim_id: raw["claim_id"],
     };
     if (!input.allowedClaimRefs.has(refKey(normalized))) {
       throw new ContentReviewError(
@@ -283,11 +315,7 @@ export function conflictRecordForAllocation(input: {
     evidence_refs: evidenceIds(input.candidate.evidence_refs),
     created_at: input.issuedAt,
   };
-  return validateKbContract(
-    ConflictRecordSchema,
-    record,
-    "allocated conflict record"
-  ) as unknown as Record<string, JsonValue>;
+  return validateKbContract(ConflictRecordSchema, record, "allocated conflict record");
 }
 
 function readCandidateDocuments(
@@ -307,7 +335,7 @@ function readCandidateDocuments(
           `candidate artifact '${handle.artifact_id}' no longer matches its packet handle`
         );
       }
-      documents.set(handle.artifact_kind, JSON.parse(actual.content) as unknown);
+      documents.set(handle.artifact_kind, parseJsonValue(actual.content));
     }
     return documents;
   } finally {
@@ -316,9 +344,9 @@ function readCandidateDocuments(
 }
 
 function conflictCandidates(lintDocument: unknown): RawCandidateConflict[] {
-  const raw = (lintDocument as { candidate_conflicts?: unknown })?.candidate_conflicts;
+  const raw = isUnknownRecord(lintDocument) ? lintDocument["candidate_conflicts"] : undefined;
   if (!Array.isArray(raw)) return [];
-  const candidates = raw.map((candidate) => candidate as RawCandidateConflict);
+  const candidates = raw.map(rawCandidateConflict);
   for (const candidate of candidates) {
     if (
       typeof candidate.candidate_conflict_id !== "string" ||
@@ -514,8 +542,8 @@ export function verifyLiveContentReviewBindings(input: {
   const kbRoot = resolveGrantedProfile({
     profileId: packet.kb_profile_id,
     sessionId: packet.session_id,
-    registryPath: path.join(input.projectRoot, ".penny", "kb-profiles.json"),
-    grantStoreDir: path.join(input.projectRoot, ".penny", "kb-host-grants"),
+    registryPath: kbProfileRegistryPath(input.projectRoot),
+    grantStoreDir: hostGrantAuthorityDir(input.projectRoot),
   }).resolvedRoot;
   const manifest = readManifest(kbRoot);
   if (manifest.kb_id !== packet.kb_id) {
@@ -535,7 +563,7 @@ export function verifyLiveContentReviewBindings(input: {
   if (packet.action === "save") {
     const claim = new SaveQueryClaimStore(
       saveClaimStoreDir(input.projectRoot, packet.kb_profile_id)
-    ).load(packet.query_run_id!);
+    ).load(requiredContentReviewValue(packet.query_run_id, "save query-run identity"));
     if (
       claim.kb_profile_id !== packet.kb_profile_id ||
       claim.kb_id !== packet.kb_id ||
@@ -788,7 +816,10 @@ export class ContentReviewService {
     });
     if (accepted.kind === "duplicate" && accepted.finalized) {
       return this.completeRecordedOperation(
-        this.options.checkpointer.contentReviewForRun(receipt.run_id)!,
+        requiredContentReviewValue(
+          this.options.checkpointer.contentReviewForRun(receipt.run_id),
+          "duplicate content-review record"
+        ),
         currentDirective(this.options.checkpointer, receipt.run_id)
       ).directive;
     }
@@ -835,8 +866,8 @@ export class ContentReviewService {
       const kbRoot = resolveGrantedProfile({
         profileId: record.packet.kb_profile_id,
         sessionId: record.packet.session_id,
-        registryPath: path.join(this.options.projectRoot, ".penny", "kb-profiles.json"),
-        grantStoreDir: path.join(this.options.projectRoot, ".penny", "kb-host-grants"),
+        registryPath: kbProfileRegistryPath(this.options.projectRoot),
+        grantStoreDir: hostGrantAuthorityDir(this.options.projectRoot),
       }).resolvedRoot;
       const selected = readCurrent(kbRoot);
       selectorCommitted =
@@ -857,7 +888,10 @@ export class ContentReviewService {
       if (error instanceof ContentReviewError) {
         this.options.engine.invalidateContentReviewedRun({
           runId,
-          receiptSha256: record.decision_receipt_sha256!,
+          receiptSha256: requiredContentReviewValue(
+            record.decision_receipt_sha256,
+            "content-review decision receipt digest"
+          ),
           reason: error.code,
           state: error.code === "content_review_expired" ? "expired" : "invalidated",
         });
@@ -866,7 +900,10 @@ export class ContentReviewService {
     }
     const directive = this.options.engine.resumeContentReviewedRun({
       runId,
-      receiptSha256: record.decision_receipt_sha256!,
+      receiptSha256: requiredContentReviewValue(
+        record.decision_receipt_sha256,
+        "content-review decision receipt digest"
+      ),
       transactionId,
     });
     const finalized = this.options.checkpointer.contentReviewForRun(runId);
@@ -926,7 +963,7 @@ export class ContentReviewService {
       run,
       checkpointer: this.options.checkpointer,
     });
-    const candidateGenerationId = String(run.playbookData.published_generation_id ?? "");
+    const candidateGenerationId = String(run.knowledgeBaseData.published_generation_id ?? "");
     let selectorEvidence:
       | {
           transaction_id: string;
@@ -944,8 +981,8 @@ export class ContentReviewService {
       const kbRoot = resolveGrantedProfile({
         profileId: record.packet.kb_profile_id,
         sessionId: record.packet.session_id,
-        registryPath: path.join(this.options.projectRoot, ".penny", "kb-profiles.json"),
-        grantStoreDir: path.join(this.options.projectRoot, ".penny", "kb-host-grants"),
+        registryPath: kbProfileRegistryPath(this.options.projectRoot),
+        grantStoreDir: hostGrantAuthorityDir(this.options.projectRoot),
       }).resolvedRoot;
       const selected = readCurrent(kbRoot);
       let publication;
@@ -958,7 +995,7 @@ export class ContentReviewService {
       } catch (error) {
         throw new ContentReviewError(
           "content_review_corrupt",
-          `published run lacks same-transaction selector evidence: ${(error as Error).message}`
+          `published run lacks same-transaction selector evidence: ${errorMessage(error)}`
         );
       }
       if (
@@ -973,7 +1010,10 @@ export class ContentReviewService {
       selectorEvidence = {
         transaction_id: group.transaction_id,
         candidate_generation_id: candidateGenerationId,
-        selector_sha256: publication.selector_sha256!,
+        selector_sha256: requiredContentReviewValue(
+          publication.selector_sha256,
+          "published selector digest"
+        ),
       };
     }
     const operation = new OperationReceiptStore({

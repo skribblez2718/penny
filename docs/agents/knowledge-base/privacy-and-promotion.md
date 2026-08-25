@@ -14,8 +14,9 @@ body. Every one of those is host-owned, resolved out of band, and validated befo
 | Processing policy, parent/child model allowlists                         | nothing                           |
 | Content-review and promotion approval decisions                          | nothing                           |
 
-Complete envelopes, leases, and source-admission metadata live only in the owner-only
-`$PROJECT_ROOT/.penny/kb-capabilities/capabilities.sqlite` store, never under a KB root. Source
+Complete envelopes, leases, and source-admission metadata live only in the owner-only,
+catalog-bound project `kb/capabilities/capabilities.sqlite` store beneath `PENNY_STATE_ROOT`, never
+under a KB root. Source
 admission allocates an independent opaque `source_id`, preindexes exact work keys, then performs one
 no-follow external open and streams/hash-checks the bytes into
 `work/<run_id>/transaction/sources/<source_id>`. Child, refinement, and content-review reads use
@@ -30,8 +31,8 @@ admission mode and a create flag.
 A request is admitted only when its profile is **both** granted in the current authenticated host
 session **and** present in the registry. Creation additionally requires the profile's create flag.
 
-Profile-session and parent-delivery grants share one ignored owner-only authority at
-`$PROJECT_ROOT/.penny/kb-host-grants/grants.sqlite`. It is a WAL database with
+Profile-session and parent-delivery grants share one owner-only authority at the catalog-bound
+project path `kb/host-grants/grants.sqlite`. It is a WAL database with
 `synchronous=FULL`; the directory is exactly `0700`, and the database/WAL/SHM files are exactly
 `0600`, regular, single-link, and current-user-owned. Separate indexed tables are one authority,
 not fallback stores. Unexpected JSON, temporary files, retired `profile-grants/` directories, or
@@ -214,14 +215,17 @@ does not currently expose.
 
 ### Approval custody and host commands
 
-The packet is committed to ignored `$PROJECT_ROOT/.penny/kb-approval/receipts.sqlite` **before**
-the orchestration control DB may expose `awaiting_user`. Only packet digests and safe IDs cross into
+The packet is committed to the catalog-bound project
+`kb/approval/receipts.sqlite` **before** the orchestration control DB may expose `awaiting_user`.
+Only packet digests and safe IDs cross into
 control state; target presentations, intent, receipt bytes, and journal bytes remain in the approval
 DB. Approve, refine, and deny each begin with one durable exact decision-intent JCS. Only approve
 creates a signed receipt. A callback retry is idempotent only for the same intent digest.
 
-The `.penny` ancestor and approval directory are current-user-owned mode `0700`; every absolute
-ancestor is opened one component at a time and may not be a symlink. SQLite/WAL/SHM, mutex, and key
+The Penny state, project partition, `kb`, and approval directories are current-user-owned mode
+`0700`; every absolute ancestor is opened one component at a time and may not be a symlink.
+Ordinary approval workflows resolve an already-initialized project through the catalog and never
+create or inspect a project-local legacy root. SQLite/WAL/SHM, mutex, and key
 files are current-user-owned, regular, single-link, mode `0600`, opened no-follow, and their pinned
 identity/custody is rechecked throughout the store lifetime. Each key file is exactly 32 raw CSPRNG
 bytes. Exactly one key is active for signing; rotation first creates and fsyncs a new key, then

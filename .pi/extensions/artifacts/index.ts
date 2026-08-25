@@ -1,115 +1,22 @@
-/**
- * Constrained, read-only artifact access for model workers.
- *
- * Grants and caller identity come only from trusted process invocation context;
- * model arguments can identify an artifact or continuation but cannot grant it.
- */
+import { registerTool } from "../../lib/pi-tool-registration.js";
+/** Direct, non-expiring reads of exact immutable artifact IDs. */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
-
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createLogger } from "../../lib/logger/logger.js";
 import {
   configurationErrorResult,
   executeArtifactRead,
   loadArtifactRuntimeConfig,
 } from "./artifact-runtime.js";
-import { ownerGrantBookPath, readOwnerGrantBook, resolveOwnerInvocation } from "./owner-grants.js";
-import type {
-  ArtifactInvocation,
-  ArtifactReadParams,
-  ArtifactRuntimeConfig,
-  ArtifactTelemetry,
+import {
+  ArtifactReadParamsSchema,
+  type ArtifactRuntimeConfig,
+  type ArtifactTelemetry,
 } from "./types.js";
 
 const logger = createLogger("artifacts");
 
-const CanonicalStringSchema = Type.String({
-  minLength: 1,
-  pattern: "^(?!\\s)(?!.*\\s$)(?!.*[\\u0000-\\u001F\\u007F]).+$",
-});
-
-const ArtifactRefSchema = Type.Object(
-  {
-    schema_version: Type.Literal(1),
-    artifact_id: Type.String({
-      pattern: "^art_[a-f0-9]{64}$",
-      description: "Canonical immutable artifact owner identity",
-    }),
-    run_id: CanonicalStringSchema,
-    phase: CanonicalStringSchema,
-    branch_id: Type.Union([CanonicalStringSchema, Type.Null()]),
-    kind: Type.String({ pattern: "^[a-z][a-z0-9-]*$" }),
-    operation_id: CanonicalStringSchema,
-    version: Type.Integer({ minimum: 1 }),
-    producer: CanonicalStringSchema,
-    consumer_scope: Type.Array(CanonicalStringSchema, { uniqueItems: true }),
-    media_type: CanonicalStringSchema,
-    byte_length: Type.Integer({ minimum: 0 }),
-    content_digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
-    store_ref: Type.String({ pattern: "^artifact://sha256/[a-f0-9]{64}$" }),
-  },
-  { additionalProperties: false }
-);
-
-const ArtifactReadParamsSchema = Type.Object(
-  {
-    artifact: Type.Union(
-      [
-        Type.String({
-          pattern: "^art_[a-f0-9]{64}$",
-          description: "Canonical immutable artifact owner identity",
-        }),
-        ArtifactRefSchema,
-      ],
-      {
-        description:
-          "Exact artifact ID or immutable artifact ref already supplied by the execution owner",
-      }
-    ),
-    range: Type.Optional(
-      Type.Object(
-        {
-          start: Type.Integer({
-            minimum: 0,
-            description: "Inclusive UTF-8 byte offset",
-          }),
-          end: Type.Optional(
-            Type.Integer({
-              minimum: 0,
-              description: "Exclusive UTF-8 byte offset; defaults to artifact end",
-            })
-          ),
-        },
-        { additionalProperties: false }
-      )
-    ),
-    cursor: Type.Optional(
-      Type.String({
-        minLength: 1,
-        maxLength: 4096,
-        description: "Opaque continuation cursor returned by a prior artifact_read",
-      })
-    ),
-  },
-  { additionalProperties: false }
-);
-
-interface SessionStartContext {
-  sessionManager: { getSessionId(): string };
-}
-
 export default function artifactExtension(pi: ExtensionAPI): void {
-  let config: ArtifactRuntimeConfig | undefined;
-  let configError: unknown;
-  let currentSessionId: string | undefined;
-  try {
-    // Read process.env inside the factory, after Penny's environment extension.
-    config = loadArtifactRuntimeConfig(process.env);
-  } catch (error) {
-    configError = error;
-  }
-
   const telemetry: ArtifactTelemetry = {
     info(event, context) {
       logger.info(event, context);
@@ -119,52 +26,29 @@ export default function artifactExtension(pi: ExtensionAPI): void {
     },
   };
 
-  pi.on("session_start", async (_event: unknown, context: SessionStartContext) => {
-    currentSessionId = context.sessionManager.getSessionId();
-  });
-
-  /**
-   * Owner-held grant resolution for the primary runtime. Workers never reach
-   * this path: they carry an invocation snapshot in their environment, which
-   * takes precedence in `loadInvocation`.
-   */
-  const invocationResolver = async (
-    artifactId: string
-  ): Promise<ArtifactInvocation | undefined> => {
-    if (!currentSessionId) return undefined;
-    try {
-      const book = readOwnerGrantBook(ownerGrantBookPath(currentSessionId));
-      return resolveOwnerInvocation(book, artifactId);
-    } catch (error) {
-      telemetry.warn("artifact_owner_grant_unreadable", {
-        errorCode: "ARTIFACT_CONFIG_INVALID",
-        reason: error instanceof Error ? error.message : "unknown",
-      });
-      return undefined;
-    }
-  };
-
-  pi.registerTool({
+  registerTool(pi, {
     name: "artifact_read",
     label: "Artifact Read",
     description: [
-      "Read one exact immutable artifact already granted by the execution owner.",
-      "Use only with an artifact ID/ref or opaque continuation you were given.",
-      "This tool cannot list, search, discover, guess, or grant artifacts.",
-      "Byte ranges are UTF-8 and use an inclusive start and exclusive end.",
+      "Read one exact immutable artifact by ID.",
+      "Artifact IDs are internal communication addresses, not grants, and reads do not expire.",
+      "This tool cannot list, search, discover, or guess artifacts.",
+      "Use next_range for bounded continuation until truncated is false.",
     ].join(" "),
     parameters: ArtifactReadParamsSchema,
-    async execute(_toolCallId: string, params: ArtifactReadParams) {
-      if (!config) {
-        const execution = configurationErrorResult(configError);
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      let config: ArtifactRuntimeConfig;
+      try {
+        config = loadArtifactRuntimeConfig(ctx.cwd, process.env);
+      } catch (error) {
+        const execution = configurationErrorResult(error);
         telemetry.warn("artifact_read_failed", {
           errorCode: execution.code,
           configurationReady: false,
-          compactionCorrelation: { status: "not_evaluated", keys: [] },
         });
         return execution.result;
       }
-      return (await executeArtifactRead(config, params, { telemetry, invocationResolver })).result;
+      return (await executeArtifactRead(config, params, { telemetry })).result;
     },
   });
 }
@@ -177,8 +61,6 @@ export {
 };
 export type {
   ArtifactExecution,
-  ArtifactEnvelope,
-  ArtifactInvocation,
   ArtifactReadParams,
   ArtifactRef,
   ArtifactRuntimeConfig,

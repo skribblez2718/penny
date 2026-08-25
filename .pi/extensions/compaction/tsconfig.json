@@ -5,6 +5,7 @@
     "moduleResolution": "NodeNext",
     "esModuleInterop": true,
     "strict": true,
+    "noEmit": true,
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,

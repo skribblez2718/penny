@@ -12,26 +12,34 @@
  * agent invocation must use this shared module directly.
  */
 
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Message } from "@mariozechner/pi-ai";
-import { withFileMutationQueue } from "@mariozechner/pi-coding-agent";
+import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import {
+  ensureOwnerDirectory,
+  PennyStateResolutionError,
+  resolvePennyProjectState,
+} from "@penny/orchestration/source";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
 import { captureToolResultForExecutionOwner } from "./execution-owner-capture.js";
 import type { ArtifactRef } from "../artifacts/owner-client.js";
-import { createLogger } from "../../lib/logger/logger.js";
+import { createLogger, getSessionId } from "../../lib/logger/logger.js";
 
 const logger = createLogger("agent-runner");
-const ARTIFACT_TOOL_NAME = "artifact_read";
-const OWNER_SCOPED_ARTIFACT_ENVIRONMENT = [
-  "PENNY_ARTIFACT_INVOCATION_JSON",
-  "PENNY_ARTIFACT_INVOCATION_FILE",
-  "PENNY_ARTIFACT_CURSOR_HMAC_KEY",
-] as const;
 const MEMORY_ENVIRONMENT_PREFIXES = ["PENNY_MEMORY_", "MEMPALACE_"] as const;
 const LEGACY_MEMORY_ENVIRONMENT_SELECTORS = ["PI_MEMORY_BRIDGE", "MEMPAL_PALACE_PATH"] as const;
+const RETIRED_STATE_ENVIRONMENT_SELECTORS = [
+  "PENNY_ARTIFACT_ROOT",
+  "PENNY_ARTIFACT_GRANT_ROOT",
+  "PENNY_SKILL_CHAIN_STATE_ROOT",
+  "PENNY_ORCH_DB",
+  "PENNY_ORCH_V2_DB",
+  "PI_OBSERVABILITY_URL",
+  "PI_OBSERVABILITY_DATA_DIR",
+] as const;
 
 // Re-export agent discovery for convenience
 export { type AgentConfig, type AgentScope, discoverAgents };
@@ -99,6 +107,7 @@ export function isolatedAgentEnvironment(
     }
   }
   for (const name of LEGACY_MEMORY_ENVIRONMENT_SELECTORS) delete isolated[name];
+  for (const name of RETIRED_STATE_ENVIRONMENT_SELECTORS) delete isolated[name];
   if (selectedMemoryCredential) delete isolated[selectedMemoryCredential];
   delete isolated.PENNY_RECEIPT_HMAC_KEY;
   delete isolated.PENNY_APPROVAL_HMAC_KEY;
@@ -131,7 +140,6 @@ function ownerSuppliedAgentEnvironment(
     ownerEnvironment?.PENNY_MEMORY_MCP_TOKEN_ENV?.trim(),
   ].filter((name): name is string => Boolean(name));
   const merged: NodeJS.ProcessEnv = { ...process.env };
-  for (const name of OWNER_SCOPED_ARTIFACT_ENVIRONMENT) delete merged[name];
   for (const [name, value] of Object.entries(ownerEnvironment ?? {})) {
     if (value === undefined) delete merged[name];
     else merged[name] = value;
@@ -141,11 +149,113 @@ function ownerSuppliedAgentEnvironment(
   return isolated;
 }
 
-function hasOwnerArtifactGrant(environment?: NodeJS.ProcessEnv): boolean {
-  const json = environment?.PENNY_ARTIFACT_INVOCATION_JSON?.trim();
-  const file = environment?.PENNY_ARTIFACT_INVOCATION_FILE?.trim();
-  const cursorKey = environment?.PENNY_ARTIFACT_CURSOR_HMAC_KEY?.trim();
-  return Boolean(cursorKey && ((json && !file) || (file && !json)));
+export const SUBAGENT_SESSION_RETENTION_DAYS = 30;
+export const SUBAGENT_SESSION_MAX_FILES_PER_AGENT = 500;
+const SUBAGENT_SESSION_CAP_MINIMUM_AGE_MS = 24 * 60 * 60 * 1000;
+
+function hardenDurableSubagentSessions(directory: string): void {
+  const uid = typeof process.geteuid === "function" ? process.geteuid() : undefined;
+  let changed = false;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+    const file = path.join(directory, entry.name);
+    const stat = fs.lstatSync(file);
+    if (
+      stat.isSymbolicLink() ||
+      !stat.isFile() ||
+      stat.nlink !== 1 ||
+      (uid !== undefined && stat.uid !== uid)
+    ) {
+      continue;
+    }
+    if ((stat.mode & 0o777) !== 0o600) {
+      fs.chmodSync(file, 0o600);
+      changed = true;
+    }
+    const descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  }
+  if (changed) {
+    const descriptor = fs.openSync(directory, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY);
+    try {
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  }
+}
+
+/**
+ * Delete only completed, owner-controlled Pi JSONL session files according to
+ * the bounded target-state retention policy. Symlinks, hard links, foreign
+ * files, and recently active sessions are never removed.
+ */
+export function pruneDurableSubagentSessions(
+  directory: string,
+  options: {
+    readonly now?: number;
+    readonly retentionDays?: number;
+    readonly maxFiles?: number;
+  } = {}
+): readonly string[] {
+  const now = options.now ?? Date.now();
+  const retentionDays = options.retentionDays ?? SUBAGENT_SESSION_RETENTION_DAYS;
+  const maxFiles = options.maxFiles ?? SUBAGENT_SESSION_MAX_FILES_PER_AGENT;
+  if (!Number.isSafeInteger(retentionDays) || retentionDays < 1) {
+    throw new Error("subagent retentionDays must be a positive integer");
+  }
+  if (!Number.isSafeInteger(maxFiles) || maxFiles < 1) {
+    throw new Error("subagent maxFiles must be a positive integer");
+  }
+  const uid = typeof process.geteuid === "function" ? process.geteuid() : undefined;
+  const candidates = fs
+    .readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+    .flatMap((entry) => {
+      const file = path.join(directory, entry.name);
+      const stat = fs.lstatSync(file);
+      if (
+        stat.isSymbolicLink() ||
+        !stat.isFile() ||
+        stat.nlink !== 1 ||
+        (uid !== undefined && stat.uid !== uid) ||
+        (stat.mode & 0o022) !== 0
+      ) {
+        return [];
+      }
+      return [{ file, modified: stat.mtimeMs }];
+    })
+    .sort((left, right) => left.modified - right.modified);
+  const retentionCutoff = now - retentionDays * 24 * 60 * 60 * 1000;
+  const capCutoff = now - SUBAGENT_SESSION_CAP_MINIMUM_AGE_MS;
+  const selected = new Set(
+    candidates.filter((candidate) => candidate.modified < retentionCutoff).map(({ file }) => file)
+  );
+  const remaining = candidates.filter(({ file }) => !selected.has(file));
+  const excess = Math.max(0, remaining.length - maxFiles);
+  for (const candidate of remaining
+    .filter(({ modified }) => modified < capCutoff)
+    .slice(0, excess)) {
+    selected.add(candidate.file);
+  }
+  const removed: string[] = [];
+  for (const file of selected) {
+    fs.unlinkSync(file);
+    removed.push(file);
+  }
+  if (removed.length > 0) {
+    const descriptor = fs.openSync(directory, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY);
+    try {
+      fs.fsyncSync(descriptor);
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  }
+  return removed;
 }
 
 // ============================================================
@@ -179,8 +289,12 @@ function resolveDefaultProvider(): string | undefined {
   for (const settingsPath of candidates) {
     try {
       const raw = fs.readFileSync(settingsPath, "utf-8");
-      const settings = JSON.parse(raw) as { defaultProvider?: string };
-      if (settings.defaultProvider) {
+      const settings: unknown = JSON.parse(raw);
+      if (
+        isRecord(settings) &&
+        typeof settings.defaultProvider === "string" &&
+        settings.defaultProvider
+      ) {
         _defaultProviderCache = settings.defaultProvider;
         return settings.defaultProvider;
       }
@@ -213,12 +327,14 @@ function loadModelProviderMap(): Map<string, string> {
   for (const modelsPath of candidates) {
     try {
       const raw = fs.readFileSync(modelsPath, "utf-8");
-      const parsed = JSON.parse(raw) as {
-        providers?: Record<string, { models?: Array<{ id?: string }> }>;
-      };
-      for (const [providerName, providerCfg] of Object.entries(parsed.providers ?? {})) {
-        for (const m of providerCfg.models ?? []) {
-          if (m.id && !map.has(m.id)) map.set(m.id, providerName);
+      const parsed: unknown = JSON.parse(raw);
+      if (!isRecord(parsed) || !isRecord(parsed.providers)) continue;
+      for (const [providerName, providerCfg] of Object.entries(parsed.providers)) {
+        if (!isRecord(providerCfg) || !Array.isArray(providerCfg.models)) continue;
+        for (const model of providerCfg.models) {
+          if (isRecord(model) && typeof model.id === "string" && model.id && !map.has(model.id)) {
+            map.set(model.id, providerName);
+          }
         }
       }
     } catch {
@@ -260,12 +376,119 @@ export interface UsageStats {
   turns: number;
 }
 
+interface ObservedPiUsage {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  totalTokens?: number;
+  cost?: { total?: number };
+}
+
+type ObservedPiAssistantMessage = Record<string, unknown> & {
+  role: "assistant";
+  content: Record<string, unknown>[];
+  usage?: ObservedPiUsage;
+  model?: string;
+  stopReason?: string;
+  errorMessage?: string;
+};
+
+type ObservedPiToolResultMessage = Record<string, unknown> & {
+  role: "toolResult";
+  content: Record<string, unknown>[];
+  toolCallId?: string;
+  toolName?: string;
+  isError?: boolean;
+};
+
+type ObservedPiUserMessage = Record<string, unknown> & {
+  role: "user";
+  content: string | Record<string, unknown>[];
+};
+
+/** The validated Pi JSON-message subset consumed and surfaced by this runner. */
+export type ObservedPiMessage =
+  | ObservedPiAssistantMessage
+  | ObservedPiToolResultMessage
+  | ObservedPiUserMessage;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isOptionalNumber(value: unknown): boolean {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isObservedPiUsage(value: unknown): value is ObservedPiUsage {
+  if (!isRecord(value)) return false;
+  if (
+    !isOptionalNumber(value.input) ||
+    !isOptionalNumber(value.output) ||
+    !isOptionalNumber(value.cacheRead) ||
+    !isOptionalNumber(value.cacheWrite) ||
+    !isOptionalNumber(value.totalTokens)
+  ) {
+    return false;
+  }
+  if (value.cost === undefined) return true;
+  return isRecord(value.cost) && isOptionalNumber(value.cost.total);
+}
+
+function hasRecordContent(value: Record<string, unknown>): boolean {
+  return Array.isArray(value.content) && value.content.every(isRecord);
+}
+
+function isObservedPiAssistantMessage(
+  value: Record<string, unknown>
+): value is ObservedPiAssistantMessage {
+  return (
+    value.role === "assistant" &&
+    hasRecordContent(value) &&
+    (value.usage === undefined || isObservedPiUsage(value.usage)) &&
+    (value.model === undefined || typeof value.model === "string") &&
+    (value.stopReason === undefined || typeof value.stopReason === "string") &&
+    (value.errorMessage === undefined || typeof value.errorMessage === "string")
+  );
+}
+
+function isObservedPiToolResultMessage(
+  value: Record<string, unknown>
+): value is ObservedPiToolResultMessage {
+  return (
+    value.role === "toolResult" &&
+    hasRecordContent(value) &&
+    (value.toolCallId === undefined || typeof value.toolCallId === "string") &&
+    (value.toolName === undefined || typeof value.toolName === "string") &&
+    (value.isError === undefined || typeof value.isError === "boolean")
+  );
+}
+
+function isObservedPiUserMessage(value: Record<string, unknown>): value is ObservedPiUserMessage {
+  return (
+    value.role === "user" &&
+    (typeof value.content === "string" ||
+      (Array.isArray(value.content) && value.content.every(isRecord)))
+  );
+}
+
+/** Validate one message from Pi's JSON event stream without rewriting its payload. */
+export function adaptPiJsonMessage(value: unknown): ObservedPiMessage | undefined {
+  if (!isRecord(value)) return undefined;
+  return isObservedPiAssistantMessage(value) ||
+    isObservedPiToolResultMessage(value) ||
+    isObservedPiUserMessage(value)
+    ? value
+    : undefined;
+}
+
 export interface SingleResult {
   agent: string;
   agentSource: "user" | "project" | "unknown";
   task: string;
   exitCode: number;
-  messages: Message[];
+  messages: ObservedPiMessage[];
   stderr: string;
   usage: UsageStats;
   model?: string;
@@ -274,6 +497,26 @@ export interface SingleResult {
   step?: number;
   /** Exact execution-owner output ref when this invocation is artifact-captured. */
   outputArtifactRef?: ArtifactRef;
+}
+
+export function createPendingSingleResult(agent: string, task: string): SingleResult {
+  return {
+    agent,
+    agentSource: "unknown",
+    task,
+    exitCode: -1,
+    messages: [],
+    stderr: "",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      contextTokens: 0,
+      turns: 0,
+    },
+  };
 }
 
 export interface SubagentCatalogDriftError {
@@ -356,11 +599,13 @@ export function formatUsageStats(usage: UsageStats, model?: string): string {
  * message with no text is canonically empty; an earlier turn is never reused
  * as a substitute for an incomplete final turn.
  */
-export function getFinalOutput(messages: Message[]): string {
+export function getFinalOutput(messages: readonly unknown[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role === "assistant") {
-      return msg.content.map((part) => (part.type === "text" ? part.text || "" : "")).join("");
+    const message = adaptPiJsonMessage(messages[i]);
+    if (message?.role === "assistant") {
+      return message.content
+        .map((part) => (part.type === "text" && typeof part.text === "string" ? part.text : ""))
+        .join("");
     }
   }
   return "";
@@ -646,17 +891,24 @@ export async function mapWithConcurrencyLimit<TIn, TOut>(
 ): Promise<TOut[]> {
   if (items.length === 0) return [];
   const limit = Math.max(1, Math.min(concurrency, items.length));
-  const results: TOut[] = new Array(items.length);
+  const results: Array<{ value: TOut } | undefined> = Array.from(
+    { length: items.length },
+    () => undefined
+  );
   let nextIndex = 0;
-  const workers = new Array(limit).fill(null).map(async () => {
+  const workers = Array.from({ length: limit }, async () => {
     while (true) {
       const current = nextIndex++;
       if (current >= items.length) return;
-      results[current] = await fn(items[current], current);
+      results[current] = { value: await fn(items[current], current) };
     }
   });
   await Promise.all(workers);
-  return results;
+  return Array.from({ length: items.length }, (_unused, index) => {
+    const entry = results[index];
+    if (entry === undefined) throw new Error(`concurrent mapper omitted result ${index}`);
+    return entry.value;
+  });
 }
 
 // ============================================================
@@ -664,7 +916,7 @@ export async function mapWithConcurrencyLimit<TIn, TOut>(
 // ============================================================
 
 export type OnUpdateCallback = (partial: {
-  content: Array<{ type: string; text: string }>;
+  content: Array<{ type: "text"; text: string }>;
   details: SubagentDetails;
 }) => void;
 
@@ -739,15 +991,48 @@ export async function runSingleAgent(
   let tmpPromptPath: string | null = null;
   let tmpBaseDir: string | null = null;
   let tmpBasePath: string | null = null;
-  let tmpSessionDir: string | null = null;
+  let sessionState: ReturnType<typeof resolvePennyProjectState>;
+  try {
+    sessionState = resolvePennyProjectState(defaultCwd, {
+      env: ownerEnvironment ?? process.env,
+    });
+  } catch (error) {
+    const code = error instanceof PennyStateResolutionError ? error.code : "STATE_CUSTODY_INVALID";
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      agent: agentName,
+      agentSource: agent.source,
+      task,
+      exitCode: 1,
+      messages: [],
+      stderr: `${code}: subagent state preflight failed before spawn. ${message}`,
+      errorMessage: `${code}: subagent state preflight failed before spawn. ${message}`,
+      stopReason: "error",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        contextTokens: 0,
+        turns: 0,
+      },
+      step,
+    };
+  }
+  const sessionAgentName = agentName.replace(/[^A-Za-z0-9._-]+/gu, "_");
+  const durableSessionDir = path.join(
+    sessionState.paths.subagentSessions,
+    sessionAgentName || "unknown-agent"
+  );
+  ensureOwnerDirectory(durableSessionDir, "Penny subagent session directory");
 
-  tmpSessionDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-session-"));
   const args: string[] = [
     "--mode",
     "json",
     "-p",
     "--session-dir",
-    tmpSessionDir,
+    durableSessionDir,
     "--no-themes",
     "--no-skills",
     "--no-prompt-templates",
@@ -780,38 +1065,20 @@ export async function runSingleAgent(
   // Per-agent thinking/effort level (frontmatter `thinking:`), e.g. xhigh. The
   // spawned pi subprocess accepts `--thinking <off|minimal|low|medium|high|xhigh>`.
   if (agent.thinking) args.push("--thinking", agent.thinking);
-  // Pass all declared agent tools via --tools so Pi exposes them to the agent.
-  // artifact_read is owner-grant-sensitive: a declared allowlist cannot expose
-  // it without an invocation environment, while a valid owner environment adds
-  // it for this worker only. The artifact extension still validates the exact
-  // refs; tool visibility and PENNY_RUNTIME_ROLE are not authorization.
-  const hasArtifactGrant = hasOwnerArtifactGrant(ownerEnvironment);
+  // YAML is the sole runtime tool authority. Pass the exact declared list with
+  // no additions, removals, trust-profile filtering, or conditional tools.
+  args.push("--tools", agent.tools.join(","));
 
-  // Memory read access: enabled when the primary session has a configured
-  // memory hub. The worker-read branch of the memory extension will register
-  // only read tools (writeEnabled=false). If the env vars are missing, the
-  // extension gracefully degrades and registers no tools.
-  //
-  // Memory tools are declared in each agent's frontmatter `tools:` field and
-  // `tool_profiles:` (via the `memory.read` profile in check_tool_profiles.py).
-  // The agent-runner does NOT inject them dynamically — the frontmatter is the
-  // entire control plane (universal-agents PRD R1.5, R2.1). The runner only
-  // sets the role marker and passes through read-only memory env vars.
-  const memoryReadAccess = Boolean(
-    process.env.PENNY_MEMORY_MODE === "hub" &&
-    process.env.PENNY_MEMORY_MCP_ENDPOINT &&
-    process.env.PENNY_MEMORY_MCP_TOKEN_FILE &&
-    process.env.PENNY_MEMORY_PALACE_ID
-  );
-
-  if (agent.tools && agent.tools.length > 0) {
-    const tools = agent.tools.filter((tool) => tool !== ARTIFACT_TOOL_NAME);
-    if (hasArtifactGrant) tools.push(ARTIFACT_TOOL_NAME);
-    if (tools.length > 0) args.push("--tools", tools.join(","));
-    else args.push("--no-tools");
-  }
-  if (!hasArtifactGrant) args.push("--exclude-tools", ARTIFACT_TOOL_NAME);
+  // Select the worker-read memory actor whenever the YAML surface declares a
+  // memory tool. Missing backing configuration remains a tool-call error; it
+  // must never make a declared tool disappear.
+  const memoryReadAccess = agent.tools.some((tool) => tool.startsWith("memory_"));
   const workerEnvironment = ownerSuppliedAgentEnvironment(ownerEnvironment, { memoryReadAccess });
+  const parentSessionId = ownerEnvironment?.PENNY_SUBAGENT_PARENT_SESSION_ID ?? getSessionId();
+  if (parentSessionId) workerEnvironment.PENNY_SUBAGENT_PARENT_SESSION_ID = parentSessionId;
+  workerEnvironment.PENNY_SUBAGENT_PROJECT_ID = sessionState.projectId;
+  workerEnvironment.PENNY_SUBAGENT_AGENT_NAME = agentName;
+  workerEnvironment.PENNY_SUBAGENT_INVOCATION_ID = randomUUID();
 
   const currentResult: SingleResult = {
     agent: agentName,
@@ -902,10 +1169,8 @@ export async function runSingleAgent(
       // Using "pipe" would keep a writable stream handle in the parent's
       // event loop, preventing Pi's process from exiting cleanly.
       //
-      // Pi's print mode exits when the event loop drains. Extensions that
-      // create persistent connections (WebSocket, timers) must call .unref()
-      // on them, or they prevent the event loop from draining and the
-      // subprocess never exits. See: observability/index.ts, memory/index.ts.
+      // Pi's print mode exits when the event loop drains. Extensions must not
+      // leave referenced sockets, subprocesses, or timers behind.
       //
       // No hard timeout — Pi has internal safety (context limits, cost limits).
       // The abort signal handles user-initiated cancellation.
@@ -918,83 +1183,79 @@ export async function runSingleAgent(
 
       const processLine = (line: string) => {
         if (!line.trim()) return;
-        let event: Record<string, unknown>;
+        let parsed: unknown;
         try {
-          event = JSON.parse(line) as Record<string, unknown>;
+          parsed = JSON.parse(line);
         } catch {
           return;
         }
+        if (!isRecord(parsed)) return;
+        const event = parsed;
+        const eventMessage = adaptPiJsonMessage(event.message);
 
         eventCount++;
-        lastEventType = (event.type as string) || "unknown";
+        lastEventType = typeof event.type === "string" && event.type ? event.type : "unknown";
 
         // Emit progress events for heartbeat tracking
         if (progressEmitter) {
           if (event.type === "agent_start") {
             progressEmitter.markProgress({ type: "agent_start", timestamp: Date.now() });
-          } else if (event.type === "message_end" && event.message) {
-            const msg = event.message as Message;
-            if (msg.role === "assistant" && msg.stopReason) {
+          } else if (event.type === "message_end" && eventMessage?.role === "assistant") {
+            if (eventMessage.stopReason) {
               progressEmitter.markProgress({ type: "message_end", timestamp: Date.now() });
             }
-          } else if (event.type === "tool_result_end" && event.message) {
-            const msg = event.message as Message;
+          } else if (event.type === "tool_result_end" && eventMessage) {
             progressEmitter.markProgress({
               type: "tool_result",
               timestamp: Date.now(),
-              detail: (msg as { toolName?: string }).toolName || undefined,
+              detail: eventMessage.role === "toolResult" ? eventMessage.toolName : undefined,
             });
-          } else if (event.type === "message" && event.message) {
-            const msg = event.message as Message;
-            if (msg.role === "toolResult") {
-              progressEmitter.markProgress({
-                type: "tool_result",
-                timestamp: Date.now(),
-                detail: (msg as { toolName?: string }).toolName || undefined,
-              });
-            }
+          } else if (event.type === "message" && eventMessage?.role === "toolResult") {
+            progressEmitter.markProgress({
+              type: "tool_result",
+              timestamp: Date.now(),
+              detail: eventMessage.toolName,
+            });
           }
         }
 
         if (event.type === "agent_end") {
           _hasAgentEnd = true;
-          // Pi's print mode sets process.exitCode and returns from main().
-          // The process exits when the event loop drains. Extensions that hold
-          // event loop references (WebSocket connections, timers) must call
-          // .unref() on them so they don't prevent process exit.
-          // See: observability/index.ts and memory/index.ts for the .unref() fixes.
+          // Pi's print mode sets process.exitCode and returns from main(). The
+          // process exits only after extension-owned event-loop handles drain.
         }
 
-        if (event.type === "message_end" && event.message) {
+        if (event.type === "message_end" && eventMessage) {
           hasMessageEnd = true;
-          const msg = event.message as Message;
-          currentResult.messages.push(msg);
+          currentResult.messages.push(eventMessage);
 
-          if (msg.role === "assistant") {
+          if (eventMessage.role === "assistant") {
             currentResult.usage.turns++;
-            const usage = msg.usage;
+            const usage = eventMessage.usage;
             if (usage) {
               currentResult.usage.input += usage.input || 0;
               currentResult.usage.output += usage.output || 0;
               currentResult.usage.cacheRead += usage.cacheRead || 0;
               currentResult.usage.cacheWrite += usage.cacheWrite || 0;
-              currentResult.usage.cost +=
-                (usage.cost as { total?: number } | undefined)?.total || 0;
+              currentResult.usage.cost += usage.cost?.total || 0;
               currentResult.usage.contextTokens = usage.totalTokens || 0;
             }
-            if (!currentResult.model && msg.model) currentResult.model = msg.model;
-            if (msg.stopReason) currentResult.stopReason = msg.stopReason;
-            if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
+            if (!currentResult.model && eventMessage.model) {
+              currentResult.model = eventMessage.model;
+            }
+            if (eventMessage.stopReason) currentResult.stopReason = eventMessage.stopReason;
+            if (eventMessage.errorMessage) currentResult.errorMessage = eventMessage.errorMessage;
           }
           emitUpdate();
         }
 
-        if (event.type === "tool_result_end" && event.message) {
-          const captured = captureToolResultForExecutionOwner(
-            event.message as Record<string, unknown>
-          );
-          currentResult.messages.push(captured as unknown as Message);
-          emitUpdate();
+        if (event.type === "tool_result_end" && eventMessage) {
+          const captured = captureToolResultForExecutionOwner(eventMessage);
+          const capturedMessage = adaptPiJsonMessage(captured);
+          if (capturedMessage) {
+            currentResult.messages.push(capturedMessage);
+            emitUpdate();
+          }
         }
       };
 
@@ -1080,6 +1341,21 @@ export async function runSingleAgent(
 
     return currentResult;
   } finally {
+    try {
+      hardenDurableSubagentSessions(durableSessionDir);
+      const removed = pruneDurableSubagentSessions(durableSessionDir);
+      if (removed.length > 0) {
+        logger.info("Pruned durable subagent sessions", {
+          agent: agentName,
+          count: removed.length,
+        });
+      }
+    } catch (error) {
+      logger.warn("Durable subagent session retention failed closed", {
+        agent: agentName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     if (tmpPromptPath)
       try {
         fs.unlinkSync(tmpPromptPath);
@@ -1103,13 +1379,6 @@ export async function runSingleAgent(
         fs.rmdirSync(tmpBaseDir);
       } catch {
         /* ignore */
-      }
-    // Use rmSync (not rmdirSync) — Pi writes session files into the session directory.
-    if (tmpSessionDir)
-      try {
-        fs.rmSync(tmpSessionDir, { recursive: true });
-      } catch {
-        /* ignore — session dir may be locked by Pi process */
       }
   }
 }
@@ -1140,28 +1409,7 @@ export async function runAgentsParallel(
     throw new Error(`Too many parallel tasks (${tasks.length}). Max is ${MAX_PARALLEL_TASKS}.`);
   }
 
-  const allResults: SingleResult[] = new Array(tasks.length);
-
-  // Initialize placeholder results
-  for (let i = 0; i < tasks.length; i++) {
-    allResults[i] = {
-      agent: tasks[i].agent,
-      agentSource: "unknown",
-      task: tasks[i].task,
-      exitCode: -1,
-      messages: [],
-      stderr: "",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        cost: 0,
-        contextTokens: 0,
-        turns: 0,
-      },
-    };
-  }
+  const allResults = tasks.map((task) => createPendingSingleResult(task.agent, task.task));
 
   const results = await mapWithConcurrencyLimit(tasks, MAX_CONCURRENCY, async (t, index) => {
     const result = await runSingleAgent(

@@ -1,30 +1,47 @@
-import type { Message } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   withFileMutationQueue: vi.fn((_path: string, fn: () => unknown) => fn()),
 }));
 
 import { getFinalOutput } from "../../agent-runner.js";
 
-function messages(finalContent: Array<Record<string, unknown>>): Message[] {
+const ZERO_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+function assistantMessage(content: AssistantMessage["content"]): AssistantMessage {
+  return {
+    role: "assistant",
+    content,
+    api: "anthropic-messages",
+    provider: "fixture",
+    model: "fixture",
+    usage: ZERO_USAGE,
+    stopReason: "stop",
+    timestamp: 0,
+  };
+}
+
+function messages(finalContent: AssistantMessage["content"]): Message[] {
   return [
-    {
-      role: "assistant",
-      content: [{ type: "text", text: "earlier turn must not leak" }],
-    },
+    assistantMessage([{ type: "text", text: "earlier turn must not leak" }]),
     {
       role: "toolResult",
       toolCallId: "call-earlier",
       toolName: "read",
       content: [{ type: "text", text: "tool output must not leak" }],
       isError: false,
+      timestamp: 0,
     },
-    {
-      role: "assistant",
-      content: finalContent,
-    },
-  ] as unknown as Message[];
+    assistantMessage(finalContent),
+  ];
 }
 
 describe("canonical finalized assistant output", () => {

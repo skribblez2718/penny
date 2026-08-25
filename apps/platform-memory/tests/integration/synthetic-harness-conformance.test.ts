@@ -6,9 +6,16 @@ import {
   PlatformMemoryClientV1,
   assertDistinctIsolatedMemoryConfigsV1,
   type IsolatedPlatformMemoryConfigV1,
-  type PlatformMemoryOperation,
 } from "../../src/index.js";
-import { ALPHA_TOKEN, BETA_TOKEN, isolatedConfig } from "../fixtures.js";
+import {
+  ALPHA_TOKEN,
+  BETA_TOKEN,
+  isolatedConfig,
+  parseJson,
+  requireArray,
+  requireRecord,
+  requireString,
+} from "../fixtures.js";
 
 interface Drawer {
   drawer_id: string;
@@ -28,7 +35,7 @@ interface SyntheticPalace {
 
 const servers: Server[] = [];
 
-function rpcResult(id: string, data: Record<string, unknown>): Buffer {
+function rpcResult(id: string, data: Record<string, unknown>): Buffer<ArrayBufferLike> {
   return Buffer.from(
     JSON.stringify({
       jsonrpc: "2.0",
@@ -38,18 +45,32 @@ function rpcResult(id: string, data: Record<string, unknown>): Buffer {
   );
 }
 
+function requestChunk(value: unknown): Buffer<ArrayBufferLike> {
+  if (typeof value === "string") return Buffer.from(value);
+  if (value instanceof Uint8Array) return Buffer.from(value);
+  throw new Error("synthetic palace received a non-byte request chunk");
+}
+
 async function startSyntheticPalace(state: SyntheticPalace): Promise<string> {
   const server = createServer((request: IncomingMessage, response) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    const chunks: Buffer<ArrayBufferLike>[] = [];
+    request.on("data", (chunk: unknown) => chunks.push(requestChunk(chunk)));
     request.on("end", () => {
       if (request.headers.authorization !== `Bearer ${state.token}`) {
         response.writeHead(403).end();
         return;
       }
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
-        id: string;
-        params: { name: string; arguments: Record<string, unknown> };
+      const parsed = requireRecord(
+        parseJson(Buffer.concat(chunks).toString("utf8")),
+        "synthetic palace received a non-object request"
+      );
+      const params = requireRecord(parsed.params, "synthetic palace request omitted params");
+      const body = {
+        id: requireString(parsed.id, "synthetic palace request omitted id"),
+        params: {
+          name: requireString(params.name, "synthetic palace request omitted tool name"),
+          arguments: requireRecord(params.arguments, "synthetic palace request omitted arguments"),
+        },
       };
       const { name, arguments: input } = body.params;
       state.calls.push(name);
@@ -132,6 +153,20 @@ function data(result: { data: Record<string, unknown> }): Record<string, unknown
   return result.data;
 }
 
+function invokeUnchecked(
+  client: PlatformMemoryClientV1,
+  operation: string,
+  input: Record<string, unknown>
+): Promise<unknown> {
+  const result: unknown = Reflect.apply(client.invoke, client, [operation, input]);
+  if (!(result instanceof Promise)) throw new Error("platform memory invocation was not async");
+  return result;
+}
+
+function resultArray(result: { data: Record<string, unknown> }, key: string): unknown[] {
+  return requireArray(data(result)[key], `platform memory result omitted ${key}`);
+}
+
 afterEach(async () => {
   await Promise.all(
     servers
@@ -173,9 +208,9 @@ describe("two synthetic harness conformance", () => {
     ];
     for (const client of clients) {
       for (const [operation, input] of attempts) {
-        await expect(
-          client.invoke(operation as PlatformMemoryOperation, input)
-        ).rejects.toMatchObject({ code: "MEMORY_DISABLED" });
+        await expect(invokeUnchecked(client, operation, input)).rejects.toMatchObject({
+          code: "MEMORY_DISABLED",
+        });
       }
     }
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -231,10 +266,10 @@ describe("two synthetic harness conformance", () => {
     const beta = new PlatformMemoryClientV1(betaConfig, { env });
 
     expect(
-      data(await alpha.invoke("search", { query: "beta-only-memory" })).results as unknown[]
+      resultArray(await alpha.invoke("search", { query: "beta-only-memory" }), "results")
     ).toEqual([]);
     expect(
-      data(await beta.invoke("search", { query: "alpha-only-memory" })).results as unknown[]
+      resultArray(await beta.invoke("search", { query: "alpha-only-memory" }), "results")
     ).toEqual([]);
     await expect(alpha.invoke("get_drawer", { drawer_id: "beta-private" })).rejects.toMatchObject({
       code: "MEMORY_INVALID_REQUEST",
@@ -257,7 +292,7 @@ describe("two synthetic harness conformance", () => {
       content: "alpha-new-memory",
     });
     expect(
-      data(await beta.invoke("search", { query: "alpha-new-memory" })).results as unknown[]
+      resultArray(await beta.invoke("search", { query: "alpha-new-memory" }), "results")
     ).toEqual([]);
 
     for (const [client, otherEntity] of [
@@ -265,7 +300,7 @@ describe("two synthetic harness conformance", () => {
       [beta, "Alpha"],
     ] as const) {
       expect(
-        data(await client.invoke("kg_query", { entity: otherEntity })).facts as unknown[]
+        resultArray(await client.invoke("kg_query", { entity: otherEntity }), "facts")
       ).toEqual([]);
       await expect(
         client.invoke("diary_read", { agent_name: `diary-${otherEntity.toLowerCase()}` })
@@ -277,7 +312,7 @@ describe("two synthetic harness conformance", () => {
         })
       ).rejects.toMatchObject({ code: "MEMORY_INVALID_REQUEST" });
       for (const operation of ["delete", "admin", "logstream-read", "logstream-write"] as const) {
-        await expect(client.invoke(operation as never, {})).rejects.toMatchObject({
+        await expect(invokeUnchecked(client, operation, {})).rejects.toMatchObject({
           code: "MEMORY_OPERATION_FORBIDDEN",
         });
       }
@@ -288,17 +323,21 @@ describe("two synthetic harness conformance", () => {
       predicate: "uses",
       object: "forged-cross-fact",
     });
-    const betaFacts = data(await beta.invoke("kg_query", { entity: "Beta" })).facts as Array<{
-      object: string;
-    }>;
-    expect(betaFacts.map((fact) => fact.object)).not.toContain("forged-cross-fact");
+    const betaFacts = resultArray(await beta.invoke("kg_query", { entity: "Beta" }), "facts");
+    const betaFactObjects = betaFacts.map((fact) =>
+      requireString(
+        requireRecord(fact, "KG fact was not an object").object,
+        "KG fact omitted object"
+      )
+    );
+    expect(betaFactObjects).not.toContain("forged-cross-fact");
 
     await alpha.invoke("diary_write", { entry: "alpha-new-diary" });
-    expect(data(await alpha.invoke("diary_read", {})).entries as string[]).toEqual([
+    expect(resultArray(await alpha.invoke("diary_read", {}), "entries")).toEqual([
       "alpha-diary",
       "alpha-new-diary",
     ]);
-    expect(data(await beta.invoke("diary_read", {})).entries as string[]).toEqual(["beta-diary"]);
+    expect(resultArray(await beta.invoke("diary_read", {}), "entries")).toEqual(["beta-diary"]);
     expect(alphaState.calls).not.toContain("mempalace_delete_drawer");
     expect(betaState.calls).not.toContain("mempalace_delete_drawer");
     expect(

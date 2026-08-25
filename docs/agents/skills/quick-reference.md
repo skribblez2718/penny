@@ -14,7 +14,7 @@
 3. Write one Domain Guidance prompt per worker/state.
 4. Make every cognitive directive declare exact `input_artifacts` and an owner
    `output_artifact` contract.
-5. Require workers to use `artifact_read` through complete continuation, return
+5. Require workers to use `artifact_read` through `next_range`, return
    complete stage content, and keep routing fields separate from product bytes.
 6. Add README, reference, and `resources/flow.html`.
 7. Add playbook, artifact-handoff, memory-absent recovery, composition, and source-guard tests.
@@ -41,7 +41,7 @@
 - Treating a SUMMARY or model-authored locator as persistence proof.
 - Giving workers `memory_*` tools or room instructions.
 - Requiring a room-manifest entry for a new skill.
-- Silently truncating artifact content instead of following continuation.
+- Silently truncating artifact content instead of following `next_range`.
 
 ## Files
 

@@ -247,26 +247,32 @@ def weekly_archival_report(drawer_list: List[DrawerMeta], now: Optional[datetime
 def _drawer_from_payload(raw: object) -> DrawerMeta:
     if not isinstance(raw, dict):
         raise ValidationError("hub get_drawer returned a non-object drawer")
-    drawer_id = raw.get("drawer_id", raw.get("id"))
+    payload: dict[str, object] = {str(key): value for key, value in raw.items()}
+    drawer_id = payload.get("drawer_id", payload.get("id"))
     if not isinstance(drawer_id, str) or not drawer_id:
         raise ValidationError("hub get_drawer returned a drawer without an id")
-    content = raw.get("content", raw.get("text", raw.get("document", "")))
+    content = payload.get("content", payload.get("text", payload.get("document", "")))
     if not isinstance(content, str):
         raise ValidationError(f"drawer {drawer_id} has non-text content")
-    metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+    metadata_value = payload.get("metadata")
+    metadata: dict[str, object] = (
+        {str(key): value for key, value in metadata_value.items()}
+        if isinstance(metadata_value, dict)
+        else {}
+    )
     return DrawerMeta(
         drawer_id=drawer_id,
-        wing=str(raw.get("wing", metadata.get("wing", ""))),
-        room=str(raw.get("room", metadata.get("room", ""))),
+        wing=str(payload.get("wing", metadata.get("wing", ""))),
+        room=str(payload.get("room", metadata.get("room", ""))),
         timestamp=str(
-            raw.get(
+            payload.get(
                 "filed_at",
-                raw.get("created_at", metadata.get("filed_at", metadata.get("date", ""))),
+                payload.get("created_at", metadata.get("filed_at", metadata.get("date", ""))),
             )
         ),
         content=content,
-        recall_count=int(raw.get("recall_count", metadata.get("recall_count", 0)) or 0),
-        last_recalled_at=str(raw.get("last_recalled_at", metadata.get("last_recalled_at", ""))),
+        recall_count=int(str(payload.get("recall_count", metadata.get("recall_count", 0)) or 0)),
+        last_recalled_at=str(payload.get("last_recalled_at", metadata.get("last_recalled_at", ""))),
     )
 
 

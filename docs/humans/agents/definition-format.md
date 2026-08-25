@@ -9,13 +9,13 @@ role-specific Non-Negotiables, Output, and the `<agent_boundary>` insertion anch
 
 Workers now receive read-only memory tools (the `memory.read` profile: search,
 read drawers/list/taxonomy, read KG, read Penny's diary) but no write tools.
-Their role files include `artifact_read` because workflows may grant exact
-current-run inputs; the runner hides that tool when no trusted grant exists.
+Their role files include `artifact_read` because workflows pass exact immutable IDs.
+The tool remains visible exactly as YAML declares, even when no inputs are supplied.
 
 Working Discipline now says:
 
-- read every granted `input_artifacts` ref with `artifact_read`;
-- follow typed continuation until the input is complete;
+- read every needed `input_artifacts` ID with `artifact_read` and `next_range`;
+- repeat with `next_range` until the input is complete;
 - do not discover predecessor workflow output through another channel;
 - preserve the role's evidence/honesty contract and SUMMARY wire vocabulary.
 
@@ -29,8 +29,8 @@ not the model, proves persistence and registration.
 | ------------------- | ----------------------------------------------------------------------------------------------------- |
 | `name`              | Lowercase alphanumeric plus hyphens; matches filename.                                                |
 | `description`       | One-line role, positive triggers, and anti-cases.                                                     |
-| `tools`             | Comma-delimited role minimum. Include `artifact_read` and `memory.read` profile tools.                |
-| `authority`         | Maximum authority class: `read`, `write`, or `inspect`. Cannot be broadened by invocation or skills.  |
+| `tools`             | Required non-empty duplicate-free exact active list; include `artifact_read`.                         |
+| `authority`         | Static intent class (`read`, `write`, or `inspect`) used to lint the exact YAML list.                 |
 | `tool_profiles`     | Named rungs that expand exactly to `tools:`. Verified by `check_tool_profiles.py` in `make lint`.     |
 | capability metadata | `capability`, `family`, `transformation`, `accepts`, `produces`, and semantic coordinates. See below. |
 | `model`             | Runtime-resolvable model name.                                                                        |
@@ -51,8 +51,9 @@ roster tables are prohibited.
 Descriptions name only a role's nearest confusable **neighbours** (at most three) instead of
 enumerating everything it is not. See [Capability Registry](capability-registry.md).
 
-`tools:` is the only local tool declaration. A task, prompt body, artifact, or
-remote service cannot add a tool. `authority` and `tool_profiles` make the intended
+`tools:` is the exact runtime surface. A task, prompt body, trust profile, skill,
+artifact, or remote service cannot add, remove, or suppress a tool. `authority` and
+`tool_profiles` statically lint the intended
 authority declared and machine-checked; see [Tool Authority Profiles](tool-profiles.md).
 
 ## Why this format matters

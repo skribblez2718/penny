@@ -1,6 +1,7 @@
 """Chunk reassembly for MemPalace drawers — the read-side inverse of chunking.
 
-``memory_bridge.tool_add_drawer`` (via ``_chunk_text``) splits content over the
+The legacy raw bridge's ``tool_add_drawer`` (via ``_chunk_text``; that bridge is
+retired) split content over the
 chunk threshold into NON-overlapping sibling chunks that share a ``drawer_key``
 metadata field and are ordered by ``chunk_index`` — a clean ``content[i:i+size]``
 split, so concatenating a drawer's chunks in ``chunk_index`` order EXACTLY

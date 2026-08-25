@@ -7,8 +7,8 @@
  * The CONTROL DATABASE (the checkpointer) indexes the input BEFORE its bytes
  * exist: one `preparing` record with host-preallocated exact final/temporary
  * keys, committed in the same transaction as the durable run row and the
- * idempotency record. This module owns only the BYTES under the trusted input
- * root `$PROJECT_ROOT/.penny/orchestration-inputs/` and performs the CAS that
+ * idempotency record. This module owns only the BYTES under the trusted,
+ * catalog-bound project input root and performs the CAS that
  * each filesystem step earns:
  *
  * ```text
@@ -56,6 +56,7 @@ import path from "node:path";
 import type { Checkpointer } from "./checkpointer.js";
 import { canonicalJson, sha256 } from "./checkpointer.js";
 import type { RunContext } from "./context.js";
+import { resolvePennyProjectState } from "./state/setup.js";
 
 /** A custody, hash, or lifecycle refusal. `code` is bounded and safe to surface. */
 export class PrivateInputError extends Error {
@@ -81,9 +82,19 @@ function ownerUid(): number | undefined {
   }
 }
 
-/** The trusted input root: ignored, owner-only, never a model-visible argument. */
+function errorHasCode(error: unknown, code: string): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    error.code === code
+  );
+}
+
+/** The trusted catalog-bound input root; never a model-visible argument. */
 export function privateInputRoot(projectRoot: string): string {
-  return path.join(projectRoot, ".penny", "orchestration-inputs");
+  return resolvePennyProjectState(path.resolve(projectRoot)).paths.orchestration.inputs;
 }
 
 function assertOwnerDirectory(dir: string, what: string): void {
@@ -381,7 +392,7 @@ function discardExactKeys(
     try {
       unlinkSync(exact);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (!errorHasCode(error, "ENOENT")) throw error;
     }
   }
   if (existsSync(keys.runDir)) fsyncDirectory(keys.runDir);
@@ -425,7 +436,8 @@ export function readRunInput(input: {
     );
   }
   try {
-    return JSON.parse(stored.toString("utf8")) as unknown;
+    const value: unknown = JSON.parse(stored.toString("utf8"));
+    return value;
   } catch {
     throw new PrivateInputError("hash_mismatch", "the private input is not valid JSON");
   }
@@ -452,7 +464,7 @@ export function verifyAndSettleTerminalStart(input: {
   ) {
     return undefined;
   }
-  const result = terminal.result as Record<string, unknown>;
+  const result: Record<string, unknown> = terminal.result;
   const admission = input.checkpointer.getStartAdmission(input.run.identity.run_id);
   if (admission === undefined) return result;
   const storedTerminal = input.checkpointer.terminalResult(input.run.identity.run_id);
@@ -524,7 +536,7 @@ export function settleRunInput(input: {
     try {
       unlinkSync(exact);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (!errorHasCode(error, "ENOENT")) throw error;
     }
   }
   if (existsSync(runDir)) {

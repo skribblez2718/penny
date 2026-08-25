@@ -118,6 +118,72 @@ export class GateStorageError extends Error {
   }
 }
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isGateStatus(value: unknown): value is GateStatus {
+  return (
+    value === "awaiting" ||
+    value === "claimed" ||
+    value === "approved" ||
+    value === "denied" ||
+    value === "invalidated"
+  );
+}
+
+function isGateArtifact(value: unknown): value is GateState["artifacts"][number] {
+  return (
+    isUnknownRecord(value) &&
+    value["schema_version"] === 1 &&
+    typeof value["artifact_id"] === "string" &&
+    typeof value["artifact_kind"] === "string" &&
+    typeof value["sha256"] === "string" &&
+    typeof value["media_type"] === "string" &&
+    typeof value["byte_length"] === "number"
+  );
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+/** Legacy rows remain forward-compatible: required fields are checked, extras are retained. */
+function isGateState(value: unknown): value is GateState {
+  return (
+    isUnknownRecord(value) &&
+    value["schema_version"] === 1 &&
+    typeof value["gate_id"] === "string" &&
+    typeof value["run_id"] === "string" &&
+    typeof value["kb_profile_id"] === "string" &&
+    value["action"] === "ingest" &&
+    isGateStatus(value["status"]) &&
+    typeof value["issued_at"] === "string" &&
+    typeof value["expires_at"] === "string" &&
+    typeof value["base_generation_id"] === "string" &&
+    typeof value["base_catalog_sha256"] === "string" &&
+    isStringArray(value["source_capability_ids"]) &&
+    isStringArray(value["source_ids"]) &&
+    Array.isArray(value["artifacts"]) &&
+    value["artifacts"].every(isGateArtifact) &&
+    typeof value["packet_sha256"] === "string" &&
+    (value["terminal_at"] === undefined || typeof value["terminal_at"] === "string") &&
+    (value["terminal_reason"] === undefined || typeof value["terminal_reason"] === "string") &&
+    (value["published_generation_id"] === undefined ||
+      typeof value["published_generation_id"] === "string")
+  );
+}
+
+function parseGateState(source: string): GateState {
+  const value: unknown = JSON.parse(source);
+  if (!isGateState(value)) throw new GateStorageError("gate row is malformed");
+  return value;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Atomically write the gate row only if the current file still equals `expectedContent`. */
 function casWrite(root: string, gate: GateState, expectedContent: string | undefined): void {
   const dir = gatesDir(root);
@@ -153,24 +219,21 @@ function casWrite(root: string, gate: GateState, expectedContent: string | undef
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
-function artifactRecords(
-  handles: readonly {
-    schema_version: 1;
-    artifact_id: string;
-    artifact_kind: string;
-    sha256: string;
-    media_type: string;
-    byte_length: number;
-  }[]
-): GateState["artifacts"] {
-  return handles.map((h) => ({
-    schema_version: 1,
-    artifact_id: h.artifact_id,
-    artifact_kind: h.artifact_kind,
-    sha256: h.sha256,
-    media_type: h.media_type,
-    byte_length: h.byte_length,
-  }));
+function artifactRecords(handles: readonly Record<string, unknown>[]): GateState["artifacts"] {
+  return handles.map((handle) => {
+    const projected: unknown = {
+      schema_version: handle["schema_version"],
+      artifact_id: handle["artifact_id"],
+      artifact_kind: handle["artifact_kind"],
+      sha256: handle["sha256"],
+      media_type: handle["media_type"],
+      byte_length: handle["byte_length"],
+    };
+    if (!isGateArtifact(projected)) {
+      throw new GateStorageError("gate artifact handle is malformed");
+    }
+    return projected;
+  });
 }
 
 /**
@@ -204,7 +267,7 @@ export function persistIngestGate(
     base_catalog_sha256: current.catalog_sha256,
     source_capability_ids: [...sourceCapabilityIds],
     source_ids: [...sourceIds],
-    artifacts: artifactRecords((artifacts ?? []) as GateState["artifacts"]),
+    artifacts: artifactRecords(artifacts),
     packet_sha256: "",
   };
   gate.packet_sha256 = gatePacketDigest(gate);
@@ -242,7 +305,7 @@ export function readGate(root: string, gateId: string): GateState | undefined {
   const p = gatePath(root, gateId);
   if (!existsSync(p)) return undefined;
   assertSafe(p, "gate row");
-  return JSON.parse(readFileSync(p, "utf8")) as GateState;
+  return parseGateState(readFileSync(p, "utf8"));
 }
 
 /** Find the gate row for a run (gates are keyed by a minted gate_id; index by run here). */
@@ -253,7 +316,7 @@ export function findGateForRun(root: string, runId: string): GateState | undefin
     if (!f.endsWith(".json")) continue;
     try {
       const p = path.join(dir, f);
-      const g = JSON.parse(readFileSync(p, "utf8")) as GateState;
+      const g = parseGateState(readFileSync(p, "utf8"));
       if (g.run_id === runId) return g;
     } catch {
       // skip unreadable rows
@@ -270,7 +333,7 @@ export function listGates(root: string): GateState[] {
     if (!f.endsWith(".json")) continue;
     try {
       const p = path.join(dir, f);
-      gates.push(JSON.parse(readFileSync(p, "utf8")) as GateState);
+      gates.push(parseGateState(readFileSync(p, "utf8")));
     } catch {
       // skip
     }
@@ -420,7 +483,7 @@ export function approveGate(
           root,
           current,
           "awaiting",
-          `approval_failed_released: ${(err as Error).message.slice(0, 200)}`
+          `approval_failed_released: ${errorMessage(err).slice(0, 200)}`
         );
       }
     } catch {

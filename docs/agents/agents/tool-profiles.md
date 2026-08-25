@@ -14,9 +14,9 @@ profiles must equal its `tools:` list exactly.
 
 ## Rules
 
-1. **Role Definition selects the maximum authority class.** Invocation context or a
-   skill may narrow what an agent actually uses; neither may broaden it beyond the
-   declared profiles.
+1. **Profiles statically lint the exact YAML surface.** Their expansion must equal
+   `tools:`. Invocation context, trust profiles, and skills may guide what the agent uses,
+   but may not add, remove, suppress, replace, or conditionally expose a tool.
 2. **Rungs are strictly additive.** Each rung contains every tool of the rung below it
    plus a bounded, named increment. Restoring one rung is a one-line edit, which is
    what makes the reduction safe to attempt.

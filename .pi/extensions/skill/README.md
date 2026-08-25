@@ -23,10 +23,16 @@ No Python process, per-skill executable delegate, or legacy checkpoint conversio
 - **Chain:** sequential TypeScript runs with exact terminal-artifact handoff.
 - **Resume:** reloads the durable owner-only chain checkpoint and resumes the failed step.
 
-For chain handoff, the owner reads the exact terminal bytes and persists a target-run
-`chain_input` artifact. `{previous}` becomes a bounded instruction identifying that grant;
-payload text is never substituted into the goal. Chain checkpoints retain the terminal
-and ingress refs across restart.
+For chain handoff, the owner verifies and forwards the prior terminal artifact ID directly;
+cross-run reads require no target-run copy. `{previous}` becomes a bounded instruction
+identifying that ID, never payload text. Additional explicit IDs may be supplied for
+multi-source fan-in. Chain checkpoints retain exact terminal/handoff refs across restart.
+
+## Catalog visibility and entrypoints
+
+Pi's native `<available_skills>` system section is the sole model-facing catalog of skill names, YAML descriptions, and locations. The `skill` tool describes orchestration mechanics without repeating those catalog rows. At prompt assembly, this extension replaces Pi's generic read-to-load sentence with a directive to invoke each matching skill's registered entrypoint and reserve `read` for documentation inspection.
+
+The engine workflow entrypoint is `skill`; the knowledge-base profile deliberately exposes its separate typed `knowledge_base` entrypoint. The extension registers both tools, and unit coverage rejects registration drift.
 
 ## Model policy
 
@@ -35,16 +41,25 @@ optional per-invocation override applied to every worker in that run, primarily 
 It does not mutate production frontmatter. A step-level chain/parallel override is scoped
 to that step.
 
-## Artifact and authority model
+## Artifact communication and tool authority
 
-- Every worker receives a closed `InputArtifactsV1` grant.
-- Exact finalized output bytes are persisted by the TypeScript artifact owner before
-  routing fields can advance the engine.
+- Inputs are unique exact artifact IDs/refs from any run; existence and integrity are
+  checked before worker execution.
+- Exact finalized output bytes are persisted and immediately re-read before routing fields
+  are parsed or a successful result is returned.
 - Receipts bind run, state, branch, agent, attempt, trust posture, invocation digest,
   output digest, and canonical artifact ref.
-- Run context stores selected refs, not payload bytes.
-- Memory is never workflow transport or persistence proof.
-- Worker tools come from agent SSOT; hardened posture strips mutation/execution tools.
+- Run context stores selected refs, not payload bytes. Memory is never workflow transport.
+- A catalog worker's exact active tools equal its `.pi/agents/<agent>.md` YAML `tools:` list
+  under every trust profile. The runtime neither strips hardened tools nor injects result
+  or artifact tools.
+- Every provider extension loads before session creation. Optional-service absence is a
+  typed call error, not conditional tool omission.
+- Standard catalog workers return complete assistant output plus their closed `SUMMARY`
+  line. Owner code parses routing only from persisted bytes; no injected
+  `submit_orchestration_result` tool exists.
+- KB's host-tool-matrix session is explicitly anonymous and does not load or claim a
+  catalog role. Catalog-agent invocations may never replace YAML tools with that matrix.
 
 ## Recovery
 
@@ -52,14 +67,16 @@ to that step.
 the pending checkpoint. A fresh recovery under `active` reissues the exact selected refs
 and output contract. Unknown mode values fail closed.
 
-The TypeScript database defaults to `$PROJECT_ROOT/.penny/orchestration-v2.db`. Existing
-runs remain owner-sticky by `run_id`; retired Python checkpoints are archived outside the
-runtime and are never converted.
+The TypeScript database is the current opaque project partition's unversioned
+`orchestration/orchestration.db` below `${PENNY_STATE_ROOT:-<Pi getAgentDir()>/penny}`.
+Existing runs remain owner-sticky by `run_id`; retired Python checkpoints are archived
+outside the runtime and are never a fallback. Chain checkpoints use the same project
+partition and include its opaque project ID.
 
 ## KB host-grant authority
 
-Profile-session and parent-delivery grants share the owner-only
-`$PROJECT_ROOT/.penny/kb-host-grants/grants.sqlite` WAL/FULL database. There is no JSON or
+Profile-session and parent-delivery grants share one owner-only WAL/FULL database in the current
+opaque project's catalog-bound `kb/host-grants` partition. There is no project-local, JSON, or
 secondary-directory fallback. Unexpected legacy fragments block the authority rather than being
 scanned or adopted.
 
@@ -71,16 +88,17 @@ query request, and the resulting grant remains exact single-use by one delivered
 
 ## Parameters
 
-| Parameter                    | Scope       | Description                                      |
-| ---------------------------- | ----------- | ------------------------------------------------ |
-| `skill_name`, `goal`         | single      | Registered skill and objective                   |
-| `session_id`, `project_root` | single      | Optional stable identity and target root         |
-| `constraints`                | all         | Bounded skill-specific constraints               |
-| `model`                      | single/step | Test/caller worker-model override                |
-| `skills`                     | parallel    | Up to three independent skill steps              |
-| `chain`                      | chain       | Up to ten sequential steps                       |
-| `resume_chain`               | resume      | Durable chain checkpoint ID                      |
-| `step_overrides`             | resume      | Goal/constraint changes for the failed step only |
+| Parameter            | Scope       | Description                                          |
+| -------------------- | ----------- | ---------------------------------------------------- |
+| `skill_name`, `goal` | single      | Registered skill and objective                       |
+| `session_id`         | single      | Optional stable run identity                         |
+| `constraints`        | all         | Bounded skill-specific constraints                   |
+| `input_artifacts`    | single/step | Unique exact IDs from any run; verified before start |
+| `model`              | single/step | Test/caller worker-model override                    |
+| `skills`             | parallel    | Up to three independent skill steps                  |
+| `chain`              | chain       | Up to ten sequential steps                           |
+| `resume_chain`       | resume      | Durable chain checkpoint ID                          |
+| `step_overrides`     | resume      | Goal/constraint changes for the failed step only     |
 
 ## Testing
 

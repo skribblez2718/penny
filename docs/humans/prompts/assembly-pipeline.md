@@ -2,53 +2,40 @@
 
 ## Direct primary conversation
 
-Pi loads the Cognitive Frame, project indexes, discovered skills, date/cwd, and
-the user's task. The unmarked primary runtime may expose durable-memory tools.
+Pi loads the Cognitive Frame, project indexes, discovered skills, date/cwd, and the user's
+task. The primary runtime may expose durable-memory tools.
 
-## Worker dispatch
+## Catalog-worker dispatch
 
-1. The runner reads and transforms the Cognitive Frame, removing parent-only protocols.
-2. It reads one Role Definition from the current `.pi/agents` catalog snapshot.
-3. It injects optional static Domain Guidance before `<agent_boundary>`.
-4. Pi appends project indexes and runtime context.
-5. The runner marks the process as a worker, strips approval/receipt secrets, and
-   applies the role tool allowlist.
-6. If trusted owner metadata grants exact artifacts, the runner exposes
-   `artifact_read`; otherwise it explicitly excludes that tool.
-7. The task supplies the current goal, constraints, and exact input/output
-   artifact contracts.
+1. Transform the Cognitive Frame and remove parent-only protocols.
+2. Read one Role Definition from the current `.pi/agents` snapshot.
+3. Inject optional static Domain Guidance before `<agent_boundary>`.
+4. Append project indexes and current task context.
+5. Load all tool providers, validate every YAML name, and activate exactly the YAML
+   `tools:` list—no trust/profile/input-dependent changes.
+6. Verify every supplied artifact ID before model use.
 
-Workers receive no durable-memory tools.
+Workers may have YAML-declared read-only memory tools, but those are advisory recall rather
+than workflow transport.
 
 ## Output path
 
-The worker reads every granted input with `artifact_read` and follows typed
-continuation until complete. It returns complete stage content, then any
-Domain-Guidance SUMMARY. The execution owner persists and verifies exact bytes
-before parsing the SUMMARY or advancing a skill/chain.
+The worker reads needed IDs with `artifact_read` and repeats with `next_range` until
+complete. It returns complete content and a final routing-only SUMMARY. Owner code persists
+and re-reads exact bytes before parsing SUMMARY or returning success.
 
-Parallel branches get no sibling grants. A chain grants only the verified prior
-step ref; `{previous}` points to that ref rather than carrying payload text.
+Parallel branches can receive independent exact IDs. Chain mode inserts the prior ID
+automatically and permits additional fan-in IDs; `{previous}` never carries payload.
 
-## Context-safe continuation
+## Recovery
 
-The artifact tool has no list/search/self-grant surface. Continuation cursors are
-bound to caller, operation, query/ref, revision, and next byte range. Missing or
-invalid content fails closed.
+`artifact_read` has no list/search/guess surface. IDs/ranges do not expire. Checkpoints
+preserve compact refs. Compaction emits prose plus exact code-proven current-session refs,
+or one immutable handoff-index ID when the set is large. Memory is optional and never
+recovery authority.
 
-Run checkpoints preserve compact state and selected refs. After compaction, a
-prose brief plus optional code-owned `[RESUME-REFS v2]` addresses restores the
-same continuation. Durable memory is optional and not recovery authority.
+## Markers and controls
 
-## Structural markers and controls
-
-`<skill_context>`, `<agent_boundary>`, and `<system_boundary>` help the model parse
-regions. Actual controls are system-role placement, tool allowlists, artifact
-grants, signed workflow receipts, and OS/container permissions.
-
-## Fixed channels
-
-Pi still provides one system prompt, one append-system-prompt channel, AGENTS
-context, skill discovery, runtime info, and the user/task message. Role Definition
-and Domain Guidance share the append channel and remain separated by the static
-`<skill_context>` wrapper.
+`<skill_context>`, `<agent_boundary>`, and `<system_boundary>` aid parsing. Actual controls
+are system-role placement, the exact YAML surface, workflow gates/receipts, artifact byte
+integrity, and OS/container permissions.

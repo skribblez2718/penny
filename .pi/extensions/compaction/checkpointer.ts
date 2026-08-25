@@ -8,7 +8,8 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { isAbsolute, join, resolve } from "node:path";
+
+import { resolvePennyProjectState } from "@penny/orchestration/source";
 
 import { createLogger } from "../../lib/logger/logger.js";
 import {
@@ -17,16 +18,33 @@ import {
   type ArtifactRef,
   type EngineRunRef,
 } from "./schema.js";
-import { asRecord, asString } from "./pi-messages.js";
+import { asRecord, asString, isRecord } from "./pi-messages.js";
 
 const logger = createLogger("compaction-checkpointer");
-const MAX_EXACT_RUN_IDS = 20;
-const MAX_SELECTED_REFS_PER_RUN = 100;
 
 export interface CheckpointReadResult {
   runs: EngineRunRef[];
   artifactRefs: ArtifactRef[];
   issues: string[];
+}
+
+interface SqliteStatementBoundary {
+  get(...parameters: unknown[]): unknown;
+  all(...parameters: unknown[]): unknown[];
+}
+
+interface SqliteDatabaseBoundary {
+  exec(sql: string): unknown;
+  prepare(sql: string): SqliteStatementBoundary;
+  close(): void;
+}
+
+interface SqliteRuntimeBoundary {
+  DatabaseSync: new (path: string, options: { readOnly: boolean }) => SqliteDatabaseBoundary;
+}
+
+function isSqliteRuntimeBoundary(value: unknown): value is SqliteRuntimeBoundary {
+  return isRecord(value) && typeof value.DatabaseSync === "function";
 }
 
 function canonicalRunId(value: unknown): string | null {
@@ -39,11 +57,19 @@ function canonicalRunId(value: unknown): string | null {
   return value;
 }
 
-function configuredDatabasePath(projectRoot?: string): string | null {
-  const configured = process.env.PENNY_ORCH_V2_DB?.trim();
-  if (configured) return isAbsolute(configured) ? resolve(configured) : null;
-  const root = projectRoot || process.env.PROJECT_ROOT || process.cwd();
-  return resolve(join(root, ".penny", "orchestration-v2.db"));
+function configuredDatabase(projectRoot: string): {
+  databasePath: string;
+  projectId: string;
+} | null {
+  try {
+    const state = resolvePennyProjectState(projectRoot);
+    return {
+      databasePath: state.paths.orchestration.database,
+      projectId: state.projectId,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function artifactIdentity(ref: ArtifactRef): string {
@@ -82,13 +108,6 @@ function parseSelectedArtifacts(
   if (!Array.isArray(raw)) {
     return { refs: [], issues: [`run ${runId}: selected_artifacts is not an array`] };
   }
-  if (raw.length > MAX_SELECTED_REFS_PER_RUN) {
-    return {
-      refs: [],
-      issues: [`run ${runId}: selected_artifacts exceeds the strict limit`],
-    };
-  }
-
   const refs: ArtifactRef[] = [];
   const issues: string[] = [];
   for (let index = 0; index < raw.length; index += 1) {
@@ -161,25 +180,32 @@ function parseCheckpointRow(rowValue: unknown): {
  */
 export function readExactCheckpoints(
   runIds: readonly string[],
-  projectRoot?: string
+  projectRoot: string
 ): CheckpointReadResult {
   const exactIds = Array.from(
     new Set(runIds.map(canonicalRunId).filter((value): value is string => value !== null))
-  ).slice(0, MAX_EXACT_RUN_IDS);
+  );
   if (exactIds.length === 0) return { runs: [], artifactRefs: [], issues: [] };
 
-  const databasePath = configuredDatabasePath(projectRoot);
-  if (!databasePath || !existsSync(databasePath)) {
+  const configured = configuredDatabase(projectRoot);
+  if (!configured || !existsSync(configured.databasePath)) {
     return { runs: [], artifactRefs: [], issues: [] };
   }
 
-  let database: InstanceType<(typeof import("node:sqlite"))["DatabaseSync"]> | undefined;
+  let database: SqliteDatabaseBoundary | undefined;
   try {
-    const { DatabaseSync } = createRequire(import.meta.url)(
-      "node:sqlite"
-    ) as typeof import("node:sqlite");
-    database = new DatabaseSync(databasePath, { readOnly: true });
+    const sqliteRuntime: unknown = createRequire(import.meta.url)("node:sqlite");
+    if (!isSqliteRuntimeBoundary(sqliteRuntime)) {
+      throw new TypeError("node:sqlite has an invalid DatabaseSync export");
+    }
+    database = new sqliteRuntime.DatabaseSync(configured.databasePath, { readOnly: true });
     database.exec("PRAGMA query_only = ON");
+    const metadata = asRecord(
+      database.prepare("SELECT project_id FROM store_metadata WHERE singleton = 1").get()
+    );
+    if (String(metadata.project_id ?? "") !== configured.projectId) {
+      throw new Error("orchestration database project binding does not match the catalog");
+    }
     const placeholders = exactIds.map(() => "?").join(",");
     const rows = database
       .prepare(

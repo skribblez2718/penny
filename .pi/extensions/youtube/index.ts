@@ -1,3 +1,4 @@
+import { registerTool } from "../../lib/pi-tool-registration.js";
 /**
  * YouTube Extension
  *
@@ -9,8 +10,8 @@
  * proxy support, Invidious fallback, and multiple language/caption formats.
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
-import { Type, type Static } from "@sinclair/typebox";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { Type, type Static } from "typebox";
 import { createLogger } from "../../lib/logger/logger.js";
 import { fetchTranscript, extractVideoId } from "./client.js";
 import {
@@ -84,24 +85,16 @@ export default async function youtubeExtension(pi: ExtensionAPI) {
   // ==========================
   // TOOL: youtube_transcript
   // ==========================
-  pi.registerTool({
+  registerTool(pi, {
     name: "youtube_transcript",
     label: "YouTube Transcript",
     description:
-      "Fetch the transcript/captions from a YouTube video along with metadata (title, author, video ID). " +
-      "Returns the full transcript text or structured JSON with timing. Supports multiple format options " +
-      "(text, json, srt, webvtt) and language fallback for automatic caption detection.",
+      "Fetch the transcript/captions from a YouTube URL or video ID along with metadata (title, author, video ID). " +
+      "Use for transcript retrieval, summaries, key-point extraction, or timing-aware analysis; do not use when the task does not require video captions. " +
+      "Returns readable text or structured JSON/SRT/WebVTT with timing and supports language fallback. Some videos have no captions or are region-locked.",
     promptSnippet: "youtube_transcript with { url, format, languages }",
-    promptGuidelines: [
-      "Use youtube_transcript when the user asks for a video transcript, summary, or key points.",
-      "Accept YouTube URLs (youtube.com/watch, youtu.be, embed, shorts) or raw 11-character video IDs.",
-      "For technical analysis, prefer format='json' for structured data with timing info.",
-      "For readable summaries, use format='text' (default).",
-      "If captions are in another language, set languages=['auto'] or specific language codes.",
-      "Handle videoUnavailable errors gracefully — some videos have no captions or are region-locked.",
-    ],
     parameters: TranscriptParams,
-    async execute(_toolCallId: string, params: TranscriptParams) {
+    async execute(_toolCallId, params) {
       try {
         const { url, format, languages } = params;
 

@@ -1,4 +1,4 @@
-# Skribble — KB promotion patch
+# Anonymous private worker — KB promotion patch
 
 ## Mission
 
@@ -10,7 +10,7 @@ filesystem, search, network, memory, or extension tools.
 
 1. **Start with `read_phase_brief({schema_version:1})` before any other action.** It returns exact run/state/scope
    metadata and the plan handle. Do not plan or answer in assistant prose first.
-2. Read Piper's allowed plan artifact with `read_run_artifact({schema_version:1,artifact_id})`.
+2. Read the allowed plan artifact with `read_run_artifact({schema_version:1,artifact_id})`.
 3. Read every requested advisory revision with `read_selected_page({schema_version:1,page_id,revision_id})`.
 4. Read every claimed target with `read_canonical_target({schema_version:1,capability_id})`; it returns current
    content and the preimage digest, never a path.

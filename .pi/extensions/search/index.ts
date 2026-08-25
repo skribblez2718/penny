@@ -1,3 +1,4 @@
+import { registerTool } from "../../lib/pi-tool-registration.js";
 /**
  * Search Extension — web search and web fetch via Ollama's Web Search API
  *
@@ -10,8 +11,8 @@
  * Docs: https://docs.ollama.com/capabilities/web-search
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { type Static, Type } from "@sinclair/typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { createLogger, setSessionId, type ErrorCode } from "../../lib/logger/logger.js";
 import {
   clampMaxResults,
@@ -43,10 +44,6 @@ const WebFetchParams = Type.Object({
   url: Type.String({ description: "The http(s) URL of the page to fetch" }),
 });
 
-interface SessionContext {
-  sessionManager: { getSessionId(): string };
-}
-
 const ERROR_CODES: Record<SearchErrorKind, ErrorCode> = {
   api_key_missing: "SEARCH_API_KEY_MISSING",
   client_error: "SEARCH_CLIENT_ERROR",
@@ -64,41 +61,31 @@ function textResult(payload: unknown) {
 
 function errorResult(tool: string, e: unknown) {
   const err = e instanceof Error ? e : new Error(String(e));
-  const kind = e instanceof SearchApiError ? e.kind : ("network_error" as SearchErrorKind);
+  const kind: SearchErrorKind = e instanceof SearchApiError ? e.kind : "network_error";
   logger.error(`${tool} failed`, { kind }, Object.assign(err, { code: ERROR_CODES[kind] }));
   return textResult({ success: false, error: err.message });
 }
 
 export default function searchExtension(pi: ExtensionAPI): void {
-  pi.on("session_start", async (_event: unknown, ctx: SessionContext) => {
+  pi.on("session_start", async (_event, ctx) => {
     setSessionId(ctx.sessionManager.getSessionId());
   });
 
   // ── Tool 1: web_search ──
-  pi.registerTool({
+  registerTool(pi, {
     name: "web_search",
     label: "Web Search",
     description: [
       "Search the web for a query using Ollama's Web Search API.",
       "Returns up to 10 results, each with title, url, and content (page excerpt).",
-      "Use for discovering current information, documentation, or sources beyond local files.",
-      "Follow up with web_fetch to read a specific result's full page.",
+      "Use for current information, external documentation, or sources beyond local project material and durable memory.",
+      "Do not use when the supplied or local material is sufficient.",
+      "Prefer specific queries, refine before broadening, cite result URLs, and follow up with web_fetch for a relevant page's full content.",
       "Example: web_search({query: 'ollama web search api', max_results: 5})",
     ].join(" "),
     promptSnippet: "web_search with { query, max_results }",
-    promptGuidelines: [
-      "Use web_search for current events, external documentation, or anything not in the local project or memory.",
-      "Prefer specific queries over broad ones; refine and re-search rather than requesting more results.",
-      "Cite result URLs when using searched information in output.",
-    ],
     parameters: WebSearchParams,
-    execute: async (
-      _toolCallId: string,
-      params: Static<typeof WebSearchParams>,
-      signal: AbortSignal | undefined,
-      _onUpdate: unknown,
-      _ctx: unknown
-    ) => {
+    execute: async (_toolCallId, params, signal) => {
       // Read env at call time — after the environment extension has loaded .env
       const config = resolveConfig(process.env);
       try {
@@ -117,29 +104,19 @@ export default function searchExtension(pi: ExtensionAPI): void {
   });
 
   // ── Tool 2: web_fetch ──
-  pi.registerTool({
+  registerTool(pi, {
     name: "web_fetch",
     label: "Web Fetch",
     description: [
-      "Fetch a single web page by URL using Ollama's Web Fetch API.",
+      "Fetch a single HTTP(S) page by URL using Ollama's Web Fetch API.",
       "Returns the page title, extracted text content, and links found on the page.",
-      "Use to read the full content of a page discovered via web_search or a known URL.",
+      "Use to read a relevant result discovered through web_search or a known URL; do not use it as a broad discovery tool.",
+      `Content beyond ${MAX_FETCH_CONTENT_CHARS} characters is truncated.`,
       "Example: web_fetch({url: 'https://docs.ollama.com/capabilities/web-search'})",
     ].join(" "),
     promptSnippet: "web_fetch with { url }",
-    promptGuidelines: [
-      "Use web_fetch to read full page content after web_search identifies relevant URLs.",
-      "Only http and https URLs are supported; content is truncated beyond " +
-        `${MAX_FETCH_CONTENT_CHARS} characters.`,
-    ],
     parameters: WebFetchParams,
-    execute: async (
-      _toolCallId: string,
-      params: Static<typeof WebFetchParams>,
-      signal: AbortSignal | undefined,
-      _onUpdate: unknown,
-      _ctx: unknown
-    ) => {
+    execute: async (_toolCallId, params, signal) => {
       const urlError = validateHttpUrl(params.url);
       if (urlError) {
         return textResult({ success: false, error: urlError });

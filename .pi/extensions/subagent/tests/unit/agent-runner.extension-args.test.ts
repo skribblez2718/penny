@@ -12,7 +12,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   withFileMutationQueue: vi.fn((_path: string, fn: () => unknown) => fn()),
 }));
 
@@ -21,6 +21,8 @@ let extDirExists = true;
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const KNOWN_DIR_EXTS = ["compaction", "memory", "observability"];
+  const directoryStats = actual.statSync(new URL("../../", import.meta.url));
+  const fileStats = actual.statSync(new URL(import.meta.url));
   return {
     ...actual,
     existsSync: vi.fn((p: unknown) => {
@@ -29,19 +31,15 @@ vi.mock("node:fs", async () => {
       // subdir extensions have an index.ts; the single-file one does not
       return KNOWN_DIR_EXTS.some((name) => s.endsWith(`/extensions/${name}/index.ts`));
     }),
-    statSync: vi.fn((p: unknown) => {
-      const s = String(p);
-      return {
-        isDirectory: () => s.endsWith("/extensions"),
-        isFile: () => !s.endsWith("/extensions"),
-      } as unknown as import("node:fs").Stats;
-    }),
+    statSync: vi.fn((p: unknown) =>
+      String(p).endsWith("/extensions") ? directoryStats : fileStats
+    ),
     readdirSync: vi.fn((p: unknown) => {
       if (String(p).endsWith("/extensions")) {
         // intentionally unsorted to prove the function sorts deterministically
-        return ["observability", "memory", "single.ts", "compaction"] as unknown as string[];
+        return ["observability", "memory", "single.ts", "compaction"];
       }
-      return [] as unknown as string[];
+      return [];
     }),
   };
 });

@@ -2,10 +2,10 @@
   "name": "@penny/artifacts-extension",
   "version": "1.0.0",
   "main": "index.ts",
-  "description": "Constrained read-only access to exact owner-granted immutable artifacts",
+  "description": "Direct bounded reads of exact immutable artifact IDs",
   "type": "module",
   "scripts": {
-    "lint": "eslint . --ext .ts",
+    "lint": "eslint . --ext .ts --max-warnings=0",
     "lint:fix": "eslint . --ext .ts --fix",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
     "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
@@ -17,11 +17,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@penny/orchestration": "workspace:*",
-    "@sinclair/typebox": "^0.34.49"
+    "@penny/orchestration": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^6.0.3",
     "vitest": "^2.1.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   }
 }

@@ -1,4 +1,6 @@
+import { requireValue } from "../tests/helpers/narrowing.js";
 import { existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -9,13 +11,16 @@ import { sha256Hex } from "../src/kb/contracts.js";
 import { KB_PHASE_TOOL_MATRIX } from "../src/kb/session-tools.js";
 import {
   G8_SMOKE_MANIFEST_PATH,
-  G8_SMOKE_RESULT_PATH,
+  G8_SMOKE_RESULT_FILENAME,
+  G8_SMOKE_RESULT_PATH_ENV,
   g8SmokeCohortIssueCodes,
   g8SmokeScheduledPairs,
   loadG8SmokeCohortManifest,
   loadG8SmokeResultReceipt,
   parseG8SmokeCohortManifestJcs,
   parseG8SmokeResultReceiptJcs,
+  resolveG8SmokeResultPath,
+  resolveG8SmokeResultShaPath,
   type G8SmokePairReceipt,
   type G8SmokeResultReceipt,
   type G8SmokeScheduledPair,
@@ -28,7 +33,8 @@ const toolMatrix = [
   { phase: "query", tools: [...KB_PHASE_TOOL_MATRIX.query] },
   { phase: "verify", tools: [...KB_PHASE_TOOL_MATRIX.verify] },
 ] as const satisfies G8SmokeToolMatrix;
-const resultReceiptExists = existsSync(path.join(repoRoot, G8_SMOKE_RESULT_PATH));
+const resultPath = resolveG8SmokeResultPath();
+const resultReceiptExists = existsSync(resultPath);
 
 function phaseMetrics() {
   return {
@@ -98,6 +104,20 @@ function withPayloadDigest(
 }
 
 describe("predeclared stable G8 qwen smoke cohort", () => {
+  it("resolves live result output to an absolute override or a deterministic tmp file", () => {
+    const defaultPath = path.join(tmpdir(), G8_SMOKE_RESULT_FILENAME);
+    expect(resolveG8SmokeResultPath({})).toBe(defaultPath);
+    expect(resolveG8SmokeResultShaPath({})).toBe(`${defaultPath}.sha256`);
+
+    const configured = path.join(tmpdir(), "custom-g8-smoke-result.jcs.json");
+    const env = { [G8_SMOKE_RESULT_PATH_ENV]: configured };
+    expect(resolveG8SmokeResultPath(env)).toBe(configured);
+    expect(resolveG8SmokeResultShaPath(env)).toBe(`${configured}.sha256`);
+    expect(() =>
+      resolveG8SmokeResultPath({ [G8_SMOKE_RESULT_PATH_ENV]: "relative/result.json" })
+    ).toThrow(/must be an absolute path/u);
+  });
+
   it("strict-loads one exact-JCS manifest with the frozen review bindings", () => {
     const loaded = loadG8SmokeCohortManifest(repoRoot);
     expect(loaded.sha256).toBe("37145abe042b717ce07a49211e613dd0afb4e9543966e2c57eed51545cf76847");
@@ -171,7 +191,11 @@ describe("predeclared stable G8 qwen smoke cohort", () => {
       g8SmokeCohortIssueCodes({ manifest, pairs: passing, excludedPairs: 0, retries: 0 })
     ).toEqual([]);
 
-    const duplicate = passing.map((pair, index) => (index === 5 ? passing[0]! : pair));
+    const duplicate = passing.map((pair, index) =>
+      index === 5
+        ? requireValue(passing[0], "apps/orchestration/smoke/kb-model-smoke-contract.test.ts:193")
+        : pair
+    );
     expect(
       g8SmokeCohortIssueCodes({ manifest, pairs: duplicate, excludedPairs: 1, retries: 1 })
     ).toEqual([
@@ -201,10 +225,12 @@ describe("predeclared stable G8 qwen smoke cohort", () => {
   });
 });
 
-describe.skipIf(!resultReceiptExists)("actual ignored G8 qwen smoke receipt", () => {
+describe.skipIf(!resultReceiptExists)("optional G8 qwen smoke result", () => {
   it("strict-parses the exact JCS receipt and matching SHA sidecar", () => {
     const loaded = loadG8SmokeResultReceipt(repoRoot, toolMatrix);
-    expect(loaded.sha256).toBe("a0890c5dd528deb527fed2ff6ee89c2cec13f581b7e9d56fef2dbd413e50a313");
+    expect(loaded.path).toBe(resultPath);
+    expect(loaded.sidecarPath).toBe(`${resultPath}.sha256`);
+    expect(loaded.sha256).toBe(sha256Hex(loaded.bytes));
     expect(loaded.bytes).toBe(jcsCanonicalize(loaded.receipt));
     expect(loaded.receipt.pairs.map((pair) => pair.pair_id)).toEqual(
       g8SmokeScheduledPairs(loadG8SmokeCohortManifest(repoRoot).manifest).map(
@@ -218,17 +244,32 @@ describe.skipIf(!resultReceiptExists)("actual ignored G8 qwen smoke receipt", ()
     const { manifest } = loadG8SmokeCohortManifest(repoRoot);
     const forged = [
       withPayloadDigest(loaded.receipt, (receipt) => {
-        receipt.pairs[0]!.terminal.action = "incomplete";
-        receipt.pairs[0]!.terminal.status = "incomplete";
-        receipt.pairs[0]!.terminal.met = false;
+        requireValue(
+          receipt.pairs[0],
+          "apps/orchestration/smoke/kb-model-smoke-contract.test.ts:242"
+        ).terminal.action = "incomplete";
+        requireValue(
+          receipt.pairs[0],
+          "apps/orchestration/smoke/kb-model-smoke-contract.test.ts:243"
+        ).terminal.status = "incomplete";
+        requireValue(
+          receipt.pairs[0],
+          "apps/orchestration/smoke/kb-model-smoke-contract.test.ts:244"
+        ).terminal.met = false;
         return receipt;
       }),
       withPayloadDigest(loaded.receipt, (receipt) => {
-        receipt.pairs[0]!.terminal.met = false;
+        requireValue(
+          receipt.pairs[0],
+          "apps/orchestration/smoke/kb-model-smoke-contract.test.ts:248"
+        ).terminal.met = false;
         return receipt;
       }),
       withPayloadDigest(loaded.receipt, (receipt) => {
-        receipt.pairs[0]!.phases = [];
+        requireValue(
+          receipt.pairs[0],
+          "apps/orchestration/smoke/kb-model-smoke-contract.test.ts:252"
+        ).phases = [];
         return receipt;
       }),
     ];

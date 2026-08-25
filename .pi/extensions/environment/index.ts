@@ -16,7 +16,12 @@
  * 3. Empty string (if not found)
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type {
+  BeforeAgentStartEvent,
+  ExtensionAPI,
+  ExtensionContext,
+  SessionStartEvent,
+} from "@earendil-works/pi-coding-agent";
 import { readFile, access } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
@@ -69,23 +74,6 @@ function getCurrentDate(): string {
 interface EnvConfig {
   [key: string]: string | undefined;
   CURRENT_DATE?: string; // Always present - computed from system clock
-}
-
-/**
- * Context passed to the `session_start` handler by the Pi runtime.
- * The Pi SDK exposes these as `any`; we declare the subset we consume.
- */
-interface SessionStartContext {
-  cwd: string;
-  hasUI: boolean;
-  ui: { notify(message: string, level: "info" | "warn" | "error"): void };
-}
-
-/**
- * Event payload passed to the `before_agent_start` handler by the Pi runtime.
- */
-interface BeforeAgentStartEvent {
-  systemPrompt: string;
 }
 
 /**
@@ -170,7 +158,7 @@ function substituteEnvVars(content: string, config: EnvConfig): string {
   }
 
   // Substitute remaining ${VAR} from process.env (except CURRENT_DATE which is always from system)
-  result = result.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, varName) => {
+  result = result.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match: string, varName: string) => {
     // CURRENT_DATE should always come from config (system clock), not process.env
     if (varName === "CURRENT_DATE") {
       return config.CURRENT_DATE ?? "";
@@ -207,7 +195,7 @@ export default async function (pi: ExtensionAPI) {
   systemContent = await readFileOrNull(join(cwd, SYSTEM_PATH));
   initialized = true;
 
-  pi.on("session_start", async (_event: unknown, ctx: SessionStartContext) => {
+  pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext) => {
     const sessionCwd = ctx.cwd;
 
     // Re-load .env config (picks up changes and fresh CURRENT_DATE)
@@ -226,7 +214,7 @@ export default async function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("before_agent_start", async (event: BeforeAgentStartEvent, _ctx: unknown) => {
+  pi.on("before_agent_start", async (event: BeforeAgentStartEvent) => {
     if (!initialized) return;
 
     let systemPrompt = event.systemPrompt;

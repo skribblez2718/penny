@@ -44,6 +44,29 @@ interface AdvisoryEvent {
 
 const SAFE_TYPE_SET = new Set<string>(SAFE_ADVISORY_EVENT_TYPES);
 const STATUS_SET = new Set<string>(UPSTREAM_LOGSTREAM_STATUSES);
+
+function isAdvisoryEventType(value: unknown): value is AdvisoryEventType {
+  return typeof value === "string" && SAFE_TYPE_SET.has(value);
+}
+
+function isAdvisoryEventStatus(value: unknown): value is AdvisoryEventStatus {
+  return typeof value === "string" && STATUS_SET.has(value);
+}
+
+function isPermittedEventType(
+  value: unknown,
+  allowAck: boolean
+): value is AdvisoryEventType | "event.ack" {
+  return isAdvisoryEventType(value) || (allowAck && value === "event.ack");
+}
+
+function isSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value);
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return isSafeInteger(value) && value >= 1;
+}
 const EVENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const CORRELATION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
@@ -68,10 +91,12 @@ const EVENT_KEYS = new Set([
   "metadata",
 ]);
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  return isUnknownRecord(value) ? value : undefined;
 }
 
 function invalid(message: string): never {
@@ -112,18 +137,18 @@ function requireIdentifier(
 
 function optionalStatus(value: unknown): AdvisoryEventStatus | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "string" || !STATUS_SET.has(value)) {
+  if (!isAdvisoryEventStatus(value)) {
     invalid("status must be an upstream logstream status");
   }
-  return value as AdvisoryEventStatus;
+  return value;
 }
 
 function optionalType(value: unknown): AdvisoryEventType | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "string" || !SAFE_TYPE_SET.has(value)) {
+  if (!isAdvisoryEventType(value)) {
     invalid("type must be a safe advisory event type");
   }
-  return value as AdvisoryEventType;
+  return value;
 }
 
 function hasLoneSurrogate(value: string): boolean {
@@ -162,10 +187,10 @@ function boundedInteger(
   maximum: number
 ): number {
   if (value === undefined) return defaultValue;
-  if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > maximum) {
+  if (!isSafeInteger(value) || value < minimum || value > maximum) {
     invalid(`${label} must be an integer between ${minimum} and ${maximum}`);
   }
-  return value as number;
+  return value;
 }
 
 function assertPayloadKeys(
@@ -266,10 +291,7 @@ export class MemoryLogstreamAdapter {
       integrity("Memory hub returned the excluded advisory anchor event");
     }
     const type = event.type;
-    if (
-      typeof type !== "string" ||
-      (!SAFE_TYPE_SET.has(type) && !(options.allowAck && type === "event.ack"))
-    ) {
+    if (!isPermittedEventType(type, options.allowAck)) {
       integrity("Memory hub returned a non-advisory event type");
     }
     if (options.type !== undefined && type !== options.type) {
@@ -305,7 +327,7 @@ export class MemoryLogstreamAdapter {
       integrity("Memory hub returned a forbidden advisory artifact reference");
     }
     const status = event.status;
-    if (status !== null && (typeof status !== "string" || !STATUS_SET.has(status))) {
+    if (status !== null && !isAdvisoryEventStatus(status)) {
       integrity("Memory hub returned an invalid advisory status");
     }
     if (options.status !== undefined && status !== options.status) {
@@ -324,13 +346,11 @@ export class MemoryLogstreamAdapter {
       integrity("Memory hub returned an invalid advisory event timestamp");
     }
     if (
-      !Number.isSafeInteger(event.seq) ||
-      (event.seq as number) < 1 ||
+      !isPositiveSafeInteger(event.seq) ||
       typeof event.origin_replica !== "string" ||
       event.origin_replica.length === 0 ||
       event.origin_replica.length > 256 ||
-      !Number.isSafeInteger(event.origin_seq) ||
-      (event.origin_seq as number) < 1 ||
+      !isPositiveSafeInteger(event.origin_seq) ||
       typeof event.hlc !== "string" ||
       event.hlc.length === 0 ||
       event.hlc.length > 512
@@ -356,15 +376,15 @@ export class MemoryLogstreamAdapter {
     return {
       event: {
         event_id: eventId,
-        type: type as AdvisoryEventType | "event.ack",
+        type,
         room: event.room,
         correlation_id: event.correlation_id,
-        status: status as AdvisoryEventStatus | null,
+        status,
         body: event.body,
         created_at: event.created_at,
         ...(ackOf === undefined ? {} : { ack_of: ackOf }),
       },
-      seq: event.seq as number,
+      seq: event.seq,
     };
   }
 
@@ -617,7 +637,7 @@ export class MemoryLogstreamAdapter {
       wait: false,
     });
     const target = proof.events.find((event) => event.event_id === eventId);
-    if (!target || !SAFE_TYPE_SET.has(target.type)) {
+    if (!target || !isAdvisoryEventType(target.type)) {
       invalid(
         "Ack target scope could not be proved within the bounded configured stream/principal/correlation read"
       );

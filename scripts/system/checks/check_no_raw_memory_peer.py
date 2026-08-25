@@ -13,8 +13,6 @@ ROOT = Path(__file__).resolve().parents[3]
 SCAN_PATHS = (
     "scripts/setup/init-memory.sh",
     "scripts/system/bridge",
-    "scripts/system/evals",
-    "scripts/system/maintenance",
     "scripts/system/memory",
     "scripts/system/tiered_memory",
 )
@@ -22,7 +20,6 @@ HUB_OWNER_MODULES = frozenset({"scripts/system/memory/hub_service.py"})
 OFFLINE_MODULES = frozenset(
     {
         "scripts/system/bridge/fts5_integrity.py",
-        "scripts/system/bridge/memory_bridge.py",
         "scripts/system/bridge/palace_doctor.py",
         "scripts/system/bridge/repair_palace.py",
         "scripts/system/bridge/rebuild_from_disk.py",
@@ -126,8 +123,6 @@ def _runtime_gate_violations(relative: str, source: str) -> list[RawPeerViolatio
         violations.append(
             RawPeerViolation(relative, 1, "offline module lacks runtime receipt gate")
         )
-    if relative.endswith("memory_bridge.py") and "PENNY_MEMORY_BRIDGE_OFFLINE_COMPAT" not in source:
-        violations.append(RawPeerViolation(relative, 1, "legacy bridge lacks explicit env gate"))
     return violations
 
 

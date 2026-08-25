@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { createTestLogger } from "../../../../lib/logger/test-logger.js";
+import { requireDefined } from "../fixtures.js";
 
 describe("memory metadata logging", () => {
   const state = createTestLogger("memory");
@@ -31,12 +32,13 @@ describe("memory metadata logging", () => {
       },
     });
     expect(state.buffer).toHaveLength(1);
-    expect(state.buffer[0]!.message).toBe("memory_tool_result");
-    expect(state.buffer[0]!.context).toMatchObject({
+    const record = requireDefined(state.buffer[0], "memory log record was not captured");
+    expect(record.message).toBe("memory_tool_result");
+    expect(record.context).toMatchObject({
       serializedBytes: 1024,
       page: 1,
       compactionCorrelation: { status: "not_evaluated" },
     });
-    expect(JSON.stringify(state.buffer[0])).not.toContain("private memory content");
+    expect(JSON.stringify(record)).not.toContain("private memory content");
   });
 });

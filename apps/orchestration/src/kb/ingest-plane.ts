@@ -23,9 +23,8 @@
  * is never accepted or reconstructed from the profile id.
  */
 
-import path from "node:path";
-
 import type { Checkpointer } from "../checkpointer.js";
+import { hostGrantAuthorityDir, kbProfileRegistryPath } from "./host-state.js";
 import { resolveGrantedProfile } from "./profile-registry.js";
 import {
   claimCapabilities,
@@ -65,6 +64,53 @@ export interface KbSealInput {
   readonly kbRoot: string;
   readonly runId: string;
   readonly artifactIds: readonly string[];
+}
+
+/**
+ * Exact adapter contract for the retained legacy gate writer.
+ *
+ * `persistIngestGate` still accepts an open record for standalone compatibility,
+ * so production projects the validated content-plane handle field-by-field. The
+ * projection preserves its historical bytes while preventing the open legacy
+ * signature from erasing the handle contract inside the ingest plane.
+ */
+type LegacyIngestGateArtifactContract = {
+  readonly schema_version: ArtifactHandle["schema_version"];
+  readonly artifact_id: ArtifactHandle["artifact_id"];
+  readonly artifact_kind: ArtifactHandle["artifact_kind"];
+  readonly sha256: ArtifactHandle["sha256"];
+  readonly media_type: ArtifactHandle["media_type"];
+  readonly byte_length: ArtifactHandle["byte_length"];
+};
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function pageRevisionRefs(value: unknown): Array<{ page_id: string; revision_id: string }> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate: unknown) => {
+    if (!isUnknownRecord(candidate)) return [];
+    return typeof candidate["page_id"] === "string" && typeof candidate["revision_id"] === "string"
+      ? [{ page_id: candidate["page_id"], revision_id: candidate["revision_id"] }]
+      : [];
+  });
+}
+
+function legacyIngestGateArtifact(handle: ArtifactHandle): LegacyIngestGateArtifactContract {
+  return {
+    schema_version: handle.schema_version,
+    artifact_id: handle.artifact_id,
+    artifact_kind: handle.artifact_kind,
+    sha256: handle.sha256,
+    media_type: handle.media_type,
+    byte_length: handle.byte_length,
+  };
+}
+
+function parseJsonValue(source: string): unknown {
+  const value: unknown = JSON.parse(source);
+  return value;
 }
 
 export interface KbGateInput {
@@ -312,8 +358,8 @@ export function resolveKbRoot(projectRoot: string, profileId: string, sessionId:
   return resolveGrantedProfile({
     profileId,
     sessionId,
-    registryPath: path.join(projectRoot, ".penny", "kb-profiles.json"),
-    grantStoreDir: path.join(projectRoot, ".penny", "kb-host-grants"),
+    registryPath: kbProfileRegistryPath(projectRoot),
+    grantStoreDir: hostGrantAuthorityDir(projectRoot),
   }).resolvedRoot;
 }
 
@@ -459,8 +505,8 @@ export function defaultKbIngestPlane(
         let answerDocument: unknown;
         let verificationDocument: unknown;
         try {
-          answerDocument = JSON.parse(answerRecord.content) as unknown;
-          verificationDocument = JSON.parse(verificationRecord.content) as unknown;
+          answerDocument = parseJsonValue(answerRecord.content);
+          verificationDocument = parseJsonValue(verificationRecord.content);
         } catch {
           answerDocument = null;
           verificationDocument = null;
@@ -620,6 +666,14 @@ export function defaultKbIngestPlane(
         kbRoot: input.kbRoot,
         artifactCheckpointer: artifactControl(),
       });
+      const [planArtifactId, patchArtifactId, verificationArtifactId] = input.artifactIds;
+      if (
+        planArtifactId === undefined ||
+        patchArtifactId === undefined ||
+        verificationArtifactId === undefined
+      ) {
+        throw new Error("promotion approval packet artifact set is incomplete");
+      }
       try {
         const record = store.storePreparedGate({
           runId: input.runId,
@@ -628,9 +682,9 @@ export function defaultKbIngestPlane(
           profileId: input.profileId,
           pageRevisions: input.pageRevisions,
           targetCapabilityIds: input.capabilityIds,
-          planArtifactId: input.artifactIds[0]!,
-          patchArtifactId: input.artifactIds[1]!,
-          verificationArtifactId: input.artifactIds[2]!,
+          planArtifactId,
+          patchArtifactId,
+          verificationArtifactId,
         });
         return { challengeId: record.challenge_id, packetSha256: record.packet_sha256 };
       } finally {
@@ -639,12 +693,9 @@ export function defaultKbIngestPlane(
     },
     persistGate(input) {
       const store = new RunArtifactStore(input.kbRoot, input.runId, artifactControl());
-      let handles: Record<string, unknown>[];
+      let handles: LegacyIngestGateArtifactContract[];
       try {
-        handles = input.artifactIds.map((id) => {
-          const { handle } = store.read(id);
-          return handle as unknown as Record<string, unknown>;
-        });
+        handles = input.artifactIds.map((id) => legacyIngestGateArtifact(store.read(id).handle));
       } finally {
         store.close();
       }
@@ -687,6 +738,12 @@ export function defaultKbIngestPlane(
             })
           : [];
       const publicationTransactionId = input.transactionId ?? input.runId;
+      const requiredSaveQueryRunId = (): string => {
+        if (packet.action !== "save" || packet.query_run_id === undefined) {
+          throw new Error("save content-review packet has no query-run identity");
+        }
+        return packet.query_run_id;
+      };
       const publicationAuthority =
         publicationCheckpointer === undefined
           ? undefined
@@ -724,7 +781,7 @@ export function defaultKbIngestPlane(
                     saveClaimStoreDir(input.projectRoot, packet.kb_profile_id)
                   );
                   store.reserveCommit({
-                    query_run_id: packet.query_run_id!,
+                    query_run_id: requiredSaveQueryRunId(),
                     save_run_id: input.runId,
                     publication_transaction_id: transactionId,
                   });
@@ -734,7 +791,7 @@ export function defaultKbIngestPlane(
                     saveClaimStoreDir(input.projectRoot, packet.kb_profile_id)
                   );
                   store.consume({
-                    query_run_id: packet.query_run_id!,
+                    query_run_id: requiredSaveQueryRunId(),
                     save_run_id: input.runId,
                     publication_transaction_id: transactionId,
                   });
@@ -743,11 +800,12 @@ export function defaultKbIngestPlane(
                   using store = new SaveQueryClaimStore(
                     saveClaimStoreDir(input.projectRoot, packet.kb_profile_id)
                   );
-                  const claim = store.load(packet.query_run_id!);
+                  const queryRunId = requiredSaveQueryRunId();
+                  const claim = store.load(queryRunId);
                   if (claim.save_transaction_id !== transactionId) {
                     throw new Error("save claim abort transaction is not exact");
                   }
-                  store.invalidate(packet.query_run_id!, input.runId);
+                  store.invalidate(queryRunId, input.runId);
                 },
               };
       let result: ReturnType<typeof approveIngest>;
@@ -923,11 +981,7 @@ export function defaultKbIngestPlane(
       });
     },
     verifyPromotion(input) {
-      const refs = Array.isArray(input.pageRevisions)
-        ? (input.pageRevisions as Array<Record<string, unknown>>)
-            .filter((r) => typeof r?.page_id === "string" && typeof r?.revision_id === "string")
-            .map((r) => ({ page_id: String(r.page_id), revision_id: String(r.revision_id) }))
-        : [];
+      const refs = pageRevisionRefs(input.pageRevisions);
       const report = verifyPromotionCandidate({
         projectRoot: input.projectRoot,
         kbRoot: input.kbRoot,

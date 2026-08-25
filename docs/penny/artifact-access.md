@@ -1,71 +1,75 @@
-# Artifact Access
+# Artifact Access Protocol
 
-Read when a delegation returns an artifact ref and the exact output matters, or
-when an `artifact_read` call fails.
+Run this protocol when exact delegation/skill output must be read or forwarded.
+Artifacts are ordinary internal communication addresses, not grants or durable memory.
 
-## What the channel is
+## Result contract
 
-Exact agent output is persisted by the execution owner as an immutable artifact
-before any summary is parsed. The artifact is the authority; the text in the tool
-result is a convenience copy or a bounded preview.
+Every successful producer persists its complete final assistant bytes, re-reads them, and
+prints the exact `art_<64 hex>` ID in model-visible result text.
 
-MemPalace is **not** this channel. It is durable curated memory. It is not a
-communication path, not workflow handoff, and not artifact storage.
+| Mode                | Result text                                    |
+| ------------------- | ---------------------------------------------- |
+| `subagent` single   | Complete output plus one exact-output ID       |
+| `subagent` parallel | Bounded preview plus one labeled ID per branch |
+| `subagent` chain    | Final output plus every step ID in order       |
+| `skill`             | Terminal result plus exact terminal ID(s)      |
 
-## What you receive
+A success without a readable ID is a communication failure, not a best-effort success.
 
-| Delegation                      | In the tool result                                        | Ref location                                 |
-| ------------------------------- | --------------------------------------------------------- | -------------------------------------------- |
-| `subagent` single               | Full final output inline                                  | `details.outputArtifactRefs[0]`              |
-| `subagent` parallel             | **100-character preview per agent** \u2014 not the output | `details.outputArtifactRefs[]`, one per task |
-| `subagent` chain                | Final step output inline                                  | `details.outputArtifactRefs[]` in step order |
-| `skill` (single/chain/parallel) | Final result plus a bounded preview                       | `details.output_artifact_ref`                |
-
-Parallel mode is the case that most often needs a read: the previews are
-truncated at 100 characters, so any real comparison of agent outputs requires
-reading the refs.
-
-## Reading
-
-Pass the `artifact_id` string \u2014 the simple, always-correct path:
+## Read on demand
 
 ```text
-artifact_read({ artifact: "art_<64 hex>" })
+artifact_read({ artifact: "art_<id>" })
 ```
 
-Passing a full ref object also works, but it must be the **exact** ref you were
-handed; a modified ref is rejected as `ARTIFACT_STALE`.
+If `truncated` is true, repeat with the returned non-expiring range:
 
-Large artifacts return `continuation`. Follow it until `continuation` is null if
-you need the whole document; a single bounded page is often enough.
+```text
+artifact_read({ artifact: "art_<id>", range: { start: <next>, end: <end> } })
+```
 
-## When to read
+Continue until `truncated` is false. Verify the returned ID and digest when exact identity
+matters. Do not bulk-read outputs when previews are sufficient.
 
-Read when the full text changes what you do: verifying a specific claim,
-integrating multiple agent outputs, quoting exactly, or recovering detail after
-compaction dropped the inline copy.
+## Forward exact work
 
-Do not bulk-read every ref by reflex. Each read consumes context against the same
-32 KB / 8,192-estimated-token result budget as any other tool result.
+Pass producer IDs through `input_artifacts` rather than re-running the producer or pasting
+payload text:
 
-## Failure codes
+```text
+subagent({
+  agent: "synthia",
+  task: "Integrate the supplied findings.",
+  input_artifacts: ["art_<annie>", "art_<carren>"]
+})
+```
 
-| Code                       | Meaning                                                                                       |
-| -------------------------- | --------------------------------------------------------------------------------------------- |
-| `ARTIFACT_NOT_GRANTED`     | The ID is not in this session's grant book. Expected for another session's or an invented ID. |
-| `ARTIFACT_STALE`           | The grant expired (24 h) or the supplied ref does not exactly match the granted ref.          |
-| `ARTIFACT_MISSING`         | The manifest entry exists but the object is gone \u2014 report it; do not retry.              |
-| `ARTIFACT_DIGEST_MISMATCH` | Content failed verification. Treat as corruption and report it.                               |
-| `ARTIFACT_CONFIG_INVALID`  | The runtime is misconfigured. Not retryable; report it.                                       |
+IDs may come from different agents, runs, sessions, or parallel branches. Owner code
+performs exact manifest lookup plus digest/length verification before spawn. There is no
+same-run restriction or fixed ID-count cap; for very large fan-in, pass one handoff-index
+artifact.
 
-There is deliberately no list, search, or discovery surface. You can only read
-refs the execution owner handed you in this session. If you do not have a ref,
-the answer is to re-run the delegation, not to go looking.
+Chain mode inserts the prior step ID automatically and accepts additional explicit IDs on
+each step. Skill chains forward the prior terminal ID directly across runs.
 
-## Where it lives
+## Missing input
 
-Grants are recorded in an owner-only grant book under
-`$XDG_STATE_HOME/penny/artifact-grants/`, keyed by session, and survive
-compaction and restart. It is deliberately outside the artifact root, which the
-artifact stores claim exclusively. Implementation contract:
-`.pi/extensions/artifacts/README.md`.
+There is no list/search/discovery operation. If a required predecessor ID or explicit file
+path is absent, report `missing_input:`. Do not search memory, `/tmp`, the repository, or
+old sessions for a name such as “the Annie review.” Memory is durable curated recall, not
+work-product transport.
+
+## Errors
+
+| Code                              | Meaning                                                   |
+| --------------------------------- | --------------------------------------------------------- |
+| `ARTIFACT_INVALID_ID`             | The ID shape is invalid.                                  |
+| `ARTIFACT_MISSING`                | No canonical manifest row/object exists for the exact ID. |
+| `ARTIFACT_DIGEST_MISMATCH`        | Immutable bytes do not match the manifest.                |
+| `ARTIFACT_ENCODING_INVALID`       | The artifact is not valid UTF-8 for this read surface.    |
+| `ARTIFACT_RANGE_INVALID`          | The requested byte range is invalid or splits UTF-8.      |
+| `ARTIFACT_CONFIG_INVALID`         | Canonical store configuration/integrity is invalid.       |
+| `ARTIFACT_RESULT_BUDGET_EXCEEDED` | No bounded result envelope can fit.                       |
+
+Implementation contract: `.pi/extensions/artifacts/README.md`.

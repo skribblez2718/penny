@@ -49,8 +49,9 @@ The agent runner force-loads Penny's project extension modules so their tools ex
 - [ ] Prompt markers present and described as structural, not enforcement
 - [ ] User/task authority distinguished from permission authority
 - [ ] External requirements allowed only within the user's request and runtime limits
-- [ ] Agent tool allowlists match declared authority — enforced by
-      `scripts/system/checks/check_tool_profiles.py` in `make lint`, not by review
+- [ ] Each catalog agent's active tools equal YAML `tools:` exactly; profiles statically
+      lint that list through `scripts/system/checks/check_tool_profiles.py`, while runtime
+      equality guards cover every production runner
       (see [Tool Authority Profiles](tool-profiles.md)). Browser authority is
       structural; `bash` means filesystem and process authority remain advisory.
 - [ ] Execution-path isolation status accurately documented

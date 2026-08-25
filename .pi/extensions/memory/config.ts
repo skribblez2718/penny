@@ -172,6 +172,14 @@ function required(env: Readonly<Record<string, string | undefined>>, name: strin
   return value;
 }
 
+function preserveUninstallDisposition(
+  env: Readonly<Record<string, string | undefined>>
+): "preserve" {
+  const value = required(env, "PENNY_MEMORY_UNINSTALL_DISPOSITION");
+  if (value !== "preserve") configError("custody.uninstallDisposition must be preserve");
+  return value;
+}
+
 function credentialReference(
   env: Readonly<Record<string, string | undefined>>
 ): MemoryCredentialReference {
@@ -220,7 +228,7 @@ function buildPlatformConfig(
       backupPolicyRef: required(env, "PENNY_MEMORY_BACKUP_POLICY_REF"),
       migrationPolicyRef: required(env, "PENNY_MEMORY_MIGRATION_POLICY_REF"),
       retentionPolicyRef: required(env, "PENNY_MEMORY_RETENTION_POLICY_REF"),
-      uninstallDisposition: required(env, "PENNY_MEMORY_UNINSTALL_DISPOSITION") as "preserve",
+      uninstallDisposition: preserveUninstallDisposition(env),
     },
     capabilities: ["recall-read", "curated-write", "kg-read", "kg-write", "primary-diary"] as const,
     primaryDiaryId: "penny",

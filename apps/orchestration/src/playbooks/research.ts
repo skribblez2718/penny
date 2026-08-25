@@ -272,56 +272,36 @@ function taskForState(context: RunContext, state: ResearchState): string {
   return `${task}${handoff}${clarification}`;
 }
 
-const SUCCESSORS_BY_STATE: Record<ResearchState, readonly string[]> = {
-  planning: ["critiquing_plan", "researching"],
-  critiquing_plan: ["planning", "researching"],
-  researching: ["synthesizing"],
-  synthesizing: ["critiquing_report", "validating"],
-  critiquing_report: ["synthesizing", "validating"],
-  validating: ["researching", "synthesizing", "report_writing"],
-  report_writing: ["complete"],
-};
-
 function selectedInputRefs(context: RunContext, state: ResearchState): ArtifactRef[] {
   const phases = new Set(INPUT_PHASES_BY_STATE[state]);
-  // A skill-chain predecessor is imported into this run as an owner-persisted
-  // `chain_input` artifact. Only the actual entry states consume it; subsequent
-  // phases inherit its information through the first accepted phase output.
+  // Entry states consume every cross-run exact input directly. Subsequent phases
+  // inherit that information through accepted current-run outputs.
   if (state === "planning" || state === "researching") phases.add("chain_input");
+  const entryState = state === "planning" || state === "researching";
   return context.selectedArtifacts
-    .filter((artifact) => phases.has(artifact.phase))
+    .filter(
+      (artifact) =>
+        phases.has(artifact.phase) || (entryState && artifact.run_id !== context.identity.run_id)
+    )
     .sort((left, right) =>
       `${left.phase}/${left.branch_id ?? ""}/${left.version}/${left.artifact_id}`.localeCompare(
         `${right.phase}/${right.branch_id ?? ""}/${right.version}/${right.artifact_id}`
       )
-    )
-    .slice(0, 128);
+    );
 }
 
 function inputArtifacts(
   context: RunContext,
-  state: ResearchState,
+  _state: ResearchState,
   refs: readonly ArtifactRef[]
 ): InputArtifacts {
   return {
-    schema_version: 1,
-    run_id: context.identity.run_id,
-    consumer: `state:${state}`,
+    schema_version: 2,
     artifacts: refs.map((ref, index) => ({
       slot: `upstream-${String(index).padStart(4, "0")}`,
       ref,
     })),
   };
-}
-
-function consumerScope(state: ResearchState): string[] {
-  const consumers = new Set<string>([state, ...SUCCESSORS_BY_STATE[state]]);
-  for (const [consumer, phases] of Object.entries(INPUT_PHASES_BY_STATE)) {
-    if (phases.includes(state)) {
-      consumers.add(consumer);
-    }
-  }
-  return [...consumers].map((consumer) => `state:${consumer}`).sort();
 }
 
 function asResearchState(value: string): ResearchState {
@@ -346,7 +326,6 @@ function outputArtifactMetadata(
     phase: state,
     agent,
     branchId,
-    consumerScope: consumerScope(state),
     upstreamRefs,
     ...(revisions ? { revisions } : {}),
   });
@@ -593,10 +572,8 @@ export class ResearchPlaybook
     if (!isResearchState(state)) {
       throw new Error(`unexpected result for state '${state}'`);
     }
-    return validateContract(SUMMARY_SCHEMA_BY_STATE[state], details, `${state} summary`) as Record<
-      string,
-      JsonValue
-    >;
+    validateContract(SUMMARY_SCHEMA_BY_STATE[state], details, `${state} summary`);
+    return details;
   }
 
   /**
@@ -658,6 +635,9 @@ export class ResearchPlaybook
     if (context.stepCount >= context.maxSteps) {
       throw new Error(`run exceeded max_steps=${context.maxSteps}`);
     }
+    if (!isResearchState(context.stateId)) {
+      throw new Error(`cannot reissue a research branch from state '${context.stateId}'`);
+    }
     context.previousState = context.stateId;
     context.stepCount += 1;
     context.status = "running";
@@ -666,7 +646,7 @@ export class ResearchPlaybook
       attempt: context.stepCount,
       output_artifact: outputArtifactMetadata(
         context,
-        context.stateId as ResearchState,
+        context.stateId,
         assignment.agent,
         branchId,
         assignment.output_artifact.upstream_refs,

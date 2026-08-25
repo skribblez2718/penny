@@ -9,6 +9,7 @@ const MAX_BRANCHES = 64;
 const Id = Type.String({ minLength: 1, maxLength: ID_MAX_LENGTH });
 const BoundedText = Type.String({ maxLength: TEXT_MAX_LENGTH });
 const IsoTimestamp = Type.String({ minLength: 20, maxLength: 40 });
+const ArtifactKind = Type.String({ pattern: "^[a-z][a-z0-9-]*$" });
 
 export const ConfidenceSchema = Type.Union([
   Type.Literal("CERTAIN"),
@@ -64,26 +65,33 @@ export const RunIdentitySchema = Type.Object(
 );
 export type RunIdentity = Static<typeof RunIdentitySchema>;
 
-export const ArtifactRefSchema = Type.Object(
+const ArtifactRefCommon = {
+  artifact_id: Type.String({ pattern: "^art_[a-f0-9]{64}$" }),
+  run_id: Id,
+  phase: Id,
+  branch_id: Type.Union([Id, Type.Null()]),
+  kind: ArtifactKind,
+  operation_id: Id,
+  version: Type.Integer({ minimum: 1 }),
+  producer: Id,
+  media_type: Id,
+  byte_length: Type.Integer({ minimum: 0 }),
+  content_digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  store_ref: Type.String({ pattern: "^artifact://sha256/[a-f0-9]{64}$" }),
+} as const;
+
+/** Canonical artifact communication address. It carries lineage, not authorization. */
+export const CurrentArtifactRefSchema = Type.Object(
   {
-    schema_version: Type.Literal(1),
-    artifact_id: Type.String({ pattern: "^art_[a-f0-9]{64}$" }),
-    run_id: Id,
-    phase: Id,
-    branch_id: Type.Union([Id, Type.Null()]),
-    kind: Id,
-    operation_id: Id,
-    version: Type.Integer({ minimum: 1 }),
-    producer: Id,
-    media_type: Id,
-    byte_length: Type.Integer({ minimum: 0 }),
-    content_digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
-    store_ref: Type.String({ pattern: "^artifact://sha256/[a-f0-9]{64}$" }),
-    consumer_scope: Type.Array(Id, { maxItems: 128, uniqueItems: true }),
+    schema_version: Type.Literal(2),
+    ...ArtifactRefCommon,
   },
   { additionalProperties: false }
 );
+
+export const ArtifactRefSchema = CurrentArtifactRefSchema;
 export type ArtifactRef = Static<typeof ArtifactRefSchema>;
+export type CurrentArtifactRef = ArtifactRef;
 
 export const InputArtifactBindingSchema = Type.Object(
   {
@@ -93,34 +101,34 @@ export const InputArtifactBindingSchema = Type.Object(
   { additionalProperties: false }
 );
 
+/** Exact inputs may originate in any run; slots are routing labels only. */
 export const InputArtifactsSchema = Type.Object(
   {
-    schema_version: Type.Literal(1),
-    run_id: Id,
-    consumer: Id,
-    artifacts: Type.Array(InputArtifactBindingSchema, { maxItems: 128 }),
+    schema_version: Type.Literal(2),
+    artifacts: Type.Array(InputArtifactBindingSchema),
   },
   { additionalProperties: false }
 );
 export type InputArtifacts = Static<typeof InputArtifactsSchema>;
 
-export const OutputArtifactMetadataSchema = Type.Object(
+export const CurrentOutputArtifactMetadataSchema = Type.Object(
   {
-    schema_version: Type.Literal(1),
+    schema_version: Type.Literal(2),
     run_id: Id,
     phase: Id,
     branch_id: Type.Union([Id, Type.Null()]),
-    kind: Type.Literal("agent-output"),
+    kind: ArtifactKind,
     operation_id: Id,
     version: Type.Integer({ minimum: 1 }),
     producer: Id,
-    consumer_scope: Type.Array(Id, { minItems: 1, maxItems: 128, uniqueItems: true }),
     media_type: Id,
     parent_ref: Type.Union([ArtifactRefSchema, Type.Null()]),
-    upstream_refs: Type.Array(ArtifactRefSchema, { maxItems: 128, uniqueItems: true }),
+    upstream_refs: Type.Array(ArtifactRefSchema),
   },
   { additionalProperties: false }
 );
+
+export const OutputArtifactMetadataSchema = CurrentOutputArtifactMetadataSchema;
 export type OutputArtifactMetadata = Static<typeof OutputArtifactMetadataSchema>;
 
 export const ExecutionReceiptSchema = Type.Object(

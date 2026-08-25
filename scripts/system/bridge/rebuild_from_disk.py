@@ -3,7 +3,7 @@
 
 When to reach for this
 ----------------------
-`repair_palace.py` and `rebuild_collection_index.py` both drive the repair
+`repair_palace.py` and the former `rebuild_collection_index.py` driver both drove the repair
 THROUGH ChromaDB — they open a client and call `col.count()` before doing
 anything. That works for a palace that merely returns errors. It cannot work
 for a palace whose vector segment is TORN, because the count itself segfaults

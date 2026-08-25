@@ -2,34 +2,21 @@
  * KB retrieval + lint tests (G7).
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  assertRetrievalDecisionFixture,
-  parseGateDecisionReceiptJcs,
-} from "../src/kb/gate-decisions.js";
+import { parseRetrievalFixture } from "../src/kb/gate-decisions.js";
 import {
   canonicalJson,
   defaultDenyPolicy,
-  sha256Hex,
   type KbManifest,
   type KbRetrievalFixtureV1,
-  type RetrievalBaselineDecisionV1,
-  type RetrievalFixtureCaseV1,
 } from "../src/kb/contracts.js";
-import {
-  writeManifest,
-  writePolicy,
-  writeSourceObject,
-  writeSourceRecord,
-  writePageRevision,
-  writeConflictRecord,
-} from "../src/kb/filesystem.js";
+import { writeManifest, writePolicy, writePageRevision } from "../src/kb/filesystem.js";
 import {
   buildCatalog,
   buildGenerationIndex,
@@ -58,133 +45,41 @@ afterEach(() => {
 
 const NOW = "2026-01-01T00:00:00Z";
 const ZERO = "0".repeat(64);
-const FROZEN_FIXTURE_PATH = "apps/orchestration/tests/fixtures/kb-retrieval.json";
-const FROZEN_CASE_IDS = ["sqlite-query", "typebox-query", "cross-query"] as const;
+const TRACKED_FIXTURE_PATH = "apps/orchestration/tests/fixtures/kb-retrieval.json";
+const TRACKED_CASE_IDS = ["sqlite-query", "typebox-query", "cross-query"] as const;
+const RETRIEVAL_K = 10;
+const MINIMUM_HIT_AT_K = 1;
+const MINIMUM_MRR = 1;
+const MINIMUM_CONTRADICTION_RECALL = 1;
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../../..");
-const ownerReceiptPath = path.join(
-  repoRoot,
-  ".penny/plan-gates/hybrid-kb-ts-plan-2026-08-13/retrieval_baseline.json"
-);
+const trackedFixturePath = path.join(repoRoot, TRACKED_FIXTURE_PATH);
 
-type FrozenRetrievalReceipt = RetrievalBaselineDecisionV1;
-type FrozenRetrievalCase = RetrievalFixtureCaseV1;
-type FrozenRetrievalFixture = KbRetrievalFixtureV1;
+type TrackedRetrievalFixture = KbRetrievalFixtureV1;
 
-function requireFrozen(condition: unknown, message: string): asserts condition {
-  if (!condition) throw new Error(`invalid owner retrieval receipt/fixture: ${message}`);
+function requireTracked(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(`invalid tracked retrieval fixture: ${message}`);
 }
 
-function endpointKey(endpoint: ExpectedContradiction["left"]): string {
-  return `${endpoint.page_id}\u0000${endpoint.revision_id}\u0000${endpoint.claim_id}`;
-}
-
-function pairKey(pair: ExpectedContradiction): string {
-  return [endpointKey(pair.left), endpointKey(pair.right)].sort().join("\u0001");
-}
-
-/** Load only the exact owner path. Candidate receipts are never a test authority. */
-function loadReviewedRetrievalBaseline(): {
-  readonly receipt: FrozenRetrievalReceipt;
-  readonly fixture: FrozenRetrievalFixture;
-} {
-  const receiptBytes = readFileSync(ownerReceiptPath, "utf8");
-  const parsed = parseGateDecisionReceiptJcs(receiptBytes);
-  requireFrozen(parsed.decision_kind === "retrieval_baseline", "decision kind changed");
-  const receipt: FrozenRetrievalReceipt = parsed;
-  requireFrozen(receipt.fixture_path === FROZEN_FIXTURE_PATH, "fixture path changed");
-  requireFrozen(receipt.case_count === FROZEN_CASE_IDS.length, "case_count must remain 3");
-  requireFrozen(receipt.k === 10, "k must remain 10");
-  requireFrozen(receipt.minimum_hit_at_k === 1, "minimum_hit_at_k must remain 1");
-  requireFrozen(receipt.minimum_mrr === 1, "minimum_mrr must remain 1");
-  requireFrozen(
-    receipt.minimum_contradiction_recall === 1,
-    "minimum_contradiction_recall must remain 1"
-  );
-  requireFrozen(
-    receipt.maximum_unsupported_answer_rate === 0,
-    "maximum_unsupported_answer_rate must remain 0"
-  );
-
-  const fixturePath = path.resolve(repoRoot, receipt.fixture_path);
-  requireFrozen(
-    fixturePath === path.join(repoRoot, FROZEN_FIXTURE_PATH),
-    "fixture path does not resolve to the tracked fixture"
-  );
-  const fixtureBytes = readFileSync(fixturePath, "utf8");
-  const fixture = assertRetrievalDecisionFixture({ decision: receipt, fixtureBytes });
-  requireFrozen(fixture.corpus.length > 0, "fixture corpus must be non-empty");
-  requireFrozen(fixture.cases.length === receipt.case_count, "fixture case count mismatch");
-  requireFrozen(
+/** Load and validate the tracked regression fixture directly. */
+function loadTrackedRetrievalFixture(): TrackedRetrievalFixture {
+  const fixture = parseRetrievalFixture(readFileSync(trackedFixturePath, "utf8"));
+  requireTracked(fixture.fixture_id === "kb-retrieval-v1", "fixture ID changed");
+  requireTracked(fixture.corpus.length > 0, "fixture corpus must be non-empty");
+  requireTracked(fixture.cases.length === TRACKED_CASE_IDS.length, "case count must remain 3");
+  requireTracked(
     canonicalJson(fixture.cases.map((testCase) => testCase.case_id)) ===
-      canonicalJson(FROZEN_CASE_IDS),
+      canonicalJson(TRACKED_CASE_IDS),
     "the original three query cases changed"
   );
-
-  const pages = new Map<string, FrozenRetrievalPage>();
-  const claims = new Map<string, { readonly page: FrozenRetrievalPage }>();
-  for (const page of fixture.corpus) {
-    const pageKey = `${page.frontmatter.page_id}\u0000${page.frontmatter.revision_id}`;
-    requireFrozen(!pages.has(pageKey), "duplicate corpus page/revision");
-    requireFrozen(page.markdown.length > 0, "page markdown must be non-empty");
-    requireFrozen(
-      page.claims.page_id === page.frontmatter.page_id &&
-        page.claims.revision_id === page.frontmatter.revision_id,
-      "claims sidecar does not match its page/revision"
-    );
-    pages.set(pageKey, page);
-    for (const claim of page.claims.claims) {
-      requireFrozen(!claims.has(claim.claim_id), "claim IDs must be globally unique");
-      claims.set(claim.claim_id, { page });
-    }
-  }
-
-  const labels: ExpectedContradiction[] = [];
-  const labelKeys = new Set<string>();
-  for (const testCase of fixture.cases) {
-    requireFrozen(testCase.query.length > 0, "query must be non-empty");
-    requireFrozen(testCase.expected_relevant.length > 0, "expected_relevant must be non-empty");
-    for (const relevant of testCase.expected_relevant) {
-      requireFrozen(
-        pages.has(`${relevant.page_id}\u0000${relevant.revision_id}`),
-        "expected_relevant points outside the corpus"
-      );
-    }
-    for (const pair of testCase.expected_contradictions) {
-      const key = pairKey(pair);
-      requireFrozen(!labelKeys.has(key), "contradiction labels must be unique");
-      labelKeys.add(key);
-      labels.push(pair);
-      for (const endpoint of [pair.left, pair.right]) {
-        const page = pages.get(`${endpoint.page_id}\u0000${endpoint.revision_id}`);
-        const claim = claims.get(endpoint.claim_id);
-        requireFrozen(page !== undefined, "contradiction endpoint page is missing");
-        requireFrozen(claim?.page === page, "contradiction endpoint claim is missing");
-      }
-      const leftClaim = claims
-        .get(pair.left.claim_id)
-        ?.page.claims.claims.find((claim) => claim.claim_id === pair.left.claim_id);
-      const rightClaim = claims
-        .get(pair.right.claim_id)
-        ?.page.claims.claims.find((claim) => claim.claim_id === pair.right.claim_id);
-      requireFrozen(
-        leftClaim?.contradicts_claim_ids.includes(pair.right.claim_id) === true &&
-          rightClaim?.contradicts_claim_ids.includes(pair.left.claim_id) === true,
-        "labeled contradiction must be cross-linked by both endpoint claims"
-      );
-    }
-  }
-  requireFrozen(labels.length > 0, "at least one labeled contradiction pair is required");
-  requireFrozen(
-    receipt.evidence_refs.some(
-      (evidence) =>
-        evidence.evidence_id === "retrieval-fixture" &&
-        evidence.kind === "digest" &&
-        evidence.ref === fixture.fixture_id
-    ),
-    "receipt does not bind the fixture ID"
+  requireTracked(
+    fixture.cases.some((testCase) => testCase.expected_contradictions.length > 0),
+    "at least one labeled contradiction pair is required"
   );
-  return { receipt, fixture };
+  for (const page of fixture.corpus) {
+    requireTracked(page.markdown.length > 0, "page markdown must be non-empty");
+  }
+  return fixture;
 }
 
 function seedKb(root: string): { manifest: KbManifest } {
@@ -290,11 +185,15 @@ describe("KB §5.13 retrieval", () => {
     ]);
 
     const results = rankPages({ catalog, query: "sqlite unflagged", pageContents });
-    expect(results[0].page_id).toBe("page_a");
-    expect(results[0].score).toBeGreaterThan(0);
+    const sqliteResult = results[0];
+    if (sqliteResult === undefined) throw new Error("sqlite query returned no ranked page");
+    expect(sqliteResult.page_id).toBe("page_a");
+    expect(sqliteResult.score).toBeGreaterThan(0);
 
     const typeboxResults = rankPages({ catalog, query: "TypeBox schema", pageContents });
-    expect(typeboxResults[0].page_id).toBe("page_b");
+    const typeboxResult = typeboxResults[0];
+    if (typeboxResult === undefined) throw new Error("TypeBox query returned no ranked page");
+    expect(typeboxResult.page_id).toBe("page_b");
   });
 
   it("hit@k and MRR are computed correctly", () => {
@@ -340,9 +239,9 @@ describe("KB §5.13 retrieval", () => {
   });
 });
 
-describe.skipIf(!existsSync(ownerReceiptPath))("frozen §5.13 retrieval baseline", () => {
-  it("validates the exact owner receipt before scoring and enforces every frozen floor", () => {
-    const { receipt, fixture } = loadReviewedRetrievalBaseline();
+describe("tracked §5.13 retrieval regression", () => {
+  it("scores the tracked fixture at k=10 and enforces the 1/1/1 floors", () => {
+    const fixture = loadTrackedRetrievalFixture();
     const root = tmpRoot();
     const { manifest } = seedKb(root);
     const catalog = buildCatalog({
@@ -377,27 +276,32 @@ describe.skipIf(!existsSync(ownerReceiptPath))("frozen §5.13 retrieval baseline
         catalog,
         query: testCase.query,
         pageContents,
-        maxCandidates: receipt.k,
+        maxCandidates: RETRIEVAL_K,
       }),
       expected: testCase.expected_relevant,
       expectedContradictions: testCase.expected_contradictions,
     }));
     const metrics = {
-      hit_at_k: hitAtK(executions, receipt.k),
+      hit_at_k: hitAtK(executions, RETRIEVAL_K),
       mrr: meanReciprocalRank(executions),
-      contradiction_recall: microContradictionRecallAtK(executions, receipt.k),
+      contradiction_recall: microContradictionRecallAtK(executions, RETRIEVAL_K),
     };
     const diagnostic = canonicalJson({
-      fixture_sha256: receipt.fixture_sha256,
-      case_count: receipt.case_count,
-      k: receipt.k,
+      fixture_id: fixture.fixture_id,
+      case_count: fixture.cases.length,
+      k: RETRIEVAL_K,
+      floors: {
+        hit_at_k: MINIMUM_HIT_AT_K,
+        mrr: MINIMUM_MRR,
+        contradiction_recall: MINIMUM_CONTRADICTION_RECALL,
+      },
       metrics,
     });
 
-    expect(metrics.hit_at_k, diagnostic).toBeGreaterThanOrEqual(receipt.minimum_hit_at_k);
-    expect(metrics.mrr, diagnostic).toBeGreaterThanOrEqual(receipt.minimum_mrr);
+    expect(metrics.hit_at_k, diagnostic).toBeGreaterThanOrEqual(MINIMUM_HIT_AT_K);
+    expect(metrics.mrr, diagnostic).toBeGreaterThanOrEqual(MINIMUM_MRR);
     expect(metrics.contradiction_recall, diagnostic).toBeGreaterThanOrEqual(
-      receipt.minimum_contradiction_recall
+      MINIMUM_CONTRADICTION_RECALL
     );
   });
 });

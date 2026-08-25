@@ -12,18 +12,28 @@
  */
 
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
-import { Value } from "@sinclair/typebox/value";
+import { Value } from "typebox/value";
 
 // ============================================================
 // Import mocked TUI utilities for multi-select tests
 // ============================================================
-import { matchesKey, Key } from "@mariozechner/pi-tui";
+import { matchesKey } from "@earendil-works/pi-tui";
+import {
+  createExtensionApiHarness,
+  createQuestionnaireUiHost,
+  requireBoolean,
+  requireDefined,
+  requireQuestionnaireCommand,
+  requireQuestionnaireTool,
+  requireQuestionnaireToolResult,
+  requireRecord,
+} from "../helpers.js";
 
 // ============================================================
 // Mock Pi dependencies before importing the extension
 // ============================================================
 
-vi.mock("@mariozechner/pi-tui", () => ({
+vi.mock("@earendil-works/pi-tui", () => ({
   Editor: vi.fn().mockImplementation(() => ({
     onSubmit: null,
     setText: vi.fn(),
@@ -46,7 +56,7 @@ vi.mock("@mariozechner/pi-tui", () => ({
   matchesKey: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   getMarkdownTheme: vi.fn().mockReturnValue({
     fg: (_color: string, text: string) => text,
     bg: (_color: string, text: string) => text,
@@ -86,6 +96,13 @@ interface QuestionnaireResult {
   questions: Question[];
   answers: Answer[];
   cancelled: boolean;
+}
+
+async function registerQuestionnaireForTest() {
+  const harness = createExtensionApiHarness();
+  const mod = await import("../../index.js");
+  mod.default(harness.api);
+  return harness;
 }
 
 // ============================================================
@@ -172,7 +189,7 @@ function formatAnswerOutput(questions: Question[], result: QuestionnaireResult):
 // Schema (duplicated for test isolation — imported from index)
 // ============================================================
 
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 const QuestionOptionSchema = Type.Object({
   value: Type.String({ description: "The value returned when selected" }),
@@ -667,13 +684,13 @@ describe("Schema Validation", () => {
       expect(Value.Check(QuestionSchema, question)).toBe(false);
     });
 
-    it("should reject question with empty options", () => {
+    it("should allow empty options at the schema boundary", () => {
       const question = {
         id: "q1",
         prompt: "What?",
         options: [],
       };
-      // Empty array is valid per TypeBox Array — but worth checking behavior
+      // Runtime behavior, rather than this schema, owns the no-options policy.
       expect(Value.Check(QuestionSchema, question)).toBe(true);
     });
 
@@ -704,10 +721,9 @@ describe("Schema Validation", () => {
       expect(Value.Check(QuestionnaireParams, params)).toBe(true);
     });
 
-    it("should reject empty questions array", () => {
+    it("should allow an empty questions array at the schema boundary", () => {
       const params = { questions: [] };
-      // Empty array is valid per TypeBox Array schema — the extension
-      // should handle this at runtime (no questions = nothing to ask)
+      // Runtime execution owns the no-questions behavior.
       expect(Value.Check(QuestionnaireParams, params)).toBe(true);
     });
 
@@ -745,172 +761,146 @@ describe("Schema Validation", () => {
 
 describe("Tool Registration", () => {
   it("should register the questionnaire tool via ExtensionAPI", async () => {
-    const registeredTools: { name: string; label: string; description: string }[] = [];
-    const registeredCommands: { name: string; description: string }[] = [];
-
-    const mockPi = {
-      registerTool: vi.fn((tool: { name: string; label: string; description: string }) => {
-        registeredTools.push({ name: tool.name, label: tool.label, description: tool.description });
-      }),
-      registerCommand: vi.fn((name: string, cmd: { description: string }) => {
-        registeredCommands.push({ name, description: cmd.description });
-      }),
-      on: vi.fn(),
-    } as unknown as import("@mariozechner/pi-coding-agent").ExtensionAPI;
-
-    // Dynamic import to avoid side effects across tests
-    const mod = await import("../../index.js");
-    const extension = mod.default;
-    extension(mockPi);
-
-    expect(mockPi.registerTool).toHaveBeenCalledOnce();
-    expect(registeredTools[0].name).toBe("questionnaire");
-    expect(registeredTools[0].label).toBe("Questionnaire");
-    expect(registeredTools[0].description).toContain("Ask the user one or more questions");
+    const harness = await registerQuestionnaireForTest();
+    expect(harness.registeredTools).toHaveLength(1);
+    const tool = requireQuestionnaireTool(harness.registeredTools[0]);
+    expect(tool.name).toBe("questionnaire");
+    expect(tool.label).toBe("Questionnaire");
+    expect(tool.description).toContain("Ask the user one or more questions");
   });
 
   it("should register the 'ask' convenience command", async () => {
-    const registeredCommands: { name: string; description: string }[] = [];
+    const harness = await registerQuestionnaireForTest();
+    expect(harness.registeredCommands).toHaveLength(1);
+    const command = requireQuestionnaireCommand(harness.registeredCommands[0]);
+    expect(command.name).toBe("ask");
+    expect(requireDefined(command.description, "ask command description is missing")).toContain(
+      "interactive"
+    );
+  });
 
-    const mockPi = {
-      registerTool: vi.fn(),
-      registerCommand: vi.fn((name: string, cmd: { description: string }) => {
-        registeredCommands.push({ name, description: cmd.description });
-      }),
-      on: vi.fn(),
-    } as unknown as import("@mariozechner/pi-coding-agent").ExtensionAPI;
+  it("fails fast when the exact partial ExtensionAPI seam is exceeded", () => {
+    const harness = createExtensionApiHarness();
+    expect(() => harness.api.getActiveTools()).toThrow(
+      "Questionnaire ExtensionAPI test seam does not implement getActiveTools"
+    );
+  });
 
-    const mod = await import("../../index.js");
-    const extension = mod.default;
-    extension(mockPi);
-
-    expect(mockPi.registerCommand).toHaveBeenCalledWith("ask", expect.any(Object));
-    expect(registeredCommands[0].name).toBe("ask");
+  it("fails fast when required captured values are missing", () => {
+    expect(() => requireDefined(undefined, "missing questionnaire fixture")).toThrow(
+      "missing questionnaire fixture"
+    );
+    expect(() => requireDefined(null, "null questionnaire fixture")).toThrow(
+      "null questionnaire fixture"
+    );
+    expect(() => requireQuestionnaireToolResult({})).toThrow(/content is missing/i);
+    expect(requireDefined(false, "boolean fixture")).toBe(false);
   });
 });
 
 describe("Non-Interactive Execute", () => {
   it("should return structured text with needsUserInput when hasUI is false", async () => {
-    const mockPi = {
-      registerTool: vi.fn(),
-      registerCommand: vi.fn(),
-      on: vi.fn(),
-    } as unknown as import("@mariozechner/pi-coding-agent").ExtensionAPI;
+    const harness = await registerQuestionnaireForTest();
+    const tool = requireQuestionnaireTool(harness.registeredTools[0]);
+    const result = requireQuestionnaireToolResult(
+      await tool.execute(
+        "call-1",
+        {
+          questions: [
+            {
+              id: "scope",
+              prompt: "What scope?",
+              options: [
+                { value: "local", label: "Local" },
+                { value: "global", label: "Global" },
+              ],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        { hasUI: false }
+      )
+    );
 
-    const mod = await import("../../index.js");
-    const extension = mod.default;
-    extension(mockPi);
+    const content = requireDefined(result.content[0], "non-interactive content is missing");
+    expect(content.type).toBe("text");
+    expect(content.text).toContain("## Questionnaire — User Input Needed");
+    expect(content.text).toContain("1. Local");
+    expect(content.text).toContain("2. Global");
 
-    const toolCall = mockPi.registerTool.mock.calls[0][0] as {
-      execute: (...args: unknown[]) => Promise<unknown>;
-    };
+    const details = requireDefined(result.details, "non-interactive details are missing");
+    expect(requireBoolean(details.needsUserInput, "needsUserInput marker is missing")).toBe(true);
+    const answers = details.answers;
+    if (!Array.isArray(answers)) throw new Error("non-interactive answers are missing");
+    expect(answers).toHaveLength(1);
+    const answer = requireRecord(answers[0], "non-interactive answer is missing");
+    expect(answer.value).toBe("__needs_user_input__");
+  });
 
-    const result = (await toolCall.execute(
-      "call-1",
-      {
-        questions: [
-          {
-            id: "scope",
-            prompt: "What scope?",
-            options: [
-              { value: "local", label: "Local" },
-              { value: "global", label: "Global" },
-            ],
-          },
-        ],
-      },
-      undefined, // signal
-      undefined, // onUpdate
-      { hasUI: false } // <- non-interactive context
-    )) as {
-      content: { type: string; text: string }[];
-      details: QuestionnaireResult & { needsUserInput: boolean };
-    };
-
-    // Content is structured text
-    expect(result.content[0].type).toBe("text");
-    expect(result.content[0].text).toContain("## Questionnaire — User Input Needed");
-    expect(result.content[0].text).toContain("1. Local");
-    expect(result.content[0].text).toContain("2. Global");
-
-    // Details have needsUserInput marker
-    expect(result.details.needsUserInput).toBe(true);
-    expect(result.details.answers).toHaveLength(1);
-    expect(result.details.answers[0].value).toBe("__needs_user_input__");
+  it("rejects execution when both input modes are missing", async () => {
+    const harness = await registerQuestionnaireForTest();
+    const tool = requireQuestionnaireTool(harness.registeredTools[0]);
+    const result = requireQuestionnaireToolResult(
+      await tool.execute("call-missing-input", {}, undefined, undefined, { hasUI: false })
+    );
+    const content = requireDefined(result.content[0], "missing-input content is missing");
+    const details = requireDefined(result.details, "missing-input details are missing");
+    expect(content.text).toContain("exactly one");
+    expect(requireBoolean(details.cancelled, "missing-input cancellation marker is missing")).toBe(
+      true
+    );
   });
 
   it("should include 'Type something' option by default in non-interactive mode", async () => {
-    const mockPi = {
-      registerTool: vi.fn(),
-      registerCommand: vi.fn(),
-      on: vi.fn(),
-    } as unknown as import("@mariozechner/pi-coding-agent").ExtensionAPI;
+    const harness = await registerQuestionnaireForTest();
+    const tool = requireQuestionnaireTool(harness.registeredTools[0]);
+    const result = requireQuestionnaireToolResult(
+      await tool.execute(
+        "call-1",
+        {
+          questions: [
+            {
+              id: "q1",
+              prompt: "Pick one",
+              options: [{ value: "a", label: "A" }],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        { hasUI: false }
+      )
+    );
 
-    const mod = await import("../../index.js");
-    const extension = mod.default;
-    extension(mockPi);
-
-    const toolCall = mockPi.registerTool.mock.calls[0][0] as {
-      execute: (...args: unknown[]) => Promise<unknown>;
-    };
-
-    const result = (await toolCall.execute(
-      "call-1",
-      {
-        questions: [
-          {
-            id: "q1",
-            prompt: "Pick one",
-            options: [{ value: "a", label: "A" }],
-          },
-        ],
-      },
-      undefined,
-      undefined,
-      { hasUI: false }
-    )) as {
-      content: { type: string; text: string }[];
-    };
-
-    // With allowOther defaulting to true, "(Type something)" should appear
-    expect(result.content[0].text).toContain("(Type something)");
+    const content = requireDefined(result.content[0], "default allowOther content is missing");
+    expect(content.text).toContain("(Type something)");
   });
 
   it("should NOT include 'Type something' when allowOther is false", async () => {
-    const mockPi = {
-      registerTool: vi.fn(),
-      registerCommand: vi.fn(),
-      on: vi.fn(),
-    } as unknown as import("@mariozechner/pi-coding-agent").ExtensionAPI;
+    const harness = await registerQuestionnaireForTest();
+    const tool = requireQuestionnaireTool(harness.registeredTools[0]);
+    const result = requireQuestionnaireToolResult(
+      await tool.execute(
+        "call-1",
+        {
+          questions: [
+            {
+              id: "q1",
+              prompt: "Pick one",
+              options: [{ value: "a", label: "A" }],
+              allowOther: false,
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        { hasUI: false }
+      )
+    );
 
-    const mod = await import("../../index.js");
-    const extension = mod.default;
-    extension(mockPi);
-
-    const toolCall = mockPi.registerTool.mock.calls[0][0] as {
-      execute: (...args: unknown[]) => Promise<unknown>;
-    };
-
-    const result = (await toolCall.execute(
-      "call-1",
-      {
-        questions: [
-          {
-            id: "q1",
-            prompt: "Pick one",
-            options: [{ value: "a", label: "A" }],
-            allowOther: false,
-          },
-        ],
-      },
-      undefined,
-      undefined,
-      { hasUI: false }
-    )) as {
-      content: { type: string; text: string }[];
-    };
-
-    expect(result.content[0].text).not.toContain("(Type something)");
+    const content = requireDefined(result.content[0], "explicit allowOther content is missing");
+    expect(content.text).not.toContain("(Type something)");
   });
 });
 
@@ -978,19 +968,22 @@ describe("Multi-Select TUI", () => {
   });
 
   function setupUI(questions: Question[]) {
-    const mockTui = { requestRender: vi.fn() };
-    const mockTheme = {
-      fg: (_c: string, t: string) => t,
-      bg: (_c: string, t: string) => t,
-      bold: (t: string) => t,
-    };
+    const host = createQuestionnaireUiHost(vi.fn());
     let capturedResult: QuestionnaireResult | undefined;
     const done = (res: QuestionnaireResult) => {
       capturedResult = res;
     };
-    const ui = createQuestionnaireUI(questions, mockTui, mockTheme, done);
-    return { ui, mockTui, mockTheme, getResult: () => capturedResult };
+    const ui = createQuestionnaireUI(questions, host.tui, host.theme, done);
+    return { ui, getResult: () => capturedResult };
   }
+
+  it("fails fast when the exact partial TUI or Theme seam is exceeded", () => {
+    const host = createQuestionnaireUiHost(vi.fn());
+    expect(() => host.tui.start()).toThrow("Questionnaire TUI test seam does not implement start");
+    expect(() => host.theme.italic("text")).toThrow(
+      "Questionnaire Theme test seam does not implement italic"
+    );
+  });
 
   it("shows checkbox prefixes for multi-select questions", () => {
     const { ui } = setupUI([
@@ -1072,9 +1065,10 @@ describe("Multi-Select TUI", () => {
 
     const result = getResult();
     expect(result).toBeDefined();
-    expect(result!.answers).toHaveLength(1);
-    expect(result!.answers[0].value).toBe("a,c");
-    expect(result!.answers[0].label).toBe("Option A; Option C");
+    const completed = requireDefined(result, "multi-select did not produce a result");
+    expect(completed.answers).toHaveLength(1);
+    expect(completed.answers[0].value).toBe("a,c");
+    expect(completed.answers[0].label).toBe("Option A; Option C");
   });
 
   it("stores comma-separated values for multi-select", () => {
@@ -1097,8 +1091,8 @@ describe("Multi-Select TUI", () => {
     ui.handleInput(" "); // toggle second
     ui.handleInput("\r"); // confirm
 
-    const result = getResult();
-    expect(result!.answers[0].value).toBe("file1.js,file2.js");
+    const result = requireDefined(getResult(), "multi-select did not produce a result");
+    expect(result.answers[0].value).toBe("file1.js,file2.js");
   });
 
   it("default type behaves as single (Enter advances immediately)", () => {
@@ -1120,9 +1114,10 @@ describe("Multi-Select TUI", () => {
 
     const result = getResult();
     expect(result).toBeDefined();
-    expect(result!.answers).toHaveLength(1);
-    expect(result!.answers[0].value).toBe("a");
-    expect(result!.answers[0].index).toBe(1);
-    expect(result!.cancelled).toBe(false);
+    const completed = requireDefined(result, "single-select did not produce a result");
+    expect(completed.answers).toHaveLength(1);
+    expect(completed.answers[0].value).toBe("a");
+    expect(completed.answers[0].index).toBe(1);
+    expect(completed.cancelled).toBe(false);
   });
 });

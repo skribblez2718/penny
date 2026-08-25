@@ -14,26 +14,31 @@ import {
   primaryMemoryToolNames,
   resolveMemoryActor,
 } from "../../index.js";
-import { TEST_TOKEN, extensionEnv, testConfig } from "../fixtures.js";
+import {
+  TEST_TOKEN,
+  asMemoryExtensionApi,
+  extensionEnv,
+  testConfig,
+  type MemoryExtensionApiFake,
+  type MemoryExtensionHandler,
+  type RegisteredMemoryTool,
+} from "../fixtures.js";
 
 function piRecorder() {
-  const tools: Array<{ name: string }> = [];
-  const handlers = new Map<string, Array<(...args: any[]) => unknown>>();
-  return {
-    tools,
-    handlers,
-    pi: {
-      registerTool(tool: { name: string }) {
-        tools.push(tool);
-      },
-      registerCommand: vi.fn(),
-      on(event: string, handler: (...args: any[]) => unknown) {
-        const existing = handlers.get(event) ?? [];
-        existing.push(handler);
-        handlers.set(event, existing);
-      },
+  const tools: RegisteredMemoryTool[] = [];
+  const handlers = new Map<string, MemoryExtensionHandler[]>();
+  const pi: MemoryExtensionApiFake = {
+    registerTool(tool) {
+      tools.push(tool);
+    },
+    registerCommand: vi.fn(),
+    on(event, handler) {
+      const existing = handlers.get(event) ?? [];
+      existing.push(handler);
+      handlers.set(event, existing);
     },
   };
+  return { tools, handlers, pi };
 }
 
 describe("runtime role policy", () => {
@@ -58,7 +63,7 @@ describe("runtime role policy", () => {
       createMemoryExtension({
         env: { PENNY_RUNTIME_ROLE: role },
         fetch: fetchSpy as typeof fetch,
-      })(recorder.pi as any);
+      })(asMemoryExtensionApi(recorder.pi));
       expect(recorder.tools).toEqual([]);
       expect(recorder.handlers.size).toBe(0);
       expect(fetchSpy).not.toHaveBeenCalled();
@@ -68,7 +73,7 @@ describe("runtime role policy", () => {
   it("registers the explicit primary bundles without model-visible admin tools", () => {
     const recorder = piRecorder();
     createMemoryExtension({ env: extensionEnv(), fetch: vi.fn() as typeof fetch })(
-      recorder.pi as any
+      asMemoryExtensionApi(recorder.pi)
     );
     const names = recorder.tools.map((tool) => tool.name);
     expect(names).toEqual(primaryMemoryToolNames({ writeEnabled: true }));
@@ -98,7 +103,7 @@ describe("runtime role policy", () => {
     createMemoryExtension({
       env: workerEnv,
       fetch: fetchSpy as typeof fetch,
-    })(recorder.pi as any);
+    })(asMemoryExtensionApi(recorder.pi));
     const names = recorder.tools.map((tool) => tool.name);
     // Read-only tools only (writeEnabled=false filters out write operations)
     expect(names).toEqual(primaryMemoryToolNames({ writeEnabled: false }));
@@ -127,7 +132,7 @@ describe("runtime role policy", () => {
     createMemoryExtension({
       env: extensionEnv({ PENNY_MEMORY_WRITE_MODE: undefined }),
       fetch: fetchSpy as typeof fetch,
-    })(recorder.pi as any);
+    })(asMemoryExtensionApi(recorder.pi));
     const names = recorder.tools.map((tool) => tool.name);
     expect(names).toEqual(primaryMemoryToolNames());
     for (const writeTool of [
@@ -165,7 +170,9 @@ describe("runtime role policy", () => {
 
   it("disabled mode registers no tools or lifecycle hooks", () => {
     const recorder = piRecorder();
-    createMemoryExtension({ env: { PENNY_MEMORY_MODE: "disabled" } })(recorder.pi as any);
+    createMemoryExtension({ env: { PENNY_MEMORY_MODE: "disabled" } })(
+      asMemoryExtensionApi(recorder.pi)
+    );
     expect(recorder.tools).toEqual([]);
     expect(recorder.handlers.size).toBe(0);
   });

@@ -53,10 +53,16 @@ const UPSTREAM_TOOL: Readonly<Record<PlatformMemoryOperation, string>> = Object.
   kg_stats: "mempalace_kg_stats",
 });
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  return isRecord(value) ? value : undefined;
+}
+
+function isInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value);
 }
 
 function safeSleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
@@ -212,7 +218,7 @@ function errorForMcpToolResult(text: string, requestId: string): PlatformMemoryE
     );
   }
   const error = asRecord(errorValue);
-  if (!error || !Number.isInteger(error.code) || typeof error.message !== "string") {
+  if (!error || !isInteger(error.code) || typeof error.message !== "string") {
     return new PlatformMemoryError(
       "MEMORY_INTEGRITY",
       "memory service returned malformed MCP tool error data",
@@ -221,7 +227,7 @@ function errorForMcpToolResult(text: string, requestId: string): PlatformMemoryE
     );
   }
 
-  const code = error.code as number;
+  const code = error.code;
   if (SUPPORTED_UPSTREAM_HTTP_ERROR_STATUS.has(code)) return errorForHttpStatus(code, requestId);
   if (SUPPORTED_UPSTREAM_RPC_ERROR_CODE.has(code)) return errorForRpc(code, requestId);
   return new PlatformMemoryError(
@@ -256,7 +262,7 @@ function parseMcpResponse(raw: Buffer, expectedId: string): Record<string, unkno
 
   if (envelope.error !== undefined) {
     const error = asRecord(envelope.error);
-    if (!error || !Number.isInteger(error.code) || typeof error.message !== "string") {
+    if (!error || !isInteger(error.code) || typeof error.message !== "string") {
       throw new PlatformMemoryError(
         "MEMORY_INTEGRITY",
         "memory service returned a malformed JSON-RPC error",
@@ -264,7 +270,7 @@ function parseMcpResponse(raw: Buffer, expectedId: string): Record<string, unkno
         expectedId
       );
     }
-    throw errorForRpc(error.code as number, expectedId);
+    throw errorForRpc(error.code, expectedId);
   }
 
   const result = asRecord(envelope.result);

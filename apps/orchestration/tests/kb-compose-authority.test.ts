@@ -1,3 +1,4 @@
+import { requireValue } from "./helpers/narrowing.js";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -91,7 +92,14 @@ function draft(inputAuthority: KbComposeAuthority): PageDraftArtifact {
           kind: "fact",
           state: "supported",
           confidence: "CERTAIN",
-          evidence: [{ source_id: allocation.source_ids[0]! }],
+          evidence: [
+            {
+              source_id: requireValue(
+                allocation.source_ids[0],
+                "apps/orchestration/tests/kb-compose-authority.test.ts:94"
+              ),
+            },
+          ],
           contradicts_claim_ids: [],
           canonical_verification_refs: [],
         })),
@@ -115,16 +123,16 @@ describe("host-owned compose identity authority", () => {
     const first = authority();
     const second = authority();
     expect(second).toEqual(first);
-    expect(first.allocations[0]).toMatchObject({
-      page_id: expect.stringMatching(/^page_/),
-      revision_id: expect.stringMatching(/^rev_/),
-      lifecycle: "draft",
-      supersedes: null,
-      claim_allocations: [
-        { claim_id: expect.stringMatching(/^clm_/) },
-        { claim_id: expect.stringMatching(/^clm_/) },
-      ],
-    });
+    const allocation = requireValue(
+      first.allocations[0],
+      "apps/orchestration/tests/kb-compose-authority.test.ts:first allocation"
+    );
+    expect(allocation.page_id).toMatch(/^page_/);
+    expect(allocation.revision_id).toMatch(/^rev_/);
+    expect(allocation.lifecycle).toBe("draft");
+    expect(allocation.supersedes).toBeNull();
+    expect(allocation.claim_allocations).toHaveLength(2);
+    for (const claim of allocation.claim_allocations) expect(claim.claim_id).toMatch(/^clm_/);
     expect(() =>
       allocateComposeAuthority({
         runId: "run_save_allocation",
@@ -144,7 +152,10 @@ describe("host-owned compose identity authority", () => {
 
   it("permits only a host-selected exact existing-page supersede bound", () => {
     const catalog = baseCatalog();
-    const selected = catalog.pages.page_selected!;
+    const selected = requireValue(
+      catalog.pages.page_selected,
+      "apps/orchestration/tests/kb-compose-authority.test.ts:147"
+    );
     const allocated = allocateComposeAuthority({
       runId: "run_exact_supersede",
       operation: "ingest",
@@ -178,16 +189,28 @@ describe("host-owned compose identity authority", () => {
     expect(() => validate(draft(allocated), allocated)).not.toThrow();
 
     const widened = structuredClone(draft(allocated));
-    widened.pages[0]!.frontmatter.previous_revision_id = "rev_other_selected";
+    requireValue(
+      widened.pages[0],
+      "apps/orchestration/tests/kb-compose-authority.test.ts:181"
+    ).frontmatter.previous_revision_id = "rev_other_selected";
     expect(() => validate(widened, allocated)).toThrow(/supersede bound/);
   });
 
   it("rejects a hostile child that chooses an existing selected page to supersede", () => {
     const allocated = authority();
     const hostile = structuredClone(draft(allocated));
-    hostile.pages[0]!.frontmatter.page_id = "page_selected";
-    hostile.pages[0]!.frontmatter.previous_revision_id = "rev_selected";
-    hostile.pages[0]!.claims.page_id = "page_selected";
+    requireValue(
+      hostile.pages[0],
+      "apps/orchestration/tests/kb-compose-authority.test.ts:188"
+    ).frontmatter.page_id = "page_selected";
+    requireValue(
+      hostile.pages[0],
+      "apps/orchestration/tests/kb-compose-authority.test.ts:189"
+    ).frontmatter.previous_revision_id = "rev_selected";
+    requireValue(
+      hostile.pages[0],
+      "apps/orchestration/tests/kb-compose-authority.test.ts:190"
+    ).claims.page_id = "page_selected";
     expect(() => validate(hostile, allocated)).toThrow(/unallocated page identity/);
   });
 
@@ -226,7 +249,11 @@ describe("host-owned compose identity authority", () => {
     ).not.toThrow();
 
     const reassigned = structuredClone(valid);
-    reassigned.pages[0]!.claims.claims[0]!.text = "Allocated claim 1";
+    requireValue(
+      requireValue(reassigned.pages[0], "apps/orchestration/tests/kb-compose-authority.test.ts:229")
+        .claims.claims[0],
+      "apps/orchestration/tests/kb-compose-authority.test.ts:229"
+    ).text = "Allocated claim 1";
     expect(() =>
       validatePageDraftAuthority({
         document: reassigned,
@@ -242,12 +269,24 @@ describe("host-owned compose identity authority", () => {
   it("rejects invented page/revision/claim identity outside the pool", () => {
     const allocated = authority();
     const inventedRevision = structuredClone(draft(allocated));
-    inventedRevision.pages[0]!.frontmatter.revision_id = "rev_invented";
-    inventedRevision.pages[0]!.claims.revision_id = "rev_invented";
+    requireValue(
+      inventedRevision.pages[0],
+      "apps/orchestration/tests/kb-compose-authority.test.ts:245"
+    ).frontmatter.revision_id = "rev_invented";
+    requireValue(
+      inventedRevision.pages[0],
+      "apps/orchestration/tests/kb-compose-authority.test.ts:246"
+    ).claims.revision_id = "rev_invented";
     expect(() => validate(inventedRevision, allocated)).toThrow(/outside its allocation/);
 
     const inventedClaim = structuredClone(draft(allocated));
-    inventedClaim.pages[0]!.claims.claims[0]!.claim_id = "clm_invented";
+    requireValue(
+      requireValue(
+        inventedClaim.pages[0],
+        "apps/orchestration/tests/kb-compose-authority.test.ts:250"
+      ).claims.claims[0],
+      "apps/orchestration/tests/kb-compose-authority.test.ts:250"
+    ).claim_id = "clm_invented";
     expect(() => validate(inventedClaim, allocated)).toThrow(/unallocated claim identity/);
   });
 
@@ -256,7 +295,12 @@ describe("host-owned compose identity authority", () => {
     const valid = draft(allocated);
 
     const duplicatePage = structuredClone(valid);
-    duplicatePage.pages[1] = structuredClone(duplicatePage.pages[0]!);
+    duplicatePage.pages[1] = structuredClone(
+      requireValue(
+        duplicatePage.pages[0],
+        "apps/orchestration/tests/kb-compose-authority.test.ts:259"
+      )
+    );
     expect(() => validate(duplicatePage, allocated)).toThrow(/more than once/);
 
     const omittedPage = structuredClone(valid);
@@ -264,12 +308,24 @@ describe("host-owned compose identity authority", () => {
     expect(() => validate(omittedPage, allocated)).toThrow(/every page allocation/);
 
     const omittedClaim = structuredClone(valid);
-    omittedClaim.pages[0]!.claims.claims.pop();
+    requireValue(
+      omittedClaim.pages[0],
+      "apps/orchestration/tests/kb-compose-authority.test.ts:267"
+    ).claims.claims.pop();
     expect(() => validate(omittedClaim, allocated)).toThrow(/every claim allocation/);
 
     const duplicateClaim = structuredClone(valid);
-    duplicateClaim.pages[0]!.claims.claims[1] = structuredClone(
-      duplicateClaim.pages[0]!.claims.claims[0]!
+    requireValue(
+      duplicateClaim.pages[0],
+      "apps/orchestration/tests/kb-compose-authority.test.ts:271"
+    ).claims.claims[1] = structuredClone(
+      requireValue(
+        requireValue(
+          duplicateClaim.pages[0],
+          "apps/orchestration/tests/kb-compose-authority.test.ts:272"
+        ).claims.claims[0],
+        "apps/orchestration/tests/kb-compose-authority.test.ts:272"
+      )
     );
     expect(() => validate(duplicateClaim, allocated)).toThrow(/more than once/);
   });

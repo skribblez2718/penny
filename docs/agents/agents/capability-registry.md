@@ -60,14 +60,15 @@ with `plan`. Forcing symmetric lists would spend scarce description budget on no
 The runtime truncates silently, and truncation removes the **tail** — exactly where the
 anti-cases that disambiguate routing live.
 
-| Bound            | Value | Behaviour                       |
-| ---------------- | ----: | ------------------------------- |
-| Hard limit       | 1,024 | Validator fails the build       |
-| Soft target      |   600 | Validator warns                 |
-| Authoring budget |   400 | Convention for new descriptions |
+| Bound            | Value | Behaviour                                                   |
+| ---------------- | ----: | ----------------------------------------------------------- |
+| Hard limit       | 1,024 | Validator fails the build                                   |
+| Preferred target |   500 | Validator warns; justified longer descriptions remain valid |
 
-The ceiling bounds absurdity, not authorship. Every description competes for the same model
-attention during agent and skill selection, so shorter routes better.
+The ceiling bounds runaway text, not authorship. The preferred target keeps routing compact
+without forcing deletion of distinctions that materially improve selection. Every description
+competes for the same model attention during agent and skill selection, so shorter still routes
+better when it preserves the relevant positive trigger and nearest anti-cases.
 
 ## The roster
 

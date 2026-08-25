@@ -33,23 +33,26 @@ delegates.
 4. `RunContext` stores refs, never payload bytes.
 5. Playbooks classify domain gaps; the engine enforces contracts, budgets, authority, and terminal gates.
 6. Recovery is exact-run and forward-only. It never scans semantic memory.
-7. Compaction reads only caller-supplied run IDs from the TypeScript v2 database.
+7. Compaction reads only caller-supplied run IDs from the catalog-bound unversioned orchestration database.
 8. `PENNY_ARTIFACT_DISPATCH_MODE=paused` preserves pending state and blocks new dispatch.
 9. Unknown playbooks, requests, trust profiles, contract fields, and dispatch modes fail closed.
-10. Production model/tool authority comes from `.pi/agents/*.md`; test overrides do not mutate it.
+10. A catalog worker's active tools equal `.pi/agents/<agent>.md` YAML exactly under every trust profile; no result/artifact tool is injected.
 
 ## Composition
 
-Parallel skill invocations create independent TypeScript runs. Chain composition persists
-the prior terminal bytes into an immutable `chain_input` artifact bound to the next run.
-The next entry state receives only that exact grant; `{previous}` is never payload transport.
-Durable chain checkpoints retain terminal and ingress refs across restart.
+Parallel skill invocations create independent TypeScript runs. Chain composition verifies
+and forwards the prior terminal artifact ID directly across runs. The next entry state may
+also receive additional explicit fan-in IDs; `{previous}` is never payload transport.
+Durable chain checkpoints retain exact terminal/handoff refs across restart.
 
 ## Persistence
 
-- Database: `$PROJECT_ROOT/.penny/orchestration-v2.db` unless `PENNY_ORCH_V2_DB` is set. It uses WAL, `synchronous=FULL`, bounded busy timeout, and co-locates ingest/save content-review packets and receipts with their runs/gates.
-- Artifacts: `PENNY_ARTIFACT_ROOT`, otherwise XDG/platform state.
-- Retired checkpoints are archived separately, not converted and not used as fallback.
+- State root: `${PENNY_STATE_ROOT:-<Pi getAgentDir()>/penny}`; Pi relocation follows `PI_CODING_AGENT_DIR`.
+- Database: `projects/<opaque-project-id>/orchestration/orchestration.db`. It uses WAL, `synchronous=FULL`, bounded busy timeout, project metadata, and co-locates ingest/save content-review packets and receipts with their runs/gates.
+- Receipt key: the same partition's `orchestration/receipt-key`; exact key bytes must survive migration.
+- Artifacts: the same partition's `artifacts/manifest.db` plus content-addressed objects.
+- Chains and subagent sessions: the same project partition, with project-bound checkpoints and durable Pi JSONL.
+- Retired selectors and roots are rejected; ordinary runtime performs no scan, import, or fallback.
 
 ## Verification
 

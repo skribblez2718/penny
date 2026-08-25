@@ -52,9 +52,18 @@ export const SAFE_PLATFORM_MEMORY_READ_OPERATIONS = new Set<PlatformMemoryOperat
   "kg_stats",
 ]);
 
+function isPlatformMemoryCapability(value: string): value is PlatformMemoryCapability {
+  return Object.hasOwn(PLATFORM_MEMORY_CAPABILITY_OPERATIONS, value);
+}
+
 const OPERATION_CAPABILITY = new Map<PlatformMemoryOperation, PlatformMemoryCapability>(
   Object.entries(PLATFORM_MEMORY_CAPABILITY_OPERATIONS).flatMap(([capability, operations]) =>
-    operations.map((operation) => [operation, capability as PlatformMemoryCapability])
+    isPlatformMemoryCapability(capability)
+      ? operations.map((operation): [PlatformMemoryOperation, PlatformMemoryCapability] => [
+          operation,
+          capability,
+        ])
+      : []
   )
 );
 
@@ -62,11 +71,19 @@ function invalidRequest(message: string): never {
   throw new PlatformMemoryError("MEMORY_INVALID_REQUEST", message);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    invalidRequest("memory operation input must be an object");
-  }
-  return value as Record<string, unknown>;
+  if (!isRecord(value)) invalidRequest("memory operation input must be an object");
+  return value;
+}
+
+function isPlatformMemoryOperation(value: unknown): value is PlatformMemoryOperation {
+  return (
+    typeof value === "string" && PLATFORM_MEMORY_OPERATIONS.some((operation) => operation === value)
+  );
 }
 
 function assertExactKeys(
@@ -127,7 +144,10 @@ function optionalInteger(
   const value = input[key];
   if (
     value !== undefined &&
-    (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > maximum)
+    (typeof value !== "number" ||
+      !Number.isSafeInteger(value) ||
+      value < minimum ||
+      value > maximum)
   ) {
     invalidRequest(`${key} must be an integer between ${minimum} and ${maximum}`);
   }
@@ -208,16 +228,13 @@ export function assertPlatformMemoryOperationAllowed(
   if (config.mode === "none") {
     throw new PlatformMemoryError("MEMORY_DISABLED", "memory mode is none");
   }
-  if (
-    typeof operation !== "string" ||
-    !OPERATION_CAPABILITY.has(operation as PlatformMemoryOperation)
-  ) {
+  if (!isPlatformMemoryOperation(operation) || !OPERATION_CAPABILITY.has(operation)) {
     throw new PlatformMemoryError(
       "MEMORY_OPERATION_FORBIDDEN",
       "operation is outside the platform-memory contract"
     );
   }
-  const capability = OPERATION_CAPABILITY.get(operation as PlatformMemoryOperation);
+  const capability = OPERATION_CAPABILITY.get(operation);
   if (!capability || !config.capabilities.includes(capability)) {
     throw new PlatformMemoryError(
       "MEMORY_OPERATION_FORBIDDEN",

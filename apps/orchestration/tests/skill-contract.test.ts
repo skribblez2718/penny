@@ -7,6 +7,7 @@
  *   - guidance carries a per-agent-phase option, required by the KB prompt shape
  */
 
+import { requireValue } from "./helpers/narrowing.js";
 import { describe, expect, it } from "vitest";
 
 import { SkillContractSchema, validateContract, type SkillContract } from "../src/contracts.js";
@@ -21,7 +22,7 @@ import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
 import { COMPATIBILITY_LOANS } from "../src/loans.js";
 
 function clone(): SkillContract {
-  return JSON.parse(JSON.stringify(RESEARCH_SKILL_CONTRACT)) as SkillContract;
+  return structuredClone(RESEARCH_SKILL_CONTRACT);
 }
 
 describe("W3 research reference contract", () => {
@@ -34,9 +35,9 @@ describe("W3 research reference contract", () => {
   it("is the contract the registry ships for research", () => {
     const registration = resolvePlaybook(SOLE_PRODUCTION_PLAYBOOK);
     expect(registration?.contract).toEqual(RESEARCH_SKILL_CONTRACT);
-    expect(validateRegistrationContract(registration as PlaybookRegistrationV1).name).toBe(
-      "research"
-    );
+    expect(
+      validateRegistrationContract(requireValue(registration, "research registration")).name
+    ).toBe("research");
   });
 
   it("declares research's real guidance root and per-agent-phase resolution", () => {
@@ -62,8 +63,7 @@ describe("W3 fails closed", () => {
   });
 
   it("rejects a missing required field", () => {
-    const bad = clone() as Partial<SkillContract>;
-    delete bad.completion_gate;
+    const { completion_gate: _removed, ...bad } = clone();
     expect(() => validateContract(SkillContractSchema, bad, "contract")).toThrow();
   });
 
@@ -73,8 +73,7 @@ describe("W3 fails closed", () => {
   });
 
   it("rejects an unknown guidance resolution", () => {
-    const bad = clone();
-    (bad.guidance as { resolution: string }).resolution = "per_run";
+    const bad = { ...clone(), guidance: { ...clone().guidance, resolution: "per_run" } };
     expect(() => validateContract(SkillContractSchema, bad, "contract")).toThrow();
   });
 

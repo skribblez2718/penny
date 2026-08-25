@@ -13,7 +13,7 @@ workflow engine, an immutable artifact plane, and optional primary durable memor
 - **The checkpointer carries control state.** It stores compact fields and selected
   refs, never stage payload bytes.
 - **Memory carries durable cross-session knowledge.** Only the unmarked primary
-  runtime recalls or curates it; workers and skill drivers have no memory tools.
+  runtime owns curation; workers may use YAML-declared read-only recall, never writes or handoff.
 
 ## Context and recovery
 

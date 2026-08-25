@@ -123,7 +123,7 @@ Complete the `{state}` state for the task goal within the supplied constraints.
 ## Exact artifact handoff
 
 The task supplies `input_artifacts`. Read every granted ref with `artifact_read`
-through complete continuation. Do not discover predecessors through another channel.
+through `next_range` until complete. Do not discover predecessors through another channel; return `missing_input:` when a required ID/path is absent.
 Return the complete stage output. The execution owner captures and registers it;
 do not claim persistence. Typed result fields are routing data only.
 

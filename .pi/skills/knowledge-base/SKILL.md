@@ -62,7 +62,7 @@ knowledge_base({schema_version: 1, action: "resume", kb_profile_id: "kbp_demo", 
 
 ## Authority
 
-The model may name an opaque `kb_profile_id` and, where applicable, opaque capability IDs the host already minted. It may never supply a filesystem root, source path, canonical target, provider choice, approval decision, or receipt body. Those are host-owned. Profile-session and parent-delivery grants live only in the owner-only `$PROJECT_ROOT/.penny/kb-host-grants/grants.sqlite` WAL/FULL authority; no JSON or secondary-directory fallback exists.
+The model may name an opaque `kb_profile_id` and, where applicable, opaque capability IDs the host already minted. It may never supply a filesystem root, source path, canonical target, provider choice, approval decision, or receipt body. Those are host-owned. Profile-session and parent-delivery grants live only in the owner-only catalog-bound project `kb/host-grants/` WAL/FULL authority; no project-local, JSON, or secondary-directory fallback exists.
 
 ## Gates
 

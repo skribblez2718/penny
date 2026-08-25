@@ -26,7 +26,10 @@ import argparse
 import re
 import sys
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import Callable
+
+AgentRecord = dict[str, str]
+Registry = dict[str, AgentRecord]
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "system" / "checks"))
@@ -50,13 +53,13 @@ FAMILY_BLURB = {
 }
 
 
-def _sorted_agents(registry: Dict[str, Dict[str, str]]) -> List[Dict[str, str]]:
+def _sorted_agents(registry: Registry) -> list[AgentRecord]:
     """Family order, then capability name — stable and independent of filenames."""
     rows = [dict(fm, agent=agent) for agent, fm in registry.items() if fm.get("capability")]
     return sorted(rows, key=lambda r: (FAMILY_ORDER.index(r["family"]), r["capability"]))
 
 
-def block_roster(registry) -> str:
+def block_roster(registry: Registry) -> str:
     lines = [
         "| Capability | Agent | Family | Authority | Transformation |",
         "|---|---|---|---|---|",
@@ -69,7 +72,7 @@ def block_roster(registry) -> str:
     return "\n".join(lines)
 
 
-def block_coordinates(registry) -> str:
+def block_coordinates(registry: Registry) -> str:
     """Semantic coordinates. These replace pairwise 'do not use me for X' prose."""
     header = "| Capability | Gathers | Evaluates | Selects | Sequences | Writes | Needs standard |"
     lines = [header, "|---|---|---|---|---|---|---|"]
@@ -87,7 +90,7 @@ def block_coordinates(registry) -> str:
     return "\n".join(lines)
 
 
-def block_transformations(registry) -> str:
+def block_transformations(registry: Registry) -> str:
     lines = ["| Capability | Accepts | Produces | Nearest confusable |", "|---|---|---|---|"]
     for r in _sorted_agents(registry):
         neighbors = ", ".join(f"`{n}`" for n in split_list(r["neighbors"])) or "—"
@@ -102,14 +105,14 @@ def _third_person(verb: str) -> str:
     return verb + "s"
 
 
-def block_role_semantics(registry) -> str:
+def block_role_semantics(registry: Registry) -> str:
     """Compact state->agent assignment line used by skill design methodology."""
     rows = _sorted_agents(registry)
     parts = [f"`{r['agent']}` {_third_person(r['capability'])}" for r in rows]
     return "(" + ", ".join(parts) + ")"
 
 
-def block_families(registry) -> str:
+def block_families(registry: Registry) -> str:
     rows = _sorted_agents(registry)
     lines = []
     for family in FAMILY_ORDER:
@@ -119,7 +122,7 @@ def block_families(registry) -> str:
     return "\n".join(lines)
 
 
-BLOCKS: Dict[str, Callable] = {
+BLOCKS: dict[str, Callable[[Registry], str]] = {
     "roster": block_roster,
     "coordinates": block_coordinates,
     "transformations": block_transformations,
@@ -151,8 +154,8 @@ def _normalize(text: str) -> str:
     return "\n".join(canon(line) for line in text.strip().splitlines() if line.strip())
 
 
-def render(text: str, registry) -> str:
-    def replace(match: re.Match) -> str:
+def render(text: str, registry: Registry) -> str:
+    def replace(match: re.Match[str]) -> str:
         name = match.group(1).strip()
         if name not in BLOCKS:
             return match.group(0)
@@ -178,8 +181,8 @@ def main() -> int:
     args = parser.parse_args()
 
     registry = load_registry()
-    stale: List[Path] = []
-    written: List[Path] = []
+    stale: list[Path] = []
+    written: list[Path] = []
 
     for target in TARGETS:
         if not target.exists():

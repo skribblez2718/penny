@@ -8,6 +8,13 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { chromium, type Browser, type Page, type BrowserContext } from "playwright";
 
+import type { SnapshotNode } from "../../types.js";
+
+interface TestAppData {
+  token: string;
+  user: string;
+}
+
 // ============================================================================
 // Vulnerability Scanning Simulation
 // ============================================================================
@@ -83,10 +90,10 @@ describe("E2E: Vulnerability Scanning Workflow", () => {
         }
         return text.trim().slice(0, 100);
       }
-      function buildTree(el: Element, d: number): any {
+      function buildTree(el: Element, d: number): SnapshotNode | null {
         if (d > 5 || ["SCRIPT", "STYLE"].includes(el.tagName)) return null;
-        const node: any = { role: getRole(el), name: getName(el) };
-        const children = [];
+        const node: SnapshotNode = { role: getRole(el), name: getName(el) };
+        const children: SnapshotNode[] = [];
         for (const child of el.children) {
           const c = buildTree(child, d + 1);
           if (c) children.push(c);
@@ -98,6 +105,7 @@ describe("E2E: Vulnerability Scanning Workflow", () => {
     });
 
     expect(snapshot).toBeTruthy();
+    if (snapshot === null) throw new Error("snapshot tree was not created");
     expect(snapshot.role).toBe("body");
 
     // Verify we can find the login button
@@ -105,8 +113,11 @@ describe("E2E: Vulnerability Scanning Workflow", () => {
     expect(buttons.length).toBeGreaterThanOrEqual(1);
 
     // Step 3: Check for exposed data in JS globals
-    const exposedData = await page.evaluate(() => (window as any).__appData);
+    const exposedData = await page.evaluate(
+      () => (window as Window & { __appData?: TestAppData }).__appData
+    );
     expect(exposedData).toBeTruthy();
+    if (exposedData === undefined) throw new Error("test app data was not initialized");
     expect(exposedData.token).toBe("exposed-token-12345");
     expect(exposedData.user).toBe("admin");
 
@@ -227,8 +238,8 @@ describe("E2E: Error Recovery", () => {
 // Helper
 // ============================================================================
 
-function findNodes(node: any, role: string): any[] {
-  const results: any[] = [];
+function findNodes(node: SnapshotNode, role: string): SnapshotNode[] {
+  const results: SnapshotNode[] = [];
   if (node.role === role) results.push(node);
   if (node.children) {
     for (const child of node.children) {

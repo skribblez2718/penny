@@ -1,3 +1,4 @@
+import { parseJson, requireRecord, requireValue } from "./helpers/narrowing.js";
 /**
  * G8 — engine-owned `query` start and grounding (§5.6) end-to-end.
  *
@@ -33,6 +34,7 @@ import {
 import { RunContext } from "../src/context.js";
 import { OrchestrationEngine } from "../src/engine.js";
 import { OrchestrationService } from "../src/service.js";
+import { initializePennyState } from "../src/state/index.js";
 import {
   materializeRunInput,
   privateInputRoot,
@@ -61,12 +63,17 @@ import { RunArtifactStore } from "../src/kb/run-artifacts.js";
 import { KbWorkerClient } from "../src/kb/kb-worker-client.js";
 import { KbQueryReader } from "../src/kb/query-reader.js";
 import { createTestOnlyArtifactBodyRunner, kbSessionSpec } from "../src/kb/session-tools.js";
+import { computeRequestSha256, validateQueryRequest } from "../src/kb/parent-delivery.js";
 import {
-  computeRequestSha256,
-  validateQueryRequest,
+  ReadPhaseBriefResultSchema,
+  ReadRunArtifactResultSchema,
+  SearchSelectedKbResultSchema,
+  sha256Hex,
+  validateKbContract,
+  type KbManifest,
+  type PageRevisionFrontmatter,
   type QueryKbRequest,
-} from "../src/kb/parent-delivery.js";
-import { type KbManifest, sha256Hex } from "../src/kb/contracts.js";
+} from "../src/kb/contracts.js";
 import { kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 
@@ -94,7 +101,10 @@ function installKbWithPage(projectRoot: string): { kbRoot: string; kbId: string 
   installGrantedProfile({ projectRoot, kbRoot, profileId: PROFILE, sessionId: SESSION });
   const ctx = { kbRoot, profileId: PROFILE, runId: "qstart-init" };
   const init = initKb(ctx, "Query-start KB");
-  const kbId = (init.kb_id as string) ?? "kb_unknown";
+  if (init.status !== "complete" || init.kb_id === undefined) {
+    throw new Error("query-start KB fixture did not initialize");
+  }
+  const kbId = init.kb_id;
 
   // The out-of-band policy install §5.3 requires (default-deny until an
   // operator edits the ignored policy; this test performs that host operation).
@@ -123,7 +133,7 @@ function installKbWithPage(projectRoot: string): { kbRoot: string; kbId: string 
     created_at: NOW,
     derived_from: [],
     related_page_ids: [],
-  };
+  } satisfies PageRevisionFrontmatter;
   const sourceDigest = sha256Hex(SOURCE_BODY);
   const sourceRecord = {
     schema_version: 1 as const,
@@ -336,16 +346,15 @@ function startRequest(stack: Stack, runId: string, sessionId = SESSION) {
   } as const;
 }
 
-function terminalResult(d: Directive): Record<string, unknown> {
-  const terminal = d as unknown as {
-    action: string;
-    met?: boolean;
-    result?: Record<string, unknown>;
-  };
-  if (terminal.action !== "complete" && terminal.action !== "incomplete") {
-    throw new Error(`qstart: expected a terminal directive, got '${terminal.action}'`);
-  }
-  return (terminal.result ?? {}) as Record<string, unknown>;
+type TerminalDirective = Extract<Directive, { result: Record<string, unknown> }>;
+
+function requireTerminal(directive: Directive): TerminalDirective {
+  if ("result" in directive) return directive;
+  throw new Error(`qstart: expected a terminal directive, got '${directive.action}'`);
+}
+
+function terminalResult(directive: Directive): Record<string, unknown> {
+  return requireTerminal(directive).result;
 }
 
 function settle(stack: Stack, runId: string, result: Record<string, unknown>) {
@@ -366,7 +375,16 @@ async function runGroundedQuery(input: {
   runId: string;
   verificationPasses: boolean;
 }) {
-  const dbPath = path.join(input.projectRoot, ".penny", `${input.runId}.db`);
+  const stateRoot = tmpRoot();
+  const stateEnv = {
+    ...process.env,
+    PENNY_STATE_ROOT: stateRoot,
+    PENNY_ARTIFACT_ROOT: undefined,
+    PENNY_ORCH_DB: undefined,
+    PENNY_ORCH_V2_DB: undefined,
+  };
+  const state = initializePennyState(input.projectRoot, { env: stateEnv });
+  const dbPath = state.paths.orchestration.database;
   const request = validateQueryRequest({
     schema_version: 1,
     action: "query",
@@ -411,19 +429,20 @@ async function runGroundedQuery(input: {
 
   const phases: string[] = [];
   const phaseBriefs: string[] = [];
-  let service: OrchestrationService | undefined;
+  const serviceSlot: { current?: OrchestrationService } = {};
   const queryReader = new KbQueryReader({
     kbRoot: path.join(input.projectRoot, "private-kb"),
     profileId: PROFILE,
     readRequest: () =>
       readRunInput({
         projectRoot: input.projectRoot,
-        checkpointer: service!.checkpointer,
+        checkpointer: requireValue(serviceSlot.current, "query service").checkpointer,
         runId: input.runId,
       }),
     selectedGenerationId: () =>
       String(
-        service!.checkpointer.loadRunById(input.runId)?.playbookData.selected_generation_id ?? ""
+        requireValue(serviceSlot.current, "query service").checkpointer.loadRunById(input.runId)
+          ?.playbookData.selected_generation_id ?? ""
       ),
   });
   const worker = new KbWorkerClient({
@@ -436,7 +455,8 @@ async function runGroundedQuery(input: {
     sourceCapabilityIds: [],
     admittedPolicySha256: () =>
       String(
-        service!.checkpointer.loadRunById(input.runId)?.playbookData.admitted_policy_sha256 ?? ""
+        requireValue(serviceSlot.current, "query service").checkpointer.loadRunById(input.runId)
+          ?.playbookData.admitted_policy_sha256 ?? ""
       ),
     queryReader,
     testOnlyAgentRunner: createTestOnlyArtifactBodyRunner(async (invocation) => {
@@ -446,7 +466,11 @@ async function runGroundedQuery(input: {
       expect(invocation.phaseBrief).not.toContain(SOURCE_BODY);
       const privateBriefText = invocation.readPhaseBrief?.() ?? "{}";
       expect(privateBriefText).toContain(QUERY_BODY);
-      const privateBrief = JSON.parse(privateBriefText) as Record<string, unknown>;
+      const privateBrief = validateKbContract(
+        ReadPhaseBriefResultSchema,
+        parseJson(privateBriefText),
+        "query-start private phase brief"
+      );
       expect(Object.keys(privateBrief).sort()).toEqual([
         "allowed_prior_artifacts",
         "allowed_selected_pages",
@@ -455,7 +479,7 @@ async function runGroundedQuery(input: {
         "schema_version",
         "state_id",
       ]);
-      expect(Object.keys(privateBrief.brief as Record<string, unknown>).sort()).toEqual([
+      expect(Object.keys(privateBrief.brief).sort()).toEqual([
         "action",
         "max_candidates",
         "page_ids",
@@ -465,10 +489,12 @@ async function runGroundedQuery(input: {
       ]);
       expect(privateBriefText).not.toContain("expected_artifact_kind");
       expect(privateBriefText).not.toContain("task");
-      const search = JSON.parse(invocation.searchSelectedKb?.() ?? "{}") as {
-        candidates?: Array<{ page_id: string; revision_id: string }>;
-      };
-      expect(search.candidates?.[0]?.page_id).toBe("page_quorum");
+      const search = validateKbContract(
+        SearchSelectedKbResultSchema,
+        parseJson(invocation.searchSelectedKb?.() ?? "{}"),
+        "query-start selected KB search"
+      );
+      expect(search.candidates[0]?.page_id).toBe("page_quorum");
       expect(invocation.readSelectedPage?.("page_quorum", "rev_q1")).toContain("claim_quorum");
       expect(invocation.readSelectedSource?.("source_quorum")).toContain("PRIVATE-SOURCE 6c81af");
       if (invocation.stateId === "query") {
@@ -494,21 +520,31 @@ async function runGroundedQuery(input: {
       }
       const prior = invocation.allowedPriorArtifacts?.[0];
       expect(prior).toBeDefined();
-      const priorRead = JSON.parse(invocation.readRunArtifact?.(prior!.artifact_id) ?? "{}") as {
-        artifact?: { artifact_id?: string; sha256?: string };
-        payload?: unknown;
-      };
+      const priorRead = validateKbContract(
+        ReadRunArtifactResultSchema,
+        parseJson(
+          invocation.readRunArtifact?.(
+            requireValue(prior, "apps/orchestration/tests/kb-query-start.test.ts:508").artifact_id
+          ) ?? "{}"
+        ),
+        "query-start prior artifact"
+      );
       expect(JSON.stringify(priorRead.payload)).toContain("claim_quorum");
       expect(priorRead.artifact).toMatchObject({
-        artifact_id: prior!.artifact_id,
-        sha256: prior!.sha256,
+        artifact_id: requireValue(prior, "apps/orchestration/tests/kb-query-start.test.ts:514")
+          .artifact_id,
+        sha256: requireValue(prior, "apps/orchestration/tests/kb-query-start.test.ts:515").sha256,
       });
       return JSON.stringify({
         schema_version: 1,
         artifact_kind: "verification_report",
         passed: input.verificationPasses,
-        answer_artifact_id: prior!.artifact_id,
-        answer_sha256: prior!.sha256,
+        answer_artifact_id: requireValue(
+          prior,
+          "apps/orchestration/tests/kb-query-start.test.ts:521"
+        ).artifact_id,
+        answer_sha256: requireValue(prior, "apps/orchestration/tests/kb-query-start.test.ts:522")
+          .sha256,
         answer_verdict: input.verificationPasses ? "supported" : "unsupported",
         citation_findings: [
           {
@@ -527,16 +563,13 @@ async function runGroundedQuery(input: {
       });
     }),
   });
-  service = new OrchestrationService({
+  const service = new OrchestrationService({
     projectRoot: input.projectRoot,
-    env: {
-      ...process.env,
-      PENNY_ORCH_V2_DB: dbPath,
-      PENNY_ARTIFACT_ROOT: path.join(input.projectRoot, ".penny", `${input.runId}-artifacts`),
-    },
+    env: stateEnv,
     playbookName: "knowledge-base",
     modelClient: worker,
   });
+  serviceSlot.current = service;
   try {
     const directive = await service.execute({
       schema_version: 2,
@@ -588,7 +621,6 @@ describe("engine-owned query start (§5.6)", () => {
         submitPhaseResult: (result) => canonicalJson(result),
       },
       cognitiveFrame: "Cognitive frame.",
-      agentBody: "Synthia role context.",
       phaseGuidance: "Use the query readers and submit one typed result.",
     });
     expect(spec.noTools).toBe("all");
@@ -599,7 +631,9 @@ describe("engine-owned query start (§5.6)", () => {
       "stage_run_artifact",
       "submit_phase_result",
     ]);
-    expect(spec.customTools.map((tool) => tool.name)).toEqual(spec.tools);
+    const customTools = spec.customTools;
+    if (customTools === undefined) throw new Error("query session registered no custom tools");
+    expect(customTools.map((tool) => tool.name)).toEqual(spec.tools);
     expect(spec.opening).not.toContain(QUERY_BODY);
     expect(spec.opening).not.toContain(SOURCE_BODY);
   });
@@ -621,14 +655,14 @@ describe("engine-owned query start (§5.6)", () => {
 
     // Engine-owned start: the admitted branch drives the playbook step.
     const directive = stack.engine.handle(startRequest(stack, runId));
-    const result = terminalResult(directive);
+    const terminal = requireTerminal(directive);
+    const result = terminal.result;
     expect(directive.action).toBe("complete");
-    const terminal = directive as unknown as { met: boolean };
     expect(terminal.met).toBe(true);
     expect(result["public_status"]).toBe("complete");
     expect(result["candidate_count"]).toBeGreaterThanOrEqual(1);
     expect(result["kb_id"]).toBeTruthy();
-    const handle = result["answer_handle"] as Record<string, unknown>;
+    const handle = requireRecord(result["answer_handle"], "query-start answer handle");
     expect(handle["artifact_kind"]).toBe("query_answer");
     expect(typeof handle["artifact_id"]).toBe("string");
     expect(typeof handle["sha256"]).toBe("string");
@@ -650,38 +684,46 @@ describe("engine-owned query start (§5.6)", () => {
       maxSteps: 8,
       playbookName: "knowledge-base",
     });
-    const status = reopenedEngine.handle({
-      schema_version: 2,
-      action: "status",
-      identity: {
+    const status = requireTerminal(
+      reopenedEngine.handle({
         schema_version: 2,
-        run_id: runId,
-        session_id: SESSION,
-        playbook: "knowledge-base",
-        engine_owner: "typescript",
-      },
-    }) as unknown as { action: string; met?: boolean; result?: Record<string, unknown> };
+        action: "status",
+        identity: {
+          schema_version: 2,
+          run_id: runId,
+          session_id: SESSION,
+          playbook: "knowledge-base",
+          engine_owner: "typescript",
+        },
+      })
+    );
     expect(status.action).toBe("complete");
     expect(status.met).toBe(true);
     expect(status.result).toEqual(result);
-    const recovered = reopenedEngine.handle({
-      schema_version: 2,
-      action: "recover",
-      identity: {
+    const recovered = requireTerminal(
+      reopenedEngine.handle({
         schema_version: 2,
-        run_id: runId,
-        session_id: SESSION,
-        playbook: "knowledge-base",
-        engine_owner: "typescript",
-      },
-    }) as unknown as { action: string; met?: boolean };
+        action: "recover",
+        identity: {
+          schema_version: 2,
+          run_id: runId,
+          session_id: SESSION,
+          playbook: "knowledge-base",
+          engine_owner: "typescript",
+        },
+      })
+    );
     expect(recovered.action).toBe("complete");
     expect(recovered.met).toBe(true);
 
     // The body is in NO control-db file, snapshot, or event payload.
     const run = reopened.loadRunById(runId);
     expect(run).toBeDefined();
-    expect(canonicalJson(run!.snapshot())).not.toContain(QUERY_BODY);
+    expect(
+      canonicalJson(
+        requireValue(run, "apps/orchestration/tests/kb-query-start.test.ts:692").snapshot()
+      )
+    ).not.toContain(QUERY_BODY);
     for (const event of reopened.events(runId)) {
       expect(canonicalJson(event.payload)).not.toContain(QUERY_BODY);
     }
@@ -712,10 +754,7 @@ describe("engine-owned query start (§5.6)", () => {
       expect(phaseBriefs.join("\n")).not.toContain(QUERY_BODY);
       expect(phaseBriefs.join("\n")).not.toContain(SOURCE_BODY);
       expect(directive.action).toBe("complete");
-      const terminal = directive as unknown as {
-        met: boolean;
-        result: Record<string, unknown>;
-      };
+      const terminal = requireTerminal(directive);
       expect(terminal.met).toBe(true);
       expect(terminal.result["grounding_verified"]).toBe(true);
       expect(terminal.result["verification_artifact_id"]).toMatch(/^art_/);
@@ -723,8 +762,16 @@ describe("engine-owned query start (§5.6)", () => {
       expect(claim.state).toBe("available");
       expect(claim.answer_artifact_id).toBe(terminal.result["answer_artifact_id"]);
       const run = service.checkpointer.loadRunById(runId);
-      expect(canonicalJson(run!.snapshot())).not.toContain(QUERY_BODY);
-      expect(canonicalJson(run!.snapshot())).not.toContain(SOURCE_BODY);
+      expect(
+        canonicalJson(
+          requireValue(run, "apps/orchestration/tests/kb-query-start.test.ts:734").snapshot()
+        )
+      ).not.toContain(QUERY_BODY);
+      expect(
+        canonicalJson(
+          requireValue(run, "apps/orchestration/tests/kb-query-start.test.ts:735").snapshot()
+        )
+      ).not.toContain(SOURCE_BODY);
       for (const event of service.checkpointer.events(runId)) {
         expect(canonicalJson(event.payload)).not.toContain(QUERY_BODY);
         expect(canonicalJson(event.payload)).not.toContain(SOURCE_BODY);
@@ -754,10 +801,7 @@ describe("engine-owned query start (§5.6)", () => {
     try {
       expect(phases).toEqual(["query", "verify"]);
       expect(directive.action).toBe("incomplete");
-      const terminal = directive as unknown as {
-        met: boolean;
-        result: Record<string, unknown>;
-      };
+      const terminal = requireTerminal(directive);
       expect(terminal.met).toBe(false);
       expect(terminal.result["public_status"]).toBe("complete");
       expect(terminal.result["grounding_verified"]).toBe(false);
@@ -786,7 +830,6 @@ describe("engine-owned query start (§5.6)", () => {
     admitAndMaterialize(stack, runId, request, "call-2");
     const first = stack.engine.handle(startRequest(stack, runId));
     const firstResult = terminalResult(first);
-    const firstHandle = firstResult["answer_handle"] as Record<string, unknown>;
     settle(stack, runId, firstResult);
 
     // Explicitly unverified deterministic answers have no save authority.
@@ -799,11 +842,7 @@ describe("engine-owned query start (§5.6)", () => {
     expect(retryAdmission).toEqual({ kind: "replay", run_id: runId });
     expect(stack.checkpointer.runExists("qstart_idem_1_retry")).toBe(false);
 
-    const retried = stack.engine.handle(startRequest(stack, runId)) as unknown as {
-      action: string;
-      met?: boolean;
-      result?: Record<string, unknown>;
-    };
+    const retried = requireTerminal(stack.engine.handle(startRequest(stack, runId)));
     expect(retried.action).toBe("complete");
     expect(retried.result).toEqual(firstResult);
     // No second side effect: the deterministic replay still created no claim.
@@ -880,7 +919,7 @@ describe("engine-owned query start (§5.6)", () => {
         playbook: "knowledge-base",
         engine_owner: "typescript",
       },
-    }) as unknown as { action: string };
+    });
     expect(status.action).toBe("complete");
     stack.checkpointer.close();
   });
@@ -941,46 +980,46 @@ describe("engine-owned query start (§5.6)", () => {
       request,
       requestSha256: computeRequestSha256(request),
     });
-    const directive = engine.handle({
-      schema_version: 2,
-      action: "start",
-      identity: {
+    const directive = requireTerminal(
+      engine.handle({
         schema_version: 2,
-        run_id: runId,
-        session_id: SESSION,
-        playbook: "knowledge-base",
-        engine_owner: "typescript",
-      },
-      goal: "stored private request",
-      constraints: {
-        action: "query",
-        kb_profile_id: "kbp_qstart_empty",
-        parent_identity: E2E_PARENT,
-      },
-      project_root: projectRoot,
-      trust_profile: "hardened-untrusted",
-    }) as unknown as {
-      action: string;
-      met: boolean;
-      result: Record<string, unknown>;
-    };
+        action: "start",
+        identity: {
+          schema_version: 2,
+          run_id: runId,
+          session_id: SESSION,
+          playbook: "knowledge-base",
+          engine_owner: "typescript",
+        },
+        goal: "stored private request",
+        constraints: {
+          action: "query",
+          kb_profile_id: "kbp_qstart_empty",
+          parent_identity: E2E_PARENT,
+        },
+        project_root: projectRoot,
+        trust_profile: "hardened-untrusted",
+      })
+    );
     // Engine truth met:false; the §5.6 PUBLIC projection is `complete`/`met:false`.
     expect(directive.met).toBe(false);
     expect(directive.result["public_status"]).toBe("complete");
     expect(directive.result["candidate_count"]).toBe(0);
 
     // Status mirrors it: addressable, unmet, public `complete`.
-    const status = engine.handle({
-      schema_version: 2,
-      action: "status",
-      identity: {
+    const status = requireTerminal(
+      engine.handle({
         schema_version: 2,
-        run_id: runId,
-        session_id: SESSION,
-        playbook: "knowledge-base",
-        engine_owner: "typescript",
-      },
-    }) as unknown as { action: string; met?: boolean };
+        action: "status",
+        identity: {
+          schema_version: 2,
+          run_id: runId,
+          session_id: SESSION,
+          playbook: "knowledge-base",
+          engine_owner: "typescript",
+        },
+      })
+    );
     expect(status.action).toBe(directive.action);
     expect(status.met).toBe(false);
 
@@ -1048,29 +1087,27 @@ describe("engine-owned query start (§5.6)", () => {
     });
     // The refusal is a DURABLE terminal, not an exception: the run stays
     // addressable and the public projection says `refused`.
-    const directive = engine.handle({
-      schema_version: 2,
-      action: "start",
-      identity: {
+    const directive = requireTerminal(
+      engine.handle({
         schema_version: 2,
-        run_id: runId,
-        session_id: SESSION,
-        playbook: "knowledge-base",
-        engine_owner: "typescript",
-      },
-      goal: "stored private request",
-      constraints: {
-        action: "query",
-        kb_profile_id: "kbp_qstart_refused",
-        parent_identity: E2E_PARENT,
-      },
-      project_root: projectRoot,
-      trust_profile: "hardened-untrusted",
-    }) as unknown as {
-      action: string;
-      met: boolean;
-      result: Record<string, unknown>;
-    };
+        action: "start",
+        identity: {
+          schema_version: 2,
+          run_id: runId,
+          session_id: SESSION,
+          playbook: "knowledge-base",
+          engine_owner: "typescript",
+        },
+        goal: "stored private request",
+        constraints: {
+          action: "query",
+          kb_profile_id: "kbp_qstart_refused",
+          parent_identity: E2E_PARENT,
+        },
+        project_root: projectRoot,
+        trust_profile: "hardened-untrusted",
+      })
+    );
     expect(directive.met).toBe(false);
     expect(directive.result["public_status"]).toBe("refused");
 
@@ -1079,23 +1116,29 @@ describe("engine-owned query start (§5.6)", () => {
     expect(checkpointer.getPrivateInput(runId)?.state).toBe("discarded");
 
     // Status mirrors the refusal durably.
-    const status = engine.handle({
-      schema_version: 2,
-      action: "status",
-      identity: {
+    const status = requireTerminal(
+      engine.handle({
         schema_version: 2,
-        run_id: runId,
-        session_id: SESSION,
-        playbook: "knowledge-base",
-        engine_owner: "typescript",
-      },
-    }) as unknown as { action: string; met?: boolean };
+        action: "status",
+        identity: {
+          schema_version: 2,
+          run_id: runId,
+          session_id: SESSION,
+          playbook: "knowledge-base",
+          engine_owner: "typescript",
+        },
+      })
+    );
     expect(status.action).toBe(directive.action);
     expect(status.met).toBe(false);
 
     // The body is nowhere in control state.
     const run = checkpointer.loadRunById(runId);
-    expect(canonicalJson(run!.snapshot())).not.toContain("any private body 3c91de");
+    expect(
+      canonicalJson(
+        requireValue(run, "apps/orchestration/tests/kb-query-start.test.ts:1106").snapshot()
+      )
+    ).not.toContain("any private body 3c91de");
     checkpointer.close();
   });
 
@@ -1112,22 +1155,27 @@ describe("engine-owned query start (§5.6)", () => {
     });
     const runId = "qstart_seal_1";
     admitAndMaterialize(stack, runId, request, "call-6");
-    const terminal = stack.engine.handle(startRequest(stack, runId)) as unknown as {
-      result: Record<string, unknown>;
-    };
-    const handle = terminal.result["answer_handle"] as Record<string, unknown>;
+    const terminal = requireTerminal(stack.engine.handle(startRequest(stack, runId)));
+    const handle = requireRecord(terminal.result["answer_handle"], "sealed answer handle");
     const store = new RunArtifactStore(stack.kbRoot, runId, stack.checkpointer);
     const { handle: checked, content } = store.read(String(handle["artifact_id"]));
     store.close();
     expect(checked.artifact_id).toBe(String(handle["artifact_id"]));
     expect(checked.artifact_kind).toBe("query_answer");
-    const doc = JSON.parse(content) as Record<string, unknown>;
+    const doc = requireRecord(
+      parseJson(content),
+      "apps/orchestration/tests/kb-query-start.test.ts:1133"
+    );
     expect(doc["artifact_kind"]).toBe("query_answer");
     expect(doc["answer"]).toBeTruthy();
     // The request body is not copied into the answer artifact or control state.
     expect(content).not.toContain(QUERY_BODY);
     const run = stack.checkpointer.loadRunById(runId);
-    expect(canonicalJson(run!.snapshot())).not.toContain(QUERY_BODY);
+    expect(
+      canonicalJson(
+        requireValue(run, "apps/orchestration/tests/kb-query-start.test.ts:1138").snapshot()
+      )
+    ).not.toContain(QUERY_BODY);
     stack.checkpointer.close();
   });
 

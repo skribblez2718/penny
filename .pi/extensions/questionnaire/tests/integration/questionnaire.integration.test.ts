@@ -14,7 +14,7 @@
 import { describe, it, expect, vi, beforeAll } from "vitest";
 
 // Mock TUI dependencies (integration tests don't need actual TUI)
-vi.mock("@mariozechner/pi-tui", () => ({
+vi.mock("@earendil-works/pi-tui", () => ({
   Editor: vi.fn().mockImplementation(() => ({
     onSubmit: null,
     setText: vi.fn(),
@@ -36,62 +36,60 @@ vi.mock("@mariozechner/pi-tui", () => ({
   matchesKey: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   getMarkdownTheme: vi.fn().mockReturnValue({
     fg: (_color: string, text: string) => text,
     bg: (_color: string, text: string) => text,
   }),
 }));
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import {
   registerTrustedQuestionnaireTransport,
   renderedQuestionsDigest,
   verifyOwnerReceiptForTest,
 } from "../../../skill/execution-receipts.js";
+import {
+  createExtensionApiHarness,
+  requireBoolean,
+  requireDefined,
+  requireQuestionnaireCommand,
+  requireQuestionnaireTool,
+  requireQuestionnaireToolResult,
+  requireRecord,
+  requireTextComponent,
+  type QuestionnaireToolResult,
+  type RegisteredQuestionnaireCommand,
+  type RegisteredQuestionnaireTool,
+} from "../helpers.js";
 
-interface RegisteredTool {
-  name: string;
-  label: string;
-  description: string;
-  parameters: unknown;
-  execute: (...args: unknown[]) => Promise<unknown>;
-  renderCall?: (args: unknown, theme: unknown) => unknown;
-  renderResult?: (result: unknown, options: unknown, theme: unknown) => unknown;
+async function registerQuestionnaire(): Promise<{
+  tool: RegisteredQuestionnaireTool;
+  commands: RegisteredQuestionnaireCommand[];
+}> {
+  const harness = createExtensionApiHarness();
+  const mod = await import("../../index.js");
+  mod.default(harness.api);
+  return {
+    tool: requireQuestionnaireTool(harness.registeredTools[0]),
+    commands: harness.registeredCommands.map((command) => requireQuestionnaireCommand(command)),
+  };
 }
 
-interface RegisteredCommand {
-  name: string;
-  config: { description: string; handler: (args: unknown, ctx: unknown) => Promise<void> };
+async function executeQuestionnaire(
+  execute: (...args: unknown[]) => Promise<unknown>,
+  ...args: unknown[]
+): Promise<QuestionnaireToolResult> {
+  return requireQuestionnaireToolResult(await execute(...args));
 }
 
 describe("Questionnaire Integration — Tool Registration", () => {
-  let registeredTool: RegisteredTool;
-  let registeredCommands: RegisteredCommand[];
+  let registeredTool: RegisteredQuestionnaireTool;
+  let registeredCommands: RegisteredQuestionnaireCommand[];
 
   beforeAll(async () => {
-    const tools: RegisteredTool[] = [];
-    registeredCommands = [];
-
-    const mockPi = {
-      registerTool: vi.fn((tool: RegisteredTool) => {
-        tools.push(tool);
-      }),
-      registerCommand: vi.fn(
-        (
-          name: string,
-          config: { description: string; handler: (args: unknown, ctx: unknown) => Promise<void> }
-        ) => {
-          registeredCommands.push({ name, config });
-        }
-      ),
-      on: vi.fn(),
-    } as unknown as ExtensionAPI;
-
-    const mod = await import("../../index.js");
-    mod.default(mockPi);
-
-    registeredTool = tools[0];
+    const registration = await registerQuestionnaire();
+    registeredTool = registration.tool;
+    registeredCommands = registration.commands;
   });
 
   it("should register exactly one tool", () => {
@@ -106,17 +104,18 @@ describe("Questionnaire Integration — Tool Registration", () => {
     // must stay a flat object; exactly-one-of is enforced at runtime in
     // execute().
     expect(registeredTool.parameters).toBeDefined();
-    const parameters = registeredTool.parameters as {
-      type?: string;
-      anyOf?: Record<string, unknown>[];
-      properties?: Record<string, unknown>;
-      additionalProperties?: boolean;
-    };
+    const parameters = requireRecord(
+      registeredTool.parameters,
+      "questionnaire parameters were not an object"
+    );
+    const properties = requireRecord(
+      parameters.properties,
+      "questionnaire parameter properties were not registered"
+    );
     expect(parameters.anyOf).toBeUndefined();
     expect(parameters.type).toBe("object");
-    expect(parameters.properties).toBeDefined();
-    expect(parameters.properties).toHaveProperty("questions");
-    expect(parameters.properties).toHaveProperty("trustedTransportCapability");
+    expect(properties).toHaveProperty("questions");
+    expect(properties).toHaveProperty("trustedTransportCapability");
     expect(parameters.additionalProperties).toBe(false);
   });
 
@@ -132,7 +131,9 @@ describe("Questionnaire Integration — Tool Registration", () => {
 
   it("should register the 'ask' command", () => {
     expect(registeredCommands).toHaveLength(1);
-    expect(registeredCommands[0].name).toBe("ask");
+    expect(requireDefined(registeredCommands[0], "ask command was not registered").name).toBe(
+      "ask"
+    );
   });
 });
 
@@ -140,24 +141,12 @@ describe("Questionnaire Integration — Non-Interactive Execute", () => {
   let execute: (...args: unknown[]) => Promise<unknown>;
 
   beforeAll(async () => {
-    const tools: RegisteredTool[] = [];
-
-    const mockPi = {
-      registerTool: vi.fn((tool: RegisteredTool) => {
-        tools.push(tool);
-      }),
-      registerCommand: vi.fn(),
-      on: vi.fn(),
-    } as unknown as ExtensionAPI;
-
-    const mod = await import("../../index.js");
-    mod.default(mockPi);
-
-    execute = tools[0].execute;
+    execute = (await registerQuestionnaire()).tool.execute;
   });
 
   it("should return structured text with proper Markdown headers", async () => {
-    const result = (await execute(
+    const result = await executeQuestionnaire(
+      execute,
       "call-int-1",
       {
         questions: [
@@ -174,12 +163,9 @@ describe("Questionnaire Integration — Non-Interactive Execute", () => {
       undefined,
       undefined,
       { hasUI: false }
-    )) as {
-      content: { type: string; text: string }[];
-      details: Record<string, unknown>;
-    };
+    );
 
-    const text = result.content[0].text;
+    const text = requireDefined(result.content[0], "questionnaire result content is missing").text;
     expect(text).toContain("## Questionnaire");
     expect(text).toContain("### Q1: What is the scope?");
     expect(text).toContain("1. Local");
@@ -188,7 +174,8 @@ describe("Questionnaire Integration — Non-Interactive Execute", () => {
   });
 
   it("should include needsUserInput marker in details", async () => {
-    const result = (await execute(
+    const result = await executeQuestionnaire(
+      execute,
       "call-int-2",
       {
         questions: [{ id: "q1", prompt: "Q?", options: [{ value: "a", label: "A" }] }],
@@ -196,12 +183,11 @@ describe("Questionnaire Integration — Non-Interactive Execute", () => {
       undefined,
       undefined,
       { hasUI: false }
-    )) as {
-      details: Record<string, unknown>;
-    };
+    );
+    const details = requireDefined(result.details, "questionnaire result details are missing");
 
-    expect(result.details.needsUserInput).toBe(true);
-    expect(result.details.cancelled).toBe(false);
+    expect(requireBoolean(details.needsUserInput, "needsUserInput marker is missing")).toBe(true);
+    expect(requireBoolean(details.cancelled, "cancelled marker is missing")).toBe(false);
   });
 
   it("signs a gate event only for owner-registered content shown to an interactive human", async () => {
@@ -233,7 +219,8 @@ describe("Questionnaire Integration — Non-Interactive Execute", () => {
       renderedQuestionsDigest: renderedQuestionsDigest(questions),
     });
     expect(capability).toBeTruthy();
-    const result = (await execute(
+    const result = await executeQuestionnaire(
+      execute,
       "call-gate",
       { trustedTransportCapability: capability },
       undefined,
@@ -257,12 +244,13 @@ describe("Questionnaire Integration — Non-Interactive Execute", () => {
           notify: vi.fn(),
         },
       }
-    )) as {
-      content: { type: string; text: string }[];
-      details: { trustedHumanEvents: Record<string, unknown>[] };
-    };
-
-    const event = result.details.trustedHumanEvents[0];
+    );
+    const details = requireDefined(result.details, "trusted questionnaire details are missing");
+    const trustedEvents = details.trustedHumanEvents;
+    if (!Array.isArray(trustedEvents)) {
+      throw new Error("trusted questionnaire events are missing");
+    }
+    const event = requireRecord(trustedEvents[0], "trusted questionnaire event is missing");
     expect(event).toMatchObject({
       schema_version: 2,
       origin: "trusted-human-ui",
@@ -278,7 +266,9 @@ describe("Questionnaire Integration — Non-Interactive Execute", () => {
       },
     });
     expect(verifyOwnerReceiptForTest(event)).toBe(true);
-    expect(result.content[0].text).toContain("TRUSTED_HUMAN_EVENT:");
+    expect(requireDefined(result.content[0], "trusted result content is missing").text).toContain(
+      "TRUSTED_HUMAN_EVENT:"
+    );
   });
 
   it("rejects caller-substituted questions instead of signing altered gate content", async () => {
@@ -299,7 +289,8 @@ describe("Questionnaire Integration — Non-Interactive Execute", () => {
       transportRef: { artifact_id: "transport-adversarial" },
       renderedQuestionsDigest: renderedQuestionsDigest(questions),
     });
-    const result = (await execute(
+    const result = await executeQuestionnaire(
+      execute,
       "call-altered-gate",
       {
         trustedTransportCapability: capability,
@@ -314,15 +305,18 @@ describe("Questionnaire Integration — Non-Interactive Execute", () => {
       undefined,
       undefined,
       { hasUI: true, ui: { custom: vi.fn(), notify: vi.fn() } }
-    )) as { content: { text: string }[]; details: Record<string, unknown> };
+    );
+    const content = requireDefined(result.content[0], "altered-gate result content is missing");
+    const details = requireDefined(result.details, "altered-gate result details are missing");
 
-    expect(result.content[0].text).toContain("exactly one");
-    expect(result.content[0].text).not.toContain("TRUSTED_HUMAN_EVENT:");
-    expect(result.details.trustedHumanEvents).toBeUndefined();
+    expect(content.text).toContain("exactly one");
+    expect(content.text).not.toContain("TRUSTED_HUMAN_EVENT:");
+    expect(details.trustedHumanEvents).toBeUndefined();
   });
 
   it("should auto-number options correctly across multiple questions", async () => {
-    const result = (await execute(
+    const result = await executeQuestionnaire(
+      execute,
       "call-int-3",
       {
         questions: [
@@ -348,12 +342,9 @@ describe("Questionnaire Integration — Non-Interactive Execute", () => {
       undefined,
       undefined,
       { hasUI: false }
-    )) as {
-      content: { type: string; text: string }[];
-      details: Record<string, unknown>;
-    };
+    );
 
-    const text = result.content[0].text;
+    const text = requireDefined(result.content[0], "auto-numbered result content is missing").text;
     // Q1 options: 1-3, Type something=4
     expect(text).toContain("1. A1");
     expect(text).toContain("3. C1");
@@ -362,12 +353,13 @@ describe("Questionnaire Integration — Non-Interactive Execute", () => {
     expect(text).toContain("1. X2");
     expect(text).toContain("2. Y2");
     // Second "(Type something)" for Q2
-    const typeSomethingCount = (text.match(/\(Type something\)/g) || []).length;
+    const typeSomethingCount = [...text.matchAll(/\(Type something\)/g)].length;
     expect(typeSomethingCount).toBe(2);
   });
 
   it("should include option descriptions when provided", async () => {
-    const result = (await execute(
+    const result = await executeQuestionnaire(
+      execute,
       "call-int-4",
       {
         questions: [
@@ -384,17 +376,19 @@ describe("Questionnaire Integration — Non-Interactive Execute", () => {
       undefined,
       undefined,
       { hasUI: false }
-    )) as {
-      content: { type: string; text: string }[];
-    };
+    );
 
-    const text = result.content[0].text;
+    const text = requireDefined(
+      result.content[0],
+      "described-option result content is missing"
+    ).text;
     expect(text).toContain("1. Safe — Conservative approach");
     expect(text).toContain("2. Risky — High risk, high reward");
   });
 
   it("should handle multiple questions with different allowOther settings", async () => {
-    const result = (await execute(
+    const result = await executeQuestionnaire(
+      execute,
       "call-int-5",
       {
         questions: [
@@ -415,12 +409,9 @@ describe("Questionnaire Integration — Non-Interactive Execute", () => {
       undefined,
       undefined,
       { hasUI: false }
-    )) as {
-      content: { type: string; text: string }[];
-      details: Record<string, unknown>;
-    };
+    );
 
-    const text = result.content[0].text;
+    const text = requireDefined(result.content[0], "allowOther result content is missing").text;
     // Fixed question: only 1 option, no "Type something"
     // We need to verify the fixed question section doesn't have (Type something)
     // and the open question section does.
@@ -431,8 +422,10 @@ describe("Questionnaire Integration — Non-Interactive Execute", () => {
 
     expect(fixedSection).toBeDefined();
     expect(openSection).toBeDefined();
-    expect(fixedSection!).not.toContain("(Type something)");
-    expect(openSection!).toContain("(Type something)");
+    const fixedQuestion = requireDefined(fixedSection, "fixed question section was not rendered");
+    const openQuestion = requireDefined(openSection, "open question section was not rendered");
+    expect(fixedQuestion).not.toContain("(Type something)");
+    expect(openQuestion).toContain("(Type something)");
   });
 });
 
@@ -440,24 +433,15 @@ describe("Questionnaire Integration — renderCall", () => {
   let renderCall: (args: unknown, theme: unknown) => unknown;
 
   beforeAll(async () => {
-    const tools: RegisteredTool[] = [];
-
-    const mockPi = {
-      registerTool: vi.fn((tool: RegisteredTool) => {
-        tools.push(tool);
-      }),
-      registerCommand: vi.fn(),
-      on: vi.fn(),
-    } as unknown as ExtensionAPI;
-
-    const mod = await import("../../index.js");
-    mod.default(mockPi);
-
-    renderCall = tools[0].renderCall!;
+    const tool = (await registerQuestionnaire()).tool;
+    renderCall = requireDefined(tool.renderCall, "questionnaire renderCall was not registered");
   });
 
   it("should render single question display", () => {
-    const mockTheme = (color: string, text: string) => `[${color}]${text}]`;
+    const mockTheme = {
+      fg: (color: string, text: string) => `[${color}]${text}]`,
+      bold: (text: string) => `**${text}**`,
+    };
 
     const result = renderCall(
       {
@@ -472,7 +456,10 @@ describe("Questionnaire Integration — renderCall", () => {
   });
 
   it("should render multi-question display with count", () => {
-    const mockTheme = (color: string, text: string) => `[${color}]${text}]`;
+    const mockTheme = {
+      fg: (color: string, text: string) => `[${color}]${text}]`,
+      bold: (text: string) => `**${text}**`,
+    };
 
     const result = renderCall(
       {
@@ -493,24 +480,18 @@ describe("Questionnaire Integration — renderResult", () => {
   let renderResult: (result: unknown, options: unknown, theme: unknown) => unknown;
 
   beforeAll(async () => {
-    const tools: RegisteredTool[] = [];
-
-    const mockPi = {
-      registerTool: vi.fn((tool: RegisteredTool) => {
-        tools.push(tool);
-      }),
-      registerCommand: vi.fn(),
-      on: vi.fn(),
-    } as unknown as ExtensionAPI;
-
-    const mod = await import("../../index.js");
-    mod.default(mockPi);
-
-    renderResult = tools[0].renderResult!;
+    const tool = (await registerQuestionnaire()).tool;
+    renderResult = requireDefined(
+      tool.renderResult,
+      "questionnaire renderResult was not registered"
+    );
   });
 
   it("should render cancelled result", () => {
-    const mockTheme = (color: string, text: string) => `[${color}]${text}]`;
+    const mockTheme = {
+      fg: (color: string, text: string) => `[${color}]${text}]`,
+      bold: (text: string) => `**${text}**`,
+    };
 
     const result = renderResult(
       {
@@ -530,7 +511,10 @@ describe("Questionnaire Integration — renderResult", () => {
   });
 
   it("should render non-interactive (needsUserInput) result", () => {
-    const mockTheme = (color: string, text: string) => `[${color}]${text}]`;
+    const mockTheme = {
+      fg: (color: string, text: string) => `[${color}]${text}]`,
+      bold: (text: string) => `**${text}**`,
+    };
 
     const result = renderResult(
       {
@@ -551,7 +535,10 @@ describe("Questionnaire Integration — renderResult", () => {
   });
 
   it("should render answered result with custom answer", () => {
-    const mockTheme = (color: string, text: string) => `[${color}]${text}]`;
+    const mockTheme = {
+      fg: (color: string, text: string) => `[${color}]${text}]`,
+      bold: (text: string) => `**${text}**`,
+    };
 
     const result = renderResult(
       {
@@ -571,7 +558,10 @@ describe("Questionnaire Integration — renderResult", () => {
   });
 
   it("should render answered result with selected answer", () => {
-    const mockTheme = (color: string, text: string) => `[${color}]${text}]`;
+    const mockTheme = {
+      fg: (color: string, text: string) => `[${color}]${text}]`,
+      bold: (text: string) => `**${text}**`,
+    };
 
     const result = renderResult(
       {
@@ -591,7 +581,10 @@ describe("Questionnaire Integration — renderResult", () => {
   });
 
   it("should render result without details (fallback)", () => {
-    const mockTheme = (color: string, text: string) => `[${color}]${text}]`;
+    const mockTheme = {
+      fg: (color: string, text: string) => `[${color}]${text}]`,
+      bold: (text: string) => `**${text}**`,
+    };
 
     const result = renderResult(
       {
@@ -601,48 +594,35 @@ describe("Questionnaire Integration — renderResult", () => {
       mockTheme
     );
 
-    expect(result).toBeDefined();
-    expect(result).toHaveProperty("text");
-    expect((result as { text: string }).text).toBe("Simple result");
+    expect(requireTextComponent(result, "fallback result component is missing").text).toBe(
+      "Simple result"
+    );
   });
 });
 
 describe("Questionnaire Integration — 'ask' Command", () => {
-  let askCommand: RegisteredCommand;
+  let askCommand: RegisteredQuestionnaireCommand;
 
   beforeAll(async () => {
-    const commands: RegisteredCommand[] = [];
-
-    const mockPi = {
-      registerTool: vi.fn(),
-      registerCommand: vi.fn(
-        (
-          name: string,
-          config: { description: string; handler: (args: unknown, ctx: unknown) => Promise<void> }
-        ) => {
-          commands.push({ name, config });
-        }
-      ),
-      on: vi.fn(),
-    } as unknown as ExtensionAPI;
-
-    const mod = await import("../../index.js");
-    mod.default(mockPi);
-
-    askCommand = commands[0];
+    askCommand = requireDefined(
+      (await registerQuestionnaire()).commands[0],
+      "ask command was not registered"
+    );
   });
 
   it("should have the 'ask' command registered", () => {
     expect(askCommand).toBeDefined();
     expect(askCommand.name).toBe("ask");
-    expect(askCommand.config.description).toContain("interactive");
+    expect(requireDefined(askCommand.description, "ask command description is missing")).toContain(
+      "interactive"
+    );
   });
 
   it("should notify user when no UI available", async () => {
     const notifyMock = vi.fn();
     const ctx = { hasUI: false, ui: { notify: notifyMock } };
 
-    await askCommand.config.handler({}, ctx);
+    await askCommand.handler({}, ctx);
 
     expect(notifyMock).toHaveBeenCalledWith(expect.stringContaining("interactive mode"), "error");
   });
@@ -651,7 +631,7 @@ describe("Questionnaire Integration — 'ask' Command", () => {
     const notifyMock = vi.fn();
     const ctx = { hasUI: true, ui: { notify: notifyMock } };
 
-    await askCommand.config.handler({}, ctx);
+    await askCommand.handler({}, ctx);
 
     expect(notifyMock).toHaveBeenCalledWith(expect.stringContaining("questionnaire tool"), "info");
   });

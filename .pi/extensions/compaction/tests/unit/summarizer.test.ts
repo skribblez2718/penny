@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   renderGroundedDigest,
   buildSummarizerMessages,
@@ -125,13 +125,15 @@ describe("generateModelSummary", () => {
     });
     const res = await generateModelSummary(baseInput, ctxWithModel());
     expect(res).not.toBeNull();
-    expect(res!.prose).toBe("## Goal\nDo X");
-    expect(res!.model).toBe("anthropic/claude-x");
+    expect(res).toMatchObject({
+      prose: "## Goal\nDo X",
+      model: "anthropic/claude-x",
+    });
   });
 
   it("passes the serialized conversation + digest into the model call", async () => {
     _summaryInternals.serialize = async () => "[User]: do X";
-    const seen: any = {};
+    const seen: { text?: string } = {};
     _summaryInternals.complete = async (_m, context) => {
       seen.text = context.messages[0].content[0].text;
       return { content: [{ type: "text", text: "## Goal\nok" }] };

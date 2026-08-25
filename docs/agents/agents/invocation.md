@@ -1,68 +1,54 @@
-# Agent Invocation — Dispatch, exact inputs, and capture
-
-## What
-
-`subagent` invokes one, parallel, or chained workers. Engine-backed skills use
-that same runner. Every worker starts with fresh model context and sees only its
-assembled prompt, task, allowlisted tools, and any exact owner grants.
+# Agent Invocation — Dispatch, exact IDs, and mandatory capture
 
 ## Assembly
 
-1. Read the requested entry from the `.pi/agents` local catalog.
+1. Resolve the catalog entry from the registered snapshot.
 2. Inject optional static Domain Guidance before `<agent_boundary>`.
-3. Add Project Index and runtime context.
-4. Set the worker runtime role and strip approval/receipt secrets.
-5. Expose `artifact_read` only when trusted invocation metadata grants exact refs.
-6. Spawn the worker process.
+3. Add Project Index and current task context.
+4. Strip approval/receipt secrets and memory-write configuration.
+5. Preflight every YAML tool provider and every supplied artifact ID.
+6. Spawn with the exact YAML `--tools` list.
 
 ## Task contract
 
-A task contains:
+A task contains the goal, constraints, optional exact `input_artifacts` IDs, and any
+required output/routing contract. IDs may come from any agent, branch, run, or session.
+Do not put predecessor payload bytes, memory pointers, or name-only references in task
+text.
 
-- the current goal and request-specific constraints;
-- current-run identifiers needed by the execution owner;
-- `input_artifacts` metadata for exact predecessors, when any;
-- an `output_artifact` contract when the owner must persist stage output.
-
-Do not put predecessor payload bytes, durable-memory room pointers, or
-model-authored persistence claims in the task. If a granted artifact is larger
-than one result page, call `artifact_read` with the returned opaque continuation
-until `truncated` is false. Verify the canonical ref and digest supplied by the
-tool result.
+Workers read needed IDs with `artifact_read` and repeat `next_range` until complete. If a
+required ID/path is absent, they return `missing_input:` rather than searching memory,
+`/tmp`, the repository, or historical sessions.
 
 ## Completion
 
-The worker returns complete task content. If Domain Guidance defines a
-`SUMMARY`, it appears at the end as compact routing data. For owner-managed
-workflows, the owner persists and verifies the exact final response before
-parsing that SUMMARY; persistence failure prevents the next state from running.
+The execution owner automatically persists the canonical final assistant text (all final
+`text` parts in order, no inserted separator) and immediately reads it back. A successful
+result is impossible if persistence or re-read fails. The exact ID is printed in result
+text and retained in structured details.
 
-A direct single invocation may return the complete worker result to Penny. A
-chain persists every step and grants only the preceding canonical ref to the next
-worker. `{previous}` is a bounded instruction identifying that ref, never an
-inline payload substitute. Parallel branches receive no sibling grants.
+For engine workflows, owner persistence/re-read occurs before the final closed `SUMMARY`
+line is parsed into routing state. No absent-from-YAML submission tool is injected.
+
+## Modes
+
+- **Single:** arbitrary exact inputs → one persisted result ID → Penny.
+- **Parallel:** branch-specific arbitrary inputs; each branch persists independently and
+  returns a labeled ID. A branch persistence failure is a communication failure.
+- **Chain:** previous step ID is automatic; each step may add explicit multi-source IDs;
+  every step persists before the next starts; result text lists all step IDs.
+- **Fan-in:** outputs from different runs/agents can be passed together to one consumer.
 
 ## Recovery and compaction
 
-Selected run/artifact refs remain in durable owner checkpoints. A compaction
-summary may include a code-owned `[RESUME-REFS v2]` appendix with exact run and
-artifact addresses. Resume control state from the run checkpoint and read only
-currently granted artifacts; do not replace absent refs with semantic memory
-search. Typed continuation keeps large reads bounded and byte-exact.
+Checkpoints retain compact refs, never payloads. Compaction preserves only code-proven
+current-session subagent/skill refs, explicitly reused input IDs, and prior exact resume
+index records. Large sets become one immutable handoff-index artifact; there is no global
+artifact or memory scan.
 
 ## Verification
 
-- [ ] Worker task includes exact refs, not workflow payload bytes.
-- [ ] Every granted ref is read with `artifact_read` through complete continuation.
-- [ ] Owner persistence and ref verification happen before SUMMARY routing.
-- [ ] Workers receive no durable-memory tools or room instructions.
-- [ ] Chain handoff is canonical-ref based and restart-safe.
-- [ ] Parallel branches remain isolated.
-
-## Files
-
-| File                                 | Purpose                                    |
-| ------------------------------------ | ------------------------------------------ |
-| `.pi/extensions/subagent/README.md`  | Invocation modes and chain handoff         |
-| `.pi/extensions/artifacts/README.md` | Artifact read/grant protocol               |
-| `docs/penny/compaction-protocol.md`  | Context-safe continuation after compaction |
+- [ ] Inputs are verified before model usage.
+- [ ] Exact YAML tools are active under every production path/profile.
+- [ ] Complete output persistence and re-read precede success/routing.
+- [ ] Single, parallel, chain, cross-run fan-in, restart, and failure injection pass.

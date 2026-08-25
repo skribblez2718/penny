@@ -15,7 +15,7 @@ import { describe, it, expect, vi } from "vitest";
 
 // agent-runner.ts imports this package at module load; resolve it with a stub
 // so the module graph loads under vitest (mirrors the sibling model-override test).
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   withFileMutationQueue: vi.fn((_path: string, fn: () => unknown) => fn()),
 }));
 

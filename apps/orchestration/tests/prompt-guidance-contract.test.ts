@@ -8,6 +8,7 @@
  * constructs every expected path from the declared agent/state pair.
  */
 
+import { parseResearchParityPin } from "./helpers/fixtures.js";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,7 +26,7 @@ interface AgentPhase {
 }
 
 const PROJECT_ROOT = path.resolve(fileURLToPath(new URL("../../..", import.meta.url)));
-const PIN = JSON.parse(
+const PIN = parseResearchParityPin(
   readFileSync(
     path.join(
       PROJECT_ROOT,
@@ -37,7 +38,7 @@ const PIN = JSON.parse(
     ),
     "utf8"
   )
-) as { agent_by_state: Record<string, string> };
+);
 
 function expectedPromptFiles(contract: SkillContract, phases: readonly AgentPhase[]): string[] {
   return [

@@ -20,7 +20,7 @@ Before any code is delivered, it must pass six universal checks. These rules are
 | Rule                 | What it means                                                                                  | Why it matters                                                                               |
 | -------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | **Test-first**       | Write a failing test that describes the desired behavior, then write the code to make it pass. | Tests become a specification. They also make refactorings safer and catch regressions early. |
-| **Lint clean**       | Code must pass the project's linter with zero errors.                                          | Linters catch style violations, suspicious patterns, and common bugs that humans miss.       |
+| **Lint clean**       | Code must pass the project's linter with zero errors and warnings.                             | Linters catch style violations, suspicious patterns, and common bugs that humans miss.       |
 | **Format clean**     | Code must pass the formatter.                                                                  | Consistent formatting removes pointless diff noise and lets reviewers focus on logic.        |
 | **Type-check clean** | TypeScript must pass `tsc --noEmit`; Python must pass `mypy`.                                  | Static types turn whole classes of runtime errors into compile-time errors.                  |
 | **No dead code**     | Remove commented-out blocks, unused imports, and unreachable branches.                         | Dead code confuses readers, inflates diffs, and can accidentally be reactivated.             |
@@ -49,7 +49,7 @@ Enforcement is part of the delivery workflow, not an afterthought.
 3. **Before summary** — the agent runs the verification checklist: tests, lint, format, type-check, dead-code scan, and magic-number scan.
 4. **At review** — human reviewers can rely on the checklist to focus on design rather than style.
 
-This means the responsibility for quality sits with the generator, not the reviewer. Reviewers validate design decisions; they should not have to clean up formatting or add missing tests.
+This means the responsibility for quality sits with the generator, not the reviewer. Reviewers validate design decisions; they should not have to clean up formatting, resolve lint warnings, or add missing tests. The root `bun run lint` command enforces this with `--max-warnings=0`.
 
 ## Domain-Specific Conventions
 

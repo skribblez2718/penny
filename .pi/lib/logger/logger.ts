@@ -60,13 +60,9 @@ export type ErrorCode =
   | "SEARCH_NETWORK_ERROR"
   | "SEARCH_ABORTED"
   // observability
-  | "OBSERVABILITY_WS_ERROR"
   | "OBSERVABILITY_SERVER_SPAWN_FAILED"
-  | "OBSERVABILITY_QUEUE_OVERFLOW"
   | "OBSERVABILITY_QUERY_LOGS_FAILED"
-  | "OBSERVABILITY_QUERY_HISTORY_FAILED"
-  | "OBSERVABILITY_NULL_MODEL_PROVIDER"
-  | "OBSERVABILITY_PYTHON_VALIDATION_FAILED";
+  | "OBSERVABILITY_QUERY_HISTORY_FAILED";
 
 // ── Structured log entry ───────────────────────────────
 export interface LogEntry {
@@ -139,60 +135,98 @@ export function getSessionId(): string {
 
 // ── REST fallback transport ────────────────────────────────
 const DEFAULT_REST_URL = "http://localhost:8765";
-const REST_BASE_URL = (() => {
-  const raw = process.env.PI_OBSERVABILITY_URL;
-  if (!raw) return DEFAULT_REST_URL;
-  try {
-    return raw.replace(/^ws/, "http").replace(/\/ws$/, "");
-  } catch {
-    return DEFAULT_REST_URL;
-  }
-})();
-const REST_API_KEY =
-  process.env.PI_OBSERVABILITY_API_KEY || process.env.PENNY_OBSERVABILITY_API_KEY || "";
+const REST_CIRCUIT_BREAKER_MS = 30_000;
 
+interface RestConfiguration {
+  baseUrl: string;
+  apiKey: string;
+}
+
+function resolveRestConfiguration(): RestConfiguration {
+  const rawUrl = process.env.PI_OBSERVABILITY_REST_URL?.trim();
+  let baseUrl = DEFAULT_REST_URL;
+  if (rawUrl) {
+    try {
+      const parsed = new URL(rawUrl);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        baseUrl = parsed.toString().replace(/\/$/u, "");
+      }
+    } catch {
+      baseUrl = DEFAULT_REST_URL;
+    }
+  }
+
+  const apiKey =
+    process.env.PI_OBSERVABILITY_API_KEY || process.env.PENNY_OBSERVABILITY_API_KEY || "";
+  return { baseUrl, apiKey };
+}
+
+let restConfiguration: RestConfiguration | undefined;
 let restCircuitOpenUntil = 0;
+
+function runtimeRestConfiguration(): RestConfiguration {
+  if (restConfiguration === undefined) restConfiguration = resolveRestConfiguration();
+  return restConfiguration;
+}
 
 function sendLogViaRest(payload: Record<string, unknown>): void {
   if (Date.now() < restCircuitOpenUntil) return;
   try {
+    const { baseUrl, apiKey } = runtimeRestConfiguration();
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Accept: "application/json",
     };
-    if (REST_API_KEY) {
-      headers["Authorization"] = `Bearer ${REST_API_KEY}`;
+    if (apiKey) {
+      headers["Authorization"] = `Bearer ${apiKey}`;
     }
-    fetch(`${REST_BASE_URL}/logs`, {
+    fetch(`${baseUrl}/logs`, {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
     }).catch(() => {
       // Brief circuit-breaker to avoid hammering a down server
-      restCircuitOpenUntil = Date.now() + 30_000;
+      restCircuitOpenUntil = Date.now() + REST_CIRCUIT_BREAKER_MS;
     });
   } catch {
     /* fetch may not be available in older Node versions */
   }
 }
 
-/** Fallback transport: posts structured log entries to the
- *  observability server's `/logs` REST endpoint so logs are
- *  never lost when the WebSocket transport is not active. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isLogLevel(value: unknown): value is LogLevel {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 4;
+}
+
+/** Default transport: posts structured entries to the canonical `/logs` HTTP endpoint. */
 function defaultTransport(entry: string): void {
   try {
-    const parsed = JSON.parse(entry);
-    const levelName =
-      typeof parsed.level === "number" ? LogLevel[parsed.level] : parsed.level || "INFO";
+    const parsed: unknown = JSON.parse(entry);
+    if (!isRecord(parsed)) throw new TypeError("log transport entry must be an object");
+
+    const rawLevel = parsed.level;
+    const levelName = isLogLevel(rawLevel)
+      ? LogLevel[rawLevel]
+      : typeof rawLevel === "string" && rawLevel !== ""
+        ? rawLevel
+        : "INFO";
+    const context = parsed.context;
+    const error = parsed.error;
     sendLogViaRest({
       level: levelName,
-      component: parsed.extension || "unknown",
-      event: parsed.message || entry,
-      session_id: parsed.sessionId,
+      component:
+        typeof parsed.extension === "string" && parsed.extension !== ""
+          ? parsed.extension
+          : "unknown",
+      event: typeof parsed.message === "string" && parsed.message !== "" ? parsed.message : entry,
+      session_id: typeof parsed.sessionId === "string" ? parsed.sessionId : undefined,
       client_id: "penny-extension",
       data: {
-        ...(parsed.context || {}),
-        ...(parsed.error ? { error: parsed.error } : {}),
+        ...(isRecord(context) ? context : {}),
+        ...(error !== undefined ? { error } : {}),
       },
     });
   } catch {
@@ -210,6 +244,13 @@ function defaultTransport(entry: string): void {
 // ── Environment config ─────────────────────────────────
 const DEFAULT_LEVEL = LogLevel.WARN;
 const DEFAULT_FORMAT: "json" | "text" = "json";
+
+type LogFormat = "json" | "text";
+
+interface LoggerConfiguration {
+  level: LogLevel;
+  format: LogFormat;
+}
 
 function parseLevel(raw?: string): LogLevel {
   if (!raw) return DEFAULT_LEVEL;
@@ -267,12 +308,23 @@ export function componentLevelVariable(extension: string): string {
   return `PI_LOG_LEVEL_${extension.replace(/[^A-Za-z0-9]+/g, "_").toUpperCase()}`;
 }
 
-export function createLogger(extension: string, transport?: LogTransport): Logger {
+function resolveLoggerConfiguration(extension: string): LoggerConfiguration {
   const componentLevel = process.env[componentLevelVariable(extension)];
-  const configuredLevel = parseLevel(componentLevel ?? process.env.PI_LOG_LEVEL);
-  const configuredFormat = parseFormat(process.env.PI_LOG_FORMAT);
+  return {
+    level: parseLevel(componentLevel ?? process.env.PI_LOG_LEVEL),
+    format: parseFormat(process.env.PI_LOG_FORMAT),
+  };
+}
+
+export function createLogger(extension: string, transport?: LogTransport): Logger {
   const localDefaultTransport: LogTransport = defaultTransport;
   const write = transport ?? globalTransport ?? localDefaultTransport;
+  let configuration: LoggerConfiguration | undefined;
+
+  function runtimeLoggerConfiguration(): LoggerConfiguration {
+    if (configuration === undefined) configuration = resolveLoggerConfiguration(extension);
+    return configuration;
+  }
 
   function log(
     level: LogLevel,
@@ -280,6 +332,7 @@ export function createLogger(extension: string, transport?: LogTransport): Logge
     context?: Record<string, unknown>,
     error?: Error & { code?: ErrorCode }
   ): void {
+    const { level: configuredLevel, format: configuredFormat } = runtimeLoggerConfiguration();
     if (level < configuredLevel) return;
 
     const entry: Omit<LogEntry, "error"> & Partial<Pick<LogEntry, "error">> = {

@@ -2,17 +2,33 @@
   "name": "@penny/powerpoint-extension",
   "version": "1.2.0",
   "main": "index.ts",
-  "description": "PowerPoint tools for Penny — generate modern, well-designed .pptx presentations from structured slides or markdown with themed styling",
+  "description": "PowerPoint tools for Penny — generate modern, well-designed .pptx presentations from structured slides or markdown with a TypeScript renderer",
   "type": "module",
   "scripts": {
     "test:unit": "vitest run --config tests/vitest.config.ts",
-    "test:integration": "vitest run --config tests/vitest.integration.config.ts"
-  },
-  "dependencies": {
-    "@sinclair/typebox": "^0.34.49"
+    "test:integration": "vitest run --config tests/vitest.integration.config.ts",
+    "lint": "eslint . --ext .ts --max-warnings=0",
+    "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
+    "typecheck": "tsc --noEmit",
+    "test:all": "bun run lint && bun run format:check && bun run typecheck && bun run test:unit && bun run test:integration"
   },
   "devDependencies": {
+    "@types/fontkit": "2.0.9",
+    "@types/markdown-it": "14.2.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.7"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "dependencies": {
+    "fast-xml-parser": "5.3.0",
+    "fontkit": "2.0.4",
+    "image-size": "2.0.2",
+    "jszip": "3.10.1",
+    "markdown-it": "14.1.0",
+    "pptxgenjs": "4.0.1",
+    "sharp": "0.34.3"
   }
 }

@@ -7,7 +7,8 @@
  *   1. A prose brief — goal, in-flight runs, pending state —
  *      so Penny re-orients by reading, not parsing.
  *   2. A versioned [RESUME-REFS] appendix — exact run IDs and immutable
- *      artifact ID/digest pairs selected by orchestration checkpoints.
+ *      artifact ID/digest pairs proven by current-session results, explicit reused
+ *      inputs, prior exact indexes, or named orchestration checkpoints.
  *
  * Orchestration state is read only by exact run ID from the durable SQLite
  * checkpointer. Compaction never searches session rooms, durable memory, or a
@@ -23,6 +24,7 @@
  */
 
 import {
+  ArtifactRefSchema,
   PennyCompactArtifactSchema,
   RESUME_REFS_VERSION,
   ResumeRefSetSchema,
@@ -42,8 +44,8 @@ import { readExactCheckpoints } from "./checkpointer.js";
 import { generateModelSummary, renderGroundedDigest, type SummarizerCtx } from "./summarizer.js";
 import { loanEnabled } from "./loans.js";
 import type { SessionMessage } from "./pi-messages.js";
-import { asRecord, asString } from "./pi-messages.js";
-import { createLogger, setSessionId, type ErrorCode } from "../../lib/logger/logger.js";
+import { asArray, asRecord, asString, isRecord } from "./pi-messages.js";
+import { createLogger, setSessionId } from "../../lib/logger/logger.js";
 import {
   DEFAULT_TOOL_RESULT_BUDGET,
   ToolResultBudgetConfigError,
@@ -56,15 +58,17 @@ import {
 } from "../lib/tool-result-budget.js";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import {
+  ArtifactStore,
+  loadRuntimeConfig,
+  type OutputArtifactMetadata,
+} from "@penny/orchestration/source";
 
 const logger = createLogger("compaction");
 
 // ============================================================
-// .env Fallback Loader
-// Pi doesn't load .env files, but the Python observability server does
-// (via python-dotenv). This creates an asymmetry where TS extensions
-// can't authenticate to the server if the shell didn't export the key.
-// We parse .env directly as a fallback.
+// .env fallback loader for host-owned service credentials when Pi was
+// launched without exporting the repository's private environment.
 // ============================================================
 
 let _envCache: Record<string, string> | null = null;
@@ -173,9 +177,7 @@ export function detectDominantSkill(messages: SessionMessage[]): SkillInvocation
         session_id: sessionId,
         goal,
         completed,
-        ...(rawConstraints && typeof rawConstraints === "object"
-          ? { constraints: rawConstraints as Record<string, unknown> }
-          : {}),
+        ...(isRecord(rawConstraints) ? { constraints: rawConstraints } : {}),
       };
     }
   }
@@ -743,8 +745,6 @@ export function applyEviction(
   artifact.constraints = apply("constraints", artifact.constraints, cap(20));
   artifact.preferences = apply("preferences", artifact.preferences, cap(10));
   artifact.errors = apply("errors", artifact.errors, cap(10), true);
-  artifact.engine_runs = apply("engine_runs", artifact.engine_runs, cap(20));
-  artifact.artifact_refs = apply("artifact_refs", artifact.artifact_refs, cap(200));
   artifact.files.read = apply("files.read", artifact.files.read, cap(30));
   artifact.files.modified = apply("files.modified", artifact.files.modified, cap(30));
   artifact.tool_calls = apply("tool_calls", artifact.tool_calls, cap(15));
@@ -767,7 +767,8 @@ export function applyEviction(
 export function createResumeRefSet(
   runs: PennyCompactArtifact["engine_runs"],
   artifacts: ArtifactRef[],
-  memoryIds: string[] = []
+  memoryIds: string[] = [],
+  priorArtifactRefs: ResumeRef[] = []
 ): PennyCompactArtifact["resume_refs"] {
   const runRefs: ResumeRef[] = runs.map((run) => ({ type: "run", run_id: run.run_id }));
   const artifactRefs: ResumeRef[] = artifacts.map((artifact) => ({
@@ -775,14 +776,24 @@ export function createResumeRefSet(
     artifact_id: artifact.artifact_id,
     digest: artifact.content_digest,
   }));
-  // Durable-memory IDs are optional and are accepted only when an owner has
-  // already supplied the exact ID. They never displace exact run/artifact refs.
-  const memoryCapacity = Math.max(0, 250 - runRefs.length - artifactRefs.length);
-  const memoryRefs: ResumeRef[] = memoryIds
-    .slice(0, memoryCapacity)
-    .map((memoryId) => ({ type: "memory", memory_id: memoryId }));
-  const refs: ResumeRef[] = [...runRefs, ...artifactRefs, ...memoryRefs];
-  return ResumeRefSetSchema.parse({ version: RESUME_REFS_VERSION, refs });
+  const memoryRefs: ResumeRef[] = memoryIds.map((memoryId) => ({
+    type: "memory",
+    memory_id: memoryId,
+  }));
+  const refs: ResumeRef[] = [...runRefs, ...artifactRefs, ...priorArtifactRefs, ...memoryRefs];
+  const unique = [
+    ...new Map(
+      refs.map((ref) => [
+        ref.type === "run"
+          ? `run:${ref.run_id}`
+          : ref.type === "artifact"
+            ? `artifact:${ref.artifact_id}@${ref.digest}`
+            : `memory:${ref.memory_id}`,
+        ref,
+      ])
+    ).values(),
+  ];
+  return ResumeRefSetSchema.parse({ version: RESUME_REFS_VERSION, refs: unique });
 }
 
 /** Parse one exact, versioned refs block. Unknown versions/lines fail closed. */
@@ -974,6 +985,7 @@ export function createProseSummary(artifact: PennyCompactArtifact): string {
 interface BuildArtifactInput {
   sessionId: string;
   compactionSeq: number;
+  projectRoot: string;
   /** Chronological, already-merged [messagesToSummarize, ...turnPrefixMessages]. */
   messages: SessionMessage[];
   preparation: {
@@ -1061,12 +1073,124 @@ export function collectExactRunIds(
   );
 }
 
+function addArtifactCandidate(values: unknown[], value: unknown): void {
+  if (value !== undefined && value !== null) values.push(value);
+}
+
+function collectSkillArtifactCandidates(value: unknown, values: unknown[], depth = 0): void {
+  if (depth > 4) return;
+  const result = asRecord(value);
+  addArtifactCandidate(values, result.output_artifact_ref);
+  for (const key of ["parallel_results", "chain_results"] as const) {
+    const children = result[key];
+    if (!Array.isArray(children)) continue;
+    for (const child of children) collectSkillArtifactCandidates(child, values, depth + 1);
+  }
+}
+
+function collectExplicitInputArtifactIds(messages: SessionMessage[]): string[] {
+  const ids = new Set<string>();
+  const add = (value: unknown): void => {
+    if (typeof value === "string" && /^art_[a-f0-9]{64}$/u.test(value)) ids.add(value);
+  };
+  const visit = (value: unknown, depth = 0): void => {
+    if (depth > 4) return;
+    const record = asRecord(value);
+    const direct = record.input_artifacts;
+    if (Array.isArray(direct)) for (const id of direct) add(id);
+    for (const key of ["tasks", "chain", "skills"] as const) {
+      const children = record[key];
+      if (!Array.isArray(children)) continue;
+      for (const child of children) visit(child, depth + 1);
+    }
+  };
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (block.type !== "toolCall" || (block.name !== "subagent" && block.name !== "skill")) {
+        continue;
+      }
+      visit(block.arguments);
+    }
+  }
+  return [...ids];
+}
+
+/**
+ * Collect only code-owned current-session communication refs: completed
+ * subagent/skill result metadata plus exact IDs explicitly passed later.
+ */
+export function collectCurrentSessionArtifactRefs(
+  messages: SessionMessage[],
+  projectRoot = process.env.PROJECT_ROOT || process.cwd()
+): ArtifactRef[] {
+  const candidates: unknown[] = [];
+  for (const message of messages) {
+    if (message.role !== "toolResult") continue;
+    const details = asRecord(message.details);
+    if (message.toolName === "subagent") {
+      addArtifactCandidate(candidates, details.finalOutputArtifactRef);
+      candidates.push(...asArray(details.outputArtifactRefs));
+      const results = details.results;
+      if (Array.isArray(results)) {
+        for (const result of results)
+          addArtifactCandidate(candidates, asRecord(result).outputArtifactRef);
+      }
+    } else if (message.toolName === "skill") {
+      collectSkillArtifactCandidates(details, candidates);
+    }
+  }
+
+  let store: ArtifactStore | undefined;
+  try {
+    const runtimeConfig = loadRuntimeConfig(projectRoot);
+    store = new ArtifactStore(runtimeConfig.artifactRoot, {
+      projectId: runtimeConfig.projectId,
+    });
+    for (const id of collectExplicitInputArtifactIds(messages)) {
+      const ref = store.refById(id);
+      if (ref !== undefined) candidates.push(ref);
+    }
+    const refs: ArtifactRef[] = [];
+    for (const candidate of candidates) {
+      const parsed = ArtifactRefSchema.safeParse(candidate);
+      if (!parsed.success) continue;
+      const stored = store.refById(parsed.data.artifact_id);
+      if (
+        stored === undefined ||
+        stored.content_digest !== parsed.data.content_digest ||
+        stored.byte_length !== parsed.data.byte_length
+      ) {
+        continue;
+      }
+      store.readById(stored.artifact_id);
+      refs.push(ArtifactRefSchema.parse(stored));
+    }
+    return [...new Map(refs.map((ref) => [ref.artifact_id, ref])).values()];
+  } catch (error) {
+    logger.warn("Current-session artifact ref collection failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  } finally {
+    store?.close();
+  }
+}
+
 /** Carry optional durable-memory IDs only when a prior exact block supplied them. */
 export function parsePriorMemoryIds(previousSummary: string | undefined): string[] {
   try {
     return parseResumeRefs(previousSummary).refs.flatMap((ref) =>
       ref.type === "memory" ? [ref.memory_id] : []
     );
+  } catch {
+    return [];
+  }
+}
+
+export function parsePriorArtifactRefs(previousSummary: string | undefined): ResumeRef[] {
+  try {
+    return parseResumeRefs(previousSummary).refs.filter((ref) => ref.type === "artifact");
   } catch {
     return [];
   }
@@ -1131,9 +1255,15 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
   // prior v2 appendix. No pending-run list or session correlation exists here.
   const exactRunIds = collectExactRunIds(input.messages, input.preparation.previousSummary);
   const explicitMemoryIds = parsePriorMemoryIds(input.preparation.previousSummary);
-  const checkpoint = readExactCheckpoints(exactRunIds);
+  const priorArtifactRefs = parsePriorArtifactRefs(input.preparation.previousSummary);
+  const checkpoint = readExactCheckpoints(exactRunIds, input.projectRoot);
   const engineRuns = checkpoint.runs;
-  const artifactRefs = checkpoint.artifactRefs.slice(0, 200);
+  const currentSessionRefs = collectCurrentSessionArtifactRefs(input.messages, input.projectRoot);
+  const artifactRefs = [
+    ...new Map(
+      [...checkpoint.artifactRefs, ...currentSessionRefs].map((ref) => [ref.artifact_id, ref])
+    ).values(),
+  ];
   const pending = await detectPendingState(input.messages).catch((error) => {
     logger.warn("Pending state detection failed", { error: String(error) });
     return null;
@@ -1189,7 +1319,7 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
     errors: deriveErrorRefs(input.messages),
     engine_runs: engineRuns,
     artifact_refs: artifactRefs,
-    resume_refs: createResumeRefSet(engineRuns, artifactRefs, explicitMemoryIds),
+    resume_refs: createResumeRefSet(engineRuns, artifactRefs, explicitMemoryIds, priorArtifactRefs),
     files: { read: readFiles, modified: modifiedFiles },
     tool_calls: extractToolCalls(input.messages),
     tool_error_recovery: extractToolErrorRecovery(input.messages),
@@ -1227,7 +1357,8 @@ async function buildArtifact(input: BuildArtifactInput): Promise<{
   artifact.resume_refs = createResumeRefSet(
     artifact.engine_runs,
     artifact.artifact_refs,
-    explicitMemoryIds
+    explicitMemoryIds,
+    priorArtifactRefs
   );
   return { artifact, digest };
 }
@@ -1273,6 +1404,52 @@ function renderRefSet(refSet: PennyCompactArtifact["resume_refs"]): string {
     return `memory:${ref.memory_id}`;
   });
   return [`[RESUME-REFS v${RESUME_REFS_VERSION}]`, ...lines, "[/RESUME-REFS]"].join("\n");
+}
+
+export function persistHandoffIndex(input: {
+  sessionId: string;
+  compactionSeq: number;
+  projectRoot: string;
+  resumeRefs: PennyCompactArtifact["resume_refs"];
+  artifactRefs: ArtifactRef[];
+}): ArtifactRef {
+  const artifactResumeRefs = input.resumeRefs.refs.filter((ref) => ref.type === "artifact");
+  const byId = new Map(input.artifactRefs.map((ref) => [ref.artifact_id, ref]));
+  const records = artifactResumeRefs.map((ref, index) => {
+    const full = byId.get(ref.artifact_id);
+    return {
+      artifact_id: ref.artifact_id,
+      digest: ref.digest,
+      producing_tool: full?.producer.startsWith("skill:") ? "skill" : "subagent-or-skill-stage",
+      mode: full?.kind ?? "artifact",
+      agent: full?.producer ?? "unknown",
+      branch_or_step: full?.branch_id ?? full?.phase ?? "unknown",
+      creation_order: index,
+    };
+  });
+  const metadata: OutputArtifactMetadata = {
+    schema_version: 2,
+    run_id: `compaction:${input.sessionId}`,
+    phase: "handoff-index",
+    branch_id: null,
+    kind: "handoff-index",
+    operation_id: `compaction-handoff-index:${input.compactionSeq}`,
+    version: 1,
+    producer: "extension:compaction",
+    media_type: "application/json; charset=utf-8",
+    parent_ref: null,
+    upstream_refs: [],
+  };
+  const runtimeConfig = loadRuntimeConfig(input.projectRoot);
+  using store = new ArtifactStore(runtimeConfig.artifactRoot, {
+    projectId: runtimeConfig.projectId,
+  });
+  const ref = store.persist({
+    metadata,
+    content: JSON.stringify({ schema_version: 1, records }),
+  });
+  store.readById(ref.artifact_id);
+  return ArtifactRefSchema.parse(ref);
 }
 
 export function fitCompactionSummary(
@@ -1381,12 +1558,11 @@ async function postCompactionArtifact(
  * Emit a structured error to the observability server.
  * Use this when compaction encounters a failure that needs recording.
  */
-function failLoudly(
-  message: string,
-  context?: Record<string, unknown>,
-  error?: Error & { code?: string }
-): void {
-  logger.error(message, context, error as Error & { code?: ErrorCode });
+function failLoudly(message: string, context?: Record<string, unknown>, error?: Error): void {
+  // Error objects are an open JavaScript boundary. Existing extension-specific
+  // diagnostic properties remain attached at runtime without becoming part of
+  // the shared logger ErrorCode contract.
+  logger.error(message, context, error);
 }
 
 /**
@@ -1483,6 +1659,19 @@ interface CompactionExtensionAPI {
   ): void;
 }
 
+function isSummarizerContext(value: unknown): value is SummarizerCtx {
+  if (!isRecord(value) || !isRecord(value.modelRegistry)) return false;
+  const model = value.model;
+  const validModel =
+    model === undefined ||
+    (isRecord(model) && typeof model.provider === "string" && typeof model.id === "string");
+  return (
+    validModel &&
+    typeof value.modelRegistry.find === "function" &&
+    typeof value.modelRegistry.getApiKeyAndHeaders === "function"
+  );
+}
+
 export default function compactionExtension(pi: CompactionExtensionAPI) {
   observabilityConfig = {
     baseUrl: getEnvVar("PI_OBSERVABILITY_REST_URL") || "http://localhost:8765",
@@ -1491,6 +1680,11 @@ export default function compactionExtension(pi: CompactionExtensionAPI) {
 
   pi.on("session_before_compact", async (event: SessionBeforeCompactEvent, ctx: unknown) => {
     const { preparation, branchEntries } = event;
+    const projectRootValue = isRecord(ctx) ? ctx.cwd : undefined;
+    if (typeof projectRootValue !== "string" || projectRootValue.length === 0) {
+      throw new Error("compaction context is missing its trusted project root");
+    }
+    const projectRoot = resolve(projectRootValue);
     const sessionId =
       branchEntries.length > 0 && branchEntries[0].sessionId
         ? branchEntries[0].sessionId
@@ -1513,6 +1707,7 @@ export default function compactionExtension(pi: CompactionExtensionAPI) {
     const build = await buildArtifact({
       sessionId,
       compactionSeq,
+      projectRoot,
       messages,
       preparation: {
         firstKeptEntryId: preparation.firstKeptEntryId,
@@ -1534,17 +1729,19 @@ export default function compactionExtension(pi: CompactionExtensionAPI) {
     // empty) → the deterministic LOAN fallback, or Pi's default when that loan
     // is ablated.
     const proseTokenTarget = Math.floor(resultBudget.maxEstimatedTokens * 0.66);
-    const modelResult = await generateModelSummary(
-      {
-        messages,
-        previousSummary: preparation.previousSummary,
-        digest: build.digest,
-        customInstructions: event.customInstructions,
-        proseTokenTarget,
-        signal: event.signal,
-      },
-      ctx as SummarizerCtx
-    );
+    const modelResult = isSummarizerContext(ctx)
+      ? await generateModelSummary(
+          {
+            messages,
+            previousSummary: preparation.previousSummary,
+            digest: build.digest,
+            customInstructions: event.customInstructions,
+            proseTokenTarget,
+            signal: event.signal,
+          },
+          ctx
+        )
+      : null;
 
     let modelProse: string | null = null;
     if (modelResult) {
@@ -1584,7 +1781,47 @@ export default function compactionExtension(pi: CompactionExtensionAPI) {
             resume_refs: { version: RESUME_REFS_VERSION, refs: [] },
           });
     const proseWithCanary = appendGoalStreakMarker(proseOnly, artifact.metadata.goal_streak ?? 0);
-    const fitted = fitCompactionSummary(proseWithCanary, artifact.resume_refs, resultBudget);
+    let fitted = fitCompactionSummary(proseWithCanary, artifact.resume_refs, resultBudget);
+    if (fitted.resumeRefs.refs.length !== artifact.resume_refs.refs.length) {
+      try {
+        const indexRef = persistHandoffIndex({
+          sessionId,
+          compactionSeq,
+          projectRoot,
+          resumeRefs: artifact.resume_refs,
+          artifactRefs: artifact.artifact_refs,
+        });
+        artifact.artifact_refs = [
+          ...artifact.artifact_refs.filter((ref) => ref.artifact_id !== indexRef.artifact_id),
+          indexRef,
+        ];
+        artifact.resume_refs = createResumeRefSet(
+          artifact.engine_runs,
+          [indexRef],
+          parsePriorMemoryIds(preparation.previousSummary)
+        );
+        fitted = fitCompactionSummary(proseWithCanary, artifact.resume_refs, resultBudget);
+        const indexPresent = fitted.resumeRefs.refs.some(
+          (ref) => ref.type === "artifact" && ref.artifact_id === indexRef.artifact_id
+        );
+        const fittedRunIds = new Set(
+          fitted.resumeRefs.refs.flatMap((ref) => (ref.type === "run" ? [ref.run_id] : []))
+        );
+        const missingRunRef = artifact.engine_runs.some((run) => !fittedRunIds.has(run.run_id));
+        if (!indexPresent || missingRunRef) {
+          throw new Error("handoff-index or exact run reference cannot fit the result budget");
+        }
+      } catch (error) {
+        failLoudly(
+          "Exact compaction handoff index could not be persisted; using Pi default compaction",
+          { session_id: sessionId },
+          Object.assign(error instanceof Error ? error : new Error(String(error)), {
+            code: "COMPACTION_HANDOFF_INDEX_FAILED",
+          })
+        );
+        return;
+      }
+    }
     const proseSummary = fitted.summary;
     artifact.resume_refs = fitted.resumeRefs;
     const summaryMeasurement = measureToolResult(createTextToolResult({ summary: proseSummary }));

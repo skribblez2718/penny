@@ -192,7 +192,7 @@ export function serializeEntry(entry: EntryLike | undefined): string | null {
  * dropped: recent turns are what referential prompts point at.
  */
 export function buildTranscript(entries: readonly EntryLike[] | undefined): TranscriptResult {
-  if (!Array.isArray(entries) || entries.length === 0) {
+  if (!entries || entries.length === 0) {
     return { text: "", entryCount: 0, truncated: false };
   }
   const blocks: string[] = [];

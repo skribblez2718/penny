@@ -1,42 +1,48 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { buildDiaryFromObservability, createMemoryExtension } from "../../index.js";
-import { extensionEnv, mcpResponse, requestBody } from "../fixtures.js";
+import { requireString } from "../../../../lib/tests/test-narrowers.js";
+
+import { buildDiaryFromSessionEntries, createMemoryExtension } from "../../index.js";
+import {
+  asMemoryExtensionApi,
+  extensionEnv,
+  mcpResponse,
+  requestBody,
+  requireDefined,
+  type MemoryExtensionApiFake,
+  type MemoryExtensionHandler,
+} from "../fixtures.js";
 
 function recorder() {
-  const handlers = new Map<string, Array<(...args: any[]) => Promise<void>>>();
-  return {
-    handlers,
-    pi: {
-      registerTool: vi.fn(),
-      registerCommand: vi.fn(),
-      on(event: string, handler: (...args: any[]) => Promise<void>) {
-        const values = handlers.get(event) ?? [];
-        values.push(handler);
-        handlers.set(event, values);
-      },
+  const handlers = new Map<string, MemoryExtensionHandler[]>();
+  const pi: MemoryExtensionApiFake = {
+    registerTool: vi.fn(),
+    registerCommand: vi.fn(),
+    on(event, handler) {
+      handlers.set(event, [...(handlers.get(event) ?? []), handler]);
     },
   };
+  return { handlers, pi };
 }
 
-function observabilityResponse(url: string): Response {
-  if (url.includes("agent_start")) {
-    return new Response(JSON.stringify({ items: [{ data: { agent: "echo" } }], total: 1 }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-  return new Response(
-    JSON.stringify({
-      items: [
-        { data: { toolName: "read" } },
-        { data: { toolName: "read" } },
-        { data: { toolName: "write" } },
-      ],
-      total: 3,
-    }),
-    { status: 200, headers: { "Content-Type": "application/json" } }
-  );
+const SESSION_ENTRIES = [
+  {
+    type: "custom",
+    customType: "penny.observability.agent-lifecycle",
+    data: { phase: "start" },
+  },
+  { type: "message", message: { role: "toolResult", toolName: "read" } },
+  { type: "message", message: { role: "toolResult", toolName: "read" } },
+  { type: "message", message: { role: "toolResult", toolName: "write" } },
+] as const;
+
+function context(sessionId = "session-primary-1") {
+  return {
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getEntries: () => [...SESSION_ENTRIES],
+    },
+  };
 }
 
 describe("primary-only automatic diary", () => {
@@ -54,17 +60,15 @@ describe("primary-only automatic diary", () => {
     createMemoryExtension({
       env: extensionEnv({ PENNY_RUNTIME_ROLE: role }),
       fetch: fetchSpy as typeof fetch,
-    })(state.pi as any);
+    })(asMemoryExtensionApi(state.pi));
     expect(state.handlers.get("session_shutdown")).toBeUndefined();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("writes one duplicate-checked bounded diary for a primary session", async () => {
+  it("writes one duplicate-checked bounded diary from direct Pi metadata", async () => {
     const state = recorder();
     const mcpTools: string[] = [];
-    const fetchSpy = vi.fn((input: string | URL | Request, init?: RequestInit) => {
-      const url = String(input);
-      if (!url.endsWith("/mcp")) return Promise.resolve(observabilityResponse(url));
+    const fetchSpy = vi.fn((_input: string | URL | Request, init?: RequestInit) => {
       const request = requestBody(init);
       mcpTools.push(request.params.name);
       const payload =
@@ -74,86 +78,79 @@ describe("primary-only automatic diary", () => {
       return Promise.resolve(mcpResponse(request.id, payload));
     });
     createMemoryExtension({ env: extensionEnv(), fetch: fetchSpy as typeof fetch })(
-      state.pi as any
+      asMemoryExtensionApi(state.pi)
     );
 
-    await state.handlers.get("session_start")![0]!(
-      {},
-      {
-        sessionManager: { getSessionId: () => "session-primary-1" },
-      }
+    const ctx = context();
+    const sessionStart = requireDefined(
+      state.handlers.get("session_start")?.[0],
+      "session_start handler was not registered"
     );
-    await state.handlers.get("session_shutdown")![0]!({ reason: "quit" });
-    await state.handlers.get("session_shutdown")![0]!({ reason: "quit" });
+    const sessionShutdown = requireDefined(
+      state.handlers.get("session_shutdown")?.[0],
+      "session_shutdown handler was not registered"
+    );
+    await sessionStart({}, ctx);
+    await sessionShutdown({ reason: "quit" }, ctx);
+    await sessionShutdown({ reason: "quit" }, ctx);
 
     expect(mcpTools).toEqual(["mempalace_check_duplicate", "mempalace_diary_write"]);
-    const diaryCall = fetchSpy.mock.calls.find((call) => {
-      const init = call[1] as RequestInit | undefined;
-      return init?.method === "POST" && requestBody(init).params.name === "mempalace_diary_write";
-    });
-    const entry = requestBody(diaryCall![1] as RequestInit).params.arguments.entry as string;
+    const diaryCall = requireDefined(
+      fetchSpy.mock.calls.find((call) => {
+        const init = call[1];
+        return init?.method === "POST" && requestBody(init).params.name === "mempalace_diary_write";
+      }),
+      "diary write request was not sent"
+    );
+    const diaryInit = requireDefined(diaryCall[1], "diary write request init was absent");
+    const entry = requireString(
+      requestBody(diaryInit).params.arguments.entry,
+      "diary write request entry was not text"
+    );
     expect(Buffer.byteLength(entry, "utf8")).toBeLessThanOrEqual(2_048);
     expect(entry).toContain("Agents:1");
     expect(entry).toContain("Tools:read(2)+write(1)");
-    expect(requestBody(diaryCall![1] as RequestInit).params.arguments).not.toHaveProperty(
-      "session_id"
-    );
+    expect(requestBody(diaryInit).params.arguments).not.toHaveProperty("session_id");
   });
 
   it("suppresses a duplicate diary without a write", async () => {
     const state = recorder();
     const mcpTools: string[] = [];
-    const fetchImpl = ((input: string | URL | Request, init?: RequestInit) => {
-      const url = String(input);
-      if (!url.endsWith("/mcp")) return Promise.resolve(observabilityResponse(url));
+    const fetchImpl = ((_input: string | URL | Request, init?: RequestInit) => {
       const request = requestBody(init);
       mcpTools.push(request.params.name);
       return Promise.resolve(mcpResponse(request.id, { is_duplicate: true }));
     }) as typeof fetch;
-    createMemoryExtension({ env: extensionEnv(), fetch: fetchImpl })(state.pi as any);
-    await state.handlers.get("session_start")![0]!(
-      {},
-      {
-        sessionManager: { getSessionId: () => "session-primary-duplicate" },
-      }
+    createMemoryExtension({ env: extensionEnv(), fetch: fetchImpl })(
+      asMemoryExtensionApi(state.pi)
     );
-    await state.handlers.get("session_shutdown")![0]!({ reason: "quit" });
+    const ctx = context("session-primary-duplicate");
+    const sessionStart = requireDefined(
+      state.handlers.get("session_start")?.[0],
+      "session_start handler was not registered"
+    );
+    const sessionShutdown = requireDefined(
+      state.handlers.get("session_shutdown")?.[0],
+      "session_shutdown handler was not registered"
+    );
+    await sessionStart({}, ctx);
+    await sessionShutdown({ reason: "quit" }, ctx);
     expect(mcpTools).toEqual(["mempalace_check_duplicate"]);
   });
 
-  it("builds content-free bounded metadata even with hostile long tool labels", async () => {
-    const fetchImpl = ((input: string | URL | Request) => {
-      const url = String(input);
-      if (url.includes("agent_start")) {
-        return Promise.resolve(
-          new Response(JSON.stringify({ items: [], total: 0 }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          })
-        );
-      }
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({
-            items: Array.from({ length: 500 }, () => ({
-              data: { toolName: `private|payload\n${"x".repeat(5_000)}` },
-            })),
-            total: 500,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
-      );
-    }) as typeof fetch;
-    const entry = await buildDiaryFromObservability(
+  it("bounds and sanitizes hostile direct-session metadata", () => {
+    const entry = buildDiaryFromSessionEntries(
       "session-secret-not-logged-verbatim",
       "quit|injected\nreason",
-      "ws://observability.invalid/ws",
-      "",
-      fetchImpl
+      Array.from({ length: 500 }, () => ({
+        type: "message",
+        message: { role: "toolResult", toolName: `private|payload\n${"x".repeat(5_000)}` },
+      }))
     );
     expect(entry).not.toBeNull();
-    expect(Buffer.byteLength(entry!, "utf8")).toBeLessThanOrEqual(2_048);
-    expect(entry).not.toContain("session-secret-not-logged-verbatim");
-    expect(entry).not.toContain("\n");
+    const boundedEntry = requireDefined(entry, "hostile session metadata did not produce a diary");
+    expect(Buffer.byteLength(boundedEntry, "utf8")).toBeLessThanOrEqual(2_048);
+    expect(boundedEntry).not.toContain("session-secret-not-logged-verbatim");
+    expect(boundedEntry).not.toContain("\n");
   });
 });

@@ -1,3 +1,11 @@
+import {
+  parseJson,
+  requireArray,
+  requireBoolean,
+  requireRecord,
+  requireString,
+  requireValue,
+} from "./helpers/narrowing.js";
 import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -34,9 +42,31 @@ interface ResearchContractFixture {
   }>;
 }
 
-const researchContractFixture = JSON.parse(
-  readFileSync(new URL("./fixtures/research-contract-v1.json", import.meta.url), "utf8")
-) as ResearchContractFixture;
+function parseResearchContractFixture(value: unknown): ResearchContractFixture {
+  const fixture = requireRecord(value, "research contract fixture");
+  const confidence = requireRecord(fixture["confidence"], "research fixture confidence");
+  return {
+    confidence: {
+      valid: requireArray(confidence["valid"], "research fixture confidence.valid"),
+      invalid: requireArray(confidence["invalid"], "research fixture confidence.invalid"),
+    },
+    terminal_truth: requireArray(fixture["terminal_truth"], "research fixture terminal_truth").map(
+      (entry, index) => {
+        const terminal = requireRecord(entry, `research fixture terminal_truth[${index}]`);
+        return {
+          id: requireString(terminal["id"], `terminal_truth[${index}].id`),
+          met: requireBoolean(terminal["met"], `terminal_truth[${index}].met`),
+          action: requireString(terminal["action"], `terminal_truth[${index}].action`),
+          status: requireString(terminal["status"], `terminal_truth[${index}].status`),
+        };
+      }
+    ),
+  };
+}
+
+const researchContractFixture = parseResearchContractFixture(
+  parseJson(readFileSync(new URL("./fixtures/research-contract-v1.json", import.meta.url), "utf8"))
+);
 
 const tempDirectories: string[] = [];
 
@@ -259,7 +289,10 @@ describe("frozen research contract fixture", () => {
     if (initial.action !== "invoke_agent") {
       throw new Error("expected quick research directive");
     }
-    const validResult = (await workers.execute(initial))[0]!;
+    const validResult = requireValue(
+      (await workers.execute(initial))[0],
+      "apps/orchestration/tests/research-parity.test.ts:262"
+    );
     expect(() =>
       engine.handle({
         schema_version: 2,
@@ -321,12 +354,18 @@ describe("frozen research contract fixture", () => {
       schema_version: 2,
       action: "step",
       identity: runIdentity,
-      result: (await workers.execute(plan))[0]!,
+      result: requireValue(
+        (await workers.execute(plan))[0],
+        "apps/orchestration/tests/research-parity.test.ts:324"
+      ),
     });
     if (fan.action !== "invoke_agents_parallel") {
       throw new Error("expected research fan");
     }
-    const valid = (await workers.execute(fan))[0]!;
+    const valid = requireValue(
+      (await workers.execute(fan))[0],
+      "apps/orchestration/tests/research-parity.test.ts:329"
+    );
     const mutations: PhaseResult[] = [
       { ...valid, branch_id: "wrong-branch" },
       {
@@ -484,7 +523,10 @@ describe("research behavioral parity", () => {
       throw new Error("expected research directive");
     }
     const malformed = {
-      ...(await workers.execute(pending))[0]!,
+      ...requireValue(
+        (await workers.execute(pending))[0],
+        "apps/orchestration/tests/research-parity.test.ts:487"
+      ),
       details: {},
     };
     const retry = engine.handle({
@@ -519,7 +561,10 @@ describe("research behavioral parity", () => {
     if (pending.action !== "invoke_agent") {
       throw new Error("expected research directive");
     }
-    const accepted = (await workers.execute(pending))[0]!;
+    const accepted = requireValue(
+      (await workers.execute(pending))[0],
+      "apps/orchestration/tests/research-parity.test.ts:522"
+    );
     const next = engine.handle({
       schema_version: 2,
       action: "step",

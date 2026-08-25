@@ -36,6 +36,7 @@ import {
   PromotionApprovalError,
 } from "./approval-receipts.js";
 import { CapabilityStore, envelopeDigest } from "./capabilities.js";
+import { kbHostStatePaths } from "./host-state.js";
 import {
   ParsedPromotionApprovalReceiptV1Schema,
   PromotionApplyJournalSchema,
@@ -135,14 +136,125 @@ export class PromotionSimulatedCrash extends Error {
 }
 
 export function approvalRootFor(projectRoot: string): string {
-  return path.join(path.resolve(projectRoot), ".penny", "kb-approval");
+  return kbHostStatePaths(projectRoot).approval;
+}
+
+function isSqlRow(value: unknown): value is Record<string, SQLOutputValue> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function sqlText(row: Record<string, SQLOutputValue>, field: string, label: string): string {
+  const value = row[field];
+  if (typeof value !== "string") {
+    throw new PromotionApprovalError(`${label} field '${field}' is malformed`);
+  }
+  return value;
+}
+
+function sqlNullableText(
+  row: Record<string, SQLOutputValue>,
+  field: string,
+  label: string
+): string | null {
+  const value = row[field];
+  if (value === null) return null;
+  if (typeof value !== "string") {
+    throw new PromotionApprovalError(`${label} field '${field}' is malformed`);
+  }
+  return value;
+}
+
+function isGateRow(value: unknown): value is GateRow {
+  if (!isSqlRow(value)) return false;
+  return (
+    typeof value["challenge_id"] === "string" &&
+    typeof value["run_id"] === "string" &&
+    typeof value["session_id"] === "string" &&
+    typeof value["packet_sha256"] === "string" &&
+    typeof value["packet_jcs"] === "string" &&
+    typeof value["state"] === "string" &&
+    (value["decision_intent_jcs"] === null || typeof value["decision_intent_jcs"] === "string") &&
+    (value["decision_intent_sha256"] === null ||
+      typeof value["decision_intent_sha256"] === "string") &&
+    (value["decision_record_jcs"] === null || typeof value["decision_record_jcs"] === "string") &&
+    (value["decision_or_receipt_id"] === null ||
+      typeof value["decision_or_receipt_id"] === "string") &&
+    typeof value["transaction_id"] === "string" &&
+    typeof value["updated_at"] === "string"
+  );
+}
+
+function gateRow(value: unknown): GateRow {
+  if (!isGateRow(value)) throw new PromotionApprovalError("promotion gate SQL row is malformed");
+  return value;
+}
+
+function gateRowOrUndefined(value: unknown): GateRow | undefined {
+  return value === undefined ? undefined : gateRow(value);
+}
+
+function isReceiptRow(value: unknown): value is ReceiptRow {
+  if (!isSqlRow(value)) return false;
+  return (
+    typeof value["receipt_id"] === "string" &&
+    typeof value["challenge_id"] === "string" &&
+    typeof value["receipt_sha256"] === "string" &&
+    typeof value["receipt_jcs"] === "string" &&
+    typeof value["signed_jcs"] === "string" &&
+    typeof value["key_id"] === "string" &&
+    typeof value["state"] === "string" &&
+    (value["transaction_id"] === null || typeof value["transaction_id"] === "string") &&
+    typeof value["updated_at"] === "string"
+  );
+}
+
+function receiptRowOrUndefined(value: unknown): ReceiptRow | undefined {
+  if (value === undefined) return undefined;
+  if (!isReceiptRow(value)) {
+    throw new PromotionApprovalError("promotion receipt SQL row is malformed");
+  }
+  return value;
+}
+
+function isJournalRow(value: unknown): value is JournalRow {
+  if (!isSqlRow(value)) return false;
+  return (
+    typeof value["transaction_id"] === "string" &&
+    typeof value["run_id"] === "string" &&
+    typeof value["receipt_id"] === "string" &&
+    typeof value["journal_jcs"] === "string" &&
+    typeof value["state"] === "string" &&
+    typeof value["updated_at"] === "string"
+  );
+}
+
+function journalRowOrUndefined(value: unknown): JournalRow | undefined {
+  if (value === undefined) return undefined;
+  if (!isJournalRow(value)) {
+    throw new PromotionApprovalError("promotion journal SQL row is malformed");
+  }
+  return value;
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object" || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+function isSqliteModule(value: unknown): value is typeof import("node:sqlite") {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "DatabaseSync" in value &&
+    typeof value.DatabaseSync === "function"
+  );
 }
 
 function sqliteModule(): typeof import("node:sqlite") {
-  const module = process.getBuiltinModule("node:" + "sqlite") as
-    | typeof import("node:sqlite")
-    | undefined;
-  if (module === undefined) throw new PromotionApprovalError("Node.js runtime lacks node:sqlite");
+  const module: unknown = process.getBuiltinModule("node:" + "sqlite");
+  if (!isSqliteModule(module)) {
+    throw new PromotionApprovalError("Node.js runtime lacks node:sqlite");
+  }
   return module;
 }
 
@@ -155,7 +267,7 @@ function pathExistsNoFollow(candidate: string): boolean {
     lstatSync(candidate);
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    if (errorCode(error) === "ENOENT") return false;
     throw error;
   }
 }
@@ -185,7 +297,7 @@ function openChildDirectory(
       mkdirSync(childPath, { mode: APPROVAL_DIRECTORY_MODE });
       created = true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (errorCode(error) !== "EEXIST") throw error;
     }
   }
   let descriptor: number;
@@ -217,32 +329,25 @@ function openApprovalRoot(input: { projectRoot: string; create: boolean }): {
   descriptor: number;
   identity: { dev: bigint | number; ino: bigint | number };
 } {
-  const projectDescriptor = openPinnedDirectoryNoFollow(input.projectRoot);
+  // Project-state setup owns directory creation. Approval workflows may create
+  // authority files, but they never infer or create a legacy/project-local root.
+  const approvalRoot = approvalRootFor(input.projectRoot);
+  let descriptor: number;
   try {
-    assertDirectoryDescriptor(projectDescriptor, "promotion project root");
-    const pennyDescriptor = openChildDirectory(
-      projectDescriptor,
-      ".penny",
-      "promotion .penny ancestor",
-      input.create
+    descriptor = openPinnedDirectoryNoFollow(approvalRoot);
+  } catch (error) {
+    const action = input.create ? "initialize project state first" : "approval state is absent";
+    throw new PromotionApprovalError(
+      `promotion approval root is unavailable; ${action}: ${String(error)}`
     );
-    try {
-      const approvalDescriptor = openChildDirectory(
-        pennyDescriptor,
-        "kb-approval",
-        "promotion approval root",
-        input.create
-      );
-      const stat = fstatSync(approvalDescriptor);
-      return {
-        descriptor: approvalDescriptor,
-        identity: { dev: stat.dev, ino: stat.ino },
-      };
-    } finally {
-      closeSync(pennyDescriptor);
-    }
-  } finally {
-    closeSync(projectDescriptor);
+  }
+  try {
+    assertDirectoryDescriptor(descriptor, "promotion approval root", APPROVAL_DIRECTORY_MODE);
+    const stat = fstatSync(descriptor);
+    return { descriptor, identity: { dev: stat.dev, ino: stat.ino } };
+  } catch (error) {
+    closeSync(descriptor);
+    throw error;
   }
 }
 
@@ -304,12 +409,21 @@ function sameJson(left: unknown, right: unknown): boolean {
   return jcsCanonicalize(left) === jcsCanonicalize(right);
 }
 
+function requiredPromotionValue<T>(value: T | undefined, label: string): T {
+  if (value === undefined) {
+    throw new PromotionApprovalError(`${label} is absent`);
+  }
+  return value;
+}
+
 function assertSortedUnique(values: readonly string[], label: string): void {
   if (values.length === 0 || new Set(values).size !== values.length) {
     throw new PromotionApprovalError(`${label} must be non-empty and unique`);
   }
   for (let index = 1; index < values.length; index += 1) {
-    if (bytewiseCompare(values[index - 1]!, values[index]!) >= 0) {
+    const previous = requiredPromotionValue(values[index - 1], `${label} previous item`);
+    const current = requiredPromotionValue(values[index], `${label} current item`);
+    if (bytewiseCompare(previous, current) >= 0) {
       throw new PromotionApprovalError(`${label} must be sorted by UTF-8 byte order`);
     }
   }
@@ -412,7 +526,7 @@ interface NoClobberReplaceInput {
 
 function noClobberStageName(input: NoClobberReplaceInput): string {
   const targetTag = promotionSha256(path.basename(input.target)).slice(0, 16);
-  return `.penny-promote-${input.transactionId}-${input.ordinal}-${input.purpose}-${targetTag}`;
+  return `.pny-promote-${input.transactionId}-${input.ordinal}-${input.purpose}-${targetTag}`;
 }
 
 function recoverNoClobberStageAt(
@@ -907,14 +1021,19 @@ export class PromotionApprovalStore implements Disposable {
 
   keyStates(): Array<{ key_id: string; state: "active" | "verification_only" }> {
     this.assertCustody();
-    return (
-      this.db
-        .prepare("SELECT key_id, state FROM signing_keys ORDER BY created_at, key_id")
-        .all() as Array<Record<string, SQLOutputValue>>
-    ).map((row) => ({
-      key_id: String(row.key_id),
-      state: String(row.state) as "active" | "verification_only",
-    }));
+    return this.db
+      .prepare("SELECT key_id, state FROM signing_keys ORDER BY created_at, key_id")
+      .all()
+      .map((row) => {
+        const state = sqlText(row, "state", "promotion signing key");
+        if (state !== "active" && state !== "verification_only") {
+          throw new PromotionApprovalError("promotion signing key state is malformed");
+        }
+        return {
+          key_id: sqlText(row, "key_id", "promotion signing key"),
+          state,
+        };
+      });
   }
 
   storePreparedGate(input: {
@@ -999,7 +1118,7 @@ export class PromotionApprovalStore implements Disposable {
 
     const capabilityStore = new CapabilityStore(this.projectRoot);
     const presentations: PromotionGatePacket["target_presentations"] = [];
-    const preimages: Record<string, Sha256Hex> = Object.create(null) as Record<string, Sha256Hex>;
+    const preimages: Record<string, Sha256Hex> = {};
     let earliestCapabilityExpiry = Number.POSITIVE_INFINITY;
     try {
       for (const [ordinal, capabilityId] of targetIds.entries()) {
@@ -1100,9 +1219,11 @@ export class PromotionApprovalStore implements Disposable {
     const transactionId = `tx_gate_${randomUUID().replace(/-/g, "")}`;
     const timestamp = safeIso(this.now());
     this.transaction(() => {
-      const existing = this.db
-        .prepare("SELECT * FROM promotion_gates WHERE challenge_id = ?")
-        .get(packet.challenge_id) as GateRow | undefined;
+      const existing = gateRowOrUndefined(
+        this.db
+          .prepare("SELECT * FROM promotion_gates WHERE challenge_id = ?")
+          .get(packet.challenge_id)
+      );
       if (existing !== undefined) {
         if (
           String(existing.packet_jcs) !== packetJcs ||
@@ -1132,28 +1253,30 @@ export class PromotionApprovalStore implements Disposable {
           timestamp
         );
     });
-    return this.gate(packet.challenge_id)!;
+    return requiredPromotionValue(this.gate(packet.challenge_id), "stored promotion approval gate");
   }
 
   gate(challengeId: string): PromotionGateStoreRecord | undefined {
     this.assertCustody();
-    const row = this.db
-      .prepare("SELECT * FROM promotion_gates WHERE challenge_id = ?")
-      .get(challengeId) as GateRow | undefined;
+    const row = gateRowOrUndefined(
+      this.db.prepare("SELECT * FROM promotion_gates WHERE challenge_id = ?").get(challengeId)
+    );
     return row === undefined ? undefined : this.gateRecord(row);
   }
 
   gateForRun(runId: string): PromotionGateStoreRecord | undefined {
     this.assertCustody();
-    const row = this.db
-      .prepare("SELECT * FROM promotion_gates WHERE run_id = ? ORDER BY rowid DESC LIMIT 1")
-      .get(runId) as GateRow | undefined;
+    const row = gateRowOrUndefined(
+      this.db
+        .prepare("SELECT * FROM promotion_gates WHERE run_id = ? ORDER BY rowid DESC LIMIT 1")
+        .get(runId)
+    );
     return row === undefined ? undefined : this.gateRecord(row);
   }
 
   listGates(profileId?: string): PromotionGateStoreRecord[] {
     this.assertCustody();
-    const rows = this.db.prepare("SELECT * FROM promotion_gates ORDER BY rowid").all() as GateRow[];
+    const rows = this.db.prepare("SELECT * FROM promotion_gates ORDER BY rowid").all().map(gateRow);
     return rows
       .map((row) => this.gateRecord(row))
       .filter((record) => profileId === undefined || record.packet.kb_profile_id === profileId);
@@ -1204,7 +1327,9 @@ export class PromotionApprovalStore implements Disposable {
     }
     if (
       intent.decision === "approve" &&
-      new Date(intent.approval_expires_at!).getTime() > new Date(gate.packet.expires_at).getTime()
+      new Date(
+        requiredPromotionValue(intent.approval_expires_at, "approval decision expiry")
+      ).getTime() > new Date(gate.packet.expires_at).getTime()
     ) {
       throw new PromotionApprovalError("approve intent expiry outlives the stored gate packet");
     }
@@ -1245,11 +1370,10 @@ export class PromotionApprovalStore implements Disposable {
     const receipt = parsePromotionReceipt(raw);
     const keyRow = this.db
       .prepare("SELECT state FROM signing_keys WHERE key_id = ?")
-      .get(receipt.key_id) as { state: string } | undefined;
-    if (
-      keyRow === undefined ||
-      (keyRow.state !== "active" && keyRow.state !== "verification_only")
-    ) {
+      .get(receipt.key_id);
+    const keyState =
+      keyRow === undefined ? undefined : sqlText(keyRow, "state", "promotion signing key");
+    if (keyState !== "active" && keyState !== "verification_only") {
       throw new PromotionApprovalError("promotion approval receipt names an unknown key_id");
     }
     const key = readRawPromotionKeyFile(this.root, receipt.key_id);
@@ -1264,21 +1388,23 @@ export class PromotionApprovalStore implements Disposable {
 
   receipt(receiptId: string): PromotionApprovalStoreRecord | undefined {
     this.assertCustody();
-    const row = this.db
-      .prepare("SELECT * FROM promotion_receipts WHERE receipt_id = ?")
-      .get(receiptId) as ReceiptRow | undefined;
+    const row = receiptRowOrUndefined(
+      this.db.prepare("SELECT * FROM promotion_receipts WHERE receipt_id = ?").get(receiptId)
+    );
     return row === undefined ? undefined : this.receiptRecord(row);
   }
 
   receiptForRun(runId: string): PromotionApprovalStoreRecord | undefined {
     this.assertCustody();
-    const row = this.db
-      .prepare(
-        `SELECT r.* FROM promotion_receipts r
-         JOIN promotion_gates g ON g.challenge_id = r.challenge_id
-         WHERE g.run_id = ? ORDER BY r.rowid DESC LIMIT 1`
-      )
-      .get(runId) as ReceiptRow | undefined;
+    const row = receiptRowOrUndefined(
+      this.db
+        .prepare(
+          `SELECT r.* FROM promotion_receipts r
+           JOIN promotion_gates g ON g.challenge_id = r.challenge_id
+           WHERE g.run_id = ? ORDER BY r.rowid DESC LIMIT 1`
+        )
+        .get(runId)
+    );
     return row === undefined ? undefined : this.receiptRecord(row);
   }
 
@@ -1316,7 +1442,10 @@ export class PromotionApprovalStore implements Disposable {
       return this.terminalizeApprovalBeforeClaim(verified, "invalidated");
     }
     const transactionId = `tx_apply_${randomUUID().replace(/-/g, "")}`;
-    const packet = this.gate(verified.receipt.challenge_id)!.packet;
+    const packet = requiredPromotionValue(
+      this.gate(verified.receipt.challenge_id),
+      "approved promotion gate"
+    ).packet;
     const patch = this.readPatch(packet);
     const timestamp = safeIso(this.now());
     const journal = validateKbContract(
@@ -1432,9 +1561,9 @@ export class PromotionApprovalStore implements Disposable {
 
   journal(transactionId: string): PromotionApplyJournal | undefined {
     this.assertCustody();
-    const row = this.db
-      .prepare("SELECT * FROM apply_journals WHERE transaction_id = ?")
-      .get(transactionId) as JournalRow | undefined;
+    const row = journalRowOrUndefined(
+      this.db.prepare("SELECT * FROM apply_journals WHERE transaction_id = ?").get(transactionId)
+    );
     if (row === undefined) return undefined;
     const parsed = validateKbContract(
       PromotionApplyJournalSchema,
@@ -1467,6 +1596,10 @@ export class PromotionApprovalStore implements Disposable {
       return this.decisionOutcome(gate);
     }
     const intent = gate.decision_intent;
+    const decisionIntentSha256 = requiredPromotionValue(
+      gate.decision_intent_sha256,
+      "claimed promotion decision digest"
+    );
     if (intent.decision === "approve") {
       if (intent.approval_nonce === undefined || intent.approval_expires_at === undefined) {
         throw new PromotionApprovalError("approve intent is missing nonce/expiry");
@@ -1474,7 +1607,7 @@ export class PromotionApprovalStore implements Disposable {
       this.revalidatePacketForApproval(gate.packet);
       const keyRow = this.db
         .prepare("SELECT key_id FROM signing_keys WHERE state = 'active'")
-        .get() as { key_id: string } | undefined;
+        .get();
       if (keyRow === undefined) {
         throw new PromotionApprovalError("no active promotion approval key; rotate a key first");
       }
@@ -1499,9 +1632,9 @@ export class PromotionApprovalStore implements Disposable {
         issued_at: intent.decided_at,
         expires_at: intent.approval_expires_at,
         nonce: intent.approval_nonce,
-        key_id: keyRow.key_id,
+        key_id: sqlText(keyRow, "key_id", "active promotion signing key"),
       };
-      const key = readRawPromotionKeyFile(this.root, keyRow.key_id);
+      const key = readRawPromotionKeyFile(this.root, unsigned.key_id);
       const receipt = signPromotionReceipt(unsigned, key);
       this.validateReceiptPacketBinding(receipt, gate);
       const completeJcs = receiptJcs(receipt);
@@ -1530,17 +1663,14 @@ export class PromotionApprovalStore implements Disposable {
              SET state = 'approved', decision_or_receipt_id = ?, updated_at = ?
              WHERE challenge_id = ? AND state = 'claimed' AND decision_intent_sha256 = ?`
           )
-          .run(
-            receipt.receipt_id,
-            safeIso(this.now()),
-            gate.challenge_id,
-            gate.decision_intent_sha256!
-          );
+          .run(receipt.receipt_id, safeIso(this.now()), gate.challenge_id, decisionIntentSha256);
         if (Number(changed.changes) !== 1) {
           throw new PromotionApprovalError("lost promotion approval finalization race");
         }
       });
-      return this.decisionOutcome(this.gate(challengeId)!);
+      return this.decisionOutcome(
+        requiredPromotionValue(this.gate(challengeId), "finalized promotion approval gate")
+      );
     }
 
     const decisionRecord = validateKbContract(
@@ -1570,13 +1700,15 @@ export class PromotionApprovalStore implements Disposable {
           decisionRecord.decision_id,
           safeIso(this.now()),
           gate.challenge_id,
-          gate.decision_intent_sha256!
+          decisionIntentSha256
         );
       if (Number(changed.changes) !== 1) {
         throw new PromotionApprovalError("lost promotion decision finalization race");
       }
     });
-    return this.decisionOutcome(this.gate(challengeId)!);
+    return this.decisionOutcome(
+      requiredPromotionValue(this.gate(challengeId), "finalized promotion decision gate")
+    );
   }
 
   private decisionOutcome(gate: PromotionGateStoreRecord): PromotionDecisionOutcome {
@@ -1759,7 +1891,10 @@ export class PromotionApprovalStore implements Disposable {
       }
 
       this.acquireMutex(transactionId);
-      const currentReceipt = this.receipt(journal.receipt_id)!;
+      const currentReceipt = requiredPromotionValue(
+        this.receipt(journal.receipt_id),
+        "claimed promotion receipt"
+      );
       this.requireControlApprovalBinding(verified.receipt, gate, currentReceipt.receipt_sha256);
       if (currentReceipt.state === "claimed") {
         if (new Date(verified.receipt.expires_at).getTime() <= this.now().getTime()) {
@@ -2104,7 +2239,10 @@ export class PromotionApprovalStore implements Disposable {
     using capabilities = new CapabilityStore(this.projectRoot);
     for (const [ordinal, capabilityId] of receipt.target_capability_ids.entries()) {
       const envelope = loadEnvelope(this.projectRoot, capabilityId);
-      const presentation = gate.packet.target_presentations[ordinal]!;
+      const presentation = requiredPromotionValue(
+        gate.packet.target_presentations[ordinal],
+        "promotion target presentation"
+      );
       const lease = capabilities.lease(capabilityId);
       if (
         lease === undefined ||
@@ -2300,7 +2438,9 @@ export class PromotionApprovalStore implements Disposable {
       if (!hasNonce || !hasExpiry) {
         throw new PromotionApprovalError("approve intent requires nonce and approval expiry");
       }
-      const expiry = new Date(intent.approval_expires_at!).getTime();
+      const expiry = new Date(
+        requiredPromotionValue(intent.approval_expires_at, "approval decision expiry")
+      ).getTime();
       if (expiry <= new Date(intent.decided_at).getTime()) {
         throw new PromotionApprovalError("approve intent expiry must follow its decision time");
       }
@@ -2577,7 +2717,10 @@ export class PromotionApprovalStore implements Disposable {
       }
     });
     this.hit("after_preclaim_approval_terminal");
-    const record = this.receipt(receipt.receipt_id)!;
+    const record = requiredPromotionValue(
+      this.receipt(receipt.receipt_id),
+      "terminalized promotion receipt"
+    );
     return this.recoverApprovalBeforeClaim(record);
   }
 
@@ -2678,20 +2821,22 @@ export class PromotionApprovalStore implements Disposable {
       });
       const currentReceipt = this.db
         .prepare("SELECT state, transaction_id FROM promotion_receipts WHERE receipt_id = ?")
-        .get(updated.receipt_id) as { state: string; transaction_id: string | null } | undefined;
+        .get(updated.receipt_id);
       if (
         currentReceipt === undefined ||
-        currentReceipt.transaction_id !== updated.transaction_id
+        sqlNullableText(currentReceipt, "transaction_id", "promotion receipt") !==
+          updated.transaction_id
       ) {
         throw new PromotionApprovalError(
           "promotion journal lost its exact receipt transaction during terminalization"
         );
       }
-      if (currentReceipt.state !== receiptState) {
+      const currentReceiptState = sqlText(currentReceipt, "state", "promotion receipt");
+      if (currentReceiptState !== receiptState) {
         const allowed =
           receiptState === "consumed"
-            ? currentReceipt.state === "apply_reserved"
-            : currentReceipt.state === "claimed" || currentReceipt.state === "apply_reserved";
+            ? currentReceiptState === "apply_reserved"
+            : currentReceiptState === "claimed" || currentReceiptState === "apply_reserved";
         if (!allowed) {
           throw new PromotionApprovalError(
             "promotion receipt state conflicts with journal terminalization"
@@ -2708,7 +2853,7 @@ export class PromotionApprovalStore implements Disposable {
             updated.updated_at,
             updated.receipt_id,
             updated.transaction_id,
-            currentReceipt.state
+            currentReceiptState
           );
         if (Number(changed.changes) !== 1) {
           throw new PromotionApprovalError(
@@ -2875,9 +3020,13 @@ export class PromotionApprovalStore implements Disposable {
     this.transaction(() => {
       const row = this.db
         .prepare("SELECT transaction_id FROM apply_mutex WHERE mutex_id = ?")
-        .get(MUTEX_ROW_ID) as { transaction_id: string | null };
-      if (row.transaction_id !== null && row.transaction_id !== transactionId) {
-        const owner = this.journal(row.transaction_id);
+        .get(MUTEX_ROW_ID);
+      if (row === undefined) {
+        throw new PromotionApprovalError("promotion apply mutex row is absent");
+      }
+      const ownerTransactionId = sqlNullableText(row, "transaction_id", "promotion apply mutex");
+      if (ownerTransactionId !== null && ownerTransactionId !== transactionId) {
+        const owner = this.journal(ownerTransactionId);
         if (owner === undefined || !TERMINAL_JOURNAL_STATES.has(owner.state)) {
           throw new PromotionApprovalError(
             "another promotion apply transaction holds the host mutex"

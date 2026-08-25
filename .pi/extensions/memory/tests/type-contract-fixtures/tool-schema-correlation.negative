@@ -1,0 +1,38 @@
+import {
+  createPrimaryLogstreamTools,
+  type LogstreamOperationSchemaPair,
+} from "__LOGSTREAM_TOOLS__";
+import {
+  createPrimaryMemoryTools,
+  type MemoryOperationSchemaPair,
+} from "__MEMORY_TOOLS__";
+
+type DrawerPair = Extract<MemoryOperationSchemaPair, { operation: "get_drawer" }>;
+declare const drawerParameters: DrawerPair["parameters"];
+const invalidMemoryPair: MemoryOperationSchemaPair = {
+  operation: "search",
+  parameters: drawerParameters,
+};
+
+type ListPair = Extract<
+  LogstreamOperationSchemaPair,
+  { operation: "logstream_list" }
+>;
+declare const listParameters: ListPair["parameters"];
+const invalidLogstreamPair: LogstreamOperationSchemaPair = {
+  operation: "logstream_append",
+  parameters: listParameters,
+};
+
+type MemoryTool = ReturnType<typeof createPrimaryMemoryTools>[number];
+type SearchTool = Extract<MemoryTool, { name: "memory_search" }>;
+declare const searchTool: SearchTool;
+searchTool.execute("memory-call", { drawer_id: "wrong-schema" });
+
+type LogstreamTool = ReturnType<typeof createPrimaryLogstreamTools>[number];
+type AppendTool = Extract<LogstreamTool, { name: "memory_logstream_append" }>;
+declare const appendTool: AppendTool;
+appendTool.execute("logstream-call", { room: "status" });
+
+void invalidMemoryPair;
+void invalidLogstreamPair;

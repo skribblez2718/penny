@@ -1,22 +1,20 @@
+import { registerTool } from "../../lib/pi-tool-registration.js";
 /**
  * PowerPoint Extension
  *
- * Generate modern, professionally styled PowerPoint (.pptx) presentations:
- *   - powerpoint_generate: render structured slides or markdown into a themed .pptx
- *
- * The heavy lifting happens in generate_pptx.py (python-pptx + markdown-it-py),
- * run with the project venv and fed a JSON spec over stdin.
+ * Generate modern, professionally styled PowerPoint (.pptx) presentations in
+ * process through the TypeScript renderer.
  */
 
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type, type Static } from "typebox";
 import { createLogger, setSessionId } from "../../lib/logger/logger.js";
+import { generate, type GeneratorHooks, type PowerpointGenerationResult } from "./renderer.js";
 
 const logger = createLogger("powerpoint");
 
@@ -35,8 +33,50 @@ export const SLIDE_LAYOUTS = [
   "full_bleed",
 ] as const;
 
+type PowerpointThemeName = (typeof POWERPOINT_THEMES)[number];
+
+export interface PowerpointToolResultEnvelope extends Record<string, unknown> {
+  path: string;
+  slide_count: number;
+  theme: PowerpointThemeName;
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPowerpointThemeName(value: unknown): value is PowerpointThemeName {
+  return typeof value === "string" && POWERPOINT_THEMES.some((themeName) => themeName === value);
+}
+
+function isPowerpointToolResultEnvelope(value: unknown): value is PowerpointToolResultEnvelope {
+  return (
+    isUnknownRecord(value) &&
+    typeof value.path === "string" &&
+    value.path.length > 0 &&
+    typeof value.slide_count === "number" &&
+    Number.isInteger(value.slide_count) &&
+    value.slide_count >= 0 &&
+    isPowerpointThemeName(value.theme)
+  );
+}
+
+/**
+ * Validate the renderer-to-Pi result boundary without closing its established
+ * open envelope. Required logging fields are checked; all recorded renderer
+ * fields and any future extras remain on the original object passed to Pi.
+ */
+export function adaptPowerpointResultEnvelope(value: unknown): PowerpointToolResultEnvelope {
+  if (!value) {
+    throw new Error("PowerPoint generator completed without a result");
+  }
+  if (!isPowerpointToolResultEnvelope(value)) {
+    throw new Error("PowerPoint generator returned an invalid result envelope");
+  }
+  return value;
+}
+
 const DEFAULT_TIMEOUT_MS = 90_000;
-const MAX_STDERR_CHARS = 16_000;
 const MAX_STAGING_ATTEMPTS = 10;
 const EXTENSION_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DISCOVERED_PROJECT_ROOT = path.resolve(EXTENSION_DIR, "../../..");
@@ -47,33 +87,9 @@ export function getExtensionDir(): string {
   return EXTENSION_DIR;
 }
 
-export function getGeneratorScript(): string {
-  return path.join(EXTENSION_DIR, "generate_pptx.py");
-}
-
 export function getProjectRoot(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env.PROJECT_ROOT?.trim();
   return configured ? path.resolve(configured) : DISCOVERED_PROJECT_ROOT;
-}
-
-export function venvPythonCandidates(
-  root: string,
-  platform: NodeJS.Platform = process.platform
-): string[] {
-  const unix = path.join(root, ".venv", "bin", "python");
-  const windows = path.join(root, ".venv", "Scripts", "python.exe");
-  return platform === "win32" ? [windows, unix] : [unix, windows];
-}
-
-export function getVenvPython(
-  root = getProjectRoot(),
-  env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform
-): string {
-  const override = env.PI_VENV_PYTHON?.trim();
-  if (override) return path.resolve(override);
-  const candidates = venvPythonCandidates(root, platform);
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
 }
 
 /** Lowercase, alphanumeric-and-dash slug for filenames; never empty. */
@@ -104,22 +120,17 @@ export function defaultOutputPath(
     String(now.getMinutes()).padStart(2, "0"),
     String(now.getSeconds()).padStart(2, "0"),
   ].join("");
-  // A full invocation UUID prevents concurrent sibling calls from deriving the
-  // same final destination; staging already receives a separate UUID below.
   const uniq = `${String(now.getMilliseconds()).padStart(3, "0")}-${invocationId()}`;
   const name = `${slugify(title || "presentation")}_${stamp}_${time}_${uniq}.pptx`;
   return path.join(os.tmpdir(), "penny", "powerpoint", name);
 }
 
-/** Resolve the final output path from an optional explicit param. */
 export function resolveOutputPath(
   outputPath: string | undefined,
   title: string | undefined,
   projectRoot: string
 ): string {
-  if (!outputPath) {
-    return defaultOutputPath(title);
-  }
+  if (!outputPath) return defaultOutputPath(title);
   const resolved = path.isAbsolute(outputPath) ? outputPath : path.join(projectRoot, outputPath);
   return resolved.toLowerCase().endsWith(".pptx") ? resolved : `${resolved}.pptx`;
 }
@@ -139,7 +150,7 @@ export function reserveStagingPath(outputPath: string): string {
       fs.closeSync(descriptor);
       return candidate;
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
+      const code = error instanceof Error && "code" in error ? error.code : undefined;
       if (code !== "EEXIST") throw error;
     }
   }
@@ -150,12 +161,12 @@ export function reserveStagingPath(outputPath: string): string {
 
 export interface GeneratorOutcome {
   cancelled: boolean;
-  result?: Record<string, unknown>;
+  result?: PowerpointGenerationResult;
 }
 
 export interface GeneratorRunOptions {
-  pythonPath?: string;
   timeoutMs?: number;
+  hooks?: GeneratorHooks;
 }
 
 function generatorTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
@@ -163,147 +174,47 @@ function generatorTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
 }
 
-function boundedAppend(current: string, chunk: Buffer, limit: number): string {
-  const appended = current + chunk.toString();
-  return appended.length <= limit ? appended : appended.slice(-limit);
-}
-
-export function runGenerator(
-  scriptPath: string,
+export async function runGenerator(
   spec: Record<string, unknown>,
   signal: AbortSignal | undefined,
   options: GeneratorRunOptions = {}
 ): Promise<GeneratorOutcome> {
-  if (signal?.aborted) return Promise.resolve({ cancelled: true });
-
-  const projectRoot = getProjectRoot();
-  const configuredOverride = process.env.PI_VENV_PYTHON?.trim();
-  const attempted = options.pythonPath
-    ? [path.resolve(options.pythonPath)]
-    : configuredOverride
-      ? [path.resolve(configuredOverride)]
-      : venvPythonCandidates(projectRoot);
-  const python = options.pythonPath ? path.resolve(options.pythonPath) : getVenvPython(projectRoot);
-
-  if (!fs.existsSync(python)) {
-    throw new Error(
-      `Python interpreter not found. Attempted: ${attempted.join(", ")}. ` +
-        "Run `uv sync --extra dev --frozen` or set PI_VENV_PYTHON."
-    );
-  }
-  if (!fs.existsSync(scriptPath)) {
-    throw new Error(`PowerPoint generator script not found: ${scriptPath}`);
-  }
+  if (signal?.aborted) return { cancelled: true };
 
   const outputPath = spec.output_path;
   if (typeof outputPath !== "string" || outputPath.length === 0) {
     throw new Error("Presentation generator spec requires output_path");
   }
+
   const stagingPath = reserveStagingPath(outputPath);
   const preparedSpec = { ...spec, staging_path: stagingPath };
   const timeoutMs = options.timeoutMs ?? generatorTimeoutMs();
+  const internalController = new AbortController();
+  let timedOut = false;
 
-  return new Promise((resolve, reject) => {
-    const startedAt = Date.now();
-    const proc = spawn(python, [scriptPath], { stdio: ["pipe", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let aborted = false;
-    let timedOut = false;
-    let settled = false;
-    const lifecycle: { timer?: ReturnType<typeof setTimeout> } = {};
+  const forwardAbort = () => internalController.abort();
+  signal?.addEventListener("abort", forwardAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    internalController.abort();
+  }, timeoutMs);
 
-    const cleanup = () => {
-      if (lifecycle.timer !== undefined) clearTimeout(lifecycle.timer);
-      signal?.removeEventListener("abort", onAbort);
-      fs.rmSync(stagingPath, { force: true });
-    };
-    const settleResolve = (outcome: GeneratorOutcome) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(outcome);
-    };
-    const settleReject = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    };
-
-    const onAbort = () => {
-      aborted = true;
-      if (!proc.kill("SIGKILL")) settleResolve({ cancelled: true });
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-
-    lifecycle.timer = setTimeout(() => {
-      timedOut = true;
-      if (!proc.kill("SIGKILL")) {
-        settleReject(new Error(`Presentation generator timed out after ${timeoutMs}ms`));
-      }
-    }, timeoutMs);
-
-    proc.stdout.on("data", (data: Buffer) => {
-      stdout += data.toString();
-    });
-    proc.stderr.on("data", (data: Buffer) => {
-      stderr = boundedAppend(stderr, data, MAX_STDERR_CHARS);
-    });
-
-    proc.on("close", (code) => {
-      const durationMs = Date.now() - startedAt;
-      if (timedOut) {
-        settleReject(
-          new Error(
-            `Presentation generator timed out after ${timeoutMs}ms ` +
-              `(python=${python}, script=${scriptPath}, durationMs=${durationMs})`
-          )
-        );
-        return;
-      }
-      if (aborted) {
-        settleResolve({ cancelled: true });
-        return;
-      }
-      if (code !== 0) {
-        const diagnostic = stderr.trim() || `Presentation generator exited with code ${code}`;
-        settleReject(
-          new Error(
-            `${diagnostic}\n` +
-              `(python=${python}, script=${scriptPath}, exitCode=${String(code)}, durationMs=${durationMs})`
-          )
-        );
-        return;
-      }
-      try {
-        settleResolve({
-          cancelled: false,
-          result: JSON.parse(stdout) as Record<string, unknown>,
-        });
-      } catch {
-        settleReject(
-          new Error(
-            `Presentation generator returned invalid JSON: ${stdout.slice(0, 500)} ` +
-              `(python=${python}, script=${scriptPath}, durationMs=${durationMs})`
-          )
-        );
-      }
-    });
-
-    proc.on("error", (error) => {
-      settleReject(
-        new Error(
-          `Unable to start presentation generator: ${error.message} ` +
-            `(python=${python}, script=${scriptPath})`
-        )
-      );
-    });
-
-    proc.stdin.on("error", () => {});
-    proc.stdin.write(JSON.stringify(preparedSpec));
-    proc.stdin.end();
-  });
+  try {
+    const result = await generate(preparedSpec, internalController.signal, options.hooks ?? {});
+    return { cancelled: false, result };
+  } catch (error) {
+    if (timedOut) {
+      throw new Error(`Presentation generator timed out after ${timeoutMs}ms`);
+    }
+    if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+      return { cancelled: true };
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", forwardAbort);
+    fs.rmSync(stagingPath, { force: true });
+  }
 }
 
 // ── Tool parameters ──────────────────────────────────────────────────────────
@@ -553,34 +464,24 @@ const powerpointGenerateParams = Type.Object({
   ),
 });
 
-interface PowerpointGenerateParams {
-  slides?: unknown[];
-  markdown?: string;
-  title?: string;
-  subtitle?: string;
-  author?: string;
-  date?: string;
-  theme?: string;
-  accent_color?: string;
-  design?: Record<string, unknown>;
-  allowed_image_roots?: string[];
-  line_break_mode?: "preserve" | "commonmark";
-  footer_text?: string;
-  slide_numbers?: boolean;
-  output_path?: string;
-}
+export type PowerpointGenerateParams = Static<typeof powerpointGenerateParams>;
 
-/** Build the JSON spec handed to generate_pptx.py. Exported for unit tests. */
+export type PowerpointGeneratorSpec = PowerpointGenerateParams & {
+  output_path: string;
+  project_root: string;
+};
+
+/** Build the JSON spec handed to the in-process renderer. Exported for unit tests. */
 export function buildSpec(
   params: PowerpointGenerateParams,
   projectRoot: string
-): Record<string, unknown> {
+): PowerpointGeneratorSpec {
   const hasSlides = Array.isArray(params.slides) && params.slides.length > 0;
   const hasMarkdown = typeof params.markdown === "string" && params.markdown.trim().length > 0;
   if (hasSlides === hasMarkdown) {
     throw new Error("Provide exactly one of 'slides' or 'markdown'.");
   }
-  const spec: Record<string, unknown> = {
+  const spec: PowerpointGeneratorSpec = {
     ...params,
     output_path: resolveOutputPath(params.output_path, params.title, projectRoot),
     project_root: projectRoot,
@@ -599,16 +500,15 @@ export function buildSpec(
 // ── Registration ─────────────────────────────────────────────────────────────
 
 export default function powerpointExtension(pi: ExtensionAPI): void {
-  pi.on("session_start", async (_event: unknown, ctx: unknown) => {
-    const sessionCtx = ctx as { sessionManager: { getSessionId(): string } };
-    setSessionId(sessionCtx.sessionManager.getSessionId());
+  pi.on("session_start", async (_event, ctx) => {
+    setSessionId(ctx.sessionManager.getSessionId());
   });
 
-  pi.registerTool({
+  registerTool(pi, {
     name: "powerpoint_generate",
     label: "Generate PowerPoint Presentation",
     description:
-      "Render a professionally styled 16:9 PowerPoint (.pptx) presentation. Preferred input is " +
+      "Render a professionally styled 16:9 PowerPoint (.pptx) presentation. Use when the requested deliverable is an editable slide deck; do not use for plain-text answers or Word documents. Preferred input is " +
       "a structured 'slides' array with layouts: title, section (full-accent divider), content " +
       "(kicker/title/body/bullets with nesting), two_column, table (accent header, banded rows), " +
       "quote, image (auto-fit with caption), closing, image_left, image_right, and full_bleed. " +
@@ -625,13 +525,7 @@ export default function powerpointExtension(pi: ExtensionAPI): void {
     promptSnippet:
       "powerpoint_generate: render structured slides or markdown into a professionally styled PowerPoint (.pptx)",
     parameters: powerpointGenerateParams,
-    async execute(
-      _toolCallId: string,
-      params: PowerpointGenerateParams,
-      signal: AbortSignal | undefined,
-      _onUpdate: unknown,
-      _ctx: unknown
-    ) {
+    async execute(_toolCallId, params, signal) {
       try {
         if (signal?.aborted) {
           return {
@@ -641,15 +535,15 @@ export default function powerpointExtension(pi: ExtensionAPI): void {
         }
         const projectRoot = getProjectRoot();
         const spec = buildSpec(params, projectRoot);
-        fs.mkdirSync(path.dirname(spec.output_path as string), { recursive: true });
-        const outcome = await runGenerator(getGeneratorScript(), spec, signal);
+        fs.mkdirSync(path.dirname(spec.output_path), { recursive: true });
+        const outcome = await runGenerator(spec, signal);
         if (outcome.cancelled) {
           return {
             content: [{ type: "text" as const, text: "Cancelled" }],
             details: { cancelled: true },
           };
         }
-        const result = outcome.result as Record<string, unknown>;
+        const result = adaptPowerpointResultEnvelope(outcome.result);
         logger.info("PowerPoint generated", {
           path: result.path,
           slides: result.slide_count,

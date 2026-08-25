@@ -25,6 +25,15 @@ import {
 import { readClaimedCanonicalTarget } from "./gate.js";
 import { readSelectedGeneration } from "./generations.js";
 
+function errorSummary(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error !== null && typeof error === "object" && "message" in error) {
+    const message = error.message;
+    if (typeof message === "string") return message;
+  }
+  return String(error);
+}
+
 /** §5.6 closed validation for the public `promote` request. */
 export function validatePromoteRequest(raw: unknown): PromoteKbRequest {
   const request = validateKbContract(PromoteKbRequestSchema, raw, "promote request");
@@ -99,10 +108,10 @@ export function verifyPromotionCandidate(input: {
         sessionId: input.sessionId,
         profileId: input.profileId,
       });
-      preimage = target.sha256 as Sha256Hex;
-    } catch (err) {
+      preimage = target.sha256;
+    } catch (error) {
       findings.push(
-        `target capability '${capId}' did not resolve: ${String((err as Error).message ?? err).slice(0, 200)}`
+        `target capability '${capId}' did not resolve: ${errorSummary(error).slice(0, 200)}`
       );
     }
     targets.push({

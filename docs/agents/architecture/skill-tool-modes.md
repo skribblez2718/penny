@@ -3,50 +3,35 @@
 ## Rules
 
 1. Exactly one invocation mode is selected.
-2. Single/parallel skill stages use owner-selected exact artifact contracts.
-3. Chain handoff is the prior skill's verified terminal `output_artifact_ref`,
-   never an inline `{previous}` payload or memory room.
-4. Chain checkpoints persist under the caller-supplied state root or platform
-   state directory with owner-only permissions and atomic replacement.
-5. Resume verifies checkpoint identity and every terminal/handoff ref before
-   advancing. Missing, corrupt, wrong-run, or ungranted refs fail closed.
-6. Workers read grants with `artifact_read` and typed continuation.
+2. Single/parallel stages use owner-selected exact artifact IDs from any run.
+3. Chain handoff is the prior skill's verified terminal ID, never inline payload or memory.
+4. Chain checkpoints are owner-only, atomic, and retain terminal/handoff refs.
+5. Resume verifies checkpoint identity and every exact ref before advancing.
+6. Every catalog worker uses its exact YAML tool surface; missing optional services remain
+   visible and return typed call errors.
+7. Every stage output is persisted and re-read before routing or continuation.
 
 ## Modes
 
-| Mode     | Input                                    | Failure behavior                                          |
-| -------- | ---------------------------------------- | --------------------------------------------------------- |
-| Single   | One skill and goal                       | Return typed terminal result/error.                       |
-| Parallel | Independent skill goals                  | Branch failures do not cancel accepted siblings.          |
-| Chain    | Ordered dependent skill goals            | Stop on first failure; persist exact refs.                |
-| Resume   | Existing chain ID plus allowed overrides | Skip verified completed steps; retry failed/pending step. |
+| Mode     | Input                                               | Failure behavior                           |
+| -------- | --------------------------------------------------- | ------------------------------------------ |
+| Single   | One skill and goal plus optional exact IDs          | Typed terminal result/error                |
+| Parallel | Independent skill goals/inputs                      | Branch communication failures are explicit |
+| Chain    | Ordered goals; automatic prior ID plus optional IDs | Stop on first failure; persist every ref   |
+| Resume   | Chain ID plus bounded failed-step overrides         | Skip verified completed steps              |
 
-Mode detection remains `resume_chain > chain > skills > single`; ambiguous mixed
-parameters fail rather than guess.
+Mode detection remains `resume_chain > chain > skills > single`; ambiguous mixed parameters
+fail rather than guess.
 
-## Chain handoff
+## Chain and fan-in
 
-The previous step's terminal ref is read and verified by the owner, then wrapped
-as an immutable chain-run handoff ref for the next skill. The first fresh worker
-in that skill receives only that grant. `{previous}` may remain in goal text as a
-bounded instruction pointing to the grant, but never contains authoritative
-payload bytes. Large or multibyte content is consumed through continuation.
-
-Durable memory is optional and not chain authority. A memory outage cannot alter
-single, parallel, chain, or resume correctness.
+The owner verifies the prior terminal ID and passes it directly across runs. `{previous}`
+is a bounded instruction marker. A chain step may add explicit IDs for multi-source fan-in.
+Payload bytes and durable memory are never control transport.
 
 ## Verification
 
-- [ ] Every successful step has a verified exact terminal ref.
-- [ ] Checkpoint writes are owner-only and atomic.
+- [ ] Every successful producer/stage has a readable exact output ID.
+- [ ] Cross-run single/parallel/chain/fan-in pass.
 - [ ] Restart reconstructs handoff from refs, not previews or memory.
-- [ ] Parallel branches remain grant-isolated.
-- [ ] Final result exposes authoritative product refs.
-
-## Files
-
-| File                                            | Purpose                          |
-| ----------------------------------------------- | -------------------------------- |
-| `.pi/extensions/skill/README.md`                | Skill owner loop and chain state |
-| `.pi/extensions/skill/skill-chain-artifacts.ts` | Chain artifact handoff           |
-| `.pi/extensions/skill/chain-checkpoint.ts`      | Durable chain checkpoint         |
+- [ ] Output persistence/readability failures cannot return success.

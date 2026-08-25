@@ -1,3 +1,4 @@
+import { parseJson, requireRecord, requireRecordArray, requireValue } from "./helpers/narrowing.js";
 /**
  * G8 prepare-only acceptance: one synthetic, non-personal flow through
  * init → policy install → ingest approval → grounded query → save
@@ -7,7 +8,6 @@
 
 import { createHash } from "node:crypto";
 import {
-  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -24,14 +24,25 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { Checkpointer, canonicalJson, sha256 } from "../src/checkpointer.js";
-import type { Directive } from "../src/contracts.js";
+import type { Directive, JsonValue } from "../src/contracts.js";
 import { RunContext } from "../src/context.js";
 import { OrchestrationEngine } from "../src/engine.js";
 import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
 import { materializeRunInput, readRunInput, settleRunInput } from "../src/private-inputs.js";
 import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
 import { CapabilityStore, mintEnvelope } from "../src/kb/capabilities.js";
-import { canonicalJson as kbCanonicalJson, sha256Hex } from "../src/kb/contracts.js";
+import {
+  canonicalJson as kbCanonicalJson,
+  IngestVerificationReportSchema,
+  KbArtifactHandleSchema,
+  PageDraftArtifactSchema,
+  PromotionPatchArtifactSchema,
+  PromotionPlanArtifactSchema,
+  ReadPhaseBriefResultSchema,
+  sha256Hex,
+  validateKbContract,
+  type QueryKbRequest,
+} from "../src/kb/contracts.js";
 import { readPolicy, writePolicy } from "../src/kb/filesystem.js";
 import { mintSourceCapability } from "../src/kb/gate.js";
 import {
@@ -47,11 +58,7 @@ import {
 import { replayableResultFromRun } from "../src/kb/operation-receipts.js";
 import { KbWorkerClient } from "../src/kb/kb-worker-client.js";
 import { KbQueryReader } from "../src/kb/query-reader.js";
-import {
-  computeRequestSha256,
-  validateQueryRequest,
-  type QueryKbRequest,
-} from "../src/kb/parent-delivery.js";
+import { computeRequestSha256, validateQueryRequest } from "../src/kb/parent-delivery.js";
 import { validatePromoteRequest } from "../src/kb/promote.js";
 import { PromotionApprovalStore } from "../src/kb/promotion.js";
 import { resolveKbRoot } from "../src/kb/ingest-plane.js";
@@ -241,7 +248,7 @@ async function driveAgentRun(input: {
   projectRoot: string;
   runId: string;
   client: ClosableModelClient;
-  constraints: Record<string, unknown>;
+  constraints: Record<string, JsonValue>;
   startRequest?: unknown;
 }): Promise<AgentStack> {
   const stateRoot = path.join(input.projectRoot, ".penny", "prepare-e2e");
@@ -262,7 +269,10 @@ async function driveAgentRun(input: {
   });
   workers.setReceiptAuthority(engine.receiptAuthority);
   const runner = new OrchestrationRunner(engine, workers);
-  const action = String(input.constraints["action"] ?? "") as "ingest" | "save" | "promote";
+  const action = input.constraints["action"];
+  if (action !== "ingest" && action !== "save" && action !== "promote") {
+    throw new Error("prepare-only fixture requires an ingest, save, or promote action");
+  }
   let admittedStart: AdmittedOperationStart | undefined;
   if (input.startRequest !== undefined) {
     const context = RunContext.create({
@@ -311,7 +321,10 @@ async function driveAgentRun(input: {
     undefined
   );
   if (admittedStart !== undefined) {
-    const durable = checkpointer.loadRunById(input.runId)!;
+    const durable = requireValue(
+      checkpointer.loadRunById(input.runId),
+      "apps/orchestration/tests/kb-e2e-prepare.test.ts:317"
+    );
     const startResult = replayableResultFromRun({ action, run: durable });
     completeOperationStart({
       projectRoot: input.projectRoot,
@@ -384,7 +397,7 @@ function kbClient(input: {
     | {
         page_id: string;
         revision_id: string;
-        lifecycle: "draft";
+        lifecycle: "draft" | "validated" | "superseded" | "archived";
         source_ids: string[];
         claim_allocations: Array<{ claim_id: string }>;
         supersedes: null | { revision_id: string };
@@ -417,23 +430,25 @@ function kbClient(input: {
         }
       }
       if (inv.stateId === "compose") {
-        const brief = JSON.parse(inv.readPhaseBrief?.() ?? "{}") as {
-          compose_authority?: { allocations?: (typeof composeAllocation)[] };
-        };
-        composeAllocation = brief.compose_authority?.allocations?.[0];
-        const allocation = composeAllocation;
-        if (allocation === undefined) throw new Error("compose allocation is absent");
-        const parsed = JSON.parse(body) as {
-          pages: Array<{
-            frontmatter: Record<string, unknown>;
-            claims: {
-              page_id: string;
-              revision_id: string;
-              claims: Array<Record<string, unknown>>;
-            };
-          }>;
-        };
-        const page = parsed.pages[0]!;
+        const brief = validateKbContract(
+          ReadPhaseBriefResultSchema,
+          parseJson(inv.readPhaseBrief?.() ?? "{}"),
+          "synthetic compose phase brief"
+        );
+        const allocation = brief.compose_authority?.allocations[0];
+        if (allocation === undefined || allocation.lifecycle !== "draft") {
+          throw new Error("compose draft allocation is absent");
+        }
+        composeAllocation = allocation;
+        const parsed = validateKbContract(
+          PageDraftArtifactSchema,
+          parseJson(body),
+          "synthetic compose body"
+        );
+        const page = requireValue(
+          parsed.pages[0],
+          "apps/orchestration/tests/kb-e2e-prepare.test.ts:439"
+        );
         page.frontmatter.page_id = allocation.page_id;
         page.frontmatter.revision_id = allocation.revision_id;
         page.frontmatter.lifecycle = allocation.lifecycle;
@@ -448,18 +463,26 @@ function kbClient(input: {
           throw new Error("synthetic compose claim/allocation count differs");
         }
         for (const [index, claim] of page.claims.claims.entries()) {
-          claim.claim_id = allocation.claim_allocations[index]!.claim_id;
+          claim.claim_id = requireValue(
+            allocation.claim_allocations[index],
+            "apps/orchestration/tests/kb-e2e-prepare.test.ts:454"
+          ).claim_id;
         }
         return JSON.stringify(parsed);
       }
       if (inv.stateId === "verify" && composeAllocation !== undefined) {
-        const parsed = JSON.parse(body) as {
-          claim_findings?: Array<Record<string, unknown>>;
-        };
-        for (const [index, finding] of (parsed.claim_findings ?? []).entries()) {
+        const parsed = validateKbContract(
+          IngestVerificationReportSchema,
+          parseJson(body),
+          "synthetic ingest verification body"
+        );
+        for (const [index, finding] of parsed.claim_findings.entries()) {
           finding.page_id = composeAllocation.page_id;
           finding.revision_id = composeAllocation.revision_id;
-          finding.claim_id = composeAllocation.claim_allocations[index]!.claim_id;
+          finding.claim_id = requireValue(
+            composeAllocation.claim_allocations[index],
+            "apps/orchestration/tests/kb-e2e-prepare.test.ts:465"
+          ).claim_id;
         }
         return JSON.stringify(parsed);
       }
@@ -497,7 +520,18 @@ class SyntheticPromotionClient implements ClosableModelClient {
       artifact_kind: kind,
       content: body,
     });
-    const parsed = JSON.parse(body) as { changes?: unknown[]; targets?: unknown[] };
+    const itemCount =
+      phase === "plan"
+        ? validateKbContract(
+            PromotionPlanArtifactSchema,
+            parseJson(body),
+            "synthetic promotion plan"
+          ).changes.length
+        : validateKbContract(
+            PromotionPatchArtifactSchema,
+            parseJson(body),
+            "synthetic promotion patch"
+          ).targets.length;
     return {
       text: body,
       confidence: "CERTAIN",
@@ -506,8 +540,8 @@ class SyntheticPromotionClient implements ClosableModelClient {
         complete: true,
         kb_artifact_id: handle.artifact_id,
         ...(phase === "plan"
-          ? { step_count: parsed.changes?.length ?? 0, target_count: 1 }
-          : { hunk_count: parsed.targets?.length ?? 0, target_count: 1 }),
+          ? { step_count: itemCount, target_count: 1 }
+          : { hunk_count: itemCount, target_count: 1 }),
       },
     };
   }
@@ -521,10 +555,11 @@ function terminalResult(directive: Directive): Record<string, unknown> {
   if (directive.action !== "complete" && directive.action !== "incomplete") {
     throw new Error(`expected a terminal directive, got '${directive.action}'`);
   }
-  return (directive.result ?? {}) as Record<string, unknown>;
+  return directive.result;
 }
 
-function expectPathFreeHandles(handles: readonly Record<string, unknown>[]): void {
+function expectPathFreeHandles(value: unknown): void {
+  const handles = requireRecordArray(value, "path-free artifact handles");
   for (const handle of handles) {
     expect(Object.keys(handle).sort()).toEqual(HANDLE_KEYS);
     expect(handle["artifact_id"]).toMatch(/^art_/);
@@ -590,7 +625,13 @@ function runArtifact(
   const store = new RunArtifactStore(kbRoot, runId, checkpointer);
   try {
     const read = store.read(handle.artifact_id);
-    return { handle: read.handle, body: JSON.parse(read.content) as Record<string, unknown> };
+    return {
+      handle: read.handle,
+      body: requireRecord(
+        parseJson(read.content),
+        "apps/orchestration/tests/kb-e2e-prepare.test.ts:597"
+      ),
+    };
   } finally {
     store.close();
     checkpointer.close();
@@ -701,13 +742,21 @@ async function runGroundedQuery(
       }
       const prior = invocation.allowedPriorArtifacts?.[0];
       expect(prior).toBeDefined();
-      expect(invocation.readRunArtifact?.(prior!.artifact_id)).toContain(selectedClaim.claim_id);
+      expect(
+        invocation.readRunArtifact?.(
+          requireValue(prior, "apps/orchestration/tests/kb-e2e-prepare.test.ts:707").artifact_id
+        )
+      ).toContain(selectedClaim.claim_id);
       return JSON.stringify({
         schema_version: 1,
         artifact_kind: "verification_report",
         passed: true,
-        answer_artifact_id: prior!.artifact_id,
-        answer_sha256: prior!.sha256,
+        answer_artifact_id: requireValue(
+          prior,
+          "apps/orchestration/tests/kb-e2e-prepare.test.ts:712"
+        ).artifact_id,
+        answer_sha256: requireValue(prior, "apps/orchestration/tests/kb-e2e-prepare.test.ts:713")
+          .sha256,
         answer_verdict: "supported",
         citation_findings: [
           { citation, verdict: "supported", notes: "The admitted source states the rule." },
@@ -776,7 +825,7 @@ function registerCanonicalTarget(input: Fixture): {
     kb_profile_id: PROFILE,
     resolved_path: targetPath,
     authority_root: targetRoot,
-    expected_sha256: sha256Hex(original),
+    expected_sha256: sha256(original),
     allowed_operation: "promote",
     issued_at: NOW,
     expires_at: "2027-08-20T00:00:00Z",
@@ -871,9 +920,18 @@ describe("G8 prepare-only end to end", () => {
     try {
       expect(ingestStack.directive.action).toBe("await_user");
       expect(ingestSeen).toEqual(["ingest", "compose", "lint", "verify"]);
-      const gate = ingestStack.checkpointer.contentReviewForRun(ingestRunId)!;
-      const ingestRun = ingestStack.checkpointer.loadRunById(ingestRunId)!;
-      admittedSourceId = (ingestRun.playbookData.source_ids as string[])[0]!;
+      const gate = requireValue(
+        ingestStack.checkpointer.contentReviewForRun(ingestRunId),
+        "apps/orchestration/tests/kb-e2e-prepare.test.ts:877"
+      );
+      const ingestRun = requireValue(
+        ingestStack.checkpointer.loadRunById(ingestRunId),
+        "apps/orchestration/tests/kb-e2e-prepare.test.ts:878"
+      );
+      admittedSourceId = requireValue(
+        ingestRun.knowledgeBaseData.source_ids?.[0],
+        "admitted ingest source id"
+      );
       expect(admittedSourceId).toMatch(/^src_[a-f0-9]{32}$/);
       expect(admittedSourceId).not.toBe(source.capability_id);
       expect(gate.state).toBe("awaiting");
@@ -898,9 +956,10 @@ describe("G8 prepare-only end to end", () => {
         revision_id: quorumAllocation.revision_id,
         claim_id: quorumClaimAllocation.claim_id,
       };
-      const semanticLint = gate.packet.candidate_artifacts.find(
-        (a) => a.artifact_kind === "lint_report"
-      )!;
+      const semanticLint = requireValue(
+        gate.packet.candidate_artifacts.find((a) => a.artifact_kind === "lint_report"),
+        "apps/orchestration/tests/kb-e2e-prepare.test.ts:904"
+      );
       expect(
         runArtifact(input.projectRoot, input.kbRoot, ingestRunId, semanticLint).body
       ).toMatchObject({
@@ -908,10 +967,18 @@ describe("G8 prepare-only end to end", () => {
         findings: [],
       });
 
-      const selectedBefore = readSelectedGeneration(input.kbRoot)!.selector.generation_id;
+      const selectedBefore = requireValue(
+        readSelectedGeneration(input.kbRoot),
+        "apps/orchestration/tests/kb-e2e-prepare.test.ts:914"
+      ).selector.generation_id;
       expect(existsSync(path.join(input.kbRoot, "sources"))).toBe(false);
       expect(() => respond(ingestStack, "approve", "sess_wrong")).toThrow();
-      expect(readSelectedGeneration(input.kbRoot)!.selector.generation_id).toBe(selectedBefore);
+      expect(
+        requireValue(
+          readSelectedGeneration(input.kbRoot),
+          "apps/orchestration/tests/kb-e2e-prepare.test.ts:917"
+        ).selector.generation_id
+      ).toBe(selectedBefore);
       expect(ingestStack.checkpointer.contentReviewForRun(ingestRunId)?.state).toBe("awaiting");
 
       const approved = respond(ingestStack, "approve");
@@ -920,7 +987,12 @@ describe("G8 prepare-only end to end", () => {
       expect(approvedResult["kb_profile_id"]).toBe(PROFILE);
       expect(approvedResult["review_decision"]).toBe("approve");
       expect(String(approvedResult["published_generation_id"])).toMatch(/^gen_/);
-      expect(readSelectedGeneration(input.kbRoot)!.selector.generation_id).not.toBe(selectedBefore);
+      expect(
+        requireValue(
+          readSelectedGeneration(input.kbRoot),
+          "apps/orchestration/tests/kb-e2e-prepare.test.ts:926"
+        ).selector.generation_id
+      ).not.toBe(selectedBefore);
       expect(ingestStack.checkpointer.contentReviewForRun(ingestRunId)?.state).toBe("consumed");
       expect(ingestStack.checkpointer.operationReceipts(ingestRunId)).toMatchObject([
         { event_sequence: 0, action: "ingest", event: "prepared" },
@@ -941,11 +1013,15 @@ describe("G8 prepare-only end to end", () => {
     expect(queryResult["kb_profile_id"]).toBe(PROFILE);
     expect(queryResult["candidate_count"]).toBeGreaterThanOrEqual(1);
     expect(canonicalJson(queryResult)).not.toContain("quorum acknowledgements chair abstains");
-    const queryHandle = queryResult["answer_handle"] as unknown as ArtifactHandle;
-    expectPathFreeHandles([queryHandle as unknown as Record<string, unknown>]);
+    const queryHandle: ArtifactHandle = validateKbContract(
+      KbArtifactHandleSchema,
+      queryResult["answer_handle"],
+      "query answer handle"
+    );
+    expectPathFreeHandles([queryHandle]);
     const answer = runArtifact(input.projectRoot, input.kbRoot, queryRunId, queryHandle);
     expect(answer.body["artifact_kind"]).toBe("query_answer");
-    const answerBody = answer.body["answer"] as Record<string, unknown>;
+    const answerBody = requireRecord(answer.body["answer"], "query answer body");
     expect(answerBody["citations"]).toEqual([{ kind: "claim", ...quorumClaim }]);
     const queryArtifactControl = new Checkpointer(
       path.join(input.projectRoot, ".penny", "prepare-e2e", "orchestration.db")
@@ -1029,7 +1105,10 @@ describe("G8 prepare-only end to end", () => {
         state: "claimed",
         save_run_id: saveRunId,
       });
-      const gate = saveStack.checkpointer.contentReviewForRun(saveRunId)!;
+      const gate = requireValue(
+        saveStack.checkpointer.contentReviewForRun(saveRunId),
+        "apps/orchestration/tests/kb-e2e-prepare.test.ts:1035"
+      );
       expect(gate.packet.action).toBe("save");
       expect(gate.packet.query_run_id).toBe(queryRunId);
       expect(gate.packet.candidate_artifacts.map((a) => a.artifact_kind)).toEqual([
@@ -1045,12 +1124,14 @@ describe("G8 prepare-only end to end", () => {
         page_id: saveAllocation.page_id,
         revision_id: saveAllocation.revision_id,
       };
-      const semanticLint = gate.packet.candidate_artifacts.find(
-        (a) => a.artifact_kind === "lint_report"
-      )!;
-      const semanticVerification = gate.packet.candidate_artifacts.find(
-        (a) => a.artifact_kind === "verification_report"
-      )!;
+      const semanticLint = requireValue(
+        gate.packet.candidate_artifacts.find((a) => a.artifact_kind === "lint_report"),
+        "apps/orchestration/tests/kb-e2e-prepare.test.ts:1051"
+      );
+      const semanticVerification = requireValue(
+        gate.packet.candidate_artifacts.find((a) => a.artifact_kind === "verification_report"),
+        "apps/orchestration/tests/kb-e2e-prepare.test.ts:1054"
+      );
       expect(
         runArtifact(input.projectRoot, input.kbRoot, saveRunId, semanticLint).body
       ).toMatchObject({
@@ -1063,14 +1144,23 @@ describe("G8 prepare-only end to end", () => {
         claim_findings: [{ verdict: "supported" }],
       });
 
-      const generationBeforeSave = readSelectedGeneration(input.kbRoot)!.selector.generation_id;
+      const generationBeforeSave = requireValue(
+        readSelectedGeneration(input.kbRoot),
+        "apps/orchestration/tests/kb-e2e-prepare.test.ts:1069"
+      ).selector.generation_id;
       const saved = respond(saveStack, "approve");
       expect(saved.action).toBe("complete");
-      expect(readSelectedGeneration(input.kbRoot)!.selector.generation_id).not.toBe(
-        generationBeforeSave
-      );
       expect(
-        readSelectedGeneration(input.kbRoot)!.catalog.pages[savedPage.page_id]?.revision_id
+        requireValue(
+          readSelectedGeneration(input.kbRoot),
+          "apps/orchestration/tests/kb-e2e-prepare.test.ts:1072"
+        ).selector.generation_id
+      ).not.toBe(generationBeforeSave);
+      expect(
+        requireValue(
+          readSelectedGeneration(input.kbRoot),
+          "apps/orchestration/tests/kb-e2e-prepare.test.ts:1076"
+        ).catalog.pages[savedPage.page_id]?.revision_id
       ).toBe(savedPage.revision_id);
       expect(claimStore.load(queryRunId)).toMatchObject({
         state: "consumed",
@@ -1114,9 +1204,17 @@ describe("G8 prepare-only end to end", () => {
     expect(lintResult.status).toBe("complete");
     expect(lintResult.met).toBe(true);
     expect(lintResult.counts.blocking).toBe(0);
-    expectPathFreeHandles(lintResult.artifacts as unknown as Record<string, unknown>[]);
+    expectPathFreeHandles(lintResult.artifacts);
     expect(
-      runArtifact(input.projectRoot, input.kbRoot, "run_lint_main", lintResult.artifacts[0]!).body
+      runArtifact(
+        input.projectRoot,
+        input.kbRoot,
+        "run_lint_main",
+        requireValue(
+          lintResult.artifacts[0],
+          "apps/orchestration/tests/kb-e2e-prepare.test.ts:1122"
+        )
+      ).body
     ).toMatchObject({
       artifact_kind: "lint_report",
       candidate_conflicts: [],
@@ -1166,7 +1264,7 @@ describe("G8 prepare-only end to end", () => {
         targets: [
           {
             target_capability_id: target.capabilityId,
-            preimage_sha256: sha256Hex(target.original),
+            preimage_sha256: sha256(target.original),
             postimage_sha256: sha256Hex(replacement),
             replacement_utf8: replacement,
           },
@@ -1176,7 +1274,10 @@ describe("G8 prepare-only end to end", () => {
     const promotionCalls: string[] = [];
     const promotionRunId = "run_promote_main";
     const beforePromote = publicationSnapshot(input.kbRoot);
-    const selectedBeforePromote = readSelectedGeneration(input.kbRoot)!.selector.generation_id;
+    const selectedBeforePromote = requireValue(
+      readSelectedGeneration(input.kbRoot),
+      "apps/orchestration/tests/kb-e2e-prepare.test.ts:1182"
+    ).selector.generation_id;
     const targetBefore = readFileSync(target.targetPath);
     const targetListingBefore = readdirSync(target.targetRoot).sort();
     const promotionStack = await driveAgentRun({
@@ -1203,7 +1304,10 @@ describe("G8 prepare-only end to end", () => {
         projectRoot: input.projectRoot,
         kbRoot: input.kbRoot,
       });
-      const gate = approval.gateForRun(promotionRunId)!;
+      const gate = requireValue(
+        approval.gateForRun(promotionRunId),
+        "apps/orchestration/tests/kb-e2e-prepare.test.ts:1209"
+      );
       expect(gate.state).toBe("awaiting");
       const gateArtifacts = [
         gate.packet.plan_artifact,
@@ -1230,16 +1334,19 @@ describe("G8 prepare-only end to end", () => {
         targets: [
           {
             capability_id: target.capabilityId,
-            preimage_sha256: sha256Hex(targetBefore),
+            preimage_sha256: sha256(targetBefore),
           },
         ],
         findings: [],
       });
 
       expect(publicationSnapshot(input.kbRoot)).toEqual(beforePromote);
-      expect(readSelectedGeneration(input.kbRoot)!.selector.generation_id).toBe(
-        selectedBeforePromote
-      );
+      expect(
+        requireValue(
+          readSelectedGeneration(input.kbRoot),
+          "apps/orchestration/tests/kb-e2e-prepare.test.ts:1243"
+        ).selector.generation_id
+      ).toBe(selectedBeforePromote);
       expect(readFileSync(target.targetPath)).toEqual(targetBefore);
       expect(readdirSync(target.targetRoot).sort()).toEqual(targetListingBefore);
       const capabilityStore = new CapabilityStore(input.projectRoot);
@@ -1266,11 +1373,19 @@ describe("G8 prepare-only end to end", () => {
     try {
       expect(stack.directive.action).toBe("await_user");
       const atGate = publicationSnapshot(input.kbRoot);
-      const generationAtGate = readSelectedGeneration(input.kbRoot)!.selector.generation_id;
+      const generationAtGate = requireValue(
+        readSelectedGeneration(input.kbRoot),
+        "apps/orchestration/tests/kb-e2e-prepare.test.ts:1272"
+      ).selector.generation_id;
       const next = respond(stack, "refine");
       expect(next.action).toBe("invoke_agent");
       if (next.action === "invoke_agent") expect(next.state_id).toBe("compose");
-      expect(readSelectedGeneration(input.kbRoot)!.selector.generation_id).toBe(generationAtGate);
+      expect(
+        requireValue(
+          readSelectedGeneration(input.kbRoot),
+          "apps/orchestration/tests/kb-e2e-prepare.test.ts:1276"
+        ).selector.generation_id
+      ).toBe(generationAtGate);
       expect(publicationSnapshot(input.kbRoot)).toEqual(atGate);
       expect(stack.checkpointer.contentReviewForRun(stack.runId)?.state).toBe("refined");
       const store = new CapabilityStore(input.projectRoot);
@@ -1290,7 +1405,10 @@ describe("G8 prepare-only end to end", () => {
     try {
       expect(stack.directive.action).toBe("await_user");
       const atGate = publicationSnapshot(input.kbRoot);
-      const generationAtGate = readSelectedGeneration(input.kbRoot)!.selector.generation_id;
+      const generationAtGate = requireValue(
+        readSelectedGeneration(input.kbRoot),
+        "apps/orchestration/tests/kb-e2e-prepare.test.ts:1296"
+      ).selector.generation_id;
       const denied = respond(stack, "deny");
       expect(denied.action).toBe("incomplete");
       expect(terminalResult(denied)).toMatchObject({
@@ -1298,7 +1416,12 @@ describe("G8 prepare-only end to end", () => {
         kb_profile_id: PROFILE,
         review_decision: "deny",
       });
-      expect(readSelectedGeneration(input.kbRoot)!.selector.generation_id).toBe(generationAtGate);
+      expect(
+        requireValue(
+          readSelectedGeneration(input.kbRoot),
+          "apps/orchestration/tests/kb-e2e-prepare.test.ts:1304"
+        ).selector.generation_id
+      ).toBe(generationAtGate);
       expect(publicationSnapshot(input.kbRoot)).toEqual(atGate);
       expect(stack.checkpointer.contentReviewForRun(stack.runId)?.state).toBe("denied");
       const store = new CapabilityStore(input.projectRoot);

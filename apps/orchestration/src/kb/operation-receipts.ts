@@ -33,6 +33,7 @@ import {
 } from "../checkpointer.js";
 import type { RunContext } from "../context.js";
 import { jcsCanonicalize } from "./approval-receipts.js";
+import { kbHostStatePaths } from "./host-state.js";
 import {
   ContentReviewGatePacketSchema,
   OperationEventGroupSchema,
@@ -85,8 +86,21 @@ export interface OperationCompletion {
   readonly replay_result: ReplayableKnowledgeBaseResult;
 }
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseJsonValue(source: string): unknown {
+  const value: unknown = JSON.parse(source);
+  return value;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function operationReceiptRoot(projectRoot: string): string {
-  return path.join(path.resolve(projectRoot), ".penny", "kb-operation-receipts");
+  return kbHostStatePaths(projectRoot).operationReceipts;
 }
 
 /** SHA-256(JCS(session/invocation/action/request digest)). */
@@ -139,10 +153,15 @@ export function promotionApplyOperationSourceIdentity(input: {
 
 function asStringArray(value: unknown): string[] {
   if (value === undefined) return [];
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+  if (!Array.isArray(value)) {
     throw new OperationReceiptError("receipt_result_invalid", "result string list is malformed");
   }
-  return [...value] as string[];
+  return value.map((item: unknown) => {
+    if (typeof item !== "string") {
+      throw new OperationReceiptError("receipt_result_invalid", "result string list is malformed");
+    }
+    return item;
+  });
 }
 
 function uniqueOpaque(values: readonly string[]): string[] {
@@ -171,11 +190,11 @@ function optionalOpaque(value: unknown): string[] {
 
 function flatSafeCounts(value: unknown): Record<string, number> {
   if (value === undefined) return {};
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (!isUnknownRecord(value)) {
     throw new OperationReceiptError("receipt_result_invalid", "result counts must be an object");
   }
   const out: Record<string, number> = {};
-  for (const [key, count] of Object.entries(value as Record<string, unknown>)) {
+  for (const [key, count] of Object.entries(value)) {
     if (
       !/^(?!(?:__proto__|prototype|constructor)$)[a-z][a-z0-9_]{0,63}$/.test(key) ||
       typeof count !== "number" ||
@@ -195,7 +214,13 @@ function artifactHandles(value: unknown): ReplayableKnowledgeBaseResult["artifac
     throw new OperationReceiptError("receipt_result_invalid", "result artifacts must be an array");
   }
   return value.map((item) => {
-    const candidate = item as Record<string, unknown>;
+    if (!isUnknownRecord(item)) {
+      throw new OperationReceiptError(
+        "receipt_result_invalid",
+        "result artifact handle is malformed"
+      );
+    }
+    const candidate = item;
     return validateKbContract(
       ReplayableKnowledgeBaseResultSchema.properties.artifacts.items,
       {
@@ -323,12 +348,11 @@ export function replayableResultFromRun(input: {
   checkpointer?: Checkpointer;
   status_override?: ReplayableKnowledgeBaseResult["status"];
 }): ReplayableKnowledgeBaseResult {
-  const terminal = input.run.terminalDirective as {
-    result?: Record<string, unknown>;
-    unresolved?: unknown[];
-  } | null;
-  const internal = terminal?.result ?? {};
-  const publicStatus = String(input.run.playbookData.public_status ?? "");
+  const terminalValue: unknown = input.run.terminalDirective;
+  const terminal = isUnknownRecord(terminalValue) ? terminalValue : undefined;
+  const resultValue = terminal?.["result"];
+  const internal = isUnknownRecord(resultValue) ? resultValue : {};
+  const publicStatus = String(input.run.knowledgeBaseData.public_status ?? "");
   const status =
     input.status_override ??
     (input.run.status === "complete"
@@ -343,7 +367,9 @@ export function replayableResultFromRun(input: {
               : "complete"
             : "error");
   const counts = flatSafeCounts(
-    internal["published_counts"] ?? internal["counts"] ?? input.run.playbookData.published_counts
+    internal["published_counts"] ??
+      internal["counts"] ??
+      input.run.knowledgeBaseData.published_counts
   );
   if (typeof internal["candidate_count"] === "number") {
     counts["candidates"] = Math.max(0, Math.trunc(internal["candidate_count"]));
@@ -360,7 +386,7 @@ export function replayableResultFromRun(input: {
     Array.isArray(artifactInput) &&
     artifactInput.length === 0
   ) {
-    const packetJcs = input.run.playbookData.content_review_packet_jcs;
+    const packetJcs = input.run.knowledgeBaseData.content_review_packet_jcs;
     if (typeof packetJcs !== "string") {
       throw new OperationReceiptError(
         "receipt_result_invalid",
@@ -387,7 +413,7 @@ export function replayableResultFromRun(input: {
     artifacts = indexedReviewArtifacts(
       input.checkpointer,
       input.run.identity.run_id,
-      input.run.playbookData.review_artifact_ids
+      input.run.knowledgeBaseData.review_artifact_ids
     );
   }
   const ids = uniqueOpaque([
@@ -399,7 +425,7 @@ export function replayableResultFromRun(input: {
   ]);
   const warnings = [
     ...asStringArray(internal["warnings"]),
-    ...asStringArray(input.run.playbookData.warnings),
+    ...asStringArray(input.run.knowledgeBaseData.warnings),
   ];
   const unresolved = [
     ...asStringArray(internal["unresolved"]),
@@ -410,8 +436,9 @@ export function replayableResultFromRun(input: {
     schema_version: 1,
     action: input.action,
     run_id: input.run.identity.run_id,
-    ...(typeof input.run.playbookData.kb_id === "string" && input.run.playbookData.kb_id.length > 0
-      ? { kb_id: input.run.playbookData.kb_id }
+    ...(typeof input.run.knowledgeBaseData.kb_id === "string" &&
+    input.run.knowledgeBaseData.kb_id.length > 0
+      ? { kb_id: input.run.knowledgeBaseData.kb_id }
       : {}),
     status,
     met: status === "complete" ? input.run.met : false,
@@ -665,7 +692,7 @@ export class OperationReceiptStore {
       } catch (error) {
         throw new OperationReceiptError(
           "operation_conflict",
-          `published event lacks same-transaction selector evidence: ${(error as Error).message}`
+          `published event lacks same-transaction selector evidence: ${errorMessage(error)}`
         );
       }
       if (publication.selector_sha256 !== input.selector_evidence.selector_sha256) {
@@ -783,7 +810,7 @@ export class OperationReceiptStore {
     this.validateStored(group, receipt);
     const storedReceipt = validateKbContract(
       OperationReceiptSchema,
-      JSON.parse(receipt.receipt_jcs) as unknown,
+      parseJsonValue(receipt.receipt_jcs),
       "stored operation receipt"
     );
     if (storedReceipt.event === "published") {
@@ -802,12 +829,19 @@ export class OperationReceiptStore {
       } catch (error) {
         throw new OperationReceiptError(
           "operation_conflict",
-          `published receipt lacks durable selector evidence: ${(error as Error).message}`
+          `published receipt lacks durable selector evidence: ${errorMessage(error)}`
         );
       }
     }
     this.publishReceiptFile(receipt);
-    receipt = this.input.checkpointer.operationReceipt(receipt.receipt_id)!;
+    const persistedReceipt = this.input.checkpointer.operationReceipt(receipt.receipt_id);
+    if (persistedReceipt === undefined) {
+      throw new OperationReceiptError(
+        "operation_conflict",
+        "published operation receipt disappeared"
+      );
+    }
+    receipt = persistedReceipt;
     if (group.state !== "committed") {
       group = this.input.checkpointer.commitOperationReceipt(receipt.receipt_id);
     }
@@ -819,9 +853,16 @@ export class OperationReceiptStore {
       });
     }
     const replay = this.replay(group);
+    const committedReceipt = this.input.checkpointer.operationReceipt(receipt.receipt_id);
+    if (committedReceipt === undefined) {
+      throw new OperationReceiptError(
+        "operation_conflict",
+        "committed operation receipt disappeared"
+      );
+    }
     return {
       group,
-      receipt: this.input.checkpointer.operationReceipt(receipt.receipt_id)!,
+      receipt: committedReceipt,
       replay_result: replay,
     };
   }
@@ -835,7 +876,7 @@ export class OperationReceiptStore {
     }
     const parsed = validateKbContract(
       ReplayableKnowledgeBaseResultSchema,
-      JSON.parse(group.replay_result_jcs) as unknown,
+      parseJsonValue(group.replay_result_jcs),
       "stored operation replay"
     );
     if (jcsCanonicalize(parsed) !== group.replay_result_jcs) {
@@ -849,7 +890,7 @@ export class OperationReceiptStore {
     validateKbContract(OperationReceiptIndexRecordSchema, index, "stored operation receipt index");
     const receipt = validateKbContract(
       OperationReceiptSchema,
-      JSON.parse(index.receipt_jcs) as unknown,
+      parseJsonValue(index.receipt_jcs),
       "stored operation receipt"
     );
     const shared = [
@@ -888,9 +929,6 @@ export class OperationReceiptStore {
 
   private publishReceiptFile(record: OperationReceiptIndexRecord): void {
     const keys = validateExactKeys(record);
-    const projectRoot = path.resolve(this.input.projectRoot);
-    const penny = path.join(projectRoot, ".penny");
-    ensureDirectory(penny, "receipt .penny ancestor");
     ensureDirectory(this.root, "operation receipt root");
     const profileDirectory = path.join(this.root, keys.profileDirectory);
     ensureDirectory(profileDirectory, "operation receipt profile directory");

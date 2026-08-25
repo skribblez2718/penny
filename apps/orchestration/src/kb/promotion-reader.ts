@@ -80,6 +80,15 @@ export function createPromotionReader(input: {
   };
 }
 
+function parseJsonValue(source: string): unknown {
+  const value: unknown = JSON.parse(source);
+  return value;
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function splitPage(pageMarkdown: string): {
   frontmatter: Record<string, unknown>;
   markdown: string;
@@ -88,9 +97,9 @@ function splitPage(pageMarkdown: string): {
   if (match?.[1] === undefined || match[2] === undefined) {
     throw new Error("selected page does not have the canonical page encoding");
   }
-  const frontmatter = JSON.parse(match[1]) as unknown;
-  if (frontmatter === null || typeof frontmatter !== "object" || Array.isArray(frontmatter)) {
+  const frontmatter = parseJsonValue(match[1]);
+  if (!isUnknownRecord(frontmatter)) {
     throw new Error("selected page frontmatter is invalid");
   }
-  return { frontmatter: frontmatter as Record<string, unknown>, markdown: match[2] };
+  return { frontmatter, markdown: match[2] };
 }

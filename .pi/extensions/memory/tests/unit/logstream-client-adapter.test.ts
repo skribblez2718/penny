@@ -1,9 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { isRecord } from "../../../../lib/tests/test-narrowers.js";
+
 import { MemoryAdapter } from "../../adapter.js";
 import { MemoryLogstreamAdapter } from "../../logstream-adapter.js";
 import { MemoryLogstreamClient } from "../../logstream-client.js";
-import { mcpResponse, mcpToolErrorResponse, requestBody, testConfig } from "../fixtures.js";
+import type { LogstreamOperation } from "../../types.js";
+import {
+  mcpResponse,
+  mcpToolErrorResponse,
+  parseTextResult,
+  requestBody,
+  requireDefined,
+  testConfig,
+} from "../fixtures.js";
 
 function advisoryConfig(options: { writeEnabled?: boolean; maxReadAttempts?: number } = {}) {
   return testConfig({
@@ -42,8 +52,16 @@ function event(overrides: Record<string, unknown> = {}): Record<string, unknown>
   };
 }
 
-function payloadOf(result: { content: Array<{ text: string }> }) {
-  return JSON.parse(result.content[0]!.text) as Record<string, any>;
+interface ErrorPayload {
+  type: string;
+}
+
+function payloadOf(result: { content: Array<{ type: "text"; text: string }> }): ErrorPayload {
+  const value = parseTextResult(result);
+  if (!isRecord(value) || typeof value.type !== "string") {
+    throw new Error("memory adapter returned an invalid error payload");
+  }
+  return { type: value.type };
 }
 
 function adapterWithFetch(fetchImpl: typeof fetch, writeEnabled = true) {
@@ -89,9 +107,10 @@ describe("primary advisory argument pinning and bounds", () => {
 
     expect(execution.code).toBe("OK");
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    const firstCall = requireDefined(fetchSpy.mock.calls[0], "append request was not sent");
+    const [url, init] = firstCall;
     expect(url).toBe("http://127.0.0.1:8765/mcp");
-    expect((init.headers as Record<string, string>).Authorization).toBe(
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
       `Bearer ${advisoryConfig().bearerToken}`
     );
     const request = requestBody(init);
@@ -129,7 +148,9 @@ describe("primary advisory argument pinning and bounds", () => {
       { callerId: "primary:test" }
     );
     expect(execution.code).toBe("OK");
-    const request = requestBody(fetchSpy.mock.calls[0]![1] as RequestInit);
+    const firstCall = requireDefined(fetchSpy.mock.calls[0], "wait request was not sent");
+    const init = requireDefined(firstCall[1], "wait request init was absent");
+    const request = requestBody(init);
     expect(request.params).toEqual({
       name: "mempalace_event_wait",
       arguments: {
@@ -166,7 +187,7 @@ describe("primary advisory argument pinning and bounds", () => {
   });
 
   it("rejects overbound body, limit, timeout, room, type, and status before HTTP", async () => {
-    const cases: Array<[any, Record<string, unknown>]> = [
+    const cases: Array<[LogstreamOperation, Record<string, unknown>]> = [
       [
         "logstream_append",
         {
@@ -310,6 +331,58 @@ describe("strict self-addressed response semantics", () => {
 });
 
 describe("strict MCP errors, retry policy, and response bounds", () => {
+  it("accepts transport-envelope extras but rejects advisory-event extras", async () => {
+    const envelopeExtraFetch = vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+      const request = requestBody(init);
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: request.id,
+            transport_extra: { accepted: true },
+            result: {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    success: true,
+                    event: event(),
+                    tool_extra: "accepted",
+                  }),
+                  content_extra: true,
+                },
+              ],
+              result_extra: true,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+    });
+    const client = new MemoryLogstreamClient(advisoryConfig(), {
+      fetch: envelopeExtraFetch as typeof fetch,
+    });
+    await expect(client.call("append", {})).resolves.toMatchObject({
+      payload: { success: true, tool_extra: "accepted" },
+    });
+
+    const eventExtraFetch = vi.fn((_url: string | URL | Request, init?: RequestInit) =>
+      Promise.resolve(
+        mcpResponse(requestBody(init).id, {
+          events: [event({ unexpected_event_field: true })],
+          count: 1,
+        })
+      )
+    );
+    const adapter = adapterWithFetch(eventExtraFetch as typeof fetch);
+    const execution = await adapter.execute(
+      "logstream_list",
+      { room: "status" },
+      { callerId: "primary:test" }
+    );
+    expect(execution.code).toBe("MEMPALACE_INTEGRITY");
+  });
+
   it("rejects HTTP-200 MCP isError and payload success:false", async () => {
     const isErrorFetch = vi.fn((_url: string | URL | Request, init?: RequestInit) =>
       Promise.resolve(
@@ -460,7 +533,9 @@ describe("acknowledgement scope proof", () => {
 
     expect(execution.code).toBe("OK");
     expect(fetchSpy).toHaveBeenCalledTimes(2);
-    const proof = requestBody(fetchSpy.mock.calls[0]![1] as RequestInit);
+    const proofCall = requireDefined(fetchSpy.mock.calls[0], "proof request was not sent");
+    const proofInit = requireDefined(proofCall[1], "proof request init was absent");
+    const proof = requestBody(proofInit);
     expect(proof.params).toEqual({
       name: "mempalace_event_list",
       arguments: {
@@ -472,7 +547,9 @@ describe("acknowledgement scope proof", () => {
         preview: false,
       },
     });
-    const ack = requestBody(fetchSpy.mock.calls[1]![1] as RequestInit);
+    const ackCall = requireDefined(fetchSpy.mock.calls[1], "ack request was not sent");
+    const ackInit = requireDefined(ackCall[1], "ack request init was absent");
+    const ack = requestBody(ackInit);
     expect(ack.params).toEqual({
       name: "mempalace_event_ack",
       arguments: {

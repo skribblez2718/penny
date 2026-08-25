@@ -6,27 +6,23 @@ import {
   SessionManager,
   SettingsManager,
   createAgentSession,
-  defineTool,
   getAgentDir,
   resolveModelScopeWithDiagnostics,
   type AgentSessionEvent,
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 export type { InlineExtension };
-import { Type } from "typebox";
 
 import {
-  ConfidenceSchema,
   type ArtifactRef,
   type Confidence,
   type JsonValue,
   type SkillContract,
-  validateContract,
 } from "./contracts.js";
-import { researchSummarySchema } from "./playbooks/research.js";
 
 type CreateSessionOptions = NonNullable<Parameters<typeof createAgentSession>[0]>;
 type PiModel = NonNullable<CreateSessionOptions["model"]>;
+type PiCustomTool = NonNullable<CreateSessionOptions["customTools"]>[number];
 export type SessionThinkingLevel = NonNullable<CreateSessionOptions["thinkingLevel"]>;
 
 export interface AgentInvocation {
@@ -36,7 +32,6 @@ export interface AgentInvocation {
   readonly projectRoot: string;
   readonly trustProfile: "trusted-interactive" | "hardened-untrusted";
   readonly inputArtifacts: readonly ArtifactRef[];
-  readonly artifactConsumer: string;
   readonly signal?: AbortSignal;
   readonly modelOverride?: string;
   /**
@@ -60,13 +55,9 @@ export interface AgentInvocation {
   /**
    * Optional session posture supplied by the dispatching playbook.
    *
-   * Research supplies nothing and takes the default posture (SSOT tools + the
-   * result/artifact tools + the research opening), so its path is unchanged.
-   *
-   * A playbook whose agents must not hold built-in tool authority — the KB
-   * private-reader sessions of `agents-md-research` §5.8 — supplies its own tools
-   * and result contract here instead of standing up a second session runner.
-   * That duplication is exactly what this seam exists to prevent.
+   * Catalog agents never use this seam: their exact YAML tools and normal
+   * provider extensions are mandatory. The seam exists only for explicitly
+   * anonymous private host sessions such as the KB reader matrix.
    */
   readonly session?: AgentSessionSpecV1;
 }
@@ -80,12 +71,12 @@ export interface AgentInvocation {
  * about their domain.
  */
 export interface AgentSessionSpecV1 {
-  /** Explicit SDK suppression posture. Private KB sessions require `all`. */
+  /** Explicit SDK suppression posture for anonymous private sessions only. */
   readonly noTools?: "all" | "builtin";
   /** Exact active tool-name allowlist; required with KB `noTools: "all"`. */
   readonly tools?: readonly string[];
-  /** Host-closed tools replacing the default result/artifact pair. */
-  readonly customTools?: readonly { readonly name: string }[];
+  /** Host-closed SDK tools for an anonymous non-catalog session. */
+  readonly customTools?: readonly PiCustomTool[];
   /**
    * Exact isolated system content. When present, the runner creates an
    * in-memory-settings ResourceLoader with no extensions, skills, templates,
@@ -223,6 +214,14 @@ export type AgentSessionTraceRecordV1 =
 
 export type AgentSessionTraceSink = (record: AgentSessionTraceRecordV1) => void;
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function errorHasCode(error: unknown, code: string): boolean {
+  return isUnknownRecord(error) && error.code === code;
+}
+
 function boundedProtocolErrorSignal(value: unknown, depth = 0): string {
   if (depth > 3) return "";
   if (typeof value === "string") return value.slice(0, 4_096).toLowerCase();
@@ -235,9 +234,9 @@ function boundedProtocolErrorSignal(value: unknown, depth = 0): string {
       .join(" ")
       .slice(0, 4_096);
   }
-  const record = value as Record<string, unknown>;
+  if (!isUnknownRecord(value)) return "";
   return ["code", "message", "error", "content"]
-    .map((key) => boundedProtocolErrorSignal(record[key], depth + 1))
+    .map((key) => boundedProtocolErrorSignal(value[key], depth + 1))
     .join(" ")
     .slice(0, 4_096);
 }
@@ -315,7 +314,6 @@ export function contentFreeSessionTraceRecord(
 
 export interface PiAgentClientOptions {
   readonly resolveModel?: (modelId: string) => Promise<PiModel> | PiModel;
-  readonly readArtifact?: (ref: ArtifactRef, consumer: string) => Promise<Buffer> | Buffer;
   readonly workerExtensions?: readonly InlineExtension[];
   /**
    * TEST-ONLY. Production omits this so settings/model defaults remain the
@@ -324,16 +322,11 @@ export interface PiAgentClientOptions {
   readonly testOnlyThinkingLevelOverride?: SessionThinkingLevel;
 }
 
-interface CapturedRoutingResult {
-  readonly confidence: Confidence;
-  readonly details: Record<string, JsonValue>;
-}
-
 function objectValue(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (!isUnknownRecord(value)) {
     throw new Error(`${label} must be a JSON object`);
   }
-  return value as Record<string, unknown>;
+  return value;
 }
 
 export function canonicalAssistantText(messages: readonly unknown[]): string {
@@ -355,14 +348,6 @@ export function canonicalAssistantText(messages: readonly unknown[]): string {
   }
   throw new Error("agent session produced no assistant text");
 }
-
-// Under the `hardened-untrusted` trust profile a worker may read and gather but
-// must not execute or mutate the (untrusted) target. With the allow-list now
-// derived from the SSOT, these built-in execution/mutation tools are stripped
-// (the native agent-runner enforces the same authority boundary).
-const HARDENED_STRIP = new Set(["bash", "write", "edit"]);
-
-const WORKER_EXTENSION_NAMES = new Set(["search", "youtube"]);
 
 /**
  * Derive a worker's tool allow-list from the SSOT: the `tools:` frontmatter of
@@ -408,17 +393,24 @@ export function parseSsotTools(agentDoc: string, agent: string): readonly string
       `agent '${agent}' declares no top-level 'tools:' in .pi/agents/${agent}.md; the SSOT is required and must not be bypassed`
     );
   }
-  const names = line
+  const rawNames = line
     .slice(line.indexOf(":") + 1)
     .split(",")
-    .map((name) => name.trim())
-    .filter((name) => name.length > 0);
+    .map((name) => name.trim());
+  if (rawNames.some((name) => name.length === 0)) {
+    throw new Error(`agent '${agent}' has an empty tools: entry`);
+  }
+  const names = rawNames;
   if (names.length === 0) {
     throw new Error(
       `agent '${agent}' has an empty 'tools:' list; refusing to run with no declared authority`
     );
   }
-  return [...new Set(names)];
+  const duplicate = names.find((name, index) => names.indexOf(name) !== index);
+  if (duplicate !== undefined) {
+    throw new Error(`agent '${agent}' declares duplicate tool '${duplicate}'`);
+  }
+  return names;
 }
 
 export async function createWorkerResourceLoader(
@@ -436,26 +428,6 @@ export async function createWorkerResourceLoader(
     noThemes: true,
     noContextFiles: true,
     ...(extensionFactories.length > 0 ? { extensionFactories: [...extensionFactories] } : {}),
-    extensionsOverride(base) {
-      const extensions = base.extensions.filter((extension) => {
-        // Owner-supplied inline grants are always kept: the execution owner decides
-        // what a worker may use (e.g. read-only memory). Only *file* extensions are
-        // restricted to the worker-safe set so no other on-disk extension leaks in.
-        if (extension.path.startsWith("<inline:")) {
-          return true;
-        }
-        const parent = path.basename(path.dirname(extension.resolvedPath));
-        return WORKER_EXTENSION_NAMES.has(parent);
-      });
-      const allowedPaths = new Set(
-        extensions.flatMap((extension) => [extension.path, extension.resolvedPath])
-      );
-      return {
-        ...base,
-        extensions,
-        errors: base.errors.filter((error) => allowedPaths.has(error.path)),
-      };
-    },
   });
   await loader.reload();
   return loader;
@@ -499,8 +471,7 @@ async function optionalText(filePath: string): Promise<string> {
   try {
     return await readFile(filePath, "utf8");
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") {
+    if (errorHasCode(error, "ENOENT")) {
       return "";
     }
     throw error;
@@ -512,115 +483,17 @@ export class PiAgentClient implements ModelClient {
 
   async runAgent(invocation: AgentInvocation): Promise<AgentCompletion> {
     const spec = invocation.session;
-    // A dispatcher that brings its own tools also brings its own result contract.
-    // Building research's summary schema unconditionally would make this runner
-    // reject every non-research state before it ever reached the session — the
-    // exact coupling the seam is meant to remove.
-    const usesDefaultTools = spec?.customTools === undefined;
-    const summarySchema = usesDefaultTools
-      ? researchSummarySchema(invocation.stateId)
-      : Type.Object({}, { additionalProperties: true });
-    const ToolParameters = Type.Object(
-      {
-        confidence: Type.String({
-          pattern: "^(CERTAIN|PROBABLE|POSSIBLE|UNCERTAIN)$",
-        }),
-        details: summarySchema,
-      },
-      { additionalProperties: false }
-    );
-    let captured: CapturedRoutingResult | undefined;
-    const readArtifact = this.options.readArtifact;
-    const resultTool = defineTool({
-      name: "submit_orchestration_result",
-      label: "Submit orchestration result",
-      description:
-        "Submit the typed routing result for this phase exactly once after completing the task.",
-      promptSnippet: "Submit the typed result for the current orchestration phase.",
-      promptGuidelines: [
-        "Call submit_orchestration_result exactly once after the complete stage output is ready.",
-      ],
-      parameters: ToolParameters,
-      async execute(_toolCallId, params) {
-        if (captured !== undefined) {
-          throw new Error("phase result was already submitted");
-        }
-        const confidence = validateContract(ConfidenceSchema, params.confidence, "tool confidence");
-        const details = validateContract(
-          summarySchema,
-          params.details,
-          `${invocation.stateId} tool result`
-        ) as Record<string, JsonValue>;
-        captured = { confidence, details };
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Typed phase result accepted. Finish with the complete stage output.",
-            },
-          ],
-          details: { accepted: true },
-        };
-      },
-    });
-
-    const artifactTool = defineTool({
-      name: "artifact_read",
-      label: "Read exact artifact",
-      description:
-        "Read one exact task-granted artifact. Continue from next_offset until truncated is false.",
-      parameters: Type.Object(
-        {
-          artifact_id: Type.String({ pattern: "^art_[a-f0-9]{64}$" }),
-          offset: Type.Optional(Type.Integer({ minimum: 0 })),
-        },
-        { additionalProperties: false }
-      ),
-      async execute(_toolCallId, params) {
-        const ref = invocation.inputArtifacts.find(
-          (candidate) => candidate.artifact_id === params.artifact_id
-        );
-        if (ref === undefined) {
-          throw new Error(`artifact '${params.artifact_id}' is not granted`);
-        }
-        if (readArtifact === undefined) {
-          throw new Error("artifact reader is not configured");
-        }
-        const bytes = await readArtifact(ref, invocation.artifactConsumer);
-        const offset = params.offset ?? 0;
-        if (offset > bytes.length) {
-          throw new Error("artifact offset exceeds byte length");
-        }
-        let end = Math.min(bytes.length, offset + 48_000);
-        while (end > offset && end < bytes.length && ((bytes[end] ?? 0) & 0xc0) === 0x80) {
-          end -= 1;
-        }
-        const truncated = end < bytes.length;
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                artifact_id: ref.artifact_id,
-                offset,
-                next_offset: end,
-                truncated,
-                text: bytes.subarray(offset, end).toString("utf8"),
-              }),
-            },
-          ],
-          details: { nextOffset: end, truncated },
-        };
-      },
-    });
-
     const isolatedSystemPrompt = spec?.isolatedSystemPrompt;
     const isolated = isolatedSystemPrompt !== undefined;
-    const agentGuidance = isolated
-      ? ""
-      : await optionalText(
-          path.join(invocation.projectRoot, ".pi", "agents", `${invocation.agent}.md`)
-        );
+    const catalogAgentDoc = await optionalText(
+      path.join(invocation.projectRoot, ".pi", "agents", `${invocation.agent}.md`)
+    );
+    if (isolated && catalogAgentDoc.trim().length > 0) {
+      throw new Error(
+        `catalog agent '${invocation.agent}' cannot run with an isolated replacement tool matrix`
+      );
+    }
+    const agentGuidance = isolated ? "" : catalogAgentDoc;
     // W6: contract-resolved, not hardcoded. Private sessions already carry the
     // exact resolved guidance in their isolated system prompt, so they never
     // rediscover a project/global prompt here.
@@ -636,12 +509,7 @@ export class PiAgentClient implements ModelClient {
         );
     const allowed = isolated
       ? [...(spec?.tools ?? [])]
-      : (invocation.trustProfile === "hardened-untrusted"
-          ? parseSsotTools(agentGuidance, invocation.agent).filter(
-              (tool) => !HARDENED_STRIP.has(tool)
-            )
-          : [...parseSsotTools(agentGuidance, invocation.agent)]
-        ).concat("submit_orchestration_result");
+      : [...parseSsotTools(agentGuidance, invocation.agent)];
     if (isolated && allowed.length === 0) {
       throw new Error("private session has no exact tool-name allowlist");
     }
@@ -663,12 +531,11 @@ export class PiAgentClient implements ModelClient {
       sessionManager: SessionManager.inMemory(invocation.projectRoot),
       resourceLoader,
       ...(isolatedResources ? { settingsManager: isolatedResources.settingsManager } : {}),
-      ...(spec?.noTools !== undefined ? { noTools: spec.noTools } : {}),
+      ...(isolated && spec?.noTools !== undefined ? { noTools: spec.noTools } : {}),
       tools: allowed,
-      customTools: (spec?.customTools ?? [
-        resultTool,
-        ...(invocation.inputArtifacts.length > 0 ? [artifactTool] : []),
-      ]) as NonNullable<CreateSessionOptions["customTools"]>,
+      ...(isolated && spec?.customTools !== undefined
+        ? { customTools: [...spec.customTools] }
+        : {}),
       ...(this.options.testOnlyThinkingLevelOverride === undefined
         ? {}
         : { thinkingLevel: this.options.testOnlyThinkingLevelOverride }),
@@ -709,7 +576,7 @@ export class PiAgentClient implements ModelClient {
     }
 
     if (invocation.admitResolvedModel !== undefined) {
-      const resolved = sessionOptions.model as { provider?: unknown; id?: unknown } | undefined;
+      const resolved = sessionOptions.model;
       const provider = typeof resolved?.provider === "string" ? resolved.provider : "";
       const id = typeof resolved?.id === "string" ? resolved.id : "";
       if (provider.length === 0 || id.length === 0) {
@@ -722,6 +589,19 @@ export class PiAgentClient implements ModelClient {
     }
 
     const { session } = await createAgentSession(sessionOptions);
+    const activeTools = [...session.getActiveToolNames()].sort();
+    const expectedTools = [...allowed].sort();
+    if (
+      activeTools.length !== expectedTools.length ||
+      activeTools.some((tool, index) => tool !== expectedTools[index])
+    ) {
+      session.dispose();
+      const missing = expectedTools.filter((tool) => !activeTools.includes(tool));
+      const added = activeTools.filter((tool) => !expectedTools.includes(tool));
+      throw new Error(
+        `agent '${invocation.agent}' tool surface mismatch before model invocation; missing=[${missing.join(",")}], added=[${added.join(",")}]`
+      );
+    }
     const traceToolNames = new Set(allowed);
     const unsubscribeTrace =
       spec?.trace === undefined
@@ -753,11 +633,11 @@ export class PiAgentClient implements ModelClient {
           "TASK:",
           invocation.task,
           invocation.inputArtifacts.length > 0
-            ? `GRANTED INPUT ARTIFACTS:\n${invocation.inputArtifacts
+            ? `INPUT ARTIFACTS:\n${invocation.inputArtifacts
                 .map((ref) => JSON.stringify(ref))
-                .join("\n")}\nRead each with artifact_read before working.`
-            : "GRANTED INPUT ARTIFACTS: none.",
-          "Return the complete stage output in assistant text. Use the result tool for routing metadata.",
+                .join("\n")}\nRead each needed ID with artifact_read before working.`
+            : "INPUT ARTIFACTS: none.",
+          "Return the complete stage output in assistant text and end with the closed SUMMARY line defined by the domain guidance.",
         ]
           .filter((part) => part.length > 0)
           .join("\n\n");
@@ -783,17 +663,7 @@ export class PiAgentClient implements ModelClient {
         }
         return { text: body };
       }
-      const text = canonicalAssistantText(session.messages);
-      if (captured === undefined) {
-        // The execution owner persists exact assistant bytes before parsing fallback
-        // SUMMARY text. WorkerExecutor performs that parse after artifact persistence.
-        return { text };
-      }
-      return {
-        text,
-        confidence: captured.confidence,
-        details: captured.details,
-      };
+      return { text: canonicalAssistantText(session.messages) };
     } finally {
       invocation.signal?.removeEventListener("abort", abort);
       unsubscribeTrace?.();

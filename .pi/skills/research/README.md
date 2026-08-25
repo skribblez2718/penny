@@ -46,9 +46,9 @@ The playbook selects the exact predecessor refs each state needs. Payload bytes 
 enter `RunContext`; retries, clarification, recovery, and fan-in retain selected refs.
 A malformed routing result creates an explicit output revision rather than advancing.
 
-When research is a later skill-chain step, the owner copies exact predecessor bytes into
-an immutable target-run `chain_input` artifact. Only the actual research entry states may
-consume it. No `{previous}` payload substitution occurs.
+When research is a later skill-chain step, the owner verifies and forwards the exact
+predecessor terminal ID directly across runs. Additional explicit IDs may provide fan-in;
+no `{previous}` payload substitution occurs.
 
 ## Honest outcomes
 

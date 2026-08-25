@@ -31,10 +31,16 @@ describe("compaction source guard", () => {
 
   it("uses an exact, read-only run-id query instead of a pending-run scan", () => {
     const source = readFileSync(join(extensionRoot, "checkpointer.ts"), "utf8");
-    expect(source).toContain("new DatabaseSync(databasePath, { readOnly: true })");
+    expect(source).toContain(
+      "new sqliteRuntime.DatabaseSync(configured.databasePath, { readOnly: true })"
+    );
+    expect(source).toContain("isSqliteRuntimeBoundary(sqliteRuntime)");
     expect(source).toContain('database.exec("PRAGMA query_only = ON")');
     expect(source).toContain("FROM runs WHERE run_id IN");
     expect(source).not.toMatch(/WHERE\s+status\s+IN/i);
     expect(source).not.toMatch(/WHERE\s+session_id\s*=/i);
+    expect(source).toContain("resolvePennyProjectState(projectRoot)");
+    expect(source).not.toContain("PENNY_ORCH_V2_DB");
+    expect(source).not.toContain("process.cwd()");
   });
 });

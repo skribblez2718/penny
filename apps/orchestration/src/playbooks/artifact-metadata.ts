@@ -43,7 +43,6 @@ export function buildOutputArtifactMetadata(input: {
   phase: string;
   agent: string;
   branchId: string | null;
-  consumerScope: readonly string[];
   upstreamRefs: readonly ArtifactRef[];
   revisions?: ArtifactRevisionLookup;
 }): OutputArtifactMetadata {
@@ -85,7 +84,7 @@ export function buildOutputArtifactMetadata(input: {
     }
   }
   return {
-    schema_version: 1,
+    schema_version: 2,
     run_id: context.identity.run_id,
     phase,
     branch_id: branchId,
@@ -93,7 +92,6 @@ export function buildOutputArtifactMetadata(input: {
     operation_id: operationId,
     version,
     producer: `agent:${input.agent}`,
-    consumer_scope: [...input.consumerScope],
     media_type: "text/plain; charset=utf-8",
     parent_ref: parent,
     upstream_refs: [...input.upstreamRefs],

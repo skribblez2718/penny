@@ -11,7 +11,15 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { initializePennyState } from "@penny/orchestration/source";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  createTestExtensionApi,
+  isRecord,
+  requireFunction,
+  requireString,
+} from "../../../../lib/tests/test-narrowers.js";
 
 const { mockSpawn } = vi.hoisted(() => ({
   mockSpawn: vi.fn(),
@@ -21,32 +29,20 @@ vi.mock("node:child_process", () => ({
   spawn: mockSpawn,
 }));
 
-vi.mock("@mariozechner/pi-ai", () => ({
+vi.mock("@earendil-works/pi-ai", () => ({
   StringEnum: (values: readonly string[], options?: Record<string, unknown>) => ({
     anyOf: values.map((value) => ({ type: "string", const: value })),
     ...options,
   }),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@earendil-works/pi-coding-agent")>()),
   getMarkdownTheme: () => ({}),
   withFileMutationQueue: vi.fn((_path: string, fn: () => unknown) => fn()),
-  parseFrontmatter: <T extends Record<string, string>>(content: string) => {
-    const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-    if (!fmMatch) return { frontmatter: {} as T, body: content };
-    const fm: Record<string, string> = {};
-    for (const line of fmMatch[1].split("\n")) {
-      const match = line.match(/^(\w+):\s*(.+)$/);
-      if (match) fm[match[1]] = match[2].trim();
-    }
-    return {
-      frontmatter: fm as T,
-      body: content.replace(/^---\n[\s\S]*?\n---\n?/, ""),
-    };
-  },
 }));
 
-vi.mock("@mariozechner/pi-tui", () => ({
+vi.mock("@earendil-works/pi-tui", () => ({
   Container: class ContainerMock {
     addChild() {}
   },
@@ -104,9 +100,13 @@ type EventHandler = (...args: unknown[]) => unknown;
 let projectRoot: string;
 let originalPiDirectory: string | undefined;
 let originalProjectRoot: string | undefined;
+let originalStateRoot: string | undefined;
 let promptCaptures: PromptCapture[];
 
-function restoreEnv(name: "PI_DIRECTORY" | "PROJECT_ROOT", value: string | undefined): void {
+function restoreEnv(
+  name: "PI_DIRECTORY" | "PROJECT_ROOT" | "PENNY_STATE_ROOT",
+  value: string | undefined
+): void {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
 }
@@ -162,8 +162,11 @@ beforeEach(() => {
 
   originalPiDirectory = process.env.PI_DIRECTORY;
   originalProjectRoot = process.env.PROJECT_ROOT;
+  originalStateRoot = process.env.PENNY_STATE_ROOT;
   process.env.PI_DIRECTORY = path.join(projectRoot, ".pi");
   process.env.PROJECT_ROOT = projectRoot;
+  process.env.PENNY_STATE_ROOT = path.join(projectRoot, "state");
+  initializePennyState(projectRoot, { env: process.env });
 
   promptCaptures = [];
   mockSpawn.mockImplementation((_command: string, args: string[]) => {
@@ -183,40 +186,48 @@ afterEach(() => {
   mockSpawn.mockReset();
   restoreEnv("PI_DIRECTORY", originalPiDirectory);
   restoreEnv("PROJECT_ROOT", originalProjectRoot);
+  restoreEnv("PENNY_STATE_ROOT", originalStateRoot);
   fs.rmSync(projectRoot, { recursive: true, force: true });
 });
 
 describe("effective prompt assembly", () => {
   it("preserves authority semantics across primary, direct-agent, and skill-agent paths", async () => {
     const handlers = new Map<string, EventHandler>();
-    await environmentExtension({
-      on: (event: string, handler: EventHandler) => handlers.set(event, handler),
-    } as never);
+    await environmentExtension(
+      createTestExtensionApi({
+        onEvent: (event, handler) => {
+          handlers.set(event, requireFunction(handler, `invalid ${event} handler`));
+        },
+      })
+    );
 
     const sessionStart = handlers.get("session_start");
     const beforeAgentStart = handlers.get("before_agent_start");
     expect(sessionStart).toBeDefined();
     expect(beforeAgentStart).toBeDefined();
+    if (sessionStart === undefined || beforeAgentStart === undefined) {
+      throw new Error("environment extension did not register both required handlers");
+    }
 
-    await sessionStart!(undefined, {
+    await sessionStart(undefined, {
       cwd: projectRoot,
       hasUI: false,
       ui: { notify: vi.fn() },
     });
 
     const applyEnvironment = async (systemPrompt: string): Promise<string> => {
-      const result = (await beforeAgentStart!({ systemPrompt }, {})) as {
-        systemPrompt: string;
-      };
-      return result.systemPrompt;
+      const result = await beforeAgentStart({ systemPrompt }, {});
+      if (!isRecord(result)) throw new Error("environment hook returned a non-object result");
+      return requireString(result.systemPrompt, "environment hook omitted its system prompt");
     };
 
     const primaryPrompt = await applyEnvironment(SYSTEM_MD_FIXTURE);
 
+    const agentTools = ["read", "grep", "memory_search"];
     const agent: AgentConfig = {
       name: "echo",
       description: "Prompt assembly fixture",
-      tools: ["read", "grep", "memory_search"],
+      tools: agentTools,
       systemPrompt: AGENT_PROMPT_FIXTURE,
       source: "project",
       filePath: path.join(projectRoot, ".pi", "agents", "echo.md"),
@@ -267,20 +278,27 @@ describe("effective prompt assembly", () => {
     expect(primaryPrompt).toContain(`Project root: ${projectRoot}`);
 
     const registeredTools: Array<Record<string, unknown>> = [];
-    subagentExtension({
-      registerTool: (tool: Record<string, unknown>) => registeredTools.push(tool),
-      on: () => {},
-    } as never);
+    subagentExtension(
+      createTestExtensionApi({
+        onRegisterTool(tool) {
+          if (!isRecord(tool)) throw new Error("subagent registered a non-object tool");
+          registeredTools.push(tool);
+        },
+      })
+    );
     const subagentTool = registeredTools.find((tool) => tool.name === "subagent");
     expect(subagentTool).toBeDefined();
+    if (subagentTool === undefined) {
+      throw new Error("subagent tool was not registered");
+    }
 
     // With Penny's custom SYSTEM.md path active, Pi does not append extension
     // snippets/guidelines to that prompt. Provider tool descriptions and
     // parameter schemas remain visible, so every current frontmatter
     // description must be carried by the registered tool itself.
     const currentAgents = discoverAgents(process.cwd(), "project").agents;
-    const providerVisibleToolText = `${subagentTool!.description}\n${JSON.stringify(
-      subagentTool!.parameters
+    const providerVisibleToolText = `${subagentTool.description}\n${JSON.stringify(
+      subagentTool.parameters
     )}`;
     for (const currentAgent of currentAgents) {
       expect(providerVisibleToolText).toContain(currentAgent.name);
@@ -304,7 +322,7 @@ describe("effective prompt assembly", () => {
       // Memory tools are declared in agent frontmatter (via the memory.read
       // profile), not injected by the agent-runner. The --tools argument is
       // exactly the agent's declared tools list.
-      expect(argValue(capture.args, "--tools")).toBe(agent.tools!.join(","));
+      expect(argValue(capture.args, "--tools")).toBe(agentTools.join(","));
     }
   });
 });

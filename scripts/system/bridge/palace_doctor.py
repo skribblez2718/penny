@@ -35,7 +35,7 @@ from scripts.system.bridge.fts5_integrity import probe_authorized_database
 from scripts.system.memory.offline_access import authorize_offline_target
 
 # Backlog sizes measured on the production palace, repeating each trial on
-# byte-identical input (see HNSW_TUNING in memory_bridge.py):
+# byte-identical input (see HNSW_TUNING in scripts/system/memory/hnsw.py):
 #     0 -> 0/8 crashes   142 -> 0/5 crashes   162 -> 4/4   218 -> 5/5
 # The triggering corpus was dominated by metadata-only UPDATEs (operation 1),
 # followed by ADDs — NOT deletes. The cliff sits between 142 and 162, so warn

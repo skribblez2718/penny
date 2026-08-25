@@ -17,6 +17,8 @@ import { spawnSync } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
+import { parseJson, requireRecord } from "../fixtures.js";
+
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 function snapshot(root: string): string {
@@ -54,15 +56,16 @@ function writeConsumerPackage(consumer: string, dependencyPath?: string): void {
   );
 }
 
+function packageManifest(path: string): Record<string, unknown> {
+  return requireRecord(parseJson(readFileSync(path, "utf8")), `invalid package manifest: ${path}`);
+}
+
 function copyRelease(destination: string, version: string): void {
   mkdirSync(destination, { recursive: true });
   for (const entry of ["src", "README.md", "LICENSE"]) {
     cpSync(join(packageRoot, entry), join(destination, entry), { recursive: true });
   }
-  const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as Record<
-    string,
-    unknown
-  >;
+  const manifest = packageManifest(join(packageRoot, "package.json"));
   manifest.version = version;
   delete manifest.devDependencies;
   writeFileSync(join(destination, "package.json"), JSON.stringify(manifest, null, 2));
@@ -96,9 +99,7 @@ describe("clean-machine code/data separation", () => {
     writeConsumerPackage(consumer, releaseOne);
     runBun(["install", "--offline"], consumer, env);
     expect(
-      JSON.parse(
-        readFileSync(join(consumer, "node_modules", "platform-memory", "package.json"), "utf8")
-      ).version
+      packageManifest(join(consumer, "node_modules", "platform-memory", "package.json")).version
     ).toBe("1.0.0");
     runBun(
       [
@@ -114,9 +115,7 @@ describe("clean-machine code/data separation", () => {
     writeConsumerPackage(consumer, releaseTwo);
     runBun(["install", "--offline", "--force"], consumer, env);
     expect(
-      JSON.parse(
-        readFileSync(join(consumer, "node_modules", "platform-memory", "package.json"), "utf8")
-      ).version
+      packageManifest(join(consumer, "node_modules", "platform-memory", "package.json")).version
     ).toBe("1.0.1");
     expect([snapshot(dataRootAlpha), snapshot(dataRootBeta)]).toEqual(before);
 
@@ -126,11 +125,11 @@ describe("clean-machine code/data separation", () => {
   });
 
   it("ships no lifecycle hook or storage-mutating production API", () => {
-    const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as {
-      scripts?: Record<string, string>;
-    };
+    const manifest = packageManifest(join(packageRoot, "package.json"));
+    const scripts =
+      manifest.scripts === undefined ? {} : requireRecord(manifest.scripts, "scripts");
     for (const hook of ["preinstall", "install", "postinstall", "preuninstall", "postuninstall"]) {
-      expect(manifest.scripts?.[hook]).toBeUndefined();
+      expect(scripts[hook]).toBeUndefined();
     }
 
     const source = readdirSync(join(packageRoot, "src"))

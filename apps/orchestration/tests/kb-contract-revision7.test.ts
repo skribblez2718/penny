@@ -261,8 +261,10 @@ describe("Section 5 Revision 7 ratified foundation fields", () => {
       ],
     };
     expect(() => validateKbContract(KbProfileRegistrySchema, registry, "registry")).not.toThrow();
-    const bad = structuredClone(registry) as typeof registry;
-    delete (bad.profiles[0] as Partial<(typeof bad.profiles)[number]>).schema_version;
+    const profile = registry.profiles[0];
+    if (profile === undefined) throw new Error("registry fixture is missing its profile");
+    const { schema_version: _profileSchemaVersion, ...unversionedProfile } = profile;
+    const bad = { ...registry, profiles: [unversionedProfile] };
     expect(() => validateKbContract(KbProfileRegistrySchema, bad, "registry")).toThrow();
   });
 
@@ -425,8 +427,10 @@ describe("Section 5 Revision 7 ratified foundation fields", () => {
       updated_at: NOW,
     };
     expect(() => validateKbContract(PromotionApplyJournalSchema, journal, "journal")).not.toThrow();
-    const badJournal = structuredClone(journal);
-    delete (badJournal.targets[0] as Partial<(typeof badJournal.targets)[number]>).preimage_mode;
+    const target = journal.targets[0];
+    if (target === undefined) throw new Error("journal fixture is missing its target");
+    const { preimage_mode: _preimageMode, ...targetWithoutMode } = target;
+    const badJournal = { ...journal, targets: [targetWithoutMode] };
     expect(() => validateKbContract(PromotionApplyJournalSchema, badJournal, "journal")).toThrow();
   });
 

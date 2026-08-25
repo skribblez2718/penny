@@ -21,10 +21,16 @@ const MAX_LOGSTREAM_REQUEST_BYTES = 64 * 1024;
 const MAX_LOGSTREAM_RESPONSE_BYTES = 512 * 1024;
 const MAX_LOGSTREAM_HTTP_TIMEOUT_MS = 6_000;
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  return isUnknownRecord(value) ? value : undefined;
+}
+
+function isInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value);
 }
 
 function safeSleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
@@ -158,7 +164,7 @@ function parseJson(value: string, requestId: string, label: string): unknown {
 function errorForMcpToolResult(text: string, requestId: string): MemoryError {
   const payload = asRecord(parseJson(text, requestId, "Memory hub"));
   const error = payload ? asRecord(payload.error) : undefined;
-  if (!error || !Number.isInteger(error.code) || typeof error.message !== "string") {
+  if (!error || !isInteger(error.code) || typeof error.message !== "string") {
     return new MemoryError(
       "MEMPALACE_UNAVAILABLE",
       "Memory hub returned an unsupported advisory-log tool error",
@@ -166,7 +172,7 @@ function errorForMcpToolResult(text: string, requestId: string): MemoryError {
       requestId
     );
   }
-  const code = error.code as number;
+  const code = error.code;
   if ([400, 401, 403, 404, 409, 413, 422, 429, 502, 503, 504].includes(code)) {
     return errorForHttpStatus(code, requestId);
   }
@@ -189,7 +195,7 @@ function parseMcpResponse(
   }
   if (envelope.error !== undefined) {
     const error = asRecord(envelope.error);
-    if (!error || !Number.isInteger(error.code) || typeof error.message !== "string") {
+    if (!error || !isInteger(error.code) || typeof error.message !== "string") {
       throw new MemoryError(
         "MEMPALACE_INTEGRITY",
         "Memory hub returned a malformed advisory-log RPC error",
@@ -197,7 +203,7 @@ function parseMcpResponse(
         expectedId
       );
     }
-    throw errorForRpc(error.code as number, expectedId);
+    throw errorForRpc(error.code, expectedId);
   }
 
   const result = asRecord(envelope.result);

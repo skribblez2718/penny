@@ -1,3 +1,4 @@
+import { parseJson, requireRecord, requireValue } from "./helpers/narrowing.js";
 /**
  * KB engine-driven E2E — step 4 acceptance.
  *
@@ -60,6 +61,12 @@ import {
   type KbPhaseInvocation,
 } from "../src/kb/session-tools.js";
 import type { Directive } from "../src/contracts.js";
+import {
+  IngestVerificationReportSchema,
+  PageDraftArtifactSchema,
+  ReadPhaseBriefResultSchema,
+  validateKbContract,
+} from "../src/kb/contracts.js";
 import { kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 
@@ -231,11 +238,7 @@ interface Stack {
 }
 
 /** The engine stack the extension builds for a KB run. */
-function buildStack(
-  projectRoot: string,
-  capIds: readonly string[],
-  bodies: Record<string, string>
-): Stack {
+function buildStack(projectRoot: string, capIds: readonly string[]): Stack {
   const runId = `kb-e2e-${Math.random().toString(16).slice(2, 10)}`;
   const kbRoot = path.join(projectRoot, "private-kb");
   const dbPath = path.join(projectRoot, ".penny", "orchestration-e2e.db");
@@ -255,7 +258,7 @@ function buildStack(
     | {
         page_id: string;
         revision_id: string;
-        lifecycle: "draft";
+        lifecycle: "draft" | "validated" | "superseded" | "archived";
         claim_allocations: Array<{ claim_id: string }>;
         supersedes: null | { revision_id: string };
       }
@@ -273,40 +276,51 @@ function buildStack(
       const body = fakeBodies(inv.sourceAllowlist)[inv.stateId];
       if (body === undefined) throw new Error(`e2e: no body for ${inv.stateId}`);
       if (inv.stateId === "compose") {
-        const brief = JSON.parse(inv.readPhaseBrief?.() ?? "{}") as {
-          compose_authority?: { allocations?: Array<NonNullable<typeof composeAllocation>> };
-        };
-        composeAllocation = brief.compose_authority?.allocations?.[0];
-        if (composeAllocation === undefined) throw new Error("e2e compose allocation is absent");
-        const parsed = JSON.parse(body) as {
-          pages: Array<{
-            frontmatter: Record<string, unknown>;
-            claims: {
-              page_id: string;
-              revision_id: string;
-              claims: Array<Record<string, unknown>>;
-            };
-          }>;
-        };
-        const page = parsed.pages[0]!;
-        page.frontmatter.page_id = composeAllocation.page_id;
-        page.frontmatter.revision_id = composeAllocation.revision_id;
-        page.frontmatter.lifecycle = composeAllocation.lifecycle;
-        page.claims.page_id = composeAllocation.page_id;
-        page.claims.revision_id = composeAllocation.revision_id;
+        const brief = validateKbContract(
+          ReadPhaseBriefResultSchema,
+          parseJson(inv.readPhaseBrief?.() ?? "{}"),
+          "engine e2e compose phase brief"
+        );
+        const allocation = brief.compose_authority?.allocations[0];
+        if (allocation === undefined || allocation.lifecycle !== "draft") {
+          throw new Error("e2e compose draft allocation is absent");
+        }
+        composeAllocation = allocation;
+        const parsed = validateKbContract(
+          PageDraftArtifactSchema,
+          parseJson(body),
+          "engine e2e compose body"
+        );
+        const page = requireValue(
+          parsed.pages[0],
+          "apps/orchestration/tests/kb-engine-e2e.test.ts:291"
+        );
+        page.frontmatter.page_id = allocation.page_id;
+        page.frontmatter.revision_id = allocation.revision_id;
+        page.frontmatter.lifecycle = allocation.lifecycle;
+        page.claims.page_id = allocation.page_id;
+        page.claims.revision_id = allocation.revision_id;
         for (const [index, claim] of page.claims.claims.entries()) {
-          claim.claim_id = composeAllocation.claim_allocations[index]!.claim_id;
+          claim.claim_id = requireValue(
+            allocation.claim_allocations[index],
+            "apps/orchestration/tests/kb-engine-e2e.test.ts:298"
+          ).claim_id;
         }
         return JSON.stringify(parsed);
       }
       if (inv.stateId === "verify" && composeAllocation !== undefined) {
-        const parsed = JSON.parse(body) as {
-          claim_findings: Array<Record<string, unknown>>;
-        };
+        const parsed = validateKbContract(
+          IngestVerificationReportSchema,
+          parseJson(body),
+          "engine e2e verification body"
+        );
         for (const [index, finding] of parsed.claim_findings.entries()) {
           finding.page_id = composeAllocation.page_id;
           finding.revision_id = composeAllocation.revision_id;
-          finding.claim_id = composeAllocation.claim_allocations[index]!.claim_id;
+          finding.claim_id = requireValue(
+            composeAllocation.claim_allocations[index],
+            "apps/orchestration/tests/kb-engine-e2e.test.ts:309"
+          ).claim_id;
         }
         return JSON.stringify(parsed);
       }
@@ -397,7 +411,7 @@ describe("KB through the engine (step 4)", () => {
     initKb({ kbRoot, profileId: PROFILE, runId: "kb-init-e2e" }, "E2E KB");
     installTestPolicy(kbRoot);
     const capIds = seedSources(projectRoot);
-    const stack = buildStack(projectRoot, capIds, fakeBodies(capIds));
+    const stack = buildStack(projectRoot, capIds);
 
     const directive = await driveToGate(stack, capIds);
 
@@ -411,7 +425,10 @@ describe("KB through the engine (step 4)", () => {
     const gate = stack.checkpointer.contentReviewForRun(stack.runId);
     expect(gate?.state).toBe("awaiting");
     expect(gate?.packet.candidate_artifacts).toHaveLength(3);
-    const admittedSourceIds = (run?.playbookData.source_ids ?? []) as string[];
+    const admittedSourceIds = requireValue(
+      run?.knowledgeBaseData.source_ids,
+      "engine e2e admitted source ids"
+    );
     expect(Object.keys(gate?.packet.candidate_source_record_digests ?? {})).toEqual(
       [...admittedSourceIds].sort()
     );
@@ -436,13 +453,14 @@ describe("KB through the engine (step 4)", () => {
     // HOST approval — the canonical path (engine respond protocol).
     const terminal = respond(stack, "approve");
     expect(terminal.action).toBe("complete");
-    const result = ((terminal as { result?: Record<string, unknown> }).result ?? {}) as Record<
-      string,
-      unknown
-    >;
+    if (terminal.action !== "complete") {
+      throw new Error(`expected complete terminal, received ${terminal.action}`);
+    }
+    const result = terminal.result;
     const genId = String(result["published_generation_id"] ?? "");
     expect(genId).toMatch(/^gen_/);
-    expect(((result["published_counts"] ?? {}) as Record<string, number>)["pages"]).toBe(1);
+    const publishedCounts = requireRecord(result["published_counts"], "published counts");
+    expect(publishedCounts["pages"]).toBe(1);
 
     // Publication is real: the selector advanced; the page is queryable.
     expect(readSelectedGeneration(kbRoot)?.selector?.generation_id).toBe(genId);
@@ -482,7 +500,7 @@ describe("KB through the engine (step 4)", () => {
     initKb({ kbRoot, profileId: PROFILE, runId: "kb-init-e2e" }, "E2E KB drift");
     installTestPolicy(kbRoot);
     const capIds = seedSources(projectRoot);
-    const stack = buildStack(projectRoot, capIds, fakeBodies(capIds));
+    const stack = buildStack(projectRoot, capIds);
     const selectorBefore = readSelectedGeneration(kbRoot)?.selector?.generation_id;
     await driveToGate(stack, capIds);
 
@@ -492,10 +510,14 @@ describe("KB through the engine (step 4)", () => {
       reader_limits: { ...changed.reader_limits, max_calls_per_phase: 15 },
     });
     expect(() => respond(stack, "approve")).toThrow(/policy changed after review/);
-    const terminal = stack.checkpointer.loadRunById(stack.runId)?.terminalDirective;
-    expect(terminal?.action).toBe("incomplete");
-    expect(terminal?.met).toBe(false);
-    expect(terminal?.unresolved).toContain("content_review_drift");
+    const durable = stack.checkpointer.loadRunById(stack.runId);
+    if (durable === undefined) throw new Error("policy drift lost the durable run");
+    const terminal = durable.terminalDirective;
+    if (terminal === null || terminal.action !== "incomplete") {
+      throw new Error("policy drift did not persist an incomplete terminal directive");
+    }
+    expect(terminal.met).toBe(false);
+    expect(terminal.unresolved).toContain("content_review_drift");
     expect(readSelectedGeneration(kbRoot)?.selector?.generation_id).toBe(selectorBefore);
     stack.checkpointer.close();
   });
@@ -507,7 +529,7 @@ describe("KB through the engine (step 4)", () => {
     initKb({ kbRoot, profileId: PROFILE, runId: "kb-init-e2e" }, "E2E KB deny");
     installTestPolicy(kbRoot);
     const capIds = seedSources(projectRoot);
-    const stack = buildStack(projectRoot, capIds, fakeBodies(capIds));
+    const stack = buildStack(projectRoot, capIds);
     const selectorBefore = readSelectedGeneration(kbRoot)?.selector?.generation_id;
 
     const directive = await driveToGate(stack, capIds);
@@ -515,7 +537,10 @@ describe("KB through the engine (step 4)", () => {
 
     const terminal = respond(stack, "deny");
     expect(terminal.action).toBe("incomplete");
-    expect((terminal as { met?: boolean }).met).toBe(false);
+    if (terminal.action !== "incomplete") {
+      throw new Error(`expected incomplete terminal, received ${terminal.action}`);
+    }
+    expect(terminal.met).toBe(false);
 
     // Nothing published: the selector is exactly where it was before.
     expect(readSelectedGeneration(kbRoot)?.selector?.generation_id).toBe(selectorBefore);

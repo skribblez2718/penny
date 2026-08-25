@@ -2,8 +2,8 @@
  * KB host capabilities and immutable source admissions — Plan §5.2.
  *
  * Capability authority is deliberately outside every KB publication tree. Complete
- * envelopes, leases, and source-admission metadata live in the owner-only
- * `$PROJECT_ROOT/.penny/kb-capabilities/capabilities.sqlite` store. Source bytes are
+ * envelopes, leases, and source-admission metadata live in the owner-only,
+ * catalog-bound project capability store. Source bytes are
  * copied once into a preindexed same-run snapshot; later readers never reopen the
  * external source path.
  */
@@ -30,6 +30,7 @@ import {
   type SourceAdmissionStateV1,
   type SourceCapabilityMetadataV1,
 } from "./contracts.js";
+import { kbHostStatePaths } from "./host-state.js";
 import { OwnerSqliteDatabase } from "./owner-sqlite.js";
 
 // Compatibility vocabulary is type-only and derives from the normative
@@ -53,26 +54,27 @@ export class CapabilityError extends Error {
 const CAPABILITY_DB_NAME = "capabilities.sqlite";
 const OPAQUE_ID = /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseJsonValue(source: string): unknown {
+  const value: unknown = JSON.parse(source);
+  return value;
+}
+
 export function capabilityStoreDirectory(projectRoot: string): string {
-  return path.join(path.resolve(projectRoot), ".penny", "kb-capabilities");
+  return kbHostStatePaths(projectRoot).capabilities;
 }
 
 export function validateEnvelopeCrossField(value: unknown): CapabilityEnvelope {
   try {
     return validateHostCapabilityEnvelope(value);
   } catch (error) {
-    const capabilityId =
-      value !== null &&
-      typeof value === "object" &&
-      typeof (value as { capability_id?: unknown }).capability_id === "string"
-        ? (value as { capability_id: string }).capability_id
-        : "unknown";
-    const detail =
-      error !== null &&
-      typeof error === "object" &&
-      Array.isArray((error as { issues?: unknown }).issues)
-        ? (error as { issues: string[] }).issues.join("; ")
-        : "closed schema validation failed";
+    const capabilityIdValue = isUnknownRecord(value) ? value["capability_id"] : undefined;
+    const capabilityId = typeof capabilityIdValue === "string" ? capabilityIdValue : "unknown";
+    const issues = isUnknownRecord(error) ? error["issues"] : undefined;
+    const detail = Array.isArray(issues) ? issues.join("; ") : "closed schema validation failed";
     throw new CapabilityError(
       `capability '${capabilityId}' has an invalid envelope or finite timestamps: ${detail}`
     );
@@ -476,7 +478,7 @@ export class CapabilityStore implements Disposable {
     validateSqlTimestamp(createdAt, `${label} created_at`);
     let value: unknown;
     try {
-      value = JSON.parse(envelopeJcs) as unknown;
+      value = parseJsonValue(envelopeJcs);
     } catch {
       throw new CapabilityError(`${label} is malformed`);
     }

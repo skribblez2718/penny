@@ -135,86 +135,72 @@ function assertSegment(value: string, label: string): void {
   }
 }
 
+function parsePayloadContract(
+  kind: ArtifactKind,
+  value: unknown,
+  childProducer: boolean
+): ArtifactPayload {
+  switch (kind) {
+    case "claims":
+      return validateKbContract(
+        childProducer ? ExtractedClaimsArtifactSchema : ClaimsArtifactSchema,
+        value,
+        "claims artifact"
+      );
+    case "page_draft":
+      return validateKbContract(PageDraftArtifactSchema, value, "page draft artifact");
+    case "query_answer":
+      return validateKbContract(QueryAnswerArtifactSchema, value, "query answer artifact");
+    case "lint_report":
+      return validateKbContract(LintReportArtifactSchema, value, "lint report artifact");
+    case "verification_report":
+      return validateKbContract(
+        childProducer ? ChildVerificationReportSchema : VerificationReportArtifactSchema,
+        value,
+        "verification report artifact"
+      );
+    case "promotion_plan":
+      return validateKbContract(PromotionPlanArtifactSchema, value, "promotion plan artifact");
+    case "promotion_patch":
+      return validateKbContract(PromotionPatchArtifactSchema, value, "promotion patch artifact");
+  }
+}
+
 function validatePayload(
   kind: ArtifactKind,
   value: unknown,
   childProducer: boolean
 ): ArtifactPayload {
+  let payload: ArtifactPayload;
   try {
-    switch (kind) {
-      case "claims":
-        validateKbContract(
-          childProducer ? ExtractedClaimsArtifactSchema : ClaimsArtifactSchema,
-          value,
-          "claims artifact"
-        );
-        break;
-      case "page_draft":
-        validateKbContract(PageDraftArtifactSchema, value, "page draft artifact");
-        break;
-      case "query_answer":
-        validateKbContract(QueryAnswerArtifactSchema, value, "query answer artifact");
-        break;
-      case "lint_report":
-        validateKbContract(LintReportArtifactSchema, value, "lint report artifact");
-        break;
-      case "verification_report":
-        validateKbContract(
-          childProducer ? ChildVerificationReportSchema : VerificationReportArtifactSchema,
-          value,
-          "verification report artifact"
-        );
-        break;
-      case "promotion_plan":
-        validateKbContract(PromotionPlanArtifactSchema, value, "promotion plan artifact");
-        break;
-      case "promotion_patch":
-        validateKbContract(PromotionPatchArtifactSchema, value, "promotion patch artifact");
-        break;
-    }
+    payload = parsePayloadContract(kind, value, childProducer);
   } catch {
     // Validation diagnostics can contain model-authored member names. They stay
     // out of tool/public errors; the caller receives one bounded code.
     throw new ArtifactStoreError("artifact_payload_invalid");
   }
 
-  const payload = value as ArtifactPayload;
   if (payload.artifact_kind !== kind) throw new ArtifactStoreError("artifact_kind_mismatch");
 
-  if (kind === "claims") {
-    const claims = value as {
-      source_ids: string[];
-      claims: Array<{
-        claim_id?: string;
-        provisional_id?: string;
-        evidence: Array<{ source_id: string }>;
-      }>;
-    };
+  if (payload.artifact_kind === "claims") {
     unique(
-      claims.claims.map((claim) => claim.claim_id ?? claim.provisional_id ?? ""),
+      payload.claims.map((claim) => claim.provisional_id),
       "artifact_claim_ids_duplicate"
     );
-    const sources = new Set(claims.source_ids);
+    const sources = new Set(payload.source_ids);
     if (
-      claims.claims.some((claim) => claim.evidence.some((entry) => !sources.has(entry.source_id)))
+      payload.claims.some((claim) => claim.evidence.some((entry) => !sources.has(entry.source_id)))
     ) {
       throw new ArtifactStoreError("artifact_claim_source_not_admitted");
     }
   }
 
-  if (kind === "page_draft") {
-    const draft = value as {
-      pages: Array<{
-        frontmatter: { page_id: string; revision_id: string };
-        markdown: string;
-        claims: { page_id: string; revision_id: string; claims: Array<{ claim_id: string }> };
-      }>;
-    };
+  if (payload.artifact_kind === "page_draft") {
     unique(
-      draft.pages.map((page) => page.frontmatter.page_id),
+      payload.pages.map((page) => page.frontmatter.page_id),
       "artifact_page_ids_duplicate"
     );
-    for (const page of draft.pages) {
+    for (const page of payload.pages) {
       if (
         page.frontmatter.page_id !== page.claims.page_id ||
         page.frontmatter.revision_id !== page.claims.revision_id
@@ -239,25 +225,20 @@ function validatePayload(
     }
   }
 
-  if (kind === "lint_report") {
-    const report = value as {
-      findings: Array<{ finding_id: string }>;
-      candidate_conflicts: Array<{ candidate_conflict_id: string }>;
-    };
+  if (payload.artifact_kind === "lint_report") {
     unique(
-      report.findings.map((finding) => finding.finding_id),
+      payload.findings.map((finding) => finding.finding_id),
       "artifact_finding_ids_duplicate"
     );
     unique(
-      report.candidate_conflicts.map((conflict) => conflict.candidate_conflict_id),
+      payload.candidate_conflicts.map((conflict) => conflict.candidate_conflict_id),
       "artifact_conflict_ids_duplicate"
     );
   }
 
-  if (kind === "promotion_patch") {
-    const patch = value as { targets: Array<{ target_capability_id: string }> };
+  if (payload.artifact_kind === "promotion_patch") {
     unique(
-      patch.targets.map((target) => target.target_capability_id),
+      payload.targets.map((target) => target.target_capability_id),
       "artifact_target_ids_duplicate"
     );
   }
@@ -271,7 +252,7 @@ function assertBodyFreeMetadata(value: unknown): void {
     for (const item of value) assertBodyFreeMetadata(item);
     return;
   }
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+  for (const [key, child] of Object.entries(value)) {
     if (FORBIDDEN_RESULT_KEYS.has(key)) throw new ArtifactStoreError("phase_result_contains_body");
     assertBodyFreeMetadata(child);
   }
@@ -297,12 +278,17 @@ function currentUid(): number | undefined {
   return typeof process.geteuid === "function" ? process.geteuid() : undefined;
 }
 
+function errorCode(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object" || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
 function pathExistsNoFollow(candidate: string): boolean {
   try {
     lstatSync(candidate);
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    if (errorCode(error) === "ENOENT") return false;
     throw error;
   }
 }
@@ -513,7 +499,7 @@ export class RunArtifactStore implements Disposable {
     if (!Value.Check(StageRunArtifactInputSchema, input.tool_input)) {
       throw new ArtifactStoreError("stage_run_artifact_input_invalid");
     }
-    const toolInput = input.tool_input as StageRunArtifactInput;
+    const toolInput: StageRunArtifactInput = input.tool_input;
     if (input.producer !== input.expected_producer) {
       throw new ArtifactStoreError("artifact_producer_mismatch");
     }
@@ -710,7 +696,11 @@ export class RunArtifactStore implements Disposable {
       if (record.lifecycle !== binding.required_lifecycle) {
         throw new ArtifactStoreError("artifact_lifecycle_invalid");
       }
-    } else if (!(["staged", "sealed", "consumed"] as const).includes(record.lifecycle as never)) {
+    } else if (
+      record.lifecycle !== "staged" &&
+      record.lifecycle !== "sealed" &&
+      record.lifecycle !== "consumed"
+    ) {
       throw new ArtifactStoreError("artifact_lifecycle_invalid");
     }
 

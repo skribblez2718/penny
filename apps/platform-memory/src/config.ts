@@ -20,7 +20,7 @@ const MAX_SECRET_BYTES = 4_096;
 const MAX_IDENTIFIER_CHARACTERS = 1_024;
 const ENVIRONMENT_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-const CAPABILITIES = new Set<PlatformMemoryCapability>([
+const CAPABILITIES: ReadonlySet<string> = new Set([
   "recall-read",
   "curated-write",
   "kg-read",
@@ -32,11 +32,17 @@ function configError(message: string): never {
   throw new PlatformMemoryError("MEMORY_CONFIG_INVALID", message);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function asRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    configError(`${label} must be an object`);
-  }
-  return value as Record<string, unknown>;
+  if (!isRecord(value)) configError(`${label} must be an object`);
+  return value;
+}
+
+function isPlatformMemoryCapability(value: unknown): value is PlatformMemoryCapability {
+  return typeof value === "string" && CAPABILITIES.has(value);
 }
 
 function assertExactKeys(
@@ -99,10 +105,15 @@ function parsePositiveInteger(
   maximum: number
 ): number {
   if (value === undefined) return defaultValue;
-  if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > maximum) {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < minimum ||
+    value > maximum
+  ) {
     configError(`${label} must be an integer between ${minimum} and ${maximum}`);
   }
-  return value as number;
+  return value;
 }
 
 function validateCredential(value: unknown): MemoryCredentialReference {
@@ -128,16 +139,13 @@ function validateCapabilities(value: unknown, primaryDiaryId: unknown): Platform
   if (!Array.isArray(value)) configError("capabilities must be an array");
   const capabilities: PlatformMemoryCapability[] = [];
   for (const capability of value) {
-    if (
-      typeof capability !== "string" ||
-      !CAPABILITIES.has(capability as PlatformMemoryCapability)
-    ) {
+    if (!isPlatformMemoryCapability(capability)) {
       configError("capabilities contains an unsupported capability");
     }
-    if (capabilities.includes(capability as PlatformMemoryCapability)) {
+    if (capabilities.includes(capability)) {
       configError("capabilities cannot contain duplicates");
     }
-    capabilities.push(capability as PlatformMemoryCapability);
+    capabilities.push(capability);
   }
   const hasDiary = capabilities.includes("primary-diary");
   if (hasDiary) boundedIdentifier(primaryDiaryId, "primaryDiaryId");

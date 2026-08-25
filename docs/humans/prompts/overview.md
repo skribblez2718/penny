@@ -3,13 +3,13 @@
 Penny separates stable policy, worker roles, domain guidance, project navigation,
 and the current task so each concern has one owner.
 
-| Layer              | Purpose                                           | Source              |
-| ------------------ | ------------------------------------------------- | ------------------- |
-| Cognitive Frame    | Stable operating policy and outcome contract      | `.pi/SYSTEM.md`     |
-| Role Definition    | Project-local worker identity and constraints     | `.pi/agents/*.md`   |
-| Domain Guidance    | Static task-family criteria and output contract   | Skill prompts       |
-| Project Index      | Navigation                                        | `AGENTS.md` indexes |
-| Invocation Context | Current goal, constraints, and exact owner grants | Runtime task        |
+| Layer              | Purpose                                             | Source              |
+| ------------------ | --------------------------------------------------- | ------------------- |
+| Cognitive Frame    | Stable operating policy and outcome contract        | `.pi/SYSTEM.md`     |
+| Role Definition    | Project-local worker identity and constraints       | `.pi/agents/*.md`   |
+| Domain Guidance    | Static task-family criteria and output contract     | Skill prompts       |
+| Project Index      | Navigation                                          | `AGENTS.md` indexes |
+| Invocation Context | Current goal, constraints, exact artifact IDs/paths | Runtime task        |
 
 ## Local catalog and remote services
 
@@ -18,15 +18,13 @@ availability; that belongs to the harness/service registry.
 
 ## Context preservation
 
-Workflows no longer use durable memory as a relay. The execution owner grants
-exact immutable predecessor refs, workers read them with `artifact_read`, and the
-owner captures each complete response before consuming a small routing SUMMARY.
-Large reads use typed continuation, and checkpoints keep refs rather than payload
-bytes.
+Workflows never use durable memory as a relay. The execution owner verifies
+exact immutable predecessor IDs, workers read them with `artifact_read`, and the owner
+persists/re-reads each complete response before consuming a small routing SUMMARY. Large
+reads repeat with `next_range`, and checkpoints keep refs rather than payload bytes.
 
-Workers and skill drivers have no memory tools. The unmarked primary runtime
-still owns value-triggered durable recall, curated writes, a primary diary, and
-governed temporal KG access.
+Workers may have YAML-declared read-only recall tools, but write-capable memory remains
+primary-only and memory is never workflow transport.
 
 ## Recovery
 
@@ -38,7 +36,7 @@ active workflow.
 ## Boundaries
 
 Prompt markers clarify structure but do not enforce permissions. Tool allowlists,
-owner artifact grants, approval receipts, and OS/container permissions are the
+exact YAML tools, artifact integrity, approval receipts, and OS/container permissions are the
 control plane.
 
 ## Related documents

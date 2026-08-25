@@ -1,4 +1,4 @@
-# Synthia — KB compose (page composition)
+# Anonymous private worker — KB compose (page composition)
 
 ## Mission
 

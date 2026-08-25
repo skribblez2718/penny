@@ -2,7 +2,7 @@
 
 Browser automation tools for the Pi/Penny agent runtime. Provides ~50 tools
 across 10+ capability domains, all using the `playwright` npm package and
-@sinclair/typebox schemas.
+typebox schemas.
 
 ## Configuration
 
@@ -17,10 +17,10 @@ All config is read from environment variables (with `.env` fallback). See
 | `PLAYWRIGHT_NETWORK_ALLOWLIST` | (none)                      | Comma-separated allowed hosts |
 | `PLAYWRIGHT_DOWNLOAD_DIR`      | `/tmp/playwright-downloads` | Download location             |
 | `PLAYWRIGHT_OUTPUT_DIR`        | `/tmp/playwright-output`    | Screenshot/video output       |
-| `PLAYWRIGHT_ENABLE_VISION`     | `false`                     | Mouse/click by coordinates    |
-| `PLAYWRIGHT_ENABLE_DEVTOOLS`   | `false`                     | Tracing, console logs         |
-| `PLAYWRIGHT_ENABLE_NETWORK`    | `false`                     | Intercept/route tools         |
-| `PLAYWRIGHT_ENABLE_STORAGE`    | `false`                     | localStorage/cookies tools    |
+| `PLAYWRIGHT_ENABLE_VISION`     | `false`                     | Pre-enable coordinate tools   |
+| `PLAYWRIGHT_ENABLE_DEVTOOLS`   | `false`                     | Pre-enable highlight/tracing  |
+| `PLAYWRIGHT_ENABLE_NETWORK`    | `false`                     | Pre-enable route/proxy tools  |
+| `PLAYWRIGHT_ENABLE_STORAGE`    | `false`                     | Pre-enable storage tools      |
 
 ## Proxy Support
 
@@ -110,18 +110,23 @@ Per Playwright docs, this applies to all browser contexts and pages.
 The configured environment proxy is the default. A runtime override set through
 `playwright_set_proxy` takes precedence and applies after the browser relaunches.
 
+## Active Tool Loading
+
+The unmarked primary Penny runtime keeps a compact browser core active: navigation, tabs, snapshots, screenshots, resizing, closing, and waits. Use `playwright_load_tools` to add the narrowest capability group needed. Additive loading preserves Pi's native deferred-tool path when the provider supports it. Existing `PLAYWRIGHT_ENABLE_NETWORK`, `PLAYWRIGHT_ENABLE_STORAGE`, `PLAYWRIGHT_ENABLE_VISION`, and `PLAYWRIGHT_ENABLE_DEVTOOLS` settings pre-enable their corresponding groups.
+
+Spawned workers are not subject to the primary reduction. Their explicit `--tools` allowlists remain authoritative and the loader never broadens them.
+
 ## Tool Categories
 
-- **core** — navigate, snapshot, click, type, evaluate, screenshot
-- **core-navigation** — back, forward, reload, get URL/title
-- **core-tabs** — new page, close page, switch tab, list tabs
-- **core-input** — press key, fill, check, uncheck, file upload
-- **network** — intercept, route, proxy info, proxy reachability
+- **core, initially active** — navigation, tabs, snapshots, screenshots, resize, close, wait
+- **interact** — click, hover, drag, text input, form controls, dialogs, batch form fill
+- **diagnose** — page evaluation, console, request observation, assertions
 - **storage** — localStorage, sessionStorage, cookies
-- **pdf** — page to PDF export
-- **testing** — verify element/text/value visible
-- **vision** — mouse move/click/drag by coordinates
-- **devtools** — console, tracing, performance, video
+- **network** — route interception and proxy control
+- **files** — PDF export and file upload/drop
+- **vision** — coordinate interaction
+- **devtools** — highlights and tracing
+- **unsafe** — arbitrary Playwright/Node.js execution; never load by default
 
 ## Testing
 

@@ -52,21 +52,21 @@ registry. Local roles and remote service presence are different concepts.
 
 ## How handoff works
 
-Workers do not share Penny's conversation and have no durable-memory tools. An
-execution owner gives a worker the current goal and, when needed, exact immutable
-artifact refs. The worker reads only granted refs with `artifact_read`, including
-all continuation pages, and returns the complete work.
+Workers do not share Penny's conversation. The owner supplies the goal, constraints,
+and exact immutable artifact IDs/paths. The worker reads needed IDs with `artifact_read`
+and `next_range`, then returns complete work. YAML-declared read-only memory tools may
+support advisory recall but never workflow transport.
 
-In a workflow, the owner captures and verifies those exact response bytes before
-reading the small routing SUMMARY at the end. This keeps Penny's context bounded
-without treating memory search or a model-authored pointer as persistence proof.
+The owner persists and re-reads exact response bytes before parsing the small routing
+SUMMARY or returning success. Every result prints the exact ID; memory search and
+model-authored pointers are never persistence proof.
 
 ## Durable memory boundary
 
 The unmarked primary Penny runtime still has value-triggered durable recall,
 curated writes, a primary diary, and governed temporal knowledge-graph tools.
-Those capabilities support cross-session continuity. They are not worker tools
-or active workflow transport.
+Those capabilities support cross-session continuity. Write-capable memory remains
+primary-only, and no memory operation is active workflow transport.
 
 ## Isolation
 

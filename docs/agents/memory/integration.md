@@ -12,12 +12,12 @@ lifecycle hooks. Since the operator-approved policy change of 2026-08-17,
 subagent workers additionally receive a **read-only recall subset** declared in
 their frontmatter `tools:` via the `memory.read` tool profile: search, exact
 drawer/taxonomy reads, KG reads, and primary-diary read. Workers get no write
-surface, no diary write, no KG mutation, no logstream, and no lifecycle hooks;
-skill-driver processes receive nothing.
+surface, no diary write, no KG mutation, no logstream, and no lifecycle hooks. SDK
+skill workers receive the same YAML-declared read subset through an owner-scoped provider.
 
 Read-only recall lets an agent look up prior durable knowledge. It is not a
 channel: with no write surface, no agent can post a message for another to read.
-Active workflow handoff uses immutable execution-owner artifacts; run control
+Active workflow handoff uses exact immutable artifact IDs; run control
 state uses the orchestration checkpointer. Memory is neither channel.
 
 ## Primary capability bundles

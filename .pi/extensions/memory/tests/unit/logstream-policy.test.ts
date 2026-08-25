@@ -6,7 +6,12 @@ import {
   loadMemoryRuntimeConfig,
   primaryLogstreamToolNames,
 } from "../../index.js";
-import { extensionEnv } from "../fixtures.js";
+import {
+  asMemoryExtensionApi,
+  extensionEnv,
+  type MemoryExtensionApiFake,
+  type RegisteredMemoryTool,
+} from "../fixtures.js";
 
 function advisoryEnv(overrides: Record<string, string | undefined> = {}) {
   return extensionEnv({
@@ -18,18 +23,19 @@ function advisoryEnv(overrides: Record<string, string | undefined> = {}) {
 }
 
 function recordTools(env: Record<string, string | undefined>) {
-  const tools: any[] = [];
+  const tools: RegisteredMemoryTool[] = [];
   const handlers: string[] = [];
   const fetchSpy = vi.fn();
-  createMemoryExtension({ env, fetch: fetchSpy as typeof fetch })({
-    registerTool(tool: unknown) {
+  const pi: MemoryExtensionApiFake = {
+    registerTool(tool) {
       tools.push(tool);
     },
     registerCommand: vi.fn(),
-    on(event: string) {
+    on(event) {
       handlers.push(event);
     },
-  } as any);
+  };
+  createMemoryExtension({ env, fetch: fetchSpy as typeof fetch })(asMemoryExtensionApi(pi));
   return { tools, handlers, fetchSpy };
 }
 

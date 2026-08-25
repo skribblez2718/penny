@@ -63,7 +63,9 @@ async function extractVideoMetadata(
   const titleMatch = html.match(/"title":"([^"]+)"/);
   if (titleMatch) {
     title = titleMatch[1]
-      .replace(/\\u([0-9a-f]{4})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+      .replace(/\\u([0-9a-f]{4})/gi, (_match: string, hex: string) =>
+        String.fromCharCode(parseInt(hex, 16))
+      )
       .replace(/\\n/g, "")
       .replace(/\\"/g, '"');
   } else {
@@ -76,7 +78,9 @@ async function extractVideoMetadata(
   const authorMatch = html.match(/"ownerChannelName":"([^"]+)"/);
   if (authorMatch) {
     author = authorMatch[1]
-      .replace(/\\u([0-9a-f]{4})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+      .replace(/\\u([0-9a-f]{4})/gi, (_match: string, hex: string) =>
+        String.fromCharCode(parseInt(hex, 16))
+      )
       .replace(/\\n/g, "");
   } else {
     const authorH1Match = html.match(/"author":"([^"]+)"/);

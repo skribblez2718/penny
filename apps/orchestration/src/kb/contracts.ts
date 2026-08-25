@@ -12,7 +12,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 
-import { Type, type Static, type TString, type TSchema } from "typebox";
+import { IsSchema, Type, type Static, type TString, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 
 // ── Shared scalars ──────────────────────────────────────────────────────────
@@ -713,6 +713,10 @@ export class KbContractError extends Error {
 
 const UNSAFE_RECORD_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 /** Real RFC 3339-Z calendar/time validation; the schema separately closes syntax. */
 export function isRfc3339Utc(value: string): boolean {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z$/.exec(value);
@@ -728,7 +732,8 @@ export function isRfc3339Utc(value: string): boolean {
   if (second === 60 && (hour !== 23 || minute !== 59)) return false;
   const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
   const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  return day >= 1 && day <= days[month - 1]!;
+  const daysInMonth = days[month - 1];
+  return daysInMonth !== undefined && day >= 1 && day <= daysInMonth;
 }
 
 function pointer(path: string, key: string | number): string {
@@ -737,48 +742,59 @@ function pointer(path: string, key: string | number): string {
 }
 
 function scalarIssues(schema: TSchema, value: unknown, path = "/"): string[] {
-  const node = schema as TSchema & Record<string, unknown>;
+  if (!isUnknownRecord(schema)) return [];
   const issues: string[] = [];
-  if (node["x-kb-human-text"] === true && typeof value === "string") {
+  if (schema["x-kb-human-text"] === true && typeof value === "string") {
     const bytes = Buffer.byteLength(value, "utf8");
-    const min = Number(node["x-kb-min-utf8-bytes"] ?? 0);
-    const max = node["x-kb-max-utf8-bytes"];
+    const min = Number(schema["x-kb-min-utf8-bytes"] ?? 0);
+    const max = schema["x-kb-max-utf8-bytes"];
     if (value !== value.normalize("NFC")) issues.push(`${path}: must be NFC-normalized UTF-8`);
     if (bytes < min) issues.push(`${path}: must contain at least ${min} UTF-8 byte(s)`);
     if (typeof max === "number" && bytes > max) {
       issues.push(`${path}: must contain at most ${max} UTF-8 byte(s)`);
     }
   }
-  if (node["x-kb-rfc3339-z"] === true && typeof value === "string" && !isRfc3339Utc(value)) {
+  if (schema["x-kb-rfc3339-z"] === true && typeof value === "string" && !isRfc3339Utc(value)) {
     issues.push(`${path}: must be a real RFC 3339 UTC timestamp ending in Z`);
   }
 
-  if (Array.isArray(node.anyOf)) {
-    const branch = (node.anyOf as TSchema[]).find((candidate) => Value.Check(candidate, value));
+  const anyOf = schema["anyOf"];
+  if (Array.isArray(anyOf)) {
+    const candidates: unknown[] = anyOf;
+    const branch = candidates.find(
+      (candidate): candidate is TSchema => IsSchema(candidate) && Value.Check(candidate, value)
+    );
     if (branch !== undefined) issues.push(...scalarIssues(branch, value, path));
     return issues;
   }
-  if (Array.isArray(node.allOf)) {
-    for (const branch of node.allOf as TSchema[]) issues.push(...scalarIssues(branch, value, path));
+  const allOf = schema["allOf"];
+  if (Array.isArray(allOf)) {
+    const candidates: unknown[] = allOf;
+    for (const branch of candidates) {
+      if (IsSchema(branch)) issues.push(...scalarIssues(branch, value, path));
+    }
   }
-  if (Array.isArray(value) && node.items !== undefined) {
+  const items = schema["items"];
+  if (Array.isArray(value) && IsSchema(items)) {
     for (let index = 0; index < value.length; index++) {
-      issues.push(...scalarIssues(node.items as TSchema, value[index], pointer(path, index)));
+      issues.push(...scalarIssues(items, value[index], pointer(path, index)));
     }
     return issues;
   }
-  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    const record = value as Record<string, unknown>;
-    const properties = (node.properties ?? {}) as Record<string, TSchema>;
+  if (isUnknownRecord(value)) {
+    const propertiesValue = schema["properties"];
+    const properties = isUnknownRecord(propertiesValue) ? propertiesValue : {};
     for (const [key, child] of Object.entries(properties)) {
-      if (Object.hasOwn(record, key))
-        issues.push(...scalarIssues(child, record[key], pointer(path, key)));
+      if (Object.hasOwn(value, key) && IsSchema(child)) {
+        issues.push(...scalarIssues(child, value[key], pointer(path, key)));
+      }
     }
-    const patterns = (node.patternProperties ?? {}) as Record<string, TSchema>;
-    for (const [key, childValue] of Object.entries(record)) {
+    const patternsValue = schema["patternProperties"];
+    const patterns = isUnknownRecord(patternsValue) ? patternsValue : {};
+    for (const [key, childValue] of Object.entries(value)) {
       if (Object.hasOwn(properties, key)) continue;
       for (const [pattern, child] of Object.entries(patterns)) {
-        if (new RegExp(pattern).test(key)) {
+        if (IsSchema(child) && new RegExp(pattern).test(key)) {
           issues.push(...scalarIssues(child, childValue, pointer(path, key)));
           break;
         }
@@ -792,15 +808,13 @@ function unsafeRecordKeyIssues(value: unknown, path = "/"): string[] {
   if (Array.isArray(value)) {
     return value.flatMap((item, index) => unsafeRecordKeyIssues(item, pointer(path, index)));
   }
-  if (value === null || typeof value !== "object") return [];
+  if (!isUnknownRecord(value)) return [];
   const issues: string[] = [];
   for (const key of Object.keys(value)) {
     if (UNSAFE_RECORD_KEYS.has(key) || !/^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(key)) {
       issues.push(`${pointer(path, key)}: unsafe record key`);
     }
-    issues.push(
-      ...unsafeRecordKeyIssues((value as Record<string, unknown>)[key], pointer(path, key))
-    );
+    issues.push(...unsafeRecordKeyIssues(value[key], pointer(path, key)));
   }
   return issues;
 }
@@ -809,13 +823,11 @@ function prototypeRecordKeyIssues(value: unknown, path = "/"): string[] {
   if (Array.isArray(value)) {
     return value.flatMap((item, index) => prototypeRecordKeyIssues(item, pointer(path, index)));
   }
-  if (value === null || typeof value !== "object") return [];
+  if (!isUnknownRecord(value)) return [];
   const issues: string[] = [];
   for (const key of Object.keys(value)) {
     if (UNSAFE_RECORD_KEYS.has(key)) issues.push(`${pointer(path, key)}: unsafe record key`);
-    issues.push(
-      ...prototypeRecordKeyIssues((value as Record<string, unknown>)[key], pointer(path, key))
-    );
+    issues.push(...prototypeRecordKeyIssues(value[key], pointer(path, key)));
   }
   return issues;
 }
@@ -1130,43 +1142,54 @@ function resultIssues(result: KnowledgeBaseResult | ReplayableKnowledgeBaseResul
 }
 
 function crossFieldIssues(schema: TSchema, value: unknown): string[] {
-  if (schema === SourceRecordSchema) {
-    const record = value as SourceRecord;
+  if (schema === SourceRecordSchema && Value.Check(SourceRecordSchema, value)) {
+    const record = value;
     const expectedObjectRef = `sources/objects/${record.sha256}`;
     return record.object_ref === expectedObjectRef
       ? []
       : [`/object_ref: must equal ${expectedObjectRef}`];
   }
-  if (schema === HostCapabilityEnvelopeV1Schema) {
-    return capabilityEnvelopeIssues(value as HostCapabilityEnvelopeV1);
+  if (
+    schema === HostCapabilityEnvelopeV1Schema &&
+    Value.Check(HostCapabilityEnvelopeV1Schema, value)
+  ) {
+    return capabilityEnvelopeIssues(value);
   }
-  if (schema === HostCapabilityLeaseV1Schema) {
-    return capabilityLeaseIssues(value as HostCapabilityLeaseV1);
+  if (schema === HostCapabilityLeaseV1Schema && Value.Check(HostCapabilityLeaseV1Schema, value)) {
+    return capabilityLeaseIssues(value);
   }
-  if (schema === SourceAdmissionRecordV1Schema) {
-    return sourceAdmissionIssues(value as SourceAdmissionRecordV1);
+  if (
+    schema === SourceAdmissionRecordV1Schema &&
+    Value.Check(SourceAdmissionRecordV1Schema, value)
+  ) {
+    return sourceAdmissionIssues(value);
   }
-  if (schema === ParentDeliveryGrantV1Schema) {
-    return parentDeliveryGrantIssues(value as ParentDeliveryGrantV1);
+  if (schema === ParentDeliveryGrantV1Schema && Value.Check(ParentDeliveryGrantV1Schema, value)) {
+    return parentDeliveryGrantIssues(value);
   }
-  if (schema === ParentDeliveryGrantStoreRecordV1Schema) {
-    return parentDeliveryRecordIssues(value as ParentDeliveryGrantStoreRecordV1);
+  if (
+    schema === ParentDeliveryGrantStoreRecordV1Schema &&
+    Value.Check(ParentDeliveryGrantStoreRecordV1Schema, value)
+  ) {
+    return parentDeliveryRecordIssues(value);
   }
-  if (schema === ParentDeliveryGrantFileV1Schema) {
-    return parentDeliveryFileIssues(value as ParentDeliveryGrantFileV1);
+  if (
+    schema === ParentDeliveryGrantFileV1Schema &&
+    Value.Check(ParentDeliveryGrantFileV1Schema, value)
+  ) {
+    return parentDeliveryFileIssues(value);
   }
-  if (schema === KbHostInvocationContextV1Schema) {
-    return hostInvocationContextIssues(value as KbHostInvocationContextV1);
+  if (
+    schema === KbHostInvocationContextV1Schema &&
+    Value.Check(KbHostInvocationContextV1Schema, value)
+  ) {
+    return hostInvocationContextIssues(value);
   }
-  if (schema === KbProfileRegistrySchema) {
-    return duplicateIdentityIssues(
-      (value as KbProfileRegistry).profiles,
-      (profile) => profile.kb_profile_id,
-      "/profiles"
-    );
+  if (schema === KbProfileRegistrySchema && Value.Check(KbProfileRegistrySchema, value)) {
+    return duplicateIdentityIssues(value.profiles, (profile) => profile.kb_profile_id, "/profiles");
   }
-  if (schema === KbPolicySchema) {
-    const policy = value as KbPolicy;
+  if (schema === KbPolicySchema && Value.Check(KbPolicySchema, value)) {
+    const policy = value;
     const issues = [
       ...duplicateIdentityIssues(
         policy.allowed_parent_models,
@@ -1195,13 +1218,17 @@ function crossFieldIssues(schema: TSchema, value: unknown): string[] {
     schema === StatusKbRequestSchema ||
     schema === ResumeKbRequestSchema
   ) {
-    return requestIssues(value as KnowledgeBaseRequest);
+    return Value.Check(KnowledgeBaseRequestSchema, value) ? requestIssues(value) : [];
   }
   if (schema === KnowledgeBaseResultSchema || schema === ReplayableKnowledgeBaseResultSchema) {
-    return resultIssues(value as KnowledgeBaseResult | ReplayableKnowledgeBaseResult);
+    if (Value.Check(KnowledgeBaseResultSchema, value)) return resultIssues(value);
+    return Value.Check(ReplayableKnowledgeBaseResultSchema, value) ? resultIssues(value) : [];
   }
-  if (schema === KbPublicationTransactionSchema) {
-    const publication = value as KbPublicationTransaction;
+  if (
+    schema === KbPublicationTransactionSchema &&
+    Value.Check(KbPublicationTransactionSchema, value)
+  ) {
+    const publication = value;
     const issues = [
       ...duplicateIdentityIssues(publication.files, (item) => item.publication_file_id, "/files"),
       ...duplicateIdentityIssues(publication.files, (item) => item.staging_key, "/files"),
@@ -1212,8 +1239,8 @@ function crossFieldIssues(schema: TSchema, value: unknown): string[] {
     }
     return issues;
   }
-  if (schema === KbComposeAuthoritySchema) {
-    const authority = value as KbComposeAuthority;
+  if (schema === KbComposeAuthoritySchema && Value.Check(KbComposeAuthoritySchema, value)) {
+    const authority = value;
     const allocations = authority.allocations;
     return [
       ...duplicateIdentityIssues(
@@ -1235,8 +1262,11 @@ function crossFieldIssues(schema: TSchema, value: unknown): string[] {
       ),
     ];
   }
-  if (schema === ContentReviewGatePacketSchema) {
-    const packet = value as ContentReviewGatePacket;
+  if (
+    schema === ContentReviewGatePacketSchema &&
+    Value.Check(ContentReviewGatePacketSchema, value)
+  ) {
+    const packet = value;
     const artifactMap = packet.candidate_artifact_digests;
     const issues = duplicateIdentityIssues(
       packet.candidate_artifacts,
@@ -1267,8 +1297,8 @@ function crossFieldIssues(schema: TSchema, value: unknown): string[] {
     }
     return issues;
   }
-  if (schema === PromotionGatePacketSchema) {
-    const packet = value as PromotionGatePacket;
+  if (schema === PromotionGatePacketSchema && Value.Check(PromotionGatePacketSchema, value)) {
+    const packet = value;
     const issues = [
       ...duplicateIdentityIssues(
         packet.page_revisions,
@@ -1319,8 +1349,8 @@ function crossFieldIssues(schema: TSchema, value: unknown): string[] {
     }
     return issues;
   }
-  if (schema === PromotionApplyJournalSchema) {
-    const journal = value as PromotionApplyJournal;
+  if (schema === PromotionApplyJournalSchema && Value.Check(PromotionApplyJournalSchema, value)) {
+    const journal = value;
     const issues = [
       ...duplicateIdentityIssues(journal.targets, (item) => String(item.ordinal), "/targets"),
       ...duplicateIdentityIssues(journal.targets, (item) => item.target_capability_id, "/targets"),
@@ -1331,8 +1361,11 @@ function crossFieldIssues(schema: TSchema, value: unknown): string[] {
     }
     return issues;
   }
-  if (schema === PromotionGateStoreRecordV1Schema) {
-    const record = value as PromotionGateStoreRecordV1;
+  if (
+    schema === PromotionGateStoreRecordV1Schema &&
+    Value.Check(PromotionGateStoreRecordV1Schema, value)
+  ) {
+    const record = value;
     const issues: string[] = [];
     if (
       (record.decision_intent_jcs === undefined) !==
@@ -1363,15 +1396,21 @@ function crossFieldIssues(schema: TSchema, value: unknown): string[] {
     }
     return issues;
   }
-  if (schema === PromotionApprovalStoreRecordV1Schema) {
-    const record = value as PromotionApprovalStoreRecordV1;
+  if (
+    schema === PromotionApprovalStoreRecordV1Schema &&
+    Value.Check(PromotionApprovalStoreRecordV1Schema, value)
+  ) {
+    const record = value;
     if ((record.state === "available") !== (record.transaction_id === undefined)) {
       return ["/transaction_id: absent exactly while the approval receipt is available"];
     }
     return [];
   }
-  if (schema === PromotionDecisionOutcomeV1Schema) {
-    const outcome = value as PromotionDecisionOutcomeV1;
+  if (
+    schema === PromotionDecisionOutcomeV1Schema &&
+    Value.Check(PromotionDecisionOutcomeV1Schema, value)
+  ) {
+    const outcome = value;
     const approvalMembers = [outcome.receipt, outcome.receipt_jcs, outcome.receipt_sha256];
     const approvalCount = approvalMembers.filter((item) => item !== undefined).length;
     if (
@@ -1384,8 +1423,11 @@ function crossFieldIssues(schema: TSchema, value: unknown): string[] {
     }
     return [];
   }
-  if (schema === PromotionApplyOutcomeV1Schema) {
-    const outcome = value as PromotionApplyOutcomeV1;
+  if (
+    schema === PromotionApplyOutcomeV1Schema &&
+    Value.Check(PromotionApplyOutcomeV1Schema, value)
+  ) {
+    const outcome = value;
     if ((outcome.status === "complete") !== outcome.post_apply_verified) {
       return ["/post_apply_verified: true exactly for complete promotion apply"];
     }
@@ -1399,26 +1441,24 @@ export function validateKbContract<T extends TSchema>(
   value: unknown,
   label: string
 ): Static<T> {
-  const structuralIssues = Value.Check(schema, value)
-    ? []
-    : [...Value.Errors(schema, value)].map(
-        (issue) => `${issue.instancePath || "/"}: ${issue.message}`
-      );
-  const issues =
-    structuralIssues.length > 0
-      ? structuralIssues
-      : [
-          ...(Object.is(schema, PackageSurfaceDecisionV1Schema) ||
-          Object.is(schema, GateDecisionReceiptV1Schema)
-            ? prototypeRecordKeyIssues(value)
-            : unsafeRecordKeyIssues(value)),
-          ...scalarIssues(schema, value),
-          ...crossFieldIssues(schema, value),
-        ];
+  if (!Value.Check(schema, value)) {
+    const structuralIssues = [...Value.Errors(schema, value)].map(
+      (issue) => `${issue.instancePath || "/"}: ${issue.message}`
+    );
+    throw new KbContractError(`${label} failed schema validation`, structuralIssues);
+  }
+  const issues = [
+    ...(Object.is(schema, PackageSurfaceDecisionV1Schema) ||
+    Object.is(schema, GateDecisionReceiptV1Schema)
+      ? prototypeRecordKeyIssues(value)
+      : unsafeRecordKeyIssues(value)),
+    ...scalarIssues(schema, value),
+    ...crossFieldIssues(schema, value),
+  ];
   if (issues.length > 0) {
     throw new KbContractError(`${label} failed schema validation`, issues);
   }
-  return value as Static<T>;
+  return value;
 }
 
 export function validateHostCapabilityEnvelope(value: unknown): HostCapabilityEnvelopeV1 {
@@ -1465,16 +1505,18 @@ export function validateKnowledgeBaseResult(value: unknown): KnowledgeBaseResult
 
 /** RFC 8785 JCS canonical JSON (sorted keys, no whitespace). */
 export function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  const entries = Object.keys(value as Record<string, unknown>)
+  if (!isUnknownRecord(value)) {
+    if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+    return JSON.stringify(value);
+  }
+  const entries = Object.keys(value)
     .sort()
-    .map((k) => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`);
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`);
   return `{${entries.join(",")}}`;
 }
 
 export function sha256Hex(value: string): Sha256Hex {
-  return createHash("sha256").update(value, "utf8").digest("hex") as Sha256Hex;
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 // ── §5.6 public requests (closed, exact keys) ────────────────────────────────

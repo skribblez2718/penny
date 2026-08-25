@@ -5,6 +5,15 @@
   "main": "index.ts",
   "type": "module",
   "scripts": {
-    "test:unit": "vitest run --config tests/vitest.config.ts"
+    "test:unit": "vitest run --config tests/vitest.config.ts",
+    "test:integration": "vitest run --config tests/vitest.integration.config.ts",
+    "lint": "eslint . --ext .ts --max-warnings=0",
+    "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
+    "typecheck": "tsc --noEmit",
+    "test:all": "bun run lint && bun run format:check && bun run typecheck && bun run test:unit && bun run test:integration"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
   }
 }

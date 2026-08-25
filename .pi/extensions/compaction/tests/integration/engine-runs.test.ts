@@ -1,16 +1,17 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRequire } from "node:module";
 
-const { DatabaseSync } = createRequire(import.meta.url)(
-  "node:sqlite"
-) as typeof import("node:sqlite");
-
+import { Checkpointer, initializePennyState } from "@penny/orchestration/source";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { readExactCheckpoints } from "../../checkpointer.js";
+import { ArtifactRefSchema } from "../../schema.js";
+
+const sqlite = process.getBuiltinModule("node:sqlite");
+if (sqlite === undefined) throw new Error("node:sqlite unavailable");
+const { DatabaseSync } = sqlite;
 
 function artifactRef(runId: string, operationId: string, digest = "a".repeat(64)) {
   const identity = {
@@ -49,29 +50,31 @@ function context(runId: string, selectedRefs: unknown[]) {
 
 describe("readExactCheckpoints (TypeScript v2 read-only SQLite)", () => {
   let directory: string;
+  let projectRoot: string;
   let databasePath: string;
+  const previousStateRoot = process.env.PENNY_STATE_ROOT;
   const previousDatabase = process.env.PENNY_ORCH_V2_DB;
   const selected = artifactRef("run-current", "observe-1");
 
   beforeAll(() => {
     directory = mkdtempSync(join(tmpdir(), "compaction-checkpointer-"));
-    databasePath = join(directory, "orchestration-v2.db");
+    projectRoot = join(directory, "project");
+    mkdirSync(projectRoot, { mode: 0o700 });
+    process.env.PENNY_STATE_ROOT = join(directory, "state");
+    delete process.env.PENNY_ORCH_V2_DB;
+    const state = initializePennyState(projectRoot, { env: process.env });
+    databasePath = state.paths.orchestration.database;
+    const checkpointer = new Checkpointer(databasePath, undefined, {
+      projectId: state.projectId,
+    });
+    checkpointer.close();
     const database = new DatabaseSync(databasePath);
-    database.exec(`
-      CREATE TABLE runs (
-        run_id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        playbook TEXT NOT NULL,
-        engine_owner TEXT NOT NULL,
-        schema_version INTEGER NOT NULL,
-        status TEXT NOT NULL,
-        state_id TEXT NOT NULL,
-        context_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )
-    `);
-    const insert = database.prepare("INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    const insert = database.prepare(
+      "INSERT INTO runs(" +
+        "run_id, session_id, playbook, engine_owner, schema_version, status, state_id, " +
+        "context_json, created_at, updated_at" +
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    );
     insert.run(
       "run-current",
       "session-current",
@@ -109,17 +112,18 @@ describe("readExactCheckpoints (TypeScript v2 read-only SQLite)", () => {
       "2026-08-15T14:00:00Z"
     );
     database.close();
-    process.env.PENNY_ORCH_V2_DB = databasePath;
   });
 
   afterAll(() => {
+    if (previousStateRoot === undefined) delete process.env.PENNY_STATE_ROOT;
+    else process.env.PENNY_STATE_ROOT = previousStateRoot;
     if (previousDatabase === undefined) delete process.env.PENNY_ORCH_V2_DB;
     else process.env.PENNY_ORCH_V2_DB = previousDatabase;
     rmSync(directory, { recursive: true, force: true });
   });
 
   it("reads only caller-supplied exact run IDs and selected artifact refs", () => {
-    const result = readExactCheckpoints(["run-current"]);
+    const result = readExactCheckpoints(["run-current"], projectRoot);
     expect(result.runs.map((run) => run.run_id)).toEqual(["run-current"]);
     expect(result.runs[0]).toMatchObject({
       playbook: "research",
@@ -127,20 +131,20 @@ describe("readExactCheckpoints (TypeScript v2 read-only SQLite)", () => {
       status: "awaiting_user",
       clarification_text: "Keep the fixture?",
     });
-    expect(result.artifactRefs).toEqual([selected]);
+    expect(result.artifactRefs).toEqual([ArtifactRefSchema.parse(selected)]);
     expect(result.runs).not.toContainEqual(expect.objectContaining({ run_id: "run-unrelated" }));
   });
 
   it("supports a fresh reader using only the prior exact run ref", () => {
     const previousSummary = "[RESUME-REFS v2]\nrun:run-current\n[/RESUME-REFS]";
     const runId = previousSummary.match(/^run:(.+)$/m)?.[1];
-    const result = readExactCheckpoints(runId ? [runId] : []);
+    const result = readExactCheckpoints(runId ? [runId] : [], projectRoot);
     expect(result.runs[0]?.run_id).toBe("run-current");
     expect(result.artifactRefs[0]?.artifact_id).toBe(selected.artifact_id);
   });
 
   it("does not require artifact object bytes to preserve a valid selected ref", () => {
-    const result = readExactCheckpoints(["run-current"]);
+    const result = readExactCheckpoints(["run-current"], projectRoot);
     expect(result.runs).toHaveLength(1);
     expect(result.artifactRefs).toHaveLength(1);
   });
@@ -153,7 +157,7 @@ describe("readExactCheckpoints (TypeScript v2 read-only SQLite)", () => {
       .run(context("run-current", [corrupt]), "run-current");
     database.close();
 
-    const result = readExactCheckpoints(["run-current"]);
+    const result = readExactCheckpoints(["run-current"], projectRoot);
     expect(result.runs).toHaveLength(1);
     expect(result.artifactRefs).toEqual([]);
     expect(result.issues[0]).toContain("selected_artifacts[0] rejected");
@@ -166,13 +170,17 @@ describe("readExactCheckpoints (TypeScript v2 read-only SQLite)", () => {
   });
 
   it("skips terminal or missing exact IDs and degrades on a missing database", () => {
-    expect(readExactCheckpoints(["run-complete", "does-not-exist"]).runs).toEqual([]);
-    process.env.PENNY_ORCH_V2_DB = join(directory, "missing.db");
-    expect(readExactCheckpoints(["run-current"])).toEqual({
-      runs: [],
-      artifactRefs: [],
-      issues: [],
-    });
-    process.env.PENNY_ORCH_V2_DB = databasePath;
+    expect(readExactCheckpoints(["run-complete", "does-not-exist"], projectRoot).runs).toEqual([]);
+    const missingPath = `${databasePath}.missing`;
+    renameSync(databasePath, missingPath);
+    try {
+      expect(readExactCheckpoints(["run-current"], projectRoot)).toEqual({
+        runs: [],
+        artifactRefs: [],
+        issues: [],
+      });
+    } finally {
+      renameSync(missingPath, databasePath);
+    }
   });
 });

@@ -1,3 +1,4 @@
+import { requireValue } from "./helpers/narrowing.js";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -15,6 +16,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { Checkpointer } from "../src/checkpointer.js";
 import {
   jcsCanonicalize,
   parsePromotionReceipt,
@@ -33,7 +35,6 @@ import {
   PromotionGateStoreEnvelopeV1Schema,
   PromotionGateStoreRecordV1Schema,
   validateKbContract,
-  canonicalJson,
   sha256Hex,
 } from "../src/kb/contracts.js";
 import { readManifest, readPolicy, writePageRevision } from "../src/kb/filesystem.js";
@@ -53,6 +54,7 @@ import {
 } from "../src/kb/promotion.js";
 import { RunArtifactStore } from "../src/kb/run-artifacts.js";
 import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
+import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 import { initKb } from "../src/kb/workflows.js";
 
 const PROFILE = "kbp_promotion";
@@ -82,6 +84,7 @@ interface Fixture {
   targetPaths: string[];
   targetIds: string[];
   original: Buffer[];
+  artifactCheckpointer: Checkpointer;
   store: PromotionApprovalStore;
   gateChallenge: string;
   controlBindingForRun: (runId: string) => PromotionControlApprovalBinding | undefined;
@@ -90,12 +93,16 @@ interface Fixture {
 
 function fixture(targetCount = 1, fault?: (boundary: string) => void): Fixture {
   const projectRoot = tempRoot("penny-promotion");
+  installTestProjectState(projectRoot);
   const kbRoot = path.join(projectRoot, "private-kb");
   initKb({ kbRoot, profileId: PROFILE, runId: "run_init" }, "Promotion test KB");
 
   const manifest = readManifest(kbRoot);
   const policy = readPolicy(kbRoot);
-  const selected = readSelectedGeneration(kbRoot)!;
+  const selected = requireValue(
+    readSelectedGeneration(kbRoot),
+    "apps/orchestration/tests/kb-promotion.test.ts:102"
+  );
   const markdown =
     "## Synthesis\nSynthetic promotion guidance.\n\n" +
     "## Evidence\n- Synthetic evidence.\n\n" +
@@ -243,8 +250,16 @@ function fixture(targetCount = 1, fault?: (boundary: string) => void): Fixture {
     targets: targets.map((target, index) => ({
       target_capability_id: target.id,
       preimage_sha256: hash(target.original),
-      postimage_sha256: hash(Buffer.from(replacements[index]!, "utf8")),
-      replacement_utf8: replacements[index]!,
+      postimage_sha256: hash(
+        Buffer.from(
+          requireValue(replacements[index], "apps/orchestration/tests/kb-promotion.test.ts:250"),
+          "utf8"
+        )
+      ),
+      replacement_utf8: requireValue(
+        replacements[index],
+        "apps/orchestration/tests/kb-promotion.test.ts:251"
+      ),
     })),
   };
   const planHandle = artifactStore.stage({
@@ -324,9 +339,16 @@ function approve(input: Fixture) {
     challenge_id: outcome.gate.challenge_id,
     packet_sha256: outcome.gate.packet_sha256,
     decision: "approve",
-    decision_intent_sha256: outcome.gate.decision_intent_sha256!,
-    receipt_id: outcome.receipt!.receipt_id,
-    receipt_sha256: outcome.receipt_sha256!,
+    decision_intent_sha256: requireValue(
+      outcome.gate.decision_intent_sha256,
+      "apps/orchestration/tests/kb-promotion.test.ts:331"
+    ),
+    receipt_id: requireValue(outcome.receipt, "apps/orchestration/tests/kb-promotion.test.ts:332")
+      .receipt_id,
+    receipt_sha256: requireValue(
+      outcome.receipt_sha256,
+      "apps/orchestration/tests/kb-promotion.test.ts:333"
+    ),
   });
   return outcome;
 }
@@ -335,7 +357,10 @@ describe("G9 signed host-only promotion", () => {
   it("stores the approval packet first, signs exact JCS, applies once, and rotates keys", () => {
     const input = fixture(2);
     try {
-      const gate = input.store.gate(input.gateChallenge)!;
+      const gate = requireValue(
+        input.store.gate(input.gateChallenge),
+        "apps/orchestration/tests/kb-promotion.test.ts:342"
+      );
       expect(gate.state).toBe("awaiting");
       expect(gate.packet.target_capability_ids).toEqual(input.targetIds);
       expect(gate.packet.target_presentations.map((target) => target.canonical_target)).toEqual(
@@ -357,7 +382,11 @@ describe("G9 signed host-only promotion", () => {
       expect(decision.receipt?.key_id).toBe(firstKey);
       expect(decision.receipt?.signature).toMatch(/^[A-Za-z0-9_-]{43}$/);
       expect(decision.receipt?.signature).not.toContain("=");
-      expect(receiptJcs(decision.receipt!)).toBe(decision.receipt_jcs);
+      expect(
+        receiptJcs(
+          requireValue(decision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:364")
+        )
+      ).toBe(decision.receipt_jcs);
       const secondKey = input.store.rotateKey();
       expect(input.store.keyStates()).toEqual([
         { key_id: firstKey, state: "verification_only" },
@@ -370,7 +399,9 @@ describe("G9 signed host-only promotion", () => {
         statSync(path.join(approvalRootFor(input.projectRoot), `${firstKey}.key`)).mode & 0o777
       ).toBe(0o600);
 
-      const outcome = input.store.resumeApprovedPromotion(decision.receipt_jcs!);
+      const outcome = input.store.resumeApprovedPromotion(
+        requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:377")
+      );
       expect(outcome).toMatchObject({
         status: "complete",
         post_apply_verified: true,
@@ -395,9 +426,11 @@ describe("G9 signed host-only promotion", () => {
         post_apply_verified: true,
         targets: [{ state: "verified" }, { state: "verified" }],
       });
-      expect(() => input.store.resumeApprovedPromotion(decision.receipt_jcs!)).toThrow(
-        /not available|consumed/
-      );
+      expect(() =>
+        input.store.resumeApprovedPromotion(
+          requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:402")
+        )
+      ).toThrow(/not available|consumed/);
     } finally {
       input.store.close();
     }
@@ -406,7 +439,10 @@ describe("G9 signed host-only promotion", () => {
   it("validates exact closed packet/store/journal projections and keeps preimage_mode", () => {
     const input = fixture();
     try {
-      const gate = input.store.gate(input.gateChallenge)!;
+      const gate = requireValue(
+        input.store.gate(input.gateChallenge),
+        "apps/orchestration/tests/kb-promotion.test.ts:413"
+      );
       const { packet, ...gateRecord } = gate;
       expect(() =>
         validateKbContract(
@@ -434,7 +470,13 @@ describe("G9 signed host-only promotion", () => {
       ).toThrow();
 
       const decision = approve(input);
-      const storedReceipt = input.store.receipt(decision.receipt!.receipt_id)!;
+      const storedReceipt = requireValue(
+        input.store.receipt(
+          requireValue(decision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:441")
+            .receipt_id
+        ),
+        "apps/orchestration/tests/kb-promotion.test.ts:441"
+      );
       const {
         challenge_id: _challengeId,
         receipt_jcs: _receiptJcs,
@@ -457,12 +499,20 @@ describe("G9 signed host-only promotion", () => {
         )
       ).not.toThrow();
 
-      const outcome = input.store.resumeApprovedPromotion(decision.receipt_jcs!);
-      const journal = input.store.journal(outcome.transaction_id)!;
+      const outcome = input.store.resumeApprovedPromotion(
+        requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:464")
+      );
+      const journal = requireValue(
+        input.store.journal(outcome.transaction_id),
+        "apps/orchestration/tests/kb-promotion.test.ts:465"
+      );
       expect(() =>
         validateKbContract(PromotionApplyJournalSchema, journal, "test apply journal")
       ).not.toThrow();
-      expect(journal.targets[0]!.preimage_mode).toBe(0o600);
+      expect(
+        requireValue(journal.targets[0], "apps/orchestration/tests/kb-promotion.test.ts:469")
+          .preimage_mode
+      ).toBe(0o600);
       expect(() =>
         validateKbContract(
           PromotionApplyJournalSchema,
@@ -481,7 +531,10 @@ describe("G9 signed host-only promotion", () => {
   it("admits additional bound verification evidence but never an empty evidence set", () => {
     const input = fixture();
     try {
-      const stored = input.store.gate(input.gateChallenge)!;
+      const stored = requireValue(
+        input.store.gate(input.gateChallenge),
+        "apps/orchestration/tests/kb-promotion.test.ts:488"
+      );
       const verificationEvidence = [
         ...stored.packet.verification_evidence,
         {
@@ -501,7 +554,7 @@ describe("G9 signed host-only promotion", () => {
         "test multi-evidence promotion packet"
       );
       const packetJcs = jcsCanonicalize(packet);
-      const sqlite = process.getBuiltinModule("node:" + "sqlite") as typeof import("node:sqlite");
+      const sqlite = process.getBuiltinModule("node:sqlite");
       const db = new sqlite.DatabaseSync(
         path.join(approvalRootFor(input.projectRoot), "receipts.sqlite")
       );
@@ -514,7 +567,11 @@ describe("G9 signed host-only promotion", () => {
       }
 
       const decision = approve(input);
-      expect(input.store.resumeApprovedPromotion(decision.receipt_jcs!)).toMatchObject({
+      expect(
+        input.store.resumeApprovedPromotion(
+          requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:521")
+        )
+      ).toMatchObject({
         status: "complete",
         post_apply_verified: true,
       });
@@ -526,8 +583,11 @@ describe("G9 signed host-only promotion", () => {
   it("keeps canonical targets and private packet/receipt bodies out of control projection", () => {
     const input = fixture();
     try {
-      const decision = approve(input);
-      const binding = input.controlBindingForRun(RUN)!;
+      approve(input);
+      const binding = requireValue(
+        input.controlBindingForRun(RUN),
+        "apps/orchestration/tests/kb-promotion.test.ts:534"
+      );
       expect(() =>
         validateKbContract(
           PromotionControlApprovalBindingV1Schema,
@@ -535,7 +595,9 @@ describe("G9 signed host-only promotion", () => {
           "test promotion control binding"
         )
       ).not.toThrow();
-      expect(JSON.stringify(binding)).not.toContain(input.targetPaths[0]!);
+      expect(JSON.stringify(binding)).not.toContain(
+        requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:542")
+      );
       expect(JSON.stringify(binding)).not.toContain("packet_jcs");
       expect(JSON.stringify(binding)).not.toContain("receipt_jcs");
       expect(() =>
@@ -554,8 +616,14 @@ describe("G9 signed host-only promotion", () => {
     const input = fixture();
     try {
       const decision = approve(input);
-      const receipt = decision.receipt!;
-      const raw = decision.receipt_jcs!;
+      const receipt = requireValue(
+        decision.receipt,
+        "apps/orchestration/tests/kb-promotion.test.ts:561"
+      );
+      const raw = requireValue(
+        decision.receipt_jcs,
+        "apps/orchestration/tests/kb-promotion.test.ts:562"
+      );
       expect(() =>
         strictParseJson(
           raw
@@ -621,20 +689,22 @@ describe("G9 signed host-only promotion", () => {
 
   it("rejects symlinked or broadened approval ancestors and detects live DB/mutex drift", () => {
     const symlinkProject = tempRoot("penny-approval-ancestor");
-    const decoyPenny = tempRoot("penny-approval-decoy");
-    symlinkSync(decoyPenny, path.join(symlinkProject, ".penny"));
+    const symlinkState = installTestProjectState(symlinkProject);
+    const decoyApproval = tempRoot("penny-approval-decoy");
+    rmSync(symlinkState.paths.knowledgeBase.approval, { recursive: true, force: true });
+    symlinkSync(decoyApproval, symlinkState.paths.knowledgeBase.approval);
     expect(
       () =>
         new PromotionApprovalStore({
           projectRoot: symlinkProject,
           kbRoot: path.join(symlinkProject, "private-kb"),
         })
-    ).toThrow(/symlink|directory component/);
+    ).toThrow(/symlink|directory component|non-symlink/);
 
     const ancestor = fixture();
     ancestor.store.close();
-    const pennyRoot = path.join(ancestor.projectRoot, ".penny");
-    chmodSync(pennyRoot, 0o750);
+    const kbStateRoot = path.dirname(approvalRootFor(ancestor.projectRoot));
+    chmodSync(kbStateRoot, 0o750);
     expect(
       () =>
         new PromotionApprovalStore({
@@ -642,7 +712,7 @@ describe("G9 signed host-only promotion", () => {
           kbRoot: ancestor.kbRoot,
         })
     ).toThrow(/0700/);
-    chmodSync(pennyRoot, 0o700);
+    chmodSync(kbStateRoot, 0o700);
 
     const live = fixture();
     const approvalRoot = approvalRootFor(live.projectRoot);
@@ -665,7 +735,10 @@ describe("G9 signed host-only promotion", () => {
     const input = fixture(2);
     try {
       const decision = approve(input);
-      const receipt = decision.receipt!;
+      const receipt = requireValue(
+        decision.receipt,
+        "apps/orchestration/tests/kb-promotion.test.ts:674"
+      );
       const key = readRawPromotionKeyFile(approvalRootFor(input.projectRoot), receipt.key_id);
       const { signature: _signature, ...unsigned } = receipt;
       const mutations = [
@@ -689,7 +762,15 @@ describe("G9 signed host-only promotion", () => {
         { ...unsigned, page_revisions: [{ page_id: "page_other", revision_id: "rev_other" }] },
         { ...unsigned, target_capability_ids: [...unsigned.target_capability_ids].reverse() },
         { ...unsigned, canonical_targets: [...unsigned.canonical_targets].reverse() },
-        { ...unsigned, preimage_digests: { [unsigned.target_capability_ids[0]!]: "b".repeat(64) } },
+        {
+          ...unsigned,
+          preimage_digests: {
+            [requireValue(
+              unsigned.target_capability_ids[0],
+              "apps/orchestration/tests/kb-promotion.test.ts:698"
+            )]: "b".repeat(64),
+          },
+        },
         { ...unsigned, patch_digest: "c".repeat(64) },
         { ...unsigned, verification_evidence_digest: "d".repeat(64) },
       ];
@@ -714,34 +795,66 @@ describe("G9 signed host-only promotion", () => {
     const input = fixture();
     try {
       const decision = approve(input);
-      const binding = input.controlBindingForRun(RUN)!;
-      input.setControlBinding({ ...binding, receipt_sha256: "a".repeat(64) });
-      expect(() => input.store.resumeApprovedPromotion(decision.receipt_jcs!)).toThrow(
-        /exact control-side approved decision\/receipt binding/
+      const binding = requireValue(
+        input.controlBindingForRun(RUN),
+        "apps/orchestration/tests/kb-promotion.test.ts:723"
       );
-      expect(input.store.receipt(decision.receipt!.receipt_id)?.state).toBe("available");
-      expect(readFileSync(input.targetPaths[0]!)).toEqual(input.original[0]);
+      input.setControlBinding({ ...binding, receipt_sha256: "a".repeat(64) });
+      expect(() =>
+        input.store.resumeApprovedPromotion(
+          requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:725")
+        )
+      ).toThrow(/exact control-side approved decision\/receipt binding/);
+      expect(
+        input.store.receipt(
+          requireValue(decision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:728")
+            .receipt_id
+        )?.state
+      ).toBe("available");
+      expect(
+        readFileSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:729")
+        )
+      ).toEqual(input.original[0]);
     } finally {
       input.store.close();
     }
   });
 
   it("rechecks the control binding at the mutation reservation cliff", () => {
-    let input: Fixture;
-    input = fixture(1, (boundary) => {
+    const input: Fixture = fixture(1, (boundary) => {
       if (boundary === "after_preimage_0") {
-        const binding = input.controlBindingForRun(RUN)!;
+        const binding = requireValue(
+          input.controlBindingForRun(RUN),
+          "apps/orchestration/tests/kb-promotion.test.ts:739"
+        );
         input.setControlBinding({ ...binding, decision_intent_sha256: "b".repeat(64) });
       }
     });
     try {
       const decision = approve(input);
-      expect(() => input.store.resumeApprovedPromotion(decision.receipt_jcs!)).toThrow(
-        /exact control-side approved decision\/receipt binding/
+      expect(() =>
+        input.store.resumeApprovedPromotion(
+          requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:745")
+        )
+      ).toThrow(/exact control-side approved decision\/receipt binding/);
+      expect(
+        readFileSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:748")
+        )
+      ).toEqual(input.original[0]);
+      const receipt = requireValue(
+        input.store.receipt(
+          requireValue(decision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:749")
+            .receipt_id
+        ),
+        "apps/orchestration/tests/kb-promotion.test.ts:749"
       );
-      expect(readFileSync(input.targetPaths[0]!)).toEqual(input.original[0]);
-      const receipt = input.store.receipt(decision.receipt!.receipt_id)!;
-      expect(input.store.journal(receipt.transaction_id!)?.state).toBe("failed");
+      expect(
+        input.store.journal(
+          requireValue(receipt.transaction_id, "apps/orchestration/tests/kb-promotion.test.ts:750")
+        )?.state
+      ).toBe("failed");
     } finally {
       input.store.close();
     }
@@ -759,18 +872,38 @@ describe("G9 signed host-only promotion", () => {
       controlBindingForRun: expired.controlBindingForRun,
     });
     try {
-      expect(afterExpiry.resumeApprovedPromotion(expiredDecision.receipt_jcs!)).toMatchObject({
+      expect(
+        afterExpiry.resumeApprovedPromotion(
+          requireValue(
+            expiredDecision.receipt_jcs,
+            "apps/orchestration/tests/kb-promotion.test.ts:768"
+          )
+        )
+      ).toMatchObject({
         status: "failed",
         post_apply_verified: false,
       });
-      expect(afterExpiry.receipt(expiredDecision.receipt!.receipt_id)?.state).toBe("expired");
+      expect(
+        afterExpiry.receipt(
+          requireValue(expiredDecision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:772")
+            .receipt_id
+        )?.state
+      ).toBe("expired");
       const capabilities = new CapabilityStore(expired.projectRoot);
       try {
-        expect(capabilities.lease(expired.targetIds[0]!)?.state).toBe("invalidated");
+        expect(
+          capabilities.lease(
+            requireValue(expired.targetIds[0], "apps/orchestration/tests/kb-promotion.test.ts:775")
+          )?.state
+        ).toBe("invalidated");
       } finally {
         capabilities.close();
       }
-      expect(readFileSync(expired.targetPaths[0]!)).toEqual(expired.original[0]);
+      expect(
+        readFileSync(
+          requireValue(expired.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:779")
+        )
+      ).toEqual(expired.original[0]);
     } finally {
       afterExpiry.close();
     }
@@ -779,13 +912,33 @@ describe("G9 signed host-only promotion", () => {
     try {
       const driftDecision = approve(drifted);
       const thirdParty = Buffer.from("# drift before apply\n", "utf8");
-      writeFileSync(drifted.targetPaths[0]!, thirdParty, { mode: 0o600 });
-      expect(drifted.store.resumeApprovedPromotion(driftDecision.receipt_jcs!)).toMatchObject({
+      writeFileSync(
+        requireValue(drifted.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:788"),
+        thirdParty,
+        { mode: 0o600 }
+      );
+      expect(
+        drifted.store.resumeApprovedPromotion(
+          requireValue(
+            driftDecision.receipt_jcs,
+            "apps/orchestration/tests/kb-promotion.test.ts:789"
+          )
+        )
+      ).toMatchObject({
         status: "failed",
         post_apply_verified: false,
       });
-      expect(drifted.store.receipt(driftDecision.receipt!.receipt_id)?.state).toBe("invalidated");
-      expect(readFileSync(drifted.targetPaths[0]!)).toEqual(thirdParty);
+      expect(
+        drifted.store.receipt(
+          requireValue(driftDecision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:793")
+            .receipt_id
+        )?.state
+      ).toBe("invalidated");
+      expect(
+        readFileSync(
+          requireValue(drifted.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:794")
+        )
+      ).toEqual(thirdParty);
     } finally {
       drifted.store.close();
     }
@@ -824,12 +977,28 @@ describe("G9 signed host-only promotion", () => {
       }
     });
     const decision = approve(input);
-    expect(() => input.store.resumeApprovedPromotion(decision.receipt_jcs!)).toThrow(
-      PromotionSimulatedCrash
+    expect(() =>
+      input.store.resumeApprovedPromotion(
+        requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:833")
+      )
+    ).toThrow(PromotionSimulatedCrash);
+    const receipt = requireValue(
+      input.store.receipt(
+        requireValue(decision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:836")
+          .receipt_id
+      ),
+      "apps/orchestration/tests/kb-promotion.test.ts:836"
     );
-    const receipt = input.store.receipt(decision.receipt!.receipt_id)!;
-    const transactionId = receipt.transaction_id!;
-    expect(readFileSync(input.targetPaths[0]!, "utf8")).toContain("Applied");
+    const transactionId = requireValue(
+      receipt.transaction_id,
+      "apps/orchestration/tests/kb-promotion.test.ts:837"
+    );
+    expect(
+      readFileSync(
+        requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:838"),
+        "utf8"
+      )
+    ).toContain("Applied");
     input.store.close();
 
     const recovered = new PromotionApprovalStore({
@@ -857,11 +1026,26 @@ describe("G9 signed host-only promotion", () => {
       }
     });
     const decision = approve(input);
-    expect(() => input.store.resumeApprovedPromotion(decision.receipt_jcs!)).toThrow(
-      PromotionSimulatedCrash
+    expect(() =>
+      input.store.resumeApprovedPromotion(
+        requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:866")
+      )
+    ).toThrow(PromotionSimulatedCrash);
+    const transactionId = requireValue(
+      requireValue(
+        input.store.receipt(
+          requireValue(decision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:869")
+            .receipt_id
+        ),
+        "apps/orchestration/tests/kb-promotion.test.ts:869"
+      ).transaction_id,
+      "apps/orchestration/tests/kb-promotion.test.ts:869"
     );
-    const transactionId = input.store.receipt(decision.receipt!.receipt_id)!.transaction_id!;
-    expect(() => statSync(input.targetPaths[0]!)).toThrow();
+    expect(() =>
+      statSync(
+        requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:870")
+      )
+    ).toThrow();
     input.store.close();
 
     const recovered = new PromotionApprovalStore({
@@ -875,8 +1059,17 @@ describe("G9 signed host-only promotion", () => {
         status: "complete",
         post_apply_verified: true,
       });
-      expect(statSync(input.targetPaths[0]!).nlink).toBe(1);
-      expect(readFileSync(input.targetPaths[0]!, "utf8")).toContain("Applied");
+      expect(
+        statSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:884")
+        ).nlink
+      ).toBe(1);
+      expect(
+        readFileSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:885"),
+          "utf8"
+        )
+      ).toContain("Applied");
     } finally {
       recovered.close();
     }
@@ -891,11 +1084,26 @@ describe("G9 signed host-only promotion", () => {
       }
     });
     const decision = approve(input);
-    expect(() => input.store.resumeApprovedPromotion(decision.receipt_jcs!)).toThrow(
-      PromotionSimulatedCrash
+    expect(() =>
+      input.store.resumeApprovedPromotion(
+        requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:900")
+      )
+    ).toThrow(PromotionSimulatedCrash);
+    const transactionId = requireValue(
+      requireValue(
+        input.store.receipt(
+          requireValue(decision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:903")
+            .receipt_id
+        ),
+        "apps/orchestration/tests/kb-promotion.test.ts:903"
+      ).transaction_id,
+      "apps/orchestration/tests/kb-promotion.test.ts:903"
     );
-    const transactionId = input.store.receipt(decision.receipt!.receipt_id)!.transaction_id!;
-    expect(statSync(input.targetPaths[0]!).nlink).toBe(2);
+    expect(
+      statSync(
+        requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:904")
+      ).nlink
+    ).toBe(2);
     input.store.close();
 
     const recovered = new PromotionApprovalStore({
@@ -906,7 +1114,11 @@ describe("G9 signed host-only promotion", () => {
     });
     try {
       expect(recovered.recoverApply(transactionId).status).toBe("complete");
-      expect(statSync(input.targetPaths[0]!).nlink).toBe(1);
+      expect(
+        statSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:915")
+        ).nlink
+      ).toBe(1);
     } finally {
       recovered.close();
     }
@@ -922,11 +1134,26 @@ describe("G9 signed host-only promotion", () => {
       }
     });
     const decision = approve(input);
-    expect(() => input.store.resumeApprovedPromotion(decision.receipt_jcs!)).toThrow(
-      PromotionSimulatedCrash
+    expect(() =>
+      input.store.resumeApprovedPromotion(
+        requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:931")
+      )
+    ).toThrow(PromotionSimulatedCrash);
+    const transactionId = requireValue(
+      requireValue(
+        input.store.receipt(
+          requireValue(decision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:934")
+            .receipt_id
+        ),
+        "apps/orchestration/tests/kb-promotion.test.ts:934"
+      ).transaction_id,
+      "apps/orchestration/tests/kb-promotion.test.ts:934"
     );
-    const transactionId = input.store.receipt(decision.receipt!.receipt_id)!.transaction_id!;
-    expect(() => statSync(input.targetPaths[0]!)).toThrow();
+    expect(() =>
+      statSync(
+        requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:935")
+      )
+    ).toThrow();
     input.store.close();
 
     const recovered = new PromotionApprovalStore({
@@ -937,8 +1164,16 @@ describe("G9 signed host-only promotion", () => {
     });
     try {
       expect(recovered.recoverApply(transactionId).status).toBe("failed");
-      expect(readFileSync(input.targetPaths[0]!)).toEqual(input.original[0]);
-      expect(statSync(input.targetPaths[0]!).nlink).toBe(1);
+      expect(
+        readFileSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:946")
+        )
+      ).toEqual(input.original[0]);
+      expect(
+        statSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:947")
+        ).nlink
+      ).toBe(1);
     } finally {
       recovered.close();
     }
@@ -953,26 +1188,45 @@ describe("G9 signed host-only promotion", () => {
       }
     });
     const decision = approve(input);
-    expect(() => input.store.resumeApprovedPromotion(decision.receipt_jcs!)).toThrow(
-      PromotionSimulatedCrash
+    expect(() =>
+      input.store.resumeApprovedPromotion(
+        requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:962")
+      )
+    ).toThrow(PromotionSimulatedCrash);
+    const receipt = requireValue(
+      input.store.receipt(
+        requireValue(decision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:965")
+          .receipt_id
+      ),
+      "apps/orchestration/tests/kb-promotion.test.ts:965"
     );
-    const receipt = input.store.receipt(decision.receipt!.receipt_id)!;
-    const transactionId = receipt.transaction_id!;
+    const transactionId = requireValue(
+      receipt.transaction_id,
+      "apps/orchestration/tests/kb-promotion.test.ts:966"
+    );
     expect(receipt.state).toBe("consumed");
     expect(input.store.journal(transactionId)?.state).toBe("complete");
-    expect(readFileSync(input.targetPaths[0]!, "utf8")).toContain("Applied");
+    expect(
+      readFileSync(
+        requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:969"),
+        "utf8"
+      )
+    ).toContain("Applied");
     input.store.close();
 
     // Synthetic legacy split: terminal journal committed while the receipt row
     // still reads apply_reserved. Recovery must repair the approval pair before
     // settling the capability store.
-    const sqlite = process.getBuiltinModule("node:" + "sqlite") as typeof import("node:sqlite");
+    const sqlite = process.getBuiltinModule("node:sqlite");
     const splitDb = new sqlite.DatabaseSync(
       path.join(approvalRootFor(input.projectRoot), "receipts.sqlite")
     );
     splitDb
       .prepare("UPDATE promotion_receipts SET state = 'apply_reserved' WHERE receipt_id = ?")
-      .run(decision.receipt!.receipt_id);
+      .run(
+        requireValue(decision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:981")
+          .receipt_id
+      );
     splitDb.close();
 
     const recovered = new PromotionApprovalStore({
@@ -983,10 +1237,19 @@ describe("G9 signed host-only promotion", () => {
     });
     try {
       expect(recovered.recoverApply(transactionId).status).toBe("complete");
-      expect(recovered.receipt(decision.receipt!.receipt_id)?.state).toBe("consumed");
+      expect(
+        recovered.receipt(
+          requireValue(decision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:992")
+            .receipt_id
+        )?.state
+      ).toBe("consumed");
       const capabilities = new CapabilityStore(input.projectRoot);
       try {
-        expect(capabilities.lease(input.targetIds[0]!)).toMatchObject({
+        expect(
+          capabilities.lease(
+            requireValue(input.targetIds[0], "apps/orchestration/tests/kb-promotion.test.ts:995")
+          )
+        ).toMatchObject({
           state: "consumed",
           transaction_id: transactionId,
         });
@@ -1006,7 +1269,9 @@ describe("G9 signed host-only promotion", () => {
     });
     try {
       const decision = approve(input);
-      const outcome = input.store.resumeApprovedPromotion(decision.receipt_jcs!);
+      const outcome = input.store.resumeApprovedPromotion(
+        requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:1015")
+      );
       expect(outcome.status).toBe("failed");
       expect(restored).toEqual([1, 0]);
       input.targetPaths.forEach((targetPath, index) => {
@@ -1023,15 +1288,30 @@ describe("G9 signed host-only promotion", () => {
     const input = fixture(1, (boundary) => {
       if (!crashed && boundary === "after_rename_before_journal_0") {
         crashed = true;
-        writeFileSync(input.targetPaths[0]!, drift, { mode: 0o600 });
+        writeFileSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:1032"),
+          drift,
+          { mode: 0o600 }
+        );
         throw new PromotionSimulatedCrash(boundary);
       }
     });
     const decision = approve(input);
-    expect(() => input.store.resumeApprovedPromotion(decision.receipt_jcs!)).toThrow(
-      PromotionSimulatedCrash
+    expect(() =>
+      input.store.resumeApprovedPromotion(
+        requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:1037")
+      )
+    ).toThrow(PromotionSimulatedCrash);
+    const transactionId = requireValue(
+      requireValue(
+        input.store.receipt(
+          requireValue(decision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:1040")
+            .receipt_id
+        ),
+        "apps/orchestration/tests/kb-promotion.test.ts:1040"
+      ).transaction_id,
+      "apps/orchestration/tests/kb-promotion.test.ts:1040"
     );
-    const transactionId = input.store.receipt(decision.receipt!.receipt_id)!.transaction_id!;
     input.store.close();
     const recovered = new PromotionApprovalStore({
       projectRoot: input.projectRoot,
@@ -1041,10 +1321,18 @@ describe("G9 signed host-only promotion", () => {
     });
     try {
       expect(recovered.recoverApply(transactionId).status).toBe("blocked_external_drift");
-      expect(readFileSync(input.targetPaths[0]!)).toEqual(drift);
+      expect(
+        readFileSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:1050")
+        )
+      ).toEqual(drift);
       const capabilities = new CapabilityStore(input.projectRoot);
       try {
-        expect(capabilities.lease(input.targetIds[0]!)?.state).toBe("invalidated");
+        expect(
+          capabilities.lease(
+            requireValue(input.targetIds[0], "apps/orchestration/tests/kb-promotion.test.ts:1053")
+          )?.state
+        ).toBe("invalidated");
       } finally {
         capabilities.close();
       }
@@ -1063,15 +1351,35 @@ describe("G9 signed host-only promotion", () => {
     });
     const decision = approve(input);
     const drift = Buffer.from("# drift before pre-claim validation\n", "utf8");
-    writeFileSync(input.targetPaths[0]!, drift, { mode: 0o600 });
-    expect(() => input.store.resumeApprovedPromotion(decision.receipt_jcs!)).toThrow(
-      PromotionSimulatedCrash
+    writeFileSync(
+      requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:1072"),
+      drift,
+      { mode: 0o600 }
     );
-    const receipt = input.store.receipt(decision.receipt!.receipt_id)!;
+    expect(() =>
+      input.store.resumeApprovedPromotion(
+        requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:1073")
+      )
+    ).toThrow(PromotionSimulatedCrash);
+    const receipt = requireValue(
+      input.store.receipt(
+        requireValue(decision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:1076")
+          .receipt_id
+      ),
+      "apps/orchestration/tests/kb-promotion.test.ts:1076"
+    );
     expect(receipt.state).toBe("invalidated");
-    expect(input.store.journal(receipt.transaction_id!)).toBeUndefined();
+    expect(
+      input.store.journal(
+        requireValue(receipt.transaction_id, "apps/orchestration/tests/kb-promotion.test.ts:1078")
+      )
+    ).toBeUndefined();
     const beforeRecovery = new CapabilityStore(input.projectRoot);
-    expect(beforeRecovery.lease(input.targetIds[0]!)?.state).toBe("claimed");
+    expect(
+      beforeRecovery.lease(
+        requireValue(input.targetIds[0], "apps/orchestration/tests/kb-promotion.test.ts:1080")
+      )?.state
+    ).toBe("claimed");
     beforeRecovery.close();
     input.store.close();
 
@@ -1087,12 +1395,20 @@ describe("G9 signed host-only promotion", () => {
         transaction_id: receipt.transaction_id,
       });
       const capabilities = new CapabilityStore(input.projectRoot);
-      expect(capabilities.lease(input.targetIds[0]!)).toMatchObject({
+      expect(
+        capabilities.lease(
+          requireValue(input.targetIds[0], "apps/orchestration/tests/kb-promotion.test.ts:1096")
+        )
+      ).toMatchObject({
         state: "invalidated",
         transaction_id: receipt.transaction_id,
       });
       capabilities.close();
-      expect(readFileSync(input.targetPaths[0]!)).toEqual(drift);
+      expect(
+        readFileSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:1101")
+        )
+      ).toEqual(drift);
     } finally {
       recovered.close();
     }
@@ -1108,15 +1424,32 @@ describe("G9 signed host-only promotion", () => {
       }
     });
     const decision = approve(input);
-    expect(() => input.store.resumeApprovedPromotion(decision.receipt_jcs!)).toThrow(
-      PromotionSimulatedCrash
+    expect(() =>
+      input.store.resumeApprovedPromotion(
+        requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:1117")
+      )
+    ).toThrow(PromotionSimulatedCrash);
+    const receipt = requireValue(
+      input.store.receipt(
+        requireValue(decision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:1120")
+          .receipt_id
+      ),
+      "apps/orchestration/tests/kb-promotion.test.ts:1120"
     );
-    const receipt = input.store.receipt(decision.receipt!.receipt_id)!;
-    const journal = input.store.journal(receipt.transaction_id!)!;
+    const journal = requireValue(
+      input.store.journal(
+        requireValue(receipt.transaction_id, "apps/orchestration/tests/kb-promotion.test.ts:1121")
+      ),
+      "apps/orchestration/tests/kb-promotion.test.ts:1121"
+    );
     expect(receipt.state).toBe("invalidated");
     expect(journal.state).toBe("failed");
     const beforeRecovery = new CapabilityStore(input.projectRoot);
-    expect(beforeRecovery.lease(input.targetIds[0]!)?.state).toBe("apply_reserved");
+    expect(
+      beforeRecovery.lease(
+        requireValue(input.targetIds[0], "apps/orchestration/tests/kb-promotion.test.ts:1125")
+      )?.state
+    ).toBe("apply_reserved");
     beforeRecovery.close();
     input.store.close();
 
@@ -1129,9 +1462,17 @@ describe("G9 signed host-only promotion", () => {
     try {
       expect(recovered.recoverApply(journal.transaction_id).status).toBe("failed");
       const capabilities = new CapabilityStore(input.projectRoot);
-      expect(capabilities.lease(input.targetIds[0]!)?.state).toBe("invalidated");
+      expect(
+        capabilities.lease(
+          requireValue(input.targetIds[0], "apps/orchestration/tests/kb-promotion.test.ts:1138")
+        )?.state
+      ).toBe("invalidated");
       capabilities.close();
-      expect(readFileSync(input.targetPaths[0]!)).toEqual(input.original[0]);
+      expect(
+        readFileSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:1140")
+        )
+      ).toEqual(input.original[0]);
     } finally {
       recovered.close();
     }
@@ -1141,15 +1482,25 @@ describe("G9 signed host-only promotion", () => {
     const input = fixture();
     try {
       const decision = approve(input);
-      const targetRoot = path.dirname(input.targetPaths[0]!);
+      const targetRoot = path.dirname(
+        requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:1150")
+      );
       const movedRoot = `${targetRoot}-moved`;
       renameSync(targetRoot, movedRoot);
       symlinkSync(movedRoot, targetRoot);
-      expect(input.store.resumeApprovedPromotion(decision.receipt_jcs!)).toMatchObject({
+      expect(
+        input.store.resumeApprovedPromotion(
+          requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:1154")
+        )
+      ).toMatchObject({
         status: "failed",
         post_apply_verified: false,
       });
-      expect(readFileSync(input.targetPaths[0]!)).toEqual(input.original[0]);
+      expect(
+        readFileSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:1158")
+        )
+      ).toEqual(input.original[0]);
     } finally {
       input.store.close();
     }
@@ -1157,19 +1508,30 @@ describe("G9 signed host-only promotion", () => {
 
   it("never overwrites drift introduced after the final check but before commit", () => {
     const drift = Buffer.from("# Drift in the check-to-commit window\n", "utf8");
-    let input: Fixture;
-    input = fixture(1, (boundary) => {
+    const input: Fixture = fixture(1, (boundary) => {
       if (boundary === "before_replace_commit_0") {
-        writeFileSync(input.targetPaths[0]!, drift, { mode: 0o600 });
+        writeFileSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:1169"),
+          drift,
+          { mode: 0o600 }
+        );
       }
     });
     try {
       const decision = approve(input);
-      expect(input.store.resumeApprovedPromotion(decision.receipt_jcs!)).toMatchObject({
+      expect(
+        input.store.resumeApprovedPromotion(
+          requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:1174")
+        )
+      ).toMatchObject({
         status: "blocked_external_drift",
         post_apply_verified: false,
       });
-      expect(readFileSync(input.targetPaths[0]!)).toEqual(drift);
+      expect(
+        readFileSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:1178")
+        )
+      ).toEqual(drift);
     } finally {
       input.store.close();
     }
@@ -1178,25 +1540,52 @@ describe("G9 signed host-only promotion", () => {
   it("preserves the complete required target mode bits", () => {
     const input = fixture();
     try {
-      chmodSync(input.targetPaths[0]!, 0o4750);
-      const requiredMode = statSync(input.targetPaths[0]!).mode & 0o7777;
+      chmodSync(
+        requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:1187"),
+        0o4750
+      );
+      const requiredMode =
+        statSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:1188")
+        ).mode & 0o7777;
       const decision = approve(input);
-      expect(input.store.resumeApprovedPromotion(decision.receipt_jcs!).status).toBe("complete");
-      expect(statSync(input.targetPaths[0]!).mode & 0o7777).toBe(requiredMode);
+      expect(
+        input.store.resumeApprovedPromotion(
+          requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:1190")
+        ).status
+      ).toBe("complete");
+      expect(
+        statSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:1191")
+        ).mode & 0o7777
+      ).toBe(requiredMode);
     } finally {
       input.store.close();
     }
   });
 
   it("hash- and custody-checks a saved preimage immediately before restore", () => {
-    let input: Fixture;
-    input = fixture(1, (boundary) => {
+    const input: Fixture = fixture(1, (boundary) => {
       if (boundary === "after_written_0") {
-        const receipt = input.store.receiptForRun(RUN)!;
-        const journal = input.store.journal(receipt.transaction_id!)!;
+        const receipt = requireValue(
+          input.store.receiptForRun(RUN),
+          "apps/orchestration/tests/kb-promotion.test.ts:1201"
+        );
+        const journal = requireValue(
+          input.store.journal(
+            requireValue(
+              receipt.transaction_id,
+              "apps/orchestration/tests/kb-promotion.test.ts:1202"
+            )
+          ),
+          "apps/orchestration/tests/kb-promotion.test.ts:1202"
+        );
         const preimage = path.join(
           input.kbRoot,
-          ...journal.targets[0]!.preimage_storage_key.split("/")
+          ...requireValue(
+            journal.targets[0],
+            "apps/orchestration/tests/kb-promotion.test.ts:1205"
+          ).preimage_storage_key.split("/")
         );
         writeFileSync(preimage, "tampered saved preimage", { mode: 0o600 });
         throw new Error("force restore after saved-preimage tamper");
@@ -1204,14 +1593,31 @@ describe("G9 signed host-only promotion", () => {
     });
     try {
       const decision = approve(input);
-      expect(input.store.resumeApprovedPromotion(decision.receipt_jcs!)).toMatchObject({
+      expect(
+        input.store.resumeApprovedPromotion(
+          requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:1213")
+        )
+      ).toMatchObject({
         status: "blocked_external_drift",
         post_apply_verified: false,
       });
-      expect(input.store.journal(input.store.receiptForRun(RUN)!.transaction_id!)?.state).toBe(
-        "blocked_external_drift"
-      );
-      expect(readFileSync(input.targetPaths[0]!, "utf8")).toContain("Applied");
+      expect(
+        input.store.journal(
+          requireValue(
+            requireValue(
+              input.store.receiptForRun(RUN),
+              "apps/orchestration/tests/kb-promotion.test.ts:1217"
+            ).transaction_id,
+            "apps/orchestration/tests/kb-promotion.test.ts:1217"
+          )
+        )?.state
+      ).toBe("blocked_external_drift");
+      expect(
+        readFileSync(
+          requireValue(input.targetPaths[0], "apps/orchestration/tests/kb-promotion.test.ts:1220"),
+          "utf8"
+        )
+      ).toContain("Applied");
     } finally {
       input.store.close();
     }
@@ -1238,10 +1644,21 @@ describe("G9 signed host-only promotion", () => {
     });
     input.store = store;
     const decision = approve(input);
-    expect(() => store.resumeApprovedPromotion(decision.receipt_jcs!)).toThrow(
-      PromotionSimulatedCrash
+    expect(() =>
+      store.resumeApprovedPromotion(
+        requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-promotion.test.ts:1247")
+      )
+    ).toThrow(PromotionSimulatedCrash);
+    const transactionId = requireValue(
+      requireValue(
+        store.receipt(
+          requireValue(decision.receipt, "apps/orchestration/tests/kb-promotion.test.ts:1250")
+            .receipt_id
+        ),
+        "apps/orchestration/tests/kb-promotion.test.ts:1250"
+      ).transaction_id,
+      "apps/orchestration/tests/kb-promotion.test.ts:1250"
     );
-    const transactionId = store.receipt(decision.receipt!.receipt_id)!.transaction_id!;
     store.close();
     const recovered = new PromotionApprovalStore({
       projectRoot: input.projectRoot,

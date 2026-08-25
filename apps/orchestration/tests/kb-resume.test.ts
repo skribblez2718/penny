@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { requireValue } from "./helpers/narrowing.js";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -20,6 +21,7 @@ import {
   requireKbRunPolicyCurrent,
 } from "../src/kb/run-access.js";
 import { PolicyRefusal } from "../src/kb/policy.js";
+import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 
 const PROFILE = "kbp_resume";
 const SESSION = "sess_resume";
@@ -68,9 +70,9 @@ type ResumableAction = "ingest" | "query" | "save" | "promote";
 function crashRestartPosture(action: ResumableAction) {
   const projectRoot = mkdtempSync(path.join(tmpdir(), `penny-kb-${action}-restart-`));
   roots.push(projectRoot);
+  installTestProjectState(projectRoot);
   const kbRoot = path.join(projectRoot, "private-kb");
   const dbPath = path.join(projectRoot, "orchestration.db");
-  mkdirSync(path.join(projectRoot, ".penny"), { mode: 0o700 });
   const runId = `run_${action}_restart`;
   const phase =
     action === "query"
@@ -223,7 +225,14 @@ describe("KB crash/restart worker posture reconstruction", () => {
     const { options, reopened } = crashRestartPosture("query");
     try {
       expect(options.operation).toBe("query");
-      expect(JSON.parse(options.queryReader!.readRequest())).toMatchObject({
+      expect(
+        JSON.parse(
+          requireValue(
+            options.queryReader,
+            "apps/orchestration/tests/kb-resume.test.ts:227"
+          ).readRequest()
+        )
+      ).toMatchObject({
         action: "query",
         query: "private restart query",
       });
@@ -237,7 +246,11 @@ describe("KB crash/restart worker posture reconstruction", () => {
     const { options, reopened } = crashRestartPosture("save");
     try {
       expect(options.operation).toBe("save");
-      expect(JSON.parse(options.readPhaseBrief!())).toMatchObject({
+      expect(
+        JSON.parse(
+          requireValue(options.readPhaseBrief, "apps/orchestration/tests/kb-resume.test.ts:241")()
+        )
+      ).toMatchObject({
         action: "save",
         title: "Private saved title",
       });
@@ -255,7 +268,14 @@ describe("KB crash/restart worker posture reconstruction", () => {
     const { options, reopened } = crashRestartPosture("promote");
     try {
       expect(options.operation).toBe("promote");
-      expect(JSON.parse(options.promotionReader!.readPhaseBrief())).toEqual({
+      expect(
+        JSON.parse(
+          requireValue(
+            options.promotionReader,
+            "apps/orchestration/tests/kb-resume.test.ts:259"
+          ).readPhaseBrief()
+        )
+      ).toEqual({
         schema_version: 1,
         action: "promote",
         page_revisions: [{ page_id: "page_restart", revision_id: "rev_restart" }],

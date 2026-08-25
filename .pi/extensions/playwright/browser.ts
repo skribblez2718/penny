@@ -27,6 +27,42 @@ import type { PlaywrightConfig, ProxyConfig, BrowserState, SnapshotNode } from "
 
 const logger = createLogger("playwright:browser");
 
+interface CdpWebSocketHandle {
+  unref(): void;
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isCdpWebSocketHandle(value: unknown): value is CdpWebSocketHandle {
+  return isUnknownRecord(value) && typeof value.unref === "function";
+}
+
+/**
+ * Best-effort adapter for Playwright's private Chromium transport chain.
+ *
+ * The private host shape is intentionally permissive: missing or wrong-type
+ * members are ignored, extra members are accepted, and transport failures do
+ * not escape. This preserves the CDP event-loop safety behavior without
+ * asserting that Playwright's public Browser type exposes private internals.
+ */
+export function unrefPlaywrightCdpConnection(browser: unknown): boolean {
+  try {
+    if (!isUnknownRecord(browser)) return false;
+    const connection = browser._connection;
+    if (!isUnknownRecord(connection)) return false;
+    const transport = connection._transport;
+    if (!isUnknownRecord(transport)) return false;
+    const webSocket = transport._ws;
+    if (!isCdpWebSocketHandle(webSocket)) return false;
+    webSocket.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ============================================================================
 // BrowserManager (Singleton)
 // ============================================================================
@@ -193,19 +229,8 @@ export class BrowserManager {
   private unrefConnections(): void {
     if (!this.browser) return;
 
-    try {
-      // Playwright does not expose the underlying CDP WebSocket, so we reach into
-      // its private transport internals through a narrow shape rather than `any`.
-      interface CdpTransportInternals {
-        _connection?: { _transport?: { _ws?: { unref?: () => void } } };
-      }
-      const ws = (this.browser as unknown as CdpTransportInternals)?._connection?._transport?._ws;
-      if (ws && typeof ws.unref === "function") {
-        ws.unref();
-        logger.debug("CDP WebSocket unref'd");
-      }
-    } catch {
-      // .unref() is best-effort — the kill-switch is the safety net
+    if (unrefPlaywrightCdpConnection(this.browser)) {
+      logger.debug("CDP WebSocket unref'd");
     }
   }
 
@@ -386,7 +411,7 @@ export class BrowserManager {
   async snapshot(): Promise<{ tree: SnapshotNode | null; error?: string }> {
     const page = await this.getPage();
     try {
-      const tree = (await page.evaluate(() => {
+      const tree = await page.evaluate(() => {
         // Build a semantic tree from the DOM — mirrors accessibility snapshot format
         const MAX_DEPTH = 8;
         const MAX_CHILDREN = 30;
@@ -436,11 +461,11 @@ export class BrowserManager {
             const labelEl = document.getElementById(labelledBy);
             if (labelEl) return labelEl.textContent?.trim() || "";
           }
-          if (el.tagName === "INPUT" && (el as HTMLInputElement).type !== "submit") {
-            return (el as HTMLInputElement).placeholder || (el as HTMLInputElement).value || "";
+          if (el instanceof HTMLInputElement && el.type !== "submit") {
+            return el.placeholder || el.value || "";
           }
-          if (el.tagName === "IMG") {
-            return (el as HTMLImageElement).alt || "";
+          if (el instanceof HTMLImageElement) {
+            return el.alt || "";
           }
           // Direct text only (no nested element text)
           let text = "";
@@ -502,7 +527,7 @@ export class BrowserManager {
         }
 
         return buildTree(document.body, 0);
-      })) as SnapshotNode | null;
+      });
 
       return { tree };
     } catch (err) {

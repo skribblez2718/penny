@@ -1,9 +1,12 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "declaration": false,
+    "declarationMap": false,
     "noEmit": true,
-    "rootDir": "."
+    "rootDir": ".",
+    "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*.ts", "smoke/**/*.ts"],
+  "include": ["src/**/*.ts", "smoke/**/*.ts", "vitest.kb-model-smoke.config.ts"],
   "exclude": ["dist", "node_modules"]
 }

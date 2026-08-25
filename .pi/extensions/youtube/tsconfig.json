@@ -13,6 +13,6 @@
     "resolveJsonModule": true,
     "isolatedModules": true
   },
-  "include": ["*.ts", "tools/**/*.ts", "tests/**/*.ts", "../../lib/types/pi-types.d.ts"],
+  "include": ["*.ts", "tools/**/*.ts", "tests/**/*.ts"],
   "exclude": ["node_modules"]
 }

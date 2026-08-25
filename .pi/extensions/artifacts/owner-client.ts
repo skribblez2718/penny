@@ -1,85 +1,23 @@
-import { createHash } from "crypto";
-import { lstat, readFile, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { createHash } from "node:crypto";
 
 import {
   ArtifactStore,
-  type OutputArtifactMetadata as TypeScriptOutputArtifactMetadata,
+  currentArtifactRef,
+  resolvePennyProjectState,
+} from "@penny/orchestration/source";
+import type {
+  CurrentArtifactRef as TypeScriptArtifactRef,
+  OutputArtifactMetadata as TypeScriptArtifactMetadata,
 } from "@penny/orchestration/source";
 
-export const OUTPUT_ARTIFACT_SCHEMA_VERSION = 1 as const;
+export const OUTPUT_ARTIFACT_SCHEMA_VERSION = 2 as const;
 export const RESULT_PROTOCOL_VERSION = 2 as const;
 export const MAX_ARTIFACT_METADATA_BYTES = 64 * 1024;
 
-const ARTIFACT_ID = /^art_[0-9a-f]{64}$/;
-const DIGEST = /^[0-9a-f]{64}$/;
 const KIND = /^[a-z][a-z0-9-]*$/;
-const STORE_REF = /^artifact:\/\/sha256\/[0-9a-f]{64}$/;
 
-const OUTPUT_ARTIFACT_FIELDS = [
-  "schema_version",
-  "run_id",
-  "phase",
-  "branch_id",
-  "kind",
-  "operation_id",
-  "version",
-  "producer",
-  "consumer_scope",
-  "media_type",
-  "parent_ref",
-  "upstream_refs",
-] as const;
-
-const ARTIFACT_REF_FIELDS = [
-  "schema_version",
-  "artifact_id",
-  "run_id",
-  "phase",
-  "branch_id",
-  "kind",
-  "operation_id",
-  "version",
-  "producer",
-  "consumer_scope",
-  "media_type",
-  "byte_length",
-  "content_digest",
-  "store_ref",
-] as const;
-
-export interface ArtifactRef {
-  schema_version: 1;
-  artifact_id: string;
-  run_id: string;
-  phase: string;
-  branch_id: string | null;
-  kind: string;
-  operation_id: string;
-  version: number;
-  producer: string;
-  consumer_scope: string[];
-  media_type: string;
-  byte_length: number;
-  content_digest: string;
-  store_ref: string;
-}
-
-export interface OutputArtifactMetadata {
-  schema_version: 1;
-  run_id: string;
-  phase: string;
-  branch_id: string | null;
-  kind: string;
-  operation_id: string;
-  version: number;
-  producer: string;
-  consumer_scope: string[];
-  media_type: string;
-  parent_ref: ArtifactRef | null;
-  upstream_refs: ArtifactRef[];
-}
+export type ArtifactRef = TypeScriptArtifactRef;
+export type OutputArtifactMetadata = Extract<TypeScriptArtifactMetadata, { schema_version: 2 }>;
 
 export interface OutputArtifactExpectation {
   runId: string;
@@ -117,115 +55,49 @@ function refError(message: string): never {
   throw new ArtifactClientError("ARTIFACT_REF_INVALID", message);
 }
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function asObject(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isUnknownRecord(value)) {
     if (label === "ArtifactRef") refError(`${label} must be an object`);
     contractError(`${label} must be an object`);
   }
-  return value as Record<string, unknown>;
+  return value;
 }
 
-function exactKeys(
-  record: Record<string, unknown>,
-  expected: readonly string[],
-  label: string,
-  invalid: (message: string) => never
-): void {
-  const keys = Object.keys(record);
-  const missing = expected.filter((key) => !Object.prototype.hasOwnProperty.call(record, key));
-  const unknown = keys.filter((key) => !expected.includes(key));
-  if (missing.length) invalid(`${label} missing required fields: ${missing.sort().join(", ")}`);
-  if (unknown.length) invalid(`${label} has unknown fields: ${unknown.sort().join(", ")}`);
-}
-
-function hasUnpairedSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) return true;
-      index += 1;
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function canonicalString(
-  value: unknown,
-  field: string,
-  invalid: (message: string) => never
-): string {
+function canonicalString(value: unknown, field: string): string {
   if (
     typeof value !== "string" ||
-    !value ||
+    value.length === 0 ||
     value !== value.trim() ||
-    hasUnpairedSurrogate(value) ||
     Array.from(value).some((character) => {
       const code = character.codePointAt(0) ?? 0;
       return code < 32 || code === 127;
     })
   ) {
-    invalid(`${field} must be a non-empty canonical string`);
+    contractError(`${field} must be a non-empty canonical string`);
   }
   return value;
 }
 
-function positiveInteger(
-  value: unknown,
-  field: string,
-  invalid: (message: string) => never
-): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 1) {
-    invalid(`${field} must be a positive integer`);
-  }
-  return value as number;
+function isSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value);
 }
 
-function nonnegativeInteger(
-  value: unknown,
-  field: string,
-  invalid: (message: string) => never
-): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    invalid(`${field} must be a non-negative integer`);
+function positiveInteger(value: unknown, field: string): number {
+  if (!isSafeInteger(value) || value < 1) {
+    contractError(`${field} must be a positive integer`);
   }
-  return value as number;
-}
-
-function compareUnicode(left: string, right: string): number {
-  const leftPoints = Array.from(left, (character) => character.codePointAt(0) ?? -1);
-  const rightPoints = Array.from(right, (character) => character.codePointAt(0) ?? -1);
-  const length = Math.min(leftPoints.length, rightPoints.length);
-  for (let index = 0; index < length; index += 1) {
-    const leftPoint = leftPoints[index] ?? -1;
-    const rightPoint = rightPoints[index] ?? -1;
-    if (leftPoint < rightPoint) return -1;
-    if (leftPoint > rightPoint) return 1;
-  }
-  return leftPoints.length - rightPoints.length;
-}
-
-function canonicalStringArray(
-  value: unknown,
-  field: string,
-  invalid: (message: string) => never
-): string[] {
-  if (!Array.isArray(value)) invalid(`${field} must be an array`);
-  const items = value.map((item, index) => canonicalString(item, `${field}[${index}]`, invalid));
-  if (new Set(items).size !== items.length) invalid(`${field} must not contain duplicates`);
-  if (items.some((item, index) => index > 0 && compareUnicode(items[index - 1], item) > 0)) {
-    invalid(`${field} must use canonical sorted order`);
-  }
-  return items;
+  return value;
 }
 
 function sortJson(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortJson);
-  if (value && typeof value === "object") {
+  if (isUnknownRecord(value)) {
     return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
+      Object.entries(value)
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([key, child]) => [key, sortJson(child)])
     );
@@ -271,52 +143,13 @@ export function artifactIdFor(value: {
     .digest("hex")}`;
 }
 
+/** Validate one canonical schema-v2 artifact communication address. */
 export function parseArtifactRef(value: unknown): ArtifactRef {
-  const record = asObject(value, "ArtifactRef");
-  exactKeys(record, ARTIFACT_REF_FIELDS, "ArtifactRef", refError);
-  if (record.schema_version !== OUTPUT_ARTIFACT_SCHEMA_VERSION) {
-    refError("unsupported ArtifactRef schema version");
+  try {
+    return currentArtifactRef(value, "ArtifactRef");
+  } catch (error) {
+    refError(error instanceof Error ? error.message : "ArtifactRef is invalid");
   }
-  const artifactId = canonicalString(record.artifact_id, "artifact_id", refError);
-  const runId = canonicalString(record.run_id, "run_id", refError);
-  const phase = canonicalString(record.phase, "phase", refError);
-  const branchId =
-    record.branch_id === null ? null : canonicalString(record.branch_id, "branch_id", refError);
-  const kind = canonicalString(record.kind, "kind", refError);
-  if (!KIND.test(kind)) refError("kind must use lowercase kebab-case");
-  const operationId = canonicalString(record.operation_id, "operation_id", refError);
-  const version = positiveInteger(record.version, "version", refError);
-  const producer = canonicalString(record.producer, "producer", refError);
-  const consumerScope = canonicalStringArray(record.consumer_scope, "consumer_scope", refError);
-  const mediaType = canonicalString(record.media_type, "media_type", refError);
-  const byteLength = nonnegativeInteger(record.byte_length, "byte_length", refError);
-  const contentDigest = canonicalString(record.content_digest, "content_digest", refError);
-  const storeRef = canonicalString(record.store_ref, "store_ref", refError);
-
-  if (!ARTIFACT_ID.test(artifactId)) refError("artifact_id is not canonical");
-  if (!DIGEST.test(contentDigest)) refError("content_digest is not canonical lowercase SHA-256");
-  if (!STORE_REF.test(storeRef) || storeRef !== `artifact://sha256/${contentDigest}`) {
-    refError("store_ref does not match content_digest");
-  }
-
-  const ref: ArtifactRef = {
-    schema_version: 1,
-    artifact_id: artifactId,
-    run_id: runId,
-    phase,
-    branch_id: branchId,
-    kind,
-    operation_id: operationId,
-    version,
-    producer,
-    consumer_scope: consumerScope,
-    media_type: mediaType,
-    byte_length: byteLength,
-    content_digest: contentDigest,
-    store_ref: storeRef,
-  };
-  if (artifactIdFor(ref) !== artifactId) refError("artifact_id does not match its identity");
-  return ref;
 }
 
 export function parseOutputArtifactMetadata(
@@ -324,32 +157,45 @@ export function parseOutputArtifactMetadata(
   expected?: OutputArtifactExpectation
 ): OutputArtifactMetadata {
   const record = asObject(value, "output_artifact");
-  exactKeys(record, OUTPUT_ARTIFACT_FIELDS, "output_artifact", contractError);
   if (record.schema_version !== OUTPUT_ARTIFACT_SCHEMA_VERSION) {
     contractError("unsupported output_artifact schema version");
   }
-
-  const runId = canonicalString(record.run_id, "output_artifact.run_id", contractError);
-  const phase = canonicalString(record.phase, "output_artifact.phase", contractError);
+  const expectedFields = [
+    "schema_version",
+    "run_id",
+    "phase",
+    "branch_id",
+    "kind",
+    "operation_id",
+    "version",
+    "producer",
+    "media_type",
+    "parent_ref",
+    "upstream_refs",
+  ];
+  const keys = Object.keys(record);
+  const missing = expectedFields.filter((field) => !Object.hasOwn(record, field));
+  const unknown = keys.filter((field) => !expectedFields.includes(field));
+  if (missing.length > 0) {
+    contractError(`output_artifact missing required fields: ${missing.sort().join(", ")}`);
+  }
+  if (unknown.length > 0) {
+    contractError(`output_artifact has unknown fields: ${unknown.sort().join(", ")}`);
+  }
+  const runId = canonicalString(record.run_id, "output_artifact.run_id");
+  const phase = canonicalString(record.phase, "output_artifact.phase");
   const branchId =
     record.branch_id === null
       ? null
-      : canonicalString(record.branch_id, "output_artifact.branch_id", contractError);
-  const kind = canonicalString(record.kind, "output_artifact.kind", contractError);
-  if (!KIND.test(kind)) contractError("output_artifact.kind must use lowercase kebab-case");
-  const operationId = canonicalString(
-    record.operation_id,
-    "output_artifact.operation_id",
-    contractError
-  );
-  const version = positiveInteger(record.version, "output_artifact.version", contractError);
-  const producer = canonicalString(record.producer, "output_artifact.producer", contractError);
-  const consumerScope = canonicalStringArray(
-    record.consumer_scope,
-    "output_artifact.consumer_scope",
-    contractError
-  );
-  const mediaType = canonicalString(record.media_type, "output_artifact.media_type", contractError);
+      : canonicalString(record.branch_id, "output_artifact.branch_id");
+  const kind = canonicalString(record.kind, "output_artifact.kind");
+  if (!KIND.test(kind) || kind !== "agent-output") {
+    contractError("output_artifact.kind must be agent-output");
+  }
+  const operationId = canonicalString(record.operation_id, "output_artifact.operation_id");
+  const version = positiveInteger(record.version, "output_artifact.version");
+  const producer = canonicalString(record.producer, "output_artifact.producer");
+  const mediaType = canonicalString(record.media_type, "output_artifact.media_type");
   const parentRef = record.parent_ref === null ? null : parseArtifactRef(record.parent_ref);
   if (!Array.isArray(record.upstream_refs)) {
     contractError("output_artifact.upstream_refs must be an array");
@@ -357,9 +203,6 @@ export function parseOutputArtifactMetadata(
   const upstreamRefs = record.upstream_refs.map(parseArtifactRef);
   if (new Set(upstreamRefs.map((ref) => ref.artifact_id)).size !== upstreamRefs.length) {
     contractError("output_artifact.upstream_refs must not contain duplicates");
-  }
-  if (upstreamRefs.some((ref) => ref.run_id !== runId)) {
-    contractError("output_artifact.upstream_refs must belong to the same run");
   }
   if ((version === 1 && parentRef !== null) || (version > 1 && parentRef === null)) {
     contractError("output_artifact.parent_ref is invalid for its version");
@@ -370,11 +213,11 @@ export function parseOutputArtifactMetadata(
       parentRef.phase !== phase ||
       parentRef.branch_id !== branchId ||
       parentRef.kind !== kind ||
+      parentRef.operation_id !== operationId ||
       parentRef.version !== version - 1)
   ) {
     contractError("output_artifact.parent_ref is not the immediately preceding version");
   }
-
   if (
     expected &&
     (runId !== expected.runId ||
@@ -385,23 +228,20 @@ export function parseOutputArtifactMetadata(
   ) {
     contractError("output_artifact does not match the trusted action identity");
   }
-
   const metadata: OutputArtifactMetadata = {
-    schema_version: 1,
+    schema_version: OUTPUT_ARTIFACT_SCHEMA_VERSION,
     run_id: runId,
     phase,
     branch_id: branchId,
-    kind,
+    kind: "agent-output",
     operation_id: operationId,
     version,
     producer,
-    consumer_scope: consumerScope,
     media_type: mediaType,
     parent_ref: parentRef,
     upstream_refs: upstreamRefs,
   };
-  const serializedBytes = Buffer.byteLength(canonicalArtifactJson(metadata), "utf8");
-  if (serializedBytes > MAX_ARTIFACT_METADATA_BYTES) {
+  if (Buffer.byteLength(canonicalArtifactJson(metadata), "utf8") > MAX_ARTIFACT_METADATA_BYTES) {
     contractError(`output_artifact metadata exceeds ${MAX_ARTIFACT_METADATA_BYTES} UTF-8 bytes`);
   }
   return metadata;
@@ -414,8 +254,8 @@ export function expectedArtifactRef(
   const metadata = parseOutputArtifactMetadata(metadataValue);
   const bytes = Buffer.isBuffer(output) ? Buffer.from(output) : Buffer.from(output, "utf8");
   const digest = createHash("sha256").update(bytes).digest("hex");
-  return {
-    schema_version: 1,
+  return parseArtifactRef({
+    schema_version: OUTPUT_ARTIFACT_SCHEMA_VERSION,
     artifact_id: artifactIdFor(metadata),
     run_id: metadata.run_id,
     phase: metadata.phase,
@@ -424,12 +264,11 @@ export function expectedArtifactRef(
     operation_id: metadata.operation_id,
     version: metadata.version,
     producer: metadata.producer,
-    consumer_scope: [...metadata.consumer_scope],
     media_type: metadata.media_type,
     byte_length: bytes.length,
     content_digest: digest,
     store_ref: `artifact://sha256/${digest}`,
-  };
+  });
 }
 
 export function stableArtifactReceiptId(metadataValue: OutputArtifactMetadata | unknown): string {
@@ -440,124 +279,131 @@ export function stableArtifactReceiptId(metadataValue: OutputArtifactMetadata | 
   return `artifact-receipt:${digest}`;
 }
 
-function resolveArtifactRoot(
+export function resolveArtifactRoot(
+  projectRoot: string,
   env: Readonly<Record<string, string | undefined>> = process.env
 ): string {
-  const explicit = env.PENNY_ARTIFACT_ROOT?.trim();
-  if (explicit) {
-    if (!isAbsolute(explicit)) {
+  for (const name of ["PENNY_ARTIFACT_ROOT", "PENNY_ARTIFACT_GRANT_ROOT"] as const) {
+    if (env[name]?.trim()) {
       throw new ArtifactClientError(
         "ARTIFACT_CONFIG_INVALID",
-        "PENNY_ARTIFACT_ROOT must be absolute"
+        `${name} is retired; artifacts are bound to the Pi-native Penny project partition`
       );
     }
-    return resolve(explicit);
   }
-  const xdgStateHome = env.XDG_STATE_HOME?.trim();
-  if (xdgStateHome) {
-    if (!isAbsolute(xdgStateHome)) {
-      throw new ArtifactClientError("ARTIFACT_CONFIG_INVALID", "XDG_STATE_HOME must be absolute");
-    }
-    return join(resolve(xdgStateHome), "penny", "artifacts");
-  }
-  const home = env.HOME?.trim() || homedir();
-  if (!home || !isAbsolute(home)) {
-    throw new ArtifactClientError(
-      "ARTIFACT_CONFIG_INVALID",
-      "No absolute artifact state root is available"
-    );
-  }
-  return join(resolve(home), ".local", "state", "penny", "artifacts");
-}
-
-function isWithinRoot(root: string, candidate: string): boolean {
-  const fromRoot = relative(root, candidate);
-  return fromRoot !== ".." && !fromRoot.startsWith(`..${sep}`) && !isAbsolute(fromRoot);
-}
-
-async function assertOwnerPath(
-  candidate: string,
-  type: "file" | "directory",
-  missingCode: ArtifactClientErrorCode
-): Promise<void> {
-  let stats;
   try {
-    stats = await lstat(candidate);
+    return resolvePennyProjectState(projectRoot, { env }).paths.artifacts.root;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new ArtifactClientError(missingCode, "artifact owner path is missing");
-    }
-    throw new ArtifactClientError("ARTIFACT_CONFIG_INVALID", "artifact owner path is inaccessible");
-  }
-  if (stats.isSymbolicLink()) {
-    throw new ArtifactClientError("ARTIFACT_CONFIG_INVALID", "artifact owner path is a symlink");
-  }
-  if ((type === "file" && !stats.isFile()) || (type === "directory" && !stats.isDirectory())) {
-    throw new ArtifactClientError("ARTIFACT_CONFIG_INVALID", "artifact owner path has wrong type");
-  }
-  if ((stats.mode & 0o077) !== 0) {
     throw new ArtifactClientError(
       "ARTIFACT_CONFIG_INVALID",
-      "artifact owner path is not owner-only"
+      error instanceof Error ? error.message : "Penny project state is unavailable"
     );
   }
-  if (typeof process.getuid === "function" && stats.uid !== process.getuid()) {
-    throw new ArtifactClientError("ARTIFACT_CONFIG_INVALID", "artifact owner path has wrong owner");
+}
+
+export async function refArtifactById(input: {
+  artifactId: string;
+  projectRoot: string;
+  env?: Readonly<Record<string, string | undefined>>;
+}): Promise<ArtifactRef | undefined> {
+  try {
+    const artifactRoot = resolveArtifactRoot(input.projectRoot, input.env);
+    const state = resolvePennyProjectState(input.projectRoot, { env: input.env });
+    using store = new ArtifactStore(artifactRoot, { projectId: state.projectId });
+    return store.refById(input.artifactId);
+  } catch (error) {
+    if (error instanceof ArtifactClientError) throw error;
+    throw new ArtifactClientError(
+      "ARTIFACT_CONFIG_INVALID",
+      error instanceof Error ? error.message : "artifact manifest lookup failed"
+    );
   }
+}
+
+export async function readArtifactsById(input: {
+  artifactIds: readonly string[];
+  projectRoot: string;
+  env?: Readonly<Record<string, string | undefined>>;
+}): Promise<Array<{ ref: ArtifactRef; content: Buffer }>> {
+  try {
+    const artifactRoot = resolveArtifactRoot(input.projectRoot, input.env);
+    const state = resolvePennyProjectState(input.projectRoot, { env: input.env });
+    using store = new ArtifactStore(artifactRoot, { projectId: state.projectId });
+    return input.artifactIds.map((artifactId) => {
+      const ref = store.refById(artifactId);
+      if (ref === undefined) {
+        throw new ArtifactClientError("ARTIFACT_MISSING", "artifact is absent from the manifest", {
+          artifactId,
+        });
+      }
+      return { ref, content: store.readById(artifactId) };
+    });
+  } catch (error) {
+    if (error instanceof ArtifactClientError) throw error;
+    const message = error instanceof Error ? error.message : "artifact read failed";
+    const code = /verification|digest|byte/i.test(message)
+      ? "ARTIFACT_DIGEST_MISMATCH"
+      : /absent|missing/i.test(message)
+        ? "ARTIFACT_MISSING"
+        : "ARTIFACT_CONFIG_INVALID";
+    throw new ArtifactClientError(code, message);
+  }
+}
+
+export async function readArtifactById(input: {
+  artifactId: string;
+  projectRoot: string;
+  env?: Readonly<Record<string, string | undefined>>;
+}): Promise<{ ref: ArtifactRef; content: Buffer }> {
+  const [read] = await readArtifactsById({
+    artifactIds: [input.artifactId],
+    projectRoot: input.projectRoot,
+    env: input.env,
+  });
+  if (read === undefined) {
+    throw new ArtifactClientError("ARTIFACT_MISSING", "artifact is absent from the manifest");
+  }
+  return read;
 }
 
 /** Read and independently verify exact artifact bytes as the execution owner. */
 export async function readArtifactOutput(input: {
   ref: ArtifactRef | unknown;
+  projectRoot: string;
   env?: Readonly<Record<string, string | undefined>>;
 }): Promise<Buffer> {
-  const ref = parseArtifactRef(input.ref);
-  const root = resolveArtifactRoot(input.env);
-  await assertOwnerPath(root, "directory", "ARTIFACT_MISSING");
-  const canonicalRoot = await realpath(root);
-  const objects = join(canonicalRoot, "objects");
-  const sha256 = join(objects, "sha256");
-  const shard = join(sha256, ref.content_digest.slice(0, 2));
-  for (const directory of [objects, sha256, shard]) {
-    await assertOwnerPath(directory, "directory", "ARTIFACT_MISSING");
+  const supplied = parseArtifactRef(input.ref);
+  const read = await readArtifactById({
+    artifactId: supplied.artifact_id,
+    projectRoot: input.projectRoot,
+    env: input.env,
+  });
+  if (canonicalArtifactJson(read.ref) !== canonicalArtifactJson(supplied)) {
+    throw new ArtifactClientError("ARTIFACT_REF_INVALID", "artifact ref does not match manifest", {
+      artifactId: supplied.artifact_id,
+    });
   }
-  const objectPath = join(shard, ref.content_digest.slice(2));
-  await assertOwnerPath(objectPath, "file", "ARTIFACT_MISSING");
-  const canonicalObject = await realpath(objectPath);
-  if (!isWithinRoot(canonicalRoot, canonicalObject)) {
-    throw new ArtifactClientError("ARTIFACT_CONFIG_INVALID", "artifact object escapes its root");
-  }
-  const content = await readFile(canonicalObject);
-  const digest = createHash("sha256").update(content).digest("hex");
-  if (digest !== ref.content_digest || content.length !== ref.byte_length) {
-    throw new ArtifactClientError(
-      "ARTIFACT_DIGEST_MISMATCH",
-      "artifact exact-byte verification failed",
-      { artifactId: ref.artifact_id }
-    );
-  }
-  return content;
+  return read.content;
 }
 
-/** Persist exact output bytes through the TypeScript artifact owner. */
+/** Persist output and prove the returned ID is immediately readable byte-for-byte. */
 export async function persistArtifactOutput(input: {
   metadata: OutputArtifactMetadata | unknown;
   output: string | Buffer;
-  cwd?: string;
+  cwd: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<ArtifactRef> {
   const metadata = parseOutputArtifactMetadata(input.metadata);
-  if (metadata.kind !== "agent-output") {
-    contractError("TypeScript artifact persistence accepts agent-output artifacts only");
-  }
   const outputBytes = Buffer.isBuffer(input.output)
     ? Buffer.from(input.output)
     : Buffer.from(input.output, "utf8");
   try {
-    using store = new ArtifactStore(resolveArtifactRoot(input.env));
+    const artifactRoot = resolveArtifactRoot(input.cwd, input.env);
+    const state = resolvePennyProjectState(input.cwd, { env: input.env });
+    using store = new ArtifactStore(artifactRoot, { projectId: state.projectId });
     const ref = parseArtifactRef(
       store.persist({
-        metadata: metadata as TypeScriptOutputArtifactMetadata,
+        metadata,
         content: outputBytes,
       })
     );
@@ -565,12 +411,20 @@ export async function persistArtifactOutput(input: {
     if (canonicalArtifactJson(ref) !== canonicalArtifactJson(expected)) {
       refError("TypeScript artifact owner returned a ref that does not match exact output bytes");
     }
+    const verified = store.readById(ref.artifact_id);
+    if (!verified.equals(outputBytes)) {
+      throw new ArtifactClientError(
+        "ARTIFACT_DIGEST_MISMATCH",
+        "persisted artifact re-read did not match exact output bytes",
+        { artifactId: ref.artifact_id }
+      );
+    }
     return ref;
   } catch (error) {
     if (error instanceof ArtifactClientError) throw error;
     throw new ArtifactClientError(
       "ARTIFACT_PERSIST_FAILED",
-      "TypeScript artifact persistence failed",
+      error instanceof Error ? error.message : "TypeScript artifact persistence failed",
       { operationId: metadata.operation_id, version: metadata.version }
     );
   }

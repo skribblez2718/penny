@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:penny:orchestration:artifacts:input-artifacts:2",
+  "title": "Exact cross-run input artifacts v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "artifacts"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["slot", "ref"],
+        "properties": {
+          "slot": { "type": "string", "minLength": 1 },
+          "ref": { "$ref": "urn:penny:orchestration:artifacts:artifact-ref:2" }
+        }
+      }
+    }
+  }
+}

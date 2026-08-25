@@ -1,4 +1,4 @@
-.PHONY: setup venv install-py install-js init clean test test-integration check-public check-agents-links check-kb-privacy lint format evals evals-update-baseline trajectory
+.PHONY: setup venv install-py install-js init clean test test-integration check-public check-agents-links check-kb-privacy check-tool-profiles check-tool-descriptions check-skill-structure check-capability-registry check-agent-roster lint typecheck verify-publication format evals
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 
@@ -50,15 +50,20 @@ test:
 	@echo "==================== knowledge-base privacy guard ===================="
 	@.venv/bin/python scripts/system/checks/check_kb_privacy.py
 	@echo ""
-	@echo "==================== eval compat guards ===================="
-	@.venv/bin/python scripts/system/evals/run_evals.py --sections compat --quiet --no-history
+	@echo "==================== provider-visible tool guidance guard ===================="
+	@.venv/bin/python scripts/system/checks/check_tool_descriptions.py
+	@echo ""
+	@echo "==================== skill structure guard ===================="
+	@.venv/bin/python scripts/system/checks/check_skill_structure.py
 	@echo ""
 	@bash -c 'set -uo pipefail; source .venv/bin/activate; \
 	  export PYTEST_TIMEOUT=$(PYTEST_TIMEOUT); rc=0; \
-	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests apps/observability/tests apps/observability/src/observability/tests .pi/extensions/powerpoint/tests/python .pi/extensions/word/tests/python; do \
+	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests apps/orchestration/tests; do \
 	    [ -d "$$d" ] || continue; \
 	    echo "==================== pytest $$d ===================="; \
-	    python -m pytest "$$d" -p no:cacheprovider -m "$(PYTEST_MARKERS)" --tb=short -q || rc=1; \
+	    python -m pytest "$$d" -p no:cacheprovider -m "$(PYTEST_MARKERS)" --tb=short -q || { \
+	      pytest_status=$$?; [ "$$pytest_status" -eq 5 ] || rc=1; \
+	    }; \
 	  done; \
 	  exit $$rc'
 
@@ -69,28 +74,22 @@ test-integration:
 	bun run test:integration
 	@bash -c 'set -uo pipefail; source .venv/bin/activate; \
 	  export PYTEST_TIMEOUT=$(PYTEST_TIMEOUT); rc=0; \
-	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests .pi/extensions/powerpoint/tests/python .pi/extensions/word/tests/python; do \
+	  for d in .pi/skills/*/tests scripts/system/tests scripts/system/*/tests; do \
 	    [ -d "$$d" ] || continue; \
 	    echo "==================== pytest $$d ===================="; \
-	    python -m pytest "$$d" -p no:cacheprovider --tb=short -q || rc=1; \
+	    python -m pytest "$$d" -p no:cacheprovider --tb=short -q || { \
+	      pytest_status=$$?; [ "$$pytest_status" -eq 5 ] || rc=1; \
+	    }; \
 	  done; \
 	  exit $$rc'
 
-# Eval & regression suite: measures what "better" means for Penny against the
-# LIVE stores (mempalace, checkpointer, observability) and gates on the ratchet
-# in scripts/system/evals/baseline.json. See scripts/system/evals/README.md.
+# EVALUATION — stub.
+# The legacy behavioral ratchet (scripts/system/evals + scripts/system/trajectory)
+# was retired 2026-08-21. A new evaluation system (prompt architecture, agents,
+# skills, etc.) is being built from scratch under evals/. Oracle-authored
+# trajectory fixtures are preserved at evals/fixtures/trajectory-fixtures.json.
 evals:
-	@.venv/bin/python scripts/system/evals/run_evals.py
-
-evals-update-baseline:
-	@.venv/bin/python scripts/system/evals/run_evals.py --update-baseline
-
-# Behavioral-regression ratchet: replay the Oracle-authored fixtures through the
-# current system, judge each against its pass bar, and write
-# .penny/evals/trajectory/latest.json which `make evals` ratchets (the
-# trajectory section). Run weekly. Anti-drift.
-trajectory:
-	@.venv/bin/python scripts/system/trajectory/run_trajectory.py $(ARGS)
+	@echo "[evals] legacy ratchet retired — the new evaluation system lands under evals/ (see evals/README.md)"
 
 # Public-boundary guard: fail if a tracked file reintroduces an operator-filesystem path
 # (enforces the AGENTS.md "Public repository boundary" invariant; also runs inside `make test`).
@@ -116,6 +115,17 @@ check-kb-privacy:
 check-tool-profiles:
 	@.venv/bin/python scripts/system/checks/check_tool_profiles.py
 
+# Provider-visible tool guidance: Penny's custom system prompt omits Pi's
+# promptGuidelines, so runtime source must keep required guidance in descriptions,
+# parameter schemas, or SYSTEM.md.
+check-tool-descriptions:
+	@.venv/bin/python scripts/system/checks/check_tool_descriptions.py
+
+# Skill manifests: validate frontmatter routing descriptions, required sections,
+# engine markers, prompt resources, and flow descriptors.
+check-skill-structure:
+	@.venv/bin/python scripts/system/checks/check_skill_structure.py
+
 # Capability registry: `.pi/agents/*.md` frontmatter is the single source of truth for
 # the roster. Validates completeness, enums, unique capabilities, neighbour referential
 # integrity, and the description budget (silent truncation is the defect being prevented).
@@ -133,10 +143,38 @@ lint:
 	.venv/bin/flake8 . --config .flake8
 	.venv/bin/black . --check --config pyproject.toml
 	.venv/bin/python scripts/system/checks/check_tool_profiles.py
+	.venv/bin/python scripts/system/checks/check_tool_descriptions.py
 	.venv/bin/python scripts/system/checks/check_capability_registry.py
+	.venv/bin/python scripts/system/checks/check_skill_structure.py
 	.venv/bin/python scripts/system/checks/check_agents_links.py
 	.venv/bin/python scripts/system/checks/check_kb_privacy.py
 	.venv/bin/python scripts/system/generate_agent_roster.py --check
+
+typecheck:
+	bun run typecheck
+
+# Complete offline-safe publication gate. It never stages, commits, contacts a Git
+# remote, or enables the live-model cohort; final candidate-tree/range checks remain
+# Phase-5 procedures because they require an explicitly reviewed index and remote base.
+verify-publication:
+	bun install --frozen-lockfile
+	uv sync --frozen --extra dev
+	bun run format:check
+	bun run lint
+	bun run typecheck
+	bun run typescript:inventory
+	bun run typescript:architecture
+	bun run typescript:guard-tests
+	bun run test:typescript
+	bun run test:all
+	bun run build:observability
+	bun run build:orchestration
+	$(MAKE) lint
+	$(MAKE) test
+	$(MAKE) test-integration
+	$(MAKE) check-public
+	$(MAKE) check-kb-privacy
+	bun run security:secrets:staged
 
 format:
 	bun run format

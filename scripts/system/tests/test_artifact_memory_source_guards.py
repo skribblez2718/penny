@@ -218,7 +218,7 @@ def test_memory_normative_doc_states_service_and_data_boundaries() -> None:
         "supervised",
         "Hub outage fails closed",
         "read-only recall subset",
-        "skill-driver processes receive nothing",
+        "skill workers receive the same YAML-declared read subset",
         "Memory is neither channel",
         "copied target",
         "Uninstall",

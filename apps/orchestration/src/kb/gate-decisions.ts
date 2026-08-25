@@ -37,6 +37,10 @@ function exactCanonical(value: unknown): string {
   return canonicalJson(value);
 }
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function reviewDecision(receipt: GateDecisionReceiptV1): void {
   if (receipt.approved_by_subject_id === receipt.reviewed_by_subject_id) {
     throw new GateDecisionError("gate decision approver and reviewer must differ");
@@ -155,14 +159,10 @@ export function assertPackageSurfaceDecision(input: {
   readonly packFiles: readonly string[];
 }): void {
   const decision = validatePackageSurfaceDecision(input.decision);
-  if (
-    input.packageJson === null ||
-    typeof input.packageJson !== "object" ||
-    Array.isArray(input.packageJson)
-  ) {
+  if (!isUnknownRecord(input.packageJson)) {
     throw new GateDecisionError("package.json must be an object");
   }
-  const pkg = input.packageJson as Record<string, unknown>;
+  const pkg = input.packageJson;
   const snapshot = validateKbContract(
     PackageSurfaceDecisionV1Schema,
     {

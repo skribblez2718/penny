@@ -1,3 +1,4 @@
+import { errorCode } from "./helpers/narrowing.js";
 /**
  * §5.6 save-query claim transactional ratchet, including synchronized
  * cross-process races, crash rollback, exact retries, and tamper refusal.
@@ -10,6 +11,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { SaveClaimError, SaveQueryClaimStore, saveClaimStoreDir } from "../src/kb/save-claim.js";
+import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 import { crashAuthorityTransaction, runAuthorityRace } from "./fixtures/authority-race-harness.js";
 
 const dirs: string[] = [];
@@ -40,9 +42,7 @@ const BASE = {
 const SAVE = { save_run_id: "run_save_1", save_transaction_id: "tx_1" };
 
 function database(pathname: string): import("node:sqlite").DatabaseSync {
-  const module = process.getBuiltinModule("node:" + "sqlite") as
-    | typeof import("node:sqlite")
-    | undefined;
+  const module = process.getBuiltinModule("node:sqlite");
   if (module === undefined) throw new Error("node:sqlite is unavailable");
   return new module.DatabaseSync(pathname);
 }
@@ -82,7 +82,7 @@ describe("claim creation and custody", () => {
       try {
         expect(statSync(file).mode & 0o777).toBe(0o600);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        if (errorCode(error) !== "ENOENT") throw error;
       }
     }
   });
@@ -378,9 +378,12 @@ describe("release after deny, error, or cancellation", () => {
 });
 
 describe("store location", () => {
-  it("preserves the ignored host-control root outside the KB", () => {
-    const directory = saveClaimStoreDir("/project", "kbp_demo");
-    expect(directory).toBe(path.join("/project", ".penny", "kb-save-claims", "kbp_demo"));
-    expect(directory.includes(path.join(".penny", "kb", "kbp_demo"))).toBe(false);
+  it("uses the catalog-bound host-control partition outside the KB publication root", () => {
+    const projectRoot = mkdtempSync(path.join(tmpdir(), "penny-kb-claims-project-"));
+    dirs.push(projectRoot);
+    const state = installTestProjectState(projectRoot);
+    const directory = saveClaimStoreDir(projectRoot, "kbp_demo");
+    expect(directory).toBe(path.join(state.paths.knowledgeBase.saveClaims, "kbp_demo"));
+    expect(directory.startsWith(projectRoot)).toBe(false);
   });
 });

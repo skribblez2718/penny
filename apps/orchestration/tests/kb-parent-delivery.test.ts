@@ -1,3 +1,4 @@
+import { errorCode, requireValue } from "./helpers/narrowing.js";
 /**
  * Parent-answer delivery grants (§5.1 / §5.6) — the exact request/grant/policy
  * binding, atomic single-use consumption, bounded refusal codes, and store
@@ -29,6 +30,8 @@ import {
   sha256Hex,
   validateKbHostInvocationContext,
   type KbPolicy,
+  type ParentDeliveryGrant,
+  type ParentDeliveryGrantFile,
   type QueryKbRequest,
 } from "../src/kb/contracts.js";
 import { KbSessionProfileGrantStore } from "../src/kb/profile-grants.js";
@@ -49,9 +52,7 @@ const HOST = { session_id: SESSION, invocation_id: INVOCATION };
 const PARENT = { provider: "ollama", model: "qwen327b:latest" };
 
 function database(pathname: string): import("node:sqlite").DatabaseSync {
-  const module = process.getBuiltinModule("node:" + "sqlite") as
-    | typeof import("node:sqlite")
-    | undefined;
+  const module = process.getBuiltinModule("node:sqlite");
   if (module === undefined) throw new Error("node:sqlite is unavailable");
   return new module.DatabaseSync(pathname);
 }
@@ -82,7 +83,11 @@ function grantFor(
   request: QueryKbRequest,
   overrides: Record<string, unknown> = {},
   policy: KbPolicy = allowingPolicy()
-): { grant; store; file } {
+): {
+  grant: ParentDeliveryGrant;
+  store: ParentDeliveryGrantStore;
+  file: ParentDeliveryGrantFile;
+} {
   const dir = mkdtempSync(path.join(os.tmpdir(), "kb-parent-grant-"));
   const store = new ParentDeliveryGrantStore(dir);
   const grant = mintParentDeliveryGrant({
@@ -194,13 +199,15 @@ describe("KB host invocation context boundary (§5.1)", () => {
 describe("parent delivery — request canonicalization (§5.6)", () => {
   it("binds SHA-256(JCS(request)) and is independent of key order", () => {
     const a = baseRequest();
-    const b = validateQueryRequest(
-      Object.fromEntries(
-        Object.keys(a)
-          .sort((x, y) => y.localeCompare(x))
-          .map((k) => [k, (a as unknown as Record<string, unknown>)[k]])
-      )
-    );
+    const b = validateQueryRequest({
+      query: a.query,
+      kb_profile_id: a.kb_profile_id,
+      action: a.action,
+      schema_version: a.schema_version,
+      ...(a.answer_delivery === undefined ? {} : { answer_delivery: a.answer_delivery }),
+      ...(a.max_candidates === undefined ? {} : { max_candidates: a.max_candidates }),
+      ...(a.verify_grounding === undefined ? {} : { verify_grounding: a.verify_grounding }),
+    });
     expect(computeRequestSha256(a)).toEqual(computeRequestSha256(b));
     expect(computeRequestSha256(a)).toBe(sha256Hex(canonicalJson(a)));
     // A different query is a different digest.
@@ -211,9 +218,7 @@ describe("parent delivery — request canonicalization (§5.6)", () => {
   it("admits closed requests and refuses open/malformed ones", () => {
     expect(baseRequest()).toBeDefined();
     // extra key
-    expect(() =>
-      validateQueryRequest({ ...baseRequest(), page_ids: ["x"] as never, extra: 1 })
-    ).toThrow();
+    expect(() => validateQueryRequest({ ...baseRequest(), page_ids: ["x"], extra: 1 })).toThrow();
     // wrong action
     expect(() => validateQueryRequest({ ...baseRequest(), action: "save" })).toThrow();
     // empty/oversized query
@@ -499,7 +504,10 @@ describe("parent delivery — transactional single-use and store integrity", () 
     expect(results.filter((result) => result.ok === false)).toHaveLength(1);
 
     const reopened = new ParentDeliveryGrantStore(dir);
-    const winner = reopened.load(grant.grant_id).record.run_id!;
+    const winner = requireValue(
+      reopened.load(grant.grant_id).record.run_id,
+      "apps/orchestration/tests/kb-parent-delivery.test.ts:508"
+    );
     expect(["run-race-a", "run-race-b"]).toContain(winner);
     expect(reopened.consume(grant.grant_id, winner).record.run_id).toBe(winner);
     const loser = winner === "run-race-a" ? "run-race-b" : "run-race-a";
@@ -589,7 +597,7 @@ describe("parent delivery — transactional single-use and store integrity", () 
       try {
         expect(lstatSync(file).mode & 0o777).toBe(0o600);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        if (errorCode(error) !== "ENOENT") throw error;
       }
     }
     store.close();

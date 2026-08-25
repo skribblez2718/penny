@@ -8,65 +8,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- **Penny can read the artifacts her delegations produce.** `artifact_read` was
-  registered in the primary runtime but failed every call with
-  `ARTIFACT_CONFIG_INVALID`: grants were built only as a per-spawn environment
-  snapshot for workers, and the orchestrator has no spawn boundary. Owner code
-  now records grants in an owner-only **grant book**
-  (`$XDG_STATE_HOME/penny/artifact-grants/<sha256(session)>.json`, `0600`) after
-  it has already persisted and verified exact bytes, and the primary runtime
-  resolves them by exact artifact ID. The grant root is a sibling of the
-  artifact root, never inside it: the TypeScript artifact owner treats the artifact
-  root as its managed persistence boundary.
-  - Resolution stays exact-ID only — no list, search, or probing oracle. An
-    ungranted ID returns `ARTIFACT_NOT_GRANTED`, as it does for a worker.
-  - The owner presents `penny-primary:owner`, distinct from every worker
-    vocabulary, so an owner grant can never satisfy a worker's scope check.
-  - Artifact identity and content binding are untouched: identity hashes only
-    the identity tuple, and digest, byte length, and UTF-8 are still verified.
-  - Grants are session-scoped, expire in 24 h, are bounded to 512 entries, and
-    survive compaction and process restart.
-- **`subagent` parallel and single modes now persist exact agent output.**
-  Parallel previously returned only a 100-character preview per agent and
-  persisted nothing, so full output was unrecoverable; single-mode output was
-  lost once compaction dropped the inline copy. Both now persist an artifact and
-  surface its ref. Persistence and granting are best effort and never fail a
-  completed delegation.
-- **Per-component log levels** — `PI_LOG_LEVEL_<COMPONENT>` (for example
-  `PI_LOG_LEVEL_ARTIFACTS=INFO`) overrides the global threshold for one
-  component. Artifact reads log success at INFO, so under the `WARN` default the
-  channel produced no usage record at all.
+- **Direct, non-expiring artifact-ID communication.** `ArtifactStore` now provides indexed
+  `refById`/`readById`; `artifact_read` accepts only an exact ID plus optional UTF-8 range
+  and returns `next_range` for bounded continuation. Schema-v2 refs retain lineage and
+  contain no access-control fields.
+- **Pi-native Penny state migration.** Explicit plan/apply/verify/finalize tooling reconciles
+  orchestration and artifact sources into one catalog-bound project partition, normalizes retained
+  state, verifies historical receipts and objects, recovers across durable-boundary faults, and
+  supports checksum-bound one-time legacy deletion approvals.
+- **Reduced TypeScript observability.** Canonical structured logs and compaction archives use the
+  global Penny state database; conversation history reads Pi JSONL directly, including durable
+  attributed subagent sessions. The Python/WebSocket/transcript-mirror implementation is removed.
+- **Complete delegation matrix.** Single, parallel, chain, cross-run fan-in, and skill
+  composition accept exact IDs from any run. Every successful producer persists and
+  re-reads complete output, and result text prints the exact ID.
+- **Exact-session compaction handoff.** Compaction records only code-proven current-session
+  subagent/skill refs, explicitly reused IDs, and prior exact index records. Ref sets that
+  exceed the result budget become one immutable handoff-index artifact.
+- **Per-component log levels** — `PI_LOG_LEVEL_<COMPONENT>` can override the global
+  threshold for one component.
 
 ### Fixed
 
-- **Empty invocation environment variables are treated as absent.** An empty
-  `PENNY_ARTIFACT_INVOCATION_JSON` was parsed as an invocation and failed with
-  "Invocation context is not valid JSON".
-- **Worker-contract guard matched the pre-2026-08-17 policy.**
-  `test_artifact_memory_source_guards.py` asserted that no agent may hold any
-  `memory_*` tool, which the operator-approved read-only recall subset made
-  false — leaving `make test` red. The guard now allows exactly the read-only
-  subset and fails on any memory **write**, diary-write, KG-mutation, or
-  logstream tool, which is the boundary that actually matters.
-- **Documentation corrected to match the implemented memory boundary.**
-  `docs/agents/memory/integration.md` and `docs/agents/skills/mempalace-integration.md`
-  still claimed workers receive no memory tools. `docs/penny/tool-usage.md` still
-  directed scratch files and unrequested artifacts to "`/tmp/` or mempalace",
-  contradicting SYSTEM.md and the migration.
+- **YAML `tools:` is now the sole catalog-agent tool authority.** Native and SDK runners
+  no longer strip hardened tools, conditionally expose `artifact_read`, filter provider
+  extensions, inject result tools, or replace catalog surfaces for private phases.
+  Missing/empty/duplicate/unknown names fail before model invocation, and optional-service
+  absence remains a typed tool-call error.
+- **Output communication is mandatory.** Persistence or immediate re-read failure is a
+  typed communication failure instead of a best-effort warning.
+- **Routing is parsed after persistence.** Standard catalog workers end with the closed
+  SUMMARY line from Domain Guidance; no absent-from-YAML result tool is injected.
+- **KB private matrix sessions are anonymous.** They no longer load or claim a catalog
+  role while using a host-specific tool matrix.
 
 ### Documentation
 
-- `docs/penny/artifact-access.md` — new trigger-gated protocol: where refs
-  appear per delegation mode, when to read, failure codes, and the absence of any
-  discovery surface. Indexed from `docs/penny/AGENTS.md`; SYSTEM.md carries the
-  trigger only.
-- `apps/orchestration/README.md` — documents the two coexisting manifests
-  (`manifest.sqlite3` for the Python engine, `manifest-v2.db` for the TypeScript
-  engine) over one shared content-addressed object store, and that manifest
-  records are not cross-visible so retention must be applied per manifest.
-- `.pi/extensions/artifacts/README.md` — documents the owner grant book and
-  corrects `PENNY_ARTIFACT_CURSOR_HMAC_KEY`, which is minted per invocation, not
-  an operator setting.
+- Updated artifact, subagent, skill, orchestration, prompt, agent, state-management,
+  compaction, and human-facing docs to the exact-ID/no-grant model.
 
 ### Removed
 
@@ -112,10 +91,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   terminal outcome record per run, so the code skill's P0 completion contract no
   longer includes the "canonical terminal outcome persisted before publication"
   condition; and no session-memory brief is injected at session start (the diary
-  itself and its tools are unaffected). Retained and unchanged: the behavioral
-  ratchet / trajectory eval, the remaining eval sections (compat, invariants,
-  retrieval, trajectory), tiered memory, MemPalace and the knowledge graph, the
-  observability server, and all skills and agents.
+  itself and its tools are unaffected). The behavioral-ratchet/trajectory runner
+  and its legacy evaluation sections were retired with the surrounding surface;
+  the replacement `evals/` scaffold retains only its documented Oracle-authored
+  fixture. Tiered memory, MemPalace and the knowledge graph, the TypeScript
+  observability server, and all skills and agents remain.
 
 ### Changed
 

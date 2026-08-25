@@ -13,32 +13,30 @@ Extensions extend Penny's capabilities with:
 
 ## Universal Coding Standards
 
-**All TypeScript/JavaScript must have:**
+**All owned TypeScript must have:**
 
-- **Lint passes** (`ruff check` or `eslint`)
-- **Unit tests** - Test individual functions
-- **Integration tests** - Test extension integration with Pi
-- **Type safety** - Full TypeScript types
-
-**TDD for ALL coding.** No exceptions.
+- zero-warning, type-aware root lint coverage;
+- membership in an invoked strict/no-emit TypeScript project;
+- focused tests that prove changed behavior;
+- real runner mapping for every test or smoke file;
+- no migration baseline or unregistered assertion exception.
 
 ## Directory Structure
 
+```text
+.pi/extensions/<name>/
+├── index.ts             # Required extension entry point
+├── tsconfig.json        # Required strict/no-emit project
+├── README.md            # Required extension documentation
+├── package.json         # Required scripts, metadata, and dependency contract
+└── tests/
+    ├── vitest.config.ts # At least one real runner config
+    ├── unit/            # Typical, not a required universal layout
+    └── integration/     # Add only when the extension owns this suite
 ```
-extensions/
-└── extension-name/
-    ├── index.ts           # Required: Extension entry point
-    ├── tsconfig.json      # Required: TypeScript config for lint/IDE (noEmit: true)
-    ├── README.md           # Required: Documentation
-    ├── package.json        # Required: Scripts, metadata, and dependencies
-    ├── tests/
-    │   ├── vitest.config.ts             # Required: Unit test config
-    │   ├── vitest.integration.config.ts  # Required: Integration test config
-    │   ├── unit/                        # Required: Unit tests
-    │   │   └── *.test.ts
-    │   └── integration/                  # Required: Integration tests
-    │       └── *.test.ts
-```
+
+Every test/smoke file must match a real Vitest config reachable from package `test:all`; no fixed
+directory or test-level checklist substitutes for that dynamic mapping.
 
 ### Why package.json Is Mandatory
 
@@ -69,25 +67,11 @@ When creating a new extension, add it to the root `package.json` workspaces **im
 3. Keep the list alphabetically sorted for consistency
 4. Run `bun install` from the project root to verify all workspaces resolve
 
-**Example:**
+Add the new path to the existing array; do not copy a frozen workspace list from documentation:
 
 ```json
 {
-  "workspaces": [
-    ".pi/extensions/compaction",
-    ".pi/extensions/environment",
-    ".pi/extensions/memory",
-    ".pi/extensions/observability",
-    ".pi/extensions/playwright",
-    ".pi/extensions/powerpoint",
-    ".pi/extensions/questionnaire",
-    ".pi/extensions/search",
-    ".pi/extensions/skill",
-    ".pi/extensions/statusline",
-    ".pi/extensions/subagent",
-    ".pi/extensions/word",
-    ".pi/extensions/youtube"
-  ]
+  "workspaces": [".pi/extensions/<extension-name>"]
 }
 ```
 
@@ -101,23 +85,27 @@ Workspace registration is not optional cleanup; it is a **load-bearing step** in
 {
   "name": "@penny/<extension-name>-extension",
   "version": "1.0.0",
+  "private": true,
   "main": "index.ts",
   "description": "What this extension does",
   "type": "module",
   "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
     "test:unit": "vitest run --config tests/vitest.config.ts",
-    "test:integration": "vitest run --config tests/vitest.integration.config.ts"
+    "test:all": "bun run typecheck && bun run test:unit"
   },
-  "dependencies": {
-    // Runtime dependencies here
-  },
-  "devDependencies": {
-    "@sinclair/typebox": "^0.34.49",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.7"
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   }
 }
 ```
+
+List only packages actually imported. Every used supported Pi package and `typebox` belongs in
+`peerDependencies` with the exact range `"*"`, not in extension `dependencies` or `devDependencies`.
+Root `devDependencies` pin the used Pi SDK packages, `typebox`, and TypeScript to exact versions. Add
+integration or E2E scripts only when those suites exist, and make them reachable from `test:all` after
+typecheck.
 
 ### Workspace Registration
 
@@ -125,13 +113,10 @@ Every extension **must** be added to the root `package.json` `workspaces` array.
 
 ### Why tsconfig.json Is Mandatory
 
-Every extension **must** have its own `tsconfig.json` with `noEmit: true`. Without it:
-
-- The root `eslint.config.js` uses `parserOptions.project: true`, which requires `eslint` to find a `tsconfig.json` relative to each `.ts` file for type-aware lint rules
-- Without a per-extension `tsconfig.json`, eslint cannot parse extension files and fails with: `Parsing error: project was set to 'true' but couldn't find any tsconfig.json`
-- Editors (VS Code, etc.) cannot provide IntelliSense, go-to-definition, or type checking
-
-Pi's runtime uses **jiti** to load extensions, which does NOT use `tsconfig.json` — it transpiles `.ts` on the fly. The `tsconfig.json` is purely for development tooling: lint, type-check, and editor support.
+Every extension has its own invoked strict/no-emit project. The root sequential lint coordinator maps
+each live TypeScript file to exactly one configured tsconfig partition; inventory independently proves
+that every file is in at least one qualifying typecheck program. A missing project, unmatched file,
+multiple lint partitions, or compiler-option downgrade fails.
 
 ### Standard tsconfig.json Template
 
@@ -142,36 +127,20 @@ Pi's runtime uses **jiti** to load extensions, which does NOT use `tsconfig.json
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
     "noEmit": true,
-    "declaration": false,
-    "sourceMap": false,
-    "resolveJsonModule": true,
+    "skipLibCheck": false,
     "isolatedModules": true
   },
-  "include": ["*.ts", "tests/**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": ["**/*.ts", "**/*.tsx", "**/*.d.ts"],
+  "exclude": ["node_modules", "dist", "build", "coverage"]
 }
 ```
 
-Key settings:
-
-- `noEmit: true` — lint/typecheck only, never produces compiled output
-- `module: "NodeNext"` — matches how Pi/jiti resolves ESM imports (`.js` extensions)
-- `isolatedModules: true` — required for esbuild/jiti compatibility
-- `include` — covers source files and test files for eslint
-
-### Directory Purposes
-
-| File                        | Purpose                                       | Required |
-| --------------------------- | --------------------------------------------- | -------- |
-| `index.ts`                  | Extension entry point, registers tools        | Yes      |
-| `tsconfig.json`             | TypeScript config for lint/IDE (noEmit: true) | Yes      |
-| `README.md`                 | Extension documentation                       | Yes      |
-| `tests/unit.test.ts`        | Unit tests for extension                      | Yes      |
-| `tests/integration.test.ts` | Integration tests with Pi                     | Yes      |
-| `package.json`              | Extension metadata, scripts, and dependencies | Yes      |
+The effective check-only vector requires `strict`, `noImplicitAny`, `strictNullChecks`,
+`strictFunctionTypes`, `strictBindCallApply`, `strictPropertyInitialization`,
+`useUnknownInCatchVariables`, `noImplicitThis`, `alwaysStrict`, and `noEmit`. A child config or CLI
+flag may not downgrade it, and owned declarations may not have their diagnostics hidden by
+`skipLibCheck`.
 
 ## Environment Variables
 
@@ -187,7 +156,8 @@ This creates a silent race condition that happens to work when extensions load i
 
 ### The Standard Pattern
 
-**Never** read `process.env` at module scope. **Always** read environment variables inside the factory function body.
+**Never** read `process.env` at module scope. Read environment variables inside the factory function
+or a runtime callback.
 
 **Incorrect (fragile):**
 
@@ -260,8 +230,9 @@ Add to the validation checklist:
  * - Tool 2: Description
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { registerTool } from "../../lib/pi-tool-registration.js";
 
 // Tool parameter schemas using TypeBox
 const MyToolParams = Type.Object({
@@ -269,15 +240,12 @@ const MyToolParams = Type.Object({
   param2: Type.Optional(Type.Number({ description: "Optional parameter" })),
 });
 
-// Static constants can live at module scope
-const DEFAULT_TIMEOUT_MS = 30000;
-
 export default function (pi: ExtensionAPI) {
-  // Read environment variables inside the factory, never at module scope
-  const apiKey = process.env.MY_EXT_API_KEY || "";
+  // Read environment variables inside the factory, never at module scope.
+  const _apiKey = process.env.MY_EXT_API_KEY || "";
 
-  // Register tool
-  pi.registerTool({
+  // Register through Penny's sole schema-preserving Pi adapter.
+  registerTool(pi, {
     name: "my_tool",
     label: "My Tool",
     description: "What this tool does. When to use it.",
@@ -304,12 +272,20 @@ export default function (pi: ExtensionAPI) {
 
 ## Tool Registration
 
+### Model-visible guidance under Penny's custom prompt
+
+Penny's custom `.pi/SYSTEM.md` does not render Pi's optional `promptGuidelines` into the system prompt. Active tool names, descriptions, and parameter schemas still reach the model through the provider-native tool channel. Penny extensions therefore keep required routing, safety, and usage guidance in `description`, parameter descriptions, or the shared system prompt; runtime extension source does not define `promptGuidelines`.
+
+Extensions may dynamically reduce/load tools for the unmarked primary runtime, but never for a catalog agent: every catalog agent's active set must equal its YAML `tools:` list exactly.
+
+Gateway or consequential tools state what they do, when to use them, and their nearest anti-cases. Narrow primitive tools state the operation plus the discriminator or constraint that helps choose it without adding tautological prose.
+
 ### Parameter Schemas
 
 Use TypeBox for parameter validation:
 
 ```typescript
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 // String parameter
 const StringParam = Type.String({
@@ -346,7 +322,20 @@ const UnionParam = Type.Union([Type.String(), Type.Number()]);
 ### Tool Registration Example
 
 ```typescript
-pi.registerTool({
+const SearchMemoryParams = Type.Object({
+  query: Type.String({
+    description: "Search query in natural language",
+  }),
+  limit: Type.Optional(
+    Type.Number({
+      description: "Maximum results to return (default: 5)",
+      minimum: 1,
+      maximum: 20,
+    })
+  ),
+});
+
+registerTool(pi, {
   name: "search_memory",
   label: "Search Memory",
   description: [
@@ -354,16 +343,7 @@ pi.registerTool({
     "Use when you need to find previous conversations, decisions, or context.",
     "Returns matching memory entries with timestamps.",
   ].join(" "),
-  parameters: Type.Object({
-    query: Type.String({
-      description: "Search query in natural language",
-    }),
-    limit: Type.Optional(Type.Number({
-      description: "Maximum results to return (default: 5)",
-      minimum: 1,
-      maximum: 20,
-    })),
-  }),
+  parameters: SearchMemoryParams,
   execute: async (params) => {
     const { query, limit = 5 } = params;
 
@@ -446,7 +426,7 @@ Examples:
 Extensions can render TUI components:
 
 ```typescript
-import { Container, Text, Markdown, Spacer } from "@mariozechner/pi-tui";
+import { Container, Text, Markdown, Spacer } from "@earendil-works/pi-tui";
 
 // Render a status message
 pi.renderToolResult(
@@ -511,112 +491,53 @@ This extension is bundled with Penny. No installation required.
 ## Testing
 
 \`\`\`bash
-
-# Unit tests
-
-bun test tests/unit.test.ts
-
-# Integration tests
-
-bun test tests/integration.test.ts
+bun run typecheck
+bun run test:all
 \`\`\`
 
-## Version History
-
-- **1.0.0** - Initial release
+Document only suite-specific commands that the package manifest actually provides.
 ```
 
 ## Testing
 
-### Unit Tests
+Use Vitest for owned TypeScript tests. A package may have unit, integration, E2E, or feature-specific
+configs when its behavior requires them; do not claim a suite exists merely because a conventional
+directory name exists. Every test or smoke file must match a real config reachable from `test:all`.
 
-```typescript
-// tests/unit.test.ts
-import { describe, it, expect } from "bun:test";
-import { parseEnvFile } from "../index";
-
-describe("Extension Unit Tests", () => {
-  it("should parse parameters correctly", () => {
-    const result = parseParams({ param1: "value" });
-    expect(result.param1).toBe("value");
-  });
-
-  it("should handle optional parameters", () => {
-    const result = parseParams({});
-    expect(result.param2).toBeUndefined();
-  });
-
-  it("should validate parameter types", () => {
-    expect(() => parseParams({ param1: 123 })).toThrow("Expected string");
-  });
-});
-```
-
-### Integration Tests
-
-```typescript
-// tests/integration.test.ts
-import { describe, it, expect, beforeEach } from "bun:test";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import extension from "../index";
-
-describe("Extension Integration Tests", () => {
-  let mockPi: ExtensionAPI;
-  let registeredTools: string[];
-
-  beforeEach(() => {
-    registeredTools = [];
-    mockPi = {
-      registerTool: (tool) => {
-        registeredTools.push(tool.name);
-      },
-      on: () => {},
-    } as unknown as ExtensionAPI;
-  });
-
-  it("should register tools", () => {
-    extension(mockPi);
-    expect(registeredTools).toContain("my_tool");
-  });
-
-  it("should execute tool correctly", async () => {
-    extension(mockPi);
-    // Test tool execution
-  });
-});
-```
+Test fakes use `Pick`, small local interfaces, typed factories, `Parameters`, `ReturnType`,
+`satisfies`, or fail-fast narrowing. Explicit `any`, non-null/definite-assignment assertions, and new
+partial-host casts are prohibited in tests. Penny's only partial-host assertions are the exact five
+central sites in the [TypeScript guide](../coding/typescript.md#the-five-partial-host-test-seams), each
+with matching local rationale, removal condition, immediate one-rule suppression, and focused test.
 
 ## Verification Checklist
 
 Before submitting an extension:
 
-**Format:**
+**Structure and packages:**
 
-- [ ] `index.ts` exists with extension entry point
-- [ ] `tsconfig.json` exists with `noEmit: true` and `module: "NodeNext"`
-- [ ] `README.md` is comprehensive
-- [ ] `package.json` exists with scripts and metadata (mandatory — even with zero dependencies)
-- [ ] Extension path is added to root `package.json` `workspaces` array, sorted alphabetically (see `docs/agents/extensions/extension-creation-procedure.md`)
-- [ ] `bun install` at the project root succeeds with no "Workspace not found" errors
-- [ ] `tests/vitest.config.ts` exists
-- [ ] `tests/vitest.integration.config.ts` exists
-- [ ] Unit tests exist in `tests/unit/`
-- [ ] Integration tests exist in `tests/integration/`
+- [ ] `index.ts`, `README.md`, strict/no-emit `tsconfig.json`, and `package.json` exist.
+- [ ] The extension path is in the sorted root workspace array and `bun install` succeeds.
+- [ ] Used Pi packages and `typebox` have `"*"` peer ranges and exact root pins.
+- [ ] `test:all` runs typecheck before every test command.
+- [ ] Every test/smoke file is runner-mapped; no test level is claimed without a configuration.
 
-**Testing:**
+**Root gates:**
 
-- [ ] `bun test tests/unit.test.ts` passes
-- [ ] `bun test tests/integration.test.ts` passes
-- [ ] `eslint index.ts` passes (or `ruff check`)
-- [ ] TypeScript compiles without errors
+- [ ] `bun run format:check` passes.
+- [ ] `bun run lint` passes the dynamic inventory, architecture, and zero-warning sequential runner.
+- [ ] `bun run typecheck` passes every strict project.
+- [ ] `bun run typescript:guard-tests` passes when guard behavior changes.
+- [ ] `bun run test:typescript` passes; the live-model smoke is separately authorized or reported as skipped.
+- [ ] `make verify-publication` passes when the delivery scope requires the aggregate local gate.
 
 **Functionality:**
 
-- [ ] Tool parameter schemas use TypeBox
-- [ ] Tool descriptions are clear and indicate when to use
-- [ ] Error handling returns proper error objects
-- [ ] README documents all tools and events
-- [ ] No `process.env` reads at module scope (all env reads are inside the factory function or runtime callbacks)
+- [ ] Tool schemas use `typebox`, derive static parameter types, and register through the sole adapter.
+- [ ] Tool descriptions keep required guidance provider-visible and do not rely on `promptGuidelines`.
+- [ ] README documents actual tools, events, commands, and configuration.
+- [ ] Runtime uses the shared logger and has no module-scope `process.env` read.
+- [ ] No migration baseline, broad suppression, or new assertion exception is introduced.
 
 ## Examples
 
@@ -630,7 +551,7 @@ Before submitting an extension:
  * Also loads .env values into process.env so other extensions can read them.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFile } from "fs/promises";
 
 export default async function (pi: ExtensionAPI) {
@@ -659,8 +580,9 @@ export default async function (pi: ExtensionAPI) {
  *   - Chain: sequential execution with {previous} placeholder
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { registerTool } from "../../lib/pi-tool-registration.js";
 
 const SubagentParams = Type.Object({
   agent: Type.Optional(Type.String()),
@@ -670,7 +592,7 @@ const SubagentParams = Type.Object({
 });
 
 export default function (pi: ExtensionAPI) {
-  pi.registerTool({
+  registerTool(pi, {
     name: "subagent",
     label: "Subagent",
     description: "Delegate tasks to specialized agents...",
@@ -684,7 +606,8 @@ export default function (pi: ExtensionAPI) {
 
 ## Logging
 
-**All extensions MUST use the shared structured logger. `console.log`, `console.error`, and `console.warn` are PROHIBITED in extension code.**
+**All extension runtime code MUST use the shared structured logger. `console.log`, `console.error`,
+and `console.warn` are prohibited in extension runtime files.**
 
 ### Why
 
@@ -717,7 +640,7 @@ logger.error("Operation failed", { target }, err);
 
 ### Verification Checklist Addition
 
-- [ ] `console.log`, `console.error`, `console.warn` are NOT used anywhere in the extension
+- [ ] `console.log`, `console.error`, `console.warn` are not used in extension runtime source
 - [ ] `createLogger` is imported from `../../lib/logger/logger.js`
 - [ ] A `logger` instance is created with the extension's name
 - [ ] All status messages use the logger, not `console.*`
@@ -729,5 +652,5 @@ logger.error("Operation failed", { target }, err);
 3. **Error handling** - Return proper error objects, don't throw
 4. **Minimal dependencies** - Avoid unnecessary external packages
 5. **Documentation** - README should cover all tools and events
-6. **Testing** - Unit and integration tests required
-7. **Environment variables** - Read `process.env` only inside the factory function, never at module scope. This ensures the `environment` extension has populated `process.env` from `.env` before your extension sees the values
+6. **Testing** - Add the focused suites the behavior requires and map every test through `test:all`
+7. **Environment variables** - Read `process.env` only inside the factory or a runtime callback, never at module scope

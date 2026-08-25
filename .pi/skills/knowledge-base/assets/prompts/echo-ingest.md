@@ -1,4 +1,4 @@
-# Echo — KB ingest (evidence extraction)
+# Anonymous private worker — KB ingest (evidence extraction)
 
 ## Mission
 

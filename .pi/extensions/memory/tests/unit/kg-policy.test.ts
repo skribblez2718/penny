@@ -5,10 +5,20 @@ import {
   KG_PREDICATE_SCHEMA_VERSION,
   MemoryAdapter,
 } from "../../index.js";
-import { mcpResponse, requestBody, testConfig } from "../fixtures.js";
+import { isRecord, parseJson } from "../../../../lib/tests/test-narrowers.js";
+import { mcpResponse, requestBody, requireDefined, testConfig } from "../fixtures.js";
 
-function payloadOf(result: { content: Array<{ text: string }> }) {
-  return JSON.parse(result.content[0]!.text);
+interface MemoryErrorPayload {
+  error: { code: string };
+}
+
+function payloadOf(result: { content: Array<{ text: string }> }): MemoryErrorPayload {
+  const content = requireDefined(result.content[0], "tool result content was empty");
+  const parsed = parseJson(content.text);
+  if (!isRecord(parsed) || !isRecord(parsed.error) || typeof parsed.error.code !== "string") {
+    throw new Error("memory policy result omitted its error code");
+  }
+  return { error: { code: parsed.error.code } };
 }
 
 describe("canonical KG predicate policy", () => {
@@ -61,7 +71,9 @@ describe("canonical KG predicate policy", () => {
       { callerId: "primary:kg" }
     );
     expect(execution.code).toBe("OK");
-    const request = requestBody(fetchSpy.mock.calls[0]![1] as RequestInit);
+    const firstCall = requireDefined(fetchSpy.mock.calls[0], "KG request was not sent");
+    const init = requireDefined(firstCall[1], "KG request init was absent");
+    const request = requestBody(init);
     expect(request.params.name).toBe("mempalace_kg_supersede");
     expect(request.params.arguments.predicate).toBe("uses");
   });

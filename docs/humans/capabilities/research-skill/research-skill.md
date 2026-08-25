@@ -23,7 +23,7 @@ All modes can run a bounded additional evidence-seeking round when Vera identifi
 
 ## Exact handoff and recovery
 
-Each stage receives exact, execution-owner-verified artifact references. Workers read every ref with `artifact_read` and follow typed continuation until complete; their full responses are captured before the small routing SUMMARY is accepted. Workers have no durable-memory tools, and parallel branches are matched by branch ID rather than completion order.
+Each stage receives exact, owner-verified artifact IDs from any run. Workers read needed IDs with `artifact_read` and `next_range`; full responses are persisted/re-read before the small routing SUMMARY is accepted. YAML-declared read-only memory remains advisory, and parallel branches are matched by branch ID rather than completion order.
 
 Checkpoint state retains the exact selected refs, so retry, clarification, and restart do not depend on semantic search. The complete workflow works when no memory endpoint or memory extension exists.
 

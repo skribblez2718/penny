@@ -1,79 +1,51 @@
-# Agent Discovery and Tools — Catalog and runtime exposure
+# Agent Discovery and Exact Tool Surfaces
 
 ## Local catalog
 
-The project's `.pi/agents/*.md` frontmatter is the sole local agent catalog.
-Discovery parses `name`, `description`, `tools`, and model settings from those
-files. Pi `/reload` re-registers the model-visible enum and catalog snapshot.
-Catalog drift between registration and execution fails with a typed reload
-requirement rather than running against stale metadata.
+Discovery reads the nearest project `.pi/agents/*.md` catalog only. Pi `/reload`
+re-registers the provider-visible enum and snapshot. Drift between registration and
+execution returns `SUBAGENT_RELOAD_REQUIRED` instead of running stale metadata.
 
-Discovery never queries durable memory, scans `PATH`, or treats prior execution
-as proof that an agent exists. Remote harness/service availability belongs to a
-separate harness/service registry.
+Discovery never queries memory, scans `PATH`, or treats prior execution as presence.
 
-## Tool rules
+## Binding runtime rule
 
-1. `tools:` frontmatter is the only local declaration.
-2. Grant the minimum role tools.
-3. Workers declare no `memory_*` tools. Durable recall, curated writes, primary
-   diary, and governed temporal KG operations are primary-runtime capabilities.
-4. Workers declare `artifact_read` for exact current-run input. The runner
-   excludes it when no owner artifact invocation exists and exposes it only with
-   the trusted grant environment.
-5. Tool names are case-sensitive and must match registered extension tools.
+```text
+active model-visible tools == that agent file's YAML tools list
+```
+
+- `tools:` is required, non-empty, duplicate-free, case-sensitive, and provider-known.
+- Unknown or unregistered names fail before model invocation.
+- The runner passes the exact list to Pi.
+- Trust profiles, phases, skills, service configuration, and input presence never change
+  the set.
+- Runtime-injected tools absent from YAML are forbidden.
+- All provider extensions load before session creation; unavailable services return typed
+  call errors without hiding tools.
+
+`authority:` and `tool_profiles:` express and statically lint the intended list. Their
+expansion must equal `tools:` in CI, but they have no runtime narrowing power.
 
 ## Categories
 
-Tools are granted through **named authority profiles**, not tool-by-tool. An agent
-declares `authority:` and `tool_profiles:`; the expansion of those profiles must equal
-its `tools:` list exactly, and drift fails `make lint`. Full ladder and per-agent
-assignment: [Tool Authority Profiles](tool-profiles.md).
+| Category       | Profiles                                  | Purpose                                                   |
+| -------------- | ----------------------------------------- | --------------------------------------------------------- |
+| Exact artifact | `artifact`                                | Read any supplied exact immutable ID with bounded ranges. |
+| Filesystem     | `filesystem.read/observe/write`           | Read, search, or mutate according to role.                |
+| Shell          | `shell.unbounded`                         | Full `bash`; not a sandbox.                               |
+| Web            | `web.search`, `web.transcript`            | External evidence.                                        |
+| Browser        | `browser.observe/reveal/interact/execute` | Increasing rendered-page authority.                       |
+| Generation     | `docgen`                                  | Requested Word/PowerPoint outputs.                        |
+| Recall         | `memory.read`                             | Advisory durable recall; never artifact handoff.          |
 
-| Category       | Profiles                                                                      | Purpose                                                        |
-| -------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| Exact artifact | `artifact`                                                                    | Read one granted immutable input with typed continuation.      |
-| Filesystem     | `filesystem.read` ⊂ `filesystem.observe` ⊂ `filesystem.write`                 | Read, search, then create or change in-scope files by role.    |
-| Shell          | `shell.unbounded`                                                             | `bash`. Named honestly — it is not bounded by anything.        |
-| Web            | `web.search`, `web.transcript`                                                | Gather external evidence.                                      |
-| Browser        | `browser.observe` ⊂ `browser.reveal` ⊂ `browser.interact` ⊂ `browser.execute` | Observe, disclose, mutate, or execute against a rendered page. |
-| Generation     | `docgen`                                                                      | Create requested document products.                            |
-
-The browser rungs are the reason the ladder exists. Observing a page, clicking a tab
-to reveal state that is already present, submitting a form, and executing arbitrary
-code are four different authorities that a single `playwright_*` grant conflates.
-`browser.execute` is granted to **no** agent; a future grant requires an explicit,
-dated, recorded exception.
-
-### What the profiles do and do not guarantee
-
-**Browser authority is structural. Filesystem and shell authority are not.**
-
-Every agent holds `bash` via `shell.unbounded`. A role declaring `authority: read` is
-structurally prevented from browser form submission, file upload, and arbitrary
-Playwright/Node execution — and is **still able to mutate the filesystem, install
-packages, and reach the network through `bash`**. No document may state or imply that
-read-only is fully enforced; at the filesystem and process layer it remains advisory.
-
-Tool visibility is not artifact authorization. `artifact_read` independently
-validates the exact ref, run, consumer, digest, expiry, and continuation cursor;
-it has no list, search, guess, or self-grant surface.
+Tool visibility is the complete model action surface. Artifact IDs themselves are not
+permissions; `artifact_read` performs direct exact manifest lookup, byte verification, and
+bounded UTF-8 reads without run/consumer/expiry checks.
 
 ## Verification
 
-- [ ] Local agent names and descriptions come from `.pi/agents` only.
-- [ ] No `memory_*` tool appears in worker frontmatter.
-- [ ] `artifact_read` is present in every worker definition.
-- [ ] `authority` and `tool_profiles` are declared and pass `check_tool_profiles.py`.
-- [ ] No remote-presence claim is inferred from the local catalog.
-- [ ] Catalog changes require reload before execution.
-
-## Files
-
-| File                                      | Purpose                            |
-| ----------------------------------------- | ---------------------------------- |
-| `docs/agents/agents/definition-format.md` | Catalog entry format               |
-| `docs/agents/agents/tool-profiles.md`     | Tool authority profiles            |
-| `.pi/extensions/subagent/agents.ts`       | Discovery and catalog snapshot     |
-| `.pi/extensions/subagent/agent-runner.ts` | Tool exposure and worker process   |
-| `.pi/extensions/artifacts/README.md`      | Exact artifact grant/read contract |
+- [ ] Missing/empty/duplicate/unknown tools fail before spawn.
+- [ ] Direct, parallel, chain, SDK-skill, trust-profile, optional-service, and applicable
+      private paths assert exact set equality.
+- [ ] No `--exclude-tools`, injected result tool, trust strip set, or phase replacement
+      matrix applies to a catalog role.

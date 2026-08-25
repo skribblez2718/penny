@@ -23,5 +23,3 @@ exclude =
 per-file-ignores =
     __init__.py: F401
     *.test.py: F401,F811
-    apps/observability/src/observability/db.py: C901
-    apps/observability/src/observability/main.py: C901

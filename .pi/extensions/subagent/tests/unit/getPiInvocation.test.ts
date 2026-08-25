@@ -7,11 +7,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import * as path from "node:path";
 
 // Mock external dependencies BEFORE importing agent-runner
-vi.mock("@mariozechner/pi-ai", () => ({}));
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-ai", () => ({}));
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   withFileMutationQueue: vi.fn(),
 }));
 
@@ -24,7 +23,7 @@ vi.mock("node:fs", () => ({
 import * as fs from "node:fs";
 import { getPiInvocation } from "../../agent-runner.js";
 
-const mockExistsSync = fs.existsSync as unknown as ReturnType<typeof vi.fn>;
+const mockExistsSync = vi.mocked(fs.existsSync);
 
 // Save original process values so we can restore them after mutation
 const originalArgv = [...process.argv];
@@ -40,7 +39,8 @@ function restoreProcess() {
 }
 
 function setProcessArgv1(argv1: string | undefined) {
-  process.argv[1] = argv1 as string;
+  if (argv1 === undefined) delete process.argv[1];
+  else process.argv[1] = argv1;
 }
 
 function setProcessExecPath(execPath: string) {

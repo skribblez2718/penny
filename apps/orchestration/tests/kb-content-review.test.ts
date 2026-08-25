@@ -1,3 +1,4 @@
+import { requireValue } from "./helpers/narrowing.js";
 /**
  * G8 §5.1 authenticated content-review callback service.
  *
@@ -20,7 +21,7 @@ import {
   ContentReviewError,
   ContentReviewService,
   authenticateLocalContentReviewer,
-  buildContentReviewPacket,
+  conflictRecordForAllocation,
   packetDigest,
   packetJcs,
 } from "../src/kb/content-review.js";
@@ -157,7 +158,10 @@ function fixture(label: string): CallbackFixture {
     }),
   });
   artifacts.seal([claims.artifact_id]);
-  const selectedBase = readSelectedGeneration(kbRoot)!;
+  const selectedBase = requireValue(
+    readSelectedGeneration(kbRoot),
+    "apps/orchestration/tests/kb-content-review.test.ts:161"
+  );
   const currentPolicySha256 = sha256Hex(canonicalJson(readPolicy(kbRoot)));
   const authority = allocateComposeAuthority({
     runId,
@@ -175,14 +179,14 @@ function fixture(label: string): CallbackFixture {
       },
     ],
   });
-  context.playbookData = {
+  Object.assign(context.knowledgeBaseData, {
     action: "ingest",
     profile_id: PROFILE,
     source_capability_ids: [capability.capability_id],
     source_ids: [...sourceIds],
     kb_id: selectedBase.catalog.kb_id,
     admitted_policy_sha256: currentPolicySha256,
-  };
+  });
   checkpointer.saveRun(context, "content_review_fixture_allocating", { run_id: runId });
   artifacts.bindPhaseOperands({
     schema_version: 1,
@@ -202,7 +206,10 @@ function fixture(label: string): CallbackFixture {
     admitted_policy_sha256: currentPolicySha256,
     compose_authority: authority,
   });
-  const allocation = authority.allocations[0]!;
+  const allocation = requireValue(
+    authority.allocations[0],
+    "apps/orchestration/tests/kb-content-review.test.ts:206"
+  );
   const page = artifacts.stage({
     state_id: "compose",
     kb_profile_id: PROFILE,
@@ -293,7 +300,7 @@ function fixture(label: string): CallbackFixture {
     capabilityIds: [capability.capability_id],
     policySha256: sha256Hex(canonicalJson(readPolicy(kbRoot))),
   });
-  context.playbookData = {
+  Object.assign(context.knowledgeBaseData, {
     action: "ingest",
     profile_id: PROFILE,
     source_capability_ids: [capability.capability_id],
@@ -305,7 +312,7 @@ function fixture(label: string): CallbackFixture {
     content_review_packet_sha256: packetDigest(packet),
     gate_id: challengeId,
     base_generation_id: packet.base_generation_id,
-  };
+  });
   context.transition("awaiting_review");
   context.status = "awaiting_user";
   context.pendingDirective = validateDirective({
@@ -331,7 +338,7 @@ function fixture(label: string): CallbackFixture {
     dbPath,
     runId,
     capabilityId: capability.capability_id,
-    sourceId: sourceIds[0]!,
+    sourceId: requireValue(sourceIds[0], "apps/orchestration/tests/kb-content-review.test.ts:335"),
     checkpointer,
     engine,
   };
@@ -347,10 +354,83 @@ function host(input: CallbackFixture, afterDecisionStored?: () => void): Content
   });
 }
 
+describe("allocated conflict contract", () => {
+  const allocation = {
+    candidate_conflict_id: "cfl_boundary_01",
+    conflict_record_id: "conf_boundary_01",
+    conflict_record_sha256: "0".repeat(64),
+  };
+  const issuedAt = "2026-08-24T12:00:00Z";
+  const claimRef = {
+    page_id: "page_boundary_01",
+    revision_id: "rev_boundary_01",
+    claim_id: "clm_boundary_01",
+  };
+
+  it("normalizes loose candidate fields to exact validated conflict bytes", () => {
+    const candidate = {
+      candidate_conflict_id: allocation.candidate_conflict_id,
+      claim_refs: [{ ...claimRef, ignored_ref_field: "not serialized" }],
+      summary: "A bounded conflict summary.",
+      evidence_refs: [
+        { evidence_id: "evidence_boundary_01", ignored_evidence_field: "not serialized" },
+      ],
+      ignored_candidate_field: "not serialized",
+    };
+
+    const record = conflictRecordForAllocation({
+      candidate,
+      allocation,
+      issuedAt,
+      allowedClaimRefs: new Set([
+        `${claimRef.page_id}\u0000${claimRef.revision_id}\u0000${claimRef.claim_id}`,
+      ]),
+    });
+
+    expect(record).toEqual({
+      schema_version: 1,
+      conflict_record_id: allocation.conflict_record_id,
+      claim_refs: [claimRef],
+      state: "open",
+      summary: candidate.summary,
+      evidence_refs: ["evidence_boundary_01"],
+      created_at: issuedAt,
+    });
+    expect(canonicalJson(record)).not.toContain("ignored_");
+  });
+
+  it("preserves the content-review error contract for malformed claim references", () => {
+    let caught: unknown;
+    try {
+      conflictRecordForAllocation({
+        candidate: {
+          candidate_conflict_id: allocation.candidate_conflict_id,
+          claim_refs: [{ ...claimRef, claim_id: 42 }],
+          summary: "Malformed reference",
+          evidence_refs: [],
+        },
+        allocation,
+        issuedAt,
+        allowedClaimRefs: new Set(),
+      });
+    } catch (error) {
+      caught = error;
+    }
+    if (!(caught instanceof ContentReviewError)) {
+      throw new Error("malformed claim reference did not raise ContentReviewError");
+    }
+    expect(caught.code).toBe("content_review_corrupt");
+    expect(caught.message).toBe("candidate conflict has a malformed claim ref");
+  });
+});
+
 describe("authenticated content-review callback", () => {
   it("stores the canonical packet with the waiting run and constructs complete exact receipt metadata", () => {
     const input = fixture("metadata");
-    const stored = input.checkpointer.contentReviewForRun(input.runId)!;
+    const stored = requireValue(
+      input.checkpointer.contentReviewForRun(input.runId),
+      "apps/orchestration/tests/kb-content-review.test.ts:424"
+    );
     expect(stored.state).toBe("awaiting");
     expect(stored.packet.action).toBe("ingest");
     expect(stored.packet.candidate_artifacts.map((artifact) => artifact.artifact_kind)).toEqual([
@@ -386,8 +466,14 @@ describe("authenticated content-review callback", () => {
 
   it("blocks generic engine respond so model-visible requests remain decision-free", () => {
     const input = fixture("decision_free");
-    const run = input.checkpointer.loadRunById(input.runId)!;
-    const pending = run.pendingDirective!;
+    const run = requireValue(
+      input.checkpointer.loadRunById(input.runId),
+      "apps/orchestration/tests/kb-content-review.test.ts:460"
+    );
+    const pending = requireValue(
+      run.pendingDirective,
+      "apps/orchestration/tests/kb-content-review.test.ts:461"
+    );
     expect(pending.action).toBe("await_user");
     expect(() =>
       input.engine.handle({
@@ -409,7 +495,10 @@ describe("authenticated content-review callback", () => {
     const first = service.submit(receipt);
     expect(first.action).toBe("incomplete");
     expect(input.checkpointer.contentReviewForRun(input.runId)?.state).toBe("denied");
-    const firstOperation = service.operation(input.runId)!;
+    const firstOperation = requireValue(
+      service.operation(input.runId),
+      "apps/orchestration/tests/kb-content-review.test.ts:483"
+    );
     expect(firstOperation.group).toMatchObject({
       source_kind: "content_review_decision",
       event_sequence: 1,
@@ -419,7 +508,10 @@ describe("authenticated content-review callback", () => {
 
     const duplicate = service.submit(receipt);
     expect(duplicate.action).toBe("incomplete");
-    const duplicateOperation = service.operation(input.runId)!;
+    const duplicateOperation = requireValue(
+      service.operation(input.runId),
+      "apps/orchestration/tests/kb-content-review.test.ts:493"
+    );
     expect(duplicateOperation.receipt.receipt_id).toBe(firstOperation.receipt.receipt_id);
     expect(duplicateOperation.replay_result).toEqual(firstOperation.replay_result);
     expect(input.checkpointer.operationReceipts(input.runId)).toHaveLength(1);
@@ -438,9 +530,15 @@ describe("authenticated content-review callback", () => {
     const receipt = service.prepareDecision({ runId: input.runId, decision: "approve" });
     const first = service.submit(receipt);
     expect(first.action).toBe("complete");
-    const selectedAfterFirst = readSelectedGeneration(input.kbRoot)!.selector.generation_id;
+    const selectedAfterFirst = requireValue(
+      readSelectedGeneration(input.kbRoot),
+      "apps/orchestration/tests/kb-content-review.test.ts:512"
+    ).selector.generation_id;
     expect(input.checkpointer.contentReviewForRun(input.runId)?.state).toBe("consumed");
-    const operation = service.operation(input.runId)!;
+    const operation = requireValue(
+      service.operation(input.runId),
+      "apps/orchestration/tests/kb-content-review.test.ts:514"
+    );
     expect(operation.receipt).toMatchObject({
       event: "published",
       transaction_id: receipt.receipt_id,
@@ -450,7 +548,10 @@ describe("authenticated content-review callback", () => {
       candidate_generation_id: selectedAfterFirst,
       transaction_id: receipt.receipt_id,
     });
-    const publication = input.checkpointer.kbPublication(receipt.receipt_id)!;
+    const publication = requireValue(
+      input.checkpointer.kbPublication(receipt.receipt_id),
+      "apps/orchestration/tests/kb-content-review.test.ts:524"
+    );
     expect(publication).toMatchObject({
       run_id: input.runId,
       candidate_generation_id: selectedAfterFirst,
@@ -465,7 +566,12 @@ describe("authenticated content-review callback", () => {
     });
     const duplicate = service.submit(receipt);
     expect(duplicate.action).toBe("complete");
-    expect(readSelectedGeneration(input.kbRoot)!.selector.generation_id).toBe(selectedAfterFirst);
+    expect(
+      requireValue(
+        readSelectedGeneration(input.kbRoot),
+        "apps/orchestration/tests/kb-content-review.test.ts:539"
+      ).selector.generation_id
+    ).toBe(selectedAfterFirst);
     expect(input.checkpointer.contentReviewForRun(input.runId)?.state).toBe("consumed");
     input.checkpointer.close();
   });
@@ -480,7 +586,10 @@ describe("authenticated content-review callback", () => {
         throw new Error("injected crash after decision transaction");
       }).submit(receipt)
     ).toThrow(/injected crash/);
-    const decided = input.checkpointer.contentReviewForRun(input.runId)!;
+    const decided = requireValue(
+      input.checkpointer.contentReviewForRun(input.runId),
+      "apps/orchestration/tests/kb-content-review.test.ts:554"
+    );
     expect(decided.state).toBe("denied");
     expect(decided.transaction_id).toBeUndefined();
     expect(decided.decision_receipt_sha256).toMatch(/^[0-9a-f]{64}$/);
@@ -506,7 +615,10 @@ describe("authenticated content-review callback", () => {
       reviewer: authenticateLocalContentReviewer(),
     }).resume(input.runId);
     expect(terminal.action).toBe("incomplete");
-    const reconciled = reopened.contentReviewForRun(input.runId)!;
+    const reconciled = requireValue(
+      reopened.contentReviewForRun(input.runId),
+      "apps/orchestration/tests/kb-content-review.test.ts:580"
+    );
     expect(reconciled.state).toBe("denied");
     expect(reconciled.transaction_id).toBe(receipt.receipt_id);
     expect(reopened.loadRunById(input.runId)?.status).toBe("incomplete");

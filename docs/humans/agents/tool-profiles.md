@@ -19,8 +19,9 @@ and a capability-level read-only are different guarantees, and only the weaker o
 
 Instead of granting tools one at a time, each role declares two things: how much authority
 it is allowed to have (`authority`), and which named bundles it draws from
-(`tool_profiles`). A CI check expands the bundles and asserts they equal the tool list
-exactly. Drift fails the build.
+(`tool_profiles`). A CI check expands the bundles and asserts they equal the YAML tool
+list exactly. Drift fails the build. Profiles are static lint metadata: at runtime the
+YAML list itself is exact, and no trust profile or skill may narrow or broaden it.
 
 The bundles form **ladders** — each rung contains everything below it plus a named
 increment:

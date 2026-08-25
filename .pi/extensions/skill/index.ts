@@ -1,3 +1,4 @@
+import { registerTool } from "../../lib/pi-tool-registration.js";
 /**
  * Skill Invocation Extension
  *
@@ -21,20 +22,25 @@
 import * as path from "path";
 import { randomUUID } from "crypto";
 import type {
+  BeforeAgentStartEvent,
   ExtensionAPI,
   ExtensionCommandContext,
+  ExtensionContext,
+  SessionStartEvent,
   Theme,
   AgentToolResult,
   AgentToolUpdateCallback,
-} from "@mariozechner/pi-coding-agent";
-import { Container, Spacer, Text } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import {
   KnowledgeBaseRequestSchema,
   OrchestrationService,
+  resolvePennyProjectState,
   validateKnowledgeBaseRequest,
   type Checkpointer,
   type KbAgentRunner,
+  type JsonValue,
   type KnowledgeBaseRequest,
   type ReplayableKnowledgeBaseResult,
   type RunContext,
@@ -48,8 +54,14 @@ import {
   reconstructResumeChain,
   isClarificationEscalation,
 } from "./skill-utils.js";
-import { ArtifactClientError, parseArtifactRef, type ArtifactRef } from "./artifact-client.js";
-import { parseInputArtifacts, type InputArtifactsV1 } from "./input-artifacts.js";
+import {
+  ArtifactClientError,
+  parseArtifactRef,
+  readArtifactsById,
+  readArtifactOutput,
+  type ArtifactRef,
+} from "./artifact-client.js";
+import { parseInputArtifacts, type InputArtifactsV2 } from "./input-artifacts.js";
 import { artifactDispatchControl, localArtifactDispatchPause } from "./dispatch-control.js";
 import {
   readChainCheckpoint,
@@ -66,12 +78,72 @@ import {
   modelInvocableSkills,
   type SkillDiscovery,
 } from "./skill-discovery.js";
-import { registerOwnerArtifactGrants } from "../artifacts/owner-grants.js";
+import { alignNativeSkillInstruction } from "./skill-prompt.js";
 import { createLogger, setSessionId } from "../../lib/logger/logger.js";
 
 const logger = createLogger("skill");
 
 import { mapWithConcurrencyLimit } from "../subagent/agent-runner.js";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
+}
+
+function stringArrayOrEmpty(value: unknown, field: string): string[] {
+  if (value === undefined) return [];
+  if (!isUnknownArray(value) || !value.every((item) => typeof item === "string")) {
+    throw new TypeError(`knowledge-base terminal result has invalid ${field}`);
+  }
+  return value;
+}
+
+type ReplayOperationAction = "init" | "ingest" | "query" | "save" | "lint" | "promote" | "resume";
+
+function isReplayOperationAction(value: unknown): value is ReplayOperationAction {
+  return (
+    value === "init" ||
+    value === "ingest" ||
+    value === "query" ||
+    value === "save" ||
+    value === "lint" ||
+    value === "promote" ||
+    value === "resume"
+  );
+}
+
+type KnowledgeBaseArtifactHandle = ReplayableKnowledgeBaseResult["artifacts"][number];
+
+const KNOWLEDGE_BASE_ARTIFACT_KINDS: ReadonlySet<string> = new Set([
+  "claims",
+  "page_draft",
+  "query_answer",
+  "lint_report",
+  "verification_report",
+  "promotion_plan",
+  "promotion_patch",
+]);
+
+function isKnowledgeBaseArtifactHandle(value: unknown): value is KnowledgeBaseArtifactHandle {
+  return (
+    isRecord(value) &&
+    value.schema_version === 1 &&
+    typeof value.artifact_id === "string" &&
+    value.artifact_id.length > 0 &&
+    typeof value.artifact_kind === "string" &&
+    KNOWLEDGE_BASE_ARTIFACT_KINDS.has(value.artifact_kind) &&
+    typeof value.sha256 === "string" &&
+    /^[a-f0-9]{64}$/u.test(value.sha256) &&
+    value.media_type === "application/json" &&
+    typeof value.byte_length === "number" &&
+    Number.isSafeInteger(value.byte_length) &&
+    value.byte_length >= 0 &&
+    value.byte_length <= 1_048_576
+  );
+}
 
 /** Abort one TypeScript skill invocation without converting it to success. */
 function abortError(skillName: string): Error {
@@ -95,6 +167,23 @@ type KnowledgeBaseParams = KnowledgeBaseRequest;
 
 let config: SkillConfig;
 
+/** Open a schema-validated KB request for action-specific field projection. */
+function validatedKnowledgeBaseRequestFields(
+  request: KnowledgeBaseRequest
+): Readonly<Record<string, unknown>> {
+  return { ...request };
+}
+
+/** Project validated promotion refs into the orchestration JSON constraint domain. */
+function promotionPageRevisionsForConstraints(
+  pageRevisions: readonly { readonly page_id: string; readonly revision_id: string }[]
+): JsonValue[] {
+  return pageRevisions.map((revision) => ({
+    page_id: revision.page_id,
+    revision_id: revision.revision_id,
+  }));
+}
+
 // ============================================================
 // Skill Discovery
 // ============================================================
@@ -115,19 +204,18 @@ async function executeTypeScriptSkill(
   params: {
     goal: string;
     session_id?: string;
-    project_root?: string;
     constraints?: Record<string, unknown>;
     /** Test/caller override applied to every research agent without changing SSOT defaults. */
     model?: string;
-    /** Owner-only exact predecessor imported by skill-chain composition. */
-    chain_input_artifacts?: InputArtifactsV1;
+    /** Exact IDs supplied explicitly by the caller, from any run. */
+    input_artifacts?: string[];
+    /** Exact predecessor inserted automatically by skill-chain composition. */
+    chain_input_artifacts?: InputArtifactsV2;
   },
   cwd: string,
   signal: AbortSignal | undefined,
-  ctx: ExtensionCommandContext,
-  onUpdate:
-    | ((partial: { content: Array<{ type: string; text: string }>; details: unknown }) => void)
-    | undefined
+  ctx: ExtensionContext,
+  onUpdate: AgentToolUpdateCallback<SkillResult | undefined> | undefined
 ): Promise<SkillResult> {
   if (skillName !== "research") {
     return {
@@ -144,7 +232,7 @@ async function executeTypeScriptSkill(
   if (signal?.aborted) {
     throw abortError(skillName);
   }
-  const projectRoot = path.resolve(params.project_root || cwd);
+  const projectRoot = path.resolve(cwd);
   const sessionId = params.session_id || `skill-${randomUUID()}`;
   const runId = sessionId;
   const constraints =
@@ -153,70 +241,75 @@ async function executeTypeScriptSkill(
   const chainInput = params.chain_input_artifacts
     ? parseInputArtifacts(params.chain_input_artifacts)
     : undefined;
+  const explicitRefs = (
+    await readArtifactsById({
+      artifactIds: params.input_artifacts ?? [],
+      projectRoot,
+      env: process.env,
+    })
+  ).map((read) => read.ref);
+  const allInputRefs = [
+    ...(chainInput?.artifacts.map((binding) => binding.ref) ?? []),
+    ...explicitRefs,
+  ];
+  const dedupedInputRefs = [...new Map(allInputRefs.map((ref) => [ref.artifact_id, ref])).values()];
+  const inputArtifacts =
+    dedupedInputRefs.length > 0
+      ? parseInputArtifacts({
+          schema_version: 2,
+          artifacts: dedupedInputRefs.map((ref, index) => ({
+            slot: `input-${String(index + 1).padStart(4, "0")}`,
+            ref,
+          })),
+        })
+      : undefined;
   const trustedProject =
     typeof ctx.isProjectTrusted === "function" ? ctx.isProjectTrusted() : false;
-  // Owner-supplied, read-only memory grant for TS workers (worker-read posture).
-  // The memory extension is instantiated HERE (bun owner context) with a pinned,
-  // minimal worker-read env, so the worker session never reads the primary env and
-  // cannot gain write/logstream/inline-token access. Fail-closed: if worker-read
-  // memory is not fully provisioned, the workers simply run without memory tools
-  // (search/youtube only) and the run is not broken.
-  const workerExtensions = await (async () => {
-    try {
-      const memory = await import("@penny/memory-extension");
-      memory.loadWorkerReadConfig(process.env); // validate provisioning; throws if incomplete
-      const readEnv: Record<string, string> = {};
-      const copy = (name: string) => {
-        const value = process.env[name];
-        if (value && value.trim().length > 0) readEnv[name] = value;
-      };
-      for (const name of [
-        "PENNY_MEMORY_MCP_ENDPOINT",
-        "PENNY_MEMORY_PALACE_ID",
-        "PENNY_MEMORY_PRINCIPAL_ID",
-        "PENNY_MEMORY_TRUST_MODE",
-        "PENNY_MEMORY_ISOLATION_BOUNDARY_ID",
-        "PENNY_MEMORY_DATA_ROOT_ID",
-        "PENNY_MEMORY_MAX_RESPONSE_BYTES",
-        "PENNY_MEMORY_REQUEST_TIMEOUT_MS",
-      ]) {
-        copy(name);
-      }
-      // Credential: either a token file (copy the path; the secret is read from
-      // disk) or an environment secret (copy BOTH the referencing variable name and
-      // the secret it holds, since the factory resolves the credential from the
-      // env object it is given, not from the worker's process env).
-      const tokenFile = process.env.PENNY_MEMORY_MCP_TOKEN_FILE;
-      const tokenEnvName = process.env.PENNY_MEMORY_MCP_TOKEN_ENV;
-      if (tokenFile && tokenFile.trim().length > 0) {
-        readEnv.PENNY_MEMORY_MCP_TOKEN_FILE = tokenFile;
-      } else if (tokenEnvName && tokenEnvName.trim().length > 0) {
-        readEnv.PENNY_MEMORY_MCP_TOKEN_ENV = tokenEnvName;
-        const secret = process.env[tokenEnvName];
-        if (secret && secret.trim().length > 0) readEnv[tokenEnvName] = secret;
-      }
-      readEnv.PENNY_RUNTIME_ROLE = "worker-read";
-      // Scope/load the extension only. The worker's tool allow-list comes from the
-      // .pi/agents/<agent>.md SSOT (which declares memory.read), so there is no
-      // per-grant tool list to maintain here.
-      return [
-        {
-          name: "memory-worker-read",
-          factory: memory.createMemoryExtension({ env: readEnv }),
-          hidden: true,
-        },
-      ];
-    } catch {
-      return undefined; // memory not provisioned -> workers stay memory-free
-    }
-  })();
+  // Always register the worker-read memory provider because every catalog
+  // agent declares its exact memory.read surface. Missing service configuration
+  // becomes a typed tool-call error; it never removes declared tools.
+  const memory = await import("@penny/memory-extension");
+  const readEnv: Record<string, string> = {};
+  const copy = (name: string) => {
+    const value = process.env[name];
+    if (value && value.trim().length > 0) readEnv[name] = value;
+  };
+  for (const name of [
+    "PENNY_MEMORY_MCP_ENDPOINT",
+    "PENNY_MEMORY_PALACE_ID",
+    "PENNY_MEMORY_PRINCIPAL_ID",
+    "PENNY_MEMORY_TRUST_MODE",
+    "PENNY_MEMORY_ISOLATION_BOUNDARY_ID",
+    "PENNY_MEMORY_DATA_ROOT_ID",
+    "PENNY_MEMORY_MAX_RESPONSE_BYTES",
+    "PENNY_MEMORY_REQUEST_TIMEOUT_MS",
+  ]) {
+    copy(name);
+  }
+  const tokenFile = process.env.PENNY_MEMORY_MCP_TOKEN_FILE;
+  const tokenEnvName = process.env.PENNY_MEMORY_MCP_TOKEN_ENV;
+  if (tokenFile?.trim()) {
+    readEnv.PENNY_MEMORY_MCP_TOKEN_FILE = tokenFile;
+  } else if (tokenEnvName?.trim()) {
+    readEnv.PENNY_MEMORY_MCP_TOKEN_ENV = tokenEnvName;
+    const secret = process.env[tokenEnvName];
+    if (secret?.trim()) readEnv[tokenEnvName] = secret;
+  }
+  readEnv.PENNY_RUNTIME_ROLE = "worker-read";
+  const workerExtensions = [
+    {
+      name: "memory-worker-read",
+      factory: memory.createMemoryExtension({ env: readEnv }),
+      hidden: true,
+    },
+  ];
   const serviceEnv = params.model
     ? { ...process.env, PENNY_RESEARCH_DEFAULT_MODEL: params.model }
     : process.env;
   using service = new OrchestrationService({
     projectRoot,
     env: serviceEnv,
-    ...(workerExtensions ? { workerExtensions } : {}),
+    workerExtensions,
   });
   const identity = {
     schema_version: 2 as const,
@@ -231,13 +324,11 @@ async function executeTypeScriptSkill(
   });
 
   const existing = service.checkpointer.loadRunById(runId);
-  if (chainInput !== undefined && existing === undefined) {
-    if (chainInput.run_id !== runId) {
-      throw new Error("skill-chain input is not bound to the target TypeScript run");
-    }
-    for (const binding of chainInput.artifacts) {
-      service.artifacts.read(binding.ref, chainInput.consumer);
-    }
+  if (inputArtifacts !== undefined && existing === undefined) {
+    for (const binding of inputArtifacts.artifacts) service.artifacts.read(binding.ref);
+  }
+  if (inputArtifacts !== undefined && existing !== undefined) {
+    throw new Error(`run '${runId}' already exists; input_artifacts cannot be changed on recovery`);
   }
   let directive;
   if (existing !== undefined && clarificationResponse !== undefined) {
@@ -275,7 +366,7 @@ async function executeTypeScriptSkill(
         constraints: workflowConstraints,
         project_root: projectRoot,
         trust_profile: trustedProject ? "trusted-interactive" : "hardened-untrusted",
-        ...(chainInput ? { input_artifacts: chainInput } : {}),
+        ...(inputArtifacts ? { input_artifacts: inputArtifacts } : {}),
       },
       signal
     );
@@ -378,6 +469,15 @@ const MAX_CHAIN_STEPS = 10;
 // Skill Parameter Schema
 // ============================================================
 
+const ArtifactIdSchema = Type.String({
+  pattern: "^art_[a-f0-9]{64}$",
+  description: "Exact immutable artifact ID from any prior run",
+});
+const InputArtifactIdsSchema = Type.Array(ArtifactIdSchema, {
+  uniqueItems: true,
+  description: "Unique exact artifact IDs verified before the skill run starts",
+});
+
 /**
  * Single skill step shape — used in both skills[] and chain[] arrays.
  */
@@ -388,8 +488,9 @@ const SkillStep = Type.Object({
   goal: Type.String({
     description:
       "The goal or objective for the skill to accomplish. " +
-      "In chain mode, {previous} identifies the prior skill's exact granted terminal artifact; payload bytes are never substituted.",
+      "In chain mode, {previous} identifies the prior skill's exact terminal artifact; payload bytes are never substituted.",
   }),
+  input_artifacts: Type.Optional(InputArtifactIdsSchema),
   session_id: Type.Optional(
     Type.String({
       description: "Override auto-generated session identifier",
@@ -431,14 +532,10 @@ const SkillParams = Type.Object({
       description: "The goal or objective for the skill to accomplish (single mode)",
     })
   ),
+  input_artifacts: Type.Optional(InputArtifactIdsSchema),
   session_id: Type.Optional(
     Type.String({
       description: "Unique session identifier (auto-generated if not provided)",
-    })
-  ),
-  project_root: Type.Optional(
-    Type.String({
-      description: "Project root directory (defaults to cwd)",
     })
   ),
   constraints: Type.Optional(
@@ -464,7 +561,7 @@ const SkillParams = Type.Object({
   chain: Type.Optional(
     Type.Array(SkillStep, {
       description:
-        "Invoke skills sequentially with owner-granted exact terminal artifacts; {previous} is an artifact marker, not payload text. " +
+        "Invoke skills sequentially with exact terminal artifact IDs; {previous} is an artifact marker, not payload text. " +
         `Max ${MAX_CHAIN_STEPS} steps. Stops on first error — use resume_chain to recover.`,
     })
   ),
@@ -501,23 +598,22 @@ export { detectSkillMode } from "./skill-utils.js";
 /**
  * Run multiple skills concurrently with concurrency limiting.
  *
- * Each parallel skill gets an independent session and no chain-artifact grant.
+ * Each parallel skill gets an independent session and independent exact inputs.
  * On abort, pending skills are cancelled and partial results returned.
  */
 async function executeSkillsParallel(
   skills: Array<{
     skill_name: string;
     goal: string;
+    input_artifacts?: string[];
     session_id?: string;
     constraints?: Record<string, unknown>;
     model?: string;
   }>,
   cwd: string,
   signal: AbortSignal | undefined,
-  ctx: ExtensionCommandContext,
-  onUpdate:
-    | ((update: { content: Array<{ type: string; text: string }>; details: unknown }) => void)
-    | undefined
+  ctx: ExtensionContext,
+  onUpdate: AgentToolUpdateCallback<SkillResult | undefined> | undefined
 ): Promise<SkillResult> {
   const parallelSessionId = `parallel-${Date.now()}`;
   let completed = 0;
@@ -531,6 +627,7 @@ async function executeSkillsParallel(
         skill.skill_name,
         {
           goal: skill.goal,
+          input_artifacts: skill.input_artifacts,
           session_id: skill.session_id,
           constraints: skill.constraints,
           model: skill.model,
@@ -579,16 +676,15 @@ async function executeSkillsChain(
   chain: Array<{
     skill_name: string;
     goal: string;
+    input_artifacts?: string[];
     session_id?: string;
     constraints?: Record<string, unknown>;
     model?: string;
   }>,
   cwd: string,
   signal: AbortSignal | undefined,
-  ctx: ExtensionCommandContext,
-  onUpdate:
-    | ((update: { content: Array<{ type: string; text: string }>; details: unknown }) => void)
-    | undefined,
+  ctx: ExtensionContext,
+  onUpdate: AgentToolUpdateCallback<SkillResult | undefined> | undefined,
   resumeFrom?: string,
   stepOverrides?: Record<number, { goal?: string; constraints?: Record<string, unknown> }>
 ): Promise<SkillResult> {
@@ -598,9 +694,11 @@ async function executeSkillsChain(
   let checkpoint: ChainCheckpoint;
   let previousHandoffRef: ReturnType<typeof parseArtifactRef> | undefined;
   let finalOutputRef: ReturnType<typeof parseArtifactRef> | undefined;
+  const projectRoot = path.resolve(cwd);
+  const projectState = resolvePennyProjectState(projectRoot, { env: process.env });
 
   if (resumeFrom) {
-    const recovered = readChainCheckpoint(resumeFrom, process.env);
+    const recovered = readChainCheckpoint(resumeFrom, projectRoot, process.env);
     if (!recovered) {
       return {
         success: false,
@@ -683,6 +781,7 @@ async function executeSkillsChain(
       index,
       skill_name: step.skill_name,
       goal: step.goal,
+      input_artifacts: step.input_artifacts,
       session_id: step.session_id || `${step.skill_name}-${randomUUID()}`,
       status: "pending" as const,
       model: step.model,
@@ -690,6 +789,8 @@ async function executeSkillsChain(
     }));
     checkpoint = {
       schema_version: 1,
+      state_layout_version: 1,
+      project_id: projectState.projectId,
       chain_session_id: chainSessionId,
       chain_run_id: chainSessionId,
       chain_goal_summary: chain.map((step) => step.skill_name).join(" → "),
@@ -701,6 +802,7 @@ async function executeSkillsChain(
         index: step.index,
         skill_name: step.skill_name,
         goal: step.goal,
+        input_artifacts: step.input_artifacts,
         session_id: step.session_id,
         model: step.model,
         constraints: step.constraints,
@@ -721,10 +823,10 @@ async function executeSkillsChain(
       );
     }
 
-    let chainInputArtifacts: InputArtifactsV1 | undefined;
+    let chainInputArtifacts: InputArtifactsV2 | undefined;
     if (previousHandoffRef) {
       try {
-        await validateSkillChainHandoff(previousHandoffRef, process.env);
+        await validateSkillChainHandoff(previousHandoffRef, path.resolve(cwd), process.env);
         chainInputArtifacts = skillChainInput({
           targetRunId: stepEntry.session_id,
           handoffRef: previousHandoffRef,
@@ -735,7 +837,7 @@ async function executeSkillsChain(
         stepEntry.error = `Exact predecessor artifact is unavailable (${code})`;
         checkpoint.current_step = stepIndex;
         checkpoint.chain_status = "failed";
-        saveChainCheckpoint(checkpoint, process.env);
+        saveChainCheckpoint(checkpoint, projectRoot, process.env);
         return {
           success: false,
           session_id: chainSessionId,
@@ -760,10 +862,10 @@ async function executeSkillsChain(
     checkpoint.current_step = stepIndex;
     checkpoint.chain_status = "running";
     stepEntry.status = "running";
-    saveChainCheckpoint(checkpoint, process.env);
+    saveChainCheckpoint(checkpoint, projectRoot, process.env);
 
     const previousMarker = chainInputArtifacts
-      ? "the exact granted prior-skill terminal artifact"
+      ? "the exact prior-skill terminal artifact identified below"
       : "";
     const resolvedGoal = step.goal.replaceAll("{previous}", previousMarker);
     onUpdate?.({
@@ -780,6 +882,7 @@ async function executeSkillsChain(
       step.skill_name,
       {
         goal: resolvedGoal,
+        input_artifacts: step.input_artifacts,
         session_id: stepEntry.session_id,
         constraints: step.constraints,
         model: step.model,
@@ -807,7 +910,7 @@ async function executeSkillsChain(
       delete stepEntry.error;
       delete stepEntry.error_detail;
       checkpoint.chain_status = "running";
-      saveChainCheckpoint(checkpoint, process.env);
+      saveChainCheckpoint(checkpoint, projectRoot, process.env);
       return {
         success: false,
         session_id: chainSessionId,
@@ -840,7 +943,7 @@ async function executeSkillsChain(
         timestamp: new Date().toISOString(),
       };
       checkpoint.chain_status = "failed";
-      saveChainCheckpoint(checkpoint, process.env);
+      saveChainCheckpoint(checkpoint, projectRoot, process.env);
 
       const escalation = result.escalation;
       if (isClarificationEscalation(result) && escalation) {
@@ -918,7 +1021,7 @@ async function executeSkillsChain(
       stepEntry.status = "failed";
       stepEntry.error = "Successful skill step has no exact terminal output artifact ref";
       checkpoint.chain_status = "failed";
-      saveChainCheckpoint(checkpoint, process.env);
+      saveChainCheckpoint(checkpoint, projectRoot, process.env);
       return {
         success: false,
         session_id: chainSessionId,
@@ -964,7 +1067,7 @@ async function executeSkillsChain(
         stepEntry.output_artifact_ref = terminalRef;
         stepEntry.error = `Exact skill-chain handoff persistence failed (${code})`;
         checkpoint.chain_status = "failed";
-        saveChainCheckpoint(checkpoint, process.env);
+        saveChainCheckpoint(checkpoint, projectRoot, process.env);
         return {
           success: false,
           session_id: chainSessionId,
@@ -994,11 +1097,11 @@ async function executeSkillsChain(
     checkpoint.pending_steps = checkpoint.pending_steps.filter(
       (pending) => pending.index !== stepIndex
     );
-    saveChainCheckpoint(checkpoint, process.env);
+    saveChainCheckpoint(checkpoint, projectRoot, process.env);
   }
 
   checkpoint.chain_status = "complete";
-  saveChainCheckpoint(checkpoint, process.env);
+  saveChainCheckpoint(checkpoint, projectRoot, process.env);
   return {
     success: true,
     session_id: chainSessionId,
@@ -1055,45 +1158,56 @@ export default function skillExtension(
   let currentParentIdentity: { provider: string; model: string } | undefined;
 
   const captureParentIdentity = (model: unknown): void => {
-    const m = model as { provider?: unknown; id?: unknown } | undefined;
-    const provider = typeof m?.provider === "string" ? m.provider : "";
-    const id = typeof m?.id === "string" ? m.id : "";
+    const provider = isRecord(model) && typeof model.provider === "string" ? model.provider : "";
+    const id = isRecord(model) && typeof model.id === "string" ? model.id : "";
     currentParentIdentity =
       provider.length > 0 && id.length > 0 ? { provider, model: id } : undefined;
   };
 
-  pi.on("session_start", async (_event: unknown, ctx: ExtensionCommandContext) => {
+  pi.on("session_start", async (_event: SessionStartEvent, ctx: ExtensionContext) => {
     const sessionId = ctx.sessionManager.getSessionId();
     currentSessionId = sessionId;
     setSessionId(sessionId);
-    captureParentIdentity((ctx as { model?: unknown }).model);
+    captureParentIdentity(ctx.model);
   });
 
-  pi.on("model_select", async (event: unknown) => {
-    captureParentIdentity((event as { model?: unknown })?.model);
+  pi.on("model_select", async (event) => {
+    captureParentIdentity(event.model);
   });
 
-  /**
-   * Grant the terminal skill artifact to the execution owner so the
-   * orchestrator can read the exact result it is handed a ref for. Best effort:
-   * a completed skill run is never failed by grant bookkeeping.
-   */
-  const grantTerminalArtifact = (result: SkillResult): SkillResult => {
-    const ref = result.output_artifact_ref;
-    if (!ref || !currentSessionId) return result;
-    try {
-      const [granted] = registerOwnerArtifactGrants({
-        sessionId: currentSessionId,
-        refs: [ref as ArtifactRef],
-      });
-      return granted ? { ...result, output_artifact_ref: granted } : result;
-    } catch (error) {
-      logger.warn("skill_owner_grant_failed", {
-        errorCode: "SKILL_OWNER_GRANT_FAILED",
-        reason: error instanceof Error ? error.message : "unknown",
-      });
-      return result;
+  pi.on("before_agent_start", (event: BeforeAgentStartEvent) => {
+    const systemPrompt = alignNativeSkillInstruction(event.systemPrompt);
+    return systemPrompt === event.systemPrompt ? undefined : { systemPrompt };
+  });
+
+  /** Successful terminal communication is valid only after an exact re-read. */
+  const verifyTerminalArtifact = async (
+    result: SkillResult,
+    projectRoot: string
+  ): Promise<SkillResult> => {
+    const refs = [
+      ...(result.output_artifact_ref ? [result.output_artifact_ref] : []),
+      ...(result.parallel_results ?? []).flatMap((child) =>
+        child.output_artifact_ref ? [child.output_artifact_ref] : []
+      ),
+      ...(result.chain_results ?? []).flatMap((child) =>
+        child.output_artifact_ref ? [child.output_artifact_ref] : []
+      ),
+    ];
+    if (result.success && refs.length === 0) {
+      throw new ArtifactClientError(
+        "ARTIFACT_PERSIST_FAILED",
+        "successful skill result is missing its terminal output artifact"
+      );
     }
+    for (const ref of new Map(refs.map((value) => [value.artifact_id, value])).values()) {
+      await readArtifactOutput({
+        ref: ref as ArtifactRef,
+        projectRoot,
+        env: process.env,
+      });
+    }
+    return result;
   };
 
   // ── knowledge_base tool (Phase 6 requirement, pre-G7 disabled state) ────────
@@ -1106,7 +1220,7 @@ export default function skillExtension(
   //
   // Registered BEFORE `skill` so the last-registered tool (which unit-test mocks
   // capture) remains `skill` — adding a tool must not break existing test fixtures.
-  pi.registerTool({
+  registerTool(pi, {
     name: "knowledge_base",
     label: "Knowledge Base",
     description: [
@@ -1125,7 +1239,7 @@ export default function skillExtension(
       toolContext: ExtensionCommandContext
     ) => {
       const request = validateKnowledgeBaseRequest(typedParams);
-      const rawParams = request as unknown as Record<string, unknown>;
+      const rawParams = validatedKnowledgeBaseRequestFields(request);
       const action = request.action;
       const profileId = request.kb_profile_id;
       if (profileId.length === 0) {
@@ -1156,13 +1270,15 @@ export default function skillExtension(
         typeof toolCallId === "string" && toolCallId.length > 0
           ? toolCallId
           : `call-${randomUUID()}`;
-      const hostGrantRoot = path.join(projectRoot, ".penny", "kb-host-grants");
       let resolvedProfile;
+      let hostGrantRoot: string;
       try {
+        const projectState = resolvePennyProjectState(projectRoot);
+        hostGrantRoot = projectState.paths.knowledgeBase.hostGrants;
         resolvedProfile = orch.resolveGrantedProfile({
           profileId,
           sessionId: hostSessionId,
-          registryPath: path.join(projectRoot, ".penny", "kb-profiles.json"),
+          registryPath: projectState.paths.knowledgeBase.profiles,
           grantStoreDir: hostGrantRoot,
         });
       } catch (error) {
@@ -1383,13 +1499,15 @@ export default function skillExtension(
       }): ReplayableKnowledgeBaseResult => {
         let projected: ReplayableKnowledgeBaseResult;
         try {
-          const replayAction = (
+          const storedAction = input.run.playbookData.action;
+          const durableAction =
             input.projectedAction === "resume"
               ? "resume"
-              : String(input.run.playbookData.action ?? "")
-          ) as Parameters<typeof orch.replayableResultFromRun>[0]["action"];
+              : isReplayOperationAction(storedAction)
+                ? storedAction
+                : "init";
           const replay = orch.replayableResultFromRun({
-            action: replayAction,
+            action: durableAction,
             run: input.run,
             checkpointer: input.checkpointer,
           });
@@ -1735,7 +1853,7 @@ export default function skillExtension(
           const queryGoal =
             "Answer the stored private request from the selected generation. " +
             "Advisory only; no publication.";
-          const queryConstraints: Record<string, unknown> = {
+          const queryConstraints: Record<string, JsonValue> = {
             action: "query",
             kb_profile_id: profileId,
             // §5.3: derived from the one validated private host context.
@@ -1806,7 +1924,7 @@ export default function skillExtension(
                 engine_owner: "typescript",
               },
               goal: queryGoal,
-              constraints: queryConstraints as never,
+              constraints: queryConstraints,
               projectRoot,
               trustProfile: "hardened-untrusted",
               maxSteps: custodyService.config.maxSteps,
@@ -1900,7 +2018,7 @@ export default function skillExtension(
                 engine_owner: "typescript",
               },
               goal: queryGoal,
-              constraints: queryConstraints as never,
+              constraints: queryConstraints,
               project_root: projectRoot,
               trust_profile: "hardened-untrusted",
             });
@@ -1909,19 +2027,17 @@ export default function skillExtension(
               directive.action === "incomplete" ||
               directive.action === "cancelled"
             ) {
-              const terminal = directive as {
-                met?: boolean;
-                result?: Record<string, unknown>;
-              };
-              const result = (terminal.result ?? {}) as Record<string, unknown>;
+              const terminal: unknown = directive;
+              const terminalRecord = isRecord(terminal) ? terminal : {};
+              const result = isRecord(terminalRecord.result) ? terminalRecord.result : {};
               // The exact PUBLIC replay is bound with the receipt in the
               // operation-plane finalizer below; private bytes are discarded
               // only after that atomic control commit.
-              const met = terminal.met === true;
-              const pageIds = Array.isArray(result["query_page_ids"])
-                ? (result["query_page_ids"] as string[])
-                : [];
-              const handle = (result["answer_handle"] ?? null) as { artifact_id?: unknown } | null;
+              const met = terminalRecord.met === true;
+              const pageIds = stringArrayOrEmpty(result["query_page_ids"], "query_page_ids");
+              const handle = isKnowledgeBaseArtifactHandle(result["answer_handle"])
+                ? result["answer_handle"]
+                : undefined;
               const answerArtifactId = String(result["answer_artifact_id"] ?? "");
               kbResult = {
                 schema_version: 1,
@@ -1941,15 +2057,10 @@ export default function skillExtension(
                   ...(answerArtifactId.length > 0 ? [answerArtifactId] : []),
                 ],
                 counts: { candidates: Number(result["candidate_count"] ?? 0) },
-                artifacts:
-                  handle !== null && typeof handle.artifact_id === "string"
-                    ? ([handle as never] as never[])
-                    : [],
+                artifacts: handle ? [handle] : [],
                 evidence: [],
-                warnings: Array.isArray(result["warnings"]) ? (result["warnings"] as string[]) : [],
-                unresolved: Array.isArray(result["unresolved_issues"])
-                  ? (result["unresolved_issues"] as string[])
-                  : [],
+                warnings: stringArrayOrEmpty(result["warnings"], "warnings"),
+                unresolved: stringArrayOrEmpty(result["unresolved_issues"], "unresolved_issues"),
                 next: "none",
               };
             } else {
@@ -2014,7 +2125,7 @@ export default function skillExtension(
               settleFailedQuery(queryRunId, "query_start_failed");
               logger.warn("kb_query_start_failed", {
                 errorCode: "KB_QUERY_START_FAILED",
-                reason: String((err as Error)?.name ?? "error"),
+                reason: err instanceof Error ? err.name : "error",
               });
               kbResult = {
                 schema_version: 1,
@@ -3146,7 +3257,7 @@ export default function skillExtension(
           const promoteConstraints = {
             action: "promote",
             kb_profile_id: profileId,
-            page_revisions: promoteRequest.page_revisions as unknown as never,
+            page_revisions: promotionPageRevisionsForConstraints(promoteRequest.page_revisions),
             canonical_target_capability_ids: [...promoteRequest.canonical_target_capability_ids],
             parent_identity: hostParentIdentity ?? null,
           };
@@ -3453,36 +3564,29 @@ export default function skillExtension(
     },
   });
 
-  pi.registerTool({
+  registerTool<typeof SkillParams, SkillResult>(pi, {
     name: "skill",
     label: "Invoke Skill",
     description: [
       "Invoke a skill with durable TypeScript state-machine orchestration.",
       "Skills define workflows (phases, transitions, subagent order).",
       "Penny decides WHEN to invoke; skills decide HOW to execute.",
-      "Exact agent output is owner-persisted as an artifact before SUMMARY routing.",
+      "Exact agent output is owner-persisted and re-read before SUMMARY routing; single and step inputs may include exact IDs from any run.",
+      "Use for engine-backed skills whose listed description matches the task; do not use for a skill with a dedicated typed Pi-tool entrypoint such as knowledge_base.",
+      "Use a skill name from Pi's <available_skills> system catalog; descriptions are not repeated here.",
       "",
       "Modes:",
       "  - Single:  skill({ skill_name, goal })",
       "  - Parallel: skill({ skills: [{ skill_name, goal }, ...] })",
       `    Max ${MAX_PARALLEL_SKILLS} concurrent skills. Each skill runs independently.`,
       "  - Chain:   skill({ chain: [{ skill_name, goal }, ...] })",
-      `    Max ${MAX_CHAIN_STEPS} steps. {previous} points to the prior skill's exact granted terminal artifact.`,
+      `    Max ${MAX_CHAIN_STEPS} steps. {previous} points to the prior terminal ID; each step may add explicit input_artifacts.`,
       "    Stops on first error — use resume_chain to recover from the failed step.",
       "  - Resume:  skill({ resume_chain: chain_session_id, step_overrides?: {...} })",
       "    Skips completed steps, resumes from the failed step.",
-      "",
-      "Available skills:",
-      ...skills.map((s) => `  - ${s.name}: ${s.description}`),
     ].join("\n"),
     parameters: SkillParams,
-    async execute(
-      _toolCallId: string,
-      params: SkillToolParams,
-      signal: AbortSignal | undefined,
-      onUpdate: AgentToolUpdateCallback<unknown> | undefined,
-      ctx: ExtensionCommandContext
-    ) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       // ── Mode detection + routing ──
       const detected = detectSkillMode(params);
 
@@ -3519,8 +3623,8 @@ export default function skillExtension(
           // Reconstruct clean single-mode parameters at the tool boundary.
           const cleanParams = {
             goal,
+            input_artifacts: params.input_artifacts,
             session_id: params.session_id,
-            project_root: params.project_root,
             constraints: params.constraints,
             model: params.model,
           };
@@ -3599,12 +3703,12 @@ export default function skillExtension(
           throw new Error(`Unknown mode: ${String(detected.mode)}`);
       }
 
-      const granted = grantTerminalArtifact(result);
+      const verified = await verifyTerminalArtifact(result, ctx.cwd);
       return {
         content: [
-          { type: "text", text: formatResult(granted, ctx.ui.theme.fg.bind(ctx.ui.theme)) },
+          { type: "text", text: formatResult(verified, ctx.ui.theme.fg.bind(ctx.ui.theme)) },
         ],
-        details: granted,
+        details: verified,
       };
     },
 
@@ -3617,10 +3721,10 @@ export default function skillExtension(
           .join(" + ");
         const more = args.skills.length > 3 ? ` ...+${args.skills.length - 3} more` : "";
         const text =
-          theme("toolTitle", "skill ") +
-          theme("dim", "[parallel] ") +
-          theme("accent", names) +
-          theme("dim", more);
+          theme.fg("toolTitle", "skill ") +
+          theme.fg("dim", "[parallel] ") +
+          theme.fg("accent", names) +
+          theme.fg("dim", more);
         return new Text(text, 0, 0);
       }
 
@@ -3632,19 +3736,19 @@ export default function skillExtension(
           .join(" → ");
         const more = args.chain.length > 3 ? ` ...+${args.chain.length - 3} more` : "";
         const text =
-          theme("toolTitle", "skill ") +
-          theme("dim", "[chain] ") +
-          theme("accent", names) +
-          theme("dim", more);
+          theme.fg("toolTitle", "skill ") +
+          theme.fg("dim", "[chain] ") +
+          theme.fg("accent", names) +
+          theme.fg("dim", more);
         return new Text(text, 0, 0);
       }
 
       // ── Resume mode ──
       if (args.resume_chain) {
         const text =
-          theme("toolTitle", "skill ") +
-          theme("dim", "[resume] ") +
-          theme("accent", args.resume_chain.slice(0, 20));
+          theme.fg("toolTitle", "skill ") +
+          theme.fg("dim", "[resume] ") +
+          theme.fg("accent", args.resume_chain.slice(0, 20));
         return new Text(text, 0, 0);
       }
 
@@ -3653,23 +3757,25 @@ export default function skillExtension(
       const name = skill?.name || args.skill_name || "skill";
       const goal = args.goal?.slice(0, 50) || "...";
       const text =
-        theme("toolTitle", "skill ") + theme("accent", name) + theme("dim", ` "${goal}..."`);
+        theme.fg("toolTitle", "skill ") +
+        theme.fg("accent", name) +
+        theme.fg("dim", ` "${goal}..."`);
       return new Text(text, 0, 0);
     },
 
     renderResult(
-      result: AgentToolResult<SkillResult>,
+      result: AgentToolResult<SkillResult | undefined>,
       { expanded }: { expanded: boolean },
       theme: Theme
     ) {
       const details = result.details;
-      if (!details) return new Text(theme("muted", "No result"), 0, 0);
+      if (!details) return new Text(theme.fg("muted", "No result"), 0, 0);
 
       // ── Parallel mode ──
       if (details.mode === "parallel" && details.parallel_results) {
         if (!expanded) {
           const status = details.success ? "✓" : "✗";
-          const text = theme(
+          const text = theme.fg(
             details.success ? "success" : "error",
             `${status} ${details.parallel_results.length} skills`
           );
@@ -3679,7 +3785,7 @@ export default function skillExtension(
         const statusIcon = details.success ? "✓" : "⚠";
         container.addChild(
           new Text(
-            theme(
+            theme.fg(
               details.success ? "success" : "warning",
               `${statusIcon} ${details.parallel_results.length} skills`
             ),
@@ -3687,14 +3793,14 @@ export default function skillExtension(
             0
           )
         );
-        container.addChild(new Text(theme("muted", `Session: ${details.session_id}`), 0, 0));
+        container.addChild(new Text(theme.fg("muted", `Session: ${details.session_id}`), 0, 0));
         container.addChild(new Spacer(1));
         for (const r of details.parallel_results) {
           const s = r.success ? "✓" : "✗";
           container.addChild(
-            new Text(theme(r.success ? "success" : "error", `  ${s} ${r.skill_name}`), 0, 0)
+            new Text(theme.fg(r.success ? "success" : "error", `  ${s} ${r.skill_name}`), 0, 0)
           );
-          container.addChild(new Text(theme("muted", `     ${r.session_id}`), 0, 0));
+          container.addChild(new Text(theme.fg("muted", `     ${r.session_id}`), 0, 0));
         }
         return container;
       }
@@ -3703,12 +3809,16 @@ export default function skillExtension(
       if (details.mode === "chain") {
         if (!expanded) {
           if (details.success) {
-            return new Text(theme("success", `✓ chain ${details.chain_total || "?"} steps`), 0, 0);
+            return new Text(
+              theme.fg("success", `✓ chain ${details.chain_total || "?"} steps`),
+              0,
+              0
+            );
           }
           const errorStep = (details.chain_error_step ?? 0) + 1;
           const resumableTag = details.resumable ? " (resumable)" : "";
           return new Text(
-            theme(
+            theme.fg(
               "error",
               `✗ chain step ${errorStep}/${details.chain_total || "?"}${resumableTag}`
             ),
@@ -3718,15 +3828,15 @@ export default function skillExtension(
         }
         const container = new Container();
         if (details.success) {
-          container.addChild(new Text(theme("success", `✓ chain completed`), 0, 0));
-          container.addChild(new Text(theme("muted", `Session: ${details.session_id}`), 0, 0));
-          container.addChild(new Text(theme("muted", `Steps: ${details.chain_total}`), 0, 0));
+          container.addChild(new Text(theme.fg("success", `✓ chain completed`), 0, 0));
+          container.addChild(new Text(theme.fg("muted", `Session: ${details.session_id}`), 0, 0));
+          container.addChild(new Text(theme.fg("muted", `Steps: ${details.chain_total}`), 0, 0));
           if (details.chain_results) {
             container.addChild(new Spacer(1));
             for (const r of details.chain_results) {
               container.addChild(
                 new Text(
-                  theme("text", `  ✓ step ${(r.chain_step ?? 0) + 1}: ${r.skill_name}`),
+                  theme.fg("text", `  ✓ step ${(r.chain_step ?? 0) + 1}: ${r.skill_name}`),
                   0,
                   0
                 )
@@ -3734,12 +3844,12 @@ export default function skillExtension(
             }
           }
         } else {
-          container.addChild(new Text(theme("error", `✗ chain failed`), 0, 0));
-          container.addChild(new Text(theme("muted", `Session: ${details.session_id}`), 0, 0));
+          container.addChild(new Text(theme.fg("error", `✗ chain failed`), 0, 0));
+          container.addChild(new Text(theme.fg("muted", `Session: ${details.session_id}`), 0, 0));
           if (details.chain_error_step !== undefined) {
             container.addChild(
               new Text(
-                theme(
+                theme.fg(
                   "error",
                   `Failed at step ${details.chain_error_step + 1}/${details.chain_total}`
                 ),
@@ -3751,7 +3861,7 @@ export default function skillExtension(
           if (details.resumable) {
             container.addChild(
               new Text(
-                theme("warning", `  Resumable via resume_chain: "${details.chain_session_id}"`),
+                theme.fg("warning", `  Resumable via resume_chain: "${details.chain_session_id}"`),
                 0,
                 0
               )
@@ -3759,11 +3869,11 @@ export default function skillExtension(
           }
           if (details.chain_results) {
             container.addChild(new Spacer(1));
-            container.addChild(new Text(theme("muted", "Completed steps:"), 0, 0));
+            container.addChild(new Text(theme.fg("muted", "Completed steps:"), 0, 0));
             for (const r of details.chain_results) {
               container.addChild(
                 new Text(
-                  theme("text", `  ✓ step ${(r.chain_step ?? 0) + 1}: ${r.skill_name}`),
+                  theme.fg("text", `  ✓ step ${(r.chain_step ?? 0) + 1}: ${r.skill_name}`),
                   0,
                   0
                 )
@@ -3777,55 +3887,61 @@ export default function skillExtension(
       if (expanded && details.escalation) {
         const container = new Container();
         container.addChild(
-          new Text(theme("warning", `⏸️ ${details.skill_name} awaiting user input`), 0, 0)
+          new Text(theme.fg("warning", `⏸️ ${details.skill_name} awaiting user input`), 0, 0)
         );
         container.addChild(new Spacer(1));
-        container.addChild(new Text(theme("muted", `Session: ${details.session_id}`), 0, 0));
-        container.addChild(new Text(theme("muted", `State: ${details.state}`), 0, 0));
+        container.addChild(new Text(theme.fg("muted", `Session: ${details.session_id}`), 0, 0));
+        container.addChild(new Text(theme.fg("muted", `State: ${details.state}`), 0, 0));
         container.addChild(
-          new Text(theme("muted", `Phases: ${details.agents_invoked.join(" → ")}`), 0, 0)
+          new Text(theme.fg("muted", `Phases: ${details.agents_invoked.join(" → ")}`), 0, 0)
         );
 
         const esc = details.escalation;
         if (esc.unknown_reason) {
           container.addChild(new Spacer(1));
-          container.addChild(new Text(theme("text", `Reason: ${esc.unknown_reason}`), 0, 0));
+          container.addChild(new Text(theme.fg("text", `Reason: ${esc.unknown_reason}`), 0, 0));
         }
         if (esc.previous_state) {
           container.addChild(
-            new Text(theme("muted", `Previous state: ${esc.previous_state}`), 0, 0)
+            new Text(theme.fg("muted", `Previous state: ${esc.previous_state}`), 0, 0)
           );
         }
         container.addChild(new Spacer(1));
-        container.addChild(new Text(theme("toolTitle", "Escalation Questions:"), 0, 0));
+        container.addChild(new Text(theme.fg("toolTitle", "Escalation Questions:"), 0, 0));
         for (const q of esc.questions || []) {
-          container.addChild(new Text(theme("text", `  [${q.id}] ${q.label}`), 0, 0));
+          container.addChild(new Text(theme.fg("text", `  [${q.id}] ${q.label}`), 0, 0));
         }
         container.addChild(new Spacer(1));
         container.addChild(
-          new Text(theme("muted", "Use questionnaire tool to respond, then re-invoke skill."), 0, 0)
+          new Text(
+            theme.fg("muted", "Use questionnaire tool to respond, then re-invoke skill."),
+            0,
+            0
+          )
         );
         return container;
       }
 
       if (expanded && details.success && details.session_room) {
         const container = new Container();
-        container.addChild(new Text(theme("success", `✓ ${details.skill_name} completed`), 0, 0));
-        container.addChild(new Spacer(1));
-        container.addChild(new Text(theme("muted", `Session: ${details.session_id}`), 0, 0));
         container.addChild(
-          new Text(theme("muted", `Phases: ${details.agents_invoked.join(" → ")}`), 0, 0)
+          new Text(theme.fg("success", `✓ ${details.skill_name} completed`), 0, 0)
         );
-        container.addChild(new Text(theme("muted", `Room: ${details.session_room}`), 0, 0));
+        container.addChild(new Spacer(1));
+        container.addChild(new Text(theme.fg("muted", `Session: ${details.session_id}`), 0, 0));
+        container.addChild(
+          new Text(theme.fg("muted", `Phases: ${details.agents_invoked.join(" → ")}`), 0, 0)
+        );
+        container.addChild(new Text(theme.fg("muted", `Room: ${details.session_room}`), 0, 0));
 
         // Show approval-required banner when plan needs review
         if (details.requires_approval) {
           container.addChild(new Spacer(1));
           container.addChild(
-            new Text(theme("warning", "⛔ APPROVAL REQUIRED — Present to user for review"), 0, 0)
+            new Text(theme.fg("warning", "⛔ APPROVAL REQUIRED — Present to user for review"), 0, 0)
           );
           container.addChild(
-            new Text(theme("muted", "Use questionnaire tool: Approve / Refine / Deny"), 0, 0)
+            new Text(theme.fg("muted", "Use questionnaire tool: Approve / Refine / Deny"), 0, 0)
           );
         }
 
@@ -3833,28 +3949,33 @@ export default function skillExtension(
         const planSteps = details.plan_steps || [];
         if (planSteps.length > 0) {
           container.addChild(new Spacer(1));
-          container.addChild(new Text(theme("toolTitle", "Plan Steps:"), 0, 0));
+          container.addChild(new Text(theme.fg("toolTitle", "Plan Steps:"), 0, 0));
           for (const step of planSteps.slice(0, 15)) {
             const title = step["title"] || String(step);
             const num = step["step"] || step["id"] || "•";
-            container.addChild(new Text(theme("text", `  ${String(num)}. ${String(title)}`), 0, 0));
+            container.addChild(
+              new Text(theme.fg("text", `  ${String(num)}. ${String(title)}`), 0, 0)
+            );
           }
           if (planSteps.length > 15) {
             container.addChild(
-              new Text(theme("dim", `  ... and ${planSteps.length - 15} more`), 0, 0)
+              new Text(theme.fg("dim", `  ... and ${planSteps.length - 15} more`), 0, 0)
             );
           }
         } else if (details.plan) {
           const steps = details.plan["steps"] || details.plan["tasks"] || [];
-          if (Array.isArray(steps) && steps.length > 0) {
+          if (isUnknownArray(steps) && steps.length > 0) {
             container.addChild(new Spacer(1));
-            container.addChild(new Text(theme("toolTitle", "Steps:"), 0, 0));
+            container.addChild(new Text(theme.fg("toolTitle", "Steps:"), 0, 0));
             for (const rawStep of steps.slice(0, 15)) {
-              const step = (rawStep ?? {}) as Record<string, unknown>;
+              const step = isRecord(rawStep) ? rawStep : {};
               const title = step["title"] || step["description"] || rawStep;
               container.addChild(
                 new Text(
-                  theme("text", `  ${String(step["id"] || step["step"] || "•")}. ${String(title)}`),
+                  theme.fg(
+                    "text",
+                    `  ${String(step["id"] || step["step"] || "•")}. ${String(title)}`
+                  ),
                   0,
                   0
                 )
@@ -3862,7 +3983,7 @@ export default function skillExtension(
             }
             if (steps.length > 15) {
               container.addChild(
-                new Text(theme("dim", `  ... and ${steps.length - 15} more`), 0, 0)
+                new Text(theme.fg("dim", `  ... and ${steps.length - 15} more`), 0, 0)
               );
             }
           }

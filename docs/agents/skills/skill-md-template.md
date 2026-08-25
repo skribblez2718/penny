@@ -28,10 +28,10 @@ metadata:
 ## Exact Artifact Handoff
 
 Every cognitive directive declares execution-owner `input_artifacts` and an
-`output_artifact` contract. Workers read every granted reference with
-`artifact_read`, follow continuation until `truncated` is false, return complete
-stage content, and append only the active state's routing `SUMMARY`. The owner
-persists and verifies exact bytes before routing.
+`output_artifact` contract. Workers read needed exact IDs with `artifact_read`, repeat
+with `next_range` until `truncated` is false, return complete stage content, and append
+only the active state's routing `SUMMARY`. The owner persists and re-reads exact bytes
+before parsing routing.
 
 Durable memory is optional, primary-owned, and never workflow handoff or run state.
 
@@ -48,6 +48,7 @@ and unresolved issues.]
 ## Constraints
 
 - Replace every bracketed placeholder.
+- Keep the description under the 1,024-character hard limit and near the 500-character preferred target unless extra routing detail materially helps.
 - Keep `engine: orchestration` and remove the legacy state-machine key.
 - Do not add a room-manifest requirement.
 - Do not add worker memory tools/instructions, session rooms, duplicate

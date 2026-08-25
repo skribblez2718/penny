@@ -1,3 +1,4 @@
+import { registerTool } from "../../../lib/pi-tool-registration.js";
 /**
  * Core Tools
  *
@@ -6,8 +7,8 @@
  * Translated from MCP: snapshot.ts, screenshot.ts, common.ts
  */
 
-import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BrowserManager } from "../browser.js";
 import type { PlaywrightConfig, ScreenshotResult, SnapshotNode } from "../types.js";
 
@@ -17,18 +18,12 @@ export function registerCoreTools(pi: ExtensionAPI, _config: PlaywrightConfig) {
   // ==========================================================================
   // browser_snapshot
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_snapshot",
     label: "Page Snapshot",
     description:
       "Capture the accessibility snapshot of the current page. This is the primary way to understand page structure — it returns a semantic tree of roles, names, and states that is better for LLM analysis than raw HTML or screenshots.",
     promptSnippet: "Capture accessibility snapshot of the current page",
-    promptGuidelines: [
-      "Use playwright_snapshot to understand page structure before interacting with elements.",
-      "The snapshot shows semantic roles (button, link, textbox, etc.) with their names and states.",
-      "Snapshots are more compact and informative than raw HTML or DOM.",
-      "Use snapshot results to find element selectors for click, type, and other interaction tools.",
-    ],
     parameters: Type.Object({
       depth: Type.Optional(
         Type.Number({
@@ -42,7 +37,7 @@ export function registerCoreTools(pi: ExtensionAPI, _config: PlaywrightConfig) {
 
       let tree = snapshot.tree;
       if (params.depth && tree) {
-        tree = limitDepth(tree, params.depth as number);
+        tree = limitDepth(tree, params.depth);
       }
 
       const nodeCount = countNodes(tree);
@@ -75,18 +70,12 @@ export function registerCoreTools(pi: ExtensionAPI, _config: PlaywrightConfig) {
   // ==========================================================================
   // browser_screenshot
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_screenshot",
     label: "Take Screenshot",
     description:
       "Take a screenshot of the current page or a specific element. Saves the image to a file and returns the file path. Use this for visual inspection — for structural analysis, prefer playwright_snapshot.",
     promptSnippet: "Take a screenshot of the current page",
-    promptGuidelines: [
-      "Use playwright_screenshot for visual inspection of the page.",
-      "For structural analysis, use playwright_snapshot instead — it's more informative for LLMs.",
-      "Screenshots are saved to the configured output directory.",
-      "You can screenshot the full page (fullPage: true) or just the visible viewport.",
-    ],
     parameters: Type.Object({
       selector: Type.Optional(
         Type.String({ description: "CSS selector to screenshot a specific element" })
@@ -112,11 +101,11 @@ export function registerCoreTools(pi: ExtensionAPI, _config: PlaywrightConfig) {
     }),
     async execute(_toolCallId, params) {
       const result: ScreenshotResult = await browser.screenshot({
-        selector: params.selector as string | undefined,
-        fullPage: params.fullPage as boolean | undefined,
-        type: (params.type as "png" | "jpeg") ?? "png",
-        quality: params.quality as number | undefined,
-        path: params.path as string | undefined,
+        selector: params.selector,
+        fullPage: params.fullPage,
+        type: params.type ?? "png",
+        quality: params.quality,
+        path: params.path,
       });
 
       const summary = `Screenshot saved: ${result.filePath} (${result.width}x${result.height}, ${formatBytes(result.fileSizeBytes)}, ${result.mimeType})`;
@@ -136,16 +125,12 @@ export function registerCoreTools(pi: ExtensionAPI, _config: PlaywrightConfig) {
   // ==========================================================================
   // browser_close
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_close",
     label: "Close Browser",
     description:
       "Close the current browser page. If it was the last page, closes the browser entirely.",
     promptSnippet: "Close the current browser page",
-    promptGuidelines: [
-      "Use playwright_close when you're done with the current page.",
-      "If there are multiple pages open, the next page becomes active.",
-    ],
     parameters: Type.Object({}),
     async execute(_toolCallId, _params) {
       await browser.close();
@@ -174,22 +159,18 @@ export function registerCoreTools(pi: ExtensionAPI, _config: PlaywrightConfig) {
   // ==========================================================================
   // browser_resize
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_resize",
     label: "Resize Browser",
     description:
       "Resize the browser viewport to specific dimensions. Useful for responsive testing or ensuring consistent screenshot sizes.",
     promptSnippet: "Resize the browser viewport",
-    promptGuidelines: [
-      "Use playwright_resize to change the browser window size.",
-      "Useful for testing responsive layouts or mobile viewports.",
-    ],
     parameters: Type.Object({
       width: Type.Number({ description: "Viewport width in pixels", minimum: 1 }),
       height: Type.Number({ description: "Viewport height in pixels", minimum: 1 }),
     }),
     async execute(_toolCallId, params) {
-      await browser.resize(params.width as number, params.height as number);
+      await browser.resize(params.width, params.height);
 
       return {
         content: [

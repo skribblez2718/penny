@@ -18,7 +18,7 @@ metadata:
 ## Rules
 
 1. `name` matches the directory and uses lowercase kebab-case.
-2. `description` contains a role sentence, `Use when`, and an anti-use clause.
+2. `description` contains a role sentence, `Use when`, and an anti-use clause. It has a 1,024-character hard limit and an approximately 500-character preferred target; justified longer text remains valid.
 3. `metadata.penny.engine` is `orchestration`; the removed `state_machine` key is forbidden.
 4. `metadata.penny.mempalace` is optional. It describes optional **primary
    durable-memory** integration only. It does not authorize worker memory tools
@@ -42,26 +42,26 @@ workers to use session rooms, duplicate checks, diaries, or KG links.
 
 ## Exact handoff statement
 
-State that cognitive stages receive owner-selected `input_artifacts`, read exact
-grants with `artifact_read` through complete continuation, and return complete
+State that cognitive stages receive owner-selected exact `input_artifacts` IDs/refs,
+read needed IDs with `artifact_read` through `next_range`, and return complete
 stage content for owner capture before routing. State that memory availability
 cannot affect workflow correctness.
 
 ## Canonical wire terms
 
-| Term                   | Meaning                                                              |
-| ---------------------- | -------------------------------------------------------------------- |
-| `input_artifacts`      | Exact current-consumer predecessor slots/refs selected by the owner. |
-| `output_artifact`      | Owner contract for the current stage's exact response bytes.         |
-| `output_artifact_ref`  | Canonical selected product ref exposed by the terminal result.       |
-| `SUMMARY`              | Minimal model-authored routing payload, never persistence proof.     |
-| `needs_clarification`  | Worker requests owner-mediated user input.                           |
-| `clarifying_questions` | Questions preserved by the run checkpoint.                           |
-| `confidence`           | CERTAIN / PROBABLE / POSSIBLE / UNCERTAIN wire vocabulary.           |
+| Term                   | Meaning                                                             |
+| ---------------------- | ------------------------------------------------------------------- |
+| `input_artifacts`      | Unique exact cross-run predecessor slots/IDs selected by the owner. |
+| `output_artifact`      | Owner contract for the current stage's exact response bytes.        |
+| `output_artifact_ref`  | Canonical selected product ref exposed by the terminal result.      |
+| `SUMMARY`              | Minimal model-authored routing payload, never persistence proof.    |
+| `needs_clarification`  | Worker requests owner-mediated user input.                          |
+| `clarifying_questions` | Questions preserved by the run checkpoint.                          |
+| `confidence`           | CERTAIN / PROBABLE / POSSIBLE / UNCERTAIN wire vocabulary.          |
 
 ## Verification
 
-- [ ] YAML parses and engine marker is present.
+- [ ] YAML parses, the engine marker is present, and the routing description meets its shape and budget.
 - [ ] No legacy state-machine key.
 - [ ] Artifact handoff and terminal product ref are documented.
 - [ ] Memory is optional/primary-only and not workflow transport.

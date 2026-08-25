@@ -1,6 +1,8 @@
+import { requireValue } from "./helpers/narrowing.js";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ArtifactStore } from "../src/artifact-store.js";
@@ -67,7 +69,7 @@ function metadata(
   parent: ArtifactRef | null = null
 ): OutputArtifactMetadata {
   return {
-    schema_version: 1,
+    schema_version: 2,
     run_id: runId,
     phase: "researching",
     branch_id: null,
@@ -75,7 +77,6 @@ function metadata(
     operation_id: "agent-operation:safety",
     version,
     producer: "agent:echo",
-    consumer_scope: ["state:researching", "state:synthesizing"],
     media_type: "text/plain; charset=utf-8",
     parent_ref: parent,
     upstream_refs: [],
@@ -113,7 +114,7 @@ const planningResearchClient: ModelClient = {
 };
 
 describe("artifact and receipt safety", () => {
-  it("keeps an immutable manifest with idempotence, revision CAS, and least authority", () => {
+  it("keeps an immutable manifest with idempotence, revision CAS, and direct reads", () => {
     const root = temporaryRoot();
     using store = new ArtifactStore(path.join(root, "artifacts"));
     const firstMetadata = metadata("manifest-run");
@@ -127,8 +128,8 @@ describe("artifact and receipt safety", () => {
     );
     store.select(first);
     expect(store.selected("manifest-run", "researching", null)).toEqual(first);
-    expect(store.read(first, "state:synthesizing").toString("utf8")).toBe("first exact bytes");
-    expect(() => store.read(first, "state:report_writing")).toThrow("does not grant");
+    expect(store.read(first).toString("utf8")).toBe("first exact bytes");
+    expect(store.readById(first.artifact_id).toString("utf8")).toBe("first exact bytes");
 
     const secondMetadata = metadata("manifest-run", 2, first);
     const second = store.persist({
@@ -163,7 +164,7 @@ describe("artifact and receipt safety", () => {
     )}`;
     const orphan = store.persist({
       metadata: {
-        schema_version: 1,
+        schema_version: 2,
         run_id: runIdentity.run_id,
         phase: "researching",
         branch_id: "sq2",
@@ -171,7 +172,6 @@ describe("artifact and receipt safety", () => {
         operation_id: orphanOperation,
         version: 1,
         producer: "agent:echo",
-        consumer_scope: ["state:researching", "state:synthesizing"],
         media_type: "text/plain; charset=utf-8",
         parent_ref: null,
         upstream_refs: [],
@@ -213,7 +213,10 @@ describe("artifact and receipt safety", () => {
       schema_version: 2,
       action: "step",
       identity: runIdentity,
-      result: (await workers.execute(planning))[0]!,
+      result: requireValue(
+        (await workers.execute(planning))[0],
+        "apps/orchestration/tests/safety.test.ts:215"
+      ),
     });
     if (fan.action !== "invoke_agents_parallel") {
       throw new Error("expected a research fan");
@@ -243,8 +246,13 @@ describe("artifact and receipt safety", () => {
       });
       workers.acceptArtifact(result);
     }
-    expect(store.selected(runIdentity.run_id, "researching", "sq2").version).toBe(2);
-    expect(store.selected(runIdentity.run_id, "researching", "sq1").version).toBe(1);
+    const selectedSq2 = store.selected(runIdentity.run_id, "researching", "sq2");
+    const selectedSq1 = store.selected(runIdentity.run_id, "researching", "sq1");
+    if (selectedSq2 === undefined || selectedSq1 === undefined) {
+      throw new Error("accepted fan artifacts were not selected");
+    }
+    expect(selectedSq2.version).toBe(2);
+    expect(selectedSq1.version).toBe(1);
     checkpointer.close();
   });
 
@@ -290,14 +298,20 @@ describe("artifact and receipt safety", () => {
     workers.setReceiptAuthority(wiredEngine.receiptAuthority);
     const runIdentity = identity("rebind-run");
     const planning = wiredEngine.handle(startRequest(root, runIdentity, { mode: "standard" }));
-    const planned = (await workers.execute(planning))[0]!;
+    const planned = requireValue(
+      (await workers.execute(planning))[0],
+      "apps/orchestration/tests/safety.test.ts:297"
+    );
     const fan = wiredEngine.handle({
       schema_version: 2,
       action: "step",
       identity: runIdentity,
       result: planned,
-    }) as Extract<import("../src/contracts.js").Directive, { action: "invoke_agents_parallel" }>;
-    const branch = fan.branches[1]!;
+    });
+    if (fan.action !== "invoke_agents_parallel") {
+      throw new Error(`expected parallel fan directive, received ${fan.action}`);
+    }
+    const branch = requireValue(fan.branches[1], "apps/orchestration/tests/safety.test.ts:304");
     expect(branch.output_artifact.version).toBe(1);
     expect(branch.output_artifact.parent_ref).toBeNull();
     // A worker for this branch crashed between persist and accept: an
@@ -310,14 +324,26 @@ describe("artifact and receipt safety", () => {
       schema_version: 2,
       action: "recover",
       identity: runIdentity,
-    }) as Extract<import("../src/contracts.js").Directive, { action: "invoke_agents_parallel" }>;
-    const rebound = recovered.branches[1]!;
+    });
+    if (recovered.action !== "invoke_agents_parallel") {
+      throw new Error(`expected recovered parallel directive, received ${recovered.action}`);
+    }
+    const rebound = requireValue(
+      recovered.branches[1],
+      "apps/orchestration/tests/safety.test.ts:318"
+    );
     expect(rebound.output_artifact.version).toBe(2);
     expect(rebound.output_artifact.parent_ref?.artifact_id).toBe(orphan.artifact_id);
     expect(rebound.output_artifact.parent_ref?.version).toBe(1);
     // Unaffected branches keep their first-revision spec.
-    expect(recovered.branches[0]!.output_artifact.version).toBe(1);
-    expect(recovered.branches[0]!.output_artifact.parent_ref).toBeNull();
+    expect(
+      requireValue(recovered.branches[0], "apps/orchestration/tests/safety.test.ts:323")
+        .output_artifact.version
+    ).toBe(1);
+    expect(
+      requireValue(recovered.branches[0], "apps/orchestration/tests/safety.test.ts:324")
+        .output_artifact.parent_ref
+    ).toBeNull();
     checkpointer.close();
   });
 
@@ -336,7 +362,10 @@ describe("artifact and receipt safety", () => {
     workers.setReceiptAuthority(engine.receiptAuthority);
     const runIdentity = identity("tamper-run");
     const pending = engine.handle(startRequest(root, runIdentity));
-    const valid = (await workers.execute(pending))[0]!;
+    const valid = requireValue(
+      (await workers.execute(pending))[0],
+      "apps/orchestration/tests/safety.test.ts:343"
+    );
     const signature = valid.worker_receipt.signature;
     const tamperedSignature = `${signature.slice(0, -1)}${signature.endsWith("0") ? "1" : "0"}`;
     expect(() =>
@@ -403,7 +432,10 @@ describe("artifact and receipt safety", () => {
     if (pending.action !== "invoke_agent") {
       throw new Error("expected invoke directive");
     }
-    const malformedResult = (await workers.execute(pending))[0]!;
+    const malformedResult = requireValue(
+      (await workers.execute(pending))[0],
+      "apps/orchestration/tests/safety.test.ts:410"
+    );
     expect(malformedResult.details).toEqual({});
     const retry = engine.handle({
       schema_version: 2,
@@ -442,7 +474,10 @@ describe("dispatch and worker isolation", () => {
     workers.setReceiptAuthority(engine.receiptAuthority);
     const runIdentity = identity("pause-run");
     const pending = engine.handle(startRequest(root, runIdentity));
-    const workerResult = (await workers.execute(pending))[0]!;
+    const workerResult = requireValue(
+      (await workers.execute(pending))[0],
+      "apps/orchestration/tests/safety.test.ts:449"
+    );
     const before = checkpointer.loadRun(runIdentity).snapshot();
     const eventsBefore = checkpointer.events(runIdentity.run_id);
     mode = "paused";
@@ -493,17 +528,13 @@ describe("dispatch and worker isolation", () => {
     ).toBe("alpha beta");
   });
 
-  it("loads only worker-safe search extensions and excludes memory", async () => {
+  it("loads every provider extension before applying the exact YAML allowlist", async () => {
     const projectRoot = path.resolve("../..");
     const loader = await createWorkerResourceLoader(projectRoot);
     const paths = loader.getExtensions().extensions.map((extension) => extension.resolvedPath);
-    expect(paths.some((extensionPath) => extensionPath.includes("/memory/"))).toBe(false);
-    expect(paths.length).toBeGreaterThan(0);
-    expect(
-      paths.every(
-        (extensionPath) => extensionPath.includes("/search/") || extensionPath.includes("/youtube/")
-      )
-    ).toBe(true);
+    expect(paths.some((extensionPath) => extensionPath.includes("/memory/"))).toBe(true);
+    expect(paths.some((extensionPath) => extensionPath.includes("/artifacts/"))).toBe(true);
+    expect(paths.some((extensionPath) => extensionPath.includes("/playwright/"))).toBe(true);
   });
 
   it("loads an owner-supplied extension factory (the seam is extension-agnostic)", async () => {
@@ -511,7 +542,9 @@ describe("dispatch and worker isolation", () => {
     // The app is extension-agnostic: it loads the extension factories the
     // execution owner supplies. A stand-in factory proves the seam without
     // coupling the app (or its tests) to any specific extension package.
-    const factory = (pi: unknown): unknown => pi;
+    const factory: ExtensionFactory = (pi) => {
+      void pi;
+    };
     const inline: InlineExtension = { name: "stub-read", factory, hidden: true };
 
     const base = await createWorkerResourceLoader(projectRoot);
@@ -520,11 +553,11 @@ describe("dispatch and worker isolation", () => {
     // the owner-supplied inline extension loads (exactly one extra extension) ...
     const owner = await createWorkerResourceLoader(projectRoot, [inline]);
     expect(owner.getExtensions().extensions.length).toBe(baseCount + 1);
-    // ... and memory is still NOT implicitly loaded (the owner must supply it)
+    // ... while the complete provider catalog remains available for YAML selection.
     const ownerPaths = owner
       .getExtensions()
       .extensions.map((extension) => extension.resolvedPath ?? "");
-    expect(ownerPaths.some((p) => p.includes("/memory/"))).toBe(false);
+    expect(ownerPaths.some((p) => p.includes("/memory/"))).toBe(true);
   });
 
   describe("SSOT tool authority (.pi/agents/<agent>.md is the control plane)", () => {
@@ -548,7 +581,7 @@ describe("dispatch and worker isolation", () => {
       expect(() => parseSsotTools("---\nname: echo\n---\nbody", "echo")).toThrow(
         /no top-level 'tools:'/
       );
-      expect(() => parseSsotTools("---\ntools:\n---\nbody", "echo")).toThrow(/empty 'tools:' list/);
+      expect(() => parseSsotTools("---\ntools:\n---\nbody", "echo")).toThrow(/empty tools: entry/);
     });
   });
 });

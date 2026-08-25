@@ -1,3 +1,4 @@
+import { requireValue } from "./helpers/narrowing.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -137,9 +138,14 @@ describe("durable orchestration runtime", () => {
     expect(terminal.status).toBe("complete");
     expect(terminal.result.grounded).toBe(true);
     expect(terminal.artifacts).toHaveLength(1);
-    expect(artifacts.read(terminal.artifacts[0]!, "state:complete").toString("utf8")).toContain(
-      "# report.md"
-    );
+    expect(
+      artifacts
+        .read(
+          requireValue(terminal.artifacts[0], "apps/orchestration/tests/core-runtime.test.ts:140"),
+          "state:complete"
+        )
+        .toString("utf8")
+    ).toContain("# report.md");
     expect(client.invocations.map((call) => call.stateId)).toEqual([
       "researching",
       "synthesizing",
@@ -209,14 +215,20 @@ describe("durable orchestration runtime", () => {
       schema_version: 2,
       action: "step",
       identity: runIdentity,
-      result: (await workers.execute(planning))[0]!,
+      result: requireValue(
+        (await workers.execute(planning))[0],
+        "apps/orchestration/tests/core-runtime.test.ts:212"
+      ),
     });
     expect(fan.action).toBe("invoke_agents_parallel");
     if (fan.action !== "invoke_agents_parallel") {
       throw new Error("expected parallel directive");
     }
     const branchResults = await workers.execute(fan);
-    const accepted = branchResults[0]!;
+    const accepted = requireValue(
+      branchResults[0],
+      "apps/orchestration/tests/core-runtime.test.ts:219"
+    );
     const wrongAgent = { ...accepted, agent: "synthia" };
     expect(() =>
       engine.handle({
@@ -264,14 +276,17 @@ describe("durable orchestration runtime", () => {
       schema_version: 2,
       action: "step",
       identity: runIdentity,
-      result: (await workers.execute(planning))[0]!,
+      result: requireValue(
+        (await workers.execute(planning))[0],
+        "apps/orchestration/tests/core-runtime.test.ts:267"
+      ),
     });
     if (fan.action !== "invoke_agents_parallel") {
       throw new Error("expected research fan");
     }
     const original = await workers.execute(fan);
-    const first = original[0]!;
-    const second = original[1]!;
+    const first = requireValue(original[0], "apps/orchestration/tests/core-runtime.test.ts:273");
+    const second = requireValue(original[1], "apps/orchestration/tests/core-runtime.test.ts:274");
     const reissued = engine.handle({
       schema_version: 2,
       action: "step",
@@ -310,7 +325,10 @@ describe("durable orchestration runtime", () => {
       schema_version: 2,
       action: "step",
       identity: runIdentity,
-      result: (await workers.execute(retryOnly))[0]!,
+      result: requireValue(
+        (await workers.execute(retryOnly))[0],
+        "apps/orchestration/tests/core-runtime.test.ts:313"
+      ),
     });
     expect(synthesis.action).toBe("invoke_agent");
     if (synthesis.action === "invoke_agent") {
@@ -338,7 +356,10 @@ describe("durable orchestration runtime", () => {
     if (research.action !== "invoke_agent") {
       throw new Error("expected research directive");
     }
-    const researchResult = (await workers.execute(research))[0]!;
+    const researchResult = requireValue(
+      (await workers.execute(research))[0],
+      "apps/orchestration/tests/core-runtime.test.ts:341"
+    );
     const gate = engine.handle({
       schema_version: 2,
       action: "step",

@@ -25,9 +25,14 @@ describe("tool-result budget", () => {
       details: { continuation: true },
     });
     const measurement = measureToolResult(result);
+    const [content] = result.content;
 
+    expect(content).toBeDefined();
+    if (content === undefined) {
+      throw new Error("createTextToolResult must return text content");
+    }
     expect(measurement.bytes).toBe(Buffer.byteLength(JSON.stringify(result), "utf8"));
-    expect(measurement.bytes).toBeGreaterThan(Buffer.byteLength(result.content[0]!.text, "utf8"));
+    expect(measurement.bytes).toBeGreaterThan(Buffer.byteLength(content.text, "utf8"));
     expect(() => enforceToolResultBudget(result, DEFAULT_TOOL_RESULT_BUDGET)).toThrow();
   });
 

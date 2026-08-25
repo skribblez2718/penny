@@ -1,3 +1,4 @@
+import { requireValue } from "./helpers/narrowing.js";
 import { describe, expect, it } from "vitest";
 
 import { COMPATIBILITY_LOANS, loanReviewState, loansNeedingReview } from "../src/loans.js";
@@ -13,7 +14,7 @@ describe("TypeScript orchestration compatibility loans", () => {
   });
 
   it("makes current, changed, overdue, and unknown review states visible", () => {
-    const loan = COMPATIBILITY_LOANS[0]!;
+    const loan = requireValue(COMPATIBILITY_LOANS[0], "apps/orchestration/tests/loans.test.ts:16");
     expect(loanReviewState(loan, loan.assumptionDigest, new Date("2026-08-16T00:00:00Z"))).toBe(
       "current"
     );

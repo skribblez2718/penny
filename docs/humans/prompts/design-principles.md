@@ -182,8 +182,8 @@ This was formalized in the role-and-domain-standards.md on April 14, 2026: "Each
 Agents still provide domain focus and separate context, but exact workflow data
 moves through an immutable artifact plane:
 
-1. The execution owner grants only the exact predecessor refs needed now.
-2. The worker reads them with `artifact_read`, following typed continuation until complete.
+1. The execution owner verifies and supplies only the exact predecessor IDs needed now.
+2. The worker reads them with `artifact_read`, repeating with `next_range` until complete.
 3. The worker returns complete stage content plus a small routing SUMMARY.
 4. The owner persists and verifies exact bytes before SUMMARY routing.
 5. The checkpointer retains compact state and selected refs, never payload bytes.

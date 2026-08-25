@@ -3,9 +3,12 @@ import { randomUUID } from "node:crypto";
 import { ArtifactStore } from "./artifact-store.js";
 import { canonicalJson, sha256 } from "./checkpointer.js";
 import {
+  ConfidenceSchema,
+  JsonValueSchema,
   PhaseResultSchema,
   type Directive,
   type InputArtifacts,
+  type JsonValue,
   type OutputArtifactMetadata,
   type PhaseResult,
   type RunIdentity,
@@ -14,6 +17,34 @@ import {
 import { OrchestrationEngine } from "./engine.js";
 import type { ModelClient } from "./model-client.js";
 import { ReceiptAuthority, trustedInvocationDigest } from "./receipts.js";
+
+export function parsePersistedRoutingSummary(text: string):
+  | {
+      confidence: "CERTAIN" | "PROBABLE" | "POSSIBLE" | "UNCERTAIN";
+      details: Record<string, JsonValue>;
+    }
+  | undefined {
+  const match = /(?:^|\n)SUMMARY:(\{[^\n]*\})\s*$/u.exec(text);
+  if (match?.[1] === undefined) return undefined;
+  let value: unknown;
+  try {
+    value = JSON.parse(match[1]);
+  } catch {
+    return undefined;
+  }
+  try {
+    const parsed = validateContract(JsonValueSchema, value, "persisted SUMMARY");
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    const confidence = validateContract(
+      ConfidenceSchema,
+      parsed.confidence ?? "UNCERTAIN",
+      "persisted SUMMARY confidence"
+    );
+    return { confidence, details: parsed };
+  } catch {
+    return undefined;
+  }
+}
 
 interface Assignment {
   readonly identity: RunIdentity;
@@ -95,6 +126,10 @@ export class WorkerExecutor {
     assignment: Assignment,
     signal?: AbortSignal
   ): Promise<PhaseResult> {
+    // Communication preflight is complete before any model/session work.
+    for (const binding of assignment.inputArtifacts.artifacts) {
+      this.artifactStore.read(binding.ref);
+    }
     const workerId = randomUUID();
     const startedAt = new Date().toISOString();
     const timeoutMs = this.options.workerTimeoutMs ?? 15 * 60 * 1_000;
@@ -129,7 +164,6 @@ export class WorkerExecutor {
           projectRoot: this.options.projectRoot,
           trustProfile: assignment.trustProfile,
           inputArtifacts: assignment.inputArtifacts.artifacts.map((binding) => binding.ref),
-          artifactConsumer: assignment.inputArtifacts.consumer,
           signal: controller.signal,
           ...(assignment.modelOverride ? { modelOverride: assignment.modelOverride } : {}),
         }),
@@ -158,6 +192,7 @@ export class WorkerExecutor {
       metadata: assignment.outputArtifact,
       content: completion.text,
     });
+    const persistedText = this.artifactStore.readById(artifact.artifact_id).toString("utf8");
     const authority = this.receiptAuthority;
     if (authority === undefined) {
       throw new Error("worker receipt authority is not configured");
@@ -195,15 +230,16 @@ export class WorkerExecutor {
       output_artifact_ref: artifact,
       trusted_invocation_digest: invocationDigest,
     });
-    // Persisted exact assistant bytes remain authoritative evidence, but routing
-    // metadata is accepted only from the typed terminating tool. Prose is never
-    // parsed into control state. A missing typed result is deliberately malformed
-    // so the engine can reissue the versioned output contract without inventing
-    // domain values.
+    // Routing is parsed only after the owner has persisted and re-read the exact
+    // assistant bytes. KB/non-catalog clients may still supply a host-validated
+    // closed result directly; catalog agents use the final SUMMARY line.
     const routing =
       completion.confidence !== undefined && completion.details !== undefined
         ? { confidence: completion.confidence, details: completion.details }
-        : { confidence: "UNCERTAIN" as const, details: {} };
+        : (parsePersistedRoutingSummary(persistedText) ?? {
+            confidence: "UNCERTAIN" as const,
+            details: {},
+          });
     return validateContract(
       PhaseResultSchema,
       {
@@ -234,7 +270,7 @@ export class WorkerExecutor {
     concurrency: number,
     operation: (input: TInput) => Promise<TOutput>
   ): Promise<TOutput[]> {
-    const output: TOutput[] = new Array(inputs.length);
+    const output = new Array<TOutput>(inputs.length);
     let nextIndex = 0;
     const worker = async (): Promise<void> => {
       while (nextIndex < inputs.length) {

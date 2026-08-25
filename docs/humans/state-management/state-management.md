@@ -19,11 +19,11 @@ These planes do not substitute for each other. Payload bytes do not enter
 ## Recovery
 
 Every cognitive stage receives exact owner-selected input refs. The worker reads
-them with `artifact_read` through complete continuation. The owner persists and
+them with `artifact_read` through `next_range`. The owner persists and re-reads
 verifies the response before SUMMARY routing. If the process stops, recovery
 rehydrates the checkpoint and reissues only pending work with the same refs.
 
-Workers and skill drivers have no memory tools, so memory availability cannot
+Read-only worker recall is advisory and write-capable memory remains primary-only, so memory availability cannot
 change state-machine correctness.
 
 ## Learn more

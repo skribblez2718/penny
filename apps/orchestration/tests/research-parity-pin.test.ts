@@ -26,6 +26,7 @@
  * free of any risk to research behaviour.
  */
 
+import { parseResearchParityPin } from "./helpers/fixtures.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,19 +36,17 @@ import { describe, expect, it } from "vitest";
 import { researchSummarySchema } from "../src/playbooks/research.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const PIN = JSON.parse(
+const PIN = parseResearchParityPin(
   readFileSync(path.join(here, "fixtures", "research-parity-pin.json"), "utf8")
-) as {
-  states: string[];
-  agent_by_state: Record<string, string>;
-  modes: { allowed: string[]; default: string };
-  budget_constraints: string[];
-  output_files: string[];
-  terminal: { completion_state: string; completion_field: string; met_field: string };
-  non_states: string[];
-};
+);
 
 const SOURCE = readFileSync(path.join(here, "..", "src", "playbooks", "research.ts"), "utf8");
+
+function requiredCapture(match: RegExpMatchArray, index: number, label: string): string {
+  const capture = match[index];
+  if (capture === undefined) throw new Error(`${label} capture is missing`);
+  return capture;
+}
 
 /** Extract the `AGENT_BY_STATE` object literal — the canonical state vocabulary. */
 function extractAgentByState(source: string): Record<string, string> {
@@ -58,7 +57,9 @@ function extractAgentByState(source: string): Record<string, string> {
   if (open < 0 || close < 0) throw new Error("AGENT_BY_STATE literal not delimited as expected");
   const body = source.slice(open + 1, close);
   const map: Record<string, string> = {};
-  for (const [, state, agent] of body.matchAll(/([a-z_]+)\s*:\s*"([a-z]+)"/g)) {
+  for (const match of body.matchAll(/([a-z_]+)\s*:\s*"([a-z]+)"/g)) {
+    const state = requiredCapture(match, 1, "research state");
+    const agent = requiredCapture(match, 2, "research agent");
     map[state] = agent;
   }
   if (Object.keys(map).length === 0) throw new Error("AGENT_BY_STATE parsed empty");
@@ -68,31 +69,37 @@ function extractAgentByState(source: string): Record<string, string> {
 function extractModes(source: string): { allowed: string[]; default: string } {
   const modes = source.match(/const MODES\s*=\s*new Set\(\[([^\]]+)\]\)/);
   const fallback = source.match(/const DEFAULT_MODE\s*=\s*"([a-z]+)"/);
-  if (!modes || !fallback) throw new Error("MODES / DEFAULT_MODE not found");
+  if (modes === null || fallback === null) throw new Error("MODES / DEFAULT_MODE not found");
+  const modesBody = requiredCapture(modes, 1, "research modes");
   return {
-    allowed: [...modes[1].matchAll(/"([a-z]+)"/g)].map((m) => m[1]),
-    default: fallback[1],
+    allowed: [...modesBody.matchAll(/"([a-z]+)"/g)].map((match) =>
+      requiredCapture(match, 1, "research mode")
+    ),
+    default: requiredCapture(fallback, 1, "default research mode"),
   };
 }
 
 /** Budget knobs research accepts from caller constraints. */
 function extractBudgetConstraints(source: string): string[] {
   const names = new Set<string>();
-  for (const [, name] of source.matchAll(
+  for (const match of source.matchAll(
     /(?:boundedConstraint|positiveIntegerOrZeroConstraint)\(\s*context[^)]*?"([a-z_]+)"/g
   )) {
-    names.add(name);
+    names.add(requiredCapture(match, 1, "budget constraint"));
   }
-  for (const [, name] of source.matchAll(/constraints\.(max_research_rounds|critique_passes)/g)) {
-    names.add(name);
+  for (const match of source.matchAll(/constraints\.(max_research_rounds|critique_passes)/g)) {
+    names.add(requiredCapture(match, 1, "research-round constraint"));
   }
   return [...names].sort();
 }
 
 function extractOutputFiles(source: string): string[] {
   const match = source.match(/\[((?:\s*"[A-Za-z.]+\.md",?)+)\]\.map/);
-  if (!match) throw new Error("report output file triple not found");
-  return [...match[1].matchAll(/"([A-Za-z.]+\.md)"/g)].map((m) => m[1]);
+  if (match === null) throw new Error("report output file triple not found");
+  const outputBody = requiredCapture(match, 1, "report output files");
+  return [...outputBody.matchAll(/"([A-Za-z.]+\.md)"/g)].map((outputMatch) =>
+    requiredCapture(outputMatch, 1, "report output file")
+  );
 }
 
 describe("W12 research parity pin — behavioural", () => {

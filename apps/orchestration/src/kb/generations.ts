@@ -30,6 +30,8 @@ import {
 } from "node:fs";
 import path from "node:path";
 
+import type { Static, TSchema } from "typebox";
+
 import { Checkpointer } from "../checkpointer.js";
 import { RunContext } from "../context.js";
 
@@ -45,7 +47,6 @@ import {
   KbPolicySchema,
   PageRevisionFrontmatterSchema,
   SourceRecordSchema,
-  type ClaimsSidecar,
   type CurrentGeneration,
   type GenerationCatalog,
   type InitReservation,
@@ -89,6 +90,13 @@ export class GenerationError extends Error {
     super(message);
     this.name = "GenerationError";
   }
+}
+
+function requiredGenerationValue<T>(value: T | undefined, label: string): T {
+  if (value === undefined) {
+    throw new GenerationError(`${label} is absent`);
+  }
+  return value;
 }
 
 const GROUP_OR_OTHER_WRITE_MASK = 0o022;
@@ -185,14 +193,46 @@ interface IndexRow {
   body: string;
 }
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseJsonValue(source: string): unknown {
+  const value: unknown = JSON.parse(source);
+  return value;
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object" || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isSqliteModule(value: unknown): value is typeof import("node:sqlite") {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "DatabaseSync" in value &&
+    typeof value.DatabaseSync === "function"
+  );
+}
+
 function sqliteModule(): typeof import("node:sqlite") {
-  const mod = process.getBuiltinModule("node:" + "sqlite") as
-    | typeof import("node:sqlite")
-    | undefined;
-  if (mod === undefined) {
+  const mod: unknown = process.getBuiltinModule("node:" + "sqlite");
+  if (!isSqliteModule(mod)) {
     throw new GenerationError("Node.js runtime does not provide node:sqlite");
   }
   return mod;
+}
+
+function sqliteText(row: unknown, field: string, label: string): string {
+  if (!isUnknownRecord(row) || typeof row[field] !== "string") {
+    throw new GenerationError(`${label} is malformed`);
+  }
+  return row[field];
 }
 
 /** One indexable page (content as published). */
@@ -308,8 +348,8 @@ export function buildGenerationIndex(
     for (const r of sorted) {
       ins.run(r.page_id, r.revision_id, r.title, r.summary, r.body_sha256, r.body);
     }
-    const check = db.prepare("PRAGMA integrity_check;").get() as { integrity_check: string };
-    if (check.integrity_check !== "ok") {
+    const check = db.prepare("PRAGMA integrity_check;").get();
+    if (sqliteText(check, "integrity_check", "index integrity result") !== "ok") {
       throw new GenerationError("index.sqlite failed integrity check");
     }
   } finally {
@@ -389,8 +429,8 @@ function buildGenerationIndexAt(
         page.body
       );
     }
-    const check = db.prepare("PRAGMA integrity_check;").get() as { integrity_check: string };
-    if (check.integrity_check !== "ok")
+    const check = db.prepare("PRAGMA integrity_check;").get();
+    if (sqliteText(check, "integrity_check", "staged index integrity result") !== "ok")
       throw new GenerationError("staged index failed integrity check");
   } finally {
     db?.close();
@@ -416,27 +456,28 @@ export function verifyGenerationIndex(
       const { DatabaseSync } = sqliteModule();
       const db = new DatabaseSync(pinnedPath, { readOnly: true });
       try {
-        const table = db
+        const table: IndexRow[] = db
           .prepare(
             "SELECT page_id, revision_id, title, summary, body_sha256, body FROM pages ORDER BY page_id, revision_id"
           )
-          .all() as Array<{
-          page_id: string;
-          revision_id: string;
-          title: string;
-          summary: string;
-          body_sha256: string;
-          body: string;
-        }>;
-        // Cross-check each row's body digest before hashing the payload.
-        for (const r of table) {
-          const calc = sha256Hex(r.body);
-          if (calc !== r.body_sha256) {
-            throw new GenerationError(
-              `index row '${r.page_id}/${r.revision_id}' body digest mismatch`
-            );
-          }
-        }
+          .all()
+          .map((row) => {
+            const pageId = sqliteText(row, "page_id", "index page_id");
+            const revisionId = sqliteText(row, "revision_id", "index revision_id");
+            const body = sqliteText(row, "body", "index body");
+            const calculatedBodySha256 = sha256Hex(body);
+            if (calculatedBodySha256 !== sqliteText(row, "body_sha256", "index body_sha256")) {
+              throw new GenerationError(`index row '${pageId}/${revisionId}' body digest mismatch`);
+            }
+            return {
+              page_id: pageId,
+              revision_id: revisionId,
+              title: sqliteText(row, "title", "index title"),
+              summary: sqliteText(row, "summary", "index summary"),
+              body_sha256: calculatedBodySha256,
+              body,
+            };
+          });
         // The payload digest embeds generation identity and kb; the caller
         // supplies kbId (the selected catalog's kb_id), so verification needs no
         // second catalog read.
@@ -446,12 +487,12 @@ export function verifyGenerationIndex(
               generationId,
               kbId,
               table.map((r) => ({
-                page_id: String(r.page_id),
-                revision_id: String(r.revision_id),
-                title: String(r.title),
-                summary: String(r.summary),
-                body_sha256: String(r.body_sha256) as Sha256Hex,
-                body: String(r.body),
+                page_id: r.page_id,
+                revision_id: r.revision_id,
+                title: r.title,
+                summary: r.summary,
+                body_sha256: r.body_sha256,
+                body: r.body,
               }))
             )
           )
@@ -741,7 +782,7 @@ function processAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+    return errorCode(error) !== "ESRCH";
   }
 }
 
@@ -776,36 +817,41 @@ function acquireWriterLock(root: string, transactionId: string): HeldWriterLock 
         token,
         release() {
           try {
-            const stored = JSON.parse(
+            const stored = parseJsonValue(
               readPublicationFile(root, file, { label: "KB writer lock" }).toString("utf8")
-            ) as { token?: unknown };
-            if (stored.token !== token)
+            );
+            if (!isUnknownRecord(stored) || stored["token"] !== token) {
               throw new GenerationError("KB writer lock ownership changed");
+            }
             unlinkSync(file);
             fsyncDirectory(path.dirname(file));
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            if (errorCode(error) !== "ENOENT") throw error;
           }
         },
       };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (errorCode(error) !== "EEXIST") throw error;
       const stat = lstatSync(file);
       if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o077) !== 0) {
         throw new GenerationError("KB writer lock has unsafe custody");
       }
-      let owner: { pid?: unknown };
+      let owner: unknown;
       try {
-        owner = JSON.parse(
+        owner = parseJsonValue(
           readPublicationFile(root, file, { label: "KB writer lock" }).toString("utf8")
-        ) as { pid?: unknown };
+        );
       } catch {
         throw new GenerationError("KB writer lock is malformed");
       }
-      if (typeof owner.pid !== "number" || !Number.isSafeInteger(owner.pid)) {
+      if (
+        !isUnknownRecord(owner) ||
+        typeof owner["pid"] !== "number" ||
+        !Number.isSafeInteger(owner["pid"])
+      ) {
         throw new GenerationError("KB writer lock owner is malformed");
       }
-      if (processAlive(owner.pid)) throw new GenerationError("KB writer lock is held");
+      if (processAlive(owner["pid"])) throw new GenerationError("KB writer lock is held");
       unlinkSync(file);
       fsyncDirectory(path.dirname(file));
     }
@@ -892,7 +938,7 @@ function rootIndexBytes(catalog: GenerationCatalog, publishedAt: string): string
     "",
   ];
   for (const pageId of Object.keys(catalog.pages).sort()) {
-    const entry = catalog.pages[pageId]!;
+    const entry = requiredGenerationValue(catalog.pages[pageId], "catalog page entry");
     lines.push(
       `- [${pageId}](pages/${pageId}/revisions/${entry.revision_id}/page.md): revision ${entry.revision_id}`
     );
@@ -1035,7 +1081,7 @@ function loadCarriedBase(input: PublishGenerationTransactionInput): GenerationCa
   try {
     base = readGenerationCatalog(input.root, input.base_generation_id);
   } catch (error) {
-    throw new GenerationError(`carried base catalog is unavailable: ${(error as Error).message}`);
+    throw new GenerationError(`carried base catalog is unavailable: ${errorMessage(error)}`);
   }
   if (base.generation_id !== input.base_generation_id || base.kb_id !== input.catalog.kb_id) {
     throw new GenerationError("carried base catalog identity does not match the candidate");
@@ -1060,11 +1106,11 @@ function loadCarriedBase(input: PublishGenerationTransactionInput): GenerationCa
   return base;
 }
 
-function parseCanonicalRecord<T>(input: {
+function parseCanonicalRecord<T extends TSchema>(input: {
   bytes: Buffer;
-  schema: Parameters<typeof validateKbContract>[0];
+  schema: T;
   label: string;
-}): T {
+}): Static<T> {
   const raw = input.bytes.toString("utf8");
   let parsed: unknown;
   try {
@@ -1072,7 +1118,7 @@ function parseCanonicalRecord<T>(input: {
   } catch {
     throw new GenerationError(`${input.label} is not valid JSON`);
   }
-  const value = validateKbContract(input.schema, parsed, input.label) as T;
+  const value = validateKbContract(input.schema, parsed, input.label);
   if (canonicalJson(value) !== raw) {
     throw new GenerationError(`${input.label} is not exact canonical JSON`);
   }
@@ -1087,9 +1133,11 @@ function parsePageMarkdownBytes(
   const raw = bytes.toString("utf8");
   const match = raw.match(/^---\n([^\n]+)\n---\n\n([\s\S]*)$/u);
   if (match === null) throw new GenerationError("mapped page markdown framing is invalid");
+  const frontmatterJcs = requiredGenerationValue(match[1], "mapped page frontmatter");
+  const body = requiredGenerationValue(match[2], "mapped page body");
   let parsed: unknown;
   try {
-    parsed = JSON.parse(match[1]!);
+    parsed = JSON.parse(frontmatterJcs);
   } catch {
     throw new GenerationError("mapped page frontmatter is not valid JSON");
   }
@@ -1099,13 +1147,13 @@ function parsePageMarkdownBytes(
     "mapped page frontmatter"
   );
   if (
-    canonicalJson(frontmatter) !== match[1] ||
+    canonicalJson(frontmatter) !== frontmatterJcs ||
     frontmatter.page_id !== pageId ||
     frontmatter.revision_id !== revisionId
   ) {
     throw new GenerationError("mapped page frontmatter identity/canonical bytes mismatch");
   }
-  return { frontmatter, body: match[2]! };
+  return { frontmatter, body };
 }
 
 function derivePublicationCatalogClosure(
@@ -1157,8 +1205,9 @@ function derivePublicationCatalogClosure(
       { role: "policy", final_key: ".kb/policy.json", sha256: input.catalog.policy_sha256 }
     );
   } else {
+    const carriedBase = requiredGenerationValue(base, "carried base catalog");
     for (const [pageId, entry] of Object.entries(input.catalog.pages)) {
-      if (!sameCatalogValue(base!.pages[pageId], entry)) {
+      if (!sameCatalogValue(carriedBase.pages[pageId], entry)) {
         expected.push(
           {
             role: "page_markdown",
@@ -1180,7 +1229,7 @@ function derivePublicationCatalogClosure(
       }
     }
     for (const [sourceId, digest] of Object.entries(input.catalog.source_records)) {
-      if (base!.source_records[sourceId] !== digest) {
+      if (carriedBase.source_records[sourceId] !== digest) {
         expected.push({
           role: "source_record",
           final_key: relativePublicationKey(input.root, sourceRecordPath(input.root, sourceId)),
@@ -1188,7 +1237,7 @@ function derivePublicationCatalogClosure(
         });
       }
     }
-    const baseObjects = new Set(base!.source_objects);
+    const baseObjects = new Set(carriedBase.source_objects);
     for (const digest of input.catalog.source_objects) {
       if (!baseObjects.has(digest)) {
         expected.push({
@@ -1199,7 +1248,7 @@ function derivePublicationCatalogClosure(
       }
     }
     for (const [conflictId, digest] of Object.entries(input.catalog.conflict_records)) {
-      if (base!.conflict_records[conflictId] !== digest) {
+      if (carriedBase.conflict_records[conflictId] !== digest) {
         expected.push({
           role: "conflict",
           final_key: relativePublicationKey(input.root, conflictPath(input.root, conflictId)),
@@ -1264,15 +1313,17 @@ function derivePublicationCatalogClosure(
   }
 
   const allocated = new Map(immutableFiles.map((file) => [file.final_key, file]));
+  const requiredAllocatedFile = (finalKey: string, label: string) =>
+    requiredGenerationValue(allocated.get(finalKey), label);
   if (input.action === "init") {
-    const manifestFile = allocated.get("manifest.json")!;
-    const policyFile = allocated.get(".kb/policy.json")!;
-    const manifest = parseCanonicalRecord<KbManifest>({
+    const manifestFile = requiredAllocatedFile("manifest.json", "allocated init manifest");
+    const policyFile = requiredAllocatedFile(".kb/policy.json", "allocated init policy");
+    const manifest = parseCanonicalRecord({
       bytes: manifestFile.bytes,
       schema: KbManifestSchema,
       label: "allocated init manifest",
     });
-    const policy = parseCanonicalRecord<KbPolicy>({
+    const policy = parseCanonicalRecord({
       bytes: policyFile.bytes,
       schema: KbPolicySchema,
       label: "allocated init policy",
@@ -1281,6 +1332,7 @@ function derivePublicationCatalogClosure(
       throw new GenerationError("allocated init manifest/policy KB identity mismatch");
     }
   } else {
+    const carriedBase = requiredGenerationValue(base, "carried base catalog");
     const changedPages = immutableFiles.filter((file) => file.role === "page_markdown");
     if (changedPages.length === 0) {
       throw new GenerationError("ingest/save publication has an empty approved page plan");
@@ -1290,8 +1342,8 @@ function derivePublicationCatalogClosure(
         immutableFiles.some(
           (file) => file.role === "source_object" || file.role === "source_record"
         ) ||
-        !sameCatalogValue(input.catalog.source_records, base!.source_records) ||
-        !sameCatalogValue(input.catalog.source_objects, base!.source_objects)
+        !sameCatalogValue(input.catalog.source_records, carriedBase.source_records) ||
+        !sameCatalogValue(input.catalog.source_objects, carriedBase.source_objects)
       ) {
         throw new GenerationError("save publication cannot add or change source mappings");
       }
@@ -1300,20 +1352,22 @@ function derivePublicationCatalogClosure(
     }
 
     for (const [pageId, entry] of Object.entries(input.catalog.pages)) {
-      if (sameCatalogValue(base!.pages[pageId], entry)) continue;
-      const pageFile = allocated.get(
-        relativePublicationKey(input.root, pageMarkdownPath(input.root, pageId, entry.revision_id))
-      )!;
-      const claimsFile = allocated.get(
-        relativePublicationKey(input.root, pageClaimsPath(input.root, pageId, entry.revision_id))
-      )!;
+      if (sameCatalogValue(carriedBase.pages[pageId], entry)) continue;
+      const pageFile = requiredAllocatedFile(
+        relativePublicationKey(input.root, pageMarkdownPath(input.root, pageId, entry.revision_id)),
+        "allocated page markdown"
+      );
+      const claimsFile = requiredAllocatedFile(
+        relativePublicationKey(input.root, pageClaimsPath(input.root, pageId, entry.revision_id)),
+        "allocated claims sidecar"
+      );
       const page = parsePageMarkdownBytes(pageFile.bytes, pageId, entry.revision_id);
-      const claims = parseCanonicalRecord<ClaimsSidecar>({
+      const claims = parseCanonicalRecord({
         bytes: claimsFile.bytes,
         schema: ClaimsSidecarSchema,
         label: "allocated claims sidecar",
       });
-      const index = indexByPage.get(pageId)!;
+      const index = requiredGenerationValue(indexByPage.get(pageId), "candidate index page");
       if (
         claims.page_id !== pageId ||
         claims.revision_id !== entry.revision_id ||
@@ -1325,15 +1379,16 @@ function derivePublicationCatalogClosure(
       }
     }
     for (const [sourceId, digest] of Object.entries(input.catalog.source_records)) {
-      if (base!.source_records[sourceId] === digest) continue;
-      const file = allocated.get(
-        relativePublicationKey(input.root, sourceRecordPath(input.root, sourceId))
-      )!;
-      const record = parseCanonicalRecord<{
-        source_id: string;
-        sha256: Sha256Hex;
-        object_ref: string;
-      }>({ bytes: file.bytes, schema: SourceRecordSchema, label: "allocated source record" });
+      if (carriedBase.source_records[sourceId] === digest) continue;
+      const file = requiredAllocatedFile(
+        relativePublicationKey(input.root, sourceRecordPath(input.root, sourceId)),
+        "allocated source record"
+      );
+      const record = parseCanonicalRecord({
+        bytes: file.bytes,
+        schema: SourceRecordSchema,
+        label: "allocated source record",
+      });
       if (
         record.source_id !== sourceId ||
         record.object_ref !== sourceObjectRef(record.sha256) ||
@@ -1343,11 +1398,12 @@ function derivePublicationCatalogClosure(
       }
     }
     for (const [conflictId, digest] of Object.entries(input.catalog.conflict_records)) {
-      if (base!.conflict_records[conflictId] === digest) continue;
-      const file = allocated.get(
-        relativePublicationKey(input.root, conflictPath(input.root, conflictId))
-      )!;
-      const conflict = parseCanonicalRecord<{ conflict_record_id: string }>({
+      if (carriedBase.conflict_records[conflictId] === digest) continue;
+      const file = requiredAllocatedFile(
+        relativePublicationKey(input.root, conflictPath(input.root, conflictId)),
+        "allocated conflict record"
+      );
+      const conflict = parseCanonicalRecord({
         bytes: file.bytes,
         schema: ConflictRecordSchema,
         label: "allocated conflict record",
@@ -1420,7 +1476,7 @@ function verifyCompleteMappedPublication(input: {
     manifestPath(request.root),
     request.catalog.manifest_sha256
   );
-  const manifest = parseCanonicalRecord<KbManifest>({
+  const manifest = parseCanonicalRecord({
     bytes: manifestBytes,
     schema: KbManifestSchema,
     label: "mapped manifest",
@@ -1436,7 +1492,7 @@ function verifyCompleteMappedPublication(input: {
       policyPath(request.root),
       request.catalog.policy_sha256
     );
-    const policy = parseCanonicalRecord<KbPolicy>({
+    const policy = parseCanonicalRecord({
       bytes: policyBytes,
       schema: KbPolicySchema,
       label: "mapped policy",
@@ -1459,7 +1515,7 @@ function verifyCompleteMappedPublication(input: {
       entry.claims_sha256
     );
     const page = parsePageMarkdownBytes(pageBytes, pageId, entry.revision_id);
-    const claims = parseCanonicalRecord<ClaimsSidecar>({
+    const claims = parseCanonicalRecord({
       bytes: claimsBytes,
       schema: ClaimsSidecarSchema,
       label: "mapped claims sidecar",
@@ -1494,11 +1550,11 @@ function verifyCompleteMappedPublication(input: {
   }
   for (const [sourceId, digest] of Object.entries(request.catalog.source_records)) {
     const bytes = readExactFile(request.root, sourceRecordPath(request.root, sourceId), digest);
-    const record = parseCanonicalRecord<{
-      source_id: string;
-      sha256: Sha256Hex;
-      object_ref: string;
-    }>({ bytes, schema: SourceRecordSchema, label: "mapped source record" });
+    const record = parseCanonicalRecord({
+      bytes,
+      schema: SourceRecordSchema,
+      label: "mapped source record",
+    });
     if (
       record.source_id !== sourceId ||
       record.object_ref !== sourceObjectRef(record.sha256) ||
@@ -1509,10 +1565,11 @@ function verifyCompleteMappedPublication(input: {
   }
   for (const [conflictId, digest] of Object.entries(request.catalog.conflict_records)) {
     const bytes = readExactFile(request.root, conflictPath(request.root, conflictId), digest);
-    const conflict = parseCanonicalRecord<{
-      conflict_record_id: string;
-      claim_refs: readonly { page_id: string; revision_id: string; claim_id: string }[];
-    }>({ bytes, schema: ConflictRecordSchema, label: "mapped conflict record" });
+    const conflict = parseCanonicalRecord({
+      bytes,
+      schema: ConflictRecordSchema,
+      label: "mapped conflict record",
+    });
     if (
       conflict.conflict_record_id !== conflictId ||
       conflict.claim_refs.some(
@@ -1552,7 +1609,7 @@ function verifyCompleteMappedPublication(input: {
     catalogRow.sha256,
     catalogRow.byte_length
   );
-  const storedCatalog = parseCanonicalRecord<GenerationCatalog>({
+  const storedCatalog = parseCanonicalRecord({
     bytes: catalogBytes,
     schema: GenerationCatalogSchema,
     label: "mapped candidate catalog",
@@ -1834,7 +1891,10 @@ export function publishGenerationTransaction(
       } else {
         const bytes =
           row.role === "selector"
-            ? Buffer.from(publication.selector_jcs!, "utf8")
+            ? Buffer.from(
+                requiredGenerationValue(publication.selector_jcs, "planned selector JCS"),
+                "utf8"
+              )
             : inputByFinal.get(row.final_key);
         if (bytes === undefined) throw new GenerationError(`no bytes for planned ${row.role} row`);
         if (existsSync(staging)) {
@@ -1873,7 +1933,10 @@ export function publishGenerationTransaction(
       });
       publicationHit(input, "after_file_indexed");
     }
-    publication = input.checkpointer.kbPublication(input.transaction_id)!;
+    publication = requiredGenerationValue(
+      input.checkpointer.kbPublication(input.transaction_id),
+      "staged publication"
+    );
     if (publication.files.some((file) => file.state === "planned")) {
       throw new GenerationError("publication has unstaged planned files");
     }
@@ -1924,7 +1987,7 @@ export function publishGenerationTransaction(
           try {
             linkSync(staging, final);
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+            if (errorCode(error) !== "EEXIST") throw error;
             assertExactFile(input.root, final, row.sha256, row.byte_length);
           }
           publicationHit(input, "after_immutable_link");
@@ -1959,9 +2022,14 @@ export function publishGenerationTransaction(
         publicationHit(input, "after_generation_fsync");
       }
       for (const role of ["catalog", "index"] as const) {
-        const row = input.checkpointer
-          .kbPublication(input.transaction_id)!
-          .files.find((file) => file.role === role)!;
+        const currentPublication = requiredGenerationValue(
+          input.checkpointer.kbPublication(input.transaction_id),
+          "generation publication"
+        );
+        const row = requiredGenerationValue(
+          currentPublication.files.find((file) => file.role === role),
+          `generation ${role} publication file`
+        );
         if (row.sha256 === undefined || row.byte_length === undefined) {
           throw new GenerationError(`generation ${role} row lacks bytes evidence`);
         }
@@ -1986,7 +2054,22 @@ export function publishGenerationTransaction(
     }
 
     if (publication.lifecycle === "generation_published") {
-      publication = input.checkpointer.kbPublication(input.transaction_id)!;
+      publication = requiredGenerationValue(
+        input.checkpointer.kbPublication(input.transaction_id),
+        "generation-published transaction"
+      );
+      const selectorJcs = requiredGenerationValue(
+        publication.selector_jcs,
+        "generation-published selector JCS"
+      );
+      const selectorSha256 = requiredGenerationValue(
+        publication.selector_sha256,
+        "generation-published selector digest"
+      );
+      const selectorRow = requiredGenerationValue(
+        publication.files.find((file) => file.role === "selector"),
+        "generation-published selector file"
+      );
       verifyCompleteMappedPublication({
         publicationInput: input,
         publication,
@@ -1995,15 +2078,14 @@ export function publishGenerationTransaction(
         selector,
       });
       let classification = currentSelectorClassification(input.root, publication);
-      const selectorRow = publication.files.find((file) => file.role === "selector")!;
       const selectorTemp = publicationPath(input.root, selectorRow.staging_key);
       if (classification === "candidate") {
         if (existsSync(selectorTemp)) {
           void readExactFile(
             input.root,
             selectorTemp,
-            publication.selector_sha256!,
-            Buffer.byteLength(publication.selector_jcs!, "utf8"),
+            selectorSha256,
+            Buffer.byteLength(selectorJcs, "utf8"),
             [1, 2]
           );
         }
@@ -2023,13 +2105,13 @@ export function publishGenerationTransaction(
         if (!existsSync(selectorTemp)) {
           // The selector is the sole file whose temp may be recreated after it
           // was staged, and only from the durable transaction's exact JCS.
-          writeStagedFile(input, selectorTemp, Buffer.from(publication.selector_jcs!, "utf8"));
+          writeStagedFile(input, selectorTemp, Buffer.from(selectorJcs, "utf8"));
         }
         assertExactFile(
           input.root,
           selectorTemp,
-          publication.selector_sha256!,
-          Buffer.byteLength(publication.selector_jcs!, "utf8")
+          selectorSha256,
+          Buffer.byteLength(selectorJcs, "utf8")
         );
         publicationHit(input, "before_authority_reservation");
         input.authority?.reserve?.(input.transaction_id);
@@ -2052,7 +2134,10 @@ export function publishGenerationTransaction(
         // not on prior staging success.
         verifyCompleteMappedPublication({
           publicationInput: input,
-          publication: input.checkpointer.kbPublication(input.transaction_id)!,
+          publication: requiredGenerationValue(
+            input.checkpointer.kbPublication(input.transaction_id),
+            "final selector-commit publication"
+          ),
           plannedFiles,
           closure,
           selector,
@@ -2070,7 +2155,7 @@ export function publishGenerationTransaction(
           try {
             linkSync(selectorTemp, currentPath(input.root));
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+            if (errorCode(error) !== "EEXIST") throw error;
             throw new GenerationError("init selector already exists; no overwrite permitted");
           }
         } else {
@@ -2095,7 +2180,10 @@ export function publishGenerationTransaction(
     }
 
     if (publication.lifecycle === "selector_committed") {
-      const selectorRow = publication.files.find((file) => file.role === "selector")!;
+      const selectorRow = requiredGenerationValue(
+        publication.files.find((file) => file.role === "selector"),
+        "selector-committed publication file"
+      );
       const selectorTemp = publicationPath(input.root, selectorRow.staging_key);
       if (existsSync(selectorTemp)) {
         if (
@@ -2246,7 +2334,7 @@ export function readSelectedGeneration(root: string):
     catalog = readGenerationCatalog(root, selector.generation_id, selector.catalog_sha256);
   } catch (error) {
     throw new GenerationError(
-      `selected generation catalog failed custody/schema/digest validation: ${(error as Error).message}`
+      `selected generation catalog failed custody/schema/digest validation: ${errorMessage(error)}`
     );
   }
   if (catalog.kb_id !== selector.kb_id || catalog.index_sha256 !== selector.index_sha256) {

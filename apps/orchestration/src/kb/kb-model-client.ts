@@ -26,7 +26,6 @@ import path from "node:path";
 import {
   PiAgentClient,
   resolveDomainGuidancePath,
-  ssotBody,
   ssotModel,
   type AgentSessionTraceSink,
   type SessionThinkingLevel,
@@ -37,11 +36,16 @@ import { kbSessionSpec, type KbAgentRunner, type KbPhaseInvocation } from "./ses
 export type { KbAgentRunner, KbPhaseInvocation };
 export { ssotModel };
 
+function errorCode(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object" || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
 async function optionalText(filePath: string): Promise<string> {
   try {
     return await readFile(filePath, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    if (errorCode(error) === "ENOENT") return "";
     throw error;
   }
 }
@@ -80,12 +84,6 @@ export class KbModelClient {
         `KB phase '${invocation.stateId}': agent '${invocation.agent}' has no definition (${docPath}); refuse to run without its SSOT`
       );
     }
-    const body = ssotBody(agentDoc);
-    if (body.length === 0) {
-      throw new Error(
-        `KB phase '${invocation.stateId}': agent '${invocation.agent}' has an empty SSOT body; refusing to run`
-      );
-    }
     // W6: the phase's guidance comes from the contract's prompt root, not from a
     // literal in this file. Missing guidance is a refusal: an inline fallback is
     // how the prompts drifted out of the skill in the first place.
@@ -120,18 +118,19 @@ export class KbModelClient {
     const session = kbSessionSpec({
       invocation,
       cognitiveFrame,
-      agentBody: body,
       phaseGuidance,
     });
 
+    // This private, host-tool-matrix session is deliberately anonymous. It is
+    // not an invocation of the catalog agent whose model/quality guidance was
+    // consulted above, so it cannot claim that role while replacing YAML tools.
     const completion = await this.client.runAgent({
-      agent: invocation.agent,
+      agent: `kb-private-${invocation.stateId}`,
       stateId: invocation.stateId,
       task: invocation.phaseBrief,
       projectRoot,
       trustProfile: "hardened-untrusted",
       inputArtifacts: [],
-      artifactConsumer: `kb:${invocation.stateId}`,
       modelOverride: model,
       guidance: KNOWLEDGE_BASE_SKILL_CONTRACT.guidance,
       // §5.3: the alias above is not an identity. The runtime resolves it, then

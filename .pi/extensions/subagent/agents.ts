@@ -5,14 +5,15 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 export type AgentScope = "user" | "project" | "both";
 
 export interface AgentConfig {
   name: string;
   description: string;
-  tools?: string[];
+  /** Exact, non-empty model-visible surface declared by YAML frontmatter. */
+  tools: string[];
   model?: string;
   provider?: string;
   thinking?: string;
@@ -82,6 +83,22 @@ export function formatModelVisibleAgentCatalog(agents: AgentConfig[]): string {
   return `${prefix}${entries.join(" | ")}${suffix}`;
 }
 
+function parseExactToolList(value: unknown, filePath: string): string[] {
+  const raw = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
+  if (raw.length === 0 || raw.some((item) => typeof item !== "string")) {
+    throw new Error(`agent definition '${filePath}' requires a non-empty tools: list`);
+  }
+  const tools = raw.map((item) => String(item).trim());
+  if (tools.some((tool) => tool.length === 0)) {
+    throw new Error(`agent definition '${filePath}' contains an empty tools: entry`);
+  }
+  const duplicate = tools.find((tool, index) => tools.indexOf(tool) !== index);
+  if (duplicate !== undefined) {
+    throw new Error(`agent definition '${filePath}' contains duplicate tool '${duplicate}'`);
+  }
+  return tools;
+}
+
 function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig[] {
   const agents: AgentConfig[] = [];
 
@@ -108,24 +125,23 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
       continue;
     }
 
-    const { frontmatter, body } = parseFrontmatter<Record<string, string>>(content);
+    const { frontmatter, body } = parseFrontmatter<Record<string, unknown>>(content);
 
-    if (!frontmatter.name || !frontmatter.description) {
-      continue;
+    if (typeof frontmatter.name !== "string" || typeof frontmatter.description !== "string") {
+      throw new Error(`agent definition '${filePath}' requires string name and description fields`);
     }
-
-    const tools = frontmatter.tools
-      ?.split(",")
-      .map((t: string) => t.trim())
-      .filter(Boolean);
+    if (frontmatter.name !== entry.name.replace(/\.md$/u, "")) {
+      throw new Error(`agent definition '${filePath}' name must match its filename`);
+    }
+    const tools = parseExactToolList(frontmatter.tools, filePath);
 
     agents.push({
       name: frontmatter.name,
       description: frontmatter.description,
-      tools: tools && tools.length > 0 ? tools : undefined,
-      model: frontmatter.model,
-      provider: frontmatter.provider,
-      thinking: frontmatter.thinking,
+      tools,
+      model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
+      provider: typeof frontmatter.provider === "string" ? frontmatter.provider : undefined,
+      thinking: typeof frontmatter.thinking === "string" ? frontmatter.thinking : undefined,
       systemPrompt: body,
       source,
       filePath,
@@ -167,7 +183,7 @@ export function snapshotAgentCatalog(discovery: AgentDiscoveryResult): AgentCata
     .map((agent) => ({
       name: agent.name,
       description: agent.description,
-      tools: agent.tools ?? [],
+      tools: agent.tools,
       model: agent.model ?? null,
       provider: agent.provider ?? null,
       thinking: agent.thinking ?? null,

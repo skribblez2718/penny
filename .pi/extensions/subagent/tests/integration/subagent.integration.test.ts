@@ -7,39 +7,68 @@
  * - Agent discovery from real filesystem
  */
 
-import { describe, it, expect, vi, beforeAll } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
 // Mock Pi dependencies that require runtime packages
-vi.mock("@mariozechner/pi-ai", () => ({
-  StringEnum: vi.fn(),
-}));
+vi.mock("@earendil-works/pi-ai", async () => {
+  const { Type } = await import("typebox");
+  return {
+    StringEnum: (values: readonly string[], options?: Record<string, unknown>) =>
+      Type.Union(
+        values.map((value) => Type.Literal(value)),
+        options
+      ),
+  };
+});
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@earendil-works/pi-coding-agent")>()),
   getMarkdownTheme: vi.fn().mockReturnValue({
     fg: (_color: string, text: string) => text,
     bg: (_color: string, text: string) => text,
   }),
-  parseFrontmatter: <T extends Record<string, string>>(content: string) => {
-    const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-    if (!fmMatch) return { frontmatter: {} as T, body: content };
-    const fm: Record<string, string> = {};
-    for (const line of fmMatch[1].split("\n")) {
-      const m = line.match(/^(\w+):\s*(.+)$/);
-      if (m) fm[m[1]] = m[2].trim();
-    }
-    return { frontmatter: fm as T, body: content.replace(/^---\n[\s\S]*?\n---\n?/, "") };
-  },
 }));
 
-vi.mock("@mariozechner/pi-tui", () => ({
+vi.mock("@earendil-works/pi-tui", () => ({
   Container: vi.fn(),
   Spacer: vi.fn(),
   Text: vi.fn().mockImplementation((text: string) => ({ text, x: 0, y: 0 })),
 }));
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { createTestExtensionApi, isRecord } from "../../../../lib/tests/test-narrowers.js";
+
+interface RegisteredSubagentTool {
+  name: string;
+  promptSnippet: string;
+  description: string;
+  promptGuidelines?: unknown;
+}
+
+function isRegisteredSubagentTool(value: unknown): value is RegisteredSubagentTool {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.promptSnippet === "string" &&
+    typeof value.description === "string"
+  );
+}
+
+function createMockPi(registeredTools: RegisteredSubagentTool[]) {
+  return createTestExtensionApi({
+    onRegisterTool(tool) {
+      if (!isRegisteredSubagentTool(tool)) throw new Error("subagent registered an invalid tool");
+      registeredTools.push(tool);
+    },
+  });
+}
+
+function findSubagentTool(registeredTools: RegisteredSubagentTool[]): RegisteredSubagentTool {
+  const tool = registeredTools.find((candidate) => candidate.name === "subagent");
+  if (tool === undefined) throw new Error("subagent tool was not registered");
+  return tool;
+}
 
 describe("Subagent Integration — Agent Discovery", () => {
   // Resolve project root from test runner location (at .pi/extensions/subagent/)
@@ -72,16 +101,8 @@ describe("Subagent Integration — Agent Discovery", () => {
 
 describe("Subagent Integration — Tool Registration", () => {
   it("should register the subagent tool via ExtensionAPI", async () => {
-    const registeredTools: { name: string; promptSnippet?: string; promptGuidelines?: string[] }[] =
-      [];
-
-    const mockPi = {
-      registerTool: vi.fn((tool: { name: string }) => {
-        registeredTools.push(tool as any);
-      }),
-      registerCommand: vi.fn(),
-      on: vi.fn(),
-    } as unknown as ExtensionAPI;
+    const registeredTools: RegisteredSubagentTool[] = [];
+    const mockPi = createMockPi(registeredTools);
 
     const mod = await import("../../index.js");
     mod.default(mockPi);
@@ -90,45 +111,30 @@ describe("Subagent Integration — Tool Registration", () => {
   });
 
   it("should include promptSnippet with discovered agent names", async () => {
-    const registeredTools: any[] = [];
-    const mockPi = {
-      registerTool: vi.fn((tool: any) => {
-        registeredTools.push(tool);
-      }),
-      registerCommand: vi.fn(),
-      on: vi.fn(),
-    };
+    const registeredTools: RegisteredSubagentTool[] = [];
+    const mockPi = createMockPi(registeredTools);
 
     const mod = await import("../../index.js");
     mod.default(mockPi);
 
-    const subagent = registeredTools.find((t) => t.name === "subagent");
-    expect(subagent).toBeDefined();
+    const subagent = findSubagentTool(registeredTools);
     expect(subagent.promptSnippet).toContain("echo");
     expect(subagent.promptSnippet).toContain("skribble");
     expect(subagent.promptSnippet).toContain("piper");
   });
 
-  it("should include promptGuidelines with anti-pattern guidance", async () => {
-    const registeredTools: any[] = [];
-    const mockPi = {
-      registerTool: vi.fn((tool: any) => {
-        registeredTools.push(tool);
-      }),
-      registerCommand: vi.fn(),
-      on: vi.fn(),
-    };
+  it("should keep routing and anti-use guidance provider-visible in the description", async () => {
+    const registeredTools: RegisteredSubagentTool[] = [];
+    const mockPi = createMockPi(registeredTools);
 
     const mod = await import("../../index.js");
     mod.default(mockPi);
 
-    const subagent = registeredTools.find((t) => t.name === "subagent");
-    expect(subagent).toBeDefined();
-    expect(subagent.promptGuidelines).toBeInstanceOf(Array);
-    expect(subagent.promptGuidelines!.length).toBeGreaterThanOrEqual(5);
-    expect(
-      subagent.promptGuidelines!.some((g: string) => g.toLowerCase().includes("anti-pattern"))
-    ).toBe(true);
+    const subagent = findSubagentTool(registeredTools);
+    expect(subagent.promptGuidelines).toBeUndefined();
+    expect(subagent.description).toContain("Use when");
+    expect(subagent.description).toContain("Do not use");
+    expect(subagent.description).toContain("use the skill tool instead");
   });
 
   it("should discover all 8 agents from .pi/agents/", async () => {
@@ -137,20 +143,13 @@ describe("Subagent Integration — Tool Registration", () => {
     const files = fs.readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
     const expectedNames = files.map((f) => path.basename(f, ".md"));
 
-    const registeredTools: any[] = [];
-    const mockPi = {
-      registerTool: vi.fn((tool: any) => {
-        registeredTools.push(tool);
-      }),
-      registerCommand: vi.fn(),
-      on: vi.fn(),
-    };
+    const registeredTools: RegisteredSubagentTool[] = [];
+    const mockPi = createMockPi(registeredTools);
 
     const mod = await import("../../index.js");
     mod.default(mockPi);
 
-    const subagent = registeredTools.find((t) => t.name === "subagent");
-    expect(subagent).toBeDefined();
+    const subagent = findSubagentTool(registeredTools);
     for (const name of expectedNames) {
       expect(subagent.promptSnippet).toContain(name);
     }

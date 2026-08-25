@@ -9,7 +9,7 @@ READ THIS BEFORE RUNNING IT
     symptom and re-armed the cause on the way out.
 
     The actual defect and its fix are documented at HNSW_TUNING in
-    scripts/system/bridge/memory_bridge.py. In short: ChromaDB documents its
+    scripts/system/memory/hnsw.py. In short: ChromaDB documents its
     SQLite embeddings queue as suitable only when producer and consumer share
     one process (notification is in-process), while the bridge starts a fresh
     short-lived process per call. With stock `sync_threshold=1000`, metadata-only

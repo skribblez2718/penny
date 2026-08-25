@@ -5,7 +5,12 @@
   "description": "YouTube transcript and metadata tools for Penny — fetch transcripts, subtitles, video info",
   "scripts": {
     "test:unit": "vitest run --config tests/vitest.config.ts",
-    "test:integration": "vitest run --config tests/vitest.integration.config.ts"
+    "test:integration": "vitest run --config tests/vitest.integration.config.ts",
+    "test:e2e": "vitest run --config tests/vitest.e2e.config.js",
+    "lint": "eslint . --ext .ts --max-warnings=0",
+    "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
+    "typecheck": "tsc --noEmit",
+    "test:all": "bun run typecheck && bun run lint && bun run format:check && bun run test:unit && bun run test:integration && bun run test:e2e"
   },
   "type": "module",
   "devDependencies": {
@@ -15,5 +20,9 @@
   },
   "dependencies": {
     "youtube-transcript": "^1.3.1"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   }
 }

@@ -39,6 +39,10 @@ export interface ResolvedProfile {
   readonly resolvedRoot: string;
 }
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 /**
  * Load and validate the profile registry from an ignored host file.
  *
@@ -76,18 +80,12 @@ export function loadProfileRegistry(registryPath: string): KbProfileRegistry {
     throw new ProfileRegistryError("profile registry is not valid JSON");
   }
   const parsedProfiles =
-    parsed !== null &&
-    typeof parsed === "object" &&
-    Array.isArray((parsed as { profiles?: unknown }).profiles)
-      ? (parsed as { profiles: unknown[] }).profiles
-      : [];
-  const parsedProfileIds = parsedProfiles.flatMap((profile) =>
-    profile !== null &&
-    typeof profile === "object" &&
-    typeof (profile as { kb_profile_id?: unknown }).kb_profile_id === "string"
-      ? [(profile as { kb_profile_id: string }).kb_profile_id]
-      : []
-  );
+    isUnknownRecord(parsed) && Array.isArray(parsed["profiles"]) ? parsed["profiles"] : [];
+  const parsedProfileIds = parsedProfiles.flatMap((profile) => {
+    if (!isUnknownRecord(profile)) return [];
+    const profileId = profile["kb_profile_id"];
+    return typeof profileId === "string" ? [profileId] : [];
+  });
   if (new Set(parsedProfileIds).size !== parsedProfileIds.length) {
     throw new ProfileRegistryError("profile registry contains a duplicate profile id");
   }

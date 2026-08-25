@@ -11,7 +11,7 @@ directories contain no executable delegate.
 ## Artifact-first handoff
 
 Every cognitive stage gets exact owner-selected input artifacts and an output
-contract. Workers read granted refs with `artifact_read`, including all
+contract. Workers read needed exact IDs with `artifact_read`, including all
 continuation pages, and return complete stage content. The execution owner
 captures and verifies those bytes before the state machine consumes the small
 routing SUMMARY.
@@ -22,7 +22,7 @@ than dependent on semantic search.
 
 ## Memory is optional
 
-Workers and skill drivers have no memory tools. The primary runtime may still
+Workers may have YAML-declared read-only recall; memory writes remain primary-only. The primary runtime may still
 recall or curate durable cross-session knowledge, but memory is not workflow
 handoff, run state, or persistence proof. New skills do not require a memory room
 or room-manifest entry.

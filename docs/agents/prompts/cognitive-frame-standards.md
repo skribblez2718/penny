@@ -55,7 +55,7 @@ The frame names capabilities by trigger, not by inventory. Detailed tool-usage t
 
 - **Domain-specific checklists** (CREST tables, planning checklists) → Domain Guidance
 - **Agent role definitions** (Echo is READ-ONLY, Piper is DOMAIN-AGNOSTIC) → Role Definition
-- **Task-specific instructions** (goals, constraints, run IDs, exact artifact grants) → Invocation Context
+- **Task-specific instructions** (goals, constraints, run IDs, exact artifact IDs/paths) → Invocation Context
 - **Mandated reasoning scripts** (step sequences, fixed orderings) → keep procedures that need state or gates in skills; everything else is the model's choice
 - **Narrative descriptions** ("assumptions are the enemy of accuracy") → Use declarative rules instead
 - **File paths / references to additional knowledge** (docs to read, protocol file locations, Pi doc paths) → the **AGENTS.md index chain** (root `AGENTS.md` → sub-index → leaf). SYSTEM.md names a protocol by its _trigger_ ("run the clarification protocol"), never its path; the always-in-context root `AGENTS.md` resolves trigger → index → file. **Path references are the primary Cognitive-Frame bloat vector — keep them out.**

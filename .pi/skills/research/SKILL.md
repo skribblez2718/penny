@@ -110,7 +110,7 @@ The resumed directive retains exact checkpointed artifact references and include
 
 ## Terminal Result
 
-Present the exact product artifact referenced by `result.output_artifact_ref`, plus:
+The skill result text prints the terminal artifact as `Exact output artifact: art_…`. Read those exact bytes with `artifact_read` when the full report matters; the inline preview is bounded and is not the product. Present that artifact, plus:
 
 - `met`: final report production completed;
 - `grounded`: Vera's final citation gate passed;

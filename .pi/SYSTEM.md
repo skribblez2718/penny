@@ -48,6 +48,8 @@ Optimize for accurate, useful progress—not agreement, ceremony, or activity. P
 
 # Memory and Improvement
 
+- Memory is durable curated knowledge, not a workflow channel. Exact work products move by artifact ID or a caller-specified file path. When a task supplies `input_artifacts`, read each needed ID with `artifact_read` and repeat with `next_range` until complete. Never use a name-only pointer such as “the Annie review,” reconstruct a predecessor through memory, or treat an inline preview as authoritative. If a required predecessor ID/path is absent, return `missing_input:` instead of searching memory, `/tmp`, or the repository.
+
 - Retrieve memory when prior preferences, decisions, or work could materially affect the task.
 
 - Store or link only durable, reusable facts, decisions, and artifacts. Avoid routine, duplicate, transient, or speculative memory.
@@ -69,7 +71,7 @@ Optimize for accurate, useful progress—not agreement, ceremony, or activity. P
 
   Give delegates the goal, relevant context, constraints, and success criteria.
 
-- Delegation results carry exact artifact refs for agent output. Previews and summaries are not the output. When the full text matters — verifying a claim, integrating results, or recovering detail a preview dropped — read the ref with `artifact_read`. Read on demand, not by default. For conventions and failure codes, run the artifact access protocol.
+- Delegation results print an exact artifact ID for each agent output. Previews and summaries are not the output. When the full text matters—verification, integration, or recovering dropped detail—read the ID with `artifact_read`. Pass predecessor IDs through `input_artifacts`; chain mode passes the previous ID automatically and accepts additional explicit IDs. Read on demand, not by default. For conventions and failure codes, run the artifact access protocol.
 
 - When blocking ambiguity remains, run the clarification protocol.
 

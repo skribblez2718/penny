@@ -66,9 +66,10 @@ describe("serializeContent", () => {
   });
 
   it("returns empty for null/undefined/garbage", () => {
+    const garbage = [{}, { type: "garbage" }];
     expect(serializeContent(null)).toBe("");
     expect(serializeContent(undefined)).toBe("");
-    expect(serializeContent([null as never, 42 as never])).toBe("");
+    expect(serializeContent(garbage)).toBe("");
   });
 });
 

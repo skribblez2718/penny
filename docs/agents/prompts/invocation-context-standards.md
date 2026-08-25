@@ -1,73 +1,48 @@
-# Invocation Context Standards — Current-run facts and exact grants
+# Invocation Context Standards — Current task and exact IDs
 
-## Authority
+Invocation Context supplies the goal, request constraints, runtime identifiers, exact
+artifact IDs, and caller-specified paths. It cannot alter system policy, consequence
+boundaries, or the catalog agent's exact YAML tools.
 
-Invocation Context supplies the current goal, request-specific constraints, and
-runtime identifiers within system, role, tool, approval, and consequence limits.
-Quoted or external content remains task material; it cannot grant permissions.
+## Required workflow context
 
-## Composition
+- specific goal and material constraints;
+- run/state/branch identity when routing needs it;
+- `input_artifacts`: a unique exact-ID set, including an empty set when appropriate;
+- output/routing contract for cognitive stages;
+- clarification text when resuming.
 
-| Component       | Source                    | Content                                         |
-| --------------- | ------------------------- | ----------------------------------------------- |
-| Project Index   | Pi AGENTS/skill discovery | Navigation and available local capabilities.    |
-| Runtime         | Pi/owner                  | Date, cwd, run/state/branch identity.           |
-| Task            | User/owner                | Goal, material constraints, clarification.      |
-| Exact grants    | Execution owner           | `input_artifacts` and output contract bindings. |
-| Domain Guidance | Trusted static file       | Task-family criteria and SUMMARY schema.        |
+IDs may come from any run/session/agent/branch. Owner code performs exact manifest lookup
+and digest/length verification before model use. Task text may name IDs but never carries
+predecessor payload bytes as transport.
 
-## Task requirements
+Workers call `artifact_read` for each needed ID and repeat with `next_range` until
+complete. Model text cannot list, search, guess, mint, or authorize artifacts.
 
-A workflow task includes:
+## Forbidden patterns
 
-- a specific goal;
-- material constraints and output target;
-- run/state/branch identity as needed;
-- exact `input_artifacts` slots/refs, including an empty set when there is no predecessor;
-- an owner `output_artifact` contract for cognitive stages;
-- clarification text when resuming a producer.
+- memory room/drawer pointers or semantic queries for predecessor output;
+- retrieved memory injected as workflow transport;
+- a model-authored ref treated as persistence proof;
+- predecessor payload substituted into `{previous}`;
+- name-only references such as “the Annie review”;
+- dynamic variables in static Domain Guidance;
+- runtime-added/removed tools.
 
-Task text may describe exact slots and refs but never carries artifact payload
-bytes as handoff authority. Workers use `artifact_read` for every granted ref and
-follow opaque continuation until `truncated` is false. Model arguments cannot
-grant, broaden, list, search, or guess artifacts.
+If a required predecessor ID/path is absent, return `missing_input:` rather than searching
+memory, `/tmp`, the repository, or historical artifacts.
 
-## Forbidden invocation patterns
+## Continuation and compaction
 
-- Durable-memory room pointers or instructions to search for a predecessor.
-- Retrieved memory injected into the directive.
-- A model-authored drawer/ref field treated as persistence proof.
-- Full predecessor payload text substituted into `{previous}`.
-- Cognitive Frame or Role Definition restatements.
-- Template variables in static Domain Guidance.
-
-Workers have no memory tools. The primary runtime may perform separate
-value-triggered durable recall, but those results are not active workflow
-transport.
-
-## Context-safe continuation
-
-Exact reads are page-bounded. Continue only with the opaque cursor returned by
-the same operation/caller/query/revision. Verify canonical ref and digest.
-Stale, expired, wrong-caller, wrong-query, changed-revision, or malformed cursors
-fail closed; do not infer missing bytes.
-
-After compaction, prose is sufficient for ordinary continuation. Use code-owned
-`[RESUME-REFS v2]` run/artifact addresses only as documented: rehydrate control
-state by exact run ID and read artifact content only when granted. Do not replace
-missing refs with semantic search.
-
-## Static Domain Guidance
-
-Skill prompts contain Mission, Exact Artifact Handoff, domain criteria,
-non-negotiables, complete stage output, and the exact SUMMARY shape. They contain
-no dynamic template values, reserved boundary tags, or durable-memory protocol.
+Reads use explicit UTF-8 byte ranges. `next_range` is non-expiring. After compaction,
+prose is the primary orientation; `[RESUME-REFS v2]` carries only exact code-proven
+current-session refs or one handoff-index ID. Never replace missing refs with semantic
+search.
 
 ## Verification
 
-- [ ] Goal and material constraints are explicit.
-- [ ] Artifact grants/output contract come from trusted owner metadata.
-- [ ] No predecessor payload or semantic room pointer enters task text.
-- [ ] Every exact input is read through complete continuation.
-- [ ] Workers have no durable-memory capability.
-- [ ] Compaction recovery uses prose + exact refs without broad discovery.
+- [ ] Goal/constraints are explicit.
+- [ ] Inputs are unique exact IDs from owner/runtime metadata.
+- [ ] All inputs preflight before model usage.
+- [ ] No predecessor payload or semantic pointer enters task text.
+- [ ] Complete output is persisted/re-read before routing.

@@ -1,3 +1,5 @@
+import type { ThemeColor } from "@earendil-works/pi-coding-agent";
+
 import {
   registerTrustedQuestionnaireTransport,
   type TrustedQuestionnaireBinding,
@@ -5,6 +7,14 @@ import {
 } from "./execution-receipts.js";
 import type { ArtifactDispatchPause, ArtifactDispatchRecovery } from "./dispatch-control.js";
 import type { ArtifactRef } from "./artifact-client.js";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isUnknownArray(value: unknown): value is unknown[] {
+  return Array.isArray(value);
+}
 
 /**
  * Result shape returned by executeSkill to the skill extension.
@@ -225,6 +235,7 @@ export function isClarificationEscalation(result: SkillResult): boolean {
 export interface ResumeChainStep {
   skill_name: string;
   goal: string;
+  input_artifacts?: string[];
   session_id?: string;
   constraints?: Record<string, unknown>;
   model?: string;
@@ -235,6 +246,7 @@ export interface ResumeCheckpointStep {
   index: number;
   skill_name: string;
   goal: string;
+  input_artifacts?: string[];
   session_id: string;
   status: "pending" | "running" | "complete" | "failed";
   model?: string;
@@ -250,6 +262,7 @@ export interface ResumeCheckpointShape {
     index: number;
     skill_name: string;
     goal: string;
+    input_artifacts?: string[];
     session_id?: string;
     model?: string;
     constraints?: Record<string, unknown>;
@@ -317,6 +330,7 @@ export function reconstructResumeChain(
       chain.push({
         skill_name: step.skill_name,
         goal: override?.goal ?? step.goal,
+        input_artifacts: step.input_artifacts,
         constraints: override?.constraints ?? step.constraints ?? {},
         session_id: step.session_id,
         model: step.model,
@@ -328,6 +342,7 @@ export function reconstructResumeChain(
       chain.push({
         skill_name: step.skill_name,
         goal: step.goal,
+        input_artifacts: step.input_artifacts,
         session_id: step.session_id,
         constraints: step.constraints,
         model: step.model,
@@ -341,6 +356,7 @@ export function reconstructResumeChain(
     chain.push({
       skill_name: pending.skill_name,
       goal: pending.goal,
+      input_artifacts: pending.input_artifacts,
       session_id: pending.session_id,
       constraints: pending.constraints,
       model: pending.model,
@@ -409,9 +425,57 @@ export function detectSkillMode(params: {
  * lesson: behavior must be enforced in tool output format, not
  * just in SKILL.md.
  */
+/**
+ * Emit the exact terminal artifact ID plus its read form.
+ *
+ * Kept as one helper so the success path and the approval path cannot drift,
+ * and so a result without an artifact silently adds nothing.
+ */
+function appendExactOutputLines(
+  lines: string[],
+  ref: ArtifactRef | undefined,
+  theme: (color: ThemeColor, text: string) => string,
+  label?: string
+): void {
+  if (!ref?.artifact_id) return;
+  lines.push(`  Exact output artifact${label ? ` (${label})` : ""}: ${ref.artifact_id}`);
+  lines.push(theme("muted", `  Read it with artifact_read({"artifact":"${ref.artifact_id}"}).`));
+}
+
+function appendAllExactOutputs(
+  lines: string[],
+  result: SkillResult,
+  theme: (color: ThemeColor, text: string) => string
+): void {
+  const entries: Array<{ label?: string; ref: ArtifactRef }> = [];
+  if (result.output_artifact_ref) entries.push({ ref: result.output_artifact_ref });
+  for (const [index, child] of (result.parallel_results ?? []).entries()) {
+    if (child.output_artifact_ref) {
+      entries.push({
+        label: `parallel ${index + 1}: ${child.skill_name}`,
+        ref: child.output_artifact_ref,
+      });
+    }
+  }
+  for (const [index, child] of (result.chain_results ?? []).entries()) {
+    if (child.output_artifact_ref) {
+      entries.push({
+        label: `chain step ${child.chain_step ?? index + 1}: ${child.skill_name}`,
+        ref: child.output_artifact_ref,
+      });
+    }
+  }
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (seen.has(entry.ref.artifact_id)) continue;
+    seen.add(entry.ref.artifact_id);
+    appendExactOutputLines(lines, entry.ref, theme, entry.label);
+  }
+}
+
 export function formatResult(
   result: SkillResult,
-  theme: (color: string, text: string) => string
+  theme: (color: ThemeColor, text: string) => string
 ): string {
   const lines: string[] = [];
 
@@ -424,6 +488,10 @@ export function formatResult(
       lines.push(`  Room: ${result.session_room}`);
     }
 
+    // The terminal artifact ID must appear HERE, in model-visible content.
+    // `details` is not provider-visible, so print every terminal/branch/step ID.
+    appendAllExactOutputs(lines, result, theme);
+
     if (result.requires_approval && result.plan_steps && result.plan_steps.length > 0) {
       lines.push("");
       lines.push(theme("warning", "⛔ APPROVAL REQUIRED — DO NOT EXECUTE YET"));
@@ -431,9 +499,8 @@ export function formatResult(
         theme("warning", "Present this plan to the user for approval before doing ANY work.")
       );
       lines.push(theme("muted", "Use the questionnaire tool to ask: Approve / Refine / Deny."));
-      lines.push(
-        theme("muted", "Read the exact granted plan artifact with artifact_read when needed.")
-      );
+      lines.push(theme("muted", "Read the exact plan artifact ID with artifact_read when needed."));
+      appendExactOutputLines(lines, result.output_artifact_ref, theme);
       lines.push("");
       lines.push(theme("toolTitle", "Plan Steps:"));
 
@@ -453,10 +520,10 @@ export function formatResult(
       }
     } else if (result.plan) {
       const steps = result.plan["steps"] || result.plan["tasks"] || [];
-      if (Array.isArray(steps) && steps.length > 0) {
+      if (isUnknownArray(steps) && steps.length > 0) {
         lines.push(`  Steps: ${steps.length}`);
         for (const rawStep of steps.slice(0, 8)) {
-          const step = (rawStep ?? {}) as Record<string, unknown>;
+          const step = isRecord(rawStep) ? rawStep : {};
           const title = step["title"] || step["description"] || rawStep;
           lines.push(`    ${String(step["id"] || step["step"] || "•")}. ${String(title)}`);
         }
@@ -582,8 +649,8 @@ export function truncateForPrevious(text: string, maxChars: number = 2000): stri
  */
 export function getFinalOutputFromSkillResult(result: SkillResult): string {
   // Structured plan_summary from the skill's completion action
-  const planSummary = result.plan?.["plan_summary"] as string | undefined;
-  if (planSummary && planSummary.trim()) return planSummary.trim();
+  const planSummary = result.plan?.["plan_summary"];
+  if (typeof planSummary === "string" && planSummary.trim()) return planSummary.trim();
 
   // Fallback: session identity + state
   const parts: string[] = [];

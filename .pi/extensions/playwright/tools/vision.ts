@@ -1,3 +1,4 @@
+import { registerTool } from "../../../lib/pi-tool-registration.js";
 /**
  * Vision Tools — Mouse Control & DevTools
  *
@@ -6,8 +7,8 @@
  * browser_start_tracing, browser_stop_tracing
  */
 
-import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BrowserManager } from "../browser.js";
 import type { PlaywrightConfig } from "../types.js";
 
@@ -17,22 +18,19 @@ export function registerVisionDevtoolsTools(pi: ExtensionAPI, _config: Playwrigh
   // ==========================================================================
   // playwright_mouse_move_xy
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_mouse_move_xy",
     label: "Mouse Move",
-    description: "Move the mouse to specific X,Y coordinates on the page.",
+    description:
+      "Move the mouse to viewport-relative X,Y coordinates. Prefer selector-based interaction after playwright_snapshot when an element can be targeted directly.",
     promptSnippet: "Move mouse to X,Y coordinates",
-    promptGuidelines: [
-      "Coordinates are relative to the viewport (0,0 = top-left).",
-      "Use after playwright_snapshot to understand element positions.",
-    ],
     parameters: Type.Object({
       x: Type.Number({ description: "X coordinate" }),
       y: Type.Number({ description: "Y coordinate" }),
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      await page.mouse.move(params.x as number, params.y as number);
+      await page.mouse.move(params.x, params.y);
       return {
         content: [
           {
@@ -48,22 +46,19 @@ export function registerVisionDevtoolsTools(pi: ExtensionAPI, _config: Playwrigh
   // ==========================================================================
   // playwright_mouse_click_xy
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_mouse_click_xy",
     label: "Mouse Click XY",
-    description: "Click at specific X,Y coordinates.",
+    description:
+      "Click at viewport-relative X,Y coordinates. Use only when the target cannot be addressed reliably with a selector-based click.",
     promptSnippet: "Click at X,Y coordinates",
-    promptGuidelines: [
-      "Use when elements cannot be targeted by CSS selector.",
-      "Click is performed at the viewport-relative coordinates.",
-    ],
     parameters: Type.Object({
       x: Type.Number({ description: "X coordinate" }),
       y: Type.Number({ description: "Y coordinate" }),
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      await page.mouse.click(params.x as number, params.y as number);
+      await page.mouse.click(params.x, params.y);
       return {
         content: [
           {
@@ -79,12 +74,12 @@ export function registerVisionDevtoolsTools(pi: ExtensionAPI, _config: Playwrigh
   // ==========================================================================
   // playwright_mouse_drag_xy
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_mouse_drag_xy",
     label: "Mouse Drag XY",
-    description: "Drag from one set of coordinates to another.",
+    description:
+      "Drag between two viewport-relative coordinate pairs for interactions that cannot be targeted by source and destination selectors.",
     promptSnippet: "Drag mouse from X1,Y1 to X2,Y2",
-    promptGuidelines: ["Use for testing drag-based interactions at the coordinate level."],
     parameters: Type.Object({
       fromX: Type.Number({ description: "Start X" }),
       fromY: Type.Number({ description: "Start Y" }),
@@ -93,9 +88,9 @@ export function registerVisionDevtoolsTools(pi: ExtensionAPI, _config: Playwrigh
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      await page.mouse.move(params.fromX as number, params.fromY as number);
+      await page.mouse.move(params.fromX, params.fromY);
       await page.mouse.down();
-      await page.mouse.move(params.toX as number, params.toY as number, { steps: 10 });
+      await page.mouse.move(params.toX, params.toY, { steps: 10 });
       await page.mouse.up();
       return {
         content: [
@@ -112,19 +107,19 @@ export function registerVisionDevtoolsTools(pi: ExtensionAPI, _config: Playwrigh
   // ==========================================================================
   // playwright_mouse_wheel
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_mouse_wheel",
     label: "Mouse Wheel",
-    description: "Scroll the page by a delta X,Y amount.",
+    description:
+      "Scroll the page by X/Y deltas. Positive deltaY scrolls down and negative deltaY scrolls up.",
     promptSnippet: "Scroll page by delta",
-    promptGuidelines: ["Positive deltaY scrolls down; negative scrolls up."],
     parameters: Type.Object({
       deltaX: Type.Optional(Type.Number({ description: "Horizontal scroll (default: 0)" })),
       deltaY: Type.Optional(Type.Number({ description: "Vertical scroll (default: 0)" })),
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      await page.mouse.wheel((params.deltaX as number) ?? 0, (params.deltaY as number) ?? 0);
+      await page.mouse.wheel(params.deltaX ?? 0, params.deltaY ?? 0);
       return {
         content: [
           {
@@ -140,16 +135,11 @@ export function registerVisionDevtoolsTools(pi: ExtensionAPI, _config: Playwrigh
   // ==========================================================================
   // playwright_highlight
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_highlight",
     label: "Highlight Element",
     description: "Highlight an element on the page with a visible overlay (useful for debugging).",
     promptSnippet: "Highlight an element visually",
-    promptGuidelines: [
-      "Use playwright_highlight to visually mark an element for debugging.",
-      "The highlight is a red dashed border overlay.",
-      "Use playwright_hide_highlight to remove it.",
-    ],
     parameters: Type.Object({
       selector: Type.String({
         description: "CSS selector for the element to highlight",
@@ -157,14 +147,16 @@ export function registerVisionDevtoolsTools(pi: ExtensionAPI, _config: Playwrigh
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const selector = params.selector as string;
+      const selector = params.selector;
 
       try {
         await page.evaluate((sel) => {
           const el = document.querySelector(sel);
-          if (!el) throw new Error(`Element not found: ${sel}`);
-          (el as HTMLElement).style.outline = "3px dashed red";
-          (el as HTMLElement).style.outlineOffset = "2px";
+          if (!(el instanceof HTMLElement) && !(el instanceof SVGElement)) {
+            throw new Error(`Element not found: ${sel}`);
+          }
+          el.style.outline = "3px dashed red";
+          el.style.outlineOffset = "2px";
         }, selector);
 
         return {
@@ -193,21 +185,20 @@ export function registerVisionDevtoolsTools(pi: ExtensionAPI, _config: Playwrigh
   // ==========================================================================
   // playwright_hide_highlight
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_hide_highlight",
     label: "Hide Highlight",
     description: "Remove all highlight overlays from the page.",
     promptSnippet: "Remove element highlights",
-    promptGuidelines: ["Use playwright_hide_highlight to clean up visual debugging markers."],
     parameters: Type.Object({}),
     async execute(_toolCallId, _params) {
       const page = await browser.getPage();
       await page.evaluate(() => {
         document.querySelectorAll("*").forEach((el) => {
-          const htmlEl = el as HTMLElement;
-          if (htmlEl.style.outline.includes("dashed red")) {
-            htmlEl.style.outline = "";
-            htmlEl.style.outlineOffset = "";
+          if (!(el instanceof HTMLElement) && !(el instanceof SVGElement)) return;
+          if (el.style.outline.includes("dashed red")) {
+            el.style.outline = "";
+            el.style.outlineOffset = "";
           }
         });
       });
@@ -227,15 +218,12 @@ export function registerVisionDevtoolsTools(pi: ExtensionAPI, _config: Playwrigh
   // ==========================================================================
   // playwright_start_tracing
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_start_tracing",
     label: "Start Tracing",
-    description: "Start recording a trace of browser activity (screenshots, network, etc.).",
+    description:
+      "Start recording a trace of browser activity for debugging. Call playwright_stop_tracing afterward to save the trace file.",
     promptSnippet: "Start browser trace recording",
-    promptGuidelines: [
-      "Use playwright_start_tracing to record browser activity for debugging.",
-      "Call playwright_stop_tracing to save the trace file.",
-    ],
     parameters: Type.Object({
       screenshots: Type.Optional(
         Type.Boolean({ description: "Capture screenshots during trace (default: true)" })
@@ -247,8 +235,8 @@ export function registerVisionDevtoolsTools(pi: ExtensionAPI, _config: Playwrigh
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
       await page.context().tracing.start({
-        screenshots: (params.screenshots as boolean) ?? true,
-        snapshots: (params.snapshots as boolean) ?? true,
+        screenshots: params.screenshots ?? true,
+        snapshots: params.snapshots ?? true,
       });
 
       return {
@@ -266,15 +254,12 @@ export function registerVisionDevtoolsTools(pi: ExtensionAPI, _config: Playwrigh
   // ==========================================================================
   // playwright_stop_tracing
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_stop_tracing",
     label: "Stop Tracing",
-    description: "Stop trace recording and save to file.",
+    description:
+      "Stop a trace started by playwright_start_tracing and save it for Playwright Trace Viewer.",
     promptSnippet: "Stop trace recording and save",
-    promptGuidelines: [
-      "Use after playwright_start_tracing to save the trace.",
-      "Trace files can be opened in Playwright Trace Viewer.",
-    ],
     parameters: Type.Object({
       path: Type.Optional(
         Type.String({
@@ -284,7 +269,7 @@ export function registerVisionDevtoolsTools(pi: ExtensionAPI, _config: Playwrigh
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const path = (params.path as string) || `/tmp/playwright-output/trace-${Date.now()}.zip`;
+      const path = params.path || `/tmp/playwright-output/trace-${Date.now()}.zip`;
 
       await page.context().tracing.stop({ path });
 

@@ -1,0 +1,7 @@
+title = "Penny secret scanning"
+minVersion = "v8.30.1"
+
+# Keep the scanner policy aligned with the rules embedded in the pinned binary.
+# Project-specific allowlists are intentionally absent.
+[extend]
+useDefault = true

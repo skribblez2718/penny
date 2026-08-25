@@ -16,28 +16,29 @@ Without a shared taxonomy, error logs are inconsistent strings. With it, observa
 
 ## Code Reference
 
-| Code                                | Severity | Extension     | Description                                                 |
-| ----------------------------------- | -------- | ------------- | ----------------------------------------------------------- |
-| `BRIDGE_TIMEOUT`                    | ERROR    | memory        | Bridge process hung >30s                                    |
-| `BRIDGE_SPAWN_ERROR`                | ERROR    | memory        | Failed to spawn bridge                                      |
-| `BRIDGE_PARSE_ERROR`                | WARN     | memory        | Bridge stdout not valid JSON                                |
-| `PYTHON_TIMEOUT`                    | ERROR    | skill         | Orchestrator timed out                                      |
-| `PYTHON_SPAWN_ERROR`                | ERROR    | skill         | Failed to spawn orchestrator                                |
-| `PYTHON_PARSE_ERROR`                | WARN     | skill         | Orchestrator stdout not valid JSON                          |
-| `AGENT_TIMEOUT`                     | ERROR    | agent-runner  | Agent subprocess timed out                                  |
-| `AGENT_SPAWN_ERROR`                 | ERROR    | agent-runner  | Failed to spawn agent                                       |
-| `AGENT_INCOMPLETE`                  | WARN     | agent-runner  | Agent exited without `message_end`                          |
-| `COMPACTION_ENGINE_QUERY_FAILED`    | ERROR    | compaction    | Engine checkpointer read failed (runs omitted from summary) |
-| `COMPACTION_MEMPALACE_QUERY_FAILED` | ERROR    | compaction    | Mempalace query failed                                      |
-| `COMPACTION_KG_QUERY_FAILED`        | ERROR    | compaction    | KG query failed                                             |
-| `COMPACTION_VALIDATION_FAILED`      | ERROR    | compaction    | Artifact failed zod validation (summary still emitted)      |
-| `COMPACTION_BUDGET_OVERFLOW`        | ERROR    | compaction    | Summary truncated after degrade loop hit its floor          |
-| `COMPACTION_POST_FAILED`            | ERROR    | compaction    | Artifact archive POST to observability failed               |
-| `SEARCH_API_KEY_MISSING`            | ERROR    | search        | `OLLAMA_API_KEY` not set                                    |
-| `SEARCH_CLIENT_ERROR`               | WARN     | search        | HTTP 4xx from search API                                    |
-| `SEARCH_SERVER_ERROR`               | ERROR    | search        | HTTP 5xx from search API                                    |
-| `OBSERVABILITY_WS_ERROR`            | ERROR    | observability | WebSocket connection error                                  |
-| `OBSERVABILITY_QUEUE_OVERFLOW`      | WARN     | observability | Message queue hit limit                                     |
+| Code                                 | Severity | Extension     | Description                                                 |
+| ------------------------------------ | -------- | ------------- | ----------------------------------------------------------- |
+| `BRIDGE_TIMEOUT`                     | ERROR    | memory        | Bridge process hung >30s                                    |
+| `BRIDGE_SPAWN_ERROR`                 | ERROR    | memory        | Failed to spawn bridge                                      |
+| `BRIDGE_PARSE_ERROR`                 | WARN     | memory        | Bridge stdout not valid JSON                                |
+| `PYTHON_TIMEOUT`                     | ERROR    | skill         | Orchestrator timed out                                      |
+| `PYTHON_SPAWN_ERROR`                 | ERROR    | skill         | Failed to spawn orchestrator                                |
+| `PYTHON_PARSE_ERROR`                 | WARN     | skill         | Orchestrator stdout not valid JSON                          |
+| `AGENT_TIMEOUT`                      | ERROR    | agent-runner  | Agent subprocess timed out                                  |
+| `AGENT_SPAWN_ERROR`                  | ERROR    | agent-runner  | Failed to spawn agent                                       |
+| `AGENT_INCOMPLETE`                   | WARN     | agent-runner  | Agent exited without `message_end`                          |
+| `COMPACTION_ENGINE_QUERY_FAILED`     | ERROR    | compaction    | Engine checkpointer read failed (runs omitted from summary) |
+| `COMPACTION_MEMPALACE_QUERY_FAILED`  | ERROR    | compaction    | Mempalace query failed                                      |
+| `COMPACTION_KG_QUERY_FAILED`         | ERROR    | compaction    | KG query failed                                             |
+| `COMPACTION_VALIDATION_FAILED`       | ERROR    | compaction    | Artifact failed zod validation (summary still emitted)      |
+| `COMPACTION_BUDGET_OVERFLOW`         | ERROR    | compaction    | Summary truncated after degrade loop hit its floor          |
+| `COMPACTION_POST_FAILED`             | ERROR    | compaction    | Artifact archive POST to observability failed               |
+| `SEARCH_API_KEY_MISSING`             | ERROR    | search        | `OLLAMA_API_KEY` not set                                    |
+| `SEARCH_CLIENT_ERROR`                | WARN     | search        | HTTP 4xx from search API                                    |
+| `SEARCH_SERVER_ERROR`                | ERROR    | search        | HTTP 5xx from search API                                    |
+| `OBSERVABILITY_SERVER_SPAWN_FAILED`  | ERROR    | observability | Canonical TypeScript service failed to start                |
+| `OBSERVABILITY_QUERY_LOGS_FAILED`    | ERROR    | observability | Structured-log query failed                                 |
+| `OBSERVABILITY_QUERY_HISTORY_FAILED` | ERROR    | observability | Direct Pi JSONL history query failed                        |
 
 ## Adding a Code
 

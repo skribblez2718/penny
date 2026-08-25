@@ -31,12 +31,12 @@ import {
   sha256Hex,
   validateKbContract,
   ClaimsArtifactSchema,
+  KbArtifactHandleSchema,
   KbPhaseBriefSchema,
   QueryAnswerArtifactSchema,
   ReadPhaseBriefResultSchema,
   QueryVerificationReportSchema,
   type ArtifactKind,
-  type ClaimsArtifact,
   type KbComposeAuthority,
   type QueryAnswerArtifact,
 } from "./contracts.js";
@@ -98,14 +98,73 @@ const PHASE_CONTRACT: Readonly<
   },
 };
 
+function isKbPhaseState(value: string): value is KbPhaseState {
+  return ["ingest", "compose", "query", "lint", "verify", "plan", "patch"].includes(value);
+}
+
 function phaseState(value: string): KbPhaseState {
-  if (Object.hasOwn(PHASE_CONTRACT, value)) return value as KbPhaseState;
+  if (isKbPhaseState(value)) return value;
   throw new Error(`KbWorkerClient cannot serve KB phase '${value}'`);
 }
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function object(value: unknown, code: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(code);
-  return value as Record<string, unknown>;
+  if (!isUnknownRecord(value)) throw new Error(code);
+  return value;
+}
+
+function stringArray(value: unknown, code: string): string[] {
+  if (!Array.isArray(value) || !value.every((item: unknown) => typeof item === "string")) {
+    throw new Error(code);
+  }
+  return value;
+}
+
+function recordArrayOrEmpty(value: unknown, code: string): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item: unknown) => object(item, code));
+}
+
+function phaseArtifact(
+  result: Readonly<Record<string, unknown>>,
+  contract: (typeof PHASE_CONTRACT)[KbPhaseState]
+): ArtifactHandle {
+  return validateKbContract(
+    KbArtifactHandleSchema,
+    result[contract.artifactField],
+    "KB phase result artifact handle"
+  );
+}
+
+function phaseConfidence(value: unknown): Confidence {
+  if (
+    value === "CERTAIN" ||
+    value === "PROBABLE" ||
+    value === "POSSIBLE" ||
+    value === "UNCERTAIN"
+  ) {
+    return value;
+  }
+  throw new Error("kb_phase_result_confidence_invalid");
+}
+
+function selectedPageRefsFrom(
+  value: unknown,
+  field: "candidates" | "page_revisions"
+): Array<{ page_id: string; revision_id: string }> {
+  const record = object(value, "kb_selected_page_projection_invalid");
+  const candidates = record[field];
+  if (candidates === undefined) return [];
+  if (!Array.isArray(candidates)) throw new KbWorkerPostureError();
+  return candidates.flatMap((candidate: unknown) => {
+    if (!isUnknownRecord(candidate)) throw new KbWorkerPostureError();
+    return typeof candidate.page_id === "string" && typeof candidate.revision_id === "string"
+      ? [{ page_id: candidate.page_id, revision_id: candidate.revision_id }]
+      : [];
+  });
 }
 
 export interface KbWorkerClientOptions {
@@ -180,13 +239,16 @@ function postureError(): never {
   throw new KbWorkerPostureError();
 }
 
-function metadataString(run: RunContext, key: string): string {
-  const value = run.playbookData[key];
+type KbStringMetadataKey = "profile_id" | "query_run_id" | "answer_artifact_id";
+type KbStringListMetadataKey = "source_capability_ids" | "source_ids" | "target_capability_ids";
+
+function metadataString(run: RunContext, key: KbStringMetadataKey): string {
+  const value = run.knowledgeBaseData[key];
   return typeof value === "string" && OPAQUE_ID.test(value) ? value : postureError();
 }
 
-function metadataStringList(run: RunContext, key: string): string[] {
-  const value = run.playbookData[key];
+function metadataStringList(run: RunContext, key: KbStringListMetadataKey): string[] {
+  const value = run.knowledgeBaseData[key];
   if (
     !Array.isArray(value) ||
     value.length === 0 ||
@@ -194,29 +256,18 @@ function metadataStringList(run: RunContext, key: string): string[] {
   ) {
     return postureError();
   }
-  const values = value as string[];
-  if (new Set(values).size !== values.length) return postureError();
-  return [...values];
+  if (new Set(value).size !== value.length) return postureError();
+  return [...value];
 }
 
 function metadataPageRevisions(run: RunContext): Array<{ page_id: string; revision_id: string }> {
-  const value = run.playbookData.page_revisions;
-  if (!Array.isArray(value) || value.length === 0) return postureError();
+  const value = run.knowledgeBaseData.page_revisions;
+  if (value === undefined || value.length === 0) return postureError();
   return value.map((item) => {
-    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+    if (!OPAQUE_ID.test(item.page_id) || !OPAQUE_ID.test(item.revision_id)) {
       return postureError();
     }
-    const record = item as Record<string, JsonValue>;
-    if (
-      canonicalJson(Object.keys(record).sort()) !== canonicalJson(["page_id", "revision_id"]) ||
-      typeof record.page_id !== "string" ||
-      !OPAQUE_ID.test(record.page_id) ||
-      typeof record.revision_id !== "string" ||
-      !OPAQUE_ID.test(record.revision_id)
-    ) {
-      return postureError();
-    }
-    return { page_id: record.page_id, revision_id: record.revision_id };
+    return { page_id: item.page_id, revision_id: item.revision_id };
   });
 }
 
@@ -231,7 +282,7 @@ function assertDurableActionBinding(
     run.terminalDirective !== null ||
     String(run.constraints.action ?? "") !== action ||
     String(run.constraints.kb_profile_id ?? "") !== profileId ||
-    String(run.playbookData.action ?? "") !== action
+    String(run.knowledgeBaseData.action ?? "") !== action
   ) {
     postureError();
   }
@@ -261,12 +312,16 @@ export interface KbWorkerResumeInput {
  * identity, and admitted policy. This function then derives every authority
  * input from the checkpoint and owner stores: never from a new public request.
  */
+function isResumableOperation(value: string): value is KbWorkerClientOptions["operation"] {
+  return Object.hasOwn(RESUMABLE_PHASES, value);
+}
+
 export function kbWorkerClientOptionsFromRun(input: KbWorkerResumeInput): KbWorkerClientOptions {
   const { run } = input;
-  const action = String(run.playbookData.action ?? "") as KbWorkerClientOptions["operation"];
-  if (!Object.hasOwn(RESUMABLE_PHASES, action)) return postureError();
+  const action = String(run.knowledgeBaseData.action ?? "");
+  if (!isResumableOperation(action)) return postureError();
   const profileId = metadataString(run, "profile_id");
-  const admittedPolicySha256 = String(run.playbookData.admitted_policy_sha256 ?? "");
+  const admittedPolicySha256 = String(run.knowledgeBaseData.admitted_policy_sha256 ?? "");
   if (!/^[a-f0-9]{64}$/.test(admittedPolicySha256)) return postureError();
   assertDurableActionBinding(run, action, profileId);
 
@@ -284,12 +339,12 @@ export function kbWorkerClientOptionsFromRun(input: KbWorkerResumeInput): KbWork
       if (
         current === undefined ||
         current.identity.session_id !== run.identity.session_id ||
-        String(current.playbookData.profile_id ?? "") !== profileId ||
-        String(current.playbookData.action ?? "") !== action
+        String(current.knowledgeBaseData.profile_id ?? "") !== profileId ||
+        String(current.knowledgeBaseData.action ?? "") !== action
       ) {
         return "";
       }
-      return String(current.playbookData.admitted_policy_sha256 ?? "");
+      return String(current.knowledgeBaseData.admitted_policy_sha256 ?? "");
     },
     ...(input.testOnlyAgentRunner ? { testOnlyAgentRunner: input.testOnlyAgentRunner } : {}),
   };
@@ -319,7 +374,7 @@ export function kbWorkerClientOptionsFromRun(input: KbWorkerResumeInput): KbWork
           }),
         selectedGenerationId: () =>
           String(
-            input.checkpointer.loadRunById(run.identity.run_id)?.playbookData
+            input.checkpointer.loadRunById(run.identity.run_id)?.knowledgeBaseData
               .selected_generation_id ?? ""
           ),
       }),
@@ -400,12 +455,28 @@ export function createKbWorkerClientForResume(input: KbWorkerResumeInput): KbWor
   return new KbWorkerClient(kbWorkerClientOptionsFromRun(input));
 }
 
+type KbWorkerControlState =
+  | { readonly state: "unbound" }
+  | {
+      readonly state: "bound";
+      readonly store: RunArtifactStore;
+      readonly checkpointer: Checkpointer;
+    };
+
 export class KbWorkerClient implements ModelClient {
   private kbClient?: KbModelClient;
   private readonly runner: KbAgentRunner;
-  private store!: RunArtifactStore;
-  private artifactCheckpointer!: Checkpointer;
-  private controlBound = false;
+  private control: KbWorkerControlState = { state: "unbound" };
+
+  private get store(): RunArtifactStore {
+    if (this.control.state !== "bound") throw new KbWorkerPostureError();
+    return this.control.store;
+  }
+
+  private get artifactCheckpointer(): Checkpointer {
+    if (this.control.state !== "bound") throw new KbWorkerPostureError();
+    return this.control.checkpointer;
+  }
 
   constructor(private readonly options: KbWorkerClientOptions) {
     if (options.checkpointer !== undefined) this.bindCheckpointer(options.checkpointer);
@@ -430,19 +501,15 @@ export class KbWorkerClient implements ModelClient {
 
   /** Bind the worker to the service's exact control DB before dispatch. */
   bindCheckpointer(checkpointer: Checkpointer): void {
-    if (this.controlBound && this.artifactCheckpointer === checkpointer) return;
-    if (this.controlBound) this.store.close();
-    this.artifactCheckpointer = checkpointer;
-    this.store = new RunArtifactStore(
-      this.options.kbRoot,
-      this.options.runId,
-      this.artifactCheckpointer
-    );
-    this.controlBound = true;
+    if (this.control.state === "bound" && this.control.checkpointer === checkpointer) return;
+    if (this.control.state === "bound") this.control.store.close();
+    this.control = { state: "unbound" };
+    const store = new RunArtifactStore(this.options.kbRoot, this.options.runId, checkpointer);
+    this.control = { state: "bound", store, checkpointer };
   }
 
   async runAgent(invocation: AgentInvocation): Promise<AgentCompletion> {
-    if (!this.controlBound) throw new KbWorkerPostureError();
+    if (this.control.state !== "bound") throw new KbWorkerPostureError();
     const phase = phaseState(invocation.stateId);
     const contract = PHASE_CONTRACT[phase];
     if (invocation.agent !== contract.agent) throw new Error("kb_phase_producer_mismatch");
@@ -664,12 +731,14 @@ export class KbWorkerClient implements ModelClient {
           const allocatedPageIds = (operands.compose_authority?.allocations ?? [])
             .map((allocation) => allocation.page_id)
             .sort();
-          const resultPageIds = [...((result.page_ids ?? []) as string[])].sort();
+          const resultPageIds = [
+            ...stringArray(result["page_ids"], "submit_phase_result_compose_page_ids_invalid"),
+          ].sort();
           if (canonicalJson(resultPageIds) !== canonicalJson(allocatedPageIds)) {
             throw new Error("submit_phase_result_compose_allocation_mismatch");
           }
         }
-        const handle = result[contract.artifactField] as ArtifactHandle;
+        const handle = phaseArtifact(result, contract);
         this.store.sealWithPhaseResult({
           state_id: phase,
           kb_profile_id: this.options.profileId,
@@ -722,7 +791,7 @@ export class KbWorkerClient implements ModelClient {
     ) {
       throw new Error("kb_phase_result_binding_invalid");
     }
-    const handle = phaseResult[contract.artifactField] as ArtifactHandle;
+    const handle = phaseArtifact(phaseResult, contract);
     const artifact = this.store.read(handle.artifact_id, {
       expected_state_id: phase,
       expected_profile_id: this.options.profileId,
@@ -738,7 +807,7 @@ export class KbWorkerClient implements ModelClient {
     }
     return {
       text: resultJcs,
-      confidence: phaseResult["confidence"] as Confidence,
+      confidence: phaseConfidence(phaseResult["confidence"]),
       details: {
         artifact_kind: contract.artifactKind,
         complete: true,
@@ -762,13 +831,9 @@ export class KbWorkerClient implements ModelClient {
       if (this.options.queryReader.selectedPageRefs !== undefined) {
         pages = this.options.queryReader.selectedPageRefs();
       } else {
-        const result = strictParseJson(this.options.queryReader.searchSelectedKb()) as {
-          candidates?: Array<{ page_id?: unknown; revision_id?: unknown }>;
-        };
-        pages = (result.candidates ?? []).flatMap((candidate) =>
-          typeof candidate.page_id === "string" && typeof candidate.revision_id === "string"
-            ? [{ page_id: candidate.page_id, revision_id: candidate.revision_id }]
-            : []
+        pages = selectedPageRefsFrom(
+          strictParseJson(this.options.queryReader.searchSelectedKb()),
+          "candidates"
         );
       }
     }
@@ -779,13 +844,9 @@ export class KbWorkerClient implements ModelClient {
       if (this.options.promotionReader.allowedSelectedPages !== undefined) {
         pages = this.options.promotionReader.allowedSelectedPages();
       } else {
-        const brief = strictParseJson(this.options.promotionReader.readPhaseBrief()) as {
-          page_revisions?: Array<{ page_id?: unknown; revision_id?: unknown }>;
-        };
-        pages = (brief.page_revisions ?? []).flatMap((candidate) =>
-          typeof candidate.page_id === "string" && typeof candidate.revision_id === "string"
-            ? [{ page_id: candidate.page_id, revision_id: candidate.revision_id }]
-            : []
+        pages = selectedPageRefsFrom(
+          strictParseJson(this.options.promotionReader.readPhaseBrief()),
+          "page_revisions"
         );
       }
     }
@@ -843,11 +904,10 @@ export class KbWorkerClient implements ModelClient {
             input.privateInputSha256
           )
         : undefined;
-    const allowedSelectedPages =
-      composeAuthority?.selected_pages.map((page) => ({
-        page_id: page.page_id,
-        revision_id: page.revision_id,
-      })) ?? input.allowedSelectedPages;
+    const allowedSelectedPages = composeAuthority?.selected_pages.map((page) => ({
+      page_id: page.page_id,
+      revision_id: page.revision_id,
+    })) ?? [...input.allowedSelectedPages];
     return this.store.bindPhaseOperands({
       schema_version: 1,
       run_id: this.options.runId,
@@ -983,7 +1043,8 @@ export class KbWorkerClient implements ModelClient {
     ) {
       throw new KbWorkerPostureError();
     }
-    const prior = allowedArtifacts[0]!;
+    const prior = allowedArtifacts[0];
+    if (prior === undefined) throw new KbWorkerPostureError();
     let candidate: ComposePageCandidate;
     let selectedPages: ReturnType<KbWorkerClient["saveEvidenceBounds"]>["selectedPages"] = [];
     if (this.options.operation === "ingest") {
@@ -991,7 +1052,7 @@ export class KbWorkerClient implements ModelClient {
         ClaimsArtifactSchema,
         this.readAllowedArtifact(prior),
         "compose claims input"
-      ) as ClaimsArtifact;
+      );
       const claimCandidateRefs = claims.claims.map((claim) => claim.provisional_id);
       if (
         new Set(claimCandidateRefs).size !== claimCandidateRefs.length ||
@@ -1007,11 +1068,11 @@ export class KbWorkerClient implements ModelClient {
         claim_candidate_refs: claimCandidateRefs,
       };
     } else {
-      const answer = validateKbContract(
+      const answer: QueryAnswerArtifact = validateKbContract(
         QueryAnswerArtifactSchema,
         this.readAllowedArtifact(prior),
         "compose query answer input"
-      ) as QueryAnswerArtifact;
+      );
       const evidenceBounds = this.saveEvidenceBounds(answer);
       selectedPages = evidenceBounds.selectedPages;
       candidate = {
@@ -1083,13 +1144,17 @@ export class KbWorkerClient implements ModelClient {
       throw new Error("compose_artifact_allocation_missing");
     }
     const { selected } = this.selectedComposeBase();
+    const priorArtifact = operands.allowed_prior_artifacts[0];
+    if (operands.operation === "ingest" && priorArtifact === undefined) {
+      throw new KbWorkerPostureError();
+    }
     const claimCandidates =
-      operands.operation === "ingest"
+      operands.operation === "ingest" && priorArtifact !== undefined
         ? claimCandidateBodies(
             this.readAllowedArtifact({
-              runId: operands.allowed_prior_artifacts[0]!.run_id,
-              stateId: operands.allowed_prior_artifacts[0]!.state_id,
-              handle: operands.allowed_prior_artifacts[0]!.handle,
+              runId: priorArtifact.run_id,
+              stateId: priorArtifact.state_id,
+              handle: priorArtifact.handle,
             })
           )
         : undefined;
@@ -1214,9 +1279,7 @@ export class KbWorkerClient implements ModelClient {
       return { claim_count: claims.length, source_ids: sourceIds };
     }
     if (phase === "compose") {
-      const pages = Array.isArray(parsed.pages)
-        ? (parsed.pages as Array<Record<string, unknown>>)
-        : [];
+      const pages = recordArrayOrEmpty(parsed.pages, "compose_page_invalid");
       const first = pages[0] ?? {};
       const frontmatter = object(first.frontmatter ?? {}, "page_frontmatter_invalid");
       const claimCount = pages.reduce((sum, page) => {
@@ -1232,9 +1295,7 @@ export class KbWorkerClient implements ModelClient {
     }
     if (phase === "query") {
       const answer = object(parsed.answer ?? {}, "query_answer_invalid");
-      const citations = Array.isArray(answer.citations)
-        ? (answer.citations as Array<Record<string, unknown>>)
-        : [];
+      const citations = recordArrayOrEmpty(answer.citations, "query_citation_invalid");
       return {
         citation_count: citations.length,
         cited_page_ids: [
@@ -1252,17 +1313,13 @@ export class KbWorkerClient implements ModelClient {
           ? Array.isArray(parsed.target_capability_ids)
             ? parsed.target_capability_ids.filter((id): id is string => typeof id === "string")
             : []
-          : Array.isArray(parsed.targets)
-            ? (parsed.targets as Array<Record<string, unknown>>).flatMap((target) =>
-                typeof target.target_capability_id === "string" ? [target.target_capability_id] : []
-              )
-            : [];
+          : recordArrayOrEmpty(parsed.targets, "promotion_target_invalid").flatMap((target) =>
+              typeof target.target_capability_id === "string" ? [target.target_capability_id] : []
+            );
       return { target_capability_ids: targetIds, target_count: targetIds.length };
     }
     if (phase === "lint") {
-      const findings = Array.isArray(parsed.findings)
-        ? (parsed.findings as Array<Record<string, unknown>>)
-        : [];
+      const findings = recordArrayOrEmpty(parsed.findings, "lint_finding_invalid");
       const conflicts = Array.isArray(parsed.candidate_conflicts) ? parsed.candidate_conflicts : [];
       return {
         finding_count: findings.length,
@@ -1271,9 +1328,10 @@ export class KbWorkerClient implements ModelClient {
       };
     }
     if (this.options.queryReader !== undefined) {
-      const findings = Array.isArray(parsed.citation_findings)
-        ? (parsed.citation_findings as Array<Record<string, unknown>>)
-        : [];
+      const findings = recordArrayOrEmpty(
+        parsed.citation_findings,
+        "query_verification_finding_invalid"
+      );
       const answerHandle = this.store.listByState("query", "sealed").at(-1);
       const answerDocument =
         answerHandle === undefined
@@ -1287,11 +1345,10 @@ export class KbWorkerClient implements ModelClient {
         verification_passed: assessment.passed,
       };
     }
-    const verdicts = Array.isArray(parsed.claim_findings)
-      ? (parsed.claim_findings as Array<Record<string, unknown>>).map((finding) =>
-          String(finding.verdict)
-        )
-      : [];
+    const verdicts = recordArrayOrEmpty(
+      parsed.claim_findings,
+      "claim_verification_finding_invalid"
+    ).map((finding) => String(finding.verdict));
     return {
       supported: verdicts.filter((verdict) => verdict === "supported").length,
       partially_supported: verdicts.filter((verdict) => verdict === "partially_supported").length,
@@ -1300,7 +1357,7 @@ export class KbWorkerClient implements ModelClient {
   }
 
   close(): void {
-    if (this.controlBound) this.store.close();
-    this.controlBound = false;
+    if (this.control.state === "bound") this.control.store.close();
+    this.control = { state: "unbound" };
   }
 }

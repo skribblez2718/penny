@@ -7,6 +7,7 @@ import {
   mcpToolErrorResponse,
   requestBody,
   rpcErrorResponse,
+  requireDefined,
   testConfig,
 } from "../fixtures.js";
 
@@ -36,10 +37,11 @@ describe("platform-memory HTTP MCP client integration", () => {
     expect(result.requestId).toBe("platform-memory-request-1");
     expect(result.payload).toEqual({ total: 3 });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    const firstCall = requireDefined(fetchSpy.mock.calls[0], "MCP request was not sent");
+    const [url, init] = firstCall;
     expect(url).toBe("http://127.0.0.1:8765/mcp");
-    expect(init.method).toBe("POST");
-    expect((init.headers as Record<string, string>).Authorization).toBe(
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("Authorization")).toBe(
       `Bearer ${testConfig().bearerToken}`
     );
     expect(requestBody(init)).toEqual({

@@ -40,11 +40,16 @@ export class OrchestrationService implements Disposable {
     const env = options.env ?? process.env;
     this.config = loadRuntimeConfig(options.projectRoot, env);
     const observability = new ObservabilityClient({ env });
-    this.checkpointer = new Checkpointer(this.config.dbPath, observability.observe);
-    this.artifacts = new ArtifactStore(this.config.artifactRoot);
+    this.checkpointer = new Checkpointer(this.config.dbPath, observability.observe, {
+      projectId: this.config.projectId,
+    });
+    this.artifacts = new ArtifactStore(this.config.artifactRoot, {
+      projectId: this.config.projectId,
+    });
     this.engine = new OrchestrationEngine(this.checkpointer, {
       projectRoot: this.config.projectRoot,
       maxSteps: this.config.maxSteps,
+      receiptKeyPath: this.config.receiptKeyPath,
       artifactRevisions: this.artifacts,
       ...(options.dispatchMode ? { dispatchMode: options.dispatchMode } : {}),
       ...(options.playbookName ? { playbookName: options.playbookName } : {}),
@@ -52,7 +57,6 @@ export class OrchestrationService implements Disposable {
     const client =
       options.modelClient ??
       new PiAgentClient({
-        readArtifact: (ref, consumer) => this.artifacts.read(ref, consumer),
         ...(options.workerExtensions ? { workerExtensions: options.workerExtensions } : {}),
       });
     if (client instanceof KbWorkerClient) client.bindCheckpointer(this.checkpointer);

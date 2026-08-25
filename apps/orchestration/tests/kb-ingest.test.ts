@@ -1,3 +1,10 @@
+import {
+  parseJson,
+  requireArray,
+  requireRecord,
+  requireString,
+  requireValue,
+} from "./helpers/narrowing.js";
 /**
  * KB ingest workflow tests (G8.1).
  *
@@ -24,6 +31,9 @@ import {
   type TestOnlyIngestBodyRunner,
   type PendingIngest,
 } from "../src/kb/ingest.js";
+import { conflictRecordForAllocation } from "../src/kb/content-review.js";
+import { canonicalJson, sha256Hex } from "../src/kb/contracts.js";
+import { defaultKbIngestPlane } from "../src/kb/ingest-plane.js";
 import { initKb, queryKb, statusKb } from "../src/kb/workflows.js";
 import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 
@@ -147,6 +157,28 @@ function pageDraftJson() {
   });
 }
 
+function candidateConflict() {
+  return {
+    candidate_conflict_id: "cfl_0001",
+    claim_refs: [
+      {
+        page_id: "page_quorum_sync",
+        revision_id: "rev_0001",
+        claim_id: "clm_deployment_unknown",
+      },
+    ],
+    summary: "RCA says fix promoted 2024; no later source confirms it is still deployed.",
+    evidence_refs: [
+      { evidence_id: "evidence_sequence_fix", kind: "artifact", ref: "clm_sequence_fix" },
+      {
+        evidence_id: "evidence_deployment_conflict",
+        kind: "artifact",
+        ref: "clm_deployment_unknown",
+      },
+    ],
+  };
+}
+
 function lintJson() {
   return JSON.stringify({
     schema_version: 1,
@@ -166,27 +198,7 @@ function lintJson() {
         ],
       },
     ],
-    candidate_conflicts: [
-      {
-        candidate_conflict_id: "cfl_0001",
-        claim_refs: [
-          {
-            page_id: "page_quorum_sync",
-            revision_id: "rev_0001",
-            claim_id: "clm_deployment_unknown",
-          },
-        ],
-        summary: "RCA says fix promoted 2024; no later source confirms it is still deployed.",
-        evidence_refs: [
-          { evidence_id: "evidence_sequence_fix", kind: "artifact", ref: "clm_sequence_fix" },
-          {
-            evidence_id: "evidence_deployment_conflict",
-            kind: "artifact",
-            ref: "clm_deployment_unknown",
-          },
-        ],
-      },
-    ],
+    candidate_conflicts: [candidateConflict()],
   });
 }
 
@@ -237,8 +249,12 @@ function makeMockRunner(overrides: Partial<Record<string, string>> = {}): {
         throw new Error(`host readSource('${id}') returned no content`);
       }
     }
+    const readPhaseOutput = inv.readPhaseOutput;
     for (const phase of inv.priorPhaseAllowlist) {
-      const text = inv.readPhaseOutput(phase);
+      if (readPhaseOutput === undefined) {
+        throw new Error("host did not provide the required prior-phase reader");
+      }
+      const text = readPhaseOutput(phase);
       if (typeof text !== "string" || text.length === 0) {
         throw new Error(`host readPhaseOutput('${phase}') returned no content`);
       }
@@ -278,6 +294,12 @@ function ctx(root: string, runId = "kb-ingest-run") {
   };
 }
 
+function requiredArtifactId(ids: Readonly<Record<string, string>>, kind: string): string {
+  const artifactId = ids[kind];
+  if (artifactId === undefined) throw new Error(`ingest result is missing '${kind}'`);
+  return artifactId;
+}
+
 async function ingestPending(
   root: string,
   runner: TestOnlyIngestBodyRunner,
@@ -293,10 +315,10 @@ async function ingestPending(
   const pending: PendingIngest = {
     runId: "kb-ingest-run",
     sourceIds: sources.map((s) => s.sourceId),
-    claimsArtifactId: byKind.claims,
-    pageDraftArtifactId: byKind.page_draft,
-    lintReportArtifactId: byKind.lint_report,
-    verificationArtifactId: byKind.verification_report,
+    claimsArtifactId: requiredArtifactId(byKind, "claims"),
+    pageDraftArtifactId: requiredArtifactId(byKind, "page_draft"),
+    lintReportArtifactId: requiredArtifactId(byKind, "lint_report"),
+    verificationArtifactId: requiredArtifactId(byKind, "verification_report"),
   };
   return { result, pending };
 }
@@ -326,7 +348,10 @@ describe("ingest: gate (no publication)", () => {
       expect(a.artifact_id).toMatch(/^art_[0-9a-f]{32}$/);
       expect(a.sha256).toMatch(/^[0-9a-f]{64}$/);
       expect(a.artifact_kind).toBe(
-        result.artifacts.find((x) => x.artifact_id === a.artifact_id)!.artifact_kind
+        requireValue(
+          result.artifacts.find((x) => x.artifact_id === a.artifact_id),
+          "apps/orchestration/tests/kb-ingest.test.ts:344"
+        ).artifact_kind
       );
     }
 
@@ -341,6 +366,47 @@ describe("ingest: gate (no publication)", () => {
     expect(existsSync(workDir)).toBe(true);
 
     void pending;
+  });
+
+  it("projects indexed handles exactly into the legacy gate and fails before persistence on a missing artifact", async () => {
+    const root = tmpRoot();
+    const context = ctx(root);
+    initKb(context, "Ingest Test KB");
+    const { runner } = makeMockRunner();
+    const { result, pending } = await ingestPending(root, runner);
+    const plane = defaultKbIngestPlane(context.checkpointer, { testOnlyLegacyReview: true });
+    const gateInput = {
+      kbRoot: root,
+      profileId: context.profileId,
+      runId: context.runId,
+      artifactIds: result.artifacts.map((artifact) => artifact.artifact_id),
+      sourceIds: pending.sourceIds,
+      capabilityIds: [],
+    };
+
+    const gate = plane.persistGate(gateInput);
+    expect(gate.artifacts).toEqual(result.artifacts);
+    const firstArtifact = gate.artifacts[0];
+    if (firstArtifact === undefined) throw new Error("legacy gate persisted no artifacts");
+    expect(Object.keys(firstArtifact).sort()).toEqual([
+      "artifact_id",
+      "artifact_kind",
+      "byte_length",
+      "media_type",
+      "schema_version",
+      "sha256",
+    ]);
+    const gatePath = path.join(root, ".kb", "gates", `${gate.gate_id}.json`);
+    expect(readFileSync(gatePath, "utf8")).toBe(canonicalJson(gate));
+
+    const before = readdirSync(path.dirname(gatePath)).sort();
+    expect(() =>
+      plane.persistGate({
+        ...gateInput,
+        artifactIds: ["art_missing_boundary"],
+      })
+    ).toThrow("artifact_not_found");
+    expect(readdirSync(path.dirname(gatePath)).sort()).toEqual(before);
   });
 
   it("is refused on an uninitialized KB and stages nothing", async () => {
@@ -380,13 +446,18 @@ describe("approveIngest: publication", () => {
     // Selector advanced exactly one generation; parent chain intact.
     const current = readCurrent(root);
     expect(current.generation_id).not.toBe(baseGen);
-    const catalog = JSON.parse(
-      readFileSync(
-        path.join(root, ".kb", "generations", current.generation_id, "catalog.json"),
-        "utf8"
-      )
+    const catalog = requireRecord(
+      parseJson(
+        readFileSync(
+          path.join(root, ".kb", "generations", current.generation_id, "catalog.json"),
+          "utf8"
+        )
+      ),
+      "published generation catalog"
     );
-    expect(catalog.parent_generation_id).toBe(baseGen);
+    expect(requireString(catalog["parent_generation_id"], "catalog parent generation id")).toBe(
+      baseGen
+    );
 
     // Publication plane: one source object per distinct content (sharded 2-char
     // prefix), two records, one page revision pair, one conflict.
@@ -408,13 +479,81 @@ describe("approveIngest: publication", () => {
       expect(pageMd).toContain(h2);
     }
     const fmJson = pageMd.split("---\n")[1];
-    expect(() => JSON.parse(fmJson)).not.toThrow();
+    if (fmJson === undefined) throw new Error("published page is missing frontmatter JSON");
+    expect(() => {
+      JSON.parse(fmJson);
+    }).not.toThrow();
 
     // Work plane stays out of the publication plane.
     expect(JSON.stringify(catalog)).not.toContain("work/");
-    expect(catalog.source_objects).toHaveLength(2);
-    expect(Object.keys(catalog.pages)).toEqual(["page_quorum_sync"]);
-    expect(Object.keys(catalog.conflict_records)).toEqual(["cfl_0001"]);
+    expect(requireArray(catalog["source_objects"], "catalog source objects")).toHaveLength(2);
+    expect(Object.keys(requireRecord(catalog["pages"], "catalog pages"))).toEqual([
+      "page_quorum_sync",
+    ]);
+    expect(
+      Object.keys(requireRecord(catalog["conflict_records"], "catalog conflict records"))
+    ).toEqual(["cfl_0001"]);
+  });
+
+  it("publishes the exact preallocated conflict bytes from the reviewed packet", async () => {
+    const root = tmpRoot();
+    initKb(ctx(root), "Ingest Test KB");
+    const { runner } = makeMockRunner();
+    const { pending } = await ingestPending(root, runner);
+    const issuedAt = "2026-08-24T12:00:00Z";
+    const placeholder = {
+      candidate_conflict_id: "cfl_0001",
+      conflict_record_id: "conf_reviewed_0001",
+      conflict_record_sha256: "0".repeat(64),
+    };
+    const conflict = conflictRecordForAllocation({
+      candidate: candidateConflict(),
+      allocation: placeholder,
+      issuedAt,
+      allowedClaimRefs: new Set(["page_quorum_sync\u0000rev_0001\u0000clm_deployment_unknown"]),
+    });
+    const allocation = {
+      ...placeholder,
+      conflict_record_sha256: sha256Hex(canonicalJson(conflict)),
+    };
+
+    const approval = approveIngest(ctx(root), [SRC_A, SRC_B], {
+      ...pending,
+      candidateConflictAllocations: [allocation],
+      reviewIssuedAt: issuedAt,
+    });
+
+    expect(approval.status).toBe("complete");
+    expect(readFileSync(path.join(root, "conflicts", "conf_reviewed_0001.json"), "utf8")).toBe(
+      canonicalJson(conflict)
+    );
+  });
+
+  it("refuses a changed conflict allocation digest without moving the selector", async () => {
+    const root = tmpRoot();
+    initKb(ctx(root), "Ingest Test KB");
+    const baseGenerationId = readCurrent(root).generation_id;
+    const { runner } = makeMockRunner();
+    const { pending } = await ingestPending(root, runner);
+
+    const approval = approveIngest(ctx(root), [SRC_A, SRC_B], {
+      ...pending,
+      candidateConflictAllocations: [
+        {
+          candidate_conflict_id: "cfl_0001",
+          conflict_record_id: "conf_reviewed_0001",
+          conflict_record_sha256: "f".repeat(64),
+        },
+      ],
+      reviewIssuedAt: "2026-08-24T12:00:00Z",
+    });
+
+    expect(approval.status).toBe("refused");
+    expect(approval.warnings).toEqual([
+      "content-review conflict allocation digest changed; nothing published",
+    ]);
+    expect(readCurrent(root).generation_id).toBe(baseGenerationId);
+    expect(existsSync(path.join(root, "conflicts"))).toBe(false);
   });
 
   it("rejects a malformed page draft at staging before any gate or publication", async () => {
@@ -481,7 +620,13 @@ describe("approveIngest: publication", () => {
 
 // Read `.kb/current.json` without a public helper (test-local).
 function readCurrent(root: string): { generation_id: string } {
-  return JSON.parse(readFileSync(path.join(root, ".kb", "current.json"), "utf8"));
+  const selector = requireRecord(
+    parseJson(readFileSync(path.join(root, ".kb", "current.json"), "utf8")),
+    "current generation selector"
+  );
+  return {
+    generation_id: requireString(selector["generation_id"], "current generation id"),
+  };
 }
 
 function listFilesRecursive(dir: string): string[] {

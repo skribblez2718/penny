@@ -1,8 +1,8 @@
+import { requireValue } from "./helpers/narrowing.js";
 /** Exact §5.7 artifact content-plane boundary tests. */
 
 import {
   existsSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -20,6 +20,7 @@ import { Checkpointer } from "../src/checkpointer.js";
 import { RunContext } from "../src/context.js";
 import { canonicalJson, sha256Hex } from "../src/kb/contracts.js";
 import { materializeRunInput } from "../src/private-inputs.js";
+import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 import {
   ArtifactStoreError,
   RunArtifactSimulatedCrash,
@@ -35,6 +36,7 @@ const controls = new Map<string, Checkpointer>();
 function tmpRoot(): string {
   const directory = mkdtempSync(path.join(tmpdir(), "penny-kb-art-"));
   dirs.push(directory);
+  installTestProjectState(directory);
   return directory;
 }
 function control(root: string): Checkpointer {
@@ -87,7 +89,6 @@ function artifactStore(
       storage_key: `${runId}/request.json`,
       temporary_storage_key: `${runId}/.transaction_${runId}.tmp`,
     });
-    mkdirSync(path.join(root, ".penny"), { recursive: true, mode: 0o700 });
     materializeRunInput({
       projectRoot: root,
       checkpointer,
@@ -245,9 +246,19 @@ describe("KB §5.7 artifact content plane", () => {
         preparedBeforeBytes = record.lifecycle === "prepared";
         expect(record.temporary_storage_key).toBeDefined();
         expect(existsSync(path.join(root, "work", "run_001", record.storage_key))).toBe(false);
-        expect(existsSync(path.join(root, "work", "run_001", record.temporary_storage_key!))).toBe(
-          false
-        );
+        expect(
+          existsSync(
+            path.join(
+              root,
+              "work",
+              "run_001",
+              requireValue(
+                record.temporary_storage_key,
+                "apps/orchestration/tests/run-artifacts.test.ts:249"
+              )
+            )
+          )
+        ).toBe(false);
       },
     });
     const handle = stageClaims(store);
@@ -631,10 +642,22 @@ describe("KB §5.7 artifact content plane", () => {
     });
     expect(() => stageClaims(crashing)).toThrow(RunArtifactSimulatedCrash);
     crashing.close();
-    const prepared = record!;
-    writeFileSync(path.join(root, "work", runId, prepared.temporary_storage_key!), "{}", {
-      mode: 0o600,
-    });
+    const prepared = requireValue(record, "apps/orchestration/tests/run-artifacts.test.ts:635");
+    writeFileSync(
+      path.join(
+        root,
+        "work",
+        runId,
+        requireValue(
+          prepared.temporary_storage_key,
+          "apps/orchestration/tests/run-artifacts.test.ts:636"
+        )
+      ),
+      "{}",
+      {
+        mode: 0o600,
+      }
+    );
     expect(() => artifactStore(root, runId)).toThrow(/hash_mismatch/);
     expect(control(root).kbArtifact(prepared.artifact_id)?.lifecycle).toBe("discarded");
     using retry = artifactStore(root, runId);
@@ -656,10 +679,18 @@ describe("KB §5.7 artifact content plane", () => {
     });
     expect(() => stageClaims(crashing)).toThrow(RunArtifactSimulatedCrash);
     crashing.close();
-    const prepared = record!;
+    const prepared = requireValue(record, "apps/orchestration/tests/run-artifacts.test.ts:660");
     const decoy = path.join(root, "decoy.json");
     writeFileSync(decoy, CANONICAL_CONTENT, { mode: 0o600 });
-    const temp = path.join(root, "work", runId, prepared.temporary_storage_key!);
+    const temp = path.join(
+      root,
+      "work",
+      runId,
+      requireValue(
+        prepared.temporary_storage_key,
+        "apps/orchestration/tests/run-artifacts.test.ts:663"
+      )
+    );
     symlinkSync(decoy, temp);
     expect(() => artifactStore(root, runId)).toThrow(/artifact_file_unreadable/);
     expect(readFileSync(decoy, "utf8")).toBe(CANONICAL_CONTENT);
@@ -700,7 +731,10 @@ describe("KB §5.7 artifact content plane", () => {
       prior_state_ids: ["ingest"],
       allowed_prior_artifacts: [{ run_id: runId, state_id: "ingest", handle }],
       allowed_selected_pages: [],
-      private_input_sha256: control(root).getPrivateInput(runId)!.request_sha256,
+      private_input_sha256: requireValue(
+        control(root).getPrivateInput(runId),
+        "apps/orchestration/tests/run-artifacts.test.ts:704"
+      ).request_sha256,
       admitted_policy_sha256: "a".repeat(64),
     });
     first.close();
@@ -766,19 +800,29 @@ describe("KB §5.7 artifact content plane", () => {
       prior_state_ids: ["ingest"],
       allowed_prior_artifacts: [{ run_id: runId, state_id: "ingest", handle: prior }],
       allowed_selected_pages: [],
-      private_input_sha256: control(root).getPrivateInput(runId)!.request_sha256,
+      private_input_sha256: requireValue(
+        control(root).getPrivateInput(runId),
+        "apps/orchestration/tests/run-artifacts.test.ts:770"
+      ).request_sha256,
       admitted_policy_sha256: "a".repeat(64),
     });
-    expect(store.phaseOperandsRecord("lint")).toMatchObject({
+    const openRecord = requireValue(
+      store.phaseOperandsRecord("lint"),
+      "open lint phase operands record"
+    );
+    expect(openRecord).toMatchObject({
       schema_version: 1,
       lifecycle: "open",
       operands: {
         ...operands,
-        private_input_sha256: control(root).getPrivateInput(runId)!.request_sha256,
+        private_input_sha256: requireValue(
+          control(root).getPrivateInput(runId),
+          "apps/orchestration/tests/run-artifacts.test.ts:778"
+        ).request_sha256,
         allowed_selected_pages: [],
       },
-      created_at: expect.stringMatching(/Z$/),
     });
+    expect(openRecord.created_at).toMatch(/Z$/);
     const report = store.stage({
       state_id: "lint",
       kb_profile_id: "kbp_demo",
@@ -804,16 +848,19 @@ describe("KB §5.7 artifact content plane", () => {
       result,
       handles: [report],
     });
-    const closed = store.phaseOperandsRecord("lint");
+    const closed = requireValue(
+      store.phaseOperandsRecord("lint"),
+      "closed lint phase operands record"
+    );
     expect(closed).toMatchObject({
       schema_version: 1,
       lifecycle: "closed",
       closed_result_sha256: sha256Hex(canonicalJson(result)),
-      closed_at: expect.stringMatching(/Z$/),
     });
+    expect(closed.closed_at).toMatch(/Z$/);
     expect(() => store.requireOpenPhaseOperands("lint")).toThrow(/phase_operands_closed/);
     expect(() => store.bindPhaseOperands(operands)).toThrow(/phase_operands_changed/);
-    expect(store.phaseResult("lint")?.result_sha256).toBe(closed?.closed_result_sha256);
+    expect(store.phaseResult("lint")?.result_sha256).toBe(closed.closed_result_sha256);
     store.close();
   });
 

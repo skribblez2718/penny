@@ -1,3 +1,4 @@
+import { registerTool } from "../../lib/pi-tool-registration.js";
 /**
  * Questionnaire Extension - Ask users questions with options + custom input
  *
@@ -15,19 +16,22 @@
  */
 
 import type {
-  AgentToolUpdateCallback,
+  AgentToolResult,
   ExtensionAPI,
+  ExtensionCommandContext,
+  Theme,
   ToolRenderResultOptions,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import {
   Editor,
   type EditorTheme,
+  type TUI,
   Key,
   matchesKey,
   Text,
   truncateToWidth,
-} from "@mariozechner/pi-tui";
-import { Type } from "@sinclair/typebox";
+} from "@earendil-works/pi-tui";
+import { Type, type Static } from "typebox";
 import {
   consumeTrustedQuestionnaireTransport,
   resolveTrustedQuestionnaireTransport,
@@ -38,28 +42,6 @@ import {
 // ============================================================
 // Types
 // ============================================================
-
-type QuestionType = "single" | "multi";
-
-interface QuestionOption {
-  value: string;
-  label: string;
-  description?: string;
-}
-
-interface Question {
-  id: string;
-  label?: string;
-  prompt: string;
-  options: QuestionOption[];
-  allowOther?: boolean;
-  type?: QuestionType;
-}
-
-interface QuestionnaireParamsInput {
-  questions?: Question[];
-  trustedTransportCapability?: string;
-}
 
 interface Answer {
   id: string;
@@ -82,51 +64,6 @@ export interface QuestionnaireUIHandlers {
   render: (width: number) => string[];
   handleInput: (data: string) => void;
   invalidate: () => void;
-}
-
-/** Minimal TUI handle passed to the questionnaire UI (requests a re-render). */
-interface TuiHandle {
-  requestRender: () => void;
-}
-
-/**
- * Theme accessor used by the TUI: `fg`/`bg` colorize text with a named color,
- * `bold` emboldens. Superset of the Pi SDK `Theme` type (which only declares `fg`).
- */
-interface TuiTheme {
-  fg: (color: string, text: string) => string;
-  bg: (color: string, text: string) => string;
-  bold: (text: string) => string;
-}
-
-/** Theme callable used by `renderCall`/`renderResult`: `theme(color, text)`. */
-type ThemeFn = (color: string, text: string) => string;
-
-/** UI notification severity accepted by `ctx.ui.notify`. */
-type NotifyLevel = "error" | "info" | "warning";
-
-/** Subset of the tool `execute` context this extension relies on. */
-interface QuestionnaireExecuteContext {
-  hasUI: boolean;
-  ui: {
-    custom: <T>(
-      factory: (
-        tui: TuiHandle,
-        theme: TuiTheme,
-        kb: unknown,
-        done: (result: T) => void
-      ) => QuestionnaireUIHandlers
-    ) => Promise<T>;
-    notify: (message: string, level: NotifyLevel) => void;
-  };
-}
-
-/** Subset of the command context used by the `ask` command. */
-interface QuestionnaireCommandContext {
-  hasUI: boolean;
-  ui: {
-    notify: (message: string, level: NotifyLevel) => void;
-  };
 }
 
 /** Details payload attached to the tool result. */
@@ -262,6 +199,10 @@ const QuestionnaireParams = Type.Object(
   { additionalProperties: false }
 );
 
+type QuestionOption = Static<typeof QuestionOptionSchema>;
+type Question = Static<typeof QuestionSchema>;
+type QuestionnaireParamsInput = Static<typeof QuestionnaireParams>;
+
 // ============================================================
 // Interactive mode rendering
 // ============================================================
@@ -301,8 +242,8 @@ function _renderInteractive(
 
 export function createQuestionnaireUI(
   questions: Question[],
-  tui: TuiHandle,
-  theme: TuiTheme,
+  tui: TUI,
+  theme: Theme,
   done: (result: QuestionnaireResult) => void
 ): QuestionnaireUIHandlers {
   const isMulti = questions.length > 1;
@@ -661,7 +602,7 @@ export function createQuestionnaireUI(
 // ============================================================
 
 export default function questionnaire(pi: ExtensionAPI): void {
-  pi.registerTool({
+  registerTool<typeof QuestionnaireParams, QuestionnaireDetails>(pi, {
     name: "questionnaire",
     label: "Questionnaire",
     description: [
@@ -679,13 +620,7 @@ export default function questionnaire(pi: ExtensionAPI): void {
     ].join("\n"),
     parameters: QuestionnaireParams,
 
-    async execute(
-      _toolCallId: string,
-      params: QuestionnaireParamsInput,
-      _signal: AbortSignal | undefined,
-      _onUpdate: AgentToolUpdateCallback<QuestionnaireDetails>,
-      ctx: QuestionnaireExecuteContext
-    ) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const hasQuestions = Array.isArray(params.questions);
       const capability =
         typeof params.trustedTransportCapability === "string"
@@ -763,7 +698,7 @@ export default function questionnaire(pi: ExtensionAPI): void {
             answers,
             cancelled: false,
             needsUserInput: true,
-          } as QuestionnaireResult & { needsUserInput: boolean },
+          } satisfies QuestionnaireDetails,
         };
       }
 
@@ -823,28 +758,25 @@ export default function questionnaire(pi: ExtensionAPI): void {
       };
     },
 
-    renderCall(args: QuestionnaireParamsInput, theme: ThemeFn) {
+    renderCall(args: QuestionnaireParamsInput, theme: Theme) {
       const trusted = args.trustedTransportCapability
         ? resolveTrustedQuestionnaireTransport(args.trustedTransportCapability)
         : undefined;
       const qs = args.questions ?? trusted?.questions ?? [];
       const count = qs.length;
       const labels = qs.map((q) => q.label || q.id).join(", ");
-      let text = theme("toolTitle", theme("bold", "questionnaire "));
-      text += theme("muted", `${count} question${count !== 1 ? "s" : ""}`);
+      let text = theme.fg("toolTitle", theme.bold("questionnaire "));
+      text += theme.fg("muted", `${count} question${count !== 1 ? "s" : ""}`);
       if (labels) {
-        text += theme("dim", ` (${truncateToWidth(labels, 40)})`);
+        text += theme.fg("dim", ` (${truncateToWidth(labels, 40)})`);
       }
       return new Text(text, 0, 0);
     },
 
     renderResult(
-      result: {
-        content: Array<{ type: string; text: string }>;
-        details?: QuestionnaireDetails;
-      },
+      result: AgentToolResult<QuestionnaireDetails | undefined>,
       _options: ToolRenderResultOptions,
-      theme: ThemeFn
+      theme: Theme
     ) {
       const details = result.details;
       if (!details) {
@@ -855,23 +787,23 @@ export default function questionnaire(pi: ExtensionAPI): void {
       // Non-interactive mode marker
       if (details.needsUserInput) {
         return new Text(
-          theme("warning", "⚠ ") +
-            theme("muted", "Questions relayed for user input (non-interactive mode)"),
+          theme.fg("warning", "⚠ ") +
+            theme.fg("muted", "Questions relayed for user input (non-interactive mode)"),
           0,
           0
         );
       }
 
       if (details.cancelled) {
-        return new Text(theme("warning", "Cancelled"), 0, 0);
+        return new Text(theme.fg("warning", "Cancelled"), 0, 0);
       }
 
       const lines = details.answers.map((a) => {
         if (a.wasCustom) {
-          return `${theme("success", "✓ ")}${theme("accent", a.id)}: ${theme("muted", "(wrote) ")}${a.label}`;
+          return `${theme.fg("success", "✓ ")}${theme.fg("accent", a.id)}: ${theme.fg("muted", "(wrote) ")}${a.label}`;
         }
         const display = a.index ? `${a.index}. ${a.label}` : a.label;
-        return `${theme("success", "✓ ")}${theme("accent", a.id)}: ${display}`;
+        return `${theme.fg("success", "✓ ")}${theme.fg("accent", a.id)}: ${display}`;
       });
       return new Text(lines.join("\n"), 0, 0);
     },
@@ -880,7 +812,7 @@ export default function questionnaire(pi: ExtensionAPI): void {
   // Also register a convenience command for manual questionnaire invocation
   pi.registerCommand("ask", {
     description: "Ask a question interactively (for testing questionnaire tool)",
-    handler: async (_args: string, ctx: QuestionnaireCommandContext) => {
+    handler: async (_args: string, ctx: ExtensionCommandContext) => {
       if (!ctx.hasUI) {
         ctx.ui.notify("ask command requires interactive mode", "error");
         return;

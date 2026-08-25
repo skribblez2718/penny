@@ -15,7 +15,7 @@ Each skill run exposes an engine-selected terminal `output_artifact_ref`. Chain
 mode verifies those exact bytes, registers a chain-run handoff artifact, and
 grants only that ref to the next skill's first worker. `{previous}` is a bounded
 instruction pointing to the grant, never an authoritative inline payload.
-Workers use `artifact_read` and follow typed continuation until complete.
+Workers use `artifact_read` and repeat with `next_range` until complete.
 
 Checkpoints persist exact terminal/handoff refs under the caller-selected or
 platform state root. They are owner-only and atomically replaced. Resume skips

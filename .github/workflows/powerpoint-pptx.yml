@@ -33,21 +33,11 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      - name: Install uv
-        run: python -m pip install uv==0.8.22
-
-      - name: Sync locked Python environment
-        run: uv sync --extra dev --frozen
-
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.3.13"
 
@@ -58,31 +48,20 @@ jobs:
         working-directory: .pi/extensions/powerpoint
         run: bun run test:unit
 
-      - name: PowerPoint Python structural tests
-        run: >-
-          uv run --frozen python -m pytest
-          .pi/extensions/powerpoint/tests/python
-          -p no:cacheprovider --tb=short -q
-
-      - name: PowerPoint TypeScript-to-Python integration tests
+      - name: PowerPoint TypeScript integration tests
         working-directory: .pi/extensions/powerpoint
         run: bun run test:integration
-
-      - name: Prove exact sync keeps the PowerPoint runtime
-        run: |
-          uv sync --extra dev --frozen
-          uv run --frozen python -c "import lxml, markdown_it, PIL, pptx; print('powerpoint runtime OK')"
 
   standards:
     name: PowerPoint / standards
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -92,24 +71,12 @@ jobs:
       - name: Sync locked Python environment
         run: uv sync --extra dev --frozen
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.3.13"
 
       - name: Install locked JavaScript dependencies
         run: bun install --frozen-lockfile
-
-      - name: Python format, lint, and type checks
-        run: |
-          uv run --frozen black --check --config pyproject.toml \
-            .pi/extensions/powerpoint/generate_pptx.py \
-            .pi/extensions/powerpoint/tests/python
-          uv run --frozen flake8 --config .flake8 \
-            .pi/extensions/powerpoint/generate_pptx.py \
-            .pi/extensions/powerpoint/tests/python
-          uv run --frozen mypy --config-file pyproject.toml \
-            .pi/extensions/powerpoint/generate_pptx.py \
-            .pi/extensions/powerpoint/tests/python
 
       - name: TypeScript format, lint, and type checks
         run: |
@@ -118,6 +85,8 @@ jobs:
             .github/workflows/powerpoint-pptx.yml
           bunx eslint --no-ignore \
             .pi/extensions/powerpoint/index.ts \
+            .pi/extensions/powerpoint/renderer.ts \
+            .pi/extensions/powerpoint/tests/helpers/pptx.ts \
             .pi/extensions/powerpoint/tests/unit/extension.test.ts \
             .pi/extensions/powerpoint/tests/integration/generator.test.ts \
             .pi/extensions/powerpoint/tests/vitest.config.ts \

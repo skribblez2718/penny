@@ -1,3 +1,4 @@
+import { requireValue } from "./helpers/narrowing.js";
 import {
   chmodSync,
   existsSync,
@@ -37,6 +38,7 @@ import {
   type PublishGenerationTransactionInput,
 } from "../src/kb/generations.js";
 import { initKb } from "../src/kb/workflows.js";
+import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 
 const roots: string[] = [];
 const NOW = "2026-08-21T00:00:00Z";
@@ -47,6 +49,7 @@ function temporaryRoot(): string {
   chmodSync(root, 0o700);
   mkdirSync(path.join(root, ".control"), { mode: 0o700 });
   roots.push(root);
+  installTestProjectState(root);
   return root;
 }
 
@@ -194,10 +197,18 @@ function publicationSourceAuthority(input: {
     transactionId: input.admissionTransactionId,
     now: NOW,
   });
-  capabilities.admitSource(admission!.source_id, 0, NOW);
+  capabilities.admitSource(
+    requireValue(admission, "apps/orchestration/tests/kb-publication-transactions.test.ts:199")
+      .source_id,
+    0,
+    NOW
+  );
   return {
     capabilityId: envelope.capability_id,
-    sourceId: admission!.source_id,
+    sourceId: requireValue(
+      admission,
+      "apps/orchestration/tests/kb-publication-transactions.test.ts:202"
+    ).source_id,
     authority: {
       reserve(transactionId: string) {
         using store = new CapabilityStore(input.projectRoot);
@@ -207,7 +218,12 @@ function publicationSourceAuthority(input: {
         using store = new CapabilityStore(input.projectRoot);
         store.settlePublishedSources({
           capabilityIds: [envelope.capability_id],
-          sourceIds: [admission!.source_id],
+          sourceIds: [
+            requireValue(
+              admission,
+              "apps/orchestration/tests/kb-publication-transactions.test.ts:212"
+            ).source_id,
+          ],
           runId: input.runId,
           transactionId,
           now: NOW,
@@ -227,7 +243,10 @@ function normalInput(input: {
   fault?: (boundary: string) => void;
   authority?: PublishGenerationTransactionInput["authority"];
 }): PublishGenerationTransactionInput {
-  const selected = readSelectedGeneration(input.root)!;
+  const selected = requireValue(
+    readSelectedGeneration(input.root),
+    "apps/orchestration/tests/kb-publication-transactions.test.ts:232"
+  );
   const kbManifest = readManifest(input.root);
   const policy = readPolicy(input.root);
   const generationId = `gen_${sha256Hex(input.transactionId).slice(0, 40)}`;
@@ -343,7 +362,10 @@ describe("§5.10 transaction-owned publication", () => {
       )
     ).toThrow("crash");
 
-    const planned = checkpointer.kbPublication("tx_publication_init")!;
+    const planned = requireValue(
+      checkpointer.kbPublication("tx_publication_init"),
+      "apps/orchestration/tests/kb-publication-transactions.test.ts:348"
+    );
     expect(planned.lifecycle).toBe("planned");
     expect(planned.files.map((file) => file.role).sort()).toEqual([
       "catalog",
@@ -427,7 +449,10 @@ describe("§5.10 transaction-owned publication", () => {
       expect(injected).toBe(true);
 
       publishGenerationTransaction(initInput({ root, checkpointer, authority }));
-      const publication = checkpointer.kbPublication("tx_publication_init")!;
+      const publication = requireValue(
+        checkpointer.kbPublication("tx_publication_init"),
+        "apps/orchestration/tests/kb-publication-transactions.test.ts:432"
+      );
       expect(publication.lifecycle).toBe("complete");
       expect(publication.files.every((file) => file.state === "published")).toBe(true);
       expect(readCurrent(root)?.generation_id).toBe(publication.candidate_generation_id);
@@ -568,7 +593,10 @@ describe("§5.10 transaction-owned publication", () => {
         fault(boundary) {
           if (boundary !== "after_writer_lock") return;
           const foreign = {
-            ...readCurrent(root)!,
+            ...requireValue(
+              readCurrent(root),
+              "apps/orchestration/tests/kb-publication-transactions.test.ts:573"
+            ),
             generation_id: "gen_foreign_selector",
           };
           foreignBytes = canonicalJson(foreign);
@@ -617,7 +645,10 @@ describe("§5.10 transaction-owned publication", () => {
       runId: "run_malformed_catalog",
       transactionId: "tx_malformed_catalog",
     });
-    const entry = Object.values(input.catalog.pages)[0]!;
+    const entry = requireValue(
+      Object.values(input.catalog.pages)[0],
+      "apps/orchestration/tests/kb-publication-transactions.test.ts:622"
+    );
     expect(() =>
       publishGenerationTransaction({
         ...input,
@@ -633,7 +664,10 @@ describe("§5.10 transaction-owned publication", () => {
     initKb({ kbRoot: root, profileId: PROFILE, runId: "legacy_init" }, "Base");
     const checkpointer = new Checkpointer(path.join(root, ".control", "control.db"));
     createRun(checkpointer, "run_empty_plan", "save");
-    const selected = readSelectedGeneration(root)!;
+    const selected = requireValue(
+      readSelectedGeneration(root),
+      "apps/orchestration/tests/kb-publication-transactions.test.ts:638"
+    );
     const kbManifest = readManifest(root);
     const policy = readPolicy(root);
     const generationId = "gen_empty_plan";
@@ -709,7 +743,10 @@ describe("§5.10 transaction-owned publication", () => {
   it("reopens and rehashes mapped files immediately before selector commit", () => {
     const root = temporaryRoot();
     initKb({ kbRoot: root, profileId: PROFILE, runId: "legacy_init" }, "Base");
-    const base = readCurrent(root)!;
+    const base = requireValue(
+      readCurrent(root),
+      "apps/orchestration/tests/kb-publication-transactions.test.ts:714"
+    );
     const checkpointer = new Checkpointer(path.join(root, ".control", "control.db"));
     createRun(checkpointer, "run_precommit_reopen", "save");
     const input = normalInput({
@@ -718,7 +755,10 @@ describe("§5.10 transaction-owned publication", () => {
       runId: "run_precommit_reopen",
       transactionId: "tx_precommit_reopen",
     });
-    const [pageId, entry] = Object.entries(input.catalog.pages)[0]!;
+    const [pageId, entry] = requireValue(
+      Object.entries(input.catalog.pages)[0],
+      "apps/orchestration/tests/kb-publication-transactions.test.ts:723"
+    );
     let replaced = false;
     expect(() =>
       publishGenerationTransaction({
@@ -879,8 +919,14 @@ describe("§5.10 transaction-owned publication", () => {
         })
       )
     ).toThrow("before-selector");
-    const publication = checkpointer.kbPublication("tx_publication_init")!;
-    const selectorRow = publication.files.find((file) => file.role === "selector")!;
+    const publication = requireValue(
+      checkpointer.kbPublication("tx_publication_init"),
+      "apps/orchestration/tests/kb-publication-transactions.test.ts:884"
+    );
+    const selectorRow = requireValue(
+      publication.files.find((file) => file.role === "selector"),
+      "apps/orchestration/tests/kb-publication-transactions.test.ts:885"
+    );
     const selectorTemp = path.join(root, ...selectorRow.staging_key.split("/"));
     rmSync(selectorTemp, { force: true });
 

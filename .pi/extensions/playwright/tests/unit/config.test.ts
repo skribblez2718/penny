@@ -5,21 +5,16 @@
  * No browser needed — pure Node.js.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  loadConfig,
-  getConfig,
-  isCapabilityEnabled,
-  isUnsafeTool,
-  CAPABILITY_MAP,
-} from "../../config.js";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { loadConfig, getConfig, isUnsafeTool } from "../../config.js";
+import type { SnapshotNode } from "../../types.js";
 
 // ============================================================================
 // Config Tests
 // ============================================================================
 
 describe("Config", () => {
-  let savedEnv: Record<string, string | undefined> = {};
+  const savedEnv: Record<string, string | undefined> = {};
 
   beforeEach(() => {
     const vars = [
@@ -121,10 +116,12 @@ describe("Config", () => {
       process.env.PLAYWRIGHT_PROXY_SERVER = "http://127.0.0.1:8080";
       const config = loadConfig("/tmp/test");
       expect(config.proxy).toBeDefined();
-      expect(config.proxy!.server).toBe("http://127.0.0.1:8080");
-      expect(config.proxy!.username).toBeUndefined();
-      expect(config.proxy!.password).toBeUndefined();
-      expect(config.proxy!.bypass).toBeUndefined();
+      const proxy = config.proxy;
+      if (proxy === undefined) throw new Error("proxy config was not created");
+      expect(proxy.server).toBe("http://127.0.0.1:8080");
+      expect(proxy.username).toBeUndefined();
+      expect(proxy.password).toBeUndefined();
+      expect(proxy.bypass).toBeUndefined();
     });
 
     it("should parse full proxy config with auth and bypass", () => {
@@ -144,7 +141,9 @@ describe("Config", () => {
     it("should support socks5 proxies", () => {
       process.env.PLAYWRIGHT_PROXY_SERVER = "socks5://tor-proxy:9050";
       const config = loadConfig("/tmp/test");
-      expect(config.proxy!.server).toBe("socks5://tor-proxy:9050");
+      const proxy = config.proxy;
+      if (proxy === undefined) throw new Error("SOCKS proxy config was not created");
+      expect(proxy.server).toBe("socks5://tor-proxy:9050");
     });
 
     it("should freeze proxy config to prevent mutation", () => {
@@ -173,75 +172,10 @@ describe("Config", () => {
     });
   });
 
-  describe("isCapabilityEnabled", () => {
-    const config = {
-      headless: true,
-      timeout: 30000,
-      networkAllowlist: [],
-      downloadDir: "/tmp",
-      outputDir: "/tmp",
-      enableVision: true,
-      enableDevtools: false,
-      enableNetwork: true,
-      enableStorage: false,
-      allowUnsafe: false,
-      ignoreHTTPSErrors: false,
-    };
-
-    it("always enables core", () => {
-      expect(isCapabilityEnabled("core", config)).toBe(true);
-      expect(isCapabilityEnabled("core-navigation", config)).toBe(true);
-      expect(isCapabilityEnabled("core-tabs", config)).toBe(true);
-      expect(isCapabilityEnabled("core-input", config)).toBe(true);
-      expect(isCapabilityEnabled("testing", config)).toBe(true);
-      expect(isCapabilityEnabled("pdf", config)).toBe(true);
-    });
-
-    it("gates optional capabilities", () => {
-      expect(isCapabilityEnabled("vision", config)).toBe(true);
-      expect(isCapabilityEnabled("devtools", config)).toBe(false);
-      expect(isCapabilityEnabled("network", config)).toBe(true);
-      expect(isCapabilityEnabled("storage", config)).toBe(false);
-    });
-
-    it("returns false for unknown", () => {
-      expect(isCapabilityEnabled("bogus", config)).toBe(false);
-    });
-  });
-
   describe("isUnsafeTool", () => {
     it("identifies unsafe tool", () => {
       expect(isUnsafeTool("playwright_run_code_unsafe")).toBe(true);
       expect(isUnsafeTool("playwright_navigate")).toBe(false);
-    });
-  });
-
-  describe("CAPABILITY_MAP", () => {
-    it("should have entries for all known domains", () => {
-      expect(CAPABILITY_MAP.core).toBeDefined();
-      expect(CAPABILITY_MAP["core-navigation"]).toBeDefined();
-      expect(CAPABILITY_MAP["core-tabs"]).toBeDefined();
-      expect(CAPABILITY_MAP["core-input"]).toBeDefined();
-      expect(CAPABILITY_MAP.network).toBeDefined();
-      expect(CAPABILITY_MAP.storage).toBeDefined();
-      expect(CAPABILITY_MAP.pdf).toBeDefined();
-      expect(CAPABILITY_MAP.testing).toBeDefined();
-      expect(CAPABILITY_MAP.vision).toBeDefined();
-      expect(CAPABILITY_MAP.devtools).toBeDefined();
-    });
-
-    it("should include proxy tools in network domain", () => {
-      expect(CAPABILITY_MAP.network).toContain("playwright_get_proxy_info");
-      expect(CAPABILITY_MAP.network).toContain("playwright_check_proxy_reachable");
-    });
-
-    it("should have at least one tool per domain", () => {
-      for (const [domain, tools] of Object.entries(CAPABILITY_MAP)) {
-        expect(tools.length).toBeGreaterThan(0);
-        for (const tool of tools) {
-          expect(tool).toMatch(/^playwright_/);
-        }
-      }
     });
   });
 });
@@ -251,7 +185,7 @@ describe("Config", () => {
 // ============================================================================
 
 describe("Snapshot Helpers", () => {
-  function countNodes(node: any): number {
+  function countNodes(node: SnapshotNode | null | undefined): number {
     if (!node) return 0;
     let count = 1;
     if (node.children) {

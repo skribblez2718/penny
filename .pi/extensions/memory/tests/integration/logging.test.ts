@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createLogger, setSessionId } from "../../../../lib/logger/logger.js";
+import { parseJson, requireDefined, requireRecord } from "../../../../lib/tests/test-narrowers.js";
 
 describe("memory integration content-free logging", () => {
   afterEach(() => {
@@ -10,7 +11,7 @@ describe("memory integration content-free logging", () => {
 
   it("emits result-budget metadata without result content", async () => {
     const fetchSpy = vi.fn((_url: string | URL | Request, _init?: RequestInit) =>
-      Promise.resolve({ ok: true } as Response)
+      Promise.resolve(new Response(null, { status: 200 }))
     );
     vi.stubGlobal("fetch", fetchSpy);
     const logger = createLogger("memory");
@@ -35,11 +36,19 @@ describe("memory integration content-free logging", () => {
     });
 
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
-    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    const firstCall = requireDefined(fetchSpy.mock.calls[0], "logger request was not sent");
+    const init = requireDefined(firstCall[1], "logger request init was absent");
+    if (typeof init.body !== "string") throw new Error("logger request body was not text");
+    const body = requireRecord(parseJson(init.body), "logger request body was not an object");
+    const data = requireRecord(body.data, "logger request body omitted data");
+    const compactionCorrelation = requireRecord(
+      data.compactionCorrelation,
+      "logger request body omitted compaction correlation"
+    );
     expect(body.event).toBe("memory_tool_result");
-    expect(body.data.serializedBytes).toBe(2048);
-    expect(body.data.truncated).toBe(true);
-    expect(body.data.compactionCorrelation.status).toBe("not_evaluated");
+    expect(data.serializedBytes).toBe(2048);
+    expect(data.truncated).toBe(true);
+    expect(compactionCorrelation.status).toBe("not_evaluated");
     expect(JSON.stringify(body)).not.toContain("drawer content");
   });
 });

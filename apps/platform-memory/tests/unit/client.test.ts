@@ -7,6 +7,7 @@ import {
   mcpResponse,
   mcpToolErrorResponse,
   requestBody,
+  requireDefined,
 } from "../fixtures.js";
 
 function hangingFetch(): typeof fetch {
@@ -41,14 +42,13 @@ describe("HTTP-only client", () => {
       data: { results: [], count: 0 },
       attempts: 1,
     });
-    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    const [url, init] = requireDefined(fetchSpy.mock.calls[0], "memory request was not sent");
     expect(url).toBe("https://memory-alpha.invalid/mcp");
-    expect(init.method).toBe("POST");
-    expect(init.headers).toMatchObject({
-      Authorization: `Bearer ${ALPHA_TOKEN}`,
-      "X-Platform-Memory-Contract": "1",
-      "X-Platform-Memory-Palace": "palace-alpha",
-    });
+    expect(init?.method).toBe("POST");
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Authorization")).toBe(`Bearer ${ALPHA_TOKEN}`);
+    expect(headers.get("X-Platform-Memory-Contract")).toBe("1");
+    expect(headers.get("X-Platform-Memory-Palace")).toBe("palace-alpha");
     expect(requestBody(init)).toEqual({
       jsonrpc: "2.0",
       id: "platform-memory-request-1",
@@ -70,7 +70,8 @@ describe("HTTP-only client", () => {
       credentialResolver: () => ALPHA_TOKEN,
     });
     await client.invoke("diary_read", { last_n: 2 });
-    expect(requestBody(fetchSpy.mock.calls[0]![1] as RequestInit).params.arguments).toEqual({
+    const firstCall = requireDefined(fetchSpy.mock.calls[0], "diary request was not sent");
+    expect(requestBody(firstCall[1]).params.arguments).toEqual({
       last_n: 2,
       agent_name: "diary-alpha",
     });

@@ -248,7 +248,10 @@ htmlcov/
 secrets/
 .secrets/
 
-# Orchestration durable checkpointer (PENNY_ORCH_DB)
+# Penny's global state root (public-repo boundary — never tracked): the orchestration
+# checkpoint DB + adjacent <db>.receipt-key (override PENNY_ORCH_V2_DB) and KB runtime
+# state. `make setup` (scripts/setup/init-orchestration.sh) precreates the state root,
+# DB schema, and key.
 .penny/
 
 # Harness alignment audit reports (/audit) — local run artifacts, never committed

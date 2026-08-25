@@ -1,95 +1,81 @@
-import { chmodSync, mkdtempSync, rmSync, unlinkSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+
+import { initializePennyState } from "@penny/orchestration/source";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  expectedArtifactRef,
+  parseArtifactRef,
+  parseOutputArtifactMetadata,
   persistArtifactOutput,
+  readArtifactById,
   readArtifactOutput,
-  type OutputArtifactMetadata,
 } from "../../owner-client.js";
+import { outputMetadata } from "../fixtures.js";
 
-const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..");
 const roots: string[] = [];
-
-function metadata(): OutputArtifactMetadata {
-  return {
-    schema_version: 1,
-    run_id: "owner-client-restart-run",
-    phase: "chain-step-0001",
-    branch_id: null,
-    kind: "agent-output",
-    operation_id: "owner-client-restart-operation",
-    version: 1,
-    producer: "agent:echo",
-    consumer_scope: ["subagent-chain:step:0002"],
-    media_type: "text/markdown; charset=utf-8",
-    parent_ref: null,
-    upstream_refs: [],
-  };
-}
-
-function artifactRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "penny-owner-client-"));
-  chmodSync(root, 0o700);
-  roots.push(root);
-  return root;
-}
-
 afterEach(() => {
-  while (roots.length > 0) rmSync(roots.pop() as string, { recursive: true, force: true });
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("shared artifact owner client", () => {
-  it("persists and reopens exact large multibyte bytes without memory configuration", async () => {
-    const root = artifactRoot();
-    const output = `RESTART-SENTINEL\n${"🙂漢字é".repeat(20_000)}`;
-    const contract = metadata();
-    const env = {
-      PATH: process.env.PATH,
-      PENNY_ARTIFACT_ROOT: root,
-      XDG_STATE_HOME: dirname(root),
-    };
+function fixture(): { projectRoot: string; env: NodeJS.ProcessEnv } {
+  const root = mkdtempSync(join(tmpdir(), "penny-owner-client-"));
+  roots.push(root);
+  chmodSync(root, 0o700);
+  const projectRoot = join(root, "project");
+  mkdirSync(projectRoot, { mode: 0o700 });
+  const env = { PENNY_STATE_ROOT: join(root, "state") };
+  initializePennyState(projectRoot, { env });
+  return { projectRoot, env };
+}
 
+describe("artifact owner client", () => {
+  it("persists, re-reads, and resolves by exact ID", async () => {
+    const { projectRoot, env } = fixture();
     const ref = await persistArtifactOutput({
-      metadata: contract,
-      output,
-      cwd: PROJECT_ROOT,
+      metadata: outputMetadata(),
+      output: "exact bytes",
+      cwd: projectRoot,
       env,
     });
-    expect(ref).toEqual(expectedArtifactRef(contract, output));
-
-    // A new owner read uses only the durable ref and configured artifact root.
-    const reopened = await readArtifactOutput({ ref: structuredClone(ref), env });
-    expect(reopened.equals(Buffer.from(output, "utf8"))).toBe(true);
-    expect(JSON.stringify(env)).not.toContain("MEMPALACE");
-    expect(JSON.stringify(env)).not.toContain("MEMORY");
+    expect(ref.schema_version).toBe(2);
+    expect(ref).not.toHaveProperty("consumer_scope");
+    expect((await readArtifactOutput({ ref, projectRoot, env })).toString()).toBe("exact bytes");
+    const direct = await readArtifactById({ artifactId: ref.artifact_id, projectRoot, env });
+    expect(direct.ref).toEqual(ref);
+    expect(direct.content.toString()).toBe("exact bytes");
   });
 
-  it("fails closed when a checkpointed artifact object is missing", async () => {
-    const root = artifactRoot();
-    const contract = metadata();
-    const output = "exact but removed";
-    const env = { ...process.env, PENNY_ARTIFACT_ROOT: root };
-    const ref = await persistArtifactOutput({
-      metadata: contract,
-      output,
-      cwd: PROJECT_ROOT,
-      env,
-    });
-    const objectPath = join(
-      root,
-      "objects",
-      "sha256",
-      ref.content_digest.slice(0, 2),
-      ref.content_digest.slice(2)
-    );
-    unlinkSync(objectPath);
+  it("rejects a retired schema-v1 ref", () => {
+    expect(() =>
+      parseArtifactRef({
+        schema_version: 1,
+        artifact_id: "art_0526090a3d11649ef309c47abb6b890a802b9412d299ac0baeff6fef1aaf2e5a",
+        run_id: "legacy-run",
+        phase: "legacy-phase",
+        branch_id: null,
+        kind: "agent-output",
+        operation_id: "legacy-operation",
+        version: 1,
+        producer: "agent:legacy",
+        consumer_scope: ["ignored"],
+        media_type: "text/plain",
+        byte_length: 0,
+        content_digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        store_ref:
+          "artifact://sha256/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      })
+    ).toThrow(/schema_version|consumer_scope/);
+  });
 
-    await expect(readArtifactOutput({ ref, env })).rejects.toMatchObject({
-      code: "ARTIFACT_MISSING",
-    });
+  it("rejects retired schema-v1 output metadata", () => {
+    expect(() =>
+      parseOutputArtifactMetadata({
+        ...outputMetadata(),
+        schema_version: 1,
+        consumer_scope: ["state:any"],
+      })
+    ).toThrow(/unsupported output_artifact schema version/);
   });
 });

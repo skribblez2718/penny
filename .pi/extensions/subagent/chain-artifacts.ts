@@ -7,42 +7,23 @@ import {
   type ArtifactRef,
   type OutputArtifactMetadata,
 } from "../artifacts/owner-client.js";
-import { OWNER_CONSUMER_REF } from "../artifacts/owner-grants.js";
 import {
-  buildArtifactInvocationEnvironment,
+  parseInputArtifacts,
   replacePreviousWithArtifact,
-  singleArtifactInput,
-  type InputArtifactsV1,
+  type InputArtifactsV2,
 } from "../artifacts/handoff.js";
 
 const DIRECT_CHAIN_MEDIA_TYPE = "text/markdown; charset=utf-8";
 
-/** The owner phase for one 1-based chain step. Single source of truth: the
- * grant vocabulary below is derived from it so the two cannot drift. */
 export function directChainPhase(stepNumber: number): string {
   return `chain-step-${stepNumber.toString().padStart(4, "0")}`;
-}
-
-/**
- * The grant a step publishes for its successor, and the `consumer` its
- * successor presents when reading it.
- *
- * This MUST be `state:{phase}`: because a chain step declares its predecessor
- * in `upstream_refs`, both artifact stores require the upstream to grant
- * exactly `state:{consuming phase}` before the put is accepted
- * (artifacts.py `_validate` / artifact-store.ts `validateMetadata`). Any other
- * vocabulary makes every step after the first fail to persist.
- */
-export function directChainConsumer(stepNumber: number): string {
-  return `state:${directChainPhase(stepNumber)}`;
 }
 
 export function directChainOutputMetadata(options: {
   runId: string;
   stepIndex: number;
-  totalSteps: number;
   agent: string;
-  previousRef?: ArtifactRef;
+  upstreamRefs?: readonly ArtifactRef[];
 }): OutputArtifactMetadata {
   const stepNumber = options.stepIndex + 1;
   const phase = directChainPhase(stepNumber);
@@ -58,7 +39,7 @@ export function directChainOutputMetadata(options: {
     )
     .digest("hex");
   return {
-    schema_version: 1,
+    schema_version: 2,
     run_id: options.runId,
     phase,
     branch_id: null,
@@ -66,51 +47,39 @@ export function directChainOutputMetadata(options: {
     operation_id: `subagent-chain-operation:${operationDigest}`,
     version: 1,
     producer: `agent:${options.agent}`,
-    consumer_scope: [
-      stepNumber < options.totalSteps
-        ? directChainConsumer(stepNumber + 1)
-        : "subagent-chain:caller",
-    ],
     media_type: DIRECT_CHAIN_MEDIA_TYPE,
     parent_ref: null,
-    upstream_refs: options.previousRef ? [options.previousRef] : [],
+    upstream_refs: [...(options.upstreamRefs ?? [])],
   };
 }
 
 export function directChainInput(options: {
-  runId: string;
-  stepIndex: number;
   previousRef?: ArtifactRef;
-}): InputArtifactsV1 {
-  if (!options.previousRef) {
-    return {
-      schema_version: 1,
-      run_id: options.runId,
-      consumer: directChainConsumer(options.stepIndex + 1),
-      artifacts: [],
-    };
-  }
-  return singleArtifactInput({
-    runId: options.runId,
-    consumer: directChainConsumer(options.stepIndex + 1),
-    slot: "previous-step-output",
-    ref: options.previousRef,
+  additionalRefs?: readonly ArtifactRef[];
+}): InputArtifactsV2 {
+  const refs = [
+    ...(options.previousRef ? [options.previousRef] : []),
+    ...(options.additionalRefs ?? []),
+  ];
+  const unique = [...new Map(refs.map((ref) => [ref.artifact_id, ref])).values()];
+  return parseInputArtifacts({
+    schema_version: 2,
+    artifacts: unique.map((ref, index) => ({
+      slot:
+        options.previousRef?.artifact_id === ref.artifact_id
+          ? "previous-step-output"
+          : `additional-input-${String(index + 1).padStart(4, "0")}`,
+      ref,
+    })),
   });
 }
 
 export function directChainTask(options: {
   task: string;
-  input: InputArtifactsV1;
+  input: InputArtifactsV2;
   budget: ToolResultBudget;
 }): string {
   return replacePreviousWithArtifact(options.task, options.input, options.budget);
-}
-
-export function directChainEnvironment(
-  input: InputArtifactsV1,
-  invocationId: string
-): NodeJS.ProcessEnv {
-  return buildArtifactInvocationEnvironment(input, invocationId);
 }
 
 export async function persistDirectChainOutput(options: {
@@ -122,18 +91,11 @@ export async function persistDirectChainOutput(options: {
   return persistArtifactOutput(options);
 }
 
-/**
- * Owner metadata for a single- or parallel-mode agent output.
- *
- * These modes have no successor worker, so the only consumer is the execution
- * owner itself. The artifact exists so the orchestrator can re-read exact agent
- * output on demand — after a bounded preview, or after compaction has dropped
- * the inline copy — instead of losing it.
- */
 export function directAgentOutputMetadata(options: {
   runId: string;
   index: number;
   agent: string;
+  upstreamRefs?: readonly ArtifactRef[];
 }): OutputArtifactMetadata {
   const phase = `agent-output-${(options.index + 1).toString().padStart(4, "0")}`;
   const operationDigest = createHash("sha256")
@@ -148,7 +110,7 @@ export function directAgentOutputMetadata(options: {
     )
     .digest("hex");
   return {
-    schema_version: 1,
+    schema_version: 2,
     run_id: options.runId,
     phase,
     branch_id: null,
@@ -156,9 +118,8 @@ export function directAgentOutputMetadata(options: {
     operation_id: `subagent-operation:${operationDigest}`,
     version: 1,
     producer: `agent:${options.agent}`,
-    consumer_scope: [OWNER_CONSUMER_REF],
     media_type: DIRECT_CHAIN_MEDIA_TYPE,
     parent_ref: null,
-    upstream_refs: [],
+    upstream_refs: [...(options.upstreamRefs ?? [])],
   };
 }

@@ -5,27 +5,13 @@
  * TypeScript playbooks. No real model calls.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import * as fs from "fs";
+import { describe, it, expect } from "vitest";
 import type { SkillResult } from "../../skill-utils.js";
 import {
   reconstructResumeChain,
   isClarificationEscalation,
   formatResult,
 } from "../../skill-utils.js";
-
-// ============================================================
-// Mocks
-// ============================================================
-
-vi.mock("fs");
-vi.mock("node:child_process");
-
-const mockExistsSync = vi.mocked(fs.existsSync);
-const mockReaddirSync = vi.mocked(fs.readdirSync);
-const mockReadFileSync = vi.mocked(fs.readFileSync);
-const mockWriteFileSync = vi.mocked(fs.writeFileSync);
-const mockMkdirSync = vi.mocked(fs.mkdirSync);
 
 // ============================================================
 // Integration: chain error aggregation
@@ -57,7 +43,7 @@ describe("chain error aggregation (integration simulation)", () => {
     expect(result.chain_error_step).toBe(0);
     expect(result.chain_results).toHaveLength(0);
     expect(result.resumable).toBe(true);
-    expect(result.errors![0]).toContain("research");
+    expect(result.errors?.[0]).toContain("research");
   });
 
   it("error at step 3 of 5 returns prior 2 results", () => {
@@ -239,11 +225,14 @@ describe("resume from checkpoint (integration simulation)", () => {
 
     expect(completedSteps).toHaveLength(1);
     expect(failedStep).toBeDefined();
-    expect(failedStep!.index).toBe(1);
+    if (failedStep === undefined) {
+      throw new Error("expected one failed checkpoint step");
+    }
+    expect(failedStep.index).toBe(1);
 
     // With overrides
     const overrides = { 1: { goal: "Plan with longer timeout for {previous}" } };
-    const retryGoal = overrides[1]?.goal ?? failedStep!.goal;
+    const retryGoal = overrides[1]?.goal ?? failedStep.goal;
     expect(retryGoal).toBe("Plan with longer timeout for {previous}");
 
     // Optional display preview survives, but exact handoff authority is tested separately.

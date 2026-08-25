@@ -136,13 +136,13 @@ export function checkpointDirectOperationResult(input: {
       checkpointer: input.checkpointer,
     });
   }
-  run.playbookData.action = replay.action;
-  run.playbookData.profile_id = String(run.constraints.kb_profile_id ?? "");
-  if (input.kb_id !== undefined) run.playbookData.kb_id = input.kb_id;
+  run.knowledgeBaseData.action = replay.action;
+  run.knowledgeBaseData.profile_id = String(run.constraints.kb_profile_id ?? "");
+  if (input.kb_id !== undefined) run.knowledgeBaseData.kb_id = input.kb_id;
   if (input.policy_sha256 !== undefined) {
-    run.playbookData.admitted_policy_sha256 = input.policy_sha256;
+    run.knowledgeBaseData.admitted_policy_sha256 = input.policy_sha256;
   }
-  run.playbookData.public_status = replay.status;
+  run.knowledgeBaseData.public_status = replay.status;
   const action: Directive["action"] =
     replay.status === "error"
       ? "error"

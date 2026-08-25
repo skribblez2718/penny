@@ -153,7 +153,7 @@ def check_no_bare_catch(project_root: str) -> list[str]:  # noqa: C901
     return errors
 
 
-def main():
+def main() -> None:
     project_root = sys.argv[1] if len(sys.argv) > 1 else os.getcwd()
     all_errors: list[str] = []
     all_errors.extend(check_no_raw_console(project_root))
@@ -181,7 +181,7 @@ def main():
 
 def check_python_no_raw_print(project_root: str) -> list[str]:
     """Check that observability Python server uses structured logger instead of print()."""
-    errors = []
+    errors: list[str] = []
     obs_dir = Path(project_root) / "apps" / "observability" / "src" / "observability"
     if not obs_dir.exists():
         return errors
@@ -197,7 +197,7 @@ def check_python_no_raw_print(project_root: str) -> list[str]:
 
 def check_python_logger_imports(project_root: str) -> list[str]:
     """Check that main.py and scheduler.py import the structured logger."""
-    errors = []
+    errors: list[str] = []
     obs_dir = Path(project_root) / "apps" / "observability" / "src" / "observability"
     for filename in ["main.py", "scheduler.py"]:
         filepath = obs_dir / filename
@@ -212,7 +212,7 @@ def check_python_logger_imports(project_root: str) -> list[str]:
 
 def check_python_error_codes(project_root: str) -> list[str]:  # noqa: C901
     """Check that Python exceptions carry error codes in catch blocks."""
-    errors = []
+    errors: list[str] = []
     obs_dir = Path(project_root) / "apps" / "observability" / "src" / "observability"
     if not obs_dir.exists():
         return errors

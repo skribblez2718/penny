@@ -1,7 +1,83 @@
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
 import { resolveToolResultBudget } from "../../lib/tool-result-budget.js";
+import {
+  createTestExtensionApi,
+  isRecord,
+  parseJson,
+  requireFunction,
+} from "../../../lib/tests/test-narrowers.js";
+import type { TextToolResult } from "../../lib/tool-result-budget.js";
 import type { MemoryRuntimeConfig } from "../types.js";
 
 export const TEST_TOKEN = "t".repeat(64);
+
+export interface RegisteredMemoryTool {
+  name: string;
+  description: string;
+  parameters: {
+    properties: Record<string, unknown>;
+    additionalProperties?: boolean;
+  };
+  promptGuidelines?: unknown;
+  promptSnippet?: unknown;
+  execute(
+    toolCallId: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal
+  ): Promise<TextToolResult>;
+}
+
+export type MemoryExtensionHandler = (...args: unknown[]) => unknown;
+
+export interface MemoryExtensionApiFake {
+  registerTool(tool: RegisteredMemoryTool): void;
+  registerCommand: (...args: unknown[]) => unknown;
+  on(event: string, handler: MemoryExtensionHandler): void;
+}
+
+function isRegisteredMemoryTool(value: unknown): value is RegisteredMemoryTool {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.description === "string" &&
+    isRecord(value.parameters) &&
+    isRecord(value.parameters.properties) &&
+    typeof value.execute === "function"
+  );
+}
+
+/** Build a complete typed host while exposing only narrowed registration values. */
+export function asMemoryExtensionApi(fake: MemoryExtensionApiFake): ExtensionAPI {
+  return createTestExtensionApi({
+    onRegisterTool(tool) {
+      if (!isRegisteredMemoryTool(tool)) {
+        throw new Error("memory extension registered an invalid tool fixture");
+      }
+      fake.registerTool(tool);
+    },
+    onRegisterCommand: (name, options) => fake.registerCommand(name, options),
+    onEvent(event, handler) {
+      fake.on(
+        event,
+        requireFunction(handler, `memory extension registered an invalid ${event} handler`)
+      );
+    },
+  });
+}
+
+/** Fail a test with a useful invariant when an expected fixture value is absent. */
+export function requireDefined<T>(value: T | null | undefined, message: string): T {
+  if (value === null || value === undefined) throw new Error(message);
+  return value;
+}
+
+/** Parse a JSON payload produced by a test-controlled MCP response fixture. */
+export function parseTextResult(result: Pick<TextToolResult, "content">): unknown {
+  const [first] = result.content;
+  if (first === undefined) throw new Error("expected a text tool result");
+  return parseJson(first.text);
+}
 
 interface TestConfigOverrides extends Partial<MemoryRuntimeConfig> {
   endpoint?: string;
@@ -97,12 +173,33 @@ export function mcpToolErrorResponse(id: string, payload: unknown): Response {
   );
 }
 
-export function requestBody(init?: RequestInit): {
+export interface TestMcpRequestBody {
   id: string;
   method: string;
   params: { name: string; arguments: Record<string, unknown> };
-} {
-  return JSON.parse(String(init?.body));
+}
+
+function isTestMcpRequestBody(value: unknown): value is TestMcpRequestBody {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.method === "string" &&
+    isRecord(value.params) &&
+    typeof value.params.name === "string" &&
+    isRecord(value.params.arguments)
+  );
+}
+
+export function requestBody(init?: RequestInit): TestMcpRequestBody {
+  if (typeof init?.body !== "string") throw new Error("expected a valid MCP request body");
+  let value: unknown;
+  try {
+    value = parseJson(init.body);
+  } catch {
+    throw new Error("expected a valid MCP request body");
+  }
+  if (!isTestMcpRequestBody(value)) throw new Error("expected a valid MCP request body");
+  return value;
 }
 
 export function extensionEnv(

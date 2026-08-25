@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { Type, type Static } from "typebox";
@@ -7,9 +8,26 @@ import { jcsCanonicalize, strictParseJson } from "../src/kb/approval-receipts.js
 import { sha256Hex, validateKbContract } from "../src/kb/contracts.js";
 
 export const G8_SMOKE_MANIFEST_PATH = "apps/orchestration/smoke/g8-qwen3.8-cohort.jcs.json";
-export const G8_SMOKE_RESULT_PATH =
-  ".penny/plan-gates/hybrid-kb-ts-plan-2026-08-13/g8-qwen3.8-smoke-result.jcs.json";
-export const G8_SMOKE_RESULT_SHA_PATH = `${G8_SMOKE_RESULT_PATH}.sha256`;
+export const G8_SMOKE_RESULT_PATH_ENV = "PENNY_KB_MODEL_SMOKE_RESULT_PATH";
+export const G8_SMOKE_RESULT_FILENAME = "penny-g8-qwen3.8-smoke-result.jcs.json";
+
+type G8SmokeResultEnvironment = Readonly<Record<string, string | undefined>>;
+
+/** Resolve the optional live-smoke output without using repository runtime state. */
+export function resolveG8SmokeResultPath(env: G8SmokeResultEnvironment = process.env): string {
+  const configured = env[G8_SMOKE_RESULT_PATH_ENV];
+  if (configured !== undefined) {
+    if (!path.isAbsolute(configured)) {
+      throw new Error(`${G8_SMOKE_RESULT_PATH_ENV} must be an absolute path`);
+    }
+    return path.normalize(configured);
+  }
+  return path.join(tmpdir(), G8_SMOKE_RESULT_FILENAME);
+}
+
+export function resolveG8SmokeResultShaPath(env: G8SmokeResultEnvironment = process.env): string {
+  return `${resolveG8SmokeResultPath(env)}.sha256`;
+}
 
 const CaseIdSchema = Type.Union([
   Type.Literal("sqlite-query"),
@@ -85,11 +103,12 @@ export function loadG8SmokeCohortManifest(repoRoot: string): {
 export function g8SmokeScheduledPairs(
   manifest: G8SmokeCohortManifest
 ): readonly G8SmokeScheduledPair[] {
+  const repetitions = [1, 2] as const satisfies readonly G8SmokeScheduledPair["repetition"][];
   const pairs = manifest.case_ids.flatMap((caseId) =>
-    Array.from({ length: manifest.repetitions }, (_, index) => ({
-      pair_id: `${caseId}#${index + 1}`,
+    repetitions.map((repetition) => ({
+      pair_id: `${caseId}#${repetition}`,
       case_id: caseId,
-      repetition: (index + 1) as 1 | 2,
+      repetition,
     }))
   );
   if (pairs.length !== manifest.scheduled_pair_count) {
@@ -529,18 +548,22 @@ export function parseG8SmokeResultReceiptJcs(
 
 export function loadG8SmokeResultReceipt(
   repoRoot: string,
-  toolMatrix: G8SmokeToolMatrix
+  toolMatrix: G8SmokeToolMatrix,
+  env: G8SmokeResultEnvironment = process.env
 ): {
   readonly receipt: G8SmokeResultReceipt;
   readonly bytes: string;
   readonly sha256: string;
   readonly sidecar: string;
+  readonly path: string;
+  readonly sidecarPath: string;
 } {
   const { manifest } = loadG8SmokeCohortManifest(repoRoot);
-  const resultPath = path.join(repoRoot, G8_SMOKE_RESULT_PATH);
+  const resultPath = resolveG8SmokeResultPath(env);
+  const sidecarPath = resolveG8SmokeResultShaPath(env);
   const bytes = readFileSync(resultPath, "utf8");
   const sha256 = sha256Hex(bytes);
-  const sidecar = readFileSync(path.join(repoRoot, G8_SMOKE_RESULT_SHA_PATH), "utf8");
+  const sidecar = readFileSync(sidecarPath, "utf8");
   const expectedSidecar = `${sha256}  ${path.basename(resultPath)}\n`;
   if (sidecar !== expectedSidecar) {
     throw new Error("G8 qwen smoke result SHA sidecar drifted");
@@ -550,5 +573,7 @@ export function loadG8SmokeResultReceipt(
     bytes,
     sha256,
     sidecar,
+    path: resultPath,
+    sidecarPath,
   };
 }

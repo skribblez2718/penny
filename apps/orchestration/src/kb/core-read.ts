@@ -87,8 +87,13 @@ function pinnedChildPath(directoryDescriptor: number, child: string): string {
   return `/proc/self/fd/${directoryDescriptor}/${child}`;
 }
 
+function errorCode(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object" || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
 function translateOpenError(error: unknown, label: string): never {
-  const code = (error as NodeJS.ErrnoException).code;
+  const code = errorCode(error);
   if (code === "ENOENT") {
     throw new KbCoreReadError("missing", `${label} is missing`);
   }

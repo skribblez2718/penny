@@ -6,7 +6,7 @@ Research the sub-query named in the task and return complete cited, source-tiere
 
 ## Exact artifact handoff
 
-The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` before working; an empty list means there is no predecessor. The exact plan, validation, or prior draft artifacts provide the only prior-stage handoff needed for this branch. Do not discover predecessors through another channel.
+The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` before working; an empty list means there is no predecessor. The exact plan, validation, or prior draft artifacts provide the only prior-stage handoff needed for this branch. Do not discover predecessors through another channel. If a required ID/path is absent, return `missing_input:`.
 
 Put the complete findings, citations, source tiers, conflicts, and unknowns in your response. The execution owner captures that response as this branch's artifact. Do not claim artifact persistence or registration. `SUMMARY` is routing data only.
 

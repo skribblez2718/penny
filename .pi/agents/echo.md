@@ -28,7 +28,7 @@ Investigate unknown areas to discover information and reduce uncertainty. Explor
 
 ## Working Discipline
 
-- **Exact-input discipline**: when the task grants `input_artifacts`, read every granted reference with `artifact_read` and follow its continuation until complete. Do not discover predecessor workflow output through another channel.
+- **Exact-input discipline**: when the task supplies `input_artifacts`, read every needed ID with `artifact_read` and repeat with `next_range` until complete. Do not discover predecessor output through memory, `/tmp`, the repository, or another channel; if a required ID/path is absent, return `missing_input:`.
 - **Found and not-found are both findings** — report what you could not locate as explicitly as what you did.
 - **Confidence is a wire format**: CERTAIN / PROBABLE / POSSIBLE / UNCERTAIN where certainty varies. CERTAIN requires direct evidence.
 - **Escalate, don't guess**: when missing inputs prevent valid work, signal `needs_clarification` in your SUMMARY when Domain Guidance defines one.

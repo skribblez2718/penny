@@ -8,6 +8,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { chromium, type Browser, type Page } from "playwright";
 
+import type { SnapshotNode } from "../../types.js";
+
 let browser: Browser;
 let page: Page;
 
@@ -88,10 +90,10 @@ describe("Snapshot", () => {
         return text.trim().slice(0, 100);
       }
 
-      function buildTree(el: Element, depth: number): any {
+      function buildTree(el: Element, depth: number): SnapshotNode | null {
         if (depth > 5) return null;
-        const node: any = { role: getRole(el), name: getName(el) };
-        const children = [];
+        const node: SnapshotNode = { role: getRole(el), name: getName(el) };
+        const children: SnapshotNode[] = [];
         for (const child of el.children) {
           const c = buildTree(child, depth + 1);
           if (c) children.push(c);
@@ -104,6 +106,7 @@ describe("Snapshot", () => {
     });
 
     expect(tree).toBeTruthy();
+    if (tree === null) throw new Error("snapshot tree was not created");
     expect(tree.role).toBe("body");
     expect(tree.children).toBeDefined();
     // Should find a heading
@@ -142,7 +145,9 @@ describe("Click", () => {
     );
 
     await page.locator("#test-btn").click();
-    const clicked = await page.evaluate(() => (window as any).__clicked);
+    const clicked = await page.evaluate(
+      () => (window as Window & { __clicked?: boolean }).__clicked
+    );
     expect(clicked).toBe(true);
   });
 
@@ -152,7 +157,9 @@ describe("Click", () => {
     );
 
     await page.locator("#dbl-btn").dblclick();
-    const clicked = await page.evaluate(() => (window as any).__dblClicked);
+    const clicked = await page.evaluate(
+      () => (window as Window & { __dblClicked?: boolean }).__dblClicked
+    );
     expect(clicked).toBe(true);
   });
 
@@ -162,7 +169,9 @@ describe("Click", () => {
     );
 
     await page.locator("#hover-target").hover();
-    const hovered = await page.evaluate(() => (window as any).__hovered);
+    const hovered = await page.evaluate(
+      () => (window as Window & { __hovered?: boolean }).__hovered
+    );
     expect(hovered).toBe(true);
   });
 });
@@ -176,7 +185,8 @@ describe("Evaluate", () => {
     await page.setContent('<html><body><div id="data" data-value="42">Hello</div></body></html>');
 
     const result = await page.evaluate(() => {
-      const el = document.querySelector("#data")!;
+      const el = document.querySelector("#data");
+      if (el === null) throw new Error("#data fixture element was not found");
       return { text: el.textContent, value: el.getAttribute("data-value") };
     });
 
@@ -379,8 +389,8 @@ describe("Routes", () => {
 // Helper
 // ============================================================================
 
-function findNodesByRole(node: any, role: string): any[] {
-  const results: any[] = [];
+function findNodesByRole(node: SnapshotNode, role: string): SnapshotNode[] {
+  const results: SnapshotNode[] = [];
   if (node.role === role) results.push(node);
   if (node.children) {
     for (const child of node.children) {

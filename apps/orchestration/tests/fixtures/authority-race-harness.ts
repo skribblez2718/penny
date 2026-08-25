@@ -1,3 +1,5 @@
+import { parseJson, requireRecord } from "../helpers/narrowing.js";
+import { requireValue } from "../helpers/narrowing.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,7 +8,6 @@ import { fileURLToPath } from "node:url";
 
 const ORCHESTRATION_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const VITEST = path.join(ORCHESTRATION_ROOT, "node_modules", "vitest", "vitest.mjs");
-const WORKER = path.join(ORCHESTRATION_ROOT, "tests", "fixtures", "authority-race-worker.test.ts");
 const WAIT_TIMEOUT_MS = 20_000;
 
 export interface AuthorityWorkerJob {
@@ -113,15 +114,15 @@ export async function runAuthorityRace(
     writeFileSync(path.join(coordinationDir, "go"), "go", { mode: 0o600 });
     const exits = await Promise.all(workers.map(exited));
     for (let index = 0; index < exits.length; index += 1) {
-      const status = exits[index]!;
+      const status = requireValue(exits[index], "apps/orchestration/tests/fixtures/authority-race-harness.ts:116");
       if (status.code !== 0) {
         throw new Error(
-          `authority worker ${index} failed (${status.code}/${status.signal}):\n${workers[index]!.output()}`
+          `authority worker ${index} failed (${status.code}/${status.signal}):\n${requireValue(workers[index], "apps/orchestration/tests/fixtures/authority-race-harness.ts:119").output()}`
         );
       }
     }
     return workers.map(
-      (worker) => JSON.parse(readFileSync(worker.resultPath, "utf8")) as Record<string, unknown>
+      (worker) => requireRecord(parseJson(readFileSync(worker.resultPath, "utf8")), "apps/orchestration/tests/fixtures/authority-race-harness.ts:125")
     );
   } finally {
     rmSync(coordinationDir, { recursive: true, force: true });

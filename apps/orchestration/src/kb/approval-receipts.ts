@@ -23,12 +23,29 @@ const RAW_KEY_BYTES = 32;
 const SIGNATURE_BYTES = 32;
 const KEY_ID_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
 const FORBIDDEN_MEMBER_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 
 export class PromotionApprovalError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "PromotionApprovalError";
   }
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function emptyStrictJsonObject(): Record<string, unknown> {
+  const value: unknown = Object.create(null);
+  if (!isUnknownRecord(value)) {
+    throw new PromotionApprovalError("strict JSON object allocation failed");
+  }
+  return value;
+}
+
+function isSha256Hex(value: string): value is Sha256Hex {
+  return SHA256_PATTERN.test(value);
 }
 
 /** Strict JSON parser: rejects duplicate members, trailing bytes, and unsafe member names. */
@@ -60,7 +77,7 @@ class StrictJsonParser {
 
   private object(): Record<string, unknown> {
     this.expect("{");
-    const result = Object.create(null) as Record<string, unknown>;
+    const result = emptyStrictJsonObject();
     const names = new Set<string>();
     this.space();
     if (this.source[this.offset] === "}") {
@@ -130,7 +147,7 @@ class StrictJsonParser {
         this.offset += 1;
         let value: unknown;
         try {
-          value = JSON.parse(this.source.slice(start, this.offset)) as unknown;
+          value = JSON.parse(this.source.slice(start, this.offset));
         } catch {
           throw new PromotionApprovalError("strict JSON contains an invalid string");
         }
@@ -243,10 +260,10 @@ export function jcsCanonicalize(value: unknown): string {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) return `[${value.map(jcsCanonicalize).join(",")}]`;
-  if (typeof value !== "object") {
+  if (!isUnknownRecord(value)) {
     throw new PromotionApprovalError("JCS value contains an unsupported member");
   }
-  const record = value as Record<string, unknown>;
+  const record = value;
   const members = Object.keys(record)
     .sort()
     .map((name) => {
@@ -259,7 +276,11 @@ export function jcsCanonicalize(value: unknown): string {
 }
 
 export function promotionSha256(value: string | Uint8Array): Sha256Hex {
-  return createHash("sha256").update(value).digest("hex") as Sha256Hex;
+  const digest = createHash("sha256").update(value).digest("hex");
+  if (!isSha256Hex(digest)) {
+    throw new PromotionApprovalError("promotion SHA-256 digest encoding is invalid");
+  }
+  return digest;
 }
 
 export function receiptSignedJcs(receipt: PromotionApprovalReceipt): string {

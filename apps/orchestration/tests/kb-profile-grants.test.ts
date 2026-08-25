@@ -1,3 +1,4 @@
+import { errorCode } from "./helpers/narrowing.js";
 import {
   chmodSync,
   lstatSync,
@@ -12,9 +13,11 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { hostGrantAuthorityDir, kbProfileRegistryPath } from "../src/kb/host-state.js";
 import { KbSessionProfileGrantStore } from "../src/kb/profile-grants.js";
 import { resolveGrantedProfile } from "../src/kb/profile-registry.js";
 import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
+import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 import { crashAuthorityTransaction, runAuthorityRace } from "./fixtures/authority-race-harness.js";
 
 const PROFILE = "kbp_demo";
@@ -35,15 +38,13 @@ afterEach(() => {
 
 function paths(projectRoot: string) {
   return {
-    registryPath: path.join(projectRoot, ".penny", "kb-profiles.json"),
-    grantStoreDir: path.join(projectRoot, ".penny", "kb-host-grants"),
+    registryPath: kbProfileRegistryPath(projectRoot),
+    grantStoreDir: hostGrantAuthorityDir(projectRoot),
   };
 }
 
 function database(pathname: string): import("node:sqlite").DatabaseSync {
-  const module = process.getBuiltinModule("node:" + "sqlite") as
-    | typeof import("node:sqlite")
-    | undefined;
+  const module = process.getBuiltinModule("node:sqlite");
   if (module === undefined) throw new Error("node:sqlite is unavailable");
   return new module.DatabaseSync(pathname);
 }
@@ -262,7 +263,7 @@ describe("KB session/profile SQLite authority", () => {
       try {
         expect(lstatSync(file).mode & 0o777).toBe(0o600);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        if (errorCode(error) !== "ENOENT") throw error;
       }
     }
     store.close();
@@ -282,6 +283,7 @@ describe("KB session/profile SQLite authority", () => {
 
   it("rejects impossible timestamps and path-shaped identities before registry resolution", () => {
     const projectRoot = temp();
+    installTestProjectState(projectRoot);
     const store = new KbSessionProfileGrantStore(paths(projectRoot).grantStoreDir);
     expect(() =>
       store.mint({

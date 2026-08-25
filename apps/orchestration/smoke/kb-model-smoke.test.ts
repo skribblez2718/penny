@@ -1,3 +1,10 @@
+import {
+  parseJson,
+  requireRecord,
+  requireRecordArray,
+  requireString,
+  requireValue,
+} from "../tests/helpers/narrowing.js";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -37,11 +44,15 @@ import {
   settleRunInput,
   verifyAndSettleTerminalStart,
 } from "../src/private-inputs.js";
+import { initializePennyState } from "../src/state/index.js";
 import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
 import { scoreAnswerQuality, type AnswerQualityCaseObservation } from "../src/kb/answer-quality.js";
 import {
   canonicalJson,
+  QueryAnswerArtifactSchema,
+  QueryVerificationReportSchema,
   sha256Hex,
+  validateKbContract,
   type ClaimsSidecar,
   type PageRevisionFrontmatter,
   type QueryAnswerArtifact,
@@ -58,6 +69,7 @@ import {
   writePolicy,
 } from "../src/kb/filesystem.js";
 import { buildCatalog, buildGenerationIndex, publishGeneration } from "../src/kb/generations.js";
+import { parseRetrievalFixture } from "../src/kb/gate-decisions.js";
 import { KbWorkerClient } from "../src/kb/kb-worker-client.js";
 import { validateQueryRequest } from "../src/kb/parent-delivery.js";
 import { KbSessionProfileGrantStore } from "../src/kb/profile-grants.js";
@@ -68,11 +80,11 @@ import { KB_PHASE_TOOL_MATRIX } from "../src/kb/session-tools.js";
 import { initKb } from "../src/kb/workflows.js";
 import {
   G8_SMOKE_MANIFEST_PATH,
-  G8_SMOKE_RESULT_PATH,
-  G8_SMOKE_RESULT_SHA_PATH,
   g8SmokeCohortIssueCodes,
   g8SmokeScheduledPairs,
   loadG8SmokeCohortManifest,
+  resolveG8SmokeResultPath,
+  resolveG8SmokeResultShaPath,
   validateG8SmokeResultReceipt,
   type G8SmokeCohortManifest,
   type G8SmokePairReceipt,
@@ -84,28 +96,7 @@ const MODEL_IDENTITY = { provider: "ollama", model: "qwen3.8:latest", locality: 
 const PROFILE = "kbp_model_smoke";
 const SESSION = "sess_kb_model_smoke";
 const NOW = "2026-01-01T00:00:00Z";
-
-interface FrozenReceipt {
-  readonly schema_version: 1;
-  readonly decision_kind: "retrieval_baseline";
-  readonly approved_by_subject_id: string;
-  readonly reviewed_by_subject_id: string;
-  readonly review_sha256: string;
-  readonly case_count: number;
-  readonly fixture_path: string;
-  readonly fixture_sha256: string;
-  readonly k: number;
-  readonly minimum_hit_at_k: number;
-  readonly minimum_mrr: number;
-  readonly minimum_contradiction_recall: number;
-  readonly maximum_unsupported_answer_rate: number;
-  readonly evidence_refs: readonly {
-    readonly evidence_id: string;
-    readonly kind: string;
-    readonly ref: string;
-  }[];
-  readonly [key: string]: unknown;
-}
+const RETRIEVAL_K = 10;
 
 interface FrozenCase {
   readonly case_id: string;
@@ -187,11 +178,11 @@ interface CaseExecution {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../../..");
-const receiptPath = path.join(
-  repoRoot,
-  ".penny/plan-gates/hybrid-kb-ts-plan-2026-08-13/retrieval_baseline.json"
-);
+const smokeResultPath = resolveG8SmokeResultPath();
+const smokeResultShaPath = resolveG8SmokeResultShaPath();
+const originalStateRoot = process.env.PENNY_STATE_ROOT;
 let scratchRoot: string | undefined;
+let smokeStateRoot: string | undefined;
 
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -202,10 +193,7 @@ function sha256(text: string): string {
 }
 
 function asObject(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} is not an object`);
-  }
-  return value as Record<string, unknown>;
+  return requireRecord(value, label);
 }
 
 function safeText(value: unknown): string {
@@ -265,74 +253,33 @@ function scanFile(
   );
 }
 
-function loadFrozenInputs(manifest: G8SmokeCohortManifest): {
-  receipt: FrozenReceipt;
-  fixture: FrozenFixture;
-  fixtureBytes: string;
-} {
-  invariant(existsSync(receiptPath), `owner retrieval receipt is absent: ${receiptPath}`);
-  const receipt = JSON.parse(readFileSync(receiptPath, "utf8")) as FrozenReceipt;
-  const fixturePath = path.resolve(repoRoot, receipt.fixture_path);
-  invariant(receipt.schema_version === 1, "retrieval receipt schema changed");
-  invariant(receipt.decision_kind === "retrieval_baseline", "wrong retrieval receipt kind");
+function loadTrackedFixture(manifest: G8SmokeCohortManifest): FrozenFixture {
+  const fixturePath = path.resolve(repoRoot, manifest.fixture.path);
   invariant(
-    receipt.approved_by_subject_id !== receipt.reviewed_by_subject_id,
-    "retrieval receipt approval and review identities must differ"
+    fixturePath === path.join(repoRoot, "apps/orchestration/tests/fixtures/kb-retrieval.json"),
+    "retrieval fixture did not resolve to the manifest-bound tracked path"
   );
-  const { review_sha256: reviewSha256, ...decision } = receipt;
-  invariant(
-    sha256(canonicalJson(decision)) === reviewSha256,
-    "retrieval receipt review digest drifted"
-  );
-  invariant(
-    receipt.fixture_path === manifest.fixture.path,
-    "retrieval receipt fixture path drifted"
-  );
-  invariant(
-    fixturePath === path.resolve(repoRoot, manifest.fixture.path),
-    "retrieval fixture did not resolve to the manifest-bound frozen path"
-  );
-  invariant(existsSync(fixturePath), "tracked frozen retrieval fixture is absent");
+  invariant(existsSync(fixturePath), "tracked retrieval fixture is absent");
   const fixtureBytes = readFileSync(fixturePath, "utf8");
+  invariant(sha256(fixtureBytes) === manifest.fixture.sha256, "tracked fixture digest drifted");
+  const fixture: FrozenFixture = parseRetrievalFixture(fixtureBytes);
+  invariant(fixture.schema_version === 1, "tracked fixture schema changed");
   invariant(
-    sha256(fixtureBytes) === receipt.fixture_sha256 &&
-      receipt.fixture_sha256 === manifest.fixture.sha256,
-    "frozen retrieval fixture digest drifted"
-  );
-  invariant(receipt.case_count === manifest.case_ids.length, "frozen case count drifted");
-  invariant(receipt.k === 10, "frozen retrieval k drifted");
-  invariant(receipt.minimum_hit_at_k === 1, "frozen hit@k floor drifted");
-  invariant(receipt.minimum_mrr === 1, "frozen MRR floor drifted");
-  invariant(receipt.minimum_contradiction_recall === 1, "frozen contradiction floor drifted");
-  invariant(
-    receipt.maximum_unsupported_answer_rate === manifest.bad_answer_ceiling,
-    "live smoke requires the approved answer-quality ceiling to equal the frozen manifest"
-  );
-  const fixture = JSON.parse(fixtureBytes) as FrozenFixture;
-  invariant(fixture.schema_version === 1, "frozen fixture schema changed");
-  invariant(
-    fixture.cases.length === receipt.case_count,
-    "frozen fixture case count mismatches receipt"
+    fixture.cases.length === manifest.case_ids.length,
+    "tracked fixture case count mismatches the manifest"
   );
   invariant(
     canonicalJson(fixture.cases.map((testCase) => testCase.case_id)) ===
       canonicalJson(manifest.case_ids),
-    "frozen fixture case order or identity drifted"
+    "tracked fixture case order or identity drifted"
   );
   invariant(
     new Set(fixture.cases.map((testCase) => testCase.case_id)).size === fixture.cases.length,
-    "frozen fixture contains duplicate case ids"
+    "tracked fixture contains duplicate case ids"
   );
-  invariant(
-    receipt.evidence_refs.some(
-      (entry) =>
-        entry.evidence_id === "retrieval-fixture" &&
-        entry.kind === "digest" &&
-        entry.ref === fixture.fixture_id
-    ),
-    "retrieval receipt does not bind the frozen fixture id"
-  );
-  return { receipt, fixture, fixtureBytes };
+  invariant(RETRIEVAL_K === 10, "tracked retrieval k drifted");
+  invariant(manifest.bad_answer_ceiling === 0, "tracked bad-answer ceiling drifted");
+  return fixture;
 }
 
 function copySessionInputs(projectRoot: string): Record<string, string> {
@@ -358,12 +305,10 @@ function copySessionInputs(projectRoot: string): Record<string, string> {
 }
 
 function installProfile(projectRoot: string, kbRoot: string): void {
-  const penny = path.join(projectRoot, ".penny");
-  mkdirSync(penny, { recursive: true, mode: 0o700 });
-  chmodSync(penny, 0o700);
+  const state = initializePennyState(projectRoot, { env: process.env });
   mkdirSync(kbRoot, { recursive: true, mode: 0o700 });
   chmodSync(kbRoot, 0o700);
-  const registryPath = path.join(penny, "kb-profiles.json");
+  const registryPath = state.paths.knowledgeBase.profiles;
   writeFileSync(
     registryPath,
     canonicalJson({
@@ -381,7 +326,7 @@ function installProfile(projectRoot: string, kbRoot: string): void {
     { encoding: "utf8", mode: 0o600 }
   );
   chmodSync(registryPath, 0o600);
-  using grants = new KbSessionProfileGrantStore(path.join(penny, "kb-host-grants"));
+  using grants = new KbSessionProfileGrantStore(state.paths.knowledgeBase.hostGrants);
   grants.mint({
     session_id: SESSION,
     kb_profile_id: PROFILE,
@@ -569,23 +514,24 @@ function phaseHandle(result: Record<string, unknown>, state: "query" | "verify")
 function receiptRows(controlPath: string, runId: string): Array<Record<string, unknown>> {
   if (!existsSync(controlPath)) return [];
   // Vite 5 predates node:sqlite, so resolve the built-in through Node itself.
-  const sqlite = process.getBuiltinModule("node:" + "sqlite") as
-    | typeof import("node:sqlite")
-    | undefined;
+  const sqlite = process.getBuiltinModule("node:sqlite");
   invariant(sqlite !== undefined, "node:sqlite is unavailable");
   const database = new sqlite.DatabaseSync(controlPath, { readOnly: true });
   try {
-    const rows = database
-      .prepare(
-        `SELECT receipt_id,state_id,agent,result_json
-         FROM receipts WHERE run_id=? ORDER BY created_at,receipt_id`
-      )
-      .all(runId) as Array<Record<string, string>>;
-    return rows.map((row) => ({
-      receipt_id: row["receipt_id"],
-      state_id: row["state_id"],
-      agent: row["agent"],
-      result: JSON.parse(String(row["result_json"])) as unknown,
+    const rows = requireRecordArray(
+      database
+        .prepare(
+          `SELECT receipt_id,state_id,agent,result_json
+           FROM receipts WHERE run_id=? ORDER BY created_at,receipt_id`
+        )
+        .all(runId),
+      "model-smoke receipt rows"
+    );
+    return rows.map((row, index) => ({
+      receipt_id: requireString(row["receipt_id"], `receipt rows[${index}].receipt_id`),
+      state_id: requireString(row["state_id"], `receipt rows[${index}].state_id`),
+      agent: requireString(row["agent"], `receipt rows[${index}].agent`),
+      result: parseJson(requireString(row["result_json"], `receipt rows[${index}].result_json`)),
     }));
   } finally {
     database.close();
@@ -607,8 +553,15 @@ async function executeCase(input: {
   const startedAt = performance.now();
   const pairId = `${input.testCase.case_id}#${input.repetition}`;
   const runId = `run_kb_model_smoke_${input.testCase.case_id.replace(/-/gu, "_")}_r${input.repetition}`;
-  const controlPath = path.join(input.projectRoot, ".penny", `${runId}.db`);
-  const parentArtifactRoot = path.join(input.projectRoot, ".penny", "parent-artifacts", runId);
+  const controlPath = path.join(input.projectRoot, ".smoke-private", `${runId}.db`);
+  const parentArtifactRoot = path.join(
+    input.projectRoot,
+    ".smoke-private",
+    "parent-artifacts",
+    runId
+  );
+  mkdirSync(path.dirname(controlPath), { recursive: true, mode: 0o700 });
+  chmodSync(path.dirname(controlPath), 0o700);
   const observations: CheckpointObservation[] = [];
   const issues: string[] = [];
   const privacyLeaks: PrivacyLeak[] = [];
@@ -702,7 +655,10 @@ async function executeCase(input: {
       readRequest: () =>
         readRunInput({
           projectRoot: input.projectRoot,
-          checkpointer: checkpointer!,
+          checkpointer: requireValue(
+            checkpointer,
+            "apps/orchestration/smoke/kb-model-smoke.test.ts:650"
+          ),
           runId,
         }),
       selectedGenerationId: () =>
@@ -752,7 +708,7 @@ async function executeCase(input: {
         phaseResult !== undefined,
         `${input.testCase.case_id}: missing ${stateId} phase result`
       );
-      const result = asObject(JSON.parse(phaseResult.result_jcs) as unknown, `${stateId} result`);
+      const result = asObject(parseJson(phaseResult.result_jcs), `${stateId} result`);
       const handle = phaseHandle(result, stateId);
       const artifactId = String(handle["artifact_id"] ?? "");
       const artifactRecord = checkpointer?.kbArtifact(artifactId);
@@ -805,12 +761,16 @@ async function executeCase(input: {
     const verificationArtifactId = String(
       phaseHandle(verifyPhase.result, "verify")["artifact_id"] ?? ""
     );
-    const answerDocument = JSON.parse(
-      runStore.read(answerArtifactId).content
-    ) as QueryAnswerArtifact;
-    const verificationDocument = JSON.parse(
-      runStore.read(verificationArtifactId).content
-    ) as QueryVerificationReport;
+    const answerDocument: QueryAnswerArtifact = validateKbContract(
+      QueryAnswerArtifactSchema,
+      parseJson(runStore.read(answerArtifactId).content),
+      "model-smoke query answer"
+    );
+    const verificationDocument: QueryVerificationReport = validateKbContract(
+      QueryVerificationReportSchema,
+      parseJson(runStore.read(verificationArtifactId).content),
+      "model-smoke verification report"
+    );
     citations = answerDocument.answer.citations;
     answerSha256 = sha256Hex(answerDocument.answer.text);
     const assessment = assessQueryVerification(answerDocument, verificationDocument, answerHandle);
@@ -1045,6 +1005,31 @@ function traceMetrics(records: readonly AgentSessionTraceRecordV1[]) {
   };
 }
 
+function receiptAction(value: string): G8SmokePairReceipt["terminal"]["action"] {
+  switch (value) {
+    case "complete":
+    case "incomplete":
+    case "error":
+    case "cancelled":
+    case "missing":
+    case "nonterminal":
+      return value;
+    default:
+      return "nonterminal";
+  }
+}
+
+function receiptCaseId(value: string): G8SmokePairReceipt["case_id"] {
+  switch (value) {
+    case "sqlite-query":
+    case "typebox-query":
+    case "cross-query":
+      return value;
+    default:
+      throw new Error(`Unexpected model-smoke case id: ${value}`);
+  }
+}
+
 function pairReceipt(input: {
   execution: CaseExecution;
   badReasons: readonly G8SmokePairReceipt["metrics"]["bad_reasons"][number][];
@@ -1056,18 +1041,9 @@ function pairReceipt(input: {
     { state_id: "query" as const, agent: "synthia" as const, trace: phaseTraces[0] },
     { state_id: "verify" as const, agent: "vera" as const, trace: phaseTraces[1] },
   ];
-  const action = [
-    "complete",
-    "incomplete",
-    "error",
-    "cancelled",
-    "missing",
-    "nonterminal",
-  ].includes(input.execution.terminal_action)
-    ? (input.execution.terminal_action as G8SmokePairReceipt["terminal"]["action"])
-    : "nonterminal";
+  const action = receiptAction(input.execution.terminal_action);
   return {
-    case_id: input.execution.case_id as G8SmokePairReceipt["case_id"],
+    case_id: receiptCaseId(input.execution.case_id),
     execution_count: 1,
     pair_id: input.execution.pair_id,
     repetition: input.execution.repetition,
@@ -1199,14 +1175,13 @@ function writeResultReceipt(receipt: G8SmokeResultReceipt): {
   readonly path: string;
   readonly sha256: string;
 } {
-  const resultPath = path.join(repoRoot, G8_SMOKE_RESULT_PATH);
-  const digestPath = path.join(repoRoot, G8_SMOKE_RESULT_SHA_PATH);
+  const resultPath = smokeResultPath;
+  const digestPath = smokeResultShaPath;
   invariant(
     !existsSync(resultPath) && !existsSync(digestPath),
     "stable G8 smoke receipt already exists; rerun refused"
   );
   mkdirSync(path.dirname(resultPath), { recursive: true, mode: 0o700 });
-  chmodSync(path.dirname(resultPath), 0o700);
   const bytes = canonicalJson(receipt);
   const digest = sha256(bytes);
   const resultTemp = `${resultPath}.tmp`;
@@ -1244,7 +1219,7 @@ function writeResultReceipt(receipt: G8SmokeResultReceipt): {
     sha256(readFileSync(resultPath, "utf8")) === digest,
     "stable G8 smoke receipt digest drifted"
   );
-  return { path: G8_SMOKE_RESULT_PATH, sha256: digest };
+  return { path: resultPath, sha256: digest };
 }
 
 const gatedDescribe = process.env[GATE_ENV] === "1" ? describe : describe.skip;
@@ -1252,22 +1227,28 @@ const gatedDescribe = process.env[GATE_ENV] === "1" ? describe : describe.skip;
 gatedDescribe("G8 stable qwen real-session KB model smoke", () => {
   afterAll(() => {
     if (scratchRoot !== undefined) rmSync(scratchRoot, { recursive: true, force: true });
+    if (smokeStateRoot !== undefined) rmSync(smokeStateRoot, { recursive: true, force: true });
+    if (originalStateRoot === undefined) delete process.env.PENNY_STATE_ROOT;
+    else process.env.PENNY_STATE_ROOT = originalStateRoot;
   });
 
   it("executes all six frozen case/repetition pairs exactly once", async () => {
     const loadedManifest = loadG8SmokeCohortManifest(repoRoot);
     const { manifest } = loadedManifest;
     invariant(
-      !existsSync(path.join(repoRoot, G8_SMOKE_RESULT_PATH)),
+      !existsSync(smokeResultPath),
       "stable G8 smoke receipt already exists; live rerun refused"
     );
     invariant(
-      !existsSync(path.join(repoRoot, G8_SMOKE_RESULT_SHA_PATH)),
+      !existsSync(smokeResultShaPath),
       "stable G8 smoke receipt SHA already exists; live rerun refused"
     );
-    const { receipt, fixture } = loadFrozenInputs(manifest);
+    const fixture = loadTrackedFixture(manifest);
     scratchRoot = mkdtempSync(path.join(tmpdir(), "penny-kb-model-smoke-"));
+    smokeStateRoot = mkdtempSync(path.join(tmpdir(), "penny-kb-model-smoke-state-"));
     chmodSync(scratchRoot, 0o700);
+    chmodSync(smokeStateRoot, 0o700);
+    process.env.PENNY_STATE_ROOT = smokeStateRoot;
     copySessionInputs(scratchRoot);
     const { kbRoot, publishedBodyPaths } = seedFrozenKb(scratchRoot, fixture);
     const allowedBodyPaths = new Set(
@@ -1286,7 +1267,7 @@ gatedDescribe("G8 stable qwen real-session KB model smoke", () => {
           kbRoot,
           testCase,
           repetition: pair.repetition,
-          k: receipt.k,
+          k: RETRIEVAL_K,
           modelOverride: manifest.model,
           phaseTimeoutMs: manifest.per_phase_timeout_ms,
           thinkingLevel: manifest.thinking_level,

@@ -71,8 +71,8 @@ exceeds that bound it is **silently truncated** — no error, no warning.
 Truncation removes the _tail_, which is exactly where the disambiguating anti-cases live.
 The failure mode is therefore invisible and lands precisely on the content that makes
 routing work. The ceiling was raised, and a build-failing assertion added, so it can never
-again happen quietly. Descriptions currently run 227–365 characters against a hard limit of
-1,024.
+again happen quietly. The hard limit is 1,024 characters and the preferred target is about
+500; crossing the target warns but remains valid when the extra distinction improves routing.
 
 ## Admission: making the roster hard to grow
 

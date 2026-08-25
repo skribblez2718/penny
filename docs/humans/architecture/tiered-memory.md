@@ -15,7 +15,7 @@ Workers read exact grants with `artifact_read`; the checkpointer retains refs.
 
 ## Runtime ownership
 
-Only the unmarked primary runtime has durable-memory tools. It recalls prior
+Only the unmarked primary runtime has durable-memory write tools and lifecycle hooks. It recalls prior
 knowledge when it could materially affect a task, curates only stable reusable
 results, writes the primary diary, and governs temporal KG facts. An optional,
 default-off advisory log adds only bounded, strictly self-addressed
@@ -23,8 +23,8 @@ append/list/wait/ack and rejects raw upstream broadcasts. Its body is bounded
 free-form advisory text, so it can technically contain arbitrary small text.
 Dedicated artifact/patch endpoints and refs are absent; by policy the body is
 non-authoritative and is never consumed as artifact handoff, workflow state, a
-persistence receipt, or recovery input. Workers and skill drivers have no memory
-or advisory-log tools.
+persistence receipt, or recovery input. Catalog workers may have YAML-declared
+read-only recall, but no write or advisory-log tools.
 
 ## Retention
 

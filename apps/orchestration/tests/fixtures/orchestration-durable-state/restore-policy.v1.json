@@ -1,0 +1,93 @@
+{
+  "research": [
+    {
+      "case": "valid_without_optional_playbook_data",
+      "accepted": true,
+      "state_id": "planning",
+      "playbook_data_present": false,
+      "future_field": null
+    },
+    {
+      "case": "malformed_json",
+      "accepted": false,
+      "error_name": "SyntaxError"
+    },
+    {
+      "case": "missing_required_goal",
+      "accepted": false,
+      "error_name": "Error",
+      "error_message": "checkpoint context fields are invalid (missing=goal; unknown=)"
+    },
+    {
+      "case": "wrong_type_step_count",
+      "accepted": false,
+      "error_name": "Error",
+      "error_message": "checkpoint step_count is invalid"
+    },
+    {
+      "case": "wrong_type_playbook_data",
+      "accepted": false,
+      "error_name": "Error",
+      "error_message": "checkpoint playbook_data must be an object"
+    },
+    {
+      "case": "extra_top_level_state",
+      "accepted": false,
+      "error_name": "Error",
+      "error_message": "checkpoint context fields are invalid (missing=; unknown=future_state)"
+    },
+    {
+      "case": "extra_playbook_data_member",
+      "accepted": true,
+      "state_id": "planning",
+      "playbook_data_present": true,
+      "future_field": "preserved"
+    }
+  ],
+  "knowledge_base": [
+    {
+      "case": "valid_path_free_projection",
+      "accepted": true,
+      "state_id": "compose",
+      "phases": {
+        "ingest": {
+          "artifact_kind": "claims",
+          "counts": {
+            "claim_count": 2
+          },
+          "kb_artifact_id": "kbart_ts200_claims",
+          "verdict": "pass"
+        }
+      }
+    },
+    {
+      "case": "malformed_json",
+      "accepted": false,
+      "error_name": "SyntaxError"
+    },
+    {
+      "case": "missing_required_playbook_data",
+      "accepted": false,
+      "error_name": "CheckpointIdentityError",
+      "error_message": "KB durable projection fields or version are invalid"
+    },
+    {
+      "case": "wrong_durable_schema_version",
+      "accepted": false,
+      "error_name": "CheckpointIdentityError",
+      "error_message": "KB durable projection fields or version are invalid"
+    },
+    {
+      "case": "extra_top_level_state",
+      "accepted": false,
+      "error_name": "CheckpointIdentityError",
+      "error_message": "KB durable projection fields or version are invalid"
+    },
+    {
+      "case": "nested_absolute_path",
+      "accepted": false,
+      "error_name": "CheckpointIdentityError",
+      "error_message": "KB durable projection contains an absolute path"
+    }
+  ]
+}

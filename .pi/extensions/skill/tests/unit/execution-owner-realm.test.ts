@@ -25,6 +25,8 @@
 
 import { describe, it, expect } from "vitest";
 
+import { isRecord, requireString } from "../../../../lib/tests/test-narrowers.js";
+
 const MODULE_PATH = "../../execution-receipts.js";
 
 /**
@@ -34,10 +36,31 @@ const MODULE_PATH = "../../execution-receipts.js";
  * jiti's `moduleCache: false` does to us in production. Without the realm singleton
  * each of these would carry its own key and its own registry.
  */
-async function freshInstance(tag: string) {
-  return (await import(
-    /* @vite-ignore */ `${MODULE_PATH}?realm-instance=${tag}`
-  )) as typeof import("../../execution-receipts.js");
+type ExecutionReceiptsModule = Pick<
+  typeof import("../../execution-receipts.js"),
+  | "withExecutionOwnerEnvironment"
+  | "renderedQuestionsDigest"
+  | "registerTrustedQuestionnaireTransport"
+  | "resolveTrustedQuestionnaireTransport"
+  | "consumeTrustedQuestionnaireTransport"
+>;
+
+function isExecutionReceiptsModule(value: unknown): value is ExecutionReceiptsModule {
+  return (
+    isRecord(value) &&
+    typeof value.withExecutionOwnerEnvironment === "function" &&
+    typeof value.renderedQuestionsDigest === "function" &&
+    typeof value.registerTrustedQuestionnaireTransport === "function" &&
+    typeof value.resolveTrustedQuestionnaireTransport === "function" &&
+    typeof value.consumeTrustedQuestionnaireTransport === "function"
+  );
+}
+
+async function freshInstance(tag: string): Promise<ExecutionReceiptsModule> {
+  const value: unknown = await import(/* @vite-ignore */ `${MODULE_PATH}?realm-instance=${tag}`);
+  if (!isExecutionReceiptsModule(value))
+    throw new Error("invalid execution-receipts module fixture");
+  return value;
 }
 
 describe("execution-owner realm singleton", () => {
@@ -56,6 +79,22 @@ describe("execution-owner realm singleton", () => {
     // so the questionnaire is signed with a key the transport would reject.
     expect(envB.PENNY_RECEIPT_HMAC_KEY).toBe(envA.PENNY_RECEIPT_HMAC_KEY);
     expect(envB.PENNY_APPROVAL_HMAC_KEY).toBe(envA.PENNY_APPROVAL_HMAC_KEY);
+  });
+
+  it("keeps the realm slot non-enumerable and immutable on the shared global host", async () => {
+    const instance = await freshInstance("descriptor");
+    instance.withExecutionOwnerEnvironment({});
+
+    const descriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      Symbol.for("penny.skill.execution-owner")
+    );
+    expect(descriptor).toBeDefined();
+    expect(descriptor).toMatchObject({
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
   });
 
   it("resolves a capability registered by a DIFFERENT module instance", async () => {
@@ -98,7 +137,9 @@ describe("execution-owner realm singleton", () => {
     expect(capability).toBeTruthy();
 
     // Cross-instance resolve — undefined before the realm fix.
-    const resolved = questionnaireSide.resolveTrustedQuestionnaireTransport(capability as string);
+    const resolved = questionnaireSide.resolveTrustedQuestionnaireTransport(
+      requireString(capability, "trusted transport capability was not created")
+    );
     expect(resolved).toBeDefined();
     expect(resolved?.binding.challenge).toBe("challenge-realm");
     expect(resolved?.questions).toEqual(questions);
@@ -125,10 +166,10 @@ describe("execution-owner realm singleton", () => {
       renderedQuestionsDigest: registrar.renderedQuestionsDigest(questions),
     };
 
-    const capability = registrar.registerTrustedQuestionnaireTransport(
-      questions,
-      binding
-    ) as string;
+    const capability = requireString(
+      registrar.registerTrustedQuestionnaireTransport(questions, binding),
+      "trusted transport capability was not created"
+    );
     expect(consumer.resolveTrustedQuestionnaireTransport(capability)).toBeDefined();
 
     consumer.consumeTrustedQuestionnaireTransport(capability);

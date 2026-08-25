@@ -1,3 +1,4 @@
+import { parseJson, requireRecord, requireString, requireValue } from "./helpers/narrowing.js";
 /**
  * KB durable state and recovery (§6.2 step 3).
  *
@@ -24,13 +25,14 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { Checkpointer, canonicalJson, sha256 } from "../src/checkpointer.js";
+import { Checkpointer, canonicalJson } from "../src/checkpointer.js";
 import { RunContext } from "../src/context.js";
+import type { GateState } from "../src/kb/gate.js";
+import type { KbIngestPlaneV1 } from "../src/kb/ingest-plane.js";
 import { evaluateCompletionGate } from "../src/playbooks/playbook.js";
 import {
   KNOWLEDGE_BASE_SKILL_CONTRACT,
   KnowledgeBasePlaybook,
-  KB_STATES,
 } from "../src/playbooks/knowledge-base.js";
 import type { Confidence, Directive, JsonValue } from "../src/contracts.js";
 
@@ -112,7 +114,7 @@ interface FakePlaneCalls {
   denials: string[];
 }
 
-function fakePlane(calls: FakePlaneCalls) {
+function fakePlane(calls: FakePlaneCalls): KbIngestPlaneV1 {
   return {
     admitRun() {
       // §5.3 admission; this suite asserts durable state, not the policy matrix.
@@ -162,7 +164,14 @@ function fakePlane(calls: FakePlaneCalls) {
         action: i.action,
         base_generation_id: "gen_base",
         base_selector_sha256: "c".repeat(64),
-        ...(i.action === "save" ? { query_run_id: i.queryRunId! } : {}),
+        ...(i.action === "save"
+          ? {
+              query_run_id: requireValue(
+                i.queryRunId,
+                "apps/orchestration/tests/kb-durable-state.test.ts:167"
+              ),
+            }
+          : {}),
         candidate_artifacts: handles,
         candidate_artifact_digests: Object.fromEntries(
           handles.map((artifact) => [artifact.artifact_id, artifact.sha256])
@@ -177,11 +186,31 @@ function fakePlane(calls: FakePlaneCalls) {
         expires_at: new Date(new Date(issuedAt).getTime() + 3_600_000).toISOString(),
       };
     },
-    persistGate(i: { runId: string; artifactIds: readonly string[] }) {
+    persistGate(i: { runId: string; artifactIds: readonly string[] }): GateState {
+      const issuedAt = new Date().toISOString();
       return {
+        schema_version: 1,
         gate_id: "gate_fake01",
+        run_id: i.runId,
+        kb_profile_id: "kbp_test",
+        action: "ingest",
+        status: "awaiting",
+        issued_at: issuedAt,
+        expires_at: new Date(new Date(issuedAt).getTime() + 3_600_000).toISOString(),
         base_generation_id: "gen_base",
-      } as unknown as ReturnType<typeof Object>;
+        base_catalog_sha256: "c".repeat(64),
+        source_capability_ids: ["cap_a", "cap_b"],
+        source_ids: ["src_restart_1", "src_restart_2"],
+        artifacts: i.artifactIds.map((artifactId) => ({
+          schema_version: 1,
+          artifact_id: artifactId,
+          artifact_kind: "test_artifact",
+          sha256: "b".repeat(64),
+          media_type: "application/json",
+          byte_length: 2,
+        })),
+        packet_sha256: "d".repeat(64),
+      };
     },
     approve(i: { runId: string }) {
       calls.approvals.push(i.runId);
@@ -190,7 +219,16 @@ function fakePlane(calls: FakePlaneCalls) {
     deny(i: { runId: string }) {
       calls.denials.push(i.runId);
     },
-  } as unknown as Parameters<typeof KnowledgeBasePlaybook.prototype.constructor>[1];
+    claimSave() {
+      throw new Error("durable ingest fixture does not support save claims");
+    },
+    settleSave() {
+      throw new Error("durable ingest fixture does not support save settlement");
+    },
+    verifyPromotion() {
+      throw new Error("durable ingest fixture does not support promotion verification");
+    },
+  } satisfies KbIngestPlaneV1;
 }
 
 /** Drive to a target state, returning the last directive. */
@@ -209,7 +247,7 @@ function driveTo(playbook: KnowledgeBasePlaybook, context: RunContext, stop: str
 /** Simulate what the checkpointer does: serialize → reload. */
 function checkpointRoundTrip(context: RunContext): RunContext {
   const json = canonicalJson(context.snapshot());
-  const snapshot = JSON.parse(json);
+  const snapshot: unknown = JSON.parse(json);
   return RunContext.fromSnapshot(snapshot);
 }
 
@@ -236,13 +274,21 @@ describe("KB durable state — checkpoint round trip at every phase boundary", (
       expect(restored.playbookData.source_ids).toEqual(["src_restart_1", "src_restart_2"]);
 
       // Phase metadata survived (phases before the current one are recorded)
-      const phases = (restored.playbookData.phases ?? {}) as Record<string, unknown>;
       const allPhases = ["ingest", "compose", "lint", "verify"];
       const phaseIndex = allPhases.indexOf(phase);
-      for (let i = 0; i < phaseIndex; i++) {
-        const p = allPhases[i]!;
-        expect(phases[p]).toBeDefined();
-        expect((phases[p] as Record<string, unknown>).artifact_kind).toBeDefined();
+      const restoredPhases = restored.knowledgeBaseData.phases;
+      if (phaseIndex === 0) {
+        expect(restoredPhases).toBeUndefined();
+      } else {
+        const phases = requireValue(restoredPhases, "restored knowledge-base phases");
+        for (let i = 0; i < phaseIndex; i++) {
+          const p = requireValue(
+            allPhases[i],
+            "apps/orchestration/tests/kb-durable-state.test.ts:274"
+          );
+          const phaseRecord = requireValue(phases[p], `restored phase ${p}`);
+          expect(phaseRecord.artifact_kind).toBeDefined();
+        }
       }
     });
   }
@@ -265,15 +311,15 @@ describe("KB durable state — rebindPendingDirective (the recover path)", () =>
     // Simulate a crash: the context was checkpointed with the pending directive.
     const restored = checkpointRoundTrip(context);
     const rebound = playbook.rebindPendingDirective(restored);
-    expect(rebound).not.toBeNull();
-    expect(rebound!.action).toBe("invoke_agent");
-    if (rebound!.action !== "invoke_agent") throw new Error("unreachable");
+    if (rebound === null || rebound.action !== "invoke_agent") {
+      throw new Error("recovery did not re-bind an invoke_agent directive");
+    }
     // The re-bound directive must target the same agent and state.
-    expect(rebound!.agent).toBe("echo");
-    expect(rebound!.state_id).toBe("ingest");
+    expect(rebound.agent).toBe("echo");
+    expect(rebound.state_id).toBe("ingest");
     // The output artifact must be a valid metadata object with version >= 1.
-    expect(rebound!.output_artifact.version).toBeGreaterThanOrEqual(1);
-    expect(rebound!.output_artifact.phase).toBe("ingest");
+    expect(rebound.output_artifact.version).toBeGreaterThanOrEqual(1);
+    expect(rebound.output_artifact.phase).toBe("ingest");
   });
 
   it("re-presents an await_user directive unchanged on recovery", () => {
@@ -287,17 +333,19 @@ describe("KB durable state — rebindPendingDirective (the recover path)", () =>
     const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls), TEST_ROOT_RESOLVER);
     const context = newContext();
     const directive = driveTo(playbook, context, "awaiting_review");
-    expect(directive.action).toBe("await_user");
+    if (directive.action !== "await_user") {
+      throw new Error("playbook did not reach the awaiting review directive");
+    }
 
     const restored = checkpointRoundTrip(context);
     const rebound = playbook.rebindPendingDirective(restored);
-    expect(rebound).not.toBeNull();
-    expect(rebound!.action).toBe("await_user");
-    if (rebound!.action !== "await_user") throw new Error("unreachable");
+    if (rebound === null || rebound.action !== "await_user") {
+      throw new Error("recovery did not re-present the await_user directive");
+    }
     // The gate_id and challenge must be preserved so the host can answer it.
-    expect(rebound!.gate_id).toBe(directive.gate_id);
-    expect(rebound!.challenge).toBe(directive.challenge);
-    expect(rebound!.payload_digest).toBe(directive.payload_digest);
+    expect(rebound.gate_id).toBe(directive.gate_id);
+    expect(rebound.challenge).toBe(directive.challenge);
+    expect(rebound.payload_digest).toBe(directive.payload_digest);
   });
 
   it("a terminal run returns its terminal directive, not a re-bind", () => {
@@ -317,14 +365,21 @@ describe("KB durable state — rebindPendingDirective (the recover path)", () =>
     expect(context.terminalDirective).not.toBeNull();
     const restored = checkpointRoundTrip(context);
     expect(restored.terminalDirective).not.toBeNull();
-    expect(restored.terminalDirective!.action).toBe("complete");
+    expect(
+      requireValue(
+        restored.terminalDirective,
+        "apps/orchestration/tests/kb-durable-state.test.ts:353"
+      ).action
+    ).toBe("complete");
     // rebindPendingDirective on a terminal context returns the terminal directive
     // (it is not an invoke_agent, so it passes through). The engine never calls
     // this in practice — it returns terminalDirective first — but the behaviour
     // is defined and should not throw.
     const rebound = playbook.rebindPendingDirective(restored);
     expect(rebound).not.toBeNull();
-    expect(rebound!.action).toBe("complete");
+    expect(
+      requireValue(rebound, "apps/orchestration/tests/kb-durable-state.test.ts:360").action
+    ).toBe("complete");
   });
 
   it("passes through an await_user directive unchanged (no re-binding needed)", () => {
@@ -372,7 +427,12 @@ describe("KB durable state — status projection", () => {
     // A recovered terminal context returns the terminal directive, not a re-bind.
     const restored = checkpointRoundTrip(context);
     expect(restored.terminalDirective).not.toBeNull();
-    expect(restored.terminalDirective!.action).toBe("complete");
+    expect(
+      requireValue(
+        restored.terminalDirective,
+        "apps/orchestration/tests/kb-durable-state.test.ts:408"
+      ).action
+    ).toBe("complete");
   });
 
   it("the completion gate admits the approved terminal from publishing", () => {
@@ -444,11 +504,13 @@ describe("KB closed durable projection", () => {
       checkpointer.saveRun(context, "projection_saved", { run_id: context.identity.run_id });
 
       const raw = database(dbPath);
-      const row = raw
-        .prepare("SELECT context_json FROM runs WHERE run_id=?")
-        .get(context.identity.run_id) as { context_json: string };
-      expect(row.context_json).not.toContain(projectRoot);
-      const projection = JSON.parse(row.context_json) as Record<string, unknown>;
+      const row = requireRecord(
+        raw.prepare("SELECT context_json FROM runs WHERE run_id=?").get(context.identity.run_id),
+        "closed durable projection row"
+      );
+      const contextJson = requireString(row["context_json"], "closed durable projection context");
+      expect(contextJson).not.toContain(projectRoot);
+      const projection = requireRecord(parseJson(contextJson), "closed durable projection context");
       expect(projection.durable_schema_version).toBe(1);
       expect(projection).not.toHaveProperty("project_root");
       expect(checkpointer.loadRunById(context.identity.run_id)?.projectRoot).toBe(projectRoot);
@@ -482,8 +544,14 @@ describe("KB durable state — revision chain integrity across recovery", () => 
     const playbook = new KnowledgeBasePlaybook(undefined, fakePlane(calls), TEST_ROOT_RESOLVER);
     const context = newContext();
     playbook.initialize(context);
-    const first = playbook.rebindPendingDirective(context)!;
-    const second = playbook.rebindPendingDirective(context)!;
+    const first = playbook.rebindPendingDirective(context);
+    const second = playbook.rebindPendingDirective(context);
+    if (first === null || first.action !== "invoke_agent") {
+      throw new Error("first re-bind did not produce an invoke_agent directive");
+    }
+    if (second === null || second.action !== "invoke_agent") {
+      throw new Error("second re-bind did not produce an invoke_agent directive");
+    }
     // Same run, same phase, same branch → same operation_id. No artifact was
     // captured yet, so both re-binds produce version 1 (the next version past
     // the empty ledger).

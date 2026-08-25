@@ -11,11 +11,13 @@ Without pre-generation rules, agents produce inconsistent, untested, unverified 
 ## Rules
 
 1. **Tests that prove the change.** Every change ships with tests that exercise it and fail on a reverted implementation — a pass is backed by an oracle, never asserted. Sequencing (test-first, alongside, or after) is the author's choice; the verified outcome is what matters.
-2. **Lint before delivery.** Code must pass lint with zero errors.
+2. **Lint before delivery.** Code must pass lint with zero errors and warnings. Do not suppress warnings; fix their cause before production delivery.
 3. **Format before delivery.** Code must pass format check.
-4. **Typecheck before delivery.** TypeScript: `tsc --noEmit`. Python: `mypy`.
-5. **No dead code.** Remove commented-out blocks, unused imports, unreachable branches.
-6. **No magic numbers.** All constants must be named and documented.
+4. **Typecheck before delivery.** TypeScript: `bun run typecheck` (or the changed package's `bun run typecheck`). Python: `bun run py:typecheck`. A green test suite never substitutes for a green typecheck.
+5. **Treat types as design contracts.** Give domain data, states, results, and public boundaries named machine-checkable types. Validate untrusted data at entry, derive static types from runtime schemas where available, and make invalid states unrepresentable with discriminated unions.
+6. **Contain uncertainty.** Use `unknown`/`object` at untrusted boundaries and narrow it immediately. Do not introduce implicit `any`, broad assertions, or suppression comments to evade a compiler error. A necessary interoperability exception is local, documented with a removal condition, and tested.
+7. **No dead code.** Remove commented-out blocks, unused imports, unreachable branches.
+8. **No magic numbers.** All constants must be named and documented.
 
 ## Frontend UI & CSS defaults
 
@@ -31,8 +33,8 @@ For web application projects, **build UIs as custom [Lit](https://lit.dev) web c
 
 | Severity     | Meaning            | Action                         |
 | ------------ | ------------------ | ------------------------------ |
-| **BLOCKER**  | Rule 1-4 violation | Must fix before delivery       |
-| **CRITICAL** | Rule 5-6 violation | Must fix or document exception |
+| **BLOCKER**  | Rule 1-6 violation | Must fix before delivery       |
+| **CRITICAL** | Rule 7-8 violation | Must fix or document exception |
 
 ## Constraints
 
@@ -45,4 +47,6 @@ For web application projects, **build UIs as custom [Lit](https://lit.dev) web c
 - [ ] Lint passes
 - [ ] Format passes
 - [ ] Typecheck passes
+- [ ] Types/schemas model the changed contract and external data is validated
+- [ ] No implicit `any`, broad assertion, or suppression bypasses the contract
 - [ ] No dead code or magic numbers

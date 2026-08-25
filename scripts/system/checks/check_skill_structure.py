@@ -176,7 +176,7 @@ def discover_skills() -> List[Path]:
 
 def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
     """Return list of (severity, message) issues for a skill."""
-    issues = []
+    issues: List[Tuple[str, str]] = []
     name = skill_dir.name
 
     # Skip non-skill directories (shared resources, templates, etc.)
@@ -361,7 +361,7 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
     return issues
 
 
-def main():  # noqa: C901
+def main() -> None:  # noqa: C901
     parser = argparse.ArgumentParser(description="Validate Penny skill structure")
     parser.add_argument("--skill", help="Validate only a specific skill name")
     args = parser.parse_args()

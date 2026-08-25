@@ -7,10 +7,10 @@
  * - Event handler registration
  */
 
-import { describe, it, expect, vi, beforeAll } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 // Mock TUI dependencies
-vi.mock("@mariozechner/pi-tui", () => ({
+vi.mock("@earendil-works/pi-tui", () => ({
   truncateToWidth: (s: string, width: number) => {
     if (s.length <= width) return s;
     return s.slice(0, width - 1) + "…";
@@ -18,14 +18,15 @@ vi.mock("@mariozechner/pi-tui", () => ({
   visibleWidth: (s: string) => s.length,
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@earendil-works/pi-coding-agent")>()),
   getMarkdownTheme: vi.fn().mockReturnValue({
     fg: (_color: string, text: string) => text,
     bg: (_color: string, text: string) => text,
   }),
 }));
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { createTestExtensionApi } from "../../../../lib/tests/test-narrowers.js";
 
 describe("Statusline Integration — Format Functions", () => {
   it("should format token counts with K suffix for thousands", () => {
@@ -56,19 +57,16 @@ describe("Statusline Integration — Event Registration", () => {
   it("should register event handlers via ExtensionAPI", async () => {
     const registeredEvents: string[] = [];
 
-    const mockPi = {
-      registerTool: vi.fn(),
-      registerCommand: vi.fn(),
-      on: vi.fn((event: string) => {
-        registeredEvents.push(event);
-      }),
-    } as unknown as ExtensionAPI;
+    const onEvent = vi.fn((event: string) => {
+      registeredEvents.push(event);
+    });
+    const mockPi = createTestExtensionApi({ onEvent });
 
     const mod = await import("../../index.js");
     mod.default(mockPi);
 
     // Statusline should register event handlers
-    expect(mockPi.on).toHaveBeenCalled();
+    expect(onEvent).toHaveBeenCalled();
     expect(registeredEvents.length).toBeGreaterThan(0);
   });
 });

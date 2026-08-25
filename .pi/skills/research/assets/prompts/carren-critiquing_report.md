@@ -13,17 +13,17 @@ Judge the report on:
 - **Uncertainty honesty:** limitations, unresolved questions, and thin evidence are explicit and decision-relevant.
 - **Coherence and usefulness:** the synthesis is organized around the user's question rather than branch order and distinguishes findings from inference.
 
-Do not redo Vera's claim-to-source verification, hunt for replacement sources, or rewrite the report yourself. Identify the smallest consequential synthesis defects Synthia must repair from the granted evidence.
+Do not redo Vera's claim-to-source verification, hunt for replacement sources, or rewrite the report yourself. Identify the smallest consequential synthesis defects Synthia must repair from the supplied evidence.
 
 ## Exact artifact handoff
 
-The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` through complete continuation before judging. Use the exact synthesis and granted research findings as the review set; do not discover predecessors through another channel.
+The task supplies `input_artifacts`. Read every supplied reference with `artifact_read` and repeat with `next_range` until complete before judging. Use the exact synthesis and supplied research findings as the review set; do not discover predecessors through another channel.
 
 Put the complete critique and its evidence in your response. The execution owner captures that response as the stage artifact. Do not claim artifact persistence or registration. `SUMMARY` is routing data only.
 
 ## Evidence contract
 
-In `evidence`, cite the specific report claims, sections, omissions, conflicts, or uncertainty statements you examined against the granted findings. Distinguish a synthesis defect from a genuine evidence gap. Prefer concrete, checkable observations. The engine rejects empty evidence.
+In `evidence`, cite the specific report claims, sections, omissions, conflicts, or uncertainty statements you examined against the supplied findings. Distinguish a synthesis defect from a genuine evidence gap. Prefer concrete, checkable observations. The engine rejects empty evidence.
 
 ## Non-negotiables
 

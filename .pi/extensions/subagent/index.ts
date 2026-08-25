@@ -1,3 +1,4 @@
+import { registerTool } from "../../lib/pi-tool-registration.js";
 /**
  * Subagent Tool - Delegate tasks to specialized agents
  *
@@ -14,13 +15,21 @@
 
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { Message } from "@mariozechner/pi-ai";
-import { StringEnum } from "@mariozechner/pi-ai";
-import { type ExtensionAPI, getMarkdownTheme } from "@mariozechner/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
-import { Type } from "@sinclair/typebox";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { StringEnum } from "@earendil-works/pi-ai";
 import {
+  type ExtensionAPI,
+  type ExtensionContext,
+  getMarkdownTheme,
+  type Theme,
+  type ThemeColor,
+  type ToolRenderResultOptions,
+} from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { Type, type Static } from "typebox";
+import {
+  adaptPiJsonMessage,
+  createPendingSingleResult,
   formatUsageStats,
   getFinalOutput,
   mapWithConcurrencyLimit,
@@ -33,6 +42,7 @@ import {
   ProgressEmitter,
   MAX_PARALLEL_TASKS,
   MAX_CONCURRENCY,
+  WORKER_READ_MEMORY_TOOLS,
 } from "./agent-runner.js";
 import {
   type AgentConfig,
@@ -41,13 +51,22 @@ import {
   formatModelVisibleAgentCatalog,
   snapshotAgentCatalog,
 } from "./agents.js";
-import { ArtifactClientError, type ArtifactRef } from "../artifacts/owner-client.js";
-import { registerOwnerArtifactGrants } from "../artifacts/owner-grants.js";
+import {
+  ArtifactClientError,
+  readArtifactsById,
+  type ArtifactRef,
+} from "../artifacts/owner-client.js";
+import { appendInputArtifactInstruction, parseInputArtifacts } from "../artifacts/handoff.js";
+import {
+  appendBlock,
+  exactOutputBlock,
+  exactOutputListBlock,
+  inlineArtifactMarker,
+} from "../artifacts/visible-refs.js";
 import { createLogger } from "../../lib/logger/logger.js";
 import { resolveToolResultBudget } from "../lib/tool-result-budget.js";
 import {
   directAgentOutputMetadata,
-  directChainEnvironment,
   directChainInput,
   directChainOutputMetadata,
   directChainTask,
@@ -56,51 +75,33 @@ import {
 
 const logger = createLogger("subagent");
 
-interface SessionStartContext {
-  sessionManager: { getSessionId(): string };
-}
-
 const COLLAPSED_ITEM_COUNT = 10;
 
-// ── Local types for the (untyped) Pi tool boundary ──────────────────────────
-// Pi's ExtensionAPI/ExtensionContext are `any` in the SDK; these interfaces
-// pin down the exact shapes this extension actually reads/writes.
-
-/** A single agent invocation as it appears in tool params (task/parallel/chain). */
-interface AgentTaskSpec {
-  agent: string;
-  task: string;
-  cwd?: string;
-  skillContext?: string;
-  model?: string;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Parameters accepted by the `subagent` tool (mirrors SubagentParams schema). */
-interface SubagentToolParams {
-  agent?: string;
-  task?: string;
-  tasks?: AgentTaskSpec[];
-  chain?: AgentTaskSpec[];
-  agentScope?: AgentScope;
-  confirmProjectAgents?: boolean;
-  cwd?: string;
-  skillContext?: string;
-  maxConcurrency?: number;
-  model?: string;
+function firstStringArgument(
+  args: Readonly<Record<string, unknown>>,
+  keys: readonly string[],
+  fallback: string
+): string {
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return fallback;
 }
 
-/** The execution context Pi passes to tool `execute` (subset this tool uses). */
-interface SubagentToolContext {
-  cwd: string;
-  hasUI: boolean;
-  ui: { confirm: (title: string, message: string) => Promise<boolean> };
+function optionalNumberArgument(
+  args: Readonly<Record<string, unknown>>,
+  key: string
+): number | undefined {
+  const value = args[key];
+  return typeof value === "number" ? value : undefined;
 }
 
-/** The render theme Pi passes to renderCall/renderResult (fg + bold helpers). */
-interface RenderTheme {
-  fg: (color: string, text: string) => string;
-  bold: (text: string) => string;
-}
+// ── Tool-specific domain types ─────────────────────────────────────────────
 
 // ── Agent discovery at module load (drives dynamic enum + promptSnippet) ──
 const registeredDiscovery = discoverAgents(process.cwd(), "project");
@@ -109,9 +110,14 @@ const registeredCatalogSnapshot = snapshotAgentCatalog(registeredDiscovery);
 const agentNames =
   discoveredAgents.length > 0 ? discoveredAgents.map((a) => a.name) : ["no-agents-found"];
 
-const AgentNameEnum = StringEnum(agentNames as unknown as readonly string[], {
-  description: "Name of the agent to invoke",
-});
+/** Build Pi's Google-compatible TypeBox enum from the discovered string catalog. */
+export function createAgentNameEnumSchema(values: readonly string[]) {
+  return StringEnum(values, {
+    description: "Name of the agent to invoke",
+  });
+}
+
+const AgentNameEnum = createAgentNameEnumSchema(agentNames);
 
 const dynamicPromptSnippet =
   discoveredAgents.length > 0
@@ -123,7 +129,7 @@ const dynamicAgentCatalog = formatModelVisibleAgentCatalog(discoveredAgents);
 function formatToolCall(
   toolName: string,
   args: Record<string, unknown>,
-  themeFg: (color: string, text: string) => string
+  themeFg: (color: ThemeColor, text: string) => string
 ): string {
   const shortenPath = (p: string) => {
     const home = os.homedir();
@@ -132,15 +138,15 @@ function formatToolCall(
 
   switch (toolName) {
     case "bash": {
-      const command = (args.command as string) || "...";
+      const command = firstStringArgument(args, ["command"], "...");
       const preview = command.length > 60 ? `${command.slice(0, 60)}...` : command;
       return themeFg("muted", "$ ") + themeFg("toolOutput", preview);
     }
     case "read": {
-      const rawPath = (args.file_path || args.path || "...") as string;
+      const rawPath = firstStringArgument(args, ["file_path", "path"], "...");
       const filePath = shortenPath(rawPath);
-      const offset = args.offset as number | undefined;
-      const limit = args.limit as number | undefined;
+      const offset = optionalNumberArgument(args, "offset");
+      const limit = optionalNumberArgument(args, "limit");
       let text = themeFg("accent", filePath);
       if (offset !== undefined || limit !== undefined) {
         const startLine = offset ?? 1;
@@ -150,25 +156,25 @@ function formatToolCall(
       return themeFg("muted", "read ") + text;
     }
     case "write": {
-      const rawPath = (args.file_path || args.path || "...") as string;
+      const rawPath = firstStringArgument(args, ["file_path", "path"], "...");
       const filePath = shortenPath(rawPath);
-      const content = (args.content || "") as string;
+      const content = firstStringArgument(args, ["content"], "");
       const lines = content.split("\n").length;
       let text = themeFg("muted", "write ") + themeFg("accent", filePath);
       if (lines > 1) text += themeFg("dim", ` (${lines} lines)`);
       return text;
     }
     case "edit": {
-      const rawPath = (args.file_path || args.path || "...") as string;
+      const rawPath = firstStringArgument(args, ["file_path", "path"], "...");
       return themeFg("muted", "edit ") + themeFg("accent", shortenPath(rawPath));
     }
     case "ls": {
-      const rawPath = (args.path || ".") as string;
+      const rawPath = firstStringArgument(args, ["path"], ".");
       return themeFg("muted", "ls ") + themeFg("accent", shortenPath(rawPath));
     }
     case "find": {
-      const pattern = (args.pattern || "*") as string;
-      const rawPath = (args.path || ".") as string;
+      const pattern = firstStringArgument(args, ["pattern"], "*");
+      const rawPath = firstStringArgument(args, ["path"], ".");
       return (
         themeFg("muted", "find ") +
         themeFg("accent", pattern) +
@@ -176,8 +182,8 @@ function formatToolCall(
       );
     }
     case "grep": {
-      const pattern = (args.pattern || "") as string;
-      const rawPath = (args.path || ".") as string;
+      const pattern = firstStringArgument(args, ["pattern"], "");
+      const rawPath = firstStringArgument(args, ["path"], ".");
       return (
         themeFg("muted", "grep ") +
         themeFg("accent", `/${pattern}/`) +
@@ -200,14 +206,20 @@ type DisplayItem =
   | { type: "text"; text: string }
   | { type: "toolCall"; name: string; args: Record<string, unknown> };
 
-function getDisplayItems(messages: Message[]): DisplayItem[] {
+function getDisplayItems(messages: readonly unknown[]): DisplayItem[] {
   const items: DisplayItem[] = [];
-  for (const msg of messages) {
-    if (msg.role === "assistant") {
-      for (const part of msg.content) {
-        if (part.type === "text") items.push({ type: "text", text: part.text || "" });
-        else if (part.type === "toolCall")
-          items.push({ type: "toolCall", name: part.name || "", args: part.arguments || {} });
+  for (const rawMessage of messages) {
+    const message = adaptPiJsonMessage(rawMessage);
+    if (message?.role !== "assistant") continue;
+    for (const part of message.content) {
+      if (part.type === "text" && typeof part.text === "string") {
+        items.push({ type: "text", text: part.text });
+      } else if (part.type === "toolCall") {
+        items.push({
+          type: "toolCall",
+          name: typeof part.name === "string" ? part.name : "",
+          args: isRecord(part.arguments) ? part.arguments : {},
+        });
       }
     }
   }
@@ -241,7 +253,7 @@ async function runSingleAgentLocal(
   const adaptedOnUpdate: import("./agent-runner.js").OnUpdateCallback | undefined = onUpdate
     ? (partial) => {
         onUpdate({
-          content: partial.content as Array<{ type: "text"; text: string }>,
+          content: partial.content,
           details: partial.details,
         });
       }
@@ -264,9 +276,21 @@ async function runSingleAgentLocal(
   );
 }
 
+const ArtifactIdSchema = Type.String({
+  pattern: "^art_[a-f0-9]{64}$",
+  description: "Exact artifact id from an earlier delegation result",
+});
+
+const InputArtifactsSchema = Type.Array(ArtifactIdSchema, {
+  uniqueItems: true,
+  description:
+    "Unique exact artifact IDs from any prior run. The runtime verifies every ID before spawn, and the worker reads exact bytes with artifact_read.",
+});
+
 const TaskItem = Type.Object({
   agent: AgentNameEnum,
   task: Type.String({ description: "Task to delegate to the agent" }),
+  input_artifacts: Type.Optional(InputArtifactsSchema),
   cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
   skillContext: Type.Optional(
     Type.String({
@@ -286,8 +310,9 @@ const ChainItem = Type.Object({
   agent: AgentNameEnum,
   task: Type.String({
     description:
-      "Task with optional {previous} placeholder. The owner replaces it with an exact granted artifact instruction, never prior payload bytes.",
+      "Task with optional {previous} placeholder. The owner replaces it with an exact artifact instruction, never prior payload bytes.",
   }),
+  input_artifacts: Type.Optional(InputArtifactsSchema),
   cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
   skillContext: Type.Optional(
     Type.String({
@@ -349,128 +374,157 @@ const SubagentParams = Type.Object({
         "Override the model for this agent invocation (uses agent's default model if not set)",
     })
   ),
+  input_artifacts: Type.Optional(InputArtifactsSchema),
 });
 
+type SubagentToolParams = Static<typeof SubagentParams>;
+
+/** Raised when a caller-supplied artifact ID fails existence/integrity preflight. */
+class InputArtifactError extends Error {}
+class ArtifactCommunicationError extends Error {}
+
+interface HostToolCatalog {
+  getAllTools(): unknown;
+}
+
+function hasHostToolCatalog(value: unknown): value is HostToolCatalog {
+  return isRecord(value) && typeof value.getAllTools === "function";
+}
+
+function isNamedHostTool(value: unknown): value is { name: string } {
+  return isRecord(value) && typeof value.name === "string";
+}
+
+/** Read an optional host tool catalog while validating every provider name. */
+export function readHostToolNames(host: unknown): Set<string> | undefined {
+  if (!hasHostToolCatalog(host)) return undefined;
+  const tools = host.getAllTools();
+  if (!Array.isArray(tools) || !tools.every(isNamedHostTool)) {
+    throw new InputArtifactError("TOOL_PROVIDER_CATALOG_INVALID: host tool catalog is malformed");
+  }
+  return new Set(tools.map((tool) => tool.name));
+}
+
 export default function (pi: ExtensionAPI) {
-  // Resolve owner-lowered caps inside the factory; a cap cannot raise the shared hard limit.
   const handoffBudget = resolveToolResultBudget(process.env);
-  let currentSessionId: string | undefined;
 
-  pi.on("session_start", async (_event: unknown, context: SessionStartContext) => {
-    currentSessionId = context.sessionManager.getSessionId();
-  });
-
-  /**
-   * Record owner grants so the orchestrator can re-read exact agent output on
-   * demand. Registration never fails a delegation: the agent result is already
-   * complete, and a missing grant only costs the optional re-read.
-   */
-  const grantToOwner = (refs: readonly ArtifactRef[]): ArtifactRef[] => {
-    if (!currentSessionId || refs.length === 0) return [...refs];
+  const buildInputArtifactHandoff = async (
+    artifactIds: readonly string[] | undefined,
+    projectRoot: string
+  ): Promise<{ input: ReturnType<typeof parseInputArtifacts> } | undefined> => {
+    if (!artifactIds || artifactIds.length === 0) return undefined;
+    let refs: ArtifactRef[];
     try {
-      return registerOwnerArtifactGrants({ sessionId: currentSessionId, refs });
+      refs = (await readArtifactsById({ artifactIds, projectRoot, env: process.env })).map(
+        (read) => read.ref
+      );
     } catch (error) {
-      logger.warn("subagent_owner_grant_failed", {
-        errorCode: "SUBAGENT_OWNER_GRANT_FAILED",
-        reason: error instanceof Error ? error.message : "unknown",
-      });
-      return [...refs];
+      const code = error instanceof ArtifactClientError ? error.code : "ARTIFACT_MISSING";
+      throw new InputArtifactError(`${code}: input artifact existence/integrity preflight failed`);
     }
+    logger.info("subagent_input_artifacts_verified", {
+      count: refs.length,
+      artifactIds: refs.map((ref) => ref.artifact_id),
+    });
+    return {
+      input: parseInputArtifacts({
+        schema_version: 2,
+        artifacts: refs.map((ref, index) => ({
+          slot: `input-${(index + 1).toString().padStart(4, "0")}`,
+          ref,
+        })),
+      }),
+    };
   };
 
-  /**
-   * Persist exact output for a mode that has no successor worker. Best effort:
-   * a persistence failure must not discard a completed agent result.
-   */
-  const persistOwnerOutput = async (options: {
-    runId: string;
-    index: number;
-    agent: string;
-    output: string;
-    cwd: string;
-  }): Promise<ArtifactRef | undefined> => {
-    if (!options.output) return undefined;
-    try {
-      return await persistDirectChainOutput({
-        metadata: directAgentOutputMetadata({
-          runId: options.runId,
-          index: options.index,
-          agent: options.agent,
-        }),
-        output: options.output,
-        cwd: options.cwd,
-        env: process.env,
-      });
-    } catch (error) {
-      logger.warn("subagent_output_persist_failed", {
-        errorCode: "SUBAGENT_OUTPUT_PERSIST_FAILED",
-        agent: options.agent,
-        reason: error instanceof Error ? error.message : "unknown",
-      });
-      return undefined;
-    }
-  };
-
-  /**
-   * Persist exact output for each result, grant the owner, and attach the
-   * granted refs. Entirely best effort: results are returned unchanged when the
-   * artifact plane is unavailable.
-   */
   const attachOwnerArtifacts = async (options: {
     results: SingleResult[];
     runId: string;
     cwd: string;
+    upstreamRefsByIndex?: ReadonlyArray<readonly ArtifactRef[]>;
   }): Promise<void> => {
-    const persisted = await Promise.all(
-      options.results.map((result, index) =>
-        persistOwnerOutput({
-          runId: options.runId,
-          index,
-          agent: result.agent,
+    for (let index = 0; index < options.results.length; index += 1) {
+      const result = options.results[index];
+      if (result === undefined) continue;
+      try {
+        result.outputArtifactRef = await persistDirectChainOutput({
+          metadata: directAgentOutputMetadata({
+            runId: options.runId,
+            index,
+            agent: result.agent,
+            upstreamRefs: options.upstreamRefsByIndex?.[index],
+          }),
           output: getFinalOutput(result.messages),
           cwd: options.cwd,
-        })
-      )
-    );
-
-    const indexed = persisted.flatMap((ref, index) => (ref ? [{ ref, index }] : []));
-    if (indexed.length === 0) return;
-    const granted = grantToOwner(indexed.map((entry) => entry.ref));
-    indexed.forEach((entry, position) => {
-      const result = options.results[entry.index];
-      if (result) result.outputArtifactRef = granted[position] ?? entry.ref;
-    });
+          env: process.env,
+        });
+        logger.info("subagent_output_artifact_verified", {
+          mode: options.runId.split(":", 1)[0],
+          agent: result.agent,
+          index,
+          artifactId: result.outputArtifactRef.artifact_id,
+        });
+      } catch (error) {
+        const code = error instanceof ArtifactClientError ? error.code : "ARTIFACT_PERSIST_FAILED";
+        logger.warn("subagent_output_persist_failed", {
+          errorCode: code,
+          agent: result.agent,
+          mode: options.runId.split(":", 1)[0],
+        });
+        throw new ArtifactCommunicationError(
+          `${code}: exact output for '${result.agent}' could not be persisted and re-read`
+        );
+      }
+    }
   };
 
-  pi.registerTool({
+  const assertRegisteredProviders = (agents: readonly AgentConfig[], names: readonly string[]) => {
+    const registered = readHostToolNames(pi);
+    if (registered === undefined) return;
+    for (const name of WORKER_READ_MEMORY_TOOLS) registered.add(name);
+    for (const requested of new Set(names)) {
+      const agent = agents.find((candidate) => candidate.name === requested);
+      if (agent === undefined) continue;
+      const missing = agent.tools.filter((tool) => !registered.has(tool));
+      if (missing.length > 0) {
+        throw new InputArtifactError(
+          `TOOL_PROVIDER_MISSING: agent '${requested}' declares unregistered tool(s): ${missing.join(", ")}`
+        );
+      }
+    }
+  };
+
+  registerTool<typeof SubagentParams, SubagentDetails>(pi, {
     name: "subagent",
     label: "Subagent",
     description: [
       "Delegate tasks to specialized subagents with isolated context.",
-      "Modes: single (agent + task), parallel (isolated tasks array), chain (sequential exact-artifact handoff through {previous}).",
+      "Use when a task matches an agent's specialty and benefits from isolation, parallel work, or separate judgment.",
+      "Do not use for trivial direct work; use the skill tool instead for multi-step workflows with state, gates, retries, or resumability.",
+      "Modes: single (agent + task), parallel (isolated tasks array), chain (sequential exact-ID handoff through {previous} plus optional explicit inputs).",
+      "Every result names its exact output artifact ID; pass those IDs as input_artifacts to give another agent the exact bytes instead of re-running a producer.",
       "Agents are discovered from the project's .pi/agents/ directory.",
       'Use agentScope: "both" to include agents from parent directories.',
+      "Pass sufficient context because agents cannot see the parent conversation.",
       "Use skillContext to inject skill-specific prompt content (file path or inline) as <skill_context> in the system prompt.",
       dynamicAgentCatalog,
     ].join(" "),
     promptSnippet: dynamicPromptSnippet,
-    promptGuidelines: [
-      "Use subagent when a task matches an agent's specialty and benefits from isolated context or specialized constraints.",
-      dynamicAgentCatalog,
-      "For ad-hoc single tasks, use single mode: { agent, task }. For multi-step workflows with state/approval gates, use the skill tool instead.",
-      "Always pass sufficient context in the task parameter — the agent has no access to your conversation history.",
-      "Anti-pattern: do NOT use subagent for trivial single-step tasks (single file read, simple edit, one-line bash command). Do those directly with your own tools.",
-    ],
     parameters: SubagentParams,
 
     async execute(
       _toolCallId: string,
-      params: SubagentToolParams,
+      params,
       signal: AbortSignal | undefined,
       onUpdate: OnUpdateCallback | undefined,
-      ctx: SubagentToolContext
+      ctx: ExtensionContext
     ) {
       const agentScope: AgentScope = params.agentScope ?? "project";
+      const parentSessionId = ctx.sessionManager?.getSessionId?.() ?? "";
+      const ownerEnvironment: NodeJS.ProcessEnv = {
+        ...process.env,
+        ...(parentSessionId ? { PENNY_SUBAGENT_PARENT_SESSION_ID: parentSessionId } : {}),
+      };
       const discovery = discoverAgents(ctx.cwd, agentScope);
       const agents = discovery.agents;
       const confirmProjectAgents = params.confirmProjectAgents ?? false;
@@ -508,6 +562,38 @@ export default function (pi: ExtensionAPI) {
               : {}),
           };
         };
+
+      // Resolve every requested exact ID and every declared provider before any
+      // model usage. Cross-run and multi-source fan-in are intentionally valid.
+      let singleHandoff: Awaited<ReturnType<typeof buildInputArtifactHandoff>>;
+      let taskHandoffs: Array<Awaited<ReturnType<typeof buildInputArtifactHandoff>>> = [];
+      let chainHandoffs: Array<Awaited<ReturnType<typeof buildInputArtifactHandoff>>> = [];
+      try {
+        const requestedAgents = [
+          ...(params.agent ? [params.agent] : []),
+          ...(params.tasks ?? []).map((task) => task.agent),
+          ...(params.chain ?? []).map((step) => step.agent),
+        ];
+        assertRegisteredProviders(agents, requestedAgents);
+        singleHandoff = await buildInputArtifactHandoff(params.input_artifacts, ctx.cwd);
+        taskHandoffs = await Promise.all(
+          (params.tasks ?? []).map((task) =>
+            buildInputArtifactHandoff(task.input_artifacts, ctx.cwd)
+          )
+        );
+        chainHandoffs = await Promise.all(
+          (params.chain ?? []).map((step) =>
+            buildInputArtifactHandoff(step.input_artifacts, ctx.cwd)
+          )
+        );
+      } catch (error) {
+        if (!(error instanceof InputArtifactError)) throw error;
+        return {
+          content: [{ type: "text", text: `Delegation preflight failed. ${error.message}` }],
+          details: makeDetails(requestedMode)([]),
+          isError: true,
+        };
+      }
 
       const executionCatalogSnapshot = snapshotAgentCatalog(discovery);
       if (executionCatalogSnapshot.digest !== registeredCatalogSnapshot.digest) {
@@ -582,26 +668,21 @@ export default function (pi: ExtensionAPI) {
 
         for (let i = 0; i < params.chain.length; i++) {
           const step = params.chain[i];
+          const additionalRefs = chainHandoffs[i]?.input.artifacts.map((binding) => binding.ref);
           const input = directChainInput({
-            runId: artifactRunId,
-            stepIndex: i,
             previousRef,
+            additionalRefs,
           });
           const taskWithContext = directChainTask({
             task: step.task,
             input,
             budget: handoffBudget,
           });
-          const ownerEnvironment = directChainEnvironment(
-            input,
-            `subagent-chain:${artifactRunId}:step:${i + 1}:${randomUUID()}`
-          );
           const outputMetadata = directChainOutputMetadata({
             runId: artifactRunId,
             stepIndex: i,
-            totalSteps: params.chain.length,
             agent: step.agent,
-            previousRef,
+            upstreamRefs: input.artifacts.map((binding) => binding.ref),
           });
 
           // Create update callback that includes all previous results.
@@ -641,21 +722,14 @@ export default function (pi: ExtensionAPI) {
               cwd: ctx.cwd,
               env: process.env,
             });
-            // Two refs, deliberately kept distinct.
-            //
-            // `persisted` is the envelope exactly as the manifest stores it. It is
-            // the ONLY value that may flow into the next step, because a chain step
-            // declares its predecessor in `upstream_refs` and both stores require
-            // that envelope to match stored metadata byte-for-byte
-            // (artifacts.py `_validate` / artifact-store.ts `validateMetadata`).
-            //
-            // `grantToOwner` returns a DIFFERENT envelope: it appends
-            // `penny-primary:owner` to `consumer_scope` so Penny may read the
-            // artifact. Surfacing that ref is correct; forwarding it as an upstream
-            // is not — it fails the exact-match check and every step after the
-            // first dies with ARTIFACT_PERSIST_FAILED.
             stepOutputRef = persisted;
-            result.outputArtifactRef = grantToOwner([persisted])[0] ?? persisted;
+            result.outputArtifactRef = persisted;
+            logger.info("subagent_output_artifact_verified", {
+              mode: "chain",
+              agent: step.agent,
+              step: i + 1,
+              artifactId: persisted.artifact_id,
+            });
           } catch (error) {
             if (!(error instanceof ArtifactClientError)) throw error;
             return {
@@ -688,14 +762,29 @@ export default function (pi: ExtensionAPI) {
               isError: true,
             };
           }
-          // Hand the stored envelope forward, never the owner-granted one.
           previousRef = stepOutputRef;
         }
+        // Only the final step's text is returned inline. Every step's exact
+        // output is an artifact, and the ID must reach the model here: it is
+        // absent from `details` as far as any provider is concerned.
+        const chainRefs = results.flatMap((result) =>
+          result.outputArtifactRef
+            ? [
+                {
+                  label: `step ${result.step ?? results.indexOf(result) + 1} (${result.agent})`,
+                  ref: result.outputArtifactRef,
+                },
+              ]
+            : []
+        );
         return {
           content: [
             {
               type: "text",
-              text: getFinalOutput(results[results.length - 1].messages) || "(no output)",
+              text: appendBlock(
+                getFinalOutput(results[results.length - 1].messages) || "(no output)",
+                exactOutputListBlock(chainRefs)
+              ),
             },
           ],
           details: makeDetails("chain")(results),
@@ -714,29 +803,10 @@ export default function (pi: ExtensionAPI) {
             details: makeDetails("parallel")([]),
           };
 
-        // Track all results for streaming updates
-        const allResults: SingleResult[] = new Array(params.tasks.length);
-
-        // Initialize placeholder results
-        for (let i = 0; i < params.tasks.length; i++) {
-          allResults[i] = {
-            agent: params.tasks[i].agent,
-            agentSource: "unknown",
-            task: params.tasks[i].task,
-            exitCode: -1, // -1 = still running
-            messages: [],
-            stderr: "",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              cost: 0,
-              contextTokens: 0,
-              turns: 0,
-            },
-          };
-        }
+        // Track all results for streaming updates.
+        const allResults = params.tasks.map((task) =>
+          createPendingSingleResult(task.agent, task.task)
+        );
 
         const emitParallelUpdate = () => {
           if (onUpdate) {
@@ -758,11 +828,15 @@ export default function (pi: ExtensionAPI) {
           params.tasks,
           params.maxConcurrency ?? MAX_CONCURRENCY,
           async (t, index) => {
+            const handoff = taskHandoffs[index];
+            const taskText = handoff
+              ? appendInputArtifactInstruction(t.task, handoff.input, handoffBudget)
+              : t.task;
             const result = await runSingleAgentLocal(
               ctx.cwd,
               agents,
               t.agent,
-              t.task,
+              taskText,
               t.cwd,
               undefined,
               signal,
@@ -776,7 +850,8 @@ export default function (pi: ExtensionAPI) {
               makeDetails("parallel"),
               resolveSkillContext(t.skillContext, ctx.cwd),
               undefined,
-              t.model
+              t.model,
+              ownerEnvironment
             );
             allResults[index] = result;
             emitParallelUpdate();
@@ -786,27 +861,46 @@ export default function (pi: ExtensionAPI) {
 
         const successCount = results.filter((r) => r.exitCode === 0).length;
 
-        // Parallel results are previewed, not returned whole. Persist exact
-        // output and grant it to the owner so the preview is a summary of
-        // something readable rather than the only surviving copy.
         artifactRunId = `subagent-parallel:${randomUUID()}`;
-        await attachOwnerArtifacts({
-          results,
-          runId: artifactRunId,
-          cwd: ctx.cwd,
-        });
+        try {
+          await attachOwnerArtifacts({
+            results,
+            runId: artifactRunId,
+            cwd: ctx.cwd,
+            upstreamRefsByIndex: taskHandoffs.map(
+              (handoff) => handoff?.input.artifacts.map((binding) => binding.ref) ?? []
+            ),
+          });
+        } catch (error) {
+          if (!(error instanceof ArtifactCommunicationError)) throw error;
+          return {
+            content: [{ type: "text", text: `Parallel communication failed. ${error.message}` }],
+            details: makeDetails("parallel")(results),
+            isError: true,
+          };
+        }
 
+        // The preview is 100 characters; the artifact is the output. Naming the
+        // exact ID inline is what makes the preview a summary of something
+        // readable rather than a prompt to re-run the agent.
         const summaries = results.map((r) => {
           const output = getFinalOutput(r.messages);
           const preview = output.slice(0, 100) + (output.length > 100 ? "..." : "");
-          const suffix = r.outputArtifactRef ? " [exact output: artifact_read]" : "";
+          const suffix = r.outputArtifactRef ? inlineArtifactMarker(r.outputArtifactRef) : "";
           return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}: ${preview || "(no output)"}${suffix}`;
         });
+        const parallelText = `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`;
+        const anyParallelRef = results.some((r) => r.outputArtifactRef);
         return {
           content: [
             {
               type: "text",
-              text: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
+              text: anyParallelRef
+                ? appendBlock(
+                    parallelText,
+                    'Previews are truncated at 100 characters. Read any exact output with artifact_read({"artifact":"art_<id>"}).'
+                  )
+                : parallelText,
             },
           ],
           details: makeDetails("parallel")(results),
@@ -814,11 +908,14 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (params.agent && params.task) {
+        const singleTask = singleHandoff
+          ? appendInputArtifactInstruction(params.task, singleHandoff.input, handoffBudget)
+          : params.task;
         const result = await runSingleAgentLocal(
           ctx.cwd,
           agents,
           params.agent,
-          params.task,
+          singleTask,
           params.cwd,
           undefined,
           signal,
@@ -826,7 +923,8 @@ export default function (pi: ExtensionAPI) {
           makeDetails("single"),
           resolveSkillContext(params.skillContext, ctx.cwd),
           undefined,
-          params.model
+          params.model,
+          ownerEnvironment
         );
         const isError =
           result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
@@ -848,14 +946,38 @@ export default function (pi: ExtensionAPI) {
         // Single-mode output is returned in full, but compaction can drop the
         // inline copy later. The artifact keeps it recoverable by exact ref.
         artifactRunId = `subagent-single:${randomUUID()}`;
-        await attachOwnerArtifacts({
-          results: [result],
-          runId: artifactRunId,
-          cwd: ctx.cwd,
-        });
+        try {
+          await attachOwnerArtifacts({
+            results: [result],
+            runId: artifactRunId,
+            cwd: ctx.cwd,
+            upstreamRefsByIndex: [
+              singleHandoff?.input.artifacts.map((binding) => binding.ref) ?? [],
+            ],
+          });
+        } catch (error) {
+          if (!(error instanceof ArtifactCommunicationError)) throw error;
+          return {
+            content: [
+              { type: "text", text: `Single-agent communication failed. ${error.message}` },
+            ],
+            details: makeDetails("single")([result]),
+            isError: true,
+          };
+        }
 
         return {
-          content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+          content: [
+            {
+              type: "text",
+              text: result.outputArtifactRef
+                ? appendBlock(
+                    getFinalOutput(result.messages) || "(no output)",
+                    exactOutputBlock(result.outputArtifactRef)
+                  )
+                : getFinalOutput(result.messages) || "(no output)",
+            },
+          ],
           details: makeDetails("single")([result]),
         };
       }
@@ -867,7 +989,7 @@ export default function (pi: ExtensionAPI) {
       };
     },
 
-    renderCall(args: SubagentToolParams, theme: RenderTheme, _context: unknown) {
+    renderCall(args: SubagentToolParams, theme: Theme, _context: unknown) {
       const scope: AgentScope = args.agentScope ?? "project";
       if (args.chain && args.chain.length > 0) {
         let text =
@@ -918,12 +1040,12 @@ export default function (pi: ExtensionAPI) {
     },
 
     renderResult(
-      result: AgentToolResult<SubagentDetails>,
-      { expanded }: { expanded: boolean },
-      theme: RenderTheme,
+      result: AgentToolResult<SubagentDetails | undefined>,
+      { expanded }: ToolRenderResultOptions,
+      theme: Theme,
       _context: unknown
     ) {
-      const details = result.details as SubagentDetails | undefined;
+      const details = result.details;
       if (!details || details.results.length === 0) {
         const text = result.content[0];
         return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);

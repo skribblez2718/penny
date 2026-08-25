@@ -16,10 +16,10 @@ registry in-process.
 
 ## Exact artifact handoff
 
-Every cognitive directive declares owner-selected `input_artifacts` and an
-`output_artifact` contract. Workers read every granted ref through complete continuation,
-return complete stage output, and keep routing fields separate from product bytes. The owner
-persists and verifies exact bytes before advancing.
+Every cognitive directive declares owner-selected exact `input_artifacts` IDs/refs and an
+`output_artifact` contract. Workers read needed IDs through `next_range`, return complete
+stage output, and keep routing fields separate from product bytes. The owner persists and
+re-reads exact bytes before parsing routing or advancing.
 
 Selected refs survive retries, clarification, restart, fan recovery, compaction, and skill
 composition. Payload bytes and semantic memory never enter `RunContext`.

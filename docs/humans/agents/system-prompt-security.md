@@ -8,7 +8,7 @@ System prompt security is the set of layered controls that keep untrusted conten
 
 1. **System-role authority.** Penny's operating policy is delivered in the system role, which models are trained to prioritize over user-role content.
 2. **User-authorized task scope.** The user's message is authoritative for the goal and request-specific constraints — but not for system policy, tools, permissions, credentials, or consequence limits.
-3. **Tool allowlists and exact grants.** Each worker's `--tools` list controls visible tools; workers receive no durable-memory tools. `artifact_read` is exposed only with trusted owner invocation metadata, and the artifact service separately validates each exact grant.
+3. **Exact YAML tool surfaces and exact IDs.** Each catalog worker's active `--tools` set equals its YAML list. Trust profiles and input presence cannot change it. `artifact_read` performs direct exact-ID lookup and byte verification without grants or expiry; YAML-declared read-only memory is advisory only.
 
    Allowlists are now derived from a declared authority class rather than hand-curated, and a CI check fails the build if a role's tools drift from the authority it claims. This closed a real gap: several roles that declared themselves read-only in prose held form-fill, file-upload, and arbitrary-code-execution tools. **Be precise about what that fixed.** Browser authority is now structural — a read-only role genuinely cannot submit a form or execute Playwright code. Filesystem and shell authority are not: every agent still holds `bash`, so a read-only role can still write files, install packages, and reach the network. The allowlist bounds the browser surface; the host boundary and user supervision still bound everything else. See [Tool Authority Profiles](tool-profiles.md).
 
@@ -33,7 +33,7 @@ The user defines the task; external content may supply evidence or designated re
 | Skill-invoked agent                    | Separate process and context; tool allowlist                               | No filesystem/process sandbox (Bubblewrap removed 2026-08-06; approval/receipt secrets still stripped from the spawned environment) | Tool allowlist, workflow gates, receipts, host boundary — same as direct `subagent(...)` until a container-based replacement lands |
 | Untrusted repository / unattended work | Depends on selected path                                                   | Use an external container, VM, or micro-VM with minimal mounts, credentials, and network                                            | OS or virtualization boundary                                                                                                      |
 
-One more subtlety: the agent runner force-loads Penny's extension modules so tools can register regardless of working directory. The `--tools` allowlist controls what the model can call; it does not prevent extension code from loading. Artifact tool visibility still does not grant an artifact—the owner grant and runtime checks do that.
+One more subtlety: the agent runner force-loads Penny's extension modules so providers can register regardless of working directory. The exact YAML `--tools` allowlist controls what the model can call; it does not prevent extension code from loading. An artifact ID is a communication address, while runtime checks still enforce manifest identity, path containment, digest, length, and UTF-8 ranges.
 
 ## What Skill Prompts Must Avoid
 

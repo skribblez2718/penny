@@ -7,7 +7,7 @@
  * - HOME/PWD resolution
  */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdtemp, writeFile, readFile, rm, access } from "fs/promises";
 import { tmpdir } from "os";
 import * as path from "path";

@@ -1,227 +1,129 @@
-# Extension Testing and Quality Standards
+# TypeScript Testing, Quality, and Publication Gates
 
-All extension code must pass lint, format, and test checks before committing.
+Penny's TypeScript quality certificate is rooted in live discovery. A file is not covered merely
+because a glob appears broad, and a test is not covered merely because it typechecks. The guards
+inspect the effective ESLint project, actual TypeScript program membership, and real Vitest runner
+mapping for every owned file.
 
-## TypeScript (ESLint + Prettier)
+## Owned scope and current report
 
-### Configuration Files
+The dynamic inventory walks `.pi/extensions/`, `.pi/lib/`, `apps/observability/`,
+`apps/orchestration/`, and `apps/platform-memory/`, including non-ignored untracked TypeScript. The
+current report is 426/426 files with type-aware lint and strict-program coverage, plus 210/210 test or
+smoke files reachable from package `test:all`. Neither number is hardcoded; new files must be
+discovered and covered automatically.
 
-- `eslint.config.js` - ESLint rules (TypeScript-focused)
-- `.prettierrc` - Prettier formatting rules
-- `.prettierignore` - Files to skip formatting
+## Root command map
 
-### Commands
+| Command                           | Purpose                                                                                                                                         |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bun run typescript:inventory`    | Check live file discovery, effective lint coverage, qualifying strict projects, declarations, syntax, and test-runner mapping.                  |
+| `bun run typescript:architecture` | Check assertions, directives/suppressions, SDK and tool seams, extension packages, logging, and environment-read policy.                        |
+| `bun run typescript:guard-tests`  | Exercise every detector with generated positive/negative fixtures and verify cleanup.                                                           |
+| `bun run lint`                    | Run inventory, architecture, and sequential type-aware ESLint with zero warnings.                                                               |
+| `bun run typecheck`               | Run inventory, architecture, and all extension/library/application plus orchestration test/smoke projects.                                      |
+| `bun run test:typescript`         | Run inventory, architecture, shared-library tests, and every distinct Vitest config reachable from package `test:all`.                          |
+| `bun run format:check`            | Check TypeScript, JavaScript, JSON, and Markdown formatting.                                                                                    |
+| `bun run test:all`                | Run root TypeScript/Python typecheck, lint, format checks, aggregate TypeScript tests, and Python tests.                                        |
+| `make verify-publication`         | Run frozen Bun/uv installs; format, lint, strict checks, guards, mapped TypeScript and root tests, builds, Make checks, and staged secret scan. |
 
-```bash
-bun run lint           # Lint TypeScript
-bun run lint:fix       # Auto-fix lint issues
-bun run format         # Format code
-bun run format:check   # Check formatting without changes
-```
+`make verify-publication` is the installed aggregate local publication gate. It installs frozen
+dependencies and runs the complete offline-safe check set, but does not stage files, create a commit,
+or contact a Git remote. It never opts into a live model itself; with `PENNY_KB_MODEL_SMOKE` unset,
+the live config prints its skip. Candidate-tree, range, and remote verification remain explicit
+Phase-5 procedures.
 
-### ESLint Rules
+## Sequential type-aware lint
 
-- `@typescript-eslint/no-unused-vars` - Error (allow `_` prefix)
-- `@typescript-eslint/no-explicit-any` - Warn
-- `@typescript-eslint/no-non-null-assertion` - Warn
-- `prefer-const` - Error
-- `no-var` - Error
+Root `bun run lint` first executes inventory and architecture. It then uses
+`scripts/system/checks/typescript-lint.mjs` to assign each TypeScript file to exactly one configured
+tsconfig partition and launch ESLint over those partitions one at a time. Every invocation uses
+`--max-warnings=0` and unused-disable reporting. JavaScript runs in a final partition.
 
-### Prettier Rules
+The coordinator fails before delivery when a configured project is absent, a live TypeScript file
+matches no partition or multiple partitions, or a configured partition has no inventory files. This
+keeps lint type-aware without constructing one memory-heavy repository-wide TypeScript program.
 
-- Semi-colons: required
-- Quotes: double
-- Tab width: 2 spaces
-- Trailing commas: ES5
-- Print width: 100 characters
-- End of line: LF
+Every owned file must resolve the complete canonical matrix to `error`:
 
-## Python (flake8 + black + mypy)
+- `@typescript-eslint/no-explicit-any`
+- `@typescript-eslint/no-non-null-assertion`
+- `@typescript-eslint/no-unsafe-assignment`
+- `@typescript-eslint/no-unsafe-argument`
+- `@typescript-eslint/no-unsafe-call`
+- `@typescript-eslint/no-unsafe-member-access`
+- `@typescript-eslint/no-unsafe-return`
+- `@typescript-eslint/no-unsafe-enum-comparison`
+- `@typescript-eslint/no-unsafe-unary-minus`
+- `@typescript-eslint/no-unsafe-type-assertion`
 
-### Configuration Files
+The architecture guard also catches definite-assignment assertions, double assertions,
+`@ts-nocheck`, `@ts-ignore`, invalid/unused `@ts-expect-error`, broad or unused ESLint disables,
+contract-rule suppressions outside the exact five-site test-host registry, raw Pi registration outside
+the adapter, unsupported imports, invalid package placement, extension runtime console calls, and
+module-scope `process.env` reads. A used `@ts-expect-error` needs the checker's same-line negative
+compile/type-contract description or upstream-defect removal condition.
 
-- `pyproject.toml` - Black, isort, mypy, pytest config
-- `.flake8` - Flake8 linting rules
+## Typecheck projects
 
-### Commands
+Each owned file must be an actual member of an invoked no-emit project whose effective options enable
+`strict`, `noImplicitAny`, `strictNullChecks`, `strictFunctionTypes`, `strictBindCallApply`,
+`strictPropertyInitialization`, `useUnknownInCatchVariables`, `noImplicitThis`, `alwaysStrict`, and
+`noEmit`. Child configs and CLI flags may not downgrade that vector. Owned declarations cannot rely on
+`skipLibCheck` to hide diagnostics. Orchestration has separate strict source, test, and live-smoke
+projects.
 
-```bash
-bun run py:lint            # Lint Python
-bun run py:format          # Format Python
-bun run py:format:check    # Check formatting
-bun run py:typecheck       # Type check
-```
+## Package test contract
 
-### flake8 Rules
+Every extension package provides a `typecheck` script and a `test:all` script that runs typecheck
+before tests. A package may own unit, integration, E2E, or other suites when the feature requires them;
+there is no universal claim that every package has every test level or a fixed directory layout. The
+contract is that every TypeScript test/smoke file is matched by an actual Vitest configuration
+reachable from that package's `test:all`.
 
-- Max line length: 100
-- Max complexity: 10
-- Ignore: E203, W503/W504
+`bun run test:typescript` discovers the reachable Vitest configurations and invokes one package
+runner for each distinct config. It does not maintain a hardcoded list of test files or suite counts.
+A newly added but unmapped test fails inventory rather than silently disappearing from the aggregate.
 
-### black Rules
+## Live-model gate
 
-- Line length: 100
-- Target: Python 3.12
+The sole live-model configuration is
+`apps/orchestration/vitest.kb-model-smoke.config.ts`. The aggregate TypeScript test coordinator must
+route it through the permanent `test:kb-model-smoke:aggregate` script. That script skips with an
+explicit message unless `PENNY_KB_MODEL_SMOKE=1`.
 
-### mypy Rules
+Setting `PENNY_KB_MODEL_SMOKE=1` opts into the predeclared live KB model cohort and requires separate
+authorization because it can contact an external model and incur cost. Default local and offline gates
+do not silently set it. A skipped live cohort is reported as skipped, never counted as an executed
+live-model pass.
 
-- Python version: 3.12
-- Strict mode enabled
-- Ignore missing imports
+## Assertions and partial hosts in tests
 
-## Test Levels
+Tests use typed factories, small local interfaces, `Pick`, `Parameters`, `ReturnType`, `satisfies`,
+and fail-fast narrowing helpers. Explicit `any`, postfix `!`, and definite-assignment `!:` are
+prohibited in tests as well as runtime source. Malformed input remains `unknown` until a real parser
+handles it; missing required fixture values must fail rather than default.
 
-### Unit Tests (`tests/unit/`)
+Only five centrally registered partial-host assertions exist: one orchestration `ExtensionContext`
+site, one PowerPoint `ExtensionAPI` site, and three questionnaire sites (`ExtensionAPI`, `TUI`, and
+`Theme`). Each registry entry binds an exact path and AST expression to a local rationale, removal
+condition, single immediately preceding lint suppression, and named focused test. No package or test
+directory receives a broad exemption. The exact sites are listed in the
+[TypeScript guide](../coding/typescript.md#the-five-partial-host-test-seams).
 
-Tests isolated logic with all dependencies mocked:
+## No migration baseline
 
-```typescript
-import { describe, it, expect, vi, beforeEach } from "vitest";
+Normal root scripts pass no TypeScript guard baseline. Current debt cannot be accepted by checking in
+an allowlist or running an advisory side command: any inventory or architecture finding fails. The
+guards may support external analysis inputs for migration tooling, but those are not part of Penny's
+delivery or publication command path and never establish full compliance.
 
-vi.mock("fs/promises", () => ({
-  readFile: vi.fn(),
-  access: vi.fn(),
-}));
+## Delivery checklist
 
-describe("Feature Unit Tests", () => {
-  beforeEach(() => { vi.clearAllMocks(); });
-  it("should validate parameters", () => { ... });
-});
-```
-
-### Integration Tests (`tests/integration/`)
-
-Tests with real dependencies where safe:
-
-```typescript
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtemp, rm } from "fs/promises";
-import { tmpdir } from "os";
-
-describe("Feature Integration Tests", () => {
-  it("should work with real filesystem", async () => { ... });
-});
-```
-
-### E2E Tests (`tests/e2e/`)
-
-Tests full extension lifecycle with Pi harness. **E2E tests are mandatory for all extensions** — they validate the complete stack from tool registration through invocation to result rendering. Stubs and placeholders are not acceptable.
-
-Every extension must have at minimum:
-
-- **Tool registration test**: Verify the tool registers and appears in Pi's tool list
-- **Invocation test**: Invoke the tool with valid parameters and verify output shape
-- **Error handling test**: Invoke with invalid parameters and verify graceful error response
-
-```typescript
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { spawn } from "child_process";
-import { mkdtemp, rm } from "fs/promises";
-import { tmpdir } from "os";
-
-// E2E tests spawn actual pi processes to validate full integration
-describe("Feature E2E Tests", () => {
-  it("should register tool and invoke successfully", async () => {
-    // Spawn pi with extension loaded, invoke tool, verify output
-  });
-});
-```
-
-E2E test configuration:
-
-```typescript
-// tests/vitest.e2e.config.ts
-export default defineConfig({
-  test: {
-    include: ["tests/e2e/**/*.test.ts"],
-    environment: "node",
-    globals: true,
-    testTimeout: 60000, // E2E tests may be slow
-    pool: "forks",
-    poolOptions: { forks: { singleFork: true } },
-  },
-});
-```
-
-## Test Commands
-
-```bash
-bun test                    # Unit tests only
-bun run test:unit           # Unit tests only
-bun run test:integration    # Integration tests
-bun run test:all            # All tests + lint + format
-```
-
-## Vitest Configurations
-
-### Unit Tests (`tests/vitest.config.ts`)
-
-```typescript
-export default defineConfig({
-  test: {
-    include: ["tests/unit/**/*.test.ts"],
-    environment: "node",
-    globals: true,
-    testTimeout: 10000,
-  },
-});
-```
-
-### Integration Tests (`tests/vitest.integration.config.ts`)
-
-```typescript
-export default defineConfig({
-  test: {
-    include: ["tests/integration/**/*.test.ts"],
-    environment: "node",
-    globals: true,
-    testTimeout: 30000,
-    pool: "forks",
-    poolOptions: { forks: { singleFork: true } },
-  },
-});
-```
-
-## TDD Workflow
-
-1. **Write failing test first** - Define expected behavior
-2. **Run test** - Confirm it fails for the right reason
-3. **Run lint/format** - Code must pass quality checks
-4. **Write minimal code** - Make test pass
-5. **Refactor** - Clean up while keeping tests green
-6. **Repeat** - Next feature/fix
-
-```bash
-bun run test:watch      # Keep tests running
-bun run lint:fix         # Auto-fix lint issues
-bun run format           # Format code
-```
-
-## Pre-Commit Checklist
-
-```bash
-bun run test:all         # All checks
-bun run lint              # TypeScript linting
-bun run format:check      # Prettier
-bun run py:lint           # Python linting
-bun run py:format:check   # Black
-bun run py:typecheck      # MyPy
-bun run test:unit         # Unit tests
-```
-
-## Current Extension Test Status
-
-| Extension     | Unit | Integration | E2E | Python |
-| ------------- | ---- | ----------- | --- | ------ |
-| environment   | ✅   | 📝          | 📝  | -      |
-| memory        | ✅   | ✅          | 📝  | ✅     |
-| observability | ✅   | 📝          | 📝  | -      |
-| search        | ✅   | 📝          | 📝  | -      |
-| skill         | ✅   | 📝          | 📝  | -      |
-| statusline    | ✅   | 📝          | 📝  | -      |
-| subagent      | ✅   | 📝          | 📝  | -      |
-| questionnaire | 📝   | 📝          | 📝  | -      |
-
-✅ = Implemented · 📝 = Required (not yet implemented) · - = Not applicable
-
-**Note**: E2E column no longer shows "-" — E2E tests are mandatory for all extensions.
+- [ ] Focused package tests pass when behavior changed.
+- [ ] Edited files pass `bun run format:check` or a targeted Prettier check.
+- [ ] Root `bun run lint` and `bun run typecheck` pass for TypeScript changes.
+- [ ] `bun run typescript:guard-tests` passes when guard behavior changes.
+- [ ] `bun run test:typescript` executes all mapped offline configs.
+- [ ] The live-model cohort is explicitly authorized and run, or honestly reported as skipped.
+- [ ] `make verify-publication` passes when the requested scope requires the aggregate local gate.

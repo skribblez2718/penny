@@ -21,15 +21,15 @@ import {
   KbProfileSchema,
   PageRevisionFrontmatterSchema,
   sha256Hex,
+  Sha256HexSchema,
   SourceRecordSchema,
   validateKbContract,
   type KbManifest,
-  type KbPolicy,
   type KbProfile,
   type SourceRecord,
 } from "../src/kb/contracts.js";
 
-const ZERO = "0".repeat(64) as never;
+const ZERO = validateKbContract(Sha256HexSchema, "0".repeat(64), "zero digest fixture");
 const NOW = "2026-01-01T00:00:00Z";
 
 // ── Reference instances ─────────────────────────────────────────────────────

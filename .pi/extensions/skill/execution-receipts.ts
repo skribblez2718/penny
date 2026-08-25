@@ -34,15 +34,33 @@ interface ExecutionOwnerRealm {
   transports: Map<string, TrustedQuestionnaireTransport>;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function executionOwnerRealmSlot(): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, EXECUTION_OWNER_REALM);
+  return descriptor?.value;
+}
+
+function isExecutionOwnerRealm(value: unknown): value is ExecutionOwnerRealm {
+  if (!isRecord(value)) return false;
+  const candidateOwnerKey = value.ownerKey;
+  return (
+    Buffer.isBuffer(candidateOwnerKey) &&
+    candidateOwnerKey.length === 32 &&
+    value.transports instanceof Map
+  );
+}
+
 function executionOwnerRealm(): ExecutionOwnerRealm {
-  const host = globalThis as unknown as Record<symbol, unknown>;
-  const existing = host[EXECUTION_OWNER_REALM];
+  const existing = executionOwnerRealmSlot();
   if (existing === undefined) {
     const created: ExecutionOwnerRealm = {
       ownerKey: randomBytes(32),
       transports: new Map<string, TrustedQuestionnaireTransport>(),
     };
-    Object.defineProperty(host, EXECUTION_OWNER_REALM, {
+    Object.defineProperty(globalThis, EXECUTION_OWNER_REALM, {
       value: created,
       enumerable: false,
       writable: false,
@@ -52,17 +70,12 @@ function executionOwnerRealm(): ExecutionOwnerRealm {
   }
   // Fail loud rather than silently minting a SECOND owner identity, which would
   // reintroduce exactly the split-brain this exists to prevent.
-  const realm = existing as Partial<ExecutionOwnerRealm>;
-  if (
-    !Buffer.isBuffer(realm.ownerKey) ||
-    realm.ownerKey.length !== 32 ||
-    !(realm.transports instanceof Map)
-  ) {
+  if (!isExecutionOwnerRealm(existing)) {
     throw new Error(
       "execution-owner realm singleton is present but malformed; refusing to mint a second owner identity"
     );
   }
-  return realm as ExecutionOwnerRealm;
+  return existing;
 }
 
 /** The per-PROCESS (not per-module-instance) execution-owner capability. */
@@ -85,9 +98,9 @@ export function withExecutionOwnerEnvironment(environment: NodeJS.ProcessEnv): N
 
 function ownerConfiguredSecrets(explicitSecrets: string[]): string[] {
   const secretName = /(?:secret|token|password|passwd|api[_-]?key|credential|private[_-]?key)/i;
-  const environmentSecrets = Object.entries(process.env)
-    .filter(([name, value]) => secretName.test(name) && typeof value === "string")
-    .map(([, value]) => value as string);
+  const environmentSecrets = Object.entries(process.env).flatMap(([name, value]) =>
+    secretName.test(name) && typeof value === "string" ? [value] : []
+  );
   return Array.from(
     new Set([...explicitSecrets, ...environmentSecrets, ownerKey().toString("hex")])
   ).filter((value) => value.length >= 4);
@@ -121,9 +134,9 @@ export function redactReceiptOutput(output: string, configuredSecrets: string[] 
 function canonicalReceiptJson(value: unknown): string {
   const sortValue = (item: unknown): unknown => {
     if (Array.isArray(item)) return item.map(sortValue);
-    if (item && typeof item === "object") {
+    if (isRecord(item)) {
       return Object.fromEntries(
-        Object.entries(item as Record<string, unknown>)
+        Object.entries(item)
           .sort(([left], [right]) => left.localeCompare(right))
           .map(([key, child]) => [key, sortValue(child)])
       );
@@ -181,8 +194,8 @@ function pruneTrustedQuestionnaireTransports(now: number): void {
     }
   }
   while (ownerTransports().size >= TRUSTED_QUESTIONNAIRE_MAX_PENDING) {
-    const oldest = ownerTransports().keys().next().value as string | undefined;
-    if (!oldest) break;
+    const oldest = ownerTransports().keys().next().value;
+    if (typeof oldest !== "string" || oldest.length === 0) break;
     ownerTransports().delete(oldest);
   }
 }
@@ -329,9 +342,8 @@ function contentText(content: unknown): string {
   return content
     .map((block) => {
       if (typeof block === "string") return block;
-      if (!block || typeof block !== "object") return "";
-      const record = block as Record<string, unknown>;
-      return typeof record.text === "string" ? record.text : "";
+      if (!isRecord(block)) return "";
+      return typeof block.text === "string" ? block.text : "";
     })
     .filter(Boolean)
     .join("\n");
@@ -355,11 +367,13 @@ function eventTimestamp(value: unknown): string | undefined {
 }
 
 function completeCommandOutput(result: Record<string, unknown>): string | undefined {
-  const details = result.details as Record<string, unknown> | undefined;
-  const truncation = details?.truncation as Record<string, unknown> | undefined;
+  const details = isRecord(result.details) ? result.details : undefined;
+  const truncation = isRecord(details?.truncation) ? details.truncation : undefined;
   if (truncation?.truncated !== true) return contentText(result.content) || undefined;
 
-  const capture = details?.executionOwnerCapture as Record<string, unknown> | undefined;
+  const capture = isRecord(details?.executionOwnerCapture)
+    ? details.executionOwnerCapture
+    : undefined;
   const output = capture?.output;
   const outputDigest = capture?.output_digest;
   if (
@@ -378,30 +392,28 @@ function completeCommandOutput(result: Record<string, unknown>): string | undefi
 function observedSuccessfulCommands(messages: unknown[]): ObservedCommand[] {
   const calls = new Map<string, ObservedCall>();
   for (const message of messages) {
-    if (!message || typeof message !== "object") continue;
-    const record = message as Record<string, unknown>;
-    if (record.role !== "assistant" || !Array.isArray(record.content)) continue;
-    for (const block of record.content) {
-      if (!block || typeof block !== "object") continue;
-      const call = block as Record<string, unknown>;
-      const args = call.arguments as Record<string, unknown> | undefined;
+    if (!isRecord(message)) continue;
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (!isRecord(block)) continue;
+      const args = isRecord(block.arguments) ? block.arguments : undefined;
       if (
-        call.type === "toolCall" &&
-        call.name === "bash" &&
-        typeof call.id === "string" &&
+        block.type === "toolCall" &&
+        block.name === "bash" &&
+        typeof block.id === "string" &&
         typeof args?.command === "string"
       ) {
-        calls.set(call.id, {
+        calls.set(block.id, {
           command: args.command,
-          startedAt: eventTimestamp(record.timestamp),
+          startedAt: eventTimestamp(message.timestamp),
         });
       }
     }
   }
   const observed: ObservedCommand[] = [];
   for (const message of messages) {
-    if (!message || typeof message !== "object") continue;
-    const result = message as Record<string, unknown>;
+    if (!isRecord(message)) continue;
+    const result = message;
     const callId = typeof result.toolCallId === "string" ? result.toolCallId : "";
     const call = calls.get(callId);
     if (result.role !== "toolResult" || result.toolName !== "bash" || !call) continue;
@@ -437,11 +449,9 @@ export function buildObservedCommandReceipts(input: {
   const claimedKeys = new Set<string>();
   const receipts: Record<string, unknown>[] = [];
   for (const claim of input.claims) {
-    if (!claim || typeof claim !== "object") continue;
-    const record = claim as Record<string, unknown>;
-    const obligationId =
-      typeof record.obligation_id === "string" ? record.obligation_id.trim() : "";
-    const command = typeof record.command === "string" ? record.command : "";
+    if (!isRecord(claim)) continue;
+    const obligationId = typeof claim.obligation_id === "string" ? claim.obligation_id.trim() : "";
+    const command = typeof claim.command === "string" ? claim.command : "";
     if (!obligationId || !command) continue;
     const match = observed.find((candidate) => candidate.command === command);
     const claimKey = `${obligationId}\u0000${command}`;
@@ -545,9 +555,7 @@ export function parseTrustedHumanEventMarker(text: string): Record<string, unkno
   if (!marker) return undefined;
   try {
     const parsed: unknown = JSON.parse(marker.slice(prefix.length));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
+    return isRecord(parsed) ? parsed : undefined;
   } catch {
     return undefined;
   }

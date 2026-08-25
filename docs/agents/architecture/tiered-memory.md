@@ -15,11 +15,12 @@ artifact plane; `RunContext` stores only compact refs and routing state.
 
 ## Rules
 
-1. Only the unmarked primary runtime has memory tools and lifecycle hooks.
+1. The unmarked primary runtime owns all memory writes and lifecycle hooks.
 2. Primary T2/T3 recall is value-triggered, bounded, provenance-aware, and advisory.
-3. Workers and skill drivers have no memory tools or instructions.
-4. Active workflow handoff uses owner grants plus `artifact_read`; large reads use
-   typed continuation until complete.
+3. Catalog workers may hold the YAML-declared `memory.read` subset. It is advisory recall,
+   never workflow transport; no worker receives write, diary-write, KG-write, or logstream tools.
+4. Active workflow handoff uses exact immutable artifact IDs plus `artifact_read`;
+   large reads repeat with non-expiring `next_range` until complete.
 5. Curated writes preserve stable reusable knowledge only. The write path enforces
    duplicate rejection; no routine precheck is required.
 6. The primary diary may retain one bounded session entry. Workers never write diaries.
@@ -42,7 +43,8 @@ One authenticated supervised MemPalace 3.7.1 HTTP hub owns normal writable
 access. Production, admin, eval, and retention paths have no raw/direct fallback.
 The local primary extension may expose the strict advisory logstream subset while
 generic `platform-memory` clients continue to forbid all logstream operations.
-Workers receive neither tools nor memory configuration. Offline raw access is
+Workers receive only the minimal configuration needed by YAML-declared read-only tools;
+optional-service absence returns typed call errors. Offline raw access is
 limited to a drained, stopped, receipt-bound copied target. Setup, cutover, and
 uninstall preserve caller-owned data; deletion is separate.
 
@@ -50,11 +52,11 @@ uninstall preserve caller-owned data; deletion is separate.
 
 Conversation compaction is not T4. The compaction summary carries a concise prose
 orientation and optional code-owned exact run/artifact refs. Resume from the run
-checkpoint and granted artifacts; memory absence does not block continuation.
+checkpoint and exact artifact IDs; memory absence does not block continuation.
 
 ## Verification
 
-- [ ] Workers expose no memory or advisory logstream tools.
+- [ ] Workers expose only YAML-declared read-only memory and no write/logstream tools.
 - [ ] Workflow handoff/recovery is exact-artifact based.
 - [ ] Dedicated artifact/patch endpoints and refs are absent; advisory body text is never consumed as artifact handoff, workflow state, a persistence receipt, or recovery input.
 - [ ] Advisory reads remain strictly self-addressed and reject upstream broadcasts.

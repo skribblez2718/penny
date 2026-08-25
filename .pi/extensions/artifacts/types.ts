@@ -1,88 +1,54 @@
 import type { TextToolResult, ToolResultBudget } from "../lib/tool-result-budget.js";
+import type { ArtifactRef } from "./owner-client.js";
+import { Type, type Static } from "typebox";
 
-export const ARTIFACT_SCHEMA_VERSION = 1 as const;
+export const ARTIFACT_SCHEMA_VERSION = 2 as const;
 export const ARTIFACT_OPERATION = "artifact_read" as const;
 
 export type ArtifactErrorCode =
   | "ARTIFACT_CONFIG_INVALID"
-  | "ARTIFACT_NOT_GRANTED"
-  | "ARTIFACT_WRONG_RUN"
-  | "ARTIFACT_WRONG_CONSUMER"
-  | "ARTIFACT_STALE"
+  | "ARTIFACT_INVALID_ID"
   | "ARTIFACT_MISSING"
   | "ARTIFACT_DIGEST_MISMATCH"
   | "ARTIFACT_ENCODING_INVALID"
   | "ARTIFACT_RANGE_INVALID"
-  | "ARTIFACT_CURSOR_INVALID"
-  | "ARTIFACT_CURSOR_EXPIRED"
-  | "ARTIFACT_RESULT_BUDGET_EXCEEDED"
-  | "ARTIFACT_MATERIALIZATION_FAILED";
+  | "ARTIFACT_RESULT_BUDGET_EXCEEDED";
 
-/** Exact schema-v1 transport reference accepted by the artifact plane. */
-export interface ArtifactRef {
-  schema_version: 1;
-  artifact_id: string;
-  run_id: string;
-  phase: string;
-  branch_id: string | null;
-  kind: string;
-  operation_id: string;
-  version: number;
-  producer: string;
-  consumer_scope: string[];
-  media_type: string;
-  byte_length: number;
-  content_digest: string;
-  store_ref: string;
-}
+export type { ArtifactRef };
 
-/** Exact schema-v1 manifest envelope accepted by the artifact plane. */
-export interface ArtifactEnvelope extends ArtifactRef {
-  created_at: string;
-  parent_ref: ArtifactRef | null;
-  upstream_refs: ArtifactRef[];
-}
+export const ArtifactReadParamsSchema = Type.Object(
+  {
+    artifact: Type.String({
+      pattern: "^art_[a-f0-9]{64}$",
+      description: "Exact immutable artifact ID",
+    }),
+    range: Type.Optional(
+      Type.Object(
+        {
+          start: Type.Integer({
+            minimum: 0,
+            description: "Inclusive UTF-8 byte offset",
+          }),
+          end: Type.Optional(
+            Type.Integer({
+              minimum: 0,
+              description: "Exclusive UTF-8 byte offset; defaults to artifact end",
+            })
+          ),
+        },
+        { additionalProperties: false }
+      )
+    ),
+  },
+  { additionalProperties: false }
+);
 
-export interface ArtifactGrant {
-  artifact: ArtifactRef;
-  expires_at: string;
-}
-
-export interface ArtifactCaller {
-  run_id: string;
-  consumer_ref: string;
-  invocation_id: string;
-}
-
-export interface ArtifactInvocation {
-  schema_version: 1;
-  caller: ArtifactCaller;
-  grants: ArtifactGrant[];
-}
-
-export type ArtifactLocator = string | ArtifactRef;
-
-export interface ArtifactReadParams {
-  artifact: ArtifactLocator;
-  range?: {
-    start: number;
-    end?: number;
-  };
-  cursor?: string;
-}
+export type ArtifactReadParams = Static<typeof ArtifactReadParamsSchema>;
 
 export interface ArtifactRuntimeConfig {
   artifactRoot: string;
-  invocationJson?: string;
-  invocationFile?: string;
-  cursorKey: Buffer;
-  cursorTtlMs: number;
+  projectId: string;
   budget: ToolResultBudget;
-  materialization: {
-    enabled: boolean;
-    thresholdBytes: number;
-    ttlMs: number;
-  };
 }
 
 export interface ArtifactTelemetry {
@@ -91,15 +57,7 @@ export interface ArtifactTelemetry {
 }
 
 export interface ArtifactRuntimeDependencies {
-  now?: () => number;
   telemetry?: ArtifactTelemetry;
-  /**
-   * Owner-side resolution of one exact artifact ID for runtimes that have no
-   * process-environment invocation snapshot (the unmarked primary runtime).
-   * Returning `undefined` is `ARTIFACT_NOT_GRANTED`; the resolver never
-   * enumerates and is never reachable from model arguments.
-   */
-  invocationResolver?: (artifactId: string) => Promise<ArtifactInvocation | undefined>;
 }
 
 export interface ArtifactExecution {

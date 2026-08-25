@@ -1,3 +1,4 @@
+import { requireValue } from "./helpers/narrowing.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -224,7 +225,10 @@ describe("§5.13 observation oracle negatives", () => {
     expect(() =>
       assertObservationDecision({
         ...observationInput(fixture),
-        pairs: [...fixture.pairs.slice(0, -1), fixture.pairs[0]!],
+        pairs: [
+          ...fixture.pairs.slice(0, -1),
+          requireValue(fixture.pairs[0], "apps/orchestration/tests/kb-gate-decisions.test.ts:227"),
+        ],
       })
     ).toThrow(/exactly once/u);
     expect(() =>
@@ -245,7 +249,8 @@ describe("§5.13 observation oracle negatives", () => {
       );
     const mismatched = withFirstCandidate({
       projection: {
-        ...fixture.pairs[0]!.candidate.projection,
+        ...requireValue(fixture.pairs[0], "apps/orchestration/tests/kb-gate-decisions.test.ts:248")
+          .candidate.projection,
         safe_counts: { sources: 3 },
       },
     });

@@ -9,6 +9,9 @@ import { describe, it, expect } from "vitest";
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "node:url";
+
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../..");
 
 describe("Observability E2E — Extension Discovery", () => {
   it("should have pi available on PATH", () => {
@@ -17,7 +20,7 @@ describe("Observability E2E — Extension Discovery", () => {
   });
 
   it("should have the observability extension directory structure", () => {
-    const extDir = path.join(process.cwd(), ".pi/extensions/observability");
+    const extDir = path.join(PROJECT_ROOT, ".pi/extensions/observability");
     expect(fs.existsSync(path.join(extDir, "index.ts"))).toBe(true);
     expect(fs.existsSync(path.join(extDir, "package.json"))).toBe(true);
     expect(fs.existsSync(path.join(extDir, "tsconfig.json"))).toBe(true);

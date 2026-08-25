@@ -30,7 +30,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createLogger } from "../../lib/logger/logger.js";
 import { type SessionLike, type TranscriptResult, transcriptFromSession } from "./transcript.js";
 
@@ -96,14 +96,65 @@ export function acceptableRewrite(enhanced: string): boolean {
  * NOTE: complete() RESOLVES (never rejects) on abort/provider error, returning
  * the partial message with stopReason "aborted"/"error" — so enhanceText must
  * inspect stopReason, not rely on a thrown exception. */
+interface CompleteContentPart {
+  type: string;
+  text?: string;
+}
+
+interface CompleteResponse {
+  content: CompleteContentPart[];
+  stopReason?: string;
+}
+
 export type CompleteFn = (
   model: unknown,
   request: { messages: unknown[] },
   options: Record<string, unknown>
-) => Promise<{
-  content: Array<{ type: string; text?: string }>;
-  stopReason?: string;
-}>;
+) => Promise<CompleteResponse>;
+
+interface CompatRuntimeModule {
+  complete: CompleteFn;
+}
+
+interface UnknownModuleRecord {
+  readonly [key: string]: unknown;
+}
+
+function isUnknownModuleRecord(value: unknown): value is UnknownModuleRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isUnknownCallable(value: unknown): value is (...args: unknown[]) => unknown {
+  return typeof value === "function";
+}
+
+function isSessionLike(value: unknown): value is SessionLike {
+  return (
+    isUnknownModuleRecord(value) &&
+    (value.buildContextEntries === undefined || typeof value.buildContextEntries === "function")
+  );
+}
+
+function isCompatRuntimeModule(value: unknown): value is CompatRuntimeModule {
+  return isUnknownModuleRecord(value) && typeof value.complete === "function";
+}
+
+function isCompleteContentPart(value: unknown): value is CompleteContentPart {
+  return (
+    isUnknownModuleRecord(value) &&
+    typeof value.type === "string" &&
+    (value.text === undefined || typeof value.text === "string")
+  );
+}
+
+function isCompleteResponse(value: unknown): value is CompleteResponse {
+  return (
+    isUnknownModuleRecord(value) &&
+    Array.isArray(value.content) &&
+    value.content.every(isCompleteContentPart) &&
+    (value.stopReason === undefined || typeof value.stopReason === "string")
+  );
+}
 
 export interface EnhanceDeps {
   completeFn?: CompleteFn;
@@ -118,8 +169,71 @@ async function resolveComplete(deps: EnhanceDeps): Promise<CompleteFn> {
   // A variable specifier keeps tsc from statically resolving a package that only
   // exists inside pi's loader — same pattern as compaction/summarizer.ts.
   const spec = "@earendil-works/pi-ai/compat";
-  const mod = (await import(spec)) as unknown as { complete: CompleteFn };
-  return mod.complete;
+  const imported: unknown = await import(spec);
+  if (!isCompatRuntimeModule(imported)) {
+    throw new TypeError("pi-ai compat module has no callable complete export");
+  }
+  return async (model, request, options) => {
+    const response: unknown = await imported.complete(model, request, options);
+    if (!isCompleteResponse(response)) {
+      throw new TypeError("pi-ai compat complete returned an invalid response");
+    }
+    return response;
+  };
+}
+
+type ModelAuthResolution =
+  | {
+      ok: true;
+      apiKey?: string;
+      headers?: Record<string, string>;
+      env?: Record<string, string>;
+    }
+  | { ok: false };
+
+function optionalStringRecord(value: unknown, field: string): Record<string, string> | undefined {
+  if (value === undefined) return undefined;
+  if (!isUnknownModuleRecord(value)) {
+    throw new TypeError(`model registry auth response has invalid ${field}`);
+  }
+  const result: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item !== "string") {
+      throw new TypeError(`model registry auth response has invalid ${field}.${key}`);
+    }
+    result[key] = item;
+  }
+  return result;
+}
+
+/**
+ * Pi currently exposes the session model as Model<any> while its registry auth
+ * resolver accepts Model<Api>. Keep the exact runtime object, isolate that
+ * upstream generic mismatch behind an unknown callable, and validate the only
+ * response field enhancement consumes.
+ */
+async function resolveModelAuth(
+  ctx: ExtensionContext,
+  model: unknown
+): Promise<ModelAuthResolution> {
+  const resolver: unknown = ctx.modelRegistry.getApiKeyAndHeaders.bind(ctx.modelRegistry);
+  if (!isUnknownCallable(resolver)) {
+    throw new TypeError("model registry auth resolver is not callable");
+  }
+  const response: unknown = await resolver(model);
+  if (!isUnknownModuleRecord(response) || typeof response.ok !== "boolean") {
+    throw new TypeError("model registry auth resolver returned an invalid response");
+  }
+  if (!response.ok) return { ok: false };
+  if (response.apiKey !== undefined && typeof response.apiKey !== "string") {
+    throw new TypeError("model registry auth response has invalid apiKey");
+  }
+  return {
+    ok: true,
+    apiKey: response.apiKey,
+    headers: optionalStringRecord(response.headers, "headers"),
+    env: optionalStringRecord(response.env, "env"),
+  };
 }
 
 async function enhanceText(
@@ -143,7 +257,7 @@ async function enhanceText(
     logger.warn("no model available for enhancement");
     return null;
   }
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+  const auth = await resolveModelAuth(ctx, model);
   // ok=false means auth resolution failed; a missing apiKey is legitimate for
   // keyless providers (e.g. a local endpoint), so don't hard-require it.
   if (!auth.ok) {
@@ -187,8 +301,8 @@ async function enhanceText(
       return null;
     }
     const enhanced = response.content
-      .filter((c): c is { type: "text"; text: string } => c.type === "text")
-      .map((c) => c.text)
+      .filter((part) => part.type === "text")
+      .map((part) => part.text ?? "")
       .join("\n")
       .trim();
     if (!acceptableRewrite(enhanced)) {
@@ -235,7 +349,9 @@ export default function enhance(pi: ExtensionAPI, deps: EnhanceDeps = {}): void 
 
     // Full active conversation so referential prompts resolve. Failure to read
     // the session yields an empty transcript — never blocks the input path.
-    const transcript = transcriptFromSession(ctx.sessionManager as SessionLike | undefined);
+    const transcript = transcriptFromSession(
+      isSessionLike(ctx.sessionManager) ? ctx.sessionManager : undefined
+    );
     ctx.ui.notify(
       transcript.entryCount > 0
         ? `Enhancing prompt (${transcript.entryCount} session entries)…`

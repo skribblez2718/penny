@@ -1,13 +1,14 @@
 # Evaluation
 
-## Why some numbers are frozen before the code
+## Why some numbers were frozen before implementation
 
-Three values cannot be chosen honestly after seeing results: the **package surface**, the
-**retrieval quality bar**, and the **research observation window**. If any of them is selected after
-observing an outcome, the "gate" measures nothing — it just describes whatever happened.
+Three values could not be chosen honestly after seeing results: the **package surface**, the
+**retrieval quality bar**, and the **research observation window**. If any had been selected after
+observing an outcome, the "gate" would have measured nothing — it would only have described what
+happened.
 
-Each is therefore fixed in an explicit, operator-approved, independently reviewed decision receipt,
-written before its boundary and digest-recorded:
+For the completed implementation gate sequence, each was fixed in an explicit, operator-approved,
+independently reviewed decision receipt written before its boundary and digest-recorded:
 
 | Receipt              | Approved | Must predate                                        |
 | -------------------- | -------- | --------------------------------------------------- |
@@ -15,17 +16,29 @@ written before its boundary and digest-recorded:
 | Retrieval baseline   | After G6 | Any retrieval implementation, tuning, or result run |
 | Research observation | After G5 | The first canary result                             |
 
-Receipts are strict canonical JSON in an ignored, owner-only store. The approver and the independent
-reviewer must be **different** identities, and the review hashes the complete decision. A
-model-authored or unreviewed file is not approval. Changing any frozen field invalidates the
-evidence gathered under it.
+Those implementation-time receipts were strict canonical JSON in an ignored, owner-only store. The
+approver and independent reviewer were **different** identities, and the review hashed the complete
+decision. A model-authored or unreviewed file was not approval. Changing a frozen field invalidated
+the implementation evidence gathered under it.
+
+The completed receipts are historical decision evidence, not runtime state and not inputs to the
+current test suite. Current regression coverage is self-contained in tracked code and fixtures:
+
+- package-surface tests retain the receipt parser, validator, and exact-comparison unit contracts;
+- retrieval scoring reads `apps/orchestration/tests/fixtures/kb-retrieval.json` directly with
+  tracked `k = 10` and hit@k/MRR/contradiction-recall floors of `1 / 1 / 1`;
+- deterministic answer-quality execution reads the same fixture directly with `k = 10` and a
+  maximum bad-answer rate of `0`.
+
+No current regression test requires an owner-local legacy decision receipt.
 
 ## Objective oracles
 
-**Package.** The oracle deep-compares canonicalized package `name`, `version`, `private`, `exports`,
-`bin`, and `scripts` against the receipt, then requires exact sorted equality with the parsed
-pack dry-run file list. Any extra or missing field or file fails. A root or adapter pack cannot
-substitute for the app package; each independently tested package asserts its own reviewed list.
+**Package.** The implementation-time oracle deep-compared canonicalized package `name`, `version`,
+`private`, `exports`, `bin`, and `scripts` against its decision, then required exact sorted equality
+with the parsed pack dry-run file list. Any extra or missing field or file failed. Current tracked
+unit tests preserve the closed decision contract, parser hardening, dry-run parsing, and exact field
+and file comparison without loading the historical live receipt.
 
 **Retrieval.** Over a closed, synthetic, non-personal fixture with unique corpus and cases:
 
@@ -92,9 +105,10 @@ allowed-delta oracles, opaque source identity and its distinct digest roles, sou
 immutability, old/new generation views, profile-safe restart, deny-before-session, path-free
 handles, parent delivery, approval cryptography and single use, and byte-preserving rollback.
 
-These survive an implementation rewrite. Baselines change only through a new explicit
-operator-reviewed receipt, together with invalidation of the evidence that the old baseline
-supported.
+These survive an implementation rewrite. The completed implementation-time decisions remain tied
+to their historical receipts and evidence. Current tracked regression fixtures and constants change
+through an explicit reviewed repository update with corresponding regression evidence; they are not
+reconstructed from owner-local receipts.
 
 A completion claim must carry current command and test evidence and must name anything it did not
 verify.

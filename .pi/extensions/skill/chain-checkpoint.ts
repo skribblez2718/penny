@@ -11,8 +11,8 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { join } from "node:path";
+import { resolvePennyProjectState } from "@penny/orchestration/source";
 import { randomBytes } from "node:crypto";
 
 import { ArtifactClientError, parseArtifactRef, type ArtifactRef } from "./artifact-client.js";
@@ -24,6 +24,7 @@ export interface ChainCheckpointStep {
   index: number;
   skill_name: string;
   goal: string;
+  input_artifacts?: string[];
   session_id: string;
   status: "pending" | "running" | "complete" | "failed";
   model?: string;
@@ -41,6 +42,8 @@ export interface ChainCheckpointStep {
 
 export interface ChainCheckpoint {
   schema_version: 1;
+  state_layout_version: 1;
+  project_id: string;
   chain_session_id: string;
   chain_run_id: string;
   chain_goal_summary: string;
@@ -52,6 +55,7 @@ export interface ChainCheckpoint {
     index: number;
     skill_name: string;
     goal: string;
+    input_artifacts?: string[];
     session_id: string;
     model?: string;
     constraints?: Record<string, unknown>;
@@ -72,29 +76,30 @@ function canonicalChainSessionId(value: unknown): string {
 }
 
 export function resolveSkillChainStateRoot(
+  projectRoot: string,
   env: Readonly<Record<string, string | undefined>> = process.env
 ): string {
-  const explicit = env.PENNY_SKILL_CHAIN_STATE_ROOT?.trim();
-  if (explicit) {
-    if (!isAbsolute(explicit)) checkpointError("PENNY_SKILL_CHAIN_STATE_ROOT must be absolute");
-    return resolve(explicit);
+  if (env.PENNY_SKILL_CHAIN_STATE_ROOT?.trim()) {
+    checkpointError(
+      "PENNY_SKILL_CHAIN_STATE_ROOT is retired; chains are bound to the Penny project partition"
+    );
   }
-  const xdgStateHome = env.XDG_STATE_HOME?.trim();
-  if (xdgStateHome) {
-    if (!isAbsolute(xdgStateHome)) checkpointError("XDG_STATE_HOME must be absolute");
-    return join(resolve(xdgStateHome), "penny", "skill-chains");
+  try {
+    return resolvePennyProjectState(projectRoot, { env }).paths.skillChains;
+  } catch (error) {
+    checkpointError(error instanceof Error ? error.message : "Penny project state is unavailable");
   }
-  const home = env.HOME?.trim() || homedir();
-  if (!home || !isAbsolute(home))
-    checkpointError("no absolute skill-chain state root is available");
-  return join(resolve(home), ".local", "state", "penny", "skill-chains");
 }
 
 function checkpointPath(
   chainSessionId: string,
+  projectRoot: string,
   env: Readonly<Record<string, string | undefined>>
 ): string {
-  return join(resolveSkillChainStateRoot(env), `${canonicalChainSessionId(chainSessionId)}.json`);
+  return join(
+    resolveSkillChainStateRoot(projectRoot, env),
+    `${canonicalChainSessionId(chainSessionId)}.json`
+  );
 }
 
 function assertOwnerOnly(path: string, type: "file" | "directory"): void {
@@ -109,9 +114,98 @@ function assertOwnerOnly(path: string, type: "file" | "directory"): void {
   }
 }
 
-function normalizeCheckpoint(value: ChainCheckpoint): ChainCheckpoint {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isArtifactRef(value: unknown): value is ArtifactRef {
+  try {
+    parseArtifactRef(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isCheckpointStep(value: unknown): value is ChainCheckpointStep {
+  if (!isRecord(value)) return false;
+  const status = value.status;
+  const errorDetail = value.error_detail;
+  return (
+    typeof value.index === "number" &&
+    typeof value.skill_name === "string" &&
+    typeof value.goal === "string" &&
+    (value.input_artifacts === undefined || isStringArray(value.input_artifacts)) &&
+    typeof value.session_id === "string" &&
+    (status === "pending" ||
+      status === "running" ||
+      status === "complete" ||
+      status === "failed") &&
+    (value.model === undefined || typeof value.model === "string") &&
+    (value.constraints === undefined || isRecord(value.constraints)) &&
+    (value.result_preview === undefined || typeof value.result_preview === "string") &&
+    (value.output_artifact_ref === undefined || isArtifactRef(value.output_artifact_ref)) &&
+    (value.handoff_artifact_ref === undefined || isArtifactRef(value.handoff_artifact_ref)) &&
+    (value.error === undefined || typeof value.error === "string") &&
+    (errorDetail === undefined ||
+      (isRecord(errorDetail) &&
+        (errorDetail.agent === undefined || typeof errorDetail.agent === "string") &&
+        (errorDetail.stop_reason === undefined || typeof errorDetail.stop_reason === "string") &&
+        typeof errorDetail.timestamp === "string"))
+  );
+}
+
+function isPendingCheckpointStep(
+  value: unknown
+): value is ChainCheckpoint["pending_steps"][number] {
+  return (
+    isRecord(value) &&
+    typeof value.index === "number" &&
+    typeof value.skill_name === "string" &&
+    typeof value.goal === "string" &&
+    (value.input_artifacts === undefined || isStringArray(value.input_artifacts)) &&
+    typeof value.session_id === "string" &&
+    (value.model === undefined || typeof value.model === "string") &&
+    (value.constraints === undefined || isRecord(value.constraints))
+  );
+}
+
+function isChainCheckpoint(value: unknown): value is ChainCheckpoint {
+  if (!isRecord(value)) return false;
+  const status = value.chain_status;
+  return (
+    value.schema_version === SKILL_CHAIN_CHECKPOINT_SCHEMA_VERSION &&
+    value.state_layout_version === 1 &&
+    typeof value.project_id === "string" &&
+    typeof value.chain_session_id === "string" &&
+    typeof value.chain_run_id === "string" &&
+    typeof value.chain_goal_summary === "string" &&
+    Array.isArray(value.steps) &&
+    value.steps.every(isCheckpointStep) &&
+    typeof value.current_step === "number" &&
+    typeof value.total_steps === "number" &&
+    (status === "running" || status === "failed" || status === "complete") &&
+    Array.isArray(value.pending_steps) &&
+    value.pending_steps.every(isPendingCheckpointStep) &&
+    typeof value.created_at === "string" &&
+    typeof value.updated_at === "string"
+  );
+}
+
+function normalizeCheckpoint(value: unknown, expectedProjectId: string): ChainCheckpoint {
+  if (!isChainCheckpoint(value)) {
+    checkpointError("skill-chain checkpoint does not match its schema");
+  }
   if (value.schema_version !== SKILL_CHAIN_CHECKPOINT_SCHEMA_VERSION) {
     checkpointError("unsupported skill-chain checkpoint schema");
+  }
+  if (value.state_layout_version !== 1) checkpointError("unsupported state layout version");
+  if (value.project_id !== expectedProjectId) {
+    checkpointError("skill-chain checkpoint belongs to another Penny project");
   }
   const chainSessionId = canonicalChainSessionId(value.chain_session_id);
   if (value.chain_run_id !== chainSessionId) checkpointError("skill-chain run identity is stale");
@@ -130,10 +224,13 @@ function normalizeCheckpoint(value: ChainCheckpoint): ChainCheckpoint {
     const handoffRef = step.handoff_artifact_ref
       ? parseArtifactRef(step.handoff_artifact_ref)
       : undefined;
-    if (handoffRef) {
-      const target = value.steps.find((candidate) => candidate.index === step.index + 1);
-      if (!target || handoffRef.run_id !== target.session_id) {
-        checkpointError("skill-chain handoff artifact is not bound to the next target run");
+    if (step.input_artifacts !== undefined) {
+      if (
+        !Array.isArray(step.input_artifacts) ||
+        new Set(step.input_artifacts).size !== step.input_artifacts.length ||
+        step.input_artifacts.some((id) => !/^art_[a-f0-9]{64}$/u.test(id))
+      ) {
+        checkpointError("skill-chain explicit input artifacts are invalid");
       }
     }
     return {
@@ -148,15 +245,17 @@ function normalizeCheckpoint(value: ChainCheckpoint): ChainCheckpoint {
 /** Atomically persist complete owner-only restart state under XDG state. */
 export function saveChainCheckpoint(
   checkpoint: ChainCheckpoint,
+  projectRoot: string,
   env: Readonly<Record<string, string | undefined>> = process.env
 ): void {
   checkpoint.updated_at = new Date().toISOString();
-  const normalized = normalizeCheckpoint(checkpoint);
-  const root = resolveSkillChainStateRoot(env);
+  const state = resolvePennyProjectState(projectRoot, { env });
+  const normalized = normalizeCheckpoint(checkpoint, state.projectId);
+  const root = resolveSkillChainStateRoot(projectRoot, env);
   mkdirSync(root, { recursive: true, mode: 0o700 });
   chmodSync(root, 0o700);
   assertOwnerOnly(root, "directory");
-  const destination = checkpointPath(normalized.chain_session_id, env);
+  const destination = checkpointPath(normalized.chain_session_id, projectRoot, env);
   const temporary = join(
     root,
     `.${normalized.chain_session_id}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`
@@ -190,11 +289,13 @@ export function saveChainCheckpoint(
 /** Load and validate durable exact refs; absence is distinct from corruption. */
 export function readChainCheckpoint(
   chainSessionId: string,
+  projectRoot: string,
   env: Readonly<Record<string, string | undefined>> = process.env
 ): ChainCheckpoint | null {
-  const filePath = checkpointPath(chainSessionId, env);
+  const state = resolvePennyProjectState(projectRoot, { env });
+  const filePath = checkpointPath(chainSessionId, projectRoot, env);
   if (!existsSync(filePath)) return null;
-  assertOwnerOnly(resolveSkillChainStateRoot(env), "directory");
+  assertOwnerOnly(resolveSkillChainStateRoot(projectRoot, env), "directory");
   assertOwnerOnly(filePath, "file");
   let value: unknown;
   try {
@@ -202,8 +303,5 @@ export function readChainCheckpoint(
   } catch {
     checkpointError("skill-chain checkpoint is not valid JSON");
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    checkpointError("skill-chain checkpoint must be an object");
-  }
-  return normalizeCheckpoint(value as ChainCheckpoint);
+  return normalizeCheckpoint(value, state.projectId);
 }

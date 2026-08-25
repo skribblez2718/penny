@@ -23,7 +23,7 @@ skill tool
 | Playbook                 | State vocabulary, input selection, routing, repairs, gates, terminal result      |
 | Engine                   | Contract/authority checks, checkpoints, receipts, recovery, completion admission |
 | Worker                   | Exact input reads and complete stage output                                      |
-| ArtifactStore            | Immutable bytes, metadata, versions, consumer scopes                             |
+| ArtifactStore            | Immutable bytes, lineage metadata, versions, and direct exact-ID reads           |
 
 ## Requests
 
@@ -44,13 +44,13 @@ skill tool
 6. Gates and escalation emit `await_user`; only `respond` can continue them.
 7. Repairs are explicit successor states and have finite budgets.
 8. Recovery is exact-run, idempotent, and memory-independent.
-9. Composition imports exact predecessor bytes as target-run `chain_input` artifacts.
+9. Composition verifies and forwards exact predecessor IDs directly across runs.
 
 ## Verification
 
 - [ ] Playbook is registered and contract-valid.
 - [ ] Start/step/respond/recover/cancel all fail closed on wrong identity.
-- [ ] Wrong artifact consumer/run/state/branch is rejected.
+- [ ] Missing/corrupt input IDs are rejected before worker use; cross-run fan-in succeeds.
 - [ ] Crash and partial-fan recovery preserve exact refs.
 - [ ] Gate payload/challenge binds the response.
 - [ ] Positive terminals satisfy `CompletionGateV1`.

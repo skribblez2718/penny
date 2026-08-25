@@ -2,8 +2,8 @@
  * Penny compaction checkpoint schemas.
  *
  * Version 3 removes semantic memory/session discovery. Recovery state is a
- * strict set of exact orchestration run IDs and immutable artifact references
- * read from TypeScript v2 RunContext.selected_artifacts checkpoints.
+ * strict set of exact current-session run IDs and immutable communication refs
+ * proven by result metadata, explicit reused inputs, prior indexes, or named checkpoints.
  */
 
 import { createHash } from "node:crypto";
@@ -12,25 +12,13 @@ import { z } from "zod";
 
 export const SCHEMA_VERSION = "3.0.0" as const;
 export const RESUME_REFS_VERSION = 2 as const;
-export const ARTIFACT_REF_SCHEMA_VERSION = 1 as const;
+export const ARTIFACT_REF_SCHEMA_VERSION = 2 as const;
 
 function hasControlCharacter(value: string): boolean {
   return Array.from(value).some((character) => {
     const codePoint = character.codePointAt(0) ?? -1;
     return codePoint < 32 || codePoint === 127;
   });
-}
-
-function compareUnicode(left: string, right: string): number {
-  const leftPoints = Array.from(left, (character) => character.codePointAt(0) ?? -1);
-  const rightPoints = Array.from(right, (character) => character.codePointAt(0) ?? -1);
-  const length = Math.min(leftPoints.length, rightPoints.length);
-  for (let index = 0; index < length; index += 1) {
-    if (leftPoints[index] !== rightPoints[index]) {
-      return (leftPoints[index] ?? -1) - (rightPoints[index] ?? -1);
-    }
-  }
-  return leftPoints.length - rightPoints.length;
 }
 
 const CanonicalStringSchema = z
@@ -82,32 +70,51 @@ export const EngineRunRefSchema = z
   })
   .strict();
 
+const ArtifactRefFields = {
+  artifact_id: ArtifactIdSchema,
+  run_id: CanonicalStringSchema,
+  phase: CanonicalStringSchema,
+  branch_id: CanonicalStringSchema.nullable(),
+  kind: z.string().regex(/^[a-z][a-z0-9-]*$/),
+  operation_id: CanonicalStringSchema,
+  version: z.number().int().positive(),
+  producer: CanonicalStringSchema,
+  media_type: CanonicalStringSchema,
+  byte_length: z.number().int().nonnegative(),
+  content_digest: DigestSchema,
+  store_ref: z.string().regex(/^artifact:\/\/sha256\/[0-9a-f]{64}$/),
+};
+
 export const ArtifactRefSchema = z
-  .object({
-    schema_version: z.literal(ARTIFACT_REF_SCHEMA_VERSION),
-    artifact_id: ArtifactIdSchema,
-    run_id: CanonicalStringSchema,
-    phase: CanonicalStringSchema,
-    branch_id: CanonicalStringSchema.nullable(),
-    kind: z.string().regex(/^[a-z][a-z0-9-]*$/),
-    operation_id: CanonicalStringSchema,
-    version: z.number().int().positive(),
-    producer: CanonicalStringSchema,
-    consumer_scope: z.array(CanonicalStringSchema).max(100),
-    media_type: CanonicalStringSchema,
-    byte_length: z.number().int().nonnegative(),
-    content_digest: DigestSchema,
-    store_ref: z.string().regex(/^artifact:\/\/sha256\/[0-9a-f]{64}$/),
+  .union([
+    z.object({ schema_version: z.literal(2), ...ArtifactRefFields }).strict(),
+    z
+      .object({
+        schema_version: z.literal(1),
+        ...ArtifactRefFields,
+        consumer_scope: z.array(CanonicalStringSchema).max(100),
+      })
+      .strict(),
+  ])
+  .transform((ref) => {
+    if (ref.schema_version === 2) return ref;
+    return {
+      schema_version: 2 as const,
+      artifact_id: ref.artifact_id,
+      run_id: ref.run_id,
+      phase: ref.phase,
+      branch_id: ref.branch_id,
+      kind: ref.kind,
+      operation_id: ref.operation_id,
+      version: ref.version,
+      producer: ref.producer,
+      media_type: ref.media_type,
+      byte_length: ref.byte_length,
+      content_digest: ref.content_digest,
+      store_ref: ref.store_ref,
+    };
   })
-  .strict()
   .superRefine((ref, ctx) => {
-    if (new Set(ref.consumer_scope).size !== ref.consumer_scope.length) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "consumer_scope contains duplicates" });
-    }
-    const sorted = [...ref.consumer_scope].sort(compareUnicode);
-    if (sorted.some((value, index) => value !== ref.consumer_scope[index])) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "consumer_scope is not sorted" });
-    }
     if (ref.store_ref !== `artifact://sha256/${ref.content_digest}`) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "store_ref does not match digest" });
     }
@@ -155,7 +162,7 @@ export const ResumeRefSchema = z.discriminatedUnion("type", [
 export const ResumeRefSetSchema = z
   .object({
     version: z.literal(RESUME_REFS_VERSION),
-    refs: z.array(ResumeRefSchema).max(250),
+    refs: z.array(ResumeRefSchema),
   })
   .strict();
 
@@ -258,8 +265,8 @@ export const PennyCompactArtifactSchema = z
     next_steps: z.array(z.string().min(1).max(300)).max(10).optional(),
 
     errors: z.array(ErrorRefSchema).max(10),
-    engine_runs: z.array(EngineRunRefSchema).max(20),
-    artifact_refs: z.array(ArtifactRefSchema).max(200),
+    engine_runs: z.array(EngineRunRefSchema),
+    artifact_refs: z.array(ArtifactRefSchema),
     resume_refs: ResumeRefSetSchema,
     files: FileContextSchema,
     dominant_skill: SkillInvocationRefSchema.optional(),

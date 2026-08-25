@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { createLogger } from "../../lib/logger/logger.js";
 
 const logger = createLogger("playwright:config");
-import type { PlaywrightConfig, ProxyConfig, CapabilityMap } from "./types.js";
+import type { PlaywrightConfig, ProxyConfig } from "./types.js";
 
 // ============================================================================
 // .env Fallback Parser
@@ -139,133 +139,6 @@ export function loadConfig(cwd?: string): PlaywrightConfig {
 export function getConfig(): PlaywrightConfig {
   if (!cachedConfig) return loadConfig();
   return cachedConfig;
-}
-
-// ============================================================================
-// Capability Map
-//
-// Maps each capability domain to the list of tool names it gates.
-// Used by index.ts to conditionally register tools.
-// ============================================================================
-
-export const CAPABILITY_MAP: CapabilityMap = {
-  core: [
-    "playwright_navigate",
-    "playwright_snapshot",
-    "playwright_click",
-    "playwright_type",
-    "playwright_evaluate",
-    "playwright_close",
-    "playwright_resize",
-    "playwright_screenshot",
-    "playwright_drag",
-    "playwright_hover",
-    "playwright_select_option",
-    "playwright_fill_form",
-    "playwright_file_upload",
-    "playwright_drop",
-    "playwright_handle_dialog",
-    "playwright_wait_for",
-    "playwright_console_messages",
-    "playwright_network_requests",
-    "playwright_network_request",
-  ],
-  "core-navigation": [
-    "playwright_navigate_back",
-    "playwright_navigate_forward",
-    "playwright_reload",
-    "playwright_get_current_url",
-    "playwright_get_title",
-  ],
-  "core-tabs": [
-    "playwright_new_page",
-    "playwright_close_page",
-    "playwright_switch_tab",
-    "playwright_list_tabs",
-  ],
-  "core-input": [
-    "playwright_press_key",
-    "playwright_press_sequentially",
-    "playwright_keydown",
-    "playwright_keyup",
-    "playwright_check",
-    "playwright_uncheck",
-    "playwright_fill",
-    "playwright_select_option",
-    "playwright_upload_file",
-  ],
-  network: [
-    "playwright_intercept",
-    "playwright_route",
-    "playwright_route_list",
-    "playwright_unroute",
-    "playwright_network_state_set",
-    "playwright_get_proxy_info",
-    "playwright_check_proxy_reachable",
-  ],
-  storage: [
-    "playwright_local_storage",
-    "playwright_session_storage",
-    "playwright_cookies",
-    "playwright_storage_state",
-    "playwright_set_storage_state",
-  ],
-  pdf: ["playwright_pdf"],
-  testing: [
-    "playwright_verify_element_visible",
-    "playwright_verify_text_visible",
-    "playwright_verify_list_visible",
-    "playwright_verify_value",
-    "playwright_generate_locator",
-  ],
-  vision: [
-    "playwright_mouse_move_xy",
-    "playwright_mouse_click_xy",
-    "playwright_mouse_drag_xy",
-    "playwright_mouse_down",
-    "playwright_mouse_up",
-    "playwright_mouse_wheel",
-    "playwright_accessibility_snapshot",
-  ],
-  devtools: [
-    "playwright_console",
-    "playwright_network_log",
-    "playwright_performance",
-    "playwright_highlight",
-    "playwright_hide_highlight",
-    "playwright_start_tracing",
-    "playwright_stop_tracing",
-    "playwright_start_video",
-    "playwright_stop_video",
-    "playwright_video_chapter",
-  ],
-};
-
-/**
- * Check if a capability domain is enabled according to config.
- */
-export function isCapabilityEnabled(domain: string, config: PlaywrightConfig): boolean {
-  switch (domain) {
-    case "core":
-    case "core-navigation":
-    case "core-tabs":
-    case "core-input":
-      return true; // Always enabled
-    case "network":
-      return config.enableNetwork;
-    case "storage":
-      return config.enableStorage;
-    case "pdf":
-      return true; // Lightweight, always on
-    case "testing":
-      return true; // Always on
-    case "vision":
-      return config.enableVision;
-    case "devtools":
-      return config.enableDevtools;
-    default:
-      return false;
-  }
 }
 
 /**

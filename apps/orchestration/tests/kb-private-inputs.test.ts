@@ -1,3 +1,4 @@
+import { requireRecord, requireValue } from "./helpers/narrowing.js";
 /**
  * §5.6 durable private-input custody — focused crash/custody/status tests.
  *
@@ -55,7 +56,12 @@ import {
   verifyAndSettleTerminalStart,
 } from "../src/private-inputs.js";
 import { computeRequestSha256, validateQueryRequest } from "../src/kb/parent-delivery.js";
-import { canonicalJson as kbCanonicalJson, sha256Hex } from "../src/kb/contracts.js";
+import {
+  canonicalJson as kbCanonicalJson,
+  sha256Hex,
+  type QueryKbRequest,
+} from "../src/kb/contracts.js";
+import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 
 const PROFILE = "kbp_custody";
 const SESSION = "sess_custody";
@@ -66,13 +72,14 @@ const dirs: string[] = [];
 function tmpRoot(): string {
   const d = mkdtempSync(path.join(tmpdir(), "penny-kb-custody-"));
   dirs.push(d);
+  installTestProjectState(d);
   return d;
 }
 afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-function queryRequest(): unknown {
+function queryRequest(): QueryKbRequest {
   return validateQueryRequest({
     schema_version: 1,
     action: "query",
@@ -175,8 +182,14 @@ describe("§5.6 exact DB projections", () => {
     const request = queryRequest();
     admit(projectRoot, checkpointer, "run_projection", request);
 
-    const privateInput = checkpointer.getPrivateInput("run_projection")!;
-    const idempotency = checkpointer.getStartAdmission("run_projection")!;
+    const privateInput = requireValue(
+      checkpointer.getPrivateInput("run_projection"),
+      "apps/orchestration/tests/kb-private-inputs.test.ts:180"
+    );
+    const idempotency = requireValue(
+      checkpointer.getStartAdmission("run_projection"),
+      "apps/orchestration/tests/kb-private-inputs.test.ts:181"
+    );
     expect(Object.keys(privateInput).sort()).toEqual([
       "created_at",
       "private_input_id",
@@ -235,10 +248,19 @@ describe("§5.6 private-input custody (index before bytes)", () => {
     // The row exists with the exact host-allocated keys and NO bytes yet.
     const row = checkpointer.getPrivateInput(runId);
     expect(row).toBeDefined();
-    expect(row!.state).toBe("preparing");
-    expect(row!.storage_key).toBe(`${runId}/request.json`);
-    expect(row!.temporary_storage_key).toBe(`${runId}/.tx_${runId}.tmp`);
-    expect(row!.request_sha256).toBe(requestSha(request));
+    expect(requireValue(row, "apps/orchestration/tests/kb-private-inputs.test.ts:240").state).toBe(
+      "preparing"
+    );
+    expect(
+      requireValue(row, "apps/orchestration/tests/kb-private-inputs.test.ts:241").storage_key
+    ).toBe(`${runId}/request.json`);
+    expect(
+      requireValue(row, "apps/orchestration/tests/kb-private-inputs.test.ts:242")
+        .temporary_storage_key
+    ).toBe(`${runId}/.tx_${runId}.tmp`);
+    expect(
+      requireValue(row, "apps/orchestration/tests/kb-private-inputs.test.ts:243").request_sha256
+    ).toBe(requestSha(request));
 
     const finalPath = path.join(privateInputRoot(projectRoot), runId, "request.json");
     expect(existsSync(finalPath)).toBe(false);
@@ -258,7 +280,10 @@ describe("§5.6 private-input custody (index before bytes)", () => {
     expect(sha256(readFileSync(finalPath))).toBe(requestSha(request));
 
     // Read-back is custody + digest verified and yields the parsed document.
-    const doc = readRunInput({ projectRoot, checkpointer, runId }) as Record<string, unknown>;
+    const doc = requireRecord(
+      readRunInput({ projectRoot, checkpointer, runId }),
+      "active private run input"
+    );
     expect(doc["query"]).toBe(QUERY_BODY);
 
     // Materialize is idempotent in `active` (a retry never rewrites).
@@ -275,10 +300,19 @@ describe("§5.6 private-input custody (index before bytes)", () => {
     const request = queryRequest();
     const runId = "cust_run_2";
     admit(projectRoot, checkpointer, runId, request);
-    const row = checkpointer.getPrivateInput(runId)!;
+    const row = requireValue(
+      checkpointer.getPrivateInput(runId),
+      "apps/orchestration/tests/kb-private-inputs.test.ts:280"
+    );
 
     // Simulate the crash: the temp exists with the exact bytes, the final does not.
-    const tempPath = path.join(privateInputRoot(projectRoot), row.temporary_storage_key!);
+    const tempPath = path.join(
+      privateInputRoot(projectRoot),
+      requireValue(
+        row.temporary_storage_key,
+        "apps/orchestration/tests/kb-private-inputs.test.ts:283"
+      )
+    );
     const runDir = path.join(privateInputRoot(projectRoot), runId);
     mkdir0700(runDir);
     writeFileSync(tempPath, canonicalJson(request), { mode: 0o600 });
@@ -319,8 +353,17 @@ describe("§5.6 private-input custody (index before bytes)", () => {
     const request = queryRequest();
     const runId = "cust_run_3";
     admit(projectRoot, checkpointer, runId, request);
-    const row = checkpointer.getPrivateInput(runId)!;
-    const tempPath = path.join(privateInputRoot(projectRoot), row.temporary_storage_key!);
+    const row = requireValue(
+      checkpointer.getPrivateInput(runId),
+      "apps/orchestration/tests/kb-private-inputs.test.ts:324"
+    );
+    const tempPath = path.join(
+      privateInputRoot(projectRoot),
+      requireValue(
+        row.temporary_storage_key,
+        "apps/orchestration/tests/kb-private-inputs.test.ts:325"
+      )
+    );
     const runDir = path.join(privateInputRoot(projectRoot), runId);
     mkdir0700(runDir);
     // A foreign byte at the indexed temp key.
@@ -333,7 +376,8 @@ describe("§5.6 private-input custody (index before bytes)", () => {
       error = err;
     }
     expect(error).toBeInstanceOf(PrivateInputError);
-    expect((error as PrivateInputError).code).toBe("hash_mismatch");
+    if (!(error instanceof PrivateInputError)) throw new Error("expected PrivateInputError");
+    expect(error.code).toBe("hash_mismatch");
 
     // Exact indexed keys are gone; the metadata row survives as `discarded`;
     // the run row remains (the run is left incomplete, never silently resumed).
@@ -368,7 +412,10 @@ describe("§5.6 private-input custody (index before bytes)", () => {
     expect(() => readRunInput({ projectRoot, checkpointer, runId })).toThrow(
       /must be a regular non-symlink file/
     );
-    const row = checkpointer.getPrivateInput(runId)!;
+    const row = requireValue(
+      checkpointer.getPrivateInput(runId),
+      "apps/orchestration/tests/kb-private-inputs.test.ts:373"
+    );
     // The row must not have been re-CASed by a refused read.
     expect(row.state).toBe("active");
     checkpointer.close();
@@ -467,7 +514,10 @@ describe("§5.6 idempotency (session + invocation identity)", () => {
       error = err;
     }
     expect(error).toBeInstanceOf(StartAdmissionMismatchError);
-    expect((error as StartAdmissionMismatchError).code).toBe("idempotency_mismatch");
+    if (!(error instanceof StartAdmissionMismatchError)) {
+      throw new Error("expected StartAdmissionMismatchError");
+    }
+    expect(error.code).toBe("idempotency_mismatch");
     expect(checkpointer.runExists("cust_idem_2_retry")).toBe(false);
     // The original survives untouched.
     expect(checkpointer.getStartAdmission(runId)?.state).toBe("running");
@@ -540,7 +590,10 @@ describe("§5.6 terminal settlement and body containment", () => {
     const runId = "cust_set_crash";
     admit(projectRoot, checkpointer, runId, request);
     materialize(projectRoot, checkpointer, runId, request);
-    const run = checkpointer.loadRunById(runId)!;
+    const run = requireValue(
+      checkpointer.loadRunById(runId),
+      "apps/orchestration/tests/kb-private-inputs.test.ts:545"
+    );
     const result = { action: "query", public_status: "complete", met: true };
     run.status = "complete";
     run.met = true;
@@ -605,7 +658,11 @@ describe("§5.6 terminal settlement and body containment", () => {
         expect(canonicalJson(event.payload)).not.toContain(QUERY_BODY);
         expect(event.eventType).not.toContain(QUERY_BODY);
       }
-      expect(canonicalJson(run!.snapshot())).not.toContain(QUERY_BODY);
+      expect(
+        canonicalJson(
+          requireValue(run, "apps/orchestration/tests/kb-private-inputs.test.ts:610").snapshot()
+        )
+      ).not.toContain(QUERY_BODY);
     } finally {
       reopened.close();
     }
@@ -626,10 +683,10 @@ describe("§5.6 terminal settlement and body containment", () => {
     const second = new Checkpointer(dbPath);
     try {
       expect(second.getPrivateInput(runId)?.state).toBe("active");
-      const doc = readRunInput({ projectRoot, checkpointer: second, runId }) as Record<
-        string,
-        unknown
-      >;
+      const doc = requireRecord(
+        readRunInput({ projectRoot, checkpointer: second, runId }),
+        "reopened private run input"
+      );
       expect(doc["query"]).toBe(QUERY_BODY);
     } finally {
       second.close();
@@ -638,7 +695,7 @@ describe("§5.6 terminal settlement and body containment", () => {
 
   it("digest consistency: the adapter digest, KB canonicalization, and control DB agree", () => {
     const request = queryRequest();
-    const adapterDigest = computeRequestSha256(request as never);
+    const adapterDigest = computeRequestSha256(request);
     const controlDigest = requestSha(request);
     const kbDigest = sha256Hex(kbCanonicalJson(request));
     expect(adapterDigest).toBe(controlDigest);

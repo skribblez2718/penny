@@ -50,6 +50,16 @@ export interface StoredProfileGrantProjection {
   readonly expires_at: Rfc3339Utc;
 }
 
+function errorCode(error: unknown): string | undefined {
+  if (error === null || typeof error !== "object" || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+function parseJsonValue(source: string): unknown {
+  const value: unknown = JSON.parse(source);
+  return value;
+}
+
 function requiredText(row: Record<string, SQLOutputValue>, field: string): string {
   const value = row[field];
   if (typeof value !== "string") {
@@ -223,7 +233,7 @@ export class KbSessionProfileGrantStore implements Disposable {
             recordDigest(record)
           );
       } catch (error) {
-        if ((error as { code?: string }).code === "ERR_SQLITE_ERROR") {
+        if (errorCode(error) === "ERR_SQLITE_ERROR") {
           throw new Error("competing profile grant issuance lost");
         }
         throw error;
@@ -274,16 +284,18 @@ export class KbSessionProfileGrantStore implements Disposable {
       const existing = this.useRow(input.session_id, input.invocation_id);
       if (existing !== undefined) {
         const use = this.useFromRow(existing);
-        const expected = {
-          session_id: input.session_id,
-          invocation_id: input.invocation_id,
-          kb_profile_id: input.kb_profile_id,
-          action: input.action,
-          request_sha256: input.request_sha256,
-          policy_sha256: input.policy_sha256,
-        };
-        for (const [field, value] of Object.entries(expected)) {
-          if (use[field as keyof typeof use] !== value) {
+        const expected: ReadonlyArray<
+          readonly [keyof KbSessionProfileGrantUse, string | Sha256Hex | null]
+        > = [
+          ["session_id", input.session_id],
+          ["invocation_id", input.invocation_id],
+          ["kb_profile_id", input.kb_profile_id],
+          ["action", input.action],
+          ["request_sha256", input.request_sha256],
+          ["policy_sha256", input.policy_sha256],
+        ];
+        for (const [field, value] of expected) {
+          if (use[field] !== value) {
             throw new Error(`profile grant invocation already consumed with another ${field}`);
           }
         }
@@ -344,7 +356,7 @@ export class KbSessionProfileGrantStore implements Disposable {
             useDigest(use)
           );
       } catch (error) {
-        if ((error as { code?: string }).code === "ERR_SQLITE_ERROR") {
+        if (errorCode(error) === "ERR_SQLITE_ERROR") {
           throw new Error("competing profile grant consumption lost");
         }
         throw error;
@@ -482,13 +494,13 @@ export class KbSessionProfileGrantStore implements Disposable {
     const grantId = requiredText(row, "grant_id");
     const grantSha256 = requiredText(row, "grant_sha256") as Sha256Hex;
     const grantJcs = requiredText(row, "grant_jcs");
-    const state = requiredText(row, "state") as KbSessionProfileGrantState;
+    const stateValue = requiredText(row, "state");
     const updatedAt = requiredText(row, "updated_at") as Rfc3339Utc;
     const storedRecordDigest = requiredText(row, "record_sha256");
 
     let rawGrant: unknown;
     try {
-      rawGrant = JSON.parse(grantJcs) as unknown;
+      rawGrant = parseJsonValue(grantJcs);
     } catch {
       throw new Error(`profile grant row is unparseable: ${grantId}`);
     }
@@ -515,16 +527,17 @@ export class KbSessionProfileGrantStore implements Disposable {
     if (expiresAt <= issuedAt)
       throw new Error(`profile grant has invalid timestamp semantics: ${grantId}`);
 
-    const record: KbSessionProfileGrantRecord = {
+    const recordCandidate = {
       schema_version: 1,
       grant_id: grantId,
       grant_sha256: grantSha256,
-      state,
+      state: stateValue,
       updated_at: updatedAt,
     };
-    if (!Value.Check(KbSessionProfileGrantRecordSchema, record)) {
+    if (!Value.Check(KbSessionProfileGrantRecordSchema, recordCandidate)) {
       throw new Error(`profile grant record failed closed validation: ${grantId}`);
     }
+    const record: KbSessionProfileGrantRecord = recordCandidate;
     if (recordDigest(record) !== storedRecordDigest) {
       throw new Error(`profile grant state digest mismatch: ${grantId}`);
     }
@@ -539,7 +552,7 @@ export class KbSessionProfileGrantStore implements Disposable {
       session_id: requiredText(row, "session_id"),
       invocation_id: requiredText(row, "invocation_id"),
       kb_profile_id: requiredText(row, "kb_profile_id"),
-      action: requiredText(row, "action") as KbSessionProfileGrantUse["action"],
+      action: requiredText(row, "action"),
       request_sha256: requiredText(row, "request_sha256") as Sha256Hex,
       policy_sha256: nullablePolicy(row),
       consumed_at: requiredText(row, "consumed_at") as Rfc3339Utc,

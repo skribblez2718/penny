@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { createLogger, setSessionId } from "../../../../lib/logger/logger.js";
+import {
+  parseJson,
+  requireArrayElement,
+  requireRecord,
+  requireString,
+} from "../../../../lib/tests/test-narrowers.js";
 
 describe("subagent integration logging", () => {
   afterEach(() => {
@@ -11,7 +17,7 @@ describe("subagent integration logging", () => {
 
   it("emits JSON to observability REST endpoint for agent spawn error with sessionId", async () => {
     const fetchSpy = vi.fn((_url: string, _options?: RequestInit) =>
-      Promise.resolve({ ok: true } as Response)
+      Promise.resolve(new Response(null, { status: 200 }))
     );
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -22,16 +28,23 @@ describe("subagent integration logging", () => {
 
     await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
 
-    const [url, options] = fetchSpy.mock.calls[0];
+    const [url, options] = requireArrayElement(
+      fetchSpy.mock.calls,
+      0,
+      "subagent log request was not sent"
+    );
     expect(url).toBe("http://localhost:8765/logs");
     expect(options?.method).toBe("POST");
 
-    const body = JSON.parse(options?.body as string);
+    const bodyText = requireString(options?.body, "subagent log body was not text");
+    const body = requireRecord(parseJson(bodyText), "subagent log body was not an object");
+    const data = requireRecord(body.data, "subagent log body omitted data");
+    const error = requireRecord(data.error, "subagent log body omitted error data");
     expect(body.level).toBe("ERROR");
     expect(body.component).toBe("agent-runner");
     expect(body.session_id).toBe("agent-int-005");
     expect(body.event).toBe("Spawn failed");
-    expect(body.data.error.code).toBe("AGENT_SPAWN_ERROR");
-    expect(body.data.agent).toBe("echo");
+    expect(error.code).toBe("AGENT_SPAWN_ERROR");
+    expect(data.agent).toBe("echo");
   });
 });

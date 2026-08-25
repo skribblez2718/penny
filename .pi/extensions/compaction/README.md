@@ -1,109 +1,73 @@
 # Penny Custom Compaction Extension
 
-Turns Pi compaction into a bounded recovery checkpoint with **model-owned prose and code-owned exact references**.
+Pi compaction produces model-owned prose plus code-owned exact recovery references.
 
-The model-visible summary contains:
+## Exact source set
 
-1. A concise prose resumption brief over the evicted conversation.
-2. An optional strict `[RESUME-REFS v2]` appendix containing only exact addresses:
+Artifact IDs enter `[RESUME-REFS v2]` only from:
 
-   ```text
-   run:<run_id>
-   artifact:<artifact_id>@sha256:<content_digest>
-   ```
+1. completed `subagent` result metadata in this session;
+2. completed `skill` result metadata in this session;
+3. exact IDs explicitly passed later through `input_artifacts`;
+4. a prior valid current-session resume block/handoff index; or
+5. selected refs from an exact orchestration run ID already proven by those skill results.
 
-A durable-memory ID may be carried only when an owner already supplied that exact ID. Compaction never lists or searches memory, session rooms, or active runs.
+Compaction never scans global/historical artifact manifests, old sessions, memory, task-text
+names, agent-name heuristics, or recency. Exact input IDs use indexed manifest lookup only.
 
-## Source of Truth
-
-Compaction collects exact run IDs from two places only:
-
-- named, owner-produced fields in persisted `skill` tool-result metadata; and
-- a prior valid `[RESUME-REFS v2]` block in this conversation.
-
-It then opens the orchestration SQLite checkpointer with `readOnly: true`, enables `PRAGMA query_only`, and selects only those run IDs. It never scans pending rows or correlates by session name/recency.
-
-For each resumable TypeScript v2 checkpoint, every `selected_artifacts` entry must be a strict artifact-ref v1 value with canonical identity, run binding, store URI, and digest consistency before it can enter the appendix. Invalid refs are omitted while the exact run ref remains recoverable. Artifact bytes are not opened during compaction, so a missing or corrupt artifact object cannot block run recovery.
-
-## Failure Policy
-
-- **Memory unavailable:** irrelevant to recovery; no memory service is called.
-- **Checkpointer missing/unavailable:** prose compaction continues without refs.
-- **Missing run row or now-terminal run:** the stale ref is omitted.
-- **Invalid checkpoint protocol/ref:** reject that protocol/ref, record a bounded issue, preserve valid run recovery.
-- **Model unavailable:** use the tagged deterministic fallback; when that LOAN is ablated, yield to Pi's default compaction.
-- **Oversized output:** fit the final model-visible envelope with the shared result-budget utility. One estimated token is charged per serialized UTF-8 byte, so the unchanged 8,192 estimated-token cap limits the complete envelope to at most 8,192 bytes. Prose is UTF-8-safe truncated; refs are removed only as complete lines, artifacts before runs, so the block is never malformed.
-- **Invalid owner budget attempting to raise hard caps:** enforce the shared hard defaults.
-
-## Strict Versions
-
-| Contract                          | Version |
-| --------------------------------- | ------: |
-| Compact artifact                  | `3.0.0` |
-| Resume appendix                   |    `v2` |
-| Orchestration artifact checkpoint |     `2` |
-| Immutable artifact ref            |     `1` |
-
-Unsupported versions and unknown schema fields fail closed.
-
-## Architecture
+## Output
 
 ```text
-session_before_compact
-  ├─ merge evicted + split-turn-prefix messages
-  ├─ collect exact run IDs from trusted result metadata + prior v2 refs
-  ├─ readExactCheckpoints(run IDs) using read-only SQLite
-  │    └─ validate RunContext.selected_artifacts
-  ├─ detect conversational pending state (message-only)
-  ├─ build + strictly validate compact artifact 3.0.0
-  ├─ model prose, or deterministic LOAN fallback
-  ├─ append exact run/artifact refs
-  ├─ fit final model-visible envelope with shared result budget
-  └─ archive structured details asynchronously
+[RESUME-REFS v2]
+run:<run_id>
+artifact:<artifact_id>@sha256:<digest>
+memory:<exact optional durable-memory id>
+[/RESUME-REFS]
 ```
 
-## Files
+Schema-v1 refs from old checkpoints are normalized to schema v2. New refs contain lineage
+but no consumer/access field.
 
-- `index.ts` — compaction hook, exact-ID extraction, prose/refs assembly, shared-budget fitting
-- `checkpointer.ts` — exact read-only SQLite access and strict selected-ref validation
-- `schema.ts` — strict versioned Zod schemas
-- `summarizer.ts` — model prose path and exact grounded digest
-- `pending.ts` — message-only escalation detection
-- `loans.ts` — deterministic fallback LOAN registry
-- `pi-messages.ts` — structural Pi message boundary types
+When all exact artifact lines cannot fit the shared result budget, compaction persists one
+immutable `handoff-index` artifact containing the complete ordered routing records and
+emits only its ID. If that index cannot be persisted and re-read, the custom enhancement
+yields to Pi's default compaction rather than guessing or silently losing refs.
 
-The removed raw memory bridge has no replacement: memory is not a recovery prerequisite.
+## Run recovery
 
-## Environment
+Run IDs are read from the current project's catalog-bound `orchestration.db` with
+`readOnly` and `PRAGMA query_only`. Compaction verifies the database's opaque project ID;
+there is no independent path selector, CWD fallback, or pending-run/session scan. Missing
+or terminal rows are omitted. Control state comes from checkpoints, never artifact
+payloads.
 
-| Variable                                        | Purpose                                 | Default                                    |
-| ----------------------------------------------- | --------------------------------------- | ------------------------------------------ |
-| `PENNY_ORCH_V2_DB`                              | Absolute TypeScript checkpointer path   | `$PROJECT_ROOT/.penny/orchestration-v2.db` |
-| `PI_OBSERVABILITY_REST_URL`                     | Optional archive endpoint               | `http://localhost:8765`                    |
-| `PI_OBSERVABILITY_API_KEY`                      | Optional archive bearer token           | unset                                      |
-| `PI_COMPACTION_SUMMARY_MODEL`                   | Optional `provider/model-id` override   | current session model                      |
-| `PI_COMPACTION_SUMMARY_TIMEOUT_MS`              | Model summarization timeout             | `30000`                                    |
-| `PENNY_TOOL_RESULT_MAX_BYTES`                   | Shared lower byte cap                   | shared hard default                        |
-| `PENNY_TOOL_RESULT_MAX_CHARACTERS`              | Shared lower character cap              | shared hard default                        |
-| `PENNY_TOOL_RESULT_MAX_TOKENS`                  | Shared lower estimated-token cap        | shared hard default                        |
-| `PENNY_ABLATE_COMPACTION_DETERMINISTIC_SUMMARY` | Disable deterministic fallback when `1` | off                                        |
+## Failure policy
 
-Exact checkpoint refs require a Node runtime that provides `node:sqlite` (Node 22.5+; current Pi runtime recommended). On an older runtime, prose compaction still succeeds but the unavailable checkpointer read yields no refs.
+- Memory unavailable: irrelevant to exact recovery.
+- Checkpointer unavailable: prose and exact non-run communication refs still continue.
+- Invalid ref/object: omit it and record a bounded issue; never broaden discovery.
+- Model unavailable: deterministic fallback LOAN, or Pi default when ablated.
+- Oversized refs: one verified handoff-index ID.
+- Invalid owner budget: shared hard defaults.
 
-## Result budget and telemetry
+## Versions
 
-Byte, character, and estimated-token caps are independent. The release minimum context headroom is 16,384 tokens; a conforming result consumes no more than half and leaves at least 8,192 tokens reserved after it. Compaction artifact metadata records the final envelope measurement and reserve assessment.
+| Contract                       | Version |
+| ------------------------------ | ------: |
+| Compact artifact               | `3.0.0` |
+| Resume appendix                |    `v2` |
+| Current immutable artifact ref |     `2` |
+| Legacy readable artifact ref   |     `1` |
 
-`metadata.compaction_correlation` contains metadata-only session/run keys and `status: not_evaluated`. It enables a later telemetry join but does not claim a live supported-model trial, establish that one result caused compaction, or mark the release trial passed. Live correlation remains a separately receipted release activity.
-
-## Tests
+## Verification
 
 ```bash
-bun run test
-bun run typecheck
-bun run lint
-bun run format:check
-bun run test:all
+bun run --cwd .pi/extensions/compaction typecheck
+bun run --cwd .pi/extensions/compaction test:unit
+bun run --cwd .pi/extensions/compaction lint
+bun run --cwd .pi/extensions/compaction format:check
 ```
 
-Focused coverage includes fresh-process prior-ref recovery, exact read-only queries, missing/corrupt artifacts, memory unavailability, giant result budgets, strict schema/version/ref failures, and a production source guard against legacy bridge/discovery paths.
+Tests cover current-session selection, explicit reused IDs, prior exact refs, no global
+leakage, legacy normalization, read-only checkpoint access, repeated compaction, and
+readable handoff-index materialization.

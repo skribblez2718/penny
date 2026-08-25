@@ -46,6 +46,14 @@ const MEMORY_WRITE_OPERATIONS = new Set<PlatformMemoryOperation>([
   "kg_supersede",
 ]);
 
+function isMemoryResultOperation(value: unknown): value is MemoryResultOperation {
+  return typeof value === "string" && MEMORY_OPERATION_SET.has(value);
+}
+
+function isSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value);
+}
+
 interface CursorPayload {
   v: 1;
   op: MemoryResultOperation;
@@ -109,9 +117,9 @@ class BoundedSourceCache {
       this.entries.size >= this.maximumEntries ||
       this.totalBytes + source.buffer.length > this.maximumBytes
     ) {
-      const oldest = this.entries.values().next().value as SourceCacheEntry | undefined;
-      if (!oldest) break;
-      this.delete(oldest.id);
+      const oldest = this.entries.values().next();
+      if (oldest.done) break;
+      this.delete(oldest.value.id);
     }
     const id = createHash("sha256")
       .update(`${source.digest}:${this.now()}:${this.serial++}`)
@@ -156,10 +164,12 @@ class BoundedSourceCache {
   }
 }
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  return isUnknownRecord(value) ? value : undefined;
 }
 
 function canonicalize(value: unknown): unknown {
@@ -254,7 +264,8 @@ function prepareUpstreamArguments(
 
 function contentFromItem(item: Record<string, unknown>): string {
   for (const key of ["content", "text", "document", "body"]) {
-    if (typeof item[key] === "string") return item[key] as string;
+    const value = item[key];
+    if (typeof value === "string") return value;
   }
   return "";
 }
@@ -453,7 +464,7 @@ function parseCursorPayload(value: unknown): CursorPayload {
   }
   if (
     record.v !== CURSOR_VERSION ||
-    !MEMORY_OPERATION_SET.has(String(record.op)) ||
+    !isMemoryResultOperation(record.op) ||
     typeof record.caller !== "string" ||
     typeof record.query !== "string" ||
     !DIGEST_PATTERN.test(record.query) ||
@@ -465,15 +476,30 @@ function parseCursorPayload(value: unknown): CursorPayload {
     !DIGEST_PATTERN.test(record.revision) ||
     (record.kind !== "content" && record.kind !== "json") ||
     (record.cache !== null && typeof record.cache !== "string") ||
-    !Number.isSafeInteger(record.start) ||
-    !Number.isSafeInteger(record.end) ||
-    !Number.isSafeInteger(record.next) ||
-    !Number.isSafeInteger(record.page) ||
-    !Number.isSafeInteger(record.exp)
+    !isSafeInteger(record.start) ||
+    !isSafeInteger(record.end) ||
+    !isSafeInteger(record.next) ||
+    !isSafeInteger(record.page) ||
+    !isSafeInteger(record.exp)
   ) {
     throw new MemoryError("MEMPALACE_CURSOR_INVALID", "Memory continuation cursor is invalid");
   }
-  return record as unknown as CursorPayload;
+  return {
+    v: CURSOR_VERSION,
+    op: record.op,
+    caller: record.caller,
+    query: record.query,
+    filter: record.filter,
+    digest: record.digest,
+    revision: record.revision,
+    kind: record.kind,
+    cache: record.cache,
+    start: record.start,
+    end: record.end,
+    next: record.next,
+    page: record.page,
+    exp: record.exp,
+  };
 }
 
 function decodeCursor(cursor: string, key: Buffer): CursorPayload {
@@ -876,6 +902,7 @@ export class MemoryAdapter {
     }
 
     if (start === 0 && page === 1) {
+      const data: unknown = JSON.parse(source.buffer.toString("utf8"));
       const complete = createTextToolResult({
         schema_version: MEMORY_SCHEMA_VERSION,
         ok: true,
@@ -885,7 +912,7 @@ export class MemoryAdapter {
         source_digest: source.digest,
         source_revision: source.revision,
         total_bytes: source.buffer.length,
-        data: JSON.parse(source.buffer.toString("utf8")),
+        data,
         truncated: false,
         continuation: null,
         request_id: requestId ?? null,

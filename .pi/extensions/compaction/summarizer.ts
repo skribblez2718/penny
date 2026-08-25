@@ -192,6 +192,55 @@ export interface CompleteResult {
   content: Array<{ type: string; text?: string }>;
 }
 
+interface CodingAgentRuntimeModule {
+  serializeConversation(messages: unknown): string;
+  convertToLlm(messages: SessionMessage[]): unknown;
+}
+
+interface CompatRuntimeModule {
+  complete(
+    model: SummarizerModel,
+    context: { messages: SummarizerMessage[] },
+    options: Record<string, unknown>
+  ): Promise<CompleteResult>;
+}
+
+interface UnknownModuleRecord {
+  readonly [key: string]: unknown;
+}
+
+function isUnknownModuleRecord(value: unknown): value is UnknownModuleRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isCodingAgentRuntimeModule(value: unknown): value is CodingAgentRuntimeModule {
+  return (
+    isUnknownModuleRecord(value) &&
+    typeof value.serializeConversation === "function" &&
+    typeof value.convertToLlm === "function"
+  );
+}
+
+function isCompatRuntimeModule(value: unknown): value is CompatRuntimeModule {
+  return isUnknownModuleRecord(value) && typeof value.complete === "function";
+}
+
+function isCompleteContentPart(value: unknown): value is { type: string; text?: string } {
+  return (
+    isUnknownModuleRecord(value) &&
+    typeof value.type === "string" &&
+    (value.text === undefined || typeof value.text === "string")
+  );
+}
+
+function isCompleteResult(value: unknown): value is CompleteResult {
+  return (
+    isUnknownModuleRecord(value) &&
+    Array.isArray(value.content) &&
+    value.content.every(isCompleteContentPart)
+  );
+}
+
 export const _summaryInternals: {
   serialize: (messages: SessionMessage[]) => Promise<string>;
   complete: (
@@ -205,20 +254,30 @@ export const _summaryInternals: {
     // resolves these packages at runtime, but tsc cannot (the same tolerated
     // condition as index.ts's `import type` from the aliased package). Using a
     // variable specifier keeps tsc from statically resolving it — no new
-    // module-not-found errors, no @ts-ignore.
-    const spec = "@mariozechner/pi-coding-agent";
-    const mod = (await import(spec)) as unknown as {
-      serializeConversation: (m: unknown) => string;
-      convertToLlm: (m: unknown) => unknown;
-    };
-    return mod.serializeConversation(mod.convertToLlm(messages));
+    // module-not-found errors, without a TypeScript suppression directive.
+    const spec = "@earendil-works/pi-coding-agent";
+    const imported: unknown = await import(spec);
+    if (!isCodingAgentRuntimeModule(imported)) {
+      throw new TypeError("pi coding-agent module has an invalid summarization surface");
+    }
+    const converted: unknown = imported.convertToLlm(messages);
+    const serialized: unknown = imported.serializeConversation(converted);
+    if (typeof serialized !== "string") {
+      throw new TypeError("pi coding-agent serializer returned a non-string result");
+    }
+    return serialized;
   },
   complete: async (model, context, options) => {
     const spec = "@earendil-works/pi-ai/compat";
-    const mod = (await import(spec)) as unknown as {
-      complete: (m: unknown, c: unknown, o: unknown) => Promise<CompleteResult>;
-    };
-    return mod.complete(model, context, options);
+    const imported: unknown = await import(spec);
+    if (!isCompatRuntimeModule(imported)) {
+      throw new TypeError("pi-ai compat module has no callable complete export");
+    }
+    const result: unknown = await imported.complete(model, context, options);
+    if (!isCompleteResult(result)) {
+      throw new TypeError("pi-ai compat complete returned an invalid result");
+    }
+    return result;
   },
 };
 

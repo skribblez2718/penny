@@ -10,13 +10,33 @@
  * knowledge_base tool; these are the deterministic tests that pin the behavior.
  */
 
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { initKb, queryKb, lintKb, statusKb, type KbWorkflowContext } from "../src/kb/workflows.js";
+import { canonicalJson, sha256Hex, type KbPolicy } from "../src/kb/contracts.js";
+import { readPolicy, writePolicy } from "../src/kb/filesystem.js";
+import { PolicyRefusal } from "../src/kb/policy.js";
+import {
+  admitKbRun,
+  initKb,
+  lintKb,
+  queryKb,
+  recheckAdmittedPolicy,
+  statusKb,
+  type KbWorkflowContext,
+} from "../src/kb/workflows.js";
 import { closeKbArtifactControls, kbArtifactControl } from "./fixtures/kb-artifact-control.js";
 
 const dirs: string[] = [];
@@ -38,6 +58,70 @@ function ctx(root: string, runId = `kb-e2e-${Date.now()}`): KbWorkflowContext {
     checkpointer: kbArtifactControl({ root, runId, profileId: "kbp_test" }),
   };
 }
+
+describe("validated policy digest boundary", () => {
+  const parentIdentity = { provider: "ollama", model: "qwen327b:latest" };
+
+  it("hashes the validated policy bytes and preserves policy-change refusal", () => {
+    const root = tmpRoot();
+    initKb(ctx(root), "Policy Boundary KB");
+    const initial = readPolicy(root);
+    const admittedPolicy = {
+      ...initial,
+      allowed_parent_models: [{ ...parentIdentity, locality: "local" }],
+    } satisfies KbPolicy;
+    writePolicy(root, admittedPolicy);
+
+    const admission = admitKbRun({ kbRoot: root, parentIdentity });
+    expect(admission.policy).toEqual(admittedPolicy);
+    expect(admission.policy_sha256).toBe(sha256Hex(canonicalJson(admittedPolicy)));
+    expect(
+      recheckAdmittedPolicy({
+        kbRoot: root,
+        admittedPolicySha256: admission.policy_sha256,
+      })
+    ).toEqual(admittedPolicy);
+
+    writePolicy(root, {
+      ...admittedPolicy,
+      reader_limits: {
+        ...admittedPolicy.reader_limits,
+        max_calls_per_phase: admittedPolicy.reader_limits.max_calls_per_phase + 1,
+      },
+    });
+    let caught: unknown;
+    try {
+      recheckAdmittedPolicy({
+        kbRoot: root,
+        admittedPolicySha256: admission.policy_sha256,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    if (!(caught instanceof PolicyRefusal)) {
+      throw new Error("changed policy did not raise PolicyRefusal");
+    }
+    expect(caught.code).toBe("policy_changed");
+    expect(caught.message).toBe(
+      "the KB policy changed mid-run; this run is invalid and a new run is required"
+    );
+  });
+
+  it("rejects an extra policy property at the filesystem boundary", () => {
+    const root = tmpRoot();
+    initKb(ctx(root), "Policy Extra Property KB");
+    const policy = readPolicy(root);
+    writeFileSync(
+      path.join(root, ".kb", "policy.json"),
+      canonicalJson({ ...policy, unexpected_policy_field: true }),
+      { mode: 0o600 }
+    );
+
+    expect(() => admitKbRun({ kbRoot: root, parentIdentity })).toThrow(
+      "policy failed schema validation"
+    );
+  });
+});
 
 describe("KB E2E: init → query → lint → status", () => {
   it("init creates a KB with manifest, policy, and first generation", () => {
@@ -100,7 +184,9 @@ describe("KB E2E: init → query → lint → status", () => {
     expect(result.warnings).toContain("No supported matching claims found");
     // An answer artifact was still produced (work plane only, no publication)
     expect(result.artifacts.length).toBe(1);
-    expect(result.artifacts[0].artifact_kind).toBe("query_answer");
+    const answerArtifact = result.artifacts[0];
+    if (answerArtifact === undefined) throw new Error("query produced no answer artifact");
+    expect(answerArtifact.artifact_kind).toBe("query_answer");
   });
 
   it("query on an uninitialized KB is refused", () => {
@@ -121,7 +207,9 @@ describe("KB E2E: init → query → lint → status", () => {
     expect(result.counts.blocking).toBe(0);
     // A lint-report artifact was produced
     expect(result.artifacts.length).toBe(1);
-    expect(result.artifacts[0].artifact_kind).toBe("lint_report");
+    const lintArtifact = result.artifacts[0];
+    if (lintArtifact === undefined) throw new Error("lint produced no report artifact");
+    expect(lintArtifact.artifact_kind).toBe("lint_report");
   });
 
   it("lint on an uninitialized KB reports blocking findings", () => {
@@ -189,8 +277,6 @@ describe("KB E2E: publication plane is unchanged by query and lint", () => {
  * This is the §5.6 no-write oracle: query and lint must not change any of these.
  */
 function snapshotPublicationPlane(root: string): string {
-  const { readdirSync, statSync, readFileSync, existsSync } =
-    require("node:fs") as typeof import("node:fs");
   const paths: string[] = [];
   const planeDirs = ["sources/objects", "sources/records", "pages", "conflicts", ".kb/generations"];
   const planeFiles = [".kb/current.json", "index.md", "manifest.json", ".kb/policy.json"];
@@ -223,7 +309,6 @@ function snapshotPublicationPlane(root: string): string {
 }
 
 function walk(dir: string, root: string, paths: string[]): void {
-  const { readdirSync, statSync } = require("node:fs") as typeof import("node:fs");
   for (const entry of readdirSync(dir)) {
     const full = path.join(dir, entry);
     const rel = path.relative(root, full);

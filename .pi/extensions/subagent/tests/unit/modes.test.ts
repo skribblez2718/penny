@@ -13,8 +13,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as path from "node:path";
 
+import { isRecord, parseJson, requireArray } from "../../../../lib/tests/test-narrowers.js";
+
 // Mock child_process
-const mockSpawn = vi.fn();
+const mockSpawn =
+  vi.fn<(command: string, args: string[], options: Record<string, unknown>) => unknown>();
 vi.mock("node:child_process", () => ({
   spawn: mockSpawn,
 }));
@@ -92,9 +95,11 @@ function validateParallelParams(params: { tasks?: unknown[] }): string | null {
   if (params.tasks.length === 0) return "Empty 'tasks' array";
   if (params.tasks.length > 8) return "Too many tasks (max 8)";
   for (let i = 0; i < params.tasks.length; i++) {
-    const task = params.tasks[i] as { agent?: string; task?: string };
-    if (!task.agent) return `Task ${i}: missing 'agent'`;
-    if (!task.task) return `Task ${i}: missing 'task'`;
+    const task = params.tasks[i];
+    if (!isRecord(task) || typeof task.agent !== "string" || !task.agent) {
+      return `Task ${i}: missing 'agent'`;
+    }
+    if (typeof task.task !== "string" || !task.task) return `Task ${i}: missing 'task'`;
   }
   return null;
 }
@@ -103,9 +108,11 @@ function validateChainParams(params: { chain?: unknown[] }): string | null {
   if (!params.chain || !Array.isArray(params.chain)) return "Missing 'chain' array";
   if (params.chain.length === 0) return "Empty 'chain' array";
   for (let i = 0; i < params.chain.length; i++) {
-    const task = params.chain[i] as { agent?: string; task?: string };
-    if (!task.agent) return `Chain ${i}: missing 'agent'`;
-    if (!task.task) return `Chain ${i}: missing 'task'`;
+    const task = params.chain[i];
+    if (!isRecord(task) || typeof task.agent !== "string" || !task.agent) {
+      return `Chain ${i}: missing 'agent'`;
+    }
+    if (typeof task.task !== "string" || !task.task) return `Chain ${i}: missing 'task'`;
   }
   return null;
 }
@@ -342,14 +349,18 @@ describe("Process Spawning", () => {
       stdout: { on: vi.fn() },
       stderr: { on: vi.fn() },
       stdin: { write: vi.fn(), end: vi.fn() },
-      on: vi.fn((event: string, cb: Function) => {
-        if (event === "close") setTimeout(() => cb(0), 0);
+      on: vi.fn((event: string, callback: (value: number | Error) => void) => {
+        if (event === "close") {
+          setTimeout(() => {
+            callback(0);
+          }, 0);
+        }
       }),
     };
     mockSpawn.mockReturnValue(mockProc);
     const args = ["run", "--agent", "reviewer", "--task", "Review code"];
     const result = mockSpawn("pi", args, { stdio: ["pipe", "pipe", "pipe"] });
-    expect(mockSpawn).toHaveBeenCalledWith("pi", args, expect.any(Object));
+    expect(mockSpawn).toHaveBeenCalledWith("pi", args, { stdio: ["pipe", "pipe", "pipe"] });
     expect(result).toBe(mockProc);
   });
 
@@ -358,8 +369,8 @@ describe("Process Spawning", () => {
       stdout: { on: vi.fn() },
       stderr: { on: vi.fn() },
       stdin: { write: vi.fn(), end: vi.fn() },
-      on: vi.fn((event: string, cb: Function) => {
-        if (event === "error") cb(new Error("Spawn failed"));
+      on: vi.fn((event: string, callback: (value: number | Error) => void) => {
+        if (event === "error") callback(new Error("Spawn failed"));
       }),
     };
     mockSpawn.mockReturnValue(mockProc);
@@ -382,9 +393,10 @@ describe("Process Spawning", () => {
 describe("JSON Output Parsing", () => {
   it("should parse valid JSON output", () => {
     const output = '{"result": "success", "files": ["a.ts", "b.ts"]}';
-    const parsed = JSON.parse(output);
+    const parsed = parseJson(output);
+    if (!isRecord(parsed)) throw new Error("valid JSON fixture did not parse to an object");
     expect(parsed.result).toBe("success");
-    expect(parsed.files).toHaveLength(2);
+    expect(requireArray(parsed.files, "valid JSON fixture omitted files")).toHaveLength(2);
   });
 
   it("should handle JSON in markdown code block", () => {
@@ -392,7 +404,8 @@ describe("JSON Output Parsing", () => {
     const match = output.match(/```json\s*([\s\S]*?)\s*```/);
     expect(match).not.toBeNull();
     if (match) {
-      const parsed = JSON.parse(match[1]);
+      const parsed = parseJson(match[1]);
+      if (!isRecord(parsed)) throw new Error("markdown JSON fixture did not parse to an object");
       expect(parsed.result).toBe("success");
     }
   });
@@ -401,7 +414,9 @@ describe("JSON Output Parsing", () => {
     const output = '{"step1": "done"}\n{"step2": "done"}';
     const lines = output.trim().split("\n");
     const lastLine = lines[lines.length - 1];
-    const parsed = JSON.parse(lastLine);
+    if (lastLine === undefined) throw new Error("multiple JSON fixture had no final line");
+    const parsed = parseJson(lastLine);
+    if (!isRecord(parsed)) throw new Error("final JSON fixture did not parse to an object");
     expect(parsed.step2).toBe("done");
   });
 
@@ -409,7 +424,7 @@ describe("JSON Output Parsing", () => {
     const output = '{"result": "incomplete';
     let parsed: unknown = null;
     try {
-      parsed = JSON.parse(output);
+      parsed = parseJson(output);
     } catch {
       parsed = null;
     }

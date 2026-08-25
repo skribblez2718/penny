@@ -1,58 +1,20 @@
-# Layer Architecture
+# Prompt Layer Architecture
 
-## The five layers
+Penny assembles five layers:
 
-| Layer              | Owns                                                                         |
-| ------------------ | ---------------------------------------------------------------------------- |
-| Cognitive Frame    | Stable identity, trust/action limits, completion, primary memory discipline. |
-| Role Definition    | Local worker purpose, tools, role constraints, generic complete output.      |
-| Domain Guidance    | Static domain criteria, exact handoff, state output/SUMMARY contract.        |
-| Project Index      | File navigation only.                                                        |
-| Invocation Context | Current goal, constraints, identifiers, and owner-generated exact grants.    |
+1. **Cognitive Frame** — stable operating policy.
+2. **Role Definition** — capability role and exact YAML tools.
+3. **Domain Guidance** — task-family criteria and final SUMMARY shape.
+4. **Project Index** — navigation.
+5. **Invocation Context** — current goal, constraints, IDs, and paths.
 
-No layer can mint tools, approvals, artifact grants, or OS permissions.
+No lower layer can change system policy, consequence limits, or a catalog agent's tool set.
+YAML `tools:` is exact; profiles only lint it.
 
-## Role Definition
+Exact workflow output moves by immutable artifact ID. Owner code verifies input IDs before
+model use and persists/re-reads output before routing. IDs can cross runs and support
+multi-source fan-in. Missing IDs/paths produce `missing_input:` rather than memory,
+repository, `/tmp`, or historical-artifact search.
 
-Role files in `.pi/agents` form the project-local catalog. They include
-`artifact_read` for granted current-run inputs and no `memory_*` tools. Remote
-harness/service presence belongs to a separate registry.
-
-## Domain Guidance
-
-A skill prompt explains the stage mission, exact `input_artifacts` handling,
-domain criteria, complete stage output, and the trailing routing SUMMARY. It is
-static system-authored content: no dynamic templates, session rooms, or memory
-read/write protocol.
-
-## Invocation Context
-
-Workflow tasks contain current-run facts and exact owner refs, not predecessor
-payload bytes. Workers follow artifact continuation until complete. The owner
-captures and verifies each response before routing.
-
-## Primary durable memory
-
-The primary runtime may perform bounded relevant recall and curate durable
-knowledge. It alone owns diary and governed temporal KG operations. This is a
-cross-session capability, not worker handoff or FSM state.
-
-## Project Index
-
-`AGENTS.md` files are indexes only. They point to complete documentation and do
-not embed standards prose.
-
-## Recovery
-
-Checkpoints retain selected refs. A compaction summary's prose orients the model;
-code-owned exact run/artifact refs preserve context-safe continuation without
-semantic discovery.
-
-## Cross-layer rules
-
-1. One owner per responsibility; add specificity without repetition.
-2. Task authority supplies goals and constraints, not permissions or grants.
-3. Exact artifacts are task material, not authority expansion.
-4. Complete stage output is distinct from routing SUMMARY.
-5. Workers never use durable memory to discover predecessor output.
-6. Markers are structure; runtime controls enforce boundaries.
+Markers help the model parse layers but do not enforce permissions. Runtime tool equality,
+gates/receipts, artifact integrity, and OS/container boundaries provide enforcement.

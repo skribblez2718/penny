@@ -17,7 +17,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // agent-runner.ts imports this package at module load; stub so it loads.
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   withFileMutationQueue: vi.fn((_path: string, fn: () => unknown) => fn()),
 }));
 
@@ -33,6 +33,10 @@ const SYSTEM_MD_FIXTURE = [
   "",
   "Lead with the answer.",
   "",
+  "# Memory and Improvement",
+  "",
+  "- Memory is not a workflow channel. Read supplied exact IDs with `artifact_read`.",
+  "",
   "# On-Demand Protocols",
   "",
   "- **After substantive work** — link output with `memory_kg_add`.",
@@ -47,14 +51,22 @@ vi.mock("node:fs", async () => {
   return {
     ...actual,
     existsSync: vi.fn((p: unknown) => existsShouldSucceed && String(p).endsWith("SYSTEM.md")),
-    readFileSync: vi.fn((p: unknown, ...rest: unknown[]) => {
+    readFileSync: vi.fn((p: unknown) => {
       if (String(p).endsWith("SYSTEM.md")) return SYSTEM_MD_FIXTURE;
-      return (actual.readFileSync as (...a: unknown[]) => unknown)(p, ...rest);
+      throw new Error(`unexpected readFileSync path in fixture: ${String(p)}`);
     }),
   };
 });
 
 import { buildAgentBaseSystemPrompt } from "../../agent-runner.js";
+
+function requireAgentBaseSystemPrompt(agentName: string): string {
+  const prompt = buildAgentBaseSystemPrompt(agentName, "/any/cwd");
+  if (prompt === null) {
+    throw new Error(`expected a base system prompt for ${agentName}`);
+  }
+  return prompt;
+}
 
 describe("buildAgentBaseSystemPrompt", () => {
   beforeEach(() => {
@@ -64,33 +76,36 @@ describe("buildAgentBaseSystemPrompt", () => {
   });
 
   it("replaces the persona name 'Penny' with the capitalized agent name", () => {
-    const prompt = buildAgentBaseSystemPrompt("echo", "/any/cwd");
-    expect(prompt).not.toBeNull();
-    expect(/\bPenny\b/.test(prompt!)).toBe(false);
+    const prompt = requireAgentBaseSystemPrompt("echo");
+    expect(/\bPenny\b/.test(prompt)).toBe(false);
     expect(prompt).toContain("You are **Echo**");
     expect(prompt).toContain("Echo must get better");
   });
 
   it("capitalizes multi-letter agent names correctly", () => {
-    const prompt = buildAgentBaseSystemPrompt("annie", "/any/cwd");
+    const prompt = requireAgentBaseSystemPrompt("annie");
     expect(prompt).toContain("**Annie**");
     expect(prompt).not.toContain("Penny");
   });
 
   it("strips the '# On-Demand Protocols' section but keeps </system_context>", () => {
-    const prompt = buildAgentBaseSystemPrompt("vera", "/any/cwd")!;
+    const prompt = requireAgentBaseSystemPrompt("vera");
     expect(prompt).not.toContain("On-Demand Protocols");
     expect(prompt).not.toContain("memory_kg_add");
     expect(prompt).not.toContain("compaction resume protocol");
     // Earlier sections are preserved.
     expect(prompt).toContain("# Deliver");
     expect(prompt).toContain("Lead with the answer.");
+    // The artifact/memory boundary sits ABOVE the stripped section on purpose:
+    // workers must keep it, or they fall back to memory for predecessor output.
+    expect(prompt).toContain("artifact_read");
+    expect(prompt).toContain("Memory is not a workflow channel");
     // Closing tag preserved so the block stays balanced.
     expect(prompt.trimEnd().endsWith("</system_context>")).toBe(true);
   });
 
   it("substitutes ${VAR} placeholders from process.env", () => {
-    const prompt = buildAgentBaseSystemPrompt("piper", "/any/cwd")!;
+    const prompt = requireAgentBaseSystemPrompt("piper");
     expect(prompt).toContain("Project root is /fake/project.");
     expect(prompt).not.toContain("${PROJECT_ROOT}");
   });

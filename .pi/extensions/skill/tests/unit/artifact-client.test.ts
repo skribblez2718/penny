@@ -1,10 +1,11 @@
 import { createHash } from "crypto";
-import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import * as path from "path";
-import { fileURLToPath } from "url";
+import { initializePennyState } from "@penny/orchestration/source";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   withFileMutationQueue: vi.fn((_path: string, fn: () => unknown) => fn()),
 }));
 
@@ -22,19 +23,11 @@ import {
 } from "../../artifact-client.js";
 import { getFinalOutput } from "../../../subagent/agent-runner.js";
 
-const PROJECT_ROOT = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-  "..",
-  "..",
-  ".."
-);
 const temporaryRoots: string[] = [];
 
 function metadata(overrides: Partial<OutputArtifactMetadata> = {}): OutputArtifactMetadata {
   return {
-    schema_version: 1,
+    schema_version: 2,
     run_id: "run-ts-client-1",
     phase: "observing",
     branch_id: null,
@@ -42,7 +35,6 @@ function metadata(overrides: Partial<OutputArtifactMetadata> = {}): OutputArtifa
     operation_id: "observe-output-v1",
     version: 1,
     producer: "agent:echo",
-    consumer_scope: ["state:synthesizing"],
     media_type: "text/markdown; charset=utf-8",
     parent_ref: null,
     upstream_refs: [],
@@ -50,35 +42,43 @@ function metadata(overrides: Partial<OutputArtifactMetadata> = {}): OutputArtifa
   };
 }
 
-function tempArtifactRoot(): string {
+function tempArtifactState(): {
+  projectRoot: string;
+  artifactRoot: string;
+  env: NodeJS.ProcessEnv;
+} {
   const root = mkdtempSync(path.join(tmpdir(), "penny-artifact-client-test-"));
   temporaryRoots.push(root);
-  return root;
+  const projectRoot = path.join(root, "project");
+  mkdirSync(projectRoot, { mode: 0o700 });
+  const env = { PENNY_STATE_ROOT: path.join(root, "state") };
+  const state = initializePennyState(projectRoot, { env });
+  return { projectRoot, artifactRoot: state.paths.artifacts.root, env };
 }
 
 afterEach(() => {
-  while (temporaryRoots.length) {
-    rmSync(temporaryRoots.pop() as string, { recursive: true, force: true });
+  for (const root of temporaryRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
 describe("skill artifact client", () => {
   it("persists exact UTF-8 bytes through the TypeScript owner and verifies the canonical ref", async () => {
-    const root = tempArtifactRoot();
+    const { projectRoot, artifactRoot, env } = tempArtifactState();
     const output = 'before\u0000after\nmultibyte: ☃\nSUMMARY:{"complete":true}\n';
     const contract = metadata();
 
     const ref = await persistArtifactOutput({
       metadata: contract,
       output,
-      cwd: PROJECT_ROOT,
-      env: { ...process.env, PENNY_ARTIFACT_ROOT: root },
+      cwd: projectRoot,
+      env,
     });
 
     expect(ref).toEqual(expectedArtifactRef(contract, output));
     expect(parseArtifactRef(JSON.parse(canonicalArtifactJson(ref)))).toEqual(ref);
     const objectPath = path.join(
-      root,
+      artifactRoot,
       "objects",
       "sha256",
       ref.content_digest.slice(0, 2),
@@ -88,31 +88,45 @@ describe("skill artifact client", () => {
   });
 
   it("stores exactly the canonical multipart assistant result with matching byte length and digest", async () => {
-    const root = tempArtifactRoot();
-    const messages = [
+    const { projectRoot, artifactRoot, env } = tempArtifactState();
+    const content: AssistantMessage["content"] = [
+      { type: "thinking", thinking: "excluded reasoning" },
+      { type: "text", text: "first🙂" },
+      { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+      { type: "text", text: "\nsecond漢" },
+      { type: "thinking", thinking: "excluded too" },
+      { type: "text", text: '\nSUMMARY:{"complete":true}' },
+    ];
+    const messages: Parameters<typeof getFinalOutput>[0] = [
       {
         role: "assistant",
-        content: [
-          { type: "thinking", thinking: "excluded reasoning" },
-          { type: "text", text: "first🙂" },
-          { type: "toolCall", id: "call-1", name: "read", arguments: {} },
-          { type: "text", text: "\nsecond漢" },
-          { type: "thinking", thinking: "excluded too" },
-          { type: "text", text: '\nSUMMARY:{"complete":true}' },
-        ],
+        content,
+        api: "anthropic-messages",
+        provider: "fixture",
+        model: "fixture",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 0,
       },
-    ] as any;
+    ];
     const normalResult = getFinalOutput(messages);
     const contract = metadata();
 
     const ref = await persistArtifactOutput({
       metadata: contract,
       output: normalResult,
-      cwd: PROJECT_ROOT,
-      env: { ...process.env, PENNY_ARTIFACT_ROOT: root },
+      cwd: projectRoot,
+      env,
     });
     const objectPath = path.join(
-      root,
+      artifactRoot,
       "objects",
       "sha256",
       ref.content_digest.slice(0, 2),
@@ -127,14 +141,13 @@ describe("skill artifact client", () => {
   });
 
   it("fails closed on missing, unknown, mismatched, or noncanonical action metadata", () => {
-    const base = metadata() as unknown as Record<string, unknown>;
+    const base: Record<string, unknown> = { ...metadata() };
     const missing = { ...base };
     delete missing.operation_id;
     const unknown = { ...base, model_claimed_ref: "forged" };
     const mismatched = { ...base, producer: "agent:other" };
-    const unsortedScope = { ...base, consumer_scope: ["state:z", "state:a"] };
 
-    for (const value of [missing, unknown, unsortedScope]) {
+    for (const value of [missing, unknown]) {
       expect(() => parseOutputArtifactMetadata(value)).toThrowError(ArtifactClientError);
     }
     expect(() =>
@@ -159,29 +172,29 @@ describe("skill artifact client", () => {
   });
 
   it("returns a typed persistence error and does not echo private output", async () => {
-    const root = tempArtifactRoot();
+    const { projectRoot, env } = tempArtifactState();
     const contract = metadata();
     await persistArtifactOutput({
       metadata: contract,
       output: "first",
-      cwd: PROJECT_ROOT,
-      env: { ...process.env, PENNY_ARTIFACT_ROOT: root },
+      cwd: projectRoot,
+      env,
     });
 
     await expect(
       persistArtifactOutput({
         metadata: contract,
         output: "private divergent second output",
-        cwd: PROJECT_ROOT,
-        env: { ...process.env, PENNY_ARTIFACT_ROOT: root },
+        cwd: projectRoot,
+        env,
       })
     ).rejects.toMatchObject({ code: "ARTIFACT_PERSIST_FAILED" });
     try {
       await persistArtifactOutput({
         metadata: contract,
         output: "private divergent second output",
-        cwd: PROJECT_ROOT,
-        env: { ...process.env, PENNY_ARTIFACT_ROOT: root },
+        cwd: projectRoot,
+        env,
       });
     } catch (error) {
       expect(String(error)).not.toContain("private divergent second output");

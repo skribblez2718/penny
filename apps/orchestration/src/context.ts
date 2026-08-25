@@ -1,101 +1,28 @@
-import path from "node:path";
-
 import {
-  ArtifactRefSchema,
-  JsonValueSchema,
   RunIdentitySchema,
-  RunStatusSchema,
   TrustProfileSchema,
   isTerminalStatus,
   type ArtifactRef,
-  type Confidence,
   type Directive,
   type JsonValue,
   type RunIdentity,
   type RunStatus,
   type TrustProfile,
   validateContract,
-  validateDirective,
 } from "./contracts.js";
+import {
+  orchestrationDurableStateCodec,
+  playbookDataJson,
+  type DecodedRunContextState,
+  type JsonObject,
+  type KnowledgeBasePlaybookData,
+  type PendingBranch,
+  type PlaybookDurableState,
+  type ResearchData,
+  type RunContextSnapshot,
+} from "./durable-state.js";
 
-export interface PendingBranch {
-  readonly branch_id: string;
-  readonly agent: string;
-  readonly attempt: number;
-  readonly completed: boolean;
-  readonly confidence: Confidence | null;
-  readonly result: Record<string, JsonValue> | null;
-  readonly artifact: ArtifactRef | null;
-}
-
-export interface ResearchData {
-  mode: string;
-  max_sub_queries: number;
-  max_research_rounds: number;
-  critique_passes: number;
-  research_round: number;
-  report_format: string;
-  sub_queries: string[];
-  phase: string;
-  plan_revision: number;
-  report_revision: number;
-  validation_revision: number;
-  plan_revisions: number;
-  report_revisions: number;
-  validation_revisions: number;
-  plan_critique_issues: string[];
-  report_critique_issues: string[];
-  validation_issues: string[];
-  validation_verdict: string;
-  report_written: boolean;
-  report_dir: string;
-  report_files: string[];
-  warnings: string[];
-  plan_critique_exhausted: boolean;
-  report_critique_exhausted: boolean;
-  validation_exhausted: boolean;
-  rigor_escalated: boolean;
-  echo_branches_dispatched: number;
-  evidence_needed: string[];
-}
-
-export interface RunContextSnapshot {
-  readonly schema_version: 2;
-  readonly identity: RunIdentity;
-  readonly goal: string;
-  readonly constraints: Record<string, JsonValue>;
-  readonly project_root: string;
-  readonly trust_profile: TrustProfile;
-  readonly status: RunStatus;
-  readonly state_id: string;
-  readonly previous_state: string | null;
-  readonly step_count: number;
-  readonly max_steps: number;
-  readonly iteration: number;
-  readonly max_iterations: number;
-  readonly iteration_history: string[][];
-  readonly clarification_text: string;
-  readonly met: boolean;
-  readonly research: ResearchData;
-  /**
-   * Playbook-scoped durable state for playbooks that are not research.
-   *
-   * The Foundation stage extracted the playbook seam but left this snapshot
-   * research-shaped: `research` is a hardcoded field, so a second playbook had
-   * nowhere to keep durable state and was pushed into running beside the engine
-   * instead of on it.
-   *
-   * This slot is deliberately additive and **omitted when empty**, so research
-   * snapshots stay byte-identical and the parity oracle is untouched. It is a
-   * bounded JSON bag owned by the dispatching playbook; the engine never reads
-   * its contents.
-   */
-  readonly playbook_data?: Record<string, JsonValue>;
-  readonly selected_artifacts: ArtifactRef[];
-  readonly pending_directive: Directive | null;
-  readonly pending_branches: PendingBranch[];
-  readonly terminal_directive: Directive | null;
-}
+export type { PendingBranch, ResearchData, RunContextSnapshot } from "./durable-state.js";
 
 function emptyResearchData(): ResearchData {
   return {
@@ -151,14 +78,13 @@ export class RunContext {
   clarificationText: string;
   met: boolean;
   research: ResearchData;
-  /** Playbook-scoped durable state; see `RunContextSnapshot.playbook_data`. */
-  playbookData: Record<string, JsonValue>;
+  private readonly playbookState: PlaybookDurableState;
   selectedArtifacts: ArtifactRef[];
   pendingDirective: Directive | null;
   pendingBranches: PendingBranch[];
   terminalDirective: Directive | null;
 
-  private constructor(snapshot: RunContextSnapshot) {
+  private constructor(snapshot: DecodedRunContextState) {
     this.identity = Object.freeze(clone(snapshot.identity));
     this.goal = snapshot.goal;
     this.constraints = Object.freeze(clone(snapshot.constraints));
@@ -175,7 +101,7 @@ export class RunContext {
     this.clarificationText = snapshot.clarification_text;
     this.met = snapshot.met;
     this.research = clone(snapshot.research);
-    this.playbookData = clone(snapshot.playbook_data ?? {});
+    this.playbookState = clone(snapshot.playbook_state);
     this.selectedArtifacts = clone(snapshot.selected_artifacts);
     this.pendingDirective = clone(snapshot.pending_directive);
     this.pendingBranches = clone(snapshot.pending_branches);
@@ -199,140 +125,57 @@ export class RunContext {
       throw new Error("orchestration goal must be non-empty");
     }
     validateContract(TrustProfileSchema, input.trustProfile, "trust profile");
-    return new RunContext({
-      schema_version: 2,
-      identity,
-      goal: input.goal,
-      constraints: clone(input.constraints),
-      project_root: input.projectRoot,
-      trust_profile: input.trustProfile,
-      status: "running",
-      state_id: "intake",
-      previous_state: null,
-      step_count: 0,
-      max_steps: input.maxSteps,
-      iteration: 0,
-      max_iterations: positiveIntegerConstraint(input.constraints.max_iterations, 3),
-      iteration_history: [],
-      clarification_text: "",
-      met: false,
-      research: emptyResearchData(),
-      selected_artifacts: clone([...(input.initialArtifacts ?? [])]),
-      // playbook_data is intentionally omitted here; it materializes only when a
-      // playbook writes to it, keeping research snapshots byte-identical.
-      pending_directive: null,
-      pending_branches: [],
-      terminal_directive: null,
-    });
+    return new RunContext(
+      orchestrationDurableStateCodec.decodeSnapshot({
+        schema_version: 2,
+        identity,
+        goal: input.goal,
+        constraints: clone(input.constraints),
+        project_root: input.projectRoot,
+        trust_profile: input.trustProfile,
+        status: "running",
+        state_id: "intake",
+        previous_state: null,
+        step_count: 0,
+        max_steps: input.maxSteps,
+        iteration: 0,
+        max_iterations: positiveIntegerConstraint(input.constraints.max_iterations, 3),
+        iteration_history: [],
+        clarification_text: "",
+        met: false,
+        research: emptyResearchData(),
+        selected_artifacts: clone([...(input.initialArtifacts ?? [])]),
+        // playbook_data is intentionally omitted here; it materializes only when a
+        // playbook writes to it, keeping research snapshots byte-identical.
+        pending_directive: null,
+        pending_branches: [],
+        terminal_directive: null,
+      })
+    );
   }
 
   static fromSnapshot(value: unknown): RunContext {
-    if (value === null || typeof value !== "object" || Array.isArray(value)) {
-      throw new Error("checkpoint context must be an object");
+    return new RunContext(orchestrationDurableStateCodec.decodeSnapshot(value));
+  }
+
+  static fromCheckpoint(
+    value: unknown,
+    options: { readonly playbook: string; readonly projectRoot?: string }
+  ): RunContext {
+    return new RunContext(orchestrationDurableStateCodec.decodeCheckpoint(value, options));
+  }
+
+  /** Compatibility view for callers that intentionally inspect unknown future fields. */
+  get playbookData(): JsonObject {
+    return playbookDataJson(this.playbookState);
+  }
+
+  /** Validated KB metadata. The discriminant check is explicit and assertion-free. */
+  get knowledgeBaseData(): KnowledgeBasePlaybookData {
+    if (this.playbookState.kind !== "knowledge-base") {
+      throw new Error(`run '${this.identity.run_id}' is not a knowledge-base run`);
     }
-    const record = value as Record<string, unknown>;
-    const expectedKeys = [
-      "schema_version",
-      "identity",
-      "goal",
-      "constraints",
-      "project_root",
-      "trust_profile",
-      "status",
-      "state_id",
-      "previous_state",
-      "step_count",
-      "max_steps",
-      "iteration",
-      "max_iterations",
-      "iteration_history",
-      "clarification_text",
-      "met",
-      "research",
-      "selected_artifacts",
-      "pending_directive",
-      "pending_branches",
-      "terminal_directive",
-    ];
-    // `playbook_data` is optional: absent on every research snapshot and on every
-    // checkpoint written before the slot existed, so it is accepted-if-present
-    // rather than required.
-    const optionalKeys = ["playbook_data"];
-    const unknownKeys = Object.keys(record).filter(
-      (key) => !expectedKeys.includes(key) && !optionalKeys.includes(key)
-    );
-    const missingKeys = expectedKeys.filter((key) => !Object.hasOwn(record, key));
-    if (unknownKeys.length > 0 || missingKeys.length > 0) {
-      throw new Error(
-        `checkpoint context fields are invalid (missing=${missingKeys.join(",")}; unknown=${unknownKeys.join(",")})`
-      );
-    }
-    const snapshot = record as unknown as RunContextSnapshot;
-    validateContract(RunIdentitySchema, snapshot.identity, "checkpoint identity");
-    if (snapshot.identity.engine_owner !== "typescript") {
-      throw new Error("checkpoint engine_owner must be typescript");
-    }
-    if (typeof snapshot.goal !== "string" || snapshot.goal.trim().length === 0) {
-      throw new Error("checkpoint goal must be non-empty");
-    }
-    if (!path.isAbsolute(snapshot.project_root)) {
-      throw new Error("checkpoint project_root must be absolute");
-    }
-    if (
-      snapshot.constraints === null ||
-      typeof snapshot.constraints !== "object" ||
-      Array.isArray(snapshot.constraints)
-    ) {
-      throw new Error("checkpoint constraints must be an object");
-    }
-    validateContract(JsonValueSchema, snapshot.constraints, "checkpoint constraints");
-    validateContract(RunStatusSchema, snapshot.status, "checkpoint status");
-    validateContract(TrustProfileSchema, snapshot.trust_profile, "checkpoint trust profile");
-    if (snapshot.schema_version !== 2) {
-      throw new Error(`unsupported checkpoint schema version ${snapshot.schema_version}`);
-    }
-    for (const [name, numeric, minimum] of [
-      ["step_count", snapshot.step_count, 0],
-      ["max_steps", snapshot.max_steps, 1],
-      ["iteration", snapshot.iteration, 0],
-      ["max_iterations", snapshot.max_iterations, 1],
-    ] as const) {
-      if (!Number.isSafeInteger(numeric) || numeric < minimum) {
-        throw new Error(`checkpoint ${name} is invalid`);
-      }
-    }
-    if (!Array.isArray(snapshot.selected_artifacts)) {
-      throw new Error("checkpoint selected_artifacts must be an array");
-    }
-    for (const artifact of snapshot.selected_artifacts) {
-      validateContract(ArtifactRefSchema, artifact, "checkpoint artifact ref");
-      if (artifact.run_id !== snapshot.identity.run_id) {
-        throw new Error("checkpoint artifact belongs to another run");
-      }
-    }
-    if (snapshot.pending_directive !== null) {
-      const pending = validateDirective(snapshot.pending_directive);
-      if (pending.identity.run_id !== snapshot.identity.run_id) {
-        throw new Error("pending directive belongs to another run");
-      }
-    }
-    if (snapshot.terminal_directive !== null) {
-      const terminal = validateDirective(snapshot.terminal_directive);
-      if (terminal.identity.run_id !== snapshot.identity.run_id) {
-        throw new Error("terminal directive belongs to another run");
-      }
-    }
-    if (snapshot.playbook_data !== undefined) {
-      if (
-        snapshot.playbook_data === null ||
-        typeof snapshot.playbook_data !== "object" ||
-        Array.isArray(snapshot.playbook_data)
-      ) {
-        throw new Error("checkpoint playbook_data must be an object");
-      }
-      validateContract(JsonValueSchema, snapshot.playbook_data, "checkpoint playbook_data");
-    }
-    return new RunContext(snapshot);
+    return this.playbookState.data;
   }
 
   reissueCurrent(): void {
@@ -365,7 +208,7 @@ export class RunContext {
   }
 
   snapshot(): RunContextSnapshot {
-    return {
+    return orchestrationDurableStateCodec.encodeSnapshot({
       schema_version: 2,
       identity: clone(this.identity),
       goal: this.goal,
@@ -383,16 +226,12 @@ export class RunContext {
       clarification_text: this.clarificationText,
       met: this.met,
       research: clone(this.research),
-      // Omitted when empty so research snapshots serialize byte-identically to
-      // their pre-slot form. Parity is preserved by construction, not by promise.
-      ...(Object.keys(this.playbookData).length > 0
-        ? { playbook_data: clone(this.playbookData) }
-        : {}),
+      playbook_state: clone(this.playbookState),
       selected_artifacts: clone(this.selectedArtifacts),
       pending_directive: clone(this.pendingDirective),
       pending_branches: clone(this.pendingBranches),
       terminal_directive: clone(this.terminalDirective),
-    };
+    });
   }
 }
 

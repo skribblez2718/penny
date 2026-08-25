@@ -1,6 +1,6 @@
 # Word Extension
 
-Generate professionally styled, structurally validated Word (`.docx`) documents from Markdown. The TypeScript extension validates arguments and manages the Python process; `generate_docx.py` parses Markdown, renders through python-docx, validates the OOXML package, and atomically publishes the final file.
+Generate professionally styled, structurally validated Word (`.docx`) documents from Markdown. The extension is now fully TypeScript/Node: it validates arguments, parses Markdown, renders editable OOXML through `docx`, validates the package structure, and atomically publishes the final file in process.
 
 ## Tool
 
@@ -66,50 +66,41 @@ The generator writes to a unique same-directory staging file, then checks:
 
 1. ZIP integrity and CRCs
 2. Required OPC/OOXML package parts
-3. Every XML and relationship part parses
-4. python-docx can reopen the package
+3. Every XML and relationship part parses safely
+4. The generated package can be reopened by `docx`'s patch reader
 
-Only a validated package replaces the target. A failed generation leaves an existing target unchanged. This publication guarantee assumes normal local-filesystem `replace` semantics; it does not claim stronger guarantees for every network or virtual filesystem.
+Only a validated package replaces the target. A failed generation leaves an existing target unchanged. This publication guarantee assumes normal local-filesystem `rename`/`replace` semantics; it does not claim stronger guarantees for every network or virtual filesystem.
 
 ## Dependencies
 
-Word runtime dependencies are first-class locked project dependencies in `pyproject.toml` and `uv.lock`:
+Word runtime dependencies are first-class locked Bun workspace dependencies:
 
-- `python-docx>=1.2,<1.3`
-- `markdown-it-py>=4,<5`
-- `pillow>=12,<13`
-
-TypeBox is a runtime dependency of the Word workspace package. No manual `uv pip install` step is required.
+- `docx`
+- `markdown-it`
+- `jszip`
+- `fast-xml-parser`
+- `image-size`
 
 ```bash
-uv sync --extra dev --frozen
 bun install --frozen-lockfile
 ```
 
 ## Configuration
 
-| Environment variable      | Purpose                                                                                                          |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `PROJECT_ROOT`            | Optional project-root override. Otherwise the root is discovered from the extension module, not the process CWD. |
-| `PI_VENV_PYTHON`          | Optional Python interpreter override. Standard POSIX and Windows venv layouts are discovered automatically.      |
-| `PENNY_DOCGEN_TIMEOUT_MS` | Generator timeout in milliseconds (default 90000).                                                               |
+| Environment variable      | Purpose                                            |
+| ------------------------- | -------------------------------------------------- |
+| `PROJECT_ROOT`            | Optional project-root override.                    |
+| `PENNY_DOCGEN_TIMEOUT_MS` | Generator timeout in milliseconds (default 90000). |
 
 ## Testing
 
 ```bash
-# TypeScript behavior
 (cd .pi/extensions/word && bun run test:unit)
-
-# Python rendering and OOXML structure
-uv run --frozen python -m pytest \
-  .pi/extensions/word/tests/python \
-  -p no:cacheprovider --tb=short -q
-
-# Real TypeScript → Python boundary, including cancellation and timeout
 (cd .pi/extensions/word && bun run test:integration)
+(cd .pi/extensions/word && bun run typecheck)
 ```
 
-The focused GitHub Actions workflow runs these checks on Linux, macOS, and Windows. A Linux LibreOffice conversion smoke test adds an independent compatibility check without making LibreOffice a runtime dependency. Visual release review remains a separate human check.
+The focused GitHub Actions workflow runs the TypeScript checks on Linux, macOS, and Windows. A Linux LibreOffice conversion smoke test remains an independent compatibility check without making LibreOffice a runtime dependency.
 
 ## Known viewer constraints
 

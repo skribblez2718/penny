@@ -1,3 +1,4 @@
+import { parseJson, requireRecord, requireString, requireValue } from "./helpers/narrowing.js";
 /**
  * KB content-review gate tests (§5.1 pragmatic slice).
  *
@@ -10,13 +11,10 @@
 import {
   chmodSync,
   existsSync,
-  lstatSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,7 +34,6 @@ import {
 import {
   capabilitySha256Of,
   claimCapabilities,
-  consumeCapabilities,
   denyGate,
   findGateForRun,
   invalidateCapabilities,
@@ -51,7 +48,6 @@ import {
 } from "../src/kb/gate.js";
 import {
   CapabilityStore,
-  envelopeDigest,
   mintEnvelope,
   validateEnvelopeCrossField,
   type CapabilityEnvelope,
@@ -82,6 +78,19 @@ const SOURCE_A: IngestSource = {
   sourceType: "manual",
   capturedAt: "2026-08-18T00:00:00Z",
 };
+
+function gateArtifacts(
+  artifacts: Awaited<ReturnType<typeof ingestKb>>["artifacts"]
+): Array<Record<string, unknown>> {
+  return artifacts.map((artifact) => ({
+    schema_version: artifact.schema_version,
+    artifact_id: artifact.artifact_id,
+    artifact_kind: artifact.artifact_kind,
+    sha256: artifact.sha256,
+    media_type: artifact.media_type,
+    byte_length: artifact.byte_length,
+  }));
+}
 
 function ctx(root: string, runId: string) {
   return {
@@ -211,7 +220,7 @@ async function runToGate(
     root,
     "kbp_gate",
     runId,
-    gateResult.artifacts as unknown as Record<string, unknown>[],
+    gateArtifacts(gateResult.artifacts),
     capIds,
     capIds
   );
@@ -232,10 +241,18 @@ describe("gate persistence and projection", () => {
 
     const stored = readGate(root, gate.gate_id);
     expect(stored).toBeDefined();
-    expect(stored!.status).toBe("awaiting");
-    expect(stored!.source_ids).toEqual([]);
-    expect(stored!.artifacts).toHaveLength(4);
-    expect(stored!.packet_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(requireValue(stored, "apps/orchestration/tests/kb-gate.test.ts:235").status).toBe(
+      "awaiting"
+    );
+    expect(requireValue(stored, "apps/orchestration/tests/kb-gate.test.ts:236").source_ids).toEqual(
+      []
+    );
+    expect(
+      requireValue(stored, "apps/orchestration/tests/kb-gate.test.ts:237").artifacts
+    ).toHaveLength(4);
+    expect(
+      requireValue(stored, "apps/orchestration/tests/kb-gate.test.ts:238").packet_sha256
+    ).toMatch(/^[0-9a-f]{64}$/);
 
     // Safe projection: no KB paths, no bodies.
     const json = JSON.stringify(listGates(root));
@@ -281,14 +298,14 @@ describe("gate decisions (host-authenticated)", () => {
       profileId: "kbp_gate",
     });
 
-    const gate = await (async () => {
+    await (async () => {
       const gateResult = await ingestKb(ctx(root, "kb-run-1"), sources, makeMockRunner());
       expect(gateResult.status).toBe("awaiting_user");
       return persistIngestGate(
         root,
         "kbp_gate",
         "kb-run-1",
-        gateResult.artifacts as unknown as Record<string, unknown>[],
+        gateArtifacts(gateResult.artifacts),
         sourceIds,
         [cap.capabilityId]
       );
@@ -322,23 +339,29 @@ describe("gate decisions (host-authenticated)", () => {
     // Publication plane: the approved page is selected. This legacy fixture
     // carries no supported claims, so current grounded query semantics
     // correctly do not call it a met answer.
-    expect(Object.keys(readSelectedGeneration(root)!.catalog.pages)).toContain("page_gate");
+    expect(
+      Object.keys(
+        requireValue(readSelectedGeneration(root), "apps/orchestration/tests/kb-gate.test.ts:325")
+          .catalog.pages
+      )
+    ).toContain("page_gate");
   });
 
   it("drift invalidates a gate without publishing", async () => {
     const root = tmpRoot();
     initKb(ctx(root, "kb-init"), "Gate KB");
-    const baseGen = JSON.parse(
-      readFileSync(path.join(root, ".kb", "current.json"), "utf8")
-    ).generation_id;
+    const selector = requireRecord(
+      parseJson(readFileSync(path.join(root, ".kb", "current.json"), "utf8")),
+      "current generation selector"
+    );
+    const baseGen = requireString(selector["generation_id"], "current generation id");
 
     const gate1 = await runToGate(root, "kb-run-drift-1");
     expect(gate1.base_generation_id).toBe(baseGen);
 
     // A second run publishes a new generation (selector advances).
-    const cap = makeCapability(root, SOURCE_A, "kbp_gate");
+    makeCapability(root, SOURCE_A, "kbp_gate");
     const sources = [SOURCE_A];
-    gate1 && void gate1;
     const sources2 = [SOURCE_A];
     const gate2Raw = await ingestKb(ctx(root, "kb-run-drift-2"), sources2, makeMockRunner());
     expect(gate2Raw.status).toBe("awaiting_user");
@@ -346,7 +369,7 @@ describe("gate decisions (host-authenticated)", () => {
       root,
       "kbp_gate",
       "kb-run-drift-2",
-      gate2Raw.artifacts as unknown as Record<string, unknown>[],
+      gateArtifacts(gate2Raw.artifacts),
       [],
       []
     );
@@ -374,8 +397,6 @@ describe("gate decisions (host-authenticated)", () => {
     expect(invalidated?.terminal_reason).toBe("base_generation_drift");
 
     // The first gate's candidate set never published a second page for gen1.
-    void cap;
-    void sources;
   });
 
   it("expiry invalidates before any publication", async () => {
@@ -385,9 +406,9 @@ describe("gate decisions (host-authenticated)", () => {
 
     // Force expiry by rewriting the row (test-only).
     const p = path.join(root, ".kb", "gates", `${gate.gate_id}.json`);
-    const raw = JSON.parse(readFileSync(p, "utf8")) as GateState;
-    raw.expires_at = "2020-01-01T00:00:00Z";
-    writeFileSync(p, canonicalJson(raw), { mode: 0o600 });
+    const raw = requireValue(readGate(root, gate.gate_id), "persisted gate fixture");
+    const expired = { ...raw, expires_at: "2020-01-01T00:00:00Z" } satisfies GateState;
+    writeFileSync(p, canonicalJson(expired), { mode: 0o600 });
     chmodSync(p, 0o600);
 
     expect(() => approveGate(root, [SOURCE_A], "kb-run-expired")).toThrow(/expired/);
@@ -426,7 +447,7 @@ describe("gate decisions (host-authenticated)", () => {
       root,
       "kbp_gate",
       "kb-run-deny",
-      gateResult.artifacts as unknown as Record<string, unknown>[],
+      gateArtifacts(gateResult.artifacts),
       sourceIds,
       [cap.capabilityId]
     );

@@ -1,10 +1,8 @@
-import { mkdirSync } from "node:fs";
-import path from "node:path";
-
 import { Checkpointer, canonicalJson, sha256 } from "../../src/checkpointer.js";
 import { RunContext } from "../../src/context.js";
 import { materializeRunInput } from "../../src/private-inputs.js";
 import type { StartKbAction } from "../../src/kb/contracts.js";
+import { installTestProjectState } from "./penny-state-fixture.js";
 
 const controls = new Map<string, Checkpointer>();
 
@@ -13,16 +11,17 @@ export function kbArtifactControl(input: {
   root: string;
   runId: string;
   profileId: string;
-  action?: string;
+  action?: StartKbAction;
   sessionId?: string;
 }): Checkpointer {
+  installTestProjectState(input.root);
   let checkpointer = controls.get(input.root);
   if (checkpointer === undefined) {
     checkpointer = new Checkpointer(":memory:");
     controls.set(input.root, checkpointer);
   }
   if (!checkpointer.runExists(input.runId)) {
-    const action = (input.action ?? "ingest") as StartKbAction;
+    const action = input.action ?? "ingest";
     const sessionId = input.sessionId ?? `test_session_${input.runId}`;
     const context = RunContext.create({
       identity: {
@@ -58,7 +57,6 @@ export function kbArtifactControl(input: {
       storage_key: `${input.runId}/request.json`,
       temporary_storage_key: `${input.runId}/.${transactionId}.tmp`,
     });
-    mkdirSync(path.join(input.root, ".penny"), { recursive: true, mode: 0o700 });
     materializeRunInput({
       projectRoot: input.root,
       checkpointer,

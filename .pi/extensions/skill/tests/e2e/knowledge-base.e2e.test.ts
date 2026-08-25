@@ -20,11 +20,11 @@ import { fileURLToPath } from "node:url";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   withFileMutationQueue: vi.fn((_path: string, operation: () => unknown) => operation()),
   parseFrontmatter: vi.fn(() => ({ frontmatter: {}, body: "" })),
 }));
-vi.mock("@mariozechner/pi-tui", () => ({
+vi.mock("@earendil-works/pi-tui", () => ({
   Container: class {},
   Spacer: class {},
   Text: class {},
@@ -35,6 +35,8 @@ import {
   ContentReviewService,
   KbSessionProfileGrantStore,
   OrchestrationService,
+  initializePennyState,
+  resolvePennyProjectState,
   ParentDeliveryGrantStore,
   PromotionApprovalStore,
   SaveQueryClaimStore,
@@ -59,6 +61,14 @@ import {
   createTestOnlyArtifactBodyRunner,
 } from "../../../../../apps/orchestration/src/kb/session-tools.js";
 import { setGlobalLogTransport } from "../../../../lib/logger/logger.js";
+import {
+  createTestExtensionApi,
+  isRecord,
+  parseJson,
+  requireArray,
+  requireFunction,
+  requireString,
+} from "../../../../lib/tests/test-narrowers.js";
 import type { SkillExtensionTestDependencies } from "../../index.js";
 
 const REPOSITORY_ROOT = path.resolve(
@@ -123,6 +133,8 @@ interface RegisteredTool {
 const roots: string[] = [];
 const capturedLogs: string[] = [];
 let priorEnvironment: Record<string, string | undefined> | undefined;
+const originalPennyStateRoot = process.env.PENNY_STATE_ROOT;
+const originalArtifactRoot = process.env.PENNY_ARTIFACT_ROOT;
 
 function temporary(label: string): string {
   const root = mkdtempSync(path.join(tmpdir(), `${label}-`));
@@ -130,16 +142,36 @@ function temporary(label: string): string {
   return root;
 }
 
+function rawSentinel(kind: RawKind, index: number, nonce: string): string {
+  return ["RAW", kind, "SENTINEL", "REGISTERED", nonce, String(index)].join("_");
+}
+
+function rawKindKey(kind: RawKind): Lowercase<RawKind> {
+  switch (kind) {
+    case "SOURCE":
+      return "source";
+    case "CLAIM":
+      return "claim";
+    case "PAGE":
+      return "page";
+    case "QUERY":
+      return "query";
+    case "REPORT":
+      return "report";
+    case "PATCH":
+      return "patch";
+  }
+}
+
 function sentinels(): Sentinels {
   const nonce = randomBytes(12).toString("hex");
-  const raw = Object.fromEntries(
-    RAW_KINDS.map((kind, index) => [
-      kind.toLowerCase(),
-      ["RAW", kind, "SENTINEL", "REGISTERED", nonce, String(index)].join("_"),
-    ])
-  ) as Record<Lowercase<RawKind>, string>;
   return {
-    ...raw,
+    source: rawSentinel("SOURCE", 0, nonce),
+    claim: rawSentinel("CLAIM", 1, nonce),
+    page: rawSentinel("PAGE", 2, nonce),
+    query: rawSentinel("QUERY", 3, nonce),
+    report: rawSentinel("REPORT", 4, nonce),
+    patch: rawSentinel("PATCH", 5, nonce),
     derived: ["DERIVED", "ANSWER", "SENTINEL", "GRANTED", nonce].join("_"),
   };
 }
@@ -152,7 +184,7 @@ function text(value: unknown): string {
 function assertRawAbsent(label: string, value: unknown, markers: Sentinels): void {
   const surface = text(value);
   for (const kind of RAW_KINDS) {
-    const marker = markers[kind.toLowerCase() as Lowercase<RawKind>];
+    const marker = markers[rawKindKey(kind)];
     if (surface.includes(marker))
       throw new Error(`raw ${kind.toLowerCase()} escaped into ${label}`);
   }
@@ -179,13 +211,18 @@ function allFiles(root: string): string[] {
   return files;
 }
 
+function installProjectState(projectRoot: string) {
+  const stateRoot = temporary("penny-kb-state-e2e");
+  delete process.env.PENNY_ARTIFACT_ROOT;
+  process.env.PENNY_STATE_ROOT = stateRoot;
+  return initializePennyState(projectRoot, { env: process.env });
+}
+
 function installProfile(projectRoot: string, kbRoot: string): void {
-  const penny = path.join(projectRoot, ".penny");
-  mkdirSync(penny, { recursive: true, mode: 0o700 });
-  chmodSync(penny, 0o700);
+  const state = installProjectState(projectRoot);
   mkdirSync(kbRoot, { recursive: true, mode: 0o700 });
   chmodSync(kbRoot, 0o700);
-  const registry = path.join(penny, "kb-profiles.json");
+  const registry = state.paths.knowledgeBase.profiles;
   writeFileSync(
     registry,
     JSON.stringify({
@@ -203,7 +240,7 @@ function installProfile(projectRoot: string, kbRoot: string): void {
     { encoding: "utf8", mode: 0o600 }
   );
   chmodSync(registry, 0o600);
-  const grantStore = new KbSessionProfileGrantStore(path.join(penny, "kb-host-grants"));
+  const grantStore = new KbSessionProfileGrantStore(state.paths.knowledgeBase.hostGrants);
   grantStore.mint({
     session_id: SESSION,
     kb_profile_id: PROFILE,
@@ -236,10 +273,8 @@ function installScaffoldProfile(projectRoot: string): string {
   writeFileSync(path.join(kbRoot, "templates", "source.json"), "{}\n");
   execFileSync("git", ["-C", projectRoot, "add", ...SCAFFOLD_TRACKED_FILES]);
 
-  const penny = path.join(projectRoot, ".penny");
-  mkdirSync(penny, { mode: 0o700 });
-  chmodSync(penny, 0o700);
-  const registry = path.join(penny, "kb-profiles.json");
+  const state = installProjectState(projectRoot);
+  const registry = state.paths.knowledgeBase.profiles;
   writeFileSync(
     registry,
     JSON.stringify({
@@ -261,7 +296,7 @@ function installScaffoldProfile(projectRoot: string): string {
     { encoding: "utf8", mode: 0o600 }
   );
   chmodSync(registry, 0o600);
-  const grantStore = new KbSessionProfileGrantStore(path.join(penny, "kb-host-grants"));
+  const grantStore = new KbSessionProfileGrantStore(state.paths.knowledgeBase.hostGrants);
   grantStore.mint({
     session_id: SESSION,
     kb_profile_id: PROFILE,
@@ -297,51 +332,60 @@ function assertScaffoldLiveCustody(kbRoot: string): void {
 }
 
 function object(value: unknown): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("expected an object");
+  if (!isRecord(value)) throw new Error("expected an object");
+  return value;
+}
+
+function required<T>(value: T | null | undefined, label: string): T {
+  if (value === null || value === undefined) {
+    throw new Error(`expected ${label}`);
   }
-  return value as Record<string, unknown>;
+  return value;
 }
 
 function phaseAction(invocation: KbPhaseInvocation): string {
-  const envelope = object(JSON.parse(invocation.readPhaseBrief?.() ?? "{}"));
+  const envelope = object(parseJson(invocation.readPhaseBrief?.() ?? "{}"));
   return String(object(envelope["brief"])["action"] ?? "");
 }
 
 function composedFixture(invocation: KbPhaseInvocation): ComposedFixture {
-  const envelope = JSON.parse(invocation.readPhaseBrief?.() ?? "{}") as {
-    compose_authority?: {
-      allocations?: Array<{
-        page_id: string;
-        revision_id: string;
-        lifecycle: "draft";
-        source_ids: string[];
-        claim_allocations: Array<{ candidate_ref: string; claim_id: string }>;
-        supersedes: null | { revision_id: string };
-      }>;
-    };
-  };
-  const allocations = envelope.compose_authority?.allocations;
-  const allocation = allocations?.[0];
-  const claimAllocation = allocation?.claim_allocations[0];
-  if (
-    allocations?.length !== 1 ||
-    allocation === undefined ||
-    allocation.source_ids.length === 0 ||
-    allocation.claim_allocations.length !== 1 ||
-    claimAllocation === undefined
-  ) {
+  const envelope = object(parseJson(invocation.readPhaseBrief?.() ?? "{}"));
+  const authority = object(envelope.compose_authority);
+  const allocations = requireArray(authority.allocations, "compose authority omitted allocations");
+  const allocation = object(allocations[0]);
+  const sourceIds = requireArray(
+    allocation.source_ids,
+    "compose allocation omitted source IDs"
+  ).map((sourceId) => requireString(sourceId, "compose source ID was not text"));
+  const claimAllocations = requireArray(
+    allocation.claim_allocations,
+    "compose allocation omitted claim allocations"
+  );
+  const claimAllocation = object(claimAllocations[0]);
+  if (allocations.length !== 1 || sourceIds.length === 0 || claimAllocations.length !== 1) {
     throw new Error("registered E2E compose allocation is incomplete");
   }
+  const pageId = requireString(allocation.page_id, "compose allocation omitted page ID");
+  const revisionId = requireString(
+    allocation.revision_id,
+    "compose allocation omitted revision ID"
+  );
+  if (allocation.lifecycle !== "draft") throw new Error("compose allocation was not a draft");
+  const supersedes = allocation.supersedes;
+  const previousRevision =
+    supersedes === null
+      ? undefined
+      : requireString(object(supersedes).revision_id, "superseded revision ID was absent");
   return {
-    page: { page_id: allocation.page_id, revision_id: allocation.revision_id },
-    claimId: claimAllocation.claim_id,
+    page: { page_id: pageId, revision_id: revisionId },
+    claimId: requireString(claimAllocation.claim_id, "claim allocation omitted claim ID"),
     lifecycle: allocation.lifecycle,
-    sourceIds: [...allocation.source_ids],
-    ...(allocation.supersedes === null
-      ? {}
-      : { previousRevisionId: allocation.supersedes.revision_id }),
-    claimCandidateRef: claimAllocation.candidate_ref,
+    sourceIds,
+    ...(previousRevision === undefined ? {} : { previousRevisionId: previousRevision }),
+    claimCandidateRef: requireString(
+      claimAllocation.candidate_ref,
+      "claim allocation omitted candidate ref"
+    ),
   };
 }
 
@@ -447,6 +491,14 @@ function ingestVerificationBody(markers: Sentinels, composition: ComposedFixture
   });
 }
 
+function phaseTools(state: string): string[] {
+  const value: unknown = Reflect.get(KB_PHASE_TOOL_MATRIX, state);
+  if (!Array.isArray(value) || !value.every((tool) => typeof tool === "string")) {
+    throw new Error(`unknown KB phase '${state}'`);
+  }
+  return value;
+}
+
 function deterministicAgent(input: {
   markers: Sentinels;
   target: () => { capabilityId: string; original: Buffer; replacement: string } | undefined;
@@ -459,8 +511,7 @@ function deterministicAgent(input: {
     invocation.admitModel?.(PARENT);
     const action = phaseAction(invocation);
     const state = invocation.stateId;
-    const tools = KB_PHASE_TOOL_MATRIX[state as keyof typeof KB_PHASE_TOOL_MATRIX];
-    if (tools === undefined) throw new Error(`unknown KB phase '${state}'`);
+    const tools = phaseTools(state);
     input.phasePostures.push({
       action,
       state,
@@ -524,8 +575,12 @@ function deterministicAgent(input: {
       const privateBrief = invocation.readPhaseBrief?.() ?? "";
       expect(invocation.phaseBrief).not.toContain(input.markers.query);
       expect(privateBrief).toContain(input.markers.query);
-      const selection = object(JSON.parse(invocation.searchSelectedKb?.() ?? "{}"));
-      const candidate = object((selection["candidates"] as unknown[])[0]);
+      const selection = object(parseJson(invocation.searchSelectedKb?.() ?? "{}"));
+      const candidates = requireArray(
+        selection["candidates"],
+        "selected KB search omitted candidates"
+      );
+      const candidate = object(candidates[0]);
       const pageId = String(candidate["page_id"]);
       const revisionId = String(candidate["revision_id"]);
       expect(invocation.readSelectedPage?.(pageId, revisionId)).toContain(input.markers.page);
@@ -648,10 +703,20 @@ function deterministicAgent(input: {
     try {
       return await bodyRunner(invocation);
     } catch (error) {
-      input.agentErrors.push(`${invocation.stateId}:${(error as Error).name}`);
+      const errorName = error instanceof Error ? error.name : "UnknownError";
+      input.agentErrors.push(`${invocation.stateId}:${errorName}`);
       throw error;
     }
   };
+}
+
+function isRegisteredTool(value: unknown): value is RegisteredTool {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    value.parameters !== undefined &&
+    typeof value.execute === "function"
+  );
 }
 
 async function registerKnowledgeBaseTool(input: {
@@ -659,18 +724,21 @@ async function registerKnowledgeBaseTool(input: {
   dependencies: SkillExtensionTestDependencies;
 }): Promise<RegisteredTool> {
   const tools: RegisteredTool[] = [];
-  const handlers = new Map<string, (...args: any[]) => unknown>();
+  const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const skillExtension = (await import("../../index.js")).default;
   skillExtension(
-    {
-      registerTool(tool: unknown) {
-        tools.push(tool as RegisteredTool);
+    createTestExtensionApi({
+      onRegisterTool(tool) {
+        if (!isRegisteredTool(tool)) throw new Error("skill registered an invalid tool");
+        tools.push(tool);
       },
-      on(event: string, handler: (...args: any[]) => unknown) {
-        handlers.set(event, handler);
+      onEvent(event, handler) {
+        handlers.set(
+          event,
+          requireFunction(handler, `skill registered an invalid ${event} handler`)
+        );
       },
-      registerCommand() {},
-    } as never,
+    }),
     input.dependencies
   );
   await handlers.get("session_start")?.(
@@ -682,7 +750,7 @@ async function registerKnowledgeBaseTool(input: {
   );
   const matches = tools.filter((tool) => tool.name === "knowledge_base");
   expect(matches).toHaveLength(1);
-  return matches[0]!;
+  return required(matches[0], "one registered knowledge_base tool");
 }
 
 async function callTool(
@@ -695,7 +763,8 @@ async function callTool(
   expect(Value.Check(tool.parameters, params)).toBe(true);
   const result = await tool.execute(callId, params, undefined, undefined, { cwd: projectRoot });
   expect(result.content).toHaveLength(1);
-  expect(JSON.parse(result.content[0]!.text)).toEqual(result.details);
+  const content = required(result.content[0], "one knowledge_base result content item");
+  expect(JSON.parse(content.text)).toEqual(result.details);
   parentSurfaces.push(result);
   return result;
 }
@@ -786,6 +855,10 @@ afterEach(() => {
     priorEnvironment = undefined;
   }
   capturedLogs.length = 0;
+  if (originalPennyStateRoot === undefined) delete process.env.PENNY_STATE_ROOT;
+  else process.env.PENNY_STATE_ROOT = originalPennyStateRoot;
+  if (originalArtifactRoot === undefined) delete process.env.PENNY_ARTIFACT_ROOT;
+  else process.env.PENNY_ARTIFACT_ROOT = originalArtifactRoot;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -829,17 +902,13 @@ describe("registered knowledge_base production path", () => {
       ).not.toThrow();
     }
 
-    const artifactRoot = path.join(projectRoot, ".penny", "engine-artifacts");
     priorEnvironment = Object.fromEntries(
-      [
-        "PROJECT_ROOT",
-        "PENNY_ARTIFACT_ROOT",
-        "PI_OBSERVABILITY_ENABLED",
-        "PI_OBSERVABILITY_AUTO_START",
-      ].map((name) => [name, process.env[name]])
+      ["PROJECT_ROOT", "PI_OBSERVABILITY_ENABLED", "PI_OBSERVABILITY_AUTO_START"].map((name) => [
+        name,
+        process.env[name],
+      ])
     );
     process.env.PROJECT_ROOT = projectRoot;
-    process.env.PENNY_ARTIFACT_ROOT = artifactRoot;
     process.env.PI_OBSERVABILITY_ENABLED = "false";
     process.env.PI_OBSERVABILITY_AUTO_START = "false";
 
@@ -958,31 +1027,28 @@ describe("registered knowledge_base production path", () => {
     const markers = sentinels();
     expect(new Set(Object.values(markers)).size).toBe(RAW_KINDS.length + 1);
     const projectRoot = temporary("penny-kb-registered-e2e");
+    delete process.env.PENNY_ARTIFACT_ROOT;
     const kbRoot = path.join(projectRoot, "private-kb");
-    const artifactRoot = path.join(projectRoot, ".penny", "engine-artifacts");
     priorEnvironment = Object.fromEntries(
-      [
-        "PROJECT_ROOT",
-        "PENNY_ARTIFACT_ROOT",
-        "PI_OBSERVABILITY_ENABLED",
-        "PI_OBSERVABILITY_AUTO_START",
-      ].map((name) => [name, process.env[name]])
+      ["PROJECT_ROOT", "PI_OBSERVABILITY_ENABLED", "PI_OBSERVABILITY_AUTO_START"].map((name) => [
+        name,
+        process.env[name],
+      ])
     );
     process.env.PROJECT_ROOT = projectRoot;
-    process.env.PENNY_ARTIFACT_ROOT = artifactRoot;
     process.env.PI_OBSERVABILITY_ENABLED = "false";
     process.env.PI_OBSERVABILITY_AUTO_START = "false";
     setGlobalLogTransport((entry) => capturedLogs.push(entry));
 
-    let targetFixture:
-      | { capabilityId: string; targetPath: string; original: Buffer; replacement: string }
-      | undefined;
+    const targetFixture: {
+      current?: { capabilityId: string; targetPath: string; original: Buffer; replacement: string };
+    } = {};
     const compositions: Partial<Record<"ingest" | "save", ComposedFixture>> = {};
     const phasePostures: Array<Record<string, unknown>> = [];
     const agentErrors: string[] = [];
     const runner = deterministicAgent({
       markers,
-      target: () => targetFixture,
+      target: () => targetFixture.current,
       compositions,
       phasePostures,
       agentErrors,
@@ -1008,6 +1074,7 @@ describe("registered knowledge_base production path", () => {
       warnings: ["profile_not_authorized"],
     });
     installProfile(projectRoot, kbRoot);
+    const projectPaths = resolvePennyProjectState(projectRoot).paths;
 
     const initialized = await callTool(
       tool,
@@ -1120,6 +1187,7 @@ describe("registered knowledge_base production path", () => {
       query: `What is the synthetic orbital quorum? ${markers.query}`,
       answer_delivery: "parent_tool_result",
     });
+    const queryToolRequest: Record<string, unknown> = { ...queryRequest };
 
     // Parent-delivery authority: a request is not a grant. The first grounded
     // query retains only its artifact handle; the exact second request receives
@@ -1128,16 +1196,14 @@ describe("registered knowledge_base production path", () => {
       tool,
       projectRoot,
       "call_query_without_parent_grant",
-      queryRequest as unknown as Record<string, unknown>,
+      queryToolRequest,
       parentSurfaces
     );
     expect(queryWithoutGrant.details).toMatchObject({ status: "complete", met: true });
     expect(queryWithoutGrant.details["warnings"]).toContain("refused_parent_delivery");
     assertDerivedAbsent("query without parent grant", queryWithoutGrant, markers);
 
-    const parentGrantStore = new ParentDeliveryGrantStore(
-      path.join(projectRoot, ".penny", "kb-host-grants")
-    );
+    const parentGrantStore = new ParentDeliveryGrantStore(projectPaths.knowledgeBase.hostGrants);
     parentGrantStore.mint(
       mintParentDeliveryGrant({
         session_id: SESSION,
@@ -1158,7 +1224,7 @@ describe("registered knowledge_base production path", () => {
       tool,
       projectRoot,
       "call_query_with_parent_grant",
-      queryRequest as unknown as Record<string, unknown>,
+      queryToolRequest,
       parentSurfaces
     );
     const queryRunId = String(grantedQuery.details["run_id"]);
@@ -1168,14 +1234,18 @@ describe("registered knowledge_base production path", () => {
       derived_answer: { authority: "advisory" },
     });
     expect(text(grantedQuery.details)).toContain(markers.derived);
-    expect(grantedQuery.content[0]!.text).toContain(markers.derived);
+    const grantedContent = required(
+      grantedQuery.content[0],
+      "one granted query result content item"
+    );
+    expect(grantedContent.text).toContain(markers.derived);
     assertRawAbsent("granted query parent result", grantedQuery, markers);
 
     const replayedDelivery = await callTool(
       tool,
       projectRoot,
       "call_query_consumed_parent_grant",
-      queryRequest as unknown as Record<string, unknown>,
+      queryToolRequest,
       parentSurfaces
     );
     expect(replayedDelivery.details["warnings"]).toContain("refused_parent_delivery");
@@ -1184,9 +1254,20 @@ describe("registered knowledge_base production path", () => {
     // Terminal status/resume must not silently drop the one required answer
     // handle when its exact same-run sealed bytes cannot be reopened. Every
     // corruption class returns the same bounded body/path-free error projection.
-    const queryArtifacts = grantedQuery.details["artifacts"] as Array<{ artifact_id: string }>;
+    const queryArtifacts = requireArray(
+      grantedQuery.details["artifacts"],
+      "granted query omitted artifacts"
+    );
     expect(queryArtifacts).toHaveLength(1);
-    const answerRecord = host.checkpointer.kbArtifact(queryArtifacts[0]!.artifact_id)!;
+    const queryArtifact = object(required(queryArtifacts[0], "one query answer artifact"));
+    const queryArtifactId = requireString(
+      queryArtifact.artifact_id,
+      "query answer artifact omitted its ID"
+    );
+    const answerRecord = required(
+      host.checkpointer.kbArtifact(queryArtifactId),
+      "durable query answer artifact"
+    );
     const answerPath = path.join(
       kbRoot,
       "work",
@@ -1281,13 +1362,9 @@ describe("registered knowledge_base production path", () => {
       writeFileSync(answerPath, answerBytes, { mode: 0o600 });
     }
 
-    const corruptionSqlite = process.getBuiltinModule("node:sqlite") as
-      | typeof import("node:sqlite")
-      | undefined;
+    const corruptionSqlite = process.getBuiltinModule("node:sqlite");
     if (corruptionSqlite === undefined) throw new Error("node:sqlite unavailable");
-    const corruptionDb = new corruptionSqlite.DatabaseSync(
-      path.join(projectRoot, ".penny", "orchestration-v2.db")
-    );
+    const corruptionDb = new corruptionSqlite.DatabaseSync(projectPaths.orchestration.database);
     corruptionDb
       .prepare("UPDATE kb_run_artifacts SET run_id=? WHERE artifact_id=?")
       .run(ingestRunId, answerRecord.artifact_id);
@@ -1295,9 +1372,7 @@ describe("registered knowledge_base production path", () => {
     try {
       await expectCorruptTerminalProjection("cross_run_answer");
     } finally {
-      const repairDb = new corruptionSqlite.DatabaseSync(
-        path.join(projectRoot, ".penny", "orchestration-v2.db")
-      );
+      const repairDb = new corruptionSqlite.DatabaseSync(projectPaths.orchestration.database);
       repairDb
         .prepare("UPDATE kb_run_artifacts SET run_id=? WHERE artifact_id=?")
         .run(queryRunId, answerRecord.artifact_id);
@@ -1402,7 +1477,7 @@ describe("registered knowledge_base production path", () => {
     const capabilityStore = new CapabilityStore(projectRoot);
     capabilityStore.register(targetEnvelope);
     capabilityStore.close();
-    targetFixture = {
+    targetFixture.current = {
       capabilityId: targetEnvelope.capability_id,
       targetPath,
       original,
@@ -1469,8 +1544,11 @@ describe("registered knowledge_base production path", () => {
       })
     ).toBe(false);
     expect(Value.Check(tool.parameters, { schema_version: 1, action: "apply" })).toBe(false);
-    const promotionRun = host.checkpointer.loadRunById(promoteRunId)!;
-    const promotionPending = promotionRun.pendingDirective!;
+    const promotionRun = required(
+      host.checkpointer.loadRunById(promoteRunId),
+      "durable promotion run"
+    );
+    const promotionPending = required(promotionRun.pendingDirective, "pending promotion directive");
     expect(() =>
       host.engine.handle({
         schema_version: 2,
@@ -1504,7 +1582,7 @@ describe("registered knowledge_base production path", () => {
     expect(() => approval.resumeApprovedPromotion("{}")).toThrow();
     expect(readFileSync(targetPath)).toEqual(original);
     approval.rotateKey("pkey_registered_e2e");
-    const gate = approval.gateForRun(promoteRunId)!;
+    const gate = required(approval.gateForRun(promoteRunId), "promotion approval gate");
     const decision = approval.decide(
       approval.buildDecisionIntent({
         challengeId: gate.challenge_id,
@@ -1512,17 +1590,24 @@ describe("registered knowledge_base production path", () => {
         reviewerSubjectId: authenticateLocalContentReviewer().subjectId,
       })
     );
+    const decisionIntentSha256 = required(
+      decision.gate.decision_intent_sha256,
+      "promotion decision intent digest"
+    );
+    const receipt = required(decision.receipt, "promotion approval receipt");
+    const receiptSha256 = required(decision.receipt_sha256, "promotion approval receipt digest");
+    const receiptJcs = required(decision.receipt_jcs, "promotion approval receipt bytes");
     const controlDecision = host.engine.recordPromotionDecision({
       runId: promoteRunId,
       challengeId: gate.challenge_id,
       decision: "approve",
-      intentSha256: decision.gate.decision_intent_sha256!,
+      intentSha256: decisionIntentSha256,
       packetSha256: decision.gate.packet_sha256,
-      receiptId: decision.receipt!.receipt_id,
-      receiptSha256: decision.receipt_sha256!,
+      receiptId: receipt.receipt_id,
+      receiptSha256,
     });
     expect(controlDecision.action).toBe("await_user");
-    const apply = approval.resumeApprovedPromotion(decision.receipt_jcs!);
+    const apply = approval.resumeApprovedPromotion(receiptJcs);
     const promotionTerminal = host.engine.finalizeApprovedPromotion({
       runId: apply.run_id,
       status: apply.status,
@@ -1552,9 +1637,7 @@ describe("registered knowledge_base production path", () => {
     expect(finalCapabilities.lease(sourceCapability.capability_id)?.state).toBe("consumed");
     expect(finalCapabilities.lease(targetEnvelope.capability_id)?.state).toBe("consumed");
 
-    const finalParentGrants = new ParentDeliveryGrantStore(
-      path.join(projectRoot, ".penny", "kb-host-grants")
-    );
+    const finalParentGrants = new ParentDeliveryGrantStore(projectPaths.knowledgeBase.hostGrants);
     expect(finalParentGrants.list()).toMatchObject({
       grants: [{ grant_id: "pgt_registered_e2e", state: "consumed", run_id: queryRunId }],
       skipped_malformed: 0,
@@ -1599,13 +1682,13 @@ describe("registered knowledge_base production path", () => {
           schema_version: 1,
           run_id: phaseRunId,
           state_id: stateId,
-          private_input_sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
-          allowed_prior_artifacts: expect.any(Array),
-          allowed_selected_pages: expect.any(Array),
         },
-        created_at: expect.stringMatching(/Z$/),
-        closed_at: expect.stringMatching(/Z$/),
       });
+      expect(record?.operands.private_input_sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(Array.isArray(record?.operands.allowed_prior_artifacts)).toBe(true);
+      expect(Array.isArray(record?.operands.allowed_selected_pages)).toBe(true);
+      expect(record?.created_at).toMatch(/Z$/);
+      expect(record?.closed_at).toMatch(/Z$/);
       if (stateId === "compose") {
         expect(record?.operands.compose_authority).toBeDefined();
       } else {
@@ -1613,41 +1696,41 @@ describe("registered knowledge_base production path", () => {
       }
     }
     for (const runId of [ingestRunId, queryRunId, saveRunId, promoteRunId]) {
-      const run = host.checkpointer.loadRunById(runId)!;
+      const run = required(host.checkpointer.loadRunById(runId), `durable control run ${runId}`);
       assertRawAbsent(`control run ${runId}`, run.snapshot(), markers);
       assertDerivedAbsent(`control run ${runId}`, run.snapshot(), markers);
     }
 
-    const controlDbPath = path.join(projectRoot, ".penny", "orchestration-v2.db");
-    const sqlite = process.getBuiltinModule("node:sqlite") as
-      | typeof import("node:sqlite")
-      | undefined;
+    const controlDbPath = projectPaths.orchestration.database;
+    const sqlite = process.getBuiltinModule("node:sqlite");
     if (sqlite === undefined) throw new Error("node:sqlite unavailable");
     const projectionDb = new sqlite.DatabaseSync(controlDbPath);
     const projections = projectionDb
       .prepare("SELECT context_json FROM runs WHERE playbook='knowledge-base'")
-      .all() as Array<{ context_json: string }>;
+      .all();
     projectionDb.close();
     expect(projections.length).toBeGreaterThan(0);
-    for (const row of projections) {
-      const projection = JSON.parse(row.context_json) as Record<string, unknown>;
+    for (const value of projections) {
+      const row = object(value);
+      const contextJson = requireString(row.context_json, "run projection omitted context JSON");
+      const projection = object(parseJson(contextJson));
       expect(projection.durable_schema_version).toBe(1);
       expect(projection).not.toHaveProperty("project_root");
-      expect(row.context_json).not.toContain(projectRoot);
-      expect(row.context_json).not.toContain(kbRoot);
+      expect(contextJson).not.toContain(projectRoot);
+      expect(contextJson).not.toContain(kbRoot);
     }
 
     const databasePaths = [
       controlDbPath,
-      path.join(artifactRoot, "manifest-v2.db"),
-      path.join(projectRoot, ".penny", "kb-capabilities", "capabilities.sqlite"),
-      path.join(projectRoot, ".penny", "kb-approval", "receipts.sqlite"),
-      path.join(projectRoot, ".penny", "kb-host-grants", "grants.sqlite"),
+      projectPaths.artifacts.manifestDatabase,
+      path.join(projectPaths.knowledgeBase.capabilities, "capabilities.sqlite"),
+      path.join(projectPaths.knowledgeBase.approval, "receipts.sqlite"),
+      path.join(projectPaths.knowledgeBase.hostGrants, "grants.sqlite"),
       path.join(saveClaimStoreDir(projectRoot, PROFILE), "claims.sqlite"),
     ];
     assertDatabaseSurfaces(databasePaths, markers);
 
-    const receiptRoot = path.join(projectRoot, ".penny", "kb-operation-receipts");
+    const receiptRoot = projectPaths.knowledgeBase.operationReceipts;
     const receiptFiles = allFiles(receiptRoot);
     expect(receiptFiles.length).toBeGreaterThan(0);
     for (const receiptFile of receiptFiles) {
@@ -1679,7 +1762,7 @@ describe("registered knowledge_base production path", () => {
     for (const candidate of projectFiles) {
       const relative = path.relative(projectRoot, candidate);
       expect(relative).not.toMatch(/(?:^|\/)(?:\.mempalace)(?:\/|$)|\.jsonl$|\.snap$/);
-      expect(path.basename(candidate)).not.toMatch(/\.tmp$|^\.penny-promote-/);
+      expect(path.basename(candidate)).not.toMatch(/\.tmp$|^\.pny-promote-/);
       assertRawAbsent(`temporary path name ${relative}`, relative, markers);
       assertDerivedAbsent(`temporary path name ${relative}`, relative, markers);
     }

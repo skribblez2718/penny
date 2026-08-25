@@ -182,6 +182,11 @@ function optionalText(row: Record<string, SQLOutputValue>, field: string): strin
   return value;
 }
 
+function parseJsonValue(source: string): unknown {
+  const value: unknown = JSON.parse(source);
+  return value;
+}
+
 const PARENT_GRANT_ROW_KEYS = [
   "grant_id",
   "grant_sha256",
@@ -502,7 +507,7 @@ export class ParentDeliveryGrantStore implements Disposable {
 
     let rawGrant: unknown;
     try {
-      rawGrant = JSON.parse(grantJcs) as unknown;
+      rawGrant = parseJsonValue(grantJcs);
     } catch {
       throw new Error(`grant row is unparseable: ${grantId}`);
     }

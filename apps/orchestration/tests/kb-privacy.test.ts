@@ -51,6 +51,14 @@ const PARENT = { provider: "ollama", model: "qwen3.8:latest" };
 const RAW_KINDS = ["SOURCE", "CLAIM", "PAGE", "QUERY", "REPORT", "PATCH"] as const;
 type RawKind = (typeof RAW_KINDS)[number];
 type RawSentinels = Record<Lowercase<RawKind>, string>;
+const RAW_KIND_KEYS = {
+  SOURCE: "source",
+  CLAIM: "claim",
+  PAGE: "page",
+  QUERY: "query",
+  REPORT: "report",
+  PATCH: "patch",
+} as const satisfies Record<RawKind, Lowercase<RawKind>>;
 
 const roots: string[] = [];
 
@@ -66,12 +74,16 @@ afterEach(() => {
 
 function rawSentinels(): RawSentinels {
   const nonce = randomBytes(12).toString("hex");
-  return Object.fromEntries(
-    RAW_KINDS.map((kind, index) => [
-      kind.toLowerCase(),
-      ["RAW", kind, "SENTINEL", nonce, String(index)].join("_"),
-    ])
-  ) as RawSentinels;
+  const sentinel = (kind: RawKind, index: number): string =>
+    ["RAW", kind, "SENTINEL", nonce, String(index)].join("_");
+  return {
+    source: sentinel("SOURCE", 0),
+    claim: sentinel("CLAIM", 1),
+    page: sentinel("PAGE", 2),
+    query: sentinel("QUERY", 3),
+    report: sentinel("REPORT", 4),
+    patch: sentinel("PATCH", 5),
+  } satisfies RawSentinels;
 }
 
 function derivedAnswerSentinel(): string {
@@ -86,8 +98,8 @@ function surfaceText(value: unknown): string {
 function assertRawAbsent(label: string, value: unknown, sentinels: RawSentinels): void {
   const text = surfaceText(value);
   for (const kind of RAW_KINDS) {
-    if (text.includes(sentinels[kind.toLowerCase() as Lowercase<RawKind>])) {
-      throw new Error(`raw ${kind.toLowerCase()} sentinel escaped into ${label}`);
+    if (text.includes(sentinels[RAW_KIND_KEYS[kind]])) {
+      throw new Error(`raw ${RAW_KIND_KEYS[kind]} sentinel escaped into ${label}`);
     }
   }
 }
@@ -243,7 +255,7 @@ function reportPayload(sentinels: RawSentinels): string {
   });
 }
 
-function verificationPayload(sentinels: RawSentinels): string {
+function verificationPayload(): string {
   return canonicalJson({
     schema_version: 1,
     artifact_kind: "verification_report",
@@ -266,6 +278,12 @@ function verificationPayload(sentinels: RawSentinels): string {
   });
 }
 
+function requiredArtifactId(ids: Readonly<Record<string, string>>, kind: string): string {
+  const artifactId = ids[kind];
+  if (artifactId === undefined) throw new Error(`privacy ingest result is missing '${kind}'`);
+  return artifactId;
+}
+
 function pendingFrom(result: Awaited<ReturnType<typeof ingestKb>>): PendingIngest {
   const ids = Object.fromEntries(
     result.artifacts.map((artifact) => [artifact.artifact_kind, artifact.artifact_id])
@@ -273,10 +291,10 @@ function pendingFrom(result: Awaited<ReturnType<typeof ingestKb>>): PendingInges
   return {
     runId: result.run_id,
     sourceIds: ["src_privacy_matrix"],
-    claimsArtifactId: ids.claims,
-    pageDraftArtifactId: ids.page_draft,
-    lintReportArtifactId: ids.lint_report,
-    verificationArtifactId: ids.verification_report,
+    claimsArtifactId: requiredArtifactId(ids, "claims"),
+    pageDraftArtifactId: requiredArtifactId(ids, "page_draft"),
+    lintReportArtifactId: requiredArtifactId(ids, "lint_report"),
+    verificationArtifactId: requiredArtifactId(ids, "verification_report"),
   };
 }
 
@@ -317,7 +335,13 @@ describe("G9 privacy and copy-surface matrix", () => {
         const body = invocation.readSource(sourceId);
         if (!body.includes(sentinels.source)) throw new Error("source reader lost synthetic body");
       }
-      for (const stateId of invocation.priorPhaseAllowlist) invocation.readPhaseOutput(stateId);
+      const readPhaseOutput = invocation.readPhaseOutput;
+      for (const stateId of invocation.priorPhaseAllowlist) {
+        if (readPhaseOutput === undefined) {
+          throw new Error("host did not provide the required prior-phase reader");
+        }
+        readPhaseOutput(stateId);
+      }
       childSnapshots.push({
         agent: invocation.agent,
         state_id: invocation.stateId,
@@ -328,7 +352,7 @@ describe("G9 privacy and copy-surface matrix", () => {
         ingest: claimsPayload(sentinels),
         compose: pagePayload(sentinels),
         lint: reportPayload(sentinels),
-        verify: verificationPayload(sentinels),
+        verify: verificationPayload(),
       };
       const payload = payloads[invocation.stateId];
       if (payload === undefined) throw new Error("synthetic phase is unsupported");
@@ -440,16 +464,21 @@ describe("G9 privacy and copy-surface matrix", () => {
       trustProfile: "hardened-untrusted",
       maxSteps: 20,
     });
-    context.playbookData = {
+    Object.assign(context.knowledgeBaseData, {
       action: "ingest",
       profile_id: PROFILE,
       phases: Object.fromEntries(
         waiting.artifacts.map((artifact) => [
           artifact.artifact_kind,
-          { artifact_id: artifact.artifact_id, sha256: artifact.sha256 },
+          {
+            artifact_kind: artifact.artifact_kind,
+            kb_artifact_id: artifact.artifact_id,
+            counts: {},
+            sha256: artifact.sha256,
+          },
         ])
       ),
-    };
+    });
     const contextSnapshot = context.snapshot();
     checkpointer.createRun(context, "privacy_matrix_safe_checkpoint", {
       run_id: context.identity.run_id,

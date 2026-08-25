@@ -14,13 +14,13 @@ A well-formed Penny skill has:
 
 Exact stage bytes live in immutable owner artifacts. The orchestration
 checkpointer stores compact control state and selected refs. Workers read only
-owner-granted inputs with `artifact_read` and typed continuation. Model-authored
+owner-verified exact IDs with `artifact_read` and `next_range`. Model-authored
 SUMMARY fields route the workflow but never prove persistence.
 
 ## Memory-optional by construction
 
 A manifest may describe optional primary durable-memory integration, but workers
-and skill drivers receive no memory tools. Memory is not active handoff or run
+may use YAML-declared read-only recall, while writes remain primary-only. Memory is not active handoff or run
 state. New skills require no memory room and no entry in the historical
 `skill_rooms.json` classification file.
 

@@ -25,9 +25,10 @@
  *   promotion-apply   Internally resume one signed receipt and journaled apply
  *
  * Conventions:
- *   --project-root  Defaults to cwd. KB root = <project-root>/.penny/kb/<profile>.
- *   Grant authority <project-root>/.penny/kb-host-grants/grants.sqlite (WAL/FULL).
- *   Capability DB   <project-root>/.penny/kb-capabilities/capabilities.sqlite.
+ *   --project-root  Defaults to cwd. Permanent KB roots come from the owner-only
+ *                   profile registry; there is no project-local KB publication default.
+ *   Grant authority Catalog-bound project kb/host-grants/grants.sqlite (WAL/FULL).
+ *   Capability DB   Catalog-bound project kb/capabilities/capabilities.sqlite.
  *   No command prints any source or page body to stdout.
  */
 
@@ -44,7 +45,7 @@ import {
   mintParentDeliveryGrant,
   validateQueryRequest,
 } from "./kb/parent-delivery.js";
-import { hostGrantAuthorityDir } from "./kb/owner-sqlite.js";
+import { hostGrantAuthorityDir, kbProfileRegistryPath } from "./kb/host-state.js";
 import { KbSessionProfileGrantStore } from "./kb/profile-grants.js";
 import { readPolicy } from "./kb/filesystem.js";
 import { resolveRegisteredProfile } from "./kb/profile-registry.js";
@@ -59,15 +60,57 @@ import { mintSourceCapability } from "./kb/gate.js";
 import { ContentReviewService, authenticateLocalContentReviewer } from "./kb/content-review.js";
 import { promotionApplyOperationSourceIdentity } from "./kb/operation-receipts.js";
 
+type ArgValue = string | boolean | readonly string[];
+type SourceType = "file" | "url_snapshot" | "research_artifact" | "manual";
+type SourceMediaType = "text/plain" | "text/markdown" | "application/json";
+
 interface Args {
-  projectRoot: string;
-  profile: string;
-  [key: string]: unknown;
+  readonly projectRoot: string;
+  readonly profile: string;
+  readonly [key: string]: ArgValue | undefined;
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function stringListArg(args: Args, key: string): readonly string[] {
+  const value = args[key];
+  if (value === undefined) return [];
+  if (!isStringArray(value)) throw new Error(`--${key} must be supplied as a repeatable value`);
+  return value;
+}
+
+function sourceTypeArg(value: ArgValue | undefined): SourceType | undefined {
+  if (value === undefined) return undefined;
+  if (
+    value === "file" ||
+    value === "url_snapshot" ||
+    value === "research_artifact" ||
+    value === "manual"
+  ) {
+    return value;
+  }
+  throw new Error("--source-type is invalid");
+}
+
+function sourceMediaTypeArg(value: ArgValue | undefined): SourceMediaType | undefined {
+  if (value === undefined) return undefined;
+  if (value === "text/plain" || value === "text/markdown" || value === "application/json") {
+    return value;
+  }
+  throw new Error("--media-type is invalid");
+}
+
+function isJsonObject(value: JsonValue | undefined): value is Record<string, JsonValue> {
+  return (
+    value !== undefined && value !== null && typeof value === "object" && !Array.isArray(value)
+  );
 }
 
 function parseArgs(argv: string[]): Args {
   const multi = new Set(["author", "grant-profile"]);
-  const out: Record<string, unknown> = {};
+  const out: Record<string, ArgValue> = {};
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === undefined) throw new Error("unexpected end of argv");
@@ -79,17 +122,21 @@ function parseArgs(argv: string[]): Args {
       continue;
     }
     if (multi.has(key)) {
-      const list = (out[key] as string[] | undefined) ?? [];
-      out[key] = [...list, next];
+      const current = out[key];
+      if (current !== undefined && !isStringArray(current)) {
+        throw new Error(`--${key} cannot mix flag and value forms`);
+      }
+      out[key] = [...(current ?? []), next];
     } else {
       out[key] = next;
     }
     i += 1;
   }
-  const args = out as Args;
-  args.projectRoot = String(out["project-root"] ?? process.cwd());
-  args.profile = String(out["profile"] ?? "");
-  return args;
+  return {
+    ...out,
+    projectRoot: String(out["project-root"] ?? process.cwd()),
+    profile: String(out["profile"] ?? ""),
+  };
 }
 
 function kbRootFor(args: Args): string {
@@ -97,7 +144,7 @@ function kbRootFor(args: Args): string {
   const projectRoot = path.resolve(args.projectRoot);
   return resolveRegisteredProfile({
     profileId: args.profile,
-    registryPath: path.join(projectRoot, ".penny", "kb-profiles.json"),
+    registryPath: kbProfileRegistryPath(projectRoot),
   }).resolvedRoot;
 }
 
@@ -114,9 +161,9 @@ function grantStoreDir(args: Args): string {
 
 function cmdProfileGrantMint(args: Args): void {
   const sessionId = String(args["session"] ?? "");
+  const grantedProfiles = stringListArg(args, "grant-profile");
   const profileIds =
-    (args["grant-profile"] as string[] | undefined) ??
-    (args.profile.length > 0 ? [args.profile] : []);
+    grantedProfiles.length > 0 ? grantedProfiles : args.profile.length > 0 ? [args.profile] : [];
   const ttlMinutes = Number(args["ttl-minutes"] ?? 60);
   if (sessionId.length === 0 || profileIds.length === 0) {
     fail("profile-grant-mint requires --session and --profile or --grant-profile");
@@ -127,7 +174,7 @@ function cmdProfileGrantMint(args: Args): void {
   for (const profileId of profileIds) {
     resolveRegisteredProfile({
       profileId,
-      registryPath: path.join(path.resolve(args.projectRoot), ".penny", "kb-profiles.json"),
+      registryPath: kbProfileRegistryPath(path.resolve(args.projectRoot)),
     });
   }
   const now = new Date();
@@ -304,7 +351,7 @@ function cmdCapabilityMint(args: Args): void {
   void kbRootFor(args);
   const filePath = String(args["path"] ?? "");
   const title = String(args["title"] ?? "");
-  const authors = (args["author"] as string[] | undefined) ?? [];
+  const authors = stringListArg(args, "author");
   const sessionId = String(args["session"] ?? "");
   const operation = String(args["operation"] ?? "");
   if (
@@ -319,6 +366,8 @@ function cmdCapabilityMint(args: Args): void {
     );
   }
   const absolute = path.resolve(args.projectRoot, filePath);
+  const sourceType = sourceTypeArg(args["source-type"]);
+  const mediaType = sourceMediaTypeArg(args["media-type"]);
 
   const envelope = mintSourceCapability({
     projectRoot: path.resolve(args.projectRoot),
@@ -328,23 +377,8 @@ function cmdCapabilityMint(args: Args): void {
     allowedOperation: "ingest",
     title,
     authors,
-    ...(args["source-type"] !== undefined
-      ? {
-          sourceType: String(args["source-type"]) as
-            | "file"
-            | "url_snapshot"
-            | "research_artifact"
-            | "manual",
-        }
-      : {}),
-    ...(args["media-type"] !== undefined
-      ? {
-          mediaType: String(args["media-type"]) as
-            | "text/plain"
-            | "text/markdown"
-            | "application/json",
-        }
-      : {}),
+    ...(sourceType === undefined ? {} : { sourceType }),
+    ...(mediaType === undefined ? {} : { mediaType }),
     ...(args["captured-at"] !== undefined ? { capturedAt: String(args["captured-at"]) } : {}),
     ...(args["expires-hours"] !== undefined ? { expiresHours: Number(args["expires-hours"]) } : {}),
   });
@@ -378,11 +412,14 @@ function withContentReviewHost<T>(args: Args, operation: (host: ContentReviewSer
   // Resolve the configured profile first; the control DB never supplies a root.
   void kbRootFor(args);
   const config = loadRuntimeConfig(args.projectRoot, process.env);
-  const checkpointer = new Checkpointer(config.dbPath);
+  const checkpointer = new Checkpointer(config.dbPath, undefined, {
+    projectId: config.projectId,
+  });
   try {
     const engine = new OrchestrationEngine(checkpointer, {
       projectRoot: config.projectRoot,
       maxSteps: config.maxSteps,
+      receiptKeyPath: config.receiptKeyPath,
       playbookName: "knowledge-base",
     });
     return operation(
@@ -479,7 +516,9 @@ function withPromotionHost<T>(
 ): T {
   const kbRoot = kbRootFor(args);
   const config = loadRuntimeConfig(args.projectRoot, process.env);
-  const checkpointer = new Checkpointer(config.dbPath);
+  const checkpointer = new Checkpointer(config.dbPath, undefined, {
+    projectId: config.projectId,
+  });
   const store = new PromotionApprovalStore({
     projectRoot: config.projectRoot,
     kbRoot,
@@ -502,6 +541,7 @@ function withPromotionHost<T>(
     const engine = new OrchestrationEngine(checkpointer, {
       projectRoot: config.projectRoot,
       maxSteps: config.maxSteps,
+      receiptKeyPath: config.receiptKeyPath,
       playbookName: "knowledge-base",
     });
     return operation({ store, engine, checkpointer, kbRoot });
@@ -569,7 +609,7 @@ function cmdPromotionDecision(args: Args, decision: "approve" | "refine" | "deny
     }
     recheckAdmittedPolicy({
       kbRoot,
-      admittedPolicySha256: String(run.playbookData.admitted_policy_sha256 ?? ""),
+      admittedPolicySha256: String(run.knowledgeBaseData.admitted_policy_sha256 ?? ""),
     });
     let decided: PromotionDecisionOutcome;
     if (gate.decision_intent !== undefined) {
@@ -595,6 +635,10 @@ function cmdPromotionDecision(args: Args, decision: "approve" | "refine" | "deny
     }
     const intentSha = decided.gate.decision_intent_sha256;
     if (intentSha === undefined) throw new Error("promotion decision has no durable intent digest");
+    const receiptSha256 = decided.receipt_sha256;
+    if (decided.receipt !== undefined && receiptSha256 === undefined) {
+      throw new Error("promotion decision receipt has no durable digest");
+    }
     const next = engine.recordPromotionDecision({
       runId: decided.gate.run_id,
       challengeId: decided.gate.challenge_id,
@@ -604,7 +648,7 @@ function cmdPromotionDecision(args: Args, decision: "approve" | "refine" | "deny
       ...(decided.receipt !== undefined
         ? {
             receiptId: decided.receipt.receipt_id,
-            receiptSha256: decided.receipt_sha256!,
+            receiptSha256,
           }
         : {}),
     });
@@ -661,12 +705,18 @@ function terminalProjection(
   terminal: Directive,
   fallback: Record<string, JsonValue>
 ): Record<string, JsonValue> {
-  const result = (terminal as { result?: Record<string, JsonValue> }).result ?? {};
-  const counts = (result["published_counts"] ?? {}) as Record<string, JsonValue>;
+  const isTerminal =
+    terminal.action === "complete" ||
+    terminal.action === "incomplete" ||
+    terminal.action === "error" ||
+    terminal.action === "cancelled";
+  const result = isTerminal ? terminal.result : {};
+  const publishedCounts = result["published_counts"];
+  const counts = isJsonObject(publishedCounts) ? publishedCounts : {};
   const generationId = String(result["published_generation_id"] ?? "");
   return {
     schema_version: 1,
-    gate_status: String((terminal as { status?: string }).status ?? String(terminal.action)),
+    gate_status: isTerminal ? terminal.status : terminal.action,
     published: terminal.action === "complete",
     published_generation_id: generationId.length > 0 ? generationId : null,
     counts,
@@ -776,7 +826,7 @@ function main(argv: string[]): void {
         fail(`unknown command: ${cmd}`);
     }
   } catch (err) {
-    fail((err as Error).message);
+    fail(err instanceof Error ? err.message : String(err));
   }
 }
 

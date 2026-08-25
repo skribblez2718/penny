@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:penny:orchestration:artifacts:artifact-ref:2",
+  "title": "Immutable artifact communication ref v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_id",
+    "run_id",
+    "phase",
+    "branch_id",
+    "kind",
+    "operation_id",
+    "version",
+    "producer",
+    "media_type",
+    "byte_length",
+    "content_digest",
+    "store_ref"
+  ],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "artifact_id": { "type": "string", "pattern": "^art_[a-f0-9]{64}$" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "phase": { "type": "string", "minLength": 1 },
+    "branch_id": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+    "kind": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "operation_id": { "type": "string", "minLength": 1 },
+    "version": { "type": "integer", "minimum": 1 },
+    "producer": { "type": "string", "minLength": 1 },
+    "media_type": { "type": "string", "minLength": 1 },
+    "byte_length": { "type": "integer", "minimum": 0 },
+    "content_digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "store_ref": { "type": "string", "pattern": "^artifact://sha256/[a-f0-9]{64}$" }
+  }
+}

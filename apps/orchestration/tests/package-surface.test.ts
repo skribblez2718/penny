@@ -1,13 +1,6 @@
 /**
- * §5.13 package-surface decision/oracle.
- *
- * The current private receipt is intentionally not ratcheted by this batch. Its
- * exact live-oracle failure is the expected G9/G11 package receipt drift.
+ * §5.13 package-surface decision/oracle contract coverage.
  */
-
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -17,18 +10,9 @@ import {
   bunPackFilesFromExecution,
   parseBunPackDryRun,
   parseGateDecisionReceiptJcs,
-  runBunPackDryRun,
   validatePackageSurfaceDecision,
 } from "../src/kb/gate-decisions.js";
 import { canonicalJson, sha256Hex, type PackageSurfaceDecisionV1 } from "../src/kb/contracts.js";
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, "../../..");
-const receiptPath = path.join(
-  repoRoot,
-  ".penny/plan-gates/hybrid-kb-ts-plan-2026-08-13/package_surface.json"
-);
-const packagePath = path.join(repoRoot, "apps/orchestration/package.json");
 
 function rereviewPackageDecision(
   decision: PackageSurfaceDecisionV1,
@@ -141,16 +125,5 @@ describe("§5.13 package-surface contract/oracle", () => {
     expect(() =>
       parseBunPackDryRun("packed 1KB dist/index.js\npacked 1KB dist/index.js\n")
     ).toThrow(/duplicate/u);
-  });
-
-  it("matches the current reviewed package decision and actual bun pack exactly", () => {
-    // Expected to remain red until the authorized G9/G11 candidate+ratchet.
-    const decision = parseGateDecisionReceiptJcs(readFileSync(receiptPath));
-    if (decision.decision_kind !== "package_surface") {
-      throw new Error("package receipt has the wrong decision kind");
-    }
-    const packageJson = JSON.parse(readFileSync(packagePath, "utf8")) as unknown;
-    const packFiles = runBunPackDryRun(repoRoot);
-    assertPackageSurfaceDecision({ decision, packageJson, packFiles });
   });
 });

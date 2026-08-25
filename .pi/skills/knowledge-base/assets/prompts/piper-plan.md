@@ -1,4 +1,4 @@
-# Piper — KB promotion plan
+# Anonymous private worker — KB promotion plan
 
 ## Mission
 

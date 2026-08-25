@@ -1,3 +1,4 @@
+import { parseJson, requireRecord, requireString, requireValue } from "./helpers/narrowing.js";
 /**
  * `save` end to end (§6.2A step 7) — claim → compose → lint → verify → gate →
  * publish, driven through the real engine, the real plane, and the real claim
@@ -46,7 +47,7 @@ import {
   type KbPhaseInvocation,
 } from "../src/kb/session-tools.js";
 import type { Directive } from "../src/contracts.js";
-import { sha256Hex } from "../src/kb/contracts.js";
+import { ReadPhaseBriefResultSchema, validateKbContract } from "../src/kb/contracts.js";
 import { installGrantedProfile } from "./fixtures/kb-profile-fixture.js";
 
 const PROFILE = "kbp_save_e2e";
@@ -167,22 +168,20 @@ function saveBodies(
 }
 
 function allocatedSaveComposeBody(invocation: KbPhaseInvocation): string {
-  const brief = JSON.parse(invocation.readPhaseBrief?.() ?? "{}") as {
-    compose_authority?: {
-      allocations?: Array<{
-        page_id: string;
-        revision_id: string;
-        lifecycle: "draft";
-        source_ids: string[];
-        claim_allocations: Array<{ claim_id: string }>;
-        supersedes: null | { revision_id: string };
-      }>;
-    };
-  };
-  const allocation = brief.compose_authority?.allocations?.[0];
+  const brief = validateKbContract(
+    ReadPhaseBriefResultSchema,
+    parseJson(invocation.readPhaseBrief?.() ?? "{}"),
+    "save compose phase brief"
+  );
+  const allocation = brief.compose_authority?.allocations[0];
   const claim = allocation?.claim_allocations[0];
   const sourceId = allocation?.source_ids[0];
-  if (allocation === undefined || claim === undefined || sourceId === undefined) {
+  if (
+    allocation === undefined ||
+    allocation.lifecycle !== "draft" ||
+    claim === undefined ||
+    sourceId === undefined
+  ) {
     throw new Error("save compose host allocation is incomplete");
   }
   return JSON.stringify({
@@ -288,10 +287,22 @@ async function kbWithQuery() {
   approveIngest({ kbRoot, profileId: PROFILE, runId: "run_seed", checkpointer }, [source], {
     runId: "run_seed",
     sourceIds: [sourceId],
-    claimsArtifactId: byKind.claims!,
-    pageDraftArtifactId: byKind.page_draft!,
-    lintReportArtifactId: byKind.lint_report!,
-    verificationArtifactId: byKind.verification_report!,
+    claimsArtifactId: requireValue(
+      byKind.claims,
+      "apps/orchestration/tests/kb-save-e2e.test.ts:291"
+    ),
+    pageDraftArtifactId: requireValue(
+      byKind.page_draft,
+      "apps/orchestration/tests/kb-save-e2e.test.ts:292"
+    ),
+    lintReportArtifactId: requireValue(
+      byKind.lint_report,
+      "apps/orchestration/tests/kb-save-e2e.test.ts:293"
+    ),
+    verificationArtifactId: requireValue(
+      byKind.verification_report,
+      "apps/orchestration/tests/kb-save-e2e.test.ts:294"
+    ),
   });
 
   // Seed this SAVE-focused suite through the same authority finalizer a passing
@@ -304,7 +315,10 @@ async function kbWithQuery() {
     kb_profile_id: PROFILE,
     query: "quorum",
   });
-  const selectedGenerationId = readSelectedGeneration(kbRoot)!.selector.generation_id;
+  const selectedGenerationId = requireValue(
+    readSelectedGeneration(kbRoot),
+    "apps/orchestration/tests/kb-save-e2e.test.ts:307"
+  ).selector.generation_id;
   ensureArtifactRun(checkpointer, projectRoot, "run_query", "query");
   const queryStore = new RunArtifactStore(kbRoot, "run_query", checkpointer);
   const citation = {
@@ -347,7 +361,10 @@ async function kbWithQuery() {
     }),
   });
   queryStore.close();
-  const finalized = defaultKbIngestPlane(checkpointer).finalizeVerifiedQuery!({
+  const finalized = requireValue(
+    defaultKbIngestPlane(checkpointer).finalizeVerifiedQuery,
+    "apps/orchestration/tests/kb-save-e2e.test.ts:350"
+  )({
     projectRoot,
     kbRoot,
     profileId: PROFILE,
@@ -494,7 +511,10 @@ async function driveSaveToGate(input: {
     }),
     undefined
   );
-  const durable = checkpointer.loadRunById(input.runId)!;
+  const durable = requireValue(
+    checkpointer.loadRunById(input.runId),
+    "apps/orchestration/tests/kb-save-e2e.test.ts:497"
+  );
   const startResult = replayableResultFromRun({ action: "save", run: durable });
   completeOperationStart({
     projectRoot: input.projectRoot,
@@ -564,7 +584,14 @@ describe("save: claim, compose, gate, publish", () => {
     }
     // Compose actually read the claimed sealed answer (§5.8 prior-run artifact).
     expect(seen.composeInput).toBeDefined();
-    expect(JSON.parse(seen.composeInput!).payload.artifact_kind).toBe("query_answer");
+    const composeInput = requireRecord(
+      parseJson(requireValue(seen.composeInput, "compose input")),
+      "compose input"
+    );
+    const composePayload = requireRecord(composeInput["payload"], "compose input payload");
+    expect(requireString(composePayload["artifact_kind"], "compose payload artifact kind")).toBe(
+      "query_answer"
+    );
 
     // The claim is held by this save run, not yet spent.
     const claim = new SaveQueryClaimStore(claimDir).load("run_query");
@@ -574,7 +601,10 @@ describe("save: claim, compose, gate, publish", () => {
 
   it("approval publishes the saved page ADDITIVELY and consumes the claim once", async () => {
     const { projectRoot, kbRoot, claimDir } = await kbWithQuery();
-    const before = readSelectedGeneration(kbRoot)!;
+    const before = requireValue(
+      readSelectedGeneration(kbRoot),
+      "apps/orchestration/tests/kb-save-e2e.test.ts:577"
+    );
     expect(Object.keys(before.catalog.pages)).toEqual(["page_saved"]);
 
     await driveSaveToGate({ projectRoot, kbRoot, runId: "run_save_1", queryRunId: "run_query" });
@@ -583,7 +613,10 @@ describe("save: claim, compose, gate, publish", () => {
     const approved = decideSave(projectRoot, "run_save_1", "approve");
     expect(approved.action).toBe("complete");
 
-    const after = readSelectedGeneration(kbRoot)!;
+    const after = requireValue(
+      readSelectedGeneration(kbRoot),
+      "apps/orchestration/tests/kb-save-e2e.test.ts:586"
+    );
     // The KB still holds what it held, plus this save's revision.
     expect(Object.keys(after.catalog.pages)).toContain("page_saved");
     expect(Object.keys(after.catalog.source_records).length).toBe(
@@ -599,7 +632,10 @@ describe("save: claim, compose, gate, publish", () => {
         { action: "save", event_sequence: 0, event: "prepared", state: "published" },
         { action: "save", event_sequence: 1, event: "published", state: "published" },
       ]);
-      const publicationTransactionId = receipts[1]!.transaction_id;
+      const publicationTransactionId = requireValue(
+        receipts[1],
+        "apps/orchestration/tests/kb-save-e2e.test.ts:602"
+      ).transaction_id;
       expect(control.kbPublication(publicationTransactionId)).toMatchObject({
         run_id: "run_save_1",
         candidate_generation_id: after.selector.generation_id,
@@ -627,9 +663,7 @@ describe("save: claim, compose, gate, publish", () => {
     const denied = decideSave(projectRoot, "run_save_1", "deny");
     expect(denied.action).toBe("incomplete");
 
-    const claim = new SaveQueryClaimStore(saveClaimStoreDir(projectRoot, PROFILE)).load(
-      "run_query"
-    );
+    const claim = new SaveQueryClaimStore(claimDir).load("run_query");
     expect(claim.state).toBe("available");
     expect(claim.save_run_id).toBeUndefined();
   });
@@ -668,7 +702,10 @@ describe("save: claim, compose, gate, publish", () => {
       );
       const store = new RunArtifactStore(kbRoot, runId, control);
       try {
-        const handle = store.listByState("compose", "sealed")[0]!;
+        const handle = requireValue(
+          store.listByState("compose", "sealed")[0],
+          "apps/orchestration/tests/kb-save-e2e.test.ts:671"
+        );
         const content = store.read(handle.artifact_id).content;
         expect(() =>
           store.stageFromTool({
@@ -689,7 +726,11 @@ describe("save: claim, compose, gate, publish", () => {
             },
           })
         ).toThrow(/artifact_phase_already_terminated/);
-        expect(() => store.bindPhaseOperands(record!.operands)).toThrow(/phase_operands_changed/);
+        expect(() =>
+          store.bindPhaseOperands(
+            requireValue(record, "apps/orchestration/tests/kb-save-e2e.test.ts:692").operands
+          )
+        ).toThrow(/phase_operands_changed/);
       } finally {
         store.close();
       }

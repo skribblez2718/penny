@@ -1,3 +1,4 @@
+import { registerTool } from "../../../lib/pi-tool-registration.js";
 /**
  * Route, Form, and File Tools
  *
@@ -5,8 +6,8 @@
  * browser_fill_form, browser_file_upload, browser_drop
  */
 
-import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { existsSync, statSync } from "node:fs";
 import { BrowserManager } from "../browser.js";
 import type { PlaywrightConfig } from "../types.js";
@@ -17,17 +18,12 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
   // ==========================================================================
   // playwright_route
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_route",
     label: "Route Intercept",
     description:
       "Intercept and modify network requests matching a URL pattern. Can abort, fulfill with custom response, or continue.",
     promptSnippet: "Intercept network requests by URL pattern",
-    promptGuidelines: [
-      "Use playwright_route for network-level testing and mocking.",
-      "For vulnerability testing: block malicious URLs, mock API responses.",
-      "Use playwright_unroute to remove routes.",
-    ],
     parameters: Type.Object({
       urlPattern: Type.String({
         description: "URL glob pattern to match (e.g., '**/api/**')",
@@ -49,8 +45,8 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const pattern = params.urlPattern as string;
-      const action = params.action as string;
+      const pattern = params.urlPattern;
+      const action = params.action;
 
       try {
         if (action === "abort") {
@@ -58,9 +54,9 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
         } else {
           await page.route(pattern, (route) =>
             route.fulfill({
-              status: (params.status as number) ?? 200,
-              contentType: (params.contentType as string) ?? "text/plain",
-              body: (params.body as string) ?? "",
+              status: params.status ?? 200,
+              contentType: params.contentType ?? "text/plain",
+              body: params.body ?? "",
             })
           );
         }
@@ -91,16 +87,12 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
   // ==========================================================================
   // playwright_unroute
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_unroute",
     label: "Remove Routes",
     description:
       "Remove previously set route intercepts. Call with urlPattern to remove specific route, or omit to remove all.",
     promptSnippet: "Remove network route intercepts",
-    promptGuidelines: [
-      "Use playwright_unroute to restore normal network behavior.",
-      "Omit urlPattern to clear all routes.",
-    ],
     parameters: Type.Object({
       urlPattern: Type.Optional(
         Type.String({
@@ -112,7 +104,7 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
       const page = await browser.getPage();
 
       try {
-        await page.unroute((params.urlPattern as string) ?? "**/*");
+        await page.unroute(params.urlPattern ?? "**/*");
 
         return {
           content: [
@@ -143,17 +135,12 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
   // ==========================================================================
   // playwright_fill_form
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_fill_form",
     label: "Fill Form",
     description:
       "Fill multiple form fields at once. Provide an object mapping CSS selectors to values.",
     promptSnippet: "Fill multiple form fields at once",
-    promptGuidelines: [
-      "Use playwright_fill_form for batch form filling instead of multiple type/fill calls.",
-      'Provide a JSON object: { "#name": "John", "#email": "john@test.com" }.',
-      "Each key is a CSS selector; each value is the text to fill.",
-    ],
     parameters: Type.Object({
       fields: Type.Record(Type.String(), Type.String(), {
         description:
@@ -162,7 +149,7 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const fields = params.fields as Record<string, string>;
+      const fields = params.fields;
 
       try {
         const results: Record<string, string> = {};
@@ -197,17 +184,12 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
   // ==========================================================================
   // playwright_file_upload
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_file_upload",
     label: "Upload File",
     description:
       "Upload files to a file input element. Useful for testing file upload functionality.",
     promptSnippet: "Upload files to the page",
-    promptGuidelines: [
-      "Use playwright_file_upload to test file upload features.",
-      "Provide absolute file paths for local files.",
-      "For security testing: test file upload filters and validation.",
-    ],
     parameters: Type.Object({
       selector: Type.String({
         description: "CSS selector for the file input element",
@@ -218,8 +200,8 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const selector = params.selector as string;
-      const filePaths = params.filePaths as string[];
+      const selector = params.selector;
+      const filePaths = params.filePaths;
 
       try {
         // Validate files exist
@@ -270,16 +252,12 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
   // ==========================================================================
   // playwright_drop
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_drop",
     label: "Drop Files",
     description:
       "Drop files onto an element (simulates drag-and-drop file upload). Useful for testing modern file drop zones.",
     promptSnippet: "Drop files onto an element",
-    promptGuidelines: [
-      "Use playwright_drop for testing drag-and-drop file upload UIs.",
-      "The element should accept 'drop' events with files.",
-    ],
     parameters: Type.Object({
       selector: Type.String({
         description: "CSS selector for the drop target element",
@@ -290,8 +268,8 @@ export function registerRouteFormFileTools(pi: ExtensionAPI, _config: Playwright
     }),
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
-      const selector = params.selector as string;
-      const filePaths = params.filePaths as string[];
+      const selector = params.selector;
+      const filePaths = params.filePaths;
 
       try {
         // Create a DataTransfer with files

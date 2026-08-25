@@ -43,9 +43,34 @@ then invoke by name with `skill({ skill_name: "research", goal })`.
 
 Agents lack your conversation history. When delegating, structure tasks as:
 
-`Task: <goal> | Context: <background> | Sources: <paths or drawer IDs> | Constraints: <hard limits>`
+`Task: <goal> | Context: <background> | Sources: <paths or URLs> | Constraints: <hard limits>`
 
 Task is required. Include only what the agent cannot discover.
+
+Never pass a memory drawer ID, room, or search query as a workflow source. Memory
+is curated durable knowledge, not a handoff channel; an agent pointed at memory
+for a predecessor's output will search for it instead of reading it.
+
+## Passing a predecessor's output forward
+
+Every delegation result prints its exact output artifact ID. To give the next
+agent that output, pass the ID — do not re-run the producer and do not paste its
+text into the task:
+
+```text
+subagent({ agent: "skribble", task: "Fix the blockers in the review.",
+           input_artifacts: ["art_<id from the review result>"] })
+```
+
+The owner performs exact manifest lookup and digest/length verification before spawn,
+then appends the ID/read instruction to the task. IDs may come from different agents,
+runs, sessions, or branches; multi-source fan-in is supported. Chain mode inserts the
+prior ID automatically through `{previous}` and each chain step may also take additional
+`input_artifacts`.
+
+The anti-pattern this replaces: re-invoking an agent to "return a report of your
+just-completed review." That output already exists as an artifact — read it or
+forward it.
 
 ## Agent escalation
 

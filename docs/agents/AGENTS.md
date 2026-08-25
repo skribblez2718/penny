@@ -1,6 +1,6 @@
 # Agents Documentation Index
 
-- [Agents](agents/AGENTS.md): Project-local agent catalog, artifact-granted worker lifecycle, and role/domain separation
+- [Agents](agents/AGENTS.md): Project-local catalog, exact YAML tools, artifact-ID communication, and role/domain separation
 - [Extensions](extensions/AGENTS.md): Creating extensions: directory structure, tool registration, event handlers, TUI
 - [Skills](skills/AGENTS.md): Artifact-first engine workflows, Domain Guidance, scaffolding, and tests
 - [Prompts](prompts/AGENTS.md): Layer Reference, standards, cognitive frame, role definitions

@@ -112,8 +112,44 @@ const PAUSE_FIELDS = new Set([
   "recovery",
 ]);
 
+/** Narrow a fully validated closed dispatch-pause wire value. */
+export function isArtifactDispatchPause(value: unknown): value is ArtifactDispatchPause {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => !PAUSE_FIELDS.has(key)) ||
+    (value.code !== "ARTIFACT_DISPATCH_PAUSED" &&
+      value.code !== "ARTIFACT_DISPATCH_MODE_INVALID") ||
+    value.schema_version !== 1 ||
+    value.action !== "paused" ||
+    value.retryable !== true ||
+    value.dispatch_mode !== "paused" ||
+    typeof value.reason !== "string" ||
+    !value.reason ||
+    typeof value.run_status !== "string" ||
+    !value.run_status ||
+    typeof value.state_id !== "string" ||
+    !value.state_id ||
+    typeof value.session_id !== "string" ||
+    typeof value.run_id !== "string" ||
+    !isRecord(value.recovery)
+  ) {
+    return false;
+  }
+  const recovery = value.recovery;
+  return (
+    !Object.keys(recovery).some(
+      (key) => !["action", "run_id", "requires_dispatch_mode", "checkpoint_preserved"].includes(key)
+    ) &&
+    recovery.action === "recover" &&
+    recovery.run_id === value.run_id &&
+    recovery.requires_dispatch_mode === "active" &&
+    recovery.checkpoint_preserved === true
+  );
+}
+
 /** Validate the closed dispatch-pause schema before exposing it as a result. */
 export function parseArtifactDispatchPause(value: unknown): ArtifactDispatchPause {
+  if (isArtifactDispatchPause(value)) return value;
   if (!isRecord(value) || Object.keys(value).some((key) => !PAUSE_FIELDS.has(key))) {
     throw new Error("artifact dispatch pause has unknown or malformed fields");
   }
@@ -150,5 +186,5 @@ export function parseArtifactDispatchPause(value: unknown): ArtifactDispatchPaus
   ) {
     throw new Error("artifact dispatch pause recovery directive is invalid");
   }
-  return value as unknown as ArtifactDispatchPause;
+  throw new Error("artifact dispatch pause failed validated adaptation");
 }

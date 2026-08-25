@@ -11,9 +11,9 @@ budgets, recovery, and observability. Skill directories contain no executable ru
 
 1. Closed requests: `start`, `step`, `status`, `recover`, `respond`, `cancel`.
 2. Persist control state in the Node SQLite checkpointer keyed by exact `run_id`.
-3. Every cognitive directive carries strict input grants and output metadata.
-4. Grant only current-state refs authorized by canonical consumer scope.
-5. Persist complete finalized worker bytes before routing fields can advance the run.
+3. Every cognitive directive carries exact input IDs/refs and output metadata.
+4. Preflight every input by direct manifest lookup and exact-byte verification; cross-run fan-in is valid.
+5. Persist and re-read complete finalized worker bytes before routing fields can advance.
 6. Keep payload bytes out of `RunContext`; retain exact selected refs.
 7. Use branch IDs—not completion order—for fan-in and partial recovery.
 8. Workers and skill drivers receive no workflow-memory transport.
@@ -34,9 +34,9 @@ budgets, recovery, and observability. Skill directories contain no executable ru
 ## Composition
 
 - Single and parallel modes create TypeScript runs directly.
-- Chain mode persists prior terminal bytes as a target-run `chain_input` artifact.
-- `{previous}` names the exact grant; it never carries predecessor payload text.
-- Chain resume reloads an owner-only checkpoint and reuses the exact ingress ref.
+- Chain mode verifies and forwards the prior terminal ID directly across runs.
+- `{previous}` names that exact ID; it never carries predecessor payload text.
+- Chain steps may add explicit multi-source IDs; resume reuses checkpointed refs.
 
 ## Recovery
 

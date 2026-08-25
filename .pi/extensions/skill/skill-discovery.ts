@@ -1,8 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
-import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
-interface SkillFrontmatter {
+interface SkillFrontmatter extends Record<string, unknown> {
   name?: unknown;
   description?: unknown;
   "disable-model-invocation"?: unknown;

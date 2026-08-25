@@ -7,7 +7,7 @@ Project standards are the approved implementations for common concerns in Penny'
 | Concern          | The Approved Choice                                                                                                                                                                  |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | State management | Shared TypeScript orchestration engine (`apps/orchestration/`) — durable Node SQLite checkpointer keyed by `run_id`; each skill is a registered playbook with no executable delegate |
-| Workflow handoff | Execution-owner immutable artifacts with grant-bound `artifact_read` and typed continuation                                                                                          |
+| Workflow handoff | Exact immutable artifact IDs with direct `artifact_read` and non-expiring `next_range`                                                                                               |
 | Memory           | Primary-only durable recall/curation through one supervised MemPalace 3.7.1 HTTP hub; no raw fallback                                                                                |
 | Agent tooling    | `.pi/agents` local catalog frontmatter; remote presence in the harness/service registry                                                                                              |
 | Extensions       | Always loaded; `--no-extensions` is never used                                                                                                                                       |

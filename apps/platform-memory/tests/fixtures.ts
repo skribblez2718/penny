@@ -3,6 +3,34 @@ import type { IsolatedPlatformMemoryConfigV1 } from "../src/index.js";
 export const ALPHA_TOKEN = "a".repeat(64);
 export const BETA_TOKEN = "b".repeat(64);
 
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function requireDefined<T>(value: T | null | undefined, message: string): T {
+  if (value === null || value === undefined) throw new Error(message);
+  return value;
+}
+
+export function requireRecord(value: unknown, message: string): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(message);
+  return value;
+}
+
+export function requireArray(value: unknown, message: string): unknown[] {
+  if (!Array.isArray(value)) throw new Error(message);
+  return value;
+}
+
+export function requireString(value: unknown, message: string): string {
+  if (typeof value !== "string") throw new Error(message);
+  return value;
+}
+
+export function parseJson(text: string): unknown {
+  return JSON.parse(text);
+}
+
 export function isolatedConfig(
   name: "alpha" | "beta",
   overrides: Partial<IsolatedPlatformMemoryConfigV1> = {}
@@ -58,9 +86,29 @@ export function mcpToolErrorResponse(id: string, payload: unknown): Response {
   );
 }
 
-export function requestBody(init?: RequestInit): {
+export interface TestMcpRequestBody {
   id: string;
   params: { name: string; arguments: Record<string, unknown> };
-} {
-  return JSON.parse(String(init?.body));
+}
+
+function isTestMcpRequestBody(value: unknown): value is TestMcpRequestBody {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    isRecord(value.params) &&
+    typeof value.params.name === "string" &&
+    isRecord(value.params.arguments)
+  );
+}
+
+export function requestBody(init?: RequestInit): TestMcpRequestBody {
+  if (typeof init?.body !== "string") throw new Error("expected a valid MCP request body");
+  let value: unknown;
+  try {
+    value = parseJson(init.body);
+  } catch {
+    throw new Error("expected a valid MCP request body");
+  }
+  if (!isTestMcpRequestBody(value)) throw new Error("expected a valid MCP request body");
+  return value;
 }

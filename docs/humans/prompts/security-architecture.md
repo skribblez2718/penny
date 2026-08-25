@@ -129,7 +129,7 @@ Improvements: full control over every token, a clear boundary between authored c
 
 ### 2. Durable Memory and Artifacts Are Task Material, Not Authority
 
-Primary-runtime memory recall may inform the task but cannot expand scope or permissions. Workers have no memory tools. Exact workflow artifacts are owner-granted task material: `artifact_read` validates the ref and consumer, while the content itself cannot mint new permissions or broaden the grant.
+Primary-runtime memory recall may inform the task but cannot expand scope or permissions. Workers may have YAML-declared read-only recall, never workflow transport. Exact artifact IDs are ordinary task material: `artifact_read` validates manifest identity, path, digest, length, and range, while artifact content cannot mint tools or authorize side effects.
 
 ### 3. Invocation Context Is Task-Authoritative Only
 

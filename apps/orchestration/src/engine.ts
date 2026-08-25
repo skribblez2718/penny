@@ -30,7 +30,6 @@ import {
   type EvaluationResult,
   isTerminalStatus,
   type RunIdentity,
-  type RunStatus,
   type SkillContract,
   validateContract,
   validateDirective,
@@ -51,11 +50,56 @@ import {
 } from "./playbooks/registry.js";
 import { ReceiptAuthority, trustedInvocationDigest } from "./receipts.js";
 
+interface ApprovedPromotionCompletionCapability {
+  completeApprovedPromotion(
+    run: RunContext,
+    outcome: {
+      status: "complete" | "failed" | "blocked_external_drift";
+      receiptId: string;
+      receiptSha256: string;
+      transactionId: string;
+      targetCount: number;
+      postApplyVerified: boolean;
+    }
+  ): Directive;
+}
+
+interface ReviewInvalidationCapability {
+  invalidateReview(run: RunContext, reason: string): Directive;
+}
+
+function hasApprovedPromotionCompletion(
+  playbook: PlaybookV1
+): playbook is PlaybookV1 & ApprovedPromotionCompletionCapability {
+  return (
+    "completeApprovedPromotion" in playbook &&
+    typeof playbook.completeApprovedPromotion === "function"
+  );
+}
+
+function hasReviewInvalidation(
+  playbook: PlaybookV1
+): playbook is PlaybookV1 & ReviewInvalidationCapability {
+  return "invalidateReview" in playbook && typeof playbook.invalidateReview === "function";
+}
+
+function isOperationEventAction(value: string): value is ReserveOperationEventGroupInput["action"] {
+  return (
+    value === "init" ||
+    value === "ingest" ||
+    value === "query" ||
+    value === "save" ||
+    value === "lint" ||
+    value === "promote"
+  );
+}
+
 export interface EngineOptions {
   readonly projectRoot: string;
   readonly maxSteps: number;
   readonly dispatchMode?: () => string | undefined;
   readonly receiptAuthority?: ReceiptAuthority;
+  readonly receiptKeyPath?: string;
   /** Immutable artifact-manifest ledger used to resolve output revision chains. */
   readonly artifactRevisions?: ArtifactRevisionLookup;
   /**
@@ -152,7 +196,8 @@ export class OrchestrationEngine {
     this.maxSteps = options.maxSteps;
     this.dispatchMode = options.dispatchMode ?? (() => process.env.PENNY_ARTIFACT_DISPATCH_MODE);
     this.receiptAuthority =
-      options.receiptAuthority ?? ReceiptAuthority.load(`${this.checkpointer.dbPath}.receipt-key`);
+      options.receiptAuthority ??
+      ReceiptAuthority.load(options.receiptKeyPath ?? `${this.checkpointer.dbPath}.receipt-key`);
   }
 
   handle(value: unknown): Directive {
@@ -219,21 +264,6 @@ export class OrchestrationEngine {
           return next;
         }
         const initialArtifacts = request.input_artifacts;
-        if (initialArtifacts !== undefined) {
-          if (initialArtifacts.run_id !== request.identity.run_id) {
-            throw new Error("initial input_artifacts belongs to another run");
-          }
-          for (const binding of initialArtifacts.artifacts) {
-            if (binding.ref.run_id !== request.identity.run_id) {
-              throw new Error("initial artifact ref belongs to another run");
-            }
-            if (!binding.ref.consumer_scope.includes(initialArtifacts.consumer)) {
-              throw new Error(
-                `initial artifact '${binding.ref.artifact_id}' does not grant '${initialArtifacts.consumer}'`
-              );
-            }
-          }
-        }
         const context = RunContext.create({
           identity: request.identity,
           goal: request.goal,
@@ -285,14 +315,13 @@ export class OrchestrationEngine {
         return this.recover(request.identity);
       case "respond": {
         const context = this.checkpointer.loadRun(request.identity);
-        const kbAction = String(context.playbookData.action ?? "");
-        if (
-          context.identity.playbook === "knowledge-base" &&
-          (kbAction === "ingest" || kbAction === "save" || kbAction === "promote")
-        ) {
-          throw new Error(
-            "KB content/promotion review is host-only through the authenticated host callback service; generic respond is decision-free for this run"
-          );
+        if (context.identity.playbook === "knowledge-base") {
+          const kbAction = String(context.knowledgeBaseData.action ?? "");
+          if (kbAction === "ingest" || kbAction === "save" || kbAction === "promote") {
+            throw new Error(
+              "KB content/promotion review is host-only through the authenticated host callback service; generic respond is decision-free for this run"
+            );
+          }
         }
         const pending = context.pendingDirective;
         if (
@@ -361,7 +390,7 @@ export class OrchestrationEngine {
       context.stateId !== "awaiting_review" ||
       pending?.action !== "await_user" ||
       pending.gate_id !== review.challenge_id ||
-      String(context.playbookData.review_receipt_sha256 ?? "") !== input.receiptSha256
+      String(context.knowledgeBaseData.review_receipt_sha256 ?? "") !== input.receiptSha256
     ) {
       throw new Error(
         `run '${input.runId}' is not bound to decided content-review challenge '${review.challenge_id}'`
@@ -370,7 +399,7 @@ export class OrchestrationEngine {
     // The host callback transaction owns any approved selector commit and the
     // eventual `published` operation receipt. It is never accepted from model
     // input; the checkpointer already bound it to the exact decision receipt.
-    context.playbookData.publication_transaction_id = input.transactionId;
+    context.knowledgeBaseData.publication_transaction_id = input.transactionId;
     const next = this.playbook.resume(context, review.decision_receipt.decision);
     this.checkpointer.finishContentReview({
       context,
@@ -395,11 +424,14 @@ export class OrchestrationEngine {
   }): Directive {
     const context = this.checkpointer.loadRunById(input.runId);
     const packetSha256 =
-      input.packetSha256 ?? String(context?.playbookData.promotion_packet_sha256 ?? "");
+      input.packetSha256 ??
+      (context?.identity.playbook === "knowledge-base"
+        ? String(context.knowledgeBaseData.promotion_packet_sha256 ?? "")
+        : "");
     if (
       context === undefined ||
       context.identity.playbook !== "knowledge-base" ||
-      String(context.playbookData.action ?? "") !== "promote" ||
+      String(context.knowledgeBaseData.action ?? "") !== "promote" ||
       !/^[a-f0-9]{64}$/.test(packetSha256) ||
       !/^[a-f0-9]{64}$/.test(input.intentSha256)
     ) {
@@ -435,17 +467,18 @@ export class OrchestrationEngine {
     });
     if (reserved.group.state !== "reserved") {
       operationStore.finish(reserved.group.request_event_group_id);
-      return this.currentDirective(this.checkpointer.loadRunById(input.runId)!);
+      return this.currentDirective(this.loadRequiredRun(input.runId));
     }
-    if (String(context.playbookData.promotion_challenge_id ?? "") !== input.challengeId) {
+    if (String(context.knowledgeBaseData.promotion_challenge_id ?? "") !== input.challengeId) {
       throw new Error(
         `run '${input.runId}' is not bound to promotion challenge '${input.challengeId}'`
       );
     }
 
     const alreadyReconciled =
-      String(context.playbookData.promotion_decision_intent_sha256 ?? "") === input.intentSha256 &&
-      String(context.playbookData.review_decision ?? "") === input.decision;
+      String(context.knowledgeBaseData.promotion_decision_intent_sha256 ?? "") ===
+        input.intentSha256 &&
+      String(context.knowledgeBaseData.review_decision ?? "") === input.decision;
     let next: Directive;
     if (alreadyReconciled) {
       next = this.currentDirective(context);
@@ -461,12 +494,12 @@ export class OrchestrationEngine {
           `run '${input.runId}' is not awaiting promotion challenge '${input.challengeId}'`
         );
       }
-      context.playbookData.review_decision = input.decision;
-      context.playbookData.promotion_decision_intent_sha256 = input.intentSha256;
+      context.knowledgeBaseData.review_decision = input.decision;
+      context.knowledgeBaseData.promotion_decision_intent_sha256 = input.intentSha256;
       if (input.receiptId !== undefined)
-        context.playbookData.promotion_receipt_id = input.receiptId;
+        context.knowledgeBaseData.promotion_receipt_id = input.receiptId;
       if (input.receiptSha256 !== undefined) {
-        context.playbookData.promotion_receipt_sha256 = input.receiptSha256;
+        context.knowledgeBaseData.promotion_receipt_sha256 = input.receiptSha256;
       }
       next = input.decision === "approve" ? pending : this.playbook.resume(context, input.decision);
       this.checkpointer.saveGateResponse(
@@ -488,7 +521,7 @@ export class OrchestrationEngine {
         }
       );
     }
-    const durable = this.checkpointer.loadRunById(input.runId)!;
+    const durable = this.loadRequiredRun(input.runId);
     const replay = replayableResultFromRun({
       action: "promote",
       run: durable,
@@ -496,8 +529,8 @@ export class OrchestrationEngine {
     });
     operationStore.complete({
       request_event_group_id: reserved.group.request_event_group_id,
-      kb_profile_id: String(durable.playbookData.profile_id ?? ""),
-      kb_id: String(durable.playbookData.kb_id ?? ""),
+      kb_profile_id: String(durable.knowledgeBaseData.profile_id ?? ""),
+      kb_id: String(durable.knowledgeBaseData.kb_id ?? ""),
       result: replay,
       input_digests: [
         packetSha256,
@@ -505,7 +538,7 @@ export class OrchestrationEngine {
         ...(input.receiptSha256 !== undefined ? [input.receiptSha256] : []),
       ],
       output_refs: input.receiptId === undefined ? [] : [input.receiptId],
-      policy_sha256: String(durable.playbookData.admitted_policy_sha256 ?? ""),
+      policy_sha256: String(durable.knowledgeBaseData.admitted_policy_sha256 ?? ""),
       safe_metrics: replay.counts,
     });
     return next;
@@ -581,31 +614,19 @@ export class OrchestrationEngine {
     let next: Directive;
     if (context.terminalDirective !== null) {
       if (
-        String(context.playbookData.promotion_apply_transaction_id ?? "") === input.transactionId &&
-        String(context.playbookData.promotion_apply_status ?? "") === input.status
+        String(context.knowledgeBaseData.promotion_apply_transaction_id ?? "") ===
+          input.transactionId &&
+        String(context.knowledgeBaseData.promotion_apply_status ?? "") === input.status
       ) {
         next = context.terminalDirective;
       } else {
         throw new Error("promotion run is terminal under another apply transaction");
       }
     } else {
-      const completer = this.playbook as PlaybookV1 & {
-        completeApprovedPromotion?: (
-          run: RunContext,
-          outcome: {
-            status: "complete" | "failed" | "blocked_external_drift";
-            receiptId: string;
-            receiptSha256: string;
-            transactionId: string;
-            targetCount: number;
-            postApplyVerified: boolean;
-          }
-        ) => Directive;
-      };
-      if (completer.completeApprovedPromotion === undefined) {
+      if (!hasApprovedPromotionCompletion(this.playbook)) {
         throw new Error("the active KB playbook cannot finalize an approved promotion");
       }
-      next = completer.completeApprovedPromotion(context, input);
+      next = this.playbook.completeApprovedPromotion(context, input);
       this.checkpointer.saveRun(context, "promotion_apply_reconciled", {
         run_id: input.runId,
         receipt_id: input.receiptId,
@@ -616,7 +637,7 @@ export class OrchestrationEngine {
         post_apply_verified: input.postApplyVerified,
       });
     }
-    const durable = this.checkpointer.loadRunById(input.runId)!;
+    const durable = this.loadRequiredRun(input.runId);
     const replay = replayableResultFromRun({
       action: "promote",
       run: durable,
@@ -625,12 +646,12 @@ export class OrchestrationEngine {
     });
     operationStore.complete({
       request_event_group_id: group.request_event_group_id,
-      kb_profile_id: String(durable.playbookData.profile_id ?? ""),
-      kb_id: String(durable.playbookData.kb_id ?? ""),
+      kb_profile_id: String(durable.knowledgeBaseData.profile_id ?? ""),
+      kb_id: String(durable.knowledgeBaseData.kb_id ?? ""),
       result: replay,
       input_digests: [input.receiptSha256],
       output_refs: [input.receiptId],
-      policy_sha256: String(durable.playbookData.admitted_policy_sha256 ?? ""),
+      policy_sha256: String(durable.knowledgeBaseData.admitted_policy_sha256 ?? ""),
       safe_metrics: {
         target_count: input.targetCount,
         post_apply_verified: input.postApplyVerified ? 1 : 0,
@@ -655,13 +676,10 @@ export class OrchestrationEngine {
     if (context === undefined || context.identity.playbook !== "knowledge-base") {
       throw new Error(`unknown KB content-review run '${input.runId}'`);
     }
-    const invalidator = this.playbook as PlaybookV1 & {
-      invalidateReview?: (run: RunContext, reason: string) => Directive;
-    };
-    if (invalidator.invalidateReview === undefined) {
+    if (!hasReviewInvalidation(this.playbook)) {
       throw new Error("the active KB playbook cannot invalidate content review");
     }
-    const next = invalidator.invalidateReview(context, input.reason);
+    const next = this.playbook.invalidateReview(context, input.reason);
     this.checkpointer.invalidateContentReview({
       context,
       ...(input.receiptSha256 !== undefined ? { receiptSha256: input.receiptSha256 } : {}),
@@ -925,11 +943,6 @@ export class OrchestrationEngine {
       ["version", expected.version, artifact.version],
       ["producer", expected.producer, artifact.producer],
       ["media_type", expected.media_type, artifact.media_type],
-      [
-        "consumer_scope",
-        canonicalJson(expected.consumer_scope),
-        canonicalJson(artifact.consumer_scope),
-      ],
       ["output_digest", result.worker_receipt.output_digest, artifact.content_digest],
       [
         "receipt_artifact_ref",
@@ -1049,7 +1062,7 @@ export class OrchestrationEngine {
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
       throw new Error("KB operation_event_group metadata must be an object");
     }
-    const record = raw as Record<string, JsonValue>;
+    const record = raw;
     const keys = Object.keys(record).sort();
     if (
       canonicalJson(keys) !== canonicalJson(["invocation_id", "request_sha256", "transaction_id"])
@@ -1064,7 +1077,7 @@ export class OrchestrationEngine {
       !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(invocationId) ||
       !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(transactionId) ||
       !/^[a-f0-9]{64}$/.test(requestSha256) ||
-      !["init", "ingest", "query", "save", "lint", "promote"].includes(action)
+      !isOperationEventAction(action)
     ) {
       throw new Error("KB operation_event_group metadata is invalid");
     }
@@ -1072,12 +1085,12 @@ export class OrchestrationEngine {
       run_id: context.identity.run_id,
       session_id: context.identity.session_id,
       transaction_id: transactionId,
-      action: action as ReserveOperationEventGroupInput["action"],
+      action,
       source_kind: "external_start",
       source_identity_sha256: externalOperationSourceIdentity({
         session_id: context.identity.session_id,
         invocation_id: invocationId,
-        action: action as ReserveOperationEventGroupInput["action"],
+        action,
         request_sha256: requestSha256,
       }),
     };
@@ -1140,22 +1153,33 @@ export class OrchestrationEngine {
    * outcome must stay reachable.
    */
   private admitTerminal(context: RunContext, next: Directive): void {
-    const candidate = next as Directive & { status?: string; met?: boolean };
-    if (candidate.met !== true || !isTerminalStatus(candidate.status as RunStatus)) {
+    if (
+      next.action !== "complete" &&
+      next.action !== "incomplete" &&
+      next.action !== "error" &&
+      next.action !== "cancelled"
+    ) {
       return;
     }
+    if (next.met !== true || !isTerminalStatus(next.status)) return;
     const refusal = evaluateCompletionGate({
       gate: this.contract.completion_gate,
-      terminalStatus: String(candidate.status),
+      terminalStatus: next.status,
       met: true,
       fromState: context.previousState,
-      unresolvedCount: Array.isArray((candidate as { unresolved?: unknown[] }).unresolved)
-        ? ((candidate as { unresolved: unknown[] }).unresolved satisfies unknown[]).length
-        : 0,
+      unresolvedCount: next.unresolved.length,
     });
     if (refusal !== null) {
       throw new Error(`playbook '${context.identity.playbook}': ${refusal}`);
     }
+  }
+
+  private loadRequiredRun(runId: string): RunContext {
+    const context = this.checkpointer.loadRunById(runId);
+    if (context === undefined) {
+      throw new CheckpointIdentityError(`run '${runId}' disappeared during durable reconciliation`);
+    }
+    return context;
   }
 
   private currentDirective(context: RunContext): Directive {

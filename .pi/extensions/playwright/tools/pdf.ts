@@ -1,3 +1,4 @@
+import { registerTool } from "../../../lib/pi-tool-registration.js";
 /**
  * PDF & Unsafe Code Tools
  *
@@ -6,12 +7,18 @@
  * Translated from MCP: pdf.ts, runCode.ts
  */
 
-import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, existsSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { BrowserManager } from "../browser.js";
 import type { PlaywrightConfig } from "../types.js";
+
+type UnsafePlaywrightRunner = (page: unknown, browser: unknown, context: unknown) => unknown;
+
+function isUnsafePlaywrightRunner(value: unknown): value is UnsafePlaywrightRunner {
+  return typeof value === "function";
+}
 
 export function registerPdfTools(pi: ExtensionAPI, config: PlaywrightConfig) {
   const browser = BrowserManager.getBrowser();
@@ -19,16 +26,11 @@ export function registerPdfTools(pi: ExtensionAPI, config: PlaywrightConfig) {
   // ==========================================================================
   // playwright_pdf
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_pdf",
     label: "Save as PDF",
     description: "Save the current page as a PDF file. Only works in Chromium headless mode.",
     promptSnippet: "Save page as PDF",
-    promptGuidelines: [
-      "Use playwright_pdf to export the current page to PDF.",
-      "Works only in headless Chromium mode.",
-      "PDFs are saved to the configured output directory.",
-    ],
     parameters: Type.Object({
       path: Type.Optional(
         Type.String({ description: "Output file path (default: auto-generated)" })
@@ -50,15 +52,15 @@ export function registerPdfTools(pi: ExtensionAPI, config: PlaywrightConfig) {
     async execute(_toolCallId, params) {
       const page = await browser.getPage();
 
-      const outputDir = params.path ? dirname(params.path as string) : config.outputDir;
+      const outputDir = params.path ? dirname(params.path) : config.outputDir;
       if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
 
-      const path = (params.path as string) || `${outputDir}/page-${Date.now()}.pdf`;
+      const path = params.path || `${outputDir}/page-${Date.now()}.pdf`;
 
       await page.pdf({
         path,
-        format: (params.format as string) || "A4",
-        printBackground: (params.printBackground as boolean) ?? false,
+        format: params.format || "A4",
+        printBackground: params.printBackground ?? false,
       });
 
       const stats = statSync(path);
@@ -79,7 +81,7 @@ export function registerPdfTools(pi: ExtensionAPI, config: PlaywrightConfig) {
   // playwright_run_code_unsafe
   // ⚠️ Executes arbitrary Playwright Node.js code — RCE-equivalent
   // ==========================================================================
-  pi.registerTool({
+  registerTool(pi, {
     name: "playwright_run_code_unsafe",
     label: "⚠️ Run Unsafe Code",
     description:
@@ -88,12 +90,6 @@ export function registerPdfTools(pi: ExtensionAPI, config: PlaywrightConfig) {
       "Use ONLY as a last resort when standard tools are insufficient. " +
       "Requires PLAYWRIGHT_ALLOW_UNSAFE=true.",
     promptSnippet: "⚠️ Run arbitrary Playwright code (unsafe)",
-    promptGuidelines: [
-      "⚠️ This tool executes arbitrary JavaScript in the Node.js process — it has FULL system access.",
-      "Use ONLY when no other tool can accomplish the task.",
-      "The code receives (page, browser, context) as arguments.",
-      "For security testing: this may be needed to test complex exploit chains.",
-    ],
     parameters: Type.Object({
       code: Type.String({
         description:
@@ -116,9 +112,13 @@ export function registerPdfTools(pi: ExtensionAPI, config: PlaywrightConfig) {
       const page = await browser.getPage();
 
       try {
-        // Create a function from the code string
-        const fn = new Function("page", "browser", "context", params.code as string);
-        const result = await fn(page, browser.getRawBrowser(), page.context());
+        // Create a function from the explicitly authorized code string. Treat
+        // both the dynamic callable and its result as unknown at this boundary.
+        const candidate: unknown = new Function("page", "browser", "context", params.code);
+        if (!isUnsafePlaywrightRunner(candidate)) {
+          throw new TypeError("Unsafe Playwright code did not compile to a callable function");
+        }
+        const result: unknown = await candidate(page, browser.getRawBrowser(), page.context());
 
         return {
           content: [

@@ -195,9 +195,9 @@ harness/service registry; this document does not assert remote presence.
 
 ## Current-Run Inputs
 
-When the execution owner grants exact artifacts, the worker reads them with
-`artifact_read` and follows typed continuation until complete. Workers do not
-receive durable-memory tools.
+When the execution owner supplies exact artifact IDs, the worker reads them with
+`artifact_read` and repeats with `next_range` until complete. Missing required IDs/paths
+produce `missing_input:` rather than memory or repository search.
 
 ## Learn More
 
@@ -217,7 +217,7 @@ receive durable-memory tools.
 ## How It Works
 
 The workflow runs as a registered TypeScript playbook. Exact current-run stage output
-moves through execution-owner artifacts: workers read granted predecessors with
+moves through exact immutable IDs: workers read needed predecessors with
 `artifact_read`, return complete stage content, and append only the routing
 `SUMMARY` required by the state contract.
 
@@ -245,8 +245,8 @@ is never workflow transport, run state, or persistence proof.
 
 {spec.rules or "[Document role-specific constraints and evidence requirements.]"}
 
-Granted current-run artifacts are read with `artifact_read` and typed
-continuation. The worker has no durable-memory tools.
+Exact supplied artifact IDs are read with `artifact_read` and `next_range`.
+Read-only durable recall, when YAML-declared, is never workflow transport.
 """
 
     @staticmethod

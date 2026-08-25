@@ -14,7 +14,6 @@ import path from "node:path";
 
 import type { Checkpointer } from "../checkpointer.js";
 import { PolicyRefusal, checkParentModelIdentity } from "./policy.js";
-import type { JsonValue } from "../contracts.js";
 import {
   canonicalJson,
   defaultDenyPolicy,
@@ -59,6 +58,20 @@ function artifactControl(ctx: KbWorkflowContext): Checkpointer {
     throw new Error("KB artifact work requires the orchestration control DB");
   }
   return ctx.checkpointer;
+}
+
+function parseJsonValue(source: string): unknown {
+  const value: unknown = JSON.parse(source);
+  return value;
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Digest one policy only after the filesystem boundary has validated it. */
+function policyDigest(policy: KbPolicy): Sha256Hex {
+  return sha256Hex(canonicalJson(policy));
 }
 
 function result(
@@ -395,7 +408,7 @@ export function admitKbRun(input: {
   checkParentModelIdentity(policy, input.parentIdentity);
   return {
     policy,
-    policy_sha256: sha256Hex(canonicalJson(policy as unknown as JsonValue)),
+    policy_sha256: policyDigest(policy),
     kb_id: policy.kb_id,
   };
 }
@@ -411,7 +424,7 @@ export function recheckAdmittedPolicy(input: {
   admittedPolicySha256: string;
 }): KbPolicy {
   const policy = readPolicy(input.kbRoot);
-  const current = sha256Hex(canonicalJson(policy as unknown as JsonValue));
+  const current = policyDigest(policy);
   if (current !== input.admittedPolicySha256) {
     throw new PolicyRefusal(
       "policy_changed",
@@ -438,9 +451,15 @@ export function readSealedAnswer(
   using store = new RunArtifactStore(root, runId, checkpointer);
   try {
     const { content } = store.read(handle.artifact_id);
-    const doc = JSON.parse(content) as { artifact_kind?: unknown; answer?: unknown };
-    if (doc.artifact_kind !== "query_answer" || doc.answer === undefined) return null;
-    return doc.answer;
+    const doc = parseJsonValue(content);
+    if (
+      !isUnknownRecord(doc) ||
+      doc["artifact_kind"] !== "query_answer" ||
+      doc["answer"] === undefined
+    ) {
+      return null;
+    }
+    return doc["answer"];
   } catch {
     return null;
   }
@@ -463,7 +482,7 @@ export function readSealedQueryVerification(
     if (answer.handle.artifact_kind !== "query_answer") return null;
     const reports = store.listByState("verify", "sealed");
     if (reports.length !== 1 || reports[0]?.artifact_kind !== "verification_report") return null;
-    return JSON.parse(store.read(reports[0].artifact_id).content) as unknown;
+    return parseJsonValue(store.read(reports[0].artifact_id).content);
   } catch {
     return null;
   }

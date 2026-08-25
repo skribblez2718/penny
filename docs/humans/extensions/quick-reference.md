@@ -16,8 +16,8 @@ extension-name/
 ## Extension Template
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
 const MyToolParams = Type.Object({
   param1: Type.String({ description: "First parameter" }),

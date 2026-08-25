@@ -1,3 +1,4 @@
+import { requireValue } from "./helpers/narrowing.js";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,6 +31,7 @@ import { promotionApplyOperationSourceIdentity } from "../src/kb/operation-recei
 import { PromotionApprovalStore, PromotionSimulatedCrash } from "../src/kb/promotion.js";
 import { RunArtifactStore } from "../src/kb/run-artifacts.js";
 import { initKb } from "../src/kb/workflows.js";
+import { installTestProjectState } from "./fixtures/penny-state-fixture.js";
 
 const PROFILE = "kbp_e2e_promotion";
 const SESSION = "sess_e2e_promotion";
@@ -66,7 +68,10 @@ function assertPatchAbsent(label: string, value: Buffer | string | unknown): voi
 function selectedSyntheticPage(kbRoot: string): void {
   const manifest = readManifest(kbRoot);
   const policy = readPolicy(kbRoot);
-  const selected = readSelectedGeneration(kbRoot)!;
+  const selected = requireValue(
+    readSelectedGeneration(kbRoot),
+    "apps/orchestration/tests/kb-e2e.test.ts:70"
+  );
   const markdown =
     "## Synthesis\nSynthetic E2E guidance.\n\n" +
     "## Evidence\n- Synthetic only.\n\n" +
@@ -128,13 +133,14 @@ function selectedSyntheticPage(kbRoot: string): void {
 describe("G9 approved apply end to end", () => {
   it("uses only the signed internal resume, finalizes all stores, and leaks no patch body to control", () => {
     const projectRoot = tempRoot("penny-kb-g9-e2e");
+    const projectState = installTestProjectState(projectRoot);
     const kbRoot = path.join(projectRoot, "private-kb");
     initKb({ kbRoot, profileId: PROFILE, runId: "run_init" }, "G9 E2E");
     selectedSyntheticPage(kbRoot);
 
-    const controlPath = path.join(projectRoot, ".penny", "g9-control.db");
+    const controlPath = path.join(projectRoot, "g9-control.db");
     const checkpointer = new Checkpointer(controlPath);
-    let controlCheckpointer: Checkpointer | undefined = checkpointer;
+    const controlCheckpointer: Checkpointer | undefined = checkpointer;
     const context = RunContext.create({
       identity: {
         schema_version: 2,
@@ -283,7 +289,7 @@ describe("G9 approved apply end to end", () => {
 
     context.stateId = "awaiting_review";
     context.status = "awaiting_user";
-    context.playbookData = {
+    Object.assign(context.knowledgeBaseData, {
       action: "promote",
       profile_id: PROFILE,
       kb_id: readManifest(kbRoot).kb_id,
@@ -292,7 +298,7 @@ describe("G9 approved apply end to end", () => {
       promotion_packet_sha256: gate.packet_sha256,
       review_artifact_ids: [plan.artifact_id, patch.artifact_id, verificationHandle.artifact_id],
       gate_id: challenge,
-    };
+    });
     context.pendingDirective = validateDirective({
       schema_version: 2,
       action: "await_user",
@@ -345,19 +351,33 @@ describe("G9 approved apply end to end", () => {
       runId: RUN,
       challengeId: challenge,
       decision: "approve",
-      intentSha256: decision.gate.decision_intent_sha256!,
+      intentSha256: requireValue(
+        decision.gate.decision_intent_sha256,
+        "apps/orchestration/tests/kb-e2e.test.ts:350"
+      ),
       packetSha256: decision.gate.packet_sha256,
-      receiptId: decision.receipt!.receipt_id,
-      receiptSha256: decision.receipt_sha256!,
+      receiptId: requireValue(decision.receipt, "apps/orchestration/tests/kb-e2e.test.ts:352")
+        .receipt_id,
+      receiptSha256: requireValue(
+        decision.receipt_sha256,
+        "apps/orchestration/tests/kb-e2e.test.ts:353"
+      ),
     });
     const duplicateDecision = engine.recordPromotionDecision({
       runId: RUN,
       challengeId: challenge,
       decision: "approve",
-      intentSha256: decision.gate.decision_intent_sha256!,
+      intentSha256: requireValue(
+        decision.gate.decision_intent_sha256,
+        "apps/orchestration/tests/kb-e2e.test.ts:359"
+      ),
       packetSha256: decision.gate.packet_sha256,
-      receiptId: decision.receipt!.receipt_id,
-      receiptSha256: decision.receipt_sha256!,
+      receiptId: requireValue(decision.receipt, "apps/orchestration/tests/kb-e2e.test.ts:361")
+        .receipt_id,
+      receiptSha256: requireValue(
+        decision.receipt_sha256,
+        "apps/orchestration/tests/kb-e2e.test.ts:362"
+      ),
     });
     expect(duplicateDecision.action).toBe(decidedControl.action);
     expect(checkpointer.operationEventGroups(RUN)).toMatchObject([
@@ -370,9 +390,11 @@ describe("G9 approved apply end to end", () => {
     expect(checkpointer.operationReceipts(RUN)).toMatchObject([
       { event: "prepared", state: "published" },
     ]);
-    expect(() => approval.resumeApprovedPromotion(decision.receipt_jcs!)).toThrow(
-      PromotionSimulatedCrash
-    );
+    expect(() =>
+      approval.resumeApprovedPromotion(
+        requireValue(decision.receipt_jcs, "apps/orchestration/tests/kb-e2e.test.ts:375")
+      )
+    ).toThrow(PromotionSimulatedCrash);
     expect(checkpointer.loadRunById(RUN)?.terminalDirective).toBeNull();
     const apply = approval.reconcileApprovedPromotion(RUN);
 
@@ -427,7 +449,10 @@ describe("G9 approved apply end to end", () => {
       { event: "completed", state: "published" },
     ]);
 
-    const approvalDatabase = path.join(projectRoot, ".penny", "kb-approval", "receipts.sqlite");
+    const approvalDatabase = path.join(
+      projectState.paths.knowledgeBase.approval,
+      "receipts.sqlite"
+    );
     for (const suffix of ["", "-wal", "-shm"]) {
       const controlFile = `${controlPath}${suffix}`;
       if (existsSync(controlFile)) {

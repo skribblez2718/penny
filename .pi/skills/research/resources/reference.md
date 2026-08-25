@@ -64,9 +64,10 @@ report critique, or validation → synthesizing.
 
 ## Exact artifact handoff
 
-The owner persists every worker response before routing. `RunContext.selected_artifacts`
-contains refs only. Each directive carries a closed `InputArtifactsV1` grant and output
-metadata bound to run, state, branch, producer, operation, version, and consumer scope.
+The owner persists and re-reads every worker response before parsing routing.
+`RunContext.selected_artifacts` contains refs only. Each directive carries exact
+schema-v2 input IDs/refs from any run and output lineage bound to run, state, branch,
+producer, operation, and version.
 
 | Consumer | Selected predecessors |
 |---|---|
@@ -77,16 +78,15 @@ metadata bound to run, state, branch, producer, operation, version, and consumer
 | validating | current synthesis, research branches, and report critique when present |
 | report writing | synthesis, evidence, critique when present, and validation |
 
-A later skill-chain step receives a target-run `chain_input` artifact containing the exact
-prior terminal bytes. Its consumer scope admits only `planning`, `researching`, and the
-owner start seam. The first accepted phase output carries that input into normal same-run
-lineage.
+A later skill-chain step verifies and receives the prior terminal artifact ID directly
+across runs. `{previous}` is only an instruction marker, and additional explicit IDs may
+provide multi-source fan-in.
 
 ## Worker posture and models
 
-Tool authority comes from `.pi/agents/<agent>.md` frontmatter. Hardened workers lose
-execution/mutation tools; worker memory is absent unless the owner supplies the bounded
-read-only extension.
+Tool authority comes exactly from `.pi/agents/<agent>.md` YAML `tools:`. Hardened and
+trusted profiles expose the same declared set; optional-service absence remains a typed
+tool-call error. Read-only worker memory is advisory recall, never stage transport.
 
 Production models also come from agent SSOT. A caller may provide a per-invocation model
 override (used for test runs) without changing frontmatter. Vera-specific precedence is:
@@ -94,7 +94,7 @@ override (used for test runs) without changing frontmatter. Vera-specific preced
 
 ## Recovery and terminal truth
 
-The TypeScript v2 database defaults to `$PROJECT_ROOT/.penny/orchestration-v2.db`.
+The orchestration database resolves through Penny's active project catalog binding to the canonical `orchestration/orchestration.db`; there is no project-local or per-store path fallback.
 Recovery uses an exact `run_id`; it never scans semantic memory or converts retired
 checkpoints. Compaction reads this same v2 database by exact run ID.
 

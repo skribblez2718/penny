@@ -8,7 +8,7 @@ capabilities, policy, durable records, generation selectors, and apply authority
 ## Authority
 
 - Profile-session and parent-delivery grants share the owner-only
-  `$PROJECT_ROOT/.penny/kb-host-grants/grants.sqlite` WAL/FULL authority; unexpected legacy
+  catalog-bound project `kb/host-grants/` WAL/FULL authority; unexpected legacy
   fragments fail closed instead of being scanned or adopted.
 - Each model-visible call records an exact session/profile/invocation/request/policy grant use;
   parent delivery additionally binds provider/model and remains exact single-use.

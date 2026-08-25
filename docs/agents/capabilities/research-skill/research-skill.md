@@ -38,7 +38,7 @@ skill({
 
 `ResearchPlaybook` is a registered TypeScript playbook in `apps/orchestration/src/playbooks/research.ts`. The skill directory contains no executable delegate; Node SQLite checkpoint state is keyed by `run_id`.
 
-Every cognitive directive supplies strict `input_artifacts` and `output_artifact` contracts. A worker reads every task-provided ref with `artifact_read`, follows typed continuation until complete, and returns complete stage content. The execution owner persists exact response bytes before parsing the final SUMMARY line. Workers have no durable-memory tools, never claim artifact registration, and payloads never enter `RunContext`.
+Every cognitive directive supplies exact cross-run `input_artifacts` and an `output_artifact` contract. A worker reads needed IDs with `artifact_read` and `next_range`, then returns complete stage content. The owner persists/re-reads exact response bytes before parsing the final SUMMARY line. Read-only memory is advisory only; payloads never enter `RunContext`.
 
 The playbook selects all exact predecessor refs required by a consumer, not only reviewer metadata. Parallel research captures one artifact per `branch_id`; fan-in is order-independent. Artifact revisions, selected refs, and per-state inputs survive malformed-SUMMARY retry, clarification, and fresh-process recovery.
 

@@ -1,6 +1,6 @@
 # PowerPoint Extension
 
-Generate modern, professionally styled 16:9 PowerPoint (`.pptx`) presentations from a structured slide list or Markdown. Slides are drawn as editable PowerPoint shapes on blank layouts through python-pptx. The renderer supports the five legacy theme seeds plus an additive custom-design tier for semantic palettes, local backgrounds, one mark, and three composed image/text layouts.
+Generate modern, professionally styled 16:9 PowerPoint (`.pptx`) presentations from a structured slide list or Markdown. The extension is now fully TypeScript/Node: it validates arguments, classifies Markdown, renders editable OOXML through `PptxGenJS`, validates the resulting package structure, and atomically publishes the final file in process. The renderer supports the five legacy theme seeds plus an additive custom-design tier for semantic palettes, local backgrounds, one mark, and three composed image/text layouts.
 
 ## Tools
 
@@ -146,7 +146,7 @@ Fit defaults are contextual:
 
 ### Authoritative semantic validation
 
-TypeBox validates the public object shapes, ranges, literals, and closed nested fields. Some cross-field rules cannot be represented there: `x + width <= 1` (and the corresponding vertical bound), required `media` for composed layouts, the `accent_color`/`design.palette.accent` conflict, and layout-incompatible fields. The Python renderer is authoritative for those semantic checks, including direct JSON invocation, and rejects them before publication.
+TypeBox validates the public object shapes, ranges, literals, and closed nested fields. Some cross-field rules cannot be represented there: `x + width <= 1` (and the corresponding vertical bound), required `media` for composed layouts, the `accent_color`/`design.palette.accent` conflict, and layout-incompatible fields. The TypeScript renderer is authoritative for those semantic checks, including direct JSON invocation, and rejects them before publication.
 
 ## Markdown mode rules
 
@@ -171,26 +171,31 @@ Themes remain compatibility seeds for fonts and initial colors; they are not tem
 
 ## Dependencies
 
-PowerPoint runtime dependencies are locked project dependencies: `python-pptx`, `markdown-it-py`, `lxml`, and `pillow`. Install the project environments with:
+PowerPoint runtime dependencies are first-class locked Bun workspace dependencies:
+
+- `pptxgenjs`
+- `markdown-it`
+- `jszip`
+- `fast-xml-parser`
+- `sharp`
+- `fontkit`
 
 ```bash
-uv sync --extra dev --frozen
 bun install --frozen-lockfile
 ```
 
-No manual package-install step is required.
+No Python runtime is required for document generation.
 
 ## Configuration
 
 | Environment variable      | Purpose                                                                                                          |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `PROJECT_ROOT`            | Optional project-root override. Otherwise the root is discovered from the extension module, not the process CWD. |
-| `PI_VENV_PYTHON`          | Explicit Python interpreter override.                                                                            |
 | `PENNY_DOCGEN_TIMEOUT_MS` | Generator timeout (default 90000 ms).                                                                            |
 
 ## Reliability, validation, and results
 
-The renderer writes to a unique staging path beside the target, validates ZIP CRCs, required OPC/PresentationML parts, entity-safe/no-network XML well-formedness, python-pptx reopening, and slide count, then atomically replaces the destination. Pre-publication failures preserve an existing target and remove only the invocation's staging file. Cancellation or timeout can race after validated atomic replacement; in that case the caller may receive a cancellation/error while a complete valid final deck remains.
+The renderer writes to a unique staging path beside the target, validates ZIP CRCs, required OPC/PresentationML parts, entity-safe/no-network XML well-formedness, relationship targets, presentation structure, and slide count, then atomically replaces the destination. Pre-publication failures preserve an existing target and remove only the invocation's staging file. Cancellation or timeout can abort generation before publication; an aborted or timed-out operation never publishes an incomplete deck.
 
 Generation does not truncate table rows, code lines, or composed-layout content. Content that cannot fit at the readability floors and cannot be split at a safe boundary fails without publishing. New visual-critical assets and semantic design errors are validated before atomic publication.
 
@@ -201,17 +206,9 @@ Templates/masters, remote assets, generic collages, animation, transitions, and 
 ## Testing
 
 ```bash
-# TypeScript schema/helpers
 (cd .pi/extensions/powerpoint && bun run test:unit)
-
-# Python rendering, pagination, OOXML, palette/font/image, and atomicity
-uv run --frozen python -m pytest \
-  .pi/extensions/powerpoint/tests/python \
-  -p no:cacheprovider --tb=short -q
-
-# Real TypeScript → Python lifecycle, design semantics, and cancellation boundary
 (cd .pi/extensions/powerpoint && bun run test:integration)
-
-# PowerPoint TypeScript static check
-(cd .pi/extensions/powerpoint && bunx tsc --noEmit)
+(cd .pi/extensions/powerpoint && bun run typecheck)
 ```
+
+The focused GitHub Actions workflow runs the TypeScript checks on Linux, macOS, and Windows.
