@@ -172,7 +172,11 @@ describe("paths and spec building", () => {
     const second = reserveStagingPath(output);
     expect(path.dirname(first)).toBe(directory);
     expect(first).not.toBe(second);
-    expect(fs.statSync(first).mode & 0o777).toBe(0o600);
+    // Windows does not expose POSIX mode bits. The atomic-reservation contract
+    // is cross-platform; owner-only permissions are asserted where supported.
+    if (process.platform !== "win32") {
+      expect(fs.statSync(first).mode & 0o777).toBe(0o600);
+    }
   });
 
   it("slugifies filenames and resolves output paths", () => {
