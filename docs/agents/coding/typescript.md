@@ -146,7 +146,9 @@ The one live-model config,
 `test:kb-model-smoke:aggregate`. It skips with a clear message unless
 `PENNY_KB_MODEL_SMOKE=1`; setting that variable opts into the predeclared live KB model cohort and
 requires separate authorization for its external/costly model use. Offline/default TypeScript gates
-do not silently run it.
+do not silently run it. Browser-backed Playwright suites and live YouTube transcript checks are also
+explicitly external: set `PENNY_PLAYWRIGHT_BROWSER_TESTS=1` or `PENNY_YOUTUBE_NETWORK_TESTS=1` only
+when their Chromium/network dependencies are deliberately authorized.
 
 ## Delivery checklist
 

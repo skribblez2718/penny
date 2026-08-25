@@ -220,6 +220,9 @@ The single live-model config is
 `test:kb-model-smoke:aggregate`, which prints a skip unless `PENNY_KB_MODEL_SMOKE=1`. Setting that
 variable opts into the predeclared live KB model cohort and should be done only with separate
 authorization for the external/costly model call. Default and offline gates never silently opt in.
+Browser-backed Playwright suites and live YouTube transcript checks are likewise external: set
+`PENNY_PLAYWRIGHT_BROWSER_TESTS=1` or `PENNY_YOUTUBE_NETWORK_TESTS=1` only when their Chromium or
+network dependency is deliberately authorized.
 
 ## Delivery checklist
 

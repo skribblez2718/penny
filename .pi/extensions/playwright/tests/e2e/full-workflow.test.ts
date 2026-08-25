@@ -15,11 +15,16 @@ interface TestAppData {
   user: string;
 }
 
+// Browser suites require a provisioned Chromium binary and network access. They
+// remain opt-in so normal local/CI contract checks do not download or invoke it.
+const browserDescribe =
+  process.env.PENNY_PLAYWRIGHT_BROWSER_TESTS === "1" ? describe : describe.skip;
+
 // ============================================================================
 // Vulnerability Scanning Simulation
 // ============================================================================
 
-describe("E2E: Vulnerability Scanning Workflow", () => {
+browserDescribe("E2E: Vulnerability Scanning Workflow", () => {
   let browser: Browser;
   let context: BrowserContext;
   let page: Page;
@@ -152,7 +157,7 @@ describe("E2E: Vulnerability Scanning Workflow", () => {
 // Multi-tab Workflow
 // ============================================================================
 
-describe("E2E: Multi-tab Workflow", () => {
+browserDescribe("E2E: Multi-tab Workflow", () => {
   let browser: Browser;
   let context: BrowserContext;
 
@@ -201,7 +206,7 @@ describe("E2E: Multi-tab Workflow", () => {
 // Error Recovery
 // ============================================================================
 
-describe("E2E: Error Recovery", () => {
+browserDescribe("E2E: Error Recovery", () => {
   it("should handle navigation errors gracefully", async () => {
     const b = await chromium.launch({ headless: true });
     const p = await b.newPage();

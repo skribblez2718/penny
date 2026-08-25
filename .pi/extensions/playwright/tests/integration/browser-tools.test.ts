@@ -10,15 +10,19 @@ import { chromium, type Browser, type Page } from "playwright";
 
 import type { SnapshotNode } from "../../types.js";
 
+const browserTestsEnabled = process.env.PENNY_PLAYWRIGHT_BROWSER_TESTS === "1";
+const browserDescribe = browserTestsEnabled ? describe : describe.skip;
 let browser: Browser;
 let page: Page;
 
 beforeAll(async () => {
+  if (!browserTestsEnabled) return;
   browser = await chromium.launch({ headless: true });
   page = await browser.newPage();
 });
 
 afterAll(async () => {
+  if (!browserTestsEnabled) return;
   await page.close();
   await browser.close();
 });
@@ -27,7 +31,7 @@ afterAll(async () => {
 // Navigation
 // ============================================================================
 
-describe("Navigation", () => {
+browserDescribe("Navigation", () => {
   it("should navigate to a URL and return title", async () => {
     const resp = await page.goto("https://example.com", {
       waitUntil: "domcontentloaded",
@@ -62,7 +66,7 @@ describe("Navigation", () => {
 // Snapshot (DOM tree)
 // ============================================================================
 
-describe("Snapshot", () => {
+browserDescribe("Snapshot", () => {
   it("should build a semantic DOM tree", async () => {
     await page.goto("https://example.com", { waitUntil: "domcontentloaded" });
 
@@ -120,7 +124,7 @@ describe("Snapshot", () => {
 // Screenshot
 // ============================================================================
 
-describe("Screenshot", () => {
+browserDescribe("Screenshot", () => {
   it("should capture a screenshot and save to file", async () => {
     await page.goto("https://example.com", { waitUntil: "domcontentloaded" });
     const path = `/tmp/test-screenshot-${Date.now()}.png`;
@@ -136,7 +140,7 @@ describe("Screenshot", () => {
 // Click
 // ============================================================================
 
-describe("Click", () => {
+browserDescribe("Click", () => {
   it("should click an element by selector", async () => {
     // Inject a test page
     await page.goto("about:blank");
@@ -180,7 +184,7 @@ describe("Click", () => {
 // Evaluate
 // ============================================================================
 
-describe("Evaluate", () => {
+browserDescribe("Evaluate", () => {
   it("should evaluate JS and return result", async () => {
     await page.setContent('<html><body><div id="data" data-value="42">Hello</div></body></html>');
 
@@ -209,7 +213,7 @@ describe("Evaluate", () => {
 // Form Input
 // ============================================================================
 
-describe("Form Input", () => {
+browserDescribe("Form Input", () => {
   it("should type text into an input", async () => {
     await page.setContent('<html><body><input id="name" type="text"></body></html>');
 
@@ -265,7 +269,7 @@ describe("Form Input", () => {
 // Keyboard
 // ============================================================================
 
-describe("Keyboard", () => {
+browserDescribe("Keyboard", () => {
   it("should press keys", async () => {
     await page.setContent('<html><body><input id="key-input"></body></html>');
 
@@ -289,7 +293,7 @@ describe("Keyboard", () => {
 // Tabs
 // ============================================================================
 
-describe("Tabs", () => {
+browserDescribe("Tabs", () => {
   it("should open new tabs and switch between them", async () => {
     const ctx = await browser.newContext();
     const page1 = await ctx.newPage();
@@ -314,7 +318,7 @@ describe("Tabs", () => {
 // Storage
 // ============================================================================
 
-describe("Storage", () => {
+browserDescribe("Storage", () => {
   it("should read and write localStorage", async () => {
     await page.goto("https://example.com", { waitUntil: "domcontentloaded" });
 
@@ -345,7 +349,7 @@ describe("Storage", () => {
 // Wait
 // ============================================================================
 
-describe("Wait", () => {
+browserDescribe("Wait", () => {
   it("should wait for text to appear", async () => {
     await page.setContent(
       '<html><body><div id="target"></div><script>setTimeout(() => { document.getElementById("target").textContent = "ready"; }, 300)</script></body></html>'
@@ -374,7 +378,7 @@ describe("Wait", () => {
 // Route / Network
 // ============================================================================
 
-describe("Routes", () => {
+browserDescribe("Routes", () => {
   it("should route and abort requests", async () => {
     await page.goto("about:blank");
     await page.route("**/favicon.ico", (route) => route.abort());

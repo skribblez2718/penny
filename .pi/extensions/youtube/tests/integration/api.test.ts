@@ -8,7 +8,12 @@
 import { describe, expect, it } from "vitest";
 import { fetchTranscript as ytTranscript } from "youtube-transcript";
 
-describe("youtube_transcript integration", () => {
+// The public YouTube caption service is mutable and can disable a fixture video
+// without notice. Network coverage remains explicit rather than destabilizing
+// offline contract gates.
+const networkDescribe = process.env.PENNY_YOUTUBE_NETWORK_TESTS === "1" ? describe : describe.skip;
+
+networkDescribe("youtube_transcript integration", () => {
   it("fetches transcript from test video ogTLWGBc3cE", async () => {
     const snippets = await ytTranscript("ogTLWGBc3cE", {
       lang: "en",

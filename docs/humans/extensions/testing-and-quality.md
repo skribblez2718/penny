@@ -95,7 +95,9 @@ explicit message unless `PENNY_KB_MODEL_SMOKE=1`.
 Setting `PENNY_KB_MODEL_SMOKE=1` opts into the predeclared live KB model cohort and requires separate
 authorization because it can contact an external model and incur cost. Default local and offline gates
 do not silently set it. A skipped live cohort is reported as skipped, never counted as an executed
-live-model pass.
+live-model pass. Browser-backed Playwright suites and live YouTube transcript checks are separate
+external gates: set `PENNY_PLAYWRIGHT_BROWSER_TESTS=1` or `PENNY_YOUTUBE_NETWORK_TESTS=1` only when
+Chromium or network access is deliberately authorized.
 
 ## Assertions and partial hosts in tests
 

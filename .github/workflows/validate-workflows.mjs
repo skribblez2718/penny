@@ -154,6 +154,8 @@ for (const [variable, expected] of [
   ["PENNY_KB_MODEL_SMOKE", '"0"'],
   ["PENNY_MEMORY_MCP_TOKEN_ENV", '""'],
   ["PENNY_MEMORY_MCP_TOKEN_FILE", '""'],
+  ["PENNY_PLAYWRIGHT_BROWSER_TESTS", '"0"'],
+  ["PENNY_YOUTUBE_NETWORK_TESTS", '"0"'],
 ]) {
   const declarations = typescript
     .split(/\r?\n/u)
@@ -165,6 +167,9 @@ for (const [variable, expected] of [
 }
 if (/PENNY_KB_MODEL_SMOKE:\s+["']?1/u.test(typescript)) {
   report(`${TYPESCRIPT_WORKFLOW}: the live-model gate must never be enabled`);
+}
+if (/PENNY_(?:PLAYWRIGHT_BROWSER_TESTS|YOUTUBE_NETWORK_TESTS):\s+["']?1/u.test(typescript)) {
+  report(`${TYPESCRIPT_WORKFLOW}: external browser/network suites must never be enabled`);
 }
 if (/bun run test:kb-model-smoke(?:\s|$)/mu.test(typescript)) {
   report(`${TYPESCRIPT_WORKFLOW}: the live-model suite must not be invoked directly`);

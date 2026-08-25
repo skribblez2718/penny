@@ -10,11 +10,13 @@ permissions:
   contents: read
 
 env:
-  # Keep live-model and operator-provisioned credential paths disabled even if a
-  # self-hosted runner has matching variables or a local .env file.
+  # Keep live-model, external browser/network, and operator-provisioned credential
+  # paths disabled even if a self-hosted runner has matching variables or a local .env file.
   PENNY_KB_MODEL_SMOKE: "0"
   PENNY_MEMORY_MCP_TOKEN_ENV: ""
   PENNY_MEMORY_MCP_TOKEN_FILE: ""
+  PENNY_PLAYWRIGHT_BROWSER_TESTS: "0"
+  PENNY_YOUTUBE_NETWORK_TESTS: "0"
 
 jobs:
   repository-typescript:
