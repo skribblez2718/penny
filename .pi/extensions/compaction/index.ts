@@ -1144,7 +1144,7 @@ export function collectCurrentSessionArtifactRefs(
   let store: ArtifactStore | undefined;
   try {
     const runtimeConfig = loadRuntimeConfig(projectRoot);
-    store = new ArtifactStore(runtimeConfig.artifactRoot, {
+    store = ArtifactStore.openExisting(runtimeConfig.artifactRoot, {
       projectId: runtimeConfig.projectId,
     });
     for (const id of collectExplicitInputArtifactIds(messages)) {
@@ -1441,7 +1441,7 @@ export function persistHandoffIndex(input: {
     upstream_refs: [],
   };
   const runtimeConfig = loadRuntimeConfig(input.projectRoot);
-  using store = new ArtifactStore(runtimeConfig.artifactRoot, {
+  using store = ArtifactStore.openExisting(runtimeConfig.artifactRoot, {
     projectId: runtimeConfig.projectId,
   });
   const ref = store.persist({

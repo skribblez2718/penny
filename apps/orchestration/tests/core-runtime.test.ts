@@ -8,8 +8,14 @@ import { ArtifactStore } from "../src/artifact-store.js";
 import { CheckpointIdentityError, Checkpointer, sha256 } from "../src/checkpointer.js";
 import type { JsonValue, RunIdentity } from "../src/contracts.js";
 import { OrchestrationEngine } from "../src/engine.js";
+import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
-import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
+import {
+  OrchestrationRunner,
+  WorkerExecutor,
+  type OrchestrationProgressEvent,
+} from "../src/worker.js";
+import { researchSemanticDraftFixture } from "./helpers/research-semantic-draft.js";
 
 const directories: string[] = [];
 
@@ -53,15 +59,22 @@ function startRequest(
 }
 
 function runtime(root: string): {
+  artifacts: ArtifactStore;
   checkpointer: Checkpointer;
   engine: OrchestrationEngine;
 } {
+  const artifacts = new ArtifactStore(path.join(root, "artifacts"));
   const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
   return {
+    artifacts,
     checkpointer,
     engine: new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot: root,
       maxSteps: 96,
+      artifactRevisions: artifacts,
+      artifactStore: artifacts,
+      artifactReader: artifacts,
     }),
   };
 }
@@ -69,11 +82,33 @@ function runtime(root: string): {
 class FakeResearchClient implements ModelClient {
   readonly invocations: AgentInvocation[] = [];
 
+  constructor(private readonly artifacts: ArtifactStore) {}
+
   async runAgent(invocation: AgentInvocation): Promise<AgentCompletion> {
     this.invocations.push(invocation);
+    if (invocation.task.startsWith("Repair routing metadata only.")) {
+      return {
+        text: 'SUMMARY:{"explore_complete":true,"confidence":"PROBABLE"}',
+        confidence: "PROBABLE",
+        details: { explore_complete: true },
+      };
+    }
+    if (invocation.stateId === "synthesizing") {
+      const draft = researchSemanticDraftFixture(invocation, this.artifacts, {
+        title: "Core runtime synthesis",
+        executiveSummary: "The runtime produced a grounded semantic core.",
+        claimStatement: "The runtime fixture is grounded.",
+        sectionBody: "The runtime finding is grounded.",
+      });
+      return {
+        text: `${JSON.stringify(draft)}\nSUMMARY:{"confidence":"PROBABLE","synthesis_complete":true}`,
+        confidence: "PROBABLE",
+        details: { synthesis_complete: true },
+      };
+    }
     const result: Record<string, AgentCompletion> = {
       planning: {
-        text: "plan",
+        text: 'plan\nSUMMARY:{"confidence":"CERTAIN","plan_steps":["first sub-query","second sub-query"],"plan_complete":true,"mode":"standard"}',
         confidence: "CERTAIN",
         details: {
           plan_steps: ["first sub-query", "second sub-query"],
@@ -82,28 +117,18 @@ class FakeResearchClient implements ModelClient {
         },
       },
       researching: {
-        text: `findings for ${invocation.task}`,
+        text: `findings for ${invocation.task}\nSUMMARY:{"confidence":"PROBABLE","explore_complete":true}`,
         confidence: "PROBABLE",
         details: { explore_complete: true },
       },
-      synthesizing: {
-        text: "complete cited synthesis",
-        confidence: "PROBABLE",
-        details: { synthesis_complete: true },
-      },
       validating: {
-        text: "grounding verdict",
+        text: 'grounding verdict\nSUMMARY:{"confidence":"CERTAIN","verdict":"PASS","unsupported_claims":[],"evidence":[{"claim":"c1","source":"s1"}]}',
         confidence: "CERTAIN",
         details: {
           verdict: "PASS",
           unsupported_claims: [],
           evidence: [{ claim: "c1", source: "s1" }],
         },
-      },
-      report_writing: {
-        text: "# report.md\nReport\n# sources.md\nSources\n# README.md\nReadme",
-        confidence: "CERTAIN",
-        details: { write_complete: true },
       },
     };
     const completion = result[invocation.stateId];
@@ -117,9 +142,8 @@ class FakeResearchClient implements ModelClient {
 describe("durable orchestration runtime", () => {
   it("runs a quick research workflow to grounded complete with exact artifacts", async () => {
     const root = temporaryDirectory();
-    const { checkpointer, engine } = runtime(root);
-    const client = new FakeResearchClient();
-    const artifacts = new ArtifactStore(path.join(root, "artifacts"));
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const client = new FakeResearchClient(artifacts);
     const runner = new OrchestrationRunner(
       engine,
       new WorkerExecutor(client, artifacts, {
@@ -137,21 +161,140 @@ describe("durable orchestration runtime", () => {
     expect(terminal.met).toBe(true);
     expect(terminal.status).toBe("complete");
     expect(terminal.result.grounded).toBe(true);
-    expect(terminal.artifacts).toHaveLength(1);
+    expect(terminal.artifacts).toHaveLength(7);
+    const core = terminal.artifacts.find((artifact) => artifact.kind === "semantic-core");
+    expect(core).toBeDefined();
     expect(
       artifacts
         .read(
-          requireValue(terminal.artifacts[0], "apps/orchestration/tests/core-runtime.test.ts:140"),
+          requireValue(core, "apps/orchestration/tests/core-runtime.test.ts:semantic-core"),
           "state:complete"
         )
         .toString("utf8")
-    ).toContain("# report.md");
+    ).toContain("penny.grounded-synthesis.v1");
     expect(client.invocations.map((call) => call.stateId)).toEqual([
       "researching",
       "synthesizing",
       "validating",
-      "report_writing",
     ]);
+    const envelope = checkpointer.completionAdmission(identity().run_id);
+    expect(envelope).toMatchObject({
+      origin_state: "rendering",
+      latest_product: {
+        selector: "terminal_artifact",
+        product_id: core?.artifact_id,
+        sha256: core?.content_digest,
+      },
+    });
+    expect(envelope?.evidence_refs).toHaveLength(1);
+    expect(envelope?.evidence_refs[0]?.kind).toBe("execution_receipt");
+    expect(envelope?.evidence_refs[0]?.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(envelope?.state_visit_refs.map((visit) => visit.state_id)).toEqual([
+      "intake",
+      "researching",
+      "synthesizing",
+      "sealing_core",
+      "validating",
+      "rendering",
+    ]);
+    checkpointer.close();
+  });
+
+  it("emits content-free progress for every shared runner phase and terminal boundary", async () => {
+    const root = temporaryDirectory();
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const client = new FakeResearchClient(artifacts);
+    const runner = new OrchestrationRunner(
+      engine,
+      new WorkerExecutor(client, artifacts, {
+        projectRoot: root,
+        parallelConcurrency: 2,
+      })
+    );
+    const progress: OrchestrationProgressEvent[] = [];
+    const runIdentity = identity("progress-run");
+
+    const terminal = await runner.runUntilBoundary(
+      engine.handle(startRequest(root, runIdentity)),
+      undefined,
+      (event) => progress.push(event)
+    );
+
+    expect(terminal.action).toBe("complete");
+    expect(
+      progress.map((event) =>
+        event.event === "boundary_reached"
+          ? `${event.event}:${event.action}`
+          : `${event.event}:${event.state_id}`
+      )
+    ).toEqual([
+      "phase_started:researching",
+      "worker_completed:researching",
+      "phase_started:synthesizing",
+      "worker_completed:synthesizing",
+      "phase_started:validating",
+      "worker_completed:validating",
+      "boundary_reached:complete",
+    ]);
+    expect(progress[0]).toMatchObject({
+      event: "phase_started",
+      run_id: runIdentity.run_id,
+      playbook: "research",
+      state_id: "researching",
+      workers: [
+        {
+          state_id: "researching",
+          agent: "echo",
+          attempt: 1,
+          branch_id: null,
+          execution_purpose: "phase",
+        },
+      ],
+    });
+    expect(JSON.stringify(progress)).not.toContain("Research the sentinel topic");
+    checkpointer.close();
+  });
+
+  it("reports parallel branch starts and each completed worker through the same progress seam", async () => {
+    const root = temporaryDirectory();
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const runner = new OrchestrationRunner(
+      engine,
+      new WorkerExecutor(new FakeResearchClient(artifacts), artifacts, {
+        projectRoot: root,
+        parallelConcurrency: 2,
+      })
+    );
+    const progress: OrchestrationProgressEvent[] = [];
+    const runIdentity = identity("parallel-progress-run");
+
+    const terminal = await runner.runUntilBoundary(
+      engine.handle(startRequest(root, runIdentity, { mode: "standard" })),
+      undefined,
+      (event) => progress.push(event)
+    );
+
+    expect(terminal.action).toBe("complete");
+    const branchStart = progress.find(
+      (event) => event.event === "phase_started" && event.state_id === "researching"
+    );
+    expect(branchStart).toMatchObject({
+      event: "phase_started",
+      state_id: "researching",
+      workers: [
+        { agent: "echo", branch_id: "sq1" },
+        { agent: "echo", branch_id: "sq2" },
+      ],
+    });
+    const branchCompletions = progress.filter(
+      (event) => event.event === "worker_completed" && event.state_id === "researching"
+    );
+    expect(branchCompletions).toHaveLength(2);
+    expect(
+      branchCompletions.map((event) =>
+        event.event === "worker_completed" ? event.completed_workers : 0
+      )
+    ).toEqual([1, 2]);
     checkpointer.close();
   });
 
@@ -198,9 +341,8 @@ describe("durable orchestration runtime", () => {
 
   it("enforces parallel branch provenance and exact-once receipt replay", async () => {
     const root = temporaryDirectory();
-    const { checkpointer, engine } = runtime(root);
-    const artifacts = new ArtifactStore(path.join(root, "artifacts"));
-    const workers = new WorkerExecutor(new FakeResearchClient(), artifacts, {
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const workers = new WorkerExecutor(new FakeResearchClient(artifacts), artifacts, {
       projectRoot: root,
       parallelConcurrency: 2,
     });
@@ -260,9 +402,8 @@ describe("durable orchestration runtime", () => {
 
   it("reissues only a malformed fan branch while accepting completed sibling work", async () => {
     const root = temporaryDirectory();
-    const { checkpointer, engine } = runtime(root);
-    const artifacts = new ArtifactStore(path.join(root, "artifacts"));
-    const workers = new WorkerExecutor(new FakeResearchClient(), artifacts, {
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const workers = new WorkerExecutor(new FakeResearchClient(artifacts), artifacts, {
       projectRoot: root,
       parallelConcurrency: 2,
     });
@@ -287,47 +428,28 @@ describe("durable orchestration runtime", () => {
     const original = await workers.execute(fan);
     const first = requireValue(original[0], "apps/orchestration/tests/core-runtime.test.ts:273");
     const second = requireValue(original[1], "apps/orchestration/tests/core-runtime.test.ts:274");
-    const reissued = engine.handle({
-      schema_version: 2,
-      action: "step",
-      identity: runIdentity,
-      result: { ...first, details: {} },
-    });
-    expect(reissued.action).toBe("invoke_agents_parallel");
-    if (reissued.action !== "invoke_agents_parallel") {
-      throw new Error("expected bounded malformed branch reissue");
+    const reissued = engine.acceptWorkerResults(runIdentity, [{ ...first, details: {} }, second]);
+    expect(reissued.action).toBe("invoke_agent");
+    if (reissued.action !== "invoke_agent") {
+      throw new Error("expected bounded routing-only repair");
     }
-    expect(reissued.branches.map((branch) => branch.branch_id)).toEqual([
-      second.branch_id,
-      first.branch_id,
+    expect(reissued.execution_purpose).toBe("routing_repair");
+    expect(reissued.agent).toBe(first.agent);
+    expect(reissued.input_artifacts.artifacts).toEqual([
+      { slot: "malformed-source", ref: first.output_artifact },
     ]);
-    const retryAssignment = reissued.branches.find(
-      (branch) => branch.branch_id === first.branch_id
-    );
-    expect(retryAssignment?.attempt).toBe(first.attempt + 1);
-    expect(retryAssignment?.output_artifact.version).toBe(2);
-    expect(retryAssignment?.output_artifact.parent_ref?.artifact_id).toBe(
-      first.output_artifact.artifact_id
+    expect(reissued.output_artifact.kind).toBe("routing-metadata");
+    expect(reissued.routing_repair_binding?.source_receipt_id).toBe(
+      first.worker_receipt.receipt_id
     );
 
-    const retryOnly = engine.handle({
-      schema_version: 2,
-      action: "step",
-      identity: runIdentity,
-      result: second,
-    });
-    expect(retryOnly.action).toBe("invoke_agents_parallel");
-    if (retryOnly.action !== "invoke_agents_parallel") {
-      throw new Error("expected only the malformed branch to remain");
-    }
-    expect(retryOnly.branches.map((branch) => branch.branch_id)).toEqual([first.branch_id]);
     const synthesis = engine.handle({
       schema_version: 2,
       action: "step",
       identity: runIdentity,
       result: requireValue(
-        (await workers.execute(retryOnly))[0],
-        "apps/orchestration/tests/core-runtime.test.ts:313"
+        (await workers.execute(reissued))[0],
+        "apps/orchestration/tests/core-runtime.test.ts:routing-repair"
       ),
     });
     expect(synthesis.action).toBe("invoke_agent");
@@ -339,14 +461,23 @@ describe("durable orchestration runtime", () => {
         .events(runIdentity.run_id)
         .filter((event) => event.eventType === "phase_result_malformed")
     ).toHaveLength(1);
+    expect(
+      checkpointer
+        .events(runIdentity.run_id)
+        .filter((event) => event.eventType === "routing_repair_accepted")
+    ).toHaveLength(1);
+    expect(
+      checkpointer
+        .loadRun(runIdentity)
+        .selectedArtifacts.some((artifact) => artifact.kind === "routing-metadata")
+    ).toBe(false);
     checkpointer.close();
   });
 
   it("uses a challenge-bound user gate and rejects tampering without mutation", async () => {
     const root = temporaryDirectory();
-    const { checkpointer, engine } = runtime(root);
-    const artifacts = new ArtifactStore(path.join(root, "artifacts"));
-    const workers = new WorkerExecutor(new FakeResearchClient(), artifacts, {
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const workers = new WorkerExecutor(new FakeResearchClient(artifacts), artifacts, {
       projectRoot: root,
       parallelConcurrency: 1,
     });
@@ -401,9 +532,8 @@ describe("durable orchestration runtime", () => {
 
   it("keeps raw goals out of event telemetry and public results", async () => {
     const root = temporaryDirectory();
-    const { checkpointer, engine } = runtime(root);
-    const client = new FakeResearchClient();
-    const artifacts = new ArtifactStore(path.join(root, "artifacts"));
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const client = new FakeResearchClient(artifacts);
     const sentinel = "PRIVATE_GOAL_SENTINEL_81f3b6";
     const runIdentity = identity("privacy-run");
     const terminal = await new OrchestrationRunner(
@@ -421,9 +551,8 @@ describe("durable orchestration runtime", () => {
 
   it("propagates the validation model override and trust profile to workers", async () => {
     const root = temporaryDirectory();
-    const { checkpointer, engine } = runtime(root);
-    const client = new FakeResearchClient();
-    const artifacts = new ArtifactStore(path.join(root, "artifacts"));
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const client = new FakeResearchClient(artifacts);
     const runIdentity = identity("override-run");
     await new OrchestrationRunner(
       engine,

@@ -1,9 +1,9 @@
 # Agents Feature Index
 
-- [Overview](overview.md): Project-local catalog, worker lifecycle, exact artifact handoff, and primary-memory boundary
-- [Definition Format](definition-format.md): Catalog frontmatter, artifact-read discipline, body sections, and boundary block
-- [Discovery and Tool Sets](discovery-and-tools.md): Local catalog snapshots, remote registry boundary, and worker tool exposure
-- [Invocation](invocation.md): Dispatch, exact IDs, mandatory output capture, chain/fan-in handoff, and recovery
-- [System Prompt Security](system-prompt-security.md): Trust boundaries, task-authority model, execution-path security matrix, and runtime controls (markers are structural, not enforcement)
-- [Tool Authority Profiles](tool-profiles.md): Static authority ladder, exact YAML conformance, assignments, and guarantee limits
-- [Capability Registry](capability-registry.md): Typed roster metadata, semantic coordinates, neighbour routing, and the agent admission test
+- [Overview](overview.md): READ WHEN orienting to the catalog, worker lifecycle, artifact handoff, or primary-memory boundary — agent-system overview.
+- [Definition Format](definition-format.md): READ WHEN creating or editing a catalog agent definition — required frontmatter, body, and boundary contract.
+- [Discovery and Tool Sets](discovery-and-tools.md): READ WHEN changing catalog discovery, remote-service boundaries, or agent tool exposure — exact runtime tool rules.
+- [Invocation](invocation.md): READ WHEN dispatching agents or changing artifact capture, chains, fan-in, or recovery — invocation and handoff contract.
+- [System Prompt Security](system-prompt-security.md): READ WHEN changing trust boundaries, task authority, or execution isolation — prompt/runtime security model.
+- [Tool Authority Profiles](tool-profiles.md): READ WHEN defining or validating tool profiles and agent permissions — authority ladder and guarantee limits.
+- [Capability Registry](capability-registry.md): READ WHEN adding, removing, or changing catalog capability metadata or neighbours — registry schema and admission rules.

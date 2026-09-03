@@ -32,6 +32,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { Checkpointer, type CheckpointObservation } from "../src/checkpointer.js";
 import { RunContext } from "../src/context.js";
+import { ReceiptAuthority } from "../src/receipts.js";
 import type { Directive } from "../src/contracts.js";
 import { OrchestrationEngine } from "../src/engine.js";
 import {
@@ -591,6 +592,7 @@ async function executeCase(input: {
     checkpointer = new Checkpointer(controlPath, (observation) => observations.push(observation));
     parentArtifacts = new ArtifactStore(parentArtifactRoot);
     const engine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: ReceiptAuthority.createEphemeral(),
       projectRoot: input.projectRoot,
       maxSteps: 8,
       artifactRevisions: parentArtifacts,

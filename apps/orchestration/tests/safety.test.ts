@@ -2,6 +2,7 @@ import { requireValue } from "./helpers/narrowing.js";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -14,6 +15,8 @@ import type {
   RunIdentity,
 } from "../src/contracts.js";
 import { OrchestrationEngine } from "../src/engine.js";
+import { LivenessExhaustedError } from "../src/liveness.js";
+import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 import {
   canonicalAssistantText,
   createWorkerResourceLoader,
@@ -24,6 +27,7 @@ import {
 import { WorkerExecutor } from "../src/worker.js";
 
 const roots: string[] = [];
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
 function temporaryRoot(): string {
   const root = mkdtempSync(path.join(tmpdir(), "penny-orch-safety-"));
@@ -86,7 +90,7 @@ function metadata(
 const completeResearchClient: ModelClient = {
   async runAgent() {
     return {
-      text: "cited findings",
+      text: 'cited findings\nSUMMARY:{"confidence":"PROBABLE","explore_complete":true}',
       confidence: "PROBABLE",
       details: { explore_complete: true },
     };
@@ -97,7 +101,7 @@ const planningResearchClient: ModelClient = {
   async runAgent(invocation) {
     if (invocation.stateId === "planning") {
       return {
-        text: "plan",
+        text: 'plan\nSUMMARY:{"confidence":"CERTAIN","plan_steps":["first sub-query","second sub-query"],"plan_complete":true}',
         confidence: "CERTAIN",
         details: {
           plan_steps: ["first sub-query", "second sub-query"],
@@ -106,7 +110,7 @@ const planningResearchClient: ModelClient = {
       };
     }
     return {
-      text: `findings for ${invocation.task}`,
+      text: `findings for ${invocation.task}\nSUMMARY:{"confidence":"PROBABLE","explore_complete":true}`,
       confidence: "PROBABLE",
       details: { explore_complete: true },
     };
@@ -147,6 +151,7 @@ describe("artifact and receipt safety", () => {
     const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
     const runIdentity = identity("orphan-revision-run");
     const engine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot: root,
       maxSteps: 96,
       artifactRevisions: store,
@@ -183,7 +188,7 @@ describe("artifact and receipt safety", () => {
       async runAgent(invocation) {
         if (invocation.stateId === "planning") {
           return {
-            text: "plan",
+            text: 'plan\nSUMMARY:{"confidence":"CERTAIN","plan_steps":["first sub-query","second sub-query"],"plan_complete":true,"mode":"standard"}',
             confidence: "CERTAIN",
             details: {
               plan_steps: ["first sub-query", "second sub-query"],
@@ -193,7 +198,7 @@ describe("artifact and receipt safety", () => {
           };
         }
         return {
-          text: `findings for ${invocation.task}`,
+          text: `findings for ${invocation.task}\nSUMMARY:{"confidence":"PROBABLE","explore_complete":true}`,
           confidence: "PROBABLE",
           details: { explore_complete: true },
         };
@@ -287,6 +292,7 @@ describe("artifact and receipt safety", () => {
     const checkpointer = new Checkpointer(dbPath);
     using artifacts = new ArtifactStore(path.join(root, "artifacts"));
     const wiredEngine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot: root,
       maxSteps: 96,
       artifactRevisions: artifacts,
@@ -351,6 +357,7 @@ describe("artifact and receipt safety", () => {
     const root = temporaryRoot();
     const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
     const engine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot: root,
       maxSteps: 96,
     });
@@ -413,6 +420,7 @@ describe("artifact and receipt safety", () => {
     const root = temporaryRoot();
     const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
     const engine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot: root,
       maxSteps: 96,
     });
@@ -445,13 +453,50 @@ describe("artifact and receipt safety", () => {
     });
     expect(retry.action).toBe("invoke_agent");
     if (retry.action === "invoke_agent") {
-      expect(retry.output_artifact.version).toBe(2);
-      expect(retry.output_artifact.parent_ref).toEqual(malformedResult.output_artifact);
+      expect(retry.execution_purpose).toBe("routing_repair");
+      expect(retry.output_artifact.kind).toBe("routing-metadata");
+      expect(retry.output_artifact.version).toBe(1);
+      expect(retry.output_artifact.parent_ref).toBeNull();
+      expect(retry.input_artifacts.artifacts).toEqual([
+        { slot: "malformed-source", ref: malformedResult.output_artifact },
+      ]);
     }
     workers.acceptArtifact(malformedResult);
     expect(
       artifacts.read(malformedResult.output_artifact, "state:researching").toString("utf8")
     ).toBe(malformedText);
+    if (retry.action !== "invoke_agent") throw new Error("expected routing repair");
+    const bodyBearingRepair = new WorkerExecutor(
+      {
+        async runAgent(invocation) {
+          expect(invocation.executionPurpose).toBe("routing_repair");
+          expect(invocation.routingRepairGuidance).toContain('"explore_complete"');
+          expect(invocation.routingRepairGuidance).toContain('"additionalProperties":false');
+          expect(invocation.routingRepairGuidance).not.toContain("tiered, cited findings");
+          return {
+            text: 'semantic body\nSUMMARY:{"explore_complete":true,"confidence":"CERTAIN","defect":"forbidden"}',
+          };
+        },
+      },
+      artifacts,
+      { projectRoot: root, parallelConcurrency: 1 }
+    );
+    bodyBearingRepair.setReceiptAuthority(engine.receiptAuthority);
+    const repairResult = requireValue(
+      (await bodyBearingRepair.execute(retry))[0],
+      "apps/orchestration/tests/safety.test.ts:routing-repair"
+    );
+    const terminal = engine.handle({
+      schema_version: 2,
+      action: "step",
+      identity: pending.identity,
+      result: repairResult,
+    });
+    expect(terminal.action).toBe("incomplete");
+    if (terminal.action === "incomplete") {
+      expect(terminal.result.terminal_reason).toBe("identical_error_stall");
+      expect(terminal.met).toBe(false);
+    }
     checkpointer.close();
   });
 });
@@ -462,6 +507,7 @@ describe("dispatch and worker isolation", () => {
     let mode = "active";
     const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
     const engine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot: root,
       maxSteps: 96,
       dispatchMode: () => mode,
@@ -512,7 +558,7 @@ describe("dispatch and worker isolation", () => {
     checkpointer.close();
   });
 
-  it("uses canonical no-separator final assistant text", () => {
+  it("uses canonical no-separator final assistant text and rejects typed empty finals", () => {
     expect(
       canonicalAssistantText([
         { role: "assistant", content: [{ type: "text", text: "old" }] },
@@ -526,10 +572,57 @@ describe("dispatch and worker isolation", () => {
         },
       ])
     ).toBe("alpha beta");
+    expect(() =>
+      canonicalAssistantText([
+        { role: "assistant", content: [{ type: "text", text: "stale" }] },
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "tool-only" },
+            { type: "toolCall", name: "read" },
+          ],
+        },
+      ])
+    ).toThrow(/no non-empty final assistant text/u);
+    expect(() =>
+      canonicalAssistantText([{ role: "assistant", content: [{ type: "text", text: " \n\t" }] }])
+    ).toThrow(/no non-empty final assistant text/u);
+    expect(() =>
+      canonicalAssistantText([
+        { role: "assistant", content: [{ type: "text", text: "stale accepted text" }] },
+        {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: "external_request_budget_exhausted",
+        },
+      ])
+    ).toThrowError(new LivenessExhaustedError("external_request_budget_exhausted"));
+    expect(() =>
+      canonicalAssistantText([
+        { role: "assistant", content: [{ type: "text", text: "stale accepted text" }] },
+        {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: "unknown_provider_failure",
+        },
+      ])
+    ).toThrow(/no non-empty final assistant text/u);
+    expect(
+      canonicalAssistantText([
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "ordinary provider text" }],
+          stopReason: "error",
+          errorMessage: "unknown_provider_failure",
+        },
+      ])
+    ).toBe("ordinary provider text");
   });
 
   it("loads every provider extension before applying the exact YAML allowlist", async () => {
-    const projectRoot = path.resolve("../..");
+    const projectRoot = PROJECT_ROOT;
     const loader = await createWorkerResourceLoader(projectRoot);
     const paths = loader.getExtensions().extensions.map((extension) => extension.resolvedPath);
     expect(paths.some((extensionPath) => extensionPath.includes("/memory/"))).toBe(true);
@@ -538,7 +631,7 @@ describe("dispatch and worker isolation", () => {
   });
 
   it("loads an owner-supplied extension factory (the seam is extension-agnostic)", async () => {
-    const projectRoot = path.resolve("../..");
+    const projectRoot = PROJECT_ROOT;
     // The app is extension-agnostic: it loads the extension factories the
     // execution owner supplies. A stand-in factory proves the seam without
     // coupling the app (or its tests) to any specific extension package.
@@ -562,7 +655,7 @@ describe("dispatch and worker isolation", () => {
 
   describe("SSOT tool authority (.pi/agents/<agent>.md is the control plane)", () => {
     it("derives the worker allow-list from the agent's declared tools:", () => {
-      const projectRoot = path.resolve("../..");
+      const projectRoot = PROJECT_ROOT;
       const doc = readFileSync(path.join(projectRoot, ".pi", "agents", "echo.md"), "utf8");
       const tools = parseSsotTools(doc, "echo");
       // The SSOT for echo is honored wholesale — no private table overrides it.

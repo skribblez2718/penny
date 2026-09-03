@@ -537,7 +537,7 @@ export function openStandalonePublicationCheckpointer(input: {
     "transaction",
     "publication-control.db"
   );
-  const checkpointer = new Checkpointer(database);
+  const checkpointer = Checkpointer.provision(database);
   checkpointer.bindKbRuntimeProjectRoot(input.root);
   if (checkpointer.loadRunById(input.runId) === undefined) {
     const context = RunContext.create({

@@ -1,6 +1,6 @@
 # Research Skill
 
-The research skill runs structured, evidence-based investigations in Quick, Standard, or Deep mode. It separates planning, evidence gathering, synthesis, critique, citation validation, and final report writing so no single stage silently substitutes for another.
+The research skill runs structured, evidence-based investigations in Quick, Standard, or Deep mode. It separates planning, evidence gathering, typed semantic synthesis, deterministic host projection/sealing, critique, citation validation, and compatibility rendering so no single stage silently substitutes for another.
 
 ## How to use it
 
@@ -15,9 +15,11 @@ Optional constraints select the mode, report format, sub-query/fan budgets, rese
 
 ## What each mode does
 
-- **Quick:** one focused research pass → synthesis → citation validation → report.
-- **Standard:** plan → parallel evidence branches → synthesis → citation validation → report.
-- **Deep:** Standard plus evidence-gated plan and report critiques.
+- **Quick:** one focused research pass → Synthia typed draft → host projection/sealing → citation validation → renders, with `low` thinking.
+- **Standard:** plan → parallel evidence branches → typed draft → host projection/sealing → citation validation → renders, with `high` thinking.
+- **Deep:** Standard plus evidence-gated plan and report critiques, with `xhigh` thinking.
+
+When mode is initially unspecified, planning uses the bootstrap `high` level. The Research host derives these levels from the durable mode preset and overrides ordinary session thinking defaults; unknown Research presets are refused. Other capabilities keep their existing settings behavior.
 
 All modes can run a bounded additional evidence-seeking round when Vera identifies a claim that needs a specific source. Loops and retries are bounded; repeated unresolved issues pause for clarification instead of spinning.
 
@@ -29,20 +31,15 @@ Checkpoint state retains the exact selected refs, so retry, clarification, and r
 
 ## What you get
 
-Skribble writes three user-facing files:
+Synthia returns a closed `ResearchSemanticDraftV1` containing semantic content and local indexes only. The host deterministically assigns stable IDs, verifies that every quoted excerpt occurs in the exact selected Echo artifact, computes hashes, binds the admitted request/context/Echo/Synthia lineage, and seals canonical `GroundedSynthesisV1` bytes. Vera must pass that exact core.
 
-1. `report.md` — full thematic report with inline citations;
-2. `sources.md` — complete source-tiered bibliography;
-3. `README.md` — query, headline findings, status, limitations, and orientation.
+The host then renders three user-facing compatibility files:
 
-Skribble also returns the complete contents of all three in its response. The execution owner captures that response as the registered product artifact, and the terminal result exposes its exact `output_artifact_ref`.
+1. `report.md` — grounded narrative, qualifications, contradictions, gaps, and uncertainty;
+2. `sources.md` — ordered source and evidence index;
+3. `README.md` — question, scope, summary, status, and semantic-core binding.
 
-The result reports both:
-
-- `met`: the final report product was completed;
-- `grounded`: Vera's citation gate passed.
-
-A report may be delivered after validation budget exhaustion with `grounded: false`. In that case, unresolved claims remain explicitly listed and should not be presented as verified.
+The terminal `output_artifact_ref` is the exact semantic core, not one of the files or the product envelope. A positive result requires same-core Vera PASS, all deterministic product checks, all three matching files, and central completion admission. Validation or repair exhaustion remains honestly non-positive with the best exact partial preserved.
 
 ## Evidence quality
 

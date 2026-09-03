@@ -30,7 +30,6 @@ import {
   type AgentSessionTraceSink,
   type SessionThinkingLevel,
 } from "../model-client.js";
-import { KNOWLEDGE_BASE_SKILL_CONTRACT } from "../playbooks/knowledge-base.js";
 import { kbSessionSpec, type KbAgentRunner, type KbPhaseInvocation } from "./session-tools.js";
 
 export type { KbAgentRunner, KbPhaseInvocation };
@@ -77,6 +76,18 @@ export class KbModelClient {
   /** The runner the KB workflows expect. */
   readonly run: KbAgentRunner = async (invocation: KbPhaseInvocation) => {
     const { projectRoot } = this.options;
+    const registration = invocation.registration;
+    if (
+      registration === undefined ||
+      registration.playbook_name !== "knowledge-base" ||
+      registration.workflow_name !== "knowledge-base" ||
+      registration.result_transport !== "host_typed" ||
+      registration.model_policy !== "host_private_ssot_model"
+    ) {
+      throw new Error(
+        `KB phase '${invocation.stateId}' has no matching active host-private registration`
+      );
+    }
     const docPath = path.join(projectRoot, ".pi", "agents", `${invocation.agent}.md`);
     const agentDoc = await optionalText(docPath);
     if (agentDoc.trim().length === 0) {
@@ -91,9 +102,7 @@ export class KbModelClient {
       projectRoot,
       agent: invocation.agent,
       stateId: invocation.stateId,
-      ...(KNOWLEDGE_BASE_SKILL_CONTRACT.guidance
-        ? { guidance: KNOWLEDGE_BASE_SKILL_CONTRACT.guidance }
-        : {}),
+      guidance: registration.guidance,
     });
     const phaseGuidance = await optionalText(guidancePath);
     if (phaseGuidance.trim().length === 0) {
@@ -131,8 +140,10 @@ export class KbModelClient {
       projectRoot,
       trustProfile: "hardened-untrusted",
       inputArtifacts: [],
+      ...(invocation.signal ? { signal: invocation.signal } : {}),
+      ...(invocation.liveness ? { liveness: invocation.liveness } : {}),
       modelOverride: model,
-      guidance: KNOWLEDGE_BASE_SKILL_CONTRACT.guidance,
+      registration,
       // §5.3: the alias above is not an identity. The runtime resolves it, then
       // this hook admits the resolved tuple BEFORE any session exists.
       ...(invocation.admitModel ? { admitResolvedModel: invocation.admitModel } : {}),

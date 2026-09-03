@@ -15,9 +15,18 @@ import {
 } from "../src/checkpointer.js";
 import { RunContext } from "../src/context.js";
 import { KbWorkerClient, KbWorkerPostureError } from "../src/kb/kb-worker-client.js";
-import type { AgentInvocation } from "../src/model-client.js";
+import type { ActiveWorkerRegistrationMetadataV1, AgentInvocation } from "../src/model-client.js";
+import { KNOWLEDGE_BASE_SKILL_CONTRACT } from "../src/playbooks/knowledge-base.js";
 
 const roots: string[] = [];
+const KB_WORKER_METADATA: ActiveWorkerRegistrationMetadataV1 = {
+  playbook_name: "knowledge-base",
+  workflow_name: "knowledge-base",
+  guidance: KNOWLEDGE_BASE_SKILL_CONTRACT.guidance,
+  result_transport: "host_typed",
+  opening_policy: "host_private_opening",
+  model_policy: "host_private_ssot_model",
+};
 
 interface SqliteModule {
   readonly DatabaseSync: typeof import("node:sqlite").DatabaseSync;
@@ -64,6 +73,7 @@ function invocation(root: string): AgentInvocation {
     projectRoot: root,
     trustProfile: "hardened-untrusted",
     inputArtifacts: [],
+    registration: KB_WORKER_METADATA,
   };
 }
 
@@ -172,7 +182,10 @@ describe("TS-240 checkpoint and worker production boundaries", () => {
 
     const before = checkpointer.events("run_event_restore");
     expect(before).toHaveLength(1);
-    expect(before[0]?.payload).toEqual({ run_id: "run_event_restore" });
+    expect(before[0]?.payload).toEqual({
+      run_id: "run_event_restore",
+      state_visits_v1: [{ schema_version: 1, state_id: "intake", source: "create" }],
+    });
 
     const raw = database(dbPath);
     raw

@@ -1,35 +1,38 @@
-# Secrets Management — Never expose credentials in generated code
+# Secrets Management
 
-## What
+## Applies when
 
-Never hardcode secrets. Use environment variables or a secrets manager. Never log, commit, or transmit secrets in plaintext.
+Creating, loading, transmitting, logging, scoping, storing, rotating, or revoking credentials and key material.
 
-## Why
+## Security properties
 
-Hardcoded secrets are the most common security finding in code reviews. A single committed API key can compromise production systems.
+- Secret material is confined to approved identities, storage, transport, and lifetime.
+- A compromise can be detected, revoked, contained, and recovered without relying on secrecy of source code.
 
-## Rules
+## Requirements
 
-1. **Use environment variables for all secrets.** `process.env.API_KEY`, not `const API_KEY = "sk-..."`.
-2. **Use a `.env` file for local development.** Add `.env` to `.gitignore`.
-3. **Never log secrets.** No `console.log(token)`, no `print(password)`.
-4. **Never commit secrets.** Check diffs before committing. Use `.gitignore` for `.env` files.
-5. **Rotate exposed secrets immediately.** If a secret is committed, revoke and rotate.
+- Use an appropriate managed secret mechanism for the deployment; environment variables are one option, not the only architecture.
+- Apply least privilege, audience, scope, duration, rotation, revocation, and separation by workload/environment.
+- Prevent exposure through source control, client bundles, browser storage, logs, analytics, errors, traces, caches, backups, and untrusted workers.
+- Treat suspected exposure as an incident requiring revocation/rotation, not only a source edit.
 
-## Constraints
+## Failure modes
 
-- **BLOCKER severity.** Any hardcoded secret must be fixed before delivery.
-- **`.env.example` is the only committed env file.** Shows required variables without values.
+- Hardcoding credentials or embedding them in public configuration.
+- Logging, serializing, caching, or sharing secrets with an untrusted execution boundary.
+- Assuming a secret scan proves a secret is not exposed at runtime.
 
 ## Verification
 
-- [ ] No hardcoded API keys, tokens, or passwords
-- [ ] All secrets read from environment variables
-- [ ] `.env` in `.gitignore`
-- [ ] No secrets in log statements
+- Run secret scans and inspect client artifacts, logs, errors, cache, role bindings, and runtime scope.
+- Exercise rotation/revocation and verify a replaced credential no longer works.
 
-## Files
+## Related guidance
 
-| File                                         | Purpose                  |
-| -------------------------------------------- | ------------------------ |
-| `docs/agents/coding/security/conventions.md` | Universal security rules |
+- [Cryptography](cryptography.md) owns cryptographic key use.
+- [Supply chain](supply-chain.md), [logging and monitoring](logging-monitoring.md), and [incident response](incident-response.md) own related controls.
+
+## Current external references
+
+- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
+- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

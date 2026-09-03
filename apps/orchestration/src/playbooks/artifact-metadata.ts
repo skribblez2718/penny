@@ -27,11 +27,12 @@ export function agentOperationId(input: {
   runId: string;
   phase: string;
   branchId: string | null;
+  artifactKind?: string;
 }): string {
   return `agent-operation:${sha256(
     canonicalJson({
       branch_id: input.branchId,
-      kind: "agent-output",
+      kind: input.artifactKind ?? "agent-output",
       run_id: input.runId,
       state: input.phase,
     })
@@ -45,12 +46,17 @@ export function buildOutputArtifactMetadata(input: {
   branchId: string | null;
   upstreamRefs: readonly ArtifactRef[];
   revisions?: ArtifactRevisionLookup;
+  artifactKind?: string;
+  mediaType?: string;
+  contentSchema?: { readonly schema_id: string; readonly schema_version: number };
 }): OutputArtifactMetadata {
   const { context, phase, branchId, revisions } = input;
+  const artifactKind = input.artifactKind ?? "agent-output";
   const operationId = agentOperationId({
     runId: context.identity.run_id,
     phase,
     branchId,
+    artifactKind,
   });
   const selected = context.selectedArtifacts
     .filter(
@@ -59,7 +65,7 @@ export function buildOutputArtifactMetadata(input: {
     .sort((left, right) => right.version - left.version)[0];
   const selectedVersion = selected?.version ?? 0;
   const storedVersion = revisions
-    ? revisions.lastVersion(context.identity.run_id, phase, branchId, "agent-output", operationId)
+    ? revisions.lastVersion(context.identity.run_id, phase, branchId, artifactKind, operationId)
     : 0;
   // The immutable manifest is the revision ledger: it also contains attempts
   // persisted by a worker that was interrupted before the engine accepted the
@@ -73,7 +79,7 @@ export function buildOutputArtifactMetadata(input: {
         context.identity.run_id,
         phase,
         branchId,
-        "agent-output",
+        artifactKind,
         operationId,
         version - 1
       ) ?? (version - 1 === selectedVersion ? (selected ?? null) : null);
@@ -88,11 +94,12 @@ export function buildOutputArtifactMetadata(input: {
     run_id: context.identity.run_id,
     phase,
     branch_id: branchId,
-    kind: "agent-output",
+    kind: artifactKind,
     operation_id: operationId,
     version,
     producer: `agent:${input.agent}`,
-    media_type: "text/plain; charset=utf-8",
+    media_type: input.mediaType ?? "text/plain; charset=utf-8",
+    ...(input.contentSchema === undefined ? {} : { content_schema: input.contentSchema }),
     parent_ref: parent,
     upstream_refs: [...input.upstreamRefs],
   };

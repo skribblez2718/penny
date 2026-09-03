@@ -3,7 +3,7 @@ import path from "node:path";
 import { deleteStateMigrationLegacy, prepareStateMigrationDeletion } from "./deletion.js";
 import { createStateMigrationPlan } from "./migration-plan.js";
 import { applyStateMigration, finalizeStateMigration, verifyStateMigration } from "./migration.js";
-import { initializePennyState, relinkPennyProject, resolvePennyProjectState } from "./setup.js";
+import { initializePennyState, relinkPennyProject, resolvePennyStateStatus } from "./setup.js";
 
 export type StateCommandResult =
   | {
@@ -102,7 +102,7 @@ export async function executeStateCommand(
   }
   if (command === "status") {
     const projectRoot = requiredAbsoluteOption(arguments_, "project-root");
-    return result("status", resolvePennyProjectState(projectRoot, { env }));
+    return result("status", resolvePennyStateStatus(projectRoot, { env }));
   }
   if (command === "migrate") {
     const phase = arguments_[1];

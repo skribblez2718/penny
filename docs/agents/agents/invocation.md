@@ -7,7 +7,12 @@
 3. Add Project Index and current task context.
 4. Strip approval/receipt secrets and memory-write configuration.
 5. Preflight every YAML tool provider and every supplied artifact ID.
-6. Spawn with the exact YAML `--tools` list.
+6. Select tools by invocation path:
+   - direct, parallel, or chain: the exact YAML `--tools` list;
+   - TypeScript orchestration catalog phase: the exact YAML list when the active phase omits
+     `allowed_tools`, otherwise its one canonical-registration-bound strict YAML subset.
+7. For a phase subset, verify non-empty/unique/strict YAML membership before session creation,
+   pass it unchanged to Pi, and verify active equality before the model prompt.
 
 ## Task contract
 
@@ -28,7 +33,9 @@ result is impossible if persistence or re-read fails. The exact ID is printed in
 text and retained in structured details.
 
 For engine workflows, owner persistence/re-read occurs before the final closed `SUMMARY`
-line is parsed into routing state. No absent-from-YAML submission tool is injected.
+line is parsed into routing state. No absent-from-selected-surface submission tool is injected.
+A phase subset is active-registration metadata bound into the canonical registration digest;
+it is not task, trust-profile, input, liveness, model, or runtime-selected.
 
 ## Modes
 
@@ -49,6 +56,14 @@ artifact or memory scan.
 ## Verification
 
 - [ ] Inputs are verified before model usage.
-- [ ] Exact YAML tools are active under every production path/profile.
+- [ ] Direct, parallel, and chain catalog invocations activate exact YAML equality.
+- [ ] Orchestration phases without a subset activate exact YAML equality.
+- [ ] An orchestration subset is non-empty, duplicate-free, strict, YAML-contained,
+      registration/digest-bound, present in worker invocation metadata, and passed exactly to Pi.
+- [ ] Empty, injected, added, replaced, equality-sized, unavailable, task-selected,
+      trust-selected, and runtime-selected surfaces fail before session creation.
+- [ ] Ordinary candidate phases omit `allowed_tools` and use exact YAML. Synthetic or
+      evaluation-only strict subsets make no OS/process sandbox or extension-code isolation
+      claim; host-private sessions remain separate.
 - [ ] Complete output persistence and re-read precede success/routing.
 - [ ] Single, parallel, chain, cross-run fan-in, restart, and failure injection pass.

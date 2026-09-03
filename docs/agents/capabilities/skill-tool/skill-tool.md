@@ -13,23 +13,38 @@
 
 Each skill run exposes an engine-selected terminal `output_artifact_ref`. Chain
 mode verifies those exact bytes, registers a chain-run handoff artifact, and
-grants only that ref to the next skill's first worker. `{previous}` is a bounded
-instruction pointing to the grant, never an authoritative inline payload.
-Workers use `artifact_read` and repeat with `next_range` until complete.
+passes that direct exact ID to the next skill's first worker. `{previous}` is a
+bounded instruction pointing to the verified exact ID, never an authoritative
+inline payload. Workers use `artifact_read` and repeat with `next_range` until
+complete.
 
-Checkpoints persist exact terminal/handoff refs under the caller-selected or
-platform state root. They are owner-only and atomically replaced. Resume skips
-only steps whose checkpoint/ref bindings verify; corrupt or missing refs fail
-closed.
+Schema-v2 checkpoints persist exact terminal/handoff refs and each step's release status plus
+canonical contract digest in the active catalog-bound project partition beneath the canonical
+Penny state root. They are owner-only
+and atomically replaced. Resume skips only steps whose checkpoint/ref bindings
+verify; corrupt or missing refs fail closed.
 
 Durable memory and historical skill rooms are not handoff or resume authority. Track-A recovery is forward-only: owner `PENNY_ARTIFACT_DISPATCH_MODE=paused` stops new dispatch, returns a non-success/retriable result, and leaves chain/run checkpoints plus exact refs pending. Unknown values fail closed. After `active`, resume reuses those refs; semantic memory is never a fallback.
+
+## Registration and candidate admission
+
+The `skill` tool resolves only `ingress:skill` registrations. `.pi/skills` is the one package root;
+one discovery pass classifies packages by parsed release status and requires exact agreement with
+the separate production and candidate registries. Knowledge Base remains on `knowledge_base`.
+Visibility is independent of release status: Pi native and Penny model metadata include a valid
+package if and only if parsed `disable-model-invocation` is not `true`, while `.pi/skills/.ignore`
+contains exactly explicitly model-disabled packages. Candidate visibility grants no execution
+permission. Candidates stay outside `PLAYBOOK_REGISTRY` and require the ignored
+`.pi/candidate-enablement.json` exact name/contract-digest binding. Missing or malformed candidate
+configuration never removes production Research.
 
 ## Limits
 
 - Parallel and chain width/length limits are enforced by the extension schema.
 - One mode per invocation; ambiguous input errors.
 - Parallel branches are isolated and report independently.
-- Chain stops on first worker, artifact, or checkpoint error.
+- Chain stops on first worker, artifact, registration-digest, or checkpoint error with exact refs
+  and `resumable:true`; generic failures add no retry-approval questionnaire.
 
 ## Verification
 

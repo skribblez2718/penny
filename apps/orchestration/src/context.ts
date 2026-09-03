@@ -3,10 +3,14 @@ import {
   TrustProfileSchema,
   isTerminalStatus,
   type ArtifactRef,
+  type CompletionAdmissionEnvelope,
+  type CompletionRefusalEvidence,
   type Directive,
   type JsonValue,
+  type RegistrationContractBindingV1,
   type RunIdentity,
   type RunStatus,
+  type StateVisit,
   type TrustProfile,
   validateContract,
 } from "./contracts.js";
@@ -63,6 +67,8 @@ function clone<T>(value: T): T {
 
 export class RunContext {
   readonly identity: Readonly<RunIdentity>;
+  readonly completionProtocolVersion: 1 | undefined;
+  readonly registrationContractBinding: Readonly<RegistrationContractBindingV1> | undefined;
   readonly goal: string;
   readonly constraints: Readonly<Record<string, JsonValue>>;
   readonly projectRoot: string;
@@ -83,9 +89,17 @@ export class RunContext {
   pendingDirective: Directive | null;
   pendingBranches: PendingBranch[];
   terminalDirective: Directive | null;
+  private pendingVisits: StateVisit[] = [];
+  private pendingAdmission: CompletionAdmissionEnvelope | null = null;
+  private pendingRefusal: CompletionRefusalEvidence | null = null;
 
   private constructor(snapshot: DecodedRunContextState) {
     this.identity = Object.freeze(clone(snapshot.identity));
+    this.completionProtocolVersion = snapshot.completion_protocol_version;
+    this.registrationContractBinding =
+      snapshot.registration_contract_binding === undefined
+        ? undefined
+        : Object.freeze(clone(snapshot.registration_contract_binding));
     this.goal = snapshot.goal;
     this.constraints = Object.freeze(clone(snapshot.constraints));
     this.projectRoot = snapshot.project_root;
@@ -115,6 +129,7 @@ export class RunContext {
     projectRoot: string;
     trustProfile: TrustProfile;
     maxSteps: number;
+    registrationContractBinding?: RegistrationContractBindingV1;
     initialArtifacts?: readonly ArtifactRef[];
   }): RunContext {
     const identity = validateContract(RunIdentitySchema, input.identity, "run identity");
@@ -125,9 +140,13 @@ export class RunContext {
       throw new Error("orchestration goal must be non-empty");
     }
     validateContract(TrustProfileSchema, input.trustProfile, "trust profile");
-    return new RunContext(
+    const context = new RunContext(
       orchestrationDurableStateCodec.decodeSnapshot({
         schema_version: 2,
+        completion_protocol_version: 1,
+        ...(input.registrationContractBinding === undefined
+          ? {}
+          : { registration_contract_binding: clone(input.registrationContractBinding) }),
         identity,
         goal: input.goal,
         constraints: clone(input.constraints),
@@ -152,6 +171,8 @@ export class RunContext {
         terminal_directive: null,
       })
     );
+    context.pendingVisits.push({ schema_version: 1, state_id: "intake", source: "create" });
+    return context;
   }
 
   static fromSnapshot(value: unknown): RunContext {
@@ -201,15 +222,67 @@ export class RunContext {
     }
     this.previousState = this.stateId;
     this.stateId = nextState;
+    this.pendingVisits.push({
+      schema_version: 1,
+      state_id: nextState,
+      source: "transition",
+    });
     this.stepCount += 1;
     this.status = "running";
     this.pendingDirective = null;
     this.pendingBranches = [];
   }
 
+  /** Pending append-only visit evidence. It is never encoded into the run snapshot. */
+  pendingStateVisits(): readonly StateVisit[] {
+    return clone(this.pendingVisits);
+  }
+
+  /** Mark the exact stored current state when a legacy active checkpoint lacks visit evidence. */
+  restoreCurrentStateVisit(): void {
+    if (isTerminalStatus(this.status)) return;
+    if (this.pendingVisits.some((visit) => visit.state_id === this.stateId)) return;
+    this.pendingVisits.push({
+      schema_version: 1,
+      state_id: this.stateId,
+      source: "restored_current",
+    });
+  }
+
+  stageCompletionAdmission(envelope: CompletionAdmissionEnvelope): void {
+    this.pendingAdmission = clone(envelope);
+    this.pendingRefusal = null;
+  }
+
+  stageCompletionRefusal(refusal: CompletionRefusalEvidence): void {
+    this.pendingRefusal = clone(refusal);
+    this.pendingAdmission = null;
+  }
+
+  pendingCompletionAdmission(): CompletionAdmissionEnvelope | null {
+    return clone(this.pendingAdmission);
+  }
+
+  pendingCompletionRefusal(): CompletionRefusalEvidence | null {
+    return clone(this.pendingRefusal);
+  }
+
+  /** Called only after the transaction containing the event has committed. */
+  markCheckpointEvidencePersisted(): void {
+    this.pendingVisits = [];
+    this.pendingAdmission = null;
+    this.pendingRefusal = null;
+  }
+
   snapshot(): RunContextSnapshot {
     return orchestrationDurableStateCodec.encodeSnapshot({
       schema_version: 2,
+      ...(this.completionProtocolVersion === undefined
+        ? {}
+        : { completion_protocol_version: this.completionProtocolVersion }),
+      ...(this.registrationContractBinding === undefined
+        ? {}
+        : { registration_contract_binding: clone(this.registrationContractBinding) }),
       identity: clone(this.identity),
       goal: this.goal,
       constraints: clone(this.constraints),

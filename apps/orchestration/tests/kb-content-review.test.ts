@@ -17,6 +17,7 @@ import { Checkpointer } from "../src/checkpointer.js";
 import { RunContext } from "../src/context.js";
 import { validateDirective } from "../src/contracts.js";
 import { OrchestrationEngine } from "../src/engine.js";
+import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 import {
   ContentReviewError,
   ContentReviewService,
@@ -328,6 +329,7 @@ function fixture(label: string): CallbackFixture {
 
   checkpointer.saveRun(context, "content_review_fixture_waiting", { run_id: runId });
   const engine = new OrchestrationEngine(checkpointer, {
+    receiptAuthority: TEST_RECEIPT_AUTHORITY,
     projectRoot,
     maxSteps: 40,
     playbookName: "knowledge-base",
@@ -530,6 +532,15 @@ describe("authenticated content-review callback", () => {
     const receipt = service.prepareDecision({ runId: input.runId, decision: "approve" });
     const first = service.submit(receipt);
     expect(first.action).toBe("complete");
+    const admission = input.checkpointer.completionAdmission(input.runId);
+    expect(admission?.origin_state).toBe("publishing");
+    expect(admission?.evidence_refs.map((ref) => ref.kind)).toEqual([
+      "content_review",
+      "kb_publication",
+    ]);
+    for (const ref of admission?.evidence_refs ?? []) {
+      expect(ref.sha256).toMatch(/^[a-f0-9]{64}$/);
+    }
     const selectedAfterFirst = requireValue(
       readSelectedGeneration(input.kbRoot),
       "apps/orchestration/tests/kb-content-review.test.ts:512"
@@ -604,6 +615,7 @@ describe("authenticated content-review callback", () => {
 
     const reopened = new Checkpointer(input.dbPath);
     const engine = new OrchestrationEngine(reopened, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot: input.projectRoot,
       maxSteps: 40,
       playbookName: "knowledge-base",
@@ -641,6 +653,7 @@ describe("authenticated content-review callback", () => {
 
     const reopened = new Checkpointer(input.dbPath);
     const engine = new OrchestrationEngine(reopened, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot: input.projectRoot,
       maxSteps: 40,
       playbookName: "knowledge-base",

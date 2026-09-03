@@ -1,12 +1,8 @@
-import { closeSync, chmodSync, existsSync, openSync } from "node:fs";
-import path from "node:path";
 import type { DatabaseSync as DatabaseSyncType, SQLOutputValue } from "node:sqlite";
 
-import { assertOwnerDirectory, assertOwnerFile, fsyncDirectory } from "@penny/orchestration/source";
+import { openExistingObservabilityDatabase } from "@penny/orchestration";
 
-const sqlite = process.getBuiltinModule("node:sqlite");
-
-export const OBSERVABILITY_SCHEMA_VERSION = 1 as const;
+export { OBSERVABILITY_SCHEMA_VERSION } from "@penny/orchestration";
 const LOG_LEVELS = new Set(["DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"]);
 
 export interface LogWrite {
@@ -132,13 +128,6 @@ function integerColumn(row: unknown, name: string): number {
   return value;
 }
 
-function createOwnerFile(file: string): void {
-  if (existsSync(file)) return;
-  const descriptor = openSync(file, "wx", 0o600);
-  closeSync(descriptor);
-  fsyncDirectory(path.dirname(file));
-}
-
 export class ObservabilityDatabase implements Disposable {
   readonly databasePath: string;
   private readonly database: DatabaseSyncType;
@@ -151,17 +140,7 @@ export class ObservabilityDatabase implements Disposable {
     readonly journalSizeLimitBytes?: number;
   }) {
     this.databasePath = options.databasePath;
-    const directory = path.dirname(this.databasePath);
-    assertOwnerDirectory(directory, "Penny observability directory");
-    createOwnerFile(this.databasePath);
-    chmodSync(this.databasePath, 0o600);
-    assertOwnerFile(this.databasePath, "Penny observability database");
-    this.database = new sqlite.DatabaseSync(this.databasePath);
-    this.database.exec("PRAGMA journal_mode=WAL");
-    this.database.exec("PRAGMA synchronous=FULL");
-    this.database.exec("PRAGMA foreign_keys=ON");
-    this.database.exec("PRAGMA busy_timeout=5000");
-    this.database.exec("PRAGMA wal_autocheckpoint=1000");
+    this.database = openExistingObservabilityDatabase(this.databasePath);
     this.database.exec(
       `PRAGMA journal_size_limit=${options.journalSizeLimitBytes ?? 64 * 1024 * 1024}`
     );
@@ -169,7 +148,6 @@ export class ObservabilityDatabase implements Disposable {
     if (!Number.isSafeInteger(this.maxRows) || this.maxRows < 1) {
       throw new Error("observability maxRows must be a positive safe integer");
     }
-    this.initialize();
   }
 
   insertLog(value: unknown): number {
@@ -258,42 +236,6 @@ export class ObservabilityDatabase implements Disposable {
 
   [Symbol.dispose](): void {
     this.close();
-  }
-
-  private initialize(): void {
-    const version = integerColumn(
-      this.database.prepare("PRAGMA user_version").get(),
-      "user_version"
-    );
-    if (version > OBSERVABILITY_SCHEMA_VERSION) {
-      throw new Error(`observability schema ${version} is newer than supported`);
-    }
-    this.database.exec(`
-      BEGIN IMMEDIATE;
-      CREATE TABLE IF NOT EXISTS logs(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp_ms INTEGER NOT NULL,
-        level TEXT NOT NULL CHECK(level IN ('DEBUG','INFO','WARN','ERROR','CRITICAL')),
-        component TEXT NOT NULL,
-        event TEXT NOT NULL,
-        session_id TEXT,
-        client_id TEXT,
-        data_json TEXT
-      );
-      CREATE INDEX IF NOT EXISTS logs_time_idx ON logs(timestamp_ms DESC);
-      CREATE INDEX IF NOT EXISTS logs_component_idx ON logs(component, id DESC);
-      CREATE INDEX IF NOT EXISTS logs_session_idx ON logs(session_id, id DESC);
-      CREATE TABLE IF NOT EXISTS compactions(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp_ms INTEGER NOT NULL,
-        session_id TEXT NOT NULL,
-        summary TEXT NOT NULL,
-        details_json TEXT
-      );
-      CREATE INDEX IF NOT EXISTS compactions_session_idx ON compactions(session_id, id DESC);
-      PRAGMA user_version=${OBSERVABILITY_SCHEMA_VERSION};
-      COMMIT;
-    `);
   }
 
   private prune(): void {

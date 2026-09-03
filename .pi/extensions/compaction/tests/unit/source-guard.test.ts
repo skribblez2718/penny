@@ -39,7 +39,7 @@ describe("compaction source guard", () => {
     expect(source).toContain("FROM runs WHERE run_id IN");
     expect(source).not.toMatch(/WHERE\s+status\s+IN/i);
     expect(source).not.toMatch(/WHERE\s+session_id\s*=/i);
-    expect(source).toContain("resolvePennyProjectState(projectRoot)");
+    expect(source).toContain("resolvePennyRuntimeState(projectRoot)");
     expect(source).not.toContain("PENNY_ORCH_V2_DB");
     expect(source).not.toContain("process.cwd()");
   });

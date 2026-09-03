@@ -333,7 +333,13 @@ export function operationEventForResult(input: {
     }
     return "completed";
   }
-  if (result.status === "running" || result.status === "exhausted") return "incomplete";
+  if (
+    result.status === "running" ||
+    result.status === "exhausted" ||
+    result.status === "cancelled"
+  ) {
+    return "incomplete";
+  }
   if (result.status === "refused" || result.status === "error") return "failed";
   throw new OperationReceiptError("operation_conflict", "result/event pairing is not closed");
 }
@@ -364,8 +370,12 @@ export function replayableResultFromRun(input: {
           : input.run.status === "incomplete"
             ? publicStatus === "refused"
               ? "refused"
-              : "complete"
-            : "error");
+              : publicStatus === "exhausted"
+                ? "exhausted"
+                : "complete"
+            : input.run.status === "cancelled"
+              ? "cancelled"
+              : "error");
   const counts = flatSafeCounts(
     internal["published_counts"] ??
       internal["counts"] ??
@@ -375,11 +385,14 @@ export function replayableResultFromRun(input: {
     counts["candidates"] = Math.max(0, Math.trunc(internal["candidate_count"]));
   }
   const answerHandle = internal["answer_handle"];
+  const partialHandles = internal["best_partial_artifact_handles"];
   let artifactInput: unknown = Array.isArray(internal["artifacts"])
     ? internal["artifacts"]
-    : answerHandle === null || answerHandle === undefined
-      ? []
-      : [answerHandle];
+    : Array.isArray(partialHandles) && partialHandles.length > 0
+      ? partialHandles
+      : answerHandle === null || answerHandle === undefined
+        ? []
+        : [answerHandle];
   if (
     status === "awaiting_user" &&
     (input.action === "ingest" || input.action === "save") &&

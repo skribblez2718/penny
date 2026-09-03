@@ -21,7 +21,7 @@ import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import {
   ensureOwnerDirectory,
   PennyStateResolutionError,
-  resolvePennyProjectState,
+  resolvePennyRuntimeState,
 } from "@penny/orchestration/source";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
 import { captureToolResultForExecutionOwner } from "./execution-owner-capture.js";
@@ -63,9 +63,10 @@ const WORKER_READ_MEMORY_ENV_VARS = [
 
 /**
  * Read-only memory tools declared in agent frontmatter via the `memory.read`
- * tool profile. These are NOT injected by the agent-runner — the frontmatter
- * `tools:` field is the entire control plane (universal-agents PRD R1.5,
- * R2.1). This constant is exported for reference and test assertions only.
+ * tool profile. These are NOT injected by this ordinary direct/parallel/chain
+ * runner — its frontmatter `tools:` field is the exact control plane. The
+ * TypeScript orchestration registration-subset seam is separate and never
+ * enters this module. This constant is exported for reference/tests only.
  */
 export const WORKER_READ_MEMORY_TOOLS = [
   "memory_search",
@@ -991,9 +992,9 @@ export async function runSingleAgent(
   let tmpPromptPath: string | null = null;
   let tmpBaseDir: string | null = null;
   let tmpBasePath: string | null = null;
-  let sessionState: ReturnType<typeof resolvePennyProjectState>;
+  let sessionState: ReturnType<typeof resolvePennyRuntimeState>;
   try {
-    sessionState = resolvePennyProjectState(defaultCwd, {
+    sessionState = resolvePennyRuntimeState(defaultCwd, {
       env: ownerEnvironment ?? process.env,
     });
   } catch (error) {
@@ -1065,8 +1066,8 @@ export async function runSingleAgent(
   // Per-agent thinking/effort level (frontmatter `thinking:`), e.g. xhigh. The
   // spawned pi subprocess accepts `--thinking <off|minimal|low|medium|high|xhigh>`.
   if (agent.thinking) args.push("--thinking", agent.thinking);
-  // YAML is the sole runtime tool authority. Pass the exact declared list with
-  // no additions, removals, trust-profile filtering, or conditional tools.
+  // This ordinary direct/parallel/chain runner always passes the exact YAML list:
+  // no registration subset, additions, removals, trust filtering, or conditionals.
   args.push("--tools", agent.tools.join(","));
 
   // Select the worker-read memory actor whenever the YAML surface declares a

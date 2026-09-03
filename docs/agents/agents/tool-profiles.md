@@ -4,27 +4,33 @@
 
 A Role Definition that declares itself read-only in prose while holding form-fill,
 file-upload, and arbitrary-execution tools has two different guarantees, and only
-the weaker one is real. The frontmatter `tools:` list is the entire control plane:
+the weaker one is real. The frontmatter `tools:` list is the maximum ordinary catalog control plane:
 `.pi/agents/*.md` → `agents.ts` → `agent-runner.ts` → `pi --tools <allowlist>`.
-Prose does not narrow it.
+Direct/parallel/chain invocation uses that list exactly. Prose does not narrow it.
 
-Tool profiles make the intended authority **declared and machine-checked** instead of
-implied. Each agent declares `authority:` and `tool_profiles:`; the expansion of those
-profiles must equal its `tools:` list exactly.
+Tool profiles make the intended maximum authority **declared and machine-checked** instead
+of implied. Each agent declares `authority:` and `tool_profiles:`; the expansion of those
+profiles must equal its `tools:` list exactly. A fixed TypeScript orchestration phase subset
+is registration metadata, not a profile or agent-definition change.
 
 ## Rules
 
-1. **Profiles statically lint the exact YAML surface.** Their expansion must equal
-   `tools:`. Invocation context, trust profiles, and skills may guide what the agent uses,
-   but may not add, remove, suppress, replace, or conditionally expose a tool.
-2. **Rungs are strictly additive.** Each rung contains every tool of the rung below it
+1. **Profiles statically lint the YAML maximum.** Their expansion must equal `tools:`.
+   Direct/parallel/chain catalog invocation and orchestration phases without a registered
+   subset activate that exact list.
+2. **The one narrowing exception is registration-bound, not profile-driven.** A TypeScript
+   orchestration catalog-worker phase may bind one explicit non-empty duplicate-free strict
+   YAML subset into the canonical runtime-registration digest and worker invocation metadata.
+   Task text, trust profiles, runtime conditions, inputs, and optional-service state cannot
+   select it. It never mutates the role's `authority`, `tool_profiles`, or YAML metadata.
+3. **Rungs are strictly additive.** Each rung contains every tool of the rung below it
    plus a bounded, named increment. Restoring one rung is a one-line edit, which is
    what makes the reduction safe to attempt.
-3. **`browser.execute` is granted to no agent.** Any future grant requires an explicit,
+4. **`browser.execute` is granted to no agent.** Any future grant requires an explicit,
    dated, recorded exception.
-4. **No agent whose `authority` is `read` or `inspect` may hold a browser rung above
+5. **No agent whose `authority` is `read` or `inspect` may hold a browser rung above
    `browser.reveal`.**
-5. **Drift fails the build.** `scripts/system/checks/check_tool_profiles.py` is the
+6. **Drift fails the build.** `scripts/system/checks/check_tool_profiles.py` is the
    machine source of truth for every expansion below and runs in `make lint`.
 
 ## The ladder
@@ -76,7 +82,7 @@ inspection capability — it can write files, delete them, install packages, and
 the network. Naming the profile `shell.unbounded` keeps the registry truthful and
 keeps the gap visible in the metadata instead of disguising it behind a calm label.
 
-## Current assignment
+## Current maximum assignment
 
 <!-- BEGIN GENERATED: per-agent assignment -->
 
@@ -104,17 +110,20 @@ purpose here.
 
 **Browser authority is structural. Filesystem and shell authority are not.**
 
-All ten agents hold `bash`. A role declaring `authority: read` is:
+All ten YAML maxima include `bash`. Under an ordinary exact-YAML invocation, a role declaring
+`authority: read` is:
 
 - structurally prevented from browser-based form submission, file upload, and arbitrary
   Playwright/Node execution;
 - **still capable of arbitrary filesystem and process mutation through `bash`**, including
   writing files, deleting them, installing packages, and reaching the network.
 
-No document may state or imply that read-only is fully enforced. At the filesystem and
-process layer it remains advisory, and must be described that way. Closing that gap is
-tracked separately and is out of scope for the profile ladder; candidate approaches are a
-command-allowlisted shell wrapper, dropping `bash` from roles that only need
+A registration-bound phase subset that omits `bash` removes it from that session's
+model-visible call surface. It does **not** create OS/process sandboxing, reduce the Pi process's
+host permissions, or stop provider extension code from loading. No document may turn either
+profile linting or a phase subset into a broader isolation claim. Closing the ordinary `bash`
+gap is tracked separately and is out of scope for the profile ladder; candidate approaches are
+a command-allowlisted shell wrapper, dropping `bash` from roles that only need
 `read`/`grep`/`find`/`ls`, or container isolation.
 
 ## Verification
@@ -125,7 +134,8 @@ command-allowlisted shell wrapper, dropping `bash` from roles that only need
 .venv/bin/python scripts/system/checks/check_tool_profiles.py --emit-markdown
 ```
 
-The check runs in `make lint`. It fails on: a tool held but not granted by any declared
-profile, a tool granted but missing from `tools:`, an unknown profile name, a forbidden
-tool, a non-modifying role exceeding the browser ceiling, and a ladder rung that is not a
-superset of the rung below it.
+The check runs in `make lint`. It evaluates YAML and profiles only; orchestration subsets do
+not participate. It fails on: a tool held but not granted by any declared profile, a tool
+granted but missing from `tools:`, an unknown profile name, a forbidden tool, a
+non-modifying role exceeding the browser ceiling, and a ladder rung that is not a superset
+of the rung below it.

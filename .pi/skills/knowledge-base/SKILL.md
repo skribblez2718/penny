@@ -1,11 +1,11 @@
 ---
 name: knowledge-base
 description: Private advisory knowledge-base workflows. Use when the operator explicitly asks to initialize, ingest approved sources, query, save, lint, inspect, resume, or prepare promotion for a configured KB profile. Do not use for canonical current-state lookup without verification, automatic research ingestion, arbitrary filesystem access, or unapproved canonical writes.
-license: MIT
 metadata:
   version: "1.0.0"
   penny:
     engine: orchestration
+    release_status: production
     entrypoint: pi-tool
     tool: knowledge_base
     mempalace: metadata-only

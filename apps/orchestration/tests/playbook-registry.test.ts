@@ -18,18 +18,20 @@ import { Checkpointer } from "../src/checkpointer.js";
 import type { Confidence, Directive, JsonValue, RunIdentity } from "../src/contracts.js";
 import { RunContext } from "../src/context.js";
 import { OrchestrationEngine } from "../src/engine.js";
+import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 import type { PlaybookCoreV1 } from "../src/playbooks/playbook.js";
 import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
 import {
   assertExpectedRegistrations,
   AUTHORIZED_PLAYBOOK_NAMES,
+  DEFAULT_PLAYBOOK_NAME,
   isRegisteredPlaybook,
   PLAYBOOK_REGISTRY,
   registeredPlaybookNames,
   resolvePlaybook,
-  SOLE_PRODUCTION_PLAYBOOK,
   type PlaybookRegistrationV1,
   type PlaybookRegistryV1,
+  type WorkerRegistrationV1,
 } from "../src/playbooks/registry.js";
 
 const directories: string[] = [];
@@ -52,6 +54,25 @@ function identity(playbook: string, runId = "run-registry-001"): RunIdentity {
     playbook,
     engine_owner: "typescript",
   } satisfies RunIdentity;
+}
+
+function registrationRuntime(contract: typeof RESEARCH_SKILL_CONTRACT) {
+  return {
+    ingress: "dedicated_tool" as const,
+    liveness: {
+      resolver_id: contract.budget_policy.resolver_id,
+      resolve: () => undefined,
+      thinking_policy: "agent_ssot" as const,
+    },
+  };
+}
+
+function workerRegistration(name: string): WorkerRegistrationV1 {
+  const shipped = resolvePlaybook(DEFAULT_PLAYBOOK_NAME)?.worker;
+  if (shipped === undefined || shipped.kind !== "catalog-agent") {
+    throw new Error("research catalog worker registration is unavailable");
+  }
+  return { ...shipped, workflow_name: name };
 }
 
 function terminal(met: boolean): Directive {
@@ -107,7 +128,10 @@ describe("W2 shipped registry — authorized registrations only", () => {
         "knowledge-base",
         {
           name: "knowledge-base",
-          contract: RESEARCH_SKILL_CONTRACT,
+          contract: { ...RESEARCH_SKILL_CONTRACT, name: "knowledge-base" },
+          ...registrationRuntime(RESEARCH_SKILL_CONTRACT),
+          worker: workerRegistration("knowledge-base"),
+          completionReceiptPredicates: new Map(),
           construct: () => new DoublePlaybook(),
         },
       ],
@@ -122,7 +146,10 @@ describe("W2 shipped registry — authorized registrations only", () => {
         "coding",
         {
           name: "coding",
-          contract: RESEARCH_SKILL_CONTRACT,
+          contract: { ...RESEARCH_SKILL_CONTRACT, name: "coding" },
+          ...registrationRuntime(RESEARCH_SKILL_CONTRACT),
+          worker: workerRegistration("coding"),
+          completionReceiptPredicates: new Map(),
           construct: () => new DoublePlaybook(),
         },
       ],
@@ -131,7 +158,7 @@ describe("W2 shipped registry — authorized registrations only", () => {
   });
 
   it("resolves research and knowledge-base, and does not resolve an unregistered name", () => {
-    expect(resolvePlaybook(SOLE_PRODUCTION_PLAYBOOK)).toBeDefined();
+    expect(resolvePlaybook(DEFAULT_PLAYBOOK_NAME)).toBeDefined();
     expect(resolvePlaybook("knowledge-base")).toBeDefined();
     expect(resolvePlaybook("nonexistent")).toBeUndefined();
     expect(isRegisteredPlaybook("nonexistent")).toBe(false);
@@ -149,6 +176,7 @@ describe("W2 fail-closed on an unregistered playbook", () => {
     const root = temporaryDirectory();
     const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
     const engine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot: root,
       maxSteps: 8,
     });
@@ -184,8 +212,13 @@ describe("W2 fail-closed on an unregistered playbook", () => {
 describe("W2 multi-playbook dispatch — injected double only", () => {
   it("constructs a non-research playbook from an injected registry", () => {
     const registration: PlaybookRegistrationV1 = {
-      name: SOLE_PRODUCTION_PLAYBOOK,
+      name: DEFAULT_PLAYBOOK_NAME,
       contract: RESEARCH_SKILL_CONTRACT,
+      ...registrationRuntime(RESEARCH_SKILL_CONTRACT),
+      worker: workerRegistration(DEFAULT_PLAYBOOK_NAME),
+      completionReceiptPredicates: new Map([
+        ["research_latest_core_dod.v1", () => ({ passed: false, evidence_refs: [] })],
+      ]),
       construct: () => new DoublePlaybook(),
     };
     const injected: PlaybookRegistryV1 = new Map([[registration.name, registration]]);
@@ -197,6 +230,7 @@ describe("W2 multi-playbook dispatch — injected double only", () => {
     expect(
       () =>
         new OrchestrationEngine(checkpointer, {
+          receiptAuthority: TEST_RECEIPT_AUTHORITY,
           projectRoot: root,
           maxSteps: 8,
           playbookRegistry: injected,
@@ -212,6 +246,7 @@ describe("W2 multi-playbook dispatch — injected double only", () => {
     expect(
       () =>
         new OrchestrationEngine(checkpointer, {
+          receiptAuthority: TEST_RECEIPT_AUTHORITY,
           projectRoot: root,
           maxSteps: 8,
           playbookRegistry: empty,

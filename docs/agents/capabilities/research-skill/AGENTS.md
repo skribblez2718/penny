@@ -1,3 +1,3 @@
 # Research Skill Feature Index
 
-- [Research Skill](research-skill.md): Quick/Standard/Deep research with exact artifact handoff, memory-absent recovery, evidence fan-out, synthesis, validation, and product refs
+- [Research Skill](research-skill.md): READ WHEN changing the registered research capability — workflows, evidence, handoff, and product references.

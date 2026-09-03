@@ -1,6 +1,5 @@
 import { registerTool } from "../../lib/pi-tool-registration.js";
-import { spawn } from "node:child_process";
-import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { lstatSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import type { ExtensionAPI, SessionEntry, SessionInfo } from "@earendil-works/pi-coding-agent";
@@ -14,6 +13,11 @@ import { Type, type Static } from "typebox";
 import { resolvePennyProjectState } from "@penny/orchestration/source";
 
 import { createLogger, setSessionId, type ErrorCode } from "../../lib/logger/logger.js";
+import {
+  ObservabilityServiceStarter,
+  observabilityServiceAlive,
+  type ServiceStartupFailure,
+} from "./service-startup.js";
 
 const logger = createLogger("observability");
 const HISTORY_CUSTOM_TYPE = "penny.observability.agent-lifecycle";
@@ -93,46 +97,16 @@ async function observabilityFetch(
 }
 
 async function serviceAlive(): Promise<boolean> {
-  try {
-    const response = await fetch(`${restBaseUrl()}/health`, { signal: AbortSignal.timeout(800) });
-    return response.ok;
-  } catch {
-    return false;
-  }
+  return observabilityServiceAlive(restBaseUrl());
 }
 
-function startService(): void {
-  const projectRoot = process.env.PROJECT_ROOT || process.cwd();
-  const entry = path.join(projectRoot, "apps", "observability", "dist", "server.js");
-  if (!existsSync(entry)) {
-    logger.warn(
-      "TypeScript observability service is not built",
-      { entry },
-      Object.assign(new Error("observability build missing"), {
-        code: "OBSERVABILITY_SERVER_SPAWN_FAILED" as ErrorCode,
-      })
-    );
-    return;
-  }
-  const child = spawn(process.execPath, [entry], {
-    cwd: projectRoot,
-    env: process.env,
-    detached: true,
-    stdio: "ignore",
-  });
-  child.once("error", (error) => {
-    logger.warn("TypeScript observability service failed to start", { error: error.message });
-  });
-  child.unref();
-}
-
-async function waitForService(): Promise<boolean> {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    if (await serviceAlive()) return true;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  return false;
+function startupFailureNotification(result: ServiceStartupFailure): string {
+  const normalized = result.stderr?.replace(/\s+/gu, " ");
+  const excerpt = normalized?.slice(0, 500);
+  const displayTruncated = result.stderrTruncated || (normalized?.length ?? 0) > 500;
+  return excerpt
+    ? `${result.error.message}: ${excerpt}${displayTruncated ? " …" : ""}`
+    : `${result.error.message}; direct Pi history remains available`;
 }
 
 function sessionProjection(info: SessionInfo, storage: "pi" | "subagent"): SessionProjection {
@@ -205,7 +179,15 @@ function parentMetadataAlreadyPresent(entries: readonly SessionEntry[]): boolean
 export default function observabilityExtension(pi: ExtensionAPI): void {
   let currentCwd = process.cwd();
   let currentSessionId = "";
-  let serviceStarted = false;
+  let serviceStarter: ObservabilityServiceStarter | undefined;
+
+  const starter = (): ObservabilityServiceStarter => {
+    serviceStarter ??= new ObservabilityServiceStarter({
+      projectRoot: process.env.PROJECT_ROOT || process.cwd(),
+      baseUrl: restBaseUrl(),
+    });
+    return serviceStarter;
+  };
 
   pi.on("session_start", async (_event, ctx) => {
     currentCwd = ctx.cwd;
@@ -234,14 +216,35 @@ export default function observabilityExtension(pi: ExtensionAPI): void {
 
     if (
       process.env.PI_OBSERVABILITY_ENABLED !== "false" &&
-      process.env.PI_OBSERVABILITY_AUTO_START !== "false" &&
-      !serviceStarted &&
-      !(await serviceAlive())
+      process.env.PI_OBSERVABILITY_AUTO_START !== "false"
     ) {
-      serviceStarted = true;
-      startService();
-      if (!(await waitForService())) {
-        logger.warn("TypeScript observability service did not become ready");
+      try {
+        const result = await starter().ensureReady();
+        if (!result.ready) {
+          logger.warn(
+            "TypeScript observability service did not become ready",
+            {
+              spawned: result.spawned,
+              stderr: result.stderr,
+              stderr_truncated: result.stderrTruncated,
+              exit_code: result.exitCode,
+              signal: result.signal,
+            },
+            result.error
+          );
+          ctx.ui.notify(startupFailureNotification(result), "warning");
+        }
+      } catch (error) {
+        const startupConfigurationError = Object.assign(
+          error instanceof Error ? error : new Error(String(error)),
+          { code: "OBSERVABILITY_SERVER_SPAWN_FAILED" as const }
+        );
+        logger.warn(
+          "TypeScript observability service startup configuration is invalid",
+          undefined,
+          startupConfigurationError
+        );
+        ctx.ui.notify(startupConfigurationError.message, "warning");
       }
     }
   });

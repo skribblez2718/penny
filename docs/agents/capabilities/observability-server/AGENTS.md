@@ -1,3 +1,3 @@
 # Observability Server — Capability Index
 
-- [Observability Server](observability-server.md): canonical TypeScript structured-log service and direct Pi JSONL history
+- [Observability Server](observability-server.md): READ WHEN changing or operating canonical structured logs or Pi JSONL history — service contract and custody.

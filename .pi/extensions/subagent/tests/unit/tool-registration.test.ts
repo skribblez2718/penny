@@ -181,6 +181,11 @@ describe("subagent tool registration", () => {
     expect(schemaProperties(object(properties["chain"])["items"])).toHaveProperty(
       "input_artifacts"
     );
+
+    const confirmation = object(properties["confirmProjectAgents"]);
+    expect(confirmation["default"]).toBe(true);
+    expect(confirmation["description"]).toContain("when the current project is untrusted");
+    expect(confirmation["description"]).toContain("Default: true");
   });
 });
 

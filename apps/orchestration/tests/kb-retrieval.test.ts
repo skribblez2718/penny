@@ -239,6 +239,62 @@ describe("KB §5.13 retrieval", () => {
   });
 });
 
+describe("provider-free knowledge-base conformance", () => {
+  function retrievalInputs() {
+    const root = tmpRoot();
+    const { manifest } = seedKb(root);
+    const catalog = buildCatalog({
+      generation_id: "gen_provider_free_conformance",
+      kb_id: manifest.kb_id,
+      manifest,
+      policy: defaultDenyPolicy(manifest.kb_id),
+      pages: [
+        { page_id: "page_a", revision_id: "rev_1", page_sha256: ZERO, claims_sha256: ZERO },
+        { page_id: "page_b", revision_id: "rev_1", page_sha256: ZERO, claims_sha256: ZERO },
+      ],
+      source_records: [],
+      source_objects: [],
+      conflicts: [],
+      index_sha256: ZERO,
+    });
+    const pageContents = new Map([
+      [
+        "page_a",
+        {
+          title: "node:sqlite unflagging",
+          summary: "When sqlite was unflagged",
+          markdown: "sqlite was unflagged",
+        },
+      ],
+      [
+        "page_b",
+        {
+          title: "TypeBox schemas",
+          summary: "Schema validation",
+          markdown: "TypeBox validates",
+        },
+      ],
+    ]);
+    return { catalog, pageContents };
+  }
+
+  it("accepts meaning-preserving query variation without exact-string grading", () => {
+    const input = retrievalInputs();
+    const original = rankPages({ ...input, query: "sqlite unflagged" });
+    const varied = rankPages({ ...input, query: "UNFLAGGED sqlite" });
+    expect(varied).toEqual(original);
+  });
+
+  it("changes the ranked result after a material query mutation", () => {
+    const input = retrievalInputs();
+    const sqlite = rankPages({ ...input, query: "sqlite unflagged" });
+    const typebox = rankPages({ ...input, query: "TypeBox schema" });
+    expect(sqlite[0]?.page_id).toBe("page_a");
+    expect(typebox[0]?.page_id).toBe("page_b");
+    expect(typebox[0]?.page_id).not.toBe(sqlite[0]?.page_id);
+  });
+});
+
 describe("tracked §5.13 retrieval regression", () => {
   it("scores the tracked fixture at k=10 and enforces the 1/1/1 floors", () => {
     const fixture = loadTrackedRetrievalFixture();

@@ -8,8 +8,8 @@ This standard applies to every Penny-owned `.ts`, `.tsx`, and `.d.ts` file under
 source, and declarations.
 
 The inventory is discovered from the live filesystem, including non-ignored untracked files; it is
-not a frozen allowlist or count assertion. The current tree reports **426 owned files**, all 426 with
-type-aware ESLint and strict-program coverage, plus 210/210 test or smoke files reachable from a
+not a frozen allowlist or count assertion. The current tree reports **477 owned files**, all 477 with
+type-aware ESLint and strict-program coverage, plus 245/245 test or smoke files reachable from a
 package `test:all`. A new file must be discovered automatically and must acquire the same coverage.
 
 ## Authoritative root commands

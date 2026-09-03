@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="penny-flow-template" content="1" />
+    <title>Diagnose — candidate flow | Penny</title>
+    <style>
+      :root {
+        --canvas: #0d1117;
+        --surface: #161b22;
+        --surface-raised: #1c2230;
+        --border: #3a4657;
+        --text: #f0f6fc;
+        --muted: #b6c2cf;
+        --host: #c4b5fd;
+        --start: #94a3b8;
+        --gate: #fbbf24;
+        --done: #4ade80;
+        --negative: #fb7185;
+        --annie: #c4b5fd;
+        --carren: #fb7185;
+        --demetri: #60a5fa;
+        --echo: #22d3ee;
+        --ida: #f59e0b;
+        --piper: #facc15;
+        --skribble: #d8b4fe;
+        --synthia: #f472b6;
+        --tabitha: #fb923c;
+        --vera: #4ade80;
+        --fwd: #aab7c7;
+        --loop: #fbbf24;
+        --exit: #4ade80;
+        --abort: #fb7185;
+        --esc: #cbd5e1;
+      }
+
+      * { box-sizing: border-box; }
+      html { background: var(--canvas); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+      body { margin: 0; }
+      header, .callout, .legend, main, footer { width: min(100% - 32px, 1760px); margin-inline: auto; }
+      header { padding-top: 28px; }
+      h1 { margin: 0; font-size: clamp(1.45rem, 2.2vw, 2rem); line-height: 1.2; }
+      .summary, .muted { color: var(--muted); max-width: 100ch; }
+      .callout { margin-top: 20px; border-inline-start: 4px solid var(--gate); border-radius: 8px; background: #251f0d; color: #f9e8a4; padding: 12px 16px; }
+      .callout p { margin: 0; }
+      .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 28px; padding: 20px 0; }
+      .legend h2, .route-rail h2, footer h2 { font-size: .9rem; margin: 0 0 7px; color: var(--text); }
+      .legend ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 12px; color: var(--muted); font-size: .86rem; }
+      .legend li { display: inline-flex; align-items: center; gap: 6px; }
+      .swatch, .line { display: inline-block; flex: 0 0 auto; }
+      .swatch { width: 12px; height: 12px; border-radius: 3px; background: var(--swatch); }
+      .line { width: 25px; border-top: 3px solid var(--swatch); }
+      .line.dash { border-top-style: dashed; }
+      main { padding-bottom: 24px; }
+      .flow-viewport { overflow: auto; border: 1px solid var(--border); border-radius: 12px; background: #090d12; padding: 12px; outline-offset: 4px; }
+      .flow-viewport:focus-visible { outline: 3px solid #facc15; }
+      #wrap { min-width: 1340px; max-width: 1760px; margin-inline: auto; }
+      .graph-area { position: relative; min-height: 1180px; }
+      #edges { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
+      .edge { fill: none; stroke: var(--fwd); stroke-width: 2.4; }
+      .edge.loop { stroke: var(--loop); stroke-dasharray: 7 5; }
+      .edge.exit { stroke: var(--exit); }
+      .edge.abort { stroke: var(--abort); stroke-dasharray: 6 5; }
+      .edge.gate { stroke: var(--gate); }
+      .edge.esc { stroke: var(--esc); stroke-dasharray: 4 5; }
+      .node { position: absolute; width: 270px; min-height: 92px; padding: 12px 13px 12px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 4px 14px rgb(0 0 0 / .25); }
+      .node::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 5px; border-radius: 10px 0 0 10px; background: var(--agent, var(--host)); }
+      .node-title { display: flex; gap: 7px; align-items: baseline; font-size: .94rem; font-weight: 750; overflow-wrap: anywhere; }
+      .node-owner { color: var(--muted); font-size: .78rem; font-weight: 650; }
+      .node-desc { margin: 6px 0 0; color: var(--muted); font-size: .79rem; overflow-wrap: anywhere; }
+      .badge { margin-inline-start: auto; padding: 2px 6px; border-radius: 999px; background: var(--badge, var(--host)); color: #111827; font: 750 .66rem/1.2 system-ui, sans-serif; letter-spacing: .05em; white-space: nowrap; }
+      .node.start { --agent: var(--start); }
+      .node.host { --agent: var(--host); }
+      .node.gate { --agent: var(--gate); --badge: var(--gate); background: #25200f; }
+      .node.done { --agent: var(--done); --badge: var(--done); background: #102719; }
+      .node.error { --agent: var(--negative); --badge: var(--negative); background: #30161c; }
+      .node.esc { --agent: var(--esc); }
+      .node.annie { --agent: var(--annie); }.node.carren { --agent: var(--carren); }.node.demetri { --agent: var(--demetri); }.node.echo { --agent: var(--echo); }.node.ida { --agent: var(--ida); }.node.piper { --agent: var(--piper); }.node.skribble { --agent: var(--skribble); }.node.synthia { --agent: var(--synthia); }.node.tabitha { --agent: var(--tabitha); }.node.vera { --agent: var(--vera); }
+      .route-rail { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+      .route-rail > p { margin: 0 0 10px; color: var(--muted); font-size: .84rem; }
+      #route-labels { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+      .lbl { min-width: 0; border: 1px solid var(--border); border-inline-start: 4px solid var(--fwd); border-radius: 7px; background: var(--surface-raised); color: var(--text); padding: 7px 9px; font-size: .78rem; overflow-wrap: anywhere; }
+      .lbl.loop { border-inline-start-color: var(--loop); }.lbl.exit { border-inline-start-color: var(--exit); }.lbl.abort { border-inline-start-color: var(--abort); }.lbl.gate { border-inline-start-color: var(--gate); }.lbl.esc { border-inline-start-color: var(--esc); }
+      .route-id { color: var(--muted); font-variant-numeric: tabular-nums; }
+      .route-state { color: var(--muted); }
+      footer { padding: 0 0 44px; color: var(--muted); }
+      footer p { max-width: 105ch; }
+      .sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+      @media (max-width: 720px) { header, .callout, .legend, main, footer { width: min(100% - 20px, 1760px); } #route-labels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Diagnose — candidate flow</h1>
+      <p class="summary">Strict machine-readable mirror of DIAGNOSE_FLOW. Annie decomposes causes, Ida creates competing hypotheses, Demetri adjudicates, the host seals, Vera verifies, and the host admits.</p>
+    </header>
+    <aside class="callout" aria-label="Key workflow invariant"><p>Analysis only: no test execution, remediation, Carren phase, approval, or external-evidence state. Vera gaps return only through the engine-owned Annie or Demetri routes.</p></aside>
+    <section class="legend" aria-label="Diagram legend">
+      <div><h2>State owners and control states</h2><ul><li><span class="swatch" style="--swatch:var(--host)"></span>host</li><li><span class="swatch" style="--swatch:var(--gate)"></span>gate</li><li><span class="swatch" style="--swatch:var(--done)"></span>positive terminal</li><li><span class="swatch" style="--swatch:var(--negative)"></span>non-positive terminal</li><li><span class="swatch" style="--swatch:var(--annie)"></span>agent owner (named on card)</li></ul></div>
+      <div><h2>Route kinds</h2><ul><li><span class="line" style="--swatch:var(--fwd)"></span>forward</li><li><span class="line dash" style="--swatch:var(--loop)"></span>bounded repair</li><li><span class="line" style="--swatch:var(--exit)"></span>pass / exit</li><li><span class="line dash" style="--swatch:var(--abort)"></span>abort / deny</li><li><span class="line dash" style="--swatch:var(--esc)"></span>escalation</li></ul></div>
+    </section>
+    <main>
+      <section class="flow-viewport" aria-labelledby="flow-heading" aria-label="Workflow graph; use arrow keys to scroll when it is wider than the window" tabindex="0">
+        <h2 id="flow-heading" class="sr-only">Workflow graph</h2>
+        <div id="wrap">
+          <div class="graph-area" id="graph-area"><svg id="edges" aria-hidden="true" focusable="false"><defs><marker id="arrowhead" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="context-stroke"></path></marker></defs></svg></div>
+          <section class="route-rail" aria-labelledby="routes-heading"><h2 id="routes-heading">Route labels</h2><p>Each numbered route below maps to one directed arrow in the graph.</p><ol id="route-labels"></ol></section>
+          <ul id="edge-list" class="sr-only" aria-label="Complete workflow edge list"></ul>
+        </div>
+      </section>
+    </main>
+    <footer><h2>Notes</h2><p>No test execution, remediation, or Carren phase is present. The uniform incomplete and cancelled seams are intentionally omitted from E; engine faults remain out-of-band.</p></footer>
+    <script>
+      const N = {"intake":{"title":"Intake — host","desc":"Canonical DiagnosisRequestV1 admission","cls":"host","lane":"center","y":20,"badge":"HOST"},"decomposing_causes":{"title":"Decompose causes — Annie","desc":"Causal factors, links, assumptions, gaps, and coverage","cls":"annie","lane":"center","y":180,"who":"annie"},"generating_hypotheses":{"title":"Competing hypotheses — Ida","desc":"Complete genuinely competing causal set","cls":"ida","lane":"center","y":340,"who":"ida"},"adjudicating_diagnosis":{"title":"Adjudicate — Demetri","desc":"Ranked closed draft and non-executed discriminating checks","cls":"demetri","lane":"center","y":500,"who":"demetri"},"sealing_diagnosis":{"title":"Seal — host","desc":"Validate draft and persist canonical DiagnosisV1","cls":"host","lane":"center","y":660,"badge":"HOST"},"verifying_diagnosis":{"title":"Verify — Vera","desc":"Independent validity check over exact current graph","cls":"vera","lane":"center","y":820,"who":"vera"},"admitting_diagnosis":{"title":"Admit — host","desc":"Validity receipt, deterministic integrity, envelope, CompletionGate v2","cls":"host","lane":"center","y":980,"badge":"HOST"},"complete":{"title":"Complete","desc":"Exact latest diagnosis graph admitted","cls":"done","lane":"center","y":1140,"badge":"TERM"},"incomplete":{"title":"Incomplete","desc":"Honest non-positive exhaustion, stall, malformed, or missing-input result","cls":"error","lane":"left","y":1140,"badge":"TERM"},"cancelled":{"title":"Cancelled","desc":"Caller cancellation","cls":"error","lane":"right","y":1140,"badge":"TERM"}};
+      const E = [{"from":"intake","to":"decomposing_causes","kind":"fwd","label":"canonical request"},{"from":"decomposing_causes","to":"generating_hypotheses","kind":"fwd","label":"complete decomposition"},{"from":"generating_hypotheses","to":"adjudicating_diagnosis","kind":"fwd","label":"complete hypotheses"},{"from":"adjudicating_diagnosis","to":"sealing_diagnosis","kind":"fwd","label":"complete draft"},{"from":"sealing_diagnosis","to":"adjudicating_diagnosis","kind":"loop","label":"one seal repair"},{"from":"sealing_diagnosis","to":"verifying_diagnosis","kind":"fwd","label":"canonical seal"},{"from":"verifying_diagnosis","to":"decomposing_causes","kind":"loop","label":"analysis_gap or evidence_gap"},{"from":"verifying_diagnosis","to":"adjudicating_diagnosis","kind":"loop","label":"diagnosis_product_gap"},{"from":"verifying_diagnosis","to":"admitting_diagnosis","kind":"fwd","label":"PASS + host evidence"},{"from":"admitting_diagnosis","to":"complete","kind":"exit","label":"completion admitted"}];
+      const graph = document.getElementById("graph-area");
+      const svg = document.getElementById("edges");
+      const routes = document.getElementById("route-labels");
+      const edgeList = document.getElementById("edge-list");
+      const SVG_NS = "http://www.w3.org/2000/svg";
+      const nodeWidth = 270;
+      const edgeColor = { fwd: "#aab7c7", gate: "#fbbf24", loop: "#fbbf24", exit: "#4ade80", abort: "#fb7185", esc: "#cbd5e1" };
+
+      function point(rect, side) {
+        if (side === "top") return { x: rect.x + rect.width / 2, y: rect.y };
+        if (side === "left") return { x: rect.x, y: rect.y + rect.height / 2 };
+        if (side === "right") return { x: rect.x + rect.width, y: rect.y + rect.height / 2 };
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height };
+      }
+
+      function sides(source, target) {
+        if (source.x + source.width <= target.x) return ["right", "left"];
+        if (target.x + target.width <= source.x) return ["left", "right"];
+        if (source.y <= target.y) return ["bottom", "top"];
+        return ["top", "bottom"];
+      }
+
+      function control(pointValue, side, width, height, bend) {
+        const step = 76 + Math.abs(bend);
+        const clampX = (value) => Math.max(12, Math.min(width - 12, value));
+        const clampY = (value) => Math.max(12, Math.min(height - 12, value));
+        if (side === "top") return { x: clampX(pointValue.x + bend), y: clampY(pointValue.y - step) };
+        if (side === "left") return { x: clampX(pointValue.x - step), y: clampY(pointValue.y + bend) };
+        if (side === "right") return { x: clampX(pointValue.x + step), y: clampY(pointValue.y + bend) };
+        return { x: clampX(pointValue.x + bend), y: clampY(pointValue.y + step) };
+      }
+
+      function appendText(parent, className, text) {
+        const element = document.createElement("span");
+        element.className = className;
+        element.textContent = text;
+        parent.append(element);
+        return element;
+      }
+
+      function render() {
+        const width = Math.max(1340, Math.min(1760, document.querySelector(".flow-viewport").clientWidth - 24));
+        const viewport = document.querySelector(".flow-viewport");
+        const previousViewportWidth = Number(viewport.dataset.viewportWidth || "0");
+        document.getElementById("wrap").style.width = `${width}px`;
+        if (
+          viewport.clientWidth < width &&
+          (previousViewportWidth === 0 || previousViewportWidth >= width)
+        ) {
+          viewport.scrollLeft = Math.round((width - viewport.clientWidth) / 2);
+        }
+        viewport.dataset.viewportWidth = `${viewport.clientWidth}`;
+        graph.replaceChildren(svg);
+        routes.replaceChildren();
+        edgeList.replaceChildren();
+        const nodeRects = new Map();
+        const lanes = { left: 42, center: (width - nodeWidth) / 2, right: width - nodeWidth - 42 };
+        for (const [id, node] of Object.entries(N)) {
+          const card = document.createElement("article");
+          card.className = `node ${node.cls}`;
+          card.id = `node-${id}`;
+          card.dataset.nodeId = id;
+          card.style.left = `${lanes[node.lane]}px`;
+          card.style.top = `${node.y}px`;
+          const title = document.createElement("div");
+          title.className = "node-title";
+          appendText(title, "node-state", node.title);
+          if (node.who) appendText(title, "node-owner", `· ${node.who}`);
+          if (node.badge) appendText(title, "badge", node.badge);
+          const desc = document.createElement("p");
+          desc.className = "node-desc";
+          desc.textContent = node.desc;
+          card.append(title, desc);
+          graph.append(card);
+        }
+        let graphHeight = 0;
+        for (const [id] of Object.entries(N)) {
+          const card = document.getElementById(`node-${id}`);
+          const x = Number.parseFloat(card.style.left);
+          const y = Number.parseFloat(card.style.top);
+          const rect = { x, y, width: card.offsetWidth, height: card.offsetHeight };
+          nodeRects.set(id, rect);
+          graphHeight = Math.max(graphHeight, y + rect.height + 38);
+        }
+        graph.style.height = `${Math.max(1180, graphHeight)}px`;
+        svg.setAttribute("viewBox", `0 0 ${width} ${graph.clientHeight}`);
+        for (const [index, edge] of E.entries()) {
+          const source = nodeRects.get(edge.from);
+          const target = nodeRects.get(edge.to);
+          const [sourceSide, targetSide] = edge.s1 && edge.s2 ? [edge.s1, edge.s2] : sides(source, target);
+          const from = point(source, sourceSide);
+          const to = point(target, targetSide);
+          const bend = edge.bow || (edge.kind === "loop" ? 58 : 0);
+          const sourceControl = control(from, sourceSide, width, graph.clientHeight, bend);
+          const targetControl = control(to, targetSide, width, graph.clientHeight, edge.kind === "exit" ? -bend : bend);
+          const path = document.createElementNS(SVG_NS, "path");
+          path.classList.add("edge", edge.kind);
+          path.dataset.edgeIndex = String(index);
+          path.setAttribute("d", `M ${from.x} ${from.y} C ${sourceControl.x} ${sourceControl.y}, ${targetControl.x} ${targetControl.y}, ${to.x} ${to.y}`);
+          path.setAttribute("stroke", edgeColor[edge.kind]);
+          path.setAttribute("marker-end", "url(#arrowhead)");
+          svg.append(path);
+
+          const visibleRoute = document.createElement("li");
+          visibleRoute.className = `lbl ${edge.kind}`;
+          visibleRoute.dataset.edgeIndex = String(index);
+          appendText(visibleRoute, "route-id", `${index + 1}. `);
+          appendText(visibleRoute, "route-state", `${edge.from} → ${edge.to}: `);
+          visibleRoute.append(document.createTextNode(edge.label));
+          routes.append(visibleRoute);
+
+          const accessibleRoute = document.createElement("li");
+          accessibleRoute.textContent = `${edge.from} to ${edge.to}: ${edge.label} (${edge.kind})`;
+          edgeList.append(accessibleRoute);
+        }
+      }
+      render();
+      window.addEventListener("resize", render);
+    </script>
+  </body>
+</html>

@@ -4,8 +4,9 @@
 
 Penny uses a reduced TypeScript/Node observability service. Its sole database is
 `$PENNY_STATE_ROOT/observability/observability.db`, resolved by the shared Penny state-root module.
-The service requires an explicitly initialized or migrated state root and never scans or imports a
-legacy location.
+The service requires a complete state target explicitly initialized or migrated by an operator.
+It opens the current database create-never and never scans, initializes, repairs, migrates, or imports
+a legacy location.
 
 The database contains only:
 
@@ -22,6 +23,16 @@ or FTS transcript indexes.
 - Authentication failures and malformed requests are not persisted.
 - SQLite WAL/FULL, owner-only directory/file custody, bounded retained rows, bounded WAL, and clean
   shutdown checkpoint.
+- The emitted Node server imports the built `@penny/orchestration` export. The observability build
+  builds orchestration first, while start verifies both runtime builds. Typecheck/tests resolve the
+  dependency source directly to avoid racing a concurrent destructive build.
+- Extension auto-start accepts only a credential-free loopback HTTP origin, derives child bind
+  host/port from `PI_OBSERVABILITY_REST_URL`, and passes a least-privilege environment.
+- Auto-start coalesces concurrent calls and latches ready only after `GET /health` returns the
+  expected Penny service identity and schema. Failed attempts remain retryable; unhealthy children
+  undergo bounded SIGTERM/SIGKILL escalation with confirmed exit. Startup stderr capture is
+  time-bounded, limited to 16 KiB, and stripped of common credentials and C0/C1 terminal controls
+  before reporting.
 
 HTTP surface:
 

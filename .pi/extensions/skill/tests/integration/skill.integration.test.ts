@@ -23,7 +23,7 @@ describe("TypeScript skill integration", () => {
       path.join(PROJECT_ROOT, "apps", "orchestration", "src", "playbooks", "registry.ts"),
       "utf8"
     );
-    expect(registry).toContain('SOLE_PRODUCTION_PLAYBOOK = "research"');
+    expect(registry).toContain('DEFAULT_PLAYBOOK_NAME = "research"');
   });
 
   it("declares the shared TypeScript orchestration engine in SKILL.md", () => {

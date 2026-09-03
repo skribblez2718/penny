@@ -1,3 +1,14 @@
+import {
+  chmodSync,
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -7,23 +18,100 @@ import {
   SettingsManager,
   createAgentSession,
   getAgentDir,
+  parseSessionEntries,
   resolveModelScopeWithDiagnostics,
   type AgentSessionEvent,
   type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
+import { Type, type Static } from "typebox";
 export type { InlineExtension };
 
+import { canonicalJson } from "./checkpointer.js";
 import {
+  LivenessTerminalReasonSchema,
+  validateContract,
   type ArtifactRef,
   type Confidence,
   type JsonValue,
+  type LivenessTerminalReason,
   type SkillContract,
 } from "./contracts.js";
+import {
+  isExternalCallTool,
+  LivenessExhaustedError,
+  type WorkerPromptBudgetV1,
+} from "./liveness.js";
+import type { ResearchContextOverlayV1 } from "./research-context.js";
+import {
+  assertOwnerDirectory,
+  assertOwnerFile,
+  ensureOwnerDirectory,
+  fsyncDirectory,
+  pathExistsNoFollow,
+} from "./state/custody.js";
+import { PROJECT_ID_PATTERN } from "./state/paths.js";
 
 type CreateSessionOptions = NonNullable<Parameters<typeof createAgentSession>[0]>;
 type PiModel = NonNullable<CreateSessionOptions["model"]>;
 type PiCustomTool = NonNullable<CreateSessionOptions["customTools"]>[number];
 export type SessionThinkingLevel = NonNullable<CreateSessionOptions["thinkingLevel"]>;
+
+export interface ActiveWorkerRegistrationMetadataV1 {
+  readonly playbook_name: string;
+  readonly workflow_name: string;
+  readonly guidance: SkillContract["guidance"];
+  readonly result_transport: "persisted_summary" | "host_typed";
+  readonly opening_policy: "registration_guidance_task_artifacts" | "host_private_opening";
+  readonly model_policy: "directive_override_or_runtime_default" | "host_private_ssot_model";
+  /**
+   * Exact phase surface projected from the active PlaybookRegistrationV1. Absence preserves
+   * YAML equality; presence is the registration-digest-bound strict subset revalidated here.
+   */
+  readonly allowed_tools?: readonly string[];
+}
+
+export interface WorkflowSessionCorrelationV1 {
+  readonly run_id: string;
+  readonly workflow_session_id: string;
+  readonly branch_id: string | null;
+  readonly attempt: number;
+  readonly worker_id: string;
+  readonly purpose: "phase" | "routing_repair";
+}
+
+export const CATALOG_WORKER_SESSION_METADATA = "penny.orchestration.worker-session" as const;
+export const CATALOG_AGENT_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,127}$/u;
+const CatalogSessionIdSchema = Type.String({ minLength: 1, maxLength: 256 });
+
+/** Closed path-free correlation stored as the first entry in every catalog-worker JSONL. */
+export const CatalogWorkerSessionMetadataV1Schema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    project_id: Type.String({ pattern: "^prj_[a-f0-9]{32}$" }),
+    run_id: CatalogSessionIdSchema,
+    workflow_session_id: CatalogSessionIdSchema,
+    state_id: CatalogSessionIdSchema,
+    branch_id: Type.Union([CatalogSessionIdSchema, Type.Null()]),
+    attempt: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+    worker_id: CatalogSessionIdSchema,
+    agent: Type.String({ pattern: "^[a-z0-9][a-z0-9-]{0,127}$" }),
+    purpose: Type.Union([Type.Literal("phase"), Type.Literal("routing_repair")]),
+  },
+  { additionalProperties: false }
+);
+export type CatalogWorkerSessionMetadataV1 = Readonly<
+  Static<typeof CatalogWorkerSessionMetadataV1Schema>
+>;
+
+export function validateCatalogWorkerSessionMetadata(
+  value: unknown
+): CatalogWorkerSessionMetadataV1 {
+  return validateContract(
+    CatalogWorkerSessionMetadataV1Schema,
+    value,
+    "catalog worker session metadata"
+  );
+}
 
 export interface AgentInvocation {
   readonly agent: string;
@@ -32,8 +120,21 @@ export interface AgentInvocation {
   readonly projectRoot: string;
   readonly trustProfile: "trusted-interactive" | "hardened-untrusted";
   readonly inputArtifacts: readonly ArtifactRef[];
+  /** Required production correlation for every durable catalog-worker JSONL. */
+  readonly workflowSession?: WorkflowSessionCorrelationV1;
+  /** Summary-only guidance mechanically projected from the active phase registration. */
+  readonly routingRepairGuidance?: string;
+  readonly executionPurpose?: "phase" | "routing_repair";
+  /** Bounded owner-resolved content; never used for tool selection or telemetry. */
+  readonly contextOverlays?: readonly ResearchContextOverlayV1[];
   readonly signal?: AbortSignal;
+  /** Host-enforced, non-observational charge sink. Errors abort before admission. */
+  readonly liveness?: AgentSessionLivenessSink;
+  /** Read-only projection of the host-enforced counters for this open worker lease. */
+  readonly livenessBudget?: WorkerPromptBudgetV1;
   readonly modelOverride?: string;
+  /** Host-owned per-invocation policy; when absent, session-level fallback remains authoritative. */
+  readonly thinkingLevel?: SessionThinkingLevel;
   /**
    * Pre-session admission hook.
    *
@@ -47,17 +148,15 @@ export interface AgentInvocation {
    * rather than run on an unadmitted default.
    */
   readonly admitResolvedModel?: (resolved: { provider: string; model: string }) => void;
-  /**
-   * W6: the active skill's guidance declaration. Optional so existing callers keep
-   * working; when absent, resolution follows the reference research contract.
-   */
-  readonly guidance?: SkillContract["guidance"];
+  /** W6: bounded metadata projected from the exact active playbook registration. */
+  readonly registration: ActiveWorkerRegistrationMetadataV1;
   /**
    * Optional session posture supplied by the dispatching playbook.
    *
-   * Catalog agents never use this seam: their exact YAML tools and normal
-   * provider extensions are mandatory. The seam exists only for explicitly
-   * anonymous private host sessions such as the KB reader matrix.
+   * Catalog agents never use this private-session seam. Ordinary catalog phases
+   * use either exact YAML equality or an exact registration-bound strict subset
+   * of that YAML maximum. This seam remains only for explicitly anonymous
+   * private host sessions such as the KB reader matrix.
    */
   readonly session?: AgentSessionSpecV1;
 }
@@ -103,25 +202,15 @@ export interface AgentSessionSpecV1 {
   readonly trace?: AgentSessionTraceSink;
 }
 
-/** W6 — the resolved worker posture. Tool authority still comes from the agent SSOT. */
+/**
+ * W6 — resolved worker posture. YAML is the maximum; only the active TypeScript
+ * PlaybookRegistrationV1 may bind one fixed strict subset for an orchestration phase.
+ */
 export interface WorkerPostureV1 {
   readonly agentGuidancePath: string;
   readonly domainGuidancePath: string;
   readonly allowedTools: readonly string[];
 }
-
-/**
- * Default guidance declaration.
- *
- * Before W6 the domain-guidance path was the string literal
- * `.pi/skills/research/assets/prompts/<agent>.md`. Research has since migrated to the
- * phase-specific convention shared with KB, so the no-contract fallback follows the
- * reference skill's declared guidance contract.
- */
-export const DEFAULT_GUIDANCE: SkillContract["guidance"] = {
-  skill_root: ".pi/skills/research/assets/prompts",
-  resolution: "per_agent_phase",
-};
 
 /**
  * W6 — resolve the domain-guidance file for one agent in one phase.
@@ -133,9 +222,9 @@ export function resolveDomainGuidancePath(input: {
   projectRoot: string;
   agent: string;
   stateId: string;
-  guidance?: SkillContract["guidance"];
+  guidance: SkillContract["guidance"];
 }): string {
-  const guidance = input.guidance ?? DEFAULT_GUIDANCE;
+  const guidance = input.guidance;
   const file =
     guidance.resolution === "per_agent_phase"
       ? `${input.agent}-${input.stateId}.md`
@@ -157,10 +246,11 @@ export interface ModelClient {
  * Owner-supplied extension factories to load into each worker session (e.g. a
  * worker-read, read-only memory factory). These supply capabilities that need
  * the owner's scoping (actor role, a minimal pinned env). They are NOT a tool
- * allow-list: the tools a worker may call come from the SSOT
- * (`.pi/agents/<agent>.md` `tools:`), exactly as the native agent-runner does
- * (the frontmatter `tools:` field is the control plane). The app stays agnostic
- * about the capability's domain.
+ * allow-list: YAML (`.pi/agents/<agent>.md` `tools:`) remains the maximum and the
+ * native agent-runner uses it exactly. An eligible orchestration phase may use only
+ * the fixed strict subset projected from its active canonical registration. Extension
+ * factories, task data, and runtime state cannot select that surface. The app stays
+ * agnostic about the capability's domain.
  */
 export interface AgentSessionTokenCountsV1 {
   readonly input: number;
@@ -213,6 +303,24 @@ export type AgentSessionTraceRecordV1 =
     };
 
 export type AgentSessionTraceSink = (record: AgentSessionTraceRecordV1) => void;
+
+export type AgentSessionLivenessEventV1 =
+  | {
+      readonly kind: "model_turn";
+      readonly source:
+        | "turn_start"
+        | "auto_retry_start"
+        | "summarization_retry_attempt_start"
+        | "compaction_start";
+    }
+  | { readonly kind: "tool_call"; readonly tool_name: string }
+  | {
+      readonly kind: "protocol_error";
+      readonly tool_name: string;
+      readonly error_code: AgentSessionProtocolErrorCodeV1;
+    };
+
+export type AgentSessionLivenessSink = (event: AgentSessionLivenessEventV1) => void;
 
 function isUnknownRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -274,6 +382,39 @@ export function contentFreeSessionProtocolErrorRecord(
   return errorCode === undefined ? undefined : { kind: "protocol_error", error_code: errorCode };
 }
 
+/** Project one Pi event onto the host-enforced, content-free charge vocabulary. */
+export function contentFreeSessionLivenessEvent(
+  event: AgentSessionEvent,
+  allowedToolNames: ReadonlySet<string>
+): AgentSessionLivenessEventV1 | undefined {
+  if (
+    event.type === "turn_start" ||
+    event.type === "auto_retry_start" ||
+    event.type === "summarization_retry_attempt_start" ||
+    event.type === "compaction_start"
+  ) {
+    return { kind: "model_turn", source: event.type };
+  }
+  if (event.type === "tool_execution_start") {
+    return {
+      kind: "tool_call",
+      tool_name: allowedToolNames.has(event.toolName) ? event.toolName : "unknown_tool",
+    };
+  }
+  if (event.type !== "tool_execution_end" || !event.isError) return undefined;
+  const unknownTool = !allowedToolNames.has(event.toolName);
+  const errorCode = unknownTool
+    ? "unknown_tool"
+    : contentFreeSessionProtocolErrorCode(event.result);
+  return errorCode === undefined
+    ? undefined
+    : {
+        kind: "protocol_error",
+        tool_name: unknownTool ? "unknown_tool" : event.toolName,
+        error_code: errorCode,
+      };
+}
+
 /** Project one Pi event onto the closed content-free trace vocabulary. */
 export function contentFreeSessionTraceRecord(
   event: AgentSessionEvent,
@@ -315,9 +456,18 @@ export function contentFreeSessionTraceRecord(
 export interface PiAgentClientOptions {
   readonly resolveModel?: (modelId: string) => Promise<PiModel> | PiModel;
   readonly workerExtensions?: readonly InlineExtension[];
+  /** Optional content-free lifecycle accounting for ordinary and private sessions. */
+  readonly sessionTrace?: AgentSessionTraceSink;
+  /** Existing owner-resolved project partition; no path selector or fallback is accepted. */
+  readonly catalogSessions?: {
+    readonly projectId: string;
+    readonly root: string;
+  };
+  /** TEST-ONLY session seam. Production catalog workers must use catalogSessions. */
+  readonly testOnlySessionManagerFactory?: (invocation: AgentInvocation) => SessionManager;
   /**
-   * TEST-ONLY. Production omits this so settings/model defaults remain the
-   * authority. Live compatibility smokes may pin a level without editing SSOT.
+   * TEST-ONLY fallback used only when host invocation policy is absent. Other
+   * production sessions omit both fields and retain normal settings behavior.
    */
   readonly testOnlyThinkingLevelOverride?: SessionThinkingLevel;
 }
@@ -329,32 +479,62 @@ function objectValue(value: unknown, label: string): Record<string, unknown> {
   return value;
 }
 
+export class EmptyStageOutputError extends Error {
+  readonly code = "empty_stage_output" as const;
+
+  constructor(message = "agent session produced no non-empty final assistant text") {
+    super(message);
+    this.name = "EmptyStageOutputError";
+  }
+}
+
+export function requireNonEmptyStageOutput(text: string): string {
+  if (text.trim().length === 0) throw new EmptyStageOutputError();
+  return text;
+}
+
+function piAssistantLivenessReason(
+  message: Readonly<Record<string, unknown>>
+): LivenessTerminalReason | undefined {
+  if (message.stopReason !== "error") return undefined;
+  try {
+    return validateContract(
+      LivenessTerminalReasonSchema,
+      message.errorMessage,
+      "Pi assistant liveness error"
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 export function canonicalAssistantText(messages: readonly unknown[]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = objectValue(messages[index], "agent message");
-    if (message.role !== "assistant") {
-      continue;
-    }
+    if (message.role !== "assistant") continue;
+    const livenessReason = piAssistantLivenessReason(message);
+    if (livenessReason !== undefined) throw new LivenessExhaustedError(livenessReason);
     if (typeof message.content === "string") {
-      return message.content;
+      return requireNonEmptyStageOutput(message.content);
     }
     if (Array.isArray(message.content)) {
-      return message.content
+      const text = message.content
         .map((part) => objectValue(part, "assistant content part"))
         .filter((part) => part.type === "text" && typeof part.text === "string")
         .map((part) => String(part.text))
         .join("");
+      return requireNonEmptyStageOutput(text);
     }
+    throw new EmptyStageOutputError();
   }
-  throw new Error("agent session produced no assistant text");
+  throw new EmptyStageOutputError();
 }
 
 /**
- * Derive a worker's tool allow-list from the SSOT: the `tools:` frontmatter of
- * `.pi/agents/<agent>.md`. That file is the single source of truth for per-agent
- * tool authority (enforced by check_tool_profiles.py); the orchestration app
- * must not maintain a private per-agent table. Fails loudly rather than running
- * a worker with an empty or guessed allow-list.
+ * Parse the agent's maximum ordinary catalog authority from the `tools:` frontmatter of
+ * `.pi/agents/<agent>.md`. Profiles lint this list exactly and the orchestration app must
+ * not maintain a private per-agent table. A phase subset is validated against this maximum
+ * later, before session creation; absence preserves exact YAML equality.
  */
 /**
  * The agent's SSOT-declared model, or `undefined` when the frontmatter omits it.
@@ -478,13 +658,223 @@ async function optionalText(filePath: string): Promise<string> {
   }
 }
 
+export function createDurableCatalogSession(input: {
+  readonly projectRoot: string;
+  readonly projectId: string;
+  readonly sessionRoot: string;
+  readonly agent: string;
+  readonly stateId: string;
+  readonly correlation: WorkflowSessionCorrelationV1;
+}): SessionManager {
+  if (!PROJECT_ID_PATTERN.test(input.projectId)) throw new Error("project ID is not canonical");
+  if (!path.isAbsolute(input.sessionRoot)) throw new Error("catalog session root must be absolute");
+  if (!CATALOG_AGENT_NAME_PATTERN.test(input.agent)) {
+    throw new Error("catalog agent name is not canonical");
+  }
+  assertOwnerDirectory(input.sessionRoot, "catalog session root");
+  const agentDirectory = path.join(input.sessionRoot, input.agent);
+  ensureOwnerDirectory(agentDirectory, `catalog session directory for '${input.agent}'`);
+  const manager = SessionManager.create(input.projectRoot, agentDirectory);
+  const metadata = validateCatalogWorkerSessionMetadata({
+    schema_version: 1,
+    project_id: input.projectId,
+    run_id: input.correlation.run_id,
+    workflow_session_id: input.correlation.workflow_session_id,
+    state_id: input.stateId,
+    branch_id: input.correlation.branch_id,
+    attempt: input.correlation.attempt,
+    worker_id: input.correlation.worker_id,
+    agent: input.agent,
+    purpose: input.correlation.purpose,
+  });
+  manager.appendCustomEntry(CATALOG_WORKER_SESSION_METADATA, metadata);
+  const sessionFile = finalizeDurableCatalogSession(manager);
+  if (sessionFile === undefined) {
+    throw new Error("durable catalog session correlation did not materialize");
+  }
+  manager.setSessionFile(sessionFile);
+  return manager;
+}
+
+/**
+ * Pi intentionally delays a JSONL write until an assistant message exists. Workflow
+ * diagnostics cannot make that assumption: provider/setup errors and aborts need the
+ * same durable transcript address. Materialize the public SessionManager snapshot only
+ * when Pi has not created the file, then verify owner-only custody and exact entry IDs.
+ */
+export function finalizeDurableCatalogSession(manager: SessionManager): string | undefined {
+  if (!manager.isPersisted()) return undefined;
+  const sessionFile = manager.getSessionFile();
+  const header = manager.getHeader();
+  if (sessionFile === undefined || header === null) {
+    throw new Error("durable catalog session has no file or header");
+  }
+  const entries = manager.getEntries();
+  if (!pathExistsNoFollow(sessionFile)) {
+    const descriptor = openSync(
+      sessionFile,
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+      0o600
+    );
+    try {
+      writeFileSync(
+        descriptor,
+        `${[header, ...entries].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+        "utf8"
+      );
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+  }
+
+  const before = lstatSync(sessionFile);
+  const uid = typeof process.geteuid === "function" ? process.geteuid() : undefined;
+  if (
+    !before.isFile() ||
+    before.isSymbolicLink() ||
+    before.nlink !== 1 ||
+    (uid !== undefined && before.uid !== uid)
+  ) {
+    throw new Error("catalog session JSONL has unsafe custody");
+  }
+  if ((before.mode & 0o777) !== 0o600) chmodSync(sessionFile, 0o600);
+  assertOwnerFile(sessionFile, "catalog session JSONL");
+
+  const stored = parseSessionEntries(readFileSync(sessionFile, "utf8"));
+  const storedHeader = stored.find((entry) => entry.type === "session");
+  const storedEntryIds = new Set(
+    stored.flatMap((entry) => (entry.type === "session" ? [] : [entry.id]))
+  );
+  if (storedHeader?.id !== header.id || entries.some((entry) => !storedEntryIds.has(entry.id))) {
+    throw new Error("catalog session JSONL did not flush the authoritative session entries");
+  }
+
+  const descriptor = openSync(sessionFile, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const opened = fstatSync(descriptor);
+    if (!opened.isFile() || opened.nlink !== 1) {
+      throw new Error("catalog session JSONL changed during verification");
+    }
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+  fsyncDirectory(path.dirname(sessionFile));
+  return sessionFile;
+}
+
+type CreatedAgentSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
+
+/** Mirror Pi runtime teardown for sessions created directly through the SDK. */
+export async function closeCreatedSession(
+  session: CreatedAgentSession,
+  sessionManager: SessionManager
+): Promise<void> {
+  try {
+    if (session.hasExtensionHandlers("session_shutdown")) {
+      await session.extensionRunner.emit({
+        type: "session_shutdown",
+        reason: "quit",
+      });
+    }
+  } finally {
+    try {
+      session.dispose();
+    } finally {
+      finalizeDurableCatalogSession(sessionManager);
+    }
+  }
+}
+
+export function buildAgentOpening(input: {
+  readonly invocation: AgentInvocation;
+  readonly registration: ActiveWorkerRegistrationMetadataV1;
+  readonly agentGuidance: string;
+  readonly domainGuidance: string;
+  readonly activeToolNames: readonly string[];
+}): string {
+  const repair = input.invocation.executionPurpose === "routing_repair";
+  const operativeGuidance = repair ? input.invocation.routingRepairGuidance : input.domainGuidance;
+  if (repair && operativeGuidance?.trim().length === 0) {
+    throw new Error("routing repair has no mechanically projected summary-only guidance");
+  }
+  const livenessContext =
+    input.invocation.livenessBudget === undefined
+      ? ""
+      : [
+          "HOST-ENFORCED LIVENESS BUDGET:",
+          canonicalJson(input.invocation.livenessBudget),
+          "EXTERNAL-BUDGET TOOLS:",
+          canonicalJson(input.activeToolNames.filter(isExternalCallTool).sort()),
+          [
+            "Each assistant response consumes one model turn. Reserve one effective model",
+            "turn for the final assistant answer. Before emitting tool calls, ensure another",
+            "model turn remains for that answer. Every requested tool call—including each",
+            "call in a parallel batch—is charged individually. Stop tool use and answer with",
+            "the best supported result when evidence is sufficient or another tool round",
+            "would consume the reserve.",
+          ].join("\n"),
+        ].join("\n\n");
+  return [
+    `You are executing the '${input.invocation.agent}' role for a registered workflow.`,
+    input.agentGuidance,
+    operativeGuidance ?? "",
+    livenessContext,
+    "TASK:",
+    input.invocation.task,
+    input.invocation.inputArtifacts.length > 0
+      ? `INPUT ARTIFACTS:\n${input.invocation.inputArtifacts
+          .map((ref) => JSON.stringify(ref))
+          .join("\n")}\nRead each needed ID with artifact_read before working.`
+      : "INPUT ARTIFACTS: none.",
+    (input.invocation.contextOverlays?.length ?? 0) > 0
+      ? `OWNER-RESOLVED RESEARCH CONTEXT:\n${input.invocation.contextOverlays
+          ?.map(
+            (overlay) =>
+              `SOURCE ENVELOPE ${canonicalJson(overlay.source)}\nCONTENT:\n${overlay.content}`
+          )
+          .join("\n\n")}`
+      : "",
+    repair
+      ? "Return exactly the one summary-only line required above. Do not return prose or semantic body bytes."
+      : "Return the complete stage output in assistant text and end with the closed SUMMARY line defined by the domain guidance.",
+  ]
+    .filter((part) => part.length > 0)
+    .join("\n\n");
+}
+
 export class PiAgentClient implements ModelClient {
   constructor(private readonly options: PiAgentClientOptions = {}) {}
 
   async runAgent(invocation: AgentInvocation): Promise<AgentCompletion> {
+    const registration = invocation.registration;
+    if (
+      registration === undefined ||
+      registration.playbook_name.trim().length === 0 ||
+      registration.workflow_name.trim().length === 0 ||
+      registration.guidance.skill_root.trim().length === 0
+    ) {
+      throw new Error(
+        `agent '${invocation.agent}' state '${invocation.stateId}' has no active-registration guidance`
+      );
+    }
     const spec = invocation.session;
     const isolatedSystemPrompt = spec?.isolatedSystemPrompt;
     const isolated = isolatedSystemPrompt !== undefined;
+    if (
+      isolated
+        ? registration.result_transport !== "host_typed" ||
+          registration.opening_policy !== "host_private_opening" ||
+          registration.model_policy !== "host_private_ssot_model"
+        : registration.result_transport !== "persisted_summary" ||
+          registration.opening_policy !== "registration_guidance_task_artifacts" ||
+          registration.model_policy !== "directive_override_or_runtime_default"
+    ) {
+      throw new Error(
+        `agent '${invocation.agent}' state '${invocation.stateId}' has registration/session posture mismatch`
+      );
+    }
     const catalogAgentDoc = await optionalText(
       path.join(invocation.projectRoot, ".pi", "agents", `${invocation.agent}.md`)
     );
@@ -497,19 +887,56 @@ export class PiAgentClient implements ModelClient {
     // W6: contract-resolved, not hardcoded. Private sessions already carry the
     // exact resolved guidance in their isolated system prompt, so they never
     // rediscover a project/global prompt here.
-    const domainGuidance = isolated
-      ? ""
-      : await optionalText(
-          resolveDomainGuidancePath({
-            projectRoot: invocation.projectRoot,
-            agent: invocation.agent,
-            stateId: invocation.stateId,
-            ...(invocation.guidance ? { guidance: invocation.guidance } : {}),
-          })
+    const routingRepair = invocation.executionPurpose === "routing_repair";
+    if (
+      routingRepair !== (invocation.workflowSession?.purpose === "routing_repair") ||
+      (routingRepair && invocation.routingRepairGuidance?.trim().length === 0)
+    ) {
+      throw new Error(
+        `agent '${invocation.agent}' state '${invocation.stateId}' has invalid routing-repair guidance binding`
+      );
+    }
+    const domainGuidance =
+      isolated || routingRepair
+        ? ""
+        : await optionalText(
+            resolveDomainGuidancePath({
+              projectRoot: invocation.projectRoot,
+              agent: invocation.agent,
+              stateId: invocation.stateId,
+              guidance: registration.guidance,
+            })
+          );
+    if (!isolated && !routingRepair && domainGuidance.trim().length === 0) {
+      throw new Error(
+        `agent '${invocation.agent}' state '${invocation.stateId}' has empty required guidance`
+      );
+    }
+    const yamlMaximum = isolated ? [] : [...parseSsotTools(agentGuidance, invocation.agent)];
+    // This is the sole catalog narrowing gate. WorkerExecutor may copy only the active
+    // PlaybookRegistrationV1 phase value here; task/trust/runtime state has no selector.
+    // Validate strict membership before createAgentSession, then pass the accepted list unchanged.
+    const registeredSubset = registration.allowed_tools;
+    if (isolated && registeredSubset !== undefined) {
+      throw new Error("private session cannot carry a catalog registration tool subset");
+    }
+    if (!isolated && registeredSubset !== undefined) {
+      if (
+        registeredSubset.length === 0 ||
+        new Set(registeredSubset).size !== registeredSubset.length ||
+        registeredSubset.some((tool) => !yamlMaximum.includes(tool)) ||
+        registeredSubset.length >= yamlMaximum.length
+      ) {
+        throw new Error(
+          `agent '${invocation.agent}' state '${invocation.stateId}' registration tools must be one non-empty exact strict subset of YAML`
         );
+      }
+    }
     const allowed = isolated
       ? [...(spec?.tools ?? [])]
-      : [...parseSsotTools(agentGuidance, invocation.agent)];
+      : registeredSubset === undefined
+        ? yamlMaximum
+        : [...registeredSubset];
     if (isolated && allowed.length === 0) {
       throw new Error("private session has no exact tool-name allowlist");
     }
@@ -526,23 +953,11 @@ export class PiAgentClient implements ModelClient {
         invocation.projectRoot,
         this.options.workerExtensions ?? []
       ));
-    const sessionOptions: CreateSessionOptions = {
-      cwd: invocation.projectRoot,
-      sessionManager: SessionManager.inMemory(invocation.projectRoot),
-      resourceLoader,
-      ...(isolatedResources ? { settingsManager: isolatedResources.settingsManager } : {}),
-      ...(isolated && spec?.noTools !== undefined ? { noTools: spec.noTools } : {}),
-      tools: allowed,
-      ...(isolated && spec?.customTools !== undefined
-        ? { customTools: [...spec.customTools] }
-        : {}),
-      ...(this.options.testOnlyThinkingLevelOverride === undefined
-        ? {}
-        : { thinkingLevel: this.options.testOnlyThinkingLevelOverride }),
-    };
+    let resolvedModel: PiModel | undefined;
+    let resolvedRuntime: CreateSessionOptions["modelRuntime"];
     if (invocation.modelOverride !== undefined) {
       if (this.options.resolveModel !== undefined) {
-        sessionOptions.model = await this.options.resolveModel(invocation.modelOverride);
+        resolvedModel = await this.options.resolveModel(invocation.modelOverride);
       } else {
         const runtime = await ModelRuntime.create();
         await runtime.refresh({ allowNetwork: false });
@@ -554,7 +969,7 @@ export class PiAgentClient implements ModelClient {
           if (model === undefined) {
             throw new Error(`model override '${invocation.modelOverride}' is unavailable`);
           }
-          sessionOptions.model = model;
+          resolvedModel = model;
         } else {
           // A catalog alias (an agent SSOT declares `model: sol`, not a
           // provider/model pair). Previously any non-slash override threw, so
@@ -569,33 +984,75 @@ export class PiAgentClient implements ModelClient {
               `model override '${invocation.modelOverride}' does not resolve to an available model`
             );
           }
-          sessionOptions.model = scoped.model;
+          resolvedModel = scoped.model;
         }
-        sessionOptions.modelRuntime = runtime;
+        resolvedRuntime = runtime;
       }
     }
 
     if (invocation.admitResolvedModel !== undefined) {
-      const resolved = sessionOptions.model;
-      const provider = typeof resolved?.provider === "string" ? resolved.provider : "";
-      const id = typeof resolved?.id === "string" ? resolved.id : "";
+      const provider = typeof resolvedModel?.provider === "string" ? resolvedModel.provider : "";
+      const id = typeof resolvedModel?.id === "string" ? resolvedModel.id : "";
       if (provider.length === 0 || id.length === 0) {
         throw new Error(
           `agent '${invocation.agent}' state '${invocation.stateId}': no resolved model identity to admit; refusing to create a session`
         );
       }
-      // Throws on denial. Nothing below this line may run for a denied model.
+      // Throws on denial. Nothing below this line may create a session.
       invocation.admitResolvedModel({ provider, model: id });
     }
 
-    const { session } = await createAgentSession(sessionOptions);
+    const sessionManager = isolated
+      ? SessionManager.inMemory(invocation.projectRoot)
+      : (this.options.testOnlySessionManagerFactory?.(invocation) ??
+        (() => {
+          const catalogSessions = this.options.catalogSessions;
+          const correlation = invocation.workflowSession;
+          if (catalogSessions === undefined || correlation === undefined) {
+            throw new Error(
+              `catalog agent '${invocation.agent}' requires the existing project session partition and workflow correlation`
+            );
+          }
+          return createDurableCatalogSession({
+            projectRoot: invocation.projectRoot,
+            projectId: catalogSessions.projectId,
+            sessionRoot: catalogSessions.root,
+            agent: invocation.agent,
+            stateId: invocation.stateId,
+            correlation,
+          });
+        })());
+    const thinkingLevel = invocation.thinkingLevel ?? this.options.testOnlyThinkingLevelOverride;
+    const sessionOptions: CreateSessionOptions = {
+      cwd: invocation.projectRoot,
+      sessionManager,
+      resourceLoader,
+      ...(isolatedResources ? { settingsManager: isolatedResources.settingsManager } : {}),
+      ...(isolated && spec?.noTools !== undefined ? { noTools: spec.noTools } : {}),
+      tools: allowed,
+      ...(isolated && spec?.customTools !== undefined
+        ? { customTools: [...spec.customTools] }
+        : {}),
+      ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+      ...(resolvedModel === undefined ? {} : { model: resolvedModel }),
+      ...(resolvedRuntime === undefined ? {} : { modelRuntime: resolvedRuntime }),
+    };
+
+    let created: Awaited<ReturnType<typeof createAgentSession>>;
+    try {
+      created = await createAgentSession(sessionOptions);
+    } catch (error) {
+      finalizeDurableCatalogSession(sessionManager);
+      throw error;
+    }
+    const { session } = created;
     const activeTools = [...session.getActiveToolNames()].sort();
     const expectedTools = [...allowed].sort();
     if (
       activeTools.length !== expectedTools.length ||
       activeTools.some((tool, index) => tool !== expectedTools[index])
     ) {
-      session.dispose();
+      await closeCreatedSession(session, sessionManager);
       const missing = expectedTools.filter((tool) => !activeTools.includes(tool));
       const added = activeTools.filter((tool) => !expectedTools.includes(tool));
       throw new Error(
@@ -603,17 +1060,29 @@ export class PiAgentClient implements ModelClient {
       );
     }
     const traceToolNames = new Set(allowed);
+    const unsubscribeLiveness =
+      invocation.liveness === undefined
+        ? undefined
+        : session.subscribe((event) => {
+            const charge = contentFreeSessionLivenessEvent(event, traceToolNames);
+            if (charge !== undefined) invocation.liveness?.(charge);
+          });
+    const traceSinks = [this.options.sessionTrace, spec?.trace].filter(
+      (sink): sink is AgentSessionTraceSink => sink !== undefined
+    );
     const unsubscribeTrace =
-      spec?.trace === undefined
+      traceSinks.length === 0
         ? undefined
         : session.subscribe((event) => {
             const record = contentFreeSessionTraceRecord(event, traceToolNames);
             if (record === undefined) return;
-            try {
-              spec.trace?.(record);
-            } catch {
-              // Diagnostics are observational and may not alter session authority
-              // or completion semantics.
+            for (const sink of traceSinks) {
+              try {
+                sink(record);
+              } catch {
+                // Diagnostics are observational and may not alter session authority
+                // or completion semantics.
+              }
             }
           });
     const abort = (): void => {
@@ -626,21 +1095,13 @@ export class PiAgentClient implements ModelClient {
       }
       const opening =
         spec?.opening ??
-        [
-          `You are executing the '${invocation.agent}' role in a durable research workflow.`,
+        buildAgentOpening({
+          invocation,
+          registration,
           agentGuidance,
           domainGuidance,
-          "TASK:",
-          invocation.task,
-          invocation.inputArtifacts.length > 0
-            ? `INPUT ARTIFACTS:\n${invocation.inputArtifacts
-                .map((ref) => JSON.stringify(ref))
-                .join("\n")}\nRead each needed ID with artifact_read before working.`
-            : "INPUT ARTIFACTS: none.",
-          "Return the complete stage output in assistant text and end with the closed SUMMARY line defined by the domain guidance.",
-        ]
-          .filter((part) => part.length > 0)
-          .join("\n\n");
+          activeToolNames: activeTools,
+        });
       await session.prompt(opening, { expandPromptTemplates: false, source: "rpc" });
       if (spec?.readResult !== undefined) {
         const body = spec.readResult();
@@ -666,8 +1127,9 @@ export class PiAgentClient implements ModelClient {
       return { text: canonicalAssistantText(session.messages) };
     } finally {
       invocation.signal?.removeEventListener("abort", abort);
+      unsubscribeLiveness?.();
       unsubscribeTrace?.();
-      session.dispose();
+      await closeCreatedSession(session, sessionManager);
     }
   }
 }

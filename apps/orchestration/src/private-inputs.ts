@@ -56,7 +56,7 @@ import path from "node:path";
 import type { Checkpointer } from "./checkpointer.js";
 import { canonicalJson, sha256 } from "./checkpointer.js";
 import type { RunContext } from "./context.js";
-import { resolvePennyProjectState } from "./state/setup.js";
+import { resolvePennyRuntimeState } from "./state/setup.js";
 
 /** A custody, hash, or lifecycle refusal. `code` is bounded and safe to surface. */
 export class PrivateInputError extends Error {
@@ -94,7 +94,7 @@ function errorHasCode(error: unknown, code: string): boolean {
 
 /** The trusted catalog-bound input root; never a model-visible argument. */
 export function privateInputRoot(projectRoot: string): string {
-  return resolvePennyProjectState(path.resolve(projectRoot)).paths.orchestration.inputs;
+  return resolvePennyRuntimeState(path.resolve(projectRoot)).paths.orchestration.inputs;
 }
 
 function assertOwnerDirectory(dir: string, what: string): void {

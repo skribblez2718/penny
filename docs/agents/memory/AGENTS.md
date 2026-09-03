@@ -1,5 +1,5 @@
 # Memory Feature Index
 
-- [Integration Guide](integration.md): Primary-only durable recall/curation and default-off advisory logstream over one supervised 3.7.1 HTTP hub; authority, continuation, and lifecycle boundaries
-- [Knowledge Graph Patterns](kg-patterns.md): Governed temporal predicate schema, value-gated writes, invalidation, and supersession
-- [Retention and Legacy Corpus](schema.md): Tiers, historical skill-room classification, reviewed retention gates, and data preservation
+- [Integration Guide](integration.md): READ WHEN changing or operating primary durable recall, curation, or advisory logs — authority and lifecycle boundaries.
+- [Knowledge Graph Patterns](kg-patterns.md): READ WHEN changing temporal facts, predicates, invalidation, or supersession — governed knowledge-graph rules.
+- [Retention and Legacy Corpus](schema.md): READ WHEN changing retention, archival, or legacy memory classification — preservation and review gates.

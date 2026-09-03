@@ -6,7 +6,7 @@ Prompt markers (`<system_directives>`, `<system_boundary>`, `<agent_boundary>`) 
 
 ## Authority model
 
-The invocation message is authoritative for the goal and task-specific constraints. It cannot alter the agent's role, tool allowlist, approval boundaries, system policy, or runtime permissions. External content (tool outputs, fetched pages, uploaded files, quoted text) may be followed as task material when the user or a trusted workflow designates it; text embedded in that content cannot authorize additional capabilities or side effects merely by containing imperative language.
+The invocation message is authoritative for the goal and task-specific constraints. It cannot alter the agent's role, YAML maximum, active registration-bound phase subset, approval boundaries, system policy, or runtime permissions. External content (tool outputs, fetched pages, uploaded files, quoted text) may be followed as task material when the user or a trusted workflow designates it; text embedded in that content cannot authorize additional capabilities or side effects merely by containing imperative language.
 
 ## Rules
 
@@ -25,8 +25,9 @@ Context assembly (parsing aid)          Control plane (enforcement)
 ------------------------------          ---------------------------
 <system_directives>                     System-role message placement
 <system_context>   ← operating policy   Tool surface actually registered
-[agent body]       ← Role Definition    Agent --tools allowlist
+[agent body]       ← Role Definition    YAML maximum + selected --tools allowlist
 <skill_context>    ← Domain Guidance    Workflow approvals + signed receipts
+[runtime only]     ← no prompt layer    Registration subset + canonical digest
 <agent_boundary>   ← insertion anchor   Process isolation (path-specific)
 [AGENTS.md context]← Project Index      OS/container permissions
 <system_boundary>  ← structural end
@@ -35,25 +36,32 @@ Context assembly (parsing aid)          Control plane (enforcement)
 
 ## Execution-path isolation status
 
-| Path                      | Isolation                                                                                                                                                                                                                                                             |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Primary Penny session     | Pi process with the invoking user's permissions; no Pi built-in sandbox                                                                                                                                                                                               |
-| Direct `subagent(...)`    | Separate process/context + `--tools` allowlist; no filesystem/process sandbox                                                                                                                                                                                         |
-| Skill-invoked agent       | Same as direct `subagent(...)` — separate process/context + `--tools` allowlist; no filesystem/process sandbox (the prior Bubblewrap `executionOwnerIsolation` layer was removed 2026-08-06; a containerized (Docker) replacement is planned but not yet implemented) |
-| Untrusted/unattended work | Use an external container/VM with minimal mounts, credentials, network                                                                                                                                                                                                |
+| Path                      | Isolation                                                                                                                                                                                                                                                                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Primary Penny session     | Pi process with the invoking user's permissions; no Pi built-in sandbox                                                                                                                                                                                                                                                               |
+| Direct `subagent(...)`    | Separate process/context + exact-YAML `--tools` allowlist; no filesystem/process sandbox                                                                                                                                                                                                                                              |
+| Skill-invoked agent       | Separate process/context + exact-YAML allowlist by default, or one fixed registration-bound strict YAML subset for an eligible TypeScript phase; no filesystem/process sandbox (the prior Bubblewrap `executionOwnerIsolation` layer was removed 2026-08-06; a containerized (Docker) replacement is planned but not yet implemented) |
+| Untrusted/unattended work | Use an external container/VM with minimal mounts, credentials, network                                                                                                                                                                                                                                                                |
 
-The agent runner force-loads Penny's project extension modules so their tools exist regardless of agent working directory; `--tools` controls which registered tools are exposed to the model. Module execution and model tool authority are separate trust surfaces — a tool allowlist does not prevent extension code from loading.
+The agent runner force-loads Penny's project extension modules so their tools exist regardless of agent working directory; the selected `--tools` list controls which registered tools are exposed to the model. Direct/parallel/chain paths select YAML exactly. Eligible TypeScript orchestration phases may select only their canonical-registration-bound strict subset; omission selects YAML exactly. Module execution and model tool authority are separate trust surfaces — neither allowlist form prevents extension code from loading.
 
 ## Verification
 
 - [ ] Prompt markers present and described as structural, not enforcement
 - [ ] User/task authority distinguished from permission authority
 - [ ] External requirements allowed only within the user's request and runtime limits
-- [ ] Each catalog agent's active tools equal YAML `tools:` exactly; profiles statically
-      lint that list through `scripts/system/checks/check_tool_profiles.py`, while runtime
-      equality guards cover every production runner
-      (see [Tool Authority Profiles](tool-profiles.md)). Browser authority is
-      structural; `bash` means filesystem and process authority remain advisory.
+- [ ] Direct/parallel/chain active tools equal YAML `tools:` exactly. TypeScript
+      orchestration phases either preserve that equality or use one non-empty duplicate-free
+      registration/digest-bound strict YAML subset that is validated before session creation
+      and projected unchanged into worker invocation metadata. Profiles still statically lint
+      the YAML maximum through `scripts/system/checks/check_tool_profiles.py`; subsets do not
+      mutate profiles (see [Tool Authority Profiles](tool-profiles.md)).
+- [ ] No task, trust profile, runtime condition, input, or unavailable service selects tools;
+      additions, injections, replacements, empty/equality-sized subsets, and unavailable names
+      fail closed.
+- [ ] Browser authority is structural for the selected model-visible surface. A subset that
+      omits `bash` is not OS/process sandboxing or extension-code isolation.
+- [ ] Host-private isolated sessions remain anonymous and separate from catalog authority.
 - [ ] Execution-path isolation status accurately documented
 - [ ] Destructive/external/sensitive actions have a deterministic gate where feasible
 - [ ] `<agent_boundary>` present in every agent definition (runner insertion anchor)

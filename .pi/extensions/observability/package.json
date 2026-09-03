@@ -11,7 +11,7 @@
     "test": "bunx vitest run --config tests/vitest.config.ts",
     "test:unit": "bunx vitest run --config tests/vitest.config.ts",
     "test:integration": "bunx vitest run --config tests/vitest.integration.config.ts",
-    "test:e2e": "bunx vitest run --config tests/vitest.e2e.config.ts",
+    "test:e2e": "bun run --cwd ../../../apps/observability build && bunx vitest run --config tests/vitest.e2e.config.ts",
     "test:all": "bun run typecheck && bun run lint && bun run format:check && bun run test:unit && bun run test:integration && bun run test:e2e",
     "test:watch": "bunx vitest --config tests/vitest.config.ts",
     "typecheck": "tsc --noEmit"

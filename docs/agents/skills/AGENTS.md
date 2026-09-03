@@ -1,14 +1,15 @@
 # Skills Feature Index
 
-- [design-methodology.md](design-methodology.md): How to design a skill — extract phases from a proven workflow, failure-mode-justified ordering, gate placement, knowledge layering
-- [flow-diagrams.md](flow-diagrams.md): the interactive HTML state-diagram standard (resources/flow.html) — format, requirements, and drift enforcement (legacy resources/flow.mmd is deprecated)
-- [loops.md](loops.md): Agentic loop taxonomy (7 classes as arrangements of the atomic components), termination controls, failure modes, verifier design, task-to-loop mapping, and 5 loop-quality gaps to close
-- [mempalace-integration.md](mempalace-integration.md): Retired room protocol filename; current exact artifact handoff, optional primary durable memory, and compaction-safe recovery
-- [orchestration.md](orchestration.md): Engine protocol — exact input/output artifact contracts, owner capture, checkpoints, continuation, and recovery
-- [overview.md](overview.md): Skill architecture, directory structure, and how Penny skills extend AgentSkills.io
-- [quick-reference.md](quick-reference.md): Artifact-first skill build and validation checklist
-- [resilience.md](resilience.md): Error handling patterns and recovery strategies for skill orchestrators
-- [skill-md-format.md](skill-md-format.md): YAML frontmatter, content sections, prompt layer context, and what does NOT belong in SKILL.md
-- [skill-md-template.md](skill-md-template.md): Artifact-first, memory-optional manifest template
-- [skill-standard.md](skill-standard.md): Complete artifact-first workflow specification
-- [testing.md](testing.md): Unit, integration, E2E test standards, validation checklist
+- [Design Methodology](design-methodology.md): READ WHEN designing a new engine-backed skill — phase, failure-mode, and gate design.
+- [Evaluation](evaluation.md): READ WHEN creating, changing, or running paired skill evaluation — frozen contracts, real-path execution, deterministic grading, and disposition boundaries.
+- [Flow Diagrams](flow-diagrams.md): READ WHEN creating or updating a skill flow diagram — diagram standard and drift checks.
+- [Loops](loops.md): READ WHEN selecting or changing an agentic loop pattern — termination, verifier, and quality guidance.
+- [Exact Artifact Handoff](mempalace-integration.md): READ WHEN reasoning about skill handoff, memory boundaries, or recovery — exact artifact and optional-memory rules.
+- [Orchestration](orchestration.md): READ WHEN implementing skill engine integration, state, continuation, or recovery — orchestration protocol.
+- [Overview](overview.md): READ WHEN determining whether an engine-backed skill is appropriate — skill architecture and boundaries.
+- [Quick Reference](quick-reference.md): CONSULT WHEN checking a completed skill implementation against its build checklist — concise validation aid.
+- [Resilience](resilience.md): READ WHEN adding retries, failures, repairs, or recovery behavior to a skill — resilience patterns.
+- [SKILL.md Format](skill-md-format.md): READ WHEN creating or editing a `SKILL.md` manifest — required structure and prohibited content.
+- [SKILL.md Template](skill-md-template.md): CONSULT WHEN starting a standard artifact-first skill manifest — reusable template.
+- [Skill Standard](skill-standard.md): MUST READ FOR creating or materially changing an engine-backed skill — required architecture and contracts.
+- [Testing](testing.md): MUST READ FOR adding or changing an engine-backed skill — unit, integration, and E2E verification requirements.

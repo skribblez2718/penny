@@ -3,495 +3,236 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>knowledge-base skill — execution flows</title>
+    <meta name="penny-flow-template" content="1" />
+    <title>Knowledge Base — execution flows | Penny</title>
     <style>
       :root {
-        --bg: #0d1117;
-        --panel: #161b22;
-        --panel2: #1c2230;
-        --border: #2a3341;
-        --ink: #e6edf3;
-        --muted: #8b949e;
-        --desc: #b3bdc9;
-        --echo: #22d3ee;
-        --synthia: #f472b6;
-        --carren: #fb7185;
-        --vera: #4ade80;
-        --piper: #7c5cff;
-        --skribble: #c77dff;
+        --canvas: #0d1117;
+        --surface: #161b22;
+        --surface-raised: #1c2230;
+        --border: #3a4657;
+        --text: #f0f6fc;
+        --muted: #b6c2cf;
+        --host: #c4b5fd;
         --start: #94a3b8;
-        --gate: #e3b341;
-        --host: #a78bfa;
-        --done: #3fb950;
-        --error: #f85149;
-        --fwd: #8b98a9;
-        --exit: #3fb950;
-        --loop: #e3a52e;
-        --gatec: #e3b341;
-        --abort: #f85149;
+        --gate: #fbbf24;
+        --done: #4ade80;
+        --negative: #fb7185;
+        --annie: #c4b5fd;
+        --carren: #fb7185;
+        --demetri: #60a5fa;
+        --echo: #22d3ee;
+        --ida: #f59e0b;
+        --piper: #facc15;
+        --skribble: #d8b4fe;
+        --synthia: #f472b6;
+        --tabitha: #fb923c;
+        --vera: #4ade80;
+        --fwd: #aab7c7;
+        --loop: #fbbf24;
+        --exit: #4ade80;
+        --abort: #fb7185;
+        --esc: #cbd5e1;
       }
-      * {
-        box-sizing: border-box;
-      }
-      html,
-      body {
-        margin: 0;
-        background: var(--bg);
-        color: var(--ink);
-        font:
-          14px/1.45 -apple-system,
-          BlinkMacSystemFont,
-          "Segoe UI",
-          Roboto,
-          Helvetica,
-          Arial,
-          sans-serif;
-      }
-      header {
-        padding: 22px 28px 8px;
-      }
-      h1 {
-        margin: 0;
-        font-size: 22px;
-        letter-spacing: -0.01em;
-      }
-      .sub {
-        color: var(--muted);
-        margin-top: 4px;
-        font-size: 13px;
-        max-width: 1180px;
-      }
-      .callout {
-        margin: 14px 28px;
-        padding: 12px 14px;
-        border-left: 4px solid var(--gate);
-        background: #211d10;
-        border-radius: 6px;
-        font-size: 13px;
-        color: #e8d9a8;
-      }
-      .callout b {
-        color: #f0c657;
-      }
-      .legend {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 18px 26px;
-        padding: 10px 28px 16px;
-        font-size: 12.5px;
-        color: #c9d3df;
-      }
-      .legend .grp {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px 16px;
-        align-items: center;
-      }
-      .chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-      }
-      .dot {
-        width: 12px;
-        height: 12px;
-        border-radius: 3px;
-        display: inline-block;
-      }
-      .aline {
-        width: 26px;
-        height: 0;
-        border-top: 3px solid var(--fwd);
-        display: inline-block;
-      }
-      #wrap {
-        position: relative;
-        margin: 8px 20px 40px;
-        width: 1120px;
-        height: 1240px;
-      }
-      svg {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        pointer-events: none;
-        overflow: visible;
-      }
-      .node {
-        position: absolute;
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        box-shadow:
-          0 1px 2px rgba(0, 0, 0, 0.35),
-          0 2px 8px rgba(0, 0, 0, 0.25);
-        padding: 10px 12px;
-      }
-      .node .t {
-        font-weight: 700;
-        font-size: 13.5px;
-        display: flex;
-        align-items: center;
-        gap: 7px;
-      }
-      .node .t .who {
-        font-weight: 600;
-        color: var(--muted);
-        font-size: 11.5px;
-      }
-      .node .d {
-        color: var(--desc);
-        font-size: 12px;
-        margin-top: 5px;
-      }
-      .node::before {
-        content: "";
-        position: absolute;
-        left: 0;
-        top: 0;
-        bottom: 0;
-        width: 5px;
-        border-radius: 10px 0 0 10px;
-      }
-      .node.echo::before {
-        background: var(--echo);
-      }
-      .node.synthia::before {
-        background: var(--synthia);
-      }
-      .node.carren::before {
-        background: var(--carren);
-      }
-      .node.vera::before {
-        background: var(--vera);
-      }
-      .node.start::before {
-        background: var(--start);
-      }
-      .node.host::before {
-        background: var(--host);
-      }
-      .node.piper::before {
-        background: var(--piper);
-      }
-      .node.skribble::before {
-        background: var(--skribble);
-      }
-      .node.gate {
-        background: #211d10;
-        border-color: #4d3f1a;
-      }
-      .node.gate::before {
-        background: var(--gate);
-      }
-      .node.done {
-        background: #0f2417;
-        border-color: #1f5136;
-      }
-      .node.done::before {
-        background: var(--done);
-      }
-      .node.err {
-        background: #2a1517;
-        border-color: #5c2a2a;
-      }
-      .node.err::before {
-        background: var(--error);
-      }
-      .node .badge {
-        margin-left: auto;
-        font-size: 10px;
-        font-weight: 700;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        color: #0d1117;
-        padding: 2px 6px;
-        border-radius: 999px;
-      }
-      .badge.hitl {
-        background: var(--gate);
-      }
-      .badge.term {
-        background: #5b6675;
-        color: #e6edf3;
-      }
-      .badge.bnd {
-        background: var(--loop);
-      }
-      .lbl {
-        position: absolute;
-        transform: translate(-50%, -50%);
-        background: var(--panel2);
-        border: 1px solid #313c4a;
-        color: #c9d3df;
-        font-size: 11px;
-        padding: 1px 6px;
-        border-radius: 999px;
-        white-space: nowrap;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-      }
-      .foot {
-        margin: 0 28px 48px;
-        font-size: 12.5px;
-        color: #c3cdd9;
-        max-width: 1120px;
-      }
-      .foot h3 {
-        font-size: 13px;
-        margin: 18px 0 6px;
-        color: #e6edf3;
-      }
-      .foot ul {
-        margin: 6px 0;
-        padding-left: 18px;
-      }
-      .foot li {
-        margin: 3px 0;
-      }
-      .foot b {
-        color: #e6edf3;
-      }
-      code {
-        background: #22293a;
-        color: #cdd6e3;
-        padding: 1px 5px;
-        border-radius: 4px;
-        font-size: 12px;
-      }
+
+      * { box-sizing: border-box; }
+      html { background: var(--canvas); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+      body { margin: 0; }
+      header, .callout, .legend, main, footer { width: min(100% - 32px, 1760px); margin-inline: auto; }
+      header { padding-top: 28px; }
+      h1 { margin: 0; font-size: clamp(1.45rem, 2.2vw, 2rem); line-height: 1.2; }
+      .summary, .muted { color: var(--muted); max-width: 100ch; }
+      .callout { margin-top: 20px; border-inline-start: 4px solid var(--gate); border-radius: 8px; background: #251f0d; color: #f9e8a4; padding: 12px 16px; }
+      .callout p { margin: 0; }
+      .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 28px; padding: 20px 0; }
+      .legend h2, .route-rail h2, footer h2 { font-size: .9rem; margin: 0 0 7px; color: var(--text); }
+      .legend ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 12px; color: var(--muted); font-size: .86rem; }
+      .legend li { display: inline-flex; align-items: center; gap: 6px; }
+      .swatch, .line { display: inline-block; flex: 0 0 auto; }
+      .swatch { width: 12px; height: 12px; border-radius: 3px; background: var(--swatch); }
+      .line { width: 25px; border-top: 3px solid var(--swatch); }
+      .line.dash { border-top-style: dashed; }
+      main { padding-bottom: 24px; }
+      .flow-viewport { overflow: auto; border: 1px solid var(--border); border-radius: 12px; background: #090d12; padding: 12px; outline-offset: 4px; }
+      .flow-viewport:focus-visible { outline: 3px solid #facc15; }
+      #wrap { min-width: 1340px; max-width: 1760px; margin-inline: auto; }
+      .graph-area { position: relative; min-height: 1180px; }
+      #edges { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
+      .edge { fill: none; stroke: var(--fwd); stroke-width: 2.4; }
+      .edge.loop { stroke: var(--loop); stroke-dasharray: 7 5; }
+      .edge.exit { stroke: var(--exit); }
+      .edge.abort { stroke: var(--abort); stroke-dasharray: 6 5; }
+      .edge.gate { stroke: var(--gate); }
+      .edge.esc { stroke: var(--esc); stroke-dasharray: 4 5; }
+      .node { position: absolute; width: 270px; min-height: 92px; padding: 12px 13px 12px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 4px 14px rgb(0 0 0 / .25); }
+      .node::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 5px; border-radius: 10px 0 0 10px; background: var(--agent, var(--host)); }
+      .node-title { display: flex; gap: 7px; align-items: baseline; font-size: .94rem; font-weight: 750; overflow-wrap: anywhere; }
+      .node-owner { color: var(--muted); font-size: .78rem; font-weight: 650; }
+      .node-desc { margin: 6px 0 0; color: var(--muted); font-size: .79rem; overflow-wrap: anywhere; }
+      .badge { margin-inline-start: auto; padding: 2px 6px; border-radius: 999px; background: var(--badge, var(--host)); color: #111827; font: 750 .66rem/1.2 system-ui, sans-serif; letter-spacing: .05em; white-space: nowrap; }
+      .node.start { --agent: var(--start); }
+      .node.host { --agent: var(--host); }
+      .node.gate { --agent: var(--gate); --badge: var(--gate); background: #25200f; }
+      .node.done { --agent: var(--done); --badge: var(--done); background: #102719; }
+      .node.error { --agent: var(--negative); --badge: var(--negative); background: #30161c; }
+      .node.esc { --agent: var(--esc); }
+      .node.annie { --agent: var(--annie); }.node.carren { --agent: var(--carren); }.node.demetri { --agent: var(--demetri); }.node.echo { --agent: var(--echo); }.node.ida { --agent: var(--ida); }.node.piper { --agent: var(--piper); }.node.skribble { --agent: var(--skribble); }.node.synthia { --agent: var(--synthia); }.node.tabitha { --agent: var(--tabitha); }.node.vera { --agent: var(--vera); }
+      .route-rail { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+      .route-rail > p { margin: 0 0 10px; color: var(--muted); font-size: .84rem; }
+      #route-labels { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+      .lbl { min-width: 0; border: 1px solid var(--border); border-inline-start: 4px solid var(--fwd); border-radius: 7px; background: var(--surface-raised); color: var(--text); padding: 7px 9px; font-size: .78rem; overflow-wrap: anywhere; }
+      .lbl.loop { border-inline-start-color: var(--loop); }.lbl.exit { border-inline-start-color: var(--exit); }.lbl.abort { border-inline-start-color: var(--abort); }.lbl.gate { border-inline-start-color: var(--gate); }.lbl.esc { border-inline-start-color: var(--esc); }
+      .route-id { color: var(--muted); font-variant-numeric: tabular-nums; }
+      .route-state { color: var(--muted); }
+      footer { padding: 0 0 44px; color: var(--muted); }
+      footer p { max-width: 105ch; }
+      .sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+      @media (max-width: 720px) { header, .callout, .legend, main, footer { width: min(100% - 20px, 1760px); } #route-labels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
     </style>
   </head>
   <body>
     <header>
-      <h1>knowledge-base skill — execution flows</h1>
-      <div class="sub">
-        Mirrors
-        <code>apps/orchestration/src/playbooks/knowledge-base.ts</code>
-        (<code>KnowledgeBasePlaybook</code>, exported as <code>KB_FLOW</code>). Engine-driven
-        ingest/save/promote plus query grounding: all private inputs arrive through host-closed
-        readers; publication remains behind authenticated host authority. Promotion apply is a
-        signed internal continuation, never a public action. Drift-guarded by
-        <code>apps/orchestration/tests/flow-diagrams.test.ts</code> against the exported descriptor
-        — the <code>N</code>/<code>E</code> data below is the machine-readable half of this diagram.
-      </div>
+      <h1>Knowledge Base — execution flows</h1>
+      <p class="summary">Strict machine-readable mirror of KB_FLOW in apps/orchestration/src/playbooks/knowledge-base.ts. Private inputs remain behind host-closed readers; agents advise and authenticated host authority alone publishes or applies promotion.</p>
     </header>
-
-    <div class="callout">
-      <b>Authority transitions stay host-only:</b> ingest/save publish only after authenticated
-      content review. Promotion applies only after approval-DB-first packet custody, a strict-JCS
-      HMAC-signed single-use receipt, all-target reservation, and journaled postimage verification.
-      Grounded queries publish nothing: default-true requests run <b>Synthia → Vera</b>.
-    </div>
-
-    <div class="legend">
-      <div class="grp">
-        <span class="chip"
-          ><span class="dot" style="background: var(--echo)"></span>echo · ingest (claims)</span
-        >
-        <span class="chip"
-          ><span class="dot" style="background: var(--synthia)"></span>synthia · compose / query
-          synthesis</span
-        >
-        <span class="chip"
-          ><span class="dot" style="background: var(--carren)"></span>carren · lint (semantic
-          report)</span
-        >
-        <span class="chip"
-          ><span class="dot" style="background: var(--vera)"></span>vera · claim / citation
-          grounding</span
-        >
-        <span class="chip"
-          ><span class="dot" style="background: var(--host)"></span>host · publishing</span
-        >
-      </div>
-      <div class="grp">
-        <span class="chip"
-          ><span class="dot" style="background: var(--done)"></span>complete (met)</span
-        >
-        <span class="chip"
-          ><span class="dot" style="background: var(--error)"></span>incomplete (met = false)</span
-        >
-        <span class="chip"
-          ><span class="aline" style="border-color: var(--fwd)"></span>forward</span
-        >
-        <span class="chip"
-          ><span class="aline" style="border-color: var(--gatec)"></span>gate decision (host)</span
-        >
-        <span class="chip"
-          ><span class="aline" style="border-color: var(--loop)"></span>bounded repair</span
-        >
-        <span class="chip"
-          ><span class="aline" style="border-color: var(--abort)"></span>deny (host)</span
-        >
-      </div>
-    </div>
-
-    <div id="wrap">
-      <svg id="edges">
-        <defs>
-          <marker
-            id="ah"
-            markerWidth="10"
-            markerHeight="10"
-            refX="8"
-            refY="3"
-            orient="auto"
-            markerUnits="strokeWidth"
-          >
-            <path d="M0,0 L8,3 L0,6 Z" fill="context-stroke"></path>
-          </marker>
-        </defs>
-      </svg>
-    </div>
-
-    <div class="foot">
-      <h3>Bounded repairs &amp; honest exhaustion</h3>
-      <ul>
-        <li>
-          Repairs fire on the <b>result</b>, never on a label: ingest/save <b>lint → compose</b> on
-          a blocking-severity finding (<code>synthesis_gap</code>), ingest/save
-          <b>verify → compose</b> on an unsupported claim (<code>validation_gap</code>), and any
-          agent phase <b>→ itself</b> on an incomplete result (<code>malformed_result</code>). A
-          failed query report completes honestly as unmet and creates no claim.
-        </li>
-        <li>
-          <b>Budget spent → no fake pass.</b> The finding is carried forward as
-          <b>unresolved</b> and the machine proceeds on the forward path; the gate still sees an
-          honest candidate set.
-        </li>
-        <li>
-          <b>refine</b> (host, at the gate) re-enters at <b>compose</b> for content review or
-          <b>plan</b> for promotion; each route creates a fresh packet/challenge while retaining
-          only its exact eligible claims.
-        </li>
-      </ul>
-      <h3>Authority &amp; privacy seams</h3>
-      <ul>
-        <li>
-          <b>Uniform seam (arrows omitted for legibility):</b> operator cancellation from any
-          non-terminal state ends the run at the <code>cancelled</code> terminal (met = false). Same
-          documented-omission convention as the research diagram's abort seam.
-        </li>
-        <li>
-          <b>initialize</b> (engine, before <code>ingest</code>): claims the source capabilities and
-          admits the source objects — all-or-none, so the approval path publishes exactly what the
-          agents saw. A drifted source refuses here, before any agent read.
-        </li>
-        <li>
-          <b>Child sessions read only through host-closed readers.</b> Query phases add a
-          no-argument private-request reader, request-closed selected-generation search,
-          candidate-page reader, candidate-evidence source reader, and exact prior output. The
-          request and bodies never enter control state or an opening prompt.
-        </li>
-      </ul>
-    </div>
-
+    <aside class="callout" aria-label="Key workflow invariant"><p>Authority transitions stay host-only: content review precedes publication, and promotion apply requires the separately authenticated signed internal continuation. Grounded queries publish nothing.</p></aside>
+    <section class="legend" aria-label="Diagram legend">
+      <div><h2>State owners and control states</h2><ul><li><span class="swatch" style="--swatch:var(--host)"></span>host</li><li><span class="swatch" style="--swatch:var(--gate)"></span>gate</li><li><span class="swatch" style="--swatch:var(--done)"></span>positive terminal</li><li><span class="swatch" style="--swatch:var(--negative)"></span>non-positive terminal</li><li><span class="swatch" style="--swatch:var(--annie)"></span>agent owner (named on card)</li></ul></div>
+      <div><h2>Route kinds</h2><ul><li><span class="line" style="--swatch:var(--fwd)"></span>forward</li><li><span class="line dash" style="--swatch:var(--loop)"></span>bounded repair</li><li><span class="line" style="--swatch:var(--exit)"></span>pass / exit</li><li><span class="line dash" style="--swatch:var(--abort)"></span>abort / deny</li><li><span class="line dash" style="--swatch:var(--esc)"></span>escalation</li></ul></div>
+    </section>
+    <main>
+      <section class="flow-viewport" aria-labelledby="flow-heading" aria-label="Workflow graph; use arrow keys to scroll when it is wider than the window" tabindex="0">
+        <h2 id="flow-heading" class="sr-only">Workflow graph</h2>
+        <div id="wrap">
+          <div class="graph-area" id="graph-area"><svg id="edges" aria-hidden="true" focusable="false"><defs><marker id="arrowhead" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="context-stroke"></path></marker></defs></svg></div>
+          <section class="route-rail" aria-labelledby="routes-heading"><h2 id="routes-heading">Route labels</h2><p>Each numbered route below maps to one directed arrow in the graph.</p><ol id="route-labels"></ol></section>
+          <ul id="edge-list" class="sr-only" aria-label="Complete workflow edge list"></ul>
+        </div>
+      </section>
+    </main>
+    <footer><h2>Notes</h2><p>Budget spent leaves the finding unresolved; it never creates a fake pass. The uniform cancellation seam is omitted for legibility from E; public promotion preparation never performs a mutation.</p></footer>
     <script>
-      const COLS = { Louter: 30, C: 430, Rmid: 800 };
-      const W = { C: 300, side: 245 };
-      // Machine-readable state/edge data — drift-guarded by apps/orchestration/tests/flow-diagrams.test.ts
-      // against the exported KB_FLOW descriptor in playbooks/knowledge-base.ts.
-      // "start" is a virtual entry point (the engine's initialize), not a machine state.
-      // prettier-ignore
-      const N = {"start":{"col":"Louter","y":40,"cls":"start","title":"start","desc":"Virtual engine initialize. Ingest claims and admits sources; save claims a verified query answer; promote claims targets; query reads its private request only through host custody, binds one selected generation, then chooses grounded agents or deterministic unverified retrieval."},"ingest":{"col":"C","y":120,"cls":"echo","title":"ingest","who":"echo","desc":"Extract materially distinct claims from admitted source snapshots. Submit one typed `claims` artifact."},"compose":{"col":"C","y":280,"cls":"synthia","title":"compose","who":"synthia","desc":"Compose the page revision pair over extracted claims or a claimed verified query answer. Submit one typed `page_draft` artifact."},"query":{"col":"Louter","y":400,"cls":"synthia","title":"query","who":"synthia","desc":"Default-true query synthesis. Read the private request, deterministic candidate search, selected pages, and candidate evidence only through host-closed readers. Submit one cited `query_answer`."},"lint":{"col":"C","y":440,"cls":"carren","title":"lint","who":"carren","desc":"Semantic lint of a candidate page. Blocking-severity findings route back to compose within the bounded repair budget."},"verify":{"col":"C","y":600,"cls":"vera","title":"verify","who":"vera","desc":"Ingest/save: verify every page claim. Query: independently verify every answer citation against the bound candidates and evidence. A query passes only when the host validates the exact supported finding set."},"plan":{"col":"Rmid","y":200,"cls":"piper","title":"plan","who":"piper","desc":"PREPARE ONLY. Plan the canonical transition for named page revisions and claimed targets. Cannot apply, sign, or mutate anything."},"patch":{"col":"Rmid","y":380,"cls":"skribble","title":"patch","who":"skribble","desc":"PREPARE ONLY. Scope the exact promotion patch. The host independently verifies targets and captures preimages; public apply remains unavailable."},"awaiting_review":{"col":"C","y":780,"cls":"gate","title":"awaiting_review","badge":"HITL","desc":"Authenticated host gate. Ingest/save use control-DB content review; promotion uses approval-DB-first packet custody and a signed internal apply continuation. Public respond/resume cannot decide.","decisions":["approve","deny","refine"],"host_only":true},"publishing":{"col":"C","y":940,"cls":"host","title":"publishing","desc":"Host publication after approval: atomic selector swap and capability settlement. Query never enters this state."},"complete":{"col":"C","y":1080,"cls":"done","title":"complete","badge":"TERM","desc":"Terminal, met = true. Publication arrives from publishing; a grounded query arrives from Vera only after supported citations, a passing report, and save-claim creation. The deterministic unverified host path has no downstream authority."},"incomplete":{"col":"Louter","y":900,"cls":"err","title":"incomplete","badge":"TERM","desc":"Terminal, met = false. Covers denial, refusal/empty retrieval, failed query verification, or unavailable claim authority. No publication occurs."}};
-      // prettier-ignore
-      const E = [{"from":"start","to":"ingest","s1":"bottom","s2":"left","kind":"fwd","label":"initialize — claim + admit (host)"},{"from":"start","to":"query","s1":"bottom","s2":"left","kind":"fwd","label":"verify true — bind candidates"},{"from":"start","to":"complete","s1":"right","s2":"left","kind":"exit","label":"verify false — deterministic, unverified","bow":-60},{"from":"start","to":"incomplete","s1":"left","s2":"left","kind":"abort","label":"refused or empty query","bow":40},{"from":"start","to":"compose","s1":"bottom","s2":"left","a2frac":0.3,"kind":"fwd","label":"initialize save — claim query answer (host)","bow":-60},{"from":"start","to":"plan","s1":"right","s2":"top","kind":"fwd","label":"initialize promote — claim targets (host)"},{"from":"ingest","to":"compose","s1":"bottom","s2":"top","kind":"fwd","label":"claims (complete)"},{"from":"compose","to":"lint","s1":"bottom","s2":"top","kind":"fwd","label":"page_draft (complete)"},{"from":"query","to":"verify","s1":"right","s2":"left","kind":"fwd","label":"query_answer (complete)"},{"from":"lint","to":"verify","s1":"bottom","s2":"top","kind":"fwd","label":"lint_report (no errors)"},{"from":"verify","to":"awaiting_review","s1":"bottom","s2":"top","kind":"fwd","label":"page verification — seal + gate"},{"from":"plan","to":"patch","s1":"bottom","s2":"top","kind":"fwd","label":"promotion_plan (complete)"},{"from":"patch","to":"awaiting_review","s1":"bottom","s2":"right","kind":"fwd","label":"promotion_patch — host verify + gate"},{"from":"awaiting_review","to":"publishing","s1":"bottom","s2":"top","kind":"gate","label":"content-review approve — host only"},{"from":"awaiting_review","to":"complete","s1":"right","s2":"right","kind":"exit","label":"signed apply verified — internal only","bow":-90},{"from":"awaiting_review","to":"incomplete","s1":"left","s2":"right","kind":"abort","label":"deny — host only"},{"from":"awaiting_review","to":"compose","s1":"right","s2":"right","a2frac":0.7,"kind":"loop","label":"content refine (bounded)","bow":-170},{"from":"awaiting_review","to":"plan","s1":"right","s2":"right","kind":"loop","label":"promotion refine (bounded)","bow":-130},{"from":"publishing","to":"complete","s1":"bottom","s2":"top","kind":"exit","label":"publish generation"},{"from":"verify","to":"complete","s1":"right","s2":"left","kind":"exit","label":"query report passes + claim created","bow":70},{"from":"verify","to":"incomplete","s1":"left","s2":"right","kind":"abort","label":"query report/claim fails","bow":45},{"from":"lint","to":"compose","s1":"right","s2":"right","a2frac":0.55,"kind":"loop","label":"error findings — synthesis_gap","bow":-120},{"from":"verify","to":"compose","s1":"right","s2":"right","a2frac":0.4,"kind":"loop","label":"unsupported page claims — validation_gap","bow":-70},{"from":"ingest","to":"ingest","s1":"left","s2":"left","kind":"loop","label":"incomplete result — malformed_result","bow":90},{"from":"compose","to":"compose","s1":"left","s2":"left","kind":"loop","label":"incomplete result — malformed_result","bow":90},{"from":"query","to":"query","s1":"left","s2":"left","kind":"loop","label":"incomplete result — malformed_result","bow":90},{"from":"lint","to":"lint","s1":"left","s2":"left","kind":"loop","label":"incomplete result — malformed_result","bow":90},{"from":"verify","to":"verify","s1":"left","s2":"left","kind":"loop","label":"incomplete result — malformed_result","bow":90},{"from":"plan","to":"plan","s1":"right","s2":"right","kind":"loop","label":"malformed_result (bounded)","bow":110},{"from":"patch","to":"patch","s1":"right","s2":"right","kind":"loop","label":"malformed_result (bounded)","bow":110}];
-      const KIND = {
-        fwd: "#8b98a9",
-        exit: "#3fb950",
-        loop: "#e3a52e",
-        gate: "#e3b341",
-        abort: "#f85149",
-      };
+      const N = {"start":{"title":"start","desc":"Virtual engine initialize. Ingest claims and admits sources; save claims a verified query answer; promote claims targets; query reads its private request only through host custody, binds one selected generation, then chooses grounded agents or deterministic unverified retrieval.","cls":"start","lane":"left","y":25},"ingest":{"title":"ingest","desc":"Extract materially distinct claims from admitted source snapshots. Submit one typed `claims` artifact.","cls":"echo","lane":"center","y":150,"who":"echo"},"compose":{"title":"compose","desc":"Compose the page revision pair over extracted claims or a claimed verified query answer. Submit one typed `page_draft` artifact.","cls":"synthia","lane":"center","y":350,"who":"synthia"},"query":{"title":"query","desc":"Default-true query synthesis. Read the private request, deterministic candidate search, selected pages, and candidate evidence only through host-closed readers. Submit one cited `query_answer`.","cls":"synthia","lane":"left","y":410,"who":"synthia"},"lint":{"title":"lint","desc":"Semantic lint of a candidate page. Blocking-severity findings route back to compose within the bounded repair budget.","cls":"carren","lane":"center","y":550,"who":"carren"},"verify":{"title":"verify","desc":"Ingest/save: verify every page claim. Query: independently verify every answer citation against the bound candidates and evidence. A query passes only when the host validates the exact supported finding set.","cls":"vera","lane":"center","y":750,"who":"vera"},"plan":{"title":"plan","desc":"PREPARE ONLY. Plan the canonical transition for named page revisions and claimed targets. Cannot apply, sign, or mutate anything.","cls":"piper","lane":"right","y":200,"who":"piper"},"patch":{"title":"patch","desc":"PREPARE ONLY. Scope the exact promotion patch. The host independently verifies targets and captures preimages; public apply remains unavailable.","cls":"skribble","lane":"right","y":450,"who":"skribble"},"awaiting_review":{"title":"awaiting_review","desc":"Authenticated host gate. Ingest/save use control-DB content review; promotion uses approval-DB-first packet custody and a signed internal apply continuation. Public respond/resume cannot decide.","cls":"gate","lane":"center","y":960,"badge":"HITL","host_only":true,"decisions":["approve","deny","refine"]},"publishing":{"title":"publishing","desc":"Host publication after approval: atomic selector swap and capability settlement. Query never enters this state.","cls":"host","lane":"center","y":1160,"badge":"HOST"},"complete":{"title":"complete","desc":"Terminal, met = true. Publication arrives from publishing; a grounded query arrives from Vera only after supported citations, a passing report, and save-claim creation. The deterministic unverified host path has no downstream authority.","cls":"done","lane":"center","y":1360,"badge":"TERM"},"incomplete":{"title":"incomplete","desc":"Terminal, met = false. Covers denial, refusal/empty retrieval, failed query verification, or unavailable claim authority. No publication occurs.","cls":"error","lane":"left","y":1360,"badge":"TERM"}};
+      const E = [{"from":"start","to":"ingest","kind":"fwd","label":"initialize — claim + admit (host)"},{"from":"start","to":"query","kind":"fwd","label":"verify true — bind candidates"},{"from":"start","to":"complete","kind":"exit","label":"verify false — deterministic, unverified"},{"from":"start","to":"incomplete","kind":"abort","label":"refused or empty query"},{"from":"start","to":"compose","kind":"fwd","label":"initialize save — claim query answer (host)"},{"from":"start","to":"plan","kind":"fwd","label":"initialize promote — claim targets (host)"},{"from":"ingest","to":"compose","kind":"fwd","label":"claims (complete)"},{"from":"compose","to":"lint","kind":"fwd","label":"page_draft (complete)"},{"from":"query","to":"verify","kind":"fwd","label":"query_answer (complete)"},{"from":"lint","to":"verify","kind":"fwd","label":"lint_report (no errors)"},{"from":"verify","to":"awaiting_review","kind":"fwd","label":"page verification — seal + gate"},{"from":"plan","to":"patch","kind":"fwd","label":"promotion_plan (complete)"},{"from":"patch","to":"awaiting_review","kind":"fwd","label":"promotion_patch — host verify + gate"},{"from":"awaiting_review","to":"publishing","kind":"gate","label":"content-review approve — host only"},{"from":"awaiting_review","to":"complete","kind":"exit","label":"signed apply verified — internal only"},{"from":"awaiting_review","to":"incomplete","kind":"abort","label":"deny — host only"},{"from":"awaiting_review","to":"compose","kind":"loop","label":"content refine (bounded)"},{"from":"awaiting_review","to":"plan","kind":"loop","label":"promotion refine (bounded)"},{"from":"publishing","to":"complete","kind":"exit","label":"publish generation"},{"from":"verify","to":"complete","kind":"exit","label":"query report passes + claim created"},{"from":"verify","to":"incomplete","kind":"abort","label":"query report/claim fails"},{"from":"lint","to":"compose","kind":"loop","label":"error findings — synthesis_gap"},{"from":"verify","to":"compose","kind":"loop","label":"unsupported page claims — validation_gap"},{"from":"ingest","to":"ingest","kind":"loop","label":"incomplete result — phase_incomplete"},{"from":"compose","to":"compose","kind":"loop","label":"incomplete result — phase_incomplete"},{"from":"query","to":"query","kind":"loop","label":"incomplete result — phase_incomplete"},{"from":"lint","to":"lint","kind":"loop","label":"incomplete result — phase_incomplete"},{"from":"verify","to":"verify","kind":"loop","label":"incomplete result — phase_incomplete"},{"from":"plan","to":"plan","kind":"loop","label":"phase_incomplete (bounded)"},{"from":"patch","to":"patch","kind":"loop","label":"phase_incomplete (bounded)"}];
+      const graph = document.getElementById("graph-area");
+      const svg = document.getElementById("edges");
+      const routes = document.getElementById("route-labels");
+      const edgeList = document.getElementById("edge-list");
+      const SVG_NS = "http://www.w3.org/2000/svg";
+      const nodeWidth = 270;
+      const edgeColor = { fwd: "#aab7c7", gate: "#fbbf24", loop: "#fbbf24", exit: "#4ade80", abort: "#fb7185", esc: "#cbd5e1" };
 
-      const wrap = document.getElementById("wrap"),
-        svg = document.getElementById("edges");
-      for (const id in N) {
-        const n = N[id];
-        const w = n.col === "C" ? W.C : W.side;
-        const el = document.createElement("div");
-        el.className = "node " + n.cls;
-        el.id = "n_" + id;
-        el.style.left = COLS[n.col] + "px";
-        el.style.top = n.y + "px";
-        el.style.width = w + "px";
-        const who = n.who ? `<span class="who">· ${n.who}</span>` : "";
-        const bc = n.badge === "TERM" ? "term" : n.badge === "HITL" ? "hitl" : "bnd";
-        const badge = n.badge ? `<span class="badge ${bc}">${n.badge}</span>` : "";
-        el.innerHTML = `<div class="t">${n.title}${who}${badge}</div><div class="d">${n.desc}</div>`;
-        wrap.appendChild(el);
+      function point(rect, side) {
+        if (side === "top") return { x: rect.x + rect.width / 2, y: rect.y };
+        if (side === "left") return { x: rect.x, y: rect.y + rect.height / 2 };
+        if (side === "right") return { x: rect.x + rect.width, y: rect.y + rect.height / 2 };
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height };
       }
-      const base = wrap.getBoundingClientRect();
-      function rect(id) {
-        const r = document.getElementById("n_" + id).getBoundingClientRect();
-        return {
-          left: r.left - base.left,
-          top: r.top - base.top,
-          width: r.width,
-          height: r.height,
-        };
+
+      function sides(source, target) {
+        if (source.x + source.width <= target.x) return ["right", "left"];
+        if (target.x + target.width <= source.x) return ["left", "right"];
+        if (source.y <= target.y) return ["bottom", "top"];
+        return ["top", "bottom"];
       }
-      function anchor(r, side, frac) {
-        const f = frac == null ? 0.5 : frac;
-        switch (side) {
-          case "top":
-            return { x: r.left + r.width * f, y: r.top };
-          case "bottom":
-            return { x: r.left + r.width * f, y: r.top + r.height };
-          case "left":
-            return { x: r.left, y: r.top + r.height * f };
-          case "right":
-            return { x: r.left + r.width, y: r.top + r.height * f };
+
+      function control(pointValue, side, width, height, bend) {
+        const step = 76 + Math.abs(bend);
+        const clampX = (value) => Math.max(12, Math.min(width - 12, value));
+        const clampY = (value) => Math.max(12, Math.min(height - 12, value));
+        if (side === "top") return { x: clampX(pointValue.x + bend), y: clampY(pointValue.y - step) };
+        if (side === "left") return { x: clampX(pointValue.x - step), y: clampY(pointValue.y + bend) };
+        if (side === "right") return { x: clampX(pointValue.x + step), y: clampY(pointValue.y + bend) };
+        return { x: clampX(pointValue.x + bend), y: clampY(pointValue.y + step) };
+      }
+
+      function appendText(parent, className, text) {
+        const element = document.createElement("span");
+        element.className = className;
+        element.textContent = text;
+        parent.append(element);
+        return element;
+      }
+
+      function render() {
+        const width = Math.max(1340, Math.min(1760, document.querySelector(".flow-viewport").clientWidth - 24));
+        const viewport = document.querySelector(".flow-viewport");
+        const previousViewportWidth = Number(viewport.dataset.viewportWidth || "0");
+        document.getElementById("wrap").style.width = `${width}px`;
+        if (
+          viewport.clientWidth < width &&
+          (previousViewportWidth === 0 || previousViewportWidth >= width)
+        ) {
+          viewport.scrollLeft = Math.round((width - viewport.clientWidth) / 2);
+        }
+        viewport.dataset.viewportWidth = `${viewport.clientWidth}`;
+        graph.replaceChildren(svg);
+        routes.replaceChildren();
+        edgeList.replaceChildren();
+        const nodeRects = new Map();
+        const lanes = { left: 42, center: (width - nodeWidth) / 2, right: width - nodeWidth - 42 };
+        for (const [id, node] of Object.entries(N)) {
+          const card = document.createElement("article");
+          card.className = `node ${node.cls}`;
+          card.id = `node-${id}`;
+          card.dataset.nodeId = id;
+          card.style.left = `${lanes[node.lane]}px`;
+          card.style.top = `${node.y}px`;
+          const title = document.createElement("div");
+          title.className = "node-title";
+          appendText(title, "node-state", node.title);
+          if (node.who) appendText(title, "node-owner", `· ${node.who}`);
+          if (node.badge) appendText(title, "badge", node.badge);
+          const desc = document.createElement("p");
+          desc.className = "node-desc";
+          desc.textContent = node.desc;
+          card.append(title, desc);
+          graph.append(card);
+        }
+        let graphHeight = 0;
+        for (const [id] of Object.entries(N)) {
+          const card = document.getElementById(`node-${id}`);
+          const x = Number.parseFloat(card.style.left);
+          const y = Number.parseFloat(card.style.top);
+          const rect = { x, y, width: card.offsetWidth, height: card.offsetHeight };
+          nodeRects.set(id, rect);
+          graphHeight = Math.max(graphHeight, y + rect.height + 38);
+        }
+        graph.style.height = `${Math.max(1180, graphHeight)}px`;
+        svg.setAttribute("viewBox", `0 0 ${width} ${graph.clientHeight}`);
+        for (const [index, edge] of E.entries()) {
+          const source = nodeRects.get(edge.from);
+          const target = nodeRects.get(edge.to);
+          const [sourceSide, targetSide] = edge.s1 && edge.s2 ? [edge.s1, edge.s2] : sides(source, target);
+          const from = point(source, sourceSide);
+          const to = point(target, targetSide);
+          const bend = edge.bow || (edge.kind === "loop" ? 58 : 0);
+          const sourceControl = control(from, sourceSide, width, graph.clientHeight, bend);
+          const targetControl = control(to, targetSide, width, graph.clientHeight, edge.kind === "exit" ? -bend : bend);
+          const path = document.createElementNS(SVG_NS, "path");
+          path.classList.add("edge", edge.kind);
+          path.dataset.edgeIndex = String(index);
+          path.setAttribute("d", `M ${from.x} ${from.y} C ${sourceControl.x} ${sourceControl.y}, ${targetControl.x} ${targetControl.y}, ${to.x} ${to.y}`);
+          path.setAttribute("stroke", edgeColor[edge.kind]);
+          path.setAttribute("marker-end", "url(#arrowhead)");
+          svg.append(path);
+
+          const visibleRoute = document.createElement("li");
+          visibleRoute.className = `lbl ${edge.kind}`;
+          visibleRoute.dataset.edgeIndex = String(index);
+          appendText(visibleRoute, "route-id", `${index + 1}. `);
+          appendText(visibleRoute, "route-state", `${edge.from} → ${edge.to}: `);
+          visibleRoute.append(document.createTextNode(edge.label));
+          routes.append(visibleRoute);
+
+          const accessibleRoute = document.createElement("li");
+          accessibleRoute.textContent = `${edge.from} to ${edge.to}: ${edge.label} (${edge.kind})`;
+          edgeList.append(accessibleRoute);
         }
       }
-      function ctrl(p, side, bow) {
-        const k = 64,
-          b = bow || 0;
-        switch (side) {
-          case "top":
-            return { x: p.x + b, y: p.y - k };
-          case "bottom":
-            return { x: p.x + b, y: p.y + k };
-          case "left":
-            return { x: p.x - k - Math.abs(b), y: p.y };
-          case "right":
-            return { x: p.x + k + Math.abs(b), y: p.y };
-        }
-      }
-      const SVGNS = "http://www.w3.org/2000/svg";
-      for (const e of E) {
-        const ra = rect(e.from),
-          rb = rect(e.to);
-        const p1 = anchor(ra, e.s1, e.a1frac),
-          p2 = anchor(rb, e.s2, e.a2frac);
-        const c1 = ctrl(p1, e.s1, e.bow);
-        const c2 = ctrl(p2, e.s2, e.kind === "exit" ? -(e.bow || 0) : e.bow);
-        const path = document.createElementNS(SVGNS, "path");
-        path.setAttribute(
-          "d",
-          `M ${p1.x} ${p1.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${p2.x} ${p2.y}`
-        );
-        path.setAttribute("fill", "none");
-        path.setAttribute("stroke", KIND[e.kind]);
-        path.setAttribute("stroke-width", "2");
-        path.setAttribute("marker-end", "url(#ah)");
-        if (e.kind === "loop") path.setAttribute("stroke-dasharray", "5 4");
-        svg.appendChild(path);
-        if (e.label) {
-          const t = 0.5,
-            mt = 1 - t;
-          const x =
-            mt * mt * mt * p1.x + 3 * mt * mt * t * c1.x + 3 * mt * t * t * c2.x + t * t * t * p2.x;
-          const y =
-            mt * mt * mt * p1.y + 3 * mt * mt * t * c1.y + 3 * mt * t * t * c2.y + t * t * t * p2.y;
-          const l = document.createElement("div");
-          l.className = "lbl";
-          l.textContent = e.label;
-          l.style.left = x + "px";
-          l.style.top = y + "px";
-          wrap.appendChild(l);
-        }
-      }
+      render();
+      window.addEventListener("resize", render);
     </script>
   </body>
 </html>

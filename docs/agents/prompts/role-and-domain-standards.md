@@ -2,10 +2,10 @@
 
 ## Separation
 
-| Layer           | Source              | Purpose                                            |
-| --------------- | ------------------- | -------------------------------------------------- |
-| Role Definition | `.pi/agents/*.md`   | Domain-invariant capability and exact tool surface |
-| Domain Guidance | skill prompt assets | Static task-family criteria and SUMMARY contract   |
+| Layer           | Source              | Purpose                                           |
+| --------------- | ------------------- | ------------------------------------------------- |
+| Role Definition | `.pi/agents/*.md`   | Domain-invariant capability and YAML tool maximum |
+| Domain Guidance | skill prompt assets | Static task-family criteria and SUMMARY contract  |
 
 ## Role Definition
 
@@ -13,8 +13,11 @@ Required order: YAML frontmatter, Purpose, Working Discipline, Non-Negotiables, 
 canonical `<agent_boundary>`.
 
 Every role declares complete capability metadata plus `authority`, `tool_profiles`, and a
-required non-empty duplicate-free `tools:` list. `tools:` is the exact active surface;
-profiles statically expand to it but no runtime may narrow/broaden it.
+required non-empty duplicate-free `tools:` maximum. Profiles statically expand to it.
+Direct/parallel/chain invocation and orchestration phases without a subset activate it
+exactly. Only an active TypeScript orchestration phase registration may bind one canonical-
+digest-bound strict subset; Domain Guidance, task text, and trust/runtime state cannot
+select it or mutate the role metadata.
 
 Working Discipline includes:
 
@@ -58,7 +61,10 @@ refs and may collapse them into one handoff-index artifact.
 
 ## Verification
 
-- [ ] YAML tools are exact at every production runner.
+- [ ] YAML tools equal profiles and are exact on direct/parallel/chain and subset-absent
+      orchestration paths.
+- [ ] Any orchestration strict subset is active-registration/digest-bound, present in worker
+      metadata, validated before session creation, and never prompt/task/trust/runtime-selected.
 - [ ] Domain prompts require IDs/ranges, complete output, and final SUMMARY.
 - [ ] Owner persistence/re-read precedes parsing SUMMARY.
 - [ ] No grant/consumer/expiry or memory-handoff language remains.

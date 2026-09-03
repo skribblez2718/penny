@@ -11,7 +11,11 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 
-import type { AgentSessionSpecV1 } from "../model-client.js";
+import type {
+  ActiveWorkerRegistrationMetadataV1,
+  AgentSessionLivenessSink,
+  AgentSessionSpecV1,
+} from "../model-client.js";
 import {
   EvidenceRefSchema,
   KbArtifactHandleSchema,
@@ -114,11 +118,15 @@ const EXPECTED_ARTIFACT_FIELD: Readonly<Record<KbPhaseState, string>> = {
 /** One host-controlled phase input surface for one agent invocation. */
 export interface KbPhaseInvocation {
   readonly agent: string;
+  /** Active host-private worker registration projected by WorkerExecutor. */
+  readonly registration?: ActiveWorkerRegistrationMetadataV1;
   readonly stateId: string;
   readonly phaseBrief: string;
   readonly sourceAllowlist: readonly string[];
   readonly priorPhaseAllowlist: readonly string[];
   readonly readSource: (sourceId: string) => string;
+  readonly signal?: AbortSignal;
+  readonly liveness?: AgentSessionLivenessSink;
 
   /** Exact production boundary fields. Optional only for legacy deterministic workflow tests. */
   readonly runId?: string;

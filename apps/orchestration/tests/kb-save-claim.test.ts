@@ -4,9 +4,11 @@ import { errorCode } from "./helpers/narrowing.js";
  * cross-process races, crash rollback, exact retries, and tamper refusal.
  */
 
+import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -45,6 +47,101 @@ function database(pathname: string): import("node:sqlite").DatabaseSync {
   const module = process.getBuiltinModule("node:sqlite");
   if (module === undefined) throw new Error("node:sqlite is unavailable");
   return new module.DatabaseSync(pathname);
+}
+
+const CONSTRUCTOR_LOCK_HOLD_MS = 400;
+const CHILD_WAIT_TIMEOUT_MS = 5_000;
+const DELETE_READ_LOCK_CHILD = String.raw`
+const databasePath = process.env.PENNY_CONSTRUCTOR_LOCK_DATABASE;
+const holdText = process.env.PENNY_CONSTRUCTOR_LOCK_HOLD_MS;
+if (databasePath === undefined || holdText === undefined || process.send === undefined) {
+  throw new Error("constructor lock child is missing its closed inputs");
+}
+const holdMs = Number(holdText);
+if (!Number.isSafeInteger(holdMs) || holdMs <= 0) {
+  throw new Error("constructor lock child received an invalid hold duration");
+}
+const sqlite = process.getBuiltinModule("node:" + "sqlite");
+if (sqlite === undefined) throw new Error("node:sqlite is unavailable");
+const db = new sqlite.DatabaseSync(databasePath);
+const journal = db.prepare("PRAGMA journal_mode").get();
+if (journal?.journal_mode !== "delete") {
+  throw new Error("constructor lock fixture is not in DELETE journal mode");
+}
+db.exec("BEGIN");
+db.prepare("SELECT marker FROM constructor_lock").get();
+process.send("locked");
+setTimeout(() => {
+  db.exec("COMMIT");
+  db.close();
+  process.exit(0);
+}, holdMs);
+`;
+
+function spawnDeleteReadLock(databasePath: string): ChildProcess {
+  return spawn(process.execPath, ["--input-type=module", "--eval", DELETE_READ_LOCK_CHILD], {
+    env: {
+      ...process.env,
+      PENNY_CONSTRUCTOR_LOCK_DATABASE: databasePath,
+      PENNY_CONSTRUCTOR_LOCK_HOLD_MS: String(CONSTRUCTOR_LOCK_HOLD_MS),
+    },
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+  });
+}
+
+function waitForDeleteReadLock(child: ChildProcess): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("timed out waiting for the constructor lock child"));
+    }, CHILD_WAIT_TIMEOUT_MS);
+    const onMessage = (message: unknown): void => {
+      cleanup();
+      if (message === "locked") {
+        resolve();
+      } else {
+        reject(new Error("constructor lock child sent an unexpected readiness message"));
+      }
+    };
+    const onError = (): void => {
+      cleanup();
+      reject(new Error("constructor lock child failed before acquiring its read lock"));
+    };
+    const onExit = (): void => {
+      cleanup();
+      reject(new Error("constructor lock child exited before acquiring its read lock"));
+    };
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      child.off("message", onMessage);
+      child.off("error", onError);
+      child.off("exit", onExit);
+    };
+    child.once("message", onMessage);
+    child.once("error", onError);
+    child.once("exit", onExit);
+  });
+}
+
+function waitForCleanChildExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null) {
+    return child.exitCode === 0
+      ? Promise.resolve()
+      : Promise.reject(new Error("constructor lock child exited unsuccessfully"));
+  }
+  if (child.signalCode !== null) {
+    return Promise.reject(new Error("constructor lock child was terminated"));
+  }
+  return new Promise((resolve, reject) => {
+    child.once("error", () => reject(new Error("constructor lock child failed during release")));
+    child.once("exit", (code, signal) => {
+      if (code === 0 && signal === null) {
+        resolve();
+      } else {
+        reject(new Error("constructor lock child did not release cleanly"));
+      }
+    });
+  });
 }
 
 function claimed(claimStore: SaveQueryClaimStore) {
@@ -95,6 +192,76 @@ describe("claim creation and custody", () => {
       claimStore.create({ ...BASE, answer_artifact_id: "art_different", answer_sha256: OTHER })
     ).toThrow(/different save claim/);
     expect(claimStore.load(BASE.query_run_id)).toEqual(created);
+  });
+
+  it("waits for a transient constructor read lock before enabling WAL", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "penny-kb-claims-constructor-lock-"));
+    dirs.push(directory);
+    chmodSync(directory, 0o700);
+    const databasePath = path.join(directory, "claims.sqlite");
+    const seed = database(databasePath);
+    seed.exec(`
+      PRAGMA journal_mode=DELETE;
+      CREATE TABLE constructor_lock (marker TEXT NOT NULL);
+      INSERT INTO constructor_lock (marker) VALUES ('held');
+    `);
+    seed.close();
+    chmodSync(databasePath, 0o600);
+    expect(statSync(directory).mode & 0o777).toBe(0o700);
+    expect(statSync(databasePath).mode & 0o777).toBe(0o600);
+
+    const child = spawnDeleteReadLock(databasePath);
+    await waitForDeleteReadLock(child);
+    const startedAt = performance.now();
+    let claimStore: SaveQueryClaimStore | undefined;
+    let constructorError: unknown;
+    try {
+      claimStore = new SaveQueryClaimStore(directory);
+    } catch (error) {
+      constructorError = error;
+    }
+    const elapsedMs = performance.now() - startedAt;
+    await waitForCleanChildExit(child);
+
+    if (constructorError !== undefined) {
+      const inspection = database(databasePath);
+      const journal = inspection.prepare("PRAGMA journal_mode").get();
+      const claimTable = inspection
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'save_query_claims'"
+        )
+        .get();
+      inspection.close();
+      expect(journal?.journal_mode).toBe("delete");
+      expect(claimTable).toBeUndefined();
+      expect(elapsedMs).toBeLessThan(CONSTRUCTOR_LOCK_HOLD_MS / 2);
+      const message =
+        constructorError instanceof Error ? constructorError.message : "non-Error failure";
+      expect(message).toMatch(/database is locked/);
+      throw new Error(
+        `constructor reached WAL before busy handling after ${Math.round(elapsedMs)}ms`
+      );
+    }
+    if (claimStore === undefined) throw new Error("constructor returned without a claim store");
+    stores.push(claimStore);
+
+    expect(elapsedMs).toBeGreaterThanOrEqual(CONSTRUCTOR_LOCK_HOLD_MS / 2);
+    expect(elapsedMs).toBeLessThan(CHILD_WAIT_TIMEOUT_MS);
+    const inspection = database(databasePath);
+    const journal = inspection.prepare("PRAGMA journal_mode").get();
+    const synchronous = inspection.prepare("PRAGMA synchronous").get();
+    const claimTable = inspection
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'save_query_claims'")
+      .get();
+    const claimCount = inspection.prepare("SELECT COUNT(*) AS count FROM save_query_claims").get();
+    inspection.exec("BEGIN IMMEDIATE; ROLLBACK;");
+    inspection.close();
+    expect(journal?.journal_mode).toBe("wal");
+    expect(synchronous?.synchronous).toBe(2);
+    expect(claimTable?.name).toBe("save_query_claims");
+    expect(claimCount?.count).toBe(0);
+    expect(claimStore.create(BASE).state).toBe("available");
+    expect(claimStore.load(BASE.query_run_id).answer_sha256).toBe(ANSWER);
   });
 
   it("synchronizes multiprocess exact and competing creates", async () => {

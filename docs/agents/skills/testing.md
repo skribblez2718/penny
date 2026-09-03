@@ -16,9 +16,24 @@ recovery, and terminal truth without invoking production models.
 6. Prove owner persistence and receipt validation happen before routing.
 7. Prove wrong-run/state/branch/producer/consumer refs fail closed.
 8. Cover crash recovery and partial parallel fan recovery.
-9. Cover single, parallel, chain, and chain-resume composition.
-10. Prove memory absence does not alter correctness.
-11. Keep live-model tests separate and use caller model overrides rather than changing agent SSOT.
+9. Cover generic single, parallel, chain, chain-resume, cancellation, and recovery composition.
+10. Prove typed imports fail before run/model creation on stale refs, wrong kind/version/schema,
+    ambiguity, missing ports, missing validators, envelopes-for-cores, or corrupt bytes.
+11. Prove unified-root packages are release-classified once, production/candidate registry mismatches
+    fail closed, and release status does not control model visibility. Pi native and Penny listings
+    include every valid package whose parsed `disable-model-invocation` flag is not `true`; `.ignore`
+    exactly mirrors explicit model disablement. Candidate execution remains static-digest-bound and
+    package-checked regardless of visibility.
+12. Prove memory absence does not alter correctness.
+13. Prove direct catalog paths and subset-absent orchestration phases use exact YAML equality.
+14. Prove a phase subset exists only in an active `PlaybookRegistrationV1`, changes its
+    canonical runtime-registration digest, reaches worker invocation metadata unchanged, and is
+    passed exactly to Pi. Reject empty, duplicate, additive, replacement, equality-sized,
+    unavailable, and task/trust/runtime-selected lists before session creation.
+15. Pin every ordinary candidate phase with absent `allowed_tools` and exact agent YAML. Keep
+    synthetic or evaluation-only strict-subset coverage without OS/process sandbox or
+    extension-code-isolation claims, and keep anonymous host-private tools separate.
+16. Keep live-model tests separate and use caller model overrides rather than changing agent SSOT.
 
 ## Commands
 
@@ -35,7 +50,7 @@ bun run --cwd .pi/extensions/compaction test:unit
 
 - [ ] State vocabulary and state/agent bindings
 - [ ] Closed skill and request contracts
-- [ ] Prompt-surface equality
+- [ ] Direct/default YAML equality plus registration-bound strict-subset authority
 - [ ] Happy paths and honest negative terminals
 - [ ] Bounded repair and stall/exhaustion behavior
 - [ ] Planned and unplanned human gates

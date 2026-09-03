@@ -1,115 +1,124 @@
-/**
- * W3 — SkillContractV1 (Foundation stage, workstream 1 of 3).
- *
- * The contract is authority metadata, so an invalid one must fail closed rather than
- * degrade. These tests also pin the two Foundation-stage boundary decisions:
- *   - budgets are DECLARATIVE ONLY (W4 deferred, `research-mode-presets` loan stays open)
- *   - guidance carries a per-agent-phase option, required by the KB prompt shape
- */
+/** P2 — closed SkillContractV2 and fail-closed registration projections. */
 
 import { requireValue } from "./helpers/narrowing.js";
 import { describe, expect, it } from "vitest";
 
 import { SkillContractSchema, validateContract, type SkillContract } from "../src/contracts.js";
 import {
+  DEFAULT_PLAYBOOK_NAME,
   PLAYBOOK_REGISTRY,
   resolvePlaybook,
-  SOLE_PRODUCTION_PLAYBOOK,
   validateRegistrationContract,
   type PlaybookRegistrationV1,
 } from "../src/playbooks/registry.js";
 import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
-import { COMPATIBILITY_LOANS } from "../src/loans.js";
 
 function clone(): SkillContract {
   return structuredClone(RESEARCH_SKILL_CONTRACT);
 }
 
-describe("W3 research reference contract", () => {
-  it("validates against the closed schema", () => {
+describe("P2 research reference contract", () => {
+  it("validates against the closed V2 schema and is the shipped contract", () => {
     expect(() =>
       validateContract(SkillContractSchema, RESEARCH_SKILL_CONTRACT, "research contract")
     ).not.toThrow();
-  });
-
-  it("is the contract the registry ships for research", () => {
-    const registration = resolvePlaybook(SOLE_PRODUCTION_PLAYBOOK);
+    const registration = resolvePlaybook(DEFAULT_PLAYBOOK_NAME);
     expect(registration?.contract).toEqual(RESEARCH_SKILL_CONTRACT);
     expect(
       validateRegistrationContract(requireValue(registration, "research registration")).name
     ).toBe("research");
   });
 
-  it("declares research's real guidance root and per-agent-phase resolution", () => {
-    // Research uses the same unambiguous agent/state convention as other universal skills.
-    expect(RESEARCH_SKILL_CONTRACT.guidance.skill_root).toBe(".pi/skills/research/assets/prompts");
-    expect(RESEARCH_SKILL_CONTRACT.guidance.resolution).toBe("per_agent_phase");
-  });
-
-  it("declares budgets matching the pinned budget-constraint surface", () => {
-    expect(Object.keys(RESEARCH_SKILL_CONTRACT.budgets).sort()).toEqual([
-      "critique_passes",
-      "max_fan_width",
-      "max_research_rounds",
-      "max_sub_queries",
+  it("binds typed ports, active legacy output, behavior, and the liveness policy", () => {
+    expect(RESEARCH_SKILL_CONTRACT.io.request.schema_id).toBe("penny.research-request.v1");
+    expect(RESEARCH_SKILL_CONTRACT.io.input_ports.map((port) => port.name)).toEqual([
+      "prior_grounded_synthesis",
+      "legacy_context",
     ]);
+    expect(RESEARCH_SKILL_CONTRACT.io.active_output_ports.map((port) => port.name)).toEqual([
+      "grounded_synthesis",
+    ]);
+    expect(RESEARCH_SKILL_CONTRACT.behavior.side_effects.allowed_relative_paths).toEqual([
+      "report.md",
+      "sources.md",
+      "README.md",
+    ]);
+    expect(RESEARCH_SKILL_CONTRACT.budget_policy).toEqual({
+      schema_version: 1,
+      policy_id: "penny.research-budget-policy.v1",
+      resolver_id: "researchLivenessPolicy",
+      admission_id: "LivenessController.admitInvocation",
+      snapshot_id: "LivenessController.snapshot+phaseAttemptProjection",
+    });
   });
 });
 
-describe("W3 fails closed", () => {
-  it("rejects an unknown key", () => {
-    const bad = { ...clone(), rogue_field: true };
-    expect(() => validateContract(SkillContractSchema, bad, "contract")).toThrow();
+describe("P2 contract fails closed", () => {
+  it("rejects unknown, missing, V1 debt, and dynamic tool-posture fields", () => {
+    expect(() =>
+      validateContract(SkillContractSchema, { ...clone(), rogue_field: true }, "contract")
+    ).toThrow();
+    const { completion_gate: _removed, ...missing } = clone();
+    expect(() => validateContract(SkillContractSchema, missing, "contract")).toThrow();
+    for (const debt of [
+      { accepts: ["agent-output"] },
+      { produces: ["agent-output"] },
+      { invariants: ["descriptive only"] },
+      { budgets: { max_sub_queries: 4 } },
+      { tool_posture: {} },
+    ]) {
+      expect(() =>
+        validateContract(SkillContractSchema, { ...clone(), ...debt }, "contract")
+      ).toThrow();
+    }
   });
 
-  it("rejects a missing required field", () => {
-    const { completion_gate: _removed, ...bad } = clone();
-    expect(() => validateContract(SkillContractSchema, bad, "contract")).toThrow();
-  });
-
-  it("rejects an unknown feedback kind", () => {
-    const bad = { ...clone(), feedback_kinds: ["nonsense_gap"] };
-    expect(() => validateContract(SkillContractSchema, bad, "contract")).toThrow();
-  });
-
-  it("rejects an unknown guidance resolution", () => {
-    const bad = { ...clone(), guidance: { ...clone().guidance, resolution: "per_run" } };
-    expect(() => validateContract(SkillContractSchema, bad, "contract")).toThrow();
-  });
-
-  it("rejects an empty trust-profile list", () => {
-    const bad = clone();
-    (bad.authority as { trust_profiles: string[] }).trust_profiles = [];
-    expect(() => validateContract(SkillContractSchema, bad, "contract")).toThrow();
+  it("rejects unknown guidance and registration projection drift", () => {
+    expect(() =>
+      validateContract(
+        SkillContractSchema,
+        { ...clone(), guidance: { ...clone().guidance, resolution: "per_run" } },
+        "contract"
+      )
+    ).toThrow();
+    const shipped = requireValue(resolvePlaybook(DEFAULT_PLAYBOOK_NAME), "research registration");
+    expect(() =>
+      validateRegistrationContract({
+        ...shipped,
+        contract: {
+          ...clone(),
+          behavior: {
+            ...clone().behavior,
+            approval: {
+              ...clone().behavior.approval,
+              additional_approval_required: true,
+            },
+          },
+        },
+      })
+    ).toThrow(/projection drifted/);
   });
 
   it("rejects a contract whose name disagrees with its registration", () => {
+    const shipped = requireValue(resolvePlaybook(DEFAULT_PLAYBOOK_NAME), "research registration");
     const mismatched: PlaybookRegistrationV1 = {
       name: "research",
       contract: { ...clone(), name: "knowledge-base" },
+      ingress: shipped.ingress,
+      ...(shipped.start_admission === undefined
+        ? {}
+        : { start_admission: shipped.start_admission }),
+      liveness: shipped.liveness,
+      worker: shipped.worker,
+      completionReceiptPredicates: new Map(),
       construct: () => {
         throw new Error("not constructed in this test");
       },
     };
     expect(() => validateRegistrationContract(mismatched)).toThrow(/does not match registration/);
   });
-});
 
-describe("W3 Foundation-stage boundaries", () => {
-  it("keeps budgets declarative: W4 is deferred and its loan stays open", () => {
-    // If W4 were pulled into this stage, this loan would be closed and the assertion
-    // would fail -- which is the intended tripwire, not an inconvenience.
-    const loan = COMPATIBILITY_LOANS.find((entry) => entry.id === "research-mode-presets");
-    expect(loan, "research-mode-presets loan must still exist while W4 is deferred").toBeDefined();
-  });
-
-  it("supports the per-agent-phase resolution the KB prompt shape needs", () => {
-    const kbShaped = { ...clone(), name: "research" };
-    (kbShaped.guidance as { resolution: string }).resolution = "per_agent_phase";
-    expect(() => validateContract(SkillContractSchema, kbShaped, "contract")).not.toThrow();
-  });
-
-  it("ships research and knowledge-base (two registrations)", () => {
+  it("ships only research and knowledge-base", () => {
     expect(PLAYBOOK_REGISTRY.size).toBe(2);
   });
 });

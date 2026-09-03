@@ -1,7 +1,7 @@
 # Agent Definition Format
 
 Each `.pi/agents/<name>.md` file is one local catalog entry. YAML frontmatter
-provides the role name, routing description, model, exact tool list, authority
+provides the role name, routing description, model, maximum ordinary tool list, authority
 class, and tool-authority profiles. The body provides Purpose, Working Discipline,
 role-specific Non-Negotiables, Output, and the `<agent_boundary>` insertion anchor.
 
@@ -10,7 +10,9 @@ role-specific Non-Negotiables, Output, and the `<agent_boundary>` insertion anch
 Workers now receive read-only memory tools (the `memory.read` profile: search,
 read drawers/list/taxonomy, read KG, read Penny's diary) but no write tools.
 Their role files include `artifact_read` because workflows pass exact immutable IDs.
-The tool remains visible exactly as YAML declares, even when no inputs are supplied.
+Direct/default invocation keeps the tool visible exactly as YAML declares, even when no
+inputs are supplied. A fixed registration-bound TypeScript orchestration phase subset may
+omit it for that phase without changing the role definition.
 
 Working Discipline now says:
 
@@ -29,8 +31,8 @@ not the model, proves persistence and registration.
 | ------------------- | ----------------------------------------------------------------------------------------------------- |
 | `name`              | Lowercase alphanumeric plus hyphens; matches filename.                                                |
 | `description`       | One-line role, positive triggers, and anti-cases.                                                     |
-| `tools`             | Required non-empty duplicate-free exact active list; include `artifact_read`.                         |
-| `authority`         | Static intent class (`read`, `write`, or `inspect`) used to lint the exact YAML list.                 |
+| `tools`             | Required non-empty duplicate-free maximum ordinary catalog list; include `artifact_read`.             |
+| `authority`         | Static intent class (`read`, `write`, or `inspect`) used to lint the YAML maximum exactly.            |
 | `tool_profiles`     | Named rungs that expand exactly to `tools:`. Verified by `check_tool_profiles.py` in `make lint`.     |
 | capability metadata | `capability`, `family`, `transformation`, `accepts`, `produces`, and semantic coordinates. See below. |
 | `model`             | Runtime-resolvable model name.                                                                        |
@@ -51,10 +53,13 @@ roster tables are prohibited.
 Descriptions name only a role's nearest confusable **neighbours** (at most three) instead of
 enumerating everything it is not. See [Capability Registry](capability-registry.md).
 
-`tools:` is the exact runtime surface. A task, prompt body, trust profile, skill,
-artifact, or remote service cannot add, remove, or suppress a tool. `authority` and
-`tool_profiles` statically lint the intended
-authority declared and machine-checked; see [Tool Authority Profiles](tool-profiles.md).
+`tools:` is the maximum ordinary catalog surface. Direct/parallel/chain calls and
+orchestration phases without a subset activate it exactly. One eligible TypeScript
+orchestration phase may bind a fixed non-empty duplicate-free strict YAML subset in its
+canonical registration digest and worker metadata. A task, prompt body, trust profile,
+artifact, runtime condition, or remote service cannot select or change it. `authority` and
+`tool_profiles` continue to lint the YAML maximum exactly; see [Tool Authority
+Profiles](tool-profiles.md).
 
 ## Why this format matters
 

@@ -20,7 +20,7 @@ filesystem or any specific downstream project.** The boundary:
 
 ## Reading Documentation
 
-**Default discipline (most docs):** Read only files relevant to the current task. Do not greedily follow all index references — use the descriptions to identify the 1–2 features you need, then drill down.
+**Default discipline (most docs):** Read every mandatory baseline on the active route, every guide triggered by the task's features and trust boundaries, and every explicit dependency needed to apply them. Stop when additional documents would not change the implementation, review, or verification approach.
 
 **Load-bearing exception (system docs):** When you do drill into a file — Pi documentation (extensions, themes, skills, TUI, SDK, providers, models, packages) or Penny system documentation (protocol docs, architecture, capability pages, plans, research) — the following disciplines apply:
 
@@ -64,7 +64,7 @@ next-level sub-indexes; each `AGENTS.md` links only to the level below it until
 you reach the leaf index that lists the source docs. Drill down — do not expect
 every topic to be enumerated here.
 
-- [Agent Documentation](docs/agents/AGENTS.md): everything Penny and her agents follow when performing tasks — agent architecture, capabilities, coding standards, documentation rules, extensions, memory, observability, orchestration, prompts, skills, and state management.
-- [Penny Protocols](docs/penny/AGENTS.md): trigger-gated procedural docs — clarification, compaction-resume, routing/delegation, tool-usage (SYSTEM.md names the trigger; paths resolve here).
+- [Agent Documentation](docs/agents/AGENTS.md): MUST READ FOR every code-affecting or Penny-system-affecting task — agent architecture, capabilities, coding, documentation, extensions, knowledge-base, memory, orchestration, prompts, skills, state management, and verification guidance.
+- [Penny Protocols](docs/penny/AGENTS.md): READ WHEN a trusted system trigger activates a Penny protocol — artifact access, clarification, compaction resume, routing/delegation, and tool usage.
 
 `.pi/` resources (agents, extensions, skills, prompts, types, settings) are loaded automatically by Pi and are not duplicated in this index. `docs/humans/` is a separate, human-facing tree (WHAT/WHY) and is intentionally NOT part of this agent-facing index chain.

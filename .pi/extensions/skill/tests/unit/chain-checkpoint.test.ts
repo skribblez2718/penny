@@ -38,10 +38,18 @@ function ref(runId: string, kind: "agent-output", operationId: string) {
   return expectedArtifactRef(metadata, "exact terminal bytes");
 }
 
-function checkpoint(projectId: string, handoffRun = "research-2"): ChainCheckpoint {
+function checkpoint(
+  projectId: string,
+  handoffRun = "research-2",
+  schemaVersion: 1 | 2 = 1
+): ChainCheckpoint {
   const now = "2026-08-15T12:00:00.000Z";
+  const binding =
+    schemaVersion === 2
+      ? { release_status: "production" as const, contract_sha256: "a".repeat(64) }
+      : {};
   return {
-    schema_version: 1,
+    schema_version: schemaVersion,
     state_layout_version: 1,
     project_id: projectId,
     chain_session_id: CHAIN_ID,
@@ -51,6 +59,7 @@ function checkpoint(projectId: string, handoffRun = "research-2"): ChainCheckpoi
       {
         index: 0,
         skill_name: "research",
+        ...binding,
         goal: "first",
         session_id: "research-1",
         status: "complete",
@@ -61,6 +70,7 @@ function checkpoint(projectId: string, handoffRun = "research-2"): ChainCheckpoi
       {
         index: 1,
         skill_name: "research",
+        ...binding,
         goal: "use {previous}",
         input_artifacts: [`art_${"1".repeat(64)}`],
         session_id: "research-2",
@@ -74,6 +84,7 @@ function checkpoint(projectId: string, handoffRun = "research-2"): ChainCheckpoi
       {
         index: 1,
         skill_name: "research",
+        ...binding,
         goal: "use {previous}",
         input_artifacts: [`art_${"1".repeat(64)}`],
         session_id: "research-2",
@@ -126,6 +137,26 @@ describe("durable skill-chain checkpoints", () => {
     expect(recovered?.steps[0]?.handoff_artifact_ref).toEqual(value.steps[0]?.handoff_artifact_ref);
     expect(recovered?.steps[0]?.result_preview).toBe("display only");
     expect(recovered?.steps[1]?.input_artifacts).toEqual([`art_${"1".repeat(64)}`]);
+  });
+
+  it("writes schema-v2 release/digest bindings and still reads production-only schema v1", () => {
+    const { projectRoot, env, projectId } = stateFixture();
+    const current = checkpoint(projectId, "research-2", 2);
+    saveChainCheckpoint(current, projectRoot, env);
+    const recovered = readChainCheckpoint(CHAIN_ID, projectRoot, env);
+    expect(recovered?.schema_version).toBe(2);
+    expect(recovered?.steps[0]).toMatchObject({
+      release_status: "production",
+      contract_sha256: "a".repeat(64),
+    });
+
+    const missingBinding = checkpoint(projectId, "research-2", 2);
+    const first = missingBinding.steps[0];
+    if (first === undefined) throw new Error("checkpoint fixture has no first step");
+    delete first.contract_sha256;
+    expect(() => saveChainCheckpoint(missingBinding, projectRoot, env)).toThrow(
+      /registration binding/u
+    );
   });
 
   it("accepts cross-run handoff refs, rejects invalid explicit IDs, and distinguishes missing", () => {

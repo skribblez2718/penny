@@ -1,14 +1,11 @@
 /**
  * W12 — Research parity guard (Foundation stage, workstream 1 of 3).
  *
- * This is the authority the whole Foundation refactor is judged against. It pins
- * research's observable topology BEFORE any seam is extracted, so that W1/W2/W3/W5/W6/W7
- * cannot silently drift the parity and canary oracle that `agents-md-research` §1
- * outcome 5 makes mandatory.
- *
- * **When this fixture and the implementation disagree, the fixture wins.** Revert the
- * refactor step. Amending the pin requires an explicit prior decision — and a fixture
- * edit may never share a commit with a behaviour edit.
+ * This is the authority the Foundation and current Research architecture are judged against.
+ * The caller's explicit 2026-08-28 implementation-first directive is the prior decision that
+ * authorizes this v2 pin: Synthia emits ResearchSemanticDraftV1 and the host projects/seals it;
+ * the removed Research-specific Skribble phase is now a pinned non-state. Unrelated parity remains
+ * protected by the same behavioral and structural checks.
  *
  * Two independent detection strategies, because either alone has a blind spot:
  *
@@ -145,9 +142,20 @@ describe("W12 research parity pin — structural", () => {
   });
 
   it("pins terminal completion semantics", () => {
-    expect(PIN.states).toContain(PIN.terminal.completion_state);
-    expect(SOURCE).toContain(`${PIN.terminal.completion_field}: Type.Boolean()`);
+    expect(PIN.terminal.completion_state).toBe("rendering");
+    expect(SOURCE).toContain(`context.research.${PIN.terminal.completion_field} = true`);
     expect(SOURCE).toMatch(new RegExp(`context\\.${PIN.terminal.met_field}\\s*=`));
+  });
+
+  it("records the caller-approved plan/pin revision and exact diagnosis artifact", () => {
+    expect(PIN.approved_revision).toEqual({
+      approved_by: "caller",
+      approved_on: "2026-08-28",
+      decision:
+        "Replace Research-specific Synthia-to-Skribble shaping with Synthia ResearchSemanticDraftV1 and deterministic host projection/sealing.",
+      input_artifact_id: "art_b50e278faaefa7287659940818aa618de57300234664017555c9fdaef53d0c5f",
+      input_artifact_sha256: "609e9e2a0cde18fb7379679eaaae5ccc2c9bb80f4a61481729aef62ce5f23b16",
+    });
   });
 });
 
@@ -156,8 +164,8 @@ describe("W12 parity pin — the guard itself detects drift", () => {
   // shown to fail proves nothing about the six phases it is supposed to protect.
   it("detects an added state", () => {
     const drifted = SOURCE.replace(
-      'report_writing: "skribble",',
-      'report_writing: "skribble",\n  ingesting: "echo",'
+      'validating: "vera",',
+      'validating: "vera",\n  ingesting: "echo",'
     );
     expect(Object.keys(extractAgentByState(drifted)).sort()).not.toEqual([...PIN.states].sort());
   });

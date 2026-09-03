@@ -1,3 +1,3 @@
 # Orchestration Feature Index
 
-- [Overview](overview.md): The sole TypeScript orchestration engine — registered playbooks, closed contracts, exact artifacts, checkpoints, composition, and recovery.
+- [Overview](overview.md): READ WHEN changing the TypeScript orchestration engine, registered playbooks, checkpoints, or recovery — engine architecture and contracts.

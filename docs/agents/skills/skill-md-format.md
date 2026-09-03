@@ -6,10 +6,10 @@
 ---
 name: skill-name
 description: "One sentence. Use when [triggers]. Do not use when [anti-cases]."
-license: MIT
 metadata:
   penny:
     engine: orchestration
+    release_status: production
     mempalace: false
     subagents: [echo, vera]
 ---
@@ -20,12 +20,18 @@ metadata:
 1. `name` matches the directory and uses lowercase kebab-case.
 2. `description` contains a role sentence, `Use when`, and an anti-use clause. It has a 1,024-character hard limit and an approximately 500-character preferred target; justified longer text remains valid.
 3. `metadata.penny.engine` is `orchestration`; the removed `state_machine` key is forbidden.
-4. `metadata.penny.mempalace` is optional. It describes optional **primary
+4. Every package remains under `.pi/skills/<name>/` and declares
+   `metadata.penny.release_status: production|candidate`; location never determines lifecycle status.
+   Release status is independent of model visibility. A valid package is model-visible if and only if
+   its optional top-level `disable-model-invocation` flag is not `true`. `.pi/skills/.ignore` lists
+   exactly packages whose parsed flag is explicitly `true` and remains comment-only when none are
+   disabled.
+5. `metadata.penny.mempalace` is optional. It describes optional **primary
    durable-memory** integration only. It does not authorize worker memory tools
    or workflow rooms.
-5. `metadata.penny.subagents` lists project-local catalog roles with matching
+6. `metadata.penny.subagents` lists project-local catalog roles with matching
    Domain Guidance files.
-6. Body sections include When to Use, When Not to Use, Invocation, Exact Artifact
+7. Body sections include When to Use, When Not to Use, Invocation, Exact Artifact
    Handoff, Output, recovery/escalation as applicable, and terminal truth.
 
 ## Content boundaries

@@ -27,13 +27,14 @@ function requiredRecord(value: unknown, label: string): Record<string, unknown> 
 }
 
 describe("TS-210 orchestration durable-state codec", () => {
-  it("round-trips the frozen research writer bytes through the research variant", () => {
+  it("round-trips the frozen research writer bytes as a true pre-protocol snapshot", () => {
     const expected = fixture("research-pending.context.v2.json");
     const decoded = orchestrationDurableStateCodec.decodeSnapshot(
       fixtureValue("research-pending.context.v2.json")
     );
 
     expect(decoded.playbook_state.kind).toBe("research");
+    expect(decoded.completion_protocol_version).toBeUndefined();
     expect(canonicalJson(orchestrationDurableStateCodec.encodeSnapshot(decoded))).toBe(expected);
   });
 
@@ -47,9 +48,62 @@ describe("TS-210 orchestration durable-state codec", () => {
     if (decoded.playbook_state.kind !== "knowledge-base") {
       throw new Error("KB fixture did not decode as knowledge-base state");
     }
+    expect(decoded.completion_protocol_version).toBeUndefined();
     expect(decoded.playbook_state.data.phases?.ingest?.counts.claim_count).toBe(2);
     const snapshot = orchestrationDurableStateCodec.encodeSnapshot(decoded);
     expect(canonicalJson(orchestrationDurableStateCodec.encodeCheckpoint(snapshot))).toBe(expected);
+  });
+
+  it("persists completion protocol v1 in new research and path-free KB snapshots", () => {
+    const researchValue = requiredRecord(
+      fixtureValue("research-pending.context.v2.json"),
+      "research fixture"
+    );
+    const research = orchestrationDurableStateCodec.decodeSnapshot({
+      ...researchValue,
+      completion_protocol_version: 1,
+    });
+    expect(
+      orchestrationDurableStateCodec.encodeSnapshot(research).completion_protocol_version
+    ).toBe(1);
+
+    const kbValue = requiredRecord(
+      fixtureValue("knowledge-base-compose.context.v1.json"),
+      "KB fixture"
+    );
+    const kb = orchestrationDurableStateCodec.decodeCheckpoint(
+      { ...kbValue, completion_protocol_version: 1 },
+      { playbook: "knowledge-base", projectRoot: PROJECT_ROOT }
+    );
+    const encodedKb = requiredRecord(
+      orchestrationDurableStateCodec.encodeCheckpoint(
+        orchestrationDurableStateCodec.encodeSnapshot(kb)
+      ),
+      "encoded KB checkpoint"
+    );
+    expect(encodedKb.completion_protocol_version).toBe(1);
+    expect(encodedKb).not.toHaveProperty("project_root");
+  });
+
+  it("rejects unsupported completion protocol versions", () => {
+    const research = requiredRecord(
+      fixtureValue("research-pending.context.v2.json"),
+      "research fixture"
+    );
+    expect(() =>
+      orchestrationDurableStateCodec.decodeSnapshot({
+        ...research,
+        completion_protocol_version: 2,
+      })
+    ).toThrow("checkpoint context failed schema validation");
+
+    const kb = requiredRecord(fixtureValue("knowledge-base-compose.context.v1.json"), "KB fixture");
+    expect(() =>
+      orchestrationDurableStateCodec.decodeCheckpoint(
+        { ...kb, completion_protocol_version: 2 },
+        { playbook: "knowledge-base", projectRoot: PROJECT_ROOT }
+      )
+    ).toThrow("checkpoint context failed schema validation");
   });
 
   it("preserves the established open playbook-data policy without opening top-level state", () => {

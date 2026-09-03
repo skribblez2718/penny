@@ -20,6 +20,46 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 SKILLS_DIR = PROJECT_ROOT / ".pi" / "skills"
+RETIRED_CANDIDATE_DIRNAME = "skill" + "-candidates"
+RETIRED_CANDIDATE_ROOT = PROJECT_ROOT / ".pi" / RETIRED_CANDIDATE_DIRNAME
+RETIRED_CANDIDATE_TOKEN = f".pi/{RETIRED_CANDIDATE_DIRNAME}"
+HISTORICAL_ROOT_MARKER = "HISTORICAL_OLD_SKILL_ROOT"
+HISTORICAL_BINDING_TEST = (
+    PROJECT_ROOT
+    / ".pi"
+    / "extensions"
+    / "skill"
+    / "tests"
+    / "integration"
+    / "plan-part-b-preregistration.integration.test.ts"
+)
+CURRENT_RESEARCH_DOCS = [
+    PROJECT_ROOT / "research" / "universal-skills" / "IMPLEMENTATION_PLAN.md",
+    PROJECT_ROOT / "research" / "universal-skills" / "PRD.md",
+    PROJECT_ROOT
+    / "research"
+    / "universal-skills"
+    / "IMPLEMENTATION_PLAN-orchestrated-decide-plan.md",
+]
+SOURCE_GUARD_SUFFIXES = {
+    ".html",
+    ".js",
+    ".json",
+    ".md",
+    ".mjs",
+    ".py",
+    ".sh",
+    ".ts",
+    ".yaml",
+    ".yml",
+}
+SOURCE_GUARD_ROOTS = [
+    PROJECT_ROOT / ".pi",
+    PROJECT_ROOT / "apps",
+    PROJECT_ROOT / "docs",
+    PROJECT_ROOT / "evals",
+    PROJECT_ROOT / "scripts",
+]
 
 # Canonical structure (relative to skill root), TypeScript engine model.
 # Engine-backed skills dispatch through the TypeScript playbook registry; no
@@ -90,11 +130,11 @@ def check_kb_pi_tool_contract(
     expected = {
         "name": "knowledge-base",
         "description": KB_DESCRIPTION,
-        "license": "MIT",
         "metadata": {
             "version": "1.0.0",
             "penny": {
                 "engine": "orchestration",
+                "release_status": "production",
                 "entrypoint": "pi-tool",
                 "tool": "knowledge_base",
                 "mempalace": "metadata-only",
@@ -110,10 +150,11 @@ def check_kb_pi_tool_contract(
                 "knowledge_base pi-tool frontmatter fields/values are not the exact Section 5.12 contract",
             )
         )
-    if list(frontmatter.keys()) != ["name", "description", "license", "metadata"]:
+    if list(frontmatter.keys()) != ["name", "description", "metadata"]:
         issues.append(("ERROR", "knowledge_base frontmatter top-level field order changed"))
     if penny is not None and list(penny.keys()) != [
         "engine",
+        "release_status",
         "entrypoint",
         "tool",
         "mempalace",
@@ -174,10 +215,104 @@ def discover_skills() -> List[Path]:
     return sorted(skills)
 
 
-def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
-    """Return list of (severity, message) issues for a skill."""
+def _source_guard_files() -> List[Path]:
+    files: set[Path] = set()
+    for root in SOURCE_GUARD_ROOTS:
+        if not root.exists():
+            continue
+        for candidate in root.rglob("*"):
+            if not candidate.is_file():
+                continue
+            relative_parts = candidate.relative_to(PROJECT_ROOT).parts
+            if any(
+                part in {"node_modules", "dist", "build", "__pycache__", ".git"}
+                for part in relative_parts
+            ):
+                continue
+            if candidate.suffix in SOURCE_GUARD_SUFFIXES:
+                files.add(candidate)
+    for root_file in (
+        PROJECT_ROOT / ".gitignore",
+        PROJECT_ROOT / "Makefile",
+        PROJECT_ROOT / "README.md",
+    ):
+        if root_file.is_file():
+            files.add(root_file)
+    files.update(document for document in CURRENT_RESEARCH_DOCS if document.is_file())
+    return sorted(files)
+
+
+def check_native_model_ignore(model_disabled_names: set[str]) -> List[Tuple[str, str]]:
+    """Require Pi native discovery to ignore exactly explicitly model-disabled packages."""
+    ignore_file = SKILLS_DIR / ".ignore"
+    if ignore_file.is_symlink() or not ignore_file.is_file():
+        return [("ERROR", ".pi/skills/.ignore must be one safe regular file")]
+    try:
+        ignored_entries = [
+            line.strip().removesuffix("/")
+            for line in ignore_file.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+    except (OSError, UnicodeError):
+        return [("ERROR", ".pi/skills/.ignore must be readable UTF-8")]
+
+    issues: List[Tuple[str, str]] = []
+    if len(ignored_entries) != len(set(ignored_entries)) or any(
+        re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", name) is None for name in ignored_entries
+    ):
+        issues.append(
+            (
+                "ERROR",
+                "native skill ignore entries must be unique canonical package directory names",
+            )
+        )
+    if set(ignored_entries) != model_disabled_names:
+        issues.append(
+            (
+                "ERROR",
+                "native skill ignore entries must equal the parsed explicitly model-disabled package names exactly",
+            )
+        )
+    return issues
+
+
+def check_single_skill_source_root() -> List[Tuple[str, str]]:
+    """Provider-free guard for the retired source root and active path references."""
+    issues: List[Tuple[str, str]] = []
+    if RETIRED_CANDIDATE_ROOT.exists():
+        issues.append(("ERROR", f"retired candidate source root exists: {RETIRED_CANDIDATE_ROOT}"))
+    for source in _source_guard_files():
+        try:
+            content = source.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        if RETIRED_CANDIDATE_TOKEN not in content:
+            continue
+        if source == HISTORICAL_BINDING_TEST:
+            if HISTORICAL_ROOT_MARKER not in content:
+                issues.append(
+                    ("ERROR", "frozen Plan Part-B binding test lacks its historical-root marker")
+                )
+            continue
+        if source in CURRENT_RESEARCH_DOCS and HISTORICAL_ROOT_MARKER in content:
+            continue
+        issues.append(
+            (
+                "ERROR",
+                f"active source introduces retired candidate-root bytes: {source.relative_to(PROJECT_ROOT)}",
+            )
+        )
+    return issues
+
+
+def check_skill(  # noqa: C901
+    skill_dir: Path, expected_release_status: Optional[str] = None
+) -> List[Tuple[str, str]]:
+    """Return structural issues for one package classified by parsed release status."""
     issues: List[Tuple[str, str]] = []
     name = skill_dir.name
+    if skill_dir.is_symlink():
+        return [("ERROR", "skill package root must not be a symbolic link")]
 
     # Skip non-skill directories (shared resources, templates, etc.)
     skill_md = skill_dir / "SKILL.md"
@@ -193,6 +328,10 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
 
     if not is_delegate:
         penny = nested_mapping(frontmatter or {}, "metadata", "penny")
+        declared_release_status = None if penny is None else penny.get("release_status")
+        package_release_status = expected_release_status or (
+            declared_release_status if isinstance(declared_release_status, str) else None
+        )
         entrypoint_value = None if penny is None else penny.get("entrypoint")
         entrypoint = (
             entrypoint_value if isinstance(entrypoint_value, str) else "typescript-playbook"
@@ -285,6 +424,26 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
                         "(the routing key for engine-backed skills)",
                     )
                 )
+            if package_release_status not in {"production", "candidate"}:
+                issues.append(
+                    (
+                        "ERROR",
+                        "SKILL.md frontmatter requires metadata.penny.release_status: production|candidate",
+                    )
+                )
+            elif penny is None or penny.get("release_status") != package_release_status:
+                issues.append(
+                    (
+                        "ERROR",
+                        "SKILL.md frontmatter release status does not match its registry namespace",
+                    )
+                )
+            if (
+                package_release_status == "candidate"
+                and penny is not None
+                and penny.get("entrypoint") == "pi-tool"
+            ):
+                issues.append(("ERROR", "candidate packages must use generic skill ingress"))
             if penny is not None and "state_machine" in penny:
                 issues.append(
                     (
@@ -380,16 +539,31 @@ def main() -> None:  # noqa: C901
 
     total_errors = 0
     total_warnings = 0
+    release_counts = {"production": 0, "candidate": 0, "invalid": 0}
+    model_disabled_names: set[str] = set()
+
+    guard_issues = check_single_skill_source_root()
+    for severity, msg in guard_issues:
+        print(f"  ❌ source-root: {msg}")
+        if severity == "ERROR":
+            total_errors += 1
 
     for skill_dir in skills:
         name = skill_dir.name
         issues = check_skill(skill_dir)
+        frontmatter, _ = parse_frontmatter((skill_dir / "SKILL.md").read_text(encoding="utf-8"))
+        penny = nested_mapping(frontmatter or {}, "metadata", "penny")
+        release = None if penny is None else penny.get("release_status")
+        release_label: str = release if release in {"production", "candidate"} else "invalid"
+        release_counts[release_label] += 1
+        if frontmatter is not None and frontmatter.get("disable-model-invocation") is True:
+            model_disabled_names.add(name)
 
         if not issues:
-            print(f"  ✅ {name}")
+            print(f"  ✅ {release_label}:{name}")
             continue
 
-        print(f"  ⚠️  {name}")
+        print(f"  ⚠️  {release_label}:{name}")
         for severity, msg in issues:
             icon_map = {"ERROR": "❌", "WARN": "⚠️", "INFO": "ℹ️"}
             icon = icon_map.get(severity, "•")
@@ -399,15 +573,24 @@ def main() -> None:  # noqa: C901
             elif severity == "WARN":
                 total_warnings += 1
 
+    if not args.skill:
+        for severity, msg in check_native_model_ignore(model_disabled_names):
+            print(f"  ❌ native-discovery: {msg}")
+            if severity == "ERROR":
+                total_errors += 1
+
     print()
     if total_errors == 0 and total_warnings == 0:
-        print(f"All {len(skills)} skill(s) passed structural validation.")
-        sys.exit(0)
-    else:
         print(
-            f"Results: {total_errors} error(s), {total_warnings} warning(s) across {len(skills)} skill(s)."
+            f"All {len(skills)} unified skill package(s) passed structural validation "
+            f"({release_counts['production']} production, {release_counts['candidate']} candidate)."
         )
-        sys.exit(1 if total_errors > 0 else 0)
+        sys.exit(0)
+    print(
+        f"Results: {total_errors} error(s), {total_warnings} warning(s) across "
+        f"{len(skills)} unified package(s)."
+    )
+    sys.exit(1 if total_errors > 0 else 0)
 
 
 if __name__ == "__main__":

@@ -4,8 +4,7 @@
 
 Every user-facing surface an agent generates — HTML, Lit components, templates, emails, PDFs — must
 meet **WCAG 2.2 Level AA**. Accessibility is a build-time requirement, not a later audit. Applies to
-all web application work; the frontend UI defaults (Lit + Tailwind, see
-[conventions.md](conventions.md#frontend-ui--css-defaults)) inherit this standard.
+all user-facing UI work; the selected UI stack must meet this standard.
 
 ## Why
 

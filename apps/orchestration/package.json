@@ -28,10 +28,12 @@
     "test": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "test:unit": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "test:node-unit": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
+    "test:pi-compat": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/artifact-provider-bundled-node.test.ts tests/kb-loader-policy.test.ts tests/model-client-lifecycle.test.ts tests/package-surface.test.ts tests/ssot-session.test.ts tests/worker-tool-surface-matrix.test.ts",
     "test:runner": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts",
     "test:research-parity": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/research-parity.test.ts",
     "test:integration": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts 'tests/**/*.integration.test.ts'",
     "test:parity": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/research-parity.test.ts",
+    "test:skill-conformance": "node scripts/provider-free-skill-conformance.mjs",
     "test:all": "bun run typecheck && bun run test && bun run test:kb-model-smoke:aggregate",
     "test:kb-core": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-*.test.ts",
     "test:kb-policy": "node ./node_modules/vitest/vitest.mjs run --config vitest.config.ts tests/kb-policy.test.ts tests/kb-model-policy.test.ts tests/kb-profile-registry.test.ts tests/kb-profile-grants.test.ts",
@@ -55,7 +57,7 @@
     "smoke:research": "echo 'Smoke: set PENNY_RESEARCH_DEFAULT_MODEL and pipe a start request to dist/cli.js --execute'"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-coding-agent": "0.84.4",
     "typebox": "1.3.7"
   },
   "devDependencies": {

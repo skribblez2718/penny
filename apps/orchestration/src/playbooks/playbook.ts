@@ -16,13 +16,21 @@
  */
 
 import type {
+  CompletionEvidenceRef,
+  CompletionFailureCode,
   CompletionGate,
+  CompletionProductEvidence,
   Confidence,
   Directive,
-  EvaluationResult,
+  EvaluationResultV2,
   JsonValue,
+  LivenessSnapshotV1,
+  LivenessTerminalReason,
+  PhaseResult,
 } from "../contracts.js";
 import type { RunContext } from "../context.js";
+import type { ArtifactReader } from "../artifact-store.js";
+import type { Checkpointer, ReserveOperationEventGroupInput } from "../checkpointer.js";
 
 /**
  * Mandatory surface. Every registered playbook implements all of it.
@@ -39,14 +47,12 @@ export interface PlaybookCoreV1 {
   resume(context: RunContext, response: JsonValue): Directive;
   /** Terminate a run at the caller's request. */
   cancel(context: RunContext, reason: string): Directive;
-  /** Validate a worker's result payload for one state. Throws on contract violation. */
-  validateDetails(state: string, details: Record<string, JsonValue>): Record<string, JsonValue>;
   /** Fold an accepted result into the run and return the next directive. */
   acceptSummary(
     context: RunContext,
     details: Record<string, JsonValue>,
     confidence: Confidence
-  ): Directive;
+  ): PlaybookStepOutcomeV1;
   /** Re-derive a pending directive after restart. `null` when nothing is pending. */
   rebindPendingDirective(context: RunContext): Directive | null;
 }
@@ -66,11 +72,15 @@ export interface FanAggregateCapabilityV1 {
  * Without it the engine falls back to reissuing the current state, which is the same
  * path already used for non-branch results.
  */
-export interface MalformedReissueCapabilityV1 {
-  reissueMalformedBranch(
+export interface RoutingRepairCapabilityV1 {
+  routingRepair(context: RunContext, malformed: PhaseResult): Directive;
+}
+
+export interface LivenessTerminalCapabilityV1 {
+  terminalizeLiveness(
     context: RunContext,
-    pending: Extract<Directive, { action: "invoke_agents_parallel" }>,
-    branchId: string
+    reason: LivenessTerminalReason,
+    snapshot: LivenessSnapshotV1
   ): Directive;
 }
 
@@ -83,20 +93,106 @@ export interface MalformedReissueCapabilityV1 {
  * makes the typed seam and the transition a single source of truth -- and therefore
  * behaviour-preserving by construction rather than by inspection.
  */
-export interface GapClassificationCapabilityV1 {
-  /** `null` when the result needs no repair. */
-  classifyGap(
+export interface HostContinuationRequestV1 {
+  readonly kind: "host_continuation";
+}
+
+export type PlaybookStepOutcomeV1 = Directive | HostContinuationRequestV1;
+
+export interface HostContinuationStepV1 {
+  readonly event_type: string;
+  readonly payload: Record<string, JsonValue>;
+  readonly directive?: Directive;
+  readonly after_checkpoint_fault?: string;
+}
+
+/** Optional deterministic owner work that runs only after accepted worker bytes are durable. */
+export interface HostContinuationCapabilityV1 {
+  needsHostContinuation(context: RunContext): boolean;
+  continueHost(context: RunContext): HostContinuationStepV1;
+  hostCheckpointCommitted?(context: RunContext, faultPoint: string): void;
+}
+
+export function hostContinuation(): HostContinuationRequestV1 {
+  return { kind: "host_continuation" };
+}
+
+export function isHostContinuation(
+  outcome: PlaybookStepOutcomeV1
+): outcome is HostContinuationRequestV1 {
+  return !("action" in outcome) && outcome.kind === "host_continuation";
+}
+
+export interface StateAwareRepairCapabilityV1 {
+  /** `null` when the structurally valid result needs no typed repair. */
+  evaluateRepair(
     context: RunContext,
     state: string,
     details: Record<string, JsonValue>
-  ): EvaluationResult | null;
+  ): EvaluationResultV2 | null;
+  /** Optional domain-data bookkeeping; engine control fields remain immutable. */
+  repairBudgetUsed?(context: RunContext, state: string, evaluation: EvaluationResultV2): number;
+  applyRepairBookkeeping?(
+    context: RunContext,
+    state: string,
+    details: Record<string, JsonValue>,
+    evaluation: EvaluationResultV2,
+    disposition: "repair" | "exhausted"
+  ): void;
+}
+
+/** Optional honest terminalization for a registered repair route's exhausted successor. */
+export interface RepairExhaustionCapabilityV1 {
+  terminalizeRepairExhaustion(
+    context: RunContext,
+    state: string,
+    evaluation: EvaluationResultV2
+  ): Directive;
+}
+
+export interface GenericResponsePolicyCapabilityV1 {
+  assertGenericResponseAllowed(context: RunContext): void;
+}
+
+export interface ExternalStartOperationGroupCapabilityV1 {
+  externalStartOperationGroup(context: RunContext): ReserveOperationEventGroupInput | undefined;
+}
+
+export interface HostReviewedGateValidationCapabilityV1 {
+  validateHostReviewedGate(context: RunContext, kind: "content_review" | "promotion"): void;
+}
+
+export interface ApprovedPromotionCompletionCapabilityV1 {
+  completeApprovedPromotion(
+    run: RunContext,
+    outcome: {
+      status: "complete" | "failed" | "blocked_external_drift";
+      receiptId: string;
+      receiptSha256: string;
+      transactionId: string;
+      targetCount: number;
+      postApplyVerified: boolean;
+    }
+  ): Directive;
+}
+
+export interface ReviewInvalidationCapabilityV1 {
+  invalidateReview(run: RunContext, reason: string): Directive;
 }
 
 /** A playbook plus whatever optional capabilities it happens to implement. */
 export type PlaybookV1 = PlaybookCoreV1 &
   Partial<FanAggregateCapabilityV1> &
-  Partial<MalformedReissueCapabilityV1> &
-  Partial<GapClassificationCapabilityV1>;
+  Partial<RoutingRepairCapabilityV1> &
+  Partial<LivenessTerminalCapabilityV1> &
+  Partial<StateAwareRepairCapabilityV1> &
+  Partial<RepairExhaustionCapabilityV1> &
+  Partial<HostContinuationCapabilityV1> &
+  Partial<GenericResponsePolicyCapabilityV1> &
+  Partial<ExternalStartOperationGroupCapabilityV1> &
+  Partial<HostReviewedGateValidationCapabilityV1> &
+  Partial<ApprovedPromotionCompletionCapabilityV1> &
+  Partial<ReviewInvalidationCapabilityV1>;
 
 /**
  * Structural capability probes.
@@ -110,49 +206,120 @@ export function hasFanAggregate(
   return typeof playbook.aggregateBranches === "function";
 }
 
-export function hasMalformedReissue(
+export function hasRoutingRepair(
   playbook: PlaybookV1
-): playbook is PlaybookCoreV1 & MalformedReissueCapabilityV1 {
-  return typeof playbook.reissueMalformedBranch === "function";
+): playbook is PlaybookCoreV1 & RoutingRepairCapabilityV1 {
+  return typeof playbook.routingRepair === "function";
 }
 
-export function hasGapClassification(
+export function hasLivenessTerminal(
   playbook: PlaybookV1
-): playbook is PlaybookCoreV1 & GapClassificationCapabilityV1 {
-  return typeof playbook.classifyGap === "function";
+): playbook is PlaybookCoreV1 & LivenessTerminalCapabilityV1 {
+  return typeof playbook.terminalizeLiveness === "function";
 }
+
+export function hasStateAwareRepair(
+  playbook: PlaybookV1
+): playbook is PlaybookCoreV1 & StateAwareRepairCapabilityV1 {
+  return typeof playbook.evaluateRepair === "function";
+}
+
+export function hasRepairExhaustion(
+  playbook: PlaybookV1
+): playbook is PlaybookCoreV1 & RepairExhaustionCapabilityV1 {
+  return typeof playbook.terminalizeRepairExhaustion === "function";
+}
+
+export function hasHostContinuation(
+  playbook: PlaybookV1
+): playbook is PlaybookCoreV1 & HostContinuationCapabilityV1 {
+  return (
+    typeof playbook.needsHostContinuation === "function" &&
+    typeof playbook.continueHost === "function"
+  );
+}
+
+export function hasGenericResponsePolicy(
+  playbook: PlaybookV1
+): playbook is PlaybookCoreV1 & GenericResponsePolicyCapabilityV1 {
+  return typeof playbook.assertGenericResponseAllowed === "function";
+}
+
+export function hasExternalStartOperationGroup(
+  playbook: PlaybookV1
+): playbook is PlaybookCoreV1 & ExternalStartOperationGroupCapabilityV1 {
+  return typeof playbook.externalStartOperationGroup === "function";
+}
+
+export function hasHostReviewedGateValidation(
+  playbook: PlaybookV1
+): playbook is PlaybookCoreV1 & HostReviewedGateValidationCapabilityV1 {
+  return typeof playbook.validateHostReviewedGate === "function";
+}
+
+export function hasApprovedPromotionCompletion(
+  playbook: PlaybookV1
+): playbook is PlaybookCoreV1 & ApprovedPromotionCompletionCapabilityV1 {
+  return typeof playbook.completeApprovedPromotion === "function";
+}
+
+export function hasReviewInvalidation(
+  playbook: PlaybookV1
+): playbook is PlaybookCoreV1 & ReviewInvalidationCapabilityV1 {
+  return typeof playbook.invalidateReview === "function";
+}
+
+/** Host-owned receipt predicate. Predicate IDs are fixed by registrations, never model input. */
+export interface CompletionReceiptPredicateInputV1 {
+  readonly checkpointer: Checkpointer;
+  readonly context: RunContext;
+  readonly terminal: Extract<Directive, { result: Record<string, JsonValue> }>;
+  readonly originState: string;
+  readonly latestProduct: CompletionProductEvidence;
+  readonly artifactReader?: ArtifactReader;
+  readonly projectRoot: string;
+  readonly pendingPhaseResult?: PhaseResult;
+}
+
+export interface CompletionReceiptPredicateResultV1 {
+  readonly passed: boolean;
+  readonly evidence_refs: readonly CompletionEvidenceRef[];
+}
+
+export type CompletionReceiptPredicateV1 = (
+  input: CompletionReceiptPredicateInputV1
+) => CompletionReceiptPredicateResultV1;
 
 /**
- * W7 — evaluate a completion gate before the engine admits a `met: true` terminal.
- *
- * Returns `null` when the gate admits, or a reason string when it refuses.
- *
- * Only met terminals are gated. A cancelled or incomplete run is already an honest
- * negative outcome and must remain reachable from any state -- gating it would convert a
- * truthful failure into an error, which is the opposite of what this seam is for.
+ * Pure field-consumption seam for v2 origin/history/unresolved checks. Product and
+ * receipt checks are engine-owned because they require exact durable indexes.
  */
 export function evaluateCompletionGate(input: {
   gate: CompletionGate;
   terminalStatus: string;
   met: boolean;
-  fromState: string | null;
+  originState: string | null;
+  visitedStates: readonly string[];
   unresolvedCount: number;
-}): string | null {
-  if (!input.met) {
-    return null;
-  }
-  const { gate } = input;
-  if (gate.required_states.length > 0) {
-    const from = input.fromState ?? "";
-    if (!gate.required_states.includes(from)) {
-      return `completion gate requires terminating from one of [${gate.required_states.join(", ")}], but the run terminated from '${from}'`;
-    }
+}): CompletionFailureCode[] {
+  if (input.terminalStatus !== "complete" || !input.met) return [];
+  const failures: CompletionFailureCode[] = [];
+  if (
+    input.originState === null ||
+    !input.gate.allowed_terminal_origins.includes(input.originState)
+  ) {
+    failures.push("TERMINAL_ORIGIN_NOT_ALLOWED");
   }
   if (
-    gate.unresolved_allowance !== undefined &&
-    input.unresolvedCount > gate.unresolved_allowance
+    input.gate.required_visited_states.some((required) => !input.visitedStates.includes(required))
   ) {
-    return `completion gate allows at most ${gate.unresolved_allowance} unresolved item(s); the run has ${input.unresolvedCount}`;
+    failures.push("REQUIRED_STATE_NOT_VISITED");
   }
-  return null;
+  if (
+    input.gate.unresolved_policy.mode === "max_count" &&
+    input.unresolvedCount > input.gate.unresolved_policy.max_count
+  ) {
+    failures.push("UNRESOLVED_LIMIT_EXCEEDED");
+  }
+  return failures;
 }

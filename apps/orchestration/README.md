@@ -4,8 +4,11 @@ Penny’s sole orchestration runtime. The package owns playbook dispatch, closed
 request/directive contracts, durable Node SQLite checkpoints, exact owner artifacts,
 signed worker receipts, gates, recovery, and digest-only observability.
 
-The registry currently contains `research` and `knowledge-base`. Skills carry static
-manifests, prompts, and resources; they do not ship executable delegates.
+The production registry contains `research` and `knowledge-base`; the separate candidate registry
+contains disabled `decide` and `plan` registrations. Every package lives under `.pi/skills` and is
+classified by its parsed release status, not its directory. Package and registry namespaces must
+agree exactly. Skills carry static manifests, prompts, and resources; they do not ship executable
+delegates.
 
 ## Runtime
 
@@ -20,8 +23,8 @@ bun run --cwd apps/orchestration test
 
 The skill extension constructs `OrchestrationService` in-process. Single, parallel,
 chain, and chain-resume modes all execute TypeScript playbooks. Chain handoff verifies and
-forwards the predecessor's exact artifact ID across runs; no target-run grant/copy or
-payload substitution is required, and no Python child is spawned.
+forwards the predecessor's exact artifact ID across runs; no target-run copy or payload
+substitution is required. Runtime playbooks are TypeScript only.
 
 The closed request vocabulary is `start`, `step`, `status`, `recover`, `respond`, and
 `cancel`. The CLI accepts one version-2 request on stdin; `--execute` runs Pi SDK workers
@@ -33,19 +36,21 @@ node apps/orchestration/dist/cli.js --project-root="$PROJECT_ROOT" --execute < r
 
 ## Components
 
-| Module                            | Role                                                                                     |
-| --------------------------------- | ---------------------------------------------------------------------------------------- |
-| `src/engine.ts`                   | Request validation, playbook dispatch, receipt gates, recovery, and terminal admission   |
-| `src/service.ts`                  | In-process composition of engine, workers, checkpoints, artifacts, and observability     |
-| `src/checkpointer.ts`             | Owner-only Node SQLite run state keyed by `run_id`                                       |
-| `src/artifact-store.ts`           | Immutable manifest and content-addressed exact-byte objects                              |
-| `src/state/**`                    | Pi-root resolver, opaque project catalog, custody checks, setup, and migration planning  |
-| `src/worker.ts`                   | Pi SDK worker execution, owner capture, receipts, and bounded fan-out                    |
-| `src/model-client.ts`             | Exact YAML tool surfaces, phase guidance, provider loading, and pre-model equality guard |
-| `src/playbooks/registry.ts`       | Fail-closed playbook registry                                                            |
-| `src/playbooks/research.ts`       | Research state machine                                                                   |
-| `src/playbooks/knowledge-base.ts` | Knowledge-base state machine and host-only gates                                         |
-| `src/kb/**`                       | Private KB records, policy, generations, capabilities, retrieval, and workflows          |
+| Module                            | Role                                                                                                |
+| --------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `src/engine.ts`                   | Request validation, playbook dispatch, receipt gates, recovery, and terminal admission              |
+| `src/service.ts`                  | In-process composition of engine, workers, checkpoints, artifacts, and observability                |
+| `src/checkpointer.ts`             | Owner-only Node SQLite run state keyed by `run_id`                                                  |
+| `src/artifact-store.ts`           | Immutable manifest and content-addressed exact-byte objects                                         |
+| `src/state/**`                    | Pi-root resolver, opaque project catalog, custody checks, setup, and migration planning             |
+| `src/worker.ts`                   | Active-registration checks, Pi SDK execution, capture, receipts, and bounded fan-out                |
+| `src/model-client.ts`             | Registration guidance, YAML maxima, strict-subset validation, provider loading, and active equality |
+| `src/skill-contracts/**`          | Closed research request/product/port/budget schemas and cross-field validators                      |
+| `src/research-context.ts`         | Owner-resolved safe context envelopes and pre-model content verification                            |
+| `src/playbooks/registry.ts`       | Fail-closed playbook, worker-phase, repair-route, and completion registration                       |
+| `src/playbooks/research.ts`       | Research cognitive graph, host core sealing/rendering, product graph, and research DoD              |
+| `src/playbooks/knowledge-base.ts` | Knowledge-base state machine and host-only gates                                                    |
+| `src/kb/**`                       | Private KB records, policy, generations, capabilities, retrieval, and workflows                     |
 
 ## Pi-native state
 
@@ -82,6 +87,12 @@ Initialize a fresh target explicitly:
 penny-state init --project-root="$PROJECT_ROOT"
 penny-state status --project-root="$PROJECT_ROOT"
 ```
+
+`init` provisions the global observability database plus the project-bound
+orchestration database, receipt key, artifact manifest/object root, and their
+current bindings. It is idempotent for a complete target. `status` opens each
+component create-never and fails for a missing, stale, corrupt, or misbound
+store; it does not repair runtime state.
 
 Existing-state migration is explicit and source-manifest driven:
 
@@ -166,8 +177,64 @@ publishes a deletion receipt. It is never reachable from ordinary startup or mod
   length and the manifest is project-bound.
 - The receipt key is `orchestration/receipt-key`, not a filename-derived versioned path.
 - `RunContext` stores exact selected refs, never artifact payload bytes.
-- Successful worker output is persisted and re-read before its final `SUMMARY` line is
-  parsed into routing state.
+- Positive terminals are admitted only by the engine against the registration's closed
+  `CompletionGate` v2: append-only visited-state evidence, an exact latest-product binding,
+  and host-owned receipt predicates must all pass. Refusal is durably `incomplete/met:false`
+  and preserves candidate artifacts; honest negative terminals are not gated.
+- State visits and completion admission/refusal are body-free metadata in the existing
+  append-only `events` rows. No state path, SQLite table, schema version, or observability
+  authority is involved. Historical positive terminals without a v2 envelope
+  remain exact legacy replays; new positives cannot be written without an envelope.
+- The engine exposes one validated active registration and the service binds that exact
+  object into the worker. A worker refuses an unknown playbook or state/agent mismatch before
+  input reads or session work. Required guidance has no fallback.
+- Agent YAML `tools:` is the maximum ordinary catalog authority. Direct/parallel/chain paths
+  and TypeScript orchestration phases without `allowed_tools` keep requested SDK tools, active
+  SDK tools, and YAML exactly equal. An eligible phase may instead use one explicit non-empty,
+  duplicate-free strict YAML subset owned by the active `PlaybookRegistrationV1`; the canonical
+  runtime-registration digest and worker invocation metadata include it. Before session creation,
+  the model client rejects empty, duplicate, non-YAML/unavailable, additive, replacement, or
+  equality-sized lists, then passes the accepted list exactly to Pi and checks active equality
+  before the prompt. Task, trust profile, input, runtime condition, model/liveness policy,
+  context, typed product, and optional-service state cannot select tools. Ordinary Assess, Decide,
+  Diagnose, Plan, and Produce candidate phases omit `allowed_tools`, use exact agent YAML, and have
+  normal external-call ceilings of 8 per worker and 64 per run; routing-only repair stays at 0.
+  Evaluation-only baselines or ablations may retain strict subsets. A subset changes no agent
+  metadata/profile and supplies no OS/process sandbox or extension-code isolation. KB workers remain
+  anonymous host-private sessions with their existing phase-specific matrices.
+- `SkillContractV2` carries objective, typed request/input/active-output ports, closed
+  side-effect/approval/stop/escalation consequences, required guidance, named budget
+  policy/resolver/admission/snapshot bindings, state-aware repair routes, and the completion gate.
+  The recursive contract oracle has no declaration-only debt.
+- A new research start canonicalizes `ResearchRequestV1` and validates imported
+  `GroundedSynthesisV1` canonical bytes before run mutation or model/session work. Generic artifact
+  refs may carry optional closed `content_schema`; old refs without it remain valid.
+- Research context bindings are identifier-only. The artifact plane stores metadata-only
+  `ContextSourceRefV1` envelopes; worker owner code re-resolves selected document, caller, or exact
+  pre-resolved approved-KB content and verifies digest, length, freshness, approval, conflict, and
+  consumer state before the model. Context never changes the registration-selected tool surface or
+  KB grants/approvals.
+- Production research activates the frozen P3 graph. The sole output port and chain handoff are the
+  latest exact canonical `GroundedSynthesisV1` `semantic-core`; the legacy report artifact remains a
+  recognized compatibility schema only. Vera and optional report Carren receipts, three deterministic
+  renders, and the research product envelope bind that exact core outside it.
+- Synthia emits a closed `ResearchSemanticDraftV1`; deterministic host projection resolves local
+  indexes, verifies exact excerpt containment/hashes and request/context/Echo/Synthia lineage, then
+  seals canonical `GroundedSynthesisV1` bytes before Vera. Every changed core re-enters Vera before
+  optional report Carren, deterministic rendering, or completion. Host `sealing_core` and `rendering`
+  consume no model turns/tools and use existing selected refs plus append-only checkpoint events.
+- Renderer `penny.research.compat-markdown.v1` persists stable intent/time, immutable render artifacts,
+  and uses no-follow checks, exact temporary names, file/directory fsync, atomic rename, matching-file
+  adoption, and final full-set verification. Recovery converges without a state migration.
+- Research success additionally requires the latest-core DoD/product-graph predicate and central
+  completion admission from `rendering`; terminal `output_artifact_ref` is the semantic core. Blocking,
+  stale, exhausted, unsafe, drifted, cancelled, and error outcomes remain non-positive with best exact
+  partial refs and no complete product envelope.
+- Successful worker output is persisted and re-read before its final `SUMMARY` line is parsed.
+  Structurally valid repair evaluations use `EvaluationResultV2`, which contains findings and a
+  strategy delta but no target or exhaustion claim. The engine selects the registered route,
+  charges the iteration budget, transitions, and stores only detail/strategy digests in the same
+  checkpoint event transaction. Structural malformed-result repair remains the P1.2 path.
 - Recovery reissues the checkpointed directive with the same selected refs or the next
   explicit compatible revision.
 - Skill chains persist project-bound checkpoints in the current partition.
@@ -177,8 +244,8 @@ publishes a deletion receipt. It is never reachable from ordinary startup or mod
   to success or error. Unknown values fail closed.
 - Compaction reads exact run IDs through the catalog-bound database and verifies project
   metadata; it never scans for active runs or consults semantic memory.
-- Ordinary constructors perform no legacy path scan, fallback, or artifact-manifest
-  import.
+- Ordinary runtime opens only complete, pre-provisioned stores. It does not create,
+  migrate, repair, relink, import, or fall back to another state location.
 
 The retired Python orchestration database is never a runtime fallback. Any historical
 conversion or archive is an explicit operator migration disposition.

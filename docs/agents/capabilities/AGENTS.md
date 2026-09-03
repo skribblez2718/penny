@@ -1,11 +1,11 @@
 # Capabilities Feature Index
 
-- [Enhance](enhance/AGENTS.md): On-demand prompt enhancement via a trailing ` -i` suffix; trigger, flag consumption, session context, config, failure semantics
-- [Error Logging](error-logging/AGENTS.md): Structured error codes from logger.ts; human-readable cross-reference
-- [Observability Server](observability-server/AGENTS.md): reduced TypeScript structured-log service and direct Pi JSONL history
-- [Progress Heartbeats](progress-heartbeats/AGENTS.md): Staleness-based progress monitoring for long-running agents
-- [Research Skill](research-skill/AGENTS.md): Current workflow skill — Quick/Standard/Deep research with parallel evidence gathering, synthesis, and citation validation
-- [Skill Tool](skill-tool/AGENTS.md): Single/parallel/chain/resume with exact artifact handoff and durable checkpoints
-- [Tiered Memory](tiered-memory/AGENTS.md): Primary-only durable recall/curation, supervised HTTP hub, legacy retention, and cold archive
-- [Unknown State](unknown-state/AGENTS.md): Engine pause-and-resume behavior when an agent cannot proceed
-- [Verification State](verification-state/AGENTS.md): Evidence-grounded verification contracts and honest exhaustion
+- [Enhance](enhance/AGENTS.md): READ WHEN changing trailing `-i` prompt enhancement — activation, session, and failure semantics.
+- [Error Logging](error-logging/AGENTS.md): READ WHEN changing structured error-code behavior — error taxonomy and diagnostics.
+- [Observability Server](observability-server/AGENTS.md): READ WHEN changing structured logs or Pi session-history access — observability service contract.
+- [Progress Heartbeats](progress-heartbeats/AGENTS.md): READ WHEN changing long-running agent staleness detection — heartbeat monitoring behavior.
+- [Research Skill](research-skill/AGENTS.md): READ WHEN changing the registered research workflow — evidence gathering and completion contract.
+- [Skill Tool](skill-tool/AGENTS.md): READ WHEN changing skill dispatch, terminal refs, or continuation — invocation mode behavior.
+- [Tiered Memory](tiered-memory/AGENTS.md): READ WHEN changing primary durable recall, curation, or the memory hub — capability-level integration.
+- [Unknown State](unknown-state/AGENTS.md): READ WHEN changing pause-and-resume handling for blocked work — unresolved-state behavior.
+- [Verification State](verification-state/AGENTS.md): READ WHEN changing evidence-grounded completion or verification gates — outcome-state rules.

@@ -1,13 +1,29 @@
 # Secure Coding Feature Index
 
-- [Conventions](conventions.md): Universal pre-generation rules, severity legend, and usage guidance
-- [secrets.md](secrets.md): Passwords, API keys, tokens, env vars, credential storage (CWE-798, CWE-259 — Critical)
-- [injection.md](injection.md): Database queries, shell commands, user input in queries (CWE-89, CWE-78, CWE-90, CWE-643 — Critical)
-- [xss.md](xss.md): HTML output, templates, frontend rendering (CWE-79 — Critical)
-- [authentication.md](authentication.md): User auth, sessions, JWT, OAuth, MFA, password hashing (CWE-287, CWE-327, CWE-384 — Critical)
-- [cryptography.md](cryptography.md): Encryption, hashing, randomness, key management (CWE-326, CWE-330 — High)
-- [input-validation.md](input-validation.md): Input forms, type checking, length limits, regex, sanitization (CWE-20 — High)
-- [configuration.md](configuration.md): Config files, env vars, debug mode, security headers, CORS, error messages (CWE-16, CWE-215, CWE-209 — Medium–High)
-- [dependencies.md](dependencies.md): Package management, imports, dependency verification (CWE-1357 — Critical)
-- [api-security.md](api-security.md): API endpoints, rate limiting, authz, IDOR, data exposure (CWE-770, CWE-200, CWE-915 — High)
-- [file-handling.md](file-handling.md): File uploads, path handling, permissions, temp files (CWE-22, CWE-434, CWE-377 — High)
+- [Security Invariants](security-invariants.md): MUST READ FOR every code-affecting task — secure-by-construction properties, completion evidence, and exception discipline.
+- [Threat Modeling](threat-model.md): READ WHEN adding or changing assets, identities, sensitive data, privileged actions, trust boundaries, external systems, or attacker-accessible capabilities — task/application threat model and evidence.
+- [Web and PWA Invariants](web-pwa-invariants.md): MUST READ FOR browser-delivered, Internet-facing, API-backed, offline-capable, or service-worker-enabled application work — conditional web/PWA baseline and detailed-guide routing.
+- [Authorization](authorization.md): READ WHEN code decides whether a subject may perform an action or access an object, field, relationship, tenant, or administrative capability — server-side authority and ownership.
+- [Authentication](authentication.md): READ WHEN code establishes, restores, or strengthens identity — authenticators, credential verification, recovery, MFA, and identity proof.
+- [Session Security](session-security.md): READ WHEN code creates, stores, transports, rotates, expires, or revokes authenticated state — session lifecycle and integrity.
+- [CSRF and Browser State Transitions](csrf.md): READ WHEN browser requests use ambient credentials or trigger state changes across origins — origin, replay, and mutation integrity.
+- [API Security](api-security.md): READ WHEN adding or changing endpoints, RPC handlers, webhooks, machine interfaces, object access, sockets, or public/private route classification — interface exposure and operation controls.
+- [Input Validation](input-validation.md): READ WHEN user, network, file, environment, browser, integration, or persisted data crosses a trust boundary — syntax, structure, canonicalization, complexity, and business validation.
+- [Injection Prevention](injection.md): READ WHEN untrusted data reaches query, command, template, expression, interpreter, header, URL, path, or protocol construction — code/data separation and safe APIs.
+- [Cross-Site Scripting Prevention](xss.md): READ WHEN untrusted data can reach browser markup, script, style, URL, rich-text, template, Markdown, or unsafe rendering APIs — context-aware output safety and privileged sinks.
+- [Browser Security](browser-security.md): READ WHEN changing browser storage, messaging, DOM APIs, cross-origin behavior, CSP, Trusted Types, client trust, or security headers — browser execution and origin containment.
+- [PWA and Service-Worker Security](pwa-service-worker.md): READ WHEN changing service workers, offline caches, install scope, update lifecycle, navigation fallbacks, push, or background work — worker scope, cache, and offline safety.
+- [File Handling](file-handling.md): READ WHEN accepting, creating, extracting, transforming, storing, serving, or deleting files, archives, paths, or temporary data — path, content, storage, and resource controls.
+- [SSRF and Egress Control](ssrf-egress.md): READ WHEN code resolves, fetches, redirects through, connects to, imports from, or proxies caller-influenced destinations — destination validation and independent egress confinement.
+- [Resource Limits](resource-limits.md): READ WHEN requests, uploads, jobs, queues, parsers, recursion, decompression, fan-out, compute, storage, or external calls can consume resources or money — per-operation, identity, and global budgets.
+- [Untrusted Execution](untrusted-execution.md): READ WHEN code runs caller-influenced code, expressions, templates, plugins, subprocesses, workers, or compute jobs — capability isolation and containment.
+- [Anti-Automation and Abuse Resistance](anti-automation.md): READ WHEN an action is susceptible to brute force, enumeration, scraping, spam, replay, distributed abuse, or cost amplification — business-flow abuse controls.
+- [Configuration Security](configuration.md): READ WHEN changing runtime settings, public/client configuration, CORS, trusted proxies, headers, debug behavior, error exposure, or startup validation — fail-closed runtime policy.
+- [Secrets Management](secrets.md): READ WHEN creating, loading, transmitting, logging, scoping, storing, rotating, or revoking credentials and key material — secret lifecycle and exposure controls.
+- [Cryptography](cryptography.md): READ WHEN selecting or using encryption, signatures, password hashing, randomness, key derivation, or key lifecycle — current protocol/library selection and key management.
+- [Dependencies](dependencies.md): READ WHEN adding, updating, pinning, removing, importing, or auditing packages and lockfiles — package identity, maintenance, vulnerability, and integrity checks.
+- [Supply-Chain Security](supply-chain.md): READ WHEN changing registries, install/build scripts, CI credentials, artifacts, provenance, SBOMs, publication, or release workflows — build and artifact trust.
+- [Security Logging and Monitoring](logging-monitoring.md): READ WHEN emitting security-relevant logs, audit events, metrics, traces, alerts, or diagnostic data — detection without secret/sensitive-data leakage.
+- [Secure Error Handling](error-handling.md): READ WHEN code handles malformed requests, parser failures, exceptions, partial state, retries, fallbacks, or user-visible errors — fail-closed behavior and controlled disclosure.
+- [Incident Response and Recovery](incident-response.md): READ WHEN changing security-sensitive services, credentials, sessions, privileged surfaces, public exposure, alerts, revocation, disablement, restore, or recovery procedures — containment and recovery.
+- [Security Verification](security-verification.md): READ WHEN a task changes a trust boundary or security-sensitive behavior and requires security-specific evidence — adversarial checks and honest verification gaps.

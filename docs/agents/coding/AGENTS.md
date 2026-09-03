@@ -1,13 +1,12 @@
 # Coding Best Practices — Agent Reference Index
 
-- [conventions.md](conventions.md): Universal pre-generation rules and severity legend
-- [deployment-conventions.md](deployment-conventions.md): **Dev vs prod for web apps** — `make dev`=local / `make prod`=Docker, dedicated `.env.prod`, fail-closed prod config validator, per-environment DB-stored admin bootstrap (`create-admin`/`delete-admin`), and the hardened container shape (blog + ketwise reference impls)
-- [multi-gpu-standard.md](multi-gpu-standard.md): Multi-GPU coding standards and patterns
-- [python.md](python.md): Python style, patterns, idioms, and testing
-- [typescript.md](typescript.md): TypeScript strict mode, types, validation, and patterns
-- [accessibility.md](accessibility.md): **WCAG 2.2 AA standard for all generated UI** — semantic HTML, keyboard operability, focus, contrast (both themes), ARIA rules, reduced motion, target size, and the axe + keyboard + screen-reader verification checklist
-- [library-docs.md](library-docs.md): **Look third-party/library docs up live** — the governing convention for external docs (canonical base URL + version check + runtime fetch instead of static link lists)
-- [fastapi/AGENTS.md](fastapi/AGENTS.md): FastAPI documentation **lookup** — canonical base + section→path map; fetch current pages at runtime
-- [lit/AGENTS.md](lit/AGENTS.md): Lit documentation **lookup** — canonical base + section→path map, styling & security cross-refs; fetch live (**default UI framework**)
-- [tailwind/AGENTS.md](tailwind/AGENTS.md): Tailwind CSS documentation **lookup** — canonical base + version check, plus the shadow-DOM/Lit integration pattern; fetch live (**default CSS framework**)
-- [security/AGENTS.md](security/AGENTS.md): Security anti-patterns for generated code — injection, XSS, auth, crypto, secrets, input validation
+- [Coding Conventions](conventions.md): MUST READ FOR every code-affecting task — quality contracts, task-mode obligations, and delivery evidence.
+- [Deployment Conventions](deployment-conventions.md): MUST READ FOR deployment, infrastructure, runtime-configuration, or release-path changes — generic production-safety and verification guidance.
+- [Python](python.md): READ WHEN creating, modifying, reviewing, or diagnosing Python code — Python contracts and delivery gates.
+- [TypeScript](typescript.md): READ WHEN creating, modifying, reviewing, or diagnosing TypeScript code — strict typing and authoritative gates.
+- [Accessibility](accessibility.md): MUST READ FOR user-facing UI changes — WCAG 2.2 AA requirements and verification.
+- [Library Documentation](library-docs.md): READ WHEN relying on third-party APIs, frameworks, or libraries — current-source lookup discipline.
+- [FastAPI](fastapi/AGENTS.md): READ WHEN the caller-selected implementation uses FastAPI — live documentation lookup.
+- [Lit](lit/AGENTS.md): READ WHEN the caller-selected implementation uses Lit — live component guidance and security links.
+- [Tailwind CSS](tailwind/AGENTS.md): READ WHEN the caller-selected implementation uses Tailwind CSS — live utility and integration guidance.
+- [Security](security/AGENTS.md): MUST READ FOR every code-affecting task — invariant-first secure coding and triggered security guides.

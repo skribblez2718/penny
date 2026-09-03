@@ -13,8 +13,11 @@ import { describe, expect, it } from "vitest";
 import type { Confidence, Directive, JsonValue } from "../src/contracts.js";
 import type { RunContext } from "../src/context.js";
 import {
+  hasExternalStartOperationGroup,
   hasFanAggregate,
-  hasMalformedReissue,
+  hasGenericResponsePolicy,
+  hasHostReviewedGateValidation,
+  hasStateAwareRepair,
   type PlaybookCoreV1,
   type PlaybookV1,
 } from "../src/playbooks/playbook.js";
@@ -53,9 +56,6 @@ class CoreOnlyPlaybook implements PlaybookCoreV1 {
   cancel(): Directive {
     return terminal(false);
   }
-  validateDetails(_state: string, details: Record<string, JsonValue>): Record<string, JsonValue> {
-    return details;
-  }
   acceptSummary(
     _context: RunContext,
     _details: Record<string, JsonValue>,
@@ -75,16 +75,19 @@ class AggregatingCorePlaybook extends CoreOnlyPlaybook {
 }
 
 describe("W1 capability probing", () => {
-  it("detects both capabilities on the reference playbook", () => {
+  it("detects the reference playbook's actual optional capabilities", () => {
     const research: PlaybookV1 = new ResearchPlaybook();
     expect(hasFanAggregate(research)).toBe(true);
-    expect(hasMalformedReissue(research)).toBe(true);
+    expect(hasStateAwareRepair(research)).toBe(true);
+    expect(hasGenericResponsePolicy(research)).toBe(false);
   });
 
-  it("detects the absence of both capabilities on a core-only playbook", () => {
+  it("detects optional-capability absence on a core-only playbook", () => {
     const core: PlaybookV1 = new CoreOnlyPlaybook();
     expect(hasFanAggregate(core)).toBe(false);
-    expect(hasMalformedReissue(core)).toBe(false);
+    expect(hasStateAwareRepair(core)).toBe(false);
+    expect(hasExternalStartOperationGroup(core)).toBe(false);
+    expect(hasHostReviewedGateValidation(core)).toBe(false);
   });
 
   it("probes structurally, never by playbook identity", () => {
@@ -92,7 +95,7 @@ describe("W1 capability probing", () => {
     // "can you aggregate?", not "are you research?".
     const duck: PlaybookV1 = new AggregatingCorePlaybook();
     expect(hasFanAggregate(duck)).toBe(true);
-    expect(hasMalformedReissue(duck)).toBe(false);
+    expect(hasStateAwareRepair(duck)).toBe(false);
   });
 });
 
@@ -102,11 +105,29 @@ describe("W1 engine decoupling", () => {
   it("never calls a research-named playbook method", () => {
     expect(source).not.toContain("aggregateResearchBranches");
     // The engine must not branch on a literal playbook name for dispatch.
-    expect(source).not.toMatch(/playbook\s*===\s*"research"/);
+    expect(source).not.toMatch(/playbook\s*[!=]==?\s*"(?:research|knowledge-base)"/u);
   });
 
   it("reaches optional capabilities only through the probes", () => {
     expect(source).toContain("hasFanAggregate(this.playbook)");
-    expect(source).toContain("hasMalformedReissue(this.playbook)");
+    expect(source).toContain("hasRoutingRepair(this.playbook)");
+    expect(source).toContain("hasLivenessTerminal(this.playbook)");
+    expect(source).toContain("hasStateAwareRepair(this.playbook)");
+    expect(source).toContain("hasExternalStartOperationGroup(this.playbook)");
+    expect(source).toContain("hasHostReviewedGateValidation(this.playbook)");
+  });
+
+  it("contains no dead malformed-branch reissue capability", () => {
+    const playbookSource = readFileSync(
+      new URL("../src/playbooks/playbook.ts", import.meta.url),
+      "utf8"
+    );
+    const researchSource = readFileSync(
+      new URL("../src/playbooks/research.ts", import.meta.url),
+      "utf8"
+    );
+    expect(playbookSource).not.toContain("MalformedReissueCapabilityV1");
+    expect(playbookSource).not.toContain("hasMalformedReissue");
+    expect(researchSource).not.toContain("reissueMalformedBranch");
   });
 });

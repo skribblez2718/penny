@@ -2,6 +2,8 @@
  * §5.13 package-surface decision/oracle contract coverage.
  */
 
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,6 +15,21 @@ import {
   validatePackageSurfaceDecision,
 } from "../src/kb/gate-decisions.js";
 import { canonicalJson, sha256Hex, type PackageSurfaceDecisionV1 } from "../src/kb/contracts.js";
+
+const PACKAGE_INTERNAL_P2_MODULES = [
+  "./research-context.js",
+  "./skill-contracts/common.js",
+  "./skill-contracts/research.js",
+] as const;
+
+function sourceIndexReexports(): readonly string[] {
+  const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
+  return [
+    ...source.matchAll(/^export\s+(?:type\s+)?(?:\*|\{[^}]*\})\s+from\s+["']([^"']+)["'];$/gmu),
+  ]
+    .map((match) => match[1])
+    .filter((specifier): specifier is string => specifier !== undefined);
+}
 
 function rereviewPackageDecision(
   decision: PackageSurfaceDecisionV1,
@@ -48,6 +65,13 @@ function reviewedPackageDecision(): PackageSurfaceDecisionV1 {
 }
 
 describe("§5.13 package-surface contract/oracle", () => {
+  it("keeps approved packed P2 modules package-internal", () => {
+    const reexports = sourceIndexReexports();
+    for (const moduleSpecifier of PACKAGE_INTERNAL_P2_MODULES) {
+      expect(reexports).not.toContain(moduleSpecifier);
+    }
+  });
+
   it("accepts exact closed JCS and exact live fields/files", () => {
     const decision = reviewedPackageDecision();
     const parsed = parseGateDecisionReceiptJcs(canonicalJson(decision));

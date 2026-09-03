@@ -1,14 +1,14 @@
 # Agents Documentation Index
 
-- [Agents](agents/AGENTS.md): Project-local catalog, exact YAML tools, artifact-ID communication, and role/domain separation
-- [Extensions](extensions/AGENTS.md): Creating extensions: directory structure, tool registration, event handlers, TUI
-- [Skills](skills/AGENTS.md): Artifact-first engine workflows, Domain Guidance, scaffolding, and tests
-- [Prompts](prompts/AGENTS.md): Layer Reference, standards, cognitive frame, role definitions
-- [Knowledge Base](knowledge-base/AGENTS.md): Private advisory KB — authority model, records, workflows, retrieval/lint, privacy/promotion, evaluation
-- [Memory](memory/AGENTS.md): Primary-only durable recall/curation, default-off advisory log, supervised HTTP hub, temporal KG, and retention
-- [Orchestration](orchestration/AGENTS.md): Shared FSM engine, exact artifact contracts, durable checkpoints, and recovery
-- [Capabilities](capabilities/AGENTS.md): Artifact-first skills, primary tiered memory, observability, and verification states
-- [State Management](state-management/AGENTS.md): TypeScript playbook reference, orchestration integration, and skill patterns
-- [Architecture](architecture/AGENTS.md): Canonical implementations, Pi alignment deviations, case studies, and coding standards
-- [Documentation](documentation/AGENTS.md): Rules for AGENTS.md files — indexes only, never content
-- [Coding](coding/AGENTS.md): Python and TypeScript best practices, security anti-patterns
+- [Agents](agents/AGENTS.md): READ WHEN defining, invoking, routing to, or reviewing catalog agents and artifact handoff — catalog contracts, tool authority, and exact communication.
+- [Extensions](extensions/AGENTS.md): READ WHEN creating, modifying, or troubleshooting Pi extensions and runtime, UI, or tool integration — extension construction and interface requirements.
+- [Skills](skills/AGENTS.md): READ WHEN creating, modifying, invoking, or verifying engine-backed skills — artifact-first workflows, recovery, and tests.
+- [Prompts](prompts/AGENTS.md): READ WHEN changing prompt layers, role or domain guidance, assembly, markers, or prompt standards — prompt ownership and assembly contracts.
+- [Knowledge Base](knowledge-base/AGENTS.md): READ WHEN changing or operating Penny's private advisory knowledge-base capability — authority, workflows, privacy, and evaluation.
+- [Memory](memory/AGENTS.md): READ WHEN changing or operating durable recall, curation, advisory logs, or temporal facts — retention and authority boundaries.
+- [Orchestration](orchestration/AGENTS.md): READ WHEN changing workflow state machines, checkpoints, contracts, retries, or recovery — shared-engine behavior.
+- [Capabilities](capabilities/AGENTS.md): READ WHEN implementing, modifying, evaluating, or troubleshooting a Penny capability — capability-specific contracts.
+- [State Management](state-management/AGENTS.md): READ WHEN designing or changing durable state, run context, or orchestration integration — playbook state and recovery patterns.
+- [Architecture](architecture/AGENTS.md): MUST READ FOR changes to Penny's canonical architecture, platform alignment, or protected project standards — approved designs and invariants.
+- [Documentation](documentation/AGENTS.md): MUST READ FOR changes to root `AGENTS.md`, nested indexes, or `docs/agents/` guidance — routing architecture and documentation constraints.
+- [Coding](coding/AGENTS.md): MUST READ FOR every code-affecting task — language, framework, security, accessibility, deployment, and verification guidance.

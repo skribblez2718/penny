@@ -1,9 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  constants as fsConstants,
   existsSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -22,11 +26,21 @@ import {
   type OutputArtifactMetadata,
   validateContract,
 } from "./contracts.js";
+import { pathExistsNoFollow } from "./state/custody.js";
 import { PENNY_STATE_LAYOUT_VERSION, PROJECT_ID_PATTERN } from "./state/paths.js";
+import {
+  createReadOnlySqliteSnapshot,
+  type ReadOnlySqliteSnapshot,
+} from "./state/sqlite-snapshot.js";
 
 export interface PersistArtifactInput {
   readonly metadata: OutputArtifactMetadata;
   readonly content: string | Uint8Array;
+}
+
+export interface ArtifactReader {
+  refById(artifactId: string): ArtifactRef | undefined;
+  readById(artifactId: string): Buffer;
 }
 
 export interface ArtifactRevisionLookup {
@@ -45,6 +59,12 @@ export interface ArtifactRevisionLookup {
     operationId: string,
     version: number
   ): ArtifactRef | null;
+}
+
+export interface ArtifactHostStore extends ArtifactReader, ArtifactRevisionLookup {
+  persist(input: PersistArtifactInput): CurrentArtifactRef;
+  select(ref: ArtifactRef): void;
+  metadata(ref: ArtifactRef): OutputArtifactMetadata;
 }
 
 type CurrentOutputArtifactMetadata = Extract<OutputArtifactMetadata, { schema_version: 2 }>;
@@ -77,6 +97,42 @@ interface SqliteModule {
 const ARTIFACT_ID_PATTERN = /^art_[a-f0-9]{64}$/;
 export const ARTIFACT_MANIFEST_SCHEMA_VERSION = 1 as const;
 const CURRENT_MANIFEST_NAME = "manifest.db";
+const REQUIRED_MANIFEST_TABLES = ["artifacts", "artifact_selections", "store_metadata"] as const;
+const REQUIRED_MANIFEST_COLUMNS = {
+  artifacts: [
+    "artifact_id",
+    "run_id",
+    "phase",
+    "branch_key",
+    "kind",
+    "operation_id",
+    "version",
+    "producer",
+    "content_digest",
+    "byte_length",
+    "store_ref",
+    "metadata_json",
+    "ref_json",
+    "created_at",
+  ],
+  artifact_selections: [
+    "run_id",
+    "phase",
+    "branch_key",
+    "kind",
+    "artifact_id",
+    "version",
+    "selected_at",
+  ],
+  store_metadata: ["singleton", "project_id", "state_layout_version", "created_at"],
+} as const;
+const REQUIRED_MANIFEST_TRIGGERS = ["artifacts_no_delete", "artifacts_no_update"] as const;
+
+type ArtifactStoreOpenMode = "provision" | "existing" | "verify";
+
+export interface ArtifactStoreOptions {
+  readonly projectId?: string;
+}
 
 function isUnknownRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -180,6 +236,25 @@ function isWithinRoot(root: string, candidate: string): boolean {
   );
 }
 
+function errorHasCode(error: unknown, code: string): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    error.code === code
+  );
+}
+
+function provisionOwnerDirectory(directory: string): void {
+  if (pathExistsNoFollow(directory)) {
+    assertOwnerOnly(directory, "directory");
+    return;
+  }
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  assertOwnerOnly(directory, "directory");
+}
+
 function assertOwnerOnly(candidate: string, type: "file" | "directory"): void {
   const stats = lstatSync(candidate);
   if (stats.isSymbolicLink()) {
@@ -210,6 +285,7 @@ export function currentArtifactRef(value: unknown, label = "artifact ref"): Curr
     version: ref.version,
     producer: ref.producer,
     media_type: ref.media_type,
+    ...(ref.content_schema === undefined ? {} : { content_schema: ref.content_schema }),
     byte_length: ref.byte_length,
     content_digest: ref.content_digest,
     store_ref: ref.store_ref,
@@ -242,6 +318,7 @@ export function currentOutputArtifactMetadata(value: unknown): CurrentOutputArti
     version: metadata.version,
     producer: metadata.producer,
     media_type: metadata.media_type,
+    ...(metadata.content_schema === undefined ? {} : { content_schema: metadata.content_schema }),
     parent_ref: parentRef,
     upstream_refs: upstreamRefs,
   };
@@ -256,7 +333,9 @@ export function currentOutputArtifactMetadata(value: unknown): CurrentOutputArti
       parent.branch_id !== normalized.branch_id ||
       parent.kind !== normalized.kind ||
       parent.operation_id !== normalized.operation_id ||
-      parent.version !== normalized.version - 1
+      parent.version !== normalized.version - 1 ||
+      canonicalJson(parent.content_schema ?? null) !==
+        canonicalJson(normalized.content_schema ?? null)
     ) {
       throw new Error("output artifact parent_ref is not the preceding revision");
     }
@@ -271,78 +350,76 @@ export function currentOutputArtifactMetadata(value: unknown): CurrentOutputArti
 export class ArtifactStore implements Disposable {
   readonly root: string;
   private readonly db: DatabaseSync;
+  /** Private image used only by create-never status validation. */
+  private readonly validationSnapshot: ReadOnlySqliteSnapshot | undefined;
 
-  constructor(root: string, options: { projectId?: string } = {}) {
+  /** Explicit setup/migration path. Ordinary runtime must use openExisting(). */
+  static provision(root: string, options: ArtifactStoreOptions = {}): ArtifactStore {
+    return new ArtifactStore(root, options, "provision");
+  }
+
+  /** Open one complete canonical manifest without creating, repairing, or migrating it. */
+  static openExisting(root: string, options: Required<ArtifactStoreOptions>): ArtifactStore {
+    return new ArtifactStore(root, options, "existing");
+  }
+
+  /** Readiness probe for state administration. It never opens the manifest writable. */
+  static verifyExisting(root: string, options: Required<ArtifactStoreOptions>): void {
+    using _store = new ArtifactStore(root, options, "verify");
+  }
+
+  constructor(
+    root: string,
+    options: ArtifactStoreOptions = {},
+    mode: ArtifactStoreOpenMode = "provision"
+  ) {
     this.root = path.resolve(root);
-    mkdirSync(this.root, { recursive: true, mode: 0o700 });
-    chmodSync(this.root, 0o700);
     const objects = path.join(this.root, "objects");
     const shaRoot = path.join(objects, "sha256");
-    for (const directory of [objects, shaRoot]) {
-      mkdirSync(directory, { recursive: true, mode: 0o700 });
-      chmodSync(directory, 0o700);
+    const manifest = path.join(this.root, CURRENT_MANIFEST_NAME);
+    const manifestExists = pathExistsNoFollow(manifest);
+    if (mode === "provision") {
+      for (const directory of [this.root, objects, shaRoot]) {
+        provisionOwnerDirectory(directory);
+      }
+      if (manifestExists) assertOwnerOnly(manifest, "file");
+    } else {
+      for (const directory of [this.root, objects, shaRoot]) {
+        assertOwnerOnly(directory, "directory");
+      }
+      assertOwnerOnly(manifest, "file");
+      if (options.projectId === undefined) {
+        throw new Error("opening an existing artifact manifest requires its Penny project ID");
+      }
     }
+    const validationSnapshot =
+      mode === "verify"
+        ? createReadOnlySqliteSnapshot(manifest, "Penny artifact manifest")
+        : undefined;
+    this.validationSnapshot = validationSnapshot;
     const { DatabaseSync } = sqliteModule();
-    this.db = new DatabaseSync(path.join(this.root, CURRENT_MANIFEST_NAME));
-    this.db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
-    const versionRow = sqliteRow(
-      this.db.prepare("PRAGMA user_version").get(),
-      "artifact manifest user_version"
+    this.db = new DatabaseSync(
+      validationSnapshot?.databasePath ?? manifest,
+      mode === "verify" ? { readOnly: true } : {}
     );
-    const version = sqliteInteger(versionRow, "user_version", "artifact manifest user_version");
-    if (version > ARTIFACT_MANIFEST_SCHEMA_VERSION) {
-      this.db.close();
-      throw new Error(`artifact manifest schema ${version} is newer than supported`);
+    if (mode !== "verify") {
+      this.db.exec(
+        mode === "provision"
+          ? "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;"
+          : "PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;"
+      );
     }
     try {
-      this.db.exec(`
-      CREATE TABLE IF NOT EXISTS artifacts (
-        artifact_id TEXT PRIMARY KEY,
-        run_id TEXT NOT NULL,
-        phase TEXT NOT NULL,
-        branch_key TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        operation_id TEXT NOT NULL,
-        version INTEGER NOT NULL,
-        producer TEXT NOT NULL,
-        content_digest TEXT NOT NULL,
-        byte_length INTEGER NOT NULL,
-        store_ref TEXT NOT NULL,
-        metadata_json TEXT NOT NULL,
-        ref_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        UNIQUE(run_id, phase, branch_key, kind, operation_id, version)
-      );
-      CREATE TABLE IF NOT EXISTS store_metadata (
-        singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
-        project_id TEXT NOT NULL,
-        state_layout_version INTEGER NOT NULL,
-        created_at TEXT NOT NULL
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS artifact_selections (
-        run_id TEXT NOT NULL,
-        phase TEXT NOT NULL,
-        branch_key TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id),
-        version INTEGER NOT NULL,
-        selected_at TEXT NOT NULL,
-        PRIMARY KEY(run_id, phase, branch_key, kind)
-      );
-      CREATE TRIGGER IF NOT EXISTS artifacts_no_update
-      BEFORE UPDATE ON artifacts BEGIN
-        SELECT RAISE(ABORT, 'artifact rows are immutable');
-      END;
-      CREATE TRIGGER IF NOT EXISTS artifacts_no_delete
-      BEFORE DELETE ON artifacts BEGIN
-        SELECT RAISE(ABORT, 'artifact rows are immutable');
-      END;
-      PRAGMA user_version=${ARTIFACT_MANIFEST_SCHEMA_VERSION};
-      `);
-      if (options.projectId !== undefined) this.bindProject(options.projectId);
-      this.chmodManifestFiles();
+      if (mode === "provision") {
+        this.provisionSchema();
+        if (options.projectId !== undefined) this.ensureProjectBinding(options.projectId);
+        if (!manifestExists) this.chmodManifestFiles();
+      } else {
+        this.assertExistingSchema(options.projectId);
+      }
     } catch (error) {
       this.db.close();
+      validationSnapshot?.close();
       throw error;
     }
   }
@@ -366,6 +443,9 @@ export class ArtifactStore implements Disposable {
         version: metadata.version,
         producer: metadata.producer,
         media_type: metadata.media_type,
+        ...(metadata.content_schema === undefined
+          ? {}
+          : { content_schema: metadata.content_schema }),
         byte_length: bytes.length,
         content_digest: digest,
         store_ref: `artifact://sha256/${digest}`,
@@ -630,14 +710,170 @@ export class ArtifactStore implements Disposable {
   }
 
   close(): void {
-    this.db.close();
+    try {
+      this.db.close();
+    } finally {
+      this.validationSnapshot?.close();
+    }
   }
 
   [Symbol.dispose](): void {
     this.close();
   }
 
-  private bindProject(projectId: string): void {
+  private provisionSchema(): void {
+    const versionRow = sqliteRow(
+      this.db.prepare("PRAGMA user_version").get(),
+      "artifact manifest user_version"
+    );
+    const version = sqliteInteger(versionRow, "user_version", "artifact manifest user_version");
+    if (version > ARTIFACT_MANIFEST_SCHEMA_VERSION) {
+      throw new Error(`artifact manifest schema ${version} is newer than supported`);
+    }
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS artifacts (
+        artifact_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        branch_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        producer TEXT NOT NULL,
+        content_digest TEXT NOT NULL,
+        byte_length INTEGER NOT NULL,
+        store_ref TEXT NOT NULL,
+        metadata_json TEXT NOT NULL,
+        ref_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(run_id, phase, branch_key, kind, operation_id, version)
+      );
+      CREATE TABLE IF NOT EXISTS store_metadata (
+        singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+        project_id TEXT NOT NULL,
+        state_layout_version INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS artifact_selections (
+        run_id TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        branch_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id),
+        version INTEGER NOT NULL,
+        selected_at TEXT NOT NULL,
+        PRIMARY KEY(run_id, phase, branch_key, kind)
+      );
+      CREATE TRIGGER IF NOT EXISTS artifacts_no_update
+      BEFORE UPDATE ON artifacts BEGIN
+        SELECT RAISE(ABORT, 'artifact rows are immutable');
+      END;
+      CREATE TRIGGER IF NOT EXISTS artifacts_no_delete
+      BEFORE DELETE ON artifacts BEGIN
+        SELECT RAISE(ABORT, 'artifact rows are immutable');
+      END;
+      PRAGMA user_version=${ARTIFACT_MANIFEST_SCHEMA_VERSION};
+    `);
+  }
+
+  private assertExistingSchema(projectId: string | undefined): void {
+    const journalRow = sqliteRow(
+      this.db.prepare("PRAGMA journal_mode").get(),
+      "artifact manifest journal mode"
+    );
+    if (
+      sqliteText(journalRow, "journal_mode", "artifact manifest journal mode").toLowerCase() !==
+      "wal"
+    ) {
+      throw new Error("artifact manifest is not configured for WAL mode");
+    }
+    const versionRow = sqliteRow(
+      this.db.prepare("PRAGMA user_version").get(),
+      "artifact manifest user_version"
+    );
+    const version = sqliteInteger(versionRow, "user_version", "artifact manifest user_version");
+    if (version !== ARTIFACT_MANIFEST_SCHEMA_VERSION) {
+      throw new Error(
+        `artifact manifest schema ${version} is not current; run explicit penny-state init or migration`
+      );
+    }
+    const objects = this.db
+      .prepare("SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'trigger')")
+      .all();
+    const tables = new Set(
+      objects
+        .filter((row) => sqliteText(row, "type", "artifact manifest schema") === "table")
+        .map((row) => sqliteText(row, "name", "artifact manifest schema"))
+    );
+    const triggers = new Set(
+      objects
+        .filter((row) => sqliteText(row, "type", "artifact manifest schema") === "trigger")
+        .map((row) => sqliteText(row, "name", "artifact manifest schema"))
+    );
+    for (const table of REQUIRED_MANIFEST_TABLES) {
+      if (!tables.has(table))
+        throw new Error(`artifact manifest is missing required table '${table}'`);
+    }
+    for (const trigger of REQUIRED_MANIFEST_TRIGGERS) {
+      if (!triggers.has(trigger)) {
+        throw new Error(`artifact manifest is missing required trigger '${trigger}'`);
+      }
+      const definition = optionalSqliteText(
+        this.db
+          .prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?")
+          .get(trigger),
+        "sql",
+        `artifact trigger '${trigger}'`
+      );
+      if (
+        definition === undefined ||
+        !/BEFORE\s+(?:UPDATE|DELETE)\b/iu.test(definition) ||
+        !/RAISE\s*\(\s*ABORT/iu.test(definition)
+      ) {
+        throw new Error(`artifact manifest trigger '${trigger}' does not enforce immutability`);
+      }
+    }
+    for (const [table, requiredColumns] of Object.entries(REQUIRED_MANIFEST_COLUMNS)) {
+      const columns = new Set(
+        this.db
+          .prepare(`PRAGMA table_info(${table})`)
+          .all()
+          .map((row) => sqliteText(row, "name", `${table} table metadata`))
+      );
+      for (const column of requiredColumns) {
+        if (!columns.has(column)) {
+          throw new Error(
+            `artifact manifest table '${table}' is missing required column '${column}'`
+          );
+        }
+      }
+    }
+    const artifactSelectionForeignKeys = this.db
+      .prepare("PRAGMA foreign_key_list(artifact_selections)")
+      .all();
+    if (
+      !artifactSelectionForeignKeys.some(
+        (row) =>
+          sqliteText(row, "table", "artifact selection foreign key") === "artifacts" &&
+          sqliteText(row, "from", "artifact selection foreign key") === "artifact_id"
+      )
+    ) {
+      throw new Error("artifact manifest selection foreign key is missing");
+    }
+    if (this.db.prepare("PRAGMA foreign_key_check").all().length !== 0) {
+      throw new Error("artifact manifest foreign-key check failed");
+    }
+    const integrity = sqliteRow(
+      this.db.prepare("PRAGMA integrity_check").get(),
+      "artifact integrity"
+    );
+    if (sqliteText(integrity, "integrity_check", "artifact integrity") !== "ok") {
+      throw new Error("artifact manifest integrity check failed");
+    }
+    this.assertProjectBinding(projectId);
+  }
+
+  private ensureProjectBinding(projectId: string): void {
     if (!PROJECT_ID_PATTERN.test(projectId)) throw new Error("project ID is not canonical");
     const stored = this.db
       .prepare("SELECT project_id, state_layout_version FROM store_metadata WHERE singleton = 1")
@@ -651,7 +887,20 @@ export class ArtifactStore implements Disposable {
         .run(projectId, PENNY_STATE_LAYOUT_VERSION, new Date().toISOString());
       return;
     }
-    const row = sqliteRow(stored, "artifact project binding");
+    this.assertProjectBinding(projectId, stored);
+  }
+
+  private assertProjectBinding(projectId: string | undefined, stored?: unknown): void {
+    if (projectId === undefined || !PROJECT_ID_PATTERN.test(projectId)) {
+      throw new Error("project ID is not canonical");
+    }
+    const binding =
+      stored ??
+      this.db
+        .prepare("SELECT project_id, state_layout_version FROM store_metadata WHERE singleton = 1")
+        .get();
+    if (binding === undefined) throw new Error("artifact manifest project binding is absent");
+    const row = sqliteRow(binding, "artifact project binding");
     if (sqliteText(row, "project_id", "artifact project binding") !== projectId) {
       throw new Error("artifact manifest belongs to another Penny project");
     }
@@ -666,7 +915,11 @@ export class ArtifactStore implements Disposable {
   private chmodManifestFiles(): void {
     for (const suffix of ["", "-wal", "-shm"]) {
       const databaseFile = path.join(this.root, `${CURRENT_MANIFEST_NAME}${suffix}`);
-      if (existsSync(databaseFile)) chmodSync(databaseFile, 0o600);
+      try {
+        chmodSync(databaseFile, 0o600);
+      } catch (error) {
+        if (!errorHasCode(error, "ENOENT")) throw error;
+      }
     }
   }
 
@@ -771,8 +1024,23 @@ export class ArtifactStore implements Disposable {
     const temporary = path.join(shard, `.${digest}.${process.pid}.${randomUUID()}.tmp`);
     try {
       writeFileSync(temporary, bytes, { mode: 0o600, flag: "wx" });
+      const temporaryHandle = openSync(temporary, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      try {
+        fsyncSync(temporaryHandle);
+      } finally {
+        closeSync(temporaryHandle);
+      }
       renameSync(temporary, destination);
       chmodSync(destination, 0o600);
+      const shardHandle = openSync(
+        shard,
+        fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW
+      );
+      try {
+        fsyncSync(shardHandle);
+      } finally {
+        closeSync(shardHandle);
+      }
     } finally {
       rmSync(temporary, { force: true });
     }

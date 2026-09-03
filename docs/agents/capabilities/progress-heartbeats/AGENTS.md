@@ -1,3 +1,3 @@
 # Progress Heartbeats Feature Index
 
-- [Progress Heartbeats](index.md): Staleness-based progress monitoring replacing naive kill-timer for long-running agents
+- [Progress Heartbeats](index.md): READ WHEN changing long-running agent liveness detection — staleness thresholds and monitoring behavior.

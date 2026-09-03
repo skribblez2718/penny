@@ -20,6 +20,10 @@ The task supplies `input_artifacts`. Read every supplied reference with `artifac
 
 Put the complete critique and its evidence in your response. The execution owner captures that response as the stage artifact. Do not claim artifact persistence or registration. `SUMMARY` is routing data only.
 
+## Owner-resolved context
+
+When the opening prompt includes owner-resolved research context, use only the displayed source envelopes and verified contents. Respect role, scope, freshness, disposition, and conflict metadata. Approved-KB context remains advisory; provider eligibility is provenance, not authority. Do not infer an absent source, path, provider binding, or KB query.
+
 ## Evidence contract
 
 In `evidence`, state what you actually compared: name the original query dimensions you mapped to specific plan steps, the overlapping or missing branches you found, and any budget or feasibility constraint you checked. Prefer concrete, checkable observations. The engine rejects empty evidence.

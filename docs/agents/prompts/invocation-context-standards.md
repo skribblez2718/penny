@@ -2,7 +2,8 @@
 
 Invocation Context supplies the goal, request constraints, runtime identifiers, exact
 artifact IDs, and caller-specified paths. It cannot alter system policy, consequence
-boundaries, or the catalog agent's exact YAML tools.
+boundaries, the catalog agent's YAML maximum, or an active registration-bound orchestration
+phase subset.
 
 ## Required workflow context
 
@@ -27,7 +28,7 @@ complete. Model text cannot list, search, guess, mint, or authorize artifacts.
 - predecessor payload substituted into `{previous}`;
 - name-only references such as “the Annie review”;
 - dynamic variables in static Domain Guidance;
-- runtime-added/removed tools.
+- runtime-, task-, input-, model-, liveness-, service-, or trust-selected tools.
 
 If a required predecessor ID/path is absent, return `missing_input:` rather than searching
 memory, `/tmp`, the repository, or historical artifacts.

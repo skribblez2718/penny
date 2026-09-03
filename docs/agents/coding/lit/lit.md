@@ -44,24 +44,27 @@ first use (a failed fetch self-heals and dates the row).
 | API: Styles (adoptStyles, css, unsafeCSS) | https://lit.dev/docs/api/styles/              | ✓ 2026-07-10 |
 | API: Decorators                           | https://lit.dev/docs/api/decorators/          | seed         |
 
-## Styling (Tailwind integration)
+## Styling with a caller-selected utility system
 
-Tailwind CSS is this project's default styling layer. Because Lit renders into
-shadow DOM, a global Tailwind stylesheet does not reach component internals —
-compile Tailwind and adopt the trusted compiled sheet into each component's shadow root. See the [Tailwind documentation map](../tailwind/AGENTS.md) and fetch the current Lit styles API before implementing the `?inline` + `unsafeCSS()` integration.
+When the caller-selected stack combines Lit with Tailwind CSS, a global utility sheet
+does not cross Lit's shadow boundary. Compile the sheet and adopt only trusted,
+compiled CSS into the component's shadow root. See the [Tailwind documentation
+map](../tailwind/AGENTS.md) and fetch the current Lit styles API before implementing
+an integration. Other selected styling systems need their own documented boundary.
 
-## Secure Coding (project standards)
+## Secure Coding
 
 Lit auto-escapes text and attribute bindings, but several APIs bypass that and
-form the main client-side risk surface. Consult the project's secure-coding docs
-(`docs/agents/coding/security/`) when building Lit UIs:
+form the main client-side risk surface. Read the triggered secure-coding guides when building Lit UIs:
 
 - [XSS](../security/xss.md) — **Most relevant.** `unsafeHTML`, `unsafeSVG`, the `unsafeStatic`/`html` helpers from `static-html`, and binding to `.innerHTML` bypass Lit's auto-escaping. Never pass untrusted data to them; sanitize first.
 - [Input Validation](../security/input-validation.md) — Validate and constrain user input at the component boundary before use or dispatch.
 - [Secrets](../security/secrets.md) — Never embed API keys or tokens in client-side bundles; anything in the JS ships to the browser.
-- [Authentication](../security/authentication.md) — Browser token/session storage (avoid `localStorage` for sensitive tokens; prefer httpOnly cookies).
+- [Session Security](../security/session-security.md) — browser session storage and lifecycle.
+- [CSRF](../security/csrf.md) — cookie-authenticated state transitions.
 - [API Security](../security/api-security.md) — Components call APIs; guard against IDOR and excessive data exposure server-side.
-- [Configuration](../security/configuration.md) — CORS, security headers, and CSP. `unsafeCSS()`/inline styles interact with CSP — only ever pass trusted, compiled CSS to `unsafeCSS()`.
-- [Dependencies](../security/dependencies.md) — Vet npm packages in the Lit / Tailwind toolchain (supply-chain risk).
+- [Browser Security](../security/browser-security.md) and [Configuration](../security/configuration.md) — CORS, browser policy, headers, and CSP. `unsafeCSS()`/inline styles interact with CSP — only ever pass trusted, compiled CSS to `unsafeCSS()`.
+- [Dependencies](../security/dependencies.md) and [Supply Chain](../security/supply-chain.md) — package and build/release trust.
+- [Security Verification](../security/security-verification.md) — evidence for security-sensitive UI work.
 
 See [security/AGENTS.md](../security/AGENTS.md) for the full secure-coding index.

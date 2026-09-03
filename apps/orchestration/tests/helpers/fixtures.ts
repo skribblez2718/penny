@@ -11,6 +11,13 @@ export interface ResearchParityPin {
     readonly completion_field: string;
     readonly met_field: string;
   };
+  readonly approved_revision: {
+    readonly approved_by: string;
+    readonly approved_on: string;
+    readonly decision: string;
+    readonly input_artifact_id: string;
+    readonly input_artifact_sha256: string;
+  };
   readonly non_states: string[];
 }
 
@@ -25,6 +32,10 @@ export function parseResearchParityPin(text: string): ResearchParityPin {
   const value = requireRecord(parseJson(text), "research parity pin");
   const modes = requireRecord(value["modes"], "research parity pin.modes");
   const terminal = requireRecord(value["terminal"], "research parity pin.terminal");
+  const approval = requireRecord(
+    value["approved_revision"],
+    "research parity pin.approved_revision"
+  );
   return {
     states: requireStringArray(value["states"], "research parity pin.states"),
     agent_by_state: requireStringRecord(
@@ -50,6 +61,28 @@ export function parseResearchParityPin(text: string): ResearchParityPin {
         "research parity pin.terminal.completion_field"
       ),
       met_field: requireString(terminal["met_field"], "research parity pin.terminal.met_field"),
+    },
+    approved_revision: {
+      approved_by: requireString(
+        approval["approved_by"],
+        "research parity pin.approved_revision.approved_by"
+      ),
+      approved_on: requireString(
+        approval["approved_on"],
+        "research parity pin.approved_revision.approved_on"
+      ),
+      decision: requireString(
+        approval["decision"],
+        "research parity pin.approved_revision.decision"
+      ),
+      input_artifact_id: requireString(
+        approval["input_artifact_id"],
+        "research parity pin.approved_revision.input_artifact_id"
+      ),
+      input_artifact_sha256: requireString(
+        approval["input_artifact_sha256"],
+        "research parity pin.approved_revision.input_artifact_sha256"
+      ),
     },
     non_states: requireStringArray(value["non_states"], "research parity pin.non_states"),
   };

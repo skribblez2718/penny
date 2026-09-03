@@ -11,9 +11,14 @@ task. The primary runtime may expose durable-memory tools.
 2. Read one Role Definition from the current `.pi/agents` snapshot.
 3. Inject optional static Domain Guidance before `<agent_boundary>`.
 4. Append project indexes and current task context.
-5. Load all tool providers, validate every YAML name, and activate exactly the YAML
-   `tools:` list—no trust/profile/input-dependent changes.
-6. Verify every supplied artifact ID before model use.
+5. Load all tool providers and validate every YAML name. Direct/parallel/chain invocation
+   and orchestration phases without `allowed_tools` activate YAML exactly. An eligible
+   TypeScript orchestration phase instead activates only its fixed non-empty duplicate-free
+   strict YAML subset from the active canonical registration. Trust profiles, task/input,
+   runtime conditions, model/liveness policy, and optional-service state cannot select tools.
+6. Validate any phase subset against YAML before session creation, pass the selected list
+   exactly to Pi, and verify active equality before the model prompt.
+7. Verify every supplied artifact ID before model use.
 
 Workers may have YAML-declared read-only memory tools, but those are advisory recall rather
 than workflow transport.
@@ -37,5 +42,6 @@ recovery authority.
 ## Markers and controls
 
 `<skill_context>`, `<agent_boundary>`, and `<system_boundary>` aid parsing. Actual controls
-are system-role placement, the exact YAML surface, workflow gates/receipts, artifact byte
-integrity, and OS/container permissions.
+are system-role placement, equality to the selected exact-YAML or registration-bound strict
+subset surface, workflow gates/receipts, artifact byte integrity, and OS/container
+permissions. A subset is not OS/process sandboxing and does not isolate extension code.

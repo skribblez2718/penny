@@ -1,8 +1,8 @@
 # Knowledge Base Feature Index
 
-- [Overview](overview.md): Authority model, the eight public actions, and what the KB is not
-- [Manifest and Records](manifest-and-records.md): Static manifest, private layout, immutable record schemas, and generations
-- [Workflows](workflows.md): Request/result contract, artifact content plane, child sessions, publication, and recovery
-- [Retrieval and Lint](retrieval-and-lint.md): Selected-generation reading, deterministic ranking, the lint floor, and the no-write plane rule
-- [Privacy and Promotion](privacy-and-promotion.md): Profiles, capabilities, policy, copy surfaces, and host-only signed promotion
-- [Evaluation](evaluation.md): Frozen decision receipts, objective oracles, and the gate ladder
+- [Overview](overview.md): READ WHEN orienting to the private advisory knowledge-base capability — authority model and supported operations.
+- [Manifest and Records](manifest-and-records.md): READ WHEN changing KB manifests, record schemas, or generations — immutable record and selection rules.
+- [Workflows](workflows.md): READ WHEN operating or changing KB workflows — request/result, publication, and recovery contracts.
+- [Retrieval and Lint](retrieval-and-lint.md): READ WHEN changing or evaluating KB retrieval and linting — ranking and no-write boundaries.
+- [Privacy and Promotion](privacy-and-promotion.md): READ WHEN changing KB privacy, profiles, capabilities, or promotion — custody and authorization constraints.
+- [Evaluation](evaluation.md): READ WHEN defining or evaluating KB quality gates — receipts, objective oracles, and gate ladder.

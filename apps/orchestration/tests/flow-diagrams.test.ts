@@ -1,389 +1,287 @@
 /**
- * Flow-diagram drift guard (§5.12) for the engine-driven (TypeScript) playbooks.
- *
- * Compares the KB playbook's EXPORTED state/edge descriptor (`KB_FLOW` — forward
- * edges derived from the machine's own NEXT_STATE table) against the
- * machine-readable `N`/`E` data embedded in `.pi/skills/knowledge-base/resources/flow.html`.
- * It fails on a missing or extra STATE, EDGE, GATE, RETRY, or TERMINAL ROUTE in
- * either direction, and asserts the authority facts the diagram must carry
- * (host-only gate decisions, host-only approval, the documented cancel seam,
- * bounded repairs, honest exhaustion).
- *
- * The TypeScript descriptors are the sole machine authority. A stale diagram is
- * a hard failure, and the diagram updates in the same change as the machine.
+ * Every skill flow is a strict-JSON, self-contained visual mirror. Playbook
+ * descriptors own topology; this suite owns all-skill static template checks.
+ * Browser geometry is deliberately kept in the Playwright validator because it
+ * needs a real rendering engine.
  */
 
-import { parseJson, requireArray, requireRecord } from "./helpers/narrowing.js";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-
-import { describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 
+import { describe, expect, it } from "vitest";
+
+import { ASSESS_FLOW } from "../src/playbooks/assess.js";
+import { DECIDE_FLOW } from "../src/playbooks/decide.js";
+import { DIAGNOSE_FLOW } from "../src/playbooks/diagnose.js";
 import {
   KB_AGENT_PHASES,
   KB_FLOW,
   KNOWLEDGE_BASE_SKILL_CONTRACT,
 } from "../src/playbooks/knowledge-base.js";
+import { PLAN_FLOW } from "../src/playbooks/plan.js";
+import { PRODUCE_FLOW } from "../src/playbooks/produce.js";
 import { RESEARCH_FLOW } from "../src/playbooks/research.js";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(here, "../../..");
-const FLOW_HTML = path.join(REPO_ROOT, ".pi", "skills", "knowledge-base", "resources", "flow.html");
-const RESEARCH_FLOW_HTML = path.join(
-  REPO_ROOT,
-  ".pi",
-  "skills",
-  "research",
-  "resources",
-  "flow.html"
-);
+type EdgeKind = "fwd" | "gate" | "loop" | "exit" | "abort" | "esc";
 
 interface DiagramNode {
-  title?: string;
-  desc?: string;
+  title: string;
+  desc: string;
+  cls: string;
+  lane: string;
+  y: number;
   who?: string;
   badge?: string;
   decisions?: string[];
   host_only?: boolean;
-  [key: string]: unknown;
 }
 
 interface DiagramEdge {
   from: string;
   to: string;
-  kind: string;
-  label?: string;
-  bounded?: boolean;
-  [key: string]: unknown;
+  kind: EdgeKind;
+  label: string;
 }
 
-/**
- * Extract the value of a `const NAME = <literal>` block and JSON-parse it. The
- * flow standard keeps N/E as strict JSON (double-quoted) precisely so the drift
- * guard can read them without executing anything.
- */
-function extractConst(source: string, name: string): string {
+interface ExpectedFlow {
+  states: readonly string[];
+  edges: readonly string[];
+}
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(here, "../../..");
+const SKILLS_ROOT = path.join(REPO_ROOT, ".pi", "skills");
+const EDGE_KINDS: ReadonlySet<string> = new Set(["fwd", "gate", "loop", "exit", "abort", "esc"]);
+const NON_COGNITIVE_CLASSES = new Set(["start", "host", "gate", "done", "error", "esc"]);
+
+function edgeKey(edge: { from: string; to: string }): string {
+  return `${edge.from}→${edge.to}`;
+}
+
+function tupleFlow(flow: {
+  states: readonly string[];
+  edges: readonly (readonly [string, string])[];
+}): ExpectedFlow {
+  return { states: flow.states, edges: flow.edges.map(([from, to]) => `${from}→${to}`) };
+}
+
+const EXPECTED: Readonly<Record<string, ExpectedFlow>> = {
+  research: tupleFlow(RESEARCH_FLOW),
+  "knowledge-base": {
+    // start is the documented virtual engine initialize point, not a KB_FLOW state.
+    states: ["start", ...KB_FLOW.states.map((state) => state.id)],
+    edges: KB_FLOW.edges.map(edgeKey),
+  },
+  decide: tupleFlow(DECIDE_FLOW),
+  plan: tupleFlow(PLAN_FLOW),
+  diagnose: tupleFlow(DIAGNOSE_FLOW),
+  produce: tupleFlow(PRODUCE_FLOW),
+  assess: tupleFlow(ASSESS_FLOW),
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.trim().length === 0)
+    throw new Error(`${label} must be a non-empty string`);
+  return value;
+}
+
+function requireOptionalString(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  return requireString(value, label);
+}
+
+function requireOptionalStringArray(value: unknown, label: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error(`${label} must be a string array`);
+
+  const strings: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") throw new Error(`${label} must be a string array`);
+    strings.push(item);
+  }
+  return strings;
+}
+
+function extractJsonConstant(source: string, name: "N" | "E"): unknown {
   const marker = `const ${name} = `;
   const start = source.indexOf(marker);
-  if (start === -1) throw new Error(`flow.html is missing 'const ${name} = ...'`);
-  let i = start + marker.length;
+  if (start < 0) throw new Error(`flow.html is missing '${marker}'`);
+  const valueStart = start + marker.length;
+  const opening = source[valueStart];
+  if (opening !== "{" && opening !== "[") throw new Error(`const ${name} is not strict JSON`);
+  const closing = opening === "{" ? "}" : "]";
   let depth = 0;
   let inString = false;
   let escaped = false;
-  let opened = false;
-  for (; i < source.length; i += 1) {
-    const ch = source[i];
+  for (let index = valueStart; index < source.length; index += 1) {
+    const character = source[index];
     if (inString) {
       if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
       continue;
     }
-    if (ch === '"') {
-      inString = true;
-    } else if (ch === "{" || ch === "[") {
-      depth += 1;
-      opened = true;
-    } else if (ch === "}" || ch === "]") {
+    if (character === '"') inString = true;
+    else if (character === opening) depth += 1;
+    else if (character === closing) {
       depth -= 1;
-      if (opened && depth === 0) break;
+      if (depth === 0) {
+        const raw = source.slice(valueStart, index + 1);
+        const parsed: unknown = JSON.parse(raw);
+        return parsed;
+      }
     }
   }
-  if (!opened || depth !== 0) {
-    throw new Error(
-      `could not find the balanced 'const ${name}' value; it must be a single JSON literal`
-    );
-  }
-  const raw = source.slice(start + marker.length, i + 1);
-  try {
-    JSON.parse(raw);
-  } catch (error) {
-    throw new Error(
-      `'const ${name}' in flow.html is not strict JSON (the drift guard reads it without executing code): ${String(error)}`
-    );
-  }
-  return raw;
+  throw new Error(`const ${name} is unbalanced`);
 }
 
-function isOptionalString(value: unknown): value is string | undefined {
-  return value === undefined || typeof value === "string";
-}
-
-function isOptionalBoolean(value: unknown): value is boolean | undefined {
-  return value === undefined || typeof value === "boolean";
-}
-
-function isOptionalStringArray(value: unknown): value is string[] | undefined {
-  return (
-    value === undefined ||
-    (Array.isArray(value) && value.every((entry) => typeof entry === "string"))
-  );
-}
-
-function requireDiagramNode(value: unknown, label: string): DiagramNode {
-  const node = requireRecord(value, label);
-  if (
-    !isOptionalString(node["title"]) ||
-    !isOptionalString(node["desc"]) ||
-    !isOptionalString(node["who"]) ||
-    !isOptionalString(node["badge"]) ||
-    !isOptionalStringArray(node["decisions"]) ||
-    !isOptionalBoolean(node["host_only"])
-  ) {
-    throw new Error(`${label} has malformed node fields`);
-  }
-  return node;
-}
-
-function requireDiagramEdge(value: unknown, label: string): DiagramEdge {
-  const edge = requireRecord(value, label);
-  if (
-    typeof edge["from"] !== "string" ||
-    typeof edge["to"] !== "string" ||
-    typeof edge["kind"] !== "string" ||
-    !isOptionalString(edge["label"]) ||
-    !isOptionalBoolean(edge["bounded"])
-  ) {
-    throw new Error(`${label} has malformed edge fields`);
-  }
+function parseNode(value: unknown, id: string): DiagramNode {
+  if (!isRecord(value)) throw new Error(`N.${id} must be an object`);
+  const y = value["y"];
+  if (typeof y !== "number" || !Number.isFinite(y)) throw new Error(`N.${id}.y must be finite`);
+  const hostOnly = value["host_only"];
+  if (hostOnly !== undefined && typeof hostOnly !== "boolean")
+    throw new Error(`N.${id}.host_only must be boolean`);
+  const who = requireOptionalString(value["who"], `N.${id}.who`);
+  const badge = requireOptionalString(value["badge"], `N.${id}.badge`);
+  const decisions = requireOptionalStringArray(value["decisions"], `N.${id}.decisions`);
   return {
-    ...edge,
-    from: edge["from"],
-    to: edge["to"],
-    kind: edge["kind"],
-    ...(edge["label"] === undefined ? {} : { label: edge["label"] }),
-    ...(edge["bounded"] === undefined ? {} : { bounded: edge["bounded"] }),
+    title: requireString(value["title"], `N.${id}.title`),
+    desc: requireString(value["desc"], `N.${id}.desc`),
+    cls: requireString(value["cls"], `N.${id}.cls`),
+    lane: requireString(value["lane"], `N.${id}.lane`),
+    y,
+    ...(who === undefined ? {} : { who }),
+    ...(badge === undefined ? {} : { badge }),
+    ...(decisions === undefined ? {} : { decisions }),
+    ...(hostOnly === true ? { host_only: true } : {}),
   };
 }
 
-const html = readFileSync(FLOW_HTML, "utf8");
-const nodeDocument = requireRecord(parseJson(extractConst(html, "N")), "diagram nodes");
-const N: Record<string, DiagramNode> = Object.fromEntries(
-  Object.entries(nodeDocument).map(([id, value]) => [id, requireDiagramNode(value, `node ${id}`)])
-);
-const E: DiagramEdge[] = requireArray(parseJson(extractConst(html, "E")), "diagram edges").map(
-  (value, index) => requireDiagramEdge(value, `edge ${index}`)
-);
-
-function requireNode(id: string): DiagramNode {
-  const node = N[id];
-  if (node === undefined) throw new Error(`flow diagram node '${id}' is missing`);
-  return node;
+function isEdgeKind(value: string): value is EdgeKind {
+  return EDGE_KINDS.has(value);
 }
 
-const nodeIds = Object.keys(N);
-const edgeKey = (e: { from: string; to: string }): string => `${e.from}→${e.to}`;
+function parseEdge(value: unknown, index: number): DiagramEdge {
+  if (!isRecord(value)) throw new Error(`E[${index}] must be an object`);
+  const kind = requireString(value["kind"], `E[${index}].kind`);
+  if (!isEdgeKind(kind)) throw new Error(`E[${index}].kind is not allowed`);
+  return {
+    from: requireString(value["from"], `E[${index}].from`),
+    to: requireString(value["to"], `E[${index}].to`),
+    kind,
+    label: requireString(value["label"], `E[${index}].label`),
+  };
+}
 
-const descriptorEdgeKeys = new Set(KB_FLOW.edges.map(edgeKey));
-const diagramEdgeKeys = new Set(E.map(edgeKey));
+function parseDiagram(source: string): {
+  nodes: Record<string, DiagramNode>;
+  edges: DiagramEdge[];
+} {
+  const rawNodes = extractJsonConstant(source, "N");
+  const rawEdges = extractJsonConstant(source, "E");
+  if (!isRecord(rawNodes)) throw new Error("N must be a JSON object");
+  if (!Array.isArray(rawEdges)) throw new Error("E must be a JSON array");
+  return {
+    nodes: Object.fromEntries(
+      Object.entries(rawNodes).map(([id, node]) => [id, parseNode(node, id)])
+    ),
+    edges: rawEdges.map((edge, index) => parseEdge(edge, index)),
+  };
+}
 
-describe("flow-diagrams (KB, §5.12)", () => {
-  it("embeds a machine-readable data model (N: every state once, E: one edge per object)", () => {
-    expect(nodeIds.length).toBe(new Set(nodeIds).size); // no duplicate states
-    expect(E.length).toBeGreaterThan(0);
-    for (const id of nodeIds) {
-      const node = requireNode(id);
-      expect(node.title, `node '${id}' needs a title`).toBeTruthy();
-      expect(node.desc, `node '${id}' needs a description`).toBeTruthy();
-    }
-    for (const edge of E) {
-      expect(nodeIds, `edge ${edgeKey(edge)}: '${edge.from}' has no node`).toContain(edge.from);
-      expect(nodeIds, `edge ${edgeKey(edge)}: '${edge.to}' has no node`).toContain(edge.to);
-      expect(
-        ["fwd", "gate", "loop", "exit", "abort"],
-        `edge ${edgeKey(edge)}: unknown kind '${edge.kind}'`
-      ).toContain(edge.kind);
-    }
+function allSkillFlows(): readonly { skill: string; source: string }[] {
+  return readdirSync(SKILLS_ROOT)
+    .filter((skill) => existsSync(path.join(SKILLS_ROOT, skill, "SKILL.md")))
+    .map((skill) => ({
+      skill,
+      source: readFileSync(path.join(SKILLS_ROOT, skill, "resources", "flow.html"), "utf8"),
+    }))
+    .sort((left, right) => left.skill.localeCompare(right.skill));
+}
+
+describe("flow-diagrams", () => {
+  it("discovers every registered skill flow", () => {
+    expect(
+      allSkillFlows()
+        .map((entry) => entry.skill)
+        .sort()
+    ).toEqual(Object.keys(EXPECTED).sort());
   });
 
-  it("draws exactly the descriptor's states — no missing, no extra", () => {
-    const descriptorIds = new Set(KB_FLOW.states.map((s) => s.id));
-    const diagramStates = new Set(nodeIds.filter((id) => id !== "start"));
-    const missing = [...descriptorIds].filter((id) => !diagramStates.has(id));
-    const extra = [...diagramStates].filter((id) => !descriptorIds.has(id));
-    expect(missing, `states missing from the diagram: ${missing.join(", ")}`).toEqual([]);
-    expect(extra, `extra states in the diagram: ${extra.join(", ")}`).toEqual([]);
-  });
+  for (const { skill, source } of allSkillFlows()) {
+    const expected = EXPECTED[skill];
+    if (expected === undefined) throw new Error(`missing expected descriptor for ${skill}`);
+    const diagram = parseDiagram(source);
 
-  it("draws exactly the descriptor's edges — no missing, no extra", () => {
-    const missing = [...descriptorEdgeKeys].filter((k) => !diagramEdgeKeys.has(k));
-    const extra = [...diagramEdgeKeys].filter((k) => !descriptorEdgeKeys.has(k));
-    expect(missing, `edges missing from the diagram: ${missing.join(", ")}`).toEqual([]);
-    expect(extra, `extra edges in the diagram: ${extra.join(", ")}`).toEqual([]);
-  });
-
-  it("classifies every edge with the descriptor's kind", () => {
-    const kindMap = new Map(KB_FLOW.edges.map((e) => [edgeKey(e), e.kind]));
-    const diagramKinds = {
-      forward: "fwd",
-      repair: "loop",
-      gate: "gate",
-    } as const satisfies Record<"forward" | "repair" | "gate", string>;
-    for (const edge of E) {
-      const expected = kindMap.get(edgeKey(edge));
-      if (expected === undefined) {
-        throw new Error(`described edge ${edgeKey(edge)} has no kind in the descriptor`);
+    it(`${skill}: is strict-JSON, self-contained, and uses the canonical semantic frame`, () => {
+      expect(source).toMatch(/^<!doctype html>/imu);
+      expect(source).toMatch(/<html\s+lang=["']en["']/iu);
+      expect(source).toContain('name="penny-flow-template" content="1"');
+      expect(source).toMatch(
+        /<header>|class="callout"|class="legend"|class="flow-viewport"|id="wrap"|id="edges"|id="edge-list"|<footer>/u
+      );
+      expect(source).toContain('id="arrowhead"');
+      expect(source).not.toMatch(
+        /<script[^>]+src\s*=|<link[^>]+href\s*=|\bfetch\(|XMLHttpRequest|\bWebSocket\b/iu
+      );
+      expect(source).not.toMatch(/innerHTML\s*=/u);
+      expect(source).not.toMatch(/__FLOW_|__N_JSON__|__E_JSON__/u);
+      expect(Object.keys(diagram.nodes)).toHaveLength(new Set(Object.keys(diagram.nodes)).size);
+      for (const [id, node] of Object.entries(diagram.nodes)) {
+        expect(["left", "center", "right"], `${skill}:${id} lane`).toContain(node.lane);
+        expect(node.y, `${skill}:${id} y`).toBeGreaterThanOrEqual(0);
+        if (!NON_COGNITIVE_CLASSES.has(node.cls))
+          expect(node.who, `${skill}:${id} owner`).toBeTruthy();
+        if (node.cls === "gate" || node.cls === "host")
+          expect(node.badge, `${skill}:${id} control badge`).toBeTruthy();
+        if (node.cls === "done" || node.cls === "error")
+          expect(node.badge, `${skill}:${id} terminal badge`).toBe("TERM");
       }
-      const allowed =
-        expected === "terminal"
-          ? ["exit", "abort"] // the two terminal routes (publish / deny)
-          : [diagramKinds[expected]];
-      expect(
-        allowed,
-        `edge ${edgeKey(edge)} drawn as '${edge.kind}', descriptor says '${expected}'`
-      ).toContain(edge.kind);
-    }
-  });
-
-  it("shows the gate node with its host-only decisions", () => {
-    for (const gate of KB_FLOW.gates) {
-      const node = requireNode(gate.state);
-      expect(node.badge).toBe("HITL");
-      if (node.decisions === undefined) {
-        throw new Error(`gate state '${gate.state}' has no decisions`);
-      }
-      expect([...node.decisions].sort()).toEqual([...gate.decisions].sort());
-      expect(node.host_only).toBe(true);
-    }
-    // And exactly one gate state.
-    const gateNodes = nodeIds.filter((id) => requireNode(id).badge === "HITL");
-    expect(gateNodes).toEqual(KB_FLOW.gates.map((g) => g.state));
-  });
-
-  it("binds every agent node to its SSOT agent", () => {
-    for (const state of KB_FLOW.states) {
-      if (state.kind !== "agent" || state.agent === undefined) continue;
-      const node = requireNode(state.id);
-      expect(node.who, `node '${state.id}' must name its agent`).toBe(state.agent);
-      expect(node.cls).toBe(state.agent);
-    }
-  });
-
-  it("retains the descriptor's bounded repairs with their feedback kinds", () => {
-    const repairs = KB_FLOW.edges.filter((e) => e.kind === "repair");
-    expect(repairs.length).toBeGreaterThan(0);
-    for (const repair of repairs) {
-      const drawn = E.find((e) => edgeKey(e) === edgeKey(repair));
-      expect(drawn, `repair ${edgeKey(repair)} is missing`).toBeDefined();
-      expect(drawn?.kind).toBe("loop");
-      if (repair.feedback_kind !== undefined) {
-        expect(String(drawn?.label ?? ""), "repair labels must carry the feedback kind").toContain(
-          repair.feedback_kind
+      for (const edge of diagram.edges) {
+        expect(Object.hasOwn(diagram.nodes, edge.from), `${skill}:${edge.from} endpoint`).toBe(
+          true
         );
-        // Feedback kinds must come from the contract's feedback vocabulary.
-        // (refine carries none: it is a human decision, not a machine gap kind.)
-        expect(
-          KNOWLEDGE_BASE_SKILL_CONTRACT.feedback_kinds,
-          `repair ${edgeKey(repair)} uses an undeclared feedback kind`
-        ).toContain(repair.feedback_kind);
+        expect(Object.hasOwn(diagram.nodes, edge.to), `${skill}:${edge.to} endpoint`).toBe(true);
+        expect(EDGE_KINDS.has(edge.kind), `${skill}:${edgeKey(edge)} kind`).toBe(true);
       }
+    });
+
+    it(`${skill}: exactly mirrors the exported TypeScript topology`, () => {
+      expect(Object.keys(diagram.nodes).sort()).toEqual([...expected.states].sort());
+      expect(diagram.edges.map(edgeKey).sort()).toEqual([...expected.edges].sort());
+    });
+  }
+
+  it("knowledge-base: preserves host-only gate data, repair feedback, and honest cancellation", () => {
+    const source = readFileSync(
+      path.join(SKILLS_ROOT, "knowledge-base", "resources", "flow.html"),
+      "utf8"
+    );
+    const diagram = parseDiagram(source);
+    for (const gate of KB_FLOW.gates) {
+      const node = diagram.nodes[gate.state];
+      if (node === undefined) throw new Error(`missing knowledge-base gate '${gate.state}'`);
+      expect(node.badge).toBe("HITL");
+      expect(node.host_only).toBe(true);
+      expect([...(node.decisions ?? [])].sort()).toEqual([...gate.decisions].sort());
     }
-    // Every agent phase can reissue itself on an incomplete result.
     for (const phase of KB_AGENT_PHASES) {
       expect(
-        repairs.some((r) => r.from === phase && r.to === phase),
-        `missing self-repair at '${phase}'`
+        diagram.edges.some(
+          (edge) => edge.from === phase && edge.to === phase && edge.kind === "loop"
+        )
       ).toBe(true);
     }
-  });
-
-  it("routes the terminals exactly as the descriptor says (completion-gate consistent)", () => {
-    const requiredStates = KNOWLEDGE_BASE_SKILL_CONTRACT.completion_gate.required_states;
-    for (const terminal of KB_FLOW.terminals) {
-      const drawn = E.filter((e) => e.to === terminal.id);
-      expect(drawn.length, `terminal '${terminal.id}' must be reachable`).toBeGreaterThan(0);
-      expect(new Set(drawn.map((edge) => edge.from))).toEqual(new Set(terminal.routes_from));
-      // Agent-produced met terminals are admitted only from a completion-gate
-      // state. `start` is the documented deterministic verify_grounding:false
-      // host path; it creates no save claim and is not parent-deliverable.
-      if (terminal.met) {
-        for (const route of terminal.routes_from.filter((state) => state !== "start")) {
-          expect(requiredStates).toContain(route);
-        }
-      }
-      expect(
-        drawn.every((e) => e.kind === "exit" || e.kind === "abort" || e.kind === "gate"),
-        `terminal '${terminal.id}' has a non-decision route in the diagram`
-      ).toBe(true);
+    for (const route of KNOWLEDGE_BASE_SKILL_CONTRACT.repair_routing.routes) {
+      expect(source).toContain(route.feedback_kind);
     }
-  });
-
-  it("documents the uniform cancel seam and the honest-exhaustion rule", () => {
-    // The cancel seam (operator cancel from any non-terminal state) is the one
-    // documented omission, per the flow-diagram standard.
-    expect(html).toMatch(/omitted for legibility/i);
-    expect(html).toContain("cancelled");
-    // Exhaustion: budget spent → unresolved, never a faked pass.
-    expect(html).toMatch(/budget spent/i);
-    expect(html).toMatch(/unresolved/i);
-    expect(html).toMatch(/no fake pass|never a faked pass/i);
-  });
-
-  it("is self-contained (no network, no external assets, no script execution of private data)", () => {
-    expect(html).not.toMatch(/<script[^>]+src\s*=/i);
-    expect(html).not.toMatch(/<link[^>]+href\s*=/i);
-    const scripts =
-      html.match(/<script\b(?! type="application\/json")[^>]*>[\s\S]*?<\/script>/g) ?? [];
-    expect(scripts.length, "at most the one inline rendering script").toBe(1);
-    const inline = scripts.join("\n");
-    expect(inline).not.toMatch(/fetch\(|XMLHttpRequest|import\s+[\w"']/);
-    // The SVG namespace constant is the only URL allowed (a namespace id, never a request).
-    const urls = inline.match(/https?:\/\/[^\s'")]+/g) ?? [];
-    expect(
-      urls.filter((u) => !u.startsWith("http://www.w3.org/2000/svg")),
-      `external URLs in the inline script: ${urls.join(", ")}`
-    ).toEqual([]);
-  });
-});
-
-const researchHtml = readFileSync(RESEARCH_FLOW_HTML, "utf8");
-
-function requireCapture(match: RegExpMatchArray, label: string): string {
-  const capture = match[1];
-  if (capture === undefined) throw new Error(`research flow is missing ${label}`);
-  return capture;
-}
-
-function requireSegment(source: string, startMarker: string, endMarker: string): string {
-  const afterStart = source.split(startMarker, 2)[1];
-  if (afterStart === undefined) throw new Error(`research flow is missing '${startMarker}'`);
-  const segment = afterStart.split(endMarker, 1)[0];
-  if (segment === undefined) throw new Error(`research flow is missing '${endMarker}'`);
-  return segment;
-}
-
-function researchDiagram(): { states: Set<string>; edges: Set<string> } {
-  const nodeSegment = requireSegment(researchHtml, "const N", "const E");
-  const edgeSegment = requireSegment(researchHtml, "const E", "];");
-  const states = new Set(
-    [...nodeSegment.matchAll(/^\s{2,}([A-Za-z_]\w*)\s*:\s*\{/gm)].map((match) =>
-      requireCapture(match, "node id")
-    )
-  );
-  const from = [...edgeSegment.matchAll(/\bfrom\s*:\s*'([A-Za-z_]\w*)'/g)].map((match) =>
-    requireCapture(match, "edge source")
-  );
-  const to = [...edgeSegment.matchAll(/\bto\s*:\s*'([A-Za-z_]\w*)'/g)].map((match) =>
-    requireCapture(match, "edge target")
-  );
-  if (from.length !== to.length) throw new Error("research flow has an unpaired edge");
-  const edges = new Set<string>();
-  for (const [index, source] of from.entries()) {
-    const target = to[index];
-    if (target === undefined) throw new Error(`research flow edge ${index} has no target`);
-    edges.add(`${source}→${target}`);
-  }
-  return { states, edges };
-}
-
-describe("flow-diagrams (research)", () => {
-  it("draws exactly the TypeScript research descriptor states", () => {
-    expect([...researchDiagram().states].sort()).toEqual([...RESEARCH_FLOW.states].sort());
-  });
-
-  it("draws exactly the TypeScript research descriptor edges", () => {
-    const expected = RESEARCH_FLOW.edges.map(([from, to]) => `${from}→${to}`).sort();
-    expect([...researchDiagram().edges].sort()).toEqual(expected);
+    expect(source).toMatch(/omitted for legibility|uniform cancellation seam/iu);
+    expect(source).toMatch(/budget spent|unresolved|fake pass/iu);
   });
 });

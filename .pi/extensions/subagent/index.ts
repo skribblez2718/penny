@@ -346,7 +346,8 @@ const SubagentParams = Type.Object({
   agentScope: Type.Optional(AgentScopeSchema),
   confirmProjectAgents: Type.Optional(
     Type.Boolean({
-      description: "Prompt before running project-local agents. Default: false.",
+      description:
+        "Prompt before running project-local agents when the current project is untrusted. Default: true.",
       default: true,
     })
   ),
@@ -527,7 +528,7 @@ export default function (pi: ExtensionAPI) {
       };
       const discovery = discoverAgents(ctx.cwd, agentScope);
       const agents = discovery.agents;
-      const confirmProjectAgents = params.confirmProjectAgents ?? false;
+      const confirmProjectAgents = params.confirmProjectAgents ?? true;
 
       const hasChain = (params.chain?.length ?? 0) > 0;
       const hasTasks = (params.tasks?.length ?? 0) > 0;
@@ -635,7 +636,8 @@ export default function (pi: ExtensionAPI) {
       if (
         (agentScope === "project" || agentScope === "both") &&
         confirmProjectAgents &&
-        ctx.hasUI
+        ctx.hasUI &&
+        !ctx.isProjectTrusted()
       ) {
         const requestedAgentNames = new Set<string>();
         if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);

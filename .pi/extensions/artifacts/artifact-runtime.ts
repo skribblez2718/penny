@@ -1,4 +1,4 @@
-import { ArtifactStore, resolvePennyProjectState } from "@penny/orchestration/source";
+import { ArtifactStore, resolvePennyRuntimeState } from "@penny/orchestration";
 
 import {
   DEFAULT_TOOL_RESULT_BUDGET,
@@ -39,7 +39,7 @@ export function loadArtifactRuntimeConfig(
     throw error;
   }
   const artifactRoot = resolveArtifactRoot(projectRoot, env);
-  const state = resolvePennyProjectState(projectRoot, { env });
+  const state = resolvePennyRuntimeState(projectRoot, { env });
   return { artifactRoot, projectId: state.projectId, budget };
 }
 
@@ -131,7 +131,9 @@ export async function executeArtifactRead(
     if (!ARTIFACT_ID_PATTERN.test(artifactId)) {
       throw new ArtifactReadError("ARTIFACT_INVALID_ID", "Artifact ID is invalid");
     }
-    using store = new ArtifactStore(config.artifactRoot, { projectId: config.projectId });
+    using store = ArtifactStore.openExisting(config.artifactRoot, {
+      projectId: config.projectId,
+    });
     const ref = store.refById(artifactId);
     if (ref === undefined) {
       throw new ArtifactReadError("ARTIFACT_MISSING", "Artifact is absent from the manifest");
@@ -206,4 +208,4 @@ export function configurationErrorResult(error: unknown): ArtifactExecution {
   return errorExecution("ARTIFACT_CONFIG_INVALID", message);
 }
 
-export { currentArtifactRef as parseArtifactRef } from "@penny/orchestration/source";
+export { currentArtifactRef as parseArtifactRef } from "@penny/orchestration";

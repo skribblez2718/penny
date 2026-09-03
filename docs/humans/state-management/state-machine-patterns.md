@@ -6,14 +6,15 @@ playbooks and carry no executable delegate.
 ## Sequential pipeline
 
 Use explicit state IDs and a successor table when each phase has one clear predecessor.
-The engine checkpoints every accepted phase result and grants the next worker only the
+The engine checkpoints every accepted phase result and supplies the next worker only the
 selected exact refs.
 
 ## Bounded repair
 
-Verifier failures identify an actionable producer state. Repairs consume a finite budget,
-change strategy, and re-enter verification. Budget exhaustion produces an honest negative
-or unresolved result.
+Verifier failures return a typed cause and strategy delta, not a target. The engine selects
+the unique registered origin/cause route, consumes a finite budget, and re-enters verification.
+Budget exhaustion follows the registered honest successor. Checkpoint evidence contains only
+route hashes and counters, not findings or product bodies.
 
 ## Human gate
 
@@ -34,9 +35,9 @@ recovery may reissue it. Split prepare/verify/apply around a gate for consequent
 
 ## Skill chain
 
-The chain owner persists exact terminal bytes into the next run’s `chain_input` artifact.
-`{previous}` identifies that grant rather than carrying inline predecessor text. Chain
-checkpoints preserve exact refs across restart.
+The chain owner verifies and forwards the exact terminal artifact ID into the next run’s
+`chain_input` binding. `{previous}` identifies that direct exact-ID handoff rather than carrying
+inline predecessor text. Chain checkpoints preserve exact refs across restart.
 
 ## Testing
 

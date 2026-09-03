@@ -1,10 +1,8 @@
 import {
-  chmodSync,
   closeSync,
   existsSync,
   fsyncSync,
   lstatSync,
-  mkdirSync,
   openSync,
   readFileSync,
   renameSync,
@@ -12,17 +10,19 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { resolvePennyProjectState } from "@penny/orchestration/source";
+import { resolvePennyRuntimeState } from "@penny/orchestration/source";
 import { randomBytes } from "node:crypto";
 
 import { ArtifactClientError, parseArtifactRef, type ArtifactRef } from "./artifact-client.js";
 
-export const SKILL_CHAIN_CHECKPOINT_SCHEMA_VERSION = 1 as const;
+export const SKILL_CHAIN_CHECKPOINT_SCHEMA_VERSION = 2 as const;
 const CHAIN_SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 
 export interface ChainCheckpointStep {
   index: number;
   skill_name: string;
+  release_status?: "production" | "candidate";
+  contract_sha256?: string;
   goal: string;
   input_artifacts?: string[];
   session_id: string;
@@ -41,7 +41,7 @@ export interface ChainCheckpointStep {
 }
 
 export interface ChainCheckpoint {
-  schema_version: 1;
+  schema_version: 1 | 2;
   state_layout_version: 1;
   project_id: string;
   chain_session_id: string;
@@ -54,6 +54,8 @@ export interface ChainCheckpoint {
   pending_steps: Array<{
     index: number;
     skill_name: string;
+    release_status?: "production" | "candidate";
+    contract_sha256?: string;
     goal: string;
     input_artifacts?: string[];
     session_id: string;
@@ -85,7 +87,7 @@ export function resolveSkillChainStateRoot(
     );
   }
   try {
-    return resolvePennyProjectState(projectRoot, { env }).paths.skillChains;
+    return resolvePennyRuntimeState(projectRoot, { env }).paths.skillChains;
   } catch (error) {
     checkpointError(error instanceof Error ? error.message : "Penny project state is unavailable");
   }
@@ -138,6 +140,12 @@ function isCheckpointStep(value: unknown): value is ChainCheckpointStep {
   return (
     typeof value.index === "number" &&
     typeof value.skill_name === "string" &&
+    (value.release_status === undefined ||
+      value.release_status === "production" ||
+      value.release_status === "candidate") &&
+    (value.contract_sha256 === undefined ||
+      (typeof value.contract_sha256 === "string" &&
+        /^[a-f0-9]{64}$/u.test(value.contract_sha256))) &&
     typeof value.goal === "string" &&
     (value.input_artifacts === undefined || isStringArray(value.input_artifacts)) &&
     typeof value.session_id === "string" &&
@@ -166,6 +174,12 @@ function isPendingCheckpointStep(
     isRecord(value) &&
     typeof value.index === "number" &&
     typeof value.skill_name === "string" &&
+    (value.release_status === undefined ||
+      value.release_status === "production" ||
+      value.release_status === "candidate") &&
+    (value.contract_sha256 === undefined ||
+      (typeof value.contract_sha256 === "string" &&
+        /^[a-f0-9]{64}$/u.test(value.contract_sha256))) &&
     typeof value.goal === "string" &&
     (value.input_artifacts === undefined || isStringArray(value.input_artifacts)) &&
     typeof value.session_id === "string" &&
@@ -178,7 +192,8 @@ function isChainCheckpoint(value: unknown): value is ChainCheckpoint {
   if (!isRecord(value)) return false;
   const status = value.chain_status;
   return (
-    value.schema_version === SKILL_CHAIN_CHECKPOINT_SCHEMA_VERSION &&
+    (value.schema_version === 1 ||
+      value.schema_version === SKILL_CHAIN_CHECKPOINT_SCHEMA_VERSION) &&
     value.state_layout_version === 1 &&
     typeof value.project_id === "string" &&
     typeof value.chain_session_id === "string" &&
@@ -200,7 +215,10 @@ function normalizeCheckpoint(value: unknown, expectedProjectId: string): ChainCh
   if (!isChainCheckpoint(value)) {
     checkpointError("skill-chain checkpoint does not match its schema");
   }
-  if (value.schema_version !== SKILL_CHAIN_CHECKPOINT_SCHEMA_VERSION) {
+  if (
+    value.schema_version !== 1 &&
+    value.schema_version !== SKILL_CHAIN_CHECKPOINT_SCHEMA_VERSION
+  ) {
     checkpointError("unsupported skill-chain checkpoint schema");
   }
   if (value.state_layout_version !== 1) checkpointError("unsupported state layout version");
@@ -224,6 +242,15 @@ function normalizeCheckpoint(value: unknown, expectedProjectId: string): ChainCh
     const handoffRef = step.handoff_artifact_ref
       ? parseArtifactRef(step.handoff_artifact_ref)
       : undefined;
+    if (
+      value.schema_version === 2 &&
+      (step.release_status === undefined || step.contract_sha256 === undefined)
+    ) {
+      checkpointError("schema-v2 skill-chain step is missing its registration binding");
+    }
+    if (value.schema_version === 1 && step.release_status === "candidate") {
+      checkpointError("schema-v1 skill-chain checkpoints cannot bind candidates");
+    }
     if (step.input_artifacts !== undefined) {
       if (
         !Array.isArray(step.input_artifacts) ||
@@ -239,6 +266,19 @@ function normalizeCheckpoint(value: unknown, expectedProjectId: string): ChainCh
       ...(handoffRef ? { handoff_artifact_ref: handoffRef } : {}),
     };
   });
+  for (const pending of value.pending_steps) {
+    const step = steps.find((candidate) => candidate.index === pending.index);
+    if (step === undefined) checkpointError("pending chain step has no canonical step");
+    if (
+      value.schema_version === 2 &&
+      (pending.release_status === undefined ||
+        pending.contract_sha256 === undefined ||
+        pending.release_status !== step.release_status ||
+        pending.contract_sha256 !== step.contract_sha256)
+    ) {
+      checkpointError("schema-v2 pending step registration binding is missing or stale");
+    }
+  }
   return { ...value, chain_session_id: chainSessionId, steps };
 }
 
@@ -249,11 +289,9 @@ export function saveChainCheckpoint(
   env: Readonly<Record<string, string | undefined>> = process.env
 ): void {
   checkpoint.updated_at = new Date().toISOString();
-  const state = resolvePennyProjectState(projectRoot, { env });
+  const state = resolvePennyRuntimeState(projectRoot, { env });
   const normalized = normalizeCheckpoint(checkpoint, state.projectId);
   const root = resolveSkillChainStateRoot(projectRoot, env);
-  mkdirSync(root, { recursive: true, mode: 0o700 });
-  chmodSync(root, 0o700);
   assertOwnerOnly(root, "directory");
   const destination = checkpointPath(normalized.chain_session_id, projectRoot, env);
   const temporary = join(
@@ -266,7 +304,6 @@ export function saveChainCheckpoint(
       mode: 0o600,
       flag: "wx",
     });
-    chmodSync(temporary, 0o600);
     const fileDescriptor = openSync(temporary, "r");
     try {
       fsyncSync(fileDescriptor);
@@ -274,7 +311,6 @@ export function saveChainCheckpoint(
       closeSync(fileDescriptor);
     }
     renameSync(temporary, destination);
-    chmodSync(destination, 0o600);
     const directoryDescriptor = openSync(root, "r");
     try {
       fsyncSync(directoryDescriptor);
@@ -292,7 +328,7 @@ export function readChainCheckpoint(
   projectRoot: string,
   env: Readonly<Record<string, string | undefined>> = process.env
 ): ChainCheckpoint | null {
-  const state = resolvePennyProjectState(projectRoot, { env });
+  const state = resolvePennyRuntimeState(projectRoot, { env });
   const filePath = checkpointPath(chainSessionId, projectRoot, env);
   if (!existsSync(filePath)) return null;
   assertOwnerOnly(resolveSkillChainStateRoot(projectRoot, env), "directory");

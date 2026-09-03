@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { loadRuntimeConfig } from "../src/config.js";
-import { initializePennyState } from "../src/state/index.js";
+import { initializePennyState, resolvePennyRuntimeState } from "../src/state/index.js";
 
 const roots: string[] = [];
 
@@ -29,6 +29,7 @@ describe("TypeScript orchestration runtime configuration", () => {
 
     expect(path.basename(config.dbPath)).toBe("orchestration.db");
     expect(path.basename(config.receiptKeyPath)).toBe("receipt-key");
+    expect(path.basename(config.subagentSessionRoot)).toBe("subagent-sessions");
     expect(path.basename(config.artifactRoot)).toBe("artifacts");
     expect(config.dbPath.startsWith(config.stateRoot)).toBe(true);
     expect(config.artifactRoot.startsWith(config.stateRoot)).toBe(true);
@@ -47,15 +48,41 @@ describe("TypeScript orchestration runtime configuration", () => {
     ).toThrow("run explicit state setup");
   });
 
-  it.each(["PENNY_ORCH_DB", "PENNY_ORCH_V2_DB", "PENNY_ARTIFACT_ROOT"])(
-    "rejects retired path selector %s",
-    (name) => {
-      const { projectRoot, env } = fixture();
-      expect(() => loadRuntimeConfig(projectRoot, { ...env, [name]: "/tmp/retired" })).toThrow(
-        `${name} is retired`
-      );
-    }
-  );
+  it("does not make observability availability an orchestration runtime prerequisite", () => {
+    const { projectRoot, env } = fixture();
+    const observabilityDatabase = path.join(
+      env.PENNY_STATE_ROOT ?? "",
+      "observability",
+      "observability.db"
+    );
+    rmSync(observabilityDatabase, { force: true });
+    rmSync(`${observabilityDatabase}-wal`, { force: true });
+    rmSync(`${observabilityDatabase}-shm`, { force: true });
+
+    expect(loadRuntimeConfig(projectRoot, env).projectRoot).toBe(projectRoot);
+  });
+
+  it.each([
+    "PENNY_ORCH_DB",
+    "PENNY_ORCH_V2_DB",
+    "PENNY_ARTIFACT_ROOT",
+    "PI_OBSERVABILITY_URL",
+    "PI_OBSERVABILITY_DATA_DIR",
+  ])("rejects retired path selector %s", (name) => {
+    const { projectRoot, env } = fixture();
+    expect(() => loadRuntimeConfig(projectRoot, { ...env, [name]: "/tmp/retired" })).toThrow(
+      `${name} is retired`
+    );
+  });
+
+  it("rejects retired selectors at the shared runtime boundary", () => {
+    const { projectRoot, env } = fixture();
+    expect(() =>
+      resolvePennyRuntimeState(projectRoot, {
+        env: { ...env, PENNY_ORCH_V2_DB: "/tmp/retired" },
+      })
+    ).toThrow("PENNY_ORCH_V2_DB is retired");
+  });
 
   it("uses unversioned runtime limit names", () => {
     const { projectRoot, env } = fixture();

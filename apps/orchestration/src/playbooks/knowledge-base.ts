@@ -37,19 +37,35 @@ import { randomUUID } from "node:crypto";
 
 import { Type } from "typebox";
 
-import { canonicalJson, type Checkpointer } from "../checkpointer.js";
+import {
+  canonicalJson,
+  type Checkpointer,
+  type ReserveOperationEventGroupInput,
+} from "../checkpointer.js";
 import {
   validateDirective,
   type Confidence,
   type Directive,
-  type EvaluationResult,
+  type EvaluationResultV2,
   type JsonValue,
+  type LivenessSnapshotV1,
+  type LivenessTerminalReason,
   type SkillContract,
 } from "../contracts.js";
 import type { RunContext } from "../context.js";
 import type { KbPhaseRecord } from "../durable-state.js";
 import type { ArtifactRevisionLookup } from "../artifact-store.js";
-import type { GapClassificationCapabilityV1, PlaybookCoreV1 } from "./playbook.js";
+import type {
+  ApprovedPromotionCompletionCapabilityV1,
+  CompletionReceiptPredicateV1,
+  ExternalStartOperationGroupCapabilityV1,
+  GenericResponsePolicyCapabilityV1,
+  HostReviewedGateValidationCapabilityV1,
+  LivenessTerminalCapabilityV1,
+  PlaybookCoreV1,
+  ReviewInvalidationCapabilityV1,
+  StateAwareRepairCapabilityV1,
+} from "./playbook.js";
 import { PolicyRefusal } from "../kb/policy.js";
 import {
   packetDigest as contentReviewPacketDigest,
@@ -62,6 +78,7 @@ import {
   type ContentReviewGatePacket,
 } from "../kb/contracts.js";
 import { buildOutputArtifactMetadata } from "./artifact-metadata.js";
+import { externalOperationSourceIdentity } from "../kb/operation-receipts.js";
 import {
   defaultKbIngestPlane,
   resolveKbRoot,
@@ -95,7 +112,7 @@ export type KbAgentPhase = (typeof KB_AGENT_PHASES)[number];
 export const KB_STATES = [...KB_AGENT_PHASES, "awaiting_review", "publishing"] as const;
 export type KbState = (typeof KB_STATES)[number];
 
-const AGENT_BY_PHASE: Record<KbAgentPhase, string> = {
+export const KNOWLEDGE_BASE_AGENT_BY_PHASE: Record<KbAgentPhase, string> = {
   ingest: "echo",
   compose: "synthia",
   query: "synthia",
@@ -148,7 +165,7 @@ export interface KbFlowState {
   readonly guidance?: string;
 }
 export type KbFlowEdgeKind = "forward" | "gate" | "repair" | "terminal";
-export type KbFeedbackKind = "synthesis_gap" | "validation_gap" | "malformed_result";
+export type KbFeedbackKind = "synthesis_gap" | "validation_gap" | "phase_incomplete";
 export interface KbFlowEdge {
   readonly from: string; // a state, or the virtual entry point "start"
   readonly to: string;
@@ -184,8 +201,8 @@ export const KB_FLOW: KbFlowDescriptor = {
       (p): KbFlowState => ({
         id: p,
         kind: "agent",
-        agent: AGENT_BY_PHASE[p],
-        guidance: `${AGENT_BY_PHASE[p]}-${p}.md`,
+        agent: KNOWLEDGE_BASE_AGENT_BY_PHASE[p],
+        guidance: `${KNOWLEDGE_BASE_AGENT_BY_PHASE[p]}-${p}.md`,
       })
     ),
     { id: "awaiting_review", kind: "gate" },
@@ -304,7 +321,7 @@ export const KB_FLOW: KbFlowDescriptor = {
       kind: "repair" as const,
       trigger: "incomplete result (complete = false)",
       bounded: true,
-      feedback_kind: "malformed_result" as const,
+      feedback_kind: "phase_incomplete" as const,
     })),
   ],
   gates: [
@@ -337,6 +354,17 @@ function isAgentPhase(value: string): value is KbAgentPhase {
   return KB_AGENT_PHASES.some((phase) => phase === value);
 }
 
+function isOperationEventAction(value: string): value is ReserveOperationEventGroupInput["action"] {
+  return (
+    value === "init" ||
+    value === "ingest" ||
+    value === "query" ||
+    value === "save" ||
+    value === "lint" ||
+    value === "promote"
+  );
+}
+
 function reviewableKbAction(value: unknown): "ingest" | "save" | "promote" {
   if (value === "ingest" || value === "save" || value === "promote") return value;
   throw new Error(`KB review authority does not support action '${String(value)}'`);
@@ -351,34 +379,329 @@ function reviewableKbAction(value: unknown): "ingest" | "save" | "promote" {
  * report success before Vera plus host finalization.
  */
 export const KNOWLEDGE_BASE_SKILL_CONTRACT: SkillContract = {
-  schema_version: 1,
+  schema_version: 2,
   name: "knowledge-base",
+  release_status: "production",
   objective:
     "Manage a private advisory knowledge base: initialize, ingest sources, query, save, lint, and prepare promotions.",
-  accepts: ["agent-output"],
-  produces: ["agent-output"],
-  invariants: [
-    "No raw source, page, claim, report, or patch body is returned to the parent.",
-    "Query and lint do not publish; only ingest and save publish after content review.",
-    "Promotion only prepares; approved apply is a separate host-only path.",
-  ],
-  authority: {
-    trust_profiles: ["trusted-interactive", "hardened-untrusted"],
+  io: {
+    request: {
+      schema_version: 1,
+      name: "request",
+      direction: "input",
+      transport: "inline_request",
+      schema_id: "penny.knowledge-base-request.v1",
+      schema_version_required: 1,
+      artifact_kind: null,
+      source: "caller",
+      min_items: 1,
+      max_items: 1,
+      semantic_product: false,
+    },
+    input_ports: [],
+    active_output_ports: [
+      {
+        schema_version: 1,
+        name: "knowledge_base_result",
+        direction: "output",
+        transport: "artifact",
+        schema_id: "penny.knowledge-base-result.v1",
+        schema_version_required: 1,
+        artifact_kind: "agent-output",
+        source: "skill",
+        min_items: 1,
+        max_items: 1,
+        semantic_product: false,
+      },
+    ],
+  },
+  behavior: {
+    side_effects: {
+      external_reads: "host_policy_only",
+      external_mutations: "host_approved_only",
+      filesystem_writes: "host_policy_only",
+      allowed_relative_paths: [],
+    },
+    approval: {
+      policy: "existing_host_gates",
+      additional_approval_required: true,
+    },
+    stopping: {
+      budget_exhaustion: "incomplete",
+      cancellation: "cancelled",
+      blocking_ambiguity: "await_user",
+    },
+    escalation: {
+      out_of_scope_effect: "non_positive",
+      sandbox_prevention_claim: false,
+    },
+    violation_terminal: "incomplete",
   },
   guidance: {
     skill_root: ".pi/skills/knowledge-base/assets/prompts",
     resolution: "per_agent_phase",
   },
-  feedback_kinds: ["evidence_gap", "synthesis_gap", "validation_gap", "malformed_result"],
-  budgets: {},
-  completion_gate: {
+  budget_policy: {
     schema_version: 1,
-    required_receipts: [],
-    // Publication admits ingest/save; Vera admits grounded query; awaiting_review
-    // admits only the separate signed promotion finalizer (not ordinary resume).
-    required_states: ["awaiting_review", "publishing", "verify"],
+    policy_id: "penny.knowledge-base-budget-policy.v1",
+    resolver_id: "KbWorkerClient.livenessPolicy",
+    admission_id: "LivenessController.admitInvocation",
+    snapshot_id: "LivenessController.snapshot",
+  },
+  repair_routing: {
+    schema_version: 1,
+    routes: [
+      {
+        schema_version: 1,
+        origin_state: "lint",
+        feedback_kind: "synthesis_gap",
+        repair: { action: "transition", target_state: "compose" },
+        budget: {
+          counter: "iteration",
+          limit_source: "run.max_iterations",
+          reserved_attempts: 0,
+        },
+        on_exhaustion: {
+          action: "transition",
+          target_state: "verify",
+          reset_counter: false,
+        },
+      },
+      {
+        schema_version: 1,
+        origin_state: "verify",
+        feedback_kind: "validation_gap",
+        repair: { action: "transition", target_state: "compose" },
+        budget: {
+          counter: "iteration",
+          limit_source: "run.max_iterations",
+          reserved_attempts: 0,
+        },
+        on_exhaustion: {
+          action: "transition",
+          target_state: "awaiting_review",
+          reset_counter: false,
+        },
+      },
+      ...(
+        [
+          ["ingest", "compose"],
+          ["compose", "lint"],
+          ["query", "verify"],
+          ["lint", "verify"],
+          ["verify", "awaiting_review"],
+          ["plan", "patch"],
+          ["patch", "awaiting_review"],
+        ] as const
+      ).map(([originState, exhaustionTarget]) => ({
+        schema_version: 1 as const,
+        origin_state: originState,
+        feedback_kind: "phase_incomplete" as const,
+        repair: { action: "transition" as const, target_state: originState },
+        budget: {
+          counter: "iteration" as const,
+          limit_source: "run.max_iterations" as const,
+          reserved_attempts: 0 as const,
+        },
+        on_exhaustion: {
+          action: "transition" as const,
+          target_state: exhaustionTarget,
+          reset_counter: false,
+        },
+      })),
+    ],
+  },
+  completion_gate: {
+    schema_version: 2,
+    allowed_terminal_origins: ["intake", "publishing", "verify", "awaiting_review"],
+    required_visited_states: [],
+    required_receipt_predicates: ["knowledge_base_terminal_evidence.v1"],
+    latest_product: {
+      selector: "terminal_result",
+      schema_id: "penny.orchestration.terminal-result",
+      product_schema_version: 2,
+    },
+    unresolved_policy: { mode: "allow_any" },
   },
 };
+
+function completionRecord(value: JsonValue | undefined): Record<string, JsonValue> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+
+function exactIndexedArtifact(
+  checkpointer: Checkpointer,
+  runId: string,
+  value: JsonValue | undefined,
+  expectedKind: string,
+  allowedLifecycles: readonly string[] = ["sealed"]
+): { reference_id: string; sha256: string } | undefined {
+  const handle = completionRecord(value);
+  const artifactId = typeof handle?.artifact_id === "string" ? handle.artifact_id : "";
+  const record = artifactId.length > 0 ? checkpointer.kbArtifact(artifactId) : undefined;
+  if (
+    record === undefined ||
+    record.run_id !== runId ||
+    record.artifact_kind !== expectedKind ||
+    !allowedLifecycles.includes(record.lifecycle) ||
+    handle?.schema_version !== 1 ||
+    handle.artifact_kind !== record.artifact_kind ||
+    handle.sha256 !== record.sha256 ||
+    handle.media_type !== record.media_type ||
+    handle.byte_length !== record.byte_length
+  ) {
+    return undefined;
+  }
+  return { reference_id: artifactId, sha256: record.sha256 };
+}
+
+const knowledgeBaseTerminalEvidence: CompletionReceiptPredicateV1 = (input) => {
+  const result = input.terminal.result;
+  const action = String(result.action ?? input.context.knowledgeBaseData.action ?? "");
+  const runId = input.context.identity.run_id;
+  const refs: Array<{ kind: string; reference_id: string; sha256?: string }> = [];
+
+  if (input.originState === "intake" && action === "query") {
+    const resultArtifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
+    const artifact = exactIndexedArtifact(
+      input.checkpointer,
+      runId,
+      result.answer_handle ?? resultArtifacts[0],
+      "query_answer"
+    );
+    if (artifact === undefined) return { passed: false, evidence_refs: [] };
+    refs.push({ kind: "kb_artifact", ...artifact });
+  } else if (input.originState === "intake" && action === "lint") {
+    const artifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
+    if (artifacts.length !== 1) return { passed: false, evidence_refs: [] };
+    const artifact = exactIndexedArtifact(input.checkpointer, runId, artifacts[0], "lint_report", [
+      "staged",
+      "sealed",
+    ]);
+    if (artifact === undefined) return { passed: false, evidence_refs: [] };
+    refs.push({ kind: "kb_artifact", ...artifact });
+  } else if (input.originState === "intake" && action === "init") {
+    const kbId = String(result.kb_id ?? input.context.knowledgeBaseData.kb_id ?? "");
+    const existingGenerationId = String(
+      input.context.playbookData.planned_base_generation_id ?? ""
+    );
+    const plannedGenerationId = String(input.context.playbookData.planned_generation_id ?? "");
+    const generationId = existingGenerationId || plannedGenerationId;
+    const publications = input.checkpointer
+      .kbPublicationsForGeneration(kbId, generationId)
+      .filter(
+        (candidate) =>
+          candidate.action === "init" &&
+          candidate.lifecycle === "complete" &&
+          candidate.selector_sha256 !== undefined &&
+          (existingGenerationId.length > 0 || candidate.run_id === runId)
+      );
+    const publication = publications.length === 1 ? publications[0] : undefined;
+    if (publication?.selector_sha256 === undefined) {
+      return { passed: false, evidence_refs: [] };
+    }
+    refs.push({
+      kind: "kb_publication",
+      reference_id: publication.transaction_id,
+      sha256: publication.selector_sha256,
+    });
+  } else if (input.originState === "verify" && action === "query") {
+    const answer = exactIndexedArtifact(
+      input.checkpointer,
+      runId,
+      result.answer_handle,
+      "query_answer"
+    );
+    const verificationId = String(result.verification_artifact_id ?? "");
+    const verificationRecord = input.checkpointer.kbArtifact(verificationId);
+    const queryPhase = input.checkpointer.kbPhaseResult(runId, "query");
+    const verifyPhase = input.checkpointer.kbPhaseResult(runId, "verify");
+    if (
+      answer === undefined ||
+      result.grounding_verified !== true ||
+      verificationRecord === undefined ||
+      verificationRecord.run_id !== runId ||
+      verificationRecord.artifact_kind !== "verification_report" ||
+      verificationRecord.lifecycle !== "sealed" ||
+      queryPhase === undefined ||
+      verifyPhase === undefined ||
+      !queryPhase.artifact_ids.includes(answer.reference_id) ||
+      !verifyPhase.artifact_ids.includes(verificationId)
+    ) {
+      return { passed: false, evidence_refs: [] };
+    }
+    refs.push(
+      { kind: "kb_artifact", ...answer },
+      {
+        kind: "kb_artifact",
+        reference_id: verificationId,
+        sha256: verificationRecord.sha256,
+      },
+      {
+        kind: "kb_phase_result",
+        reference_id: queryPhase.phase_result_id,
+        sha256: queryPhase.result_sha256,
+      },
+      {
+        kind: "kb_phase_result",
+        reference_id: verifyPhase.phase_result_id,
+        sha256: verifyPhase.result_sha256,
+      }
+    );
+  } else if (input.originState === "publishing" && (action === "ingest" || action === "save")) {
+    const review = input.checkpointer.contentReviewForRun(runId);
+    const transactionId = String(input.context.knowledgeBaseData.publication_transaction_id ?? "");
+    const publication = input.checkpointer.kbPublication(transactionId);
+    if (
+      review?.decision_receipt?.decision !== "approve" ||
+      review.decision_receipt_sha256 === undefined ||
+      publication === undefined ||
+      publication.run_id !== runId ||
+      publication.action !== action ||
+      !["selector_committed", "finalizing", "complete"].includes(publication.lifecycle) ||
+      publication.selector_sha256 === undefined ||
+      publication.candidate_generation_id !== String(result.published_generation_id ?? "")
+    ) {
+      return { passed: false, evidence_refs: [] };
+    }
+    refs.push(
+      {
+        kind: "content_review",
+        reference_id: review.challenge_id,
+        sha256: review.decision_receipt_sha256,
+      },
+      {
+        kind: "kb_publication",
+        reference_id: publication.transaction_id,
+        sha256: publication.selector_sha256,
+      }
+    );
+  } else if (input.originState === "awaiting_review" && action === "promote") {
+    const approval = input.checkpointer.promotionApprovalBinding(runId);
+    if (
+      approval === undefined ||
+      result.promotion_apply_status !== "complete" ||
+      result.promotion_post_apply_verified !== true ||
+      String(input.context.knowledgeBaseData.promotion_apply_transaction_id ?? "").length === 0
+    ) {
+      return { passed: false, evidence_refs: [] };
+    }
+    refs.push({
+      kind: "promotion_approval",
+      reference_id: approval.receipt_id,
+      sha256: approval.receipt_sha256,
+    });
+  } else {
+    return { passed: false, evidence_refs: [] };
+  }
+
+  return { passed: true, evidence_refs: refs };
+};
+
+export const KNOWLEDGE_BASE_COMPLETION_RECEIPT_PREDICATES: ReadonlyMap<
+  string,
+  CompletionReceiptPredicateV1
+> = new Map([["knowledge_base_terminal_evidence.v1", knowledgeBaseTerminalEvidence]]);
 
 // ── durable state (metadata only) ───────────────────────────────────────────
 
@@ -442,10 +765,13 @@ function directive<T>(value: T): Directive {
  * Deliberately small and body-free: the phase's actual output is the captured
  * artifact, and control state must never carry private content.
  */
-function validatePhaseDetails(
-  phase: KbAgentPhase,
+export function validateKnowledgeBasePhaseDetails(
+  phase: string,
   details: Record<string, JsonValue>
 ): Record<string, JsonValue> {
+  if (!isAgentPhase(phase)) {
+    throw new Error(`KB state '${phase}' does not accept an agent result`);
+  }
   const kind = details.artifact_kind;
   const expected: Record<KbAgentPhase, string> = {
     ingest: "claims",
@@ -484,7 +810,17 @@ function validatePhaseDetails(
   return details;
 }
 
-export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationCapabilityV1 {
+export class KnowledgeBasePlaybook
+  implements
+    PlaybookCoreV1,
+    StateAwareRepairCapabilityV1,
+    LivenessTerminalCapabilityV1,
+    GenericResponsePolicyCapabilityV1,
+    ExternalStartOperationGroupCapabilityV1,
+    HostReviewedGateValidationCapabilityV1,
+    ApprovedPromotionCompletionCapabilityV1,
+    ReviewInvalidationCapabilityV1
+{
   private readonly plane: KbIngestPlaneV1;
 
   constructor(
@@ -511,6 +847,63 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
       String(context.knowledgeBaseData.profile_id ?? ""),
       context.identity.session_id
     );
+  }
+
+  assertGenericResponseAllowed(context: RunContext): void {
+    const action = String(context.knowledgeBaseData.action ?? "");
+    if (action === "ingest" || action === "save" || action === "promote") {
+      throw new Error(
+        "KB content/promotion review is host-only through the authenticated host callback service; generic respond is decision-free for this run"
+      );
+    }
+  }
+
+  externalStartOperationGroup(context: RunContext): ReserveOperationEventGroupInput | undefined {
+    const raw = context.constraints.operation_event_group;
+    if (raw === undefined) return undefined;
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error("KB operation_event_group metadata must be an object");
+    }
+    const keys = Object.keys(raw).sort();
+    if (
+      canonicalJson(keys) !== canonicalJson(["invocation_id", "request_sha256", "transaction_id"])
+    ) {
+      throw new Error("KB operation_event_group metadata has unknown or missing fields");
+    }
+    const invocationId = String(raw.invocation_id ?? "");
+    const requestSha256 = String(raw.request_sha256 ?? "");
+    const transactionId = String(raw.transaction_id ?? "");
+    const action = String(context.constraints.action ?? "");
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(invocationId) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(transactionId) ||
+      !/^[a-f0-9]{64}$/.test(requestSha256) ||
+      !isOperationEventAction(action)
+    ) {
+      throw new Error("KB operation_event_group metadata is invalid");
+    }
+    return {
+      run_id: context.identity.run_id,
+      session_id: context.identity.session_id,
+      transaction_id: transactionId,
+      action,
+      source_kind: "external_start",
+      source_identity_sha256: externalOperationSourceIdentity({
+        session_id: context.identity.session_id,
+        invocation_id: invocationId,
+        action,
+        request_sha256: requestSha256,
+      }),
+    };
+  }
+
+  validateHostReviewedGate(context: RunContext, kind: "content_review" | "promotion"): void {
+    const action = String(context.knowledgeBaseData.action ?? "");
+    const valid =
+      kind === "promotion" ? action === "promote" : action === "ingest" || action === "save";
+    if (!valid) {
+      throw new Error(`KB action '${action}' is not bound to a ${kind} host gate`);
+    }
   }
 
   initialize(context: RunContext): Directive {
@@ -794,7 +1187,7 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
   }
 
   private invokePhase(context: RunContext, phase: KbAgentPhase): Directive {
-    const agent = AGENT_BY_PHASE[phase];
+    const agent = KNOWLEDGE_BASE_AGENT_BY_PHASE[phase];
     const upstream = context.selectedArtifacts.filter(
       (ref) => isAgentPhase(ref.phase) && PRIOR_PHASES[phase].includes(ref.phase)
     );
@@ -851,31 +1244,24 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     return `Execute the knowledge-base '${phase}' phase${revision} over ${sources.length} admitted source(s). Follow the phase guidance and submit the typed result.`;
   }
 
-  validateDetails(state: string, details: Record<string, JsonValue>): Record<string, JsonValue> {
-    if (!isAgentPhase(state)) {
-      throw new Error(`KB state '${state}' does not accept an agent result`);
-    }
-    return validatePhaseDetails(state, details);
-  }
-
   /**
    * W5 — classify why a phase result is inadequate, so the engine routes repair by
    * cause. The same call decides the transition below, which keeps the typed seam and
    * the behaviour one source of truth rather than two that can disagree.
    */
-  classifyGap(
+  evaluateRepair(
     context: RunContext,
     state: string,
     details: Record<string, JsonValue>
-  ): EvaluationResult | null {
-    const exhausted = context.iteration >= context.maxIterations;
+  ): EvaluationResultV2 | null {
     if (state === "lint" && counter(details, "blocking_count") > 0) {
+      const blockingCount = counter(details, "blocking_count");
       return {
-        schema_version: 1,
+        schema_version: 2,
         kind: "synthesis_gap",
-        detail: `semantic lint reported ${counter(details, "blocking_count")} blocking-severity finding(s)`,
-        target_state: "compose",
-        exhausted,
+        detail: `semantic lint reported ${blockingCount} blocking-severity finding(s)`,
+        findings: [`blocking_count=${blockingCount}`],
+        strategy_delta: "Recompose the candidate pages to resolve blocking semantic findings.",
       };
     }
     if (
@@ -883,24 +1269,46 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
       String(context.knowledgeBaseData.action ?? "") !== "query" &&
       counter(details, "unsupported") > 0
     ) {
+      const unsupported = counter(details, "unsupported");
       return {
-        schema_version: 1,
+        schema_version: 2,
         kind: "validation_gap",
-        detail: `${counter(details, "unsupported")} claim(s) are not supported by their cited evidence`,
-        target_state: "compose",
-        exhausted,
+        detail: `${unsupported} claim(s) are not supported by their cited evidence`,
+        findings: [`unsupported_count=${unsupported}`],
+        strategy_delta: "Recompose the candidate pages using only supported cited evidence.",
       };
     }
     if (details.complete === false) {
       return {
-        schema_version: 1,
-        kind: "malformed_result",
+        schema_version: 2,
+        kind: "phase_incomplete",
         detail: `KB phase '${state}' reported incomplete work`,
-        target_state: state,
-        exhausted,
+        findings: [],
+        strategy_delta: "Retry the same phase and complete its typed result honestly.",
       };
     }
     return null;
+  }
+
+  applyRepairBookkeeping(
+    context: RunContext,
+    state: string,
+    details: Record<string, JsonValue>,
+    evaluation: EvaluationResultV2,
+    disposition: "repair" | "exhausted"
+  ): void {
+    if (!isAgentPhase(state)) {
+      throw new Error(`KB repair bookkeeping does not support state '${state}'`);
+    }
+    recordPhase(context, state, {
+      artifact_kind: String(details.artifact_kind),
+      kb_artifact_id: String(details.kb_artifact_id),
+      counts: this.countsFor(state, details),
+      ...(typeof details.verdict === "string" ? { verdict: details.verdict } : {}),
+    });
+    const key = disposition === "repair" ? "warnings" : "unresolved";
+    const prior = stringList(context.knowledgeBaseData[key]);
+    context.knowledgeBaseData[key] = [...prior, evaluation.detail];
   }
 
   acceptSummary(
@@ -921,21 +1329,6 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
 
     if (state === "verify" && String(context.knowledgeBaseData.action ?? "") === "query") {
       return this.finishVerifiedQuery(context);
-    }
-
-    const gap = this.classifyGap(context, state, details);
-    if (gap !== null && !gap.exhausted && gap.target_state !== undefined) {
-      const warnings = stringList(context.knowledgeBaseData.warnings);
-      context.knowledgeBaseData.warnings = [...warnings, gap.detail];
-      context.iteration += 1;
-      context.transition(gap.target_state);
-      return this.dispatch(context);
-    }
-    if (gap !== null && gap.exhausted) {
-      // Budget spent. Carry the finding forward as unresolved rather than looping
-      // again or pretending the phase passed.
-      const unresolved = stringList(context.knowledgeBaseData.unresolved);
-      context.knowledgeBaseData.unresolved = [...unresolved, gap.detail];
     }
 
     const next = NEXT_STATE[state];
@@ -1400,9 +1793,22 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     throw new Error(`KB review decision must be approve, deny, or refine; received '${raw}'`);
   }
 
+  terminalizeLiveness(
+    context: RunContext,
+    reason: LivenessTerminalReason,
+    snapshot: LivenessSnapshotV1
+  ): Directive {
+    context.knowledgeBaseData.public_status = "exhausted";
+    return this.terminal(context, "incomplete", false, [reason], { reason, snapshot });
+  }
+
   cancel(context: RunContext, reason: string): Directive {
     const action = String(context.knowledgeBaseData.action ?? "");
-    const capabilities = stringList(context.knowledgeBaseData.source_capability_ids);
+    const capabilities = stringList(
+      action === "promote"
+        ? context.knowledgeBaseData.target_capability_ids
+        : context.knowledgeBaseData.source_capability_ids
+    );
     if (action === "ingest" && capabilities.length > 0) {
       this.plane.deny({
         projectRoot: context.projectRoot,
@@ -1412,6 +1818,26 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
         capabilityIds: capabilities,
       });
     }
+    if (action === "save") {
+      this.plane.settleSave({
+        projectRoot: context.projectRoot,
+        profileId: String(context.knowledgeBaseData.profile_id ?? ""),
+        kbRoot: this.kbRoot(context),
+        queryRunId: String(context.knowledgeBaseData.query_run_id ?? ""),
+        saveRunId: context.identity.run_id,
+        outcome: "released",
+      });
+    }
+    if (action === "promote" && capabilities.length > 0) {
+      this.plane.deny({
+        projectRoot: context.projectRoot,
+        kbRoot: this.kbRoot(context),
+        runId: context.identity.run_id,
+        action: "promote",
+        capabilityIds: capabilities,
+      });
+    }
+    context.knowledgeBaseData.public_status = "cancelled";
     return this.terminal(context, "cancelled", false, [reason]);
   }
 
@@ -1440,7 +1866,8 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     context: RunContext,
     status: "complete" | "incomplete" | "cancelled",
     met: boolean,
-    unresolved: string[]
+    unresolved: string[],
+    liveness?: { reason: LivenessTerminalReason; snapshot: LivenessSnapshotV1 }
   ): Directive {
     context.previousState = context.stateId;
     context.stateId = status === "cancelled" ? "cancelled" : "complete";
@@ -1448,6 +1875,7 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     context.met = met;
     context.pendingBranches = [];
     const phases = phaseRecords(context);
+    const partialHandles = met ? [] : this.partialHandles(context);
     const next = directive({
       schema_version: 2,
       action: status,
@@ -1474,6 +1902,8 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
         query_page_ids: stringList(context.knowledgeBaseData.query_page_ids),
         answer_artifact_id: String(context.knowledgeBaseData.answer_artifact_id ?? ""),
         answer_handle: context.knowledgeBaseData.answer_handle ?? null,
+        best_partial_artifact_handles: partialHandles,
+        ...(liveness ? { liveness: liveness.snapshot, terminal_reason: liveness.reason } : {}),
         verification_artifact_id: String(context.knowledgeBaseData.verification_artifact_id ?? ""),
         grounding_verified: context.knowledgeBaseData.grounding_verified === true,
         promotion_apply_status: String(context.knowledgeBaseData.promotion_apply_status ?? ""),
@@ -1495,5 +1925,37 @@ export class KnowledgeBasePlaybook implements PlaybookCoreV1, GapClassificationC
     context.pendingDirective = next;
     context.terminalDirective = next;
     return next;
+  }
+
+  private partialHandles(context: RunContext): Array<{
+    schema_version: 1;
+    artifact_id: string;
+    artifact_kind: string;
+    media_type: string;
+    sha256: string;
+    byte_length: number;
+  }> {
+    if (this.checkpointer === undefined) return [];
+    const latest = new Map<string, ReturnType<Checkpointer["kbArtifacts"]>[number]>();
+    for (const artifact of this.checkpointer.kbArtifacts({
+      run_id: context.identity.run_id,
+      lifecycles: ["staged", "sealed"],
+    })) {
+      latest.set(`${artifact.state_id}\u0000${artifact.artifact_kind}`, artifact);
+    }
+    return [...latest.values()]
+      .sort((left, right) =>
+        `${left.state_id}/${left.artifact_kind}/${left.artifact_id}`.localeCompare(
+          `${right.state_id}/${right.artifact_kind}/${right.artifact_id}`
+        )
+      )
+      .map((artifact) => ({
+        schema_version: 1,
+        artifact_id: artifact.artifact_id,
+        artifact_kind: artifact.artifact_kind,
+        media_type: artifact.media_type,
+        sha256: artifact.sha256,
+        byte_length: artifact.byte_length,
+      }));
   }
 }

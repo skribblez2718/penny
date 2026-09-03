@@ -13,12 +13,16 @@
     "src"
   ],
   "scripts": {
-    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --config vitest.config.ts",
+    "ensure:orchestration": "bun run --cwd ../orchestration build",
+    "build:local": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "build": "bun run ensure:orchestration && bun run build:local",
+    "typecheck:local": "tsc -p tsconfig.json",
+    "typecheck": "bun run typecheck:local",
+    "test": "bun run test:unit",
     "test:unit": "vitest run --config vitest.config.ts",
     "test:all": "bun run typecheck && bun run test:unit",
-    "start": "node dist/server.js"
+    "verify:runtime-builds": "node -e \"for(const file of ['../orchestration/dist/index.js','dist/server.js'])if(!require('node:fs').existsSync(file))throw new Error('missing runtime build: '+file)\"",
+    "start": "bun run verify:runtime-builds && node dist/server.js"
   },
   "dependencies": {
     "@penny/orchestration": "workspace:*"

@@ -60,6 +60,8 @@ import type {
   SessionThinkingLevel,
 } from "../model-client.js";
 import { readRunInput } from "../private-inputs.js";
+import { kbLivenessPolicy } from "../liveness.js";
+import type { LivenessPolicyV1 } from "../contracts.js";
 
 const PRIOR_PHASES: Readonly<Record<KbPhaseState, readonly KbPhaseState[]>> = {
   ingest: [],
@@ -499,6 +501,14 @@ export class KbWorkerClient implements ModelClient {
       });
   }
 
+  livenessPolicy(): LivenessPolicyV1 {
+    const policy = readPolicy(this.options.kbRoot);
+    return kbLivenessPolicy({
+      action: this.options.operation,
+      readerMaxCallsPerPhase: policy.reader_limits.max_calls_per_phase,
+    });
+  }
+
   /** Bind the worker to the service's exact control DB before dispatch. */
   bindCheckpointer(checkpointer: Checkpointer): void {
     if (this.control.state === "bound" && this.control.checkpointer === checkpointer) return;
@@ -607,6 +617,7 @@ export class KbWorkerClient implements ModelClient {
 
     const phaseInvocation: KbPhaseInvocation = {
       agent: invocation.agent,
+      registration: invocation.registration,
       stateId: phase,
       runId: this.options.runId,
       profileId: this.options.profileId,
@@ -621,6 +632,8 @@ export class KbWorkerClient implements ModelClient {
       priorPhaseAllowlist: priorStates,
       allowedPriorArtifacts: allowedArtifacts.map((entry) => entry.handle),
       ...(admitModel ? { admitModel } : {}),
+      ...(invocation.signal ? { signal: invocation.signal } : {}),
+      ...(invocation.liveness ? { liveness: invocation.liveness } : {}),
       readSource: (sourceId: string): string => {
         assertLiveOperands();
         const source = sourceById.get(sourceId);

@@ -7,6 +7,7 @@ import {
 } from "./execution-receipts.js";
 import type { ArtifactDispatchPause, ArtifactDispatchRecovery } from "./dispatch-control.js";
 import type { ArtifactRef } from "./artifact-client.js";
+import type { SkillIngressRefusalCode } from "./candidate-config.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -32,10 +33,14 @@ export interface SkillResult {
   steps_total: number;
   agents_invoked: string[];
   errors: string[];
+  /** Stable pre-session ingress refusal when registration/config/package admission fails. */
+  refusal_code?: SkillIngressRefusalCode;
   /** Complete TypeScript engine terminal result, preserved without reconstruction. */
   result?: Record<string, unknown>;
   /** Exact terminal output selected by the skill's execution owner. */
   output_artifact_ref?: ArtifactRef;
+  /** Path-free exact best partials for honest negative terminals. */
+  best_partial_artifact_refs?: ArtifactRef[];
   /** Owner dispatch pause is non-success and safe to retry from the same checkpoint. */
   retriable?: boolean;
   /** Closed TypeScript dispatch-pause contract retained for operator tooling. */
@@ -71,6 +76,49 @@ export interface SkillResult {
     unknown_reason?: string;
     previous_state?: string;
   };
+}
+
+export type SkillProgressMode = "single" | "parallel" | "chain" | "resume";
+
+export interface ActiveSkillProgress {
+  readonly index: number;
+  readonly skill_name: string;
+  readonly state_id?: string;
+  readonly agents: readonly string[];
+}
+
+/** Structured, bounded details for Pi partial results while a skill tool is running. */
+export interface SkillProgressDetails {
+  readonly kind: "progress";
+  readonly mode: SkillProgressMode;
+  readonly stage:
+    | "preparing"
+    | "phase_started"
+    | "worker_completed"
+    | "worker_failed"
+    | "boundary_reached"
+    | "composition_started"
+    | "item_finished"
+    | "resuming";
+  readonly message: string;
+  readonly skill_name: string;
+  readonly session_id: string;
+  readonly state_id?: string;
+  readonly agents?: readonly string[];
+  readonly workers_completed?: number;
+  readonly workers_total?: number;
+  readonly skills_finished?: number;
+  readonly skills_total?: number;
+  readonly active_skills?: readonly ActiveSkillProgress[];
+  readonly chain_step?: number;
+  readonly chain_total?: number;
+  readonly boundary_action?: string;
+}
+
+export type SkillToolDetails = SkillResult | SkillProgressDetails;
+
+export function isSkillProgressDetails(value: unknown): value is SkillProgressDetails {
+  return isRecord(value) && value.kind === "progress" && typeof value.message === "string";
 }
 
 /**
@@ -449,6 +497,9 @@ function appendAllExactOutputs(
 ): void {
   const entries: Array<{ label?: string; ref: ArtifactRef }> = [];
   if (result.output_artifact_ref) entries.push({ ref: result.output_artifact_ref });
+  for (const [index, ref] of (result.best_partial_artifact_refs ?? []).entries()) {
+    entries.push({ label: `best partial ${index + 1}`, ref });
+  }
   for (const [index, child] of (result.parallel_results ?? []).entries()) {
     if (child.output_artifact_ref) {
       entries.push({
@@ -618,6 +669,7 @@ export function formatResult(
     for (const error of result.errors) {
       lines.push(`  Error: ${error}`);
     }
+    appendAllExactOutputs(lines, result, theme);
   }
 
   return lines.join("\n");

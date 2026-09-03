@@ -10,6 +10,9 @@
 .pi/skill-checkpoints/
 **/.pi/skill-checkpoints/
 
+# Static local candidate enablement (never runtime-created or committed)
+.pi/candidate-enablement.json
+
 # Environment & Secrets
 .env
 .env.*
@@ -126,7 +129,8 @@ cython_debug/
 # Entities file (generated)
 entities.json
 
-# Local working directories (design artifacts, research, plans)
+# Local working directories and benchmark data
+/evals/
 /ideas/
 /plans/
 /research/

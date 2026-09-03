@@ -20,7 +20,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { RunContext } from "../src/context.js";
-import { KnowledgeBasePlaybook } from "../src/playbooks/knowledge-base.js";
+import {
+  KnowledgeBasePlaybook,
+  validateKnowledgeBasePhaseDetails,
+} from "../src/playbooks/knowledge-base.js";
 import { defaultKbIngestPlane, resolveKbRoot } from "../src/kb/ingest-plane.js";
 import { initKb } from "../src/kb/workflows.js";
 import { readPolicy, writePolicy } from "../src/kb/filesystem.js";
@@ -320,7 +323,7 @@ function driveToGate(fixture: Fixture): void {
     const phase = fixture.context.stateId;
     const phaseDetails = details[phase];
     if (phaseDetails === undefined) break;
-    fixture.playbook.validateDetails(phase, phaseDetails);
+    validateKnowledgeBasePhaseDetails(phase, phaseDetails);
     fixture.playbook.acceptSummary(fixture.context, phaseDetails, "PROBABLE");
   }
   fixture.checkpointer.saveRun(fixture.context, "test_content_review_waiting", {});

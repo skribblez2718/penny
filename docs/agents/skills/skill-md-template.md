@@ -4,7 +4,6 @@
 ---
 name: [skill-name]
 description: "[One sentence]. Use when [triggers]. Do not use when [anti-cases]."
-license: MIT
 metadata:
   penny:
     engine: orchestration

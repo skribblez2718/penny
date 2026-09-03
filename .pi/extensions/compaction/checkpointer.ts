@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 
-import { resolvePennyProjectState } from "@penny/orchestration/source";
+import { resolvePennyRuntimeState } from "@penny/orchestration/source";
 
 import { createLogger } from "../../lib/logger/logger.js";
 import {
@@ -62,7 +62,7 @@ function configuredDatabase(projectRoot: string): {
   projectId: string;
 } | null {
   try {
-    const state = resolvePennyProjectState(projectRoot);
+    const state = resolvePennyRuntimeState(projectRoot);
     return {
       databasePath: state.paths.orchestration.database,
       projectId: state.projectId,

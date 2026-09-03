@@ -16,6 +16,7 @@ import {
   CheckpointIdentityError,
   Checkpointer,
   ReceiptConflictError,
+  canonicalJson,
 } from "../src/checkpointer.js";
 import { RunContext } from "../src/context.js";
 import {
@@ -28,9 +29,13 @@ import {
   validateContract,
 } from "../src/contracts.js";
 import { OrchestrationEngine } from "../src/engine.js";
+import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
+import { LivenessController, researchLivenessPolicy } from "../src/liveness.js";
 import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
 import { researchSummarySchema } from "../src/playbooks/research.js";
+import { resolvePlaybook } from "../src/playbooks/registry.js";
 import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
+import { researchSemanticDraftFixture } from "./helpers/research-semantic-draft.js";
 
 interface ResearchContractFixture {
   confidence: { valid: unknown[]; invalid: unknown[] };
@@ -110,15 +115,22 @@ function start(
 }
 
 function runtime(root: string): {
+  artifacts: ArtifactStore;
   checkpointer: Checkpointer;
   engine: OrchestrationEngine;
 } {
+  const artifacts = new ArtifactStore(path.join(root, "artifacts"));
   const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
   return {
+    artifacts,
     checkpointer,
     engine: new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot: root,
       maxSteps: 96,
+      artifactRevisions: artifacts,
+      artifactStore: artifacts,
+      artifactReader: artifacts,
     }),
   };
 }
@@ -126,9 +138,10 @@ function runtime(root: string): {
 function configuredWorkers(
   root: string,
   engine: OrchestrationEngine,
-  client: ModelClient = new ScenarioClient()
+  artifacts: ArtifactStore,
+  client: ModelClient = new ScenarioClient({ artifacts })
 ): WorkerExecutor {
-  const workers = new WorkerExecutor(client, new ArtifactStore(path.join(root, "artifacts")), {
+  const workers = new WorkerExecutor(client, artifacts, {
     projectRoot: root,
     parallelConcurrency: 2,
   });
@@ -143,11 +156,13 @@ class ScenarioClient implements ModelClient {
     private readonly options: {
       critiqueVerdict?: "APPROVE" | "NEEDS_REVISION";
       validationVerdict?: "PASS" | "FAIL";
-      writeComplete?: boolean;
+      invalidDraft?: boolean;
       researchDelayMs?: number;
       onResearchStart?: () => void;
       onResearchEnd?: () => void;
       planSteps?: string[];
+      declaredMode?: "quick" | "standard" | "deep";
+      artifacts?: ArtifactStore;
     } = {}
   ) {}
 
@@ -159,61 +174,70 @@ class ScenarioClient implements ModelClient {
       this.options.onResearchEnd?.();
     }
     switch (invocation.stateId) {
-      case "planning":
-        return {
-          text: "research plan",
-          confidence: "CERTAIN",
-          details: {
-            plan_steps: this.options.planSteps ?? ["sub-query one", "sub-query two"],
-            plan_complete: true,
-          },
+      case "planning": {
+        const details = {
+          plan_steps: this.options.planSteps ?? ["sub-query one", "sub-query two"],
+          plan_complete: true,
+          ...(this.options.declaredMode === undefined ? {} : { mode: this.options.declaredMode }),
         };
+        return {
+          text: `research plan\nSUMMARY:${JSON.stringify({ confidence: "CERTAIN", ...details })}`,
+          confidence: "CERTAIN",
+          details,
+        };
+      }
       case "critiquing_plan":
-      case "critiquing_report":
-        return {
-          text: "critique",
-          confidence: "CERTAIN",
-          details: {
-            verdict: this.options.critiqueVerdict ?? "APPROVE",
-            issues:
-              (this.options.critiqueVerdict ?? "APPROVE") === "APPROVE"
-                ? []
-                : [`issue-${invocation.stateId}`],
-            evidence: ["reviewed exact artifact"],
-          },
+      case "critiquing_report": {
+        const details = {
+          verdict: this.options.critiqueVerdict ?? "APPROVE",
+          issues:
+            (this.options.critiqueVerdict ?? "APPROVE") === "APPROVE"
+              ? []
+              : [`issue-${invocation.stateId}`],
+          evidence: ["reviewed exact artifact"],
         };
+        return {
+          text: `critique\nSUMMARY:${JSON.stringify({ confidence: "CERTAIN", ...details })}`,
+          confidence: "CERTAIN",
+          details,
+        };
+      }
       case "researching":
         return {
-          text: `cited findings: ${invocation.task}`,
+          text: `cited findings: ${invocation.task}\nSUMMARY:{"confidence":"PROBABLE","explore_complete":true}`,
           confidence: "PROBABLE",
           details: { explore_complete: true },
         };
-      case "synthesizing":
+      case "synthesizing": {
+        const artifacts = this.options.artifacts;
+        if (artifacts === undefined) throw new Error("scenario semantic draft store is absent");
+        const draft = researchSemanticDraftFixture(invocation, artifacts, {
+          title: "Research parity synthesis",
+          executiveSummary: "The P3 semantic product is grounded.",
+          sectionBody: "The fixture finding is grounded.",
+          ...(this.options.invalidDraft === undefined
+            ? {}
+            : { absentExcerpt: this.options.invalidDraft }),
+        });
         return {
-          text: "cited synthesis",
+          text: `${canonicalJson(draft)}\nSUMMARY:{"confidence":"PROBABLE","synthesis_complete":true}`,
           confidence: "PROBABLE",
           details: { synthesis_complete: true },
         };
+      }
       case "validating": {
         const verdict = this.options.validationVerdict ?? "PASS";
+        const details = {
+          verdict,
+          unsupported_claims: verdict === "PASS" ? [] : ["claim-x"],
+          evidence: ["checked source-x"],
+        };
         return {
-          text: "claim-source verification",
+          text: `claim-source verification\nSUMMARY:${JSON.stringify({ confidence: "CERTAIN", ...details })}`,
           confidence: "CERTAIN",
-          details: {
-            verdict,
-            unsupported_claims: verdict === "PASS" ? [] : ["claim-x"],
-            evidence: ["checked source-x"],
-          },
+          details,
         };
       }
-      case "report_writing":
-        return {
-          text: "# report.md\nReport\n# sources.md\nSources\n# README.md\nReadme",
-          confidence: "CERTAIN",
-          details: {
-            write_complete: this.options.writeComplete ?? true,
-          },
-        };
     }
     throw new Error(`unexpected scenario state '${invocation.stateId}'`);
   }
@@ -236,9 +260,8 @@ function canonicalDirective(current: Directive): string {
 
 async function typescriptHappyTrace(mode: "quick" | "standard" | "deep"): Promise<string[]> {
   const root = tempRoot(`penny-ts-${mode}-`);
-  const { checkpointer, engine } = runtime(root);
-  const artifacts = new ArtifactStore(path.join(root, "artifacts"));
-  const workers = new WorkerExecutor(new ScenarioClient(), artifacts, {
+  const { artifacts, checkpointer, engine } = runtime(root);
+  const workers = new WorkerExecutor(new ScenarioClient({ artifacts }), artifacts, {
     projectRoot: root,
     parallelConcurrency: 2,
   });
@@ -272,8 +295,8 @@ describe("frozen research contract fixture", () => {
 
   it("enforces start/step/status identity and exact recovery cases", async () => {
     const root = tempRoot();
-    const { checkpointer, engine } = runtime(root);
-    const workers = configuredWorkers(root, engine);
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const workers = configuredWorkers(root, engine, artifacts);
     const runIdentity = identity("fixture-identity");
     const initial = engine.handle(start(root, runIdentity, { mode: "quick" }));
     expect(() => engine.handle(start(root, runIdentity, { mode: "quick" }))).toThrow(
@@ -301,13 +324,15 @@ describe("frozen research contract fixture", () => {
         result: validResult,
       })
     ).toThrow(CheckpointIdentityError);
-    expect(
-      engine.handle({
-        schema_version: 2,
-        action: "recover",
-        identity: runIdentity,
-      })
-    ).toEqual(initial);
+    const recovered = engine.handle({
+      schema_version: 2,
+      action: "recover",
+      identity: runIdentity,
+    });
+    expect(recovered).toMatchObject({ action: "invoke_agent", state_id: initial.state_id });
+    if (recovered.action !== "invoke_agent") throw new Error("expected recovered invocation");
+    expect(recovered.output_artifact.version).toBe(initial.output_artifact.version + 1);
+    expect(recovered.output_artifact.parent_ref).toEqual(validResult.output_artifact);
     checkpointer.close();
   });
 
@@ -343,8 +368,8 @@ describe("frozen research contract fixture", () => {
 
   it("binds dynamic branches to branch, agent, run, state, attempt, and receipt", async () => {
     const root = tempRoot();
-    const { checkpointer, engine } = runtime(root);
-    const workers = configuredWorkers(root, engine);
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const workers = configuredWorkers(root, engine, artifacts);
     const runIdentity = identity("fixture-provenance");
     const plan = engine.handle(start(root, runIdentity, { mode: "standard" }));
     if (plan.action !== "invoke_agent") {
@@ -440,14 +465,14 @@ describe("frozen research contract fixture", () => {
     "$id preserves complete/incomplete terminal truth",
     async (scenario) => {
       const root = tempRoot();
-      const { checkpointer, engine } = runtime(root);
+      const { artifacts, checkpointer, engine } = runtime(root);
       const validationVerdict =
-        scenario.met || scenario.id === "TERM-FAILED-WRITE" ? "PASS" : "FAIL";
+        scenario.met || scenario.id === "TERM-MALFORMED-DRAFT" ? "PASS" : "FAIL";
       const client = new ScenarioClient({
         validationVerdict,
-        writeComplete: scenario.id !== "TERM-FAILED-WRITE",
+        invalidDraft: scenario.id === "TERM-MALFORMED-DRAFT",
+        artifacts,
       });
-      const artifacts = new ArtifactStore(path.join(root, "artifacts"));
       const terminal = await new OrchestrationRunner(
         engine,
         new WorkerExecutor(client, artifacts, {
@@ -471,10 +496,133 @@ describe("frozen research contract fixture", () => {
       ) {
         expect(terminal.status).toBe(scenario.status);
         expect(terminal.met).toBe(scenario.met);
+        expect(terminal.result).not.toHaveProperty("rigor_escalated");
       }
       checkpointer.close();
     }
   );
+});
+
+describe("Research host inference effort", () => {
+  it.each([
+    ["quick", "low"],
+    ["standard", "high"],
+    ["deep", "xhigh"],
+  ] as const)("propagates %s as invocation-level %s thinking", async (mode, expected) => {
+    const root = tempRoot(`penny-thinking-${mode}-`);
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const client = new ScenarioClient({ artifacts });
+    const workers = configuredWorkers(root, engine, artifacts, client);
+    workers.setLivenessController(engine.liveness);
+    const pending = engine.handle(start(root, identity(`thinking-${mode}`), { mode }));
+
+    await workers.execute(pending);
+
+    expect(client.invocations.map((invocation) => invocation.thinkingLevel)).toEqual([expected]);
+    expect(engine.liveness.policy(`thinking-${mode}`)?.preset).toBe(mode);
+    checkpointer.close();
+  });
+
+  it("fails closed before model work for an unknown bound Research preset", async () => {
+    const root = tempRoot("penny-thinking-unknown-");
+    const artifacts = new ArtifactStore(path.join(root, "artifacts"));
+    const checkpointer = new Checkpointer(path.join(root, "orchestration-v2.db"));
+    const registration = requireValue(resolvePlaybook("research"), "research registration");
+    const engine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
+      projectRoot: root,
+      maxSteps: 96,
+      artifactRevisions: artifacts,
+      artifactStore: artifacts,
+      artifactReader: artifacts,
+      playbookRegistration: {
+        ...registration,
+        liveness: {
+          ...registration.liveness,
+          resolve: () => ({
+            ...researchLivenessPolicy("quick"),
+            preset: "future-preset",
+          }),
+        },
+      },
+    });
+    const client = new ScenarioClient({ artifacts });
+    const workers = configuredWorkers(root, engine, artifacts, client);
+    workers.setLivenessController(engine.liveness);
+    const pending = engine.handle(start(root, identity("thinking-unknown"), { mode: "quick" }));
+
+    await expect(workers.execute(pending)).rejects.toThrow(
+      "unknown research liveness preset 'future-preset'"
+    );
+    expect(client.invocations).toHaveLength(0);
+    expect(
+      checkpointer
+        .events("thinking-unknown")
+        .filter((event) => event.eventType === "liveness_invocation_admitted")
+    ).toHaveLength(0);
+    checkpointer.close();
+  });
+
+  it("uses bootstrap high, then Quick low after Piper durably declares the mode", async () => {
+    const root = tempRoot("penny-thinking-bootstrap-");
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const runIdentity = identity("thinking-bootstrap-quick");
+    const client = new ScenarioClient({ artifacts, declaredMode: "quick" });
+    const workers = configuredWorkers(root, engine, artifacts, client);
+    workers.setLivenessController(engine.liveness);
+    const planning = engine.handle(start(root, runIdentity, {}));
+
+    expect(engine.liveness.policy(runIdentity.run_id)?.preset).toBe("bootstrap");
+    const planningResults = await workers.execute(planning);
+    expect(client.invocations.map((invocation) => invocation.thinkingLevel)).toEqual(["high"]);
+    const next = engine.acceptWorkerResults(runIdentity, planningResults);
+    for (const result of planningResults) workers.acceptArtifact(result);
+
+    expect(engine.liveness.policy(runIdentity.run_id)?.preset).toBe("quick");
+    await workers.execute(next);
+    expect(client.invocations.slice(1).map((invocation) => invocation.thinkingLevel)).toEqual([
+      "low",
+      "low",
+    ]);
+    checkpointer.close();
+  });
+
+  it("reuses the durable Standard level on recovery and every parallel Echo branch", async () => {
+    const root = tempRoot("penny-thinking-recovery-");
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const runIdentity = identity("thinking-standard-recovery");
+    const client = new ScenarioClient({ artifacts });
+    const workers = configuredWorkers(root, engine, artifacts, client);
+    workers.setLivenessController(engine.liveness);
+    const planning = engine.handle(start(root, runIdentity, { mode: "standard" }));
+    const planningResults = await workers.execute(planning);
+    const parallel = engine.acceptWorkerResults(runIdentity, planningResults);
+    for (const result of planningResults) workers.acceptArtifact(result);
+    const recovered = engine.handle({
+      schema_version: 2,
+      action: "recover",
+      identity: runIdentity,
+    });
+    expect(recovered).toEqual(parallel);
+
+    const restartedLiveness = new LivenessController(checkpointer);
+    expect(restartedLiveness.policy(runIdentity.run_id)?.preset).toBe("standard");
+    workers.setLivenessController(restartedLiveness);
+    const beforeParallel = client.invocations.length;
+    await workers.execute(recovered);
+    const parallelInvocations = client.invocations.slice(beforeParallel);
+
+    expect(parallelInvocations).toHaveLength(2);
+    expect(parallelInvocations.map((invocation) => invocation.stateId)).toEqual([
+      "researching",
+      "researching",
+    ]);
+    expect(parallelInvocations.map((invocation) => invocation.thinkingLevel)).toEqual([
+      "high",
+      "high",
+    ]);
+    checkpointer.close();
+  });
 });
 
 describe("research behavioral parity", () => {
@@ -483,7 +631,6 @@ describe("research behavioral parity", () => {
       "invoke_agent:researching:echo",
       "invoke_agent:synthesizing:synthia",
       "invoke_agent:validating:vera",
-      "invoke_agent:report_writing:skribble",
       "complete:complete",
     ],
     standard: [
@@ -491,7 +638,6 @@ describe("research behavioral parity", () => {
       "invoke_agents_parallel:researching:echo,echo",
       "invoke_agent:synthesizing:synthia",
       "invoke_agent:validating:vera",
-      "invoke_agent:report_writing:skribble",
       "complete:complete",
     ],
     deep: [
@@ -499,9 +645,8 @@ describe("research behavioral parity", () => {
       "invoke_agent:critiquing_plan:carren",
       "invoke_agents_parallel:researching:echo,echo",
       "invoke_agent:synthesizing:synthia",
-      "invoke_agent:critiquing_report:carren",
       "invoke_agent:validating:vera",
-      "invoke_agent:report_writing:skribble",
+      "invoke_agent:critiquing_report:carren",
       "complete:complete",
     ],
   } as const;
@@ -515,8 +660,8 @@ describe("research behavioral parity", () => {
 
   it("retries malformed results without advancing the checkpoint", async () => {
     const root = tempRoot();
-    const { checkpointer, engine } = runtime(root);
-    const workers = configuredWorkers(root, engine);
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const workers = configuredWorkers(root, engine, artifacts);
     const runIdentity = identity("malformed-retry");
     const pending = engine.handle(start(root, runIdentity, { mode: "quick" }));
     if (pending.action !== "invoke_agent") {
@@ -539,8 +684,13 @@ describe("research behavioral parity", () => {
     if (retry.action === "invoke_agent") {
       expect(retry.state_id).toBe(pending.state_id);
       expect(retry.attempt).toBe(pending.attempt + 1);
-      expect(retry.output_artifact.version).toBe(2);
-      expect(retry.output_artifact.parent_ref).toEqual(malformed.output_artifact);
+      expect(retry.execution_purpose).toBe("routing_repair");
+      expect(retry.output_artifact.kind).toBe("routing-metadata");
+      expect(retry.output_artifact.version).toBe(1);
+      expect(retry.output_artifact.parent_ref).toBeNull();
+      expect(retry.input_artifacts.artifacts).toEqual([
+        { slot: "malformed-source", ref: malformed.output_artifact },
+      ]);
     }
     expect(
       engine.handle({
@@ -554,8 +704,8 @@ describe("research behavioral parity", () => {
 
   it("rejects divergent replay while exact receipt replay is idempotent", async () => {
     const root = tempRoot();
-    const { checkpointer, engine } = runtime(root);
-    const workers = configuredWorkers(root, engine);
+    const { artifacts, checkpointer, engine } = runtime(root);
+    const workers = configuredWorkers(root, engine, artifacts);
     const runIdentity = identity("divergent-replay");
     const pending = engine.handle(start(root, runIdentity, { mode: "quick" }));
     if (pending.action !== "invoke_agent") {
@@ -595,14 +745,14 @@ describe("research behavioral parity", () => {
 
   it("exhausts bounded critique and validation loops honestly", async () => {
     const root = tempRoot();
-    const { checkpointer, engine } = runtime(root);
-    const artifacts = new ArtifactStore(path.join(root, "artifacts"));
+    const { artifacts, checkpointer, engine } = runtime(root);
     const terminal = await new OrchestrationRunner(
       engine,
       new WorkerExecutor(
         new ScenarioClient({
           critiqueVerdict: "NEEDS_REVISION",
           validationVerdict: "FAIL",
+          artifacts,
         }),
         artifacts,
         { projectRoot: root, parallelConcurrency: 2 }
@@ -618,21 +768,23 @@ describe("research behavioral parity", () => {
     expect(terminal.action).toBe("incomplete");
     if (terminal.action === "incomplete") {
       expect(terminal.result.plan_critique_exhausted).toBe(true);
-      expect(terminal.result.report_critique_exhausted).toBe(true);
+      expect(terminal.result.report_critique_exhausted).toBe(false);
       expect(terminal.result.validation_exhausted).toBe(true);
       expect(terminal.met).toBe(false);
     }
     checkpointer.close();
   });
 
-  it("survives crash and timeout without consuming the pending assignment", async () => {
+  it("reissues a crash but terminalizes a durable worker timeout", async () => {
     for (const failure of ["crash", "timeout"] as const) {
       const root = tempRoot(`penny-${failure}-`);
-      const { checkpointer, engine } = runtime(root);
+      const { artifacts, checkpointer, engine } = runtime(root);
       const runIdentity = identity(`${failure}-replay`);
       const pending = engine.handle(start(root, runIdentity, { mode: "quick" }));
+      let observedThinkingLevel: AgentInvocation["thinkingLevel"];
       const client: ModelClient = {
         async runAgent(invocation) {
+          observedThinkingLevel = invocation.thinkingLevel;
           if (failure === "crash") {
             throw new Error("simulated worker crash");
           }
@@ -646,28 +798,53 @@ describe("research behavioral parity", () => {
       };
       const runner = new OrchestrationRunner(
         engine,
-        new WorkerExecutor(client, new ArtifactStore(path.join(root, "artifacts")), {
+        new WorkerExecutor(client, artifacts, {
           projectRoot: root,
           parallelConcurrency: 1,
           workerTimeoutMs: 10,
         })
       );
-      await expect(runner.runUntilBoundary(pending)).rejects.toThrow();
+      if (failure === "crash") {
+        await expect(runner.runUntilBoundary(pending)).rejects.toThrow("simulated worker crash");
+        expect(
+          engine.handle({
+            schema_version: 2,
+            action: "recover",
+            identity: runIdentity,
+          })
+        ).toEqual(pending);
+      } else {
+        const exhausted = await runner.runUntilBoundary(pending);
+        expect(exhausted.action).toBe("incomplete");
+        if (exhausted.action === "incomplete") {
+          expect(exhausted.result.terminal_reason).toBe("worker_wall_clock_exhausted");
+        }
+        expect(
+          engine.handle({
+            schema_version: 2,
+            action: "recover",
+            identity: runIdentity,
+          })
+        ).toEqual(exhausted);
+      }
+      expect(observedThinkingLevel).toBe("low");
+      expect(engine.liveness.policy(runIdentity.run_id)).toMatchObject({
+        preset: "quick",
+        worker_wall_clock_ms: 5 * 60_000,
+        run_wall_clock_ms: 15 * 60_000,
+      });
       expect(
-        engine.handle({
-          schema_version: 2,
-          action: "recover",
-          identity: runIdentity,
-        })
-      ).toEqual(pending);
-      expect(checkpointer.events(runIdentity.run_id)).toHaveLength(1);
+        checkpointer
+          .events(runIdentity.run_id)
+          .some((event) => event.eventType === "liveness_worker_ended")
+      ).toBe(true);
       checkpointer.close();
     }
   });
 
   it("enforces the configured parallel concurrency bound", async () => {
     const root = tempRoot();
-    const { checkpointer, engine } = runtime(root);
+    const { artifacts, checkpointer, engine } = runtime(root);
     let active = 0;
     let maximum = 0;
     const client = new ScenarioClient({
@@ -680,10 +857,11 @@ describe("research behavioral parity", () => {
         active -= 1;
       },
       planSteps: ["one", "two", "three", "four", "five"],
+      artifacts,
     });
     const terminal = await new OrchestrationRunner(
       engine,
-      new WorkerExecutor(client, new ArtifactStore(path.join(root, "artifacts")), {
+      new WorkerExecutor(client, artifacts, {
         projectRoot: root,
         parallelConcurrency: 2,
       })

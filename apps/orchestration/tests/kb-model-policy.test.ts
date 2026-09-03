@@ -16,11 +16,22 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { KbModelClient, ssotModel } from "../src/kb/kb-model-client.js";
-import { resolveDomainGuidancePath } from "../src/model-client.js";
+import {
+  resolveDomainGuidancePath,
+  type ActiveWorkerRegistrationMetadataV1,
+} from "../src/model-client.js";
 import { KNOWLEDGE_BASE_SKILL_CONTRACT } from "../src/playbooks/knowledge-base.js";
 import { type IngestSource } from "../src/kb/ingest.js";
 
 const projectRoot = path.resolve(__dirname, "..", "..", "..");
+const KB_WORKER_METADATA: ActiveWorkerRegistrationMetadataV1 = {
+  playbook_name: "knowledge-base",
+  workflow_name: "knowledge-base",
+  guidance: KNOWLEDGE_BASE_SKILL_CONTRACT.guidance,
+  result_transport: "host_typed",
+  opening_policy: "host_private_opening",
+  model_policy: "host_private_ssot_model",
+};
 const agentFile = (name: string): string =>
   readFileSync(path.join(projectRoot, ".pi", "agents", `${name}.md`), "utf8");
 
@@ -73,6 +84,7 @@ describe("KbModelClient model policy", () => {
     await expect(
       client.run({
         agent: "modelless",
+        registration: KB_WORKER_METADATA,
         stateId: "phase_test",
         phaseBrief: "brief",
         sourceAllowlist: [],
@@ -102,6 +114,7 @@ describe("KbModelClient model policy", () => {
     await expect(
       client.run({
         agent: "modelless",
+        registration: KB_WORKER_METADATA,
         stateId: "ingest",
         runId: "run_model_override",
         profileId: "kbp_model_override",
@@ -141,6 +154,7 @@ describe("KB guidance policy (W6 seam)", () => {
     await expect(
       client.run({
         agent: "guideless",
+        registration: KB_WORKER_METADATA,
         stateId: "phase_test",
         phaseBrief: "brief",
         sourceAllowlist: [],
@@ -167,9 +181,7 @@ describe("KB guidance policy (W6 seam)", () => {
         projectRoot: root,
         agent,
         stateId: phase,
-        ...(KNOWLEDGE_BASE_SKILL_CONTRACT.guidance
-          ? { guidance: KNOWLEDGE_BASE_SKILL_CONTRACT.guidance }
-          : {}),
+        guidance: KNOWLEDGE_BASE_SKILL_CONTRACT.guidance,
       });
       expect(resolved.endsWith(`/${agent}-${phase}.md`)).toBe(true);
       expect(existsSync(resolved)).toBe(true);

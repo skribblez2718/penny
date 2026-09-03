@@ -33,6 +33,7 @@ import { evaluateCompletionGate } from "../src/playbooks/playbook.js";
 import {
   KNOWLEDGE_BASE_SKILL_CONTRACT,
   KnowledgeBasePlaybook,
+  validateKnowledgeBasePhaseDetails,
 } from "../src/playbooks/knowledge-base.js";
 import type { Confidence, Directive, JsonValue } from "../src/contracts.js";
 
@@ -238,7 +239,7 @@ function driveTo(playbook: KnowledgeBasePlaybook, context: RunContext, stop: str
   while (context.stateId !== stop && guard++ < 20) {
     const details = DETAILS[context.stateId];
     if (details === undefined) break;
-    playbook.validateDetails(context.stateId, details);
+    validateKnowledgeBasePhaseDetails(context.stateId, details);
     next = playbook.acceptSummary(context, details, "PROBABLE" as Confidence);
   }
   return next;
@@ -442,10 +443,11 @@ describe("KB durable state — status projection", () => {
         gate,
         terminalStatus: "complete",
         met: true,
-        fromState: "publishing",
+        originState: "publishing",
+        visitedStates: ["publishing"],
         unresolvedCount: 0,
       })
-    ).toBeNull();
+    ).toEqual([]);
   });
 
   it("a denied terminal is honest (incomplete, not error) and not gated", () => {
@@ -469,10 +471,11 @@ describe("KB durable state — status projection", () => {
         gate,
         terminalStatus: "incomplete",
         met: false,
-        fromState: "awaiting_review",
+        originState: "awaiting_review",
+        visitedStates: ["awaiting_review"],
         unresolvedCount: 1,
       })
-    ).toBeNull();
+    ).toEqual([]);
   });
 });
 

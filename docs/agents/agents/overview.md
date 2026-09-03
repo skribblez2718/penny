@@ -6,21 +6,24 @@
 domain-invariant capability role, model settings, and a required YAML `tools:` list.
 Remote harness/service presence belongs to a separate registry.
 
-## Exact tool surface
+## Maximum and active tool surfaces
 
-For every catalog-agent execution:
+YAML frontmatter is the maximum ordinary catalog authority. Direct, parallel, and chain
+invocation activates it exactly. A TypeScript orchestration catalog-worker phase activates
+YAML exactly when its active registration omits `allowed_tools`; otherwise it may activate
+one explicit non-empty duplicate-free strict YAML subset bound into the canonical runtime-
+registration digest and worker invocation metadata.
 
-```text
-model-visible active tool names == YAML frontmatter tools list
-```
+No trust profile, task, input, liveness/model policy, optional-service state, or runtime
+condition may select or change that subset. Missing, empty, duplicate, additive,
+replacement, equality-sized, unavailable, and non-YAML selections fail before session
+creation; Pi receives the accepted list exactly and active equality is checked before the
+model prompt. `authority:` and `tool_profiles:` continue to lint YAML exactly and are not
+mutated by a phase subset.
 
-No trust profile, skill phase, optional-service state, input presence, or runner may add,
-remove, filter, replace, or suppress names. Missing, empty, duplicate, and unknown entries
-fail before model invocation. `authority:` and `tool_profiles:` statically lint the list;
-they are not runtime authorities.
-
-All provider extensions load before activation. An unavailable backing service returns a
-typed error when called; its declared tool remains visible.
+All provider extensions load before activation. An unavailable backing service behind a
+registered selected tool returns a typed error when called; its tool is not conditionally
+hidden. Anonymous host-private isolated sessions remain separate and are not catalog roles.
 
 ## Artifact communication
 
@@ -44,7 +47,8 @@ search, and name-only pointers are not substitute handoff channels.
 1. Discover the requested definition from the current catalog snapshot.
 2. Assemble Cognitive Frame + Role Definition + optional Domain Guidance + Project Index.
 3. Preflight required providers and exact input IDs.
-4. Spawn a fresh Pi process/session with the exact YAML surface.
+4. Spawn a fresh Pi process/session with exact YAML or the one eligible registration-bound
+   orchestration strict subset.
 5. Capture complete final assistant bytes.
 6. Persist and re-read output, then parse any routing-only `SUMMARY`.
 
@@ -58,6 +62,11 @@ container/VM for untrusted or unattended work.
 
 - [ ] Every local role has one `.pi/agents/<name>.md` file.
 - [ ] Every file has a non-empty duplicate-free known `tools:` list.
-- [ ] Every production runner asserts exact set equality before model use.
+- [ ] Direct/parallel/chain runners assert exact YAML equality before model use.
+- [ ] TypeScript orchestration asserts absent-subset YAML equality and validates only
+      registration/digest-bound strict subsets before session creation.
+- [ ] Ordinary candidate phases omit `allowed_tools` and activate exact agent YAML; synthetic or
+      evaluation-only strict subsets remain separately tested without sandbox/isolation claims, and
+      host-private tools remain separate.
 - [ ] Every successful output is persisted, re-read, and returned with an ID.
 - [ ] Cross-run single/parallel/chain/fan-in communication is tested.

@@ -276,7 +276,7 @@ export default function (pi: ExtensionAPI) {
 
 Penny's custom `.pi/SYSTEM.md` does not render Pi's optional `promptGuidelines` into the system prompt. Active tool names, descriptions, and parameter schemas still reach the model through the provider-native tool channel. Penny extensions therefore keep required routing, safety, and usage guidance in `description`, parameter descriptions, or the shared system prompt; runtime extension source does not define `promptGuidelines`.
 
-Extensions may dynamically reduce/load tools for the unmarked primary runtime, but never for a catalog agent: every catalog agent's active set must equal its YAML `tools:` list exactly.
+Extensions may dynamically reduce/load tools for the unmarked primary runtime. Catalog authority is closed: direct/parallel/chain workers and TypeScript orchestration phases without `allowed_tools` activate YAML exactly; one eligible orchestration phase may activate only its fixed canonical-registration-bound non-empty duplicate-free strict YAML subset. Loaders, tasks, trust profiles, and runtime/service state may not add, replace, or select names. Host-private isolated matrices remain a separate non-catalog path.
 
 Gateway or consequential tools state what they do, when to use them, and their nearest anti-cases. Narrow primitive tools state the operation plus the discriminator or constraint that helps choose it without adding tautological prose.
 

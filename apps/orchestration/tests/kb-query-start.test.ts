@@ -33,6 +33,7 @@ import {
 } from "../src/checkpointer.js";
 import { RunContext } from "../src/context.js";
 import { OrchestrationEngine } from "../src/engine.js";
+import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 import { OrchestrationService } from "../src/service.js";
 import { initializePennyState } from "../src/state/index.js";
 import {
@@ -262,6 +263,7 @@ function buildStack(projectRoot: string): Stack {
   const dbPath = path.join(projectRoot, ".penny", "orchestration-qstart.db");
   const checkpointer = new Checkpointer(dbPath);
   const engine = new OrchestrationEngine(checkpointer, {
+    receiptAuthority: TEST_RECEIPT_AUTHORITY,
     projectRoot,
     maxSteps: 8,
     playbookName: "knowledge-base",
@@ -669,6 +671,17 @@ describe("engine-owned query start (§5.6)", () => {
     // Path-free: no locator of any kind in the handle.
     expect(handle["path"]).toBeUndefined();
     expect(handle["relative_path"]).toBeUndefined();
+    expect(stack.checkpointer.completionAdmission(runId)).toMatchObject({
+      origin_state: "intake",
+      latest_product: { selector: "terminal_result" },
+      evidence_refs: [
+        {
+          kind: "kb_artifact",
+          reference_id: handle["artifact_id"],
+          sha256: handle["sha256"],
+        },
+      ],
+    });
 
     // Terminal settlement: idempotency record terminal + exact bytes discarded.
     settle(stack, runId, result);
@@ -680,6 +693,7 @@ describe("engine-owned query start (§5.6)", () => {
     stack.checkpointer.close();
     const reopened = new Checkpointer(path.join(projectRoot, ".penny", "orchestration-qstart.db"));
     const reopenedEngine = new OrchestrationEngine(reopened, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot,
       maxSteps: 8,
       playbookName: "knowledge-base",
@@ -758,6 +772,15 @@ describe("engine-owned query start (§5.6)", () => {
       expect(terminal.met).toBe(true);
       expect(terminal.result["grounding_verified"]).toBe(true);
       expect(terminal.result["verification_artifact_id"]).toMatch(/^art_/);
+      expect(service.checkpointer.completionAdmission(runId)).toMatchObject({
+        origin_state: "verify",
+        evidence_refs: [
+          { kind: "kb_artifact" },
+          { kind: "kb_artifact" },
+          { kind: "kb_phase_result" },
+          { kind: "kb_phase_result" },
+        ],
+      });
       const claim = new SaveQueryClaimStore(saveClaimStoreDir(projectRoot, PROFILE)).load(runId);
       expect(claim.state).toBe("available");
       expect(claim.answer_artifact_id).toBe(terminal.result["answer_artifact_id"]);
@@ -930,6 +953,7 @@ describe("engine-owned query start (§5.6)", () => {
     const dbPath = path.join(projectRoot, ".penny", "orchestration-qstart.db");
     const checkpointer = new Checkpointer(dbPath);
     const engine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot,
       maxSteps: 8,
       playbookName: "knowledge-base",
@@ -1037,6 +1061,7 @@ describe("engine-owned query start (§5.6)", () => {
     const dbPath = path.join(projectRoot, ".penny", "orchestration-qstart.db");
     const checkpointer = new Checkpointer(dbPath);
     const engine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot,
       maxSteps: 8,
       playbookName: "knowledge-base",

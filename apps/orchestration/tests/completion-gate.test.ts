@@ -1,18 +1,3 @@
-/**
- * W7 — completion-gate seam (Foundation stage, workstream 1 of 3).
- *
- * The engine, not the playbook, admits a `met: true` terminal. Research's real completion
- * condition -- "must have reached report writing" -- becomes its declared gate, and its
- * terminal outcomes are unchanged (proven by the 28 parity tests staying green).
- *
- * A boundary decision is pinned here: `unresolved_allowance` is ABSENT for research.
- * Research converts an exhausted critique budget into a warning rather than a blocker, so
- * a met run can legitimately carry unresolved items. Forcing an allowance of 0 would have
- * changed behaviour, which this stage forbids.
- */
-
-import { readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
 import { CompletionGateSchema, validateContract, type CompletionGate } from "../src/contracts.js";
@@ -21,114 +6,112 @@ import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
 
 const RESEARCH_GATE = RESEARCH_SKILL_CONTRACT.completion_gate;
 
-describe("W7 research reference gate", () => {
-  it("validates against the closed schema", () => {
+function terminalResultGate(overrides: Partial<CompletionGate> = {}): CompletionGate {
+  return {
+    schema_version: 2,
+    allowed_terminal_origins: ["report_writing"],
+    required_visited_states: ["researching", "report_writing"],
+    required_receipt_predicates: [],
+    latest_product: {
+      selector: "terminal_result",
+      schema_id: "test.terminal-result",
+      product_schema_version: 1,
+    },
+    unresolved_policy: { mode: "allow_any" },
+    ...overrides,
+  };
+}
+
+describe("W7 v2 research reference gate", () => {
+  it("validates as a closed v2 gate", () => {
     expect(() => validateContract(CompletionGateSchema, RESEARCH_GATE, "gate")).not.toThrow();
-  });
-
-  it("requires terminating from report_writing", () => {
-    expect(RESEARCH_GATE.required_states).toEqual(["report_writing"]);
-  });
-
-  it("leaves unresolved_allowance absent, so warnings never block a met run", () => {
-    expect(RESEARCH_GATE.unresolved_allowance).toBeUndefined();
-  });
-
-  it("admits research's real met terminal", () => {
-    expect(
-      evaluateCompletionGate({
-        gate: RESEARCH_GATE,
-        terminalStatus: "complete",
-        met: true,
-        fromState: "report_writing",
-        // Exhausted plan/report critique can leave unresolved items on a met run.
-        unresolvedCount: 3,
-      })
-    ).toBeNull();
-  });
-});
-
-describe("W7 gate enforcement", () => {
-  it("refuses a met terminal from a state the gate does not permit", () => {
-    const refusal = evaluateCompletionGate({
-      gate: RESEARCH_GATE,
-      terminalStatus: "complete",
-      met: true,
-      fromState: "researching",
-      unresolvedCount: 0,
+    expect(RESEARCH_GATE).toMatchObject({
+      schema_version: 2,
+      allowed_terminal_origins: ["rendering"],
+      required_visited_states: [
+        "researching",
+        "synthesizing",
+        "sealing_core",
+        "validating",
+        "rendering",
+      ],
+      required_receipt_predicates: ["research_latest_core_dod.v1"],
+      unresolved_policy: { mode: "max_count", max_count: 0 },
     });
-    expect(refusal).toMatch(/requires terminating from/);
   });
 
-  it("never gates a non-met terminal, so honest failure stays reachable", () => {
-    for (const status of ["incomplete", "cancelled"]) {
-      expect(
-        evaluateCompletionGate({
-          gate: RESEARCH_GATE,
-          terminalStatus: status,
-          met: false,
-          fromState: "researching",
-          unresolvedCount: 99,
-        }),
-        `${status} must pass through`
-      ).toBeNull();
+  it("rejects v1, missing, extra, empty-origin, and duplicate fields", () => {
+    const valid = terminalResultGate();
+    const { unresolved_policy: _missing, ...missing } = valid;
+    for (const invalid of [
+      { schema_version: 1, required_receipts: [], required_states: [] },
+      missing,
+      { ...valid, extra: true },
+      { ...valid, allowed_terminal_origins: [] },
+      { ...valid, allowed_terminal_origins: ["report_writing", "report_writing"] },
+      { ...valid, required_visited_states: ["researching", "researching"] },
+      { ...valid, required_receipt_predicates: ["p.v1", "p.v1"] },
+    ]) {
+      expect(() => validateContract(CompletionGateSchema, invalid, "gate")).toThrow();
     }
   });
 
-  it("enforces unresolved_allowance when a stricter skill declares one", () => {
-    const strict: CompletionGate = {
-      schema_version: 1,
-      required_receipts: [],
-      required_states: ["report_writing"],
-      unresolved_allowance: 0,
-    };
+  it("consumes origin, visit history, and allow-any unresolved policy", () => {
     expect(
       evaluateCompletionGate({
-        gate: strict,
+        gate: terminalResultGate(),
         terminalStatus: "complete",
         met: true,
-        fromState: "report_writing",
+        originState: "report_writing",
+        visitedStates: ["intake", "researching", "report_writing"],
+        unresolvedCount: 128,
+      })
+    ).toEqual([]);
+    expect(
+      evaluateCompletionGate({
+        gate: terminalResultGate(),
+        terminalStatus: "complete",
+        met: true,
+        originState: "researching",
+        visitedStates: ["researching", "report_writing"],
+        unresolvedCount: 0,
+      })
+    ).toContain("TERMINAL_ORIGIN_NOT_ALLOWED");
+    expect(
+      evaluateCompletionGate({
+        gate: terminalResultGate(),
+        terminalStatus: "complete",
+        met: true,
+        originState: "report_writing",
+        visitedStates: ["report_writing"],
+        unresolvedCount: 0,
+      })
+    ).toContain("REQUIRED_STATE_NOT_VISITED");
+  });
+
+  it("enforces max_count and never gates honest negative terminals", () => {
+    const gate = terminalResultGate({ unresolved_policy: { mode: "max_count", max_count: 0 } });
+    expect(
+      evaluateCompletionGate({
+        gate,
+        terminalStatus: "complete",
+        met: true,
+        originState: "report_writing",
+        visitedStates: ["researching", "report_writing"],
         unresolvedCount: 1,
       })
-    ).toMatch(/allows at most 0 unresolved/);
-    expect(
-      evaluateCompletionGate({
-        gate: strict,
-        terminalStatus: "complete",
-        met: true,
-        fromState: "report_writing",
-        unresolvedCount: 0,
-      })
-    ).toBeNull();
-  });
-
-  it("admits any originating state when required_states is empty", () => {
-    const open: CompletionGate = {
-      schema_version: 1,
-      required_receipts: [],
-      required_states: [],
-    };
-    expect(
-      evaluateCompletionGate({
-        gate: open,
-        terminalStatus: "complete",
-        met: true,
-        fromState: "anything",
-        unresolvedCount: 0,
-      })
-    ).toBeNull();
-  });
-});
-
-describe("W7 engine wiring", () => {
-  const source = readFileSync(new URL("../src/engine.ts", import.meta.url), "utf8");
-
-  it("evaluates the gate before accepting a terminal", () => {
-    expect(source).toContain("this.admitTerminal(context, next)");
-    expect(source).toContain("evaluateCompletionGate({");
-  });
-
-  it("uses the active contract's gate, not a hardcoded rule", () => {
-    expect(source).toContain("gate: this.contract.completion_gate");
+    ).toContain("UNRESOLVED_LIMIT_EXCEEDED");
+    for (const terminalStatus of ["incomplete", "error", "cancelled"]) {
+      expect(
+        evaluateCompletionGate({
+          gate,
+          terminalStatus,
+          met: false,
+          originState: "arbitrary",
+          visitedStates: [],
+          unresolvedCount: 128,
+        })
+      ).toEqual([]);
+    }
   });
 });

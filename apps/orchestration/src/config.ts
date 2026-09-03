@@ -1,19 +1,21 @@
 import path from "node:path";
 
-import { resolvePennyProjectState } from "./state/setup.js";
+import { resolvePennyRuntimeState } from "./state/setup.js";
 
 export const ORCHESTRATION_SCHEMA_VERSION = 2 as const;
 export const TYPESCRIPT_ENGINE_OWNER = "typescript" as const;
 export const DEFAULT_MAX_STEPS = 96;
 export const DEFAULT_WORKER_TIMEOUT_MS = 15 * 60 * 1_000;
 export const DEFAULT_PARALLEL_CONCURRENCY = 4;
-/** Default cap on retained terminal runs; older terminal runs are pruned. */
+/** Default cap on retained terminal run cohorts and their correlated worker sessions. */
 export const DEFAULT_MAX_RETAINED_RUNS = 500;
 
 const RETIRED_PATH_SELECTORS = [
   "PENNY_ORCH_DB",
   "PENNY_ORCH_V2_DB",
   "PENNY_ARTIFACT_ROOT",
+  "PI_OBSERVABILITY_URL",
+  "PI_OBSERVABILITY_DATA_DIR",
 ] as const;
 const RETIRED_VERSIONED_LIMITS = [
   "PENNY_ORCH_V2_MAX_STEPS",
@@ -29,10 +31,11 @@ export interface RuntimeConfig {
   readonly dbPath: string;
   readonly receiptKeyPath: string;
   readonly artifactRoot: string;
+  readonly subagentSessionRoot: string;
   readonly maxSteps: number;
   readonly workerTimeoutMs: number;
   readonly parallelConcurrency: number;
-  /** Bounded retention: maximum terminal runs to keep before pruning oldest. */
+  /** Bounded retention: maximum terminal run cohorts to keep before pruning oldest. */
   readonly maxRetainedRuns: number;
 }
 
@@ -45,7 +48,9 @@ function parsePositiveInteger(value: string | undefined, fallback: number, name:
   return parsed;
 }
 
-function rejectRetiredConfiguration(env: Readonly<Record<string, string | undefined>>): void {
+export function rejectRetiredConfiguration(
+  env: Readonly<Record<string, string | undefined>>
+): void {
   for (const name of [...RETIRED_PATH_SELECTORS, ...RETIRED_VERSIONED_LIMITS]) {
     if (env[name]?.trim()) {
       throw new Error(
@@ -71,7 +76,7 @@ export function loadRuntimeConfig(
 ): RuntimeConfig {
   assertSupportedRuntime();
   rejectRetiredConfiguration(env);
-  const resolved = resolvePennyProjectState(path.resolve(projectRoot), { env });
+  const resolved = resolvePennyRuntimeState(path.resolve(projectRoot), { env });
   return {
     projectId: resolved.projectId,
     projectRoot: resolved.canonicalProjectRoot,
@@ -79,6 +84,7 @@ export function loadRuntimeConfig(
     dbPath: resolved.paths.orchestration.database,
     receiptKeyPath: resolved.paths.orchestration.receiptKey,
     artifactRoot: resolved.paths.artifacts.root,
+    subagentSessionRoot: resolved.paths.subagentSessions,
     maxSteps: parsePositiveInteger(
       env.PENNY_ORCHESTRATION_MAX_STEPS,
       DEFAULT_MAX_STEPS,

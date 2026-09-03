@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { Checkpointer } from "../src/checkpointer.js";
 import { OrchestrationEngine } from "../src/engine.js";
+import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 import { RunContext } from "../src/context.js";
 import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
 import { KbWorkerClient } from "../src/kb/kb-worker-client.js";
@@ -394,6 +395,7 @@ async function driveSaveToGate(input: {
   const checkpointer = new Checkpointer(dbPath);
   const artifacts = new ArtifactStore(artifactRoot);
   const engine = new OrchestrationEngine(checkpointer, {
+    receiptAuthority: TEST_RECEIPT_AUTHORITY,
     projectRoot: input.projectRoot,
     maxSteps: 40,
     artifactRevisions: artifacts,
@@ -536,6 +538,7 @@ function decideSave(projectRoot: string, runId: string, decision: "approve" | "d
   const checkpointer = new Checkpointer(saveControlPath(projectRoot));
   try {
     const engine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot,
       maxSteps: 40,
       playbookName: "knowledge-base",

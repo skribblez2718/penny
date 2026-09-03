@@ -1,0 +1,28 @@
+# Paired Skill Evaluation
+
+Penny can run an offline, paired comparison between one frozen baseline and one exact candidate registration. The evaluator fixes the held-out tasks, ordering, runtime, budget, grading cases, thresholds, failure penalties, and cost/latency limits before trials begin.
+
+Both sides run through the same durable orchestration and artifact path. Candidate and ablation start admission remains unchanged and receives the task's actual goal and constraints. The direct baseline receives a stricter closed projection: operational task identity, goal, oracle-free task constraints, exact input refs, model binding, and non-oracle schedule identity. Grader IDs, trigger truth, expected answers/outcomes, protected flags, thresholds, mutation oracles, and grader descriptors stay host-only; nested attempts are rejected before model or session work. A generic direct-agent factory can construct the baseline for any selected agent, phase, guidance root, typed output, and liveness policy; the existing direct Demetri baseline is only one instance. Freeze checks that the registration's worker, guidance, producer, output port, playbook directive, and baseline definition agree, while source/runtime probes inspect invocation tasks, session openings, durable sessions, outputs, and distinctive oracle markers. A direct Piper `StrategyDraft` baseline still does not require evaluator changes.
+
+A contract hash alone is not enough to freeze behavior. Callers also supply one closed implementation binding. Its digest covers exact, bounded project-relative files and deterministic descriptors for baseline, candidate, every ablation, start admission, liveness, workers, constructed playbooks, completion predicates, guidance, agents, schemas, semantic normalizers, graders, the evaluator, the worker runtime, and artifact preflight. Symlinks, path escape, missing roles, changed prompt/source bytes, and function/schema drift fail before trial 1. The same complete check runs before resume can reuse a journal.
+
+The evaluator re-reads the registration-selected terminal product, uses that registration's declared semantic normalizer to project variant-specific output into one common grading wire, and gives only that wire to the deterministic grader. Every scheduled trial remains visible. Missing, unfinished, cancelled, malformed, and errored work receives the predeclared failure score instead of disappearing from the average.
+
+For local-live runs, the dedicated evaluator root is bound into the process before Pi clients or sessions are created. Before any worker starts, Penny writes a harmless schedule-bound sentinel and proves that the actual model-visible `artifact_read` path returns the exact ref, bytes, and digest from the same isolated artifact manifest. A conflicting process root fails closed; Penny never scans or falls back to another root.
+
+The result reports task uplift, protected-capability performance, trigger precision, negative transfer, cost, latency, and complete-pair coverage. It can return only:
+
+- `NO_BUILD` — the warrant did not survive;
+- `RETIRED` — an implemented candidate failed its frozen evaluation;
+- `CANDIDATE` — the measured gate passed;
+- `INVALID_EVALUATION` — the harness, preflight, semantic normalizer, or grader/parser was incompatible, so candidate quality was not judged.
+
+A model output that its registered normalizer explicitly rejects is still an ordinary malformed-trial failure. Explicit model and liveness failures keep closed diagnostic codes. Unknown host/process exceptions abort without fabricating an immutable failure observation, so resume retries only schedule entries whose exact journal is absent. Execution evidence separately counts newly started trials, newly recorded terminals, retained journals, outstanding entries, and loopback provider calls. By contrast, a thrown normalizer or a parser that rejects already-normalized wire makes the evaluation invalid; it must not retire or reject the candidate. Mutation E2E evidence follows the real registered trial and terminal-product path rather than calling schema/seal/summary helpers alone. A mutation of a host-only product field is not applicable to a draft-only ablation, so it is excluded from that ablation's applicable denominator and escape count while remaining in the frozen full-product cohort. `CANDIDATE` is not admission or promotion, and `INVALID_EVALUATION` has no admission or quality authority. Evaluation cannot enable a candidate, add it to native skill discovery, edit the production registry, move its package, or change its thresholds after seeing results. Caller-private immutable evidence writers use only predeclared exact output paths; an arbitrary evidence filename is never accepted.
+
+## Offline self-test
+
+`make evals` runs a synthetic known-delta fixture without a provider call. The expected candidate uplift is `+0.5`. This proves the harness can detect a known effect; it is not evidence for a real product candidate.
+
+It also runs Plan's provider-free 60-trial control (10 tasks × 2 repetitions × 3 arms), exact interruption/resume, and real-path mutation cohort. The scripted result is candidate 20/20 (mean 1.0), baseline 16/20 (mean 0.8), delta +0.2, with a valid 20/20 ablation. Although the generic evaluator may label the measurement `CANDIDATE`, Plan's lifecycle stays harness-only `PREPARED_NOT_MEASURED`. The control cannot admit, promote, enable, register, or authorize Plan.
+
+Real candidate populations use held-out tasks across at least five unrelated domains, include both positive and negative trigger cases, and must not overlap declared development or tuning data.

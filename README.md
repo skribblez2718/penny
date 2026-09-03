@@ -1,6 +1,6 @@
 # Penny
 
-A personal AI assistant built on [Pi](https://github.com/mariozechner/pi-coding-agent) — adaptable to any domain, precise in how she reasons. Penny works directly when that's enough, delegates to specialized agents when isolation or separate judgment pays, and uses a checkpointed research workflow for structured investigations. Exact immutable artifact IDs carry workflow handoff across runs; an optional supervised [MemPalace](https://github.com/milla-jovovich/mempalace) hub provides durable cross-session recall.
+Penny is a personal AI assistant built on [Pi](https://github.com/mariozechner/pi-coding-agent). She can handle a task herself, ask one of ten general-purpose agents for focused help, or run a saved multi-step skill. An optional [MemPalace](https://github.com/milla-jovovich/mempalace) service provides memory across sessions.
 
 <p align="center">
   <img src="img/penny.png" width="55%" style="border-radius: 12px" alt="Penny" />
@@ -10,10 +10,10 @@ A personal AI assistant built on [Pi](https://github.com/mariozechner/pi-coding-
 
 - [Overview](#overview)
 - [Architecture](#architecture)
-- [Capability Roles](#capability-roles)
-- [Progress Heartbeats](#progress-heartbeats)
-- [Evidence Status & Vocabulary](#evidence-status--vocabulary)
-- [AGENTS.md Indexing](#agentsmd-indexing)
+- [Universal Agents](#universal-agents)
+- [Universal Skills](#universal-skills)
+- [Progress and Limits](#progress-and-limits)
+- [AGENTS.md Routing](#agentsmd-routing)
 - [Security](#security)
 - [Protocols](#protocols)
 - [Observability](#observability)
@@ -24,156 +24,146 @@ A personal AI assistant built on [Pi](https://github.com/mariozechner/pi-coding-
 
 ## Overview
 
-Penny is not a single prompt or a single model call. She is a layered reasoning system that:
+Penny has three ways to do work:
 
-- **Composes the right instructions** for the current moment via five separated prompt layers
-- **Chooses the lowest-complexity path that succeeds** — direct work when context and tools suffice; reusable capability roles with isolated context windows when specialization, isolation, or separate review pays; the research skill when a structured, multi-source investigation needs durable state, evidence gates, retries, or resumability
-- **Remembers across sessions when configured** through one pinned MemPalace 3.7.1 HTTP hub, with bounded results and no raw/direct fallback
+- **Direct:** Penny handles the task in the current session.
+- **Agent:** Penny gives one clearly defined job to another agent working in a separate session.
+- **Skill:** Penny runs a tested sequence of steps that can save progress, retry a failed step, run work in parallel, and resume later.
+
+Penny uses the simplest option that fits the task. Memory is optional; a skill passes each saved result directly to the next step.
 
 ## Architecture
 
-Penny's prompt system uses five **named layers** each with a single responsibility:
+Instructions come from up to five places:
 
-| Layer                  | Function                                            | Source                             |
-| ---------------------- | --------------------------------------------------- | ---------------------------------- |
-| **Cognitive Frame**    | Stable operating policy and outcome contract        | `.pi/SYSTEM.md`                    |
-| **Role Definition**    | Which capability this is, and its maximum authority | `.pi/agents/*.md`                  |
-| **Domain Guidance**    | How to think about this domain                      | `.pi/skills/*/assets/prompts/*.md` |
-| **Project Index**      | Where things are                                    | `AGENTS.md` files                  |
-| **Invocation Context** | What to do now                                      | Task message + runtime             |
+| Part               | What it contains                                           | Source                             |
+| ------------------ | ---------------------------------------------------------- | ---------------------------------- |
+| System rules       | Penny's standing rules and safety limits                   | `.pi/SYSTEM.md`                    |
+| Agent role         | One agent's job and maximum tool access                    | `.pi/agents/*.md`                  |
+| Skill instructions | The rules and output format for one skill step             | `.pi/skills/*/assets/prompts/*.md` |
+| Project map        | Directions to the documents needed for the task            | `AGENTS.md` files                  |
+| Task details       | The current goal, limits, file paths, and saved output IDs | Task message and runtime           |
 
-The current workflow skill is `research`. It runs as a registered TypeScript playbook on the shared `orchestration` engine with durable, checkpointed run state (`run_id`-keyed Node SQLite), so an interrupted run can resume. The execution owner stores and re-reads each exact agent output before parsing its routing SUMMARY; downstream phases receive validated artifact IDs and bounded, non-expiring `artifact_read` access. Workflows do not require memory. Track-A recovery is forward-only: `PENNY_ARTIFACT_DISPATCH_MODE=paused` halts new agent/tool/fan-out dispatch while status and exact artifact reads remain available; returning to `active` resumes from the unchanged checkpoint and refs, never semantic-memory fallback.
+All seven skills are fully implemented and available. Research and Knowledge Base are registered as production releases. The other five are registered as release candidates. A release candidate is not experimental or unfinished; it simply has not been moved into the production registry.
 
-## Capability Roles
+The skill system saves progress in SQLite. It stores each agent result under a unique ID and passes that saved result to the next step. An interrupted run can continue from its saved results.
 
-Penny's agents are not subject-matter specialists. An agent is a **domain-invariant
-capability contract** whose objective, invariants, authority, tool posture, and
-input→output transformation stay stable when the subject matter changes.
+## Universal Agents
 
-That is why there is no `security-review` agent and no `travel-planner` agent. Domain and
-function are orthogonal: security analysis and financial analysis are different domains but
-the same transformation. The research skill is the proof — it is a composition of six
-generic roles, not a `research-agent`.
+Penny's ten agents are named for the kind of work they do, not for a subject area. The same agent can work on software, finance, travel, security, or any other topic.
 
-<!-- BEGIN GENERATED: roster -->
+| Agent      | Use it to                                                                              |
+| ---------- | -------------------------------------------------------------------------------------- |
+| `annie`    | Analyze material already provided and explain its structure, relationships, or causes. |
+| `carren`   | Review the quality of a work product and explain how it should improve.                |
+| `demetri`  | Choose or rank known options using the stated goals, limits, and uncertainties.        |
+| `echo`     | Explore an unfamiliar topic, codebase, document set, or external source.               |
+| `ida`      | Generate a varied set of ideas, options, or hypotheses.                                |
+| `piper`    | Plan how to move from the current state to a goal.                                     |
+| `skribble` | Create files or other requested work products from a clear specification.              |
+| `synthia`  | Combine several sources or findings into one clear account.                            |
+| `tabitha`  | Turn an approved plan or specification into tasks ordered by what must happen first.   |
+| `vera`     | Check whether something meets a stated standard and explain why.                       |
 
-| Capability   | Agent      | Family       | Authority | Transformation                                                           |
-| ------------ | ---------- | ------------ | --------- | ------------------------------------------------------------------------ |
-| `analyze`    | `annie`    | epistemic    | `read`    | evidence/material → structured understanding                             |
-| `critique`   | `carren`   | epistemic    | `read`    | work product + quality criteria → improvement judgment                   |
-| `explore`    | `echo`     | epistemic    | `read`    | unknown area → relevant evidence/context                                 |
-| `synthesize` | `synthia`  | epistemic    | `read`    | multiple evidence sets → integrated understanding                        |
-| `verify`     | `vera`     | epistemic    | `inspect` | target + standard → evidence-backed validity verdict                     |
-| `decide`     | `demetri`  | deliberative | `read`    | alternatives + objectives + uncertainty → justified choice + sensitivity |
-| `ideate`     | `ida`      | deliberative | `read`    | problem + constraints → diverse candidate possibilities                  |
-| `plan`       | `piper`    | deliberative | `read`    | goal + state + constraints → strategy                                    |
-| `generate`   | `skribble` | operational  | `write`   | specification → materialized artifact                                    |
-| `taskify`    | `tabitha`  | operational  | `read`    | strategy/specification → executable task graph                           |
+There are no separate `security-review` or `travel-planner` agents. Those are subjects, not kinds of work. For example, Annie can analyze either a security design or a travel plan.
 
-<!-- END GENERATED -->
+See [Capability Registry](docs/humans/agents/capability-registry.md) for the full descriptions and the rules for adding another agent.
 
-The roster falls into three families. Membership is descriptive, not a pipeline —
-`analyze → decide`, `generate → verify` and `explore → synthesize` are all ordinary
-compositions that skip intermediate families.
+## Universal Skills
 
-<!-- BEGIN GENERATED: families -->
+Skills are reusable multi-step jobs that work in any subject area. Most use the agents above. Knowledge Base runs through its own `knowledge_base` tool.
 
-- **Epistemic** — transform information into knowledge or judgment: `analyze`, `critique`, `explore`, `synthesize`, `verify`
-- **Deliberative** — determine what should happen: `decide`, `ideate`, `plan`
-- **Operational** — convert intent into externalizable work: `generate`, `taskify`
+The repository contains seven fully implemented skill packages:
 
-<!-- END GENERATED -->
+| Package          | Release status and tool           | What it does                                                                        |
+| ---------------- | --------------------------------- | ----------------------------------------------------------------------------------- |
+| `research`       | **Production** — `skill`          | Runs Quick, Standard, or Deep research using external sources.                      |
+| `knowledge-base` | **Production** — `knowledge_base` | Manages a private knowledge base. The host system controls access.                  |
+| `assess`         | **Release candidate** — `skill`   | Grades submitted work using the provided rules and supporting information.          |
+| `decide`         | **Release candidate** — `skill`   | Selects or ranks supplied options, or reports that no sound choice can yet be made. |
+| `diagnose`       | **Release candidate** — `skill`   | Suggests likely causes from the information provided.                               |
+| `plan`           | **Release candidate** — `skill`   | Produces a strategy for reaching a stated goal.                                     |
+| `produce`        | **Release candidate** — `skill`   | Produces one reviewed piece of text from a complete set of instructions.            |
 
-```
-            acquire                     determine what           externalize
-         (epistemic)                  should happen               the work
-                                     (deliberative)             (operational)
+All seven appear in Pi's skill list and are available for use. Research and Knowledge Base are the two production releases. The other five are release candidates, which is a release label rather than a statement about completeness. Before a candidate run, a local configuration file must name the package and match its current checksum. Evaluations use a separate route. Running or testing a candidate does not change its release status.
 
-  explore ──► analyze ──┬──► ideate ──► decide ──► plan ──► taskify ──► generate
-                        │                                                    │
-                        └──► synthesize                    critique ◄────────┴
-                                                            verify ◄────────┘
-```
+## Progress and Limits
 
-Adding an eleventh capability is deliberately hard: a proposal must pass a six-gate
-admission test, and "complete the taxonomy" is not one of the gates. Every roster table in
-the documentation — including the two above — is generated from `.pi/agents/*.md`
-frontmatter, because hand-maintained roster tables drift. See
-[Capability Registry](docs/humans/agents/capability-registry.md).
+Skills report when a step starts and when a worker finishes or fails. Separate limits on time, model responses, tool use, and outside requests prevent a run from continuing forever.
 
-## Progress Heartbeats
+## AGENTS.md Routing
 
-Long-running agents are monitored with staleness-based progress tracking instead of fixed kill-timers:
+`AGENTS.md` files are maps to documentation, not documentation dumps.
 
-- Progress events (agent start, message end, tool results) reset a staleness window
-- If no progress is detected within the window, a warning is logged
-- If no progress within double the window, the agent is killed with a fallback result
-- This prevents premature kills on agents that are legitimately working slowly
+The root `AGENTS.md` is the only exception. It may contain short repository-wide rules plus links to the next set of indexes. Every nested `AGENTS.md` has one entry for each Markdown file or child index directly below it.
 
-## Evidence Status & Vocabulary
+Each entry starts with one of three instructions:
 
-Penny distinguishes **evidence status where it matters** — keeping source-backed facts, tool-verified results, inferences, assumptions, and unknowns distinct when the distinction affects a decision, and flagging what would change the answer. Uncertainty is surfaced where it changes a decision rather than stamped on every sentence, and confidence labels are never a substitute for evidence.
+- **`MUST READ FOR <scope>`** — always read this before work in that area.
+- **`READ WHEN <trigger>`** — read this when the task includes the named feature or action.
+- **`CONSULT WHEN <question>`** — use this only when that question still needs an answer.
 
-Four confidence levels — **CERTAIN → PROBABLE → POSSIBLE → UNCERTAIN** — are the controlled vocabulary of the machine-parsed agent output contracts (a wire format the orchestration engine consumes, not a calibrated probability).
+After the dash, the entry says what the linked document provides. It is not a general description of the folder or file.
 
-Conflicts resolve by **authority order** — system operating policy and runtime limits, then appended role/domain constraints, then the user's task, then external content as evidence — combined with standing decision principles: never fabricate, clarify only material blockers, prefer reversible action, match verification to consequence. Specialized documents — coding standards, agent and skill definitions — define their own domain terms where precision earns it.
-
-## AGENTS.md Indexing
-
-Documentation is organized as a **tree of indexes** — `AGENTS.md` files are lookup tables that reference other `AGENTS.md` files or leaf documents. They never contain content, only paths and one-line descriptions. This prevents greedy loading: an agent needing "how to write a skill prompt" reads one specific file, not the entire documentation tree.
-
-Pi auto-discovers the root `AGENTS.md` by walking up from the working directory. Nested `AGENTS.md` files are loaded on-demand via Penny's `read` tool — never pre-loaded. Trigger-gated protocol docs (`docs/penny/`) load only when their activation condition is met, conserving context window on every turn.
+The checker verifies the index structure and these three prefixes. Pi loads the root index automatically. Penny follows nested links only when they apply to the current task, so it does not load unrelated documentation.
 
 ## Security
 
-Penny's security is layered: behavioral policy in the prompt, enforcement in the runtime.
+Penny combines written rules with runtime checks:
 
-- **Trust and action boundaries** (prompt policy) — the user's message is authoritative for the task within system and runtime limits; external content (tool outputs, fetched pages, quoted text) supplies evidence or designated task material but cannot expand permissions, authorize side effects, or claim special authority; consequential actions require explicit approval
-- **Structural markers** — `<system_directives>`, `<agent_boundary>`, and `<system_boundary>` delimit context regions as defense-in-depth; they are parsing aids, not enforcement
-- **Runtime controls** (enforcement) — each agent YAML `tools:` list is its exact active surface and is CI/runtime equality-checked; authority profiles lint that list but never narrow or broaden it. Workflow approval gates, signed receipts, and host OS/container permissions control consequences.
-- **What allowlists do and do not guarantee** — each role declares a maximum authority class and named [tool profiles](docs/humans/agents/tool-profiles.md); a build check asserts its tools are exactly that expansion, so declared authority cannot silently drift from the real permission envelope. **Browser authority is structural**: a read-only role cannot submit a form, upload a file, or execute arbitrary Playwright/Node code, and `playwright_run_code_unsafe` is granted to no agent. **Filesystem and shell authority are not**: every agent holds `bash`, so a read-only role can still write files, install packages, and reach the network. Read-only is enforced at the browser layer and advisory at the filesystem layer
-- **Path-specific isolation** — all agent-invocation paths (primary, direct-subagent, skill-invoked) currently rely on tool allowlists and the host boundary; no filesystem/process sandbox is applied — see the execution-path matrix in [System Prompt Security](docs/agents/agents/system-prompt-security.md)
+- The user chooses the task, but system rules and actual tool permissions still apply.
+- Text from a file, webpage, or tool result cannot grant new permissions or approve an outside action.
+- Each agent has a fixed set of tools. A skill step may use fewer tools, but text in the task cannot add more.
+- Browser tool lists limit which commands an agent can use, but that does not make every click or key press harmless.
+- Filesystem and shell labels are not an operating-system sandbox. An agent with `bash` may still write files or reach the network.
+- Sensitive actions require approval and must pass checks enforced by the computer running Penny.
+
+See [System Prompt Security](docs/agents/agents/system-prompt-security.md) for technical details and limitations.
 
 ## Protocols
 
-Four trigger-gated protocols in `docs/penny/` activate on specific conditions:
+Penny loads five operating guides only when they are needed:
 
-- **Clarification Protocol** — activates when blocking ambiguity remains: a missing fact could materially change the result, the action is materially consequential (destructive, external, costly, credential- or privacy-sensitive), or the required authorization is missing. Five steps: identify knowns, surface assumptions, flag unknowns, classify (BLOCKER / NAVIGABLE / IRRELEVANT), consequence check.
-- **Compaction Resume Protocol** — activates when a compaction summary with a `[RESUME-REFS v2]` block appears in context. Penny reorients from the prose brief, resumes in-flight runs from `run:` refs, reads exact `artifact:` refs on demand, and treats any durable-memory IDs as optional recall only.
-- **Routing & Delegation Protocol** — activates when choosing an execution path or constructing a delegation; applies the lowest-complexity-sufficient policy and the standard handoff shape.
-- **Tool Usage Protocol** — activates when tool-reference, file-handling, authorization, or git-gate details are needed.
+- **Artifact Access** — reading a saved agent result by its exact artifact ID.
+- **Clarification** — asking the user when missing information would materially change the work.
+- **Compaction Resume** — continuing work after conversation history has been compacted.
+- **Routing and Delegation** — choosing between direct work, an agent, and a skill.
+- **Tool Usage** — handling files, approvals, and Git safely.
 
 ## Observability
 
-A reduced TypeScript/Node service stores bounded structured operational logs and compaction
-archives in Penny's canonical global `observability/observability.db`. It uses loopback HTTP only;
-there is no WebSocket or transcript-ingest plane. Conversation history is read directly from Pi's
-canonical JSONL files—including catalog-bound subagent sessions—so history works while the service
-is stopped.
+Penny stores local diagnostic logs but does not copy conversation transcripts into its log database. Conversation history remains in Pi's local session files and is available even when logging is turned off.
 
 ## Development
 
 ```bash
-make test      # Run all tests (bun + pytest)
-make lint      # Lint and format check (eslint + flake8 + black)
-make format    # Auto-format (prettier + black)
-make clean     # Remove code dependencies; preserve all memory data
+make test          # Run all Bun and Python tests
+make lint          # Run ESLint, Flake8, and formatting checks
+make format        # Format supported files
+make clean         # Remove code dependencies but preserve memory data
+bun run pi:update  # Check and update Pi safely
 ```
+
+### Updating Pi
+
+Use `bun run pi:update` instead of running `pi update` directly from this repository. The command finds the latest Pi release, tests it against Penny, and updates the global Pi installation only if those checks pass. It does not commit files.
+
+At normal startup, Penny only compares the running Pi version with the version pinned in this repository. Startup does not install packages or contact a registry.
 
 ## Documentation
 
-Documentation is organized into three categories that cover the same topics from different perspectives:
+Documentation has three audiences:
 
-- **Agent docs:** `docs/agents/` — **HOW** the system works. Agent-consumable reference for integration points, code structure, state machines, coding standards, and prompt layers. Written for AI agents that need to build and integrate with Penny.
-- **Human docs:** `docs/humans/` — **WHAT and WHY.** Human-readable explanations of architectural decisions, capability overviews, coding guides, and design principles. Written for humans who want to understand the system.
-- **Penny docs:** `docs/penny/` — Protocols specific to Penny's operation (clarification, compaction). Loaded on-demand via trigger conditions in SYSTEM.md.
+- **`docs/agents/`** — technical instructions used while changing Penny.
+- **`docs/humans/`** — explanations of what Penny does and why it was designed that way.
+- **`docs/penny/`** — Penny's five operating protocols.
 
-Both agent and human docs cover the same topics — agents, architecture, capabilities, coding, documentation, extensions, memory, prompts, skills, state management, and observability — but in different ways. Agent docs are code-first reference material; human docs are narrative explanations of decisions and trade-offs.
+The agent and human documentation cover many of the same topics, but one is a working reference and the other is an explanation.
 
 ## Requirements
 
-- **Pi** — the agent runtime ([github.com/mariozechner/pi-coding-agent](https://github.com/mariozechner/pi-coding-agent))
-- **Bun** — JavaScript runtime and package manager (>=1.0)
+- **Pi 0.84.4** — the currently supported agent runtime ([github.com/mariozechner/pi-coding-agent](https://github.com/mariozechner/pi-coding-agent)); it must match the Pi SDK version pinned in this repository
+- **Bun** — JavaScript runtime and package manager (1.0 or newer)
 - **uv** — Python package manager ([docs.astral.sh/uv](https://docs.astral.sh/uv))
 
 ## Setup
@@ -184,37 +174,29 @@ cd penny
 make setup
 ```
 
-This runs:
+Setup creates the Python environment, installs the Python and TypeScript dependencies, attempts to install Playwright Chromium, and builds the orchestration and logging services. Penny's saved state is not initialized unless `PENNY_SETUP_INITIALIZE_STATE=1` is set. Existing state must use the separate migration process.
 
-1. `uv venv .venv` — Python virtual environment
-2. `uv sync --extra dev` — tracked Python runtime and development dependencies
-3. `bun install` — active TypeScript workspace dependencies
-4. `scripts/setup/setup.sh` — runs the tracked `init-*.sh` scripts:
-   - **External runtime tools** — provisions Playwright Chromium unless explicitly skipped
-   - **MemPalace interface** — prints the explicit, non-destructive supervised-hub commands; it never discovers, initializes, migrates, starts, or deletes a palace without caller configuration
-   - **Observability backend** — validates the TypeScript server configuration; the Pi extension starts the server when needed
+Setup also prints instructions for connecting an optional MemPalace service but does not manage that service. Memory is off by default. To enable it, create a private hub configuration from `scripts/setup/mempalace-hub.config.json.in`, start the hub with your preferred service manager, and set the `PENNY_MEMORY_*` variables listed in `.env.example`. Memory writes remain off until you complete the checks listed there.
 
-Durable memory defaults to disabled. To enable it, create a private hub config from `scripts/setup/mempalace-hub.config.json.in`, supervise the hub outside the Pi extension factory, and set the `PENNY_MEMORY_*` variables described in `.env.example`. Staged authority changes use the separate `scripts/setup/mempalace-cutover.config.json.in` contract. Hub qualification is read-only by default: `PENNY_MEMORY_WRITE_MODE=disabled` omits mutating tools until the owner completes the journaled canary and reconciliation gate. Setup and uninstall preserve palace data.
-
-Then copy `.env.example` to `.env` and fill in your values:
+Copy the environment template and fill in the values you need:
 
 ```bash
 cp .env.example .env
 ```
 
-### TLS / Certificate Trust
+### TLS and Certificate Trust
 
-If a model endpoint uses a custom or internal CA, you may need to set Node.js TLS variables **before** starting Pi (they must be set at process launch — `.env` is too late):
+If Penny connects to a service that uses a custom or internal certificate authority, set the required Node.js environment variable before starting Pi. Loading it later from `.env` will not work.
 
 ```bash
-# Trust system CA certificates (custom/internal CAs)
+# Trust system certificate authorities
 NODE_USE_SYSTEM_CA=1 pi
 
-# Trust an additional custom CA certificate
+# Trust one additional certificate authority
 NODE_EXTRA_CA_CERTS=/path/to/custom-ca.pem pi
 
-# Bypass certificate validation entirely (development only, not recommended)
+# Disable certificate checks (development only; not recommended)
 NODE_TLS_REJECT_UNAUTHORIZED=0 pi
 ```
 
-To make these permanent, export them in your shell profile (`~/.bashrc` or `~/.zshrc`).
+To keep one of these settings, export it from your shell profile such as `~/.bashrc` or `~/.zshrc`.

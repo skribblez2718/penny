@@ -1,8 +1,8 @@
 # Prompts Feature Index
 
-- [ambiguity-categories.md](ambiguity-categories.md): 5 ambiguity categories, bypass phrases, clarification protocol
-- [architecture.md](architecture.md): Prompt assembly, local catalog/remote registry boundary, artifact-first handoff, recovery, and compliance
-- [cognitive-frame-standards.md](cognitive-frame-standards.md): Cognitive Frame (SYSTEM.md) — contents, writing rules, compliance, change protocol
-- [invocation-context-standards.md](invocation-context-standards.md): Current task facts, exact cross-run artifact IDs/ranges, and compaction recovery
-- [layer-reference.md](layer-reference.md): Named-layer responsibilities and component boundaries for exact handoff and primary memory
-- [role-and-domain-standards.md](role-and-domain-standards.md): Worker definitions and Domain Guidance with artifact-read and complete-output contracts
+- [Ambiguity Categories](ambiguity-categories.md): READ WHEN classifying ambiguity or deciding whether clarification is needed — ambiguity categories and protocol triggers.
+- [Architecture](architecture.md): READ WHEN changing prompt assembly, catalog boundaries, artifact handoff, or recovery — layer architecture and enforcement boundary.
+- [Cognitive Frame Standards](cognitive-frame-standards.md): READ WHEN changing `.pi/SYSTEM.md` or stable operating policy — frame ownership and change constraints.
+- [Invocation Context Standards](invocation-context-standards.md): READ WHEN changing task context, exact IDs, paths, or compaction recovery — invocation data contract.
+- [Layer Reference](layer-reference.md): READ WHEN resolving prompt-layer ownership or interactions — layer responsibilities and boundaries.
+- [Role and Domain Standards](role-and-domain-standards.md): READ WHEN creating or revising worker definitions or domain guidance — role/domain separation and output contracts.

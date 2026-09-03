@@ -10,6 +10,7 @@ import { Checkpointer } from "../src/checkpointer.js";
 import { RunContext } from "../src/context.js";
 import { validateDirective } from "../src/contracts.js";
 import { OrchestrationEngine } from "../src/engine.js";
+import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 import { jcsCanonicalize } from "../src/kb/approval-receipts.js";
 import { CapabilityStore, mintEnvelope } from "../src/kb/capabilities.js";
 import {
@@ -320,6 +321,7 @@ describe("G9 approved apply end to end", () => {
       packet_sha256: gate.packet_sha256,
     });
     const engine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot,
       maxSteps: 20,
       playbookName: "knowledge-base",
@@ -403,6 +405,7 @@ describe("G9 approved apply end to end", () => {
     checkpointer.close();
     const reopenedCheckpointer = new Checkpointer(controlPath);
     const reopenedEngine = new OrchestrationEngine(reopenedCheckpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot,
       maxSteps: 20,
       playbookName: "knowledge-base",
@@ -417,6 +420,16 @@ describe("G9 approved apply end to end", () => {
       postApplyVerified: apply.post_apply_verified,
     });
     expect(terminal.action).toBe("complete");
+    expect(reopenedCheckpointer.completionAdmission(RUN)).toMatchObject({
+      origin_state: "awaiting_review",
+      evidence_refs: [
+        {
+          kind: "promotion_approval",
+          reference_id: apply.receipt_id,
+          sha256: apply.receipt_sha256,
+        },
+      ],
+    });
     const duplicateApply = reopenedEngine.finalizeApprovedPromotion({
       runId: RUN,
       status: apply.status,

@@ -1,36 +1,38 @@
-# Input Validation — Validate all external data at the boundary
+# Input Validation
 
-## What
+## Applies when
 
-Every input from users, APIs, files, or environment must be validated before use. Reject invalid input; never sanitize and proceed silently.
+User, network, file, environment, browser, integration, or persisted data crosses a trust boundary.
 
-## Why
+## Security properties
 
-Unvalidated input is the root cause of injection, buffer overflows, type confusion, and business logic bugs. Validation at the boundary prevents tainted data from propagating.
+- External data has explicit syntax, structure, canonical representation, complexity, semantic, and business-rule constraints.
+- Invalid or ambiguous data is rejected before it can alter authority, interpreter structure, or persistent state.
 
-## Rules
+## Requirements
 
-1. **Validate at the boundary.** The first function that touches external data validates it.
-2. **Use schema validation.** TypeBox (TypeScript), Pydantic (Python), Zod, Joi. Not manual `if` checks.
-3. **Whitelist, not blacklist.** Define what's valid; reject everything else.
-4. **Validate type, length, range, and format.** String length, number range, enum values, regex patterns.
-5. **Reject invalid input with a clear error.** Never silently truncate or sanitize.
+- Define accepted type, encoding/charset, size, character/byte count, collection count, nesting, numeric range/precision, format, unknown-field, and duplicate-parameter policy as applicable.
+- Canonicalize before equality/authorization comparisons and distinguish syntactic validation from semantic and business validation.
+- Choose a maintained validation mechanism appropriate to the stack; do not make a specific library universal.
+- Bound regex/parser complexity and validate content type before expensive processing.
 
-## Constraints
+## Failure modes
 
-- **CRITICAL severity.** Unvalidated input at a security boundary must be fixed.
-- **Schema validation is mandatory for API endpoints.** No manual type checking.
+- Assuming a parsed schema establishes business validity or authorization.
+- Silently truncating, coercing, or accepting ambiguous duplicate values.
+- Using an unbounded regex, parser, or nested structure at a boundary.
 
 ## Verification
 
-- [ ] All API inputs validated with schema
-- [ ] File uploads validated for type, size, and content
-- [ ] Environment variables validated at startup
-- [ ] Invalid input rejected with clear errors
+- Test malformed, oversized, deeply nested, duplicate, unknown-field, encoding, canonicalization, semantic, and business-rule cases.
+- Verify invalid input cannot reach a privileged sink or persistence path.
 
-## Files
+## Related guidance
 
-| File                                         | Purpose                  |
-| -------------------------------------------- | ------------------------ |
-| `docs/agents/coding/security/injection.md`   | Injection prevention     |
-| `docs/agents/coding/security/conventions.md` | Universal security rules |
+- [Injection prevention](injection.md), [file handling](file-handling.md), and [API security](api-security.md) own specialized sinks and interfaces.
+- [Resource limits](resource-limits.md) owns work budgets.
+
+## Current external references
+
+- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
+- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

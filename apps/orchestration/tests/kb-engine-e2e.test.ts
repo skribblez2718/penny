@@ -55,6 +55,8 @@ import { RunContext } from "../src/context.js";
 import { admitOperationStart } from "../src/kb/operation-starts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { OrchestrationEngine } from "../src/engine.js";
+import { kbLivenessPolicy } from "../src/liveness.js";
+import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
 import {
   createTestOnlyArtifactBodyRunner,
@@ -249,10 +251,16 @@ function buildStack(projectRoot: string, capIds: readonly string[]): Stack {
   const checkpointer = new Checkpointer(dbPath);
   const artifacts = new ArtifactStore(artifactRoot);
   const engine = new OrchestrationEngine(checkpointer, {
+    receiptAuthority: TEST_RECEIPT_AUTHORITY,
     projectRoot,
     maxSteps: 40,
     artifactRevisions: artifacts,
     playbookName: "knowledge-base",
+    livenessPolicyResolver: () =>
+      kbLivenessPolicy({
+        action: "ingest",
+        readerMaxCallsPerPhase: readPolicy(kbRoot).reader_limits.max_calls_per_phase,
+      }),
   });
   let composeAllocation:
     | {

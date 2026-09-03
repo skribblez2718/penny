@@ -1,5 +1,14 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 import { canonicalJson, sha256 } from "./checkpointer.js";
@@ -23,6 +32,8 @@ export interface TrustedInvocation {
   readonly attempt: number;
   readonly trust_profile: TrustProfile;
   readonly model_override: string | null;
+  readonly execution_purpose?: "routing_repair";
+  readonly routing_repair_binding_sha256?: string;
   readonly task_sha256: string;
   readonly input_artifacts: InputArtifacts;
   readonly output_artifact: OutputArtifactMetadata;
@@ -57,11 +68,20 @@ function existingOwnerKeyFile(keyPath: string): Buffer {
   if (typeof process.getuid === "function" && stats.uid !== process.getuid()) {
     throw new Error("receipt HMAC key has the wrong owner");
   }
-  const key = readFileSync(keyPath);
-  if (key.length !== 32) {
+  if (stats.size !== 32) {
     throw new Error("receipt HMAC key file must contain exactly 32 bytes");
   }
-  return key;
+  const descriptor = openSync(keyPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const key = Buffer.alloc(32);
+    const bytesRead = readSync(descriptor, key, 0, key.length, 0);
+    if (bytesRead !== key.length) {
+      throw new Error("receipt HMAC key file must contain exactly 32 bytes");
+    }
+    return key;
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 function errorHasCode(error: unknown, code: string): boolean {
@@ -102,6 +122,20 @@ function ownerKeyFile(keyPath: string): Buffer {
 export class ReceiptAuthority {
   private constructor(private readonly key: Buffer) {}
 
+  /** Explicit state setup path. Ordinary runtime must use loadExisting(). */
+  static provision(keyPath: string): ReceiptAuthority {
+    return new ReceiptAuthority(ownerKeyFile(keyPath));
+  }
+
+  /** In-memory test/embedding helper; it never writes key material to disk. */
+  static createEphemeral(): ReceiptAuthority {
+    return new ReceiptAuthority(randomBytes(32));
+  }
+
+  /**
+   * Legacy embedded-host helper. Canonical runtime paths must inject a provisioned
+   * authority or load the canonical key with loadExisting().
+   */
   static load(keyPath: string, env: NodeJS.ProcessEnv = process.env): ReceiptAuthority {
     const configured = env.PENNY_RECEIPT_HMAC_KEY;
     return new ReceiptAuthority(

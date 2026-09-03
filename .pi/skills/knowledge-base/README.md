@@ -58,3 +58,10 @@ machine and is available only through `penny-kb-gate promotion-*` host commands.
 - `docs/agents/knowledge-base/`
 - `apps/orchestration/src/playbooks/knowledge-base.ts`
 - `apps/orchestration/src/kb/`
+
+## Flow diagram
+
+`resources/flow.html` is the strict-JSON visual mirror of `KB_FLOW`, validated
+by the shared drift test and `bun .pi/extensions/playwright/scripts/validate-flow-html.ts --skill knowledge-base`.
+It documents the omitted uniform cancellation seam while retaining the
+host-only review and promotion-authority boundaries in the drawn topology.

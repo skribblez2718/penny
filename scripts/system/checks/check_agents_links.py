@@ -35,6 +35,8 @@ ENTRY_RE = re.compile(r"^- \[(?P<label>[^\]]+)\]\((?P<target>[^)]+)\)(?::\s*(?P<
 LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 HEADING_RE = re.compile(r"^(?P<hashes>#+)\s+(?P<title>.*)$")
 EXTERNAL_PREFIXES = ("http://", "https://", "mailto:", "#")
+ROUTING_PREFIXES = ("MUST READ FOR", "READ WHEN", "CONSULT WHEN")
+ROUTING_RE = re.compile(r"^(?:MUST READ FOR|READ WHEN|CONSULT WHEN)\s+\S")
 
 # Operator-filesystem shapes that must never appear in the always-on root file.
 PRIVATE_PATH_RE = re.compile(r"(?:(?<![\w$])/(?:home|Users|root|mnt|media|var)/|~/|[A-Za-z]:\\)")
@@ -118,6 +120,28 @@ def _root_link_errors(text: str, tracked: set[str]) -> list[str]:
     return errors
 
 
+def _routing_error(lineno: int, label: str, target: str, desc: str) -> str | None:
+    """Validate the controlled routing prefix used by an index entry."""
+    if ROUTING_RE.match(desc):
+        return None
+    expected = ", ".join(f"{prefix} …" for prefix in ROUTING_PREFIXES)
+    return f"line {lineno}: [{label}]({target}) must begin with one of: {expected}"
+
+
+def _root_routing_errors(lines: list[str]) -> list[str]:
+    """Require typed routing for root next-level index entries, not bootstrap prose."""
+    errors: list[str] = []
+    for lineno, raw in enumerate(lines, 1):
+        entry = ENTRY_RE.match(raw.rstrip())
+        if not entry:
+            continue
+        desc = (entry.group("desc") or "").strip()
+        error = _routing_error(lineno, entry.group("label"), entry.group("target"), desc)
+        if error:
+            errors.append(error)
+    return errors
+
+
 def validate_root(text: str, tracked: set[str]) -> list[str]:
     """Bootstrap grammar for the repository-root AGENTS.md."""
     lines = text.splitlines()
@@ -125,6 +149,7 @@ def validate_root(text: str, tracked: set[str]) -> list[str]:
         _root_budget_errors(text, lines)
         + _root_private_path_errors(lines)
         + _root_link_errors(text, tracked)
+        + _root_routing_errors(lines)
     )
 
 
@@ -159,6 +184,10 @@ def _entry_errors(
     errors: list[str] = []
     if not desc:
         errors.append(f"line {lineno}: [{label}]({raw_target}) has no one-line description")
+    else:
+        routing_error = _routing_error(lineno, label, raw_target, desc)
+        if routing_error:
+            errors.append(routing_error)
 
     if raw_target.startswith(EXTERNAL_PREFIXES):
         errors.append(

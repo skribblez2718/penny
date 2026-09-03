@@ -1,3 +1,7 @@
+import { ArtifactStore } from "../artifact-store.js";
+import { rejectRetiredConfiguration } from "../config.js";
+import { Checkpointer } from "../checkpointer.js";
+import { ReceiptAuthority } from "../receipts.js";
 import { ProjectCatalog, type ProjectBinding } from "./catalog.js";
 import {
   assertOwnerDirectory,
@@ -5,6 +9,10 @@ import {
   fsyncDirectory,
   pathExistsNoFollow,
 } from "./custody.js";
+import {
+  assertExistingObservabilityDatabase,
+  provisionObservabilityDatabase,
+} from "./observability-store.js";
 import {
   pennyStatePaths,
   projectStatePaths,
@@ -21,7 +29,8 @@ export type PennyStateResolutionErrorCode =
   | "STATE_UNINITIALIZED"
   | "PROJECT_UNREGISTERED"
   | "PROJECT_NOT_ACTIVE"
-  | "STATE_CUSTODY_INVALID";
+  | "STATE_CUSTODY_INVALID"
+  | "STATE_COMPONENT_UNINITIALIZED";
 
 export class PennyStateResolutionError extends Error {
   readonly code: PennyStateResolutionErrorCode;
@@ -92,15 +101,64 @@ export function initializePennyState(
   options: ResolvePennyStateRootOptions = {}
 ): ResolvedProjectState {
   const stateRoot = resolvePennyStateRoot(options);
-  initializePennyStateInfrastructure(options);
+  const state = pennyStatePaths(stateRoot);
+  const catalogExists = pathExistsNoFollow(state.catalogDatabase);
+  if (catalogExists) {
+    using catalog = new ProjectCatalog(stateRoot, { create: false, readOnly: true });
+    const existing = catalog.lookupProject(projectRoot);
+    if (existing !== undefined) {
+      // An active partition is retained state. Setup must validate it rather
+      // than silently repair or replace part of its durable history.
+      return resolvePennyStateStatus(projectRoot, options);
+    }
+  } else {
+    // A canonical root without its catalog is retained, incomplete custody if
+    // any other canonical component exists. Never replace that catalog: doing
+    // so would orphan or silently adopt retained project/telemetry state. An
+    // empty, owner-only target root remains a valid fresh-init destination.
+    if (pathExistsNoFollow(state.root)) {
+      ensureOwnerDirectory(state.root, "Penny state root");
+      const retainedComponents = [
+        ...globalStateDirectories(stateRoot).filter((candidate) => candidate !== state.root),
+        `${state.catalogDatabase}-wal`,
+        `${state.catalogDatabase}-shm`,
+      ].filter(pathExistsNoFollow);
+      if (retainedComponents.length !== 0) {
+        throw new PennyStateResolutionError(
+          "STATE_COMPONENT_UNINITIALIZED",
+          "Penny state root has canonical components but its catalog is absent; use explicit recovery or migration rather than replacing retained state"
+        );
+      }
+    }
+    initializePennyStateInfrastructure(options);
+  }
 
-  using catalog = new ProjectCatalog(stateRoot, { create: true });
+  if (!pathExistsNoFollow(state.observability.database)) {
+    if (catalogExists) {
+      throw new PennyStateResolutionError(
+        "STATE_COMPONENT_UNINITIALIZED",
+        "global observability state is absent; use the explicit migration flow rather than repairing retained state"
+      );
+    }
+    provisionObservabilityDatabase(state.observability.database);
+  } else {
+    assertExistingObservabilityDatabase(state.observability.database);
+  }
+
+  using catalog = new ProjectCatalog(stateRoot, { create: false });
   const resolved = resolvedProjectState(catalog.registerProject(projectRoot));
   ensureProjectStateDirectories(resolved.paths);
+  using _checkpointer = Checkpointer.provision(resolved.paths.orchestration.database, undefined, {
+    projectId: resolved.projectId,
+  });
+  using _artifacts = ArtifactStore.provision(resolved.paths.artifacts.root, {
+    projectId: resolved.projectId,
+  });
+  ReceiptAuthority.provision(resolved.paths.orchestration.receiptKey);
   fsyncDirectory(resolved.paths.root);
   fsyncDirectory(resolved.state.projects);
   fsyncDirectory(resolved.state.root);
-  return resolved;
+  return resolvePennyStateStatus(projectRoot, options);
 }
 
 /** Resolve an already-initialized project without creating state or importing legacy roots. */
@@ -117,7 +175,7 @@ export function resolvePennyProjectState(
     );
   }
   try {
-    using catalog = new ProjectCatalog(stateRoot, { create: false });
+    using catalog = new ProjectCatalog(stateRoot, { create: false, readOnly: true });
     let binding: ProjectBinding | undefined;
     try {
       binding = catalog.lookupProject(projectRoot);
@@ -150,6 +208,57 @@ export function resolvePennyProjectState(
     throw new PennyStateResolutionError(
       "STATE_CUSTODY_INVALID",
       `Penny state failed ownership, layout, or integrity validation: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      error
+    );
+  }
+}
+
+/**
+ * Resolve one complete canonical project partition for ordinary runtime. Every
+ * component is opened create-never so missing, stale, or misbound state cannot
+ * be repaired as an execution side effect.
+ */
+export function resolvePennyRuntimeState(
+  projectRoot: string,
+  options: ResolvePennyStateRootOptions = {}
+): ResolvedProjectState {
+  rejectRetiredConfiguration(options.env ?? process.env);
+  const resolved = resolvePennyProjectState(projectRoot, options);
+  try {
+    Checkpointer.verifyExisting(resolved.paths.orchestration.database, {
+      projectId: resolved.projectId,
+    });
+    ArtifactStore.verifyExisting(resolved.paths.artifacts.root, {
+      projectId: resolved.projectId,
+    });
+    ReceiptAuthority.loadExisting(resolved.paths.orchestration.receiptKey);
+    return resolved;
+  } catch (error) {
+    throw new PennyStateResolutionError(
+      "STATE_COMPONENT_UNINITIALIZED",
+      `Penny runtime state is incomplete or incompatible: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      error
+    );
+  }
+}
+
+/** Administrative full-state check. Telemetry availability never gates ordinary workflow runtime. */
+export function resolvePennyStateStatus(
+  projectRoot: string,
+  options: ResolvePennyStateRootOptions = {}
+): ResolvedProjectState {
+  const resolved = resolvePennyRuntimeState(projectRoot, options);
+  try {
+    assertExistingObservabilityDatabase(resolved.state.observability.database);
+    return resolved;
+  } catch (error) {
+    throw new PennyStateResolutionError(
+      "STATE_COMPONENT_UNINITIALIZED",
+      `Penny observability state is incomplete or incompatible: ${
         error instanceof Error ? error.message : String(error)
       }`,
       error

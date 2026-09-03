@@ -67,7 +67,7 @@ const {
   }),
   mockLoadRun: vi.fn(),
   mockFindGate: vi.fn(),
-  mockExecute: vi.fn<(request: RecoveryRequest) => Promise<unknown>>(),
+  mockExecute: vi.fn<(request: RecoveryRequest, signal?: AbortSignal) => Promise<unknown>>(),
   mockReserveOperation: vi.fn(() => ({
     group: { request_event_group_id: "opg_resume", state: "reserved" },
   })),
@@ -160,10 +160,13 @@ const {
   mockServiceOptions: vi.fn(),
 }));
 
-vi.mock("@earendil-works/pi-coding-agent", () => ({
-  withFileMutationQueue: vi.fn((_path: string, operation: () => unknown) => operation()),
-  parseFrontmatter: vi.fn(() => ({ frontmatter: {}, body: "" })),
-}));
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
+  return {
+    ...actual,
+    withFileMutationQueue: vi.fn((_path: string, operation: () => unknown) => operation()),
+  };
+});
 vi.mock("@earendil-works/pi-tui", () => ({
   Container: class {},
   Spacer: class {},
@@ -224,6 +227,14 @@ vi.mock("@penny/orchestration/source", async (importOriginal) => {
     createKbWorkerClientForResume: mockCreateResumeWorker,
     admitKbRun: mockAdmitRun,
     resolvePennyProjectState: vi.fn(() => ({
+      paths: {
+        knowledgeBase: {
+          profiles: "/tmp/penny-test-state/kb/profiles.json",
+          hostGrants: "/tmp/penny-test-state/kb/host-grants",
+        },
+      },
+    })),
+    resolvePennyRuntimeState: vi.fn(() => ({
       paths: {
         knowledgeBase: {
           profiles: "/tmp/penny-test-state/kb/profiles.json",
@@ -469,6 +480,7 @@ describe("knowledge_base registration and closed authority surface", () => {
     }));
     const kb = (await loadTools(sessionId)).find((tool) => tool.name === "knowledge_base");
     if (kb === undefined) throw new Error("knowledge_base not registered");
+    const controller = new AbortController();
     const result = await kb.execute(
       "call_ingest",
       {
@@ -477,7 +489,7 @@ describe("knowledge_base registration and closed authority surface", () => {
         kb_profile_id: "kbp_demo",
         source_capability_ids: ["cap_1"],
       },
-      undefined,
+      controller.signal,
       undefined,
       { cwd: "/tmp/project" }
     );
@@ -486,6 +498,7 @@ describe("knowledge_base registration and closed authority surface", () => {
     expect(mockExecute.mock.calls[0]?.[0]).toMatchObject({
       identity: { session_id: sessionId, playbook: "knowledge-base" },
     });
+    expect(mockExecute.mock.calls[0]?.[1]).toBe(controller.signal);
     expect(mockConsumeProfileGrant).toHaveBeenCalledWith({
       session_id: sessionId,
       invocation_id: "call_ingest",

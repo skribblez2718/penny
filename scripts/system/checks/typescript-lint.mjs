@@ -112,6 +112,7 @@ const GENERATED_DIRECTORY_NAMES = new Set([
   ".git",
   ".mempalace",
   ".mypy_cache",
+  ".penny",
   ".venv",
   "build",
   "coverage",

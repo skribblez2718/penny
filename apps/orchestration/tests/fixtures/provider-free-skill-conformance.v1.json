@@ -1,0 +1,473 @@
+{
+  "schema_version": 1,
+  "claim_scope": "engine_and_contract_conformance_only",
+  "required_categories": [
+    "known_good",
+    "known_bad",
+    "boundary",
+    "semantic_equivalence",
+    "input_mutation",
+    "product_integrity",
+    "real_entrypoint",
+    "fail_closed"
+  ],
+  "entrypoint_checks": [
+    {
+      "check_id": "candidate-skill-tool-entrypoints",
+      "registration_scope": "candidate",
+      "test_config": "unit",
+      "test_file": "tests/unit/engine-path.test.ts",
+      "full_name": "TypeScript-only skill engine path routes every registered candidate through the skill tool with its exact registration"
+    },
+    {
+      "check_id": "research-production-entrypoint",
+      "registration_scope": "research",
+      "test_config": "e2e",
+      "test_file": "tests/e2e/research-production-entrypoint.e2e.test.ts",
+      "full_name": "P4 production skill entrypoint completes Quick through ordinary PiAgentClient sessions with only provider responses stubbed"
+    },
+    {
+      "check_id": "knowledge-base-production-entrypoint",
+      "registration_scope": "knowledge-base",
+      "test_config": "e2e",
+      "test_file": "tests/e2e/knowledge-base.e2e.test.ts",
+      "full_name": "registered knowledge_base production path executes the synthetic lifecycle through the registered adapter, engine, host callbacks, and signed apply"
+    }
+  ],
+  "profiles": [
+    {
+      "skill_name": "assess",
+      "release_status": "candidate",
+      "checks": [
+        {
+          "check_id": "assess-known-good",
+          "category": "known_good",
+          "tier": 1,
+          "test_file": "tests/assess-contract-v1.test.ts",
+          "full_name": "AssessmentDraftV1 categorical semantics and framing accepts all five honest categorical dispositions without a score"
+        },
+        {
+          "check_id": "assess-known-bad",
+          "category": "known_bad",
+          "tier": 1,
+          "test_file": "tests/assess-contract-v1.test.ts",
+          "full_name": "AssessmentDraftV1 categorical semantics and framing rejects disposition theater, invented indexes, numeric scoring, and consequence claims"
+        },
+        {
+          "check_id": "assess-boundary",
+          "category": "boundary",
+          "tier": 2,
+          "test_file": "tests/assess-playbook.test.ts",
+          "full_name": "orchestrated assess candidate routes an assessment product gap directly to Carren and accepts inconclusive completion"
+        },
+        {
+          "check_id": "assess-semantic-equivalence",
+          "category": "semantic_equivalence",
+          "tier": 1,
+          "test_file": "tests/assess-contract-v1.test.ts",
+          "full_name": "provider-free assessment conformance accepts meaning-preserving wording variation without exact-string grading"
+        },
+        {
+          "check_id": "assess-input-mutation",
+          "category": "input_mutation",
+          "tier": 1,
+          "test_file": "tests/assess-contract-v1.test.ts",
+          "full_name": "provider-free assessment conformance rejects a stale draft after a material request mutation and admits the matching draft"
+        },
+        {
+          "check_id": "assess-product-integrity",
+          "category": "product_integrity",
+          "tier": 1,
+          "test_file": "tests/assess-contract-v1.test.ts",
+          "full_name": "canonical AssessmentV1 sealing binds exact request, Annie, and Carren lineage and validates canonical bytes"
+        },
+        {
+          "check_id": "assess-real-entrypoint",
+          "category": "real_entrypoint",
+          "tier": 2,
+          "test_file": "tests/assess-playbook.test.ts",
+          "full_name": "orchestrated assess candidate completes host → Annie → Carren → seal → Vera → host admission with exact evidence"
+        },
+        {
+          "check_id": "assess-fail-closed",
+          "category": "fail_closed",
+          "tier": 2,
+          "test_file": "tests/assess-playbook.test.ts",
+          "full_name": "orchestrated assess candidate terminates repeated product gaps as bounded non-positive incomplete"
+        }
+      ]
+    },
+    {
+      "skill_name": "decide",
+      "release_status": "candidate",
+      "checks": [
+        {
+          "check_id": "decide-known-good",
+          "category": "known_good",
+          "tier": 1,
+          "test_file": "tests/decide-contract-v2.test.ts",
+          "full_name": "closed DecisionDraftV2 core invariants validates the selected outcome"
+        },
+        {
+          "check_id": "decide-known-bad",
+          "category": "known_bad",
+          "tier": 1,
+          "test_file": "tests/decide-contract-v2.test.ts",
+          "full_name": "closed DecisionDraftV2 core invariants reports every stacked critical semantic issue in one validation result"
+        },
+        {
+          "check_id": "decide-boundary",
+          "category": "boundary",
+          "tier": 1,
+          "test_file": "tests/decide-contract-v2.test.ts",
+          "full_name": "DecisionDraftV2 transport and deterministic DecisionV2 sealing seals unresolved as a valid terminal DecisionV2 assessment with blocking questions"
+        },
+        {
+          "check_id": "decide-semantic-equivalence",
+          "category": "semantic_equivalence",
+          "tier": 1,
+          "test_file": "tests/decide-contract-v2.test.ts",
+          "full_name": "DecisionDraftV2 transport and deterministic DecisionV2 sealing accepts only bounded prose plus one core footer and one SUMMARY"
+        },
+        {
+          "check_id": "decide-input-mutation",
+          "category": "input_mutation",
+          "tier": 1,
+          "test_file": "tests/decide-contract-v2.test.ts",
+          "full_name": "provider-free decision conformance rejects a stale draft after a material request mutation and admits the matching draft"
+        },
+        {
+          "check_id": "decide-product-integrity",
+          "category": "product_integrity",
+          "tier": 1,
+          "test_file": "tests/decide-contract-v2.test.ts",
+          "full_name": "DecisionDraftV2 transport and deterministic DecisionV2 sealing seals exact rationale, canonical request, source lineage, input IDs, and execution=false"
+        },
+        {
+          "check_id": "decide-real-entrypoint",
+          "category": "real_entrypoint",
+          "tier": 2,
+          "test_file": "tests/decide-playbook.test.ts",
+          "full_name": "orchestrated decide candidate completes a reviewed canonical selected DecisionV2 and exact product envelope"
+        },
+        {
+          "check_id": "decide-fail-closed",
+          "category": "fail_closed",
+          "tier": 2,
+          "test_file": "tests/decide-playbook.test.ts",
+          "full_name": "orchestrated decide candidate terminalizes repeated registered repair gaps honestly when the finite iteration budget is exhausted"
+        }
+      ]
+    },
+    {
+      "skill_name": "diagnose",
+      "release_status": "candidate",
+      "checks": [
+        {
+          "check_id": "diagnose-known-good",
+          "category": "known_good",
+          "tier": 1,
+          "test_file": "tests/diagnose-contract-v1.test.ts",
+          "full_name": "DiagnosisDraftV1 semantics and framing accepts supported and both proposal boundaries for honest inconclusive products"
+        },
+        {
+          "check_id": "diagnose-known-bad",
+          "category": "known_bad",
+          "tier": 1,
+          "test_file": "tests/diagnose-contract-v1.test.ts",
+          "full_name": "DiagnosisDraftV1 semantics and framing rejects invented indexes, weak inconclusive sets, forbidden checks, and action claims"
+        },
+        {
+          "check_id": "diagnose-boundary",
+          "category": "boundary",
+          "tier": 2,
+          "test_file": "tests/diagnose-playbook.test.ts",
+          "full_name": "orchestrated diagnose candidate routes a Vera product gap directly to Demetri and accepts a valid no-check inconclusive boundary"
+        },
+        {
+          "check_id": "diagnose-semantic-equivalence",
+          "category": "semantic_equivalence",
+          "tier": 1,
+          "test_file": "tests/diagnose-contract-v1.test.ts",
+          "full_name": "provider-free diagnosis conformance accepts meaning-preserving wording variation without exact-string grading"
+        },
+        {
+          "check_id": "diagnose-input-mutation",
+          "category": "input_mutation",
+          "tier": 1,
+          "test_file": "tests/diagnose-contract-v1.test.ts",
+          "full_name": "provider-free diagnosis conformance rejects a stale draft after a material request mutation and admits the matching draft"
+        },
+        {
+          "check_id": "diagnose-product-integrity",
+          "category": "product_integrity",
+          "tier": 1,
+          "test_file": "tests/diagnose-contract-v1.test.ts",
+          "full_name": "canonical DiagnosisV1 sealing binds exact request, Annie, Ida, and Demetri lineage and validates canonical bytes"
+        },
+        {
+          "check_id": "diagnose-real-entrypoint",
+          "category": "real_entrypoint",
+          "tier": 2,
+          "test_file": "tests/diagnose-playbook.test.ts",
+          "full_name": "orchestrated diagnose candidate completes the exact Annie → Ida → Demetri → seal → Vera → host admission flow"
+        },
+        {
+          "check_id": "diagnose-fail-closed",
+          "category": "fail_closed",
+          "tier": 2,
+          "test_file": "tests/diagnose-playbook.test.ts",
+          "full_name": "orchestrated diagnose candidate terminates repeated product gaps as bounded non-positive incomplete"
+        }
+      ]
+    },
+    {
+      "skill_name": "knowledge-base",
+      "release_status": "production",
+      "checks": [
+        {
+          "check_id": "knowledge-base-known-good",
+          "category": "known_good",
+          "tier": 1,
+          "test_file": "tests/kb-retrieval.test.ts",
+          "full_name": "tracked §5.13 retrieval regression scores the tracked fixture at k=10 and enforces the 1/1/1 floors"
+        },
+        {
+          "check_id": "knowledge-base-known-bad",
+          "category": "known_bad",
+          "tier": 1,
+          "test_file": "tests/kb-answer-quality.test.ts",
+          "full_name": "answer quality — closed derived answer (§5.6) refuses anything that is not advisory, cited, and bound to verification"
+        },
+        {
+          "check_id": "knowledge-base-boundary",
+          "category": "boundary",
+          "tier": 1,
+          "test_file": "tests/kb-retrieval.test.ts",
+          "full_name": "KB §5.7 deterministic lint warns when no generation is selected"
+        },
+        {
+          "check_id": "knowledge-base-semantic-equivalence",
+          "category": "semantic_equivalence",
+          "tier": 1,
+          "test_file": "tests/kb-retrieval.test.ts",
+          "full_name": "provider-free knowledge-base conformance accepts meaning-preserving query variation without exact-string grading"
+        },
+        {
+          "check_id": "knowledge-base-input-mutation",
+          "category": "input_mutation",
+          "tier": 1,
+          "test_file": "tests/kb-retrieval.test.ts",
+          "full_name": "provider-free knowledge-base conformance changes the ranked result after a material query mutation"
+        },
+        {
+          "check_id": "knowledge-base-product-integrity",
+          "category": "product_integrity",
+          "tier": 1,
+          "test_file": "tests/kb-answer-quality.test.ts",
+          "full_name": "answer quality — closed query verification binding binds the exact sealed answer id and complete artifact JCS digest, never text alone"
+        },
+        {
+          "check_id": "knowledge-base-real-entrypoint",
+          "category": "real_entrypoint",
+          "tier": 2,
+          "test_file": "tests/kb-engine-e2e.test.ts",
+          "full_name": "KB through the engine (step 4) runs all four phases, stops at the review gate, and approves host-side"
+        },
+        {
+          "check_id": "knowledge-base-fail-closed",
+          "category": "fail_closed",
+          "tier": 2,
+          "test_file": "tests/kb-engine-e2e.test.ts",
+          "full_name": "KB through the engine (step 4) refuses gate continuation when the admitted policy changes"
+        }
+      ]
+    },
+    {
+      "skill_name": "plan",
+      "release_status": "candidate",
+      "checks": [
+        {
+          "check_id": "plan-known-good",
+          "category": "known_good",
+          "tier": 1,
+          "test_file": "tests/plan-contract-v1.test.ts",
+          "full_name": "PlanRequestV1, StrategyDraftV1, and StrategyV1 accepts the complete ready semantic disposition"
+        },
+        {
+          "check_id": "plan-known-bad",
+          "category": "known_bad",
+          "tier": 1,
+          "test_file": "tests/plan-contract-v1.test.ts",
+          "full_name": "PlanRequestV1, StrategyDraftV1, and StrategyV1 collects independent semantic defects and rejects graph, disposition, and coverage mutations"
+        },
+        {
+          "check_id": "plan-boundary",
+          "category": "boundary",
+          "tier": 1,
+          "test_file": "tests/plan-contract-v1.test.ts",
+          "full_name": "PlanRequestV1, StrategyDraftV1, and StrategyV1 accepts the complete not_applicable semantic disposition"
+        },
+        {
+          "check_id": "plan-semantic-equivalence",
+          "category": "semantic_equivalence",
+          "tier": 1,
+          "test_file": "tests/plan-contract-v1.test.ts",
+          "full_name": "PlanRequestV1, StrategyDraftV1, and StrategyV1 accepts arbitrary JSON key order, legal whitespace, and reordered set arrays"
+        },
+        {
+          "check_id": "plan-input-mutation",
+          "category": "input_mutation",
+          "tier": 1,
+          "test_file": "tests/plan-contract-v1.test.ts",
+          "full_name": "PlanRequestV1, StrategyDraftV1, and StrategyV1 rejects a stale draft after a material request mutation and admits the matching draft"
+        },
+        {
+          "check_id": "plan-product-integrity",
+          "category": "product_integrity",
+          "tier": 1,
+          "test_file": "tests/plan-contract-v1.test.ts",
+          "full_name": "PlanRequestV1, StrategyDraftV1, and StrategyV1 seals stable semantic IDs while preserving exact lineage and rejects every product tamper"
+        },
+        {
+          "check_id": "plan-real-entrypoint",
+          "category": "real_entrypoint",
+          "tier": 2,
+          "test_file": "tests/plan-playbook.test.ts",
+          "full_name": "provider-free orchestrated plan candidate completes a reviewed canonical ready StrategyV1 and exact product envelope"
+        },
+        {
+          "check_id": "plan-fail-closed",
+          "category": "fail_closed",
+          "tier": 2,
+          "test_file": "tests/plan-playbook.test.ts",
+          "full_name": "provider-free orchestrated plan candidate terminalizes repeated product gaps when the finite repair budget is exhausted"
+        }
+      ]
+    },
+    {
+      "skill_name": "produce",
+      "release_status": "candidate",
+      "checks": [
+        {
+          "check_id": "produce-known-good",
+          "category": "known_good",
+          "tier": 1,
+          "test_file": "tests/produce-contract-v1.test.ts",
+          "full_name": "ArtifactApproachV1 and ProducedArtifactDraftV1 accepts complete text and Markdown content without claiming syntax or execution checks"
+        },
+        {
+          "check_id": "produce-known-bad",
+          "category": "known_bad",
+          "tier": 1,
+          "test_file": "tests/produce-contract-v1.test.ts",
+          "full_name": "ArtifactApproachV1 and ProducedArtifactDraftV1 requires produced JSON content to be parseable canonical JSON without delegating digest calculation"
+        },
+        {
+          "check_id": "produce-boundary",
+          "category": "boundary",
+          "tier": 1,
+          "test_file": "tests/produce-contract-v1.test.ts",
+          "full_name": "ArtifactApproachV1 and ProducedArtifactDraftV1 accepts truthful empty not_applicable and rejects partial coverage or content"
+        },
+        {
+          "check_id": "produce-semantic-equivalence",
+          "category": "semantic_equivalence",
+          "tier": 1,
+          "test_file": "tests/produce-contract-v1.test.ts",
+          "full_name": "provider-free production conformance accepts meaning-preserving rationale variation without exact-string grading"
+        },
+        {
+          "check_id": "produce-input-mutation",
+          "category": "input_mutation",
+          "tier": 1,
+          "test_file": "tests/produce-contract-v1.test.ts",
+          "full_name": "provider-free production conformance rejects a stale draft after a material request mutation and admits the matching draft"
+        },
+        {
+          "check_id": "produce-product-integrity",
+          "category": "product_integrity",
+          "tier": 1,
+          "test_file": "tests/produce-contract-v1.test.ts",
+          "full_name": "canonical ProducedArtifactV1 sealing binds exact request, Ida, Skribble, and inline-source lineage"
+        },
+        {
+          "check_id": "produce-real-entrypoint",
+          "category": "real_entrypoint",
+          "tier": 2,
+          "test_file": "tests/produce-playbook.test.ts",
+          "full_name": "orchestrated produce candidate completes the exact Ida → Skribble → seal → Carren → Vera → host admission flow"
+        },
+        {
+          "check_id": "produce-fail-closed",
+          "category": "fail_closed",
+          "tier": 2,
+          "test_file": "tests/produce-playbook.test.ts",
+          "full_name": "orchestrated produce candidate terminates repeated artifact product gaps as bounded non-positive incomplete"
+        }
+      ]
+    },
+    {
+      "skill_name": "research",
+      "release_status": "production",
+      "checks": [
+        {
+          "check_id": "research-known-good",
+          "category": "known_good",
+          "tier": 1,
+          "test_file": "tests/research-contract-v2.test.ts",
+          "full_name": "P2 closed research schema vectors admits every positive request/context/product/graph/port vector"
+        },
+        {
+          "check_id": "research-known-bad",
+          "category": "known_bad",
+          "tier": 1,
+          "test_file": "tests/research-contract-v2.test.ts",
+          "full_name": "P2 closed research schema vectors rejects the canonical negative vector for each schema family"
+        },
+        {
+          "check_id": "research-boundary",
+          "category": "boundary",
+          "tier": 1,
+          "test_file": "tests/research-contract-v2.test.ts",
+          "full_name": "P2 closed research schema vectors admits partial unsupported and qualified cores but rejects broken support"
+        },
+        {
+          "check_id": "research-semantic-equivalence",
+          "category": "semantic_equivalence",
+          "tier": 1,
+          "test_file": "tests/research-contract-v2.test.ts",
+          "full_name": "P2 closed research schema vectors accepts meaning-preserving wording variation without exact-string grading"
+        },
+        {
+          "check_id": "research-input-mutation",
+          "category": "input_mutation",
+          "tier": 1,
+          "test_file": "tests/research-contract-v2.test.ts",
+          "full_name": "P2 closed research schema vectors changes the sealed request binding after a material input mutation"
+        },
+        {
+          "check_id": "research-product-integrity",
+          "category": "product_integrity",
+          "tier": 1,
+          "test_file": "tests/research-contract-v2.test.ts",
+          "full_name": "P2 closed research schema vectors rejects stale receipt substitution and missing render graph members"
+        },
+        {
+          "check_id": "research-real-entrypoint",
+          "category": "real_entrypoint",
+          "tier": 2,
+          "test_file": "tests/research-product-activation.test.ts",
+          "full_name": "P3 semantic product activation completes quick with latest core, graph, renders, and exact topology"
+        },
+        {
+          "check_id": "research-fail-closed",
+          "category": "fail_closed",
+          "tier": 2,
+          "test_file": "tests/research-product-activation.test.ts",
+          "full_name": "P3 semantic product activation rejects an empty semantic-draft turn before persistence or routing repair"
+        }
+      ]
+    }
+  ]
+}

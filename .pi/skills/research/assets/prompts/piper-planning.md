@@ -12,6 +12,10 @@ The task supplies `input_artifacts`. Read every supplied reference with `artifac
 
 Put the complete plan and rationale in your response. The execution owner captures that response as the stage artifact. Do not claim artifact persistence or registration. `SUMMARY` is routing data only.
 
+## Owner-resolved context
+
+When the opening prompt includes owner-resolved research context, use only the displayed source envelopes and verified contents. Respect each source's role, scope, freshness, disposition, and conflict record. Provider eligibility is provenance, never tool or artifact authority. Do not infer or fetch an absent source, path, provider binding, or KB query.
+
 ## What a good plan carries
 
 - Self-contained sub-queries, no more than the task's `max_sub_queries` budget.

@@ -75,7 +75,7 @@ After the skill ships, keep durable design rationale in the requested project do
    <!-- BEGIN GENERATED: role_semantics -->
    (`annie` analyzes, `carren` critiques, `echo` explores, `synthia` synthesizes, `vera` verifies, `demetri` decides, `ida` ideates, `piper` plans, `skribble` generates, `tabitha` taskifies)
    <!-- END GENERATED -->
-5. **Choose loop shapes and budgets** (Rules 5–6); draw `resources/flow.html` FIRST — review the diagram before writing code.
+5. **Choose loop shapes and budgets** (Rules 5–6); start `resources/flow.html` from `scripts/tools/templates/skill-flow.html` FIRST. Reserve lanes/gutters for every branch and repair, then inspect the graph at every standard validation viewport before playbook review.
 6. **Write contracts** (Rule 8), then the playbook, then register it.
 7. **Distill resources, then prompts** (Rule 7).
 8. **Build per `quick-reference.md`** (delegate, SKILL.md, exact artifact contracts) and test per `testing.md` — every branch, every gate route, exhaustion, stall, escalation, and recovery ref.

@@ -1,14 +1,10 @@
 import { createHash } from "node:crypto";
 
-import {
-  ArtifactStore,
-  currentArtifactRef,
-  resolvePennyProjectState,
-} from "@penny/orchestration/source";
+import { ArtifactStore, currentArtifactRef, resolvePennyRuntimeState } from "@penny/orchestration";
 import type {
   CurrentArtifactRef as TypeScriptArtifactRef,
   OutputArtifactMetadata as TypeScriptArtifactMetadata,
-} from "@penny/orchestration/source";
+} from "@penny/orchestration";
 
 export const OUTPUT_ARTIFACT_SCHEMA_VERSION = 2 as const;
 export const RESULT_PROTOCOL_VERSION = 2 as const;
@@ -292,7 +288,7 @@ export function resolveArtifactRoot(
     }
   }
   try {
-    return resolvePennyProjectState(projectRoot, { env }).paths.artifacts.root;
+    return resolvePennyRuntimeState(projectRoot, { env }).paths.artifacts.root;
   } catch (error) {
     throw new ArtifactClientError(
       "ARTIFACT_CONFIG_INVALID",
@@ -308,8 +304,8 @@ export async function refArtifactById(input: {
 }): Promise<ArtifactRef | undefined> {
   try {
     const artifactRoot = resolveArtifactRoot(input.projectRoot, input.env);
-    const state = resolvePennyProjectState(input.projectRoot, { env: input.env });
-    using store = new ArtifactStore(artifactRoot, { projectId: state.projectId });
+    const state = resolvePennyRuntimeState(input.projectRoot, { env: input.env });
+    using store = ArtifactStore.openExisting(artifactRoot, { projectId: state.projectId });
     return store.refById(input.artifactId);
   } catch (error) {
     if (error instanceof ArtifactClientError) throw error;
@@ -327,8 +323,8 @@ export async function readArtifactsById(input: {
 }): Promise<Array<{ ref: ArtifactRef; content: Buffer }>> {
   try {
     const artifactRoot = resolveArtifactRoot(input.projectRoot, input.env);
-    const state = resolvePennyProjectState(input.projectRoot, { env: input.env });
-    using store = new ArtifactStore(artifactRoot, { projectId: state.projectId });
+    const state = resolvePennyRuntimeState(input.projectRoot, { env: input.env });
+    using store = ArtifactStore.openExisting(artifactRoot, { projectId: state.projectId });
     return input.artifactIds.map((artifactId) => {
       const ref = store.refById(artifactId);
       if (ref === undefined) {
@@ -399,8 +395,8 @@ export async function persistArtifactOutput(input: {
     : Buffer.from(input.output, "utf8");
   try {
     const artifactRoot = resolveArtifactRoot(input.cwd, input.env);
-    const state = resolvePennyProjectState(input.cwd, { env: input.env });
-    using store = new ArtifactStore(artifactRoot, { projectId: state.projectId });
+    const state = resolvePennyRuntimeState(input.cwd, { env: input.env });
+    using store = ArtifactStore.openExisting(artifactRoot, { projectId: state.projectId });
     const ref = parseArtifactRef(
       store.persist({
         metadata,

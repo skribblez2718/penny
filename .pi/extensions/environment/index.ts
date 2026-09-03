@@ -16,15 +16,18 @@
  * 3. Empty string (if not found)
  */
 
-import type {
-  BeforeAgentStartEvent,
-  ExtensionAPI,
-  ExtensionContext,
-  SessionStartEvent,
+import {
+  VERSION,
+  type BeforeAgentStartEvent,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import { readFile, access } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
+
+import { inspectPiVersionAlignment, piVersionAlignmentWarning } from "./pi-version-alignment.js";
 
 // Paths (relative to project root)
 const ENV_PATH = ".env";
@@ -186,6 +189,7 @@ export default async function (pi: ExtensionAPI) {
   let agentsContent: string | null = null;
   let systemContent: string | null = null;
   let initialized = false;
+  let lastPiVersionNotice: string | undefined;
 
   // Eagerly load .env during extension startup so other extensions
   // that read process.env at module load time can see the values.
@@ -211,6 +215,12 @@ export default async function (pi: ExtensionAPI) {
         `${envConfig.DA_NAME || "Penny"} environment loaded (date: ${envConfig.CURRENT_DATE})`,
         "info"
       );
+      const alignment = await inspectPiVersionAlignment(sessionCwd, VERSION);
+      const notice = piVersionAlignmentWarning(alignment);
+      if (notice && notice !== lastPiVersionNotice) {
+        ctx.ui.notify(notice, "warning");
+      }
+      lastPiVersionNotice = notice;
     }
   });
 

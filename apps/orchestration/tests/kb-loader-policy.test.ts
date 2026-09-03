@@ -347,37 +347,67 @@ describe("KB §5.8 purpose-built session", () => {
     expect(isolated.resourceLoader.getSystemPrompt()).not.toContain(sentinel);
   });
 
-  it("activates only the explicit custom tools under the real SDK filter", async () => {
+  it("activates every anonymous KB phase's exact custom tools under the real SDK filter", async () => {
     const projectRoot = temporary("penny-kb-sdk-tools");
-    const posture = spec("query");
-    const isolated = await createPrivateSessionResourceLoader({
-      projectRoot,
-      agentDir: temporary("penny-kb-sdk-global"),
-      systemPrompt: requireValue(
-        posture.isolatedSystemPrompt,
-        "apps/orchestration/tests/kb-loader-policy.test.ts:321"
-      ),
-    });
-    const { session } = await createAgentSession({
-      cwd: projectRoot,
-      sessionManager: SessionManager.inMemory(projectRoot),
-      settingsManager: isolated.settingsManager,
-      resourceLoader: isolated.resourceLoader,
-      noTools: "all",
-      tools: [
-        ...requireValue(posture.tools, "apps/orchestration/tests/kb-loader-policy.test.ts:329"),
-      ],
-      customTools: [...requireValue(posture.customTools, "query custom tools")],
-    });
-    try {
-      expect(session.getActiveToolNames()).toEqual([...KB_PHASE_TOOL_MATRIX.query]);
-      expect(session.getActiveToolNames()).not.toContain("read");
-      expect(session.getActiveToolNames()).not.toContain("bash");
-      expect(session.getActiveToolNames()).not.toContain("web_search");
-      expect(session.getActiveToolNames()).not.toContain("memory_smart_search");
-    } finally {
-      session.dispose();
+    const agentDir = temporary("penny-kb-sdk-global");
+
+    for (const state of PHASE_STATES) {
+      const posture = spec(state);
+      const isolated = await createPrivateSessionResourceLoader({
+        projectRoot,
+        agentDir,
+        systemPrompt: requireValue(
+          posture.isolatedSystemPrompt,
+          `isolated system prompt for ${state}`
+        ),
+      });
+      const { session } = await createAgentSession({
+        cwd: projectRoot,
+        sessionManager: SessionManager.inMemory(projectRoot),
+        settingsManager: isolated.settingsManager,
+        resourceLoader: isolated.resourceLoader,
+        noTools: "all",
+        tools: [...requireValue(posture.tools, `KB ${state} tools`)],
+        customTools: [...requireValue(posture.customTools, `KB ${state} custom tools`)],
+      });
+      try {
+        expect(session.getActiveToolNames(), state).toEqual([...KB_PHASE_TOOL_MATRIX[state]]);
+        expect(session.getActiveToolNames(), state).not.toContain("read");
+        expect(session.getActiveToolNames(), state).not.toContain("bash");
+        expect(session.getActiveToolNames(), state).not.toContain("web_search");
+        expect(session.getActiveToolNames(), state).not.toContain("memory_smart_search");
+      } finally {
+        session.dispose();
+      }
     }
+  }, 60_000);
+
+  it("refuses to replace a real catalog agent's YAML surface with a KB private matrix", async () => {
+    const posture = spec("query");
+    const { PiAgentClient } = await import("../src/model-client.js");
+    const client = new PiAgentClient();
+    await expect(
+      client.runAgent({
+        agent: "synthia",
+        stateId: "query",
+        task: "must fail before session creation",
+        projectRoot: path.resolve(new URL("../../..", import.meta.url).pathname),
+        trustProfile: "hardened-untrusted",
+        inputArtifacts: [],
+        registration: {
+          playbook_name: "knowledge-base",
+          workflow_name: "knowledge-base",
+          guidance: {
+            skill_root: ".pi/skills/knowledge-base/assets/prompts",
+            resolution: "per_agent_phase",
+          },
+          result_transport: "host_typed",
+          opening_policy: "host_private_opening",
+          model_policy: "host_private_ssot_model",
+        },
+        session: posture,
+      })
+    ).rejects.toThrow(/cannot run with an isolated replacement tool matrix/);
   });
 
   it("terminates on typed submit without host-context reads and rejects duplicate/body metadata", async () => {

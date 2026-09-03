@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { provisionObservabilityDatabase } from "@penny/orchestration";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createObservabilityServer } from "../src/server.js";
@@ -12,8 +13,10 @@ function fixture(apiKey = "") {
   roots.push(root);
   const directory = path.join(root, "observability");
   mkdirSync(directory, { mode: 0o700 });
+  const databasePath = path.join(directory, "observability.db");
+  provisionObservabilityDatabase(databasePath);
   const created = createObservabilityServer({
-    databasePath: path.join(directory, "observability.db"),
+    databasePath,
     apiKey,
     maxRows: 100,
   });

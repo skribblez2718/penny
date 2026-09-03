@@ -1,15 +1,14 @@
 {
   "schema_version": 1,
-  "fixture_id": "research-parity-pin-v1",
-  "purpose": "Foundation stage W12. Pins research's observable topology before any universal-skills refactor. When this fixture and the implementation disagree, THIS FIXTURE WINS: revert the refactor step rather than amend the pin. Amending it requires an explicit prior decision and a plan revision.",
+  "fixture_id": "research-parity-pin-v2",
+  "purpose": "Pins Research's approved typed-semantic-draft topology and observable product behavior. The caller's explicit 2026-08-28 implementation-first directive approved revising the prior plan/pin from Research-specific Skribble report_writing to Synthia ResearchSemanticDraftV1 plus deterministic host projection/sealing; all unrelated parity remains protected.",
   "states": [
     "planning",
     "critiquing_plan",
     "researching",
     "synthesizing",
     "critiquing_report",
-    "validating",
-    "report_writing"
+    "validating"
   ],
   "agent_by_state": {
     "planning": "piper",
@@ -17,11 +16,14 @@
     "researching": "echo",
     "synthesizing": "synthia",
     "critiquing_report": "carren",
-    "validating": "vera",
-    "report_writing": "skribble"
+    "validating": "vera"
   },
   "modes": {
-    "allowed": ["quick", "standard", "deep"],
+    "allowed": [
+      "quick",
+      "standard",
+      "deep"
+    ],
     "default": "standard"
   },
   "budget_constraints": [
@@ -30,11 +32,30 @@
     "max_research_rounds",
     "max_sub_queries"
   ],
-  "output_files": ["report.md", "sources.md", "README.md"],
+  "output_files": [
+    "report.md",
+    "sources.md",
+    "README.md"
+  ],
   "terminal": {
-    "completion_state": "report_writing",
-    "completion_field": "write_complete",
+    "completion_state": "rendering",
+    "completion_field": "report_written",
     "met_field": "met"
   },
-  "non_states": ["ingesting", "composing", "linting", "promoting", "planning_v2", ""]
+  "non_states": [
+    "ingesting",
+    "composing",
+    "linting",
+    "promoting",
+    "planning_v2",
+    "",
+    "report_writing"
+  ],
+  "approved_revision": {
+    "approved_by": "caller",
+    "approved_on": "2026-08-28",
+    "decision": "Replace Research-specific Synthia-to-Skribble shaping with Synthia ResearchSemanticDraftV1 and deterministic host projection/sealing.",
+    "input_artifact_id": "art_b50e278faaefa7287659940818aa618de57300234664017555c9fdaef53d0c5f",
+    "input_artifact_sha256": "609e9e2a0cde18fb7379679eaaae5ccc2c9bb80f4a61481729aef62ce5f23b16"
+  }
 }

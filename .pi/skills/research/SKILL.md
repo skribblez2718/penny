@@ -1,11 +1,11 @@
 ---
 name: research
 description: Structured research workflow with Quick, Standard, and Deep modes. Use when a task requires investigating an unfamiliar topic or gathering authoritative external evidence. Do not use for simple lookups, analysis of already-supplied material, or implementation when sufficient evidence exists.
-license: MIT
 metadata:
-  version: "2.2.0"
+  version: "3.0.0"
   penny:
     engine: orchestration
+    release_status: production
     mempalace: false
     subagents:
       - piper
@@ -13,13 +13,12 @@ metadata:
       - carren
       - synthia
       - vera
-      - skribble
 ---
 
 ## When to Use
 
 - Investigate an unfamiliar technical topic or concept.
-- Research best practices, design patterns, or architectural tradeoffs.
+- Research practices, design patterns, or architectural tradeoffs.
 - Compare options using authoritative external evidence.
 - Review literature or gather evidence before a decision.
 - Answer a complex question requiring multiple independent research angles.
@@ -27,15 +26,15 @@ metadata:
 ## When Not to Use
 
 - Simple lookup: use `web_search` directly.
-- Analysis of material already provided: delegate to the relevant analysis agent.
-- Implementation when sufficient evidence exists: proceed directly or delegate appropriately.
-- The user explicitly requests immediate execution and research would not change the result.
+- Analysis of material already provided: use the relevant analysis role.
+- Implementation when sufficient evidence exists: proceed directly.
+- The user requests immediate execution and research would not change the result.
 
 ## Invocation
 
 Invoke through the `skill` tool:
 
-```
+```text
 skill({
   skill_name: "research",
   goal: "Your research query here"
@@ -45,76 +44,83 @@ skill({
 | Parameter | Required | Description |
 |---|---:|---|
 | `skill_name` | yes | Must be `research`. |
-| `goal` | yes | Research query. |
+| `goal` | yes | Research question; normalized into `ResearchRequestV1`. |
 | `session_id` | no | Generated when omitted. |
-| `project_root` | no | Target root; defaults to cwd. |
-| `constraints` | no | Run budgets and shaping instructions below. |
-| `model` | no | Optional per-invocation test/caller override for every worker; production defaults remain in agent SSOT frontmatter. |
+| `constraints` | no | Closed research mode, scope, budget, context, and output-shape fields below. |
+| `model` | no | Optional test/caller override; production defaults remain in agent SSOT. |
 
-### Constraints
+### Current constraints
 
 | Constraint | Default | Meaning |
-|---|---|---|
+|---|---:|---|
 | `mode` | unset | `quick`, `standard`, or `deep`; omit to let Piper declare it. Only explicit caller `quick` skips planning. |
-| `report_format` | `default` | Free-form report-shaping instruction sent to Synthia. |
-| `max_sub_queries` | 4 | One decomposition budget, clamped to `max_fan_width`. |
-| `max_fan_width` | 8 | Maximum parallel research branches. |
-| `validate_model` | unset | Optional different model for Vera only. |
-| `critique_passes` | by mode | `>=1` report critique; `>=2` plan critique. |
-| `max_research_rounds` | by mode | Initial plus evidence-seeking rounds; `1` disables re-research. |
-| `rigor_escalation` | false | Permit one report-critique pass after repeated validation difficulty without a researchable gap. |
+| `scope.include` / `scope.exclude` | empty | Distinct bounded scope lists. |
+| `report_format` | unset | **Deprecated compatibility field.** Becomes caller-owned `output_shape_guidance` for Synthia, report Carren, and Vera. |
+| `max_sub_queries` | 4 | Decomposition width, effectively `min(max_sub_queries, max_fan_width)`. |
+| `max_fan_width` | 8 | Maximum parallel Echo branches. |
+| `verification_model_override` | unset | Canonical Vera-only model policy; legacy alias: `validate_model`. |
+| `critique_passes` | by mode | `0` none, `1` report critique, `2` plan plus report critique. |
+| `total_research_rounds` | by mode | Initial plus evidence-seeking rounds; legacy alias: `max_research_rounds`. |
+| `max_evaluator_attempts_per_loop` | 3 | Evaluator attempts; legacy alias: `max_iterations`. Repairs are attempts minus one. |
+| `context_bindings` | empty | Identifier-only versioned-document, pre-resolved approved-KB, or caller output-shape bindings. |
 
-### Modes are budget presets
+`rigor_escalation` is rejected. Caller input cannot set host liveness ceilings or counters.
 
-| Mode | `critique_passes` | `max_research_rounds` |
-|---|---:|---:|
-| quick | 0 | 2 |
-| standard | 0 | 2 |
-| deep | 2 | 3 |
+### Presets
 
-There is no per-mode sub-query table. Code caps budgets; the model chooses how much to spend within them.
+| Mode | Plan critique | Report critique | Total research rounds | Evaluator attempts |
+|---|---:|---:|---:|---:|
+| quick | no | no | 2 | 3 |
+| standard | no | no | 2 | 3 |
+| deep | yes | yes | 3 | 3 |
+
+P1 liveness values remain unchanged. Deterministic liveness, cancellation, and best-partial behavior are locally certified. The live-model PG4 Quick gate passed in verified run `p4-qr-live-20260827-009`; no provider rerun is required.
 
 ## Exact Artifact Handoff
 
-The engine supplies versioned `input_artifacts` and an `output_artifact` contract for every cognitive stage. Each agent reads every task-provided predecessor with `artifact_read`, returns complete stage content, and emits a small routing-only `SUMMARY`. The execution owner captures exact response bytes before SUMMARY routing; agents never assert artifact persistence or registration.
+Every cognitive directive carries exact `input_artifacts` plus an owner output contract. Agents read every needed predecessor with `artifact_read` and `next_range`, return complete stage content, and emit routing-only `SUMMARY` data. Owner persistence and exact-byte re-read precede routing. Research remains correct without memory.
 
-Research does not require a memory endpoint or memory extension. Checkpoint state contains exact selected references for retries, clarification, and restart. Parallel fan-in maps branch artifacts by `branch_id`, never result order.
+Typed `prior_grounded_synthesis` imports require canonical `penny.grounded-synthesis.v1` bytes in a matching `semantic-core` artifact. Untyped historical `agent-output` inputs remain accepted through `legacy_context`. Envelope, render, or receipt substitution fails before model work.
 
-The final Skribble response contains the complete `report.md`, `sources.md`, and `README.md` content. Its owner-captured `agent-output` reference is returned as `result.output_artifact_ref` and is the registered product artifact. The same contents are still written to the three user-facing files under the report directory.
+Owner-resolved context persists only `ContextSourceRefV1` metadata envelopes. Approved-KB content must already be approved and pre-resolved; research performs no KB query, ingestion, promotion, approval, or write. Private KB bodies never enter checkpoints, generic artifacts, receipts, renders, envelopes, or telemetry. Context never changes YAML tools.
 
-## Agent Flow
+## Agent and Host Flow
 
-`researching` is a dynamic fan: one read-only Echo branch per sub-query, bounded by `max_fan_width`. Explicit caller-quick uses one Echo agent. Carren critique and Vera validation require non-empty captured evidence.
+One approved P3 graph serves every mode:
 
-- **Quick:** intake → researching → synthesizing → validating → report_writing → complete
-- **Standard:** intake → planning → researching → synthesizing → validating → report_writing → complete
-- **Deep:** intake → planning → critiquing_plan → researching → synthesizing → critiquing_report → validating → report_writing → complete
+```text
+intake → optional planning → optional plan critique → Echo evidence fan
+→ Synthia typed `ResearchSemanticDraftV1`
+→ deterministic host projection/core sealing → Vera grounding
+→ optional report Carren → host rendering/product checks → completion admission
+```
 
-All critique and validation loops are bounded. Exhaustion proceeds honestly with warnings and unresolved issues; it never creates a fake approval. Vera may name `evidence_needed`, which drives a bounded evidence-seeking loop through Echo and Synthia before re-validation.
+- Every Synthia revision passes through deterministic host projection/core sealing and Vera.
+- Vera evidence gaps route to Echo; synthesis defects route to Synthia.
+- Carren quality defects route to Synthia, then a new core, Vera, and Carren again.
+- No changed core can proceed directly to Carren, rendering, or completion.
+- `sealing_core` and `rendering` are host-only states and consume no model turns or tools.
 
-## Verification Independence
+## Product and Terminal Truth
 
-Synthia and Vera may resolve to the same model by default. Pass `constraints.validate_model` or configure `RESEARCH_VERA` / `RESEARCH_DEFAULT` to select a different Vera model. Precedence is constraint → Vera environment override → default environment override → Vera's configured model. The override never changes Synthia.
+The sole active output port is `grounded_synthesis`. Positive terminal `output_artifact_ref` and chain handoff are the latest exact canonical `GroundedSynthesisV1` `semantic-core` ref—not the envelope, render, receipt, or Synthia draft artifact.
 
-## Clarification and Recovery
+The acyclic graph is:
 
-The run pauses when a stage requests clarification, reports incomplete work, uses `UNCERTAIN`, or repeats the same unresolved issue. Present the engine's questions, then resume the same `session_id` and `run_id` with the user's answer.
+```text
+semantic core
+  ├─ Vera grounding receipt
+  ├─ optional Carren quality receipt
+  ├─ host deterministic-validation receipt
+  ├─ report.md render
+  ├─ sources.md render
+  └─ README.md render
+        ↓
+research product envelope
+```
 
-Resume is producer-oriented:
+Host renderer `penny.research.compat-markdown.v1` consumes only the immutable core. It persists a stable render intent, immutable render artifacts, then uses no-follow checks, indexed temporary files, file/directory fsync, and atomic rename. Recovery adopts matching files and converges to identical refs, receipts, envelope ID, and bytes. The three compatibility filenames remain an open loan.
 
-- planning or plan critique → planning;
-- researching → researching;
-- synthesis, report critique, or validation → synthesizing.
+A positive result requires the latest canonical core, no unsupported claim or blocking issue, same-core Vera PASS, same-core Carren PASS when enabled, exactly three verified renders/files, host deterministic-validation PASS, an exact product graph, no exhausted required budget, and the existing engine completion gate from `rendering`. Fully disclosed non-blocking uncertainty may produce `complete/met:true/qualified:true`; it never waives a receipt or budget.
 
-The resumed directive retains exact checkpointed artifact references and includes the user's clarification. No orchestration-state blob must be threaded by the caller.
-
-## Terminal Result
-
-The skill result text prints the terminal artifact as `Exact output artifact: art_…`. Read those exact bytes with `artifact_read` when the full report matters; the inline preview is bounded and is not the product. Present that artifact, plus:
-
-- `met`: final report production completed;
-- `grounded`: Vera's final citation gate passed;
-- `report_dir` and `report_files`: user-facing file products;
-- warnings, exhausted flags, and `unresolved_issues`.
-
-After honest validation exhaustion, a useful report may still be delivered with `met: false` and `grounded: false`. Surface those unresolved claims and do not present the report as fully verified. Do not execute recommendations; the skill ends at research delivery.
+Non-positive runs return the best exact core/artifacts and blockers. They do not receive a complete product envelope. The recognized `legacy_report_artifact` schema remains compatibility-only and is neither authoritative nor chain-forwarded. Decoder-only historical `rigor_escalated:false` remains absent from new terminal projections.

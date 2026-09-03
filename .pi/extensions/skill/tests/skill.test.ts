@@ -27,11 +27,6 @@ function fakeDirent(name: string, kind: "directory" | "file"): fs.Dirent {
   };
 }
 
-interface ProgressUpdate {
-  content: Array<{ type: string; text: string }>;
-  details: unknown;
-}
-
 // Mock fs module
 vi.mock("fs", () => ({
   existsSync: vi.fn(),
@@ -336,111 +331,5 @@ describe("Skill Extension Integration", () => {
   it("should register skills command", () => {
     const commandName = "skills";
     expect(commandName).toBe("skills");
-  });
-});
-
-describe("onUpdate Progress Callbacks", () => {
-  it("should emit progress messages via onUpdate during skill execution", () => {
-    // The executeSkill function receives an onUpdate callback.
-    // When provided, it should emit progress messages at key orchestration points:
-    // - Starting the skill
-    // - Each iteration of the action loop
-    // - Before/after agent invocation
-    // - Before engine step calls
-    // - On completion or timeout
-    const progressMessages: string[] = [];
-    const mockOnUpdate = (partial: {
-      content: Array<{ type: string; text: string }>;
-      details: unknown;
-    }) => {
-      const text = partial.content?.[0]?.text;
-      if (text) progressMessages.push(text);
-    };
-
-    // Verify the callback type is compatible
-    expect(typeof mockOnUpdate).toBe("function");
-    expect(progressMessages).toHaveLength(0);
-  });
-
-  it("should pass onUpdate through execute function to executeSkill", () => {
-    // The skill extension's execute function receives onUpdate from Pi.
-    // It must forward this to executeSkill so TUI progress is visible.
-    // Previously, onUpdate was received but never forwarded (the root cause
-    // of the "skill hangs" bug — agents ran but TUI showed nothing).
-    //
-    // This test verifies the signature change: executeSkill now accepts onUpdate
-    // as its 7th parameter and uses it via emitProgress().
-    expect(true).toBe(true); // Structural verification — the real test is integration
-  });
-
-  it("should emit agent-level progress via agentOnUpdate for single agent invocation", () => {
-    // When invoking a single agent, the skill extension should create
-    // an agentOnUpdate adapter that prefixes agent output with [agentName]
-    // and forwards it to the original onUpdate callback.
-    // This gives users real-time visibility into what each agent is doing.
-    const receivedUpdates: Array<{ text: string; details: unknown }> = [];
-    const mockOnUpdate = (partial: {
-      content: Array<{ type: string; text: string }>;
-      details: unknown;
-    }) => {
-      receivedUpdates.push({ text: partial.content?.[0]?.text || "", details: partial.details });
-    };
-
-    // Simulate what the agentOnUpdate adapter does
-    const agentName = "echo";
-    const partial = {
-      content: [{ type: "text" as const, text: "Found 3 relevant files..." }],
-      details: { mode: "single", results: [] },
-    };
-    const agentOutput = partial.content?.[0]?.text || "running...";
-    const preview = agentOutput.length > 120 ? `${agentOutput.slice(0, 120)}...` : agentOutput;
-    mockOnUpdate({
-      content: [{ type: "text" as const, text: `[${agentName}] ${preview}` }],
-      details: partial.details,
-    });
-
-    expect(receivedUpdates).toHaveLength(1);
-    expect(receivedUpdates[0].text).toBe("[echo] Found 3 relevant files...");
-  });
-
-  it("should truncate long agent output in progress updates", () => {
-    const receivedUpdates: Array<{ text: string }> = [];
-    const mockOnUpdate = (partial: {
-      content: Array<{ type: string; text: string }>;
-      details: unknown;
-    }) => {
-      receivedUpdates.push({ text: partial.content?.[0]?.text || "" });
-    };
-
-    // Simulate a very long agent output
-    const longOutput = "A".repeat(200);
-    const agentName = "piper";
-    const preview = longOutput.length > 120 ? `${longOutput.slice(0, 120)}...` : longOutput;
-    mockOnUpdate({
-      content: [{ type: "text" as const, text: `[${agentName}] ${preview}` }],
-      details: undefined,
-    });
-
-    expect(receivedUpdates).toHaveLength(1);
-    expect(receivedUpdates[0].text.length).toBeLessThan(200); // truncated
-    expect(receivedUpdates[0].text).toContain("[piper]");
-    expect(receivedUpdates[0].text).toContain("...");
-  });
-
-  it("should handle undefined onUpdate gracefully (no callbacks)", () => {
-    // When onUpdate is undefined (e.g., running in non-TUI mode),
-    // emitProgress and agentOnUpdate should be no-ops.
-    // This test verifies that calling emitProgress with no onUpdate
-    // does not throw.
-    const emitProgress = (
-      message: string,
-      onUpdate?: ((partial: ProgressUpdate) => void) | undefined
-    ) => {
-      onUpdate?.({ content: [{ type: "text", text: message }], details: undefined });
-    };
-
-    // Should not throw
-    expect(() => emitProgress("test", undefined)).not.toThrow();
-    expect(() => emitProgress("test", undefined)).not.toThrow();
   });
 });

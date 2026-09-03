@@ -1,4 +1,4 @@
 # Extensions Feature Index
 
-- [Extension Creation Procedure](extension-creation-procedure.md): Step-by-step procedure for creating a new extension and registering it in the Bun workspace
-- [Tool Description Standard](tool-description-standard.md): Provider-visible routing formats, custom-prompt channels, catalog budgets, and active-tool discipline
+- [Extension Creation Procedure](extension-creation-procedure.md): READ WHEN creating or modifying a Penny extension — registration, runtime integration, and verification procedure.
+- [Tool Description Standard](tool-description-standard.md): READ WHEN creating or revising provider-visible tool descriptions — routing, safety, and active-tool guidance.

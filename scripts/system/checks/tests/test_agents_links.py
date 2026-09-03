@@ -29,8 +29,8 @@ def test_root_accepts_invariants_guidance_and_next_level_index() -> None:
         "## Public repository boundary (invariant)\n\n"
         "No tracked file may reference the operator's filesystem.\n\n"
         "## Index\n\n"
-        "- [Agent Documentation](docs/agents/AGENTS.md): how Penny works\n"
-        "- [Penny Protocols](docs/penny/AGENTS.md): trigger-gated procedural docs\n"
+        "- [Agent Documentation](docs/agents/AGENTS.md): MUST READ FOR code changes — how Penny works\n"
+        "- [Penny Protocols](docs/penny/AGENTS.md): READ WHEN a protocol trigger applies — procedural docs\n"
     )
     tracked = {"docs/agents/AGENTS.md", "docs/penny/AGENTS.md"}
     assert validate_root(text, tracked) == []
@@ -92,10 +92,40 @@ def _tracked_leaf_index() -> set[str]:
 def test_nested_accepts_heading_plus_complete_direct_children() -> None:
     text = (
         "# Prompts Feature Index\n\n"
-        "- [Architecture](architecture.md): layer structure and token budgets\n"
-        "- [Layer Reference](layer-reference.md): named layers and responsibilities\n"
+        "- [Architecture](architecture.md): READ WHEN changing prompt layers — layer structure and token budgets\n"
+        "- [Layer Reference](layer-reference.md): CONSULT WHEN resolving layer ownership — named layers and responsibilities\n"
     )
     assert validate_nested("docs/agents/prompts/AGENTS.md", text, _tracked_leaf_index()) == []
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    (
+        "MUST READ FOR relevant changes",
+        "READ WHEN the feature is present",
+        "CONSULT WHEN a question remains",
+    ),
+)
+def test_nested_accepts_each_routing_modality(prefix: str) -> None:
+    text = (
+        "# Prompts Feature Index\n\n"
+        f"- [Architecture](architecture.md): {prefix} — layer structure\n"
+        "- [Layer Reference](layer-reference.md): READ WHEN resolving ownership — layers\n"
+    )
+    assert validate_nested("docs/agents/prompts/AGENTS.md", text, _tracked_leaf_index()) == []
+
+
+@pytest.mark.parametrize(
+    "description", ("layer structure", "MUST READ FOR", "REQUIRED FOR everything")
+)
+def test_nested_rejects_passive_empty_or_unknown_routing_modality(description: str) -> None:
+    text = (
+        "# Prompts Feature Index\n\n"
+        f"- [Architecture](architecture.md): {description}\n"
+        "- [Layer Reference](layer-reference.md): READ WHEN resolving ownership — layers\n"
+    )
+    errors = validate_nested("docs/agents/prompts/AGENTS.md", text, _tracked_leaf_index())
+    assert any("must begin with one of" in error for error in errors)
 
 
 def test_nested_rejects_prose() -> None:
@@ -210,11 +240,13 @@ def repo(tmp_path: Path) -> Path:
     _git(tmp_path, "config", "user.email", "t@example.invalid")
     _git(tmp_path, "config", "user.name", "test")
     (tmp_path / "AGENTS.md").write_text(
-        "# Root\n\n- [Docs](docs/agents/AGENTS.md): index\n", encoding="utf-8"
+        "# Root\n\n- [Docs](docs/agents/AGENTS.md): READ WHEN navigating docs — index\n",
+        encoding="utf-8",
     )
     (tmp_path / "docs" / "agents").mkdir(parents=True)
     (tmp_path / "docs" / "agents" / "AGENTS.md").write_text(
-        "# Agents Index\n\n- [Overview](overview.md): what this is\n", encoding="utf-8"
+        "# Agents Index\n\n- [Overview](overview.md): READ WHEN orienting to the docs — what this is\n",
+        encoding="utf-8",
     )
     (tmp_path / "docs" / "agents" / "overview.md").write_text("# Overview\n", encoding="utf-8")
     return tmp_path

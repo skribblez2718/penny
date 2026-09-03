@@ -54,7 +54,11 @@ Before any feature or fix can be called complete, it must pass ten checks. This 
 | 9   | Prompt architecture | Token budgets are respected and domain content stays out of the Cognitive Frame |
 | 10  | False claims audit  | No inflated test counts or overstated coverage                                  |
 
-If any check fails, the change is rolled back, fixed, and all checks are re-run.
+For an implementation, applicable checks must pass before completion is claimed. For review,
+diagnosis, or planning, the work identifies applicable checks and evidence gaps rather than
+claiming an implementation changed or an unrun check passed. Security is invariant-first:
+changes must identify affected authority, boundary, resource, secret, and recovery properties
+and map them to evidence or an approved exception.
 
 ## What This Means for Contributors
 

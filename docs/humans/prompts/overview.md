@@ -8,7 +8,7 @@ and the current task so each concern has one owner.
 | Cognitive Frame    | Stable operating policy and outcome contract        | `.pi/SYSTEM.md`     |
 | Role Definition    | Project-local worker identity and constraints       | `.pi/agents/*.md`   |
 | Domain Guidance    | Static task-family criteria and output contract     | Skill prompts       |
-| Project Index      | Navigation                                          | `AGENTS.md` indexes |
+| Project Index      | Typed advisory routing to relevant guidance         | `AGENTS.md` indexes |
 | Invocation Context | Current goal, constraints, exact artifact IDs/paths | Runtime task        |
 
 ## Local catalog and remote services
@@ -35,9 +35,10 @@ active workflow.
 
 ## Boundaries
 
-Prompt markers clarify structure but do not enforce permissions. Tool allowlists,
-exact YAML tools, artifact integrity, approval receipts, and OS/container permissions are the
-control plane.
+Prompt markers clarify structure but do not enforce permissions. Tool allowlists, exact
+YAML on direct/default paths, canonical-registration-bound strict orchestration subsets,
+artifact integrity, approval receipts, and OS/container permissions are the control plane.
+A narrow tool surface is not OS/process sandboxing or extension-code isolation.
 
 ## Related documents
 

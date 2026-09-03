@@ -3,6 +3,8 @@ import { canonicalJson, sha256 } from "../checkpointer.js";
 import type { Directive } from "../contracts.js";
 import { validateDirective } from "../contracts.js";
 import { RunContext } from "../context.js";
+import { admitCompletionCandidate } from "../engine.js";
+import { resolvePlaybook, validateRegistrationContract } from "../playbooks/registry.js";
 import { materializeRunInput, settleRunInput } from "../private-inputs.js";
 import type {
   OperationAction,
@@ -154,7 +156,7 @@ export function checkpointDirectOperationResult(input: {
   run.status = action === "complete" ? "complete" : action === "error" ? "error" : "incomplete";
   run.met = replay.met;
   run.pendingDirective = null;
-  run.terminalDirective = validateDirective({
+  const candidate = validateDirective({
     schema_version: 2,
     action,
     identity: run.identity,
@@ -166,6 +168,19 @@ export function checkpointDirectOperationResult(input: {
     // an opaque KB artifact id is not a generic ArtifactRef.
     artifacts: [],
     unresolved: replay.unresolved,
+  });
+  run.terminalDirective = candidate;
+  run.pendingDirective = candidate;
+  const registration = resolvePlaybook(run.identity.playbook);
+  if (registration === undefined) {
+    throw new Error(`playbook '${run.identity.playbook}' is not registered`);
+  }
+  admitCompletionCandidate({
+    checkpointer: input.checkpointer,
+    contract: validateRegistrationContract(registration),
+    predicates: registration.completionReceiptPredicates,
+    context: run,
+    candidate,
   });
   input.checkpointer.saveRun(run, "kb_direct_operation_terminal", {
     run_id: run.identity.run_id,

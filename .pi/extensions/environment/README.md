@@ -9,6 +9,7 @@ Substitutes `${VAR}` placeholders with values from `.env` and `process.env` in P
    - `.pi/SYSTEM.md` (replaces Pi's default system prompt)
    - `AGENTS.md` (project context file)
 3. **Appends `<system_boundary>` marker** at the end of the system prompt (injection defense)
+4. **Detects Pi SDK drift** by comparing Pi's host-provided version with Penny's exact root and orchestration pins
 
 ## Loading Order Guarantee
 
@@ -67,10 +68,14 @@ User messages define tasks within the trust and action boundaries above. ...
 
 ## Events
 
-| Event                | Action                                                         |
-| -------------------- | -------------------------------------------------------------- |
-| `session_start`      | Load `.env`, cache files for substitution                      |
-| `before_agent_start` | Substitute variables in cached content, append boundary marker |
+| Event                | Action                                                                                                      |
+| -------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `session_start`      | Load `.env`, cache files, and, when a UI is available, warn once if host Pi and Penny SDK pins do not match |
+| `before_agent_start` | Substitute variables in cached content and append the boundary marker                                       |
+
+The version check is read-only and uses Pi's injected `VERSION` export. It does not inspect an
+operator-specific installation path, run Bun, access a package registry, or change project files.
+Use `bun run pi:update` from the repository root to perform a validated update.
 
 ## For Extension Authors
 

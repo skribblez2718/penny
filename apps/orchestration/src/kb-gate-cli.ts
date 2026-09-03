@@ -37,6 +37,7 @@ import path from "node:path";
 import { Checkpointer } from "./checkpointer.js";
 import { OrchestrationEngine } from "./engine.js";
 import { loadRuntimeConfig } from "./config.js";
+import { ReceiptAuthority } from "./receipts.js";
 import type { Directive, JsonValue } from "./contracts.js";
 import { canonicalJson, sha256Hex } from "./kb/contracts.js";
 import { envelopeDigest, CapabilityStore } from "./kb/capabilities.js";
@@ -412,14 +413,14 @@ function withContentReviewHost<T>(args: Args, operation: (host: ContentReviewSer
   // Resolve the configured profile first; the control DB never supplies a root.
   void kbRootFor(args);
   const config = loadRuntimeConfig(args.projectRoot, process.env);
-  const checkpointer = new Checkpointer(config.dbPath, undefined, {
+  const checkpointer = Checkpointer.openExisting(config.dbPath, undefined, {
     projectId: config.projectId,
   });
   try {
     const engine = new OrchestrationEngine(checkpointer, {
       projectRoot: config.projectRoot,
       maxSteps: config.maxSteps,
-      receiptKeyPath: config.receiptKeyPath,
+      receiptAuthority: ReceiptAuthority.loadExisting(config.receiptKeyPath),
       playbookName: "knowledge-base",
     });
     return operation(
@@ -516,7 +517,7 @@ function withPromotionHost<T>(
 ): T {
   const kbRoot = kbRootFor(args);
   const config = loadRuntimeConfig(args.projectRoot, process.env);
-  const checkpointer = new Checkpointer(config.dbPath, undefined, {
+  const checkpointer = Checkpointer.openExisting(config.dbPath, undefined, {
     projectId: config.projectId,
   });
   const store = new PromotionApprovalStore({
@@ -541,7 +542,7 @@ function withPromotionHost<T>(
     const engine = new OrchestrationEngine(checkpointer, {
       projectRoot: config.projectRoot,
       maxSteps: config.maxSteps,
-      receiptKeyPath: config.receiptKeyPath,
+      receiptAuthority: ReceiptAuthority.loadExisting(config.receiptKeyPath),
       playbookName: "knowledge-base",
     });
     return operation({ store, engine, checkpointer, kbRoot });

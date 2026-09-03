@@ -1,3 +1,3 @@
 # Tiered Memory Feature Index
 
-- [Tiered Memory](tiered-memory.md): Primary-only T0–T4 recall/curation, default-off advisory log, artifact/checkpoint workflow authority, supervised 3.7.1 HTTP hub, and preservation
+- [Tiered Memory](tiered-memory.md): READ WHEN changing the durable-memory capability — primary authority, hub integration, and preservation.

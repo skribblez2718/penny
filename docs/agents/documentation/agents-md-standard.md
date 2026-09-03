@@ -2,129 +2,107 @@
 
 ## Purpose
 
-Nested AGENTS.md files are **indexes only**. They reference documentation, never contain it. This conserves context windows — Penny and agents read ONLY the specific document they need, never the entire index.
+`AGENTS.md` is Penny's advisory routing layer. It tells an agent which direct-child
+source to read; the source document owns the rules. Routing text is not enforcement:
+semantic resolution, dependency closure, and receipts remain future work.
 
-Exactly two grammars exist, and exactly one file uses the first.
+Exactly two file classes exist.
 
-## Grammar 1 — the repository-root `AGENTS.md` (bootstrap)
+## Repository bootstrap `AGENTS.md`
 
-The root is the **sole bounded exception**. Pi loads it by walking _up_ from the working
-directory, so it is always in context, on every turn, multiplied into every subagent. It is
-the entry point of the index chain and may therefore carry a small amount of instruction —
-but only these four things:
+The repository root is the sole bounded bootstrap exception. It may contain concise,
+always-applicable repository invariants, documentation traversal semantics,
+trigger-to-index lookup guidance, and its next-level index. It must not contain
+conditional domain procedures or link past the next index level.
 
-1. **Bounded project-wide invariants** that must hold for any work in the repository.
-2. **Traversal guidance** — how to read the documentation tree.
-3. **Protocol/Pi lookup guidance** — how to resolve gated protocols and platform docs by trigger.
-4. **The next-level index** — links to sub-index `AGENTS.md` files.
+The root is constrained by the checker to one H1, a bounded line/byte budget,
+relative next-level `AGENTS.md` links only, and no operator filesystem paths. It
+is the bootstrap context, not a second system prompt.
 
-Root constraints:
+## Nested routing indexes
 
-- **Sub-index links only.** The root may link to `<dir>/AGENTS.md` and never to a leaf
-  document. A link that reaches a document directly skips the chain and defeats it.
-- **No operator filesystem paths.** Never `/home/...`, `/Users/...`, `~/...`, or a drive
-  letter. Write `$PROJECT_ROOT` or an expanded variable such as `${PI_PACKAGE_DIR}`.
-- **No domain detail.** Feature specifics, methodology, and per-project rules belong in the
-  tree, not the root. This is enforced as a hard line/byte budget: bloat fails the check.
-- **Exactly one level-one heading.**
+Every other tracked `AGENTS.md` is a one-level routing index. It contains exactly:
 
-## Grammar 2 — every other tracked `AGENTS.md` (nested index)
+1. One level-one heading.
+2. One complete, one-line entry for every tracked direct-child Markdown document
+   and direct child directory that owns an `AGENTS.md`.
 
-This grammar applies uniformly to **every tracked `AGENTS.md` anywhere in the repository**,
-not only those under `docs/agents/**`. `docs/penny/AGENTS.md` is held to exactly the same
-rules as any other nested index.
+Each entry uses this grammar:
 
-1. **AGENTS.md = lookup table.** Contains document names, paths (relative), and one-line descriptions. Nothing else.
-2. **No content in AGENTS.md.** No rules, no standards, no explanations, no cross-cutting references, no architecture descriptions, no quick-reference summaries. Those belong in individual documents. Prose lines fail the check.
-3. **Relative paths.** Links use relative paths from the AGENTS.md file location. E.g., `agents/AGENTS.md` links to `overview.md`, not `docs/agents/agents/overview.md`.
-4. **One entry per document, on one line.** Exact format: `- [Document Title](filename.md): One-line description`. A description continued on a following line is prose and fails.
-5. **Direct children only.** An AGENTS.md may only reference its immediate directory contents:
-   - A leaf `.md` file in the same directory.
-   - A subdirectory's `AGENTS.md` that is a direct child of the current directory.
-   - Never link across directories (e.g., `../other/file.md`) and never skip levels (e.g., `subdir/nested/file.md`).
-6. **Complete.** Every tracked direct-child document, and every direct subdirectory that has
-   its own `AGENTS.md`, must have exactly one entry. A missing entry orphans that branch of
-   the chain; a duplicate entry makes the index ambiguous. Both fail.
-7. **Exactly one level-one heading**, and no subheadings.
-8. **Keep current.** When a document is added, moved, or removed, update the index immediately. Stale indexes waste agent time.
+```markdown
+- [Title](path): MUST READ FOR <scope> — <what the document supplies>
+- [Title](path): READ WHEN <positive trigger> — <what the document supplies>
+- [Title](path): CONSULT WHEN <question> — <what the document supplies>
+```
 
-## Scope is tracked files only
+Nested indexes contain no substantive rules, examples, procedures, cross-cutting
+prose, or headings beyond the H1. Links are relative direct children only; they may
+not leave the directory or skip a level. Direct-child completeness prevents orphaned
+routing targets.
 
-The checker enumerates `git ls-files` and validates only tracked paths. This is load-bearing,
-not an optimization: an operator may configure a private, gitignored root inside the worktree,
-and a documentation checker must never descend into or open private content to do its job.
+## Routing modalities
 
-## Why
+- **MUST READ FOR `<scope>`** — a mandatory prerequisite whenever the stated scope
+  applies. Read and apply it before planning, implementation, review, or completion.
+  Use it only for clear baselines whose omission risks serious harm or makes required
+  guidance easy to overlook.
+- **READ WHEN `<positive trigger>`** — a conditional prerequisite when the task
+  includes the stated operation, feature, technology, or trust boundary.
+- **CONSULT WHEN `<question>`** — optional reference for an unresolved informational
+  question. It cannot replace a mandatory or triggered route.
 
-- **Context conservation**: Penny and agents have limited context windows. Loading an entire index + all documents forces the model to process irrelevant content.
-- **Precise retrieval**: An agent needing "how to write a skill prompt" reads `prompts/role-and-domain-standards.md`, not the entire prompts index.
-- **Maintenance clarity**: When the index IS the documentation, it becomes impossible to tell what's index and what's content. Keep the boundary strict.
+Write a concrete positive trigger with an operation or task facet before the em dash.
+Do not use negative exclusions as routing grammar; multiple siblings may apply to the
+same task. The checker enforces these three prefixes and index shape only. It does not
+infer semantic applicability or dependency closure.
 
-## Reading Documentation Discipline
+## Shared scopes
 
-AGENTS.md files are navigation, not instruction. The following discipline governs how Penny and agents consume them:
+A **code-affecting task** creates, modifies, reviews, diagnoses, or recommends
+executable code, tests, dependencies, schemas or migrations, build/deployment/
+infrastructure configuration, or data flows that affect executable behavior.
 
-**Default discipline (most docs):** Read only files relevant to the current task. Do not greedily follow all index references — use the descriptions to identify the 1–2 features needed, then drill down.
+A **Penny-system-affecting task** creates, changes, reviews, diagnoses, or applies
+Penny's agents, extensions, skills, prompts, memory, orchestration, capabilities,
+state management, knowledge-base behavior, architecture, protocols, root/index
+routing, or agent-facing guidance.
 
-**Load-bearing exception (system docs):** When drilling into a system documentation file (architecture, capability pages, prompt standards, coding standards), the following applies:
+These scopes include implementation and read-only work. They determine what guidance
+must be read, not whether the task must ship code or tests. Implementation must produce
+and run suitable evidence; review/diagnosis must assess available evidence and gaps;
+recommendation/planning must identify affected requirements and needed evidence without
+claiming an unimplemented control exists.
 
-- Read the file completely before acting on it. Partial reads miss cross-references that make the guidance work.
-- Follow `.md` cross-references as they are encountered. They are load-bearing, not decorative.
+## Retrieval discipline
 
-**Gated protocol docs:** Files in `docs/penny/` are trigger-gated — loaded only when the trigger condition in the system prompt is met. All other system docs follow the default discipline + load-bearing exception.
+Read every mandatory baseline on the active route, every guide triggered by the task's
+features and trust boundaries, and every explicit dependency needed to apply them. Stop
+when additional documents would not change the implementation, review, or verification
+approach. Do not use a fixed document-count limit to omit mandatory or triggered
+material, and do not load unrelated branches.
 
-The default discipline protects context window. The exception protects correctness once a doc is in scope.
+When a system document is in scope, read it completely and follow its load-bearing
+Markdown cross-references. Trigger-gated protocols under `docs/penny/` remain gated by
+their trusted activation conditions; typed entries do not make them always-on.
 
-## Paths live in the index chain, never in SYSTEM.md
+## Scope and human documentation
 
-`.pi/SYSTEM.md` (the always-on Cognitive Frame) carries **triggers and reasoning only — never file paths**. When a cognitive rule needs a companion doc, SYSTEM.md names it by trigger ("run the clarification protocol"); the **file path lives in the AGENTS.md index chain**, and Penny resolves it there:
+The checker enumerates tracked paths with `git ls-files`; it must not scan ignored or
+operator-configured private content. `docs/humans/` has no `AGENTS.md` and does not use
+the routing grammar. A shared conceptual change may need a minimal parallel human-page
+update, but human navigation remains prose-based.
 
-`SYSTEM.md trigger → root AGENTS.md (always in context) → sub-index AGENTS.md → the leaf AGENTS.md that lists the actual docs → the doc`
+## Paths and current-state documentation
 
-Each `AGENTS.md` points only to the next level down; the leaf `AGENTS.md` (the one sitting in the directory where the source docs live) is the single source of truth for those paths. This is deliberate and load-bearing: **embedding knowledge paths in SYSTEM.md is the primary cause of Cognitive-Frame bloat** — every path added there is paid on every turn and multiplied into every subagent. Keep them in the index chain, where they cost nothing until the moment they're needed.
-
-## Docs reflect current state — no deprecation ledgers
-
-Documentation describes the system as it is **now**, not its history. Do not keep
-deprecation ledgers, "removed in vX" notes, or migration-tracking tables in the
-docs tree — they add permanent context-noise, drift out of sync, and duplicate
-what version control already records. When something is removed or replaced,
-**update or delete its docs in the same change** so docs, code, and other files
-stay in sync. Point-in-time planning/research under `research/` is a historical
-archive and is exempt: it records what was decided at a moment in time and may
-reference things later removed.
-
-## docs/humans/ carries no AGENTS.md
-
-`docs/humans/` is written for **people to read and navigate directly** — not for
-Penny's on-demand index walk. It therefore has **no `AGENTS.md` index files** and
-is **not linked from the `docs/agents/` index chain or the root `AGENTS.md`**.
-Human navigation relies on prose and `index.md` files, not the agent-facing
-lookup tables.
-
-The two trees stay deliberately parallel: `docs/agents/` is **HOW** Penny and her
-agents work (agent-facing, index-walked), `docs/humans/` is **WHAT/WHY** for a
-human audience. When a change touches a concept documented in both, update both
-so they do not drift.
-
-This is machine-enforced by `scripts/system/checks/check_agents_links.py`, which
-fails if any tracked `AGENTS.md` appears anywhere under `docs/humans/`.
-
-## Pi Auto-Discovery Behavior
-
-Pi loads AGENTS.md by walking UP from the current working directory to the filesystem root, not DOWN into subdirectories. This means:
-
-- The root `AGENTS.md` is always loaded (it's on the upward path) — it is the entry point of the index chain above.
-- Nested `docs/**/AGENTS.md` files are **never auto-loaded by Pi** — they are read on demand by Penny's `read` tool as it walks the chain.
-- The root AGENTS.md is the entry point; nested AGENTS.md files are navigation within a sub-tree.
+Paths live in the index chain, never in the always-on Cognitive Frame. Documentation
+describes current behavior rather than retaining deprecation ledgers; update or remove
+superseded paths in the same change.
 
 ## Example
 
 ```markdown
 # Prompts Feature Index
 
-- [Architecture](architecture.md): Layer structure, token budgets, compliance principles
-- [Layer Reference](layer-reference.md): Named layers, responsibilities, interaction circumstances
+- [Architecture](architecture.md): READ WHEN changing prompt assembly or recovery — layer ownership and runtime boundaries.
+- [Layer Reference](layer-reference.md): CONSULT WHEN resolving a layer-ownership question — concise responsibility map.
 ```
-
-That is the entire file. No more, no less.

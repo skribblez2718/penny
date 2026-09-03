@@ -5,8 +5,27 @@ import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { Type, type Static } from "typebox";
 
 import { RunContext } from "./context.js";
-import { JsonValueSchema, PhaseResultSchema, validateContract } from "./contracts.js";
-import type { ExecutionReceipt, JsonValue, PhaseResult, RunIdentity } from "./contracts.js";
+import {
+  CompletionAdmissionEnvelopeSchema,
+  CompletionEvidenceRefSchema,
+  CompletionRefusalEvidenceSchema,
+  JsonValueSchema,
+  PhaseResultSchema,
+  StateVisitSchema,
+  isTerminalStatus,
+  validateContract,
+} from "./contracts.js";
+import type {
+  CompletionAdmissionEnvelope,
+  CompletionEvidenceRef,
+  CompletionRefusalEvidence,
+  ExecutionReceipt,
+  JsonValue,
+  PhaseResult,
+  RunIdentity,
+  StateVisit,
+  StateVisitRef,
+} from "./contracts.js";
 import { CheckpointIdentityError, orchestrationDurableStateCodec } from "./durable-state.js";
 
 export { CheckpointIdentityError } from "./durable-state.js";
@@ -58,11 +77,67 @@ import type {
   StartKbAction,
 } from "./kb/contracts.js";
 import type { PromotionControlApprovalBinding } from "./kb/promotion.js";
+import { assertOwnerDirectory, assertOwnerFile, pathExistsNoFollow } from "./state/custody.js";
 import { PENNY_STATE_LAYOUT_VERSION, PROJECT_ID_PATTERN } from "./state/paths.js";
+import {
+  createReadOnlySqliteSnapshot,
+  type ReadOnlySqliteSnapshot,
+} from "./state/sqlite-snapshot.js";
 
 export const ORCHESTRATION_DATABASE_SCHEMA_VERSION = 10 as const;
+const REQUIRED_ORCHESTRATION_COLUMNS = {
+  content_reviews: ["challenge_id", "run_id", "packet_sha256", "packet_jcs", "state"],
+  events: ["run_id", "sequence", "event_type", "payload_json", "created_at"],
+  gates: ["run_id", "gate_id", "state_id", "challenge", "status"],
+  kb_init_reservations: ["kb_profile_id", "run_id", "transaction_id", "state"],
+  kb_phase_operands: ["run_id", "state_id", "operands_jcs", "operands_sha256", "lifecycle"],
+  kb_phase_results: ["phase_result_id", "run_id", "state_id", "result_jcs", "result_sha256"],
+  kb_publication_files: ["publication_file_id", "transaction_id", "role", "state"],
+  kb_publication_transactions: ["transaction_id", "run_id", "kb_profile_id", "lifecycle"],
+  kb_run_artifacts: ["artifact_id", "run_id", "state_id", "artifact_kind", "lifecycle"],
+  operation_event_groups: ["request_event_group_id", "run_id", "action", "state"],
+  operation_receipt_index: ["receipt_id", "run_id", "action", "receipt_jcs", "state"],
+  private_inputs: ["private_input_id", "run_id", "request_sha256", "storage_key", "state"],
+  receipts: ["receipt_id", "run_id", "state_id", "branch_id", "result_json"],
+  runs: [
+    "run_id",
+    "session_id",
+    "playbook",
+    "engine_owner",
+    "schema_version",
+    "status",
+    "state_id",
+    "context_json",
+    "created_at",
+    "updated_at",
+  ],
+  start_admissions: ["run_id", "session_id", "invocation_id", "request_sha256", "state"],
+  store_metadata: ["singleton", "project_id", "state_layout_version", "created_at"],
+  terminal_results: [
+    "terminal_result_id",
+    "run_id",
+    "idempotency_transaction_id",
+    "operation_receipt_id",
+    "result_jcs",
+    "result_sha256",
+    "created_at",
+  ],
+} as const;
+const REQUIRED_ORCHESTRATION_TABLES = Object.keys(REQUIRED_ORCHESTRATION_COLUMNS);
+
+type CheckpointerOpenMode = "provision" | "existing" | "verify";
+
+export interface CheckpointerOptions {
+  readonly maxRetainedRuns?: number;
+  readonly projectId?: string;
+}
 
 const CheckpointEventPayloadSchema = Type.Record(Type.String(), JsonValueSchema);
+const RESERVED_COMPLETION_EVENT_KEYS = new Set([
+  "state_visits_v1",
+  "completion_admission_v1",
+  "completion_refusal_v1",
+]);
 
 interface RunRow extends Record<string, SQLOutputValue> {
   run_id: string;
@@ -945,37 +1020,104 @@ function numberValue(value: number | bigint): number {
   return typeof value === "bigint" ? Number(value) : value;
 }
 
+function provisionOwnerDirectory(directory: string): void {
+  if (pathExistsNoFollow(directory)) {
+    assertOwnerDirectory(directory, "Penny orchestration directory");
+    return;
+  }
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  assertOwnerDirectory(directory, "Penny orchestration directory");
+}
+
 export class Checkpointer implements Disposable {
   readonly dbPath: string;
   private readonly db: DatabaseSync;
   private readonly maxRetainedRuns: number;
+  /** Private image used only by create-never status validation. */
+  private readonly validationSnapshot: ReadOnlySqliteSnapshot | undefined;
+  private static expectedSchemaFingerprint: string | undefined;
   private kbRuntimeProjectRoot?: string;
+
+  /** Explicit setup/migration path. Ordinary runtime must use openExisting(). */
+  static provision(
+    dbPath: string,
+    observer?: CheckpointObserver,
+    options: CheckpointerOptions = {}
+  ): Checkpointer {
+    return new Checkpointer(dbPath, observer, options, "provision");
+  }
+
+  /** Open one complete canonical control database without creating, repairing, or migrating it. */
+  static openExisting(
+    dbPath: string,
+    observer: CheckpointObserver | undefined,
+    options: CheckpointerOptions & { readonly projectId: string }
+  ): Checkpointer {
+    return new Checkpointer(dbPath, observer, options, "existing");
+  }
+
+  /** Readiness probe for state administration. It never performs retention pruning. */
+  static verifyExisting(
+    dbPath: string,
+    options: CheckpointerOptions & { readonly projectId: string }
+  ): void {
+    using _checkpointer = new Checkpointer(dbPath, undefined, options, "verify");
+  }
 
   constructor(
     dbPath: string,
     private readonly observer?: CheckpointObserver,
-    options: { maxRetainedRuns?: number; projectId?: string } = {}
+    options: CheckpointerOptions = {},
+    mode: CheckpointerOpenMode = "provision"
   ) {
     this.dbPath = dbPath;
     this.maxRetainedRuns = options.maxRetainedRuns ?? 500;
-    if (dbPath !== ":memory:") {
-      const parent = path.dirname(dbPath);
-      mkdirSync(parent, { recursive: true, mode: 0o700 });
-      chmodSync(parent, 0o700);
+    const databaseExists = dbPath !== ":memory:" && pathExistsNoFollow(dbPath);
+    if (mode === "provision") {
+      if (dbPath !== ":memory:") {
+        provisionOwnerDirectory(path.dirname(dbPath));
+        if (databaseExists) assertOwnerFile(dbPath, "Penny orchestration database");
+      }
+    } else {
+      if (dbPath === ":memory:") {
+        throw new Error("ordinary runtime cannot open an in-memory orchestration database");
+      }
+      assertOwnerDirectory(path.dirname(dbPath), "Penny orchestration directory");
+      assertOwnerFile(dbPath, "Penny orchestration database");
+      if (options.projectId === undefined) {
+        throw new Error("opening an existing orchestration database requires its Penny project ID");
+      }
     }
+    const validationSnapshot =
+      mode === "verify"
+        ? createReadOnlySqliteSnapshot(dbPath, "Penny orchestration database")
+        : undefined;
+    this.validationSnapshot = validationSnapshot;
     const { DatabaseSync } = sqliteModule();
-    this.db = new DatabaseSync(dbPath);
-    this.db.exec(
-      "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;"
+    this.db = new DatabaseSync(
+      validationSnapshot?.databasePath ?? dbPath,
+      mode === "verify" ? { readOnly: true } : {}
     );
+    if (mode !== "verify") {
+      this.db.exec(
+        mode === "provision"
+          ? "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;"
+          : "PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;"
+      );
+    }
     try {
-      this.migrate();
-      if (options.projectId !== undefined) this.bindProject(options.projectId);
+      if (mode === "provision") {
+        this.migrate();
+        if (options.projectId !== undefined) this.ensureProjectBinding(options.projectId);
+      } else {
+        this.assertExistingSchema(options.projectId);
+      }
     } catch (error) {
       this.db.close();
+      validationSnapshot?.close();
       throw error;
     }
-    if (dbPath !== ":memory:") {
+    if (mode === "provision" && !databaseExists && dbPath !== ":memory:") {
       for (const suffix of ["", "-wal", "-shm"]) {
         const databaseFile = `${dbPath}${suffix}`;
         if (existsSync(databaseFile)) {
@@ -1448,7 +1590,91 @@ export class Checkpointer implements Disposable {
     `);
   }
 
-  private bindProject(projectId: string): void {
+  private assertExistingSchema(projectId: string | undefined): void {
+    const journal = this.db.prepare("PRAGMA journal_mode").get();
+    if (journal === undefined) malformedSqliteColumn("orchestration journal mode", "journal_mode");
+    if (sqliteText(journal, "journal_mode", "orchestration journal mode").toLowerCase() !== "wal") {
+      throw new Error("orchestration database is not configured for WAL mode");
+    }
+    const version = this.userVersion();
+    if (version !== ORCHESTRATION_DATABASE_SCHEMA_VERSION) {
+      throw new Error(
+        `orchestration schema ${version} is not current; run explicit penny-state init or migration`
+      );
+    }
+    const tables = new Set(
+      this.db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .all()
+        .map((row) => sqliteText(row, "name", "orchestration schema"))
+    );
+    for (const table of REQUIRED_ORCHESTRATION_TABLES) {
+      if (!tables.has(table)) {
+        throw new Error(`orchestration database is missing required table '${table}'`);
+      }
+    }
+    for (const [table, requiredColumns] of Object.entries(REQUIRED_ORCHESTRATION_COLUMNS)) {
+      const columns = new Set(
+        this.db
+          .prepare(`PRAGMA table_info(${table})`)
+          .all()
+          .map((row) => sqliteText(row, "name", `${table} table metadata`))
+      );
+      for (const column of requiredColumns) {
+        if (!columns.has(column)) {
+          throw new Error(
+            `orchestration database table '${table}' is missing required column '${column}'`
+          );
+        }
+      }
+    }
+    if (this.schemaFingerprint() !== Checkpointer.currentSchemaFingerprint()) {
+      throw new Error(
+        "orchestration database schema does not match the current canonical definition"
+      );
+    }
+    const integrity = this.db.prepare("PRAGMA integrity_check").get();
+    if (integrity === undefined)
+      malformedSqliteColumn("orchestration integrity", "integrity_check");
+    if (sqliteText(integrity, "integrity_check", "orchestration integrity") !== "ok") {
+      throw new Error("orchestration database integrity check failed");
+    }
+    const foreignKeyViolations = this.db.prepare("PRAGMA foreign_key_check").all();
+    if (foreignKeyViolations.length !== 0) {
+      throw new Error("orchestration database foreign-key check failed");
+    }
+    this.assertProjectBinding(projectId);
+  }
+
+  private schemaFingerprint(): string {
+    const objects = this.db
+      .prepare(
+        "SELECT type, name, tbl_name, sql FROM sqlite_master " +
+          "WHERE type IN ('table', 'index', 'trigger') AND sql IS NOT NULL ORDER BY type, name"
+      )
+      .all();
+    const normalized = objects.map((row) => ({
+      type: sqliteText(row, "type", "orchestration schema object"),
+      name: sqliteText(row, "name", "orchestration schema object"),
+      table: sqliteText(row, "tbl_name", "orchestration schema object"),
+      sql: sqliteText(row, "sql", "orchestration schema object").replace(/\s+/gu, " ").trim(),
+    }));
+    return sha256(canonicalJson(normalized));
+  }
+
+  private static currentSchemaFingerprint(): string {
+    if (Checkpointer.expectedSchemaFingerprint !== undefined) {
+      return Checkpointer.expectedSchemaFingerprint;
+    }
+    using expected = Checkpointer.provision(":memory:", undefined, {
+      projectId: `prj_${"0".repeat(32)}`,
+    });
+    const fingerprint = expected.schemaFingerprint();
+    Checkpointer.expectedSchemaFingerprint = fingerprint;
+    return fingerprint;
+  }
+
+  private ensureProjectBinding(projectId: string): void {
     if (!PROJECT_ID_PATTERN.test(projectId)) throw new Error("project ID is not canonical");
     const row = this.db
       .prepare("SELECT project_id, state_layout_version FROM store_metadata WHERE singleton = 1")
@@ -1462,11 +1688,26 @@ export class Checkpointer implements Disposable {
         .run(projectId, PENNY_STATE_LAYOUT_VERSION, new Date().toISOString());
       return;
     }
-    if (sqliteText(row, "project_id", "orchestration store metadata") !== projectId) {
+    this.assertProjectBinding(projectId, row);
+  }
+
+  private assertProjectBinding(projectId: string | undefined, stored?: SqliteRow): void {
+    if (projectId === undefined || !PROJECT_ID_PATTERN.test(projectId)) {
+      throw new Error("project ID is not canonical");
+    }
+    const storedValue =
+      stored ??
+      this.db
+        .prepare("SELECT project_id, state_layout_version FROM store_metadata WHERE singleton = 1")
+        .get();
+    if (storedValue === undefined) {
+      throw new Error("orchestration database project binding is absent");
+    }
+    if (sqliteText(storedValue, "project_id", "orchestration store metadata") !== projectId) {
       throw new Error("orchestration database belongs to another Penny project");
     }
     if (
-      sqliteInteger(row, "state_layout_version", "orchestration store metadata") !==
+      sqliteInteger(storedValue, "state_layout_version", "orchestration store metadata") !==
       PENNY_STATE_LAYOUT_VERSION
     ) {
       throw new Error("orchestration database has an unsupported state layout version");
@@ -1485,6 +1726,283 @@ export class Checkpointer implements Disposable {
     }
   }
 
+  private assertCompletionPayloadUnforgeable(payload: Record<string, JsonValue>): void {
+    for (const key of Object.keys(payload)) {
+      if (RESERVED_COMPLETION_EVENT_KEYS.has(key)) {
+        throw new CheckpointIdentityError(`caller payload cannot set reserved key '${key}'`);
+      }
+    }
+  }
+
+  private nextEventSequence(runId: string): number {
+    const row = this.db
+      .prepare(
+        "SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM events WHERE run_id = ?"
+      )
+      .get(runId);
+    if (row === undefined) malformedSqliteColumn("next checkpoint event", "next_sequence");
+    return sqliteInteger(row, "next_sequence", "next checkpoint event");
+  }
+
+  stateVisits(runId: string): StateVisitRef[] {
+    const refs: StateVisitRef[] = [];
+    for (const event of this.events(runId)) {
+      const raw = event.payload.state_visits_v1;
+      if (raw === undefined) continue;
+      if (!Array.isArray(raw) || raw.length > 32) {
+        throw new CheckpointIdentityError("stored state-visit metadata is malformed");
+      }
+      raw.forEach((value, offset) => {
+        let visit: StateVisit;
+        try {
+          visit = validateContract(StateVisitSchema, value, "stored state visit");
+        } catch {
+          throw new CheckpointIdentityError("stored state-visit metadata is malformed");
+        }
+        refs.push({
+          event_sequence: event.sequence,
+          offset,
+          state_id: visit.state_id,
+          source: visit.source,
+        });
+      });
+    }
+    return refs;
+  }
+
+  /** Any reserved event field proves that the run has crossed the completion-admission boundary. */
+  hasCompletionProtocolMetadata(runId: string): boolean {
+    return this.events(runId).some((event) =>
+      [...RESERVED_COMPLETION_EVENT_KEYS].some((key) => Object.hasOwn(event.payload, key))
+    );
+  }
+
+  /** Durable visits plus the exact journal that will enter the next ordinary event. */
+  completionStateVisits(context: RunContext): StateVisitRef[] {
+    const durable = this.stateVisits(context.identity.run_id);
+    const pending = context.pendingStateVisits();
+    const sequence = this.nextEventSequence(context.identity.run_id);
+    return [
+      ...durable,
+      ...pending.map((visit, offset) => ({
+        event_sequence: sequence,
+        offset,
+        state_id: visit.state_id,
+        source: visit.source,
+      })),
+    ];
+  }
+
+  completionAdmission(runId: string): CompletionAdmissionEnvelope | undefined {
+    const found: CompletionAdmissionEnvelope[] = [];
+    for (const event of this.events(runId)) {
+      const raw = event.payload.completion_admission_v1;
+      if (raw === undefined) continue;
+      try {
+        found.push(
+          validateContract(CompletionAdmissionEnvelopeSchema, raw, "stored completion admission")
+        );
+      } catch {
+        throw new CheckpointIdentityError("stored completion-admission envelope is malformed");
+      }
+    }
+    if (found.length > 1) {
+      throw new CheckpointIdentityError("run has duplicate completion-admission envelopes");
+    }
+    return found[0];
+  }
+
+  completionRefusal(runId: string): CompletionRefusalEvidence | undefined {
+    const found: CompletionRefusalEvidence[] = [];
+    for (const event of this.events(runId)) {
+      const raw = event.payload.completion_refusal_v1;
+      if (raw === undefined) continue;
+      try {
+        found.push(
+          validateContract(CompletionRefusalEvidenceSchema, raw, "stored completion refusal")
+        );
+      } catch {
+        throw new CheckpointIdentityError("stored completion-refusal evidence is malformed");
+      }
+    }
+    if (found.length > 1) {
+      throw new CheckpointIdentityError("run has duplicate completion-refusal records");
+    }
+    return found[0];
+  }
+
+  private validateAdmissionEnvelope(envelope: CompletionAdmissionEnvelope): void {
+    validateContract(CompletionAdmissionEnvelopeSchema, envelope, "completion-admission envelope");
+    const { terminal_envelope_id: _id, ...body } = envelope;
+    if (`tenv_${sha256(canonicalJson(body))}` !== envelope.terminal_envelope_id) {
+      throw new CheckpointIdentityError("completion-admission envelope ID is invalid");
+    }
+  }
+
+  private checkpointPayload(
+    context: RunContext,
+    payload: Record<string, JsonValue>
+  ): Record<string, JsonValue> {
+    this.assertCompletionPayloadUnforgeable(payload);
+    const visits = context.pendingStateVisits();
+    const admission = context.pendingCompletionAdmission();
+    const refusal = context.pendingCompletionRefusal();
+    if (admission !== null && refusal !== null) {
+      throw new CheckpointIdentityError("checkpoint cannot admit and refuse the same terminal");
+    }
+    if (visits.length > 32) {
+      throw new CheckpointIdentityError("one checkpoint event cannot append more than 32 visits");
+    }
+    for (const visit of visits) validateContract(StateVisitSchema, visit, "state visit");
+    if (admission !== null) this.validateAdmissionEnvelope(admission);
+    if (refusal !== null) {
+      validateContract(CompletionRefusalEvidenceSchema, refusal, "completion refusal");
+    }
+    return {
+      ...payload,
+      ...(visits.length > 0 ? { state_visits_v1: [...visits] } : {}),
+      ...(admission !== null ? { completion_admission_v1: admission } : {}),
+      ...(refusal !== null ? { completion_refusal_v1: refusal } : {}),
+    };
+  }
+
+  private assertNewRunCompletionProtocol(context: RunContext): void {
+    if (context.completionProtocolVersion !== 1) {
+      throw new CheckpointIdentityError("new run lacks completion protocol version 1");
+    }
+  }
+
+  private validatePositiveTerminalWrite(context: RunContext): void {
+    const terminal = context.terminalDirective;
+    const positiveRunState = context.status === "complete" && context.met === true;
+    const positiveTerminal =
+      terminal?.action === "complete" && terminal.status === "complete" && terminal.met === true;
+    if (!positiveRunState && !positiveTerminal) return;
+    if (
+      !positiveRunState ||
+      terminal?.action !== "complete" ||
+      terminal.status !== "complete" ||
+      terminal.met !== true
+    ) {
+      throw new CheckpointIdentityError("positive run state lacks matching completion admission");
+    }
+
+    const envelope = context.pendingCompletionAdmission();
+    const row = this.selectRun(context.identity.run_id);
+    if (row !== undefined && envelope === null) {
+      const priorContext = this.contextFromRunRow(row);
+      const prior = priorContext.terminalDirective;
+      if (
+        priorContext.completionProtocolVersion === undefined &&
+        context.completionProtocolVersion === undefined &&
+        prior?.action === "complete" &&
+        canonicalJson(prior) === canonicalJson(terminal) &&
+        !this.hasCompletionProtocolMetadata(context.identity.run_id)
+      ) {
+        // Only an exact positive whose durable context predates protocol v1 is legacy replay.
+        return;
+      }
+    }
+    if (envelope === null) {
+      throw new CheckpointIdentityError("new positive terminal lacks completion admission");
+    }
+    this.validateAdmissionEnvelope(envelope);
+    const visits = this.completionStateVisits(context);
+    if (
+      envelope.run_id !== context.identity.run_id ||
+      envelope.terminal_digest !== sha256(canonicalJson(terminal)) ||
+      canonicalJson(envelope.state_visit_refs) !== canonicalJson(visits) ||
+      envelope.origin_state !== visits.at(-1)?.state_id ||
+      envelope.unresolved_count !== terminal.unresolved.length
+    ) {
+      throw new CheckpointIdentityError("positive terminal completion admission is not exact");
+    }
+    if (envelope.latest_product.selector === "terminal_result") {
+      const digest = sha256(canonicalJson(terminal.result));
+      if (
+        envelope.latest_product.sha256 !== digest ||
+        envelope.latest_product.product_id !== `prod_${digest}`
+      ) {
+        throw new CheckpointIdentityError("terminal-result completion product is not exact");
+      }
+    } else {
+      const artifact = terminal.artifacts.find(
+        (candidate) => candidate.artifact_id === envelope.latest_product.product_id
+      );
+      const selected = context.selectedArtifacts.find(
+        (candidate) => candidate.artifact_id === envelope.latest_product.product_id
+      );
+      const highestVersion = Math.max(
+        ...context.selectedArtifacts
+          .filter((candidate) => candidate.operation_id === artifact?.operation_id)
+          .map((candidate) => candidate.version)
+      );
+      if (
+        artifact === undefined ||
+        selected === undefined ||
+        canonicalJson(artifact) !== canonicalJson(selected) ||
+        artifact.content_digest !== envelope.latest_product.sha256 ||
+        artifact.version !== highestVersion
+      ) {
+        throw new CheckpointIdentityError("terminal-artifact completion product is not exact");
+      }
+    }
+    if (
+      envelope.evidence_refs.some(
+        (ref) => !this.completionEvidenceRefExists(ref, context.identity.run_id)
+      )
+    ) {
+      throw new CheckpointIdentityError("completion admission references absent evidence");
+    }
+  }
+
+  completionEvidenceRefExists(ref: CompletionEvidenceRef, runId: string): boolean {
+    try {
+      validateContract(CompletionEvidenceRefSchema, ref, "completion evidence ref");
+      if (ref.kind === "execution_receipt") {
+        const row = this.db
+          .prepare("SELECT result_json FROM receipts WHERE receipt_id = ? AND run_id = ?")
+          .get(ref.reference_id, runId);
+        return (
+          row !== undefined &&
+          ref.sha256 === sha256(sqliteText(row, "result_json", "completion execution receipt"))
+        );
+      }
+      if (ref.kind === "kb_artifact") {
+        const artifact = this.kbArtifact(ref.reference_id);
+        return artifact?.run_id === runId && artifact.sha256 === ref.sha256;
+      }
+      if (ref.kind === "kb_phase_result") {
+        const row = this.db
+          .prepare(
+            "SELECT result_sha256 FROM kb_phase_results WHERE phase_result_id = ? AND run_id = ?"
+          )
+          .get(ref.reference_id, runId);
+        return (
+          row !== undefined &&
+          sqliteText(row, "result_sha256", "completion KB phase result") === ref.sha256
+        );
+      }
+      if (ref.kind === "kb_publication") {
+        const publication = this.kbPublication(ref.reference_id);
+        return publication?.selector_sha256 === ref.sha256;
+      }
+      if (ref.kind === "content_review") {
+        const review = this.contentReviewForRun(runId);
+        return (
+          review?.challenge_id === ref.reference_id && review.decision_receipt_sha256 === ref.sha256
+        );
+      }
+      if (ref.kind === "promotion_approval") {
+        const approval = this.promotionApprovalBinding(runId);
+        return approval?.receipt_id === ref.reference_id && approval.receipt_sha256 === ref.sha256;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
   createRun(
     context: RunContext,
     eventType: string,
@@ -1494,6 +2012,8 @@ export class Checkpointer implements Disposable {
     const snapshot = context.snapshot();
     const identity = snapshot.identity;
     this.transaction(() => {
+      this.assertNewRunCompletionProtocol(context);
+      this.validatePositiveTerminalWrite(context);
       const existing = this.selectRun(identity.run_id);
       if (existing !== undefined) {
         this.assertIdentityRow(identity, existing);
@@ -1531,9 +2051,16 @@ export class Checkpointer implements Disposable {
         this.reserveOperationEventGroupInTransaction(operationGroup);
       }
       this.persistPendingGate(context);
-      this.insertEvent(identity.run_id, eventType, payload, timestamp);
+      this.insertEvent(
+        identity.run_id,
+        eventType,
+        this.checkpointPayload(context, payload),
+        timestamp
+      );
     });
-    this.observe(context, eventType, payload);
+    const observedPayload = this.checkpointPayload(context, payload);
+    context.markCheckpointEvidencePersisted();
+    this.observe(context, eventType, observedPayload);
   }
 
   /**
@@ -2720,6 +3247,35 @@ export class Checkpointer implements Disposable {
     return publication;
   }
 
+  kbPublications(runId: string): KbPublicationTransaction[] {
+    return this.db
+      .prepare(
+        "SELECT transaction_id FROM kb_publication_transactions WHERE run_id = ? ORDER BY created_at"
+      )
+      .all(runId)
+      .map((row) =>
+        requiredCheckpointValue(
+          this.kbPublication(sqliteText(row, "transaction_id", "stored KB publication")),
+          "stored KB publication"
+        )
+      );
+  }
+
+  kbPublicationsForGeneration(kbId: string, generationId: string): KbPublicationTransaction[] {
+    return this.db
+      .prepare(
+        `SELECT transaction_id FROM kb_publication_transactions
+         WHERE kb_id = ? AND candidate_generation_id = ? ORDER BY created_at`
+      )
+      .all(kbId, generationId)
+      .map((row) =>
+        requiredCheckpointValue(
+          this.kbPublication(sqliteText(row, "transaction_id", "stored KB publication")),
+          "stored KB publication"
+        )
+      );
+  }
+
   /** Reserve a decided content gate at the selector cliff; exact retries are idempotent. */
   reserveContentReviewCommit(runId: string, transactionId: string): ContentReviewRecord {
     return this.transaction(() => {
@@ -3340,7 +3896,7 @@ export class Checkpointer implements Disposable {
       action: admission.action,
       request_sha256: admission.request_sha256,
     });
-    return this.transaction(() => {
+    const outcome = this.transaction(() => {
       const existingValue = this.db
         .prepare(`SELECT * FROM start_admissions WHERE session_id = ? AND invocation_id = ?`)
         .get(admission.session_id, admission.invocation_id);
@@ -3368,6 +3924,7 @@ export class Checkpointer implements Disposable {
             `admitted with a different request digest (idempotency_mismatch)`
         );
       }
+      this.assertNewRunCompletionProtocol(context);
       if (this.selectRun(identity.run_id) !== undefined) {
         throw new CheckpointIdentityError(`run_id '${identity.run_id}' already exists`);
       }
@@ -3469,12 +4026,12 @@ export class Checkpointer implements Disposable {
       this.insertEvent(
         identity.run_id,
         "run_started",
-        {
+        this.checkpointPayload(context, {
           run_id: identity.run_id,
           session_id: identity.session_id,
           request_sha256: admission.request_sha256,
           action: admission.action,
-        },
+        }),
         timestamp
       );
       if (
@@ -3485,6 +4042,8 @@ export class Checkpointer implements Disposable {
       }
       return { kind: "created" as const, run_id: identity.run_id };
     });
+    if (outcome.kind === "created") context.markCheckpointEvidencePersisted();
+    return outcome;
   }
 
   getStartAdmission(runId: string): StartAdmissionRecord | undefined {
@@ -3979,6 +4538,7 @@ export class Checkpointer implements Disposable {
     receiptSha256: string;
     transactionId: string;
   }): void {
+    let persistedPayload: Record<string, JsonValue> = {};
     this.transaction(() => {
       const record = this.contentReviewForRun(input.context.identity.run_id);
       if (
@@ -4007,23 +4567,18 @@ export class Checkpointer implements Disposable {
            WHERE challenge_id = ? AND state IN ('claimed','commit_reserved') AND transaction_id = ?`
         )
         .run(finalState, now(), record.challenge_id, input.transactionId);
+      this.validatePositiveTerminalWrite(input.context);
+      persistedPayload = this.checkpointPayload(input.context, {
+        run_id: record.run_id,
+        gate_id: record.challenge_id,
+        receipt_sha256: input.receiptSha256,
+        state: finalState,
+      });
       this.updateRun(input.context);
-      this.insertEvent(
-        record.run_id,
-        "content_review_resumed",
-        {
-          run_id: record.run_id,
-          gate_id: record.challenge_id,
-          receipt_sha256: input.receiptSha256,
-          state: finalState,
-        },
-        now()
-      );
+      this.insertEvent(record.run_id, "content_review_resumed", persistedPayload, now());
     });
-    this.observe(input.context, "content_review_resumed", {
-      gate_id: String(input.context.knowledgeBaseData.content_review_challenge_id ?? ""),
-      receipt_sha256: input.receiptSha256,
-    });
+    input.context.markCheckpointEvidencePersisted();
+    this.observe(input.context, "content_review_resumed", persistedPayload);
   }
 
   invalidateContentReview(input: {
@@ -4070,13 +4625,39 @@ export class Checkpointer implements Disposable {
     });
   }
 
-  saveRun(context: RunContext, eventType: string, payload: Record<string, JsonValue>): void {
+  /**
+   * Append one content-free liveness charge without mutating the run snapshot.
+   * These synchronous writes are the admission boundary for model/tool/time work
+   * and deliberately bypass observability.
+   */
+  appendLivenessEvent(runId: string, eventType: string, payload: Record<string, JsonValue>): void {
+    if (!eventType.startsWith("liveness_")) {
+      throw new CheckpointIdentityError("liveness event type must use the liveness_ prefix");
+    }
+    const parsed = validateContract(
+      CheckpointEventPayloadSchema,
+      payload,
+      "liveness event payload"
+    );
     this.transaction(() => {
+      if (this.selectRun(runId) === undefined) {
+        throw new CheckpointIdentityError(`unknown run_id '${runId}'`);
+      }
+      this.insertEvent(runId, eventType, parsed, now());
+    });
+  }
+
+  saveRun(context: RunContext, eventType: string, payload: Record<string, JsonValue>): void {
+    let persistedPayload: Record<string, JsonValue> = payload;
+    this.transaction(() => {
+      this.validatePositiveTerminalWrite(context);
+      persistedPayload = this.checkpointPayload(context, payload);
       this.updateRun(context);
       this.persistPendingGate(context);
-      this.insertEvent(context.identity.run_id, eventType, payload, now());
+      this.insertEvent(context.identity.run_id, eventType, persistedPayload, now());
     });
-    this.observe(context, eventType, payload);
+    context.markCheckpointEvidencePersisted();
+    this.observe(context, eventType, persistedPayload);
   }
 
   saveWithReceipt(
@@ -4086,13 +4667,17 @@ export class Checkpointer implements Disposable {
     eventType: string,
     payload: Record<string, JsonValue>
   ): void {
+    let persistedPayload: Record<string, JsonValue> = payload;
     this.transaction(() => {
       this.insertReceipt(result.worker_receipt, result, branchId);
+      this.validatePositiveTerminalWrite(context);
+      persistedPayload = this.checkpointPayload(context, payload);
       this.updateRun(context);
       this.persistPendingGate(context);
-      this.insertEvent(context.identity.run_id, eventType, payload, now());
+      this.insertEvent(context.identity.run_id, eventType, persistedPayload, now());
     });
-    this.observe(context, eventType, payload);
+    context.markCheckpointEvidencePersisted();
+    this.observe(context, eventType, persistedPayload);
   }
 
   saveGateResponse(
@@ -4103,6 +4688,7 @@ export class Checkpointer implements Disposable {
     eventType: string,
     payload: Record<string, JsonValue>
   ): void {
+    let persistedPayload: Record<string, JsonValue> = payload;
     this.transaction(() => {
       const rowValue = this.db
         .prepare(
@@ -4130,11 +4716,14 @@ export class Checkpointer implements Disposable {
            WHERE run_id=? AND gate_id=? AND status='pending'`
         )
         .run(sha256(responseJson), responseJson, now(), context.identity.run_id, gateId);
+      this.validatePositiveTerminalWrite(context);
+      persistedPayload = this.checkpointPayload(context, payload);
       this.updateRun(context);
       this.persistPendingGate(context);
-      this.insertEvent(context.identity.run_id, eventType, payload, now());
+      this.insertEvent(context.identity.run_id, eventType, persistedPayload, now());
     });
-    this.observe(context, eventType, payload);
+    context.markCheckpointEvidencePersisted();
+    this.observe(context, eventType, persistedPayload);
   }
 
   loadRun(identity: RunIdentity): RunContext {
@@ -4220,6 +4809,15 @@ export class Checkpointer implements Disposable {
     };
   }
 
+  receiptResultById(receiptId: string): PhaseResult | undefined {
+    const rowValue = this.db
+      .prepare("SELECT receipt_id, result_json FROM receipts WHERE receipt_id = ?")
+      .get(receiptId);
+    if (rowValue === undefined) return undefined;
+    const row = receiptRow(rowValue);
+    return validateContract(PhaseResultSchema, JSON.parse(row.result_json), "stored phase result");
+  }
+
   receiptResult(receipt: ExecutionReceipt): PhaseResult | undefined {
     const rowValue = this.db
       .prepare("SELECT receipt_id, result_json FROM receipts WHERE receipt_id = ?")
@@ -4258,12 +4856,20 @@ export class Checkpointer implements Disposable {
   }
 
   close(): void {
-    this.pruneTerminalRuns();
-    this.db.close();
+    try {
+      this.db.close();
+    } finally {
+      this.validationSnapshot?.close();
+    }
   }
 
   [Symbol.dispose](): void {
     this.close();
+  }
+
+  /** Body-free existence projection used by the project retention custodian. */
+  hasRunById(runId: string): boolean {
+    return this.db.prepare("SELECT 1 FROM runs WHERE run_id = ?").get(runId) !== undefined;
   }
 
   /**
@@ -4271,9 +4877,10 @@ export class Checkpointer implements Disposable {
    *
    * Terminal statuses are complete, incomplete, error, and cancelled. Non-terminal
    * (running or awaiting_user) runs are never pruned — they may still be resumed.
-   * Pruning cascades to events, receipts, and gates via FK ON DELETE CASCADE.
+   * Pruning cascades to events, receipts, and gates via FK ON DELETE CASCADE. The
+   * exact deleted run IDs are exposed only after the deletion transaction commits.
    */
-  pruneTerminalRuns(): void {
+  pruneTerminalRuns(): readonly string[] {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const terminalStatuses = ["complete", "incomplete", "error", "cancelled"];
@@ -4314,15 +4921,13 @@ export class Checkpointer implements Disposable {
         )
         .all(...terminalStatuses, ...keepIds)
         .map((row) => sqliteText(row, "run_id", "prunable orchestration run"));
-      if (excess.length === 0) {
-        this.db.exec("COMMIT");
-        return;
-      }
+      const deleted: string[] = [];
       const deleteStmt = this.db.prepare("DELETE FROM runs WHERE run_id = ?");
       for (const runId of excess) {
-        deleteStmt.run(runId);
+        if (numberValue(deleteStmt.run(runId).changes) === 1) deleted.push(runId);
       }
       this.db.exec("COMMIT");
+      return deleted;
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -4340,7 +4945,14 @@ export class Checkpointer implements Disposable {
   private contextFromRunRow(row: RunRow): RunContext {
     const parsed: unknown = JSON.parse(row.context_json);
     if (row.playbook !== "knowledge-base") {
-      return RunContext.fromCheckpoint(parsed, { playbook: row.playbook });
+      const context = RunContext.fromCheckpoint(parsed, { playbook: row.playbook });
+      if (
+        !isTerminalStatus(context.status) &&
+        !this.stateVisits(row.run_id).some((visit) => visit.state_id === context.stateId)
+      ) {
+        context.restoreCurrentStateVisit();
+      }
+      return context;
     }
     const projectRoot = this.kbRuntimeProjectRoot;
     if (projectRoot === undefined) {
@@ -4353,6 +4965,12 @@ export class Checkpointer implements Disposable {
       projectRoot,
     });
     this.assertIdentityRow(context.identity, row);
+    if (
+      !isTerminalStatus(context.status) &&
+      !this.stateVisits(row.run_id).some((visit) => visit.state_id === context.stateId)
+    ) {
+      context.restoreCurrentStateVisit();
+    }
     return context;
   }
 

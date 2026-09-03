@@ -1,34 +1,37 @@
-# Injection Prevention — SQL, command, and code injection rules
+# Injection Prevention
 
-## What
+## Applies when
 
-Never generate code that constructs executable strings from user input. Use parameterized interfaces for all database queries, subprocess calls, and dynamic evaluation.
+Untrusted data reaches query, command, template, expression, interpreter, header, URL, path, or protocol construction.
 
-## Why
+## Security properties
 
-Injection is the #1 vulnerability class in generated code. String concatenation with user input is the root cause. Parameterization eliminates the attack surface.
+- Data remains data; it cannot alter interpreter syntax, control flow, transport framing, or resource selection.
+- Construction uses context-aware safe APIs, parameterization, structural allowlists, and encoding.
 
-## Rules
+## Requirements
 
-1. **SQL: use parameterized queries.** `cursor.execute("SELECT * FROM users WHERE id = ?", [user_id])`. Never f-strings or concatenation.
-2. **Command: avoid shell=True.** Use argument arrays: `subprocess.run(["git", "log"], shell=False)`. Never `os.system(user_input)`.
-3. **Code: never eval().** No `eval()`, `Function()`, `exec()`, or equivalent in any language.
-4. **LDAP/OS/XML: use the safe API.** Every injection surface has a parameterized equivalent. Find it.
+- Use parameterized/bound query APIs, argument-vector process APIs, typed protocol builders, and structured template/query APIs.
+- Allowlist tokens when a parameterized API cannot represent identifiers or grammar; never escape a general language as if it were a value.
+- Treat templates, expressions, headers, URLs, paths, shell commands, query languages, and protocol serialization as distinct contexts.
 
-## Constraints
+## Failure modes
 
-- **BLOCKER severity.** Any injection vector in generated code must be fixed before delivery.
-- **Applies to all languages.** Python, TypeScript, Bash, SQL — the pattern is universal.
+- Concatenating untrusted strings into SQL, shell, templates, headers, URLs, paths, or protocol messages.
+- Treating output encoding as a replacement for safe query/command construction.
+- Replacing a known unsafe API with an equivalent dynamic evaluator.
 
 ## Verification
 
-- [ ] No string-concatenated SQL
-- [ ] No `shell=True` with user input
-- [ ] No `eval()` or dynamic code execution
-- [ ] All subprocess calls use argument arrays
+- Review all affected sinks and construction paths; test representative delimiter, metacharacter, encoding, and parser-confusion payloads.
+- Use static analysis where available and verify process calls never activate a shell for untrusted input.
 
-## Files
+## Related guidance
 
-| File                                         | Purpose                  |
-| -------------------------------------------- | ------------------------ |
-| `docs/agents/coding/security/conventions.md` | Universal security rules |
+- [Input validation](input-validation.md) constrains external data.
+- [XSS](xss.md), [SSRF and egress](ssrf-egress.md), and [untrusted execution](untrusted-execution.md) own adjacent contexts.
+
+## Current external references
+
+- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
+- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

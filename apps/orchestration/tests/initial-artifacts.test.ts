@@ -3,13 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { Checkpointer } from "../src/checkpointer.js";
 import { OrchestrationEngine } from "../src/engine.js";
-import type { ModelClient } from "../src/model-client.js";
-import { WorkerExecutor } from "../src/worker.js";
+import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 
 const roots: string[] = [];
 function root(): string {
@@ -59,6 +58,7 @@ describe("owner-seeded initial artifacts", () => {
     });
     using checkpointer = new Checkpointer(path.join(projectRoot, "orchestration-v2.db"));
     const engine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot,
       maxSteps: 32,
       artifactRevisions: artifacts,
@@ -84,7 +84,7 @@ describe("owner-seeded initial artifacts", () => {
     expect(directive.output_artifact.upstream_refs).toEqual([ref]);
   });
 
-  it("fails a missing input object before invoking the model", async () => {
+  it("fails a missing input object before invoking the model", () => {
     const projectRoot = root();
     const foreignRoot = root();
     const runId = "missing-input-preflight";
@@ -108,38 +108,38 @@ describe("owner-seeded initial artifacts", () => {
     using artifacts = new ArtifactStore(path.join(projectRoot, "artifacts"));
     using checkpointer = new Checkpointer(path.join(projectRoot, "orchestration-v2.db"));
     const engine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
       projectRoot,
       maxSteps: 32,
       artifactRevisions: artifacts,
     });
-    const directive = engine.handle({
-      schema_version: 2,
-      action: "start",
-      identity: identity(runId),
-      goal: "continue",
-      constraints: { mode: "quick" },
-      project_root: projectRoot,
-      trust_profile: "trusted-interactive",
-      input_artifacts: {
+    expect(() =>
+      engine.handle({
         schema_version: 2,
-        artifacts: [{ slot: "missing-local-object", ref }],
-      },
-    });
-    const runAgent = vi.fn<ModelClient["runAgent"]>();
-    const modelClient = { runAgent } satisfies ModelClient;
-    const workers = new WorkerExecutor(modelClient, artifacts, {
-      projectRoot,
-      parallelConcurrency: 1,
-    });
-    await expect(workers.execute(directive)).rejects.toThrow(/absent from the manifest/);
-    expect(runAgent).not.toHaveBeenCalled();
+        action: "start",
+        identity: identity(runId),
+        goal: "continue",
+        constraints: { mode: "quick" },
+        project_root: projectRoot,
+        trust_profile: "trusted-interactive",
+        input_artifacts: {
+          schema_version: 2,
+          artifacts: [{ slot: "missing-local-object", ref }],
+        },
+      })
+    ).toThrow(/absent from the manifest/);
+    expect(checkpointer.runExists(runId)).toBe(false);
   });
 
   it("accepts an empty v2 exact-input set without run or consumer authority", () => {
     const projectRoot = root();
     const runId = "research-chain-target";
     using checkpointer = new Checkpointer(path.join(projectRoot, "orchestration-v2.db"));
-    const engine = new OrchestrationEngine(checkpointer, { projectRoot, maxSteps: 32 });
+    const engine = new OrchestrationEngine(checkpointer, {
+      receiptAuthority: TEST_RECEIPT_AUTHORITY,
+      projectRoot,
+      maxSteps: 32,
+    });
     const directive = engine.handle({
       schema_version: 2,
       action: "start",

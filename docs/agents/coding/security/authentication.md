@@ -1,38 +1,37 @@
-# Authentication — Secure auth patterns for generated code
+# Authentication
 
-## What
+## Applies when
 
-Never generate code with weak authentication. Use established libraries, never roll your own crypto. Apply these rules to every auth-related code path.
+Code establishes, restores, or strengthens identity, including authenticators, credential verification, account recovery, MFA, passkeys, or federated identity.
 
-## Why
+## Security properties
 
-Authentication failures are the highest-impact security bugs. A single weak password reset flow or missing session validation can compromise the entire system.
+- Identity proof is resistant to guessing, replay, and recovery abuse appropriate to the risk.
+- Credential verification and recovery do not disclose account state unnecessarily.
 
-## Rules
+## Requirements
 
-1. **Use established auth libraries.** Passport.js, NextAuth, Django auth, Flask-Login. Never implement auth from scratch.
-2. **Hash passwords with bcrypt, argon2, or scrypt.** Never MD5, SHA1, or plaintext.
-3. **Use secure session management.** HttpOnly, Secure, SameSite=Strict cookies. Never store sessions in localStorage.
-4. **Rate-limit auth endpoints.** Throttling login/reset/token attempts is mandatory; make the limit a configurable knob with a sane default (e.g. ~5/min per account). The control is required; the exact number is deployment-tunable, not fixed law.
-5. **Use multi-factor where possible.** TOTP or WebAuthn for sensitive operations.
-6. **Never expose whether username or password was wrong.** "Invalid credentials" — not "user not found" vs "wrong password."
+- Use established, maintained authentication protocols and libraries; do not design cryptographic authentication primitives ad hoc.
+- Apply rate/cost controls, generic failure responses, expiry, single-use behavior, and reauthentication for sensitive flows as appropriate.
+- Treat recovery as an authentication mechanism with equivalent protection and auditability.
 
-## Constraints
+## Failure modes
 
-- **BLOCKER severity.** Weak auth must be fixed before delivery.
-- **Never generate password reset without token expiry.** Reset tokens must be short-lived and single-use; the exact TTL is a configurable default (e.g. ~1 hour), not a fixed law.
+- Treating a username lookup as proof of identity.
+- Leaking account existence through response, timing, or recovery behavior.
+- Moving session lifecycle or browser request integrity into this guide instead of their owners.
 
 ## Verification
 
-- [ ] Passwords hashed with bcrypt/argon2/scrypt
-- [ ] Sessions use HttpOnly + Secure + SameSite cookies
-- [ ] Rate limiting on login endpoints
-- [ ] Generic error messages on auth failure
-- [ ] Password reset tokens expire
+- Test successful and failed login, recovery expiry/single use, enumeration resistance, MFA/passkey fallback, and reauthentication paths.
+- Review provider/library configuration against current authoritative guidance.
 
-## Files
+## Related guidance
 
-| File                                         | Purpose                  |
-| -------------------------------------------- | ------------------------ |
-| `docs/agents/coding/security/secrets.md`     | Secrets handling         |
-| `docs/agents/coding/security/conventions.md` | Universal security rules |
+- [Session security](session-security.md) owns authenticated-state lifecycle.
+- [Anti-automation](anti-automation.md), [secrets](secrets.md), and [cryptography](cryptography.md) supply related controls.
+
+## Current external references
+
+- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
+- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

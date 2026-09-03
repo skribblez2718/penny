@@ -1,3 +1,3 @@
 # Skill Tool Feature Index
 
-- [Skill Tool](skill-tool.md): Single, parallel, chain, and resume modes with verified terminal-ref handoff, artifact continuation, and durable chain checkpoints
+- [Skill Tool](skill-tool.md): READ WHEN changing single, parallel, chain, or resume skill invocation — terminal refs and checkpoint semantics.

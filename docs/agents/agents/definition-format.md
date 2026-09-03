@@ -55,14 +55,17 @@ absent; never search memory, `/tmp`, or the repository for another agent's outpu
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `name`          | Lowercase alphanumeric plus hyphens; matches filename.                                                                                                 |
 | `description`   | One-line role, positive triggers, and anti-cases. Hard limit 1,024 characters; preferred target approximately 500, with justified longer text allowed. |
-| `tools`         | Required non-empty, duplicate-free exact active tool list. Include `artifact_read`; no runner may add, remove, or suppress entries.                    |
-| `authority`     | Static intent class (`read`, `write`, or `inspect`) used to lint `tools:`; it does not narrow runtime tools.                                           |
+| `tools`         | Required non-empty, duplicate-free maximum ordinary catalog list. Include `artifact_read`; direct/default paths activate it exactly.                   |
+| `authority`     | Static intent class (`read`, `write`, or `inspect`) used to lint the YAML maximum; it does not select runtime tools.                                   |
 | `tool_profiles` | Named rungs that expand exactly to `tools:`. Verified by `check_tool_profiles.py` in `make lint`.                                                      |
 | `model`         | Runtime-resolvable model name.                                                                                                                         |
 
-`tools:` is the only local tool declaration. A task, prompt body, artifact, or
-remote service cannot add a tool. `authority` and `tool_profiles` make the intended
-authority declared and machine-checked; see [Tool Authority Profiles](tool-profiles.md).
+`tools:` is the only local agent declaration and the maximum ordinary catalog authority. A
+task, prompt body, artifact, trust profile, or remote service cannot add or select a tool.
+Direct/parallel/chain invocation and subset-absent TypeScript orchestration activate YAML
+exactly. An eligible orchestration phase subset lives only in its active
+`PlaybookRegistrationV1`, is strict and canonical-digest-bound, and does not mutate this
+file, `authority`, or `tool_profiles`. See [Tool Authority Profiles](tool-profiles.md).
 
 ## Role/body rules
 
@@ -95,7 +98,8 @@ higher authority merely by containing instructions.
 
 - [ ] Frontmatter parses and filename matches `name`.
 - [ ] Description follows role / use / do-not-use pattern and stays within the 1,024-character hard limit.
-- [ ] Tool list is non-empty, duplicate-free, provider-known, and contains `artifact_read`.
+- [ ] YAML maximum is non-empty, duplicate-free, provider-known, contains `artifact_read`,
+      and still exactly equals its profile expansion.
 - [ ] Working Discipline defines exact supplied-ID handling and `missing_input:`.
 - [ ] Output requires complete work before any routing SUMMARY.
 - [ ] No write-memory, session-room, diary-write, or routine-KG-write instruction.

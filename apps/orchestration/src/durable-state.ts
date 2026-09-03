@@ -6,6 +6,7 @@ import {
   ArtifactRefSchema,
   DirectiveSchema,
   JsonValueSchema,
+  RegistrationContractBindingV1Schema,
   RunIdentitySchema,
   RunStatusSchema,
   TrustProfileSchema,
@@ -165,6 +166,8 @@ export type PlaybookDurableState =
 export const RunContextSnapshotSchema = Type.Object(
   {
     schema_version: Type.Literal(2),
+    completion_protocol_version: Type.Optional(Type.Literal(1)),
+    registration_contract_binding: Type.Optional(RegistrationContractBindingV1Schema),
     identity: RunIdentitySchema,
     goal: Type.String(),
     constraints: JsonObjectSchema,
@@ -226,7 +229,11 @@ const RUN_CONTEXT_REQUIRED_KEYS = [
   "terminal_directive",
 ] as const;
 
-const RUN_CONTEXT_OPTIONAL_KEYS = ["playbook_data"] as const;
+const RUN_CONTEXT_OPTIONAL_KEYS = [
+  "completion_protocol_version",
+  "registration_contract_binding",
+  "playbook_data",
+] as const;
 
 const KB_DURABLE_PROJECTION_KEYS = [
   "clarification_text",
@@ -253,6 +260,11 @@ const KB_DURABLE_PROJECTION_KEYS = [
   "trust_profile",
 ] as const;
 
+const KB_DURABLE_PROJECTION_OPTIONAL_KEYS = [
+  "completion_protocol_version",
+  "registration_contract_binding",
+] as const;
+
 function isUnknownRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -263,6 +275,13 @@ function sortedKeys(value: object): string[] {
 
 function sameKeys(actual: readonly string[], expected: readonly string[]): boolean {
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function hasValidKbProjectionKeys(value: Record<string, unknown>): boolean {
+  const presentOptional = KB_DURABLE_PROJECTION_OPTIONAL_KEYS.filter((key) =>
+    Object.hasOwn(value, key)
+  );
+  return sameKeys(sortedKeys(value), [...KB_DURABLE_PROJECTION_KEYS, ...presentOptional].sort());
 }
 
 function assertNoAbsolutePathInKbProjection(value: unknown): void {
@@ -323,11 +342,6 @@ function validateSnapshotWire(value: unknown): RunContextSnapshot {
   }
   if (snapshot.identity.engine_owner !== "typescript") {
     throw new Error("checkpoint engine_owner must be typescript");
-  }
-  for (const artifact of snapshot.selected_artifacts) {
-    if (artifact.run_id !== snapshot.identity.run_id) {
-      throw new Error("checkpoint artifact belongs to another run");
-    }
   }
   if (snapshot.pending_directive !== null) {
     const pending = validateDirective(snapshot.pending_directive);
@@ -397,7 +411,7 @@ export const orchestrationDurableStateCodec = {
       throw new CheckpointIdentityError("KB durable projection is not an object");
     }
     if (
-      !sameKeys(sortedKeys(value), [...KB_DURABLE_PROJECTION_KEYS].sort()) ||
+      !hasValidKbProjectionKeys(value) ||
       value.durable_schema_version !== 1 ||
       Object.hasOwn(value, "project_root")
     ) {
@@ -429,7 +443,7 @@ export const orchestrationDurableStateCodec = {
       ...withoutProjectRoot,
       playbook_data: snapshot.playbook_data ?? {},
     };
-    if (!sameKeys(sortedKeys(projection), [...KB_DURABLE_PROJECTION_KEYS].sort())) {
+    if (!hasValidKbProjectionKeys(projection)) {
       throw new CheckpointIdentityError("KB durable projection fields are not closed");
     }
     assertNoAbsolutePathInKbProjection(projection);

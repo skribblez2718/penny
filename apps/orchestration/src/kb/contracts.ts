@@ -696,6 +696,7 @@ export const RunStatusSchema = Type.Union([
   Type.Literal("refused"),
   Type.Literal("error"),
   Type.Literal("exhausted"),
+  Type.Literal("cancelled"),
 ]);
 export type RunStatus = Static<typeof RunStatusSchema>;
 
@@ -1085,10 +1086,13 @@ function resultIssues(result: KnowledgeBaseResult | ReplayableKnowledgeBaseResul
   } else if (result.status === "awaiting_user" && (result.met || result.next !== "review")) {
     issues.push("/: awaiting_user requires met=false,next=review");
   } else if (
-    (result.status === "refused" || result.status === "error" || result.status === "exhausted") &&
+    (result.status === "refused" ||
+      result.status === "error" ||
+      result.status === "exhausted" ||
+      result.status === "cancelled") &&
     (result.met || result.next !== "none")
   ) {
-    issues.push("/: refused/error/exhausted require met=false,next=none");
+    issues.push("/: refused/error/exhausted/cancelled require met=false,next=none");
   } else if (result.status === "complete" && result.next !== "none") {
     issues.push("/: complete requires next=none");
   }

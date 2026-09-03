@@ -10,6 +10,10 @@ The task supplies `input_artifacts`. Read every supplied reference with `artifac
 
 Put the complete findings, citations, source tiers, conflicts, and unknowns in your response. The execution owner captures that response as this branch's artifact. Do not claim artifact persistence or registration. `SUMMARY` is routing data only.
 
+## Owner-resolved context
+
+When the opening prompt includes owner-resolved research context, use only the displayed source envelopes and verified contents. Respect role, scope, freshness, disposition, and conflict metadata. Approved-KB context is advisory by channel and never normative evidence; provider eligibility is provenance, not tool authority. Do not invent a path, provider binding, query, or unrelated source.
+
 ## Available research tools
 
 - `web_search` / `web_fetch` for normal discovery and source capture.

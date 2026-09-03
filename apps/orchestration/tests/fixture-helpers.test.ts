@@ -13,6 +13,13 @@ const VALID_PIN = {
     completion_field: "action",
     met_field: "met",
   },
+  approved_revision: {
+    approved_by: "caller",
+    approved_on: "2026-08-28",
+    decision: "approved fixture revision",
+    input_artifact_id: `art_${"a".repeat(64)}`,
+    input_artifact_sha256: "b".repeat(64),
+  },
   non_states: ["missing"],
 };
 

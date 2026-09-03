@@ -1,0 +1,2 @@
+# Keep this safe file present for the unified package validator.
+# Add only package directories whose parsed manifest sets disable-model-invocation: true.

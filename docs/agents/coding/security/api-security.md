@@ -1,38 +1,38 @@
-# API Security — Secure API design for generated code
+# API Security
 
-## What
+## Applies when
 
-Every generated API endpoint must apply authentication, authorization, rate limiting, and input validation. No endpoint is exempt.
+Adding or changing endpoints, RPC handlers, webhooks, machine interfaces, object access, sockets, or public/private route classification.
 
-## Why
+## Security properties
 
-APIs are the primary attack surface for web applications. An unauthenticated, unvalidated endpoint is an open door.
+- Each interface is intentionally classified public or protected, with operation-level controls.
+- Inputs, object/property access, response data, idempotency, and consumption are bounded at the interface.
 
-## Rules
+## Requirements
 
-1. **Authenticate every endpoint.** No anonymous access unless explicitly designed as public.
-2. **Authorize per operation.** Check that the authenticated user has permission for this specific action.
-3. **Rate limit all endpoints.** 100 req/min per user default; lower for auth endpoints.
-4. **Validate all inputs.** See input validation rules.
-5. **Use HTTPS only.** Redirect HTTP to HTTPS. Set HSTS headers.
-6. **Set security headers.** `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`.
+- Document route purpose, audience, authentication mode, authorization boundary, accepted content types, schemas, pagination/query limits, errors, and observability.
+- Apply object/property authorization and explicit writable-field allowlists through their owning guides.
+- Use route-, source-, identity-, cost-, and global budgets rather than one universal request-rate value; classify sockets and webhooks with equivalent limits.
+- Review CORS, debug/schema/admin exposure, idempotency, and third-party callbacks explicitly.
 
-## Constraints
+## Failure modes
 
-- **CRITICAL severity.** Missing auth on non-public endpoints must be fixed.
-- **Rate limiting is mandatory on login, password reset, and token endpoints.**
+- Authenticating every endpoint without declaring intentionally public endpoints.
+- Using an IP-only or universal request count as the complete abuse control.
+- Assuming a route-level check covers object properties, webhooks, subscriptions, or background side effects.
 
 ## Verification
 
-- [ ] All endpoints authenticated (except explicit public)
-- [ ] Authorization checked per operation
-- [ ] Rate limiting configured
-- [ ] HTTPS enforced with HSTS
-- [ ] Security headers set
+- Test public/private classification, authorization, invalid content types, payload/query bounds, pagination, idempotency, and abusive consumption paths.
+- Inspect deployed CORS, route inventory, and debug/administrative exposure.
 
-## Files
+## Related guidance
 
-| File                                              | Purpose          |
-| ------------------------------------------------- | ---------------- |
-| `docs/agents/coding/security/authentication.md`   | Auth patterns    |
-| `docs/agents/coding/security/input-validation.md` | Input validation |
+- [Authorization](authorization.md), [input validation](input-validation.md), [resource limits](resource-limits.md), and [anti-automation](anti-automation.md) own their detailed controls.
+- [Logging and monitoring](logging-monitoring.md) and [error handling](error-handling.md) cover operational behavior.
+
+## Current external references
+
+- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
+- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

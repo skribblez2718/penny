@@ -20,10 +20,13 @@ import { fileURLToPath } from "node:url";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@earendil-works/pi-coding-agent", () => ({
-  withFileMutationQueue: vi.fn((_path: string, operation: () => unknown) => operation()),
-  parseFrontmatter: vi.fn(() => ({ frontmatter: {}, body: "" })),
-}));
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
+  return {
+    ...actual,
+    withFileMutationQueue: vi.fn((_path: string, operation: () => unknown) => operation()),
+  };
+});
 vi.mock("@earendil-works/pi-tui", () => ({
   Container: class {},
   Spacer: class {},

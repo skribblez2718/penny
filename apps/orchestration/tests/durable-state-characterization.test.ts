@@ -16,7 +16,8 @@ import {
   validateDirective,
 } from "../src/contracts.js";
 import { RunContext } from "../src/context.js";
-import { OrchestrationEngine } from "../src/engine.js";
+import { OrchestrationEngine, type EngineOptions } from "../src/engine.js";
+import { kbLivenessPolicy } from "../src/liveness.js";
 import { KnowledgeBasePlaybook } from "../src/playbooks/knowledge-base.js";
 import { ReceiptAuthority, trustedInvocationDigest } from "../src/receipts.js";
 
@@ -102,6 +103,11 @@ function fixtureObject(name: string): Record<string, unknown> {
   return requiredRecord(JSON.parse(fixture(name)), name);
 }
 
+function withCompletionProtocolV1(serialized: string): string {
+  const value = requiredRecord(JSON.parse(serialized), "legacy durable-state fixture");
+  return canonicalJson({ ...value, completion_protocol_version: 1 });
+}
+
 function fixtureDirective(
   name: string,
   field: "pending_directive" | "terminal_directive"
@@ -118,10 +124,7 @@ function deterministicReceiptAuthority(directory: string): ReceiptAuthority {
 function engine(
   checkpointer: Checkpointer,
   directory: string,
-  options: {
-    playbookName?: string;
-    dispatchMode?: () => string | undefined;
-  } = {}
+  options: Pick<EngineOptions, "playbookName" | "dispatchMode" | "livenessPolicyResolver"> = {}
 ): OrchestrationEngine {
   return new OrchestrationEngine(checkpointer, {
     projectRoot: PROJECT_ROOT,
@@ -129,6 +132,9 @@ function engine(
     receiptAuthority: deterministicReceiptAuthority(directory),
     ...(options.playbookName === undefined ? {} : { playbookName: options.playbookName }),
     ...(options.dispatchMode === undefined ? {} : { dispatchMode: options.dispatchMode }),
+    ...(options.livenessPolicyResolver === undefined
+      ? {}
+      : { livenessPolicyResolver: options.livenessPolicyResolver }),
   });
 }
 
@@ -428,6 +434,24 @@ function phaseResultProjection(
   };
 }
 
+function legacyUnmeteredPause(identity: RunIdentity, stateId: string) {
+  return {
+    schema_version: 2 as const,
+    action: "paused" as const,
+    identity,
+    status: "running" as const,
+    state_id: stateId,
+    code: "LEGACY_UNMETERED" as const,
+    reason: "active legacy run has no durable liveness policy; recovery is paused",
+    retryable: true as const,
+    recovery: {
+      action: "recover" as const,
+      run_id: identity.run_id,
+      checkpoint_preserved: true,
+    },
+  };
+}
+
 function createBareResearchRun(identity: RunIdentity): RunContext {
   return RunContext.create({
     identity,
@@ -440,8 +464,9 @@ function createBareResearchRun(identity: RunIdentity): RunContext {
 }
 
 describe("TS-200 RP-0 serialized checkpoint compatibility", () => {
-  it("locks research pending writer bytes and restores them through public recovery", () => {
-    const expectedBytes = fixture("research-pending.context.v2.json");
+  it("locks protocol-v1 research pending writer bytes and restores the legacy fixture", () => {
+    const legacyBytes = fixture("research-pending.context.v2.json");
+    const expectedBytes = withCompletionProtocolV1(legacyBytes);
     const expectedDirective = fixtureDirective(
       "research-pending.context.v2.json",
       "pending_directive"
@@ -464,7 +489,7 @@ describe("TS-200 RP-0 serialized checkpoint compatibility", () => {
       identity: RESEARCH_PENDING_IDENTITY,
       status: "running",
       stateId: "planning",
-      serialized: expectedBytes,
+      serialized: legacyBytes,
     });
     const reader = new Checkpointer(readerDb);
     const readerEngine = engine(reader, readerRoot);
@@ -474,13 +499,13 @@ describe("TS-200 RP-0 serialized checkpoint compatibility", () => {
         action: "recover",
         identity: RESEARCH_PENDING_IDENTITY,
       })
-    ).toEqual(expectedDirective);
-    expect(canonicalJson(reader.loadRun(RESEARCH_PENDING_IDENTITY).snapshot())).toBe(expectedBytes);
+    ).toEqual(legacyUnmeteredPause(RESEARCH_PENDING_IDENTITY, "planning"));
+    expect(canonicalJson(reader.loadRun(RESEARCH_PENDING_IDENTITY).snapshot())).toBe(legacyBytes);
     reader.close();
   });
 
-  it("locks research terminal writer bytes and replays the terminal directive after restart", () => {
-    const expectedBytes = fixture("research-terminal.context.v2.json");
+  it("locks protocol-v1 research terminal bytes and replays the legacy terminal fixture", () => {
+    const legacyBytes = fixture("research-terminal.context.v2.json");
     const expectedDirective = fixtureDirective(
       "research-terminal.context.v2.json",
       "terminal_directive"
@@ -496,8 +521,18 @@ describe("TS-200 RP-0 serialized checkpoint compatibility", () => {
       identity: RESEARCH_TERMINAL_IDENTITY,
       reason: "TS-200 fixture cancellation",
     });
-    expect(terminal).toEqual(expectedDirective);
-    expect(contextJson(writerDb, RESEARCH_TERMINAL_IDENTITY.run_id)).toBe(expectedBytes);
+    expect(terminal.action).toBe("cancelled");
+    if (terminal.action !== "cancelled") throw new Error("expected cancelled writer terminal");
+    expect(terminal.result.liveness).toMatchObject({
+      schema_version: 1,
+      policy_state: "bound",
+      terminal_reason: null,
+    });
+    expect(terminal.result.best_partial_artifact_refs).toEqual([]);
+    expect(terminal.result).not.toHaveProperty("report_dir");
+    expect(contextJson(writerDb, RESEARCH_TERMINAL_IDENTITY.run_id)).toBe(
+      canonicalJson(writer.loadRun(RESEARCH_TERMINAL_IDENTITY).snapshot())
+    );
     writer.close();
 
     const readerRoot = temporaryDirectory("research-terminal-reader");
@@ -508,7 +543,7 @@ describe("TS-200 RP-0 serialized checkpoint compatibility", () => {
       identity: RESEARCH_TERMINAL_IDENTITY,
       status: "cancelled",
       stateId: "cancelled",
-      serialized: expectedBytes,
+      serialized: legacyBytes,
     });
     const reader = new Checkpointer(readerDb);
     const readerEngine = engine(reader, readerRoot);
@@ -522,12 +557,9 @@ describe("TS-200 RP-0 serialized checkpoint compatibility", () => {
     reader.close();
   });
 
-  it("locks the path-free KB phase projection and restores it through public recovery", () => {
-    const expectedBytes = fixture("knowledge-base-compose.context.v1.json");
-    const expectedDirective = fixtureDirective(
-      "knowledge-base-compose.context.v1.json",
-      "pending_directive"
-    );
+  it("locks the protocol-v1 path-free KB projection and restores the legacy fixture", () => {
+    const legacyBytes = fixture("knowledge-base-compose.context.v1.json");
+    const expectedBytes = withCompletionProtocolV1(legacyBytes);
     const writerRoot = temporaryDirectory("kb-writer");
     const writerDb = path.join(writerRoot, "orchestration.db");
     const writer = new Checkpointer(writerDb);
@@ -547,17 +579,21 @@ describe("TS-200 RP-0 serialized checkpoint compatibility", () => {
       identity: KB_IDENTITY,
       status: "running",
       stateId: "compose",
-      serialized: expectedBytes,
+      serialized: legacyBytes,
     });
     const reader = new Checkpointer(readerDb);
-    const readerEngine = engine(reader, readerRoot, { playbookName: "knowledge-base" });
+    const readerEngine = engine(reader, readerRoot, {
+      playbookName: "knowledge-base",
+      livenessPolicyResolver: () =>
+        kbLivenessPolicy({ action: "ingest", readerMaxCallsPerPhase: 16 }),
+    });
     expect(
       readerEngine.handle({
         schema_version: 2,
         action: "recover",
         identity: KB_IDENTITY,
       })
-    ).toEqual(expectedDirective);
+    ).toEqual(legacyUnmeteredPause(KB_IDENTITY, "compose"));
     const restored = reader.loadRun(KB_IDENTITY);
     expect(restored.projectRoot).toBe(PROJECT_ROOT);
     expect(restored.playbookData.phases).toEqual(context.playbookData.phases);
@@ -844,19 +880,14 @@ describe("TS-200 recovery error codes and fail-closed behavior", () => {
     );
     const missingBefore = contextJson(missingDb, missingIdentity.run_id);
     const missingEngine = engine(missingCheckpointer, missingRoot);
-    try {
-      missingEngine.handle({
+    projection.missing_directive = {
+      directive: missingEngine.handle({
         schema_version: 2,
         action: "recover",
         identity: missingIdentity,
-      });
-      throw new Error("missing directive recovery unexpectedly succeeded");
-    } catch (error) {
-      projection.missing_directive = {
-        ...restoreError(error),
-        checkpoint_unchanged: contextJson(missingDb, missingIdentity.run_id) === missingBefore,
-      };
-    }
+      }),
+      checkpoint_unchanged: contextJson(missingDb, missingIdentity.run_id) === missingBefore,
+    };
     missingCheckpointer.close();
 
     expect(projection).toEqual(fixtureObject("contract-projection.v1.json").recovery_fail_closed);

@@ -132,12 +132,17 @@ def test_skill_scaffolder_generates_artifact_first_memory_optional_surfaces() ->
         "SKILL.md": scaffolder._build_skill_md(),
         "README.md": scaffolder._build_readme_md(),
         "reference.md": scaffolder._build_reference_md(),
+        "flow.html": scaffolder._build_flow_html(),
         "echo.md": scaffolder._build_prompt_md("echo", ["working_echo"]),
     }
     combined = "\n".join(generated.values())
     for required in ("input_artifacts", "output_artifact", "artifact_read", "routing data only"):
         assert required in combined
     assert "mempalace: false" in generated["SKILL.md"]
+    assert 'name="penny-flow-template" content="1"' in generated["flow.html"]
+    assert "const N =" in generated["flow.html"]
+    assert "const E =" in generated["flow.html"]
+    assert "script src" not in generated["flow.html"]
     for pattern in RETIRED_ACTIVE_PATTERNS.values():
         assert not pattern.search(combined)
     source = (ROOT / "scripts" / "tools" / "scaffold-skill.py").read_text(encoding="utf-8")

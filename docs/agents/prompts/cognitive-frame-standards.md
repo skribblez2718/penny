@@ -195,6 +195,6 @@ Compliance checklists are enforced by **review, not by a linter** — a suffix-b
 
 Review by a different model is **model-diverse review** — a useful supplementary check, not independent evidence by itself; the deterministic gates (token budget, `make evals`, parser checks) remain the stronger anchors.
 
-See [Architecture §Enforcement](architecture.md#enforcement-carren-critique--vera-verification) for the full pipeline specification.
+See [prompt architecture compliance guidance](architecture.md#compliance) for the full pipeline specification.
 
 This applies to changes at every layer: Cognitive Frame (`SYSTEM.md`), Role Definition (`.pi/agents/*.md`), and Domain Guidance (`.pi/skills/*/assets/prompts/*.md`).

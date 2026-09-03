@@ -1,3 +1,3 @@
 # Enhance Feature Index
 
-- [Enhance](enhance.md): On-demand prompt enhancement via a trailing ` -i` suffix — rewrites raw prompts into world-class goal-oriented Invocation Context; trigger, flag consumption, config, failure semantics
+- [Enhance](enhance.md): READ WHEN changing or diagnosing trailing `-i` prompt enhancement — activation, transformation, configuration, and failure semantics.

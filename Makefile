@@ -1,4 +1,4 @@
-.PHONY: setup venv install-py install-js init clean test test-integration check-public check-agents-links check-kb-privacy check-tool-profiles check-tool-descriptions check-skill-structure check-capability-registry check-agent-roster lint typecheck verify-publication format evals
+.PHONY: setup venv install-py install-js init clean test test-integration check-public check-agents-links check-doc-links check-kb-privacy check-tool-profiles check-tool-descriptions check-skill-structure check-capability-registry check-agent-roster lint typecheck verify-publication format evals
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 
@@ -47,6 +47,8 @@ test:
 	@echo "==================== AGENTS.md index guard ===================="
 	@.venv/bin/python scripts/system/checks/check_agents_links.py
 	@echo ""
+	@echo "==================== local Markdown link guard ===================="
+	@.venv/bin/python scripts/system/checks/check_markdown_links.py
 	@echo "==================== knowledge-base privacy guard ===================="
 	@.venv/bin/python scripts/system/checks/check_kb_privacy.py
 	@echo ""
@@ -83,13 +85,12 @@ test-integration:
 	  done; \
 	  exit $$rc'
 
-# EVALUATION — stub.
-# The legacy behavioral ratchet (scripts/system/evals + scripts/system/trajectory)
-# was retired 2026-08-21. A new evaluation system (prompt architecture, agents,
-# skills, etc.) is being built from scratch under evals/. Oracle-authored
-# trajectory fixtures are preserved at evals/fixtures/trajectory-fixtures.json.
+# Optional local benchmark gate. Inputs under the ignored evals/ directory are
+# caller-owned and are not part of publication checks. Neither path performs
+# promotion, admission, production registration, or candidate enablement.
 evals:
-	@echo "[evals] legacy ratchet retired — the new evaluation system lands under evals/ (see evals/README.md)"
+	bun run --cwd .pi/extensions/skill evals:known-delta
+	bun run --cwd .pi/extensions/skill evals:plan-control
 
 # Public-boundary guard: fail if a tracked file reintroduces an operator-filesystem path
 # (enforces the AGENTS.md "Public repository boundary" invariant; also runs inside `make test`).
@@ -102,6 +103,11 @@ check-public:
 # configured private root is never scanned. See docs/agents/documentation/agents-md-standard.md.
 check-agents-links:
 	@.venv/bin/python scripts/system/checks/check_agents_links.py
+
+# Local Markdown targets in the public documentation surface. This complements the
+# AGENTS grammar check without traversing ignored/private content.
+check-doc-links:
+	@.venv/bin/python scripts/system/checks/check_markdown_links.py
 
 # Knowledge-base privacy gate: the docs/kb scaffold stays exactly five tracked files with a
 # default-deny ignore grammar, no live KB path is ever tracked, and root admission is
@@ -147,6 +153,7 @@ lint:
 	.venv/bin/python scripts/system/checks/check_capability_registry.py
 	.venv/bin/python scripts/system/checks/check_skill_structure.py
 	.venv/bin/python scripts/system/checks/check_agents_links.py
+	.venv/bin/python scripts/system/checks/check_markdown_links.py
 	.venv/bin/python scripts/system/checks/check_kb_privacy.py
 	.venv/bin/python scripts/system/generate_agent_roster.py --check
 

@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "full_product_mutation_count": 8,
+  "draft_ablation_applicable_mutation_count": 6,
+  "mutations": [
+    {
+      "mutation_id": "coverage",
+      "target": "draft",
+      "expected_full_sealer": "reject",
+      "draft_ablation_applicability": "applicable"
+    },
+    {
+      "mutation_id": "feasibility",
+      "target": "draft",
+      "expected_full_sealer": "reject",
+      "draft_ablation_applicability": "applicable"
+    },
+    {
+      "mutation_id": "ranking",
+      "target": "draft",
+      "expected_full_sealer": "reject",
+      "draft_ablation_applicability": "applicable"
+    },
+    {
+      "mutation_id": "reference_integrity",
+      "target": "draft",
+      "expected_full_sealer": "reject",
+      "draft_ablation_applicability": "applicable"
+    },
+    {
+      "mutation_id": "sensitivity",
+      "target": "draft",
+      "expected_full_sealer": "reject",
+      "draft_ablation_applicability": "applicable"
+    },
+    {
+      "mutation_id": "unresolved_handling",
+      "target": "draft",
+      "expected_full_sealer": "reject",
+      "draft_ablation_applicability": "applicable"
+    },
+    {
+      "mutation_id": "request_binding",
+      "target": "product",
+      "expected_full_sealer": "reject",
+      "draft_ablation_applicability": "not_applicable"
+    },
+    {
+      "mutation_id": "execution_flag",
+      "target": "product",
+      "expected_full_sealer": "reject",
+      "draft_ablation_applicability": "not_applicable"
+    }
+  ]
+}

@@ -150,13 +150,13 @@ Loops are not alternatives — they **nest**. A production system layers them:
 
 From the research, in order of strength:
 
-| #   | Control                        | What It Does                                                 | Penny Mechanism                                   |
-| --- | ------------------------------ | ------------------------------------------------------------ | ------------------------------------------------- |
-| 1   | Verifier-gated success         | Success termination only when required gates pass            | `CompletionGateV1`                                |
-| 2   | Bounded iteration budgets      | Hard cap on retries; exhaustion is a legitimate outcome      | `max_iterations`, `learn_exhausted` → `met=False` |
-| 3   | Structured completion criteria | Written before the work; checked at the end                  | FRAME⇄VERIFY design spine; IDEAL_STATE            |
-| 4   | Human-in-the-loop checkpoints  | Escape hatch for paralysis and gate for irreversible actions | Planned gates, escalation                         |
-| 5   | Global step caps               | Backstop of last resort                                      | `max_steps` (default 96)                          |
+| #   | Control                        | What It Does                                                 | Penny Mechanism                                         |
+| --- | ------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------- |
+| 1   | Verifier-gated success         | Success termination only when required gates pass            | closed `CompletionGate` v2 + durable admission envelope |
+| 2   | Bounded iteration budgets      | Hard cap on retries; exhaustion is a legitimate outcome      | `max_iterations`, `learn_exhausted` → `met=False`       |
+| 3   | Structured completion criteria | Written before the work; checked at the end                  | FRAME⇄VERIFY design spine; IDEAL_STATE                  |
+| 4   | Human-in-the-loop checkpoints  | Escape hatch for paralysis and gate for irreversible actions | Planned gates, escalation                               |
+| 5   | Global step caps               | Backstop of last resort                                      | `max_steps` (default 96)                                |
 
 ## Failure Modes
 

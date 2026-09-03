@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   createAgentSession,
@@ -12,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { registerTool } from "../../../.pi/lib/pi-tool-registration.js";
 import { createWorkerResourceLoader, parseSsotTools } from "../src/model-client.js";
 
-const PROJECT_ROOT = path.resolve("..", "..");
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const AGENTS_DIR = path.join(PROJECT_ROOT, ".pi", "agents");
 
 function agentNames(): string[] {

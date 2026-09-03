@@ -1,36 +1,38 @@
-# File Handling — Safe file operations for generated code
+# File Handling
 
-## What
+## Applies when
 
-Never generate code with path traversal, unrestricted upload, or insecure file permissions. Validate all file operations.
+Accepting, creating, extracting, transforming, storing, serving, or deleting files, archives, paths, or temporary data.
 
-## Why
+## Security properties
 
-File handling bugs lead to path traversal (reading arbitrary files), remote code execution via uploads, and information disclosure via insecure permissions.
+- File operations cannot escape approved storage boundaries or cause unbounded parser, archive, or output work.
+- Content handling and delivery do not turn untrusted files into executable or privileged content.
 
-## Rules
+## Requirements
 
-1. **Validate and sanitize all file paths.** Use `path.resolve()` and verify the result is within the allowed directory.
-2. **Validate upload types by content, not extension.** Check MIME type and magic bytes, not the filename.
-3. **Restrict upload sizes.** Set a maximum file size before processing.
-4. **Use secure file permissions.** `0o600` for sensitive files, `0o644` for public. Never `0o777`.
-5. **Never use user input directly in file paths.** `open(user_input)` is path traversal waiting to happen.
+- Derive storage location server-side; normalize and authorize paths; use race-safe temporary creation and least-privilege permissions.
+- Validate declared and detected content, size, count, archive paths, compression/expansion, recursion, metadata, and output before expensive processing.
+- Define quarantine/scanning, retention, cleanup, serving disposition, and public/private storage boundaries according to risk.
+- Do not extract archives until path, link, type, and expansion controls are in place.
 
-## Constraints
+## Failure modes
 
-- **BLOCKER severity.** Path traversal or unrestricted upload must be fixed.
-- **Upload directories must be outside the web root.** Or served with `Content-Disposition: attachment`.
+- Trusting extensions, client file names, archive members, or MIME declarations alone.
+- Writing user paths directly, following archive symlinks, or using predictable temporary files.
+- Serving untrusted active content as if it were a safe attachment.
 
 ## Verification
 
-- [ ] File paths validated and resolved within allowed directory
-- [ ] Upload types validated by content
-- [ ] Upload sizes restricted
-- [ ] File permissions are minimal
-- [ ] No user input in raw file paths
+- Test traversal, absolute/encoded paths, symlinks, archive bombs, duplicate names, MIME mismatch, oversized output, cleanup, and authorization.
+- Inspect storage permissions and response headers for download/preview behavior.
 
-## Files
+## Related guidance
 
-| File                                              | Purpose          |
-| ------------------------------------------------- | ---------------- |
-| `docs/agents/coding/security/input-validation.md` | Input validation |
+- [Input validation](input-validation.md) owns boundary validation.
+- [Resource limits](resource-limits.md) owns budgets; [configuration](configuration.md) and [secrets](secrets.md) cover storage isolation.
+
+## Current external references
+
+- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
+- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

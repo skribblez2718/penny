@@ -27,6 +27,7 @@ import { Checkpointer, canonicalJson, sha256 } from "../src/checkpointer.js";
 import type { Directive, JsonValue } from "../src/contracts.js";
 import { RunContext } from "../src/context.js";
 import { OrchestrationEngine } from "../src/engine.js";
+import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 import type { AgentCompletion, AgentInvocation, ModelClient } from "../src/model-client.js";
 import { materializeRunInput, readRunInput, settleRunInput } from "../src/private-inputs.js";
 import { OrchestrationRunner, WorkerExecutor } from "../src/worker.js";
@@ -256,6 +257,7 @@ async function driveAgentRun(input: {
   const checkpointer = new Checkpointer(path.join(stateRoot, "orchestration.db"));
   const artifacts = new ArtifactStore(path.join(stateRoot, "engine-artifacts", input.runId));
   const engine = new OrchestrationEngine(checkpointer, {
+    receiptAuthority: TEST_RECEIPT_AUTHORITY,
     projectRoot: input.projectRoot,
     maxSteps: 50,
     artifactRevisions: artifacts,
@@ -655,6 +657,7 @@ async function runGroundedQuery(
   const checkpointer = new Checkpointer(path.join(stateRoot, "orchestration.db"));
   const artifacts = new ArtifactStore(path.join(stateRoot, "engine-artifacts", runId));
   const engine = new OrchestrationEngine(checkpointer, {
+    receiptAuthority: TEST_RECEIPT_AUTHORITY,
     projectRoot: input.projectRoot,
     maxSteps: 8,
     artifactRevisions: artifacts,

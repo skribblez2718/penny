@@ -2,7 +2,7 @@
 
 ## What
 
-These are the only approved implementations for state management, memory, agent tooling, extensions, and user input. No custom alternatives. All code must pass lint, format, typecheck, and tests before claiming completion.
+These are the only approved implementations for state management, memory, agent tooling, extensions, and user input. No custom alternatives. Implementation work must produce and run proportionate lint, format, type, test, and security evidence before claiming completion; review, diagnosis, and planning report available evidence and gaps without claiming an implementation changed.
 
 ## Why
 
@@ -12,15 +12,15 @@ Without canonical standards, every skill and extension invents its own patterns.
 
 ### Canonical Implementations — No Alternatives
 
-| Concern          | Standard                                                                                                            | Rejected                                                                             |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| State management | Shared TypeScript orchestration engine (`apps/orchestration/`) — durable Node SQLite checkpointer keyed by `run_id` | Per-skill runtimes/delegates, argv state, temporary session files, custom JSON state |
-| Memory           | Mempalace (`memory_*` tools)                                                                                        | Custom JSON caches, localStorage                                                     |
-| Agent tooling    | Exact YAML frontmatter `tools:` surface; profiles lint but runtime never overrides                                  | Hardcoded runtime lists, env-driven filtering, injected tools                        |
-| Extensions       | Always loaded (`--no-extensions` never used)                                                                        | `--no-extensions` flag                                                               |
-| User input       | `questionnaire` extension                                                                                           | stdin multi-turn, custom UI                                                          |
-| TypeScript       | Per-extension `tsconfig.json` with `noEmit: true`                                                                   | Shared root tsconfig                                                                 |
-| Package manager  | `bun`                                                                                                               | `npm`, `package-lock.json`                                                           |
+| Concern          | Standard                                                                                                                                                                                                         | Rejected                                                                                         |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| State management | Shared TypeScript orchestration engine (`apps/orchestration/`) — durable Node SQLite checkpointer keyed by `run_id`                                                                                              | Per-skill runtimes/delegates, argv state, temporary session files, custom JSON state             |
+| Memory           | Mempalace (`memory_*` tools)                                                                                                                                                                                     | Custom JSON caches, localStorage                                                                 |
+| Agent tooling    | YAML `tools:` is the maximum/profile-linted authority; direct paths and subset-absent orchestration use exact equality, while one explicit canonical-registration-bound TypeScript phase may use a strict subset | Hardcoded or task/trust/runtime-selected lists, env-driven filtering, injected/replacement tools |
+| Extensions       | Always loaded (`--no-extensions` never used)                                                                                                                                                                     | `--no-extensions` flag                                                                           |
+| User input       | `questionnaire` extension                                                                                                                                                                                        | stdin multi-turn, custom UI                                                                      |
+| TypeScript       | Per-extension `tsconfig.json` with `noEmit: true`                                                                                                                                                                | Shared root tsconfig                                                                             |
+| Package manager  | `bun`                                                                                                                                                                                                            | `npm`, `package-lock.json`                                                                       |
 
 ### The Bitter-Lesson Gate — before adding scaffolding
 
@@ -36,7 +36,7 @@ All extensions follow Pi's reference implementations. Deviations require documen
 
 ### Task Completion Protocol
 
-Before claiming any feature complete, verify all 10 checks:
+Before claiming an implementation complete, verify the applicable checks below. For review, diagnosis, or planning, identify applicable checks and evidence gaps instead of asserting unrun work passed:
 
 | #   | Check               | Verification                                        |
 | --- | ------------------- | --------------------------------------------------- |
@@ -68,9 +68,9 @@ Before claiming any feature complete, verify all 10 checks:
 
 ## Files
 
-| File                                                     | Purpose                |
-| -------------------------------------------------------- | ---------------------- |
-| `docs/agents/coding/python.md`                           | Python standards       |
-| `docs/agents/coding/typescript.md`                       | TypeScript standards   |
-| `docs/agents/coding/security/`                           | Security anti-patterns |
-| `docs/agents/extensions/extension-creation-procedure.md` | Extension creation     |
+| File                                                     | Purpose                                                 |
+| -------------------------------------------------------- | ------------------------------------------------------- |
+| `docs/agents/coding/python.md`                           | Python standards                                        |
+| `docs/agents/coding/typescript.md`                       | TypeScript standards                                    |
+| `docs/agents/coding/security/`                           | Invariant-first secure coding and evidence requirements |
+| `docs/agents/extensions/extension-creation-procedure.md` | Extension creation                                      |

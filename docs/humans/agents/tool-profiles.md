@@ -20,8 +20,11 @@ and a capability-level read-only are different guarantees, and only the weaker o
 Instead of granting tools one at a time, each role declares two things: how much authority
 it is allowed to have (`authority`), and which named bundles it draws from
 (`tool_profiles`). A CI check expands the bundles and asserts they equal the YAML tool
-list exactly. Drift fails the build. Profiles are static lint metadata: at runtime the
-YAML list itself is exact, and no trust profile or skill may narrow or broaden it.
+list exactly. Drift fails the build. Profiles are static lint metadata for that maximum.
+Direct/parallel/chain calls and ordinary orchestration phases use YAML exactly. One
+TypeScript orchestration phase may instead declare a fixed non-empty duplicate-free strict
+YAML subset in its canonical registration; task text, trust profiles, runtime state, and
+optional services cannot select it, and it does not mutate the profile assignment.
 
 The bundles form **ladders** — each rung contains everything below it plus a named
 increment:
@@ -67,13 +70,16 @@ This is the part worth reading carefully, because it is easy to overstate.
 form, upload a file, or execute arbitrary Playwright or Node code. That is enforced by the
 tool allowlist, not by asking the model nicely.
 
-**Filesystem and shell authority are not.** Every agent still holds `bash`. A "read-only"
-role can still write files, delete them, install packages, and reach the network — through
-a single tool that the profile system grants openly rather than pretending away.
+**Filesystem and shell authority are not.** Every agent's YAML maximum still holds `bash`.
+An ordinary exact-YAML "read-only" session can still write files, delete them, install
+packages, and reach the network — through a single tool that the profile system grants
+openly rather than pretending away.
 
-So the honest summary is: the browser hole is closed, the shell hole is documented and
-still open. No Penny document may claim read-only is fully enforced, because at the
-filesystem and process layer it remains advisory.
+A fixed orchestration phase subset can omit `bash` from that session's model-visible calls.
+It does not reduce the Pi process's host permissions, create OS/process sandboxing, or stop
+provider extension code from loading. So the honest summary is: the ordinary shell hole is
+documented and still open, while a narrow phase surface is a tool-call boundary rather than
+process isolation.
 
 Closing the `bash` gap is a separate, harder design problem. The plausible directions are a
 command-allowlisted shell wrapper, dropping `bash` from roles that only ever need

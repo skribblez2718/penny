@@ -3,11 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  DEFAULT_GUIDANCE,
-  parseSsotTools,
-  resolveDomainGuidancePath,
-} from "../src/model-client.js";
+import { parseSsotTools, resolveDomainGuidancePath } from "../src/model-client.js";
 import { RESEARCH_SKILL_CONTRACT } from "../src/playbooks/research.js";
 
 const PROJECT_ROOT = path.resolve(new URL("../../..", import.meta.url).pathname);
@@ -91,6 +87,5 @@ describe("guidance resolution", () => {
         guidance: RESEARCH_SKILL_CONTRACT.guidance,
       })
     ).toBe("/proj/.pi/skills/research/assets/prompts/echo-researching.md");
-    expect(DEFAULT_GUIDANCE).toEqual(RESEARCH_SKILL_CONTRACT.guidance);
   });
 });

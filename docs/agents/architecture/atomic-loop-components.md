@@ -208,14 +208,14 @@ COMPLIANCE HYGIENE
 
 The atoms are not a rewrite target — they are a **lens** for reading and evolving the existing engine. The mapping (fuller version in `research/atomic-loop-components/`):
 
-| Atom                              | Penny mechanism                                                                                 |
-| --------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Thread / Checkpoint / Workspace   | `RunContext`, durable exact-`run_id` Node SQLite checkpoint, immutable artifacts + git          |
-| Decide / Critique                 | `invoke_agent` Pi SDK workers / Vera (objective) + Carren (subjective)                          |
-| Verify / Budget / Gate / Escalate | state-specific schemas + `CompletionGateV1` / bounded repairs / `await_user`                    |
-| Fan / Compact                     | bounded branch-ID fan-out / context discipline and exact-ref compaction                         |
-| Recall                            | explicit agent/tool retrieval when prior context could matter; no engine-level memory injection |
-| Observe / Ablate                  | observability events / the eval ratchet                                                         |
+| Atom                              | Penny mechanism                                                                                                     |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Thread / Checkpoint / Workspace   | `RunContext`, durable exact-`run_id` Node SQLite checkpoint, immutable artifacts + git                              |
+| Decide / Critique                 | `invoke_agent` Pi SDK workers / Vera (objective) + Carren (subjective)                                              |
+| Verify / Budget / Gate / Escalate | state-specific schemas + closed `CompletionGate` v2 and durable admission evidence / bounded repairs / `await_user` |
+| Fan / Compact                     | bounded branch-ID fan-out / context discipline and exact-ref compaction                                             |
+| Recall                            | explicit agent/tool retrieval when prior context could matter; no engine-level memory injection                     |
+| Observe / Ablate                  | observability events / the eval ratchet                                                                             |
 
 Penny has no automatic L6 outcome-ledger/compression/amendment pipeline. Durable knowledge is written value-conditionally and retrieved explicitly; workflow-session drawers remain transport/state rather than automatically promoted learning.
 

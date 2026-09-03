@@ -5,9 +5,9 @@
 | Layer              | Function                                         | Source              |
 | ------------------ | ------------------------------------------------ | ------------------- |
 | Cognitive Frame    | Stable operating policy                          | `.pi/SYSTEM.md`     |
-| Role Definition    | Catalog role and exact YAML tools                | `.pi/agents/*.md`   |
+| Role Definition    | Catalog role and YAML maximum authority          | `.pi/agents/*.md`   |
 | Domain Guidance    | Static task-family criteria and SUMMARY contract | skill prompt assets |
-| Project Index      | Navigation                                       | `AGENTS.md`         |
+| Project Index      | Typed advisory routing                           | `AGENTS.md`         |
 | Invocation Context | Current goal, constraints, IDs, paths            | runtime task        |
 
 ## Worker assembly
@@ -16,8 +16,10 @@
 2. Read the catalog Role Definition.
 3. Inject optional Domain Guidance before literal `<agent_boundary>`.
 4. Append Project Index and current task.
-5. Load every provider extension, preflight declared names, and activate exactly YAML
-   `tools:`.
+5. Load every provider extension and preflight declared names. Direct/parallel/chain
+   invocation activates YAML exactly. A TypeScript orchestration phase activates YAML when
+   its active registration omits a subset, or its one canonical-registration-bound strict
+   YAML subset when present.
 
 Prompt markers are parsing aids. Runtime tool equality, approvals/receipts, and OS/container
 permissions are the control plane.
@@ -45,8 +47,14 @@ immutable handoff-index ID. It never scans global manifests or semantic memory.
 
 ## Compliance
 
-- [ ] YAML `tools:` is non-empty, duplicate-free, provider-known, and exact at runtime.
-- [ ] Trust profiles and skills do not alter a catalog tool set.
+- [ ] YAML `tools:` is a non-empty, duplicate-free, provider-known maximum and equals its
+      static profile expansion.
+- [ ] Direct/parallel/chain invocation and subset-absent orchestration activate exact YAML.
+- [ ] Only an active TypeScript orchestration registration may bind one non-empty,
+      duplicate-free strict YAML subset into its canonical digest and worker metadata; task,
+      trust, input, runtime, liveness, model, and service state cannot select it.
+- [ ] Candidate subset claims do not imply OS/process sandboxing or extension-code isolation;
+      host-private tools remain separate.
 - [ ] Domain Guidance defines complete output and one closed final SUMMARY line.
 - [ ] Inputs are exact IDs/paths, not payloads or semantic pointers.
 - [ ] Persistence/re-read precedes routing and success.

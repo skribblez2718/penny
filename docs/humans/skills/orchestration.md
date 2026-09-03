@@ -1,8 +1,10 @@
 # Skill Orchestration
 
-Penny has one TypeScript workflow engine. A registered playbook names states, routing,
-contracts, repairs, gates, and terminal truth; the engine owns checkpoints, exact artifacts,
-receipts, workers, and recovery.
+Penny has one TypeScript workflow engine. A registered playbook names states, happy routing,
+gap classification, gates, and terminal candidates. Its active registration binds required
+guidance, state/agent/result contracts, repair routes, and completion criteria. The engine owns
+repair budgets/transitions, checkpoints, exact artifacts, receipts, workers, positive-terminal
+admission, and recovery.
 
 ## One stage
 
@@ -11,6 +13,9 @@ receipts, workers, and recovery.
 3. The worker reads each needed exact ID through `next_range`.
 4. The owner persists/re-reads complete output bytes and signs a receipt.
 5. Only then may routing fields advance the checkpoint.
+6. For a valid domain gap, the playbook returns a strategy-bearing classification without a
+   target. The engine chooses the registered route and records digest-only evidence. Malformed
+   routing output remains a separate bounded correction path.
 
 Parallel work uses branch IDs. Chain composition verifies and forwards the exact terminal
 ID directly into the next run; `{previous}` never transports payload text.

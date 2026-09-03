@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "cohort_id": "plan-strategy-v1-mutations",
+  "mutations": [
+    { "mutation_id": "missing_outcome_coverage", "surface": "draft" },
+    { "mutation_id": "out_of_range_request_index", "surface": "draft" },
+    { "mutation_id": "dangling_dependency_endpoint", "surface": "draft" },
+    { "mutation_id": "dependency_cycle", "surface": "draft" },
+    { "mutation_id": "ready_with_blocker", "surface": "draft" },
+    { "mutation_id": "blocked_without_blocked_outcome", "surface": "draft" },
+    { "mutation_id": "not_applicable_with_outcomes", "surface": "draft" },
+    { "mutation_id": "omitted_request_coverage", "surface": "draft" },
+    { "mutation_id": "confidence_drift", "surface": "draft" },
+    { "mutation_id": "request_digest_drift", "surface": "product" },
+    { "mutation_id": "draft_lineage_digest_drift", "surface": "product" },
+    { "mutation_id": "stable_id_drift", "surface": "product" },
+    { "mutation_id": "execution_started_true", "surface": "product" },
+    {
+      "mutation_id": "unknown_execution_taskification_field",
+      "surface": "draft_and_product"
+    }
+  ],
+  "valid_controls": [
+    {
+      "control_id": "flexible_json_and_set_order",
+      "reordered_json_keys": true,
+      "legal_insignificant_whitespace": true,
+      "reordered_set_arrays": true
+    }
+  ]
+}

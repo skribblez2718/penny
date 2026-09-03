@@ -229,6 +229,57 @@ describe("subagent tool model override", () => {
     expect(getModelOverride(0)).toBeUndefined();
   });
 
+  it("does not prompt for project agents when the current project is trusted", async () => {
+    const mod = await import("../../index.js");
+    const pi = createMockPi();
+    mod.default(pi);
+    const confirm = vi.fn(() => Promise.resolve(false));
+
+    await subagentTool().execute(
+      "tool-trusted",
+      {
+        agent: "echo",
+        task: "hello",
+        confirmProjectAgents: true,
+      },
+      undefined,
+      undefined,
+      {
+        cwd: process.cwd(),
+        hasUI: true,
+        isProjectTrusted: () => true,
+        ui: { confirm },
+      }
+    );
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(mockRunSingleAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("prompts before project-agent execution when the current project is untrusted", async () => {
+    const mod = await import("../../index.js");
+    const pi = createMockPi();
+    mod.default(pi);
+    const confirm = vi.fn(() => Promise.resolve(false));
+
+    const response = await subagentTool().execute(
+      "tool-untrusted",
+      { agent: "echo", task: "hello" },
+      undefined,
+      undefined,
+      {
+        cwd: process.cwd(),
+        hasUI: true,
+        isProjectTrusted: () => false,
+        ui: { confirm },
+      }
+    );
+
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(mockRunSingleAgent).not.toHaveBeenCalled();
+    expect(response.content[0]?.text).toContain("not approved");
+  });
+
   it("preflights and forwards cross-run input IDs before invoking the worker", async () => {
     const { chmodSync, mkdtempSync, rmSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");

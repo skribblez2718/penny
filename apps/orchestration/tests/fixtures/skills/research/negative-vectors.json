@@ -1,0 +1,679 @@
+{
+  "context_kb_normative": {
+    "conflict": {
+      "status": "none"
+    },
+    "consumer_states": [
+      "planning",
+      "critiquing_plan",
+      "researching",
+      "synthesizing",
+      "critiquing_report",
+      "validating"
+    ],
+    "content": {
+      "media_type": "text/markdown",
+      "sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+      "utf8_bytes": 12
+    },
+    "freshness": {
+      "status": "not_time_sensitive"
+    },
+    "provider": {
+      "configuration_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "eligibility_record_id": "eligibility-vector",
+      "eligibility_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "provider_id": "document-provider"
+    },
+    "revision": {
+      "approval_id": "approval",
+      "approval_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "kb_profile_id": "profile",
+      "kind": "approved_kb",
+      "result_id": "result"
+    },
+    "role": "normative",
+    "schema_id": "penny.context-source-ref.v1",
+    "schema_version": 1,
+    "scope_id": "scope-vector",
+    "slot": "domain_guidance",
+    "source_id": "doc-source",
+    "source_kind": "approved_kb_result",
+    "upstream_locators": [
+      {
+        "locator": "https://example.invalid/doc",
+        "source_id": "doc-source"
+      }
+    ],
+    "verification_disposition": "accepted_for_scope"
+  },
+  "deterministic_render_wrong_filename": {
+    "artifact_ref": {
+      "artifact_id": "art_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "branch_id": null,
+      "byte_length": 10,
+      "content_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "kind": "deterministic-render",
+      "media_type": "text/markdown",
+      "operation_id": "operation-c",
+      "phase": "vector",
+      "producer": "host:vector",
+      "run_id": "run-vector",
+      "schema_version": 2,
+      "store_ref": "artifact://sha256/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "version": 1
+    },
+    "byte_length": 10,
+    "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "render_name": "report",
+    "renderer_id": "penny.research.compat-markdown.v1",
+    "schema_id": "penny.deterministic-render-ref.v1",
+    "schema_version": 1,
+    "semantic_core": {
+      "artifact_ref": {
+        "artifact_id": "art_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "branch_id": null,
+        "byte_length": 2382,
+        "content_digest": "917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff",
+        "content_schema": {
+          "schema_id": "penny.grounded-synthesis.v1",
+          "schema_version": 1
+        },
+        "kind": "semantic-core",
+        "media_type": "application/json",
+        "operation_id": "operation-a",
+        "phase": "vector",
+        "producer": "host:vector",
+        "run_id": "run-vector",
+        "schema_version": 2,
+        "store_ref": "artifact://sha256/917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff",
+        "version": 1
+      },
+      "product_schema_version": 1,
+      "schema_id": "penny.grounded-synthesis.v1",
+      "schema_version": 1,
+      "sha256": "917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff"
+    },
+    "target_relative_path": "sources.md"
+  },
+  "grounded_synthesis_duplicate_id": {
+    "claims": [
+      {
+        "claim_id": "claim-0001",
+        "claim_kind": "fact",
+        "confidence": 1,
+        "evidence_ids": [
+          "evidence-0001"
+        ],
+        "qualifications": [],
+        "statement": "The vector is internally linked.",
+        "support_status": "supported"
+      },
+      {
+        "claim_id": "claim-0001",
+        "claim_kind": "fact",
+        "confidence": 1,
+        "evidence_ids": [
+          "evidence-0001"
+        ],
+        "qualifications": [],
+        "statement": "The vector is internally linked.",
+        "support_status": "supported"
+      }
+    ],
+    "contradictions": [],
+    "evidence": [
+      {
+        "evidence_artifact_id": "art_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "evidence_id": "evidence-0001",
+        "excerpt_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "locator": "section-1",
+        "relation": "supports",
+        "source_id": "source-0001"
+      }
+    ],
+    "executive_summary": "One claim is supported by exact evidence.",
+    "irreducible_uncertainties": [],
+    "narrative": {
+      "sections": [
+        {
+          "body": "The supported finding.",
+          "claim_ids": [
+            "claim-0001"
+          ],
+          "evidence_ids": [
+            "evidence-0001"
+          ],
+          "heading": "Finding",
+          "section_id": "section-0001"
+        }
+      ]
+    },
+    "provenance": {
+      "context_trace_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "evidence_artifacts": [
+        {
+          "artifact_id": "art_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "branch_id": null,
+          "byte_length": 20,
+          "content_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "kind": "agent-output",
+          "media_type": "text/plain",
+          "operation_id": "operation-e",
+          "phase": "vector",
+          "producer": "host:vector",
+          "run_id": "run-vector",
+          "schema_version": 2,
+          "store_ref": "artifact://sha256/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "version": 1
+        }
+      ],
+      "synthesis_source_artifact": {
+        "artifact_id": "art_ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "branch_id": null,
+        "byte_length": 20,
+        "content_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "kind": "agent-output",
+        "media_type": "text/plain",
+        "operation_id": "operation-f",
+        "phase": "vector",
+        "producer": "host:vector",
+        "run_id": "run-vector",
+        "schema_version": 2,
+        "store_ref": "artifact://sha256/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "version": 1
+      }
+    },
+    "request": {
+      "normalized_question": "What is verified?",
+      "request_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "scope": {
+        "exclude": [],
+        "include": [
+          "verified scope"
+        ]
+      }
+    },
+    "schema_id": "penny.grounded-synthesis.v1",
+    "schema_version": 1,
+    "sources": [
+      {
+        "locator": "https://example.invalid/vector",
+        "observed_at": "2026-08-26T00:00:00Z",
+        "role": "evidentiary",
+        "source_id": "source-0001",
+        "source_kind": "primary",
+        "tier": 1,
+        "title": "Vector source"
+      }
+    ],
+    "title": "Verified synthesis",
+    "unresolved_gaps": []
+  },
+  "product_envelope_duplicate_render": {
+    "envelope_id": "penv_59eb62549f1eaf0c32d8d3f4c04946b8b6046a319fea384a9c4fee4ef0c14c6c",
+    "receipts": [
+      {
+        "artifact_ref": {
+          "artifact_id": "art_7777777777777777777777777777777777777777777777777777777777777777",
+          "branch_id": null,
+          "byte_length": 100,
+          "content_digest": "7777777777777777777777777777777777777777777777777777777777777777",
+          "content_schema": {
+            "schema_id": "penny.product-receipt.v1",
+            "schema_version": 1
+          },
+          "kind": "product-receipt",
+          "media_type": "application/json",
+          "operation_id": "operation-7",
+          "phase": "vector",
+          "producer": "host:vector",
+          "run_id": "run-vector",
+          "schema_version": 2,
+          "store_ref": "artifact://sha256/7777777777777777777777777777777777777777777777777777777777777777",
+          "version": 1
+        },
+        "receipt_id": "prc_3881916f4248db0dccc8f9b2f0eb69de1fa076b857ded7fbdef299a8e3d24a5b",
+        "receipt_kind": "grounding_verification"
+      },
+      {
+        "artifact_ref": {
+          "artifact_id": "art_8888888888888888888888888888888888888888888888888888888888888888",
+          "branch_id": null,
+          "byte_length": 100,
+          "content_digest": "8888888888888888888888888888888888888888888888888888888888888888",
+          "content_schema": {
+            "schema_id": "penny.product-receipt.v1",
+            "schema_version": 1
+          },
+          "kind": "product-receipt",
+          "media_type": "application/json",
+          "operation_id": "operation-8",
+          "phase": "vector",
+          "producer": "host:vector",
+          "run_id": "run-vector",
+          "schema_version": 2,
+          "store_ref": "artifact://sha256/8888888888888888888888888888888888888888888888888888888888888888",
+          "version": 1
+        },
+        "receipt_id": "prc_d5f0f99db568e778f350d083d6fa35c4e77c5bb4f191c417e9799ad337e83f08",
+        "receipt_kind": "deterministic_product_validation"
+      }
+    ],
+    "renders": [
+      {
+        "artifact_ref": {
+          "artifact_id": "art_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "branch_id": null,
+          "byte_length": 10,
+          "content_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "kind": "deterministic-render",
+          "media_type": "text/markdown",
+          "operation_id": "operation-c",
+          "phase": "vector",
+          "producer": "host:vector",
+          "run_id": "run-vector",
+          "schema_version": 2,
+          "store_ref": "artifact://sha256/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": 1
+        },
+        "byte_length": 10,
+        "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "render_name": "report",
+        "renderer_id": "penny.research.compat-markdown.v1",
+        "schema_id": "penny.deterministic-render-ref.v1",
+        "schema_version": 1,
+        "semantic_core": {
+          "artifact_ref": {
+            "artifact_id": "art_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "branch_id": null,
+            "byte_length": 2382,
+            "content_digest": "917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff",
+            "content_schema": {
+              "schema_id": "penny.grounded-synthesis.v1",
+              "schema_version": 1
+            },
+            "kind": "semantic-core",
+            "media_type": "application/json",
+            "operation_id": "operation-a",
+            "phase": "vector",
+            "producer": "host:vector",
+            "run_id": "run-vector",
+            "schema_version": 2,
+            "store_ref": "artifact://sha256/917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff",
+            "version": 1
+          },
+          "product_schema_version": 1,
+          "schema_id": "penny.grounded-synthesis.v1",
+          "schema_version": 1,
+          "sha256": "917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff"
+        },
+        "target_relative_path": "report.md"
+      },
+      {
+        "artifact_ref": {
+          "artifact_id": "art_dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "branch_id": null,
+          "byte_length": 10,
+          "content_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "kind": "deterministic-render",
+          "media_type": "text/markdown",
+          "operation_id": "operation-d",
+          "phase": "vector",
+          "producer": "host:vector",
+          "run_id": "run-vector",
+          "schema_version": 2,
+          "store_ref": "artifact://sha256/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "version": 1
+        },
+        "byte_length": 10,
+        "content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "render_name": "sources",
+        "renderer_id": "penny.research.compat-markdown.v1",
+        "schema_id": "penny.deterministic-render-ref.v1",
+        "schema_version": 1,
+        "semantic_core": {
+          "artifact_ref": {
+            "artifact_id": "art_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "branch_id": null,
+            "byte_length": 2382,
+            "content_digest": "917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff",
+            "content_schema": {
+              "schema_id": "penny.grounded-synthesis.v1",
+              "schema_version": 1
+            },
+            "kind": "semantic-core",
+            "media_type": "application/json",
+            "operation_id": "operation-a",
+            "phase": "vector",
+            "producer": "host:vector",
+            "run_id": "run-vector",
+            "schema_version": 2,
+            "store_ref": "artifact://sha256/917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff",
+            "version": 1
+          },
+          "product_schema_version": 1,
+          "schema_id": "penny.grounded-synthesis.v1",
+          "schema_version": 1,
+          "sha256": "917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff"
+        },
+        "target_relative_path": "sources.md"
+      },
+      {
+        "artifact_ref": {
+          "artifact_id": "art_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "branch_id": null,
+          "byte_length": 10,
+          "content_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "kind": "deterministic-render",
+          "media_type": "text/markdown",
+          "operation_id": "operation-c",
+          "phase": "vector",
+          "producer": "host:vector",
+          "run_id": "run-vector",
+          "schema_version": 2,
+          "store_ref": "artifact://sha256/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version": 1
+        },
+        "byte_length": 10,
+        "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "render_name": "report",
+        "renderer_id": "penny.research.compat-markdown.v1",
+        "schema_id": "penny.deterministic-render-ref.v1",
+        "schema_version": 1,
+        "semantic_core": {
+          "artifact_ref": {
+            "artifact_id": "art_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "branch_id": null,
+            "byte_length": 2382,
+            "content_digest": "917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff",
+            "content_schema": {
+              "schema_id": "penny.grounded-synthesis.v1",
+              "schema_version": 1
+            },
+            "kind": "semantic-core",
+            "media_type": "application/json",
+            "operation_id": "operation-a",
+            "phase": "vector",
+            "producer": "host:vector",
+            "run_id": "run-vector",
+            "schema_version": 2,
+            "store_ref": "artifact://sha256/917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff",
+            "version": 1
+          },
+          "product_schema_version": 1,
+          "schema_id": "penny.grounded-synthesis.v1",
+          "schema_version": 1,
+          "sha256": "917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff"
+        },
+        "target_relative_path": "report.md"
+      }
+    ],
+    "run_id": "run-vector",
+    "schema_id": "penny.research-product-envelope.v1",
+    "schema_version": 1,
+    "semantic_core": {
+      "artifact_ref": {
+        "artifact_id": "art_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "branch_id": null,
+        "byte_length": 2382,
+        "content_digest": "917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff",
+        "content_schema": {
+          "schema_id": "penny.grounded-synthesis.v1",
+          "schema_version": 1
+        },
+        "kind": "semantic-core",
+        "media_type": "application/json",
+        "operation_id": "operation-a",
+        "phase": "vector",
+        "producer": "host:vector",
+        "run_id": "run-vector",
+        "schema_version": 2,
+        "store_ref": "artifact://sha256/917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff",
+        "version": 1
+      },
+      "product_schema_version": 1,
+      "schema_id": "penny.grounded-synthesis.v1",
+      "schema_version": 1,
+      "sha256": "917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff"
+    },
+    "status": "complete"
+  },
+  "product_receipt_pass_without_evidence": {
+    "attested_core": {
+      "artifact_ref": {
+        "artifact_id": "art_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "branch_id": null,
+        "byte_length": 2382,
+        "content_digest": "917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff",
+        "content_schema": {
+          "schema_id": "penny.grounded-synthesis.v1",
+          "schema_version": 1
+        },
+        "kind": "semantic-core",
+        "media_type": "application/json",
+        "operation_id": "operation-a",
+        "phase": "vector",
+        "producer": "host:vector",
+        "run_id": "run-vector",
+        "schema_version": 2,
+        "store_ref": "artifact://sha256/917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff",
+        "version": 1
+      },
+      "product_schema_version": 1,
+      "schema_id": "penny.grounded-synthesis.v1",
+      "schema_version": 1,
+      "sha256": "917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff"
+    },
+    "created_at": "2026-08-26T00:00:00Z",
+    "evidence_refs": [],
+    "findings": [
+      "vector passed"
+    ],
+    "producer": "agent:vera",
+    "receipt_id": "prc_3881916f4248db0dccc8f9b2f0eb69de1fa076b857ded7fbdef299a8e3d24a5b",
+    "receipt_kind": "grounding_verification",
+    "schema_id": "penny.product-receipt.v1",
+    "schema_version": 1,
+    "verdict": "PASS"
+  },
+  "research_request_unknown_field": {
+    "budget_overrides": {
+      "critique_passes": 0,
+      "max_evaluator_attempts_per_loop": 3,
+      "max_fan_width": 2,
+      "max_sub_queries": 4,
+      "total_research_rounds": 2
+    },
+    "context_bindings": [
+      {
+        "binding_kind": "caller_input",
+        "content": "Use concise Markdown.",
+        "selected_by": "caller",
+        "slot": "output_shape_guidance",
+        "source_id": "caller-shape"
+      }
+    ],
+    "input_products": [
+      {
+        "artifact_ref": {
+          "artifact_id": "art_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "branch_id": null,
+          "byte_length": 100,
+          "content_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "content_schema": {
+            "schema_id": "penny.grounded-synthesis.v1",
+            "schema_version": 1
+          },
+          "kind": "semantic-core",
+          "media_type": "application/json",
+          "operation_id": "operation-a",
+          "phase": "vector",
+          "producer": "host:vector",
+          "run_id": "run-vector",
+          "schema_version": 2,
+          "store_ref": "artifact://sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": 1
+        },
+        "port_name": "prior_grounded_synthesis"
+      }
+    ],
+    "mode": "quick",
+    "question": "What is verified?",
+    "rogue": true,
+    "schema_id": "penny.research-request.v1",
+    "schema_version": 1,
+    "scope": {
+      "exclude": [],
+      "include": [
+        "verified scope"
+      ]
+    },
+    "verification_model_override": null
+  },
+  "research_semantic_draft_bad_index": {
+    "claims": [
+      {
+        "claim_kind": "fact",
+        "confidence": 1,
+        "evidence_indexes": [
+          1
+        ],
+        "qualifications": [],
+        "statement": "The vector is internally linked.",
+        "support_status": "supported"
+      }
+    ],
+    "contradictions": [],
+    "evidence": [
+      {
+        "evidence_artifact_slot": 0,
+        "excerpt": "vector excerpt",
+        "locator": "section-1",
+        "relation": "supports",
+        "source_index": 0
+      }
+    ],
+    "executive_summary": "One local claim is supported by an exact excerpt.",
+    "irreducible_uncertainties": [],
+    "schema_id": "penny.research-semantic-draft.v1",
+    "schema_version": 1,
+    "sections": [
+      {
+        "body": "The supported finding.",
+        "claim_indexes": [
+          0
+        ],
+        "evidence_indexes": [
+          0
+        ],
+        "heading": "Finding"
+      }
+    ],
+    "sources": [
+      {
+        "locator": "https://example.invalid/vector",
+        "observed_at": "2026-08-26T00:00:00Z",
+        "role": "evidentiary",
+        "source_kind": "primary",
+        "tier": 1,
+        "title": "Vector source"
+      }
+    ],
+    "title": "Verified semantic draft",
+    "unresolved_gaps": []
+  },
+  "research_semantic_draft_owner_field": {
+    "claims": [
+      {
+        "claim_kind": "fact",
+        "confidence": 1,
+        "evidence_indexes": [
+          0
+        ],
+        "qualifications": [],
+        "statement": "The vector is internally linked.",
+        "support_status": "supported"
+      }
+    ],
+    "contradictions": [],
+    "evidence": [
+      {
+        "evidence_artifact_slot": 0,
+        "excerpt": "vector excerpt",
+        "locator": "section-1",
+        "relation": "supports",
+        "source_index": 0
+      }
+    ],
+    "executive_summary": "One local claim is supported by an exact excerpt.",
+    "irreducible_uncertainties": [],
+    "request": {
+      "request_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "schema_id": "penny.research-semantic-draft.v1",
+    "schema_version": 1,
+    "sections": [
+      {
+        "body": "The supported finding.",
+        "claim_indexes": [
+          0
+        ],
+        "evidence_indexes": [
+          0
+        ],
+        "heading": "Finding"
+      }
+    ],
+    "sources": [
+      {
+        "locator": "https://example.invalid/vector",
+        "observed_at": "2026-08-26T00:00:00Z",
+        "role": "evidentiary",
+        "source_kind": "primary",
+        "tier": 1,
+        "title": "Vector source"
+      }
+    ],
+    "title": "Verified semantic draft",
+    "unresolved_gaps": []
+  },
+  "semantic_core_wrong_kind": {
+    "artifact_ref": {
+      "artifact_id": "art_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "branch_id": null,
+      "byte_length": 2382,
+      "content_digest": "917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff",
+      "content_schema": {
+        "schema_id": "penny.grounded-synthesis.v1",
+        "schema_version": 1
+      },
+      "kind": "product-receipt",
+      "media_type": "application/json",
+      "operation_id": "operation-a",
+      "phase": "vector",
+      "producer": "host:vector",
+      "run_id": "run-vector",
+      "schema_version": 2,
+      "store_ref": "artifact://sha256/917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff",
+      "version": 1
+    },
+    "product_schema_version": 1,
+    "schema_id": "penny.grounded-synthesis.v1",
+    "schema_version": 1,
+    "sha256": "917594f709e1e85be334f38f09d0effaaa818cdf3e5c4b1b74437ec1f44edbff"
+  },
+  "skill_port_invalid_cardinality": {
+    "artifact_kind": "semantic-core",
+    "direction": "input",
+    "max_items": 8,
+    "min_items": 9,
+    "name": "prior_grounded_synthesis",
+    "schema_id": "penny.grounded-synthesis.v1",
+    "schema_version": 1,
+    "schema_version_required": 1,
+    "semantic_product": true,
+    "source": "either",
+    "transport": "artifact"
+  }
+}

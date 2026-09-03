@@ -1,34 +1,37 @@
-# Configuration Security — Safe config patterns for generated code
+# Configuration Security
 
-## What
+## Applies when
 
-Never hardcode configuration. Use environment-specific config files with sensible defaults. Never expose configuration to clients.
+Changing runtime settings, public/client configuration, CORS, trusted proxies, headers, debug behavior, error exposure, or startup validation.
 
-## Why
+## Security properties
 
-Hardcoded config makes code brittle and leaks implementation details. Environment-specific config prevents dev credentials from reaching production.
+- Runtime policy is explicit, typed, validated, least-privilege, and fails closed.
+- Public and privileged surfaces, client-visible values, proxy trust, and error behavior are intentional.
 
-## Rules
+## Requirements
 
-1. **Use environment-specific config.** `config/development.json`, `config/production.json`. Never `if (env === 'prod')` inline.
-2. **Never expose server-side config to the client.** No `NEXT_PUBLIC_*` for secrets.
-3. **Use sensible secure defaults.** TLS enabled, debug mode off, verbose errors off in production.
-4. **Validate config at startup.** Fail fast if required values are missing.
+- Use typed startup validation with safe production defaults and explicit environment separation; do not require a particular file layout.
+- Separate public/client configuration from secrets. Define trusted proxies, CORS, headers, debug, logging, and feature exposure deliberately.
+- Fail startup or disable unsafe capability when required controls/configuration are absent; review privileged/admin reachability separately from ordinary public traffic.
 
-## Constraints
+## Failure modes
 
-- **CRITICAL severity.** Secrets in client-side config must be fixed.
-- **Debug mode must be off in production.** No stack traces in error responses.
+- Hardcoding a configuration topology, provider, server, or default deployment command.
+- Trusting forwarded headers from arbitrary sources, exposing debug/error internals, or shipping server configuration to clients.
+- Using environment variables as the only configuration or secret mechanism.
 
 ## Verification
 
-- [ ] No hardcoded environment-specific values
-- [ ] No server-side config exposed to client
-- [ ] Debug mode off in production
-- [ ] Config validated at startup
+- Test invalid/missing configuration, production-safe defaults, client artifact contents, CORS/proxy behavior, headers, and privileged-surface reachability.
+- Inspect effective deployed configuration rather than source templates alone.
 
-## Files
+## Related guidance
 
-| File                                     | Purpose          |
-| ---------------------------------------- | ---------------- |
-| `docs/agents/coding/security/secrets.md` | Secrets handling |
+- [Secrets](secrets.md) owns credential lifecycle.
+- [Browser security](browser-security.md), [deployment conventions](../deployment-conventions.md), and [error handling](error-handling.md) cover related domains.
+
+## Current external references
+
+- [OWASP Application Security Verification Standard (ASVS) 5.0.0](https://owasp.org/www-project-application-security-verification-standard/) is a coverage spine, not a substitute for task-specific design and evidence.
+- Reconfirm version-sensitive protocol, browser, and library guidance from primary sources before choosing concrete settings or APIs.

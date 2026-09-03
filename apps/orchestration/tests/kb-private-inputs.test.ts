@@ -594,15 +594,15 @@ describe("§5.6 terminal settlement and body containment", () => {
       checkpointer.loadRunById(runId),
       "apps/orchestration/tests/kb-private-inputs.test.ts:545"
     );
-    const result = { action: "query", public_status: "complete", met: true };
-    run.status = "complete";
-    run.met = true;
+    const result = { action: "query", public_status: "refused", met: false };
+    run.status = "incomplete";
+    run.met = false;
     run.terminalDirective = {
       schema_version: 2,
-      action: "complete",
+      action: "incomplete",
       identity: run.identity,
-      status: "complete",
-      met: true,
+      status: "incomplete",
+      met: false,
       result,
       artifacts: [],
       unresolved: [],

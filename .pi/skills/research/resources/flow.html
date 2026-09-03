@@ -1,201 +1,238 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>research skill — execution flow</title>
-<style>
-  :root{
-    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2a3341;
-    --ink:#e6edf3; --muted:#8b949e; --desc:#b3bdc9;
-    --echo:#22d3ee; --annie:#a78bfa; --carren:#fb7185; --piper:#fbbf24; --skribble:#60a5fa;
-    --synthia:#f472b6; --vera:#4ade80; --tabitha:#fb923c;
-    --start:#94a3b8; --gate:#e3b341; --esc:#9ca3af; --done:#3fb950; --error:#f85149;
-    --fwd:#8b98a9; --exit:#3fb950; --loop:#e3a52e; --abort:#f85149;
-  }
-  *{box-sizing:border-box}
-  html,body{margin:0;background:var(--bg);color:var(--ink);
-    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-  header{padding:22px 28px 8px}
-  h1{margin:0;font-size:22px;letter-spacing:-.01em}
-  .sub{color:var(--muted);margin-top:4px;font-size:13px;max-width:1180px}
-  .callout{margin:14px 28px;padding:12px 14px;border-left:4px solid var(--piper);
-    background:#211d10;border-radius:6px;font-size:13px;color:#e8d9a8}
-  .callout b{color:#f0c657}
-  .legend{display:flex;flex-wrap:wrap;gap:18px 26px;padding:10px 28px 16px;font-size:12.5px;color:#c9d3df}
-  .legend .grp{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
-  .chip{display:inline-flex;align-items:center;gap:6px}
-  .dot{width:12px;height:12px;border-radius:3px;display:inline-block}
-  .aline{width:26px;height:0;border-top:3px solid var(--fwd);display:inline-block}
-  .aline.dash{border-top-style:dashed}
-  #wrap{position:relative;margin:8px 20px 40px;width:1120px;height:1160px}
-  svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
-  .node{position:absolute;background:var(--panel);border:1px solid var(--border);border-radius:10px;
-    box-shadow:0 1px 2px rgba(0,0,0,.35),0 2px 8px rgba(0,0,0,.25);padding:10px 12px}
-  .node .t{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:7px}
-  .node .t .who{font-weight:600;color:var(--muted);font-size:11.5px}
-  .node .d{color:var(--desc);font-size:12px;margin-top:5px}
-  .node::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;border-radius:10px 0 0 10px}
-  .node.echo::before{background:var(--echo)} .node.annie::before{background:var(--annie)}
-  .node.carren::before{background:var(--carren)} .node.piper::before{background:var(--piper)}
-  .node.skribble::before{background:var(--skribble)} .node.synthia::before{background:var(--synthia)}
-  .node.vera::before{background:var(--vera)} .node.tabitha::before{background:var(--tabitha)}
-  .node.start::before{background:var(--start)} .node.esc::before{background:var(--esc)}
-  .node.gate{background:#211d10;border-color:#4d3f1a}.node.gate::before{background:var(--gate)}
-  .node.done{background:#0f2417;border-color:#1f5136}.node.done::before{background:var(--done)}
-  .node.error{background:#2a1517;border-color:#5c2a2a}.node.error::before{background:var(--error)}
-  .node .badge{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.04em;
-    text-transform:uppercase;color:#0d1117;padding:2px 6px;border-radius:999px}
-  .badge.hitl{background:var(--gate)} .badge.term{background:#5b6675;color:#e6edf3}
-  .badge.deep{background:var(--annie);color:#0d1117}
-  .lbl{position:absolute;transform:translate(-50%,-50%);background:var(--panel2);
-    border:1px solid #313c4a;color:#c9d3df;font-size:11px;padding:1px 6px;border-radius:999px;
-    white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.35)}
-  .foot{margin:0 28px 48px;font-size:12.5px;color:#c3cdd9}
-  .foot h3{font-size:13px;margin:18px 0 6px;color:#e6edf3}
-  .foot ul{margin:6px 0;padding-left:18px} .foot li{margin:3px 0}
-  .foot b{color:#e6edf3}
-  code{background:#22293a;color:#cdd6e3;padding:1px 5px;border-radius:4px;font-size:12px}
-</style>
-</head>
-<body>
-<header>
-  <h1>research skill — execution flow</h1>
-  <div class="sub">Validated against <code>orchestration/playbooks/research.py</code> (<code>ResearchMachine</code>). Three modes — <b>quick</b>, <b>standard</b>, <b>deep</b> — share one FSM. Boxes dispatch cognitive agents; exact owner-captured artifacts carry every handoff.</div>
-</header>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="penny-flow-template" content="1" />
+    <title>Research — execution flow | Penny</title>
+    <style>
+      :root {
+        --canvas: #0d1117;
+        --surface: #161b22;
+        --surface-raised: #1c2230;
+        --border: #3a4657;
+        --text: #f0f6fc;
+        --muted: #b6c2cf;
+        --host: #c4b5fd;
+        --start: #94a3b8;
+        --gate: #fbbf24;
+        --done: #4ade80;
+        --negative: #fb7185;
+        --annie: #c4b5fd;
+        --carren: #fb7185;
+        --demetri: #60a5fa;
+        --echo: #22d3ee;
+        --ida: #f59e0b;
+        --piper: #facc15;
+        --skribble: #d8b4fe;
+        --synthia: #f472b6;
+        --tabitha: #fb923c;
+        --vera: #4ade80;
+        --fwd: #aab7c7;
+        --loop: #fbbf24;
+        --exit: #4ade80;
+        --abort: #fb7185;
+        --esc: #cbd5e1;
+      }
 
-<div class="callout">
-  <b>Mode is data, and it buys a BUDGET — it does not wire the graph:</b> caller <code>constraints.mode</code> wins; otherwise piper declares it in its plan SUMMARY (no keyword detection). The mode expands into <code>critique_passes</code> + <code>max_research_rounds</code>, and the <span style="color:#c9a7fb">critique detours</span> fire on the BUDGET, not the label — <code>&ge;1</code> buys the report critique, <code>&ge;2</code> adds the plan critique. A <b>standard</b> run given <code>critique_passes: 1</code> therefore gets an adversarial report read, and opt-in <b>rigor escalation</b> can earn one mid-run. Presets: quick <code>0/2</code> · standard <code>0/2</code> · deep <code>2/3</code>. Breadth (<code>max_sub_queries</code>) is deliberately NOT a mode value — mode governs verification spend, never decomposition.
-</div>
+      * { box-sizing: border-box; }
+      html { background: var(--canvas); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+      body { margin: 0; }
+      header, .callout, .legend, main, footer { width: min(100% - 32px, 1760px); margin-inline: auto; }
+      header { padding-top: 28px; }
+      h1 { margin: 0; font-size: clamp(1.45rem, 2.2vw, 2rem); line-height: 1.2; }
+      .summary, .muted { color: var(--muted); max-width: 100ch; }
+      .callout { margin-top: 20px; border-inline-start: 4px solid var(--gate); border-radius: 8px; background: #251f0d; color: #f9e8a4; padding: 12px 16px; }
+      .callout p { margin: 0; }
+      .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 28px; padding: 20px 0; }
+      .legend h2, .route-rail h2, footer h2 { font-size: .9rem; margin: 0 0 7px; color: var(--text); }
+      .legend ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px 12px; color: var(--muted); font-size: .86rem; }
+      .legend li { display: inline-flex; align-items: center; gap: 6px; }
+      .swatch, .line { display: inline-block; flex: 0 0 auto; }
+      .swatch { width: 12px; height: 12px; border-radius: 3px; background: var(--swatch); }
+      .line { width: 25px; border-top: 3px solid var(--swatch); }
+      .line.dash { border-top-style: dashed; }
+      main { padding-bottom: 24px; }
+      .flow-viewport { overflow: auto; border: 1px solid var(--border); border-radius: 12px; background: #090d12; padding: 12px; outline-offset: 4px; }
+      .flow-viewport:focus-visible { outline: 3px solid #facc15; }
+      #wrap { min-width: 1340px; max-width: 1760px; margin-inline: auto; }
+      .graph-area { position: relative; min-height: 1180px; }
+      #edges { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
+      .edge { fill: none; stroke: var(--fwd); stroke-width: 2.4; }
+      .edge.loop { stroke: var(--loop); stroke-dasharray: 7 5; }
+      .edge.exit { stroke: var(--exit); }
+      .edge.abort { stroke: var(--abort); stroke-dasharray: 6 5; }
+      .edge.gate { stroke: var(--gate); }
+      .edge.esc { stroke: var(--esc); stroke-dasharray: 4 5; }
+      .node { position: absolute; width: 270px; min-height: 92px; padding: 12px 13px 12px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 4px 14px rgb(0 0 0 / .25); }
+      .node::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 5px; border-radius: 10px 0 0 10px; background: var(--agent, var(--host)); }
+      .node-title { display: flex; gap: 7px; align-items: baseline; font-size: .94rem; font-weight: 750; overflow-wrap: anywhere; }
+      .node-owner { color: var(--muted); font-size: .78rem; font-weight: 650; }
+      .node-desc { margin: 6px 0 0; color: var(--muted); font-size: .79rem; overflow-wrap: anywhere; }
+      .badge { margin-inline-start: auto; padding: 2px 6px; border-radius: 999px; background: var(--badge, var(--host)); color: #111827; font: 750 .66rem/1.2 system-ui, sans-serif; letter-spacing: .05em; white-space: nowrap; }
+      .node.start { --agent: var(--start); }
+      .node.host { --agent: var(--host); }
+      .node.gate { --agent: var(--gate); --badge: var(--gate); background: #25200f; }
+      .node.done { --agent: var(--done); --badge: var(--done); background: #102719; }
+      .node.error { --agent: var(--negative); --badge: var(--negative); background: #30161c; }
+      .node.esc { --agent: var(--esc); }
+      .node.annie { --agent: var(--annie); }.node.carren { --agent: var(--carren); }.node.demetri { --agent: var(--demetri); }.node.echo { --agent: var(--echo); }.node.ida { --agent: var(--ida); }.node.piper { --agent: var(--piper); }.node.skribble { --agent: var(--skribble); }.node.synthia { --agent: var(--synthia); }.node.tabitha { --agent: var(--tabitha); }.node.vera { --agent: var(--vera); }
+      .route-rail { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+      .route-rail > p { margin: 0 0 10px; color: var(--muted); font-size: .84rem; }
+      #route-labels { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+      .lbl { min-width: 0; border: 1px solid var(--border); border-inline-start: 4px solid var(--fwd); border-radius: 7px; background: var(--surface-raised); color: var(--text); padding: 7px 9px; font-size: .78rem; overflow-wrap: anywhere; }
+      .lbl.loop { border-inline-start-color: var(--loop); }.lbl.exit { border-inline-start-color: var(--exit); }.lbl.abort { border-inline-start-color: var(--abort); }.lbl.gate { border-inline-start-color: var(--gate); }.lbl.esc { border-inline-start-color: var(--esc); }
+      .route-id { color: var(--muted); font-variant-numeric: tabular-nums; }
+      .route-state { color: var(--muted); }
+      footer { padding: 0 0 44px; color: var(--muted); }
+      footer p { max-width: 105ch; }
+      .sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+      @media (max-width: 720px) { header, .callout, .legend, main, footer { width: min(100% - 20px, 1760px); } #route-labels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Research — execution flow</h1>
+      <p class="summary">Strict machine-readable mirror of RESEARCH_FLOW in apps/orchestration/src/playbooks/research.ts. Exact owner-captured artifacts cross every cognitive boundary; deterministic host states seal and render the authoritative semantic core.</p>
+    </header>
+    <aside class="callout" aria-label="Key workflow invariant"><p>Every semantic revision re-enters host sealing and Vera validation. Optional Carren report critique follows a Vera pass, never precedes it; mode changes budgets only, not topology.</p></aside>
+    <section class="legend" aria-label="Diagram legend">
+      <div><h2>State owners and control states</h2><ul><li><span class="swatch" style="--swatch:var(--host)"></span>host</li><li><span class="swatch" style="--swatch:var(--gate)"></span>gate</li><li><span class="swatch" style="--swatch:var(--done)"></span>positive terminal</li><li><span class="swatch" style="--swatch:var(--negative)"></span>non-positive terminal</li><li><span class="swatch" style="--swatch:var(--annie)"></span>agent owner (named on card)</li></ul></div>
+      <div><h2>Route kinds</h2><ul><li><span class="line" style="--swatch:var(--fwd)"></span>forward</li><li><span class="line dash" style="--swatch:var(--loop)"></span>bounded repair</li><li><span class="line" style="--swatch:var(--exit)"></span>pass / exit</li><li><span class="line dash" style="--swatch:var(--abort)"></span>abort / deny</li><li><span class="line dash" style="--swatch:var(--esc)"></span>escalation</li></ul></div>
+    </section>
+    <main>
+      <section class="flow-viewport" aria-labelledby="flow-heading" aria-label="Workflow graph; use arrow keys to scroll when it is wider than the window" tabindex="0">
+        <h2 id="flow-heading" class="sr-only">Workflow graph</h2>
+        <div id="wrap">
+          <div class="graph-area" id="graph-area"><svg id="edges" aria-hidden="true" focusable="false"><defs><marker id="arrowhead" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="context-stroke"></path></marker></defs></svg></div>
+          <section class="route-rail" aria-labelledby="routes-heading"><h2 id="routes-heading">Route labels</h2><p>Each numbered route below maps to one directed arrow in the graph.</p><ol id="route-labels"></ol></section>
+          <ul id="edge-list" class="sr-only" aria-label="Complete workflow edge list"></ul>
+        </div>
+      </section>
+    </main>
+    <footer><h2>Notes</h2><p>Bounded repairs exhaust honestly at incomplete with the best exact partial. Uniform cancel/abort seams and typed engine faults are documented outcomes but omitted from E for legibility.</p></footer>
+    <script>
+      const N = {"intake":{"title":"intake","desc":"Admit canonical ResearchRequestV1 and exact input/context refs. Explicit quick skips planning.","cls":"start","lane":"center","y":20},"planning":{"title":"planning","desc":"Decompose the evidence need. Caller mode wins; otherwise piper declares it.","cls":"piper","lane":"center","y":170,"who":"piper"},"critiquing_plan":{"title":"critiquing_plan","desc":"Optional deep plan critique before evidence acquisition.","cls":"carren","lane":"right","y":225,"badge":"BUDGET","who":"carren"},"researching":{"title":"researching","desc":"Bounded evidence fan. Vera evidence gaps return here.","cls":"echo","lane":"center","y":330,"who":"echo"},"synthesizing":{"title":"synthesizing","desc":"Emit a closed ResearchSemanticDraftV1 over selected exact evidence; revisions consume Vera/Carren feedback.","cls":"synthia","lane":"center","y":490,"who":"synthia"},"sealing_core":{"title":"sealing_core","desc":"Host resolves indexes, verifies exact excerpts/hashes and lineage, then seals canonical GroundedSynthesisV1 bytes.","cls":"gate","lane":"center","y":660,"badge":"HOST"},"validating":{"title":"validating","desc":"Objective latest-core grounding gate in every mode. Every revision re-enters Vera.","cls":"vera","lane":"center","y":830,"who":"vera"},"critiquing_report":{"title":"critiquing_report","desc":"Optional report-quality critique only after Vera PASS; defects return to synthesis.","cls":"carren","lane":"right","y":885,"badge":"BUDGET","who":"carren"},"rendering":{"title":"rendering","desc":"Persist receipts/intent/renders, atomically materialize three files, verify graph and research DoD.","cls":"gate","lane":"center","y":1000,"badge":"HOST"},"complete":{"title":"complete","desc":"Positive terminal. output_artifact_ref is the latest semantic core; envelope remains graph evidence.","cls":"done","lane":"center","y":1190,"badge":"TERM"},"incomplete":{"title":"incomplete","desc":"Honest non-positive terminal with best exact core/artifacts and blockers; no complete envelope.","cls":"error","lane":"right","y":1190,"badge":"TERM"},"cancelled":{"title":"cancelled","desc":"Caller cancellation; no further dispatch and best exact partial preserved.","cls":"error","lane":"left","y":1190,"badge":"TERM"},"error":{"title":"error","desc":"Typed fault terminal. Uniform abort seams are omitted.","cls":"error","lane":"right","y":1360,"badge":"TERM"},"unknown":{"title":"unknown","desc":"Escalation staging for uncertainty, clarification, or stalled cognitive work.","cls":"esc","lane":"left","y":620},"awaiting_clarification":{"title":"awaiting_clarification","desc":"Persisted user gate; resume returns to the producer that can use the answer.","cls":"esc","lane":"left","y":790}};
+      const E = [{"from":"intake","to":"planning","kind":"fwd","label":"default"},{"from":"intake","to":"researching","kind":"fwd","label":"explicit quick"},{"from":"planning","to":"critiquing_plan","kind":"fwd","label":"plan critique enabled"},{"from":"planning","to":"researching","kind":"fwd","label":"no plan critique"},{"from":"critiquing_plan","to":"planning","kind":"loop","label":"revise plan"},{"from":"critiquing_plan","to":"researching","kind":"exit","label":"APPROVE / exhausted"},{"from":"researching","to":"synthesizing","kind":"fwd","label":"evidence ready"},{"from":"synthesizing","to":"sealing_core","kind":"fwd","label":"typed draft complete"},{"from":"sealing_core","to":"synthesizing","kind":"loop","label":"semantic defect"},{"from":"sealing_core","to":"validating","kind":"fwd","label":"core sealed"},{"from":"sealing_core","to":"incomplete","kind":"abort","label":"repair exhausted"},{"from":"validating","to":"researching","kind":"loop","label":"evidence gap"},{"from":"validating","to":"synthesizing","kind":"loop","label":"synthesis gap"},{"from":"validating","to":"critiquing_report","kind":"fwd","label":"PASS + quality enabled"},{"from":"validating","to":"rendering","kind":"exit","label":"PASS"},{"from":"validating","to":"incomplete","kind":"abort","label":"verification exhausted"},{"from":"critiquing_report","to":"synthesizing","kind":"loop","label":"quality gap → Vera again"},{"from":"critiquing_report","to":"rendering","kind":"exit","label":"APPROVE"},{"from":"critiquing_report","to":"incomplete","kind":"abort","label":"critique exhausted"},{"from":"rendering","to":"complete","kind":"exit","label":"DoD + admission PASS"},{"from":"rendering","to":"incomplete","kind":"abort","label":"unsafe/drift/DoD failure"},{"from":"researching","to":"unknown","kind":"esc","label":"clarification"},{"from":"unknown","to":"awaiting_clarification","kind":"esc","label":"ask user"},{"from":"awaiting_clarification","to":"planning","kind":"esc","label":"resume planner"},{"from":"awaiting_clarification","to":"researching","kind":"esc","label":"resume evidence"},{"from":"awaiting_clarification","to":"synthesizing","kind":"esc","label":"resume synthesis"}];
+      const graph = document.getElementById("graph-area");
+      const svg = document.getElementById("edges");
+      const routes = document.getElementById("route-labels");
+      const edgeList = document.getElementById("edge-list");
+      const SVG_NS = "http://www.w3.org/2000/svg";
+      const nodeWidth = 270;
+      const edgeColor = { fwd: "#aab7c7", gate: "#fbbf24", loop: "#fbbf24", exit: "#4ade80", abort: "#fb7185", esc: "#cbd5e1" };
 
-<div class="legend">
-  <div class="grp">
-    <span class="chip"><span class="dot" style="background:var(--piper)"></span>piper · plan</span>
-    <span class="chip"><span class="dot" style="background:var(--echo)"></span>echo · research (fan-out)</span>
-    <span class="chip"><span class="dot" style="background:var(--synthia)"></span>synthia · synthesize</span>
-    <span class="chip"><span class="dot" style="background:var(--carren)"></span>carren · critique</span>
-    <span class="chip"><span class="dot" style="background:var(--vera)"></span>vera · validate</span>
-    <span class="chip"><span class="dot" style="background:var(--skribble)"></span>skribble · report</span>
-  </div>
-  <div class="grp">
-    <span class="chip"><span class="dot" style="background:var(--done)"></span>complete</span>
-    <span class="chip"><span class="dot" style="background:var(--error)"></span>error</span>
-    <span class="chip"><span class="aline" style="border-color:var(--fwd)"></span>forward</span>
-    <span class="chip"><span class="aline" style="border-color:var(--exit)"></span>pass / exit</span>
-    <span class="chip"><span class="aline" style="border-color:var(--loop)"></span>revise (bounded)</span>
-    <span class="chip"><span class="aline dash" style="border-color:var(--esc)"></span>escalation</span>
-  </div>
-</div>
+      function point(rect, side) {
+        if (side === "top") return { x: rect.x + rect.width / 2, y: rect.y };
+        if (side === "left") return { x: rect.x, y: rect.y + rect.height / 2 };
+        if (side === "right") return { x: rect.x + rect.width, y: rect.y + rect.height / 2 };
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height };
+      }
 
-<div id="wrap">
-  <svg id="edges"><defs>
-    <marker id="ah" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L8,3 L0,6 Z" fill="context-stroke"></path>
-    </marker>
-  </defs></svg>
-</div>
+      function sides(source, target) {
+        if (source.x + source.width <= target.x) return ["right", "left"];
+        if (target.x + target.width <= source.x) return ["left", "right"];
+        if (source.y <= target.y) return ["bottom", "top"];
+        return ["top", "bottom"];
+      }
 
-<div class="foot">
-  <h3>Bounded revise loops &amp; honest exit</h3>
-  <ul>
-    <li><b>critiquing_plan ⇄ planning</b> (<code>critique_passes ≥ 2</code>), <b>critiquing_report ⇄ synthesizing</b> (<code>≥ 1</code>) and <b>validating ⇄ synthesizing</b> (every mode) each loop on <code>NEEDS_REVISION</code>/<code>FAIL</code>, bounded by <code>max_iterations</code>. Budget spent → the "exhausted" edge proceeds forward with a warning recorded and the unresolved issues surfaced (never a faked pass).</li>
-    <li><b>validating</b> (vera) is the evidence-based citation-grounding gate in <b>every</b> mode — the report is written only after claims are grounded, or the budget is spent and the survivors are reported as unverified.</li>
-  </ul>
-  <h3>Evidence-seeking — the iterative research loop</h3>
-  <ul>
-    <li><b>validating → researching</b> fires when vera FAILS a claim <i>and</i> names <code>evidence_needed</code> <i>and</i> a research round remains (<code>max_research_rounds</code>, default 2 / deep 3; set <code>1</code> to disable). The gate's answer to "this claim has no support" becomes <b>go find out</b>, not merely <b>delete the claim</b> — which matters because synthia has no web tools, so re-grounding alone can only ever make the report thinner.</li>
-    <li><b>The verifier names what is missing; it does not supply it.</b> vera diagnoses the gap, echo (read-only, full search toolset) fills it, synthia integrates, vera re-checks. A verifier that sourced its own evidence would be grading material it authored.</li>
-    <li>Researchers are told that <b>"no supporting source found" is a useful result</b> — without that, dispatching an agent to find support for a claim is an incentive to manufacture it.</li>
-  </ul>
-  <h3>Fan-out &amp; escalation</h3>
-  <ul>
-    <li><b>researching</b> (echo) fans out one branch per planned sub-query (<code>dynamic_branches</code>, bounded by <code>max_fan_width</code>); only the explicit-quick fast path stays a single echo agent. Fan-in aggregates by <b>weakest</b> branch confidence.</li>
-    <li>Any working phase escalates to <b>unknown</b> on <b>UNCERTAIN</b>, a false <code>*_complete</code> flag, <code>needs_clarification</code>, or a stalled loop. Resume is <b>producer-oriented</b>: <b>→ planning</b> (from planning / critiquing_plan), <b>→ researching</b> (from researching — the plan is kept), <b>→ synthesizing</b> (from synthesizing / critiquing_report / validating).</li>
-    <li><b>Abort:</b> every working phase can <code>abort → error</code> (arrows omitted for legibility).</li>
-  </ul>
-</div>
+      function control(pointValue, side, width, height, bend) {
+        const step = 76 + Math.abs(bend);
+        const clampX = (value) => Math.max(12, Math.min(width - 12, value));
+        const clampY = (value) => Math.max(12, Math.min(height - 12, value));
+        if (side === "top") return { x: clampX(pointValue.x + bend), y: clampY(pointValue.y - step) };
+        if (side === "left") return { x: clampX(pointValue.x - step), y: clampY(pointValue.y + bend) };
+        if (side === "right") return { x: clampX(pointValue.x + step), y: clampY(pointValue.y + bend) };
+        return { x: clampX(pointValue.x + bend), y: clampY(pointValue.y + step) };
+      }
 
-<script>
-const COLS = { Louter:30, C:430, Rmid:800 };
-const W = { C:300, side:245 };
-const N = {
-  intake:{col:'C',y:30,cls:'start',title:'intake',desc:'Requires a non-empty goal (the query). Resolves the mode (caller constraint, else deferred to piper) and expands it into the rigor budget; seeds max_sub_queries.'},
-  planning:{col:'C',y:150,cls:'piper',title:'planning',who:'piper',desc:'Decompose the query into sub-queries; declare the mode unless the caller fixed it. Skipped ONLY on an explicit caller quick.'},
-  critiquing_plan:{col:'Rmid',y:205,cls:'carren',title:'critiquing_plan',badge:'BUDGET',desc:'Critique the plan before spending the fan-out. Runs when critique_passes \u2265 2 (deep preset) \u2014 budget-gated, not mode-gated. Evidence-gated verdict.'},
-  researching:{col:'C',y:345,cls:'echo',title:'researching',who:'echo',desc:'Gather evidence \u2014 one read-only fan branch per sub-query (bounded by max_fan_width). Re-entered for EVIDENCE-SEEKING rounds; branch numbering continues so new findings never overwrite earlier ones.'},
-  synthesizing:{col:'C',y:475,cls:'synthia',title:'synthesizing',who:'synthia',desc:'Synthesize findings into a grounded, cited draft. No web tools by design \u2014 it integrates evidence, it does not gather it.'},
-  critiquing_report:{col:'Rmid',y:545,cls:'carren',title:'critiquing_report',badge:'BUDGET',desc:'Critique the draft for overclaiming / bias / uncertainty-honesty. Runs when critique_passes \u2265 1 \u2014 so a non-deep run that EARNED a pass via rigor escalation gets it too.'},
-  validating:{col:'C',y:695,cls:'vera',title:'validating',who:'vera',desc:'Independent citation gate, EVERY mode: is each material claim grounded in a cited source that supports it? PASS \u2192 report; FAIL \u2192 seek evidence, re-ground, or exhaust honestly.'},
-  report_writing:{col:'C',y:825,cls:'skribble',title:'report_writing',who:'skribble',desc:'Write report.md / sources.md / README.md and return their complete contents for owner capture as the product artifact. Adds no claims. Not escalatable.'},
-  complete:{col:'C',y:975,cls:'done',title:'complete',badge:'TERM',desc:'Terminal. Exposes the exact selected report_writing artifact ref. met = report delivered; grounded = citation gate passed. met=true, grounded=false remains possible with unverified claims named.'},
-  error:{col:'Rmid',y:975,cls:'error',title:'error',badge:'TERM',desc:'Terminal. Reached by abort from any working phase.'},
-  unknown:{col:'Louter',y:430,cls:'esc',title:'unknown',desc:'Escalation staging: UNCERTAIN confidence, a false *_complete flag, needs_clarification, or a stalled loop at any working phase.'},
-  awaiting_clarification:{col:'Louter',y:600,cls:'esc',title:'awaiting_clarification',desc:'Paused for the user. Resumes PRODUCER-oriented \u2014 at the agent that can act on the answer (planning / researching / synthesizing), not at the position where it stopped.'},
-};
-const E = [
-  {from:'intake',to:'planning',s1:'bottom',s2:'top',kind:'fwd',label:'default (piper may declare the mode)'},
-  {from:'intake',to:'researching',s1:'left',s2:'left',kind:'fwd',label:'explicit caller quick → skip planning',c1:{dx:-70,dy:60},c2:{dx:-70,dy:-40}},
-  {from:'planning',to:'critiquing_plan',s1:'right',s2:'left',kind:'fwd',label:'critique_passes ≥ 2'},
-  {from:'planning',to:'researching',s1:'bottom',s2:'top',kind:'fwd',label:'critique_passes < 2'},
-  {from:'critiquing_plan',to:'researching',s1:'bottom',s2:'right',kind:'exit',label:'APPROVE / exhausted',c1:{dx:0,dy:60},c2:{dx:70,dy:0}},
-  {from:'critiquing_plan',to:'planning',s1:'top',s2:'right',kind:'loop',label:'revise',c1:{dx:0,dy:-50},c2:{dx:70,dy:-10}},
-  {from:'researching',to:'synthesizing',s1:'bottom',s2:'top',kind:'fwd',label:'research_done'},
-  {from:'synthesizing',to:'validating',s1:'bottom',s2:'top',kind:'fwd',label:'no critique budget / critique closed'},
-  {from:'synthesizing',to:'critiquing_report',s1:'right',s2:'left',kind:'fwd',label:'critique_passes ≥ 1'},
-  {from:'critiquing_report',to:'validating',s1:'bottom',s2:'right',kind:'exit',label:'APPROVE / exhausted',c1:{dx:0,dy:60},c2:{dx:70,dy:0}},
-  {from:'critiquing_report',to:'synthesizing',s1:'top',s2:'right',kind:'loop',label:'revise',c1:{dx:0,dy:-50},c2:{dx:70,dy:-10}},
-  {from:'validating',to:'report_writing',s1:'bottom',s2:'top',kind:'exit',label:'PASS / exhausted'},
-  {from:'validating',to:'synthesizing',s1:'left',s2:'left',kind:'loop',label:'re-ground (revise)',bow:70},
-  {from:'validating',to:'researching',s1:'right',s2:'right',kind:'loop',label:'evidence-seeking (FAIL + evidence_needed)',bow:-120},
-  {from:'report_writing',to:'complete',s1:'bottom',s2:'top',kind:'fwd',label:'report_done'},
-  {from:'unknown',to:'awaiting_clarification',s1:'bottom',s2:'top',kind:'esc',label:'escalate'},
-  {from:'awaiting_clarification',to:'planning',s1:'left',s2:'left',kind:'esc',label:'clarify → planner (plan must change)',c1:{dx:-18,dy:-230},c2:{dx:-18,dy:150}},
-  {from:'awaiting_clarification',to:'researching',s1:'right',s2:'left',kind:'esc',label:'clarify → researchers (plan kept)',c1:{dx:40,dy:-60},c2:{dx:-40,dy:40}},
-  {from:'awaiting_clarification',to:'synthesizing',s1:'right',s2:'right',kind:'esc',label:'clarify → synthesizer (report must change)',c1:{dx:60,dy:-30},c2:{dx:60,dy:30}},
-  {from:'researching',to:'unknown',s1:'left',s2:'right',kind:'esc',label:'UNCERTAIN — any working phase',c1:{dx:-40,dy:0},c2:{dx:40,dy:0}},
-];
-const KIND = {fwd:'#8b98a9',exit:'#3fb950',loop:'#e3a52e',esc:'#9ca3af',abort:'#f85149'};
+      function appendText(parent, className, text) {
+        const element = document.createElement("span");
+        element.className = className;
+        element.textContent = text;
+        parent.append(element);
+        return element;
+      }
 
-const wrap=document.getElementById('wrap'), svg=document.getElementById('edges');
-for(const id in N){const n=N[id];const w=(n.col==='C')?W.C:W.side;
-  const el=document.createElement('div');el.className='node '+n.cls;el.id='n_'+id;
-  el.style.left=COLS[n.col]+'px';el.style.top=n.y+'px';el.style.width=w+'px';
-  const who=n.who?`<span class="who">· ${n.who}</span>`:'';
-  const bc=n.badge==='TERM'?'term':((n.badge==='DEEP'||n.badge==='BUDGET')?'deep':'hitl');
-  const badge=n.badge?`<span class="badge ${bc}">${n.badge}</span>`:'';
-  el.innerHTML=`<div class="t">${n.title}${who}${badge}</div><div class="d">${n.desc}</div>`;
-  wrap.appendChild(el);}
-const base=wrap.getBoundingClientRect();
-function rect(id){const r=document.getElementById('n_'+id).getBoundingClientRect();
-  return{left:r.left-base.left,top:r.top-base.top,width:r.width,height:r.height};}
-function anchor(r,side,frac){const f=(frac==null?0.5:frac);switch(side){
-  case'top':return{x:r.left+r.width*f,y:r.top};
-  case'bottom':return{x:r.left+r.width*f,y:r.top+r.height};
-  case'left':return{x:r.left,y:r.top+r.height*f};
-  case'right':return{x:r.left+r.width,y:r.top+r.height*f};}}
-function ctrl(p,side,bow){const k=64,b=bow||0;switch(side){
-  case'top':return{x:p.x+b,y:p.y-k};
-  case'bottom':return{x:p.x+b,y:p.y+k};
-  case'left':return{x:p.x-k-Math.abs(b),y:p.y};
-  case'right':return{x:p.x+k+Math.abs(b),y:p.y};}}
-const SVGNS='http://www.w3.org/2000/svg';
-for(const e of E){
-  const ra=rect(e.from),rb=rect(e.to);
-  const p1=anchor(ra,e.s1,e.a1frac),p2=anchor(rb,e.s2,e.a2frac);
-  const c1=e.c1?{x:p1.x+e.c1.dx,y:p1.y+e.c1.dy}:ctrl(p1,e.s1,e.bow);
-  const c2=e.c2?{x:p2.x+e.c2.dx,y:p2.y+e.c2.dy}:ctrl(p2,e.s2,e.kind==='exit'?-(e.bow||0):e.bow);
-  const path=document.createElementNS(SVGNS,'path');
-  path.setAttribute('d',`M ${p1.x} ${p1.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${p2.x} ${p2.y}`);
-  path.setAttribute('fill','none');path.setAttribute('stroke',KIND[e.kind]);
-  path.setAttribute('stroke-width','2');path.setAttribute('marker-end','url(#ah)');
-  if(e.kind==='esc')path.setAttribute('stroke-dasharray','6 5');
-  svg.appendChild(path);
-  if(e.label){const t=0.5,mt=1-t;
-    const x=mt*mt*mt*p1.x+3*mt*mt*t*c1.x+3*mt*t*t*c2.x+t*t*t*p2.x;
-    const y=mt*mt*mt*p1.y+3*mt*mt*t*c1.y+3*mt*t*t*c2.y+t*t*t*p2.y;
-    const l=document.createElement('div');l.className='lbl';l.textContent=e.label;
-    l.style.left=x+'px';l.style.top=y+'px';wrap.appendChild(l);}
-}
-</script>
-</body>
+      function render() {
+        const width = Math.max(1340, Math.min(1760, document.querySelector(".flow-viewport").clientWidth - 24));
+        const viewport = document.querySelector(".flow-viewport");
+        const previousViewportWidth = Number(viewport.dataset.viewportWidth || "0");
+        document.getElementById("wrap").style.width = `${width}px`;
+        if (
+          viewport.clientWidth < width &&
+          (previousViewportWidth === 0 || previousViewportWidth >= width)
+        ) {
+          viewport.scrollLeft = Math.round((width - viewport.clientWidth) / 2);
+        }
+        viewport.dataset.viewportWidth = `${viewport.clientWidth}`;
+        graph.replaceChildren(svg);
+        routes.replaceChildren();
+        edgeList.replaceChildren();
+        const nodeRects = new Map();
+        const lanes = { left: 42, center: (width - nodeWidth) / 2, right: width - nodeWidth - 42 };
+        for (const [id, node] of Object.entries(N)) {
+          const card = document.createElement("article");
+          card.className = `node ${node.cls}`;
+          card.id = `node-${id}`;
+          card.dataset.nodeId = id;
+          card.style.left = `${lanes[node.lane]}px`;
+          card.style.top = `${node.y}px`;
+          const title = document.createElement("div");
+          title.className = "node-title";
+          appendText(title, "node-state", node.title);
+          if (node.who) appendText(title, "node-owner", `· ${node.who}`);
+          if (node.badge) appendText(title, "badge", node.badge);
+          const desc = document.createElement("p");
+          desc.className = "node-desc";
+          desc.textContent = node.desc;
+          card.append(title, desc);
+          graph.append(card);
+        }
+        let graphHeight = 0;
+        for (const [id] of Object.entries(N)) {
+          const card = document.getElementById(`node-${id}`);
+          const x = Number.parseFloat(card.style.left);
+          const y = Number.parseFloat(card.style.top);
+          const rect = { x, y, width: card.offsetWidth, height: card.offsetHeight };
+          nodeRects.set(id, rect);
+          graphHeight = Math.max(graphHeight, y + rect.height + 38);
+        }
+        graph.style.height = `${Math.max(1180, graphHeight)}px`;
+        svg.setAttribute("viewBox", `0 0 ${width} ${graph.clientHeight}`);
+        for (const [index, edge] of E.entries()) {
+          const source = nodeRects.get(edge.from);
+          const target = nodeRects.get(edge.to);
+          const [sourceSide, targetSide] = edge.s1 && edge.s2 ? [edge.s1, edge.s2] : sides(source, target);
+          const from = point(source, sourceSide);
+          const to = point(target, targetSide);
+          const bend = edge.bow || (edge.kind === "loop" ? 58 : 0);
+          const sourceControl = control(from, sourceSide, width, graph.clientHeight, bend);
+          const targetControl = control(to, targetSide, width, graph.clientHeight, edge.kind === "exit" ? -bend : bend);
+          const path = document.createElementNS(SVG_NS, "path");
+          path.classList.add("edge", edge.kind);
+          path.dataset.edgeIndex = String(index);
+          path.setAttribute("d", `M ${from.x} ${from.y} C ${sourceControl.x} ${sourceControl.y}, ${targetControl.x} ${targetControl.y}, ${to.x} ${to.y}`);
+          path.setAttribute("stroke", edgeColor[edge.kind]);
+          path.setAttribute("marker-end", "url(#arrowhead)");
+          svg.append(path);
+
+          const visibleRoute = document.createElement("li");
+          visibleRoute.className = `lbl ${edge.kind}`;
+          visibleRoute.dataset.edgeIndex = String(index);
+          appendText(visibleRoute, "route-id", `${index + 1}. `);
+          appendText(visibleRoute, "route-state", `${edge.from} → ${edge.to}: `);
+          visibleRoute.append(document.createTextNode(edge.label));
+          routes.append(visibleRoute);
+
+          const accessibleRoute = document.createElement("li");
+          accessibleRoute.textContent = `${edge.from} to ${edge.to}: ${edge.label} (${edge.kind})`;
+          edgeList.append(accessibleRoute);
+        }
+      }
+      render();
+      window.addEventListener("resize", render);
+    </script>
+  </body>
 </html>

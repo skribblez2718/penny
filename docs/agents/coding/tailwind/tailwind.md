@@ -33,17 +33,16 @@ first use (a failed fetch self-heals and dates the row).
 | Preflight (base reset)                      | https://tailwindcss.com/docs/preflight                         | seed         |
 | Editor setup / IntelliSense                 | https://tailwindcss.com/docs/editor-setup                      | seed         |
 
-## Using Tailwind with Lit (shadow DOM)
+## Using Tailwind with Lit when that stack is selected
 
-Tailwind's global stylesheet does **not** cross Lit's shadow boundary, so a
-compiled Tailwind sheet must be adopted into each component's shadow root
-(Vite `?inline` → `unsafeCSS()` → `adoptStyles()`/`static styles`, via a shared
-`TW` mixin). Theme tokens declared on `:root`/`:host` (via `@theme`) are CSS
-custom properties and **do** cross the boundary, so one host-level theme drives
-every component.
+When a caller selects both Tailwind and Lit, Tailwind's global stylesheet does **not**
+cross Lit's shadow boundary. Build an integration from the current documentation and
+adopt only trusted, compiled CSS into each component's shadow root. Theme tokens
+expressed as CSS custom properties can cross that boundary when the selected design
+uses them.
 
 Use the [Lit documentation map](../lit/AGENTS.md) to fetch the current styles API before implementing this integration; do not rely on a frozen code sample.
 
 > **Security:** `unsafeCSS()` must only ever receive **trusted, compiled** CSS —
 > never user input. See [../security/configuration.md](../security/configuration.md)
-> (CSP / inline styles) and [../security/xss.md](../security/xss.md).
+> (CSP / inline styles), [../security/browser-security.md](../security/browser-security.md), and [../security/xss.md](../security/xss.md).

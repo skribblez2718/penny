@@ -10,6 +10,8 @@ be reviewed with the playbook and tests.
 from __future__ import annotations
 
 import argparse
+import html
+import json
 import re
 from pathlib import Path
 
@@ -140,28 +142,56 @@ TypeScript state schema.
 """
 
     def _build_flow_html(self) -> str:
+        """Build a safe, self-contained starter from the canonical flow template."""
+        template_path = Path(__file__).with_name("templates") / "skill-flow.html"
+        template = template_path.read_text(encoding="utf-8")
         states = [self.state_for(agent) for agent in self.agents]
-        nodes = ",\n".join(
-            f'  "{state}": {{"title":"{state}","desc":"{agent} cognitive state","agent":"{agent}"}}'
-            for state, agent in zip(states, self.agents)
-        )
-        edges = []
-        for left, right in zip(states, states[1:]):
-            edges.append(f'  {{"from":"{left}","to":"{right}","kind":"fwd"}}')
+        nodes: dict[str, dict[str, object]] = {}
+        for index, (state, agent) in enumerate(zip(states, self.agents, strict=True)):
+            nodes[state] = {
+                "title": state,
+                "desc": f"{agent} cognitive state; replace with the descriptor-backed mission.",
+                "cls": agent,
+                "who": agent,
+                "lane": "center",
+                "y": 40 + index * 150,
+            }
+        nodes["complete"] = {
+            "title": "complete",
+            "desc": "Positive terminal; replace with the descriptor-backed completion contract.",
+            "cls": "done",
+            "badge": "TERM",
+            "lane": "center",
+            "y": 40 + len(states) * 150,
+        }
+        edges: list[dict[str, str]] = [
+            {"from": left, "to": right, "kind": "fwd", "label": "continue"}
+            for left, right in zip(states, states[1:])
+        ]
         if states:
-            edges.append(f'  {{"from":"{states[-1]}","to":"complete","kind":"exit"}}')
-        return f'''<!doctype html>
-<meta charset="utf-8"><title>{self.name} flow</title>
-<h1>{self.name}</h1><p>TypeScript playbook flow; update with the descriptor.</p>
-<script type="application/json" id="flow-data">
-{{"N":{{
-{nodes},
-  "complete": {{"title":"complete","desc":"terminal"}}
-}},"E":[
-{",\n".join(edges)}
-]}}
-</script>
-'''
+            edges.append(
+                {"from": states[-1], "to": "complete", "kind": "exit", "label": "complete"}
+            )
+        replacements = {
+            "__FLOW_TITLE__": f"{self.name} flow | Penny",
+            "__FLOW_HEADING__": f"{self.name} — draft execution flow",
+            "__FLOW_SUMMARY__": "Draft visual mirror. Replace every placeholder and align N/E with the registered TypeScript descriptor before shipping.",
+            "__FLOW_CALLOUT__": "Draft only: preserve authority boundaries, name every repair, and keep topology descriptor-backed.",
+            "__FLOW_NOTES__": "Replace this draft note with bounded-repair, exhaustion, and omitted-seam documentation before registration.",
+            "__N_JSON__": json.dumps(nodes, ensure_ascii=False, separators=(",", ":")),
+            "__E_JSON__": json.dumps(edges, ensure_ascii=False, separators=(",", ":")),
+        }
+        missing = [token for token in replacements if token not in template]
+        if missing:
+            raise ValueError(
+                f"canonical flow template is missing placeholders: {', '.join(missing)}"
+            )
+        for token, value in replacements.items():
+            replacement = (
+                value if token in {"__N_JSON__", "__E_JSON__"} else html.escape(value, quote=True)
+            )
+            template = template.replace(token, replacement)
+        return template
 
     def write(self, project_root: Path) -> Path:
         root = project_root / ".pi" / "skills" / self.name

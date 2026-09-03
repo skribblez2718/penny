@@ -88,6 +88,26 @@ describe("formatResult exact-artifact visibility", () => {
     expect(text).toContain("chain step 1");
   });
 
+  it("names every best partial on an honest negative terminal", () => {
+    const first = `art_${"e".repeat(64)}`;
+    const second = `art_${"f".repeat(64)}`;
+    const text = formatResult(
+      baseResult({
+        success: false,
+        state: "cancelled",
+        result: { met: false },
+        best_partial_artifact_refs: [ref(first), ref(second)].filter(
+          (value): value is NonNullable<SkillResult["output_artifact_ref"]> => value !== undefined
+        ),
+      }),
+      plain
+    );
+    expect(text).toContain(first);
+    expect(text).toContain(second);
+    expect(text).toContain("best partial 1");
+    expect(text).toContain("best partial 2");
+  });
+
   it("adds nothing when the run produced no artifact", () => {
     const text = formatResult(baseResult(), plain);
     expect(text).not.toContain("Exact output artifact");

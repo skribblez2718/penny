@@ -22,6 +22,24 @@ import {
 export const PROJECT_CATALOG_SCHEMA_VERSION = 2 as const;
 const PROJECT_ROOT_COMMITMENT_DOMAIN = "penny-project-root-v1\0";
 const PROJECT_ROOT_COMMITMENT_PATTERN = /^root_[a-f0-9]{64}$/u;
+const REQUIRED_CATALOG_COLUMNS = {
+  migration_reservations: ["project_id", "migration_id", "plan_sha256", "created_at"],
+  project_relinks: [
+    "relink_id",
+    "project_id",
+    "old_root_commitment",
+    "new_root_commitment",
+    "relinked_at",
+  ],
+  projects: [
+    "project_id",
+    "root_commitment",
+    "lifecycle_state",
+    "layout_version",
+    "created_at",
+    "updated_at",
+  ],
+} as const;
 
 type ProjectLifecycleState = "active" | "relink_pending" | "retired";
 
@@ -114,7 +132,7 @@ export class ProjectCatalog implements Disposable {
   readonly state: PennyStatePaths;
   private readonly store: OwnerSqliteDatabase;
 
-  constructor(stateRoot: string, options: { create: boolean }) {
+  constructor(stateRoot: string, options: { create: boolean; readOnly?: boolean }) {
     this.state = pennyStatePaths(stateRoot);
     if (options.create) {
       ensureOwnerDirectory(this.state.root, "Penny state root");
@@ -133,6 +151,8 @@ export class ProjectCatalog implements Disposable {
       directory: this.state.root,
       databaseName: CATALOG_DATABASE_NAME,
       label: "Penny state catalog",
+      mode: options.create ? "provision" : "existing",
+      ...(options.readOnly === true ? { readOnly: true } : {}),
     });
     this.initializeOrValidateSchema(options.create);
   }
@@ -430,6 +450,29 @@ export class ProjectCatalog implements Disposable {
       throw new Error(`project catalog schema ${version} is unsupported`);
     }
 
+    const schemaObjects = this.store.db
+      .prepare("SELECT type, name, sql FROM sqlite_master WHERE type = 'table'")
+      .all() as Array<Record<string, SQLOutputValue>>;
+    const tables = new Map(schemaObjects.map((row) => [String(row.name), String(row.sql ?? "")]));
+    for (const [table, requiredColumns] of Object.entries(REQUIRED_CATALOG_COLUMNS)) {
+      const definition = tables.get(table);
+      if (definition === undefined) throw new Error(`project catalog is missing table '${table}'`);
+      if (!/\bSTRICT\b/u.test(definition)) {
+        throw new Error(`project catalog table '${table}' is not STRICT`);
+      }
+      const columns = new Set(
+        (
+          this.store.db.prepare(`PRAGMA table_info(${table})`).all() as Array<
+            Record<string, SQLOutputValue>
+          >
+        ).map((row) => String(row.name))
+      );
+      for (const column of requiredColumns) {
+        if (!columns.has(column)) {
+          throw new Error(`project catalog table '${table}' is missing column '${column}'`);
+        }
+      }
+    }
     const foreignKeys = this.store.db.prepare("PRAGMA foreign_key_check").all();
     if (foreignKeys.length !== 0) throw new Error("project catalog failed foreign_key_check");
   }

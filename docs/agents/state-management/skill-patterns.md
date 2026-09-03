@@ -17,9 +17,11 @@ only exact selected predecessors; the terminal result exposes the selected produ
 
 ## Bounded repair
 
-A verifier classifies the gap and names its producer target. The playbook increments a
-bounded counter, changes strategy, and returns to that target. Repeated gaps escalate or
-exhaust instead of spinning.
+A verifier classifies the gap as a closed `EvaluationResultV2` feedback kind and supplies a
+non-empty strategy delta; it cannot name a target or claim exhaustion. The engine resolves the
+unique host-registered origin-state/feedback-kind route, charges its finite budget, and performs
+the transition. Repeated gaps escalate or exhaust through the registered successor instead of
+spinning.
 
 ## Planned human gate
 
@@ -29,9 +31,9 @@ and deny terminates safely.
 
 ## Parallel fan
 
-The directive carries one branch ID, task, exact input grant, and output contract per
-branch. The worker layer enforces concurrency; fan-in uses branch IDs and preserves
-accepted siblings during recovery.
+The directive carries one branch ID, task, owner-selected exact input IDs, and output
+contract per branch. The worker layer enforces concurrency; fan-in uses branch IDs and
+preserves accepted siblings during recovery.
 
 ## Deterministic host state
 

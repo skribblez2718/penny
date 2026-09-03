@@ -11,12 +11,13 @@ import { requireValue } from "./helpers/narrowing.js";
 import { describe, expect, it } from "vitest";
 
 import { RunContext } from "../src/context.js";
-import { evaluateCompletionGate, hasGapClassification } from "../src/playbooks/playbook.js";
+import { evaluateCompletionGate, hasStateAwareRepair } from "../src/playbooks/playbook.js";
 import {
   KB_AGENT_PHASES,
   KB_STATES,
   KNOWLEDGE_BASE_SKILL_CONTRACT,
   KnowledgeBasePlaybook,
+  validateKnowledgeBasePhaseDetails,
 } from "../src/playbooks/knowledge-base.js";
 import { PLAYBOOK_REGISTRY, validateRegistrationContract } from "../src/playbooks/registry.js";
 import type { Confidence, Directive, JsonValue } from "../src/contracts.js";
@@ -249,7 +250,7 @@ function driveTo(
     const state = context.stateId;
     const details = overrides[state] ?? DETAILS[state];
     if (details === undefined) break;
-    playbook.validateDetails(state, details);
+    validateKnowledgeBasePhaseDetails(state, details);
     next = playbook.acceptSummary(context, details, "PROBABLE" as Confidence);
   }
   return next;
@@ -294,7 +295,7 @@ describe("KB playbook — state vocabulary", () => {
   });
 
   it("implements the typed-feedback capability", () => {
-    expect(hasGapClassification(newPlaybook())).toBe(true);
+    expect(hasStateAwareRepair(newPlaybook())).toBe(true);
   });
 });
 
@@ -429,16 +430,14 @@ describe("KB playbook — dispatch", () => {
 
 describe("KB playbook — result contracts", () => {
   it("rejects a phase result carrying the wrong artifact kind", () => {
-    const playbook = newPlaybook();
-    expect(() => playbook.validateDetails("ingest", { artifact_kind: "page_draft" })).toThrow(
-      /must return artifact_kind 'claims'/
-    );
+    expect(() =>
+      validateKnowledgeBasePhaseDetails("ingest", { artifact_kind: "page_draft" })
+    ).toThrow(/must return artifact_kind 'claims'/);
   });
 
   it("requires compose to identify the page revision it produced", () => {
-    const playbook = newPlaybook();
     expect(() =>
-      playbook.validateDetails("compose", {
+      validateKnowledgeBasePhaseDetails("compose", {
         kb_artifact_id: "art_compose",
         artifact_kind: "page_draft",
         complete: true,
@@ -448,9 +447,8 @@ describe("KB playbook — result contracts", () => {
   });
 
   it("rejects an agent result for a non-agent state", () => {
-    const playbook = newPlaybook();
     expect(() =>
-      playbook.validateDetails(
+      validateKnowledgeBasePhaseDetails(
         "awaiting_review",
         requireValue(DETAILS.ingest, "apps/orchestration/tests/kb-playbook.test.ts:435")
       )
@@ -458,23 +456,27 @@ describe("KB playbook — result contracts", () => {
   });
 });
 
-describe("KB playbook — typed feedback routing (W5)", () => {
-  it("routes blocking-severity lint findings back to compose", () => {
+describe("KB playbook — typed feedback classification (W5)", () => {
+  it("exposes state-aware repair while leaving targets to the contract", () => {
     const playbook = newPlaybook();
+    expect(hasStateAwareRepair(playbook)).toBe(true);
     const context = newContext();
     driveTo(playbook, context, "lint");
     const failing = {
       ...requireValue(DETAILS.lint, "apps/orchestration/tests/kb-playbook.test.ts:446"),
       blocking_count: 2,
     };
-    const gap = playbook.classifyGap(context, "lint", failing);
+    const gap = playbook.evaluateRepair(context, "lint", failing);
     expect(gap?.kind).toBe("synthesis_gap");
-    expect(gap?.target_state).toBe("compose");
-    playbook.acceptSummary(context, failing, "PROBABLE" as Confidence);
-    expect(context.stateId).toBe("compose");
+    expect(gap).not.toHaveProperty("target_state");
+    expect(
+      KNOWLEDGE_BASE_SKILL_CONTRACT.repair_routing.routes.find(
+        (route) => route.origin_state === "lint" && route.feedback_kind === gap?.kind
+      )?.repair.target_state
+    ).toBe("compose");
   });
 
-  it("routes unsupported claims back to compose as a validation gap", () => {
+  it("classifies unsupported claims without selecting a transition", () => {
     const playbook = newPlaybook();
     const context = newContext();
     driveTo(playbook, context, "verify");
@@ -483,26 +485,19 @@ describe("KB playbook — typed feedback routing (W5)", () => {
       unsupported: 2,
       supported: 1,
     };
-    const gap = playbook.classifyGap(context, "verify", failing);
+    const gap = playbook.evaluateRepair(context, "verify", failing);
     expect(gap?.kind).toBe("validation_gap");
-    playbook.acceptSummary(context, failing, "PROBABLE" as Confidence);
-    expect(context.stateId).toBe("compose");
+    expect(gap).not.toHaveProperty("exhausted");
   });
 
-  it("proceeds honestly when the repair budget is exhausted, carrying the finding", () => {
+  it("classifies a structurally valid incomplete phase separately from malformed_result", () => {
     const playbook = newPlaybook();
-    const context = newContext({ max_iterations: 1 });
-    driveTo(playbook, context, "verify");
-    context.iteration = context.maxIterations; // budget already spent
-    const failing = {
-      ...requireValue(DETAILS.verify, "apps/orchestration/tests/kb-playbook.test.ts:470"),
-      unsupported: 2,
-      supported: 1,
+    const context = newContext();
+    const incomplete = {
+      ...requireValue(DETAILS.ingest, "apps/orchestration/tests/kb-playbook.test.ts:470"),
+      complete: false,
     };
-    playbook.acceptSummary(context, failing, "PROBABLE" as Confidence);
-    // It advances rather than looping, and the unresolved finding is preserved.
-    expect(context.stateId).toBe("awaiting_review");
-    expect(JSON.stringify(context.playbookData.unresolved)).toMatch(/not supported/);
+    expect(playbook.evaluateRepair(context, "ingest", incomplete)?.kind).toBe("phase_incomplete");
   });
 });
 
@@ -560,19 +555,21 @@ describe("KB playbook — review gate and terminal truth", () => {
         gate,
         terminalStatus: "complete",
         met: true,
-        fromState: "compose",
+        originState: "compose",
+        visitedStates: ["compose"],
         unresolvedCount: 0,
       })
-    ).toMatch(/requires terminating from/);
+    ).toContain("TERMINAL_ORIGIN_NOT_ALLOWED");
     expect(
       evaluateCompletionGate({
         gate,
         terminalStatus: "complete",
         met: true,
-        fromState: "publishing",
+        originState: "publishing",
+        visitedStates: ["publishing"],
         unresolvedCount: 0,
       })
-    ).toBeNull();
+    ).toEqual([]);
   });
 });
 
@@ -676,12 +673,11 @@ describe("KB playbook — deterministic host I/O (§6.2 step 2)", () => {
   });
 
   it("requires each phase to name the artifact it staged", () => {
-    const playbook = newPlaybook();
     const withoutHandle = {
       ...requireValue(DETAILS.ingest, "apps/orchestration/tests/kb-playbook.test.ts:641"),
     };
     delete withoutHandle.kb_artifact_id;
-    expect(() => playbook.validateDetails("ingest", withoutHandle)).toThrow(
+    expect(() => validateKnowledgeBasePhaseDetails("ingest", withoutHandle)).toThrow(
       /must return the kb_artifact_id/
     );
   });

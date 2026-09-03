@@ -4,11 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 
-import {
-  assertOwnerDirectory,
-  pennyStatePaths,
-  resolvePennyStateRoot,
-} from "@penny/orchestration/source";
+import { assertOwnerDirectory, pennyStatePaths, resolvePennyStateRoot } from "@penny/orchestration";
 
 import { ObservabilityDatabase, type LogQuery } from "./database.js";
 

@@ -11,6 +11,11 @@ import {
 import path from "node:path";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 
+import {
+  createReadOnlySqliteSnapshot,
+  type ReadOnlySqliteSnapshot,
+} from "../state/sqlite-snapshot.js";
+
 const OWNER_DIRECTORY_MODE = 0o700;
 const OWNER_FILE_MODE = 0o600;
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -137,6 +142,10 @@ export interface OwnerSqliteDatabaseOptions {
   readonly directory: string;
   readonly databaseName: string;
   readonly label: string;
+  /** Existing mode is create-never and must not normalize retained state. */
+  readonly mode?: "provision" | "existing";
+  /** Readiness validation uses a SQLite read-only connection. */
+  readonly readOnly?: boolean;
   /**
    * Legacy authority files are never scanned or adopted. Their mere presence
    * blocks the store, so a directory scan cannot mint authority in SQLite.
@@ -157,6 +166,8 @@ export class OwnerSqliteDatabase implements Disposable {
   private readonly isLegacyAuthorityFile: ((name: string) => boolean) | undefined;
   private readonly directoryIdentity: { dev: bigint | number; ino: bigint | number };
   private readonly databaseIdentity: { dev: bigint | number; ino: bigint | number };
+  /** Present only for non-mutating validation/query sessions. */
+  private readonly validationSnapshot: ReadOnlySqliteSnapshot | undefined;
   private closed = false;
 
   constructor(options: OwnerSqliteDatabaseOptions) {
@@ -164,9 +175,15 @@ export class OwnerSqliteDatabase implements Disposable {
     this.databasePath = path.join(this.directory, options.databaseName);
     this.label = options.label;
     this.isLegacyAuthorityFile = options.isLegacyAuthorityFile;
+    const mode = options.mode ?? "provision";
+    const readOnly = options.readOnly ?? false;
+    if (readOnly && mode !== "existing") {
+      throw new Error(`${this.label} read-only opening requires existing state`);
+    }
 
     assertNoSymlinkAncestors(this.directory, this.label);
     if (!pathExistsNoFollow(this.directory)) {
+      if (mode === "existing") throw new Error(`${this.label} directory is absent`);
       mkdirSync(this.directory, { recursive: true, mode: OWNER_DIRECTORY_MODE });
     }
     assertNoSymlinkAncestors(this.directory, this.label);
@@ -176,8 +193,12 @@ export class OwnerSqliteDatabase implements Disposable {
     this.directoryIdentity = { dev: directoryStat.dev, ino: directoryStat.ino };
 
     const databaseExisted = pathExistsNoFollow(this.databasePath);
-    if (databaseExisted) assertOwnerFile(this.databasePath, `${this.label} database`);
-    else createOwnerFile(this.databasePath, this.directory, `${this.label} database`);
+    if (databaseExisted) {
+      assertOwnerFile(this.databasePath, `${this.label} database`);
+    } else {
+      if (mode === "existing") throw new Error(`${this.label} database is absent`);
+      createOwnerFile(this.databasePath, this.directory, `${this.label} database`);
+    }
 
     const sidecarExisted = new Map(
       SQLITE_SIDECAR_SUFFIXES.map((suffix) => {
@@ -188,17 +209,24 @@ export class OwnerSqliteDatabase implements Disposable {
       })
     );
 
+    const validationSnapshot = readOnly
+      ? createReadOnlySqliteSnapshot(this.databasePath, `${this.label} database`)
+      : undefined;
+    this.validationSnapshot = validationSnapshot;
     const { DatabaseSync } = sqliteModule();
-    const db = new DatabaseSync(this.databasePath);
+    const db = new DatabaseSync(
+      validationSnapshot?.databasePath ?? this.databasePath,
+      readOnly ? { readOnly: true } : {}
+    );
     this.db = db;
     try {
-      const journal = db.prepare("PRAGMA journal_mode=WAL").get() as
-        | Record<string, SQLOutputValue>
-        | undefined;
+      db.exec(`PRAGMA busy_timeout=${SQLITE_BUSY_TIMEOUT_MS};`);
+      const journal = db
+        .prepare(mode === "provision" ? "PRAGMA journal_mode=WAL" : "PRAGMA journal_mode")
+        .get() as Record<string, SQLOutputValue> | undefined;
       db.exec(
         `PRAGMA synchronous=FULL;
-         PRAGMA foreign_keys=ON;
-         PRAGMA busy_timeout=${SQLITE_BUSY_TIMEOUT_MS};`
+         PRAGMA foreign_keys=ON;`
       );
       if (String(journal?.journal_mode ?? "").toLowerCase() !== "wal") {
         throw new Error(`${this.label} database refused WAL mode`);
@@ -228,11 +256,13 @@ export class OwnerSqliteDatabase implements Disposable {
           if (uid !== undefined && stat.uid !== uid) {
             throw new Error(`${this.label} database${suffix} has the wrong owner`);
           }
-          const descriptor = openSync(sidecar, constants.O_RDONLY | constants.O_NOFOLLOW);
-          try {
-            fchmodSync(descriptor, OWNER_FILE_MODE);
-          } finally {
-            closeSync(descriptor);
+          if (mode === "provision") {
+            const descriptor = openSync(sidecar, constants.O_RDONLY | constants.O_NOFOLLOW);
+            try {
+              fchmodSync(descriptor, OWNER_FILE_MODE);
+            } finally {
+              closeSync(descriptor);
+            }
           }
         }
         assertOwnerFile(sidecar, `${this.label} database${suffix}`);
@@ -240,6 +270,7 @@ export class OwnerSqliteDatabase implements Disposable {
       assertOwnerFile(this.databasePath, `${this.label} database`);
     } catch (error) {
       db.close();
+      validationSnapshot?.close();
       this.closed = true;
       throw error;
     }
@@ -294,8 +325,12 @@ export class OwnerSqliteDatabase implements Disposable {
 
   close(): void {
     if (this.closed) return;
-    this.db.close();
-    this.closed = true;
+    try {
+      this.db.close();
+    } finally {
+      this.validationSnapshot?.close();
+      this.closed = true;
+    }
   }
 
   [Symbol.dispose](): void {

@@ -20,10 +20,10 @@ export const COMPATIBILITY_LOANS: readonly CompatibilityLoan[] = [
   {
     id: "research-fixed-topology",
     description:
-      "Research retains its frozen state topology while universal-skill outcomes are measured.",
+      "Research retains the approved P3 core-sealing, Vera-before-Carren, deterministic-rendering topology while universal-skill outcomes are measured.",
     owner: "orchestration",
     reviewBy: "2026-11-14",
-    assumptionDigest: "48f35d59307b00112247a9cf92fbbf51f5472c4ac3a432cd161720849b0ab0bd",
+    assumptionDigest: "2ba859fa266abf66140ad3e437efe32ea412d529fe5f136384a3713d58cc63c0",
   },
   {
     id: "research-three-file-output",

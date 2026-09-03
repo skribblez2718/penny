@@ -1,80 +1,82 @@
 # Research Skill
 
-Structured Quick / Standard / Deep research: decompose a query, gather cited evidence,
-synthesize and critique a thematic report, validate citation grounding, and produce final
-report files.
+Quick / Standard / Deep evidence research that returns one authoritative `GroundedSynthesisV1` semantic core plus an external receipt/render/product-envelope graph.
 
-## Architecture
+## Runtime truth
 
-`ResearchPlaybook` lives in `apps/orchestration/src/playbooks/research.ts` and is
-constructed through the TypeScript playbook registry. The skill directory contains no
-executable delegate.
+`ResearchPlaybook` in `apps/orchestration/src/playbooks/research.ts` is the sole runtime. This directory contains only the manifest, prompts, and resources.
 
-- Node SQLite checkpoint state is keyed by `run_id`.
-- Exact agent output lives in the immutable artifact plane, never in run context.
-- Every worker receives exact `input_artifacts` and an owner `output_artifact` contract.
-- Agents read predecessors with `artifact_read`; complete response bytes are persisted
-  before routing fields are accepted.
-- Recovery reissues the pending TypeScript directive from checkpointed refs.
-- Single, parallel, chain, and chain-resume invocations all use TypeScript.
-- The workflow remains correct without durable memory.
+- Node SQLite checkpoints are keyed by exact `run_id`.
+- `RunContext` stores refs, never product or private context bodies.
+- Owner persistence and exact-byte re-read precede routing.
+- Restart, clarification, fan recovery, cancellation, and best-partial delivery are memory-independent.
+- Selected-agent tools remain exactly YAML under both trust profiles and every context mode.
+- `sealing_core` and `rendering` are deterministic host states; they add no model turns, agents, or tools.
 
-## States
+## P3 topology
 
-| State | Agent | Role |
+| State | Owner | Role |
 |---|---|---|
-| `planning` | Piper | Decompose the query; declare mode when the caller did not. |
-| `critiquing_plan` | Carren | Evidence-gated plan critique when `critique_passes >= 2`. |
-| `researching` | Echo × N | Bounded dynamic research fan; single-agent explicit quick. |
-| `synthesizing` | Synthia | Integrate exact findings into a cited report. |
-| `critiquing_report` | Carren | Evidence-gated report critique when `critique_passes >= 1`. |
-| `validating` | Vera | Citation-grounding gate in every mode. |
-| `report_writing` | Skribble | Write and return the complete report products. |
+| `planning` | Piper | Decompose evidence need and declare mode when unset. |
+| `critiquing_plan` | Carren | Optional evidence-gated deep-plan critique. |
+| `researching` | Echo × N | Bounded dynamic evidence fan. |
+| `synthesizing` | Synthia | Emit a closed typed semantic draft over exact findings and review feedback. |
+| `sealing_core` | host | Deterministically resolve indexes, verify excerpt containment/hashes and exact lineage, then persist canonical immutable core bytes. |
+| `validating` | Vera | Objective latest-core grounding gate in every mode. |
+| `critiquing_report` | Carren | Optional report-quality critique after Vera PASS. |
+| `rendering` | host | Persist receipts/renders/envelope, atomically materialize files, enforce DoD. |
 
-## Mode flows
+Quick skips planning; Standard plans; Deep adds plan and report critique. Every route from Echo or Synthia reaches `synthesizing → sealing_core → validating`. A Carren quality defect reaches `synthesizing → sealing_core → validating → critiquing_report`; there is no fix-to-render edge.
 
-- **Quick:** `researching → synthesizing → validating → report_writing → complete`
-- **Standard:** `planning → researching → synthesizing → validating → report_writing → complete`
-- **Deep:** `planning → critiquing_plan → researching → synthesizing → critiquing_report → validating → report_writing → complete`
+## Request, context, and compatibility
 
-Mode expands to verification budgets rather than hardcoded topology. `max_sub_queries`
-is clamped by `max_fan_width`; the model chooses how much of the ceiling to spend.
+The owner canonicalizes `ResearchRequestV1` before run mutation. Unknown fields, `rigor_escalation`, host liveness overrides, duplicate bindings, and incompatible typed imports fail closed.
 
-## Exact handoff and composition
+A typed import must be exact canonical `penny.grounded-synthesis.v1` bytes in a matching `semantic-core`. Historical untyped `agent-output` input remains `legacy_context`. Deprecated `report_format` becomes caller-owned output-shape guidance for Synthia, report Carren, and Vera.
 
-The playbook selects the exact predecessor refs each state needs. Payload bytes never
-enter `RunContext`; retries, clarification, recovery, and fan-in retain selected refs.
-A malformed routing result creates an explicit output revision rather than advancing.
+Context bindings are identifier-only versioned documents, exact pre-resolved approved-KB results, or caller output shape. Persisted `ContextSourceRefV1` artifacts contain metadata only. Content is re-resolved and checked before model use. Approved-KB content stays advisory and private bodies never enter checkpoints, generic products, receipts, renders, envelopes, or telemetry.
 
-When research is a later skill-chain step, the owner verifies and forwards the exact
-predecessor terminal ID directly across runs. Additional explicit IDs may provide fan-in;
-no `{previous}` payload substitution occurs.
+## Product graph
 
-## Honest outcomes
+The sole active output port and chain handoff are `grounded_synthesis`: the latest semantic-core ID is forwarded unchanged. The recognized `legacy_report_artifact` schema remains compatibility-only.
 
-Critique and validation repairs are bounded. Exhaustion records warnings and unresolved
-issues rather than inventing approval. Vera may name `evidence_needed`, which drives a
-bounded Echo research round followed by re-synthesis and re-validation.
+```text
+GroundedSynthesisV1 semantic core
+  ├─ grounding_verification receipt (Vera)
+  ├─ optional quality_critique receipt (Carren)
+  ├─ deterministic_product_validation receipt (host)
+  ├─ report.md deterministic render
+  ├─ sources.md deterministic render
+  └─ README.md deterministic render
+        ↓
+ResearchProductEnvelopeV1
+```
 
-`met` records report delivery; `grounded` records Vera’s final verdict. Surface both.
+The envelope is terminal graph evidence, not an output-port value and not a second W7 completion envelope.
 
-## Products
+Renderer `penny.research.compat-markdown.v1` consumes only the validated core. Stable intent identity/time, immutable artifacts, no-follow checks, exact temporary names, file/directory fsync, atomic rename, matching-file adoption, and final three-file verification make restart idempotent and drift fail closed.
 
-Skribble writes beneath `$PROJECT_ROOT/research/<slug>-<digest>`:
+## Positive terminal
 
-- `report.md`
-- `sources.md`
-- `README.md`
+`complete/met:true` requires:
 
-The owner-captured `report_writing` artifact is returned as `output_artifact_ref`; the
-files remain user-facing products.
+- latest exact canonical core with request/context/Echo-evidence/Synthia lineage and host-verified excerpt hashes;
+- no unsupported claim, blocking gap/uncertainty, or unresolved contradiction;
+- same-core Vera PASS and same-core Carren PASS when quality critique is enabled;
+- no exhausted required critique, verification, repair, malformed, protocol, call, time, or cancellation budget;
+- exactly three render artifacts and matching files;
+- host deterministic-product PASS and exact envelope graph;
+- terminal `output_artifact_ref` equal to the semantic-core ref;
+- admission through the existing engine gate from `rendering`.
 
-## Verification surfaces
+Fully disclosed non-blocking uncertainty may be `qualified:true`; failed evidence or budget may not. Non-positive outcomes preserve the best exact partial and create no complete envelope.
 
-- `apps/orchestration/tests/research-parity.test.ts`
-- `apps/orchestration/tests/research-parity-pin.test.ts`
-- `apps/orchestration/tests/core-runtime.test.ts`
-- `apps/orchestration/tests/initial-artifacts.test.ts`
-- `apps/orchestration/tests/prompt-guidance-contract.test.ts`
-- `resources/reference.md`
-- `resources/flow.html`
+Deterministic PG3 does not claim golden-template certification. The live-model PG4 Quick gate passed in verified run `p4-qr-live-20260827-009`; golden-template certification remains outside that gate. See `resources/reference.md` for the normative claim map and `resources/flow.html` for the exact graph mirror.
+
+## Flow diagram
+
+`resources/flow.html` is the strict-JSON visual mirror of `RESEARCH_FLOW`. It
+uses the shared flow template and passes the descriptor drift test plus
+`bun .pi/extensions/playwright/scripts/validate-flow-html.ts --skill research`.
+The footer documents the intentionally omitted uniform cancellation/abort seams
+and out-of-band error outcome; it does not add them to the descriptor graph.

@@ -39,7 +39,11 @@ import { assessQueryVerification } from "../../src/kb/query-verification.js";
 import { RunArtifactStore } from "../../src/kb/run-artifacts.js";
 import { createTestOnlyArtifactBodyRunner } from "../../src/kb/session-tools.js";
 import { initKb } from "../../src/kb/workflows.js";
-import type { AgentInvocation } from "../../src/model-client.js";
+import type {
+  ActiveWorkerRegistrationMetadataV1,
+  AgentInvocation,
+} from "../../src/model-client.js";
+import { KNOWLEDGE_BASE_SKILL_CONTRACT } from "../../src/playbooks/knowledge-base.js";
 import { kbArtifactControl } from "./kb-artifact-control.js";
 
 type TrackedCase = RetrievalFixtureCaseV1;
@@ -63,6 +67,14 @@ const fixtureBytes = readFileSync(fixturePath, "utf8");
 const fixture: TrackedFixture = parseRetrievalFixture(fixtureBytes);
 
 const PROFILE = "kbp_answer_quality_oracle";
+const KB_WORKER_METADATA: ActiveWorkerRegistrationMetadataV1 = {
+  playbook_name: "knowledge-base",
+  workflow_name: "knowledge-base",
+  guidance: KNOWLEDGE_BASE_SKILL_CONTRACT.guidance,
+  result_transport: "host_typed",
+  opening_policy: "host_private_opening",
+  model_policy: "host_private_ssot_model",
+};
 const NOW = "2026-01-01T00:00:00Z";
 const dirs: string[] = [];
 
@@ -168,6 +180,7 @@ function invocation(input: {
     projectRoot: input.projectRoot,
     trustProfile: "hardened-untrusted",
     inputArtifacts: [],
+    registration: KB_WORKER_METADATA,
   };
 }
 
