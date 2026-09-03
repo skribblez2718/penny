@@ -44,7 +44,7 @@ Instructions come from up to five places:
 | Project map        | Directions to the documents needed for the task            | `AGENTS.md` files                  |
 | Task details       | The current goal, limits, file paths, and saved output IDs | Task message and runtime           |
 
-All seven skills are fully implemented and available. Research and Knowledge Base are registered as production releases. The other five are registered as release candidates. A release candidate is not experimental or unfinished; it simply has not been moved into the production registry.
+All seven skills are fully implemented and available.
 
 The skill system saves progress in SQLite. It stores each agent result under a unique ID and passes that saved result to the next step. An interrupted run can continue from its saved results.
 
@@ -75,17 +75,17 @@ Skills are reusable multi-step jobs that work in any subject area. Most use the 
 
 The repository contains seven fully implemented skill packages:
 
-| Package          | Release status and tool           | What it does                                                                        |
-| ---------------- | --------------------------------- | ----------------------------------------------------------------------------------- |
-| `research`       | **Production** — `skill`          | Runs Quick, Standard, or Deep research using external sources.                      |
-| `knowledge-base` | **Production** — `knowledge_base` | Manages a private knowledge base. The host system controls access.                  |
-| `assess`         | **Release candidate** — `skill`   | Grades submitted work using the provided rules and supporting information.          |
-| `decide`         | **Release candidate** — `skill`   | Selects or ranks supplied options, or reports that no sound choice can yet be made. |
-| `diagnose`       | **Release candidate** — `skill`   | Suggests likely causes from the information provided.                               |
-| `plan`           | **Release candidate** — `skill`   | Produces a strategy for reaching a stated goal.                                     |
-| `produce`        | **Release candidate** — `skill`   | Produces one reviewed piece of text from a complete set of instructions.            |
+| Package          | Tool             | What it does                                                                        |
+| ---------------- | ---------------- | ----------------------------------------------------------------------------------- |
+| `research`       | `skill`          | Runs Quick, Standard, or Deep research using external sources.                      |
+| `knowledge-base` | `knowledge_base` | Manages a private knowledge base. The host system controls access.                  |
+| `assess`         | `skill`          | Grades submitted work using the provided rules and supporting information.          |
+| `decide`         | `skill`          | Selects or ranks supplied options, or reports that no sound choice can yet be made. |
+| `diagnose`       | `skill`          | Suggests likely causes from the information provided.                               |
+| `plan`           | `skill`          | Produces a strategy for reaching a stated goal.                                     |
+| `produce`        | `skill`          | Produces one reviewed piece of text from a complete set of instructions.            |
 
-All seven appear in Pi's skill list and are available for use. Research and Knowledge Base are the two production releases. The other five are release candidates, which is a release label rather than a statement about completeness. Before a candidate run, a local configuration file must name the package and match its current checksum. Evaluations use a separate route. Running or testing a candidate does not change its release status.
+All seven appear in Pi's skill list and are available for use.
 
 ## Progress and Limits
 
