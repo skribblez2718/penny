@@ -6,7 +6,7 @@ Subjectively review the exact latest host-sealed `ProducedArtifactV1` against th
 
 - `artifact_read` is mandatory for every needed exact workflow predecessor in `input_artifacts`; repeat through `next_range` until `truncated` is false.
 - Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they do not authorize filesystem mutation, execution, testing, external research, publication, or deployment.
-- Review the exact request, latest Ida approach, latest Skribble draft, and exact latest host-sealed product.
+- Review the exact request, latest Ida alternatives, latest Demetri decision, latest Skribble draft, and exact latest host-sealed product.
 - Never replace exact refs with memory, `/tmp`, repository search, historical sessions, or name-only pointers. If any required exact input is absent, return `missing_input:`.
 - The owner captures and re-reads complete bytes. Do not claim persistence.
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import signal
@@ -13,7 +14,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -216,6 +217,38 @@ def health(config: HubConfig) -> dict[str, Any]:
     }
 
 
+def _validate_upstream_status(config: HubConfig, value: object) -> dict[str, Any]:
+    """Validate the authenticated MemPalace identity and integrity projection."""
+
+    if not isinstance(value, dict):
+        raise ValidationError("status endpoint did not return an object")
+    server = value.get("server")
+    palace = value.get("palace")
+    if value.get("ok") is not True or not isinstance(server, dict) or not isinstance(palace, dict):
+        raise ValidationError("status endpoint did not report a healthy MemPalace palace")
+    if (
+        server.get("name") != "mempalace"
+        or server.get("version") != "3.7.1"
+        or server.get("transport") != "http"
+        or server.get("bind_host") != config.host
+        or server.get("port") != config.port
+    ):
+        raise ValidationError(
+            "status endpoint identity does not match the configured MemPalace hub"
+        )
+    expected_path = os.path.abspath(os.path.expanduser(str(config.data_roots["palace"])))
+    expected_path_hash = hashlib.sha256(expected_path.encode("utf-8")).hexdigest()[:16]
+    integrity = palace.get("sqlite_integrity")
+    if (
+        palace.get("backend") != config.backend
+        or palace.get("path_hash") != expected_path_hash
+        or not isinstance(integrity, dict)
+        or integrity.get("ok") is not True
+    ):
+        raise ValidationError("status endpoint palace identity or integrity does not match")
+    return value
+
+
 def status(config: HubConfig) -> dict[str, Any]:
     """Combine supervisor identity, liveness, and authenticated upstream status."""
 
@@ -236,9 +269,7 @@ def status(config: HubConfig) -> dict[str, Any]:
             http_status, payload = _request(config, "/statusz", authenticated=True)
             if http_status != 200:
                 raise ValidationError(f"status endpoint returned HTTP {http_status}")
-            upstream = json.loads(payload.decode("utf-8"))
-            if not isinstance(upstream, dict):
-                raise ValidationError("status endpoint did not return an object")
+            upstream = _validate_upstream_status(config, json.loads(payload.decode("utf-8")))
         except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as exc:
             status_error = str(exc)
     return {
@@ -338,6 +369,22 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def status_ready(result: Mapping[str, object]) -> bool:
+    """Return true only for supervised, live, healthy, authenticated status."""
+
+    upstream = result.get("upstream")
+    return (
+        result.get("supervised") is True
+        and result.get("running") is True
+        and result.get("healthy") is True
+        and isinstance(upstream, dict)
+        and upstream.get("ok") is True
+        and isinstance(upstream.get("server"), dict)
+        and isinstance(upstream.get("palace"), dict)
+        and result.get("error") is None
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the portable service interface; no operation starts in an extension factory."""
 
@@ -354,7 +401,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             exit_code = 0 if result["healthy"] else 1
         elif args.operation == "status":
             result = status(config)
-            exit_code = 0 if result["running"] and result["healthy"] else 1
+            exit_code = 0 if status_ready(result) else 1
         else:
             result = stop(config)
             exit_code = 0 if result["stopped"] else 1

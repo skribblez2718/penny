@@ -5,7 +5,6 @@ metadata:
   version: "3.0.0"
   penny:
     engine: orchestration
-    release_status: production
     mempalace: false
     subagents:
       - piper

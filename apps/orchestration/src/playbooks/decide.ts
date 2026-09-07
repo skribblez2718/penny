@@ -134,7 +134,7 @@ export const DECIDE_FLOW = {
 
 export const DECIDE_LIVENESS_POLICY = {
   schema_version: 1,
-  scope: "orchestrated-decide-candidate",
+  scope: "orchestrated-decide-workflow",
   preset: "bounded-external-orchestrated-v1",
   total_phase_repair_invocations: 24,
   model_turns_per_worker: 12,
@@ -307,12 +307,10 @@ function repairRoute(
 function decisionContract(input: {
   readonly name: string;
   readonly sealed: boolean;
-  readonly releaseStatus: "production" | "candidate";
 }): SkillContract {
   return {
     schema_version: 2,
     name: input.name,
-    release_status: input.releaseStatus,
     objective:
       "Produce one evidence-grounded decision assessment through separate analysis, decision authorship, host sealing, objective verification, and quality critique without taskification or execution.",
     io: {
@@ -458,17 +456,10 @@ function decisionContract(input: {
 export const DECIDE_SKILL_CONTRACT = decisionContract({
   name: DECIDE_PLAYBOOK_NAME,
   sealed: true,
-  releaseStatus: "candidate",
-});
-export const DECIDE_PROSPECTIVE_PRODUCTION_CONTRACT = decisionContract({
-  name: DECIDE_PLAYBOOK_NAME,
-  sealed: true,
-  releaseStatus: "production",
 });
 export const DECIDE_UNSEALED_EVALUATION_CONTRACT = decisionContract({
   name: DECIDE_UNSEALED_EVALUATION_NAME,
   sealed: false,
-  releaseStatus: "candidate",
 });
 
 function selectedLatest(
@@ -2638,7 +2629,7 @@ function decideRegistration(input: {
             result_schema_id: "penny.decide.decision-summary.v2",
             result_schema_version: 1 as const,
             schema: DecisionSummarySchema,
-            // Evaluation-only ablation: ordinary candidate phases omit allowed_tools.
+            // Evaluation-only ablation: ordinary workflow phases omit allowed_tools.
             allowed_tools: ["artifact_read"],
           },
         ],
@@ -2677,16 +2668,9 @@ function decideRegistration(input: {
   };
 }
 
-export const DECIDE_CANDIDATE_REGISTRATION = decideRegistration({
+export const DECIDE_PLAYBOOK_REGISTRATION = decideRegistration({
   name: DECIDE_PLAYBOOK_NAME,
   contract: DECIDE_SKILL_CONTRACT,
-  sealed: true,
-});
-
-/** Frozen promotion target only; deliberately absent from PLAYBOOK_REGISTRY. */
-export const DECIDE_PROSPECTIVE_PRODUCTION_REGISTRATION = decideRegistration({
-  name: DECIDE_PLAYBOOK_NAME,
-  contract: DECIDE_PROSPECTIVE_PRODUCTION_CONTRACT,
   sealed: true,
 });
 

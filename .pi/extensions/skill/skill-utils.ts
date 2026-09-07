@@ -7,7 +7,7 @@ import {
 } from "./execution-receipts.js";
 import type { ArtifactDispatchPause, ArtifactDispatchRecovery } from "./dispatch-control.js";
 import type { ArtifactRef } from "./artifact-client.js";
-import type { SkillIngressRefusalCode } from "./candidate-config.js";
+import type { SkillIngressRefusalCode } from "./skill-ingress.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

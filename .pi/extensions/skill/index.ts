@@ -35,7 +35,6 @@ import type {
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import {
-  CANDIDATE_PLAYBOOK_REGISTRY,
   KnowledgeBaseRequestSchema,
   OrchestrationService,
   PLAYBOOK_REGISTRY,
@@ -89,7 +88,7 @@ import {
   type SkillDiscovery,
 } from "./skill-discovery.js";
 import { alignNativeSkillInstruction } from "./skill-prompt.js";
-import { resolveSkillIngress, type SkillIngressResolution } from "./candidate-config.js";
+import { resolveSkillIngress, type SkillIngressResolution } from "./skill-ingress.js";
 
 import { createLogger, setSessionId } from "../../lib/logger/logger.js";
 
@@ -212,8 +211,7 @@ function discoverSkills(): SkillDiscovery[] {
   return [
     ...validateUnifiedSkillRegistryPackages({
       skillsDir: config.skillsDir,
-      productionRegistry: PLAYBOOK_REGISTRY,
-      candidateRegistry: CANDIDATE_PLAYBOOK_REGISTRY,
+      registry: PLAYBOOK_REGISTRY,
       discoveredSkills: discovered,
     }),
   ];
@@ -446,9 +444,6 @@ async function executeTypeScriptSkill(
     env: serviceEnv,
     workerExtensions,
     playbookName: skillName,
-    ...(ingress.release_status === "candidate"
-      ? { playbookRegistration: ingress.registration }
-      : {}),
   });
   const identity = {
     schema_version: 2 as const,
@@ -902,19 +897,15 @@ async function executeSkillsChain(
         skillsDir: config.skillsDir,
         name: storedStep.skill_name,
       });
-      const legacyCandidate =
-        recovered.schema_version === 1 && resolved.ok && resolved.release_status === "candidate";
+      const missingDigest = storedStep.contract_sha256 === undefined;
       const staleBinding =
-        recovered.schema_version === 2 &&
-        resolved.ok &&
-        (storedStep.release_status !== resolved.release_status ||
-          storedStep.contract_sha256 !== resolved.contract_sha256);
-      if (!resolved.ok || legacyCandidate || staleBinding) {
+        resolved.ok && !missingDigest && storedStep.contract_sha256 !== resolved.contract_sha256;
+      if (!resolved.ok || missingDigest || staleBinding) {
         const detail = !resolved.ok
           ? `${resolved.code}: ${resolved.message}`
-          : legacyCandidate
-            ? "schema-v1 checkpoints can resume production registrations only"
-            : "checkpoint release status or contract digest is stale";
+          : missingDigest
+            ? "legacy checkpoint has no immutable contract digest"
+            : "checkpoint contract digest is stale";
         return {
           success: false,
           session_id: chainSessionId,
@@ -1032,7 +1023,6 @@ async function executeSkillsChain(
       return {
         index,
         skill_name: step.skill_name,
-        release_status: resolution.release_status,
         contract_sha256: resolution.contract_sha256,
         goal: step.goal,
         input_artifacts: step.input_artifacts,
@@ -1043,7 +1033,7 @@ async function executeSkillsChain(
       };
     });
     checkpoint = {
-      schema_version: 2,
+      schema_version: 3,
       state_layout_version: 1,
       project_id: projectState.projectId,
       chain_session_id: chainSessionId,
@@ -1056,7 +1046,6 @@ async function executeSkillsChain(
       pending_steps: steps.map((step) => ({
         index: step.index,
         skill_name: step.skill_name,
-        release_status: step.release_status,
         contract_sha256: step.contract_sha256,
         goal: step.goal,
         input_artifacts: step.input_artifacts,

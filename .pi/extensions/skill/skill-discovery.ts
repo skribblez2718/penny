@@ -17,7 +17,6 @@ export interface SkillDiscovery {
   description: string;
   path: string;
   disableModelInvocation: boolean;
-  releaseStatus?: "production" | "candidate";
   engine?: string;
   metadataValid: boolean;
 }
@@ -47,10 +46,6 @@ function parseSkillPackage(skillPath: string, directoryName: string): SkillDisco
   const content = fs.readFileSync(skillMdPath, "utf8");
   const { frontmatter } = parseFrontmatter<SkillFrontmatter>(content);
   const penny = pennyMetadata(frontmatter);
-  const releaseStatus =
-    penny?.release_status === "production" || penny?.release_status === "candidate"
-      ? penny.release_status
-      : undefined;
   const engine = typeof penny?.engine === "string" ? penny.engine : undefined;
   return {
     name:
@@ -61,7 +56,6 @@ function parseSkillPackage(skillPath: string, directoryName: string): SkillDisco
     description: typeof frontmatter.description === "string" ? frontmatter.description.trim() : "",
     path: skillPath,
     disableModelInvocation: frontmatter["disable-model-invocation"] === true,
-    ...(releaseStatus === undefined ? {} : { releaseStatus }),
     ...(engine === undefined ? {} : { engine }),
     metadataValid: true,
   };
@@ -98,16 +92,15 @@ export function discoverSkillsFromDirectory(
   return skills.sort((left, right) => left.directoryName.localeCompare(right.directoryName));
 }
 
-/** Model visibility is controlled only by the parsed disable flag, not release status. */
+/** Model visibility is controlled only by the parsed disable flag. */
 export function modelInvocableSkills(skills: readonly SkillDiscovery[]): SkillDiscovery[] {
   return skills.filter((skill) => skill.metadataValid && !skill.disableModelInvocation);
 }
 
-/** Validate one exact package from the unified root against its registry namespace. */
+/** Validate one registered package from the unified root. */
 export function checkSkillPackage(input: {
   readonly skillsDir: string;
   readonly name: string;
-  readonly expectedReleaseStatus: "production" | "candidate";
   readonly discoveredSkills?: readonly SkillDiscovery[];
 }): SkillPackageCheck {
   if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(input.name)) {
@@ -143,26 +136,26 @@ export function checkSkillPackage(input: {
     !skill.metadataValid ||
     skill.directoryName !== input.name ||
     skill.name !== input.name ||
-    skill.engine !== "orchestration" ||
-    skill.releaseStatus !== input.expectedReleaseStatus
+    skill.engine !== "orchestration"
   ) {
     return {
       ok: false,
-      reason:
-        "skill manifest must match its directory and registry release namespace with the orchestration engine",
+      reason: "skill manifest must match its directory and declare the orchestration engine",
     };
   }
   return { ok: true, skill };
 }
 
 /**
- * Validate the complete package↔registry partition after one discovery pass.
- * Directory location grants no lifecycle status; manifests and registries must agree exactly.
+ * Validate the complete package↔registry relationship after one discovery pass.
+ *
+ * A model-invocable orchestration package must have one executable registration. A package marked
+ * `disable-model-invocation: true` remains valid without a registration so development scaffolds
+ * can be documented and statically checked without gaining generic execution authority.
  */
 export function validateUnifiedSkillRegistryPackages(input: {
   readonly skillsDir: string;
-  readonly productionRegistry: PlaybookRegistryV1;
-  readonly candidateRegistry: PlaybookRegistryV1;
+  readonly registry: PlaybookRegistryV1;
   readonly discoveredSkills?: readonly SkillDiscovery[];
 }): readonly SkillDiscovery[] {
   const discovered = input.discoveredSkills ?? discoverSkillsFromDirectory(input.skillsDir);
@@ -170,49 +163,30 @@ export function validateUnifiedSkillRegistryPackages(input: {
   if (new Set(names).size !== names.length) {
     throw new Error("unified skill package names are duplicated or ambiguous");
   }
-  const sharedRegistryNames = [...input.productionRegistry.keys()].filter((name) =>
-    input.candidateRegistry.has(name)
-  );
-  if (sharedRegistryNames.length > 0) {
-    throw new Error(
-      `production and candidate registries overlap: ${sharedRegistryNames.sort().join(", ")}`
-    );
-  }
 
-  for (const [expectedReleaseStatus, registry] of [
-    ["production", input.productionRegistry],
-    ["candidate", input.candidateRegistry],
-  ] as const) {
-    for (const [name, registration] of registry) {
-      validateRegistrationContract(registration, expectedReleaseStatus);
-      const packageCheck = checkSkillPackage({
-        skillsDir: input.skillsDir,
-        name,
-        expectedReleaseStatus,
-        discoveredSkills: discovered,
-      });
-      if (!packageCheck.ok) {
-        throw new Error(
-          `${expectedReleaseStatus} registry/package mismatch for '${name}': ${packageCheck.reason}`
-        );
-      }
+  for (const [name, registration] of input.registry) {
+    validateRegistrationContract(registration);
+    const packageCheck = checkSkillPackage({
+      skillsDir: input.skillsDir,
+      name,
+      discoveredSkills: discovered,
+    });
+    if (!packageCheck.ok) {
+      throw new Error(`registry/package mismatch for '${name}': ${packageCheck.reason}`);
     }
   }
 
   for (const skill of discovered) {
-    const expectedRegistry =
-      skill.releaseStatus === "production"
-        ? input.productionRegistry
-        : skill.releaseStatus === "candidate"
-          ? input.candidateRegistry
-          : undefined;
+    if (!skill.metadataValid) {
+      throw new Error(`skill package '${skill.directoryName}' has invalid metadata`);
+    }
     if (
-      !skill.metadataValid ||
-      expectedRegistry === undefined ||
-      !expectedRegistry.has(skill.name)
+      skill.engine === "orchestration" &&
+      !skill.disableModelInvocation &&
+      !input.registry.has(skill.name)
     ) {
       throw new Error(
-        `skill package '${skill.directoryName}' has no exact release registry binding`
+        `model-invocable skill package '${skill.directoryName}' has no executable registry binding`
       );
     }
   }

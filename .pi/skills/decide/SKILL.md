@@ -5,7 +5,6 @@ disable-model-invocation: false
 metadata:
   penny:
     engine: orchestration
-    release_status: candidate
     mempalace: false
     subagents: [annie, echo, demetri, vera, carren]
 ---
@@ -24,7 +23,7 @@ metadata:
 
 ## Invocation Boundary
 
-This package is a model-visible candidate: Pi native discovery and Penny's model-facing catalog may describe it, but it remains outside the production registry and never self-enables or promotes. Model visibility grants no execution authority. Explicit `skill` invocation is available only when ignored host configuration enables the exact candidate contract digest; evaluation callers may instead supply its registration explicitly. Candidate enablement is reversible and is not formal admission or production promotion.
+This is a model-visible, registered universal package. Pi native discovery and Penny's model-facing catalog may describe it, and explicit `skill` invocation is routed through the sole executable playbook registry with its bound contract. Model visibility does not bypass host-owned authorization or consequence boundaries.
 
 ## Orchestrated Flow
 
@@ -45,7 +44,7 @@ Vera and Carren emit only a closed gap kind plus repair owner. Engine-owned regi
 
 ## Exact Artifact Handoff
 
-Every phase receives exact artifact refs. Ordinary candidate phases omit `allowed_tools`, so runtime activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Other YAML tools may be used only when materially relevant, permitted by the caller and task, and within the phase consequence boundary; they cannot bypass host-owned evidence admission. Request, analysis, evidence packet, draft, reviewer report, receipt, and feedback IDs are transport lineage, not semantic basis IDs. Only exact admitted `GroundedSynthesisV1` artifacts may contribute artifact basis IDs.
+Every phase receives exact artifact refs. Ordinary workflow phases omit `allowed_tools`, so runtime activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Other YAML tools may be used only when materially relevant, permitted by the caller and task, and within the phase consequence boundary; they cannot bypass host-owned evidence admission. Request, analysis, evidence packet, draft, reviewer report, receipt, and feedback IDs are transport lineage, not semantic basis IDs. Only exact admitted `GroundedSynthesisV1` artifacts may contribute artifact basis IDs.
 
 Only the host-admitted Echo gap may acquire new evidence, and only through narrowly targeted read-only local inspection or web retrieval for the exact decision-sensitive fact when compatible with caller constraints. Echo must provide source locators, stop rather than broaden into open-ended research, and report unavailable, conflicting, disallowed, insufficient, or budget-exhausted evidence honestly as unresolved. Normal-phase liveness permits at most 8 external calls per worker and 64 per run; routing-only repair remains at 0.
 

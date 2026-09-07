@@ -32,12 +32,9 @@ export interface OrchestrationServiceOptions {
   readonly dispatchMode?: () => string | undefined;
   /** Owner-supplied worker extension factories (e.g. worker-read memory). Not a tool list. */
   readonly workerExtensions?: readonly InlineExtension[];
-  /**
-   * Which registered playbook this service drives ('knowledge-base' for the KB
-   * skill). Defaults to the sole production playbook (research).
-   */
+  /** Which registered playbook this service drives. Defaults to research. */
   readonly playbookName?: string;
-  /** Exact candidate registration resolved through the static allowed-candidate path. */
+  /** Optional exact registration injection for tests and dedicated host entrypoints. */
   readonly playbookRegistration?: PlaybookRegistrationV1;
   /** Identifier-only document/approved-KB context resolvers owned by the host. */
   readonly researchContextProviders?: ResearchContextProviderHandlersV1;
@@ -63,12 +60,7 @@ export class OrchestrationService implements Disposable {
     if (selectedRegistration === undefined || selectedRegistration.name !== selectedName) {
       throw new Error(`playbook '${selectedName}' is not available for service construction`);
     }
-    validateRegistrationContract(
-      selectedRegistration,
-      options.playbookRegistration === undefined
-        ? "production"
-        : selectedRegistration.contract.release_status
-    );
+    validateRegistrationContract(selectedRegistration);
     const observability = new ObservabilityClient({ env });
     this.checkpointer = Checkpointer.openExisting(this.config.dbPath, observability.observe, {
       maxRetainedRuns: this.config.maxRetainedRuns,

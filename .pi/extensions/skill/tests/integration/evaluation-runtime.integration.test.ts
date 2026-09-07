@@ -82,7 +82,7 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
 import { registerTool } from "../../../../lib/pi-tool-registration.js";
 import {
   ArtifactStore,
-  CANDIDATE_PLAYBOOK_REGISTRY,
+  PLAYBOOK_REGISTRY,
   LivenessExhaustedError,
   PiAgentClient,
   canonicalJson,
@@ -106,7 +106,7 @@ import {
   DIRECT_DEMETRI_BASELINE_REGISTRATION,
   GenericEvaluationTrialExecutor,
   RealTopologyEvaluationReadinessPreflight,
-  SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+  SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
   SYNTHETIC_KNOWN_DELTA_CANDIDATE_NAME,
   executeFrozenPairedEvaluation,
   evaluationImplementationBindingSha256,
@@ -323,7 +323,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       modelClientFactory: factory,
     });
     const network = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network forbidden"));
@@ -335,7 +335,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       plan,
       projectRoot: PROJECT_ROOT,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(plan),
     });
     const authorizationRefusal = await executeFrozenPairedEvaluation({
@@ -345,7 +345,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(plan),
       executor,
       semanticReviewCoordinator: {
@@ -384,7 +384,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(plan),
       executor,
       trialJournal: journal,
@@ -446,7 +446,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(plan),
       executor: {
         async execute() {
@@ -469,13 +469,7 @@ describe("P6 real generic paired evaluation runtime", () => {
     expect(clients).toHaveLength(clientCount);
     expect(frozen.schedule.every((entry) => journal.load(entry).recorded)).toBe(true);
     expect(DIRECT_DEMETRI_BASELINE_REGISTRATION.ingress).toBe("skill");
-    expect([...CANDIDATE_PLAYBOOK_REGISTRY.keys()]).toEqual([
-      "assess",
-      "decide",
-      "diagnose",
-      "plan",
-      "produce",
-    ]);
+    expect(PLAYBOOK_REGISTRY.has("assess")).toBe(true);
     const discovered = discoverSkillsFromDirectory(path.join(PROJECT_ROOT, ".pi", "skills"));
     expect(discovered.map((skill) => skill.name)).not.toContain(
       SYNTHETIC_KNOWN_DELTA_CANDIDATE_NAME
@@ -618,7 +612,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       plan,
       projectRoot: PROJECT_ROOT,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       implementationBinding,
       runtimeFunctions,
     });
@@ -626,7 +620,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       modelClientFactory,
     });
     const readinessPreflight = new RealTopologyEvaluationReadinessPreflight({
@@ -643,7 +637,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       executor,
       readinessPreflight,
       implementationBinding,
@@ -901,7 +895,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       plan,
       projectRoot: PROJECT_ROOT,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(planValue),
     });
     const entry = frozen.schedule.find((candidate) => candidate.variant === "baseline");
@@ -941,7 +935,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       modelClientFactory: () => client,
     });
 
@@ -1034,7 +1028,7 @@ describe("P6 real generic paired evaluation runtime", () => {
         plan,
         projectRoot: PROJECT_ROOT,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
         ...implementation(planValue),
       });
       const entry = frozen.schedule.find((candidate) => candidate.variant === "baseline");
@@ -1053,7 +1047,7 @@ describe("P6 real generic paired evaluation runtime", () => {
         projectRoot: PROJECT_ROOT,
         env,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
         modelClientFactory: () => ({
           runtime_binding: plan.runtime_binding,
           async runAgent() {
@@ -1099,7 +1093,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       modelClientFactory: factory,
     });
     const population = fixture("synthetic-known-delta.population.v1.json");
@@ -1109,7 +1103,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       plan,
       projectRoot: PROJECT_ROOT,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(plan),
     });
     using journal = new ArtifactEvaluationTrialJournal({
@@ -1126,7 +1120,7 @@ describe("P6 real generic paired evaluation runtime", () => {
         projectRoot: PROJECT_ROOT,
         env,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
         ...implementation(plan),
         executor: {
           preflight: (preflightInput) => executor.preflight(preflightInput),
@@ -1154,7 +1148,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(plan),
       executor: {
         preflight: (preflightInput) => executor.preflight(preflightInput),
@@ -1201,7 +1195,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       plan: planValue,
       projectRoot: PROJECT_ROOT,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(planValue),
     });
     const population = validateEvaluationPopulation(populationValue);
@@ -1214,7 +1208,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       modelClientFactory: () => ({
         runtime_binding: plan.runtime_binding,
         async runAgent() {
@@ -1249,7 +1243,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       plan,
       projectRoot: PROJECT_ROOT,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(plan),
     });
     using journal = new ArtifactEvaluationTrialJournal({
@@ -1265,7 +1259,7 @@ describe("P6 real generic paired evaluation runtime", () => {
         projectRoot: PROJECT_ROOT,
         env,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
         ...implementation(plan),
         executor: {
           async execute() {
@@ -1298,7 +1292,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       plan,
       projectRoot: PROJECT_ROOT,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(plan),
     });
     let clientCalls = 0;
@@ -1317,7 +1311,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       modelClientFactory: factory,
     });
     const executeSpy = vi.spyOn(executor, "execute");
@@ -1328,7 +1322,7 @@ describe("P6 real generic paired evaluation runtime", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(plan),
       executor,
     });

@@ -35,6 +35,23 @@ Both tools call Ollama's **cloud** API (`https://ollama.com`), not the local Oll
 
 **Returns**: `{ success, url, title, content, truncated, links }` as JSON text. Content is truncated at 80,000 characters (`truncated: true` when clipped).
 
+When Ollama Web Fetch returns provider HTTP 404 for a requested URL, the tool applies a bounded fallback sequence:
+
+1. Common public `github.com` repository, issue, pull request, commit, and release routes are translated to a deterministic `api.github.com` URL and retried once. Blob, tree, and `raw.githubusercontent.com` routes are translated only when they contain an unambiguous full commit SHA; branch and tag routes can contain slashes and therefore fall through to browser guidance. GitHub Contents API file responses are returned only after strict bounded base64 and UTF-8 validation; directory responses are schema-checked.
+2. If no safe GitHub translation exists, or the GitHub API retry also fails, the result normally includes a structured `retry_with` action for `playwright_navigate`. The extension cannot invoke a sibling Pi tool from inside its own tool execution, so the calling agent performs that browser retry when Playwright is active. Caller cancellations and HTTP 451 responses intentionally produce no automatic fallback guidance.
+
+## Error Handling
+
+Errors are categorized and logged with structured error codes:
+
+- `SEARCH_API_KEY_MISSING` — no API key configured
+- `SEARCH_CLIENT_ERROR` — 4xx responses (includes auth guidance for 401/403)
+- `SEARCH_SERVER_ERROR` — 5xx responses or invalid JSON
+- `SEARCH_NETWORK_ERROR` — connection failures
+- `SEARCH_ABORTED` — timeout or caller cancellation
+
+`web_fetch` errors say that Ollama Web Fetch could not return content for the **requested URL**. They call the HTTP code a **provider status** and explicitly avoid claiming that the destination itself returned that code. Failed fetch payloads include the requested `url`, a reason-specific `failure_scope`, optional `provider_status`, a diagnostic, any failed `github_api_fallback`, and—when appropriate—a structured `retry_with: { tool, arguments, available, reason }` Playwright action. Successful GitHub retries include `fallback: { strategy, kind, fetched_url, reason }`. Input validation failures and caller cancellations do not recommend another fetch automatically. Other tool errors retain the compact `{ success: false, error: "..." }` form.
+
 ## Events
 
 | Event         | When           | Handler                                |
@@ -71,4 +88,5 @@ bun run test:integration
 
 ## Version History
 
-- **1.0.0** - Initial release: web_search and web_fetch via Ollama cloud API
+- **Unreleased** — Target-focused fetch diagnostics, bounded GitHub API retries, and structured Playwright fallback guidance.
+- **1.0.0** — Initial release: web_search and web_fetch via Ollama cloud API

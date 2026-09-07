@@ -1,318 +1,157 @@
 ---
-description: Goal, Bitter-Lesson, measurement, eval, regression, and proxy-drift audit of a project
-argument-hint: "<project-path> [audit-output-directory] [additional details...]"
+description: Audit any project against its own outcome, evidence, measures, and model-scaling risks (target read-only; writes an audit bundle)
+argument-hint: "<project-path> [output-root=<directory>] [additional details...]"
 ---
 
-# Project Audit Prompt
+# Project Outcome Audit
 
-Audit the project at **`$1`** as a whole. Determine what outcome it ultimately exists to produce, find project parts that work against that outcome, identify every supported Bitter-Lesson engineering violation, define what “better” means, build outcome-faithful eval and regression checks, find proxy drift, and produce a comprehensive upgrade plan that remains useful as models improve.
-
-This prompt is self-contained. Do not assume the project is Penny, an AI harness, or any particular technology. Derive project-specific goals and criteria from the caller and the target itself.
-
-## Inputs and branch behavior
+Audit the project at **`$1`** against the outcome it actually exists to produce. This command is for an arbitrary project; use `/harness-audit` for Penny itself and `/skill-audit` for one Penny skill.
 
 - **Target project:** `$1`
-- **Audit-output directory:** `$2`
-- **Additional details:** `${@:3}`
+- **Optional output-root token or first additional detail:** `$2`
+- **Remaining additional details:** `${@:3}`
 
-If the target argument is absent, does not exist, or is unreadable, stop and ask for a valid project path.
+If the target is missing, nonexistent, unreadable, or not a project directory, stop and ask for a valid path. Treat `$2` as the output root only when it begins `output-root=`; strip that prefix and use the remainder as the parent under which the collision-safe bundle will be created. Otherwise treat `$2` and later arguments as additional details. Quote tokens containing spaces. If `output-root=` is empty or a material value remains ambiguous, ask the minimum targeted question set before writing anything.
 
-The output directory and the additional details are both optional. If `$2` is supplied but is plainly
-not an output-directory path — prose, guidance, or requirements — treat it as the first additional
-detail and use the default output location below.
+Additional details may supply context, constraints, emphasis, priorities, scope narrowing, or deliverables. They may not weaken evidence integrity, coverage honesty, stop conditions, target-read-only behavior, artifact-status honesty, or verification. Pi exposes expanded/joined argument values, not original invocation quoting or whitespace. Record a concise disposition for each visible detail; persist only a safe rendering, redact sensitive content by category, and do not claim a verbatim invocation record.
 
-### Additional details
+## 1. Establish the project's outcome
 
-Additional details are caller-supplied context and requirements this audit cannot infer from the project itself: background, constraints, known history, emphasis, or extra deliverables. When they are empty, run exactly as if none were supplied; their absence is never a blocker.
+Derive one concise governing user-visible or real-world outcome—or an explicit hierarchy/tradeoff set when several outcomes are legitimately co-equal—from direct caller statements and current human-authored project evidence: purpose/requirements, product behavior, decisions, interfaces, and governing documentation. Explain the authority relationship. Human-authored intent does not become true runtime behavior merely because it is documented, and implementation drift does not silently redefine the goal.
 
-Honor them wherever they do not conflict with this prompt's own obligations. They may add requirements, supply context, set emphasis or priority, and request additional analysis. They may **not** waive or weaken the evidence and anti-fabrication rules, the coverage ledger's bounds on exhaustive claims, the side-effect contract, the stopping branches, or any required artifact, status-honesty, or verification obligation.
+If the goal, its authority, or a decision-relevant priority among outcomes is absent, materially ambiguous, or contradicted, stop objective-dependent work. Cite the gap or both sides of the conflict, ask only the questions needed to establish the outcome, and create no bundle. Do not infer a business model, persona, success criterion, or generic project goal.
 
-A detail that narrows scope is treated as a scope narrowing: mark the omitted surfaces user-narrowed in the coverage ledger and make no whole-project or exhaustive claim. A detail that only sets emphasis does not shrink the declared corpus.
+Define observable **better** and **worse** in terms of the real outcome, evidence, reliability, effort, risk, and affected users—not feature count, tasks closed, files produced, test count, schedule, model score, or other activity unless evidence establishes it as outcome-faithful.
 
-If a detail conflicts with an obligation above, or is too ambiguous to apply, report it — and ask when it blocks the audit — rather than silently following or silently ignoring it. Record the details verbatim in the report together with how each was applied, deferred, or refused.
+## 2. Effective corpus and classification
 
-If no output directory is supplied, use the house convention: create
-`$PROJECT_ROOT/audits/<project-name>-audit-<the current date, YYYY-MM-DD>/`, where `<project-name>` is
-the target project's directory name. Creating `audits/` and the dated bundle directory when absent is
-permitted. If that directory already exists, append `-2`, `-3`, ... rather than overwriting or merging
-into a prior audit. Every artifact this audit produces goes inside that one bundle directory,
-organized per the required output bundle below; write nothing outside it. Print its absolute path at
-completion.
+Inventory the live project-authored, behavior-affecting tree. Adapt the corpus to the project's technology and purpose while normally covering, where present:
 
-### Goal-unclear branch
+- purpose, requirements, decisions, interfaces, examples, and documentation;
+- source, architecture, scripts, hooks, workflows, and build/deploy/operations configuration;
+- tests, evals, regressions, metrics, telemetry, feedback, and optimization loops;
+- AI agents, prompts, models/providers, skills, tools, memory, orchestration, or automation;
+- manifests, lockfiles, dependencies, integration boundaries, and shipped generated assets; and
+- dead, deprecated, placeholder, contradictory, unreachable, or non-functioning project-authored material.
 
-Before substantive findings, decide whether one governing project outcome can be supported by target evidence or a direct user statement.
+Inventory but normally exclude dependency trees, caches, local builds, vendored source, secrets, personal/private data, and ignored work-in-progress. Record private exclusions only by safe category and reason. Include a dependency or generated artifact only when it materially controls current behavior; state the boundary.
 
-If the goal is absent, ambiguous, or contradicted by project sources:
+Choose disjoint, reproducible component units appropriate to the target—for example one package, service, application, prompt/agent/skill, top-level source or script subsystem, documentation tree, workflow, or configuration group. Classify each once and record cross-cutting relationships separately.
 
-1. stop the audit;
-2. quote or cite the concrete ambiguity or both sides of each conflict;
-3. ask targeted questions that would resolve the objective and what better/worse mean; and
-4. do not invent a North Star, apply a generic project goal, classify Bitter-Lesson violations, or build evals against a guessed objective.
+For every unit, write to `project-component-alignment.tsv`:
 
-Resume only after the user establishes enough objective clarity. If the goal is clear, continue without unnecessary questions.
+`component ID | component/path(s) | coverage | alignment | one-line evidence-backed reason | finding ID`
 
-## Side-effect contract
+Use:
 
-The project under audit is **read-only**. Do not modify product code, project tests, configuration, documentation, dependencies, git state, or generated outputs. Do not install dependencies into the target.
+- **Coverage:** `EXAMINED`, `EXCLUDED — reason`, `INACCESSIBLE — reason`, or `UNRESOLVED — reason`.
+- **Alignment:** `ALIGNED`, `MISALIGNED`, or `NEUTRAL/UNKNOWN — reason`.
 
-The only permitted writes are the audit report and evaluation/regression artifacts inside the audit-output directory. Build standalone checks there against the target. If a check can only work after target integration, create an unapplied patch or integration specification in the output directory and label it **NOT BUILT**; do not claim that specification satisfies the build requirement. Prefer checks that can run against the target without modifying it.
+Coverage is not alignment. Split mixed units rather than averaging them. Missing optional machinery is not a defect unless an authoritative requirement makes its absence harmful. Every `MISALIGNED` row maps to a finding and plan disposition; every material `ALIGNED` row names the capability to preserve. Claim whole-project or exhaustive coverage only when every in-scope unit is accounted for at the declared component grain.
 
-Read-only commands and existing project test/eval commands may be run when safe. Record every command and exit status. Do not perform destructive, deployment, production, credential-using, or state-mutating operations.
+If the caller narrows scope, represent omitted authored surfaces by discovered top-level group or safe category as `EXCLUDED — out of scope (user-narrowed)` and make no whole-project claim. For resistant evidence, use at most two genuinely distinct approaches, then record `INACCESSIBLE` or `UNRESOLVED`. If the gap could materially change the goal or verdict, stop the affected analysis and ask for access/clarification. Preserve a `LIMITED` bundle when useful supported work exists and the output root is valid; otherwise return a response-only `BLOCKED` result.
 
-## Required audit outcomes
+## 3. Evidence and findings
 
-These are required output properties, not a mandated sequence of reasoning.
+Apply these rules globally:
 
-### 1. Establish the real desired value
+- Cite every behavioral, alignment, scaling, measure, and finding claim with a precise path and line/range, symbol, executed result, or source anchor.
+- Distinguish source-backed facts, tool-observed results, inference, assumptions, and unknowns where it affects a verdict. State what each evidence type proves.
+- Mark material unsupported claims `[UNVERIFIED]`; they cannot be the sole support for a misalignment, scaling violation, or proxy-drift finding.
+- Documents prove stated intent, tests prove only exercised behavior, and static checks prove only encoded rules.
+- Re-open both sides before alleging a contradiction and confirm references/execution paths before calling material dead.
+- Report positive aligned behavior and supported empty finding sets; never manufacture defects.
 
-Infer the project's ultimate outcome from authoritative evidence such as its stated purpose, user-facing behavior, requirements, decisions, and actual execution—not merely from filenames, task lists, architecture, or current metrics.
+Create one canonical record per finding. State the problem in plain language, exact evidence, causal harm to the project outcome, impact/priority, benefit and cost of fixing, cost of delay, one concrete change or no-change/blocker, risk/reversibility, and the working capability that must not regress. Benefit, effort, and delay cost may be qualitative, immaterial, or unknown with a reason; never invent precision.
 
-Deliver:
+## 4. Model/compute scaling when applicable
 
-- a concise **ultimate outcome** statement;
-- the evidence supporting that interpretation;
-- an operational definition of **better** and **worse** in terms of the outcome; and
-- any unresolved tradeoff or assumption that could change the interpretation.
+First decide whether the target contains AI/model behavior, human-coded procedures intended to substitute for model judgment, or mechanisms whose relative value meaningfully changes with stronger models or more computation. If not, record `Scaling-source status: N-A — reason` and do not force the analogy.
 
-A feature count, commit count, test count, velocity number, line count, model score, or completed checklist is not automatically the outcome.
-
-### 2. Bound and cover the whole project
-
-Define the effective corpus before claiming a full audit. By default, inventory all project-authored, behavior-affecting material, including where present:
-
-- purpose, requirements, decisions, instructions, prompts, and documentation;
-- source code and architecture boundaries;
-- scripts, hooks, workflows, build/deploy/operations configuration;
-- skills, agents, tools, model/provider configuration, or AI integration surfaces;
-- tests, evals, regression checks, metrics, telemetry, and feedback loops;
-- manifests, lockfiles, dependency/integration boundaries; and
-- project-authored generated or vendored material that ships or affects behavior.
-
-Do not read caches, dependency trees, build outputs, or third-party vendored source as though they were project-authored design. Inventory them and state why they are excluded unless they materially control behavior under audit.
-
-Maintain a coverage ledger with one of:
-
-- **EXAMINED** — content inspected sufficiently to support findings;
-- **EXCLUDED — reason** — outside the declared authored/behavioral corpus;
-- **INACCESSIBLE — reason**; or
-- **UNRESOLVED — reason**.
-
-A narrowed scope is allowed only when the user requests it. Mark all omitted surfaces as user-narrowed and do not call the result a whole-project or exhaustive audit. “Every violation” is a valid claim only when the ledger accounts for the full declared corpus.
-
-### 3. Test component-to-goal alignment
-
-For every supported misalignment, state:
-
-- the component and exact project path/evidence;
-- the project outcome it conflicts with;
-- how it works against that outcome or pulls another component in a contradictory direction; and
-- the correction direction.
-
-Inspect cross-component contradictions, not only local flaws. If no part is supported as working against the goal, say so explicitly; do not invent findings to make the audit look comprehensive.
-
-### 4. Ground and apply the Bitter Lesson
-
-Fetch and read Richard Sutton's “The Bitter Lesson” in full:
+If applicable, fetch and read Richard Sutton's full canonical essay before attributing source claims:
 
 `http://www.incompleteideas.net/IncIdeas/BitterLesson.html`
 
-If it cannot be read, stop before making Bitter-Lesson classifications. Report the source failure and do not substitute a rubric from memory.
+Record URL, fetch time, and evidence that the full essay—not a snippet, cached paraphrase, or remembered summary—was read. After one normal attempt and at most one genuinely different retry, source failure blocks only Sutton/source-dependent conclusions: continue source-independent project analysis, record `Scaling-source status: BLOCKED`, and mark the audit `LIMITED`.
 
-State two separate blocks before applying the lens:
+Keep separate:
 
-1. **Sutton's source claims:** general methods that leverage growing computation ultimately dominate hand-engineered domain knowledge; search and learning are his central examples; built-in knowledge may help short-term yet complicate methods, plateau, and inhibit progress; meta-methods should discover/capture complexity rather than merely contain human discoveries.
-2. **Project-engineering translation (derived, not Sutton's wording):** judge whether project mechanisms let stronger models or more computation perform search, learning, exploration, or adaptation, versus freezing current human assumptions into fixed methods. Iteration and outcome verification may complement scalable generation, but do not attribute those engineering terms to Sutton.
+- **Sutton source claims** — only claims supported by quotations or precise anchors.
+- **Project-engineering translation** — labeled applications to this target.
 
-Do not force the analogy onto components with no meaningful model/compute relationship. Mark them **NOT APPLICABLE — reason** while still assessing their goal alignment and measurements.
+Do not attribute verification terminology, model-led exploration, answer-versus-method framing, or capability ratchets to Sutton unless the essay states them.
 
-For each Bitter-Lesson violation, report:
+Classify every relevant major mechanism as `GAINS`, `APPROXIMATELY NEUTRAL`, `LOSES`, or `N-A — reason`, with the model/compute assumption, target evidence, Sutton anchor, named translation, causal rationale, and action/protection. For fixed-human-knowledge or fixed-method findings, identify the encoded knowledge/procedure, current benefit, scaling limit, and a capability-preserving alternative. Do not flag safety controls, external requirements, machine interfaces, or deterministic consequence boundaries merely because they constrain behavior.
 
-- the mechanism and exact evidence;
-- the derived rubric point it violates;
-- the human knowledge, fixed method, or current-model assumption it encodes;
-- the capability and short-term benefit it currently supplies;
-- why its relative value plateaus, complicates the system, or blocks scalable discovery as models/compute improve; and
-- a more model/compute-flexible replacement direction.
+## 5. Measures, proxy drift, and capability-safe plan
 
-Examine the full covered corpus. Typical shapes may include fixed taxonomies, keyword routers, magic thresholds, enumerated world knowledge, rigid procedure, provider/model assumptions, or scaffolding fitted to a weak model—but those are examples, not an exhaustive checklist or automatic violations. Do not flag a constraint merely because it is explicit; determine whether it represents an external requirement or a fixed human solution that inhibits scalable methods.
+Inventory material current and proposed metrics, gates, thresholds, scores, completion signals, incentives, and optimization targets. Classify each as:
 
-Also identify mechanisms that already provide compute-scalable discovery/adaptation and explain how their value changes with stronger models. This positive context prevents the upgrade plan from accidentally removing leverage.
+- `OUTCOME-FAITHFUL` — directly evidences the project outcome or protected capability;
+- `PROXY` — an indirect stand-in whose limits are explicit; or
+- `VANITY` — can improve without meaningful outcome evidence.
 
-### 5. Judge model-evolution flexibility
+Claim **proxy drift** only with evidence that optimization pressure or observed behavior diverges from the intended outcome. Name the proxy, intended outcome, divergence/gaming evidence, and correction. A weak proxy alone is not demonstrated drift. Scrutinize measures proposed by the audit too.
 
-For every relevant major mechanism, state whether it is expected to:
+Produce a self-contained capability-safe improvement plan in the report. Map every supported finding—including each `MISALIGNED` component and `LOSES` mechanism—to a concrete change or explicit no-change reason, outcome improvement, protected capability, qualitative or evidenced effort/cost, cost of delay, risk/reversibility, and linked eval/regression IDs. One plan item may address several findings; none may be orphaned.
 
-- gain value as models or usable computation improve;
-- remain approximately neutral; or
-- lose relative value / become obstructive.
+## 6. Outcome evals and regressions
 
-Name assumptions tied to present model limits. The final judgment must characterize whether the project can absorb future model improvements without redesigning around each new capability step. For non-AI projects, apply this to any AI-assisted engineering/operations harness and mark genuinely unrelated product mechanisms as not applicable rather than fabricating debt.
+Build complete, repeatable assurance artifacts in the bundle. They must test the real project outcome and protected capabilities rather than file presence, task completion, or implementation shape.
 
-### 6. Define faithful measures and detect proxy drift
+Use exactly:
 
-Inventory the measures, gates, incentives, dashboards, completion signals, and optimization loops the project currently uses **and every replacement or new measure proposed by this audit**.
+- `BUILT-AND-RUN` — command, exit status, and observed result included.
+- `BUILT-NOT-RUN — <blocker>` — complete artifact exists, but execution was unsafe, unavailable, costly, credentialed, or unjustified.
+- `NOT-BUILT — <reason>` — incomplete artifact; the audit cannot be complete.
 
-For each current or proposed measure, classify and justify:
+Under `evals/`, build at least one stable `EVAL-#` goal-level artifact with representative cases, oracle/assertion or repeatable qualitative judgment, expected evidence, pass/fail interpretation, prerequisites, exact instructions, and individual results rather than only an aggregate. Include a case that can distinguish completed work from genuine outcome success. Reuse or wrap an adequate existing check when the bundle records the exact target reference and interpretation.
 
-- **OUTCOME-FAITHFUL:** provides evidence about the ultimate outcome;
-- **VANITY:** looks favorable or is easy to increase without demonstrating the outcome;
-- **PROXY — NOT SHOWN DRIFTING:** indirectly represents the outcome, with no supported divergence yet; or
-- **PROXY DRIFT:** optimization pressure or observed behavior is pulling it away from the actual outcome.
+Under `regressions/`, build at least one stable `REG-#` early-warning artifact with an explicit baseline, comparison operation, deterioration signal, missed degradation, false-warning risks, trigger/cadence, and exact instructions. It may wrap an adequate existing check. Shared artifacts may cover multiple findings; avoid ceremonial one-file-per-finding checks.
 
-For every supported proxy-drift finding, show:
+Run only when the target remains unmodified, external impact is absent or explicitly authorized, and every intended output lands inside the bundle. Never invent results.
 
-- the proxy being optimized;
-- the intended outcome;
-- evidence of divergence, gaming pressure, or goal displacement; and
-- the corrected measurement direction or unresolved user question.
+## 7. Side effects and bundle
 
-Do not call every imperfect measure “drift.” Distinguish a weak measure from evidence that optimization has already made it diverge.
+The target project is read-only. Do not create or modify anything within its resolved directory tree, including source, prompts, docs, tests, configuration, dependencies, git state, credentials, deployments, or audit output. Do not install dependencies or mutate external systems/private data. Existing checks may run only when their non-mutation and external effects are established.
 
-### 7. Build outcome evals
+All intentional audit artifacts, scratch files, and command output must land in one external bundle. Normal Pi session/log/owner-persisted artifact records from approved reviewer calls may exist outside the target; disclose their type and purpose. They do not authorize target changes. Sanitize all logs and outputs; redact secrets, authorization headers, private path segments, personal records, and sensitive payloads.
 
-Create concrete evaluation artifacts inside `<audit-output>/evals/` that operationalize the definition of better.
+Use the supplied `output-root` as the parent directory. Otherwise use `$PROJECT_ROOT/audits/`. Resolve the target, output root, and final bundle paths before any write. The output root must be writable or safely creatable and must not be inside the target; if the default or supplied root overlaps the target, stop and request an external `output-root`.
 
-At minimum, build:
+Under that root, derive `<project-name>-audit-<current date, YYYY-MM-DD>/` from the target directory basename. Use the first free `-2`, `-3`, ... suffix; never overwrite or merge.
 
-- an evaluation specification mapping the ultimate outcome to representative inputs/scenarios;
-- the expected evidence, oracle, or judgment rule for each scenario;
-- instructions and an entry point for repeating the evaluation;
-- a result format that preserves individual outcomes rather than hiding them only in an aggregate; and
-- at least one usable evaluation case that directly tests the real outcome rather than a vanity measure.
+Create:
 
-Use executable checks when the project permits them without target modification. For inherently qualitative outcomes, a versioned case set plus an explicit, repeatable judgment protocol is a built evaluation; vague advice or a metric wish list is not.
+- `project-audit-report.md`;
+- `project-component-alignment.tsv`;
+- `evals/` and `regressions/` with complete artifacts/results;
+- `target-manifest-before.tsv` and `target-manifest-after.tsv`, containing relative path, size, and cryptographic hash for the effective corpus; and
+- `artifact-manifest.md`, listing created files and safely recorded commands, source fetches, and reviewer calls with exit status/outcome.
 
-Run the evaluation when safe and feasible. Mark every artifact as one of:
+Matching manifests prove verified net target-content equality, not absence of transient/reverted writes. Claim no audit-caused target write only when the operation log contains no write-capable target step and the manifests match; otherwise mark integrity uncertain and the audit `LIMITED`.
 
-- **BUILT AND RUN** — include command and observed result;
-- **BUILT, NOT RUN** — include the concrete blocker; or
-- **NOT BUILT** — incomplete, with what remains.
+## 8. Report and completion
 
-Do not claim AF-11-equivalent completion if all artifacts are merely proposed.
+Cover these four content areas in `project-audit-report.md`; combine sections when that improves readability:
 
-### 8. Build early-warning regression checks
+1. **Project goal and executive summary** — target, purpose, bottom line, priority findings/actions, cost of inaction, unknowns, caller-detail dispositions, better/worse, and applicable Sutton source/translation. State `Audit completeness: COMPLETE|LIMITED`, `Target alignment: ALIGNED|MISALIGNED|INDETERMINATE`, and `Scaling-source status: VERIFIED|BLOCKED|N-A`.
+2. **Component alignment and findings** — evidence-cited summary by corpus group, link to the TSV, aligned behavior, canonical findings, scaling classifications when applicable, and measure/proxy-drift analysis.
+3. **Capability-safe plan and assurance** — the self-contained improvement plan plus eval/regression inventory, statuses, commands, and observed results.
+4. **Coverage, verification, limitations, and questions** — effective corpus, coverage ledger, unresolved items, operation-log summary, manifest comparison, artifact checks, and only genuinely blocking questions; otherwise `None`.
 
-Create concrete regression artifacts inside `<audit-output>/regressions/`.
+Use `MISALIGNED` when at least one supported material misalignment exists; use `ALIGNED` only when coverage is sufficient and none exists; use `INDETERMINATE` when material unavailable evidence prevents either verdict.
 
-They must:
+Use plain language for readers unfamiliar with the project. Define terms at first use, interpret tables, make findings decision-ready, and avoid duplicated prose.
 
-- record an explicit baseline or explain why a trustworthy baseline cannot yet be captured;
-- rerun or compare outcome-faithful evals over time;
-- identify what deterioration they detect and what they do not detect;
-- state false-warning risks and how a reviewer should resolve them;
-- define the repeat trigger or command; and
-- surface degradation before reliance on informal user experience alone.
+Before finalizing, re-check every citation, classification, contradiction, measure verdict, plan link, and artifact. When permitted, available, proportionate, and safe for the evidence, use a fresh non-generator reviewer for high-impact, shared-boundary, security/authority, or otherwise consequential recommendations; treat model agreement as supplementary rather than independent evidence. If that review is necessary for a claim but unavailable, mark the audit `LIMITED`. Verify required files are non-empty, IDs resolve, no result is invented, and manifests support the exact side-effect claim.
 
-Run them when safe and feasible and record the result. A generic “run the test suite” recommendation is insufficient unless the existing suite is shown to test the ultimate outcome. Avoid ungrounded thresholds: derive any decision boundary from target evidence, user tolerance, or evaluator behavior and document the rationale.
+Terminal outcomes:
 
-### 9. Produce a comprehensive upgrade plan
+- **`BLOCKED`:** response-only preflight failure—invalid target, unclear goal/authority, unsafe or overlapping output path, or inability to establish enough evidence to produce a useful bundle. Ask the minimum targeted question set and write nothing.
+- **`LIMITED`:** useful bundle after the goal and output path are established, but a material corpus gap, applicable scaling-source failure, `NOT-BUILT` artifact, necessary review failure, or uncertain target integrity leaves an applicable obligation unmet. Do not make the blocked conclusion.
+- **`COMPLETE`:** all applicable obligations are satisfied. A justified `BUILT-NOT-RUN` may still qualify when execution is unnecessary for the audit claim.
 
-Map every component-to-goal misalignment, Bitter-Lesson violation, measure-fidelity defect, missing eval/regression capability, and proxy-drift finding to:
+Findings affect target alignment, not audit completeness.
 
-- the finding(s) addressed;
-- the proposed change or adaptive replacement direction;
-- the existing capability that must be preserved;
-- the outcome-faithful eval/regression evidence that would show the change is better and has not regressed that capability; and
-- an explicit blocker when no defensible change can yet be specified.
-
-The plan must cover the full finding set. Do not remove a mechanism solely because it looks overengineered if its capability has no protected replacement. Improve and ratchet outcomes, not a favored implementation.
-
-## Report readability contract
-
-This audit's output is read by people who do not know this project, this doctrine, or this vocabulary. The report must be understandable to a reader with only a high-level grasp of the subject.
-
-This constrains **communication, not rigor**. It never licenses padding, hedging, or repetition: prefer the shortest wording a non-expert can act on, state each thing once, and cross-reference instead of restating. Detailed **and** succinct — length must be earned by content, never spent on ceremony.
-
-### Open with a plain-language executive summary
-
-Begin `project-audit-report.md` with a summary a non-expert can read in about two minutes:
-
-- **What this is** — what was audited and what the project is supposed to achieve, in one or two sentences.
-- **Bottom line** — the single most important conclusion.
-- **What's wrong** — the most important findings, ordered by importance rather than by ID, one plain sentence each.
-- **What to do** — the recommended actions in priority order.
-- **What happens if nothing changes** — the concrete cost of inaction.
-- **What's still unknown** — open questions or limits that could change the recommendation.
-
-Use no finding ID, undefined term, or internal shorthand in this summary.
-
-### Make every finding decision-ready
-
-For each finding, in addition to the evidence obligations above, state plainly:
-
-- **What it is** — one non-expert sentence, before any quotation or technical detail.
-- **Why it matters** — the outcome at stake, not the rule it breaks.
-- **If fixed** — the benefit, plus its cost, effort, or risk.
-- **If not fixed** — the specific consequence, roughly when it would surface, and how the reader would notice it. When the honest answer is "little or nothing," say so and rank the finding low rather than inflating it.
-- **Priority** — how much this matters relative to the other findings, and on what basis.
-
-Never leave a reader to infer the cost of inaction from a finding's existence.
-
-### Define the vocabulary where it is used
-
-Define every domain term, doctrine term, classification, and status label in plain language at first use — including terms this prompt introduces (for example _proxy drift_, _vanity measure_, _outcome-faithful_). A reader must not need this prompt, or any other document, to understand a verdict.
-
-### Make tables serve the reader
-
-Precede or follow every table with prose saying what it shows and what the reader should conclude from it. A grid of IDs, classifications, or statuses without interpretation is raw data, not a finding. Keep tables narrow enough to read comfortably; put supporting detail in prose rather than widening columns.
-
-### Keep the upgrade plan standalone
-
-The comprehensive upgrade plan must be understandable on its own, without first reading the findings sections. For each proposed change state: what changes, why, what currently-working capability must survive it, what improves, what it costs, and what happens if it is skipped. Show concrete before/after detail wherever specific text or configuration is being changed.
-
-### Rigor is preserved
-
-Structured verification blocks, ledgers, coverage states, status labels, and traceability tables remain exactly as specified above. Readability requirements wrap them; they never replace, soften, or omit an honest negative status.
-
-## Required output bundle
-
-Write only inside the audit-output directory:
-
-1. **`project-audit-report.md`** containing:
-   - a plain-language executive summary per the readability contract;
-   - the caller's additional details verbatim and how each was applied, deferred, or refused (or `None supplied`);
-   - ultimate outcome and definition of better/worse;
-   - effective-corpus definition and coverage ledger;
-   - component-to-goal misalignments;
-   - Sutton source summary and labeled project-engineering translation;
-   - Bitter-Lesson violations and scalable mechanisms;
-   - model-evolution flexibility judgment;
-   - measure-fidelity and proxy-drift analysis;
-   - eval and regression artifact status/results;
-   - comprehensive upgrade plan; and
-   - unresolved questions and limitations.
-2. **`evals/`** containing the built evaluation specification, cases, entry point/instructions, and results when run.
-3. **`regressions/`** containing the baseline, repeatable comparison/check, instructions, and results when run.
-4. **`artifact-manifest.md`** listing every created file and every command executed.
-
-Do not create empty placeholder files. If the goal-unclear or source-unavailable branch stops the audit, ask/report in the response and do not fabricate a completed bundle.
-
-## Completion and verification
-
-After drafting, re-check every finding against its cited project evidence and verify the output bundle. End `project-audit-report.md` with this exact structured block:
-
-```text
-VERIFICATION:
-- AF-01 Desired-value criterion: PASS / FAIL — [evidence]
-- AF-02 Objective legibility and elicitation: PASS / FAIL — [evidence or branch]
-- AF-03 Component-to-objective alignment: PASS / FAIL — [evidence]
-- AF-04 Audit coverage boundary: PASS / FAIL — [coverage counts and limitations]
-- AF-05 Doctrine-to-domain translation: PASS / FAIL — [source-read evidence]
-- AF-06 Compute-scalable meta-method leverage: PASS / FAIL — [evidence]
-- AF-07 Built-in human-knowledge constraint: PASS / FAIL — [evidence]
-- AF-08 Model-evolution flexibility: PASS / FAIL — [evidence]
-- AF-09 Upgrade-plan completeness: PASS / FAIL — [finding-to-plan mapping]
-- AF-10 Measure fidelity: PASS / FAIL — [evidence]
-- AF-11 Evaluation embodiment: PASS / FAIL — [built artifact paths and run status]
-- AF-12 Regression early warning: PASS / FAIL — [baseline/check paths and run status]
-- AF-13 Optimized-proxy drift: PASS / FAIL — [findings or supported empty result]
-- AF-14 Report readability: PASS / FAIL — [executive summary present; every finding states if-fixed, if-not-fixed, and priority; terms defined at first use; tables interpreted]
-- Caller additional details recorded verbatim and honored without waiving any audit obligation: YES / NO / N-A — [evidence]
-- All declared corpus surfaces accounted for: YES / NO — [notes]
-- Every finding re-verified against cited evidence: YES / NO — [notes]
-- Target project remained unmodified: YES / NO — [baseline/comparison evidence]
-- Overall audit complete: YES / NO — [unmet items]
-```
-
-“PASS” means the attribute's required output exists and is supported; it does **not** mean the project has no findings. If any required attribute fails, any declared corpus surface is unaccounted for, evals/regressions are only proposed, or the target changed, do not claim complete success. Report exactly what was achieved and what remains.
+A finding-free result must still preserve supported aligned behavior and include baseline eval/regression artifacts. Print the absolute bundle path whenever a bundle is created.

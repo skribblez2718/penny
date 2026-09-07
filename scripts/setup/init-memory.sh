@@ -24,12 +24,12 @@ No command in this script creates or deletes memory data.
 EOF
 }
 
-# The master project setup invokes every init script without arguments. Memory
-# ownership is intentionally not guessed there; print the explicit interface and
-# succeed without touching data or starting a background process.
+# Memory is core and enabled by default, but ownership is never guessed. A
+# no-argument call is therefore an action-required result, not setup success.
 if [[ $# -eq 0 ]]; then
-    usage
-    exit 0
+    usage >&2
+    printf 'ACTION_REQUIRED: supply an explicit operation and absolute caller-owned hub config\n' >&2
+    exit 1
 fi
 
 if [[ $# -ne 3 || "$2" != "--config" ]]; then

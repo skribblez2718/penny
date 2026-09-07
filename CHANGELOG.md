@@ -30,6 +30,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`make setup` now gates on operational readiness.** Setup uses an explicit parallel-safe
+  graph, frozen offline installs, one orchestration and observability build, explicit fresh-state
+  authority, authenticated supervised MemPalace status, disposable observability health/auth
+  smoke, and provider-free extension registration. Hub memory is default-on; existing explicit
+  `PENNY_MEMORY_MODE=disabled` configurations remain supported as a labeled degraded profile.
+  Browser provisioning and development dependencies moved to `make setup-browser` and
+  `make setup-dev`; retained state and palace data are never discovered, repaired, or migrated.
 - **YAML `tools:` is now the sole catalog-agent tool authority.** Native and SDK runners
   no longer strip hardened tools, conditionally expose `artifact_read`, filter provider
   extensions, inject result tools, or replace catalog surfaces for private phases.
@@ -41,6 +48,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   SUMMARY line from Domain Guidance; no absent-from-YAML result tool is injected.
 - **KB private matrix sessions are anonymous.** They no longer load or claim a catalog
   role while using a host-specific tool matrix.
+- **Produce keeps ideation and selection under their declared owners.** Ida now emits only
+  unranked alternatives; Demetri makes and records the bounded approach decision before
+  Skribble may materialize, and an unresolved decision stops incomplete.
+- **Private-input filesystem mutation is descriptor-pinned.** Materialization, recovery,
+  reads, renames, and deletion use stable no-follow directory descriptors with identity
+  rechecks, so swapping a per-run directory cannot redirect writes or unlinks.
+- **CLI project identity is canonical at entry.** The orchestration and KB gate CLIs resolve
+  `--project-root` through the project catalog once and use that canonical root for all
+  subsequent state, capability, and source-path derivation.
 
 ### Documentation
 

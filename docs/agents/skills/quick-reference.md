@@ -10,9 +10,9 @@
 ## Build
 
 1. Add and register a TypeScript `PlaybookCoreV1` implementation.
-2. Write `.pi/skills/<name>/SKILL.md` with `engine: orchestration` and the intended
-   `release_status`. Set optional `disable-model-invocation: true` only when the package must be hidden
-   from models; release status and location do not select visibility.
+2. Write `.pi/skills/<name>/SKILL.md` with `engine: orchestration`. Do not add the retired
+   `release_status` field. Set optional `disable-model-invocation: true` only when the package must
+   be hidden from models; disabled development packages may remain unregistered.
 3. Write one Domain Guidance prompt per worker/state.
 4. Make every cognitive directive declare exact `input_artifacts` and an owner
    `output_artifact` contract.
@@ -26,9 +26,9 @@
 ## Validate
 
 - [ ] Manifest and description comply.
-- [ ] Registration ingress/start admission/liveness and contract release namespace agree.
+- [ ] Registration ingress/start admission/liveness and contract agree.
 - [ ] Pi native discovery, Penny model visibility, and `.pi/skills/.ignore` agree exactly with parsed
-      `disable-model-invocation`, independently of release status.
+      `disable-model-invocation`.
 - [ ] Typed composition validates exact bytes and every required port before run creation.
 - [ ] Playbook registry and flow diagram agree; run `bun run --cwd apps/orchestration test -- tests/flow-diagrams.test.ts` and `bun .pi/extensions/playwright/scripts/validate-flow-html.ts`.
 - [ ] Skill directory contains no executable delegate.

@@ -19,6 +19,11 @@ import { RunContext } from "../src/context.js";
 import { OrchestrationEngine, type EngineOptions } from "../src/engine.js";
 import { kbLivenessPolicy } from "../src/liveness.js";
 import { KnowledgeBasePlaybook } from "../src/playbooks/knowledge-base.js";
+import {
+  resolvePlaybook,
+  runtimeRegistrationSha256,
+  skillContractSha256,
+} from "../src/playbooks/registry.js";
 import { ReceiptAuthority, trustedInvocationDigest } from "../src/receipts.js";
 
 const PROJECT_ROOT = "/workspace";
@@ -106,6 +111,22 @@ function fixtureObject(name: string): Record<string, unknown> {
 function withCompletionProtocolV1(serialized: string): string {
   const value = requiredRecord(JSON.parse(serialized), "legacy durable-state fixture");
   return canonicalJson({ ...value, completion_protocol_version: 1 });
+}
+
+function withCurrentResearchRegistrationBinding(serialized: string): string {
+  const value = requiredRecord(JSON.parse(serialized), "legacy durable-state fixture");
+  const registration = resolvePlaybook("research");
+  if (registration === undefined) throw new Error("research registration is unavailable");
+  return canonicalJson({
+    ...value,
+    completion_protocol_version: 1,
+    registration_contract_binding: {
+      schema_version: 1,
+      registration_name: registration.name,
+      contract_sha256: skillContractSha256(registration.contract),
+      registration_sha256: runtimeRegistrationSha256(registration),
+    },
+  });
 }
 
 function fixtureDirective(
@@ -466,7 +487,7 @@ function createBareResearchRun(identity: RunIdentity): RunContext {
 describe("TS-200 RP-0 serialized checkpoint compatibility", () => {
   it("locks protocol-v1 research pending writer bytes and restores the legacy fixture", () => {
     const legacyBytes = fixture("research-pending.context.v2.json");
-    const expectedBytes = withCompletionProtocolV1(legacyBytes);
+    const expectedBytes = withCurrentResearchRegistrationBinding(legacyBytes);
     const expectedDirective = fixtureDirective(
       "research-pending.context.v2.json",
       "pending_directive"

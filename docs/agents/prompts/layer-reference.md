@@ -47,7 +47,7 @@ prior ID automatically and can add explicit fan-in IDs.
 - [ ] Direct/parallel/chain catalog paths assert exact YAML equality.
 - [ ] Orchestration asserts exact YAML when a subset is absent and accepts only a canonical-
       registration-bound strict subset when present; invalid selections fail before session.
-- [ ] Ordinary candidate phases omit `allowed_tools` and use exact YAML; synthetic or
+- [ ] Ordinary registered phases omit `allowed_tools` and use exact YAML; synthetic or
       evaluation-only strict subsets make no OS/process sandbox or extension-code isolation
       claim, and host-private tools remain separate.
 - [ ] Required predecessors are exact IDs/paths; absent inputs yield `missing_input:`.

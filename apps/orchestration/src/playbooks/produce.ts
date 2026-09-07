@@ -22,10 +22,12 @@ import {
 } from "../contracts.js";
 import { RunContext } from "../context.js";
 import {
+  artifactApproachDecisionPromptContract,
   artifactApproachPromptContract,
   assertProducedArtifactLineage,
   canonicalizeProduceRequest,
   parsePersistedArtifactApproach,
+  parsePersistedArtifactApproachDecision,
   parsePersistedProducedArtifactDraft,
   produceProductEnvelopeId,
   produceProductIntegrityId,
@@ -42,6 +44,7 @@ import {
   validateProduceSealFeedback,
   validateProduceValidityReceipt,
   ProduceDraftValidationError,
+  type ArtifactApproachV1,
   type ProduceProductEnvelopeV1,
   type ProduceProductIntegrityV1,
   type ProduceQualityReceiptV1,
@@ -68,6 +71,7 @@ export const PRODUCE_PLAYBOOK_NAME = "produce";
 
 export const PRODUCE_AGENT_BY_STATE = {
   exploring_artifact_approaches: "ida",
+  selecting_artifact_approach: "demetri",
   materializing_artifact: "skribble",
   critiquing_artifact: "carren",
   verifying_artifact: "vera",
@@ -86,6 +90,7 @@ export const PRODUCE_FLOW = {
   states: [
     "intake",
     "exploring_artifact_approaches",
+    "selecting_artifact_approach",
     "materializing_artifact",
     "sealing_artifact",
     "critiquing_artifact",
@@ -97,7 +102,8 @@ export const PRODUCE_FLOW = {
   ],
   edges: [
     ["intake", "exploring_artifact_approaches"],
-    ["exploring_artifact_approaches", "materializing_artifact"],
+    ["exploring_artifact_approaches", "selecting_artifact_approach"],
+    ["selecting_artifact_approach", "materializing_artifact"],
     ["materializing_artifact", "sealing_artifact"],
     ["sealing_artifact", "materializing_artifact"],
     ["sealing_artifact", "critiquing_artifact"],
@@ -112,7 +118,7 @@ export const PRODUCE_FLOW = {
 
 export const PRODUCE_LIVENESS_POLICY = {
   schema_version: 1,
-  scope: "orchestrated-produce-candidate",
+  scope: "orchestrated-produce-workflow",
   preset: "bounded-external-non-mutating-v1",
   total_phase_repair_invocations: 24,
   model_turns_per_worker: 12,
@@ -144,6 +150,16 @@ const StageCompleteSummarySchema = Type.Object(
   { complete: Type.Literal(true) },
   { additionalProperties: false }
 );
+const ApproachDecisionSummarySchema = Type.Union([
+  Type.Object(
+    { complete: Type.Literal(true), disposition: Type.Literal("selected") },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    { complete: Type.Literal(true), disposition: Type.Literal("unresolved") },
+    { additionalProperties: false }
+  ),
+]);
 const QualityFindingSchema = Type.Object(
   {
     severity: Type.Union([Type.Literal("minor"), Type.Literal("major"), Type.Literal("critical")]),
@@ -266,7 +282,6 @@ function repairRoute(
 export const PRODUCE_SKILL_CONTRACT: SkillContract = {
   schema_version: 2,
   name: PRODUCE_PLAYBOOK_NAME,
-  release_status: "candidate",
   objective:
     "Materialize one complete non-mutating artifact content product from a closed inline brief through bounded approach exploration, exact draft authorship, host sealing, subjective quality review, independent objective verification, and deterministic current-product admission.",
   io: {
@@ -338,6 +353,7 @@ export const PRODUCE_SKILL_CONTRACT: SkillContract = {
     allowed_terminal_origins: ["admitting_artifact"],
     required_visited_states: [
       "exploring_artifact_approaches",
+      "selecting_artifact_approach",
       "materializing_artifact",
       "sealing_artifact",
       "critiquing_artifact",
@@ -404,6 +420,15 @@ function latestApproachArtifact(context: RunContext): ArtifactRef | undefined {
     context,
     (artifact) =>
       artifact.kind === "artifact-approach" && artifact.phase === "exploring_artifact_approaches"
+  );
+}
+
+function latestApproachDecisionArtifact(context: RunContext): ArtifactRef | undefined {
+  return selectedLatest(
+    context,
+    (artifact) =>
+      artifact.kind === "artifact-approach-decision" &&
+      artifact.phase === "selecting_artifact_approach"
   );
 }
 
@@ -571,13 +596,22 @@ function outputMetadata(
           mediaType: "text/plain; charset=utf-8",
           contentSchema: { schema_id: "penny.artifact-approach.v1", schema_version: 1 },
         }
-      : state === "materializing_artifact"
+      : state === "selecting_artifact_approach"
         ? {
-            artifactKind: "produced-artifact-draft",
+            artifactKind: "artifact-approach-decision",
             mediaType: "text/plain; charset=utf-8",
-            contentSchema: { schema_id: "penny.produced-artifact-draft.v1", schema_version: 1 },
+            contentSchema: {
+              schema_id: "penny.artifact-approach-decision.v1",
+              schema_version: 1,
+            },
           }
-        : {};
+        : state === "materializing_artifact"
+          ? {
+              artifactKind: "produced-artifact-draft",
+              mediaType: "text/plain; charset=utf-8",
+              contentSchema: { schema_id: "penny.produced-artifact-draft.v1", schema_version: 1 },
+            }
+          : {};
   return buildOutputArtifactMetadata({
     context,
     phase: state,
@@ -592,22 +626,32 @@ function outputMetadata(
 function refsForState(context: RunContext, state: ProduceWorkerState): readonly ArtifactRef[] {
   const request = admittedProduceRequestArtifact(context);
   const approach = latestApproachArtifact(context);
+  const decision = latestApproachDecisionArtifact(context);
   const draft = latestDraftArtifact(context);
   const product = latestProductArtifact(context);
   const carren = latestReviewReport(context, "critiquing_artifact");
   const vera = latestReviewReport(context, "verifying_artifact");
   if (state === "exploring_artifact_approaches") {
     return context.previousState === "verifying_artifact"
-      ? uniqueRefs([request, approach, draft, product, carren, vera])
+      ? uniqueRefs([request, approach, decision, draft, product, carren, vera])
       : [request];
   }
   if (approach === undefined) {
     throw new Error(`${state} requires the exact latest Ida artifact approach`);
   }
+  if (state === "selecting_artifact_approach") {
+    return context.previousState === "exploring_artifact_approaches" && vera !== undefined
+      ? uniqueRefs([request, approach, decision, draft, product, carren, vera])
+      : [request, approach];
+  }
+  if (decision === undefined) {
+    throw new Error(`${state} requires the exact latest Demetri approach decision`);
+  }
   if (state === "materializing_artifact") {
     return uniqueRefs([
       request,
       approach,
+      decision,
       draft,
       product,
       carren,
@@ -618,7 +662,7 @@ function refsForState(context: RunContext, state: ProduceWorkerState): readonly 
   if (draft === undefined || product === undefined) {
     throw new Error(`${state} requires the exact latest draft and sealed ProducedArtifactV1`);
   }
-  const subject = [request, approach, draft, product];
+  const subject = [request, approach, decision, draft, product];
   if (state === "critiquing_artifact") return subject;
   if (carren === undefined) throw new Error("Vera requires the exact current Carren report");
   return [...subject, carren];
@@ -627,6 +671,7 @@ function refsForState(context: RunContext, state: ProduceWorkerState): readonly 
 function slotForRef(ref: ArtifactRef): string {
   if (ref.kind === "produce-request") return "produce-request";
   if (ref.kind === "artifact-approach") return "latest-artifact-approach";
+  if (ref.kind === "artifact-approach-decision") return "latest-artifact-approach-decision";
   if (ref.kind === "produced-artifact-draft") return "latest-produced-artifact-draft";
   if (ref.kind === "produce-seal-feedback") return "produce-seal-feedback";
   if (ref.content_schema?.schema_id === "penny.produced-artifact.v1") {
@@ -645,24 +690,30 @@ function taskForState(context: RunContext, state: ProduceWorkerState): string {
       return [
         boundary,
         `MECHANICALLY_PROJECTED_ARTIFACT_APPROACH_CONTRACT:${artifactApproachPromptContract()}`,
-        "Explore two to four genuinely different ways to satisfy the exact artifact brief, compare concrete tradeoffs, and recommend one. Do not author any final artifact content. On brief-gap repair, replace the approach set using Vera's exact current findings.",
+        "Explore two to four genuinely different ways to satisfy the exact artifact brief and state concrete tradeoffs without ranking, recommending, or choosing. Do not author any final artifact content. On brief-gap repair, replace the approach set using Vera's exact current findings.",
+      ].join("\n\n");
+    case "selecting_artifact_approach":
+      return [
+        boundary,
+        `MECHANICALLY_PROJECTED_ARTIFACT_APPROACH_DECISION_CONTRACT:${artifactApproachDecisionPromptContract()}`,
+        "Decide among the exact Ida alternatives against the exact request. Assess every option on common decision-relevant dimensions, eliminate infeasible options first, select exactly one only when the supplied brief supports a defensible choice, and state what would change it. When missing preferences or uncertainty prevent a defensible choice, emit an honest unresolved disposition with concrete blocking questions. Do not author the final artifact.",
       ].join("\n\n");
     case "materializing_artifact":
       return [
         boundary,
         `MECHANICALLY_PROJECTED_PRODUCED_ARTIFACT_DRAFT_CONTRACT:${producedArtifactDraftPromptContract()}`,
-        "Materialize one complete replacement ProducedArtifactDraftV1 from the exact request and latest Ida recommendation. Cover every exact request item. A truthful not_applicable is permitted only when required supplied material is absent or the exact constraints make production impossible; explain why and emit empty content. Never claim syntax, compilation, execution, tests, writes, or external checks. Repair all applicable Carren, Vera, or seal-feedback findings in one replacement draft.",
+        "Materialize one complete replacement ProducedArtifactDraftV1 from the exact request, Ida alternatives, and latest Demetri selection. Cover every exact request item. A truthful not_applicable is permitted only when required supplied material is absent or the exact constraints make production impossible; explain why and emit empty content. Never claim syntax, compilation, execution, tests, writes, or external checks. Repair all applicable Carren, Vera, or seal-feedback findings in one replacement draft.",
       ].join("\n\n");
     case "critiquing_artifact":
       return [
         boundary,
-        "Subjectively review the exact latest host-sealed ProducedArtifactV1 against the exact brief, Ida approach, and Skribble draft. Judge fitness for purpose, coherence, clarity, usefulness, restraint, quality of not_applicable reasoning, and whether the artifact actually feels complete. Do not repair it.",
+        "Subjectively review the exact latest host-sealed ProducedArtifactV1 against the exact brief, Ida alternatives, Demetri decision, and Skribble draft. Judge fitness for purpose, coherence, clarity, usefulness, restraint, quality of not_applicable reasoning, and whether the artifact actually feels complete. Do not repair it.",
         "APPROVE only when no major or critical quality defect remains. FAIL uses quality_gap/skribble. Never emit a target state.",
       ].join("\n\n");
     case "verifying_artifact":
       return [
         boundary,
-        "Independently verify objective correctness and compliance of the exact latest ProducedArtifactV1 against the exact request, Ida approach, Skribble draft, and current Carren report. Recompute request coverage, media type, content hash, JSON parse/canonicality when applicable, not_applicable emptiness, no-action flags, exact request/draft/source lineage, and ref roles. Treat Carren as prior context, not authority. Do not repair the product.",
+        "Independently verify objective correctness and compliance of the exact latest ProducedArtifactV1 against the exact request, Ida alternatives, Demetri decision, Skribble draft, and current Carren report. Recompute request coverage, media type, content hash, JSON parse/canonicality when applicable, not_applicable emptiness, no-action flags, exact request/alternatives/decision/draft/source lineage, and ref roles. Treat Carren as prior context, not authority. Do not repair the product.",
         "PASS only when every objective check holds. FAIL uses brief_gap/ida when the approach or brief treatment must be reconsidered, or artifact_product_gap/skribble when the draft/product must change. Never emit a target state.",
       ].join("\n\n");
   }
@@ -809,6 +860,7 @@ function persistSealedProduct(input: {
   readonly store: ArtifactHostStore;
   readonly request: ArtifactRef;
   readonly approach: ArtifactRef;
+  readonly decision: ArtifactRef;
   readonly draft: ArtifactRef;
   readonly draftValue: ProducedArtifactDraftV1;
 }): { readonly artifact: ArtifactRef; readonly added: boolean } {
@@ -817,10 +869,11 @@ function persistSealedProduct(input: {
     draft: input.draftValue,
     requestRef: input.request,
     approachRef: input.approach,
+    decisionRef: input.decision,
     draftRef: input.draft,
   });
   const content = canonicalJson(product);
-  const upstreamRefs = [input.request, input.approach, input.draft];
+  const upstreamRefs = [input.request, input.approach, input.decision, input.draft];
   const operationId = `sealed-produced-artifact:${sha256(input.context.identity.run_id).slice(0, 32)}`;
   const parent = latestProductArtifact(input.context);
   const storedVersion = input.store.lastVersion(
@@ -981,6 +1034,7 @@ function exactAcceptedExecutionGroup(input: {
 interface ProduceSubjectV1 {
   readonly request: ArtifactRef;
   readonly approach: ArtifactRef;
+  readonly decision: ArtifactRef;
   readonly draft: ArtifactRef;
   readonly product: ArtifactRef;
 }
@@ -988,16 +1042,22 @@ interface ProduceSubjectV1 {
 function currentSubject(context: RunContext): ProduceSubjectV1 {
   const request = admittedProduceRequestArtifact(context);
   const approach = latestApproachArtifact(context);
+  const decision = latestApproachDecisionArtifact(context);
   const draft = latestDraftArtifact(context);
   const product = latestProductArtifact(context);
-  if (approach === undefined || draft === undefined || product === undefined) {
+  if (
+    approach === undefined ||
+    decision === undefined ||
+    draft === undefined ||
+    product === undefined
+  ) {
     throw new Error("latest produce subject is incomplete");
   }
-  return { request, approach, draft, product };
+  return { request, approach, decision, draft, product };
 }
 
 function subjectRefs(subject: ProduceSubjectV1): readonly ArtifactRef[] {
-  return [subject.request, subject.approach, subject.draft, subject.product];
+  return [subject.request, subject.approach, subject.decision, subject.draft, subject.product];
 }
 
 function acceptedReviewEvidence(input: {
@@ -1088,6 +1148,7 @@ function matchingQualityReceipt(input: {
   const value = readCanonicalJson(input.store, artifact, validateProduceQualityReceipt);
   return value.product_ref.artifact_id === input.subject.product.artifact_id &&
     value.approach_ref.artifact_id === input.subject.approach.artifact_id &&
+    value.decision_ref.artifact_id === input.subject.decision.artifact_id &&
     value.draft_ref.artifact_id === input.subject.draft.artifact_id
     ? { artifact, value }
     : undefined;
@@ -1104,6 +1165,7 @@ function matchingValidityReceipt(input: {
   const value = readCanonicalJson(input.store, artifact, validateProduceValidityReceipt);
   return value.product_ref.artifact_id === input.subject.product.artifact_id &&
     value.approach_ref.artifact_id === input.subject.approach.artifact_id &&
+    value.decision_ref.artifact_id === input.subject.decision.artifact_id &&
     value.draft_ref.artifact_id === input.subject.draft.artifact_id &&
     value.quality_receipt_ref.artifact_id === input.quality.artifact_id
     ? { artifact, value }
@@ -1137,6 +1199,7 @@ function ensureQualityReceipt(input: {
     reviewer: "carren",
     request_ref: subject.request,
     approach_ref: subject.approach,
+    decision_ref: subject.decision,
     draft_ref: subject.draft,
     product_ref: subject.product,
     carren_report_ref: evidence.report,
@@ -1203,6 +1266,7 @@ function ensureValidityReceipt(input: {
     reviewer: "vera",
     request_ref: subject.request,
     approach_ref: subject.approach,
+    decision_ref: subject.decision,
     draft_ref: subject.draft,
     product_ref: subject.product,
     carren_report_ref: input.quality.value.carren_report_ref,
@@ -1271,7 +1335,12 @@ function ensureProductIntegrity(input: {
 } {
   const subject = currentSubject(input.context);
   const request = canonicalProduceRequest(input.store, input.context);
-  parsePersistedArtifactApproach(input.store.readById(subject.approach.artifact_id));
+  const approach = parsePersistedArtifactApproach(
+    input.store.readById(subject.approach.artifact_id)
+  ).approach;
+  parsePersistedArtifactApproachDecision(input.store.readById(subject.decision.artifact_id), {
+    approach,
+  });
   const draft = parsePersistedProducedArtifactDraft(
     input.store.readById(subject.draft.artifact_id),
     { request }
@@ -1286,6 +1355,7 @@ function ensureProductIntegrity(input: {
     draft,
     requestRef: subject.request,
     approachRef: subject.approach,
+    decisionRef: subject.decision,
     draftRef: subject.draft,
   });
   const executionReceiptIds = exactExecutionReceiptIds({
@@ -1293,6 +1363,7 @@ function ensureProductIntegrity(input: {
     checkpointer: input.checkpointer,
     artifacts: [
       subject.approach,
+      subject.decision,
       subject.draft,
       input.quality.value.carren_report_ref,
       input.validity.value.vera_report_ref,
@@ -1304,6 +1375,7 @@ function ensureProductIntegrity(input: {
     status: "PASS",
     request_ref: subject.request,
     approach_ref: subject.approach,
+    decision_ref: subject.decision,
     draft_ref: subject.draft,
     product_ref: subject.product,
     carren_report_ref: input.quality.value.carren_report_ref,
@@ -1369,6 +1441,7 @@ function ensureProductEnvelope(input: {
     status: "complete",
     request_ref: subject.request,
     approach_ref: subject.approach,
+    decision_ref: subject.decision,
     draft_ref: subject.draft,
     product_ref: subject.product,
     carren_report_ref: input.quality.value.carren_report_ref,
@@ -1475,6 +1548,7 @@ function bestPartial(context: RunContext): ArtifactRef | undefined {
   return (
     latestProductArtifact(context) ??
     latestDraftArtifact(context) ??
+    latestApproachDecisionArtifact(context) ??
     latestApproachArtifact(context)
   );
 }
@@ -1566,6 +1640,25 @@ export class ProducePlaybook
     switch (context.stateId) {
       case "exploring_artifact_approaches":
         if (details.complete !== true) throw new Error("artifact approach summary is incomplete");
+        context.transition("selecting_artifact_approach");
+        return this.dispatch(context);
+      case "selecting_artifact_approach":
+        if (details.complete !== true) {
+          throw new Error("artifact approach decision summary is incomplete");
+        }
+        if (details.disposition === "unresolved") {
+          return this.terminal(
+            context,
+            "incomplete",
+            false,
+            ["artifact approach decision is unresolved"],
+            undefined,
+            { incomplete_reason: "unresolved_approach_decision" }
+          );
+        }
+        if (details.disposition !== "selected") {
+          throw new Error("artifact approach decision has an invalid disposition");
+        }
         context.transition("materializing_artifact");
         return this.dispatch(context);
       case "materializing_artifact":
@@ -1796,12 +1889,14 @@ export class ProducePlaybook
   private continueSealing(context: RunContext, store: ArtifactHostStore): HostContinuationStepV1 {
     const request = admittedProduceRequestArtifact(context);
     const approach = latestApproachArtifact(context);
+    const decision = latestApproachDecisionArtifact(context);
     const draft = latestDraftArtifact(context);
     const missing = [
       ...(approach === undefined ? ["artifact-approach"] : []),
+      ...(decision === undefined ? ["artifact-approach-decision"] : []),
       ...(draft === undefined ? ["produced-artifact-draft"] : []),
     ];
-    if (approach === undefined || draft === undefined) {
+    if (approach === undefined || decision === undefined || draft === undefined) {
       return {
         event_type: "produce_seal_input_absent",
         payload: { run_id: context.identity.run_id, missing_exact_inputs: missing },
@@ -1815,21 +1910,32 @@ export class ProducePlaybook
         ),
       };
     }
+    let approachValue: ArtifactApproachV1;
     try {
-      parsePersistedArtifactApproach(store.readById(approach.artifact_id));
+      approachValue = parsePersistedArtifactApproach(store.readById(approach.artifact_id)).approach;
+      const parsedDecision = parsePersistedArtifactApproachDecision(
+        store.readById(decision.artifact_id),
+        { approach: approachValue }
+      );
+      if (parsedDecision.decision.disposition !== "selected") {
+        throw new Error("the exact Demetri decision did not select an approach");
+      }
     } catch (error) {
       return {
         event_type: "produce_approach_invalid",
         payload: {
           run_id: context.identity.run_id,
           approach_artifact_id: approach.artifact_id,
-          failure_sha256: sha256(error instanceof Error ? error.message : "invalid approach"),
+          decision_artifact_id: decision.artifact_id,
+          failure_sha256: sha256(
+            error instanceof Error ? error.message : "invalid approach or decision"
+          ),
         },
         directive: this.terminal(
           context,
           "incomplete",
           false,
-          ["exact Ida approach is malformed"],
+          ["exact Ida approach or Demetri decision is malformed"],
           undefined,
           { incomplete_reason: "malformed_exact_material" }
         ),
@@ -1882,6 +1988,7 @@ export class ProducePlaybook
       store,
       request,
       approach,
+      decision,
       draft,
       draftValue,
     });
@@ -2008,7 +2115,12 @@ export function evaluateProduceLatestReviewedArtifactDod(
       return { passed: false, evidence_refs: [] };
     }
     const request = canonicalProduceRequest(reader, input.context);
-    parsePersistedArtifactApproach(reader.readById(subject.approach.artifact_id));
+    const approach = parsePersistedArtifactApproach(
+      reader.readById(subject.approach.artifact_id)
+    ).approach;
+    parsePersistedArtifactApproachDecision(reader.readById(subject.decision.artifact_id), {
+      approach,
+    });
     const draft = parsePersistedProducedArtifactDraft(reader.readById(subject.draft.artifact_id), {
       request,
     }).draft;
@@ -2022,6 +2134,7 @@ export function evaluateProduceLatestReviewedArtifactDod(
       draft,
       requestRef: subject.request,
       approachRef: subject.approach,
+      decisionRef: subject.decision,
       draftRef: subject.draft,
     });
     const qualityRef = latestQualityReceipt(input.context);
@@ -2045,6 +2158,7 @@ export function evaluateProduceLatestReviewedArtifactDod(
       checkpointer: input.checkpointer,
       artifacts: [
         subject.approach,
+        subject.decision,
         subject.draft,
         quality.carren_report_ref,
         validity.vera_report_ref,
@@ -2067,16 +2181,19 @@ export function evaluateProduceLatestReviewedArtifactDod(
     if (
       canonicalJson(quality.request_ref) !== canonicalJson(subject.request) ||
       canonicalJson(quality.approach_ref) !== canonicalJson(subject.approach) ||
+      canonicalJson(quality.decision_ref) !== canonicalJson(subject.decision) ||
       canonicalJson(quality.draft_ref) !== canonicalJson(subject.draft) ||
       canonicalJson(quality.product_ref) !== canonicalJson(subject.product) ||
       canonicalJson(validity.request_ref) !== canonicalJson(subject.request) ||
       canonicalJson(validity.approach_ref) !== canonicalJson(subject.approach) ||
+      canonicalJson(validity.decision_ref) !== canonicalJson(subject.decision) ||
       canonicalJson(validity.draft_ref) !== canonicalJson(subject.draft) ||
       canonicalJson(validity.product_ref) !== canonicalJson(subject.product) ||
       canonicalJson(validity.carren_report_ref) !== canonicalJson(quality.carren_report_ref) ||
       canonicalJson(validity.quality_receipt_ref) !== canonicalJson(qualityRef) ||
       canonicalJson(integrity.request_ref) !== canonicalJson(subject.request) ||
       canonicalJson(integrity.approach_ref) !== canonicalJson(subject.approach) ||
+      canonicalJson(integrity.decision_ref) !== canonicalJson(subject.decision) ||
       canonicalJson(integrity.draft_ref) !== canonicalJson(subject.draft) ||
       canonicalJson(integrity.product_ref) !== canonicalJson(subject.product) ||
       canonicalJson(integrity.carren_report_ref) !== canonicalJson(quality.carren_report_ref) ||
@@ -2088,6 +2205,7 @@ export function evaluateProduceLatestReviewedArtifactDod(
       envelope.run_id !== input.context.identity.run_id ||
       canonicalJson(envelope.request_ref) !== canonicalJson(subject.request) ||
       canonicalJson(envelope.approach_ref) !== canonicalJson(subject.approach) ||
+      canonicalJson(envelope.decision_ref) !== canonicalJson(subject.decision) ||
       canonicalJson(envelope.draft_ref) !== canonicalJson(subject.draft) ||
       canonicalJson(envelope.product_ref) !== canonicalJson(subject.product) ||
       canonicalJson(envelope.carren_report_ref) !== canonicalJson(quality.carren_report_ref) ||
@@ -2153,7 +2271,7 @@ export const PRODUCE_COMPLETION_RECEIPT_PREDICATES: ReadonlyMap<
   ["produce_latest_reviewed_artifact_dod.v1", evaluateProduceLatestReviewedArtifactDod],
 ]);
 
-export const PRODUCE_CANDIDATE_REGISTRATION: PlaybookRegistrationV1 = {
+export const PRODUCE_PLAYBOOK_REGISTRATION: PlaybookRegistrationV1 = {
   name: PRODUCE_PLAYBOOK_NAME,
   contract: PRODUCE_SKILL_CONTRACT,
   ingress: "skill",
@@ -2180,6 +2298,15 @@ export const PRODUCE_CANDIDATE_REGISTRATION: PlaybookRegistrationV1 = {
           result_schema_id: "penny.produce.approach-summary.v1",
           result_schema_version: 1,
           schema: StageCompleteSummarySchema,
+        },
+      ],
+      [
+        "selecting_artifact_approach",
+        {
+          agent: "demetri",
+          result_schema_id: "penny.produce.approach-decision-summary.v1",
+          result_schema_version: 1,
+          schema: ApproachDecisionSummarySchema,
         },
       ],
       [

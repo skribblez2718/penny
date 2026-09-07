@@ -5,7 +5,6 @@ disable-model-invocation: false
 metadata:
   penny:
     engine: orchestration
-    release_status: candidate
     mempalace: false
     subagents: [piper, echo, vera, carren]
 ---
@@ -24,7 +23,7 @@ metadata:
 
 ## Invocation Boundary
 
-This package is a model-visible candidate: Pi native discovery and Penny's model-facing catalog may describe it, but it remains outside the production registry and never self-enables or promotes. Model visibility grants no execution authority. Explicit `skill` invocation is available only when ignored host configuration enables the exact candidate contract digest; evaluation callers may instead supply its registration explicitly. Candidate enablement is reversible and is not formal admission or production promotion.
+This is a model-visible, registered universal package. Pi native discovery and Penny's model-facing catalog may describe it, and explicit `skill` invocation is routed through the sole executable playbook registry with its bound contract. Model visibility does not bypass host-owned authorization or consequence boundaries.
 
 ## Orchestrated Flow
 
@@ -47,7 +46,7 @@ Vera and Carren emit only one closed gap kind plus repair owner. Engine-owned re
 
 The owner canonicalizes and persists `PlanRequestV1`. The exact optional semantic inputs are 0–1 `GroundedSynthesisV1` and 0–1 `DecisionV2`; each is validated from canonical bytes before run creation. There is no caller-composed prior Strategy port. Envelope-for-core, wrong version/kind, stale, ambiguous, corrupt, incompatible, and validator-missing inputs are rejected.
 
-Every phase receives exact refs. Ordinary candidate phases omit `allowed_tools`, so runtime activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Other YAML tools may be used only when materially relevant, permitted by caller/task, and within the phase consequence boundary; they cannot bypass host-owned evidence admission. Piper authors from the exact request directly plus orientation and evidence. Vera and Carren receive the exact request, orientation, draft, latest sealed strategy, source refs, and required prior review evidence.
+Every phase receives exact refs. Ordinary workflow phases omit `allowed_tools`, so runtime activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Other YAML tools may be used only when materially relevant, permitted by caller/task, and within the phase consequence boundary; they cannot bypass host-owned evidence admission. Piper authors from the exact request directly plus orientation and evidence. Vera and Carren receive the exact request, orientation, draft, latest sealed strategy, source refs, and required prior review evidence.
 
 Only the host-admitted Echo gap may acquire new evidence, and only through narrowly targeted read-only local inspection or web retrieval for the exact strategy-blocking fact when compatible with caller constraints. Echo must provide source locators, stop rather than broaden into open-ended research, and report unavailable, conflicting, disallowed, insufficient, or budget-exhausted evidence honestly as unresolved. Normal-phase liveness permits at most 8 external calls per worker and 64 per run; routing-only repair remains at 0.
 

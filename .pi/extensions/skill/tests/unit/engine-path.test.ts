@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  CANDIDATE_PLAYBOOK_REGISTRY,
+  PLAYBOOK_REGISTRY,
   initializePennyState,
   skillContractSha256,
   type OrchestrationProgressEvent,
@@ -342,9 +342,12 @@ describe("TypeScript-only skill engine path", () => {
     expect(skillTool().parameters.properties.engine).toBeUndefined();
   });
 
-  it("routes every registered candidate through the skill tool with its exact registration", async () => {
+  it("routes every generic registered skill through the skill tool with its exact registration", async () => {
     const extension = await import("../../index.js");
-    for (const registration of CANDIDATE_PLAYBOOK_REGISTRY.values()) {
+    const genericRegistrations = [...PLAYBOOK_REGISTRY.values()].filter(
+      (registration) => registration.ingress === "skill"
+    );
+    for (const registration of genericRegistrations) {
       registeredTool = undefined;
       extension.default(pi(), {
         skillIngressResolver: ({ name }) =>
@@ -352,17 +355,16 @@ describe("TypeScript-only skill engine path", () => {
             ? {
                 ok: true,
                 registration,
-                release_status: "candidate",
                 contract_sha256: skillContractSha256(registration.contract),
               }
             : { ok: false, code: "SKILL_NOT_REGISTERED", message: "unexpected test skill" },
       });
       const response = await skillTool().execute(
-        `candidate-${registration.name}`,
+        `registered-${registration.name}`,
         {
           skill_name: registration.name,
-          goal: `Exercise the ${registration.name} candidate entrypoint.`,
-          session_id: `candidate-${registration.name}`,
+          goal: `Exercise the ${registration.name} registered entrypoint.`,
+          session_id: `registered-${registration.name}`,
         },
         undefined,
         undefined,
@@ -370,15 +372,15 @@ describe("TypeScript-only skill engine path", () => {
       );
       expect(response.details).toMatchObject({
         success: true,
-        session_id: `candidate-${registration.name}`,
+        session_id: `registered-${registration.name}`,
         skill_name: registration.name,
       });
-      expect(mockServiceOptions.at(-1)?.playbookRegistration).toBe(registration);
+      expect(mockServiceOptions.at(-1)?.playbookName).toBe(registration.name);
       expect(mockTypeScriptExecute.mock.calls.at(-1)?.[0].identity.playbook).toBe(
         registration.name
       );
     }
-    expect(mockTypeScriptExecute).toHaveBeenCalledTimes(CANDIDATE_PLAYBOOK_REGISTRY.size);
+    expect(mockTypeScriptExecute).toHaveBeenCalledTimes(genericRegistrations.length);
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 

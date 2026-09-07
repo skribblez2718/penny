@@ -19,18 +19,18 @@ recovery, and terminal truth without invoking production models.
 9. Cover generic single, parallel, chain, chain-resume, cancellation, and recovery composition.
 10. Prove typed imports fail before run/model creation on stale refs, wrong kind/version/schema,
     ambiguity, missing ports, missing validators, envelopes-for-cores, or corrupt bytes.
-11. Prove unified-root packages are release-classified once, production/candidate registry mismatches
-    fail closed, and release status does not control model visibility. Pi native and Penny listings
-    include every valid package whose parsed `disable-model-invocation` flag is not `true`; `.ignore`
-    exactly mirrors explicit model disablement. Candidate execution remains static-digest-bound and
-    package-checked regardless of visibility.
+11. Prove unified-root packages are discovered once. Every model-invocable orchestration package
+    requires a matching executable registration; a model-disabled development package may remain
+    unregistered and generic invocation must fail safely. Pi native and Penny listings include every
+    valid package whose parsed `disable-model-invocation` flag is not `true`; `.ignore` exactly
+    mirrors explicit model disablement.
 12. Prove memory absence does not alter correctness.
 13. Prove direct catalog paths and subset-absent orchestration phases use exact YAML equality.
 14. Prove a phase subset exists only in an active `PlaybookRegistrationV1`, changes its
     canonical runtime-registration digest, reaches worker invocation metadata unchanged, and is
     passed exactly to Pi. Reject empty, duplicate, additive, replacement, equality-sized,
     unavailable, and task/trust/runtime-selected lists before session creation.
-15. Pin every ordinary candidate phase with absent `allowed_tools` and exact agent YAML. Keep
+15. Pin every ordinary registered phase with absent `allowed_tools` and exact agent YAML. Keep
     synthetic or evaluation-only strict-subset coverage without OS/process sandbox or
     extension-code-isolation claims, and keep anonymous host-private tools separate.
 16. Keep live-model tests separate and use caller model overrides rather than changing agent SSOT.

@@ -31,7 +31,7 @@ import {
 
 import {
   DECIDE_EVALUATION_ABLATION_REGISTRY,
-  DECIDE_EVALUATION_CANDIDATE_REGISTRY,
+  DECIDE_EVALUATION_IMPLEMENTATION_REGISTRY,
   DECIDE_SEMANTIC_CLAUSE_IDS,
   DECIDE_SEMANTIC_V3_GRADER_IMPLEMENTATION,
   DIRECT_DECIDE_DEMETRI_BASELINE_REGISTRATION,
@@ -107,7 +107,7 @@ import {
 import type { PlanSemanticRequestProjectionV1 } from "./evaluation-semantic-projections.js";
 import {
   PLAN_EVALUATION_ABLATION_REGISTRY,
-  PLAN_EVALUATION_CANDIDATE_REGISTRY,
+  PLAN_EVALUATION_IMPLEMENTATION_REGISTRY,
   PLAN_SEMANTIC_CLAUSE_IDS,
   PLAN_SEMANTIC_V2_GRADER_IMPLEMENTATION,
   DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
@@ -529,12 +529,12 @@ function registrations(skill: "decide" | "plan"): CalibrationRegistrationsV1 {
   return skill === "decide"
     ? {
         baseline: DIRECT_DECIDE_DEMETRI_BASELINE_REGISTRATION,
-        candidates: DECIDE_EVALUATION_CANDIDATE_REGISTRY,
+        candidates: DECIDE_EVALUATION_IMPLEMENTATION_REGISTRY,
         ablations: DECIDE_EVALUATION_ABLATION_REGISTRY,
       }
     : {
         baseline: DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
-        candidates: PLAN_EVALUATION_CANDIDATE_REGISTRY,
+        candidates: PLAN_EVALUATION_IMPLEMENTATION_REGISTRY,
         ablations: PLAN_EVALUATION_ABLATION_REGISTRY,
       };
 }
@@ -1302,7 +1302,7 @@ export async function preflightRemoteCalibrationPackageV1(input: {
     projectRoot: input.projectRoot,
     env: {},
     baselineRegistration: registrationValues.baseline,
-    candidateRegistry: registrationValues.candidates,
+    implementationRegistry: registrationValues.candidates,
     ablationRegistry: registrationValues.ablations,
     modelClientFactory: (() => {
       throw new Error("provider-free calibration preflight cannot construct a model client");
@@ -2168,7 +2168,7 @@ export async function executeRemoteCalibrationPackageV1(input: {
     projectRoot: input.projectRoot,
     env: input.env,
     baselineRegistration: input.preflight.registrations.baseline,
-    candidateRegistry: input.preflight.registrations.candidates,
+    implementationRegistry: input.preflight.registrations.candidates,
     ablationRegistry: input.preflight.registrations.ablations,
     modelClientFactory: factory,
   });

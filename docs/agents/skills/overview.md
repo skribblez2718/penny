@@ -9,9 +9,8 @@ TypeScript `PlaybookCoreV1` implementation in `apps/orchestration/`;
 
 ## Rules
 
-1. `.pi/skills/*/SKILL.md` is the only package source for every lifecycle. Discovery parses all
-   packages once; `metadata.penny.release_status` selects only the production/candidate registry
-   namespace.
+1. `.pi/skills/*/SKILL.md` is the only package source. Discovery parses all packages once; the
+   sole executable registry is `PLAYBOOK_REGISTRY`.
 2. The registered playbook owns states, contracts, routing, and terminal truth.
 3. Skill directories contain no executable runtime or delegate.
 4. Every cognitive stage receives exact cross-run `input_artifacts` IDs/refs and an
@@ -23,11 +22,11 @@ TypeScript `PlaybookCoreV1` implementation in `apps/orchestration/`;
    memory tools, but memory is never active handoff, run state, or persistence proof.
 7. Recovery reissues pending work from checkpointed refs. Large artifact reads
    repeat with non-expiring `next_range`.
-8. Release status and model visibility are independent. Every valid package is model-visible in Pi
-   native discovery and Penny's listing if and only if parsed `disable-model-invocation` is not
-   `true`; `.pi/skills/.ignore` exactly mirrors explicitly model-disabled packages and is comment-only
-   when none exist. A visible candidate remains outside `PLAYBOOK_REGISTRY` and requires exact-digest
-   host enablement before execution.
+8. Model visibility is controlled only by `disable-model-invocation`. Every valid package is
+   model-visible in Pi native discovery and Penny's listing if and only if that flag is not `true`;
+   `.pi/skills/.ignore` exactly mirrors explicitly model-disabled packages and is comment-only when
+   none exist. A model-disabled package may remain unregistered during development, but generic
+   execution then refuses safely.
 
 ## Skill vs. agent vs. direct
 

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -35,6 +35,19 @@ describe("TypeScript orchestration runtime configuration", () => {
     expect(config.artifactRoot.startsWith(config.stateRoot)).toBe(true);
     expect(config.projectId).toMatch(/^prj_[a-f0-9]{32}$/u);
     expect(config.dbPath).not.toContain(projectRoot);
+  });
+
+  it("collapses symlink aliases to one canonical project identity at CLI configuration", () => {
+    const { projectRoot, env } = fixture();
+    const alias = path.join(path.dirname(projectRoot), "project-alias");
+    symlinkSync(projectRoot, alias, "dir");
+
+    const direct = loadRuntimeConfig(projectRoot, env);
+    const throughAlias = loadRuntimeConfig(alias, env);
+    expect(throughAlias.projectRoot).toBe(projectRoot);
+    expect(throughAlias.projectId).toBe(direct.projectId);
+    expect(throughAlias.dbPath).toBe(direct.dbPath);
+    expect(throughAlias.artifactRoot).toBe(direct.artifactRoot);
   });
 
   it("refuses uninitialized projects instead of creating or importing state", () => {

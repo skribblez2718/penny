@@ -5,8 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   ArtifactStore,
-  CANDIDATE_PLAYBOOK_REGISTRY,
-  PLAN_CANDIDATE_REGISTRATION,
+  PLAN_PLAYBOOK_REGISTRATION,
   PLAN_PLAYBOOK_NAME,
   PLAN_SKILL_CONTRACT,
   PLAN_UNSEALED_EVALUATION_NAME,
@@ -51,7 +50,7 @@ import {
   DIRECT_PIPER_PLAN_BASELINE_NAME,
   DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
   PLAN_EVALUATION_ABLATION_REGISTRY,
-  PLAN_EVALUATION_CANDIDATE_REGISTRY,
+  PLAN_EVALUATION_IMPLEMENTATION_REGISTRY,
   PLAN_EVALUATION_LIFECYCLE,
   PLAN_KNOWN_DELTA_GRADER_ID,
   PLAN_KNOWN_DELTA_GRADER_IMPLEMENTATION,
@@ -710,7 +709,7 @@ function implementation(planValue: unknown) {
     population: population(),
     plan: planValue,
     baselineRegistration: DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
-    candidateRegistry: PLAN_EVALUATION_CANDIDATE_REGISTRY,
+    implementationRegistry: PLAN_EVALUATION_IMPLEMENTATION_REGISTRY,
     ablationRegistry: PLAN_EVALUATION_ABLATION_REGISTRY,
     gradingDefinition: grading,
     files,
@@ -764,7 +763,7 @@ function productMutationEvidence(input: {
     projectRoot: PROJECT_ROOT,
     env: input.env,
     modelClient: new PlanKnownDeltaClient(input.planValue.runtime_binding, "plan", task),
-    playbookRegistration: PLAN_CANDIDATE_REGISTRATION,
+    playbookRegistration: PLAN_PLAYBOOK_REGISTRATION,
   });
   const sourceRef = input.control.output_ref;
   const sourceStrategy = validateStrategy(JSON.parse(input.control.output_bytes));
@@ -1013,7 +1012,7 @@ async function mutationMeasurement(input: {
     projectRoot: PROJECT_ROOT,
     env: input.env,
     baselineRegistration: DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
-    candidateRegistry: PLAN_EVALUATION_CANDIDATE_REGISTRY,
+    implementationRegistry: PLAN_EVALUATION_IMPLEMENTATION_REGISTRY,
     ablationRegistry: PLAN_EVALUATION_ABLATION_REGISTRY,
     modelClientFactory: scriptedFactory,
   });
@@ -1258,10 +1257,10 @@ describe("provider-free Plan known-delta and mutation E2E", () => {
     expect(boundImplementation.implementationBinding.grading.graders).toHaveLength(10);
 
     const materialFunctions = [
-      PLAN_CANDIDATE_REGISTRATION.construct,
+      PLAN_PLAYBOOK_REGISTRATION.construct,
       DIRECT_PIPER_PLAN_BASELINE_REGISTRATION.construct,
-      PLAN_CANDIDATE_REGISTRATION.start_admission?.prepare,
-      PLAN_CANDIDATE_REGISTRATION.liveness.resolve,
+      PLAN_PLAYBOOK_REGISTRATION.start_admission?.prepare,
+      PLAN_PLAYBOOK_REGISTRATION.liveness.resolve,
       evaluatePlanLatestReviewedStrategyDod,
       validatePlanRequest,
       parseStrategyDraft,
@@ -1305,7 +1304,7 @@ describe("provider-free Plan known-delta and mutation E2E", () => {
       plan: planValue,
       projectRoot: PROJECT_ROOT,
       baselineRegistration: DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
-      candidateRegistry: PLAN_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: PLAN_EVALUATION_IMPLEMENTATION_REGISTRY,
       implementationBinding: boundImplementation.implementationBinding,
       runtimeFunctions: boundImplementation.runtimeFunctions,
       ablationRegistry: PLAN_EVALUATION_ABLATION_REGISTRY,
@@ -1433,7 +1432,7 @@ describe("provider-free Plan known-delta and mutation E2E", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
-      candidateRegistry: PLAN_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: PLAN_EVALUATION_IMPLEMENTATION_REGISTRY,
       ablationRegistry: PLAN_EVALUATION_ABLATION_REGISTRY,
       modelClientFactory: modelFactory(standardProbe),
     });
@@ -1463,7 +1462,7 @@ describe("provider-free Plan known-delta and mutation E2E", () => {
         projectRoot: PROJECT_ROOT,
         env,
         baselineRegistration: DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
-        candidateRegistry: PLAN_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: PLAN_EVALUATION_IMPLEMENTATION_REGISTRY,
         ablationRegistry: PLAN_EVALUATION_ABLATION_REGISTRY,
         executor: interruptingExecutor,
         gradingDefinition: grading,
@@ -1520,7 +1519,7 @@ describe("provider-free Plan known-delta and mutation E2E", () => {
         projectRoot: PROJECT_ROOT,
         env,
         baselineRegistration: DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
-        candidateRegistry: PLAN_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: PLAN_EVALUATION_IMPLEMENTATION_REGISTRY,
         ablationRegistry: PLAN_EVALUATION_ABLATION_REGISTRY,
         executor: noReuseExecutor,
         gradingDefinition: grading,
@@ -1537,7 +1536,7 @@ describe("provider-free Plan known-delta and mutation E2E", () => {
         projectRoot: PROJECT_ROOT,
         env,
         baselineRegistration: DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
-        candidateRegistry: PLAN_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: PLAN_EVALUATION_IMPLEMENTATION_REGISTRY,
         ablationRegistry: PLAN_EVALUATION_ABLATION_REGISTRY,
         executor: noReuseExecutor,
         gradingDefinition: grading,
@@ -1553,7 +1552,7 @@ describe("provider-free Plan known-delta and mutation E2E", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
-      candidateRegistry: PLAN_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: PLAN_EVALUATION_IMPLEMENTATION_REGISTRY,
       ablationRegistry: PLAN_EVALUATION_ABLATION_REGISTRY,
       executor: noReuseExecutor,
       gradingDefinition: gradingDefinition("_DRIFT"),
@@ -1566,10 +1565,10 @@ describe("provider-free Plan known-delta and mutation E2E", () => {
       invalid_evaluation: { stage: "registration_preflight" },
     });
     const registrationDrift = {
-      ...PLAN_CANDIDATE_REGISTRATION,
+      ...PLAN_PLAYBOOK_REGISTRATION,
       contract: {
-        ...PLAN_CANDIDATE_REGISTRATION.contract,
-        objective: `${PLAN_CANDIDATE_REGISTRATION.contract.objective} Drift.`,
+        ...PLAN_PLAYBOOK_REGISTRATION.contract,
+        objective: `${PLAN_PLAYBOOK_REGISTRATION.contract.objective} Drift.`,
       },
     };
     const registrationRejection = await executeFrozenPairedEvaluation({
@@ -1579,7 +1578,7 @@ describe("provider-free Plan known-delta and mutation E2E", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
-      candidateRegistry: new Map([["plan", registrationDrift]]),
+      implementationRegistry: new Map([["plan", registrationDrift]]),
       ablationRegistry: PLAN_EVALUATION_ABLATION_REGISTRY,
       executor: noReuseExecutor,
       gradingDefinition: grading,
@@ -1606,7 +1605,7 @@ describe("provider-free Plan known-delta and mutation E2E", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
-      candidateRegistry: PLAN_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: PLAN_EVALUATION_IMPLEMENTATION_REGISTRY,
       ablationRegistry: PLAN_EVALUATION_ABLATION_REGISTRY,
       executor: noReuseExecutor,
       gradingDefinition: grading,
@@ -1635,7 +1634,7 @@ describe("provider-free Plan known-delta and mutation E2E", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
-      candidateRegistry: PLAN_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: PLAN_EVALUATION_IMPLEMENTATION_REGISTRY,
       ablationRegistry: PLAN_EVALUATION_ABLATION_REGISTRY,
       executor,
       gradingDefinition: grading,
@@ -1699,14 +1698,7 @@ describe("provider-free Plan known-delta and mutation E2E", () => {
     expect(resumed.result.trials.filter((trial) => trial.variant === "candidate")).toHaveLength(20);
     expect(resumed.result.trials.filter((trial) => trial.variant === "baseline")).toHaveLength(20);
     expect(resumed.result.trials.filter((trial) => trial.variant === "ablation")).toHaveLength(20);
-    expect(PLAYBOOK_REGISTRY.has("plan")).toBe(false);
-    expect([...CANDIDATE_PLAYBOOK_REGISTRY.keys()]).toEqual([
-      "assess",
-      "decide",
-      "diagnose",
-      "plan",
-      "produce",
-    ]);
+    expect(PLAYBOOK_REGISTRY.get("plan")).toBe(PLAN_PLAYBOOK_REGISTRATION);
 
     const markers = populationValue.tasks.map(oracleMarker);
     const modelVisibleSurfaces = standardProbe.invocations.flatMap((invocation) => [
@@ -1729,7 +1721,7 @@ describe("provider-free Plan known-delta and mutation E2E", () => {
         "plan",
         populationValue.tasks[0]
       ),
-      playbookRegistration: PLAN_CANDIDATE_REGISTRATION,
+      playbookRegistration: PLAN_PLAYBOOK_REGISTRATION,
     });
     expect(
       standardProbe.invocations.filter((invocation) => invocation.workflowSession !== undefined)

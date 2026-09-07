@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  ASSESS_CANDIDATE_REGISTRATION,
+  ASSESS_PLAYBOOK_REGISTRATION,
   ASSESS_PLAYBOOK_NAME,
   AssessPlaybook,
   OrchestrationService,
@@ -246,14 +246,14 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("orchestrated assess candidate", () => {
+describe("orchestrated assess workflow", () => {
   it("rejects every caller artifact envelope before model work", async () => {
     const client = new ScriptedAssessClient([]);
     using service = new OrchestrationService({
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: ASSESS_CANDIDATE_REGISTRATION,
+      playbookRegistration: ASSESS_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     await expect(
@@ -275,7 +275,7 @@ describe("orchestrated assess candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: ASSESS_CANDIDATE_REGISTRATION,
+      playbookRegistration: ASSESS_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = complete(await service.execute(start(`run-assess-happy-${sequence}`)));
@@ -403,7 +403,7 @@ describe("orchestrated assess candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: ASSESS_CANDIDATE_REGISTRATION,
+      playbookRegistration: ASSESS_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = complete(await service.execute(start(`run-assess-routing-${sequence}`)));
@@ -436,7 +436,7 @@ describe("orchestrated assess candidate", () => {
         projectRoot: PROJECT_ROOT,
         env: environment(),
         modelClient: client,
-        playbookRegistration: ASSESS_CANDIDATE_REGISTRATION,
+        playbookRegistration: ASSESS_PLAYBOOK_REGISTRATION,
       });
       sequence += 1;
       const terminal = complete(await service.execute(start(`run-assess-${kind}-${sequence}`)));
@@ -474,7 +474,7 @@ describe("orchestrated assess candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: ASSESS_CANDIDATE_REGISTRATION,
+      playbookRegistration: ASSESS_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = complete(await service.execute(start(`run-assess-product-gap-${sequence}`)));
@@ -509,7 +509,7 @@ describe("orchestrated assess candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: ASSESS_CANDIDATE_REGISTRATION,
+      playbookRegistration: ASSESS_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = complete(await service.execute(start(`run-assess-seal-repair-${sequence}`)));
@@ -531,7 +531,7 @@ describe("orchestrated assess candidate", () => {
     const env = environment();
     let interrupted = false;
     const registration: PlaybookRegistrationV1 = {
-      ...ASSESS_CANDIDATE_REGISTRATION,
+      ...ASSESS_PLAYBOOK_REGISTRATION,
       construct: (options) =>
         new AssessPlaybook(
           options.artifactRevisions,
@@ -567,7 +567,7 @@ describe("orchestrated assess candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: recoveredClient,
-      playbookRegistration: ASSESS_CANDIDATE_REGISTRATION,
+      playbookRegistration: ASSESS_PLAYBOOK_REGISTRATION,
     });
     const terminal = complete(
       await recovered.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
@@ -586,7 +586,7 @@ describe("orchestrated assess candidate", () => {
     const env = environment();
     let interrupted = false;
     const registration: PlaybookRegistrationV1 = {
-      ...ASSESS_CANDIDATE_REGISTRATION,
+      ...ASSESS_PLAYBOOK_REGISTRATION,
       construct: (options) =>
         new AssessPlaybook(
           options.artifactRevisions,
@@ -623,7 +623,7 @@ describe("orchestrated assess candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: recoveredClient,
-      playbookRegistration: ASSESS_CANDIDATE_REGISTRATION,
+      playbookRegistration: ASSESS_PLAYBOOK_REGISTRATION,
     });
     const terminal = complete(
       await recovered.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
@@ -651,7 +651,7 @@ describe("orchestrated assess candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: ASSESS_CANDIDATE_REGISTRATION,
+      playbookRegistration: ASSESS_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = await service.execute(start(`run-assess-exhaust-${sequence}`));

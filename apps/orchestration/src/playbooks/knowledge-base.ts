@@ -381,7 +381,6 @@ function reviewableKbAction(value: unknown): "ingest" | "save" | "promote" {
 export const KNOWLEDGE_BASE_SKILL_CONTRACT: SkillContract = {
   schema_version: 2,
   name: "knowledge-base",
-  release_status: "production",
   objective:
     "Manage a private advisory knowledge base: initialize, ingest sources, query, save, lint, and prepare promotions.",
   io: {

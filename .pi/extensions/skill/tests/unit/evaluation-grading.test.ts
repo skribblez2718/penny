@@ -22,7 +22,7 @@ import {
   DETERMINISTIC_GRADING_DEFINITION,
   DIRECT_DEMETRI_BASELINE_NAME,
   DIRECT_DEMETRI_BASELINE_REGISTRATION,
-  SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+  SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
   SYNTHETIC_KNOWN_DELTA_CANDIDATE_NAME,
   SYNTHETIC_KNOWN_DELTA_CANDIDATE_REGISTRATION,
   evaluateTrialObservations,
@@ -223,7 +223,7 @@ function frozen(
     plan: planValue,
     projectRoot: PROJECT_ROOT,
     baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-    candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+    implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
     ...(input.gradingDefinition === undefined
       ? {}
       : { gradingDefinition: input.gradingDefinition }),
@@ -291,7 +291,7 @@ describe("P6 complete deterministic grading definition", () => {
         plan: changedPlan,
         projectRoot: PROJECT_ROOT,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: new Map([[changedCandidate.name, changedCandidate]]),
+        implementationRegistry: new Map([[changedCandidate.name, changedCandidate]]),
         gradingDefinition: changedDefinition,
         ...implementation(),
       })

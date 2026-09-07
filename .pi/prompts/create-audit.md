@@ -1,312 +1,126 @@
 ---
-description: Create or capability-preservingly revise any self-contained audit prompt using the 13-attribute audit framework
-argument-hint: "<create|revise> <audit-domain-or-existing-prompt-path> [output-path] [additional requirements...]"
+description: Create or capability-preservingly revise a self-contained audit prompt using a lean, target-adapted audit contract
+argument-hint: "<create|revise> <audit-domain-or-existing-prompt-path> [output=<new-file>] [additional requirements...]"
 ---
 
 # Audit Prompt Creator
 
-Create a new audit prompt or revise an existing one so it implements the consolidated 13-attribute audit framework **without sacrificing target-specific quality**.
+Create or revise one self-contained Pi audit prompt. Preserve target-specific audit quality, require evidence appropriate to the audited object, and avoid forcing irrelevant framework ceremony into every audit.
 
-## Invocation
+- **Mode:** `$1` — `create` or `revise`.
+- **Audit domain or source prompt:** `$2`.
+- **Optional output token or first additional requirement:** `$3`.
+- **Remaining additional requirements:** `${@:4}`.
 
-- **Mode:** `$1` — must be `create` or `revise`
-- **Audit domain or existing prompt path:** `$2`
-  - in `create` mode: a domain/object description, such as `architecture`, `documentation`, `security-program`, or `data-pipeline`;
-  - in `revise` mode: the path to the existing audit prompt.
-- **Optional output path:** `$3`
-- **Additional caller requirements:** `${@:4}`
+Quote a multi-word audit domain, source path, output token, or requirement. Treat `$3` as the output only when it begins `output=`; strip that prefix and use the remainder as the new file path. Otherwise treat `$3` and later arguments as additional requirements and return the candidate in the response. If mode or target is missing/invalid, `output=` is empty, or any material value remains ambiguous, stop and ask the minimum targeted question set rather than guessing.
 
-If mode or target is missing or invalid, stop and ask for the missing value. If critical design information cannot be inferred safely, ask targeted questions before drafting. Do not invent the audit object's goal, target-specific quality criteria, permitted side effects, or output location.
+Additional requirements may supply context, constraints, emphasis, priorities, or deliverables. They may not weaken objective clarity, evidence integrity, coverage honesty, target-side-effect rules, capability preservation, or status honesty. Pi exposes an expanded/joined argument value, not the caller's original quoting or whitespace: record a concise disposition for each visible requirement rather than claiming a verbatim invocation record. Minimize sensitive data; redact secrets, personal data, authorization material, and private path segments, name the redacted category, and state that any persisted rendering is not verbatim.
 
-## Governing principle: consistent capabilities, not identical prose
+## 1. Mode contract
 
-Consistency means that every generated audit prompt:
+### Create
 
-- establishes the real desired outcome;
-- bounds its coverage and evidence claims;
-- applies the same source-faithful Bitter-Lesson lens;
-- evaluates future model/compute scaling;
-- ties “better” to faithful measures, concrete evals, regression checks, and proxy-drift analysis; and
-- verifies those obligations through a traceability contract.
+Establish the audit object, its likely authoritative goal sources, behavior-affecting corpus, component grain, evidence types, side-effect mode, outputs, and meaningful failure branches. Ask only for a decision that would materially change the prompt's purpose, authority, safety, or deliverable.
 
-Consistency does **not** mean identical phases, headings, checklists, taxonomies, output files, or side-effect rules. Preserve domain-specific mechanisms that improve audit quality. Do not force all audits into one procedural shape or replace a strong target-specific control merely to make wording uniform.
+### Revise
 
-The framework is a **minimum capability and traceability contract**, not a maximum. Existing audit prompts may contain valuable requirements beyond it.
+Read the existing prompt completely. Treat it as a capability bundle, not disposable prose. Before drafting, create a preservation ledger for every material existing:
 
-## Mode behavior
+- goal and goal-authority rule;
+- target/corpus/dependency boundary;
+- evidence, anti-fabrication, and uncertainty rule;
+- coverage and exhaustive-claim limit;
+- stopping or partial-result branch;
+- safety, privacy, authority, and side-effect constraint;
+- supported aligned/empty-result behavior;
+- finding, prioritization, recommendation, risk, and reversibility contract;
+- target-specific rubric, output, artifact, and machine interface;
+- evaluation, regression, verification, and completion obligation; and
+- readability or decision-usability requirement.
 
-### Create mode
+Mark each `PRESERVE`, `REPHRASE`, `GENERALIZE WITHOUT LOSS`, `REPLACE — <protection>`, or `REMOVE — <caller-authorized reason>`. Do not remove or weaken a capability merely to shorten the prompt or match another template. A replacement must name how the capability remains protected.
 
-1. Determine what object the requested audit will inspect and what evidence can authoritatively establish its objective.
-2. Determine the target-specific corpus, relevant component types, user-visible outcome, model/compute applicability, side-effect mode, output form, and eval/regression execution environment.
-3. Ask only for decisions that are genuinely blocking. Otherwise make explicit, reversible choices and label them as creator decisions rather than source-framework requirements.
-4. Produce a self-contained prompt that implements every AF attribute below and adapts each one to the requested domain.
+## 2. Universal audit core
 
-### Revise mode
+Every generated prompt must enforce these behaviors, adapted to its target rather than copied mechanically:
 
-Read the existing prompt in full before drafting. Treat it as a working capability bundle, not disposable prose.
+1. **Desired outcome** — establish the user's actual overarching outcome from caller or target evidence; define observable better/worse without substituting tasks, files, phases, counts, scores, or current metrics.
+2. **Goal clarity** — if the objective or its authority is absent, materially ambiguous, or contradicted, stop objective-dependent analysis, cite the gap/conflict, and ask targeted questions instead of inventing a goal.
+3. **Causal alignment** — findings identify the exact component/evidence and explain how it harms the outcome or contradicts an authoritative requirement. Positive aligned behavior and supported empty finding sets are valid.
+4. **Bounded coverage** — declare the effective corpus and track `EXAMINED`, `EXCLUDED — reason`, `INACCESSIBLE — reason`, and `UNRESOLVED — reason`. Separate coverage from alignment where component classification matters. Exhaustive language is allowed only when the ledger supports it.
+5. **Evidence integrity** — use precise re-checkable citations; distinguish source-backed facts, tool-observed results, inference, assumptions, and unknowns when decision-relevant; mark material unsupported claims `[UNVERIFIED]`; never base a negative verdict solely on them.
+6. **Decision-ready recommendations** — map every finding to a concrete change or explicit no-change/blocker, protect existing capabilities, state benefit/cost/risk and cost of delay, and prefer reversible changes.
+7. **Side-effect clarity** — define exactly what may be read, executed, created, modified, or deleted. Prompt text grants no tool authority. Protect credentials, private data, external systems, and the audited target; state where intentional outputs and incidental runtime records may exist.
+8. **Readable output** — begin with a plain-language summary, define specialized terms, interpret tables, avoid duplicated findings, and distinguish audit completeness from target quality.
+9. **Verification** — re-check cited evidence, outputs, unresolved items, and side-effect claims. Use fresh non-generator review when consequence or uncertainty justifies it, but treat model agreement as supplementary rather than independent proof.
 
-First produce a **capability-preservation ledger** covering every existing:
+The generated prompt must define behavior for missing targets, unclear goals, narrowed or inaccessible corpus, finding-free targets, genuine findings, unsafe/unavailable checks, and incomplete verification. Do not mandate arbitrary phase counts, retry counts, taxonomies, or report sections unless they protect a real target-specific capability or machine interface.
 
-- target-specific scope or dependency rule;
-- goal/North-Star statement;
-- branch and stopping condition;
-- evidence, anti-fabrication, or confidence rule;
-- safety, security, or machine-interface exception;
-- positive-alignment or fully-aligned behavior;
-- edge-case treatment;
-- output and side-effect contract;
-- verification obligation;
-- domain-specific rubric, coverage surface, or completion criterion; and
-- useful prioritization, risk, reversibility, or capability-ratchet rule.
+## 3. Conditional modules
 
-For each current capability, mark:
+Include a module only when the target has the relevant relationship or the caller explicitly requests it. Explain inclusion and omission in the creator's design decisions; a generated prompt should discuss only applicable modules, except for a concise `N-A` state when users need it.
 
-- **PRESERVE AS-IS**;
-- **PRESERVE, REPHRASE**;
-- **GENERALIZE WITHOUT LOSS**;
-- **REPLACE — capability protected by [specific mechanism/eval]**; or
-- **REMOVE — caller-authorized reason**.
+### Model/compute scaling and the Bitter Lesson
 
-Then assess AF-01 through AF-13 as **CAPTURED**, **PARTIALLY CAPTURED**, or **MISSING**. Revise only where needed to close a gap, resolve an internal contradiction, or satisfy an explicit caller requirement.
+Use when the target contains AI/model behavior, human-coded procedures intended to substitute for model judgment, or mechanisms expected to change value with stronger models or more computation.
 
-Do not:
+When included:
 
-- regenerate from a blank slate;
-- delete an out-of-framework strength merely because other audit prompts lack it;
-- replace target-specific evidence rules with generic wording;
-- silently change read/write permissions;
-- turn answer/output constraints into arbitrary method constraints;
-- overwrite the source prompt unless the caller explicitly requests that exact path and confirms replacement; or
-- claim consistency improved if a current capability regressed.
+- fetch and read Richard Sutton's full canonical essay before attributing claims;
+- keep **Sutton source claims** separate from the **domain engineering translation**;
+- if the source is unavailable, block only Sutton/source-dependent conclusions unless the audit's purpose genuinely requires a full stop;
+- classify relevant mechanisms as gaining, remaining approximately neutral, losing relative value, or not applicable;
+- identify fixed human knowledge/procedure, current benefit, scaling limit, and a capability-preserving alternative; and
+- do not misclassify safety controls, external requirements, machine interfaces, or deterministic consequence boundaries as scaling debt.
 
-If a framework requirement conflicts with an existing prompt's purpose or side-effect contract, name the tradeoff and ask or choose an additive design. For example, a read-only target can remain read-only while eval/regression artifacts are built in a separate output directory. If the caller prohibits all writes, AF-11 and AF-12 cannot be fully satisfied; report that incompatibility rather than weakening “build” to “recommend.”
+### Measures and proxy drift
 
-## House argument convention for generated audit prompts
+Use when the target has or proposes metrics, gates, thresholds, scores, incentives, completion signals, or optimization loops.
 
-Every generated audit prompt must accept a **final optional free-form additional-details argument** after its required and optional positional arguments — `${@:3}` when the prompt already takes a target and an output directory, `${@:2}` when it takes only a target, and so on. Declare it in `argument-hint` as a trailing `[additional details...]`, and define it in the prompt body as caller-supplied context and requirements the audit cannot infer from the target: background, constraints, known history, emphasis, or extra deliverables.
+Classify material measures as outcome-faithful, proxy, or vanity. Claim proxy drift only with evidence of divergence, gaming pressure, or goal displacement; a weak proxy alone is not demonstrated drift. Scrutinize measures proposed by the audit as well as existing ones.
 
-The generated prompt must bound that argument with these rules:
+### Evaluation and regression artifacts
 
-- when it is empty, the audit runs exactly as if it were not supplied; it is never required and never a stopping condition on its own;
-- it may add requirements, supply context, set emphasis or priority, and request additional analysis, and the audit must honor it wherever it does not conflict with the prompt's own obligations;
-- it may not waive or weaken the evidence and anti-fabrication rules, the coverage ledger and its bounds on exhaustive claims, the side-effect contract, the stopping/branch conditions, or any required artifact, status-honesty, or verification obligation;
-- a detail that narrows scope is treated as a scope narrowing — recorded in the coverage ledger with the omitted surfaces marked user-narrowed and no exhaustive claim — while a detail that only sets emphasis does not shrink the declared corpus;
-- a detail that conflicts with an obligation above, or that is too ambiguous to apply, must be reported (and asked about where it blocks the audit) rather than silently followed or silently ignored; and
-- the detail text must be recorded verbatim in the audit report along with how each was applied, deferred, or refused, so findings and coverage claims stay interpretable.
+Use when repeatable acceptance evidence or early warning materially improves the audit outcome, especially for consequential or implementation-facing recommendations.
 
-Where positional ambiguity is possible — prose supplied in the position of an optional path argument — the generated prompt must state a disambiguation rule that resolves it from the argument's content rather than from position alone. Where a multi-word leading argument must arrive as one value, the generated prompt must say so.
+Require complete, reusable artifacts rather than TODOs: representative cases, oracle/assertion or repeatable judgment rule, expected evidence, exact instructions, explicit baseline/comparison, deterioration signal, missed degradation, and false-warning risk. Use `BUILT-AND-RUN`, `BUILT-NOT-RUN — <blocker>`, and `NOT-BUILT — <reason>` when reporting artifact state. Permit reuse/wrapping of adequate existing checks. If the target must stay read-only, place new artifacts in a separate output bundle. If the caller prohibits every write, report the resulting limitation instead of calling proposed artifacts built.
 
-The generated prompt's completion or verification obligations must include a check that any supplied details were recorded and honored without waiving an audit obligation.
+A **full framework** request includes all three modules. Otherwise, relevance—not habit—decides.
 
-## House output convention for generated audit prompts
+## 4. Target adaptation and output design
 
-Unless the caller specifies a different location, every generated audit prompt must default its output to a single bundle directory:
+The candidate prompt must state:
 
-```
-$PROJECT_ROOT/audits/<target-name>-audit-<the current date, YYYY-MM-DD>/
-```
+- the audit object and authoritative goal-source hierarchy;
+- the effective corpus and direct-dependency boundary;
+- the unit of component classification and evidence needed for behavioral claims;
+- applicable conditional modules and their target-specific translation;
+- the side-effect contract and terminal branches;
+- the report/artifact interface, with stable names only where users or machines depend on them; and
+- completion evidence that proves what the audit may honestly claim.
 
-where `<target-name>` is the audited object's name derived from the prompt's own target argument. The generated prompt must:
+For an artifact-producing audit, use one collision-safe bundle. A suitable default output root is `$PROJECT_ROOT/audits/`, producing `<target-name>-audit-<current date, YYYY-MM-DD>/`; append `-2`, `-3`, ... rather than overwrite. Resolve paths before writing and reject or clarify any bundle nested inside the audited target. Place all intentional outputs inside the external bundle, sanitize logs, and print the absolute path. Response-only audits should create no files.
 
-- accept an optional caller-supplied output directory that overrides this default, where the prompt's argument shape leaves an unambiguous slot for one (a prompt with no such slot may rely on the deterministic default alone);
-- permit creating `audits/` and the dated bundle directory when absent;
-- append `-2`, `-3`, ... when a bundle for that date already exists, rather than overwriting or merging into a prior audit;
-- treat that bundle directory as the sole write location, keeping the audited target read-only;
-- organize the bundle as a main `<kind>-audit-report.md`, an `evals/` directory, a `regressions/` directory, and an `artifact-manifest.md` listing every created file and every executed command with exit status, adding domain-specific files (such as a revised-target proposal) as needed;
-- forbid empty placeholder files and forbid fabricating a bundle when a stopping branch fires; and
-- print the bundle's absolute path at completion.
+When a generated audit reports completeness, use: `BLOCKED` for a response-only preflight/goal failure; `LIMITED` for a useful bundle with a material unmet applicable obligation; and `COMPLETE` only when all applicable obligations are satisfied. A justified `BUILT-NOT-RUN` may still be complete. Use `Scaling-source status: VERIFIED|BLOCKED|N-A` when the scaling module applies or its applicability must be reported.
 
-Write the path as `$PROJECT_ROOT/audits/...` — never a hardcoded absolute or home-relative path — so the generated prompt stays portable. This convention governs where artifacts land; it does not override AF-11/AF-12's requirement that artifacts be genuinely built rather than recommended. If the caller's domain genuinely requires a different output location or a stricter no-write contract, name the tradeoff and record the deviation as an explicit creator decision.
+Generated prompts that accept arguments must use valid Pi syntax and end with an optional free-form additional-details argument. Define how optional path positions are distinguished from prose and how additional details are bounded and recorded. Use `$PROJECT_ROOT`, never an operator-specific absolute path.
 
-## The 13 required framework attributes
+## 5. Required creator response
 
-Every generated prompt must enforce each attribute substantively—not merely mention its ID. An attribute may be marked not applicable only where the framework permits that decision and the generated prompt requires a concrete reason.
+Deliver:
 
-### AF-01 — Desired-value criterion
+1. **Design decisions** — mode, target, inferred purpose, goal sources, corpus strategy, included modules, side effects, outputs, and blocking assumptions.
+2. **Capability-preservation ledger** — revise mode only.
+3. **Candidate prompt** — complete Markdown with Pi frontmatter; no hidden framework references, omitted sections, or unresolved placeholders.
+4. **Change and risk summary** — additions, preserved/replaced/removed behavior, unresolved tradeoffs, and likely regression risks.
+5. **Verification** — confirm valid template syntax, self-containment, goal-unclear stopping behavior, bounded coverage, evidence integrity, side-effect consistency, applicability of modules, capability preservation, and readiness.
 
-Require the auditor to identify the user's actual overarching outcome and define observable better/worse relative to it. The outcome must not be a restatement of components, tasks, milestones, phases, output counts, or current metrics. Require target or user evidence.
+If verification finds a correctable gap, revise before delivery. If it requires a user decision, stop and ask rather than claim readiness.
 
-### AF-02 — Objective legibility and elicitation
+## 6. Write behavior
 
-Require a goal-clarity branch. If the objective is absent, ambiguous, or contradicted, the auditor must stop substantive assessment, cite the ambiguity/conflict, and ask targeted questions rather than guess.
+If no output path is supplied, return the verified candidate in the response and write nothing.
 
-### AF-03 — Component-to-objective alignment
+If a nonexisting output path is supplied, require a writable existing or safely creatable parent, write exactly the verified candidate there, and print its absolute path.
 
-Require each supported misalignment to name the component/evidence and explain causally how it works against the outcome or contradicts another component. Permit a supported empty result; never require findings for appearance's sake.
-
-### AF-04 — Audit coverage boundary
-
-Require a declared effective corpus and a coverage ledger that marks relevant surfaces as examined, excluded with reason, inaccessible, or unresolved. Narrowed scope must be visible. Exhaustive wording is allowed only when the ledger supports it.
-
-### AF-05 — Doctrine-to-domain translation
-
-Require the auditor to fetch and read Richard Sutton's “The Bitter Lesson” in full at:
-
-`http://www.incompleteideas.net/IncIdeas/BitterLesson.html`
-
-The generated prompt must require separate blocks for:
-
-1. Sutton's relevant source claims; and
-2. the auditor's domain-specific engineering translation.
-
-It must prohibit attributing the translation to Sutton and prohibit a completed Bitter-Lesson verdict if the essay was unavailable.
-
-### AF-06 — Compute-scalable meta-method leverage
-
-Require analysis of where the target enables or blocks general methods that can exploit stronger models or greater computation. Sutton's central examples are search and learning; discovering/capturing complexity rather than storing human discoveries is part of the lens. Domain adaptations such as model-led exploration or iteration must be labeled as adaptations. Verification may complement scalable generation but must not be attributed as Sutton's terminology.
-
-### AF-07 — Built-in human-knowledge constraint
-
-Require examination of all covered components for hand-engineered domain knowledge or procedural scaffolding that helps short-term but has a fixed ceiling, complicates the system, or inhibits scalable methods. Each violation must name:
-
-- the built-in knowledge or fixed method;
-- the current capability and short-term benefit;
-- why relative value plateaus or becomes obstructive; and
-- a more scalable direction that preserves the capability.
-
-Do not equate all complexity or explicit constraints with violations.
-
-### AF-08 — Model-evolution flexibility
-
-Require every relevant major mechanism to be classified as gaining value, remaining approximately neutral, or losing relative value as models/compute improve. Require current-model assumptions and justified non-applicability where no model/compute relationship exists.
-
-### AF-09 — Upgrade-plan completeness
-
-Require every supported strategic misalignment and Bitter-Lesson violation to map to a proposed change or an explicit blocker/no-change reason. Require preservation of the capability currently supplied and link that protection to AF-11/AF-12 evidence. No finding may be orphaned.
-
-### AF-10 — Measure fidelity
-
-Require current **and proposed** measures to be tied to AF-01. The auditor must distinguish outcome-faithful measures, vanity metrics, and proxies. Every retained or replacement measure needs a defensible outcome link.
-
-### AF-11 — Evaluation embodiment
-
-Require concrete, repeatable eval artifacts—not merely recommendations—with inputs/scenarios, an oracle or judgment rule, expected evidence, execution instructions, and at least one case that tests the real outcome. Require accurate status: built-and-run, built-not-run with blocker, or not-built. Proposed-only output does not pass.
-
-### AF-12 — Regression early warning
-
-Require a repeatable comparison against an explicit baseline, what deterioration it detects, what it misses, false-warning risks, how/when it runs, and current results where possible. The check must expose outcome deterioration before reliance on informal user discovery.
-
-### AF-13 — Optimized-proxy drift
-
-Require inspection of current metrics, gates, incentives, completion signals, and optimization loops. A drift finding must show the proxy, intended outcome, evidence of divergence or gaming pressure, and correction/unresolved question. Do not mislabel every weak measure as demonstrated drift; a supported empty result is valid.
-
-## Target adaptation requirements
-
-Adapt the audit framework to the requested object rather than copying generic surfaces mechanically.
-
-The generated prompt must specify:
-
-1. **Audit object and authoritative goal sources** — what is being audited and where its purpose can be established.
-2. **Effective corpus** — domain-relevant surfaces and dependency boundaries. Do not import another domain's file list.
-3. **Component meaning** — what counts as a component, mechanism, statement, control, workflow, artifact, or measure in this domain.
-4. **Bitter-Lesson translation** — how scaling, search/learning, built-in knowledge, and future-model assumptions manifest in this domain; mark genuine non-applicability.
-5. **Measurement model** — what evidence could represent the actual outcome and what likely vanity/proxy signals require scrutiny. These are hypotheses to inspect, not predeclared findings.
-6. **Eval/regression artifact form** — executable checks where feasible; a concrete repeatable judgment protocol for inherently qualitative outcomes.
-7. **Side-effect contract** — exactly what may be read, executed, created, or modified, with one coherent output location. Keep the target read-only unless the caller clearly authorizes mutation.
-8. **Branch behavior** — missing target, unclear goal, unavailable Sutton source, narrowed/inaccessible corpus, fully aligned target, genuine findings, and blocked eval execution.
-9. **Completion evidence** — how the generated audit will prove coverage, finding traceability, artifact existence, and target non-modification.
-
-Target-specific requirements may come from:
-
-- explicit caller constraints;
-- authoritative evidence in the target or its governing standards; or
-- clearly labeled creator decisions needed to make the prompt executable.
-
-Do not present generic conventions, existing-prompt details, or creator preferences as concepts from the framework.
-
-## Generated prompt quality requirements
-
-The final audit prompt must:
-
-- be valid Markdown with Pi frontmatter containing `description` and, when it accepts arguments, `argument-hint`;
-- use Pi argument syntax correctly (`$1`, `$2`, `$@`, `${N:-default}`, or slicing as needed);
-- accept and bound a final optional additional-details argument per the house argument convention above;
-- be self-contained at execution time and not require this creator or the framework file;
-- define missing/invalid-input behavior;
-- enforce all thirteen AF attributes in its body and completion check;
-- distinguish source doctrine from domain adaptation;
-- prefer outcome/evidence constraints over arbitrary fixed procedures;
-- avoid unnecessary phase counts, pass counts, magic thresholds, fixed taxonomies, or enumerated finding lists;
-- keep exhaustive claims conditional on coverage evidence;
-- permit fully aligned and supported-empty outcomes;
-- keep side effects internally consistent;
-- default its output location to the house bundle convention above, or record an explicit justified deviation;
-- specify concrete eval/regression construction rather than advice-only output;
-- preserve existing strengths in `revise` mode;
-- label unresolved or unverified claims honestly; and
-- state that a framework-complete audit is not the same as a finding-free target.
-
-## Required creator output
-
-Deliver in this order:
-
-### 1. Design decisions
-
-State:
-
-- mode and audit object;
-- inferred/supplied purpose of the audit prompt;
-- authoritative goal source expected by the generated prompt;
-- effective-corpus strategy;
-- side-effect and output mode;
-- eval/regression artifact strategy;
-- blocking assumptions or questions; and
-- any target-specific additions with provenance.
-
-### 2. Existing-capability preservation ledger (`revise` mode only)
-
-List every material existing capability and its disposition. A revised candidate cannot pass if a capability is removed or weakened without explicit authorization or a protected replacement.
-
-### 3. Framework traceability matrix
-
-Produce exactly one row for AF-01 through AF-13 with columns:
-
-| ID  | Generated prompt section/clause | Domain adaptation | Verification assertion |
-| --- | ------------------------------- | ----------------- | ---------------------- |
-
-No row may rely only on the presence of an AF identifier.
-
-### 4. Candidate audit prompt
-
-Provide the complete self-contained Markdown prompt, including frontmatter. Do not omit sections with “same as framework,” references to this creator, or placeholders that require hidden context.
-
-### 5. Change and risk summary
-
-In `create` mode, list material creator decisions and what would change them.
-
-In `revise` mode, list additions, preserved features, replacements/removals, resolved contradictions, unresolved tradeoffs, and likely quality regression risks. Distinguish **consistency-only** edits from **capability** edits.
-
-### 6. Verification
-
-Check the candidate semantically, not by keyword presence alone. Emit:
-
-```text
-VERIFICATION:
-- Valid Pi prompt-template format: YES / NO — [evidence]
-- Self-contained: YES / NO — [evidence]
-- AF-01 through AF-13 substantively enforced: YES / NO — [missing IDs/behaviors]
-- Goal-unclear branch stops guessing: YES / NO — [evidence]
-- Coverage bounds exhaustive claims: YES / NO — [evidence]
-- Sutton claims separated from domain translation: YES / NO — [evidence]
-- Every finding maps to upgrade/no-change reason: YES / NO — [evidence]
-- Current and proposed measures tested for fidelity: YES / NO — [evidence]
-- Concrete eval artifacts required: YES / NO — [evidence]
-- Concrete regression artifacts and false-warning risks required: YES / NO — [evidence]
-- Proxy drift requires divergence evidence: YES / NO — [evidence]
-- Final optional additional-details argument accepted, bounded, and recorded in the report: YES / NO — [evidence]
-- Side-effect contract internally consistent: YES / NO — [evidence]
-- No target-specific criterion fabricated as framework doctrine: YES / NO — [evidence]
-- Existing capabilities preserved (revise mode): YES / NO / N-A — [evidence]
-- Overall candidate ready: YES / NO — [unmet items]
-```
-
-If any item is `NO`, revise the candidate and re-check it before delivery. If the conflict requires a user decision, stop and ask rather than claiming readiness.
-
-## Write behavior
-
-If `$3` is supplied and does not overwrite the source prompt, write exactly the candidate prompt to that path after verification and print the absolute path. Keep the design decisions, ledgers, traceability matrix, risk summary, and verification in the response unless the caller requests a separate report.
-
-If no output path is supplied, return the candidate in the response and do not write a file.
-
-If `$3` resolves to the source prompt in `revise` mode, do not overwrite it without explicit confirmation after presenting the preservation ledger and candidate diff. Prefer writing a sibling candidate such as `<name>-framework-candidate.md` for review.
+If any output path already exists, first present the completed candidate plus preservation ledger and diff/change summary. Then require a new explicit confirmation to replace that exact path; invocation-time authorization is not enough. Write only after confirmation. Never silently choose a sibling path, merge content, or destroy an existing file.

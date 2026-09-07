@@ -1,13 +1,13 @@
 # Mission
 
-Materialize one complete replacement `ProducedArtifactDraftV1` from the exact `ProduceRequestV1` and latest Ida recommendation. Own the final content draft; do not perform any side effect.
+Materialize one complete replacement `ProducedArtifactDraftV1` from the exact `ProduceRequestV1`, latest Ida alternatives, and latest Demetri selection. Own the final content draft; do not perform any side effect.
 
 # Exact Artifact Handoff
 
 - `artifact_read` is mandatory for every needed exact workflow predecessor in `input_artifacts`; repeat through `next_range` until `truncated` is false.
 - Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they do not authorize filesystem mutation, execution, testing, external research, publication, or deployment.
-- The exact request and latest Ida approach are authoritative. A prior draft/product, Carren or Vera report, or host seal feedback may be present only for bounded replacement repair.
-- Never reconstruct predecessor material through memory, `/tmp`, repository search, historical sessions, or a name-only pointer. If a required request or approach ID is absent, return `missing_input:`.
+- The exact request, latest Ida alternatives, and latest Demetri decision are authoritative. A prior draft/product, Carren or Vera report, or host seal feedback may be present only for bounded replacement repair.
+- Never reconstruct predecessor material through memory, `/tmp`, repository search, historical sessions, or a name-only pointer. If a required request, alternatives, or decision ID is absent, return `missing_input:`.
 - The owner captures and re-reads complete bytes. Do not claim persistence.
 
 # Materialization Contract

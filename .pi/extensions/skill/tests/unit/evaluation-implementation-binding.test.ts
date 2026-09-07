@@ -23,7 +23,7 @@ import {
 import {
   DETERMINISTIC_GRADING_DEFINITION,
   DIRECT_DEMETRI_BASELINE_REGISTRATION,
-  SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+  SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
   SYNTHETIC_KNOWN_DELTA_CANDIDATE_REGISTRATION,
   createEvaluationImplementationBinding,
   evaluationImplementationBindingSha256,
@@ -106,7 +106,7 @@ describe("EvaluationImplementationBindingV1 reproducibility boundary", () => {
         plan: base.planValue,
         projectRoot: PROJECT_ROOT,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: new Map([[substituted.name, substituted]]),
+        implementationRegistry: new Map([[substituted.name, substituted]]),
         implementationBinding: base.implementationBinding,
         runtimeFunctions: base.runtimeFunctions,
       })
@@ -133,7 +133,7 @@ describe("EvaluationImplementationBindingV1 reproducibility boundary", () => {
         plan: base.planValue,
         projectRoot: root,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
         implementationBinding: base.implementationBinding,
         runtimeFunctions: base.runtimeFunctions,
       })
@@ -158,7 +158,7 @@ describe("EvaluationImplementationBindingV1 reproducibility boundary", () => {
         plan: base.planValue,
         projectRoot: root,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
         implementationBinding: base.implementationBinding,
         runtimeFunctions: base.runtimeFunctions,
       })
@@ -184,7 +184,7 @@ describe("EvaluationImplementationBindingV1 reproducibility boundary", () => {
         population: base.populationValue,
         plan: base.planValue,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
         gradingDefinition: DETERMINISTIC_GRADING_DEFINITION,
         files: sourceInputs(base.implementationBinding),
         runtimeFunctions: base.runtimeFunctions,
@@ -197,7 +197,7 @@ describe("EvaluationImplementationBindingV1 reproducibility boundary", () => {
         population: base.populationValue,
         plan: base.planValue,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
         gradingDefinition: DETERMINISTIC_GRADING_DEFINITION,
         files: sourceInputs(base.implementationBinding).map((file) =>
           file.role === "worker_source" ? { ...file, path: "../outside-worker.ts" } : file
@@ -215,7 +215,7 @@ describe("EvaluationImplementationBindingV1 reproducibility boundary", () => {
         population: base.populationValue,
         plan: base.planValue,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
         gradingDefinition: DETERMINISTIC_GRADING_DEFINITION,
         files: sourceInputs(base.implementationBinding).filter(
           (file) => file.role !== "artifact_preflight_source"
@@ -274,7 +274,7 @@ describe("EvaluationImplementationBindingV1 reproducibility boundary", () => {
           plan: base.planValue,
           projectRoot: PROJECT_ROOT,
           baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-          candidateRegistry: new Map([[registration.name, registration]]),
+          implementationRegistry: new Map([[registration.name, registration]]),
           implementationBinding: base.implementationBinding,
           runtimeFunctions: base.runtimeFunctions,
         })
@@ -293,7 +293,7 @@ describe("EvaluationImplementationBindingV1 reproducibility boundary", () => {
         plan: base.planValue,
         projectRoot: PROJECT_ROOT,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
         implementationBinding: base.implementationBinding,
         runtimeFunctions: base.runtimeFunctions,
       }).implementation_binding_sha256

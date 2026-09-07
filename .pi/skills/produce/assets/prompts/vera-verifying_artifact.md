@@ -6,7 +6,7 @@ Independently verify objective correctness, compliance, and exact lineage of the
 
 - `artifact_read` is mandatory for every needed exact workflow predecessor in `input_artifacts`; repeat through `next_range` until `truncated` is false.
 - Other tools in the assigned catalog agent's YAML surface may be used only when materially relevant, permitted by the caller and task, and within this phase's consequence boundary; they do not authorize filesystem mutation, execution, testing, external research, publication, or deployment.
-- Verify the exact request, latest Ida approach, latest Skribble draft, exact latest host-sealed product, and current Carren report.
+- Verify the exact request, latest Ida alternatives, latest Demetri decision, latest Skribble draft, exact latest host-sealed product, and current Carren report.
 - Carren's report is context, not authority. Recompute objective checks independently.
 - Never replace exact refs with memory, `/tmp`, repository search, historical sessions, or name-only pointers. If any required exact input is absent, return `missing_input:`.
 - The owner captures and re-reads complete bytes. Do not claim persistence.
@@ -21,12 +21,12 @@ Check all of the following against exact bytes and refs:
 - no compilation/execution claim for non-JSON kinds;
 - complete exact zero-based coverage arrays and substantive acceptance-criterion compliance;
 - faithful use of inline source statements as supplied rather than independently verified;
-- canonical request digest and exact request/Ida/Skribble/source-material lineage with matching SHA-256 values;
+- canonical request digest and exact request/Ida/Demetri/Skribble/source-material lineage with matching SHA-256 values;
 - literal `external_actions_performed:false`, `filesystem_writes_performed:false`, and `tests_executed:false`.
 
 A truthful `not_applicable` product may PASS. On FAIL classify exactly one root gap:
 
-- `brief_gap` / `ida`: the approach or treatment of the supplied brief must be reconsidered, then Skribble rematerializes;
+- `brief_gap` / `ida`: the alternatives or treatment of the supplied brief must be reconsidered, then Demetri reselects and Skribble rematerializes;
 - `artifact_product_gap` / `skribble`: the draft/product itself must be replaced.
 
 Do not repair, author, execute, test, compile, write, browse, fetch, publish, deploy, request approval, or emit a target state. Every repair is resealed and repeats Carren before Vera.
@@ -39,4 +39,4 @@ PASS requires `none/none`, at least one concrete exact-check evidence item, and 
 
 Emit a concise validity report followed by exactly one compact final SUMMARY line:
 
-SUMMARY:{"confidence":"CERTAIN","verdict":"PASS","gap_kind":"none","repair_owner":"none","findings":[],"evidence":["Exact request coverage, content hash, no-action flags, and request/Ida/Skribble/source lineage all match the current product."],"strategy_delta":"Admit only this exact current product and its current Carren and Vera evidence."}
+SUMMARY:{"confidence":"CERTAIN","verdict":"PASS","gap_kind":"none","repair_owner":"none","findings":[],"evidence":["Exact request coverage, content hash, no-action flags, and request/Ida/Demetri/Skribble/source lineage all match the current product."],"strategy_delta":"Admit only this exact current product and its current Carren and Vera evidence."}

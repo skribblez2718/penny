@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  DIAGNOSE_CANDIDATE_REGISTRATION,
+  DIAGNOSE_PLAYBOOK_REGISTRATION,
   DIAGNOSE_PLAYBOOK_NAME,
   DiagnosePlaybook,
   OrchestrationService,
@@ -212,7 +212,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("orchestrated diagnose candidate", () => {
+describe("orchestrated diagnose workflow", () => {
   it("completes the exact Annie → Ida → Demetri → seal → Vera → host admission flow", async () => {
     const client = new ScriptedDiagnoseClient([
       stageComplete("Causal decomposition."),
@@ -224,7 +224,7 @@ describe("orchestrated diagnose candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: DIAGNOSE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DIAGNOSE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = complete(await service.execute(start(`run-diagnose-happy-${sequence}`)));
@@ -330,7 +330,7 @@ describe("orchestrated diagnose candidate", () => {
         projectRoot: PROJECT_ROOT,
         env: environment(),
         modelClient: client,
-        playbookRegistration: DIAGNOSE_CANDIDATE_REGISTRATION,
+        playbookRegistration: DIAGNOSE_PLAYBOOK_REGISTRATION,
       });
       sequence += 1;
       const terminal = complete(await service.execute(start(`run-diagnose-${kind}-${sequence}`)));
@@ -383,7 +383,7 @@ describe("orchestrated diagnose candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: DIAGNOSE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DIAGNOSE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = complete(
@@ -433,7 +433,7 @@ describe("orchestrated diagnose candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: DIAGNOSE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DIAGNOSE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = complete(await service.execute(start(`run-diagnose-seal-repair-${sequence}`)));
@@ -454,7 +454,7 @@ describe("orchestrated diagnose candidate", () => {
     const env = environment();
     let interrupted = false;
     const registration: PlaybookRegistrationV1 = {
-      ...DIAGNOSE_CANDIDATE_REGISTRATION,
+      ...DIAGNOSE_PLAYBOOK_REGISTRATION,
       construct: (options) =>
         new DiagnosePlaybook(
           options.artifactRevisions,
@@ -491,7 +491,7 @@ describe("orchestrated diagnose candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: recoveredClient,
-      playbookRegistration: DIAGNOSE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DIAGNOSE_PLAYBOOK_REGISTRATION,
     });
     const terminal = complete(
       await recovered.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
@@ -510,7 +510,7 @@ describe("orchestrated diagnose candidate", () => {
     const env = environment();
     let interrupted = false;
     const registration: PlaybookRegistrationV1 = {
-      ...DIAGNOSE_CANDIDATE_REGISTRATION,
+      ...DIAGNOSE_PLAYBOOK_REGISTRATION,
       construct: (options) =>
         new DiagnosePlaybook(
           options.artifactRevisions,
@@ -548,7 +548,7 @@ describe("orchestrated diagnose candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: recoveredClient,
-      playbookRegistration: DIAGNOSE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DIAGNOSE_PLAYBOOK_REGISTRATION,
     });
     const terminal = complete(
       await recovered.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
@@ -576,7 +576,7 @@ describe("orchestrated diagnose candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: DIAGNOSE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DIAGNOSE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = await service.execute(start(`run-diagnose-exhaust-${sequence}`));

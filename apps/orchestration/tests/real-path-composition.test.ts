@@ -8,10 +8,10 @@ import {
   ArtifactRefSchema,
   ArtifactStore,
   Checkpointer,
-  DECIDE_CANDIDATE_REGISTRATION,
+  DECIDE_PLAYBOOK_REGISTRATION,
   OrchestrationEngine,
   OrchestrationRunner,
-  PLAN_CANDIDATE_REGISTRATION,
+  PLAN_PLAYBOOK_REGISTRATION,
   WorkerExecutor,
   canonicalJson,
   validateContract,
@@ -185,7 +185,7 @@ function strategyCore(): StrategyCoreV1 {
     applicability_reason: "The exact research and decision products support a bounded strategy.",
     outcomes: [
       {
-        statement: "A provider-free candidate chain is demonstrated.",
+        statement: "A provider-free workflow chain is demonstrated.",
         desired_outcome_indexes: [0],
         success_signal: "All three terminal semantic products are exact and readable.",
       },
@@ -213,7 +213,7 @@ function planStart(root: string, runId: string, grounded: ArtifactRef, decision:
     goal: "Demonstrate an exact provider-free Research to Decide to Plan chain.",
     constraints: {
       schema_version: 1,
-      desired_outcomes: ["A provider-free candidate chain is demonstrated."],
+      desired_outcomes: ["A provider-free workflow chain is demonstrated."],
       current_state: { status: "provided", facts: ["Research and Decide completed."] },
       hard_constraints: ["Do not execute or call a provider."],
       non_goals: ["Do not taskify the strategy."],
@@ -239,7 +239,7 @@ function planStart(root: string, runId: string, grounded: ArtifactRef, decision:
   };
 }
 
-describe("provider-free real-path candidate composition", () => {
+describe("provider-free real-path workflow composition", () => {
   it("executes Research → Decide → Plan with actual terminal semantic products", async () => {
     const root = temporaryRoot();
     using artifacts = new ArtifactStore(path.join(root, "artifacts"));
@@ -257,7 +257,7 @@ describe("provider-free real-path candidate composition", () => {
           schema_version: 2,
           action: "start",
           identity: identity(`chain-research-${sequence}`, "research"),
-          goal: "Establish exact evidence for a provider-free candidate chain.",
+          goal: "Establish exact evidence for a provider-free workflow chain.",
           constraints: { mode: "quick" },
           project_root: root,
           trust_profile: "hardened-untrusted",
@@ -301,7 +301,7 @@ describe("provider-free real-path candidate composition", () => {
         artifacts,
         checkpointer,
         client: decideClient,
-        registration: DECIDE_CANDIDATE_REGISTRATION,
+        registration: DECIDE_PLAYBOOK_REGISTRATION,
         request: decideStart(root, `chain-decide-${sequence}`, research),
       })
     );
@@ -342,7 +342,7 @@ describe("provider-free real-path candidate composition", () => {
         artifacts,
         checkpointer,
         client: planClient,
-        registration: PLAN_CANDIDATE_REGISTRATION,
+        registration: PLAN_PLAYBOOK_REGISTRATION,
         request: planStart(root, `chain-plan-${sequence}`, research, decision),
       })
     );
@@ -358,7 +358,7 @@ describe("provider-free real-path candidate composition", () => {
         artifacts,
         checkpointer,
         client: staleClient,
-        registration: PLAN_CANDIDATE_REGISTRATION,
+        registration: PLAN_PLAYBOOK_REGISTRATION,
         request: planStart(root, `chain-plan-stale-${sequence}`, research, {
           ...decision,
           content_digest: "0".repeat(64),

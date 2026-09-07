@@ -38,6 +38,16 @@ replay projection, with no second side effect. The same pair with a _different_ 
 mismatch and is refused. A previously delivered derived answer is never persisted and never
 redelivered; a new derived delivery needs a new invocation and a new grant.
 
+Private-input materialization, recovery, reads, rename, unlink, and parent-directory fsync are
+anchored to pinned owner-only `O_NOFOLLOW` directory descriptors. Immediately before every
+mutating filesystem step, the host rechecks that the indexed pathname still names the pinned
+`dev`/`ino`; a run-directory rename or symlink substitution therefore refuses without writing or
+deleting through the replacement. The implementation never treats an earlier pathname check as
+authority for a later pathname operation. Settlement removes and fsyncs the exact indexed files
+but retains the empty owner-only run directory as a custody tombstone, because Node exposes no
+inode-conditioned directory-removal primitive that could safely remove its name after closing the
+pinned descriptor.
+
 ## The six flows
 
 - **`init`** — validate profile and create authority → admit an existing empty or exact-scaffold

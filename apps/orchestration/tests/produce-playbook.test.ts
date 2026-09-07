@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  PRODUCE_CANDIDATE_REGISTRATION,
+  PRODUCE_PLAYBOOK_REGISTRATION,
   PRODUCE_PLAYBOOK_NAME,
   PRODUCE_START_ADMISSION,
   OrchestrationService,
@@ -22,6 +22,7 @@ import {
   validateProducedArtifact,
   type AgentCompletion,
   type AgentInvocation,
+  type ArtifactApproachDecisionV1,
   type ArtifactApproachV1,
   type Directive,
   type JsonValue,
@@ -113,14 +114,52 @@ function approach(label = "direct"): ArtifactApproachV1 {
         tradeoffs: ["Makes provenance explicit but adds length."],
       },
     ],
-    recommended_approach_id: `${label}_direct`,
-    recommendation_rationale: "The direct structure best matches the concise brief.",
     confidence: "PROBABLE",
   };
 }
 
 function persistedApproach(value = approach()): string {
   return `ARTIFACT_APPROACH:${canonicalJson(value)}\nSUMMARY:{"confidence":"${value.confidence}","complete":true}`;
+}
+
+function approachDecision(label = "direct"): ArtifactApproachDecisionV1 {
+  return {
+    schema_version: 1,
+    disposition: "selected",
+    approach_assessments: [
+      {
+        approach_id: `${label}_direct`,
+        feasibility: "feasible",
+        comparison: "Directly satisfies the concise greeting brief.",
+      },
+      {
+        approach_id: `${label}_sectioned`,
+        feasibility: "feasible",
+        comparison: "Adds explicit structure but also length.",
+      },
+    ],
+    selected_approach_id: `${label}_direct`,
+    rationale: "The direct structure best matches the supplied concise requirement.",
+    sensitivity: [
+      "A requirement for separate provenance sections would favor the sectioned approach.",
+    ],
+    blocking_questions: [],
+    confidence: "PROBABLE",
+  };
+}
+
+function persistedApproachDecision(value = approachDecision()): string {
+  return `ARTIFACT_APPROACH_DECISION:${canonicalJson(value)}\nSUMMARY:{"confidence":"${value.confidence}","complete":true,"disposition":"${value.disposition}"}`;
+}
+
+function unresolvedApproachDecision(): ArtifactApproachDecisionV1 {
+  return {
+    ...approachDecision(),
+    disposition: "unresolved",
+    selected_approach_id: null,
+    blocking_questions: ["Should brevity or explicit provenance structure take priority?"],
+    confidence: "UNCERTAIN",
+  };
 }
 
 function coverage(value = request()) {
@@ -270,7 +309,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("orchestrated produce candidate", () => {
+describe("orchestrated produce workflow", () => {
   it("rejects even an empty caller artifact-input envelope at closed V1 intake", () => {
     sequence += 1;
     expect(() =>
@@ -284,9 +323,10 @@ describe("orchestrated produce candidate", () => {
     ).toThrow(/no caller artifact inputs/u);
   });
 
-  it("completes the exact Ida → Skribble → seal → Carren → Vera → host admission flow", async () => {
+  it("completes the exact Ida → Demetri → Skribble → seal → Carren → Vera → host admission flow", async () => {
     const client = new ScriptedProduceClient([
       persistedApproach(),
+      persistedApproachDecision(),
       persistedDraft(draft()),
       qualityApprove(),
       veraPass(),
@@ -295,18 +335,20 @@ describe("orchestrated produce candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: PRODUCE_CANDIDATE_REGISTRATION,
+      playbookRegistration: PRODUCE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = complete(await service.execute(start(`run-produce-happy-${sequence}`)));
     expect(client.invocations.map((invocation) => invocation.stateId)).toEqual([
       "exploring_artifact_approaches",
+      "selecting_artifact_approach",
       "materializing_artifact",
       "critiquing_artifact",
       "verifying_artifact",
     ]);
     expect(client.invocations.map((invocation) => invocation.agent)).toEqual([
       "ida",
+      "demetri",
       "skribble",
       "carren",
       "vera",
@@ -316,10 +358,18 @@ describe("orchestrated produce candidate", () => {
     ).toEqual([
       ["intake"],
       ["intake", "exploring_artifact_approaches"],
-      ["intake", "exploring_artifact_approaches", "materializing_artifact", "sealing_artifact"],
+      ["intake", "exploring_artifact_approaches", "selecting_artifact_approach"],
       [
         "intake",
         "exploring_artifact_approaches",
+        "selecting_artifact_approach",
+        "materializing_artifact",
+        "sealing_artifact",
+      ],
+      [
+        "intake",
+        "exploring_artifact_approaches",
+        "selecting_artifact_approach",
         "materializing_artifact",
         "sealing_artifact",
         "critiquing_artifact",
@@ -431,6 +481,7 @@ describe("orchestrated produce candidate", () => {
     };
     const client = new ScriptedProduceClient([
       persistedApproach(approach("missing")),
+      persistedApproachDecision(approachDecision("missing")),
       persistedDraft(notApplicableDraft(value)),
       qualityApprove(),
       veraPass(),
@@ -439,7 +490,7 @@ describe("orchestrated produce candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: PRODUCE_CANDIDATE_REGISTRATION,
+      playbookRegistration: PRODUCE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = complete(
@@ -455,10 +506,38 @@ describe("orchestrated produce candidate", () => {
     });
   });
 
+  it("stops before materialization when Demetri cannot make a defensible selection", async () => {
+    const client = new ScriptedProduceClient([
+      persistedApproach(),
+      persistedApproachDecision(unresolvedApproachDecision()),
+    ]);
+    using service = new OrchestrationService({
+      projectRoot: PROJECT_ROOT,
+      env: environment(),
+      modelClient: client,
+      playbookRegistration: PRODUCE_PLAYBOOK_REGISTRATION,
+    });
+    sequence += 1;
+    const terminal = await service.execute(start(`run-produce-unresolved-${sequence}`));
+    expect(client.invocations.map((invocation) => invocation.agent)).toEqual(["ida", "demetri"]);
+    expect(terminal).toMatchObject({
+      action: "incomplete",
+      met: false,
+      unresolved: ["artifact approach decision is unresolved"],
+      result: {
+        incomplete_reason: "unresolved_approach_decision",
+        external_actions_performed: false,
+        filesystem_writes_performed: false,
+        tests_executed: false,
+      },
+    });
+  });
+
   it("counts a Carren report accepted through routing repair as one execution group", async () => {
     const malformedQuality = `Quality review.\nSUMMARY:{"confidence":"PROBABLE"}`;
     const client = new ScriptedProduceClient([
       persistedApproach(),
+      persistedApproachDecision(),
       persistedDraft(draft()),
       malformedQuality,
       routingOnly(qualityApprove()),
@@ -468,24 +547,26 @@ describe("orchestrated produce candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: PRODUCE_CANDIDATE_REGISTRATION,
+      playbookRegistration: PRODUCE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = complete(await service.execute(start(`run-produce-routing-${sequence}`)));
     expect(client.invocations.map((invocation) => invocation.stateId)).toEqual([
       "exploring_artifact_approaches",
+      "selecting_artifact_approach",
       "materializing_artifact",
       "critiquing_artifact",
       "critiquing_artifact",
       "verifying_artifact",
     ]);
-    expect(client.invocations[3]?.executionPurpose).toBe("routing_repair");
+    expect(client.invocations[4]?.executionPurpose).toBe("routing_repair");
     expect(productRef(terminal)).toMatchObject({ kind: "semantic-core", version: 1 });
   });
 
   it("routes Carren quality FAIL to Skribble, then reseals and repeats Carren before Vera", async () => {
     const client = new ScriptedProduceClient([
       persistedApproach(),
+      persistedApproachDecision(),
       persistedDraft(draft("# Greeting\n\nHello, world.")),
       qualityFail(),
       persistedDraft(draft()),
@@ -496,21 +577,23 @@ describe("orchestrated produce candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: PRODUCE_CANDIDATE_REGISTRATION,
+      playbookRegistration: PRODUCE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = complete(await service.execute(start(`run-produce-quality-${sequence}`)));
     expect(client.invocations.map((invocation) => invocation.stateId)).toEqual([
       "exploring_artifact_approaches",
+      "selecting_artifact_approach",
       "materializing_artifact",
       "critiquing_artifact",
       "materializing_artifact",
       "critiquing_artifact",
       "verifying_artifact",
     ]);
-    expect(client.invocations[3]?.inputArtifacts.map((ref) => ref.phase)).toEqual([
+    expect(client.invocations[4]?.inputArtifacts.map((ref) => ref.phase)).toEqual([
       "intake",
       "exploring_artifact_approaches",
+      "selecting_artifact_approach",
       "materializing_artifact",
       "sealing_artifact",
       "critiquing_artifact",
@@ -522,18 +605,24 @@ describe("orchestrated produce candidate", () => {
     for (const kind of ["brief_gap", "artifact_product_gap"] as const) {
       const outputs = [
         persistedApproach(),
+        persistedApproachDecision(),
         persistedDraft(draft("# Greeting\n\nHello, world.")),
         qualityApprove(),
         veraGap(kind),
       ];
-      if (kind === "brief_gap") outputs.push(persistedApproach(approach("revised")));
+      if (kind === "brief_gap") {
+        outputs.push(
+          persistedApproach(approach("revised")),
+          persistedApproachDecision(approachDecision("revised"))
+        );
+      }
       outputs.push(persistedDraft(draft()), qualityApprove(), veraPass());
       const client = new ScriptedProduceClient(outputs);
       using service = new OrchestrationService({
         projectRoot: PROJECT_ROOT,
         env: environment(),
         modelClient: client,
-        playbookRegistration: PRODUCE_CANDIDATE_REGISTRATION,
+        playbookRegistration: PRODUCE_PLAYBOOK_REGISTRATION,
       });
       sequence += 1;
       const terminal = complete(await service.execute(start(`run-produce-${kind}-${sequence}`)));
@@ -541,16 +630,19 @@ describe("orchestrated produce candidate", () => {
         kind === "brief_gap"
           ? [
               "exploring_artifact_approaches",
+              "selecting_artifact_approach",
               "materializing_artifact",
               "critiquing_artifact",
               "verifying_artifact",
               "exploring_artifact_approaches",
+              "selecting_artifact_approach",
               "materializing_artifact",
               "critiquing_artifact",
               "verifying_artifact",
             ]
           : [
               "exploring_artifact_approaches",
+              "selecting_artifact_approach",
               "materializing_artifact",
               "critiquing_artifact",
               "verifying_artifact",
@@ -559,7 +651,7 @@ describe("orchestrated produce candidate", () => {
               "verifying_artifact",
             ]
       );
-      const repairInvocation = client.invocations[4];
+      const repairInvocation = client.invocations[5];
       expect(repairInvocation?.agent).toBe(kind === "brief_gap" ? "ida" : "skribble");
       expect(repairInvocation?.inputArtifacts.map((ref) => ref.phase)).toContain(
         "verifying_artifact"
@@ -572,6 +664,7 @@ describe("orchestrated produce candidate", () => {
     const invalid = { ...draft(), tests_executed: true };
     const client = new ScriptedProduceClient([
       persistedApproach(),
+      persistedApproachDecision(),
       `PRODUCED_ARTIFACT_DRAFT:${canonicalJson(invalid)}\nSUMMARY:{"confidence":"PROBABLE","complete":true}`,
       persistedDraft(draft()),
       qualityApprove(),
@@ -581,12 +674,13 @@ describe("orchestrated produce candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: PRODUCE_CANDIDATE_REGISTRATION,
+      playbookRegistration: PRODUCE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = complete(await service.execute(start(`run-produce-seal-repair-${sequence}`)));
     expect(client.invocations.map((invocation) => invocation.stateId)).toEqual([
       "exploring_artifact_approaches",
+      "selecting_artifact_approach",
       "materializing_artifact",
       "materializing_artifact",
       "critiquing_artifact",
@@ -605,7 +699,7 @@ describe("orchestrated produce candidate", () => {
     const env = environment();
     let interrupted = false;
     const registration: PlaybookRegistrationV1 = {
-      ...PRODUCE_CANDIDATE_REGISTRATION,
+      ...PRODUCE_PLAYBOOK_REGISTRATION,
       construct: (options) =>
         new ProducePlaybook(
           options.artifactRevisions,
@@ -625,7 +719,11 @@ describe("orchestrated produce candidate", () => {
       using first = new OrchestrationService({
         projectRoot: PROJECT_ROOT,
         env,
-        modelClient: new ScriptedProduceClient([persistedApproach(), persistedDraft(draft())]),
+        modelClient: new ScriptedProduceClient([
+          persistedApproach(),
+          persistedApproachDecision(),
+          persistedDraft(draft()),
+        ]),
         playbookRegistration: registration,
       });
       await expect(first.execute(start(runId))).rejects.toThrow(/injected produce seal/u);
@@ -636,7 +734,7 @@ describe("orchestrated produce candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: recoveredClient,
-      playbookRegistration: PRODUCE_CANDIDATE_REGISTRATION,
+      playbookRegistration: PRODUCE_PLAYBOOK_REGISTRATION,
     });
     const terminal = complete(
       await recovered.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
@@ -656,7 +754,7 @@ describe("orchestrated produce candidate", () => {
     const env = environment();
     let interrupted = false;
     const registration: PlaybookRegistrationV1 = {
-      ...PRODUCE_CANDIDATE_REGISTRATION,
+      ...PRODUCE_PLAYBOOK_REGISTRATION,
       construct: (options) =>
         new ProducePlaybook(
           options.artifactRevisions,
@@ -678,6 +776,7 @@ describe("orchestrated produce candidate", () => {
         env,
         modelClient: new ScriptedProduceClient([
           persistedApproach(),
+          persistedApproachDecision(),
           persistedDraft(draft()),
           qualityApprove(),
           veraPass(),
@@ -692,7 +791,7 @@ describe("orchestrated produce candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: recoveredClient,
-      playbookRegistration: PRODUCE_CANDIDATE_REGISTRATION,
+      playbookRegistration: PRODUCE_PLAYBOOK_REGISTRATION,
     });
     const terminal = complete(
       await recovered.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
@@ -713,7 +812,7 @@ describe("orchestrated produce candidate", () => {
   });
 
   it("terminates repeated artifact product gaps as bounded non-positive incomplete", async () => {
-    const outputs = [persistedApproach()];
+    const outputs = [persistedApproach(), persistedApproachDecision()];
     for (let attempt = 0; attempt < 4; attempt += 1) {
       outputs.push(
         persistedDraft(draft(`# Greeting\n\nHello, world.\n\nAttempt ${attempt + 1}.`)),
@@ -726,7 +825,7 @@ describe("orchestrated produce candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: PRODUCE_CANDIDATE_REGISTRATION,
+      playbookRegistration: PRODUCE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = await service.execute(start(`run-produce-exhaust-${sequence}`));

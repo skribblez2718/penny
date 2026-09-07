@@ -5,8 +5,7 @@
 Every workflow skill is a registered TypeScript playbook. The playbook owns states,
 input selection, happy routing, gap classification, domain bookkeeping, gates, fan-out, and
 terminal candidates. The active registration owns ingress, typed start admission, liveness/thinking policy, required
-guidance/opening, state/agent/result contracts, model policy, repair routes, release status, and
-completion criteria. The shared engine owns request validation,
+guidance/opening, state/agent/result contracts, model policy, repair routes, and completion criteria. The shared engine owns request validation,
 route/budget execution, canonical transitions, checkpoints, artifacts, receipts, positive-terminal
 admission, recovery, and observability. Skill directories contain no executable runtime.
 
@@ -58,9 +57,9 @@ admission, recovery, and observability. Skill directories contain no executable 
 - Single and parallel modes create TypeScript runs directly.
 - Chain mode verifies and forwards the prior terminal ID directly across runs.
 - `{previous}` names that exact ID; it never carries predecessor payload text.
-- Chain steps may add explicit multi-source IDs; schema-v2 checkpoints bind each step's
-  `release_status` and canonical contract SHA-256, and resume re-resolves both.
-- Schema-v1 checkpoints remain readable for production registrations only.
+- Chain steps may add explicit multi-source IDs; schema-v3 checkpoints bind each step's canonical
+  contract SHA-256, and resume re-resolves it.
+- Legacy checkpoints without an immutable contract digest fail closed on resume.
 - Generic chain failure stops with exact refs and `resumable:true`; it adds no retry/skip/diagnose
   approval questionnaire. Genuine playbook clarification still uses `await_user`.
 
@@ -99,9 +98,9 @@ run IDs from the TypeScript v2 database; it never scans sessions or semantic mem
 - [ ] Single, parallel, chain, resume, clarification, and crash recovery are covered.
 - [ ] Compaction reconstructs TypeScript run/artifact refs by exact ID.
 - [ ] Payload bytes and durable memory never enter checkpoint control state.
-- [ ] Direct paths and subset-absent phases—including every ordinary candidate phase—prove exact
-      YAML equality. Registration-bound synthetic/evaluation strict subsets, exact Pi handoff,
-      invalid pre-session refusal, and separate host-private tools remain covered.
+- [ ] Direct paths and subset-absent ordinary phases prove exact YAML equality.
+      Registration-bound synthetic/evaluation strict subsets, exact Pi handoff, invalid pre-session
+      refusal, and separate host-private tools remain covered.
 - [ ] Flow descriptor and `resources/flow.html` agree exactly.
 
 ## Files

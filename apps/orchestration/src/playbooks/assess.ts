@@ -102,7 +102,7 @@ export const ASSESS_FLOW = {
 
 export const ASSESS_LIVENESS_POLICY = {
   schema_version: 1,
-  scope: "orchestrated-assess-candidate",
+  scope: "orchestrated-assess-workflow",
   preset: "closed-assessment-no-actions-v1",
   total_phase_repair_invocations: 18,
   model_turns_per_worker: 12,
@@ -191,7 +191,6 @@ function repairRoute(
 export const ASSESS_SKILL_CONTRACT: SkillContract = {
   schema_version: 2,
   name: ASSESS_PLAYBOOK_NAME,
-  release_status: "candidate",
   objective:
     "Produce one durable evidence-linked non-numeric assessment from a closed inline target, criteria, supplied evidence, constraints, non-goals, and uncertainty through independent analysis, subjective assessment authorship, host sealing, objective validity verification, and deterministic current-product admission without external verification or action execution.",
   io: {
@@ -1821,7 +1820,7 @@ export const ASSESS_COMPLETION_RECEIPT_PREDICATES: ReadonlyMap<
   ["assess_latest_verified_assessment_dod.v1", evaluateAssessLatestVerifiedAssessmentDod],
 ]);
 
-export const ASSESS_CANDIDATE_REGISTRATION: PlaybookRegistrationV1 = {
+export const ASSESS_PLAYBOOK_REGISTRATION: PlaybookRegistrationV1 = {
   name: ASSESS_PLAYBOOK_NAME,
   contract: ASSESS_SKILL_CONTRACT,
   ingress: "skill",

@@ -105,7 +105,7 @@ export const DIAGNOSE_FLOW = {
 
 export const DIAGNOSE_LIVENESS_POLICY = {
   schema_version: 1,
-  scope: "orchestrated-diagnose-candidate",
+  scope: "orchestrated-diagnose-workflow",
   preset: "analysis-only-v1",
   total_phase_repair_invocations: 20,
   model_turns_per_worker: 12,
@@ -195,7 +195,6 @@ function repairRoute(
 export const DIAGNOSE_SKILL_CONTRACT: SkillContract = {
   schema_version: 2,
   name: DIAGNOSE_PLAYBOOK_NAME,
-  release_status: "candidate",
   objective:
     "Produce one durable evidence-backed causal diagnosis from supplied symptoms, observations, environment facts, constraints, non-goals, and uncertainty through causal decomposition, competing hypotheses, adjudication, host sealing, and independent validity verification without tests or remediation.",
   io: {
@@ -1875,7 +1874,7 @@ export const DIAGNOSE_COMPLETION_RECEIPT_PREDICATES: ReadonlyMap<
   ["diagnose_latest_verified_diagnosis_dod.v1", evaluateDiagnoseLatestVerifiedDiagnosisDod],
 ]);
 
-export const DIAGNOSE_CANDIDATE_REGISTRATION: PlaybookRegistrationV1 = {
+export const DIAGNOSE_PLAYBOOK_REGISTRATION: PlaybookRegistrationV1 = {
   name: DIAGNOSE_PLAYBOOK_NAME,
   contract: DIAGNOSE_SKILL_CONTRACT,
   ingress: "skill",

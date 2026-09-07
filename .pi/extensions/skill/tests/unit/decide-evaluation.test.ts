@@ -246,7 +246,7 @@ function sameRecord(
 describe("minimal direct-Decide comparator and grading definition", () => {
   it("uses the generic direct baseline with Decide's bounded external policy and a distinct V2 report output schema", () => {
     expect(DECIDE_LIVENESS_POLICY).toMatchObject({
-      scope: "orchestrated-decide-candidate",
+      scope: "orchestrated-decide-workflow",
       preset: "bounded-external-orchestrated-v1",
       total_phase_repair_invocations: 24,
       model_turns_per_worker: 12,

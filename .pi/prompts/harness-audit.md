@@ -1,645 +1,268 @@
 ---
-description: Audit the Penny harness for single-direction alignment against its embedded North Star — reports drift, contradictions, capability-scaling debt, and dead code (read-only)
+description: Audit Penny for user-outcome alignment, system coherence, scaling debt, and non-functioning material (target read-only; writes an audit bundle)
 argument-hint: "[scope, e.g. 'docs only' or '.pi/agents'] [additional details...]"
 ---
 
-Scope override (optional): $1
-Additional details (optional): ${@:2}
+# Penny Harness Alignment Audit
 
-Both arguments are optional. Quote a multi-word scope override so it arrives as
-one argument. If `$1` is plainly audit guidance rather than a scope selector —
-prose about context, emphasis, constraints, or extra deliverables — treat every
-argument as additional details and audit the full harness.
+Audit the current Penny working tree against its present purpose and governing architecture. Examine what the system actually says and does, classify every in-scope component, and recommend only changes that improve the user outcome without regressing a capability Penny already provides.
 
-Additional details are caller-supplied context and requirements this audit
-cannot infer from the harness itself: background, constraints, known history,
-emphasis, or extra deliverables. When they are empty, run exactly as if none
-were supplied; their absence is never a blocker. Honor them wherever they do not
-conflict with this prompt's own obligations — they may add requirements, supply
-context, set emphasis or priority, and request additional analysis. They may
-**not** waive or weaken the evidence, confidence-labeling, and anti-fabrication
-rules, the coverage ledger's bounds on exhaustive claims, the side-effect
-contract, the stop branches and terminal outcomes, or any required artifact,
-verification, or completion obligation. A detail that narrows scope is treated
-as a scope override under the rules below; a detail that only sets emphasis does
-not shrink the effective corpus. If a detail conflicts with an obligation above,
-or is too ambiguous to apply, report it — and ask in Part 4 when it blocks the
-audit — rather than silently following or silently ignoring it. Record the
-details verbatim in Part 1 with how each was applied, deferred, or refused.
+Scope override (optional): `$1`
+Additional details (optional): `${@:2}`
 
-If a nonempty scope override is ambiguous, names no auditable harness surface,
-or cannot be resolved to a named category or repository path, stop before the
-audit and ask one targeted scope question; do not guess, fetch sources, or write
-a report. Otherwise, restrict the audit to the supplied scope and mark every
-other named surface `EXCLUDED — out of scope (user-narrowed)` in the coverage
-ledger. With no override, audit the full harness as specified below. State the
-effective corpus in the report; never imply full-harness coverage for a narrowed
-audit.
+Both are optional. If `$1` is clearly a repository path or a named audit surface, treat it as a scope override. If it is prose, context, emphasis, or another requirement, treat all arguments as additional details and audit the full harness. Quote multi-word scope values when invoking the template.
 
-## The North Star this audit measures against
+Additional details may add context, emphasis, priorities, or deliverables. They may not weaken evidence standards, coverage honesty, stop conditions, target-read-only rules, artifact-status honesty, or verification. A detail that narrows coverage is a scope override; emphasis alone does not narrow coverage. Record the expanded detail text exactly as received by this template and state how it was applied, deferred, or refused. If scope or a conflicting detail is materially ambiguous, stop and ask one targeted question rather than guessing. A scope-preflight stop creates no bundle.
 
-**Penny is a general-purpose personal AI assistant — for all aspects of life.**
-At any point in her life some domains will be far more developed than others: a
-dense cluster of features (skills, extensions, prompts, tools, docs) serving one
-domain reflects the operator's current focus and the system's current state —
-not Penny's identity. The most-developed domain of the moment is one among many;
-the enduring trajectory is breadth across all of life.
+## 1. Governing purpose
 
-**Thesis — chasing AGI under non-AGI constraints.** No single model call is AGI;
-the harness — not the model — is the intelligence amplifier. Layered prompts,
-isolated-context delegation, persistent memory (MemPalace), and calibrated +
-separately-verified reasoning compose general,
-trustworthy, compounding capability from models that are none of those things on
-their own.
+Use this as the proposed audit criterion:
 
-**The Alignment Test.** Every part is judged by one question — does it make Penny:
+> **Penny is a general-purpose personal AI assistant on Pi that turns a user's cross-domain goals into accurate, evidence-grounded progress and useful outcomes, using the simplest appropriate mode—direct work, focused delegation, or durable resumable workflows—while keeping permissions and consequential actions under user and runtime control.**
 
-1. more generally capable across life domains;
-2. more trustworthy — calibrated, evidence-based, non-fabricating;
-3. more self-correcting over time; and
-4. more able to ride model improvement — does this part gain or lose value as
-   the model underneath it gets stronger?
+This is the outcome; agents, skills, prompts, memory, artifacts, checkpoints, observability, and tools are means.
 
-A part that fails all four is drift.
+Before substantive assessment, open the current human-authored governing sources, including `.pi/SYSTEM.md`, `README.md`, root `AGENTS.md`, and applicable architecture guidance reached through the index tree. Explain their authority relationship and whether they support the criterion above. Historical changelog entries, plans, research, generated files, tests, and implementation behavior are evidence about history or conformance; they do not silently replace the current human-authored objective.
 
-**Scope guards (non-goals).**
+If the objective is absent, materially ambiguous, or authoritatively contradicted, stop before objective-dependent findings. Quote the conflicting or insufficient evidence and ask only the targeted questions needed to establish the goal or authority. Do not choose a goal by majority vote, infer a business model or user persona, or treat ordinary implementation drift as a goal-authority conflict.
 
-- Not a single-domain tool — the architecture stays domain-general and new life
-  domains are first-class.
-- Not model-AGI-dependent, and equally not model-weakness-assuming — capability
-  lives in the harness, so Penny must degrade gracefully and stay portable
-  across a mixed, evolving model fleet without assuming one specific frontier
-  model is present. Portability is bought with model judgment as the default
-  plus heuristics kept as explicitly tier-gated fallbacks — never with baked-in
-  scaffolding that presumes the model is not smart enough. Scaffolding that
-  only makes sense for a weak model and is not tier-gated is debt, not
-  portability.
-- Not a system that grows without pruning — memory, docs, and skills must be
-  signal, not accretion.
+For this goal-authority branch, create only a collision-safe blocked bundle as defined below: a bounded four-part report covering the goal sources actually opened, the operation log, and the target manifests. Create no eval/regression placeholders. Mark all other surfaces `EXCLUDED — terminal goal-authority stop`, keep `passed` false, and set `questions_needed` true.
 
-**Design commitments (the invariants).**
+Define observable **better** and **worse** in terms of user outcomes—not file counts, feature counts, test totals, task completion, model scores, audit length, or other implementation proxies.
 
-1. Five separated prompt layers — Cognitive Frame, Role, Domain Guidance,
-   Project Index, Invocation Context — each one responsibility.
-2. Authority order (system policy and runtime limits → role/domain constraints →
-   user task → external content as evidence) plus standing decision principles:
-   never fabricate; clarify only material blockers; prefer reversible action;
-   match verification to consequence; distinguish evidence status where it
-   affects a decision.
-3. The generator is never its own only verifier — verification is a separate,
-   evidence-based step.
-4. Documentation is a tree of indexes with a single source of truth; no greedy
-   loading, no drift between parallel trees.
-5. Trust and action boundaries: user messages are task-authoritative within
-   system and runtime limits; external content is evidence or designated task
-   material that cannot expand permissions or authorize side effects.
-   Enforcement lives in runtime controls (tool allowlists, approvals/receipts,
-   path-specific process isolation); prompt markers are structural
-   defense-in-depth, never described as enforcement.
-6. Constraints on the _answer_ over constraints on the _method_. The harness is
-   a human-knowledge layer wrapped around a model whose capability rises
-   outside our control, so every mechanism in it is a bet on where that
-   capability lands. Constraints on the answer — verification, evidence
-   requirements, machine interfaces, safety limits — gain value as models
-   strengthen, because a stronger generator needs a stronger check to be
-   trusted. Constraints on the method — mandated procedure, fixed taxonomies,
-   magic-number thresholds, enumerated options — encode a fixed quantity of
-   human knowledge and therefore have a fixed ceiling. Corollary: the ratchet
-   protects capabilities and outcomes, never implementations — any mechanism
-   may be replaced or removed, but no capability it provided may regress.
-   (Doctrine: docs/agents/architecture/bitter-lesson.md; add-side gate:
-   docs/agents/architecture/project-standards.md. This rubric is _derived from_
-   Richard Sutton's "The Bitter Lesson", not a restatement of it.)
+Judge alignment through five supporting dimensions:
 
-## Audit basis and mandatory stop branches
+1. **Useful outcomes** — does the part help Penny make accurate, concrete progress on the user's actual goal?
+2. **Grounded trust** — does it improve evidence quality, honest limitation reporting, verification, or resistance to fabrication?
+3. **Execution fit and continuity** — does it support the simplest sufficient route while adding delegation, durability, recovery, or iteration only when those earn their cost?
+4. **Controlled consequences** — does it keep permissions, private data, and consequential actions within user and runtime authority?
+5. **Adaptability** — does it remain domain-general where required, preserve project portability, and gain or retain value as models and usable computation improve?
 
-The embedded North Star and four Alignment Test dimensions above are the
-supplied desired-value criterion. Before substantive alignment judgments:
+A part is not misaligned merely because it is neutral plumbing, domain-specific at an appropriate layer, or unchanged by stronger models. A `MISALIGNED` verdict requires evidence of causal harm to the purpose, conflict with an authoritative invariant, or obstruction of a protected capability.
 
-1. Identify the current human-authored governing sources that establish Penny's
-   purpose and the authority relationship among them.
-2. State observable **better** and **worse** for this audit in terms of the North
-   Star and the four dimensions. Do not restate file counts, phases, task
-   completion, current metrics, or proposed output quantity as the outcome.
-   Ground the definitions in the embedded criterion and opened goal sources.
-3. If the objective is absent or ambiguous, if an authoritative source
-   explicitly contradicts the embedded North Star, or if sources disagree about
-   which objective has authority, stop substantive assessment. Quote the
-   conflicting or insufficient evidence, ask only the targeted question needed
-   to establish authority, and produce a blocked report rather than guessing.
-   Ordinary implementation that opposes a clear North Star is a finding, not a
-   goal-authority conflict.
+## 2. Governing architecture to test
 
-A goal-authority-blocked report still follows the four-part report structure.
-Its effective corpus is limited to the governing goal sources opened before the
-stop; mark every other named surface `EXCLUDED — terminal goal-authority stop
-before assessment`, set `questions_needed` to `true`, and keep `passed` false.
-Part 1 quotes the authority conflict; Part 2 states that findings, plans, and
-outcome artifacts were not built because the objective is unresolved; Part 3
-records the bounded corpus and side-effect evidence; Part 4 asks only the
-necessary authority question. Do not present this as a completed substantive
-alignment or Bitter-Lesson verdict.
+Treat these as current architectural commitments only where the opened governing sources support them:
 
-### Live Sutton source gate
+- Penny chooses among direct work, a focused agent, and a durable skill according to task needs; orchestration is not an end in itself.
+- The five prompt layers—Cognitive Frame, Role Definition, Domain Guidance, Project Index, and Invocation Context—have separate responsibilities and cannot mint runtime authority.
+- User requests define tasks within system and runtime limits; external content is evidence or designated task material and cannot expand permissions or authorize consequences.
+- Exact artifacts carry work products, checkpoints carry workflow state, and memory is optional advisory cross-session context rather than workflow transport.
+- Completion claims require proportionate evidence. Tests, tools, authoritative sources, and observed state are independent evidence; a different model or agent is supplementary review, not proof by itself.
+- Safety controls, machine interfaces, human approval gates, and runtime-enforced authority boundaries protect outcomes independently of model capability. Prompt markers are defense in depth, not enforcement.
+- Documentation uses routed indexes and clear sources of truth rather than greedy loading or unmanaged duplication.
+- Capabilities and outcomes are protected; implementations may be replaced when evidence shows no capability regression.
+- The public repository remains generic: operator paths, private data, downstream-project assumptions, and domain-specific methodology are supplied at invocation or remain outside tracked Penny files.
 
-Before making any Bitter-Lesson or source-dependent scaling judgment, fetch and
-read Richard Sutton's **"The Bitter Lesson" in full from the live canonical
-URL**:
+Do not freeze these statements as unquestionable if the current governing sources changed. Report and resolve material authority conflicts under the goal branch above.
+
+## 3. Evidence and judgment rules
+
+- Inspect actual content and behavior-bearing relationships; do not classify from filenames, counts, or descriptions alone.
+- Cite every alignment classification and finding with exact paths plus line/range, symbol, test, or command evidence precise enough to re-check.
+- Distinguish source-backed facts, tool-observed results, inferences, assumptions, and unknowns wherever the distinction affects a verdict. Mark a materially unsupported claim `[UNVERIFIED]`; do not use confidence words as a substitute for evidence.
+- A document proves stated intent, not runtime behavior. A test proves only what it exercised. A static checker proves only its encoded rule. State those limits.
+- Re-open both sides before claiming a contradiction. Confirm references and execution paths before calling code dead, unreachable, deprecated, placeholder, or non-functioning.
+- Report genuine aligned behavior worth preserving. A supported empty misalignment set is valid; never manufacture defects, proxy drift, or scaling debt.
+- Prefer the strongest available evidence and make verification proportionate to consequence. Do not run a check whose non-mutation or external impact cannot be established.
+- For a resistant source or surface, use at most two genuinely distinct attempts or approaches. Then record the attempts and classify it `INACCESSIBLE` or `UNRESOLVED`; do not spin or repeat the same failure.
+
+## 4. Effective corpus and component classification
+
+With no scope override, inventory the current project-authored, behavior-affecting working tree and cover every surface below. Discover additions from the live tree rather than treating this list as a frozen file allowlist.
+
+1. **Goal and governance** — `.pi/SYSTEM.md`, `README.md`, root `AGENTS.md`, current purpose/decision sources, and public-repository boundaries.
+2. **Prompt architecture** — all five layers, the prompt templates, and the assembly/runtime behavior that enforces layer and authority boundaries.
+3. **AGENTS.md index tree** — every discovered index, reachability, completeness, routing precision, and duplication or contradiction.
+4. **Knowledge base** — its skill/tool, orchestration and host integration, configuration, documentation, tests, authority, and privacy boundaries.
+5. **Universal agents** — every agent definition, capability boundary, model assignment, tool authority, and invocation behavior.
+6. **Universal skills** — every skill package, manifest, prompt/resource assets, playbook registration, orchestration behavior, evaluation, and current availability.
+7. **Documentation** — `README.md`, `docs/humans/**`, `docs/agents/**`, and `docs/penny/**`; check accuracy, staleness, cross-tree drift, orphaning, and index conformance.
+8. **Extensions and tools** — every `.pi/extensions/**` package and its registrations, descriptions, runtime integration, tests, and availability behavior.
+9. **Hooks** — Pi lifecycle/event hooks, repository hooks, and other discovered behavior-changing hooks; state explicitly if none exist.
+10. **Observability** — the extension, `apps/observability/**`, configuration, history/log boundaries, docs, and tests.
+11. **Orchestration and artifacts** — `apps/orchestration/**`, the skill extension boundary, state/checkpoint contracts, artifact handoff, registrations, gates, budgets, recovery, and terminal truth.
+12. **Memory and durable state** — the memory extension, `apps/platform-memory/**`, relevant scripts/config/docs/tests, optional-service behavior, retention, and custody boundaries. Do not inspect or reproduce personal memory content, credentials, or private records unless separately and explicitly authorized and necessary; prefer configuration, metadata, synthetic fixtures, and contract evidence.
+13. **Scripts** — all `scripts/**`, including setup, security, checks, evaluation, memory, update, and utility paths.
+14. **Tests, evals, regressions, and material measures** — suites and acceptance gates, behavioral ratchets, meaningful thresholds, completion signals, incentives, and feedback/optimization loops.
+15. **Pi compliance and configuration** — root and workspace manifests, lock/config/environment templates, build and CI configuration, and conformance with the project-pinned Pi version's relevant official docs/examples as located through project instructions or package metadata.
+16. **Dead or non-functioning material** — project-authored dead, deprecated, placeholder, unreachable, contradictory, or non-functioning code and documentation anywhere in the effective corpus.
+17. **Excluded inventories** — dependencies, caches, build outputs, generated artifacts, vendored source, secrets, private data, and ignored work-in-progress. Inventory excluded private material only by category, count where safe, and reason—never by sensitive name or content—unless it materially controls current behavior.
+
+Use disjoint primary units so coverage is reproducible: one row per governing source, prompt template, agent file, skill package, AGENTS.md index, extension package, application, top-level script subtree or standalone script, named documentation tree, configuration/CI group, and other standalone behavior-affecting root. Classify each unit once. Assess cross-cutting areas—prompt architecture, knowledge base, hooks, observability, orchestration, memory, Pi compliance, and dead/non-functioning material—as category summaries that cite the primary rows and relationship evidence rather than duplicating components.
+
+For every unit and category summary, record two separate axes:
+
+- **Coverage:** `EXAMINED`, `EXCLUDED — reason`, `INACCESSIBLE — reason`, or `UNRESOLVED — reason`.
+- **Alignment:** `ALIGNED`, `MISALIGNED`, or `NEUTRAL/UNKNOWN — reason`.
+
+Write the complete unit-level matrix to `component-alignment.tsv` with these columns:
+
+`component ID | class | component/path(s) | coverage | alignment | one-line evidence-backed reason | goal dimension(s) | finding ID`
+
+Rules:
+
+- Classify every disjoint unit above. Split a unit only when materially different behavior would be hidden by one verdict; record the split rule.
+- In the report, give one evidence-cited classification summary for every numbered surface above and cross-reference the TSV rows. This preserves the component-by-component audit without burying the reader in a giant table.
+- Coverage is not alignment. `EXAMINED` does not mean `ALIGNED`.
+- An excluded, inaccessible, unresolved, or optional-not-configured component is normally `NEUTRAL/UNKNOWN` unless evidence establishes a goal conflict.
+- A missing component is `MISALIGNED` only when an authoritative requirement makes the absence harmful; otherwise record `NEUTRAL/UNKNOWN — not present`.
+- Every `MISALIGNED` row maps to a finding and recommendation. Every material `ALIGNED` row states the capability to preserve.
+- Do not call the audit full or exhaustive unless all in-scope discovered descendants are accounted for. For narrowed scope, keep every named surface visible as `EXCLUDED — out of scope (user-narrowed)` and claim completeness only for the narrowed corpus.
+
+## 5. Bitter-Lesson and model-scaling lens
+
+Before attributing claims to Richard Sutton or issuing a completed Bitter-Lesson verdict, fetch and read the full canonical essay:
 
 `http://www.incompleteideas.net/IncIdeas/BitterLesson.html`
 
-Record the URL, fetch time, and whether the full essay—not an excerpt, search
-snippet, local doctrine file, or remembered summary—was read. In report Part 1,
-keep two visibly separate blocks:
+Record the URL, fetch time, and evidence that the full essay—not a snippet, excerpt, cached paraphrase, or local doctrine file—was read. If the canonical source cannot be verified as complete after one normal attempt and at most one genuinely different retry, omit Sutton claims and the completed source-dependent verdict. Continue the source-independent alignment audit, record the limitation, and keep overall `passed` false. Do not repeat a failed approach without new information.
 
-- **Sutton source claims:** only relevant claims the fetched essay actually
-  supports, with short quotations or precise source anchors.
-- **Penny-domain translation:** this audit's engineering application of those
-  claims to the harness, explicitly labeled as translation/adaptation.
+Keep two explicit blocks:
 
-Do not attribute Penny's answer-vs-method rubric, verification terminology,
-model-led exploration, or any other domain translation to Sutton unless the
-essay itself says it. Sutton's central examples include general methods that use
-computation, especially search and learning, and the value of discovering and
-capturing complexity rather than encoding human discoveries; apply only what
-the live source supports.
+- **Sutton source claims** — only claims the essay supports, with short quotations or precise anchors.
+- **Penny engineering translation** — clearly labeled applications to prompts, orchestration, verification, tools, memory, and system design.
 
-If the live essay is unavailable, truncated, or cannot be verified as complete
-after at most two distinct fetch/read attempts, fail closed: do not substitute a
-cached or local paraphrase, do not emit Sutton source claims, and do not issue a
-completed Bitter-Lesson verdict. Continue only source-independent alignment
-work that can be reported honestly, record the source-dependent assessment as
-blocked in Part 4 and `unverified_claims`, and set overall `passed` to `false`.
+Do not attribute Penny's answer-versus-method distinction, verification vocabulary, model-led exploration, or capability ratchet to Sutton unless the essay itself states them.
 
-## Terminal outcomes
+For each relevant major mechanism, classify model/compute scaling as exactly `GAINS`, `APPROXIMATELY NEUTRAL`, `LOSES`, or `N-A — reason`. Give the present model/compute assumption, evidence, causal rationale, and action or capability protection.
 
-Use exactly one whole-contract outcome:
+For every supported fixed-human-knowledge or fixed-method problem, state:
 
-1. **Invalid or ambiguous scope:** stop before the audit, ask one targeted scope
-   question, and do not write a report.
-2. **Goal authority blocked:** write only the blocked four-part report defined
-   above; no substantive findings or objective-dependent artifacts.
-3. **Sutton source blocked:** continue a clearly labeled source-independent
-   audit only; no completed Bitter-Lesson/source-dependent scaling verdict, and
-   `passed` remains false.
-4. **Corpus limited:** when in-scope evidence remains `INACCESSIBLE` or
-   `UNRESOLVED`, continue only with conclusions the examined corpus supports,
-   expose the limitation in Parts 3–4 and JSON, and keep `passed` false. Never
-   claim exhaustive full-harness coverage.
-5. **Full audit, findings present or supported-empty:** complete every applicable
-   report, artifact, verification, and side-effect obligation. An empty finding
-   set does not waive baseline outcome eval/regression artifacts.
-
-Blocked or limited outcomes are valid honest terminal responses, not passed
-substantive verdicts. Do not weaken a blocked completion criterion to make it
-appear satisfied.
-
-## The audit
-
-Produce a read-only single-direction alignment audit of the Penny harness
-measured against the North Star and Alignment Test above. A component is any
-covered prompt layer, index or governing statement, agent, skill, extension,
-tool, hook, script, memory mechanism, workflow, control,
-artifact, measure, or code path. A **major mechanism** is a distinct mechanism
-that materially supplies or governs a Penny capability; derive these from the
-examined corpus rather than from a fixed taxonomy.
-
-For every supported misalignment, identify the concrete component and evidence
-and explain causally how it opposes the outcome, one or more Alignment Test
-dimensions, or another authoritative component. Do not manufacture findings: a
-fully aligned target or supported empty finding set is valid.
-
-READABILITY CONTRACT — this report is read by people who do not know this
-harness, this doctrine, or this vocabulary. It must be understandable to a
-reader with only a high-level grasp of the subject. This constrains
-**communication, not rigor**: it never licenses padding, hedging, or repetition.
-Prefer the shortest wording a non-expert can act on, state each thing once, and
-cross-reference rather than restate — detailed **and** succinct.
-
-- **Open with a plain-language executive summary** placed at the very top of
-  Part 1, readable in about two minutes: what was audited and what it is for;
-  the bottom line; the most important problems ordered by importance rather than
-  by ID, one plain sentence each; what to do, in priority order; what happens if
-  nothing changes; and what remains unknown. Use no finding ID, undefined term,
-  or internal shorthand in this summary.
-- **Make every finding decision-ready.** Beyond the evidence obligations above,
-  each finding states in plain language: what it is (one non-expert sentence,
-  before any quotation); why it matters, in terms of the outcome rather than the
-  rule broken; what improves if it is fixed, and at what cost, effort, or risk;
-  what specifically happens if it is _not_ fixed, roughly when that would surface
-  and how the reader would notice; and its priority relative to the other
-  findings, with the basis. When the honest answer to "if not fixed" is "little
-  or nothing," say so and rank it low rather than inflating it. Never leave the
-  reader to infer the cost of inaction from a finding's existence.
-- **Define the vocabulary where it is used** — every domain term, doctrine term,
-  classification, and status label in plain language at first use, including
-  terms this prompt introduces (answer-constraint, method-constraint, proxy
-  drift, vanity measure, `[UNVERIFIED]`). A reader must not need this prompt to
-  understand a verdict.
-- **Make tables and ledgers serve the reader** — precede or follow each with
-  prose stating what it shows and what to conclude. A grid of IDs and statuses
-  without interpretation is raw data, not a finding.
-- **Keep the capability-safe plan standalone** — understandable without first
-  reading the findings. Per item: what changes, why, what currently-working
-  capability must survive it, what improves, what it costs, and what happens if
-  it is skipped.
-- **Rigor is preserved** — the JSON contract, ledgers, coverage states, status
-  labels, `[UNVERIFIED]` marks, confidence labels, and traceability tables
-  remain exactly as specified. Readability requirements wrap them; they never
-  replace, soften, or omit an honest negative status, and never alter the
-  machine-consumed JSON shape.
-
-DELIVER exactly four top-level report parts, integrating all required ledgers as
-subsections of those parts and referencing every bundle artifact by stable ID and
-path relative to the bundle directory:
-
-### 1. North Star, outcome test, and audit basis
-
-Include:
-
-- the caller's additional details verbatim and how each was applied, deferred,
-  or refused (or `None supplied`);
-- a 1-line restatement of the North Star and, for each finding ID, which of the
-  four Alignment Test dimensions it violates (generality / trust /
-  self-correction / scaling);
-- the authoritative goal sources opened and the goal-authority result;
-- observable better and worse, tied directly to the actual outcome rather than
-  current proxies; and
-- the live-source record, **Sutton source claims**, and separate
-  **Penny-domain translation** blocks required above.
-
-If there are no findings, say so; do not add a cosmetic finding.
-
-### 2. Prioritized findings, aligned behavior, and capability-safe plan
-
-Start with the prioritized misalignment table using exactly these columns:
-
-`[part | file path(s) | dimension(s) violated | constraint type (answer / method / n-a) | how it opposes the goal | impact High/Med/Low | recommended fix + the capability that must not regress]`
-
-Prefix each `part` value with a stable finding ID such as `F-01` so every row can
-be traced. `answer` means a constraint on outputs, evidence, or externally
-observable behavior; `method` means a prescribed internal procedure; `n-a`
-requires a concrete reason the distinction does not apply. Evidence, not the
-examples in this prompt, determines findings and impact. A supported empty table
-is allowed.
-
-Then include these Part 2 subsections:
-
-#### Positive aligned behavior
-
-Record supported behavior worth preserving, with mechanism, concrete path and
-evidence, Alignment Test dimensions served, and why it should survive any
-change. Include mechanisms whose value is non-obvious. If the examined corpus
-contains no supportable positive example, state that as a supported empty
-result rather than inventing one.
-
-#### Per-major-mechanism scaling ledger
-
-For every relevant major mechanism in the effective corpus, classify its
-relative value as models or available compute improve as exactly one of
-`GAINS`, `APPROXIMATELY NEUTRAL`, `LOSES`, or `N-A`. State the current
-model/compute assumption, evidence, causal rationale, and any action or
-capability protection. `N-A` requires a justified absence of a model/compute
-relationship. Do not infer that all complexity or all explicit constraints lose
-value. Assess whether the target enables or blocks general methods that can
-exploit stronger models or greater computation, including search and learning
-where the source supports them; label model-led exploration, iteration, and
-verification as Penny-domain adaptations rather than Sutton terminology.
-
-For each built-in-human-knowledge or fixed-method violation, name:
-
-- the knowledge or method encoded;
-- the current capability and short-term benefit;
+- the knowledge or procedure encoded;
+- the capability and short-term benefit it currently supplies;
 - why its relative value plateaus or becomes obstructive; and
 - a more scalable direction that preserves the capability.
 
-#### Current and proposed measure-fidelity ledger
+Do not flag all explicit constraints or all complexity. Safety/security controls, external requirements, machine-consumed interfaces, deterministic consequence boundaries, and explicitly tier-gated fallbacks are not scaling debt merely because they constrain behavior.
 
-Inventory **all current measures** found in the effective corpus and **all
-retained, replacement, or newly proposed measures** introduced by findings,
-fixes, evals, and regression checks. Include metrics, gates, ratings, thresholds,
-incentives, completion signals, and optimization-loop targets. For each, state
-where it exists or is proposed, the North-Star outcome it purports to represent,
-and classify it as `OUTCOME-FAITHFUL`, `VANITY`, or `PROXY`, with a defensible
-causal/evidentiary link and a retain/change decision. Do not let a proposed
-measure escape scrutiny merely because it appears in this report. If no current
-measure exists in a genuinely covered area, state the examined evidence for
-that empty result.
+## 6. Findings, measures, and capability-safe recommendations
 
-#### Evidenced optimized-proxy drift
+Create one canonical record per finding with a stable ID. Each finding must state:
 
-Inspect current metrics, gates, incentives, completion signals, and optimization
-loops for proxy drift. A drift finding must identify the proxy, the intended
-outcome, concrete evidence of divergence or gaming pressure, and a correction
-or unresolved question. A weak, incomplete, or indirect measure is not by
-itself demonstrated drift; classify it in the fidelity ledger without alleging
-drift unless evidence supports the divergence. A supported no-drift result is
-valid.
+- what it is, in one plain sentence;
+- exact evidence and the causal conflict with Penny's purpose or an authoritative component;
+- affected goal dimension(s);
+- whether it constrains the **answer/outcome**, prescribes the **method**, or is `N-A — reason`;
+- impact and priority relative to other findings;
+- the benefit, cost, effort, and risk of fixing it;
+- what happens if it is not fixed, when that would surface, and how a user or maintainer would notice;
+- one concrete change, or an explicit blocker/no-change/accepted-debt disposition; and
+- the currently working capability that must not regress.
 
-#### Complete finding-to-plan map
+Do not duplicate full finding prose across tables. Use IDs and cross-references.
 
-Map **every finding ID**, including every strategic misalignment and
-Bitter-Lesson violation, to either:
+Inventory material current and audit-proposed measures: metrics, ratings, thresholds, gates, acceptance/completion signals, incentives, and optimization targets that materially influence behavior or a pass/fail decision. Do not treat every test assertion as a separate measure. Classify each as:
 
-- a concrete proposed change; or
-- an explicit blocker or no-change/accepted-debt reason.
+- `OUTCOME-FAITHFUL` — directly evidences the user outcome or protected capability;
+- `PROXY` — an indirect stand-in whose limits are explicit; or
+- `VANITY` — can improve without meaningful evidence of the outcome.
 
-For every row, name the current capability to preserve, the evidence that will
-protect it, and the linked eval and regression artifact IDs below. No finding
-may be orphaned. If no safe replacement is apparent, retain the mechanism and
-record accepted debt rather than proposing capability loss. If the supported
-finding set is empty, state that the map is empty; baseline assurance artifacts
-below remain mandatory and link directly to the North Star rather than to a
-cosmetic finding.
+A **proxy-drift** finding requires evidence that optimization pressure or observed behavior has diverged from the intended outcome. Name the proxy, intended outcome, evidence of divergence or gaming pressure, and correction. A weak or incomplete proxy without such evidence is not demonstrated drift.
 
-#### Literal eval artifacts written to the bundle
+Map every `MISALIGNED` component and every `LOSES` mechanism to a recommendation or explicit no-change reason. One change may address several findings, but no finding may be orphaned. For each proposed removal or replacement, specify how eval and regression evidence will protect the capability it currently provides. Any recommendation to change `.pi/SYSTEM.md` must identify the Cognitive Frame as human-authored, explain its cross-layer blast radius, and require proportionate regression evidence. Prefer reversible changes.
 
-Build concrete, repeatable eval artifacts as real files under `evals/` in the
-audit bundle directory defined in SAVE THE BUNDLE below, and reference them
-from the report by ID and relative path. Names, TODOs, pseudocode, prose
-recommendations, or links to artifacts that do not exist are not enough; an
-artifact counts as built only when its complete literal contents exist on disk.
-At least one baseline artifact must test the North Star even when there are no
-findings. Each artifact must have a stable ID, link to finding/plan rows when
-applicable, and specify:
+## 7. Audit artifacts
 
-- exact inputs or scenarios, including at least one case that tests the real
-  North-Star outcome rather than only a local proxy;
-- an oracle, assertion, scoring rule, or fully specified repeatable judgment
-  protocol;
+Build concrete, repeatable artifacts inside the audit bundle. These test outcomes and capabilities, not exact wording or implementation shape.
+
+Use these statuses exactly:
+
+- `BUILT-AND-RUN` — include command, exit status, and observed result.
+- `BUILT-NOT-RUN — <blocker>` — complete artifact exists, but execution was unsafe, unavailable, costly, credentialed, or otherwise unjustified.
+- `NOT-BUILT — <reason>` — artifact is incomplete; overall `passed` must be false.
+
+### Evals
+
+Under `evals/`, create complete evaluation specifications, cases/fixtures, or executable checks that include:
+
+- representative inputs or scenarios, including a justified cross-domain set and at least one case that directly tests the Penny purpose rather than a local proxy;
+- an oracle, assertion, scoring rule, or repeatable qualitative judgment protocol;
 - expected evidence and pass/fail interpretation;
-- exact execution/materialization instructions and prerequisites; and
-- status: `BUILT-AND-RUN`, `BUILT-NOT-RUN — <blocker>`, or
-  `NOT-BUILT — <reason>`.
+- prerequisites and exact execution instructions; and
+- stable eval IDs linked to findings and plan items where applicable.
 
-Run an artifact when running it is read-only with respect to the harness under
-audit and every output lands inside the bundle directory; record the command,
-exit status, and result file. Otherwise mark it
-`BUILT-NOT-RUN — <exact blocker>`. Never invent execution results or relabel a
-recommendation as built. A qualitative outcome may use a repeatable judgment
-protocol, but the bundle must contain the actual cases, rubric/oracle, evidence
-capture, and comparison procedure—not advice to create them later.
+At least one baseline goal-level eval is required even when the finding set is empty. Reuse rather than duplicate an adequate existing check: the bundle artifact may be a complete runner/specification that invokes and interprets an existing check, but it must still be independently repeatable and preserve the exact target reference. A recommendation, TODO, pseudocode sketch, or empty placeholder is not a built eval.
 
-#### Literal regression early-warning artifacts written to the bundle
+### Regressions
 
-Write complete literal contents for repeatable regression checks as real files
-under `regressions/` in the bundle, also with stable IDs. At least one baseline
-check tied directly to the North Star is mandatory even when there are no
-findings; link additional checks to the finding-to-plan map when applicable.
-Each must state the explicit baseline, comparison operation, outcome
-deterioration it detects, what it misses, false-warning risks, when/how it runs,
-exact execution instructions, and current result only if actually run. It must
-expose outcome deterioration early enough to avoid relying on informal user
-discovery. Use the same honest status vocabulary and the same run-when-safe rule
-as eval artifacts.
+Under `regressions/`, create repeatable early-warning checks that state:
 
-### 3. Coverage ledger
+- the explicit baseline and comparison operation;
+- the outcome deterioration detected;
+- what the check misses and its false-warning risks;
+- when and how it runs, with exact instructions; and
+- stable regression IDs linked to findings and plan items where applicable.
 
-Declare the effective corpus, including any scope override, then give every
-named SCOPE surface exactly one of these four states:
+At least one baseline goal-level regression check is required even with no findings. It may wrap an adequate existing baseline/check when the bundle records the exact reference, comparison, interpretation, and rerun instructions. Shared artifacts may protect multiple findings; do not create ceremonial one-file-per-finding checks.
 
-- `EXAMINED` — opened and assessed, with concrete evidence of what was covered;
-- `EXCLUDED` — outside the effective corpus, with a reason (including
-  `out of scope (user-narrowed)` where applicable);
-- `INACCESSIBLE` — could not be opened after at most two distinct attempts, with
-  attempts and error recorded; or
-- `UNRESOLVED` — opened but could not be assessed after at most two distinct
-  approaches, with the uncertainty recorded.
+Run an artifact only when it is non-mutating to the audited target and all intended outputs land inside the bundle. Never invent a run result.
 
-Account for discovered descendants and additions under each named surface; do
-not mark a parent `EXAMINED` if relevant children were silently skipped. Any
-claim of exhaustive or full-harness coverage is permitted only when the ledger
-supports it. A narrowed audit may claim completeness only for its declared
-effective corpus.
+## 8. Side-effect contract and bundle
 
-Add a **target-side-effect evidence** subsection containing:
+The Penny working tree under audit is read-only. Do not modify product code, prompts, docs, tests, configuration, dependencies, git state, credentials, deployments, external systems, or private memory. Do not install dependencies. Read-only inspection and source retrieval are allowed; execute existing checks only when their non-mutation and external impact are established.
 
-- the operation log for every command, tool, source fetch, and verifier used;
-- before/after read-only manifests for every repository file in the effective
-  corpus, with path, size, and cryptographic content hash; and
-- the audit bundle directory as the sole authorized write location, explicitly
-  excluded from the target manifest.
+Normal Pi runtime records—session files, bounded logs, and owner-persisted agent artifacts—may be created by approved audit/review calls outside the project tree. They are incidental runtime state, not permission to modify the target; disclose their type and purpose in the operation log when known. Model-diverse review is supplementary scrutiny, not independent evidence.
 
-Describe matching manifests only as **verified net target-content equality**.
-They do not prove that no transient or reverted write occurred. Claim no
-audit-caused target-content write only when the operation log contains no
-write-capable target step and the target manifests match; otherwise mark that
-claim `[UNVERIFIED]`. The authorized writes inside the audit bundle directory,
-including creation of `audits/` and the dated bundle directory, must appear in
-the operation log.
+Sanitize every report and log. Never copy credentials, authorization headers, secrets, personal records, sensitive prompt payloads, or private path segments into the bundle. When exact commands or inputs contain sensitive material, record a redacted command shape, the evidence class, and the result; explain the redaction. Inventory excluded private material only by safe category and reason.
 
-### 4. Blocking questions
+All project-tree writes must land in one new ignored bundle:
 
-List only questions genuinely needed to resolve goal authority, unavailable
-source evidence, inaccessible/unresolved coverage, or a capability-safe plan.
-Quote the evidence that makes each question necessary. If none exist, state
-`None`.
+`$PROJECT_ROOT/audits/harness-audit-<current date, YYYY-MM-DD>/`
 
-SCOPE — examine each surface and record it in the coverage ledger:
+If it exists, use the first free `-2`, `-3`, ... suffix; never overwrite or merge with an existing bundle. The bundle is excluded from the target corpus and target manifests. Create no other project file.
 
-- Cognitive Frame: .pi/SYSTEM.md
-- Prompt layers + index chain: root AGENTS.md and every nested AGENTS.md
-- Agents: .pi/agents/\*.md (roles and model assignments)
-- Skills: .pi/skills/\*/ (SKILL.md, assets/prompts, orchestrate delegates)
-- Extensions / tools / hooks: .pi/extensions/\*
-- System scripts + memory: scripts/system/\* — evals, behavioral ratchet,
-  tiered memory, and any later additions — plus current MemPalace state
-- Docs — every docs/\* tree (e.g. docs/agents/ = HOW, docs/humans/ = WHAT/WHY,
-  docs/penny/ = protocols): check for staleness, doc-vs-doc contradiction,
-  orphaned/unindexed files, and cross-tree duplication drift
-- Dead, deprecated, placeholder, or non-functioning code anywhere in the tree
+The bundle contains:
 
-BIAS THE LENS TOWARD GENERALITY: flag any part that bakes a single-domain
-assumption into a layer that must stay domain-general (Cognitive Frame, agents,
-memory), and any part that assumes one specific model or
-provider. A cluster of features serving one domain is expected and healthy —
-treat it as drift only when it constrains a layer that should stay general,
-never merely for being domain-specific.
+- `harness-audit-report.md`;
+- `component-alignment.tsv`, the complete disjoint unit-level coverage/alignment matrix;
+- `evals/` with complete artifacts and results when run;
+- `regressions/` with complete artifacts and results when run;
+- `target-manifest-before.tsv` and `target-manifest-after.tsv`, containing relative path, size, and cryptographic hash for every effective-corpus file; and
+- `artifact-manifest.md`, listing every created file plus every safely recorded command, source fetch, and reviewer/verifier invocation with exit status or observed outcome.
 
-BIAS THE LENS TOWARD SCALING (commitment 7): flag any part that constrains the
-method where a constraint on the answer plus evidence would do the same job —
-mandated procedure, fixed taxonomies, keyword routers, magic-number thresholds,
-rigid phase sequences, enumerated option lists, hard-coded world-knowledge
-tables. The list above is illustrative, not exhaustive: apply commitment 7 as
-the generative rule and flag anything that fits it, whether or not it resembles
-a listed example. Per flag, name the capability the mechanism currently
-provides and why that capability gets cheaper for the model to supply itself as
-models improve. A mechanism that passes today's tests is not thereby exempt —
-passing now is what makes this debt invisible.
+Exception for the goal-authority branch: include only the blocked report, the two manifests scoped to the opened governing sources, and `artifact-manifest.md`; omit `component-alignment.tsv`, `evals/`, and `regressions/` rather than creating placeholders.
 
-Legitimate exceptions — do NOT flag these as method-constraint debt: safety and
-security controls, machine interfaces (a schema some program consumes), and
-fallbacks explicitly gated by model tier. Explicit constraints outside these
-categories may still be aligned when evidence shows they protect the answer or
-an outcome more effectively than a scalable replacement; classify from function
-and evidence, not syntax.
+Capture the before manifest after scope/goal preflight and before substantive assessment; capture the after manifest immediately before finalizing the report. Exclude the new bundle, dependencies, caches, build outputs, generated files, and private data consistently. Matching manifests establish only **verified net target-content equality**. Claim no audit-caused target-content write only when the operation log contains no write-capable target step and the manifests match; otherwise mark that claim `[UNVERIFIED]`.
 
-SIDE-EFFECT CONTRACT:
+## 9. Required report
 
-- **Read:** the declared harness corpus, repository metadata needed for coverage
-  and manifests, current MemPalace state, the local doctrine references, and the
-  live Sutton source.
-- **Execute:** only read-only inspection commands and independent-review calls
-  that cannot mutate the repository, external systems, credentials,
-  deployments, or durable state. Record each invocation, assumptions, exit
-  status, and evidence. Do not run a command when non-mutation cannot be
-  established; record the blocker instead.
-- **Create:** the collision-safe audit bundle directory is the sole permitted
-  write location. Creating `audits/` and the dated bundle directory when absent
-  is permitted. Inside the bundle, create the report, `evals/`, `regressions/`,
-  and `artifact-manifest.md` as real files. Create no file anywhere outside the
-  bundle directory.
-- **Modify/delete:** modify or delete no existing file or external state outside
-  the current bundle directory, and do not refactor, apply, or execute any
-  recommended fix. Existing same-day bundles are immutable and receive a new
-  suffix rather than being overwritten.
+Write exactly four top-level parts in `harness-audit-report.md`:
 
-Capture the initial effective-corpus content manifest before substantive
-assessment and the final manifest immediately before saving the report. Every
-file-content write must land inside the bundle directory; bundle and parent
-directory creation is permitted and must be logged.
+### 1. Goal, executive summary, and audit basis
 
-COMPLETION CRITERIA (each answerable yes/no):
+Open with a plain-language summary readable in about two minutes: what was audited and what Penny is for; the bottom line; the most important problems in priority order; recommended actions; the consequence of doing nothing; and material unknowns. Use no unexplained IDs or jargon.
 
-- Goal authority is clear, or the audit stopped and asked a targeted question
-  without guessing?
-- Observable better and worse are grounded in the North Star and opened goal
-  evidence rather than components, tasks, or current metrics?
-- The full live Sutton essay was fetched and source claims were separated from
-  Penny-domain translation, or the source-dependent verdict failed closed?
-- Every finding names the Alignment Test dimension(s) it violates?
-- Every named scope surface has exactly one coverage state, and every in-scope,
-  accessible surface is marked EXAMINED?
-- Every misalignment names concrete file path(s), not a general area?
-- Every misalignment carries an impact rating and a recommended fix or explicit
-  blocker/no-change reason?
-- Every finding is classified as answer-constraint, method-constraint, or n-a
-  with a reason where required?
-- Every method-constraint finding names the capability it currently provides
-  and why that capability gets cheaper as models improve?
-- Every relevant major mechanism has an evidenced scaling classification,
-  current-model assumption, and justified n-a where applicable?
-- Every recommended fix that removes a mechanism names the capability that must
-  not regress and how that would be verified after the change?
-- Every finding maps to a change or explicit no-change reason, capability
-  protection, eval artifact, and regression artifact?
-- All current and proposed measures are classified for fidelity to the actual
-  outcome?
-- Every proxy-drift finding includes evidence of divergence or gaming pressure,
-  not merely a weak proxy?
-- Positive aligned behavior and supported empty results are reported without
-  forcing findings?
-- Does the report satisfy the readability contract — plain-language executive
-  summary at the top of Part 1; every finding stating what-it-is, why-it-matters,
-  if-fixed, if-not-fixed, and priority; terms defined at first use; every table
-  and ledger interpreted in prose; and the capability-safe plan readable
-  standalone?
-- Concrete literal eval and regression artifacts exist as files in the bundle
-  with complete instructions, outcome coverage, honest status, and no invented
-  results?
-- Every non-CERTAIN claim carries an explicit confidence label (a controlled
-  reporting vocabulary, not a calibration claim) and every inaccessible fact is
-  reported rather than inferred?
-- Any caller additional details are recorded verbatim in Part 1 with how each
-  was applied, deferred, or refused, and none waived an evidence, coverage,
-  side-effect, artifact, or stopping obligation?
-- The operation log and manifests support an accurately bounded claim of no
-  audit-caused target-content write, and every file-content write landed inside
-  the audit bundle directory?
+Immediately after the summary, state three separate statuses so readers do not confuse audit execution with target quality:
 
-ANTI-CRITERIA (failure even if the above pass):
+- **Audit completeness:** `COMPLETE`, `LIMITED`, or `BLOCKED`.
+- **Target alignment:** `ALIGNED`, `MISALIGNED`, or `INDETERMINATE`.
+- **Scaling-source status:** `VERIFIED` or `BLOCKED`.
 
-- Any invented file, tool, or contradiction not opened and confirmed.
-- Any recommendation to change .pi/SYSTEM.md's universal layer without flagging
-  it human-authored-only.
-- Any contradiction claimed without quoting both conflicting sources.
-- Treating a domain-specific skill or tool as drift merely for being
-  domain-specific.
-- Flagging a safety control, a machine interface, or an explicitly tier-gated
-  fallback as method-constraint debt.
-- Presenting the answer-constraint / method-constraint distinction as a
-  quotation from Sutton's essay — it is a rubric derived from it, and must
-  never be attributed as the essay's own wording.
-- Recommending removal of a method-constraint without naming the capability it
-  provided and how that capability stays protected.
-- Silently choosing a North Star when authoritative goal sources conflict.
-- Issuing a completed Bitter-Lesson verdict without a verified full live fetch,
-  or blending source claims and Penny-domain translation.
-- Claiming exhaustive coverage beyond the four-state coverage evidence.
-- Requiring a finding for appearance's sake or suppressing positive aligned
-  behavior.
-- Treating every weak measure as evidenced proxy drift.
-- Treating caller additional details as authorization to waive an evidence,
-  coverage, side-effect, artifact, or stopping obligation, or silently ignoring
-  a supplied detail instead of recording its disposition.
-- Leaving any finding without a mapped change/no-change reason and concrete
-  capability-protection evidence.
-- Calling an eval or regression artifact built when the bundle contains only a
-  recommendation, placeholder, pseudocode, empty file, or missing referenced
-  content.
-- Claiming an artifact ran, or reporting results, without execution evidence.
+Then record additional details and their disposition, the governing sources and authority result, the purpose statement, observable better/worse, the five goal dimensions, and the live Sutton source record with separate source-claim and Penny-translation blocks.
 
-EDGE CASES to handle explicitly:
+### 2. Component alignment and findings
 
-- A file is referenced by docs but missing, or present but unreachable from the
-  index chain -> record as a misalignment, do not skip.
-- A part looks dead but is referenced by a live skill -> confirm usage before
-  calling it dead.
-- A part serves generality/trust/self-correction/scaling in a way that is not
-  obvious -> keep it; record it under positive aligned behavior and note why.
-- A part scores well on generality, trust, or self-correction but poorly on
-  scaling (e.g. a hand-maintained table that works on every model) -> record it
-  as a scaling misalignment with the conflict stated, do not net it out to
-  "aligned." Dimensions are reported separately, never averaged.
-- A method-constraint cannot be removed without losing a capability and no
-  answer-constraint replacement is apparent -> keep it, record it as accepted
-  debt with the blocking reason, do not recommend a fix you cannot specify.
-- A fully aligned surface or audit with no supported misalignments -> report the
-  positive evidence and an empty findings result; framework completeness is not
-  the same as a finding-free target.
-- A measure is indirect but no divergence or gaming pressure is evidenced ->
-  classify it as a proxy, not as demonstrated proxy drift.
-- An outcome is qualitative -> write a repeatable judgment artifact with fixed
-  scenarios, evidence capture, oracle/rubric, and comparison procedure rather
-  than downgrading the requirement to a recommendation.
-- A scope override excludes most surfaces -> preserve all named ledger rows as
-  EXCLUDED with `out of scope (user-narrowed)` and make no full-harness claim.
+Give one evidence-cited classification summary for every numbered surface in the effective corpus, link to the complete `component-alignment.tsv`, and explain what the matrix shows. Then present:
 
-LOOP & STOP:
+- aligned behavior and capabilities worth preserving;
+- prioritized canonical finding records;
+- the major-mechanism scaling ledger; and
+- the material-measure and evidenced-proxy-drift ledgers.
 
-- Verify every claim against file contents before writing it; quote the specific
-  lines for any contradiction or dead-code claim.
-- Stop substantive assessment immediately on an unresolved North-Star authority
-  contradiction; do not spend the audit budget optimizing against a guessed
-  objective.
-- Stop when all applicable completion criteria are yes and all named surfaces
-  are accounted for; a blocked criterion must remain visibly no rather than be
-  weakened.
-- If a surface or source resists assessment, use at most two genuinely distinct
-  attempts or approaches. Then mark it INACCESSIBLE or UNRESOLVED with the
-  reason and move on — do not spin or repeat the same failing approach.
-- Account for the full effective scope, but do not repeat settled surfaces to
-  satisfy a pass count; revisit only resistant items with a materially different
-  approach.
+If any set is empty, state the supported empty result.
 
-VERIFICATION (separate step, after drafting):
+### 3. Capability-safe plan and assurance
 
-1. Re-open each cited source and re-check every misalignment, contradiction,
-   dead-code claim, coverage state, measure classification, finding-to-plan
-   link, and bundle artifact. Mark any claim you cannot confirm from a file as
-   `[UNVERIFIED]` with confidence `UNCERTAIN` and never present it as fact; if a
-   source cannot be found or read, say so rather than inferring it.
-2. Give the draft and its cited evidence to a genuinely separate agent, model,
-   or verification tool for an independent semantic check. Record verifier
-   identity/type, scope, result, and evidence in Part 3. A self-review, repeated
-   pass by the same generator, or unsupported assertion of independence does
-   not satisfy design commitment 3. If no independent verifier is available,
-   state that blocker and keep `passed` false.
-3. Re-check the operation log and before/after manifests and report only what
-   they establish about side effects.
+Provide a standalone recommendation table mapping every finding and misaligned component to a concrete change or explicit no-change reason, why it improves the user outcome, the capability to preserve, expected benefit, effort/cost, cost of delay, risk/reversibility, and linked eval/regression IDs. Summarize artifact contents, statuses, commands, and observed results without duplicating the files.
 
-After the four report parts, emit a separate valid JSON object with no Markdown
-comments and exactly the existing four top-level keys:
+### 4. Coverage, verification, limitations, and questions
+
+Include the effective corpus, scope narrowing, coverage ledger, inaccessible/unresolved items, operation-log summary, manifest comparison, artifact existence checks, and remaining questions. List only questions genuinely needed to resolve authority, coverage, evidence, or a capability-safe recommendation; otherwise state `None`.
+
+The report is for readers unfamiliar with Penny. Define each status or doctrine term at first use, explain what every table means, keep findings decision-ready, and state each fact once.
+
+After the four parts, emit a separate valid JSON object with exactly these keys:
 
 ```json
 {
@@ -650,34 +273,25 @@ comments and exactly the existing four top-level keys:
 }
 ```
 
-Populate arrays and booleans from evidence. Encode non-examined coverage entries
-inside `unexamined_surfaces` as strings that include the ledger state and path,
-for example `"INACCESSIBLE — docs/example.md — permission denied"`; record all
-other machine-relevant detail in the four report parts rather than changing this
-machine interface. `passed` may be `true` only when goal authority is clear, the
-live source gate passed, every in-scope surface was examined, no unsupported or
-orphaned claim remains, all required measure and artifact obligations are
-satisfied, an independent verifier passed, target-side-effect evidence is
-accurately bounded, and all applicable completion criteria are yes. `passed`
-means the audit contract was satisfied, not that the harness had no findings.
+`passed` means this audit contract was completed; it does not mean the harness had no findings. Set it true only when goal authority is clear, the Sutton source gate passed, every in-scope component was accounted for and classified, required artifacts were built, material claims were grounded, a required fresh-context semantic reviewer other than the generator passed, and target-integrity evidence is complete. Put every non-examined coverage item into `unexamined_surfaces` with its state and path. Do not add keys.
 
-SAVE THE BUNDLE: write every artifact this audit produces into one bundle
-directory at
-`$PROJECT_ROOT/audits/harness-audit-<the current date, YYYY-MM-DD>/`, organized
-as:
+## 10. Verification and terminal outcomes
 
-- `harness-audit-report.md` — the completed four-part report followed by the
-  separate verification JSON, as Markdown;
-- `evals/` — the eval artifacts, their fixtures/cases, execution instructions,
-  and result files when run;
-- `regressions/` — the baselines, repeatable checks, execution instructions, and
-  result files when run;
-- `artifact-manifest.md` — every file created and every command executed, with
-  exit status.
+Before finalizing:
 
-The bundle directory is the only location you may create or write. Creating
-`audits/` and the dated bundle directory when absent is permitted. The harness
-under audit stays read-only. If a bundle for the current date already exists,
-append `-2`, `-3`, ... to the directory name rather than overwriting or merging
-into it. Do not create empty placeholders. After writing, print the absolute
-path of the bundle directory.
+1. Re-open cited evidence and re-check every classification, contradiction, dead/non-functioning claim, measure verdict, recommendation link, and artifact.
+2. Give the draft and cited evidence to a fresh-context reviewer other than the generator—Vera for conformance/correctness and Carren for quality/readability when available. Record identity, scope, findings, and disposition. This review is required for `passed: true`; if no reviewer is available, deliver the bounded audit with the blocker and `passed: false`. Treat model review as supplementary scrutiny, not independent proof.
+3. Verify every required bundle file is non-empty, linked IDs resolve, commands/results are not invented, and the before/after manifest comparison supports the exact side-effect claim.
+4. Confirm all named and discovered in-scope components have both coverage and alignment states; every `MISALIGNED` row has a finding and recommendation; every finding has capability protection and linked assurance; additional details were recorded and honored without waiving obligations; and every material limitation appears in the report and JSON.
+
+Apply these terminal outcomes honestly:
+
+- **Invalid or ambiguous scope:** stop, ask one targeted scope question, and create no bundle.
+- **Goal authority blocked:** create only the bounded blocked bundle defined above, ask the necessary authority question, set `questions_needed` true, and keep `passed` false.
+- **Sutton unavailable:** complete only source-independent analysis; omit the source-dependent verdict, write a clearly partial bundle, and keep `passed` false.
+- **Corpus limited:** make only claims supported by examined material, expose each gap, and keep `passed` false for a full-scope audit. A user-narrowed audit may pass for its declared narrowed corpus when every in-scope obligation is satisfied.
+- **Required artifact incomplete or semantic review unavailable:** record the blocker and keep `passed` false.
+- **No supported findings:** report aligned behavior and empty finding/plan sets without inventing issues; baseline eval and regression artifacts remain required.
+- **Findings present:** completion depends on audit-contract quality, not on a clean target. A fully supported audit with findings may pass.
+
+Completion is reached only when the report and bundle satisfy the contracts above or a terminal limitation is recorded without being disguised as success. Print the bundle's absolute path when a bundle is created.

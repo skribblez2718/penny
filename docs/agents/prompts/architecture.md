@@ -53,7 +53,7 @@ immutable handoff-index ID. It never scans global manifests or semantic memory.
 - [ ] Only an active TypeScript orchestration registration may bind one non-empty,
       duplicate-free strict YAML subset into its canonical digest and worker metadata; task,
       trust, input, runtime, liveness, model, and service state cannot select it.
-- [ ] Candidate subset claims do not imply OS/process sandboxing or extension-code isolation;
+- [ ] Subset claims do not imply OS/process sandboxing or extension-code isolation;
       host-private tools remain separate.
 - [ ] Domain Guidance defines complete output and one closed final SUMMARY line.
 - [ ] Inputs are exact IDs/paths, not payloads or semantic pointers.

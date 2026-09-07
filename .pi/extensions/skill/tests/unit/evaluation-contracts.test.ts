@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  CANDIDATE_PLAYBOOK_REGISTRY,
+  PLAYBOOK_REGISTRY,
   RunContext,
   canonicalJson,
   sha256,
@@ -29,7 +29,7 @@ import {
 import {
   DETERMINISTIC_GRADING_DEFINITION,
   DIRECT_DEMETRI_BASELINE_REGISTRATION,
-  SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+  SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
   createDirectAgentBaselineRegistration,
   directBaselineDefinition,
   evaluateTrialObservations,
@@ -193,7 +193,7 @@ function frozen() {
     plan: plan(),
     projectRoot: PROJECT_ROOT,
     baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-    candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+    implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
     ...implementation(),
   });
 }
@@ -455,14 +455,8 @@ describe("P6 closed evaluation contracts and deterministic freeze", () => {
     ).toThrow();
   });
 
-  it("keeps the source decide candidate disabled and dispositions non-authoritative", () => {
-    expect([...CANDIDATE_PLAYBOOK_REGISTRY.keys()]).toEqual([
-      "assess",
-      "decide",
-      "diagnose",
-      "plan",
-      "produce",
-    ]);
+  it("keeps paired-evaluation dispositions non-authoritative", () => {
+    expect(PLAYBOOK_REGISTRY.has("decide")).toBe(true);
     const freeze = frozen();
     const result = evaluateTrialObservations({
       frozen: freeze,

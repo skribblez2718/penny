@@ -18,25 +18,22 @@ bounded instruction pointing to the verified exact ID, never an authoritative
 inline payload. Workers use `artifact_read` and repeat with `next_range` until
 complete.
 
-Schema-v2 checkpoints persist exact terminal/handoff refs and each step's release status plus
-canonical contract digest in the active catalog-bound project partition beneath the canonical
-Penny state root. They are owner-only
-and atomically replaced. Resume skips only steps whose checkpoint/ref bindings
-verify; corrupt or missing refs fail closed.
+Schema-v3 checkpoints persist exact terminal/handoff refs and each step's canonical contract digest
+in the active catalog-bound project partition beneath the canonical Penny state root. They are
+owner-only and atomically replaced. Resume skips only steps whose checkpoint/ref bindings verify;
+corrupt or missing refs fail closed.
 
 Durable memory and historical skill rooms are not handoff or resume authority. Track-A recovery is forward-only: owner `PENNY_ARTIFACT_DISPATCH_MODE=paused` stops new dispatch, returns a non-success/retriable result, and leaves chain/run checkpoints plus exact refs pending. Unknown values fail closed. After `active`, resume reuses those refs; semantic memory is never a fallback.
 
-## Registration and candidate admission
+## Registration and model visibility
 
-The `skill` tool resolves only `ingress:skill` registrations. `.pi/skills` is the one package root;
-one discovery pass classifies packages by parsed release status and requires exact agreement with
-the separate production and candidate registries. Knowledge Base remains on `knowledge_base`.
-Visibility is independent of release status: Pi native and Penny model metadata include a valid
-package if and only if parsed `disable-model-invocation` is not `true`, while `.pi/skills/.ignore`
-contains exactly explicitly model-disabled packages. Candidate visibility grants no execution
-permission. Candidates stay outside `PLAYBOOK_REGISTRY` and require the ignored
-`.pi/candidate-enablement.json` exact name/contract-digest binding. Missing or malformed candidate
-configuration never removes production Research.
+The `skill` tool resolves only `ingress:skill` registrations from the sole executable
+`PLAYBOOK_REGISTRY`. `.pi/skills` is the one package root. Knowledge Base remains on
+`knowledge_base`. Pi native and Penny model metadata include a valid package if and only if parsed
+`disable-model-invocation` is not `true`, while `.pi/skills/.ignore` contains exactly explicitly
+model-disabled packages. A model-disabled development package may remain unregistered for static
+documentation work, but generic invocation refuses it with `SKILL_NOT_REGISTERED` until a playbook
+exists.
 
 ## Limits
 

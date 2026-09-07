@@ -1225,12 +1225,13 @@ source = { virtual = "." }
 dependencies = [
     { name = "chromadb" },
     { name = "mempalace" },
-    { name = "pydantic" },
-    { name = "python-statemachine" },
-    { name = "tiktoken" },
 ]
 
 [package.optional-dependencies]
+checks = [
+    { name = "pydantic" },
+    { name = "tiktoken" },
+]
 dev = [
     { name = "black" },
     { name = "flake8" },
@@ -1242,6 +1243,9 @@ dev = [
     { name = "pytest-timeout" },
     { name = "types-pyyaml" },
 ]
+memory-ops = [
+    { name = "python-statemachine" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1251,16 +1255,16 @@ requires-dist = [
     { name = "isort", marker = "extra == 'dev'", specifier = ">=5.13.0" },
     { name = "mempalace", specifier = "==3.7.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10.0" },
-    { name = "pydantic", specifier = ">=2.12,<3" },
+    { name = "pydantic", marker = "extra == 'checks'", specifier = ">=2.12,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.3" },
-    { name = "python-statemachine", specifier = ">=2.0" },
-    { name = "tiktoken", specifier = ">=0.11.0" },
+    { name = "python-statemachine", marker = "extra == 'memory-ops'", specifier = ">=2.0" },
+    { name = "tiktoken", marker = "extra == 'checks'", specifier = ">=0.11.0" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["memory-ops", "checks", "dev"]
 
 [[package]]
 name = "platformdirs"

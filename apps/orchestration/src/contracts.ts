@@ -30,12 +30,6 @@ export const TrustProfileSchema = Type.Union([
 ]);
 export type TrustProfile = Static<typeof TrustProfileSchema>;
 
-export const ReleaseStatusSchema = Type.Union([
-  Type.Literal("production"),
-  Type.Literal("candidate"),
-]);
-export type ReleaseStatus = Static<typeof ReleaseStatusSchema>;
-
 export const RunStatusSchema = Type.Union([
   Type.Literal("running"),
   Type.Literal("awaiting_user"),
@@ -73,11 +67,11 @@ export const RunIdentitySchema = Type.Object(
 );
 export type RunIdentity = Static<typeof RunIdentitySchema>;
 
+/** Immutable active-registration binding persisted with every new run. */
 export const RegistrationContractBindingV1Schema = Type.Object(
   {
     schema_version: Type.Literal(1),
     registration_name: Id,
-    release_status: ReleaseStatusSchema,
     contract_sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
     registration_sha256: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
   },
@@ -407,6 +401,93 @@ export const InvokeParallelDirectiveSchema = Type.Object(
   { additionalProperties: false }
 );
 
+/** Finite aggregate allocation reserved by a parent before one child starts. */
+export const ChildWorkflowBudgetAllocationV1Schema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    model_turns: Type.Integer({ minimum: 1, maximum: 1_024 }),
+    tool_calls: Type.Integer({ minimum: 0, maximum: 4_096 }),
+    external_calls: Type.Integer({ minimum: 0, maximum: 1_024 }),
+    wall_clock_ms: Type.Integer({ minimum: 1, maximum: 86_400_000 }),
+    max_steps: Type.Integer({ minimum: 1, maximum: 4_096 }),
+    output_bytes: Type.Integer({ minimum: 1, maximum: 16_777_216 }),
+  },
+  { additionalProperties: false }
+);
+export type ChildWorkflowBudgetAllocationV1 = Static<
+  typeof ChildWorkflowBudgetAllocationV1Schema
+>;
+
+/** Exact semantic product the parent is prepared to consume. */
+export const ChildWorkflowOutputContractV1Schema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    port_name: Id,
+    schema_id: SchemaIdSchema,
+    schema_version_required: Type.Integer({ minimum: 1 }),
+    artifact_kind: ArtifactKind,
+  },
+  { additionalProperties: false }
+);
+export type ChildWorkflowOutputContractV1 = Static<typeof ChildWorkflowOutputContractV1Schema>;
+
+/** Host-revalidated scope and destination binding; labels themselves grant no authority. */
+export const ChildWorkflowPolicyBindingV1Schema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    project_id: Id,
+    principal_id: Id,
+    scope_id: Id,
+    source_policy_id: Id,
+    destination_policy_id: Id,
+  },
+  { additionalProperties: false }
+);
+export type ChildWorkflowPolicyBindingV1 = Static<typeof ChildWorkflowPolicyBindingV1Schema>;
+
+const ChildWorkflowResumeV1Schema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    child_gate_id: Id,
+    child_challenge: Id,
+    child_payload_digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    response: JsonValueSchema,
+  },
+  { additionalProperties: false }
+);
+
+/** Internal, depth-one engine directive. It is never accepted as a public start request. */
+export const InvokeChildWorkflowDirectiveSchema = Type.Object(
+  {
+    schema_version: Type.Literal(2),
+    action: Type.Literal("invoke_child_workflow"),
+    identity: RunIdentitySchema,
+    state_id: Id,
+    call_key: Id,
+    child_name: Id,
+    request_ref: ArtifactRefSchema,
+    input_artifacts: InputArtifactsSchema,
+    expected_output: ChildWorkflowOutputContractV1Schema,
+    policy_binding: ChildWorkflowPolicyBindingV1Schema,
+    budget: ChildWorkflowBudgetAllocationV1Schema,
+    resume: Type.Optional(ChildWorkflowResumeV1Schema),
+  },
+  { additionalProperties: false }
+);
+export type InvokeChildWorkflowDirective = Static<typeof InvokeChildWorkflowDirectiveSchema>;
+
+const ChildWorkflowGateProjectionV1Schema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    call_id: Id,
+    child_run_id: Id,
+    child_gate_id: Id,
+    child_challenge: Id,
+    child_payload_digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  },
+  { additionalProperties: false }
+);
+
 export const UserGateDirectiveSchema = Type.Object(
   {
     schema_version: Type.Literal(2),
@@ -416,6 +497,7 @@ export const UserGateDirectiveSchema = Type.Object(
     gate_id: Id,
     challenge: Id,
     payload_digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    child_workflow: Type.Optional(ChildWorkflowGateProjectionV1Schema),
     questions: Type.Array(
       Type.Object(
         {
@@ -492,6 +574,7 @@ export const StatusDirectiveSchema = Type.Object(
 export const DirectiveSchema = Type.Union([
   InvokeAgentDirectiveSchema,
   InvokeParallelDirectiveSchema,
+  InvokeChildWorkflowDirectiveSchema,
   UserGateDirectiveSchema,
   TerminalDirectiveSchema,
   PausedDirectiveSchema,
@@ -856,7 +939,6 @@ export const SkillContractSchema = Type.Object(
   {
     schema_version: Type.Literal(2),
     name: Type.String({ minLength: 1, maxLength: 128 }),
-    release_status: ReleaseStatusSchema,
     objective: Type.String({ minLength: 1, maxLength: 2_048 }),
     io: Type.Object(
       {

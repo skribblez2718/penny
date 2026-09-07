@@ -20,10 +20,7 @@ function makeProject(): string {
   return directory;
 }
 
-function registrationFor(
-  name: string,
-  releaseStatus: "production" | "candidate"
-): PlaybookRegistrationV1 {
+function registrationFor(name: string): PlaybookRegistrationV1 {
   const research = resolvePlaybook("research");
   if (research === undefined || research.worker.kind !== "catalog-agent") {
     throw new Error("research registration fixture is unavailable");
@@ -31,16 +28,12 @@ function registrationFor(
   return {
     ...research,
     name,
-    contract: { ...research.contract, name, release_status: releaseStatus },
+    contract: { ...research.contract, name },
     worker: { ...research.worker, workflow_name: name },
   };
 }
 
-function writeSkill(
-  root: string,
-  name: string,
-  input: { readonly disabled?: boolean; readonly releaseStatus: "production" | "candidate" }
-): void {
+function writeSkill(root: string, name: string, disabled?: boolean): void {
   const skillDirectory = path.join(root, name);
   fs.mkdirSync(skillDirectory, { recursive: true });
   fs.writeFileSync(
@@ -48,12 +41,11 @@ function writeSkill(
     [
       "---",
       `name: ${name}`,
-      `description: ${name} description`,
-      ...(input.disabled === undefined ? [] : [`disable-model-invocation: ${input.disabled}`]),
+      `description: ${name} skill. Use when testing discovery. Do not use for production work.`,
+      ...(disabled === undefined ? [] : [`disable-model-invocation: ${disabled}`]),
       "metadata:",
       "  penny:",
       "    engine: orchestration",
-      `    release_status: ${input.releaseStatus}`,
       "---",
       "",
       `# ${name}`,
@@ -71,26 +63,12 @@ describe("unified skill discovery and model visibility", () => {
   it("uses only the disable flag for native and Penny model visibility", () => {
     const project = makeProject();
     const skillsRoot = path.join(project, ".pi", "skills");
-    writeSkill(skillsRoot, "production-visible", {
-      disabled: false,
-      releaseStatus: "production",
-    });
-    writeSkill(skillsRoot, "candidate-visible", {
-      disabled: false,
-      releaseStatus: "candidate",
-    });
-    writeSkill(skillsRoot, "candidate-implicit-visible", { releaseStatus: "candidate" });
-    writeSkill(skillsRoot, "production-hidden", {
-      disabled: true,
-      releaseStatus: "production",
-    });
-    writeSkill(skillsRoot, "candidate-hidden", {
-      disabled: true,
-      releaseStatus: "candidate",
-    });
+    writeSkill(skillsRoot, "visible-explicit", false);
+    writeSkill(skillsRoot, "visible-default");
+    writeSkill(skillsRoot, "hidden-explicit", true);
     fs.writeFileSync(
       path.join(skillsRoot, ".ignore"),
-      "# Explicitly model-disabled packages only.\ncandidate-hidden/\nproduction-hidden/\n"
+      "# Explicitly model-disabled packages only.\nhidden-explicit/\n"
     );
 
     const loaded = loadSkills({
@@ -100,85 +78,65 @@ describe("unified skill discovery and model visibility", () => {
       includeDefaults: true,
     });
     expect(loaded.skills.map((skill) => skill.name).sort()).toEqual([
-      "candidate-implicit-visible",
-      "candidate-visible",
-      "production-visible",
+      "visible-default",
+      "visible-explicit",
     ]);
     const prompt = formatSkillsForPrompt(loaded.skills);
-    expect(prompt).toContain("candidate-implicit-visible");
-    expect(prompt).toContain("candidate-visible");
-    expect(prompt).toContain("production-visible");
-    expect(prompt).not.toContain("candidate-hidden");
-    expect(prompt).not.toContain("production-hidden");
+    expect(prompt).toContain("visible-default");
+    expect(prompt).toContain("visible-explicit");
+    expect(prompt).not.toContain("hidden-explicit");
 
     const discovered = discoverSkillsFromDirectory(skillsRoot);
     expect(modelInvocableSkills(discovered).map((skill) => skill.name)).toEqual([
-      "candidate-implicit-visible",
-      "candidate-visible",
-      "production-visible",
+      "visible-default",
+      "visible-explicit",
     ]);
   });
 
-  it("uses release status only for the registry namespace", () => {
+  it("accepts one matching package without lifecycle metadata", () => {
     const project = makeProject();
     const skillsRoot = path.join(project, ".pi", "skills");
-    writeSkill(skillsRoot, "candidate-visible", {
-      disabled: false,
-      releaseStatus: "candidate",
-    });
+    writeSkill(skillsRoot, "visible-skill", false);
     const discovered = discoverSkillsFromDirectory(skillsRoot);
     expect(
       checkSkillPackage({
         skillsDir: skillsRoot,
-        name: "candidate-visible",
-        expectedReleaseStatus: "candidate",
+        name: "visible-skill",
         discoveredSkills: discovered,
       })
     ).toMatchObject({ ok: true });
-    expect(
-      checkSkillPackage({
-        skillsDir: skillsRoot,
-        name: "candidate-visible",
-        expectedReleaseStatus: "production",
-        discoveredSkills: discovered,
-      })
-    ).toMatchObject({ ok: false });
-    expect(modelInvocableSkills(discovered).map((skill) => skill.name)).toEqual([
-      "candidate-visible",
-    ]);
   });
 
-  it("requires native ignore entries to mirror explicit disablement across release classes", () => {
+  it("requires model-invocable packages to be registered but permits disabled scaffolds", () => {
     const project = makeProject();
     const skillsRoot = path.join(project, ".pi", "skills");
-    writeSkill(skillsRoot, "production-hidden", {
-      disabled: true,
-      releaseStatus: "production",
-    });
-    writeSkill(skillsRoot, "candidate-visible", {
-      disabled: false,
-      releaseStatus: "candidate",
-    });
-    fs.writeFileSync(path.join(skillsRoot, ".ignore"), "production-hidden/\n");
-    const production = registrationFor("production-hidden", "production");
-    const candidate = registrationFor("candidate-visible", "candidate");
+    writeSkill(skillsRoot, "registered-visible", false);
+    writeSkill(skillsRoot, "disabled-scaffold", true);
+    fs.writeFileSync(path.join(skillsRoot, ".ignore"), "disabled-scaffold/\n");
+    const visible = registrationFor("registered-visible");
     const discovered = discoverSkillsFromDirectory(skillsRoot);
 
     expect(
       validateUnifiedSkillRegistryPackages({
         skillsDir: skillsRoot,
-        productionRegistry: new Map([[production.name, production]]),
-        candidateRegistry: new Map([[candidate.name, candidate]]),
+        registry: new Map([[visible.name, visible]]),
         discoveredSkills: discovered,
       }).map((skill) => skill.name)
-    ).toEqual(["candidate-visible", "production-hidden"]);
+    ).toEqual(["disabled-scaffold", "registered-visible"]);
 
-    fs.writeFileSync(path.join(skillsRoot, ".ignore"), "candidate-visible/\n");
     expect(() =>
       validateUnifiedSkillRegistryPackages({
         skillsDir: skillsRoot,
-        productionRegistry: new Map([[production.name, production]]),
-        candidateRegistry: new Map([[candidate.name, candidate]]),
+        registry: new Map(),
+        discoveredSkills: discovered,
+      })
+    ).toThrow(/model-invocable skill package/u);
+
+    fs.writeFileSync(path.join(skillsRoot, ".ignore"), "registered-visible/\n");
+    expect(() =>
+      validateUnifiedSkillRegistryPackages({
+        skillsDir: skillsRoot,
+        registry: new Map([[visible.name, visible]]),
         discoveredSkills: discovered,
       })
     ).toThrow(/explicitly model-disabled package names exactly/u);

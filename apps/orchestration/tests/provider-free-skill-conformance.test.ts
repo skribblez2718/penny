@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { CANDIDATE_PLAYBOOK_REGISTRY, PLAYBOOK_REGISTRY } from "../src/index.js";
+import { PLAYBOOK_REGISTRY } from "../src/index.js";
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SKILL_EXTENSION_ROOT = path.resolve(PACKAGE_ROOT, "..", "..", ".pi", "extensions", "skill");
@@ -27,7 +27,6 @@ const REQUIRED_CATEGORIES = [
 const FORBIDDEN_PROVIDER_FREE_PATH =
   /(?:^|[-/])(c6|evaluation|local-live|model-smoke|parity|remote)(?:[-/.]|$)/u;
 
-type ReleaseStatus = "production" | "candidate";
 type Category = (typeof REQUIRED_CATEGORIES)[number];
 
 interface ConformanceCheck {
@@ -40,7 +39,6 @@ interface ConformanceCheck {
 
 interface ConformanceProfile {
   readonly skill_name: string;
-  readonly release_status: ReleaseStatus;
   readonly checks: readonly ConformanceCheck[];
 }
 
@@ -122,14 +120,10 @@ function parseEntrypointCheck(value: unknown, index: number): EntrypointCheck {
 function parseProfile(value: unknown, index: number): ConformanceProfile {
   const label = `profiles[${index}]`;
   const item = record(value, label);
-  expect(Object.keys(item).sort()).toEqual(["checks", "release_status", "skill_name"].sort());
-  if (item.release_status !== "production" && item.release_status !== "candidate") {
-    throw new Error(`${label}.release_status is unknown`);
-  }
+  expect(Object.keys(item).sort()).toEqual(["checks", "skill_name"].sort());
   if (!Array.isArray(item.checks)) throw new Error(`${label}.checks must be an array`);
   return {
     skill_name: string(item.skill_name, `${label}.skill_name`),
-    release_status: item.release_status,
     checks: item.checks.map((check, checkIndex) =>
       parseCheck(check, `${label}.checks[${checkIndex}]`)
     ),
@@ -159,61 +153,47 @@ function loadManifest(): ConformanceManifest {
 }
 
 const manifest = loadManifest();
-const registrations = [
-  ...[...PLAYBOOK_REGISTRY.values()].map((registration) => ({
-    registration,
-    releaseStatus: "production" as const,
-  })),
-  ...[...CANDIDATE_PLAYBOOK_REGISTRY.values()].map((registration) => ({
-    registration,
-    releaseStatus: "candidate" as const,
-  })),
-].sort((left, right) => left.registration.name.localeCompare(right.registration.name, "en"));
+const registrations = [...PLAYBOOK_REGISTRY.values()].sort((left, right) =>
+  left.name.localeCompare(right.name, "en")
+);
 
 describe("provider-free skill conformance manifest", () => {
-  it("covers exactly the production and candidate registration union", () => {
-    const registrationNames = registrations.map(({ registration }) => registration.name);
+  it("covers exactly the executable registration set", () => {
+    const registrationNames = registrations.map((registration) => registration.name);
     const profileNames = manifest.profiles.map((profile) => profile.skill_name).sort();
     expect(new Set(registrationNames).size).toBe(registrationNames.length);
     expect(new Set(profileNames).size).toBe(profileNames.length);
     expect(profileNames).toEqual(registrationNames);
   });
 
-  it.each(registrations)(
-    "binds a complete closed profile for registered $registration.name",
-    ({ registration, releaseStatus }) => {
-      const profile = manifest.profiles.find((item) => item.skill_name === registration.name);
-      if (profile === undefined) throw new Error(`missing profile for ${registration.name}`);
-      expect(profile.release_status).toBe(releaseStatus);
-      expect(profile.checks.map((check) => check.category).sort()).toEqual(
-        [...REQUIRED_CATEGORIES].sort()
-      );
-      expect(new Set(profile.checks.map((check) => check.check_id)).size).toBe(
-        profile.checks.length
-      );
-      expect(profile.checks.some((check) => check.tier === 1)).toBe(true);
-      expect(profile.checks.some((check) => check.tier === 2)).toBe(true);
+  it.each(registrations)("binds a complete closed profile for registered $name", (registration) => {
+    const profile = manifest.profiles.find((item) => item.skill_name === registration.name);
+    if (profile === undefined) throw new Error(`missing profile for ${registration.name}`);
+    expect(profile.checks.map((check) => check.category).sort()).toEqual(
+      [...REQUIRED_CATEGORIES].sort()
+    );
+    expect(new Set(profile.checks.map((check) => check.check_id)).size).toBe(profile.checks.length);
+    expect(profile.checks.some((check) => check.tier === 1)).toBe(true);
+    expect(profile.checks.some((check) => check.tier === 2)).toBe(true);
 
-      for (const check of profile.checks) {
-        expect(check.check_id).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u);
-        expect(check.test_file).toMatch(/^tests\/[A-Za-z0-9._/-]+\.test\.ts$/u);
-        expect(check.test_file).not.toMatch(/\.\./u);
-        expect(check.test_file).not.toMatch(FORBIDDEN_PROVIDER_FREE_PATH);
-        const absolute = path.resolve(PACKAGE_ROOT, check.test_file);
-        expect(absolute.startsWith(`${path.join(PACKAGE_ROOT, "tests")}${path.sep}`)).toBe(true);
-        expect(statSync(absolute).isFile()).toBe(true);
-      }
+    for (const check of profile.checks) {
+      expect(check.check_id).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u);
+      expect(check.test_file).toMatch(/^tests\/[A-Za-z0-9._/-]+\.test\.ts$/u);
+      expect(check.test_file).not.toMatch(/\.\./u);
+      expect(check.test_file).not.toMatch(FORBIDDEN_PROVIDER_FREE_PATH);
+      const absolute = path.resolve(PACKAGE_ROOT, check.test_file);
+      expect(absolute.startsWith(`${path.join(PACKAGE_ROOT, "tests")}${path.sep}`)).toBe(true);
+      expect(statSync(absolute).isFile()).toBe(true);
     }
-  );
+  });
 
   it("binds real extension entrypoints without admitting remote evaluation suites", () => {
     const scopes = manifest.entrypoint_checks.map((check) => check.registration_scope).sort();
-    const productionNames = registrations
-      .filter(({ releaseStatus }) => releaseStatus === "production")
-      .map(({ registration }) => registration.name)
-      .sort();
-    expect(scopes.filter((scope) => scope === "candidate")).toHaveLength(1);
-    expect(scopes.filter((scope) => scope !== "candidate").sort()).toEqual(productionNames);
+    const registrationNames = registrations.map((registration) => registration.name).sort();
+    expect(scopes).toContain("universal");
+    expect(scopes.filter((scope) => scope !== "universal").sort()).toEqual(
+      registrationNames.filter((name) => name === "knowledge-base" || name === "research")
+    );
     for (const check of manifest.entrypoint_checks) {
       expect(check.check_id).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/u);
       expect(check.test_file).toMatch(/^tests\/[A-Za-z0-9._/-]+\.test\.ts$/u);

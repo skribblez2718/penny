@@ -118,7 +118,7 @@ import {
   type InlineExtension,
   type PiAgentClientOptions,
 } from "../src/model-client.js";
-import { DECIDE_CANDIDATE_REGISTRATION } from "../src/playbooks/decide.js";
+import { DECIDE_PLAYBOOK_REGISTRATION } from "../src/playbooks/decide.js";
 import { resolvePlaybook } from "../src/playbooks/registry.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -196,7 +196,7 @@ function decideCandidateInvocation(input: {
   readonly trustProfile?: AgentInvocation["trustProfile"];
   readonly task?: string;
 }): AgentInvocation {
-  const worker = DECIDE_CANDIDATE_REGISTRATION.worker;
+  const worker = DECIDE_PLAYBOOK_REGISTRATION.worker;
   if (worker.kind !== "catalog-agent") throw new Error("decide catalog worker is absent");
   const phase = worker.phases.get("deciding");
   if (phase === undefined) throw new Error("deciding phase is absent");
@@ -208,7 +208,7 @@ function decideCandidateInvocation(input: {
     trustProfile: input.trustProfile ?? base.trustProfile,
     task: input.task ?? base.task,
     registration: {
-      playbook_name: DECIDE_CANDIDATE_REGISTRATION.name,
+      playbook_name: DECIDE_PLAYBOOK_REGISTRATION.name,
       workflow_name: worker.workflow_name,
       guidance: worker.guidance,
       result_transport: worker.result_transport,
@@ -229,9 +229,9 @@ afterEach(() => {
 });
 
 describe("PiAgentClient created-session lifecycle", () => {
-  it("activates exact Demetri YAML for an ordinary Decide candidate phase", async () => {
+  it("activates exact Demetri YAML for an ordinary Decide workflow phase", async () => {
     const { projectRoot, sessionRoot } = temporaryProject();
-    const worker = DECIDE_CANDIDATE_REGISTRATION.worker;
+    const worker = DECIDE_PLAYBOOK_REGISTRATION.worker;
     if (worker.kind !== "catalog-agent") throw new Error("decide catalog worker is absent");
     const phase = worker.phases.get("deciding");
     if (phase === undefined) throw new Error("deciding phase is absent");
@@ -277,7 +277,7 @@ describe("PiAgentClient created-session lifecycle", () => {
 
   it("does not let task text or trust profiles select a different registered subset", async () => {
     const { projectRoot, sessionRoot } = temporaryProject();
-    const worker = DECIDE_CANDIDATE_REGISTRATION.worker;
+    const worker = DECIDE_PLAYBOOK_REGISTRATION.worker;
     if (worker.kind !== "catalog-agent") throw new Error("decide catalog worker is absent");
     const phase = worker.phases.get("deciding");
     if (phase === undefined) throw new Error("deciding phase is absent");
@@ -347,7 +347,7 @@ describe("PiAgentClient created-session lifecycle", () => {
 
   it("rejects active removal, addition, and replacement before any model prompt", async () => {
     const { projectRoot, sessionRoot } = temporaryProject();
-    const worker = DECIDE_CANDIDATE_REGISTRATION.worker;
+    const worker = DECIDE_PLAYBOOK_REGISTRATION.worker;
     if (worker.kind !== "catalog-agent") throw new Error("decide catalog worker is absent");
     const phase = worker.phases.get("deciding");
     if (phase === undefined) throw new Error("deciding phase is absent");

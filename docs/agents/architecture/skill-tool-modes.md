@@ -6,9 +6,9 @@
 2. Single/parallel stages use owner-selected exact artifact IDs from any run.
 3. Chain handoff is the prior skill's verified terminal ID, never inline payload or memory.
 4. Chain checkpoints are owner-only, atomic, and retain terminal/handoff refs plus each step's
-   release status and canonical contract digest.
+   canonical contract digest.
 5. Resume verifies checkpoint identity, registration/digest, and every exact ref before advancing;
-   schema-v1 checkpoints are production-only.
+   legacy checkpoints without a digest fail closed.
 6. Direct/parallel/chain ordinary catalog-agent invocation always uses exact YAML equality.
    A TypeScript orchestration catalog-worker phase uses exact YAML when `allowed_tools` is
    absent, or one explicit non-empty duplicate-free registration/digest-bound strict YAML
@@ -46,7 +46,7 @@ Payload bytes and durable memory are never control transport.
 - [ ] Orchestration proves absent-subset YAML equality and only registration-bound strict
       subsets; empty/duplicate/equality-sized/non-YAML or dynamic declarations fail before
       session creation, and active removal/addition/replacement fails before the model prompt.
-- [ ] Ordinary candidate phases pin absent `allowed_tools` and exact YAML; synthetic/evaluation
+- [ ] Ordinary registered phases pin absent `allowed_tools` and exact YAML; synthetic/evaluation
       strict subsets and separate host-private tools remain independently covered.
 - [ ] Cross-run single/parallel/chain/fan-in pass.
 - [ ] Restart reconstructs handoff from refs, not previews or memory.

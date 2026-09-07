@@ -52,6 +52,11 @@ expected KB identity. **The orchestration database never caches the root** — i
 ID only. That is what makes a changed working directory, environment, or registry remap unable to
 redirect a run: identity is re-derived, not remembered.
 
+The orchestration and KB gate CLIs likewise collapse `--project-root` through the project catalog
+at process entry and retain only the canonical root. A symlink alias therefore selects the same
+opaque project partition and all persisted/project-relative paths are derived from the canonical
+identity, never from the caller's spelling.
+
 ### Repository admission is default-deny
 
 A root outside any Git worktree is the normal case. A root _inside_ a worktree is admitted only as

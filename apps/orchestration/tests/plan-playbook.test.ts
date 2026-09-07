@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  PLAN_CANDIDATE_REGISTRATION,
+  PLAN_PLAYBOOK_REGISTRATION,
   PLAN_PLAYBOOK_NAME,
   PLAN_UNSEALED_EVALUATION_NAME,
   PLAN_UNSEALED_EVALUATION_REGISTRATION,
@@ -278,7 +278,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("provider-free orchestrated plan candidate", () => {
+describe("provider-free orchestrated plan workflow", () => {
   it.each(["ready", "blocked", "not_applicable"] as const)(
     "completes a reviewed canonical %s StrategyV1 and exact product envelope",
     async (disposition) => {
@@ -287,7 +287,7 @@ describe("provider-free orchestrated plan candidate", () => {
         projectRoot: PROJECT_ROOT,
         env: environment(),
         modelClient: client,
-        playbookRegistration: PLAN_CANDIDATE_REGISTRATION,
+        playbookRegistration: PLAN_PLAYBOOK_REGISTRATION,
       });
       sequence += 1;
       const terminal = completeDirective(
@@ -423,7 +423,7 @@ describe("provider-free orchestrated plan candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: PLAN_CANDIDATE_REGISTRATION,
+      playbookRegistration: PLAN_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = completeDirective(
@@ -472,7 +472,7 @@ describe("provider-free orchestrated plan candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: PLAN_CANDIDATE_REGISTRATION,
+      playbookRegistration: PLAN_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = completeDirective(
@@ -507,7 +507,7 @@ describe("provider-free orchestrated plan candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: PLAN_CANDIDATE_REGISTRATION,
+      playbookRegistration: PLAN_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = completeDirective(
@@ -559,7 +559,7 @@ describe("provider-free orchestrated plan candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: PLAN_CANDIDATE_REGISTRATION,
+      playbookRegistration: PLAN_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = completeDirective(
@@ -576,7 +576,7 @@ describe("provider-free orchestrated plan candidate", () => {
     const env = environment();
     let interrupted = false;
     const registration: PlaybookRegistrationV1 = {
-      ...PLAN_CANDIDATE_REGISTRATION,
+      ...PLAN_PLAYBOOK_REGISTRATION,
       construct: (options) =>
         new PlanPlaybook(
           true,
@@ -608,7 +608,7 @@ describe("provider-free orchestrated plan candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: recoveredClient,
-      playbookRegistration: PLAN_CANDIDATE_REGISTRATION,
+      playbookRegistration: PLAN_PLAYBOOK_REGISTRATION,
     });
     const terminal = completeDirective(
       await recovered.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
@@ -636,7 +636,7 @@ describe("provider-free orchestrated plan candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: PLAN_CANDIDATE_REGISTRATION,
+      playbookRegistration: PLAN_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = await service.execute(start(`run-plan-repair-exhaust-${sequence}`));
@@ -681,7 +681,7 @@ describe("provider-free orchestrated plan candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: new ScriptedPlanClient([]),
-      playbookRegistration: PLAN_CANDIDATE_REGISTRATION,
+      playbookRegistration: PLAN_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const runId = `run-plan-liveness-${reason}-${sequence}`;
@@ -700,7 +700,7 @@ describe("provider-free orchestrated plan candidate", () => {
   });
 
   it("declares every engine-owned closed repair route without a clarification action", () => {
-    const contract = PLAN_CANDIDATE_REGISTRATION.contract;
+    const contract = PLAN_PLAYBOOK_REGISTRATION.contract;
     expect(contract.behavior.stopping).toEqual({
       budget_exhaustion: "incomplete",
       cancellation: "cancelled",
@@ -725,7 +725,7 @@ describe("provider-free orchestrated plan candidate", () => {
     expect(routes.every((route) => route.on_exhaustion.reset_counter === false)).toBe(true);
   });
 
-  it("fails closed when active or terminal replay uses a drifted candidate registration contract", async () => {
+  it("fails closed when active or terminal replay uses a drifted evaluation registration contract", async () => {
     const env = environment();
     sequence += 1;
     let activeIdentity: Directive["identity"];
@@ -735,7 +735,7 @@ describe("provider-free orchestrated plan candidate", () => {
         projectRoot: PROJECT_ROOT,
         env,
         modelClient: new ScriptedPlanClient(happyOutputs("ready")),
-        playbookRegistration: PLAN_CANDIDATE_REGISTRATION,
+        playbookRegistration: PLAN_PLAYBOOK_REGISTRATION,
       });
       const active = service.handle(start(`run-plan-active-contract-binding-${sequence}`));
       expect(active.action).toBe("invoke_agent");
@@ -745,10 +745,10 @@ describe("provider-free orchestrated plan candidate", () => {
       );
     }
     const drifted: PlaybookRegistrationV1 = {
-      ...PLAN_CANDIDATE_REGISTRATION,
+      ...PLAN_PLAYBOOK_REGISTRATION,
       contract: {
-        ...PLAN_CANDIDATE_REGISTRATION.contract,
-        objective: `${PLAN_CANDIDATE_REGISTRATION.contract.objective} Drift fixture.`,
+        ...PLAN_PLAYBOOK_REGISTRATION.contract,
+        objective: `${PLAN_PLAYBOOK_REGISTRATION.contract.objective} Drift fixture.`,
       },
     };
     using replay = new OrchestrationService({
@@ -789,7 +789,7 @@ describe("provider-free orchestrated plan candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: new ScriptedPlanClient([]),
-      playbookRegistration: PLAN_CANDIDATE_REGISTRATION,
+      playbookRegistration: PLAN_PLAYBOOK_REGISTRATION,
     });
     const prior = service.artifacts.persist({
       metadata: {
@@ -830,7 +830,7 @@ describe("provider-free orchestrated plan candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: client,
-      playbookRegistration: PLAN_CANDIDATE_REGISTRATION,
+      playbookRegistration: PLAN_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const runId = `run-plan-cancel-${sequence}`;
@@ -850,7 +850,7 @@ describe("provider-free orchestrated plan candidate", () => {
       met: false,
       result: { execution_started: false, execution_authorized: false },
     });
-    expect(canonicalJson(PLAN_CANDIDATE_REGISTRATION.contract)).not.toMatch(
+    expect(canonicalJson(PLAN_PLAYBOOK_REGISTRATION.contract)).not.toMatch(
       /tabitha|task_graph|execution_state|approval_state|approval_gate|approval_product|sandbox enforcement/iu
     );
     expect(client.invocations).toHaveLength(0);

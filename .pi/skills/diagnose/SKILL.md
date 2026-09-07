@@ -5,7 +5,6 @@ disable-model-invocation: false
 metadata:
   penny:
     engine: orchestration
-    release_status: candidate
     mempalace: false
     subagents: [annie, ida, demetri, vera]
 ---
@@ -25,7 +24,7 @@ metadata:
 
 ## Invocation Boundary
 
-This package is a model-visible candidate: Pi native discovery and Penny's model-facing catalog may describe it, but it remains absent from the production registry and never self-enables or promotes. Model visibility grants no execution authority. Explicit `skill` invocation is available only when ignored host configuration enables the exact candidate contract digest. Candidate enablement is reversible and is not production admission or promotion.
+This is a model-visible, registered universal package. Pi native discovery and Penny's model-facing catalog may describe it, and explicit `skill` invocation is routed through the sole executable playbook registry with its bound contract. Model visibility does not bypass host-owned authorization or consequence boundaries.
 
 ## Orchestrated Flow
 
@@ -44,7 +43,7 @@ Vera returns only PASS or one closed gap kind and repair owner. Engine-owned rou
 
 ## Exact Artifact Handoff
 
-The host canonicalizes and persists `DiagnosisRequestV1`. Ordinary candidate phases omit `allowed_tools`, so runtime activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Other YAML tools may be used only when materially relevant, permitted by caller/task, and within the analysis-only phase consequence boundary; they cannot enlarge the closed supplied-evidence boundary, execute tests or probes, begin remediation, or mutate anything.
+The host canonicalizes and persists `DiagnosisRequestV1`. Ordinary workflow phases omit `allowed_tools`, so runtime activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Other YAML tools may be used only when materially relevant, permitted by caller/task, and within the analysis-only phase consequence boundary; they cannot enlarge the closed supplied-evidence boundary, execute tests or probes, begin remediation, or mutate anything.
 
 The request contains observations directly; Diagnose V1 accepts no caller artifact inputs and performs no external acquisition. Request, decomposition, hypotheses, draft, report, receipt, integrity, envelope, and feedback IDs are exact transport lineage, not independent semantic evidence. Normal-phase liveness caps external calls at 8 per worker and 64 per run, while routing-only repair remains at 0; these ceilings do not grant external-acquisition or action authority.
 

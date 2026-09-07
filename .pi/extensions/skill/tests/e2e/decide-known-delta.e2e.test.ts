@@ -5,8 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   ArtifactStore,
-  CANDIDATE_PLAYBOOK_REGISTRY,
-  DECIDE_CANDIDATE_REGISTRATION,
+  DECIDE_PLAYBOOK_REGISTRATION,
   PLAYBOOK_REGISTRY,
   OrchestrationService,
   canonicalJson,
@@ -31,7 +30,7 @@ import {
 } from "../../evaluation-contracts.js";
 import {
   DECIDE_EVALUATION_ABLATION_REGISTRY,
-  DECIDE_EVALUATION_CANDIDATE_REGISTRY,
+  DECIDE_EVALUATION_IMPLEMENTATION_REGISTRY,
   DIRECT_DECIDE_DEMETRI_BASELINE_NAME,
   DIRECT_DECIDE_DEMETRI_BASELINE_REGISTRATION,
   createDecisionEvaluationGradingDefinition,
@@ -225,7 +224,7 @@ function implementation(planValue: unknown) {
     },
   ];
   const evaluatedRegistrations = [
-    DECIDE_CANDIDATE_REGISTRATION,
+    DECIDE_PLAYBOOK_REGISTRATION,
     ...DECIDE_EVALUATION_ABLATION_REGISTRY.values(),
   ];
   const candidateFiles = evaluatedRegistrations.flatMap((registration) => {
@@ -288,7 +287,7 @@ function implementation(planValue: unknown) {
     population: population(),
     plan: planValue,
     baselineRegistration: DIRECT_DECIDE_DEMETRI_BASELINE_REGISTRATION,
-    candidateRegistry: DECIDE_EVALUATION_CANDIDATE_REGISTRY,
+    implementationRegistry: DECIDE_EVALUATION_IMPLEMENTATION_REGISTRY,
     ablationRegistry: DECIDE_EVALUATION_ABLATION_REGISTRY,
     gradingDefinition: grading,
     files: [
@@ -404,7 +403,7 @@ function mutationEntry(input: {
 }
 
 function decisionConsumerContract(): SkillContract {
-  const contract = structuredClone(DECIDE_CANDIDATE_REGISTRATION.contract);
+  const contract = structuredClone(DECIDE_PLAYBOOK_REGISTRATION.contract);
   contract.io.input_ports = [
     {
       schema_version: 1,
@@ -446,7 +445,7 @@ function productMutationEvidence(input: {
     projectRoot: PROJECT_ROOT,
     env: input.env,
     modelClient: new DecideKnownDeltaClient(input.planValue.runtime_binding, "decide"),
-    playbookRegistration: DECIDE_CANDIDATE_REGISTRATION,
+    playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
   });
   const sourceRef = input.control.output_ref;
   const sourceDecision = validateDecision(JSON.parse(input.control.output_bytes));
@@ -635,7 +634,7 @@ async function mutationMeasurement(input: {
     projectRoot: PROJECT_ROOT,
     env: input.env,
     baselineRegistration: DIRECT_DECIDE_DEMETRI_BASELINE_REGISTRATION,
-    candidateRegistry: DECIDE_EVALUATION_CANDIDATE_REGISTRY,
+    implementationRegistry: DECIDE_EVALUATION_IMPLEMENTATION_REGISTRY,
     ablationRegistry: DECIDE_EVALUATION_ABLATION_REGISTRY,
     modelClientFactory: scriptedFactory,
   });
@@ -731,7 +730,7 @@ describe("provider-free Decide known-delta and mutation E2E", () => {
       plan: planValue,
       projectRoot: PROJECT_ROOT,
       baselineRegistration: DIRECT_DECIDE_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: DECIDE_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: DECIDE_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...boundImplementation,
       ablationRegistry: DECIDE_EVALUATION_ABLATION_REGISTRY,
       gradingDefinition: grading,
@@ -805,7 +804,7 @@ describe("provider-free Decide known-delta and mutation E2E", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DECIDE_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: DECIDE_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: DECIDE_EVALUATION_IMPLEMENTATION_REGISTRY,
       ablationRegistry: DECIDE_EVALUATION_ABLATION_REGISTRY,
       modelClientFactory: modelFactory(),
     });
@@ -815,7 +814,7 @@ describe("provider-free Decide known-delta and mutation E2E", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DECIDE_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: DECIDE_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: DECIDE_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(planValue),
       ablationRegistry: DECIDE_EVALUATION_ABLATION_REGISTRY,
       executor,
@@ -845,14 +844,7 @@ describe("provider-free Decide known-delta and mutation E2E", () => {
     ]);
     expect(run.result.mutation_gate).toBeNull();
     expect(run.result.trial_accounting).toMatchObject({ scheduled: 3, complete: 3 });
-    expect(PLAYBOOK_REGISTRY.has("decide")).toBe(false);
-    expect([...CANDIDATE_PLAYBOOK_REGISTRY.keys()]).toEqual([
-      "assess",
-      "decide",
-      "diagnose",
-      "plan",
-      "produce",
-    ]);
+    expect(PLAYBOOK_REGISTRY.get("decide")).toBe(DECIDE_PLAYBOOK_REGISTRATION);
 
     const state = resolvePennyRuntimeState(PROJECT_ROOT, { env });
     using artifacts = ArtifactStore.openExisting(state.paths.artifacts.root, {

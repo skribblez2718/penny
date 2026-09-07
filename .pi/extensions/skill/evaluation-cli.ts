@@ -7,7 +7,7 @@ import { canonicalJson, initializePennyState } from "@penny/orchestration/source
 import {
   DIRECT_DEMETRI_BASELINE_REGISTRATION,
   GenericEvaluationTrialExecutor,
-  SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+  SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
   runPairedEvaluation,
   syntheticEvaluationImplementationBinding,
   syntheticEvaluationRuntimeFunctions,
@@ -94,7 +94,7 @@ async function main(argv: readonly string[]): Promise<void> {
       projectRoot,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       modelClientFactory: syntheticKnownDeltaModelClientFactory(),
     });
     const run = await runPairedEvaluation({
@@ -103,7 +103,7 @@ async function main(argv: readonly string[]): Promise<void> {
       projectRoot,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       executor,
       implementationBinding,
       runtimeFunctions,

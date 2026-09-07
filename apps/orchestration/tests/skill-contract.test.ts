@@ -118,7 +118,15 @@ describe("P2 contract fails closed", () => {
     expect(() => validateRegistrationContract(mismatched)).toThrow(/does not match registration/);
   });
 
-  it("ships only research and knowledge-base", () => {
-    expect(PLAYBOOK_REGISTRY.size).toBe(2);
+  it("ships the complete universal workflow registry", () => {
+    expect([...PLAYBOOK_REGISTRY.keys()].sort()).toEqual([
+      "assess",
+      "decide",
+      "diagnose",
+      "knowledge-base",
+      "plan",
+      "produce",
+      "research",
+    ]);
   });
 });

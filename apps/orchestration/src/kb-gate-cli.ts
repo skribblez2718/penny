@@ -760,8 +760,15 @@ function main(argv: string[]): void {
     return;
   }
   const [cmd, ...rest] = argv;
-  const args = parseArgs(rest);
+  const parsedArgs = parseArgs(rest);
   try {
+    // Collapse project-root aliases once at the process boundary. Every later
+    // host-state, grant, capability, and source-path derivation uses the same
+    // catalog-bound canonical identity.
+    const args: Args = {
+      ...parsedArgs,
+      projectRoot: loadRuntimeConfig(parsedArgs.projectRoot, process.env).projectRoot,
+    };
     switch (cmd) {
       case "capability-mint":
         cmdCapabilityMint(args);

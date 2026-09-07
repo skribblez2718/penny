@@ -5,7 +5,6 @@ metadata:
   version: "1.0.0"
   penny:
     engine: orchestration
-    release_status: production
     entrypoint: pi-tool
     tool: knowledge_base
     mempalace: metadata-only

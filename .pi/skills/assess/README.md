@@ -1,6 +1,6 @@
 # Assess candidate
 
-`assess` is a source-defined orchestration candidate for one evidence-linked categorical assessment of a closed inline target. It is model-visible: Pi native discovery and Penny's model-facing catalog may describe it, but visibility grants no execution authority. It remains outside the production registry and never self-enables or promotes. Explicit `skill` invocation is available only when ignored host configuration enables its exact contract digest.
+`assess` is a registered universal orchestration workflow for one evidence-linked categorical assessment of a closed inline target. It is model-visible through Pi native discovery and Penny's model-facing catalog; explicit `skill` invocation is routed through the sole executable playbook registry and its bound contract. Model visibility grants no authority to bypass host consequence boundaries.
 
 ```text
 host intake → Annie analysis → Carren assessment draft → host seal
@@ -25,7 +25,7 @@ host intake → Annie analysis → Carren assessment draft → host seal
 - Closed inline request only; V1 accepts no caller artifacts.
 - Supplied evidence is caller-provided task material, not independently verified evidence.
 - Categorical truth only: no numeric score, weighted total, ranking, or invented precision.
-- Ordinary candidate phases omit `allowed_tools`; runtime therefore activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for exact predecessors, and no other channel may replace a missing predecessor ref.
+- Ordinary workflow phases omit `allowed_tools`; runtime therefore activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for exact predecessors, and no other channel may replace a missing predecessor ref.
 - Other YAML tools are usable only when materially relevant and allowed by caller/task and phase boundaries. Normal-phase external calls are capped at 8 per worker and 64 per run; routing-only repair stays at 0. These ceilings do not authorize browsing, fetching, external verification, execution, filesystem writing, change initiation, mutation, approval, enablement, or promotion.
 - Carren is the assessment author, so no separate Carren approval receipt exists.
 - Vera `analysis_gap` and `evidence_gap` route to Annie then Carren; `assessment_product_gap` routes to Carren. Every revision is resealed and reverified.

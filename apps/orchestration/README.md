@@ -4,11 +4,11 @@ Penny’s sole orchestration runtime. The package owns playbook dispatch, closed
 request/directive contracts, durable Node SQLite checkpoints, exact owner artifacts,
 signed worker receipts, gates, recovery, and digest-only observability.
 
-The production registry contains `research` and `knowledge-base`; the separate candidate registry
-contains disabled `decide` and `plan` registrations. Every package lives under `.pi/skills` and is
-classified by its parsed release status, not its directory. Package and registry namespaces must
-agree exactly. Skills carry static manifests, prompts, and resources; they do not ship executable
-delegates.
+`PLAYBOOK_REGISTRY` is the sole executable registry and contains every registered workflow. Every
+package lives under `.pi/skills`. A model-invocable orchestration package must have a matching
+registration; a model-disabled development package may remain unregistered but generic execution
+then refuses safely. Skills carry static manifests, prompts, and resources; they do not ship
+executable delegates.
 
 ## Runtime
 
@@ -64,8 +64,10 @@ Pi's `getAgentDir()` honors `PI_CODING_AGENT_DIR`. `PENNY_STATE_ROOT` is the onl
 Penny-specific state-root override and must be absolute.
 
 Projects are registered by a commitment to their canonical root and receive an opaque
-random project ID. Raw project paths are not stored in `catalog.db`. Current target paths
-include:
+random project ID. Raw project paths are not stored in `catalog.db`. Both orchestration
+CLIs resolve `--project-root` through that catalog at process entry and use only the
+canonical root thereafter, so a symlink alias cannot create a second project identity or
+leak into persisted/project-relative paths. Current target paths include:
 
 ```text
 <Penny state root>/
@@ -197,8 +199,8 @@ publishes a deletion receipt. It is never reachable from ordinary startup or mod
   equality-sized lists, then passes the accepted list exactly to Pi and checks active equality
   before the prompt. Task, trust profile, input, runtime condition, model/liveness policy,
   context, typed product, and optional-service state cannot select tools. Ordinary Assess, Decide,
-  Diagnose, Plan, and Produce candidate phases omit `allowed_tools`, use exact agent YAML, and have
-  normal external-call ceilings of 8 per worker and 64 per run; routing-only repair stays at 0.
+  Diagnose, Plan, and Produce phases omit `allowed_tools`, use exact agent YAML, and have normal
+  external-call ceilings of 8 per worker and 64 per run; routing-only repair stays at 0.
   Evaluation-only baselines or ablations may retain strict subsets. A subset changes no agent
   metadata/profile and supplies no OS/process sandbox or extension-code isolation. KB workers remain
   anonymous host-private sessions with their existing phase-specific matrices.

@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  PLAN_CANDIDATE_REGISTRATION,
+  PLAN_PLAYBOOK_REGISTRATION,
   canonicalJson,
   sha256,
   skillContractSha256,
@@ -24,7 +24,7 @@ import {
 import {
   DIRECT_PIPER_PLAN_BASELINE_NAME,
   DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
-  PLAN_EVALUATION_CANDIDATE_REGISTRY,
+  PLAN_EVALUATION_IMPLEMENTATION_REGISTRY,
   createPlanPartBGradingDefinition,
   validatePlanEvaluationCommonWire,
   validatePlanPartBOracleSet,
@@ -197,7 +197,7 @@ function implementation(planValue: unknown) {
     population: population(),
     plan: planValue,
     baselineRegistration: DIRECT_PIPER_PLAN_BASELINE_REGISTRATION,
-    candidateRegistry: PLAN_EVALUATION_CANDIDATE_REGISTRY,
+    implementationRegistry: PLAN_EVALUATION_IMPLEMENTATION_REGISTRY,
     ablationRegistry: EMPTY_ABLATION_REGISTRY,
     gradingDefinition,
     files: [
@@ -331,11 +331,11 @@ describe("pre-registered Plan Part B product-level evaluation", () => {
       gradingDefinition.descriptor.semantic_normalizers.map((item) => item.registration_name)
     ).toEqual([DIRECT_PIPER_PLAN_BASELINE_NAME, "plan"]);
     expect(planValue.candidate.contract_sha256).not.toBe(
-      skillContractSha256(PLAN_CANDIDATE_REGISTRATION.contract)
+      skillContractSha256(PLAN_PLAYBOOK_REGISTRATION.contract)
     );
     expect(planValue.implementation_binding_sha256).toMatch(/^[a-f0-9]{64}$/u);
     expect(() => implementation(planValue)).toThrow(
-      /candidate registration is unavailable or stale/iu
+      /implementation registration is unavailable or stale/iu
     );
     expect(planValue).toMatchObject({
       material_effect_threshold: 0,
@@ -386,6 +386,6 @@ describe("pre-registered Plan Part B product-level evaluation", () => {
     );
     expect(bytes).toContain(task.goal);
     expect(bytes).toContain("desired_outcomes");
-    expect(PLAN_CANDIDATE_REGISTRATION.contract.release_status).toBe("candidate");
+    expect(PLAN_PLAYBOOK_REGISTRATION.contract).not.toHaveProperty("release_status");
   });
 });

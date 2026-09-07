@@ -16,7 +16,7 @@ import {
   type ModelClient,
 } from "../src/model-client.js";
 import {
-  DECIDE_CANDIDATE_REGISTRATION,
+  DECIDE_PLAYBOOK_REGISTRATION,
   DECIDE_UNSEALED_EVALUATION_REGISTRATION,
 } from "../src/playbooks/decide.js";
 import { resolvePlaybook } from "../src/playbooks/registry.js";
@@ -130,11 +130,11 @@ describe("W6 active worker registration", () => {
     expect(client.invocations[0]?.registration.allowed_tools).toBeUndefined();
   });
 
-  it("omits the subset for an ordinary candidate phase and copies the registration-bound evaluation subset", async () => {
+  it("omits the subset for an ordinary workflow phase and copies the registration-bound evaluation subset", async () => {
     const root = temporaryRoot();
     using artifacts = new ArtifactStore(path.join(root, "artifacts"));
     const client = new CapturingClient();
-    const worker = DECIDE_CANDIDATE_REGISTRATION.worker;
+    const worker = DECIDE_PLAYBOOK_REGISTRATION.worker;
     if (worker.kind !== "catalog-agent") throw new Error("decide candidate worker is absent");
     const phase = worker.phases.get("deciding");
     if (phase === undefined) throw new Error("deciding phase is absent");
@@ -149,14 +149,14 @@ describe("W6 active worker registration", () => {
     const ordinary = new WorkerExecutor(client, artifacts, {
       projectRoot: PROJECT_ROOT,
       parallelConcurrency: 1,
-      registration: DECIDE_CANDIDATE_REGISTRATION,
+      registration: DECIDE_PLAYBOOK_REGISTRATION,
     });
 
     await expect(
       ordinary.execute(
         researchDirective({
           runId: "run-candidate-subset-capture",
-          playbook: DECIDE_CANDIDATE_REGISTRATION.name,
+          playbook: DECIDE_PLAYBOOK_REGISTRATION.name,
           stateId: "deciding",
           agent: phase.agent,
         })

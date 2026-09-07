@@ -38,18 +38,11 @@ function ref(runId: string, kind: "agent-output", operationId: string) {
   return expectedArtifactRef(metadata, "exact terminal bytes");
 }
 
-function checkpoint(
-  projectId: string,
-  handoffRun = "research-2",
-  schemaVersion: 1 | 2 = 1
-): ChainCheckpoint {
+function checkpoint(projectId: string, handoffRun = "research-2"): ChainCheckpoint {
   const now = "2026-08-15T12:00:00.000Z";
-  const binding =
-    schemaVersion === 2
-      ? { release_status: "production" as const, contract_sha256: "a".repeat(64) }
-      : {};
+  const binding = { contract_sha256: "a".repeat(64) };
   return {
-    schema_version: schemaVersion,
+    schema_version: 3,
     state_layout_version: 1,
     project_id: projectId,
     chain_session_id: CHAIN_ID,
@@ -139,18 +132,18 @@ describe("durable skill-chain checkpoints", () => {
     expect(recovered?.steps[1]?.input_artifacts).toEqual([`art_${"1".repeat(64)}`]);
   });
 
-  it("writes schema-v2 release/digest bindings and still reads production-only schema v1", () => {
+  it("writes schema-v3 digest bindings without release metadata", () => {
     const { projectRoot, env, projectId } = stateFixture();
-    const current = checkpoint(projectId, "research-2", 2);
+    const current = checkpoint(projectId);
     saveChainCheckpoint(current, projectRoot, env);
     const recovered = readChainCheckpoint(CHAIN_ID, projectRoot, env);
-    expect(recovered?.schema_version).toBe(2);
+    expect(recovered?.schema_version).toBe(3);
     expect(recovered?.steps[0]).toMatchObject({
-      release_status: "production",
       contract_sha256: "a".repeat(64),
     });
+    expect(recovered?.steps[0]).not.toHaveProperty("release_status");
 
-    const missingBinding = checkpoint(projectId, "research-2", 2);
+    const missingBinding = checkpoint(projectId);
     const first = missingBinding.steps[0];
     if (first === undefined) throw new Error("checkpoint fixture has no first step");
     delete first.contract_sha256;

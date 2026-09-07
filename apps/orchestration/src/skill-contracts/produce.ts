@@ -113,13 +113,47 @@ export const ArtifactApproachV1Schema = Type.Object(
   {
     schema_version: Type.Literal(1),
     approaches: Type.Array(ApproachOptionV1Schema, { minItems: 2, maxItems: MAX_APPROACHES }),
-    recommended_approach_id: OpaqueIdSchema,
-    recommendation_rationale: TextSchema({ minBytes: 1, maxBytes: 8_192, multiline: true }),
     confidence: ConfidenceSchema,
   },
   { additionalProperties: false }
 );
 export type ArtifactApproachV1 = Readonly<Static<typeof ArtifactApproachV1Schema>>;
+
+const ApproachAssessmentV1Schema = Type.Object(
+  {
+    approach_id: OpaqueIdSchema,
+    feasibility: Type.Union([
+      Type.Literal("feasible"),
+      Type.Literal("infeasible"),
+      Type.Literal("undetermined"),
+    ]),
+    comparison: TextSchema({ minBytes: 1, maxBytes: 4_096, multiline: true }),
+  },
+  { additionalProperties: false }
+);
+
+export const ArtifactApproachDecisionV1Schema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    disposition: Type.Union([Type.Literal("selected"), Type.Literal("unresolved")]),
+    approach_assessments: Type.Array(ApproachAssessmentV1Schema, {
+      minItems: 2,
+      maxItems: MAX_APPROACHES,
+    }),
+    selected_approach_id: Type.Union([OpaqueIdSchema, Type.Null()]),
+    rationale: TextSchema({ minBytes: 1, maxBytes: 8_192, multiline: true }),
+    sensitivity: Type.Array(TextSchema({ minBytes: 1, maxBytes: 4_096, multiline: true }), {
+      minItems: 1,
+      maxItems: 16,
+    }),
+    blocking_questions: Type.Array(TextSchema({ minBytes: 1, maxBytes: 4_096, multiline: true }), {
+      maxItems: 16,
+    }),
+    confidence: ConfidenceSchema,
+  },
+  { additionalProperties: false }
+);
+export type ArtifactApproachDecisionV1 = Readonly<Static<typeof ArtifactApproachDecisionV1Schema>>;
 
 const RequestIndexSchema = Type.Integer({ minimum: 0, maximum: MAX_SOURCE_ITEMS - 1 });
 const RequestIndexesSchema = Type.Array(RequestIndexSchema, {
@@ -188,6 +222,8 @@ const ProducedArtifactSourceLineagePreimageV1Schema = Type.Object(
     request_artifact_sha256: Sha256Schema,
     approach_artifact_id: ArtifactIdSchema,
     approach_artifact_sha256: Sha256Schema,
+    decision_artifact_id: ArtifactIdSchema,
+    decision_artifact_sha256: Sha256Schema,
     draft_artifact_id: ArtifactIdSchema,
     draft_artifact_sha256: Sha256Schema,
     draft_sha256: Sha256Schema,
@@ -266,6 +302,18 @@ const ProduceRoutingSummaryV1Schema = Type.Object(
 );
 export type ProduceRoutingSummaryV1 = Readonly<Static<typeof ProduceRoutingSummaryV1Schema>>;
 
+const ProduceApproachDecisionRoutingSummaryV1Schema = Type.Object(
+  {
+    confidence: ConfidenceSchema,
+    complete: Type.Literal(true),
+    disposition: Type.Union([Type.Literal("selected"), Type.Literal("unresolved")]),
+  },
+  { additionalProperties: false }
+);
+export type ProduceApproachDecisionRoutingSummaryV1 = Readonly<
+  Static<typeof ProduceApproachDecisionRoutingSummaryV1Schema>
+>;
+
 export const ProduceQualityReceiptV1Schema = Type.Object(
   {
     schema_id: Type.Literal("penny.produce-quality-receipt.v1"),
@@ -276,6 +324,7 @@ export const ProduceQualityReceiptV1Schema = Type.Object(
     reviewer: Type.Literal("carren"),
     request_ref: ArtifactRefSchema,
     approach_ref: ArtifactRefSchema,
+    decision_ref: ArtifactRefSchema,
     draft_ref: ArtifactRefSchema,
     product_ref: ArtifactRefSchema,
     carren_report_ref: ArtifactRefSchema,
@@ -301,6 +350,7 @@ export const ProduceValidityReceiptV1Schema = Type.Object(
     reviewer: Type.Literal("vera"),
     request_ref: ArtifactRefSchema,
     approach_ref: ArtifactRefSchema,
+    decision_ref: ArtifactRefSchema,
     draft_ref: ArtifactRefSchema,
     product_ref: ArtifactRefSchema,
     carren_report_ref: ArtifactRefSchema,
@@ -337,6 +387,7 @@ export const ProduceProductIntegrityV1Schema = Type.Object(
     status: Type.Literal("PASS"),
     request_ref: ArtifactRefSchema,
     approach_ref: ArtifactRefSchema,
+    decision_ref: ArtifactRefSchema,
     draft_ref: ArtifactRefSchema,
     product_ref: ArtifactRefSchema,
     carren_report_ref: ArtifactRefSchema,
@@ -344,7 +395,7 @@ export const ProduceProductIntegrityV1Schema = Type.Object(
     quality_receipt_ref: ArtifactRefSchema,
     validity_receipt_ref: ArtifactRefSchema,
     execution_receipt_ids: Type.Array(OpaqueIdSchema, {
-      minItems: 4,
+      minItems: 5,
       maxItems: 16,
       uniqueItems: true,
     }),
@@ -378,6 +429,7 @@ export const ProduceProductEnvelopeV1Schema = Type.Object(
     status: Type.Literal("complete"),
     request_ref: ArtifactRefSchema,
     approach_ref: ArtifactRefSchema,
+    decision_ref: ArtifactRefSchema,
     draft_ref: ArtifactRefSchema,
     product_ref: ArtifactRefSchema,
     carren_report_ref: ArtifactRefSchema,
@@ -606,13 +658,61 @@ export function validateArtifactApproach(value: unknown): ArtifactApproachV1 {
     }
   }
   assertUnique(ids, "ArtifactApproachV1 approach IDs");
-  if (!ids.includes(approach.recommended_approach_id)) {
-    throw new SkillSchemaValidationError("ArtifactApproachV1", [
-      "recommended_approach_id must name one supplied approach",
+  return approach;
+}
+
+export function validateArtifactApproachDecision(
+  value: unknown,
+  input: { readonly approach: unknown }
+): ArtifactApproachDecisionV1 {
+  const approach = validateArtifactApproach(input.approach);
+  const decision = validateSkillSchema(
+    ArtifactApproachDecisionV1Schema,
+    value,
+    "ArtifactApproachDecisionV1"
+  );
+  const approachIds = approach.approaches.map((item) => item.approach_id);
+  const assessedIds = decision.approach_assessments.map((item) => item.approach_id);
+  for (const assessment of decision.approach_assessments) {
+    assertOpaqueId(assessment.approach_id, "ArtifactApproachDecisionV1 approach ID");
+    validateText(assessment.comparison, "ArtifactApproachDecisionV1 comparison", 4_096);
+  }
+  assertUnique(assessedIds, "ArtifactApproachDecisionV1 assessed approach IDs");
+  if (canonicalJson([...assessedIds].sort()) !== canonicalJson([...approachIds].sort())) {
+    throw new SkillSchemaValidationError("ArtifactApproachDecisionV1", [
+      "approach_assessments must cover every exact Ida approach exactly once",
     ]);
   }
-  validateText(approach.recommendation_rationale, "ArtifactApproachV1 rationale", 8_192);
-  return approach;
+  validateText(decision.rationale, "ArtifactApproachDecisionV1 rationale", 8_192);
+  for (const item of decision.sensitivity) {
+    validateText(item, "ArtifactApproachDecisionV1 sensitivity", 4_096);
+  }
+  for (const item of decision.blocking_questions) {
+    validateText(item, "ArtifactApproachDecisionV1 blocking question", 4_096);
+  }
+  if (decision.disposition === "selected") {
+    const selected = decision.approach_assessments.find(
+      (item) => item.approach_id === decision.selected_approach_id
+    );
+    if (
+      decision.selected_approach_id === null ||
+      selected?.feasibility !== "feasible" ||
+      decision.blocking_questions.length !== 0
+    ) {
+      throw new SkillSchemaValidationError("ArtifactApproachDecisionV1", [
+        "selected disposition requires one feasible in-set approach and no blocking questions",
+      ]);
+    }
+  } else if (
+    decision.selected_approach_id !== null ||
+    decision.blocking_questions.length === 0 ||
+    decision.confidence !== "UNCERTAIN"
+  ) {
+    throw new SkillSchemaValidationError("ArtifactApproachDecisionV1", [
+      "unresolved disposition requires no selection, concrete blocking questions, and UNCERTAIN confidence",
+    ]);
+  }
+  return decision;
 }
 
 function validateDraftShape(value: unknown): ProducedArtifactDraftV1 {
@@ -653,10 +753,15 @@ export function validateProducedArtifactDraft(
 }
 
 const APPROACH_PREFIX = "ARTIFACT_APPROACH:";
+const APPROACH_DECISION_PREFIX = "ARTIFACT_APPROACH_DECISION:";
 const DRAFT_PREFIX = "PRODUCED_ARTIFACT_DRAFT:";
 const SUMMARY_PREFIX = "SUMMARY:";
 
-function parseExactSummary(value: string): ProduceRoutingSummaryV1 | undefined {
+function parseExactSummary<T>(
+  value: string,
+  validate: (parsed: unknown) => T,
+  exactText: (summary: T) => string
+): T | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
@@ -664,27 +769,25 @@ function parseExactSummary(value: string): ProduceRoutingSummaryV1 | undefined {
     return undefined;
   }
   try {
-    const summary = validateSkillSchema(
-      ProduceRoutingSummaryV1Schema,
-      parsed,
-      "Produce routing summary"
-    );
-    return `{"confidence":"${summary.confidence}","complete":true}` === value ? summary : undefined;
+    const summary = validate(parsed);
+    return exactText(summary) === value ? summary : undefined;
   } catch {
     return undefined;
   }
 }
 
-function parseTwoLineCore<T>(
+function parseTwoLineCore<T, S extends { readonly confidence: string }>(
   bytes: Uint8Array,
   input: {
     readonly prefix: string;
     readonly label: string;
     readonly maximumBytes: number;
     readonly validate: (value: unknown) => T;
+    readonly validateSummary: (value: unknown) => S;
+    readonly summaryText: (summary: S) => string;
     readonly confidence: (value: T) => string;
   }
-): { readonly value: T; readonly summary: ProduceRoutingSummaryV1 } {
+): { readonly value: T; readonly summary: S } {
   const body = Buffer.from(bytes);
   if (body.length === 0 || body.length > input.maximumBytes) {
     throw new ProduceDraftValidationError("FRAMING_INVALID", [
@@ -722,7 +825,11 @@ function parseTwoLineCore<T>(
     ]);
   }
   const coreText = lines[0].slice(input.prefix.length);
-  const summary = parseExactSummary(lines[1].slice(SUMMARY_PREFIX.length));
+  const summary = parseExactSummary(
+    lines[1].slice(SUMMARY_PREFIX.length),
+    input.validateSummary,
+    input.summaryText
+  );
   if (coreText.length === 0 || summary === undefined) {
     throw new ProduceDraftValidationError("FRAMING_INVALID", [
       `${input.label} core or SUMMARY framing is invalid`,
@@ -767,9 +874,42 @@ export function parsePersistedArtifactApproach(bytes: Uint8Array): {
     label: "ArtifactApproachV1",
     maximumBytes: 65_536,
     validate: validateArtifactApproach,
+    validateSummary: (value) =>
+      validateSkillSchema(ProduceRoutingSummaryV1Schema, value, "Produce routing summary"),
+    summaryText: (summary) => `{"confidence":"${summary.confidence}","complete":true}`,
     confidence: (value) => value.confidence,
   });
   return { approach: parsed.value, summary: parsed.summary };
+}
+
+export function parsePersistedArtifactApproachDecision(
+  bytes: Uint8Array,
+  input: { readonly approach: unknown }
+): {
+  readonly decision: ArtifactApproachDecisionV1;
+  readonly summary: ProduceApproachDecisionRoutingSummaryV1;
+} {
+  const parsed = parseTwoLineCore(bytes, {
+    prefix: APPROACH_DECISION_PREFIX,
+    label: "ArtifactApproachDecisionV1",
+    maximumBytes: 65_536,
+    validate: (value) => validateArtifactApproachDecision(value, input),
+    validateSummary: (value) =>
+      validateSkillSchema(
+        ProduceApproachDecisionRoutingSummaryV1Schema,
+        value,
+        "Produce approach-decision routing summary"
+      ),
+    summaryText: (summary) =>
+      `{"confidence":"${summary.confidence}","complete":true,"disposition":"${summary.disposition}"}`,
+    confidence: (value) => value.confidence,
+  });
+  if (parsed.value.disposition !== parsed.summary.disposition) {
+    throw new ProduceDraftValidationError("SEMANTIC_INVALID", [
+      "ArtifactApproachDecisionV1 disposition must equal SUMMARY disposition",
+    ]);
+  }
+  return { decision: parsed.value, summary: parsed.summary };
 }
 
 export function parsePersistedProducedArtifactDraft(
@@ -781,6 +921,9 @@ export function parsePersistedProducedArtifactDraft(
     label: "ProducedArtifactDraftV1",
     maximumBytes: MAX_PERSISTED_PRODUCE_DRAFT_BYTES,
     validate: (value) => validateProducedArtifactDraft(value, input),
+    validateSummary: (value) =>
+      validateSkillSchema(ProduceRoutingSummaryV1Schema, value, "Produce routing summary"),
+    summaryText: (summary) => `{"confidence":"${summary.confidence}","complete":true}`,
     confidence: (value) => value.confidence,
   });
   return { draft: parsed.value, summary: parsed.summary };
@@ -794,6 +937,24 @@ export function artifactApproachPromptContract(): string {
         "exactly ARTIFACT_APPROACH:<canonical-single-line-JSON> then SUMMARY:<compact-JSON>",
       approach_count: { minimum: 2, maximum: MAX_APPROACHES },
       final_artifact_authorship: "forbidden",
+    },
+  });
+}
+
+export function artifactApproachDecisionPromptContract(): string {
+  return canonicalJson({
+    schema: ArtifactApproachDecisionV1Schema,
+    transport: {
+      canonical_framing:
+        "exactly ARTIFACT_APPROACH_DECISION:<canonical-single-line-JSON> then SUMMARY:<compact-JSON>",
+      complete_approach_assessment: "every exact Ida approach exactly once",
+      final_artifact_authorship: "forbidden",
+    },
+    disposition: {
+      selected:
+        "one feasible in-set selected_approach_id, no blocking questions, and explicit sensitivity",
+      unresolved:
+        "null selected_approach_id, concrete blocking questions, UNCERTAIN confidence, and no downstream materialization",
     },
   });
 }
@@ -852,9 +1013,10 @@ function sourceMaterialLineage(request: ProduceRequestV1) {
 function assertProduceSourceRefs(input: {
   readonly requestRef: ArtifactRef;
   readonly approachRef: ArtifactRef;
+  readonly decisionRef: ArtifactRef;
   readonly draftRef: ArtifactRef;
 }): void {
-  const refs = [input.requestRef, input.approachRef, input.draftRef];
+  const refs = [input.requestRef, input.approachRef, input.decisionRef, input.draftRef];
   if (
     input.requestRef.kind !== "produce-request" ||
     input.requestRef.phase !== "intake" ||
@@ -866,6 +1028,12 @@ function assertProduceSourceRefs(input: {
     input.approachRef.producer !== "agent:ida" ||
     input.approachRef.content_schema?.schema_id !== "penny.artifact-approach.v1" ||
     input.approachRef.content_schema.schema_version !== 1 ||
+    input.decisionRef.kind !== "artifact-approach-decision" ||
+    input.decisionRef.phase !== "selecting_artifact_approach" ||
+    input.decisionRef.branch_id !== null ||
+    input.decisionRef.producer !== "agent:demetri" ||
+    input.decisionRef.content_schema?.schema_id !== "penny.artifact-approach-decision.v1" ||
+    input.decisionRef.content_schema.schema_version !== 1 ||
     input.draftRef.kind !== "produced-artifact-draft" ||
     input.draftRef.phase !== "materializing_artifact" ||
     input.draftRef.branch_id !== null ||
@@ -884,6 +1052,7 @@ export function sealProducedArtifact(input: {
   readonly draft: unknown;
   readonly requestRef: ArtifactRef;
   readonly approachRef: ArtifactRef;
+  readonly decisionRef: ArtifactRef;
   readonly draftRef: ArtifactRef;
 }): ProducedArtifactV1 {
   const request = validateProduceRequest(input.request);
@@ -894,6 +1063,8 @@ export function sealProducedArtifact(input: {
     request_artifact_sha256: input.requestRef.content_digest,
     approach_artifact_id: input.approachRef.artifact_id,
     approach_artifact_sha256: input.approachRef.content_digest,
+    decision_artifact_id: input.decisionRef.artifact_id,
+    decision_artifact_sha256: input.decisionRef.content_digest,
     draft_artifact_id: input.draftRef.artifact_id,
     draft_artifact_sha256: input.draftRef.content_digest,
     draft_sha256: sha256(canonicalJson(draft)),
@@ -946,6 +1117,8 @@ export function validateProducedArtifact(value: unknown): ProducedArtifactV1 {
     request_artifact_sha256: product.source_lineage.request_artifact_sha256,
     approach_artifact_id: product.source_lineage.approach_artifact_id,
     approach_artifact_sha256: product.source_lineage.approach_artifact_sha256,
+    decision_artifact_id: product.source_lineage.decision_artifact_id,
+    decision_artifact_sha256: product.source_lineage.decision_artifact_sha256,
     draft_artifact_id: product.source_lineage.draft_artifact_id,
     draft_artifact_sha256: product.source_lineage.draft_artifact_sha256,
     draft_sha256: product.source_lineage.draft_sha256,
@@ -955,7 +1128,12 @@ export function validateProducedArtifact(value: unknown): ProducedArtifactV1 {
     throw new Error("ProducedArtifactV1 source lineage digest drifted");
   }
   assertUnique(
-    [lineage.request_artifact_id, lineage.approach_artifact_id, lineage.draft_artifact_id],
+    [
+      lineage.request_artifact_id,
+      lineage.approach_artifact_id,
+      lineage.decision_artifact_id,
+      lineage.draft_artifact_id,
+    ],
     "ProducedArtifactV1 source lineage artifact IDs"
   );
   if (
@@ -973,6 +1151,7 @@ export function assertProducedArtifactLineage(input: {
   readonly draft: unknown;
   readonly requestRef: ArtifactRef;
   readonly approachRef: ArtifactRef;
+  readonly decisionRef: ArtifactRef;
   readonly draftRef: ArtifactRef;
 }): ProducedArtifactV1 {
   const expected = sealProducedArtifact(input);
@@ -1033,10 +1212,17 @@ function assertCommonSubjectRefs(input: {
   readonly runId: string;
   readonly requestRef: ArtifactRef;
   readonly approachRef: ArtifactRef;
+  readonly decisionRef: ArtifactRef;
   readonly draftRef: ArtifactRef;
   readonly productRef: ArtifactRef;
 }): void {
-  const refs = [input.requestRef, input.approachRef, input.draftRef, input.productRef];
+  const refs = [
+    input.requestRef,
+    input.approachRef,
+    input.decisionRef,
+    input.draftRef,
+    input.productRef,
+  ];
   if (
     refs.some((ref) => ref.run_id !== input.runId) ||
     input.requestRef.kind !== "produce-request" ||
@@ -1045,6 +1231,9 @@ function assertCommonSubjectRefs(input: {
     input.approachRef.kind !== "artifact-approach" ||
     input.approachRef.phase !== "exploring_artifact_approaches" ||
     input.approachRef.producer !== "agent:ida" ||
+    input.decisionRef.kind !== "artifact-approach-decision" ||
+    input.decisionRef.phase !== "selecting_artifact_approach" ||
+    input.decisionRef.producer !== "agent:demetri" ||
     input.draftRef.kind !== "produced-artifact-draft" ||
     input.draftRef.phase !== "materializing_artifact" ||
     input.draftRef.producer !== "agent:skribble" ||
@@ -1078,6 +1267,7 @@ export function validateProduceQualityReceipt(value: unknown): ProduceQualityRec
     runId: receipt.run_id,
     requestRef: receipt.request_ref,
     approachRef: receipt.approach_ref,
+    decisionRef: receipt.decision_ref,
     draftRef: receipt.draft_ref,
     productRef: receipt.product_ref,
   });
@@ -1113,6 +1303,7 @@ export function validateProduceValidityReceipt(value: unknown): ProduceValidityR
     runId: receipt.run_id,
     requestRef: receipt.request_ref,
     approachRef: receipt.approach_ref,
+    decisionRef: receipt.decision_ref,
     draftRef: receipt.draft_ref,
     productRef: receipt.product_ref,
   });
@@ -1158,6 +1349,7 @@ export function validateProduceProductIntegrity(value: unknown): ProduceProductI
     runId,
     requestRef: integrity.request_ref,
     approachRef: integrity.approach_ref,
+    decisionRef: integrity.decision_ref,
     draftRef: integrity.draft_ref,
     productRef: integrity.product_ref,
   });
@@ -1207,6 +1399,7 @@ export function validateProduceProductEnvelope(value: unknown): ProduceProductEn
     runId: envelope.run_id,
     requestRef: envelope.request_ref,
     approachRef: envelope.approach_ref,
+    decisionRef: envelope.decision_ref,
     draftRef: envelope.draft_ref,
     productRef: envelope.product_ref,
   });

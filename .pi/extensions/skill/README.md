@@ -18,7 +18,7 @@ No Python process, per-skill executable delegate, or legacy checkpoint conversio
 
 ## Modes
 
-- **Single:** one production or explicitly enabled candidate `ingress:skill` registration.
+- **Single:** one registered `ingress:skill` workflow.
 - **Parallel:** independent TypeScript runs with bounded concurrency.
 - **Chain:** sequential TypeScript runs with exact terminal-artifact handoff.
 - **Resume:** reloads the durable owner-only chain checkpoint and resumes the failed step.
@@ -35,11 +35,11 @@ also preserves text-only partial updates rather than replacing them with `No res
 For chain handoff, the owner verifies and forwards the prior terminal artifact ID directly;
 cross-run reads require no target-run copy. `{previous}` becomes a bounded instruction
 identifying that ID, never payload text. Additional explicit IDs may be supplied for
-multi-source fan-in. Schema-v2 chain checkpoints retain exact terminal/handoff refs plus every step's release status and
-canonical `sha256(canonicalJson(SkillContractV2))` across restart. Schema-v1 checkpoints remain
-readable for production registrations only. A generic failure stops with exact refs and
-`resumable:true`; it does not manufacture an approve-retry/skip/diagnose questionnaire. Genuine
-playbook clarification still surfaces the registration's `await_user` questions.
+multi-source fan-in. Schema-v3 chain checkpoints retain exact terminal/handoff refs plus every step's canonical
+`sha256(canonicalJson(SkillContractV2))` across restart. Legacy checkpoints without an immutable
+contract digest fail closed on resume. A generic failure stops with exact refs and `resumable:true`;
+it does not manufacture an approve-retry/skip/diagnose questionnaire. Genuine playbook clarification
+still surfaces the registration's `await_user` questions.
 
 ## Catalog visibility and entrypoints
 
@@ -50,25 +50,19 @@ admission, liveness/thinking, worker opening/guidance, phase schemas, and model 
 knowledge-base profile remains `dedicated_tool` and deliberately exposes its separate typed
 `knowledge_base` entrypoint. The extension registers both tools, and unit coverage rejects registration drift.
 
-## Production and candidate resolution
+## Registered skill resolution
 
 `$PROJECT_ROOT/.pi/skills/<name>/` is the only active package root. The extension discovers that root
-once, parses `metadata.penny.release_status`, and requires exact package↔registry agreement.
-`PLAYBOOK_REGISTRY` is production-only; `CANDIDATE_PLAYBOOK_REGISTRY` is candidate-only. Directory
-location grants no lifecycle state. Release status and model visibility are independent: every valid
-package is model-visible in Pi native discovery and Penny's listing exactly when its parsed
-`disable-model-invocation` flag is not `true`. `.pi/skills/.ignore` must contain exactly the package
-directories with an explicit parsed `true`; it remains a safe comment-only file when none are hidden.
-The Assess, Decide, Diagnose, Plan, and Produce candidate manifests are model-visible.
+once and validates model-invocable orchestration packages against the sole `PLAYBOOK_REGISTRY`.
+Directory location does not grant execution authority. Every valid package is model-visible in Pi
+native discovery and Penny's listing exactly when its parsed `disable-model-invocation` flag is not
+`true`. `.pi/skills/.ignore` must contain exactly the package directories with an explicit parsed
+`true`; it remains a safe comment-only file when none are hidden.
 
-Visibility grants no execution authority. User-facing candidate execution additionally requires the ignored static
-`$PROJECT_ROOT/.pi/candidate-enablement.json` to bind the exact name and contract SHA-256. Missing
-configuration enables nothing; malformed configuration does not disable production Research; runtime
-never creates the file. Candidates remain exact-digest host-gated and outside
-`PLAYBOOK_REGISTRY`. There is no token, grant, TTL, promotion, package move, or second source root.
-
-Typed refusals are `SKILL_NOT_REGISTERED`, `SKILL_ENTRYPOINT_MISMATCH`, `CANDIDATE_DISABLED`,
-`CANDIDATE_CONFIG_INVALID`, `CANDIDATE_CONTRACT_STALE`, and `CANDIDATE_PACKAGE_INVALID`.
+A model-disabled development package such as the SCA scaffold remains discoverable for documentation
+and static checks while it lacks a playbook registration. Generic invocation refuses it safely until
+that registration exists. Typed refusals are `SKILL_NOT_REGISTERED`, `SKILL_ENTRYPOINT_MISMATCH`, and
+`SKILL_PACKAGE_INVALID`.
 
 ## Paired evaluation
 
@@ -171,9 +165,9 @@ are not applicable to a draft-only ablation and do not enter that ablation's app
 escape count, while the full-product cohort stays frozen. Model output rejected explicitly by
 its registered normalizer remains `MALFORMED_TRIAL_OUTPUT` and receives the frozen failure rule.
 Registration, artifact-read preflight, normalizer implementation, or grader/parser incompatibility
-produces `INVALID_EVALUATION`; it is non-dispositive for candidate quality and never falls through to
-`NO_BUILD` or `RETIRED`. Evaluation results remain measurement-only and cannot enable, admit,
-promote, move, or production-register a candidate.
+produces `INVALID_EVALUATION`; it is non-dispositive for the evaluated variant and never falls
+through to `NO_BUILD` or `RETIRED`. Evaluation results remain measurement-only and cannot alter the
+generic registry, package discovery, or execution authority.
 
 ## Model policy
 
@@ -200,10 +194,10 @@ to that step.
   fail before session creation; Pi receives the accepted list exactly, and active removal,
   addition, or replacement fails equality before the model prompt. Task, trust profile, input, runtime condition,
   model/liveness policy, and optional-service state cannot select tools.
-- Ordinary Assess, Decide, Diagnose, Plan, and Produce candidate phases omit `allowed_tools`, so
-  runtime activates each assigned catalog agent's exact YAML list. Their normal liveness policy caps
-  external calls at 8 per worker and 64 per run; routing-only repair remains at 0. Evaluation-only
-  direct baselines or ablations may still use the generic fixed strict-subset mechanism.
+- Ordinary Assess, Decide, Diagnose, Plan, and Produce phases omit `allowed_tools`, so runtime
+  activates each assigned catalog agent's exact YAML list. Their normal liveness policy caps external
+  calls at 8 per worker and 64 per run; routing-only repair remains at 0. Evaluation-only direct
+  baselines or ablations may still use the generic fixed strict-subset mechanism.
 - A phase subset does not mutate agent YAML/profiles and is not OS/process sandboxing or
   extension-code isolation. Every provider extension still loads before session creation.
   Optional-service absence behind a selected registered tool is a typed call error, not

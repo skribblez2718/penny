@@ -62,9 +62,6 @@ function disposition(path: string): Disposition {
   if (path === "objective") {
     return { kind: "surface", surface: "PlaybookRegistrationV1.contract.objective" };
   }
-  if (path === "release_status") {
-    return { kind: "equality_projection", projection: "registry namespace+contract digest" };
-  }
   if (path === "schema_version" || path === "name" || path.startsWith("guidance.")) {
     return { kind: "enforced", probe: "schema+validateRegistrationContract" };
   }

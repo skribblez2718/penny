@@ -72,10 +72,12 @@ async function main(): Promise<void> {
   const projectRootArgument = process.argv.find((argument) =>
     argument.startsWith("--project-root=")
   );
-  const projectRoot = projectRootArgument
+  const requestedProjectRoot = projectRootArgument
     ? projectRootArgument.slice("--project-root=".length)
     : process.cwd();
-  const config = loadRuntimeConfig(projectRoot);
+  // Resolve the caller spelling once at the process boundary. Only the
+  // catalog-bound canonical root in `config` flows into paths and records.
+  const config = loadRuntimeConfig(requestedProjectRoot);
   const request = await readRequest();
   const checkpointer = Checkpointer.openExisting(config.dbPath, undefined, {
     maxRetainedRuns: config.maxRetainedRuns,

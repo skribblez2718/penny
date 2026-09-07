@@ -5,15 +5,15 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { parseSsotTools } from "../src/model-client.js";
-import { ASSESS_CANDIDATE_REGISTRATION, ASSESS_LIVENESS_POLICY } from "../src/playbooks/assess.js";
-import { DECIDE_CANDIDATE_REGISTRATION, DECIDE_LIVENESS_POLICY } from "../src/playbooks/decide.js";
+import { ASSESS_PLAYBOOK_REGISTRATION, ASSESS_LIVENESS_POLICY } from "../src/playbooks/assess.js";
+import { DECIDE_PLAYBOOK_REGISTRATION, DECIDE_LIVENESS_POLICY } from "../src/playbooks/decide.js";
 import {
-  DIAGNOSE_CANDIDATE_REGISTRATION,
+  DIAGNOSE_PLAYBOOK_REGISTRATION,
   DIAGNOSE_LIVENESS_POLICY,
 } from "../src/playbooks/diagnose.js";
-import { PLAN_CANDIDATE_REGISTRATION, PLAN_LIVENESS_POLICY } from "../src/playbooks/plan.js";
+import { PLAN_PLAYBOOK_REGISTRATION, PLAN_LIVENESS_POLICY } from "../src/playbooks/plan.js";
 import {
-  PRODUCE_CANDIDATE_REGISTRATION,
+  PRODUCE_PLAYBOOK_REGISTRATION,
   PRODUCE_LIVENESS_POLICY,
 } from "../src/playbooks/produce.js";
 import {
@@ -22,14 +22,14 @@ import {
 } from "../src/playbooks/registry.js";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const CANDIDATE_REGISTRATIONS = [
-  ASSESS_CANDIDATE_REGISTRATION,
-  DECIDE_CANDIDATE_REGISTRATION,
-  DIAGNOSE_CANDIDATE_REGISTRATION,
-  PLAN_CANDIDATE_REGISTRATION,
-  PRODUCE_CANDIDATE_REGISTRATION,
+const UNIVERSAL_REGISTRATIONS = [
+  ASSESS_PLAYBOOK_REGISTRATION,
+  DECIDE_PLAYBOOK_REGISTRATION,
+  DIAGNOSE_PLAYBOOK_REGISTRATION,
+  PLAN_PLAYBOOK_REGISTRATION,
+  PRODUCE_PLAYBOOK_REGISTRATION,
 ] as const;
-const CANDIDATE_LIVENESS_POLICIES = [
+const UNIVERSAL_LIVENESS_POLICIES = [
   ASSESS_LIVENESS_POLICY,
   DECIDE_LIVENESS_POLICY,
   DIAGNOSE_LIVENESS_POLICY,
@@ -49,7 +49,7 @@ function replaceFirstPhaseTools(
   allowedTools: readonly string[]
 ): PlaybookRegistrationV1 {
   if (registration.worker.kind !== "catalog-agent") {
-    throw new Error("candidate catalog worker is absent");
+    throw new Error("catalog worker is absent");
   }
   let replaced = false;
   const phases = new Map(
@@ -68,9 +68,9 @@ function replaceFirstPhaseTools(
   };
 }
 
-describe("candidate registration tool authority", () => {
-  it("omits allowed_tools from every ordinary candidate phase so exact agent YAML applies", () => {
-    for (const registration of CANDIDATE_REGISTRATIONS) {
+describe("universal registration tool authority", () => {
+  it("omits allowed_tools from every ordinary workflow phase so exact agent YAML applies", () => {
+    for (const registration of UNIVERSAL_REGISTRATIONS) {
       expect(registration.worker.kind).toBe("catalog-agent");
       if (registration.worker.kind !== "catalog-agent") continue;
       expect(registration.worker.phases.size).toBeGreaterThan(0);
@@ -84,8 +84,8 @@ describe("candidate registration tool authority", () => {
     }
   });
 
-  it("gives normal candidate work bounded external capacity while routing repair stays at zero", () => {
-    for (const policy of CANDIDATE_LIVENESS_POLICIES) {
+  it("gives normal workflow execution bounded external capacity while routing repair stays at zero", () => {
+    for (const policy of UNIVERSAL_LIVENESS_POLICIES) {
       expect(policy.external_calls_per_worker).toBe(8);
       expect(policy.external_calls_per_run).toBe(64);
       expect(policy.routing_repair.external_calls_per_worker).toBe(0);
@@ -93,9 +93,9 @@ describe("candidate registration tool authority", () => {
   });
 
   it("changes the canonical digest when a synthetic strict phase subset is added", () => {
-    const changed = replaceFirstPhaseTools(DECIDE_CANDIDATE_REGISTRATION, ["artifact_read"]);
+    const changed = replaceFirstPhaseTools(DECIDE_PLAYBOOK_REGISTRATION, ["artifact_read"]);
     expect(runtimeRegistrationSha256(changed)).not.toBe(
-      runtimeRegistrationSha256(DECIDE_CANDIDATE_REGISTRATION)
+      runtimeRegistrationSha256(DECIDE_PLAYBOOK_REGISTRATION)
     );
   });
 });

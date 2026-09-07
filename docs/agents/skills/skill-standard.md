@@ -7,9 +7,8 @@
 2. **Playbook:** one registered TypeScript `PlaybookCoreV1` implementation under
    `apps/orchestration/src/playbooks/`.
 3. **Contract:** closed `SkillContractV2`, validated before construction. Its fields are
-   `schema_version`, `name`, `release_status`, `objective`, `io`, `behavior`, `guidance`,
-   `budget_policy`, `repair_routing`, and `completion_gate`. `release_status` is exactly
-   `production|candidate` and must equal the registry namespace. I/O ports, side-effect/approval/stop/escalation
+   `schema_version`, `name`, `objective`, `io`, `behavior`, `guidance`, `budget_policy`,
+   `repair_routing`, and `completion_gate`. I/O ports, side-effect/approval/stop/escalation
    consequences, and budget resolver/admission/snapshot bindings are consumed or equality-projected;
    declaration-only accepts/produces/invariants/budgets debt is forbidden.
 4. **Domain Guidance:** one static `<agent>-<state>.md` prompt per cognitive state.
@@ -24,23 +23,15 @@ included in the canonical runtime-registration digest and worker invocation meta
 preserves YAML equality. `ingress:skill` requires start admission; `knowledge-base` remains
 `dedicated_tool` with separate host-private tools.
 
-## Release namespaces and composition
+## Registration, visibility, and composition
 
-`.pi/skills/<name>/` is the only active package root for production and candidate lifecycles.
-Packages are discovered once and classified from parsed `metadata.penny.release_status`; directory
-location grants no status. Production registrations live only in `PLAYBOOK_REGISTRY` and
-source-defined candidates live only in `CANDIDATE_PLAYBOOK_REGISTRY`. Release status and model
-visibility are independent. A valid package is model-visible in Pi native discovery and Penny's
-listing if and only if its parsed top-level `disable-model-invocation` flag is not `true`.
-`.pi/skills/.ignore` contains exactly the package directory names whose parsed flag is explicitly
-`true`; a comment-only file is required when no package is disabled.
-
-Model-visible candidates gain no execution authority. User-facing candidate execution requires an
-exact static name/contract-digest binding in the ignored
-`$PROJECT_ROOT/.pi/candidate-enablement.json`. Missing configuration enables nothing and the runtime
-never creates it. Evaluation-only resolution is a third exact-digest path; none of these paths
-promotes or moves a package. Candidates remain outside `PLAYBOOK_REGISTRY`, and production/candidate
-registry/package mismatch fails closed.
+`.pi/skills/<name>/` is the only active package root. `PLAYBOOK_REGISTRY` is the sole executable
+registry; adding a registration is the explicit authorization step. A model-invocable orchestration
+package must have a matching registered playbook. A package whose top-level
+`disable-model-invocation` flag is explicitly `true` is hidden from Pi native discovery and Penny's
+model listing, and `.pi/skills/.ignore` contains exactly those package directory names. A disabled
+package may remain unregistered during development, but generic runtime invocation fails safely until
+its playbook is registered. Directory location and model visibility do not grant execution authority.
 
 Before run creation, generic composition re-reads every canonical input ref, resolves exactly one
 compatible port by source/kind/schema/version, checks cardinality, and validates exact bytes for
@@ -104,7 +95,7 @@ A worker prompt must:
 - [ ] Any phase subset is strict/non-empty/unique, canonical-registration/digest-bound,
       projected unchanged into invocation metadata, validated before session creation, and
       passed exactly to Pi; invalid or dynamically selected surfaces fail closed.
-- [ ] Ordinary candidate phases omit `allowed_tools` and use exact YAML; synthetic or
+- [ ] Ordinary registered phases omit `allowed_tools` and use exact YAML; synthetic or
       evaluation-only strict subsets remain separately tested without OS/process sandboxing or
       extension-code-isolation claims, and host-private tools remain separate.
 - [ ] Prompt directory exactly matches cognitive states.

@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  DECIDE_CANDIDATE_REGISTRATION,
+  DECIDE_PLAYBOOK_REGISTRATION,
   DECIDE_PLAYBOOK_NAME,
   DECIDE_UNSEALED_EVALUATION_NAME,
   DECIDE_UNSEALED_EVALUATION_REGISTRATION,
@@ -205,7 +205,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe("orchestrated decide candidate", () => {
+describe("orchestrated decide workflow", () => {
   it.each(["selected", "ranked", "no_feasible_option", "unresolved", "not_applicable"] as const)(
     "completes a reviewed canonical %s DecisionV2 and exact product envelope",
     async (outcome) => {
@@ -215,7 +215,7 @@ describe("orchestrated decide candidate", () => {
         projectRoot: PROJECT_ROOT,
         env,
         modelClient: client,
-        playbookRegistration: DECIDE_CANDIDATE_REGISTRATION,
+        playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
       });
       sequence += 1;
       const terminal = completeDirective(
@@ -331,7 +331,7 @@ describe("orchestrated decide candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: forged,
-      playbookRegistration: DECIDE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const assignment = service.handle(start(`run-decide-persisted-summary-${sequence}`));
@@ -357,7 +357,7 @@ describe("orchestrated decide candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: client,
-      playbookRegistration: DECIDE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = completeDirective(
@@ -409,7 +409,7 @@ describe("orchestrated decide candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: client,
-      playbookRegistration: DECIDE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = completeDirective(
@@ -448,7 +448,7 @@ describe("orchestrated decide candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: client,
-      playbookRegistration: DECIDE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = completeDirective(
@@ -500,7 +500,7 @@ describe("orchestrated decide candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: client,
-      playbookRegistration: DECIDE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = completeDirective(
@@ -547,7 +547,7 @@ describe("orchestrated decide candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: client,
-      playbookRegistration: DECIDE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = await service.execute(start(`run-decide-request-basis-rejected-${sequence}`));
@@ -563,7 +563,7 @@ describe("orchestrated decide candidate", () => {
     const env = environment();
     let interrupted = false;
     const registration: PlaybookRegistrationV1 = {
-      ...DECIDE_CANDIDATE_REGISTRATION,
+      ...DECIDE_PLAYBOOK_REGISTRATION,
       construct: (options) =>
         new DecidePlaybook(
           true,
@@ -595,7 +595,7 @@ describe("orchestrated decide candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: recoveredClient,
-      playbookRegistration: DECIDE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
     });
     const terminal = completeDirective(
       await recovered.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
@@ -624,7 +624,7 @@ describe("orchestrated decide candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: client,
-      playbookRegistration: DECIDE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const terminal = await service.execute(start(`run-decide-repair-exhaust-${sequence}`));
@@ -675,7 +675,7 @@ describe("orchestrated decide candidate", () => {
       projectRoot: PROJECT_ROOT,
       env: environment(),
       modelClient: new ScriptedDecideClient([]),
-      playbookRegistration: DECIDE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const runId = `run-decide-liveness-${reason}-${sequence}`;
@@ -718,7 +718,7 @@ describe("orchestrated decide candidate", () => {
     const env = environment();
     let interrupted = false;
     const registration: PlaybookRegistrationV1 = {
-      ...DECIDE_CANDIDATE_REGISTRATION,
+      ...DECIDE_PLAYBOOK_REGISTRATION,
       construct: (options) =>
         new DecidePlaybook(
           true,
@@ -750,7 +750,7 @@ describe("orchestrated decide candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: recoveredClient,
-      playbookRegistration: DECIDE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
     });
     const terminal = completeDirective(
       await recovered.execute({ schema_version: 2, action: "recover", identity: identity(runId) })
@@ -770,7 +770,7 @@ describe("orchestrated decide candidate", () => {
   });
 
   it("declares all engine-owned gap routes without reviewer-selected targets", () => {
-    const routes = DECIDE_CANDIDATE_REGISTRATION.contract.repair_routing.routes;
+    const routes = DECIDE_PLAYBOOK_REGISTRATION.contract.repair_routing.routes;
     expect(
       routes.map(
         (route) => `${route.origin_state}:${route.feedback_kind}->${route.repair.target_state}`
@@ -788,7 +788,7 @@ describe("orchestrated decide candidate", () => {
     expect(routes.every((route) => route.on_exhaustion.reset_counter === false)).toBe(true);
   });
 
-  it("fails closed when active or terminal replay uses a drifted candidate registration contract", async () => {
+  it("fails closed when active or terminal replay uses a drifted evaluation registration contract", async () => {
     const env = environment();
     sequence += 1;
     let activeIdentity: Directive["identity"];
@@ -798,7 +798,7 @@ describe("orchestrated decide candidate", () => {
         projectRoot: PROJECT_ROOT,
         env,
         modelClient: new ScriptedDecideClient(happyOutputs("selected")),
-        playbookRegistration: DECIDE_CANDIDATE_REGISTRATION,
+        playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
       });
       const active = service.handle(start(`run-decide-active-contract-binding-${sequence}`));
       expect(active.action).toBe("invoke_agent");
@@ -807,12 +807,12 @@ describe("orchestrated decide candidate", () => {
         await service.execute(start(`run-decide-terminal-contract-binding-${sequence}`))
       );
     }
-    const worker = DECIDE_CANDIDATE_REGISTRATION.worker;
+    const worker = DECIDE_PLAYBOOK_REGISTRATION.worker;
     if (worker.kind !== "catalog-agent") throw new Error("decide catalog worker is absent");
     const deciding = worker.phases.get("deciding");
     if (deciding === undefined) throw new Error("deciding registration phase is absent");
     const drifted: PlaybookRegistrationV1 = {
-      ...DECIDE_CANDIDATE_REGISTRATION,
+      ...DECIDE_PLAYBOOK_REGISTRATION,
       worker: {
         ...worker,
         phases: new Map(worker.phases).set("deciding", {
@@ -838,11 +838,11 @@ describe("orchestrated decide candidate", () => {
   });
 
   it("refuses in-process mutation of the registration snapshot after start", () => {
-    const worker = DECIDE_CANDIDATE_REGISTRATION.worker;
+    const worker = DECIDE_PLAYBOOK_REGISTRATION.worker;
     if (worker.kind !== "catalog-agent") throw new Error("decide catalog worker is absent");
     const phases = new Map(worker.phases);
     const mutableRegistration: PlaybookRegistrationV1 = {
-      ...DECIDE_CANDIDATE_REGISTRATION,
+      ...DECIDE_PLAYBOOK_REGISTRATION,
       worker: { ...worker, phases },
     };
     using service = new OrchestrationService({
@@ -894,7 +894,7 @@ describe("orchestrated decide candidate", () => {
       projectRoot: PROJECT_ROOT,
       env,
       modelClient: client,
-      playbookRegistration: DECIDE_CANDIDATE_REGISTRATION,
+      playbookRegistration: DECIDE_PLAYBOOK_REGISTRATION,
     });
     sequence += 1;
     const runId = `run-decide-cancel-${sequence}`;
@@ -914,12 +914,12 @@ describe("orchestrated decide candidate", () => {
       met: false,
       result: { execution_started: false, execution_authorized: false },
     });
-    expect(DECIDE_CANDIDATE_REGISTRATION.contract.behavior.stopping).toEqual({
+    expect(DECIDE_PLAYBOOK_REGISTRATION.contract.behavior.stopping).toEqual({
       budget_exhaustion: "incomplete",
       cancellation: "cancelled",
       blocking_ambiguity: "incomplete",
     });
-    expect(canonicalJson(DECIDE_CANDIDATE_REGISTRATION.contract)).not.toMatch(
+    expect(canonicalJson(DECIDE_PLAYBOOK_REGISTRATION.contract)).not.toMatch(
       /await_user|awaiting_user/iu
     );
     expect(client.invocations).toHaveLength(0);

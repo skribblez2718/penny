@@ -206,17 +206,22 @@ function allSkillFlows(): readonly { skill: string; source: string }[] {
 }
 
 describe("flow-diagrams", () => {
-  it("discovers every registered skill flow", () => {
+  it("requires descriptors only for registered runtime flows", () => {
     expect(
       allSkillFlows()
+        .filter((entry) => Object.hasOwn(EXPECTED, entry.skill))
         .map((entry) => entry.skill)
         .sort()
     ).toEqual(Object.keys(EXPECTED).sort());
   });
 
+  it("permits an unregistered model-disabled development flow to receive static validation only", () => {
+    expect(allSkillFlows().map((entry) => entry.skill)).toContain("sca");
+    expect(EXPECTED["sca"]).toBeUndefined();
+  });
+
   for (const { skill, source } of allSkillFlows()) {
     const expected = EXPECTED[skill];
-    if (expected === undefined) throw new Error(`missing expected descriptor for ${skill}`);
     const diagram = parseDiagram(source);
 
     it(`${skill}: is strict-JSON, self-contained, and uses the canonical semantic frame`, () => {
@@ -252,10 +257,12 @@ describe("flow-diagrams", () => {
       }
     });
 
-    it(`${skill}: exactly mirrors the exported TypeScript topology`, () => {
-      expect(Object.keys(diagram.nodes).sort()).toEqual([...expected.states].sort());
-      expect(diagram.edges.map(edgeKey).sort()).toEqual([...expected.edges].sort());
-    });
+    if (expected !== undefined) {
+      it(`${skill}: exactly mirrors the exported TypeScript topology`, () => {
+        expect(Object.keys(diagram.nodes).sort()).toEqual([...expected.states].sort());
+        expect(diagram.edges.map(edgeKey).sort()).toEqual([...expected.edges].sort());
+      });
+    }
   }
 
   it("knowledge-base: preserves host-only gate data, repair feedback, and honest cancellation", () => {

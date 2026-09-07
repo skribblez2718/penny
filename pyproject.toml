@@ -11,12 +11,16 @@ dependencies = [
     # must be a deliberate, migration-aware step — not a silent `pip -U`.
     # Recover a corrupted palace with scripts/system/bridge/repair_palace.py.
     "chromadb>=1.5.9,<1.6",
-    "python-statemachine>=2.0",   # retained by the independent memory-canary authority FSM
-    "tiktoken>=0.11.0",           # canonical SYSTEM.md token-budget counter
-    "pydantic>=2.12,<3",          # scripts/validate_ideal_state.py
 ]
 
 [project.optional-dependencies]
+memory-ops = [
+    "python-statemachine>=2.0",   # independent memory-canary authority FSM
+]
+checks = [
+    "tiktoken>=0.11.0",           # canonical SYSTEM.md token-budget counter
+    "pydantic>=2.12,<3",          # scripts/validate_ideal_state.py
+]
 dev = [
     "pytest>=9.0.0",
     "pytest-cov>=5.0.0",
@@ -30,9 +34,9 @@ dev = [
 ]
 
 # Use 'uv' for all Python dependency management:
-#   make setup     — full setup (venv + deps + init)
-#   uv sync        — sync dependencies from pyproject.toml
-#   uv add <pkg>   — add a new dependency
+#   make setup      — frozen core MemPalace runtime plus readiness
+#   make setup-dev  — frozen core, operations, checks, and development extras
+#   uv add <pkg>    — add a dependency and deliberately refresh uv.lock
 
 [tool.black]
 line-length = 100

@@ -426,8 +426,6 @@ export class OrchestrationEngine {
         : new Map([[options.playbookRegistration.name, options.playbookRegistration]]));
     const playbookName =
       options.playbookName ?? options.playbookRegistration?.name ?? DEFAULT_PLAYBOOK_NAME;
-    // Normal construction resolves only the production registry. A candidate must
-    // arrive as the one exact registration resolved by an allowed caller path.
     const registration =
       options.playbookRegistration ?? resolvePlaybook(playbookName, this.registry);
     if (registration === undefined) {
@@ -439,12 +437,7 @@ export class OrchestrationEngine {
       );
     }
     // W3: authority metadata is validated before playbook construction.
-    this.contract = validateRegistrationContract(
-      registration,
-      options.playbookRegistration === undefined && this.registry === PLAYBOOK_REGISTRY
-        ? "production"
-        : registration.contract.release_status
-    );
+    this.contract = validateRegistrationContract(registration);
     this.registration = registration;
     this.registrationContractSha256 = skillContractSha256(this.contract);
     this.runtimeRegistrationSha256 = runtimeRegistrationSha256(this.registration);
@@ -649,17 +642,12 @@ export class OrchestrationEngine {
           projectRoot: this.projectRoot,
           trustProfile: request.trust_profile,
           maxSteps: this.maxSteps,
-          ...(this.contract.release_status === "candidate"
-            ? {
-                registrationContractBinding: {
-                  schema_version: 1,
-                  registration_name: this.registration.name,
-                  release_status: this.contract.release_status,
-                  contract_sha256: this.registrationContractSha256,
-                  registration_sha256: this.runtimeRegistrationSha256,
-                },
-              }
-            : {}),
+          registrationContractBinding: {
+            schema_version: 1,
+            registration_name: this.registration.name,
+            contract_sha256: this.registrationContractSha256,
+            registration_sha256: this.runtimeRegistrationSha256,
+          },
           ...(uniqueInitialRefs.length === 0 ? {} : { initialArtifacts: uniqueInitialRefs }),
         });
         const operationGroup = hasExternalStartOperationGroup(this.playbook)
@@ -1814,8 +1802,9 @@ export class OrchestrationEngine {
 
   private registrationBindingRefusal(context: RunContext): Directive | undefined {
     const binding = context.registrationContractBinding;
-    const bindingRequired = binding !== undefined || this.contract.release_status === "candidate";
-    if (!bindingRequired) return undefined;
+    // Runs created before immutable binding was introduced remain readable legacy state.
+    // Every new run records both current contract and runtime registration digests.
+    if (binding === undefined) return undefined;
     let activeContractSha256: string | undefined;
     let activeRegistrationSha256: string | undefined;
     try {
@@ -1825,14 +1814,11 @@ export class OrchestrationEngine {
       // Runtime registration mutation or corruption is a closed mismatch, never an unchecked throw.
     }
     const code =
-      binding === undefined
-        ? "REGISTRATION_CONTRACT_BINDING_MISSING"
-        : binding.registration_name !== this.registration.name ||
-            binding.release_status !== this.contract.release_status ||
-            binding.contract_sha256 !== activeContractSha256 ||
-            binding.registration_sha256 !== activeRegistrationSha256
-          ? "REGISTRATION_CONTRACT_MISMATCH"
-          : undefined;
+      binding.registration_name !== this.registration.name ||
+      binding.contract_sha256 !== activeContractSha256 ||
+      binding.registration_sha256 !== activeRegistrationSha256
+        ? "REGISTRATION_CONTRACT_MISMATCH"
+        : undefined;
     if (code === undefined) return undefined;
     return directive({
       schema_version: 2,
@@ -1844,18 +1830,13 @@ export class OrchestrationEngine {
         code,
         checkpoint_unchanged: true,
         active_registration_name: this.registration.name,
-        active_release_status: this.contract.release_status,
         active_contract_sha256: activeContractSha256 ?? null,
         active_registration_sha256: activeRegistrationSha256 ?? null,
         checkpoint_contract_sha256: binding?.contract_sha256 ?? null,
         checkpoint_registration_sha256: binding?.registration_sha256 ?? null,
       },
       artifacts: [],
-      unresolved: [
-        code === "REGISTRATION_CONTRACT_BINDING_MISSING"
-          ? "The candidate checkpoint predates immutable registration-contract binding."
-          : "The checkpoint is bound to a different registration contract or release status.",
-      ],
+      unresolved: ["The checkpoint is bound to a different registration contract."],
     });
   }
 

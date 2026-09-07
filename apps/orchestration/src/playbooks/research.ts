@@ -500,7 +500,6 @@ export function researchSummarySchema(state: string): TSchema {
 export const RESEARCH_SKILL_CONTRACT: SkillContract = {
   schema_version: 2,
   name: "research",
-  release_status: "production",
   objective:
     "Investigate a question against external evidence and produce one grounded synthesis semantic core.",
   io: {

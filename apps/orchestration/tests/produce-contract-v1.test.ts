@@ -7,14 +7,17 @@ import {
   canonicalizeProduceRequest,
   mediaTypeForArtifactKind,
   parsePersistedArtifactApproach,
+  parsePersistedArtifactApproachDecision,
   parsePersistedProducedArtifactDraft,
   sealProducedArtifact,
   sha256,
   validateArtifactApproach,
+  validateArtifactApproachDecision,
   validateCanonicalProducedArtifactBytes,
   validateProduceRequest,
   validateProducedArtifact,
   validateProducedArtifactDraft,
+  type ArtifactApproachDecisionV1,
   type ArtifactApproachV1,
   type ArtifactRef,
   type ProduceArtifactKind,
@@ -94,14 +97,40 @@ function approach(): ArtifactApproachV1 {
         tradeoffs: ["More structure but unnecessary length."],
       },
     ],
-    recommended_approach_id: "direct",
-    recommendation_rationale: "The direct approach satisfies the bounded brief.",
     confidence: "PROBABLE",
   };
 }
 
 function persistedApproach(value = approach()): string {
   return `ARTIFACT_APPROACH:${canonicalJson(value)}\nSUMMARY:{"confidence":"${value.confidence}","complete":true}`;
+}
+
+function decision(): ArtifactApproachDecisionV1 {
+  return {
+    schema_version: 1,
+    disposition: "selected",
+    approach_assessments: [
+      {
+        approach_id: "direct",
+        feasibility: "feasible",
+        comparison: "Satisfies the concise brief directly.",
+      },
+      {
+        approach_id: "sectioned",
+        feasibility: "feasible",
+        comparison: "Adds structure that the brief does not require.",
+      },
+    ],
+    selected_approach_id: "direct",
+    rationale: "The direct approach matches the supplied brevity requirement.",
+    sensitivity: ["A sectioning requirement would favor sectioned."],
+    blocking_questions: [],
+    confidence: "PROBABLE",
+  };
+}
+
+function persistedDecision(value = decision()): string {
+  return `ARTIFACT_APPROACH_DECISION:${canonicalJson(value)}\nSUMMARY:{"confidence":"${value.confidence}","complete":true,"disposition":"${value.disposition}"}`;
 }
 
 function persistedDraft(value: ProducedArtifactDraftV1): string {
@@ -153,9 +182,9 @@ describe("closed ProduceRequestV1", () => {
   });
 });
 
-describe("ArtifactApproachV1 and ProducedArtifactDraftV1", () => {
-  it("requires a bounded genuinely plural approach shape and exact two-line framing", () => {
-    expect(validateArtifactApproach(approach()).recommended_approach_id).toBe("direct");
+describe("ArtifactApproachV1, ArtifactApproachDecisionV1, and ProducedArtifactDraftV1", () => {
+  it("requires bounded unranked alternatives and a separate exact Demetri decision", () => {
+    expect(validateArtifactApproach(approach()).approaches).toHaveLength(2);
     expect(parsePersistedArtifactApproach(Buffer.from(persistedApproach()))).toEqual({
       approach: approach(),
       summary: { confidence: "PROBABLE", complete: true },
@@ -164,11 +193,47 @@ describe("ArtifactApproachV1 and ProducedArtifactDraftV1", () => {
       validateArtifactApproach({ ...approach(), approaches: [approach().approaches[0]] })
     ).toThrow();
     expect(() =>
-      validateArtifactApproach({ ...approach(), recommended_approach_id: "missing" })
-    ).toThrow(/recommended_approach_id/u);
+      validateArtifactApproach({ ...approach(), recommended_approach_id: "direct" })
+    ).toThrow(/additional properties/u);
+    expect(validateArtifactApproachDecision(decision(), { approach: approach() })).toEqual(
+      decision()
+    );
+    expect(
+      parsePersistedArtifactApproachDecision(Buffer.from(persistedDecision()), {
+        approach: approach(),
+      })
+    ).toEqual({
+      decision: decision(),
+      summary: { confidence: "PROBABLE", complete: true, disposition: "selected" },
+    });
+    expect(() =>
+      validateArtifactApproachDecision(
+        { ...decision(), selected_approach_id: "missing" },
+        { approach: approach() }
+      )
+    ).toThrow(/feasible in-set/u);
     expect(() =>
       parsePersistedArtifactApproach(Buffer.from(`Prose\n${persistedApproach()}`))
     ).toThrow(/exactly one unwrapped/u);
+  });
+
+  it("permits an honest unresolved Demetri disposition and forbids a hidden selection", () => {
+    const unresolved: ArtifactApproachDecisionV1 = {
+      ...decision(),
+      disposition: "unresolved",
+      selected_approach_id: null,
+      blocking_questions: ["Should brevity or explicit sectioning take priority?"],
+      confidence: "UNCERTAIN",
+    };
+    expect(validateArtifactApproachDecision(unresolved, { approach: approach() })).toEqual(
+      unresolved
+    );
+    expect(() =>
+      validateArtifactApproachDecision(
+        { ...unresolved, selected_approach_id: "direct" },
+        { approach: approach() }
+      )
+    ).toThrow(/unresolved disposition/u);
   });
 
   it("accepts complete text and Markdown content without claiming syntax or execution checks", () => {
@@ -288,11 +353,12 @@ describe("provider-free production conformance", () => {
 });
 
 describe("canonical ProducedArtifactV1 sealing", () => {
-  it("binds exact request, Ida, Skribble, and inline-source lineage", () => {
+  it("binds exact request, Ida, Demetri, Skribble, and inline-source lineage", () => {
     const requestValue = request();
     const draftValue = draft();
     const requestContent = canonicalJson(requestValue);
     const approachContent = persistedApproach();
+    const decisionContent = persistedDecision();
     const draftContent = persistedDraft(draftValue);
     const requestRef = ref({
       hex: "1",
@@ -310,8 +376,16 @@ describe("canonical ProducedArtifactV1 sealing", () => {
       content: approachContent,
       schema: { schema_id: "penny.artifact-approach.v1", schema_version: 1 },
     });
-    const draftRef = ref({
+    const decisionRef = ref({
       hex: "3",
+      phase: "selecting_artifact_approach",
+      kind: "artifact-approach-decision",
+      producer: "agent:demetri",
+      content: decisionContent,
+      schema: { schema_id: "penny.artifact-approach-decision.v1", schema_version: 1 },
+    });
+    const draftRef = ref({
+      hex: "4",
       phase: "materializing_artifact",
       kind: "produced-artifact-draft",
       producer: "agent:skribble",
@@ -323,11 +397,12 @@ describe("canonical ProducedArtifactV1 sealing", () => {
       draft: draftValue,
       requestRef,
       approachRef,
+      decisionRef,
       draftRef,
     });
     const content = canonicalJson(product);
     const productRef = ref({
-      hex: "4",
+      hex: "5",
       phase: "sealing_artifact",
       kind: "semantic-core",
       producer: "host:artifact-sealer",
@@ -343,6 +418,7 @@ describe("canonical ProducedArtifactV1 sealing", () => {
       source_lineage: {
         request_artifact_id: requestRef.artifact_id,
         approach_artifact_id: approachRef.artifact_id,
+        decision_artifact_id: decisionRef.artifact_id,
         draft_artifact_id: draftRef.artifact_id,
         source_material: [
           {
@@ -369,6 +445,7 @@ describe("canonical ProducedArtifactV1 sealing", () => {
         draft: draftValue,
         requestRef,
         approachRef: { ...approachRef, run_id: "wrong-run" },
+        decisionRef,
         draftRef,
       })
     ).toThrow(/cross-run/u);

@@ -13,11 +13,11 @@
   ],
   "entrypoint_checks": [
     {
-      "check_id": "candidate-skill-tool-entrypoints",
-      "registration_scope": "candidate",
+      "check_id": "universal-skill-tool-entrypoints",
+      "registration_scope": "universal",
       "test_config": "unit",
       "test_file": "tests/unit/engine-path.test.ts",
-      "full_name": "TypeScript-only skill engine path routes every registered candidate through the skill tool with its exact registration"
+      "full_name": "TypeScript-only skill engine path routes every generic registered skill through the skill tool with its exact registration"
     },
     {
       "check_id": "research-production-entrypoint",
@@ -37,7 +37,6 @@
   "profiles": [
     {
       "skill_name": "assess",
-      "release_status": "candidate",
       "checks": [
         {
           "check_id": "assess-known-good",
@@ -58,7 +57,7 @@
           "category": "boundary",
           "tier": 2,
           "test_file": "tests/assess-playbook.test.ts",
-          "full_name": "orchestrated assess candidate routes an assessment product gap directly to Carren and accepts inconclusive completion"
+          "full_name": "orchestrated assess skill routes an assessment product gap directly to Carren and accepts inconclusive completion"
         },
         {
           "check_id": "assess-semantic-equivalence",
@@ -86,20 +85,19 @@
           "category": "real_entrypoint",
           "tier": 2,
           "test_file": "tests/assess-playbook.test.ts",
-          "full_name": "orchestrated assess candidate completes host → Annie → Carren → seal → Vera → host admission with exact evidence"
+          "full_name": "orchestrated assess skill completes host \u2192 Annie \u2192 Carren \u2192 seal \u2192 Vera \u2192 host admission with exact evidence"
         },
         {
           "check_id": "assess-fail-closed",
           "category": "fail_closed",
           "tier": 2,
           "test_file": "tests/assess-playbook.test.ts",
-          "full_name": "orchestrated assess candidate terminates repeated product gaps as bounded non-positive incomplete"
+          "full_name": "orchestrated assess skill terminates repeated product gaps as bounded non-positive incomplete"
         }
       ]
     },
     {
       "skill_name": "decide",
-      "release_status": "candidate",
       "checks": [
         {
           "check_id": "decide-known-good",
@@ -148,20 +146,19 @@
           "category": "real_entrypoint",
           "tier": 2,
           "test_file": "tests/decide-playbook.test.ts",
-          "full_name": "orchestrated decide candidate completes a reviewed canonical selected DecisionV2 and exact product envelope"
+          "full_name": "orchestrated decide skill completes a reviewed canonical selected DecisionV2 and exact product envelope"
         },
         {
           "check_id": "decide-fail-closed",
           "category": "fail_closed",
           "tier": 2,
           "test_file": "tests/decide-playbook.test.ts",
-          "full_name": "orchestrated decide candidate terminalizes repeated registered repair gaps honestly when the finite iteration budget is exhausted"
+          "full_name": "orchestrated decide skill terminalizes repeated registered repair gaps honestly when the finite iteration budget is exhausted"
         }
       ]
     },
     {
       "skill_name": "diagnose",
-      "release_status": "candidate",
       "checks": [
         {
           "check_id": "diagnose-known-good",
@@ -182,7 +179,7 @@
           "category": "boundary",
           "tier": 2,
           "test_file": "tests/diagnose-playbook.test.ts",
-          "full_name": "orchestrated diagnose candidate routes a Vera product gap directly to Demetri and accepts a valid no-check inconclusive boundary"
+          "full_name": "orchestrated diagnose skill routes a Vera product gap directly to Demetri and accepts a valid no-check inconclusive boundary"
         },
         {
           "check_id": "diagnose-semantic-equivalence",
@@ -210,41 +207,40 @@
           "category": "real_entrypoint",
           "tier": 2,
           "test_file": "tests/diagnose-playbook.test.ts",
-          "full_name": "orchestrated diagnose candidate completes the exact Annie → Ida → Demetri → seal → Vera → host admission flow"
+          "full_name": "orchestrated diagnose skill completes the exact Annie \u2192 Ida \u2192 Demetri \u2192 seal \u2192 Vera \u2192 host admission flow"
         },
         {
           "check_id": "diagnose-fail-closed",
           "category": "fail_closed",
           "tier": 2,
           "test_file": "tests/diagnose-playbook.test.ts",
-          "full_name": "orchestrated diagnose candidate terminates repeated product gaps as bounded non-positive incomplete"
+          "full_name": "orchestrated diagnose skill terminates repeated product gaps as bounded non-positive incomplete"
         }
       ]
     },
     {
       "skill_name": "knowledge-base",
-      "release_status": "production",
       "checks": [
         {
           "check_id": "knowledge-base-known-good",
           "category": "known_good",
           "tier": 1,
           "test_file": "tests/kb-retrieval.test.ts",
-          "full_name": "tracked §5.13 retrieval regression scores the tracked fixture at k=10 and enforces the 1/1/1 floors"
+          "full_name": "tracked \u00a75.13 retrieval regression scores the tracked fixture at k=10 and enforces the 1/1/1 floors"
         },
         {
           "check_id": "knowledge-base-known-bad",
           "category": "known_bad",
           "tier": 1,
           "test_file": "tests/kb-answer-quality.test.ts",
-          "full_name": "answer quality — closed derived answer (§5.6) refuses anything that is not advisory, cited, and bound to verification"
+          "full_name": "answer quality \u2014 closed derived answer (\u00a75.6) refuses anything that is not advisory, cited, and bound to verification"
         },
         {
           "check_id": "knowledge-base-boundary",
           "category": "boundary",
           "tier": 1,
           "test_file": "tests/kb-retrieval.test.ts",
-          "full_name": "KB §5.7 deterministic lint warns when no generation is selected"
+          "full_name": "KB \u00a75.7 deterministic lint warns when no generation is selected"
         },
         {
           "check_id": "knowledge-base-semantic-equivalence",
@@ -265,7 +261,7 @@
           "category": "product_integrity",
           "tier": 1,
           "test_file": "tests/kb-answer-quality.test.ts",
-          "full_name": "answer quality — closed query verification binding binds the exact sealed answer id and complete artifact JCS digest, never text alone"
+          "full_name": "answer quality \u2014 closed query verification binding binds the exact sealed answer id and complete artifact JCS digest, never text alone"
         },
         {
           "check_id": "knowledge-base-real-entrypoint",
@@ -285,7 +281,6 @@
     },
     {
       "skill_name": "plan",
-      "release_status": "candidate",
       "checks": [
         {
           "check_id": "plan-known-good",
@@ -334,20 +329,19 @@
           "category": "real_entrypoint",
           "tier": 2,
           "test_file": "tests/plan-playbook.test.ts",
-          "full_name": "provider-free orchestrated plan candidate completes a reviewed canonical ready StrategyV1 and exact product envelope"
+          "full_name": "provider-free orchestrated plan skill completes a reviewed canonical ready StrategyV1 and exact product envelope"
         },
         {
           "check_id": "plan-fail-closed",
           "category": "fail_closed",
           "tier": 2,
           "test_file": "tests/plan-playbook.test.ts",
-          "full_name": "provider-free orchestrated plan candidate terminalizes repeated product gaps when the finite repair budget is exhausted"
+          "full_name": "provider-free orchestrated plan skill terminalizes repeated product gaps when the finite repair budget is exhausted"
         }
       ]
     },
     {
       "skill_name": "produce",
-      "release_status": "candidate",
       "checks": [
         {
           "check_id": "produce-known-good",
@@ -396,20 +390,19 @@
           "category": "real_entrypoint",
           "tier": 2,
           "test_file": "tests/produce-playbook.test.ts",
-          "full_name": "orchestrated produce candidate completes the exact Ida → Skribble → seal → Carren → Vera → host admission flow"
+          "full_name": "orchestrated produce skill completes the exact Ida \u2192 Skribble \u2192 seal \u2192 Carren \u2192 Vera \u2192 host admission flow"
         },
         {
           "check_id": "produce-fail-closed",
           "category": "fail_closed",
           "tier": 2,
           "test_file": "tests/produce-playbook.test.ts",
-          "full_name": "orchestrated produce candidate terminates repeated artifact product gaps as bounded non-positive incomplete"
+          "full_name": "orchestrated produce skill terminates repeated artifact product gaps as bounded non-positive incomplete"
         }
       ]
     },
     {
       "skill_name": "research",
-      "release_status": "production",
       "checks": [
         {
           "check_id": "research-known-good",

@@ -24,7 +24,7 @@ import {
   DETERMINISTIC_GRADING_DEFINITION,
   DIRECT_DEMETRI_BASELINE_REGISTRATION,
   GenericEvaluationTrialExecutor,
-  SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+  SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
   SYNTHETIC_KNOWN_DELTA_CANDIDATE_REGISTRATION,
   executeFrozenPairedEvaluation,
   freezePairedEvaluation,
@@ -91,7 +91,7 @@ function genericExecutor(
     projectRoot: PROJECT_ROOT,
     env,
     baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-    candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+    implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
     modelClientFactory: syntheticKnownDeltaModelClientFactory(options),
   });
 }
@@ -109,7 +109,7 @@ describe("P6 offline synthetic known-delta E2E", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(),
       executor: genericExecutor(env),
     });
@@ -160,7 +160,7 @@ describe("P6 offline synthetic known-delta E2E", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(),
       executor: genericExecutor(env),
       gradingDefinition,
@@ -231,7 +231,7 @@ describe("P6 offline synthetic known-delta E2E", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(),
       executor: genericExecutor(env),
     });
@@ -259,7 +259,7 @@ describe("P6 offline synthetic known-delta E2E", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(),
       executor: genericExecutor(env, { reverseDelta: true }),
     });
@@ -289,7 +289,7 @@ describe("P6 offline synthetic known-delta E2E", () => {
       projectRoot: PROJECT_ROOT,
       env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(),
       executor,
     });
@@ -310,7 +310,7 @@ describe("P6 offline synthetic known-delta E2E", () => {
       plan: originalPlan,
       projectRoot: PROJECT_ROOT,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+      implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
       ...implementation(),
     });
     let executions = 0;
@@ -350,7 +350,7 @@ describe("P6 offline synthetic known-delta E2E", () => {
         projectRoot: PROJECT_ROOT,
         env: sandbox().env,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
         ...implementation(),
         executor,
       })
@@ -363,7 +363,7 @@ describe("P6 offline synthetic known-delta E2E", () => {
         projectRoot: PROJECT_ROOT,
         env: sandbox().env,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
         ...implementation(),
         executor,
       })
@@ -375,7 +375,7 @@ describe("P6 offline synthetic known-delta E2E", () => {
       projectRoot: PROJECT_ROOT,
       env: sandbox().env,
       baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-      candidateRegistry: driftedRegistry,
+      implementationRegistry: driftedRegistry,
       ...implementation(),
       executor,
     });
@@ -395,7 +395,7 @@ describe("P6 offline synthetic known-delta E2E", () => {
         plan: plan(),
         projectRoot: PROJECT_ROOT,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
         ...implementation(),
         forbiddenContaminationGroups: [populationValue.contamination_group],
       })

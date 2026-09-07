@@ -31,7 +31,7 @@
  * the accompanying test now state one truth instead of three.
  *
  * `assertExpectedRegistrations()` is the executable form of the *current* rule:
- * research must always be present, and only explicitly authorized names may ship.
+ * research must always be present, and only explicitly authorized names may run.
  * An accidental or unauthorized registration fails closed.
  */
 
@@ -44,7 +44,6 @@ import {
   type InputArtifacts,
   type JsonValue,
   type LivenessPolicyV1,
-  type ReleaseStatus,
   type SkillContract,
   type StartRequest,
 } from "../contracts.js";
@@ -78,11 +77,11 @@ import {
   validateKnowledgeBasePhaseDetails,
   type KbAgentPhase,
 } from "./knowledge-base.js";
-import { ASSESS_CANDIDATE_REGISTRATION } from "./assess.js";
-import { DECIDE_CANDIDATE_REGISTRATION } from "./decide.js";
-import { DIAGNOSE_CANDIDATE_REGISTRATION } from "./diagnose.js";
-import { PLAN_CANDIDATE_REGISTRATION } from "./plan.js";
-import { PRODUCE_CANDIDATE_REGISTRATION } from "./produce.js";
+import { ASSESS_PLAYBOOK_REGISTRATION } from "./assess.js";
+import { DECIDE_PLAYBOOK_REGISTRATION } from "./decide.js";
+import { DIAGNOSE_PLAYBOOK_REGISTRATION } from "./diagnose.js";
+import { PLAN_PLAYBOOK_REGISTRATION } from "./plan.js";
+import { PRODUCE_PLAYBOOK_REGISTRATION } from "./produce.js";
 
 export interface PlaybookConstructionOptionsV1 {
   readonly artifactRevisions?: ArtifactRevisionLookup;
@@ -475,19 +474,15 @@ const KNOWLEDGE_BASE_REGISTRATION: PlaybookRegistrationV1 = {
     ),
 };
 
-/** Shipped production registrations. Candidate source can never enter this map. */
+/** Every executable registered playbook. Model visibility is a manifest-only concern. */
 export const PLAYBOOK_REGISTRY: PlaybookRegistryV1 = new Map([
-  [RESEARCH_REGISTRATION.name, RESEARCH_REGISTRATION],
+  [ASSESS_PLAYBOOK_REGISTRATION.name, ASSESS_PLAYBOOK_REGISTRATION],
+  [DECIDE_PLAYBOOK_REGISTRATION.name, DECIDE_PLAYBOOK_REGISTRATION],
+  [DIAGNOSE_PLAYBOOK_REGISTRATION.name, DIAGNOSE_PLAYBOOK_REGISTRATION],
   [KNOWLEDGE_BASE_REGISTRATION.name, KNOWLEDGE_BASE_REGISTRATION],
-]);
-
-/** Source-defined candidates remain outside production; manifests control model visibility. */
-export const CANDIDATE_PLAYBOOK_REGISTRY: PlaybookRegistryV1 = new Map([
-  [ASSESS_CANDIDATE_REGISTRATION.name, ASSESS_CANDIDATE_REGISTRATION],
-  [DECIDE_CANDIDATE_REGISTRATION.name, DECIDE_CANDIDATE_REGISTRATION],
-  [DIAGNOSE_CANDIDATE_REGISTRATION.name, DIAGNOSE_CANDIDATE_REGISTRATION],
-  [PLAN_CANDIDATE_REGISTRATION.name, PLAN_CANDIDATE_REGISTRATION],
-  [PRODUCE_CANDIDATE_REGISTRATION.name, PRODUCE_CANDIDATE_REGISTRATION],
+  [PLAN_PLAYBOOK_REGISTRATION.name, PLAN_PLAYBOOK_REGISTRATION],
+  [PRODUCE_PLAYBOOK_REGISTRATION.name, PRODUCE_PLAYBOOK_REGISTRATION],
+  [RESEARCH_REGISTRATION.name, RESEARCH_REGISTRATION],
 ]);
 
 export function skillContractSha256(contractValue: SkillContract): string {
@@ -556,21 +551,26 @@ export function runtimeRegistrationSha256(registration: PlaybookRegistrationV1):
   );
 }
 
+/**
+ * Resolve an evaluation variant by its exact static contract digest.
+ *
+ * Evaluation may compare caller-supplied variant registries, but those registries grant no
+ * generic execution authority and have no lifecycle meaning.
+ */
 export function resolveEvaluationCandidate(input: {
   readonly name: string;
   readonly contract_sha256: string;
   readonly registry?: PlaybookRegistryV1;
 }): PlaybookRegistrationV1 | undefined {
-  const registry = input.registry ?? CANDIDATE_PLAYBOOK_REGISTRY;
+  const registry = input.registry ?? PLAYBOOK_REGISTRY;
   const registration = registry.get(input.name);
   if (
     registration === undefined ||
-    registration.contract.release_status !== "candidate" ||
     skillContractSha256(registration.contract) !== input.contract_sha256
   ) {
     return undefined;
   }
-  validateRegistrationContract(registration, "candidate");
+  validateRegistrationContract(registration);
   return registration;
 }
 
@@ -601,7 +601,7 @@ export function resolvePlaybook(
 ): PlaybookRegistrationV1 | undefined {
   const registration = registry.get(name);
   if (registration !== undefined && registry === PLAYBOOK_REGISTRY) {
-    validateRegistrationContract(registration, "production");
+    validateRegistrationContract(registration);
   }
   return registration;
 }
@@ -614,10 +614,7 @@ export function resolvePlaybook(
  * constructed. The contract is authority metadata, so an invalid one is a hard error
  * rather than a warning.
  */
-export function validateRegistrationContract(
-  registration: PlaybookRegistrationV1,
-  expectedReleaseStatus?: ReleaseStatus
-): SkillContract {
+export function validateRegistrationContract(registration: PlaybookRegistrationV1): SkillContract {
   const contract = validateContract(
     SkillContractSchema,
     registration.contract,
@@ -626,11 +623,6 @@ export function validateRegistrationContract(
   if (contract.name !== registration.name) {
     throw new Error(
       `skill contract name '${contract.name}' does not match registration '${registration.name}'`
-    );
-  }
-  if (expectedReleaseStatus !== undefined && contract.release_status !== expectedReleaseStatus) {
-    throw new Error(
-      `skill contract release status '${contract.release_status}' does not match '${expectedReleaseStatus}' registry namespace`
     );
   }
   if ((registration.ingress === "skill") !== (registration.start_admission !== undefined)) {
@@ -812,14 +804,16 @@ export function validateRegistrationContract(
 /**
  * Every playbook name authorized to ship, in sorted order.
  *
- * `research` — the parity/canary oracle, authorized since the Foundation stage.
- * `knowledge-base` — authorized by the G6 operator decision of 2026-08-18.
- *
- * Adding a name here is the explicit authorization step. It is deliberately a
+ * Each entry is an explicit generic execution authorization and is deliberately a
  * separate edit from adding the registration itself.
  */
 export const AUTHORIZED_PLAYBOOK_NAMES: readonly string[] = [
+  "assess",
+  "decide",
+  "diagnose",
   "knowledge-base",
+  "plan",
+  "produce",
   DEFAULT_PLAYBOOK_NAME,
 ];
 
@@ -844,6 +838,6 @@ export function assertExpectedRegistrations(
     );
   }
   for (const registration of registry.values()) {
-    validateRegistrationContract(registration, "production");
+    validateRegistrationContract(registration);
   }
 }

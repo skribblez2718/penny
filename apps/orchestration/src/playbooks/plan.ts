@@ -135,7 +135,7 @@ export const PLAN_FLOW = {
 
 export const PLAN_LIVENESS_POLICY = {
   schema_version: 1,
-  scope: "orchestrated-plan-candidate",
+  scope: "orchestrated-plan-workflow",
   preset: "bounded-external-orchestrated-v1",
   total_phase_repair_invocations: 24,
   model_turns_per_worker: 12,
@@ -308,12 +308,10 @@ function repairRoute(
 function strategyContract(input: {
   readonly name: string;
   readonly sealed: boolean;
-  readonly releaseStatus: "production" | "candidate";
 }): SkillContract {
   return {
     schema_version: 2,
     name: input.name,
-    release_status: input.releaseStatus,
     objective:
       "Produce one evidence-grounded strategy assessment through separate orientation, strategy authorship, host sealing, objective verification, and quality critique without taskification or execution.",
     io: {
@@ -472,17 +470,10 @@ function strategyContract(input: {
 export const PLAN_SKILL_CONTRACT = strategyContract({
   name: PLAN_PLAYBOOK_NAME,
   sealed: true,
-  releaseStatus: "candidate",
-});
-export const PLAN_PROSPECTIVE_PRODUCTION_CONTRACT = strategyContract({
-  name: PLAN_PLAYBOOK_NAME,
-  sealed: true,
-  releaseStatus: "production",
 });
 export const PLAN_UNSEALED_EVALUATION_CONTRACT = strategyContract({
   name: PLAN_UNSEALED_EVALUATION_NAME,
   sealed: false,
-  releaseStatus: "candidate",
 });
 
 function selectedLatest(
@@ -2625,7 +2616,7 @@ function planRegistration(input: {
             result_schema_id: "penny.plan.strategy-summary.v1",
             result_schema_version: 1 as const,
             schema: StrategySummarySchema,
-            // Evaluation-only ablation: ordinary candidate phases omit allowed_tools.
+            // Evaluation-only ablation: ordinary workflow phases omit allowed_tools.
             allowed_tools: ["artifact_read"],
           },
         ],
@@ -2664,16 +2655,9 @@ function planRegistration(input: {
   };
 }
 
-export const PLAN_CANDIDATE_REGISTRATION = planRegistration({
+export const PLAN_PLAYBOOK_REGISTRATION = planRegistration({
   name: PLAN_PLAYBOOK_NAME,
   contract: PLAN_SKILL_CONTRACT,
-  sealed: true,
-});
-
-/** Frozen promotion target only; deliberately absent from PLAYBOOK_REGISTRY. */
-export const PLAN_PROSPECTIVE_PRODUCTION_REGISTRATION = planRegistration({
-  name: PLAN_PLAYBOOK_NAME,
-  contract: PLAN_PROSPECTIVE_PRODUCTION_CONTRACT,
   sealed: true,
 });
 

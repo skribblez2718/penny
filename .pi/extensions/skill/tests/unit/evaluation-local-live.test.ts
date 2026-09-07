@@ -28,7 +28,7 @@ import {
 import {
   DETERMINISTIC_GRADING_DEFINITION,
   DIRECT_DEMETRI_BASELINE_REGISTRATION,
-  SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+  SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
   freezePairedEvaluation,
   syntheticEvaluationImplementationBinding,
   syntheticEvaluationRuntimeFunctions,
@@ -268,7 +268,7 @@ describe("local-live evaluation preflight and pinned measured client", () => {
         plan: local,
         projectRoot: PROJECT_ROOT,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
         implementationBinding: syntheticEvaluationImplementationBinding({
           projectRoot: PROJECT_ROOT,
           population: populationValue,

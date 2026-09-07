@@ -15,13 +15,12 @@ import { randomBytes } from "node:crypto";
 
 import { ArtifactClientError, parseArtifactRef, type ArtifactRef } from "./artifact-client.js";
 
-export const SKILL_CHAIN_CHECKPOINT_SCHEMA_VERSION = 2 as const;
+export const SKILL_CHAIN_CHECKPOINT_SCHEMA_VERSION = 3 as const;
 const CHAIN_SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 
 export interface ChainCheckpointStep {
   index: number;
   skill_name: string;
-  release_status?: "production" | "candidate";
   contract_sha256?: string;
   goal: string;
   input_artifacts?: string[];
@@ -41,7 +40,7 @@ export interface ChainCheckpointStep {
 }
 
 export interface ChainCheckpoint {
-  schema_version: 1 | 2;
+  schema_version: 1 | 2 | 3;
   state_layout_version: 1;
   project_id: string;
   chain_session_id: string;
@@ -54,7 +53,6 @@ export interface ChainCheckpoint {
   pending_steps: Array<{
     index: number;
     skill_name: string;
-    release_status?: "production" | "candidate";
     contract_sha256?: string;
     goal: string;
     input_artifacts?: string[];
@@ -140,9 +138,6 @@ function isCheckpointStep(value: unknown): value is ChainCheckpointStep {
   return (
     typeof value.index === "number" &&
     typeof value.skill_name === "string" &&
-    (value.release_status === undefined ||
-      value.release_status === "production" ||
-      value.release_status === "candidate") &&
     (value.contract_sha256 === undefined ||
       (typeof value.contract_sha256 === "string" &&
         /^[a-f0-9]{64}$/u.test(value.contract_sha256))) &&
@@ -174,9 +169,6 @@ function isPendingCheckpointStep(
     isRecord(value) &&
     typeof value.index === "number" &&
     typeof value.skill_name === "string" &&
-    (value.release_status === undefined ||
-      value.release_status === "production" ||
-      value.release_status === "candidate") &&
     (value.contract_sha256 === undefined ||
       (typeof value.contract_sha256 === "string" &&
         /^[a-f0-9]{64}$/u.test(value.contract_sha256))) &&
@@ -193,6 +185,7 @@ function isChainCheckpoint(value: unknown): value is ChainCheckpoint {
   const status = value.chain_status;
   return (
     (value.schema_version === 1 ||
+      value.schema_version === 2 ||
       value.schema_version === SKILL_CHAIN_CHECKPOINT_SCHEMA_VERSION) &&
     value.state_layout_version === 1 &&
     typeof value.project_id === "string" &&
@@ -217,6 +210,7 @@ function normalizeCheckpoint(value: unknown, expectedProjectId: string): ChainCh
   }
   if (
     value.schema_version !== 1 &&
+    value.schema_version !== 2 &&
     value.schema_version !== SKILL_CHAIN_CHECKPOINT_SCHEMA_VERSION
   ) {
     checkpointError("unsupported skill-chain checkpoint schema");
@@ -242,14 +236,11 @@ function normalizeCheckpoint(value: unknown, expectedProjectId: string): ChainCh
     const handoffRef = step.handoff_artifact_ref
       ? parseArtifactRef(step.handoff_artifact_ref)
       : undefined;
-    if (
-      value.schema_version === 2 &&
-      (step.release_status === undefined || step.contract_sha256 === undefined)
-    ) {
-      checkpointError("schema-v2 skill-chain step is missing its registration binding");
+    if (value.schema_version === 3 && step.contract_sha256 === undefined) {
+      checkpointError("schema-v3 skill-chain step is missing its registration binding");
     }
-    if (value.schema_version === 1 && step.release_status === "candidate") {
-      checkpointError("schema-v1 skill-chain checkpoints cannot bind candidates");
+    if (value.schema_version === 3 && "release_status" in step) {
+      checkpointError("schema-v3 skill-chain checkpoint retains a retired release field");
     }
     if (step.input_artifacts !== undefined) {
       if (
@@ -261,25 +252,64 @@ function normalizeCheckpoint(value: unknown, expectedProjectId: string): ChainCh
       }
     }
     return {
-      ...step,
+      index: step.index,
+      skill_name: step.skill_name,
+      ...(step.contract_sha256 === undefined ? {} : { contract_sha256: step.contract_sha256 }),
+      goal: step.goal,
+      ...(step.input_artifacts === undefined ? {} : { input_artifacts: [...step.input_artifacts] }),
+      session_id: step.session_id,
+      status: step.status,
+      ...(step.model === undefined ? {} : { model: step.model }),
+      ...(step.constraints === undefined ? {} : { constraints: { ...step.constraints } }),
+      ...(step.result_preview === undefined ? {} : { result_preview: step.result_preview }),
       ...(outputRef ? { output_artifact_ref: outputRef } : {}),
       ...(handoffRef ? { handoff_artifact_ref: handoffRef } : {}),
+      ...(step.error === undefined ? {} : { error: step.error }),
+      ...(step.error_detail === undefined ? {} : { error_detail: { ...step.error_detail } }),
     };
   });
-  for (const pending of value.pending_steps) {
+  const pendingSteps = value.pending_steps.map((pending) => {
     const step = steps.find((candidate) => candidate.index === pending.index);
     if (step === undefined) checkpointError("pending chain step has no canonical step");
     if (
-      value.schema_version === 2 &&
-      (pending.release_status === undefined ||
-        pending.contract_sha256 === undefined ||
-        pending.release_status !== step.release_status ||
-        pending.contract_sha256 !== step.contract_sha256)
+      value.schema_version === 3 &&
+      (pending.contract_sha256 === undefined || pending.contract_sha256 !== step.contract_sha256)
     ) {
-      checkpointError("schema-v2 pending step registration binding is missing or stale");
+      checkpointError("schema-v3 pending step registration binding is missing or stale");
     }
-  }
-  return { ...value, chain_session_id: chainSessionId, steps };
+    if (value.schema_version === 3 && "release_status" in pending) {
+      checkpointError("schema-v3 pending step retains a retired release field");
+    }
+    return {
+      index: pending.index,
+      skill_name: pending.skill_name,
+      ...(pending.contract_sha256 === undefined
+        ? {}
+        : { contract_sha256: pending.contract_sha256 }),
+      goal: pending.goal,
+      ...(pending.input_artifacts === undefined
+        ? {}
+        : { input_artifacts: [...pending.input_artifacts] }),
+      session_id: pending.session_id,
+      ...(pending.model === undefined ? {} : { model: pending.model }),
+      ...(pending.constraints === undefined ? {} : { constraints: { ...pending.constraints } }),
+    };
+  });
+  return {
+    schema_version: 3,
+    state_layout_version: 1,
+    project_id: value.project_id,
+    chain_session_id: chainSessionId,
+    chain_run_id: value.chain_run_id,
+    chain_goal_summary: value.chain_goal_summary,
+    steps,
+    current_step: value.current_step,
+    total_steps: value.total_steps,
+    chain_status: value.chain_status,
+    pending_steps: pendingSteps,
+    created_at: value.created_at,
+    updated_at: value.updated_at,
+  };
 }
 
 /** Atomically persist complete owner-only restart state under XDG state. */

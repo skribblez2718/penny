@@ -30,6 +30,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -421,6 +422,38 @@ describe("§5.6 private-input custody (index before bytes)", () => {
     checkpointer.close();
   });
 
+  it("refuses a run-directory swap before temp creation without writing through the replacement", () => {
+    const projectRoot = tmpRoot();
+    const dbPath = path.join(projectRoot, ".penny", "orchestration-custody.db");
+    const checkpointer = new Checkpointer(dbPath);
+    const request = queryRequest();
+    const runId = "cust_run_swap_write";
+    admit(projectRoot, checkpointer, runId, request);
+    const runDir = path.join(privateInputRoot(projectRoot), runId);
+    const displaced = `${runDir}.displaced`;
+    const outside = path.join(projectRoot, "outside-write-target");
+    mkdir0700(outside);
+
+    expect(() =>
+      materializeRunInput({
+        projectRoot,
+        checkpointer,
+        runId,
+        request,
+        requestSha256: requestSha(request),
+        onCustodyBoundary(boundary) {
+          if (boundary !== "before_temp_create") return;
+          renameSync(runDir, displaced);
+          symlinkSync(outside, runDir, "dir");
+        },
+      })
+    ).toThrow(/private input run directory/u);
+    expect(existsSync(path.join(outside, "request.json"))).toBe(false);
+    expect(existsSync(path.join(displaced, "request.json"))).toBe(false);
+    expect(checkpointer.getPrivateInput(runId)?.state).toBe("preparing");
+    checkpointer.close();
+  });
+
   it("materialize refuses a request that fails to canonicalize to its admitted digest", () => {
     const projectRoot = tmpRoot();
     const dbPath = path.join(projectRoot, ".penny", "orchestration-custody.db");
@@ -562,8 +595,10 @@ describe("§5.6 terminal settlement and body containment", () => {
     expect(checkpointer.getStartAdmission(runId)?.state).toBe("terminal");
     expect(checkpointer.getStartAdmission(runId)?.terminal_result_id).toBe(resultId);
     expect(existsSync(finalPath)).toBe(false);
-    expect(existsSync(path.dirname(finalPath))).toBe(false); // empty run dir removed
-    expect(existsSync(privateInputRoot(projectRoot))).toBe(true); // root kept
+    // The empty owner-pinned run directory remains as a custody tombstone:
+    // Node has no inode-conditioned rmdir primitive safe against name swaps.
+    expect(existsSync(path.dirname(finalPath))).toBe(true);
+    expect(existsSync(privateInputRoot(projectRoot))).toBe(true);
 
     // Re-settlement is idempotent in both records.
     checkpointer.settleStartAdmission(runId, {
@@ -579,6 +614,39 @@ describe("§5.6 terminal settlement and body containment", () => {
         terminal_result_sha256: "b".repeat(64),
       })
     ).toThrow();
+    checkpointer.close();
+  });
+
+  it("refuses a run-directory swap before unlink without deleting through the replacement", () => {
+    const projectRoot = tmpRoot();
+    const dbPath = path.join(projectRoot, ".penny", "orchestration-custody.db");
+    const checkpointer = new Checkpointer(dbPath);
+    const request = queryRequest();
+    const runId = "cust_set_swap_delete";
+    admit(projectRoot, checkpointer, runId, request);
+    materialize(projectRoot, checkpointer, runId, request);
+    const runDir = path.join(privateInputRoot(projectRoot), runId);
+    const displaced = `${runDir}.displaced`;
+    const outside = path.join(projectRoot, "outside-delete-target");
+    mkdir0700(outside);
+    const outsideFile = path.join(outside, "request.json");
+    writeFileSync(outsideFile, "OUTSIDE_SENTINEL", { mode: 0o600 });
+
+    expect(() =>
+      settleRunInput({
+        projectRoot,
+        checkpointer,
+        runId,
+        onCustodyBoundary(boundary) {
+          if (boundary !== "before_exact_unlink") return;
+          renameSync(runDir, displaced);
+          symlinkSync(outside, runDir, "dir");
+        },
+      })
+    ).toThrow(/private input run directory/u);
+    expect(readFileSync(outsideFile, "utf8")).toBe("OUTSIDE_SENTINEL");
+    expect(existsSync(path.join(displaced, "request.json"))).toBe(true);
+    expect(checkpointer.getPrivateInput(runId)?.state).toBe("discarding");
     checkpointer.close();
   });
 

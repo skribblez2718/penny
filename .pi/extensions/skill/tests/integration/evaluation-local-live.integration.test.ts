@@ -26,7 +26,7 @@ import {
 } from "../../evaluation-local-live.js";
 import {
   DIRECT_DEMETRI_BASELINE_REGISTRATION,
-  SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+  SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
   freezePairedEvaluation,
   syntheticEvaluationImplementationBinding,
   syntheticEvaluationRuntimeFunctions,
@@ -124,7 +124,7 @@ describe("local-live isolated artifact_read integration", () => {
         plan,
         projectRoot: PROJECT_ROOT,
         baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-        candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+        implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
         implementationBinding: syntheticEvaluationImplementationBinding({
           projectRoot: PROJECT_ROOT,
           population,

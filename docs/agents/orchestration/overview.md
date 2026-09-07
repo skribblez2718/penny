@@ -7,13 +7,12 @@
 durable Node SQLite checkpoints, exact artifacts, signed worker receipts, recovery, gates,
 owner-resolved research context, and observability.
 
-The skill extension discovers every package once from `.pi/skills`, classifies it by parsed release
-status, requires exact production/candidate registry agreement, and constructs
+The skill extension discovers every package once from `.pi/skills` and constructs
 `OrchestrationService` in-process for single, parallel, chain, and resume modes. Skill packages
-contain manifests, prompts, and resources—never executable delegates. Directory location grants no
-lifecycle status. Model visibility is orthogonal: only parsed `disable-model-invocation: true` hides a
-valid package, while candidate execution remains exact-digest host-gated outside
-`PLAYBOOK_REGISTRY`.
+contain manifests, prompts, and resources—never executable delegates. `PLAYBOOK_REGISTRY` is the
+sole executable registry. Only parsed `disable-model-invocation: true` hides a valid package from
+model discovery; a hidden development package may remain unregistered, and generic execution then
+fails safely.
 
 ## Components
 
@@ -93,12 +92,11 @@ Durable chain checkpoints retain exact terminal/handoff refs across restart.
 ## Verification
 
 - [ ] Direct/parallel/chain source guards and real-session tests prove exact YAML equality.
-- [ ] Orchestration proves subset-absent YAML equality—including ordinary candidate phases—plus
-      canonical registration-digest and invocation-metadata binding, exact Pi handoff, synthetic or
-      evaluation-only strict subsets, and invalid-subset refusal before session creation.
-- [ ] Native and Penny model listings plus `.pi/skills/.ignore` follow only the parsed disable flag,
-      independently of release namespace.
-- [ ] Candidate docs avoid OS/process sandbox and extension-code-isolation claims; host-private
+- [ ] Orchestration proves subset-absent YAML equality plus canonical registration-digest and
+      invocation-metadata binding, exact Pi handoff, synthetic or evaluation-only strict subsets,
+      and invalid-subset refusal before session creation.
+- [ ] Native and Penny model listings plus `.pi/skills/.ignore` follow only the parsed disable flag.
+- [ ] Evaluation docs avoid OS/process sandbox and extension-code-isolation claims; host-private
       isolated tools remain separate.
 
 ```bash

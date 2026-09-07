@@ -167,7 +167,6 @@ beforeEach(async () => {
           ? {
               ok: true,
               registration: fixture,
-              release_status: "production",
               contract_sha256: skillContractSha256(fixture.contract),
             }
           : { ok: false, code: "SKILL_NOT_REGISTERED", message: "fixture only" },

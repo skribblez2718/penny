@@ -21,7 +21,6 @@ const CORE_ONLY_AGENT = "piper";
 export const CORE_ONLY_CONTRACT: SkillContract = {
   schema_version: 2,
   name: CORE_ONLY_PLAYBOOK_NAME,
-  release_status: "production",
   objective: "Prove the mandatory playbook core without optional capabilities.",
   io: {
     request: {

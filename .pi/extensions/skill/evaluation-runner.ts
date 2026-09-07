@@ -249,7 +249,6 @@ interface EvaluationRegistrationOutputV1 {
 
 interface EvaluationRegistrationConfigurationV1 {
   readonly name: string;
-  readonly releaseStatus: "production" | "candidate";
   readonly actualRequest: boolean;
   readonly agent: string;
   readonly phase: string;
@@ -376,7 +375,6 @@ function evaluationContract(input: EvaluationRegistrationConfigurationV1): Skill
   return {
     schema_version: 2,
     name: input.name,
-    release_status: input.releaseStatus,
     objective:
       "Execute one frozen paired-evaluation task without admission or promotion authority.",
     io: {
@@ -605,7 +603,6 @@ export function createDirectAgentBaselineRegistration(
 ): PlaybookRegistrationV1 {
   return evaluationRegistration({
     name: input.registrationName,
-    releaseStatus: "production",
     actualRequest: false,
     agent: input.agent,
     phase: input.phase,
@@ -643,7 +640,6 @@ export const DIRECT_DEMETRI_BASELINE_REGISTRATION = createDirectAgentBaselineReg
 
 export const SYNTHETIC_KNOWN_DELTA_CANDIDATE_REGISTRATION = evaluationRegistration({
   name: SYNTHETIC_KNOWN_DELTA_CANDIDATE_NAME,
-  releaseStatus: "candidate",
   actualRequest: true,
   agent: "demetri",
   phase: "evaluating",
@@ -665,7 +661,7 @@ export const SYNTHETIC_KNOWN_DELTA_CANDIDATE_REGISTRATION = evaluationRegistrati
   },
 });
 
-export const SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY: PlaybookRegistryV1 = new Map([
+export const SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY: PlaybookRegistryV1 = new Map([
   [SYNTHETIC_KNOWN_DELTA_CANDIDATE_REGISTRATION.name, SYNTHETIC_KNOWN_DELTA_CANDIDATE_REGISTRATION],
 ]);
 
@@ -703,7 +699,7 @@ export function directBaselineDefinition(
   registration: PlaybookRegistrationV1,
   projectRoot: string
 ): DirectBaselineDefinitionV1 {
-  validateRegistrationContract(registration, "production");
+  validateRegistrationContract(registration);
   if (registration.ingress !== "skill") {
     throw new Error("direct evaluation baseline must use generic skill ingress");
   }
@@ -2027,7 +2023,7 @@ function registrationImplementationDescriptor(input: {
 function resolvedEvaluationRegistrations(input: {
   readonly plan: PairedEvaluationPlanV1;
   readonly baselineRegistration: PlaybookRegistrationV1;
-  readonly candidateRegistry: PlaybookRegistryV1;
+  readonly implementationRegistry: PlaybookRegistryV1;
   readonly ablationRegistry: PlaybookRegistryV1;
 }): readonly {
   readonly role: "baseline" | "candidate" | "ablation";
@@ -2036,10 +2032,10 @@ function resolvedEvaluationRegistrations(input: {
   const candidate = resolveEvaluationCandidate({
     name: input.plan.candidate.name,
     contract_sha256: input.plan.candidate.contract_sha256,
-    registry: input.candidateRegistry,
+    registry: input.implementationRegistry,
   });
   if (candidate === undefined) {
-    throw new Error("evaluation implementation candidate registration is unavailable or stale");
+    throw new Error("evaluation implementation registration is unavailable or stale");
   }
   const ablations = input.plan.ablations.map((ablation) => {
     const registration = resolveEvaluationCandidate({
@@ -2192,7 +2188,7 @@ export function createEvaluationImplementationBinding(input: {
   readonly population: unknown;
   readonly plan: unknown;
   readonly baselineRegistration: PlaybookRegistrationV1;
-  readonly candidateRegistry: PlaybookRegistryV1;
+  readonly implementationRegistry: PlaybookRegistryV1;
   readonly ablationRegistry?: PlaybookRegistryV1;
   readonly gradingDefinition?: EvaluationGradingDefinitionV1;
   readonly files: readonly EvaluationImplementationFileInputV1[];
@@ -2206,7 +2202,7 @@ export function createEvaluationImplementationBinding(input: {
   const registrations = resolvedEvaluationRegistrations({
     plan,
     baselineRegistration: input.baselineRegistration,
-    candidateRegistry: input.candidateRegistry,
+    implementationRegistry: input.implementationRegistry,
     ablationRegistry: input.ablationRegistry ?? new Map(),
   });
   assertImplementationFileCoverage({ files: input.files, registrations, grading });
@@ -2333,7 +2329,7 @@ function assertEvaluationImplementationBinding(input: {
   readonly plan: PairedEvaluationPlanV1;
   readonly projectRoot: string;
   readonly baselineRegistration: PlaybookRegistrationV1;
-  readonly candidateRegistry: PlaybookRegistryV1;
+  readonly implementationRegistry: PlaybookRegistryV1;
   readonly ablationRegistry: PlaybookRegistryV1;
   readonly gradingDefinition: EvaluationGradingDefinitionV1;
 }): EvaluationImplementationBindingV1 {
@@ -2354,7 +2350,7 @@ function assertEvaluationImplementationBinding(input: {
     population: input.population,
     plan: input.plan,
     baselineRegistration: input.baselineRegistration,
-    candidateRegistry: input.candidateRegistry,
+    implementationRegistry: input.implementationRegistry,
     ablationRegistry: input.ablationRegistry,
     gradingDefinition: input.gradingDefinition,
     files: binding.files.map((file) => ({ role: file.role, owner: file.owner, path: file.path })),
@@ -2578,12 +2574,12 @@ function exactRuntimeBinding(
 function registrationForEntry(input: {
   readonly entry: PairedEvaluationScheduleEntryV1;
   readonly baselineRegistration: PlaybookRegistrationV1;
-  readonly candidateRegistry: PlaybookRegistryV1;
+  readonly implementationRegistry: PlaybookRegistryV1;
   readonly ablationRegistry: PlaybookRegistryV1;
 }): PlaybookRegistrationV1 {
   if (input.entry.variant === "baseline") return input.baselineRegistration;
   const registry =
-    input.entry.variant === "candidate" ? input.candidateRegistry : input.ablationRegistry;
+    input.entry.variant === "candidate" ? input.implementationRegistry : input.ablationRegistry;
   const registration = resolveEvaluationCandidate({
     name: input.entry.variant_name,
     contract_sha256: input.entry.binding_sha256,
@@ -2785,7 +2781,7 @@ export class GenericEvaluationTrialExecutor implements EvaluationTrialExecutorV1
       readonly projectRoot: string;
       readonly env: NodeJS.ProcessEnv;
       readonly baselineRegistration: PlaybookRegistrationV1;
-      readonly candidateRegistry: PlaybookRegistryV1;
+      readonly implementationRegistry: PlaybookRegistryV1;
       readonly ablationRegistry?: PlaybookRegistryV1;
       readonly modelClientFactory: EvaluationModelClientFactoryV1;
     }
@@ -2807,7 +2803,7 @@ export class GenericEvaluationTrialExecutor implements EvaluationTrialExecutorV1
     const registration = registrationForEntry({
       entry: input.entry,
       baselineRegistration: this.options.baselineRegistration,
-      candidateRegistry: this.options.candidateRegistry,
+      implementationRegistry: this.options.implementationRegistry,
       ablationRegistry: this.options.ablationRegistry ?? new Map(),
     });
     let service: OrchestrationService | undefined;
@@ -3797,7 +3793,7 @@ function assertEvaluationRegistrationBindings(input: {
   readonly population: ReturnType<typeof validateEvaluationPopulation>;
   readonly plan: PairedEvaluationPlanV1;
   readonly baselineRegistration: PlaybookRegistrationV1;
-  readonly candidateRegistry: PlaybookRegistryV1;
+  readonly implementationRegistry: PlaybookRegistryV1;
   readonly ablationRegistry: PlaybookRegistryV1;
   readonly gradingDefinition: EvaluationGradingDefinitionV1;
   readonly implementationBinding: unknown;
@@ -3805,7 +3801,7 @@ function assertEvaluationRegistrationBindings(input: {
   readonly projectRoot: string;
 }): void {
   try {
-    validateRegistrationContract(input.baselineRegistration, "production");
+    validateRegistrationContract(input.baselineRegistration);
     const grading = validatedEvaluationGradingDefinition(input.gradingDefinition);
     assertEvaluationImplementationBinding({
       binding: input.implementationBinding,
@@ -3815,7 +3811,7 @@ function assertEvaluationRegistrationBindings(input: {
       plan: input.plan,
       projectRoot: input.projectRoot,
       baselineRegistration: input.baselineRegistration,
-      candidateRegistry: input.candidateRegistry,
+      implementationRegistry: input.implementationRegistry,
       ablationRegistry: input.ablationRegistry,
       gradingDefinition: input.gradingDefinition,
     });
@@ -3835,11 +3831,11 @@ function assertEvaluationRegistrationBindings(input: {
     const candidate = resolveEvaluationCandidate({
       name: input.frozen.candidate_name,
       contract_sha256: input.frozen.candidate_contract_sha256,
-      registry: input.candidateRegistry,
+      registry: input.implementationRegistry,
     });
     if (candidate === undefined || candidate.ingress !== "skill") {
       throw new Error(
-        "evaluation-only candidate registration is unavailable, stale, or non-generic"
+        "evaluation-only implementation registration is unavailable, stale, or non-generic"
       );
     }
     const registrations = new Map<string, PlaybookRegistrationV1>([
@@ -3935,7 +3931,7 @@ export function freezePairedEvaluation(input: {
   readonly plan: unknown;
   readonly projectRoot: string;
   readonly baselineRegistration: PlaybookRegistrationV1;
-  readonly candidateRegistry: PlaybookRegistryV1;
+  readonly implementationRegistry: PlaybookRegistryV1;
   readonly ablationRegistry?: PlaybookRegistryV1;
   readonly gradingDefinition?: EvaluationGradingDefinitionV1;
   readonly implementationBinding: unknown;
@@ -3960,7 +3956,7 @@ export function freezePairedEvaluation(input: {
     population,
     plan,
     baselineRegistration: input.baselineRegistration,
-    candidateRegistry: input.candidateRegistry,
+    implementationRegistry: input.implementationRegistry,
     ablationRegistry: input.ablationRegistry ?? new Map(),
     gradingDefinition: input.gradingDefinition ?? DETERMINISTIC_GRADING_DEFINITION,
     implementationBinding: input.implementationBinding,
@@ -5315,7 +5311,7 @@ export async function executeFrozenPairedEvaluation(input: {
   readonly projectRoot: string;
   readonly env: NodeJS.ProcessEnv;
   readonly baselineRegistration: PlaybookRegistrationV1;
-  readonly candidateRegistry: PlaybookRegistryV1;
+  readonly implementationRegistry: PlaybookRegistryV1;
   readonly ablationRegistry?: PlaybookRegistryV1;
   readonly executor: EvaluationTrialExecutorV1;
   readonly readinessPreflight?: EvaluationReadinessPreflightV1;
@@ -5349,7 +5345,7 @@ export async function executeFrozenPairedEvaluation(input: {
       population,
       plan,
       baselineRegistration: input.baselineRegistration,
-      candidateRegistry: input.candidateRegistry,
+      implementationRegistry: input.implementationRegistry,
       ablationRegistry: input.ablationRegistry ?? new Map(),
       gradingDefinition,
       implementationBinding: input.implementationBinding,
@@ -5640,7 +5636,7 @@ export async function runPairedEvaluation(input: {
   readonly projectRoot: string;
   readonly env: NodeJS.ProcessEnv;
   readonly baselineRegistration: PlaybookRegistrationV1;
-  readonly candidateRegistry: PlaybookRegistryV1;
+  readonly implementationRegistry: PlaybookRegistryV1;
   readonly ablationRegistry?: PlaybookRegistryV1;
   readonly executor: EvaluationTrialExecutorV1;
   readonly readinessPreflight?: EvaluationReadinessPreflightV1;
@@ -5660,7 +5656,7 @@ export async function runPairedEvaluation(input: {
       plan: input.plan,
       projectRoot: input.projectRoot,
       baselineRegistration: input.baselineRegistration,
-      candidateRegistry: input.candidateRegistry,
+      implementationRegistry: input.implementationRegistry,
       ...(input.ablationRegistry === undefined ? {} : { ablationRegistry: input.ablationRegistry }),
       ...(input.gradingDefinition === undefined
         ? {}
@@ -5958,7 +5954,7 @@ export function syntheticEvaluationImplementationBinding(input: {
     population: input.population,
     plan: input.plan,
     baselineRegistration: DIRECT_DEMETRI_BASELINE_REGISTRATION,
-    candidateRegistry: SYNTHETIC_EVALUATION_CANDIDATE_REGISTRY,
+    implementationRegistry: SYNTHETIC_EVALUATION_IMPLEMENTATION_REGISTRY,
     gradingDefinition,
     files,
     runtimeFunctions: input.runtimeFunctions ?? syntheticEvaluationRuntimeFunctions(),

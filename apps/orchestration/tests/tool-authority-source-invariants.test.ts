@@ -15,7 +15,7 @@ const DIRECT_AGENT_RUNNER_SOURCE = readFileSync(
   new URL("../../../.pi/extensions/subagent/agent-runner.ts", import.meta.url),
   "utf8"
 );
-const ORDINARY_CANDIDATE_PLAYBOOK_SOURCES = ["assess", "decide", "diagnose", "plan", "produce"].map(
+const ORDINARY_UNIVERSAL_PLAYBOOK_SOURCES = ["assess", "decide", "diagnose", "plan", "produce"].map(
   (name) => readFileSync(new URL(`../src/playbooks/${name}.ts`, import.meta.url), "utf8")
 );
 
@@ -25,8 +25,8 @@ describe("W6 closed catalog tool-authority seam", () => {
     expect(DIRECT_AGENT_RUNNER_SOURCE).not.toContain("allowed_tools");
   });
 
-  it("removes blanket candidate phase-tool constants while retaining the generic subset seam", () => {
-    for (const source of ORDINARY_CANDIDATE_PLAYBOOK_SOURCES) {
+  it("removes blanket per-playbook phase-tool constants while retaining the generic subset seam", () => {
+    for (const source of ORDINARY_UNIVERSAL_PLAYBOOK_SOURCES) {
       expect(source).not.toMatch(/export const [A-Z]+_CANDIDATE_PHASE_TOOLS/u);
     }
   });

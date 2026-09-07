@@ -1,26 +1,78 @@
-.PHONY: setup venv install-py install-js init clean test test-integration check-public check-agents-links check-doc-links check-kb-privacy check-tool-profiles check-tool-descriptions check-skill-structure check-capability-registry check-agent-roster lint typecheck verify-publication format evals
+.PHONY: setup setup-ready setup-dev setup-browser doctor state-status memory-status preflight-core preflight-js preflight-python config-check venv install-py install-js build-orchestration build-observability init clean test test-integration check-public check-agents-links check-doc-links check-kb-privacy check-tool-profiles check-tool-descriptions check-skill-structure check-capability-registry check-agent-roster lint typecheck verify-publication format evals
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 
-setup: venv install-py install-js init
+# Setup modes are exported directly to child processes instead of interpolated
+# into shell commands. This keeps caller-owned paths and values out of shell
+# syntax while preserving explicit setup authority.
+STATE_MODE ?= existing
+MEMORY_MODE ?= hub
+MEMORY_HUB_CONFIG ?=
+export PENNY_SETUP_STATE_MODE := $(STATE_MODE)
+export PENNY_SETUP_MEMORY_MODE := $(MEMORY_MODE)
+export PENNY_SETUP_MEMORY_HUB_CONFIG := $(MEMORY_HUB_CONFIG)
+
+# The dependency graph, rather than recipe order, makes `make -j setup` safe:
+# each package tree and dist directory has one writer and doctor runs last.
+SETUP_MEMORY_TARGET := install-py
+ifeq ($(MEMORY_MODE),disabled)
+SETUP_MEMORY_TARGET :=
+endif
+
+setup: setup-ready
+
+setup-ready: preflight-js config-check $(SETUP_MEMORY_TARGET) build-observability
+	@PENNY_SETUP_ALLOW_FRESH_INIT=$(if $(filter fresh,$(STATE_MODE)),1,0) node scripts/setup/doctor.mjs
 	@echo ""
-	@echo "Setup complete. Ensure .env exists and holds your values (cp .env.example .env if needed)."
-	@echo "Then start Pi in the project directory."
+	@echo "Setup complete. Penny is ready for the selected profile."
+	@echo "Start Pi in the project directory."
 
-venv:
-	uv venv .venv
+preflight-core: preflight-js preflight-python
 
-install-py:
-	# --extra dev installs the dev/test toolchain (pytest, flake8, black, mypy, ...)
-	# declared under [project.optional-dependencies] dev. Plain `uv sync` does NOT
-	# install extras, which previously left `make test`/`make lint` unable to run.
-	uv sync --extra dev
+preflight-js:
+	@node scripts/setup/preflight.mjs javascript
 
-install-js:
-	bun install
+preflight-python:
+	@node scripts/setup/preflight.mjs python
 
-init:
-	bash scripts/setup/setup.sh
+config-check: preflight-js
+	@node scripts/setup/check-config.mjs
+
+# Core memory is part of the default runtime. uv creates .venv when absent.
+venv: install-py
+
+install-py: preflight-python
+	uv sync --frozen --offline
+
+install-js: preflight-js
+	bun install --frozen-lockfile --offline
+
+build-orchestration: install-js
+	bash scripts/setup/init-orchestration.sh build
+
+build-observability: build-orchestration
+	bash scripts/setup/init-observability.sh
+
+# Readiness-only entrypoint: never authorizes fresh state initialization.
+doctor:
+	@PENNY_SETUP_ALLOW_FRESH_INIT=0 PENNY_SETUP_DOCTOR_COMPONENT=all node scripts/setup/doctor.mjs
+
+state-status:
+	@PENNY_SETUP_ALLOW_FRESH_INIT=0 PENNY_SETUP_DOCTOR_COMPONENT=state node scripts/setup/doctor.mjs
+
+memory-status:
+	@PENNY_SETUP_ALLOW_FRESH_INIT=0 PENNY_SETUP_DOCTOR_COMPONENT=memory node scripts/setup/doctor.mjs
+
+# Browser binaries and development/check dependencies are explicit opt-ins.
+setup-browser: install-js
+	bash scripts/setup/init-external-tools.sh
+
+setup-dev: preflight-core
+	bun install --frozen-lockfile --offline
+	uv sync --frozen --offline --all-extras
+
+# Compatibility alias for callers that previously used `make init`.
+init: doctor
 
 # ── Development ─────────────────────────────────────────────────────────────
 
@@ -86,8 +138,8 @@ test-integration:
 	  exit $$rc'
 
 # Optional local benchmark gate. Inputs under the ignored evals/ directory are
-# caller-owned and are not part of publication checks. Neither path performs
-# promotion, admission, production registration, or candidate enablement.
+# caller-owned and are not part of publication checks. Neither path changes
+# executable registration, model discovery, or invocation authority.
 evals:
 	bun run --cwd .pi/extensions/skill evals:known-delta
 	bun run --cwd .pi/extensions/skill evals:plan-control
@@ -165,7 +217,7 @@ typecheck:
 # Phase-5 procedures because they require an explicitly reviewed index and remote base.
 verify-publication:
 	bun install --frozen-lockfile
-	uv sync --frozen --extra dev
+	uv sync --frozen --all-extras
 	bun run format:check
 	bun run lint
 	bun run typecheck

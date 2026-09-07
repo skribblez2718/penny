@@ -67,6 +67,7 @@ function edgeIds(value: unknown): readonly string[] {
 const STATES = [
   "intake",
   "exploring_artifact_approaches",
+  "selecting_artifact_approach",
   "materializing_artifact",
   "sealing_artifact",
   "critiquing_artifact",
@@ -79,7 +80,8 @@ const STATES = [
 
 const EDGES = [
   "intake→exploring_artifact_approaches",
-  "exploring_artifact_approaches→materializing_artifact",
+  "exploring_artifact_approaches→selecting_artifact_approach",
+  "selecting_artifact_approach→materializing_artifact",
   "materializing_artifact→sealing_artifact",
   "sealing_artifact→materializing_artifact",
   "sealing_artifact→critiquing_artifact",

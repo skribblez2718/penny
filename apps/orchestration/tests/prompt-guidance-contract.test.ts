@@ -19,7 +19,7 @@ import { validateContract, type SkillContract } from "../src/contracts.js";
 import { resolveDomainGuidancePath } from "../src/model-client.js";
 import {
   ASSESS_AGENT_BY_STATE,
-  ASSESS_CANDIDATE_REGISTRATION,
+  ASSESS_PLAYBOOK_REGISTRATION,
   ASSESS_SKILL_CONTRACT,
 } from "../src/playbooks/assess.js";
 import { DECIDE_AGENT_BY_STATE, DECIDE_SKILL_CONTRACT } from "../src/playbooks/decide.js";
@@ -33,6 +33,7 @@ import {
 } from "../src/skill-contracts/assess.js";
 import {
   parsePersistedArtifactApproach,
+  parsePersistedArtifactApproachDecision,
   parsePersistedProducedArtifactDraft,
   type ProduceRequestV1,
 } from "../src/skill-contracts/produce.js";
@@ -124,10 +125,10 @@ describe("closed prompt-guidance surfaces", () => {
       PROJECT_ROOT,
       ...ASSESS_SKILL_CONTRACT.guidance.skill_root.split("/")
     );
-    if (ASSESS_CANDIDATE_REGISTRATION.worker.kind !== "catalog-agent") {
+    if (ASSESS_PLAYBOOK_REGISTRATION.worker.kind !== "catalog-agent") {
       throw new Error("Assess must use catalog agents");
     }
-    for (const [phase, registration] of ASSESS_CANDIDATE_REGISTRATION.worker.phases) {
+    for (const [phase, registration] of ASSESS_PLAYBOOK_REGISTRATION.worker.phases) {
       const prompt = readFileSync(
         path.join(promptRoot, `${registration.agent}-${phase}.md`),
         "utf8"
@@ -267,7 +268,7 @@ describe("closed prompt-guidance surfaces", () => {
     expect(echo).not.toContain("no external-acquisition authority");
   });
 
-  it("keeps Produce guidance equal to its exact Ida/Skribble/Carren/Vera machine", () => {
+  it("keeps Produce guidance equal to its exact Ida/Demetri/Skribble/Carren/Vera machine", () => {
     const phases = Object.entries(PRODUCE_AGENT_BY_STATE).map(([phase, agent]) => ({
       agent,
       phase,
@@ -289,11 +290,39 @@ describe("closed prompt-guidance surfaces", () => {
     const ida = readFileSync(path.join(promptRoot, "ida-exploring_artifact_approaches.md"), "utf8");
     const idaExample = ida.split(/\r?\n/u).find((line) => line.startsWith("ARTIFACT_APPROACH:"));
     if (idaExample === undefined) throw new Error("Produce Ida prompt lacks approach example");
+    const parsedApproach = parsePersistedArtifactApproach(
+      Buffer.from(`${idaExample}\nSUMMARY:{"confidence":"PROBABLE","complete":true}`)
+    ).approach;
+    expect(ida).toContain("Do not rank, score, recommend, select");
+    expect(ida).not.toContain("recommend exactly one");
+    const idaRole = readFileSync(path.join(PROJECT_ROOT, ".pi", "agents", "ida.md"), "utf8");
+    expect(idaRole).toMatch(/^selects: no$/mu);
+
+    const demetri = readFileSync(
+      path.join(promptRoot, "demetri-selecting_artifact_approach.md"),
+      "utf8"
+    );
+    const decisionExample = demetri
+      .split(/\r?\n/u)
+      .find((line) => line.startsWith("ARTIFACT_APPROACH_DECISION:"));
+    if (decisionExample === undefined) {
+      throw new Error("Produce Demetri prompt lacks decision example");
+    }
     expect(() =>
-      parsePersistedArtifactApproach(
-        Buffer.from(`${idaExample}\nSUMMARY:{"confidence":"PROBABLE","complete":true}`)
+      parsePersistedArtifactApproachDecision(
+        Buffer.from(
+          `${decisionExample}\nSUMMARY:{"confidence":"PROBABLE","complete":true,"disposition":"selected"}`
+        ),
+        { approach: parsedApproach }
       )
     ).not.toThrow();
+    expect(demetri).toContain("what would change it");
+    expect(demetri).toContain("honest unresolved disposition");
+    const demetriRole = readFileSync(
+      path.join(PROJECT_ROOT, ".pi", "agents", "demetri.md"),
+      "utf8"
+    );
+    expect(demetriRole).toMatch(/^selects: yes$/mu);
 
     const skribble = readFileSync(
       path.join(promptRoot, "skribble-materializing_artifact.md"),

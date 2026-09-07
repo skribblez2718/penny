@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from memory import hub_service
 from memory.common import ValidationError, atomic_write_json
 from memory.hub_config import HubConfig, child_environment, load_hub_config
 from memory.hub_service import (
@@ -21,6 +22,7 @@ from memory.hub_service import (
     _linux_process_stat,
     _linux_start_marker,
     _process_alive,
+    _validate_upstream_status,
     build_hub_command,
     health,
     status,
@@ -61,7 +63,7 @@ def _make_config(
             path.mkdir(mode=0o700, parents=True, exist_ok=True)
             path.chmod(0o700)
     token = root / "token"
-    token.write_text("synthetic-test-token", encoding="utf-8")
+    token.write_text("synthetic-test-token-at-least-32-bytes", encoding="utf-8")
     token.chmod(0o600)
     config = root / "hub.json"
     config.write_text(
@@ -89,6 +91,7 @@ def _write_fixture_server(path: Path) -> None:
         textwrap.dedent("""
             import argparse
             import fcntl
+            import hashlib
             import json
             import os
             import signal
@@ -134,7 +137,23 @@ def _write_fixture_server(path: Path) -> None:
                             self.send_response(401)
                             self.end_headers()
                             return
-                        payload = json.dumps({"synthetic": True}).encode()
+                        palace_path = os.path.abspath(os.path.expanduser(args.palace))
+                        payload = json.dumps({
+                            "ok": True,
+                            "server": {
+                                "name": "mempalace",
+                                "version": "3.7.1",
+                                "transport": "http",
+                                "bind_host": args.host,
+                                "port": args.port,
+                            },
+                            "palace": {
+                                "path_hash": hashlib.sha256(palace_path.encode()).hexdigest()[:16],
+                                "backend": "chroma",
+                                "sqlite_integrity": {"ok": True},
+                            },
+                            "synthetic": True,
+                        }).encode()
                         self.send_response(200)
                         self.send_header("Content-Type", "application/json")
                         self.end_headers()
@@ -269,7 +288,26 @@ def test_second_owner_refusal_and_sigterm_sighup_release_restart(tmp_path: Path)
         service_status = status(config_one)
         assert service_status["running"] is True
         assert service_status["healthy"] is True
-        assert service_status["upstream"] == {"synthetic": True}
+        assert service_status["upstream"]["synthetic"] is True
+        assert service_status["upstream"]["server"]["version"] == "3.7.1"
+        assert service_status["upstream"]["palace"]["backend"] == "chroma"
+
+        wrong_identity = dict(service_status["upstream"])
+        wrong_identity["server"] = dict(wrong_identity["server"], version="3.7.2")
+        with pytest.raises(ValidationError, match="identity does not match"):
+            _validate_upstream_status(config_one, wrong_identity)
+
+        original_token = config_one.token_file.read_text(encoding="utf-8")
+        config_one.token_file.write_text(
+            "wrong-synthetic-token-at-least-32-bytes", encoding="utf-8"
+        )
+        unauthorized = status(config_one)
+        assert unauthorized["running"] is True
+        assert unauthorized["healthy"] is True
+        assert unauthorized["upstream"] is None
+        assert unauthorized["error"] == "status endpoint returned HTTP 401"
+        assert hub_service.status_ready(unauthorized) is False
+        config_one.token_file.write_text(original_token, encoding="utf-8")
 
         second = _launch(config_two_path, launcher, fixture)
         assert second.wait(timeout=10) == 2
@@ -473,6 +511,76 @@ def test_config_rejects_non_owner_token_permissions(tmp_path: Path) -> None:
 
     with pytest.raises(ValidationError, match="group or other"):
         load_hub_config(config_path)
+
+
+def test_status_exit_requires_authenticated_upstream_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    palace = tmp_path / "palace"
+    palace.mkdir(mode=0o700)
+    config_path = _make_config(
+        tmp_path / "owner",
+        palace,
+        palace_id="synthetic",
+        port=_free_port(),
+    )
+    config = load_hub_config(config_path)
+    result: dict[str, Any] = {
+        "schema_version": 1,
+        "operation": "status",
+        "palace_id": config.palace_id,
+        "endpoint": config.endpoint,
+        "supervised": True,
+        "running": True,
+        "pid": os.getpid(),
+        "pid_error": None,
+        "healthy": True,
+        "upstream": None,
+        "error": "status endpoint returned HTTP 401",
+    }
+    monkeypatch.setattr(hub_service, "load_hub_config", lambda _path: config)
+    monkeypatch.setattr(hub_service, "status", lambda _config: result)
+
+    assert hub_service.main(["status", "--config", str(config_path)]) == 1
+    emitted = json.loads(capsys.readouterr().out)
+    assert emitted["healthy"] is True
+    assert emitted["upstream"] is None
+    assert emitted["error"] == "status endpoint returned HTTP 401"
+
+
+def test_status_exit_accepts_only_complete_authenticated_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    palace = tmp_path / "palace"
+    palace.mkdir(mode=0o700)
+    config_path = _make_config(
+        tmp_path / "owner",
+        palace,
+        palace_id="synthetic",
+        port=_free_port(),
+    )
+    config = load_hub_config(config_path)
+    result: dict[str, Any] = {
+        "schema_version": 1,
+        "operation": "status",
+        "palace_id": config.palace_id,
+        "endpoint": config.endpoint,
+        "supervised": True,
+        "running": True,
+        "pid": os.getpid(),
+        "pid_error": None,
+        "healthy": True,
+        "upstream": {
+            "ok": True,
+            "server": {"name": "mempalace"},
+            "palace": {"backend": "chroma"},
+        },
+        "error": None,
+    }
+    monkeypatch.setattr(hub_service, "load_hub_config", lambda _path: config)
+    monkeypatch.setattr(hub_service, "status", lambda _config: result)
+
+    assert hub_service.main(["status", "--config", str(config_path)]) == 0
 
 
 def test_linux_user_service_is_template_only_and_uses_portable_foreground() -> None:

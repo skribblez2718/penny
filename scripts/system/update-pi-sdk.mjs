@@ -8,6 +8,7 @@ import {
   constants,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   realpathSync,
@@ -16,7 +17,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
@@ -44,18 +45,73 @@ const INSTALL_TIMEOUT_MS = 600_000;
 const CHECK_TIMEOUT_MS = 1_200_000;
 const GLOBAL_UPDATE_TIMEOUT_MS = 600_000;
 const MAX_CAPTURE_BYTES = 1_048_576;
+const MAX_ERROR_CAUSE_DEPTH = 6;
+
+export const PI_UPDATE_ERROR_CODES = Object.freeze({
+  BASELINE_FAILED: "BASELINE_FAILED",
+  CANDIDATE_RELEASE_UNAVAILABLE: "CANDIDATE_RELEASE_UNAVAILABLE",
+  CANDIDATE_INSTALL_FAILED: "CANDIDATE_INSTALL_FAILED",
+  CANDIDATE_PACKAGE_INVALID: "CANDIDATE_PACKAGE_INVALID",
+  CANDIDATE_STAGE_FAILED: "CANDIDATE_STAGE_FAILED",
+  PENNY_ARCHITECTURE_FAILED: "PENNY_ARCHITECTURE_FAILED",
+  PENNY_TYPE_COMPATIBILITY_FAILED: "PENNY_TYPE_COMPATIBILITY_FAILED",
+  PENNY_RUNTIME_COMPATIBILITY_FAILED: "PENNY_RUNTIME_COMPATIBILITY_FAILED",
+  PENNY_EXTENSION_LOAD_FAILED: "PENNY_EXTENSION_LOAD_FAILED",
+  LOCAL_ROLLBACK_FAILED: "LOCAL_ROLLBACK_FAILED",
+  GLOBAL_UPDATE_FAILED: "GLOBAL_UPDATE_FAILED",
+  GLOBAL_SMOKE_FAILED: "GLOBAL_SMOKE_FAILED",
+  PI_UPDATE_FAILED: "PI_UPDATE_FAILED",
+});
 
 const COMPATIBILITY_COMMANDS = Object.freeze([
-  Object.freeze({ command: "bun", args: ["run", "typescript:architecture"] }),
-  Object.freeze({ command: "bun", args: ["run", "typecheck"] }),
-  Object.freeze({ command: "bun", args: ["run", "test:pi-compat"] }),
+  Object.freeze({
+    command: "bun",
+    args: ["run", "typescript:architecture"],
+    candidateErrorCode: PI_UPDATE_ERROR_CODES.PENNY_ARCHITECTURE_FAILED,
+  }),
+  Object.freeze({
+    command: "bun",
+    args: ["run", "typecheck"],
+    candidateErrorCode: PI_UPDATE_ERROR_CODES.PENNY_TYPE_COMPATIBILITY_FAILED,
+  }),
+  Object.freeze({
+    command: "bun",
+    args: ["run", "test:pi-compat"],
+    candidateErrorCode: PI_UPDATE_ERROR_CODES.PENNY_RUNTIME_COMPATIBILITY_FAILED,
+  }),
 ]);
 
 export class PiUpdateError extends Error {
-  constructor(message, options) {
-    super(message, options);
+  constructor(message, options = {}) {
+    super(message, { cause: options.cause });
     this.name = "PiUpdateError";
+    this.code = options.code ?? PI_UPDATE_ERROR_CODES.PI_UPDATE_FAILED;
+    this.phase = options.phase;
   }
+}
+
+function appendCauseMessages(value, lines, depth) {
+  if (depth >= MAX_ERROR_CAUSE_DEPTH) return;
+  const causes =
+    value instanceof AggregateError
+      ? value.errors
+      : value instanceof Error && value.cause !== undefined
+        ? [value.cause]
+        : [];
+  for (const cause of causes) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    lines.push(`${"  ".repeat(depth + 1)}Caused by: ${message}`);
+    appendCauseMessages(cause, lines, depth + 1);
+  }
+}
+
+export function formatPiUpdateFailure(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = error instanceof PiUpdateError ? error.code : PI_UPDATE_ERROR_CODES.PI_UPDATE_FAILED;
+  const phase = error instanceof PiUpdateError && error.phase ? ` (${error.phase})` : "";
+  const lines = [`Pi update failed [${code}]${phase}: ${message}`];
+  appendCauseMessages(error, lines, 0);
+  return lines.join("\n");
 }
 
 function isRecord(value) {
@@ -455,6 +511,94 @@ function localPiCli(projectRoot) {
   return cliPath;
 }
 
+export function runCandidateConsumerPreflight(runCommand, candidateVersion, log = () => {}) {
+  const candidate = parseExactVersion(candidateVersion, "candidate version");
+  const consumerRoot = mkdtempSync(path.join(tmpdir(), "penny-pi-consumer-"));
+  try {
+    writeFileSync(
+      path.join(consumerRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "penny-pi-candidate-consumer",
+          private: true,
+          type: "module",
+          dependencies: { [CODING_AGENT_PACKAGE]: candidate },
+        },
+        null,
+        2
+      )}\n`,
+      { encoding: "utf8", flag: "wx", mode: 0o600 }
+    );
+
+    log("--> clean-consumer candidate install");
+    try {
+      runCommand({
+        command: "bun",
+        args: ["install", "--production", "--ignore-scripts"],
+        cwd: consumerRoot,
+        timeoutMs: INSTALL_TIMEOUT_MS,
+      });
+    } catch (error) {
+      throw new PiUpdateError(
+        `could not install ${CODING_AGENT_PACKAGE}@${candidate} in a clean consumer`,
+        {
+          code: PI_UPDATE_ERROR_CODES.CANDIDATE_INSTALL_FAILED,
+          phase: "candidate_consumer_install",
+          cause: error,
+        }
+      );
+    }
+
+    log("--> clean-consumer SDK package-root import");
+    try {
+      runCommand({
+        command: process.execPath,
+        args: [
+          "--input-type=module",
+          "--eval",
+          `await import(${JSON.stringify(CODING_AGENT_PACKAGE)});`,
+        ],
+        cwd: consumerRoot,
+        capture: true,
+        timeoutMs: CHECK_TIMEOUT_MS,
+        extraEnvironment: { PI_OFFLINE: "1" },
+      });
+    } catch (error) {
+      throw new PiUpdateError(
+        `${CODING_AGENT_PACKAGE}@${candidate} cannot be imported by a clean consumer`,
+        {
+          code: PI_UPDATE_ERROR_CODES.CANDIDATE_PACKAGE_INVALID,
+          phase: "candidate_sdk_import",
+          cause: error,
+        }
+      );
+    }
+
+    log("--> clean-consumer bundled CLI smoke");
+    try {
+      runCommand({
+        command: process.execPath,
+        args: [localPiCli(consumerRoot), "--no-approve", "--no-session", "--list-models"],
+        cwd: consumerRoot,
+        capture: true,
+        timeoutMs: CHECK_TIMEOUT_MS,
+        extraEnvironment: { PI_OFFLINE: "1" },
+      });
+    } catch (error) {
+      throw new PiUpdateError(
+        `${CODING_AGENT_PACKAGE}@${candidate} bundled CLI failed in a clean consumer`,
+        {
+          code: PI_UPDATE_ERROR_CODES.CANDIDATE_PACKAGE_INVALID,
+          phase: "candidate_cli_smoke",
+          cause: error,
+        }
+      );
+    }
+  } finally {
+    rmSync(consumerRoot, { recursive: true, force: true });
+  }
+}
+
 function runLocalPiSmoke(runCommand, projectRoot) {
   runCommand({
     command: process.execPath,
@@ -465,20 +609,42 @@ function runLocalPiSmoke(runCommand, projectRoot) {
   });
 }
 
-function runCompatibilityGate(runCommand, projectRoot, label, log) {
+function runCompatibilityGate(runCommand, projectRoot, label, log, classifyCandidate = false) {
   log(`\n==> ${label}`);
   const offlineEnvironment = { PI_OFFLINE: "1" };
   for (const item of COMPATIBILITY_COMMANDS) {
     log(`--> ${formatCommand(item.command, item.args)}`);
-    runCommand({
-      ...item,
-      cwd: projectRoot,
-      timeoutMs: CHECK_TIMEOUT_MS,
-      extraEnvironment: offlineEnvironment,
-    });
+    try {
+      runCommand({
+        command: item.command,
+        args: item.args,
+        cwd: projectRoot,
+        timeoutMs: CHECK_TIMEOUT_MS,
+        extraEnvironment: offlineEnvironment,
+      });
+    } catch (error) {
+      if (!classifyCandidate) throw error;
+      throw new PiUpdateError(
+        `Penny compatibility command failed: ${formatCommand(item.command, item.args)}`,
+        {
+          code: item.candidateErrorCode,
+          phase: item.args[1],
+          cause: error,
+        }
+      );
+    }
   }
   log("--> local candidate Pi extension-load smoke");
-  runLocalPiSmoke(runCommand, projectRoot);
+  try {
+    runLocalPiSmoke(runCommand, projectRoot);
+  } catch (error) {
+    if (!classifyCandidate) throw error;
+    throw new PiUpdateError("candidate Pi could not load Penny's extensions", {
+      code: PI_UPDATE_ERROR_CODES.PENNY_EXTENSION_LOAD_FAILED,
+      phase: "extension_load_smoke",
+      cause: error,
+    });
+  }
 }
 
 function installProject(runCommand, projectRoot, frozen) {
@@ -597,41 +763,103 @@ export function runPiUpdate(options = {}) {
       return { status: "already_aligned", version: originalGlobalVersion };
     }
 
+    try {
+      verifyCandidatePackageFamily(runCommand, projectRoot, candidateVersion);
+    } catch (error) {
+      throw new PiUpdateError(
+        `the coordinated Pi ${candidateVersion} package family is unavailable or incoherent`,
+        {
+          code: PI_UPDATE_ERROR_CODES.CANDIDATE_RELEASE_UNAVAILABLE,
+          phase: "candidate_release_metadata",
+          cause: error,
+        }
+      );
+    }
+
+    log(`\n==> Clean-consumer candidate package preflight (${candidateVersion})`);
+    runCandidateConsumerPreflight(runCommand, candidateVersion, log);
+
     log("\n==> Restoring the frozen baseline dependency graph");
-    installProject(runCommand, projectRoot, true);
-    runCompatibilityGate(
-      runCommand,
-      projectRoot,
-      `Baseline compatibility (${pins.root[CODING_AGENT_PACKAGE]})`,
-      log
-    );
-    verifyCandidatePackageFamily(runCommand, projectRoot, candidateVersion);
-    const snapshots = captureSnapshots(projectRoot);
+    try {
+      installProject(runCommand, projectRoot, true);
+      runCompatibilityGate(
+        runCommand,
+        projectRoot,
+        `Baseline compatibility (${pins.root[CODING_AGENT_PACKAGE]})`,
+        log
+      );
+    } catch (error) {
+      throw new PiUpdateError("the frozen Penny baseline failed before candidate staging", {
+        code: PI_UPDATE_ERROR_CODES.BASELINE_FAILED,
+        phase: "baseline_compatibility",
+        cause: error,
+      });
+    }
+
+    let snapshots;
+    try {
+      snapshots = captureSnapshots(projectRoot);
+    } catch (error) {
+      throw new PiUpdateError("could not snapshot Penny before candidate staging", {
+        code: PI_UPDATE_ERROR_CODES.CANDIDATE_STAGE_FAILED,
+        phase: "candidate_snapshot",
+        cause: error,
+      });
+    }
     let candidateInstalled = false;
     try {
       log(`\n==> Staging Penny SDK ${candidateVersion}`);
-      updatePinnedFiles(projectRoot, candidateVersion);
-      installProject(runCommand, projectRoot, false);
-      candidateInstalled = true;
-      verifyInstalledVersions(projectRoot, candidateVersion);
+      try {
+        updatePinnedFiles(projectRoot, candidateVersion);
+      } catch (error) {
+        throw new PiUpdateError("could not stage Penny's candidate Pi declarations", {
+          code: PI_UPDATE_ERROR_CODES.CANDIDATE_STAGE_FAILED,
+          phase: "candidate_manifest_staging",
+          cause: error,
+        });
+      }
+      try {
+        installProject(runCommand, projectRoot, false);
+        verifyInstalledVersions(projectRoot, candidateVersion);
+        candidateInstalled = true;
+      } catch (error) {
+        throw new PiUpdateError("Penny's candidate Pi dependency graph did not install correctly", {
+          code: PI_UPDATE_ERROR_CODES.CANDIDATE_INSTALL_FAILED,
+          phase: "candidate_project_install",
+          cause: error,
+        });
+      }
       runCompatibilityGate(
         runCommand,
         projectRoot,
         `Candidate compatibility (${candidateVersion})`,
-        log
+        log,
+        true
       );
     } catch (error) {
+      const classifiedError =
+        error instanceof PiUpdateError
+          ? error
+          : new PiUpdateError("candidate validation failed", {
+              code: PI_UPDATE_ERROR_CODES.PI_UPDATE_FAILED,
+              phase: "candidate_validation",
+              cause: error,
+            });
       try {
         rollbackLocalState(runCommand, projectRoot, snapshots, log);
       } catch (rollbackError) {
         throw new PiUpdateError("candidate validation failed and local rollback also failed", {
-          cause: new AggregateError([error, rollbackError]),
+          code: PI_UPDATE_ERROR_CODES.LOCAL_ROLLBACK_FAILED,
+          phase: "candidate_rollback",
+          cause: new AggregateError([classifiedError, rollbackError]),
         });
       }
       throw new PiUpdateError(
-        "candidate Pi SDK failed compatibility validation; global Pi was not updated",
+        `${classifiedError.message}; restored the previous local state; global Pi was not updated`,
         {
-          cause: error,
+          code: classifiedError.code,
+          phase: classifiedError.phase,
+          cause: classifiedError,
         }
       );
     }
@@ -644,12 +872,18 @@ export function runPiUpdate(options = {}) {
         rollbackLocalState(runCommand, projectRoot, snapshots, log);
       } catch (rollbackError) {
         throw new PiUpdateError("latest-version recheck failed and local rollback also failed", {
+          code: PI_UPDATE_ERROR_CODES.LOCAL_ROLLBACK_FAILED,
+          phase: "latest_version_rollback",
           cause: new AggregateError([error, rollbackError]),
         });
       }
       throw new PiUpdateError(
         "validated candidate is no longer the latest release; global Pi was not updated",
-        { cause: error }
+        {
+          code: PI_UPDATE_ERROR_CODES.CANDIDATE_RELEASE_UNAVAILABLE,
+          phase: "latest_version_recheck",
+          cause: error,
+        }
       );
     }
     log(`\n==> Updating global Pi ${originalGlobalVersion} -> ${candidateVersion}`);
@@ -677,7 +911,11 @@ export function runPiUpdate(options = {}) {
     } catch (versionError) {
       throw new PiUpdateError(
         "global Pi update left the installed version unreadable; candidate local files were retained for recovery",
-        { cause: new AggregateError([globalUpdateError, versionError].filter(Boolean)) }
+        {
+          code: PI_UPDATE_ERROR_CODES.GLOBAL_UPDATE_FAILED,
+          phase: "global_version_verification",
+          cause: new AggregateError([globalUpdateError, versionError].filter(Boolean)),
+        }
       );
     }
 
@@ -689,35 +927,57 @@ export function runPiUpdate(options = {}) {
         rollbackLocalState(runCommand, projectRoot, snapshots, log);
       } catch (rollbackError) {
         throw new PiUpdateError("global Pi did not update and local rollback failed", {
+          code: PI_UPDATE_ERROR_CODES.LOCAL_ROLLBACK_FAILED,
+          phase: "global_update_rollback",
           cause: new AggregateError([globalUpdateError, rollbackError].filter(Boolean)),
         });
       }
       throw new PiUpdateError(
         `global Pi remained at ${installedGlobalVersion}; restored the matching project-local SDK`,
-        { cause: globalUpdateError }
+        {
+          code: PI_UPDATE_ERROR_CODES.GLOBAL_UPDATE_FAILED,
+          phase: "global_update",
+          cause: globalUpdateError,
+        }
       );
     }
     if (installedGlobalVersion !== candidateVersion) {
       throw new PiUpdateError(
         `global Pi is ${installedGlobalVersion}, not validated candidate ${candidateVersion}; candidate local files were retained because automatic rollback would not restore alignment`,
-        { cause: globalUpdateError }
+        {
+          code: PI_UPDATE_ERROR_CODES.GLOBAL_UPDATE_FAILED,
+          phase: "global_version_verification",
+          cause: globalUpdateError,
+        }
       );
     }
     if (globalUpdateError) {
       throw new PiUpdateError(
         `global Pi reports ${candidateVersion}, but its updater returned an error; local files remain aligned for inspection`,
-        { cause: globalUpdateError }
+        {
+          code: PI_UPDATE_ERROR_CODES.GLOBAL_UPDATE_FAILED,
+          phase: "global_update",
+          cause: globalUpdateError,
+        }
       );
     }
 
     log("\n==> Verifying the updated global Pi can load Penny");
-    runCommand({
-      command: globalPiExecutable,
-      args: ["--approve", "--no-session", "--list-models"],
-      cwd: projectRoot,
-      timeoutMs: CHECK_TIMEOUT_MS,
-      extraEnvironment: { PI_OFFLINE: "1" },
-    });
+    try {
+      runCommand({
+        command: globalPiExecutable,
+        args: ["--approve", "--no-session", "--list-models"],
+        cwd: projectRoot,
+        timeoutMs: CHECK_TIMEOUT_MS,
+        extraEnvironment: { PI_OFFLINE: "1" },
+      });
+    } catch (error) {
+      throw new PiUpdateError("updated global Pi could not load Penny", {
+        code: PI_UPDATE_ERROR_CODES.GLOBAL_SMOKE_FAILED,
+        phase: "global_extension_load_smoke",
+        cause: error,
+      });
+    }
     log(`\nPi and Penny SDK pins are aligned and validated at ${candidateVersion}.`);
     return { status: "updated", version: candidateVersion };
   } finally {
@@ -746,7 +1006,7 @@ export function parseArguments(argv) {
 
 function printHelp() {
   console.log(
-    `Usage: bun run pi:update [--target VERSION]\n\nStages and validates the latest Pi SDK locally before updating global Pi.\n--target asserts the expected latest exact version; non-latest targets are rejected.`
+    `Usage: bun run pi:update [--target VERSION]\n\nValidates the latest published coding-agent in a clean consumer, then stages and tests Penny before updating global Pi.\nThe updater classifies release/package failures separately from Penny compatibility failures and never adds missing dependencies automatically.\n--target asserts the expected latest exact version; non-latest targets are rejected.`
   );
 }
 
@@ -758,8 +1018,7 @@ if (isMain) {
     if (argumentsResult.help) printHelp();
     else runPiUpdate({ targetVersion: argumentsResult.targetVersion });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`Pi update failed: ${message}`);
+    console.error(formatPiUpdateFailure(error));
     process.exitCode = 1;
   }
 }

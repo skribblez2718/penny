@@ -5,7 +5,6 @@ disable-model-invocation: false
 metadata:
   penny:
     engine: orchestration
-    release_status: candidate
     mempalace: false
     subagents: [annie, carren, vera]
 ---
@@ -26,7 +25,7 @@ metadata:
 
 ## Invocation Boundary
 
-This package is a model-visible candidate: Pi native discovery and Penny's model-facing catalog may describe it, but it remains absent from the production registry and never self-enables or promotes. Model visibility grants no execution authority. Explicit `skill` invocation is available only when ignored host configuration enables the exact candidate contract digest. Candidate enablement is reversible and is not production admission.
+This is a model-visible, registered universal package. Pi native discovery and Penny's model-facing catalog may describe it, and explicit `skill` invocation is routed through the sole executable playbook registry with its bound contract. Model visibility does not bypass host-owned authorization or consequence boundaries.
 
 ## Invocation
 
@@ -69,7 +68,7 @@ Vera `analysis_gap` or `evidence_gap` returns through Annie and then Carren. `as
 
 ## Exact Artifact Handoff
 
-The host canonicalizes and persists `AssessmentRequestV1`. Ordinary candidate phases omit `allowed_tools`, so each phase uses its assigned catalog agent's exact YAML tool list. `artifact_read` remains mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Memory, temporary files, repository search, historical sessions, and name-only pointers are never fallback handoff channels. Other YAML tools may be used only when materially relevant, permitted by the caller and task, and within the phase consequence boundary; they cannot enlarge the closed supplied-evidence boundary.
+The host canonicalizes and persists `AssessmentRequestV1`. Ordinary workflow phases omit `allowed_tools`, so each phase uses its assigned catalog agent's exact YAML tool list. `artifact_read` remains mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Memory, temporary files, repository search, historical sessions, and name-only pointers are never fallback handoff channels. Other YAML tools may be used only when materially relevant, permitted by the caller and task, and within the phase consequence boundary; they cannot enlarge the closed supplied-evidence boundary.
 
 Normal-phase liveness permits at most eight external calls per worker and 64 per run; routing-only repair remains at zero. These are resource ceilings, not authority to browse, externally verify supplied evidence, execute, or mutate. The owner captures and re-reads exact bytes before routing, and memory availability cannot affect correctness.
 
@@ -81,4 +80,4 @@ The canonical semantic core is `penny.assessment.v1`. It has exactly one outcome
 
 ## Recovery and Consequence Boundary
 
-Host sealing and admission are idempotent, exact-run, and recovery-safe. Recovery reuses selected refs and never searches memory. No path performs external verification, numeric scoring, actions, writes, tests, changes, approval, native registration, enablement, or promotion.
+Host sealing and admission are idempotent, exact-run, and recovery-safe. Recovery reuses selected refs and never searches memory. No path performs external verification, numeric scoring, actions, writes, tests, changes, approval, executable registration or model discovery.

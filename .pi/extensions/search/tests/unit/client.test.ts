@@ -4,7 +4,9 @@ import {
   DEFAULT_BASE_URL,
   DEFAULT_MAX_RESULTS,
   DEFAULT_TIMEOUT_MS,
+  githubApiFallbackForUrl,
   MAX_RESULTS_LIMIT,
+  normalizeGithubApiFallbackPage,
   resolveConfig,
   SearchApiError,
   truncateContent,
@@ -20,6 +22,7 @@ const CONFIG: SearchConfig = {
   apiKey: "test-key",
   timeoutMs: 5000,
 };
+const COMMIT_SHA = "a".repeat(40);
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -111,8 +114,188 @@ describe("validateHttpUrl", () => {
     expect(validateHttpUrl("file:///etc/passwd")).toMatch(/Unsupported URL scheme/);
   });
 
-  it("rejects unparseable URLs", () => {
+  it("rejects unparseable and credential-bearing URLs", () => {
     expect(validateHttpUrl("not a url")).toMatch(/Invalid URL/);
+    expect(validateHttpUrl("https://user:secret@example.com/page")).toMatch(/embedded credentials/);
+  });
+});
+
+describe("githubApiFallbackForUrl", () => {
+  it("translates common GitHub HTML routes to public API URLs", () => {
+    expect(githubApiFallbackForUrl("https://github.com/owner/repo")).toEqual({
+      kind: "repository",
+      url: "https://api.github.com/repos/owner/repo",
+    });
+    expect(githubApiFallbackForUrl("https://github.com/owner/repo/issues/42#discussion")).toEqual({
+      kind: "issue",
+      url: "https://api.github.com/repos/owner/repo/issues/42",
+    });
+    expect(githubApiFallbackForUrl("https://github.com/owner/repo/pull/7")).toEqual({
+      kind: "pull_request",
+      url: "https://api.github.com/repos/owner/repo/pulls/7",
+    });
+    expect(githubApiFallbackForUrl("https://github.com/owner/repo/commit/abc123")).toEqual({
+      kind: "commit",
+      url: "https://api.github.com/repos/owner/repo/commits/abc123",
+    });
+    expect(githubApiFallbackForUrl("https://github.com/owner/repo/releases/tag/v1.2.3")).toEqual({
+      kind: "release",
+      url: "https://api.github.com/repos/owner/repo/releases/tags/v1.2.3",
+    });
+    expect(githubApiFallbackForUrl("https://github.com/owner/repo/issues")).toEqual({
+      kind: "issues",
+      url: "https://api.github.com/repos/owner/repo/issues",
+    });
+    expect(githubApiFallbackForUrl("https://github.com/owner/repo/releases")).toEqual({
+      kind: "releases",
+      url: "https://api.github.com/repos/owner/repo/releases",
+    });
+  });
+
+  it("translates immutable GitHub blob, tree, and raw content routes", () => {
+    expect(
+      githubApiFallbackForUrl(`https://github.com/owner/repo/blob/${COMMIT_SHA}/docs/read%20me.md`)
+    ).toEqual({
+      kind: "contents",
+      url: `https://api.github.com/repos/owner/repo/contents/docs/read%20me.md?ref=${COMMIT_SHA}`,
+      expectedContent: "file",
+    });
+    expect(
+      githubApiFallbackForUrl(`https://github.com/owner/repo/tree/${COMMIT_SHA}/docs`)
+    ).toEqual({
+      kind: "contents",
+      url: `https://api.github.com/repos/owner/repo/contents/docs?ref=${COMMIT_SHA}`,
+      expectedContent: "directory",
+    });
+    expect(
+      githubApiFallbackForUrl(
+        `https://raw.githubusercontent.com/owner/repo/${COMMIT_SHA}/docs/config.json`
+      )
+    ).toEqual({
+      kind: "contents",
+      url: `https://api.github.com/repos/owner/repo/contents/docs/config.json?ref=${COMMIT_SHA}`,
+      expectedContent: "file",
+    });
+  });
+
+  it("rejects unrelated, ambiguous, credential-bearing, and encoded-slash routes", () => {
+    expect(githubApiFallbackForUrl("https://example.com/owner/repo/issues/42")).toBeNull();
+    expect(githubApiFallbackForUrl("https://github.com/search?q=repo")).toBeNull();
+    expect(githubApiFallbackForUrl("https://user:secret@github.com/owner/repo")).toBeNull();
+    expect(githubApiFallbackForUrl("https://github.com:444/owner/repo")).toBeNull();
+    expect(githubApiFallbackForUrl("https://github.com/owner/repo/blob/main/file.md")).toBeNull();
+    expect(
+      githubApiFallbackForUrl(`https://github.com/owner/repo/blob/${COMMIT_SHA}/docs%2Fsecret`)
+    ).toBeNull();
+    expect(githubApiFallbackForUrl("https://github.com/owner/repo/actions")).toBeNull();
+  });
+});
+
+describe("normalizeGithubApiFallbackPage", () => {
+  it("validates route-specific GitHub API schemas and rejects error envelopes", () => {
+    const fallback = githubApiFallbackForUrl("https://github.com/owner/repo");
+    if (fallback === null) throw new Error("expected a GitHub API fallback");
+    const validPage = {
+      title: "repository",
+      content: JSON.stringify({
+        id: 1,
+        full_name: "owner/repo",
+        html_url: "https://github.com/owner/repo",
+      }),
+      links: [],
+    };
+    expect(normalizeGithubApiFallbackPage(validPage, fallback)).toEqual({
+      success: true,
+      page: validPage,
+    });
+    expect(
+      normalizeGithubApiFallbackPage(
+        {
+          title: "GitHub API",
+          content: JSON.stringify({ message: "API rate limit exceeded", status: "403" }),
+          links: [],
+        },
+        fallback
+      )
+    ).toEqual({
+      success: false,
+      reason: "the GitHub API response did not match the expected repository schema",
+    });
+  });
+
+  it("decodes bounded UTF-8 file content from the GitHub contents API", () => {
+    const fallback = githubApiFallbackForUrl(
+      `https://raw.githubusercontent.com/owner/repo/${COMMIT_SHA}/README.md`
+    );
+    if (fallback === null) throw new Error("expected a GitHub API fallback");
+    const result = normalizeGithubApiFallbackPage(
+      {
+        title: "API response",
+        content: JSON.stringify({
+          type: "file",
+          name: "README.md",
+          encoding: "base64",
+          content: Buffer.from("# Hello\n").toString("base64"),
+          download_url: "https://raw.githubusercontent.com/owner/repo/main/README.md",
+        }),
+        links: [],
+      },
+      fallback
+    );
+    expect(result).toEqual({
+      success: true,
+      page: {
+        title: "README.md",
+        content: "# Hello\n",
+        links: ["https://raw.githubusercontent.com/owner/repo/main/README.md"],
+      },
+    });
+  });
+
+  it("accepts an empty file and rejects malformed or noncanonical content", () => {
+    const fallback = githubApiFallbackForUrl(
+      `https://github.com/owner/repo/blob/${COMMIT_SHA}/file.txt`
+    );
+    if (fallback === null) throw new Error("expected a GitHub API fallback");
+    const base = { title: "API response", links: [] };
+    expect(
+      normalizeGithubApiFallbackPage(
+        {
+          ...base,
+          content: JSON.stringify({
+            type: "file",
+            name: "file.txt",
+            encoding: "base64",
+            content: "",
+          }),
+        },
+        fallback
+      )
+    ).toEqual({
+      success: true,
+      page: { title: "file.txt", content: "", links: [] },
+    });
+    expect(normalizeGithubApiFallbackPage({ ...base, content: "not-json" }, fallback)).toEqual({
+      success: false,
+      reason: "the GitHub Contents API response was not valid JSON",
+    });
+    expect(
+      normalizeGithubApiFallbackPage(
+        {
+          ...base,
+          content: JSON.stringify({
+            type: "file",
+            name: "file.txt",
+            encoding: "base64",
+            content: "Zh==",
+          }),
+        },
+        fallback
+      )
+    ).toEqual({
+      success: false,
+      reason: "the GitHub Contents API response used noncanonical base64",
+    });
   });
 });
 
@@ -206,6 +389,7 @@ describe("webSearch", () => {
     const fetchImpl: FetchLike = async () => jsonResponse({ error: "unauthorized" }, 401);
     const error = await searchApiError(webSearch("q", 5, CONFIG, undefined, fetchImpl));
     expect(error.kind).toBe("client_error");
+    expect(error.operation).toBe("web_search");
     expect(error.message).toMatch(/OLLAMA_API_KEY/);
     expect(error.status).toBe(401);
   });
@@ -294,6 +478,73 @@ describe("webFetch", () => {
     );
     expect(error.kind).toBe("server_error");
     expect(error.status).toBe(200);
+    expect(error.message).toMatch(/Unable to fetch the requested URL/);
     expect(error.message).toMatch(/invalid JSON/);
+  });
+
+  it("describes authentication failures as failures to fetch the requested URL", async () => {
+    const fetchImpl: FetchLike = async () => jsonResponse({ error: "unauthorized" }, 401);
+    const error = await searchApiError(
+      webFetch("https://example.com/private", CONFIG, undefined, fetchImpl)
+    );
+    expect(error.kind).toBe("client_error");
+    expect(error.reason).toBe("authentication");
+    expect(error.message).toMatch(/Unable to fetch the requested URL/);
+    expect(error.message).toMatch(/Authentication failed/);
+  });
+
+  it("describes provider HTTP failures as failures to fetch the requested URL", async () => {
+    const fetchImpl: FetchLike = async () => jsonResponse({ error: "page unsupported" }, 404);
+    const error = await searchApiError(
+      webFetch("https://example.com/missing", CONFIG, undefined, fetchImpl)
+    );
+    expect(error.kind).toBe("client_error");
+    expect(error.operation).toBe("web_fetch");
+    expect(error.status).toBe(404);
+    expect(error.targetUrl).toBe("https://example.com/missing");
+    expect(error.message).toMatch(/Unable to fetch the requested URL/);
+    expect(error.message).toMatch(/provider HTTP 404/);
+    expect(error.message).toMatch(/does not establish that the destination URL itself returned/);
+    expect(error.message).not.toContain("/api/web_fetch returned HTTP 404");
+  });
+
+  it("uses fetch-specific wording for network failures", async () => {
+    const fetchImpl: FetchLike = async () => {
+      throw new Error("connection refused");
+    };
+    const error = await searchApiError(
+      webFetch("https://example.com", CONFIG, undefined, fetchImpl)
+    );
+    expect(error.kind).toBe("network_error");
+    expect(error.operation).toBe("web_fetch");
+    expect(error.reason).toBe("network");
+    expect(error.message).toMatch(/Unable to fetch the requested URL/);
+    expect(error.message).toMatch(/connection refused/);
+  });
+
+  it("distinguishes caller cancellation from provider timeout", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const cancelledFetch: FetchLike = async () => {
+      const error = new Error("cancelled");
+      error.name = "AbortError";
+      throw error;
+    };
+    const cancelled = await searchApiError(
+      webFetch("https://example.com", CONFIG, controller.signal, cancelledFetch)
+    );
+    expect(cancelled.reason).toBe("cancelled");
+    expect(cancelled.message).toMatch(/caller cancelled/);
+
+    const timedOutFetch: FetchLike = async () => {
+      const error = new Error("timed out");
+      error.name = "TimeoutError";
+      throw error;
+    };
+    const timedOut = await searchApiError(
+      webFetch("https://example.com", CONFIG, undefined, timedOutFetch)
+    );
+    expect(timedOut.reason).toBe("timeout");
+    expect(timedOut.message).toMatch(/timed out/);
   });
 });

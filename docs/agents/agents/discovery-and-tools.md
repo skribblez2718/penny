@@ -71,7 +71,7 @@ and bounded UTF-8 reads without run/consumer/expiry checks.
       exactly to Pi.
 - [ ] Added, injected, replaced, unavailable, empty, duplicate, equality-sized, task-selected,
       trust-selected, or runtime-selected subset surfaces fail before session creation.
-- [ ] Ordinary candidate phases omit `allowed_tools` and assert exact YAML activation; synthetic
+- [ ] Ordinary registered phases omit `allowed_tools` and assert exact YAML activation; synthetic
       or evaluation-only strict-subset sessions remain separately covered without claiming
       OS/process sandboxing or extension-code isolation.
 - [ ] Host-private isolated tool matrices remain anonymous, separate, and unchanged.

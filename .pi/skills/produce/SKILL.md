@@ -5,9 +5,8 @@ disable-model-invocation: false
 metadata:
   penny:
     engine: orchestration
-    release_status: candidate
     mempalace: false
-    subagents: [ida, skribble, carren, vera]
+    subagents: [ida, demetri, skribble, carren, vera]
 ---
 
 ## When to Use
@@ -26,7 +25,7 @@ metadata:
 
 ## Invocation Boundary
 
-This package is a model-visible candidate: Pi native discovery and Penny's model-facing catalog may describe it, but it remains absent from the production registry and never self-enables or promotes. Model visibility grants no execution authority. Explicit `skill` invocation is available only when ignored host configuration enables the exact candidate contract digest. Candidate enablement is reversible and is not production admission or promotion.
+This is a model-visible, registered universal package. Pi native discovery and Penny's model-facing catalog may describe it, and explicit `skill` invocation is routed through the sole executable playbook registry with its bound contract. Model visibility does not bypass host-owned authorization or consequence boundaries.
 
 ## Invocation
 
@@ -38,7 +37,8 @@ Produce V1 accepts no caller artifact inputs. Every request array is closed and 
 
 ```text
 intake (host canonical request)
-  → exploring_artifact_approaches (Ida; recommend, do not author)
+  → exploring_artifact_approaches (Ida; unranked alternatives, no selection)
+  → selecting_artifact_approach (Demetri; justified selection or unresolved)
   → materializing_artifact (Skribble; one complete draft)
   → sealing_artifact (host canonical ProducedArtifactV1)
   → critiquing_artifact (Carren quality review)
@@ -47,17 +47,17 @@ intake (host canonical request)
   → complete
 ```
 
-Carren `quality_gap` returns to Skribble. Vera `brief_gap` returns through Ida and then Skribble; Vera `artifact_product_gap` returns directly to Skribble. Every replacement draft is resealed and repeats Carren before Vera. Exhausted, malformed, stale, wrong-run, or missing exact material is non-positive `incomplete`; cancellation is `cancelled`.
+Carren `quality_gap` returns to Skribble. Vera `brief_gap` returns through Ida, Demetri, and then Skribble; Vera `artifact_product_gap` returns directly to Skribble. Every replacement draft is resealed and repeats Carren before Vera. Exhausted, malformed, stale, wrong-run, or missing exact material is non-positive `incomplete`; cancellation is `cancelled`.
 
 ## Exact Artifact Handoff
 
-The host canonicalizes and persists `ProduceRequestV1`. Every cognitive directive carries owner-selected exact `input_artifacts` refs and an `output_artifact` contract. Ordinary candidate phases omit `allowed_tools`, so runtime activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Other YAML tools may be used only when materially relevant, permitted by caller/task, and within the phase consequence boundary. In particular, Skribble's YAML write-capable surface does not authorize this workflow to write files: the complete product remains response content captured by the owner.
+The host canonicalizes and persists `ProduceRequestV1`. Every cognitive directive carries owner-selected exact `input_artifacts` refs and an `output_artifact` contract. Ordinary workflow phases omit `allowed_tools`, so runtime activates each assigned catalog agent's exact YAML tool list. `artifact_read` is mandatory for every needed exact workflow predecessor and workers continue through `next_range`; no other tool or channel may substitute for a missing predecessor ref. Other YAML tools may be used only when materially relevant, permitted by caller/task, and within the phase consequence boundary. In particular, Skribble's YAML write-capable surface does not authorize this workflow to write files: the complete product remains response content captured by the owner.
 
 Normal-phase liveness permits at most 8 external calls per worker and 64 per run; routing-only repair remains at 0. These are resource ceilings, not authority for external research, filesystem mutation, execution, testing, publication, or deployment. The owner captures and re-reads exact bytes before routing, and memory availability cannot affect correctness.
 
 ## Output and Terminal Truth
 
-The selected terminal `output_artifact_ref` identifies canonical `penny.produced-artifact.v1` semantic-core bytes. The product embeds exact output identity, content and SHA-256, rationale, assumptions, uncertainties, full request coverage, the canonical request, inline-source lineage, confidence, and literal `external_actions_performed:false`, `filesystem_writes_performed:false`, and `tests_executed:false`.
+The selected terminal `output_artifact_ref` identifies canonical `penny.produced-artifact.v1` semantic-core bytes. The product embeds exact output identity, content and SHA-256, rationale, assumptions, uncertainties, full request coverage, the canonical request, Ida-alternative and Demetri-decision lineage, inline-source lineage, confidence, and literal `external_actions_performed:false`, `filesystem_writes_performed:false`, and `tests_executed:false`.
 
 For `json`, the host requires parseable canonical JSON content. Other kinds are not compiled, executed, or syntax-checked. `produced` requires nonempty content. `not_applicable` requires empty content and a truthful explanation. Host sealing—not a worker—derives `content_sha256` from the exact UTF-8 content.
 

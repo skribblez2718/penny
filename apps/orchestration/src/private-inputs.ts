@@ -36,18 +36,17 @@
  */
 
 import {
-  chmodSync,
   closeSync,
   constants,
-  existsSync,
+  fchmodSync,
   fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
-  rmdirSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
@@ -120,8 +119,8 @@ function assertOwnerFile(file: string, what: string): void {
   if (stat.nlink !== 1) {
     throw new PrivateInputError("custody_refused", `${what} has an unexpected link count`);
   }
-  if ((stat.mode & 0o077) !== 0) {
-    throw new PrivateInputError("custody_refused", `${what} must be owner-only (0600)`);
+  if ((stat.mode & 0o777) !== 0o600) {
+    throw new PrivateInputError("custody_refused", `${what} mode must be exactly 0600`);
   }
   const uid = ownerUid();
   if (uid !== undefined && stat.uid !== uid) {
@@ -133,7 +132,7 @@ function readOwnerFile(file: string, what: string): Buffer {
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o077) !== 0) {
+    if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600) {
       throw new PrivateInputError("custody_refused", `${what} failed descriptor custody checks`);
     }
     const uid = ownerUid();
@@ -146,40 +145,8 @@ function readOwnerFile(file: string, what: string): Buffer {
   }
 }
 
-function fsyncDirectory(dir: string): void {
-  const fd = openSync(dir, "r");
-  try {
-    fsyncSync(fd);
-  } finally {
-    try {
-      closeSync(fd);
-    } catch {
-      // best effort on the way out
-    }
-  }
-}
-
 function digestOf(bytes: Buffer): string {
   return sha256(bytes);
-}
-
-function indexedPath(root: string, key: string, label: string): string {
-  if (path.isAbsolute(key) || key.includes("\\")) {
-    throw new PrivateInputError("custody_refused", `${label} is not a safe relative key`);
-  }
-  const segments = key.split("/");
-  if (
-    segments.length !== 2 ||
-    segments.some((segment) => segment.length === 0 || segment === "..")
-  ) {
-    throw new PrivateInputError("custody_refused", `${label} is not an exact two-segment key`);
-  }
-  const candidate = path.resolve(root, ...segments);
-  const boundary = `${path.resolve(root)}${path.sep}`;
-  if (!candidate.startsWith(boundary)) {
-    throw new PrivateInputError("custody_refused", `${label} escapes the private input root`);
-  }
-  return candidate;
 }
 
 function requirePrivateInputRow(
@@ -207,6 +174,165 @@ function requirePrivateInputRow(
   return row;
 }
 
+interface StableOwnerDirectory {
+  readonly path: string;
+  readonly canonicalPath: string;
+  readonly descriptor: number;
+  readonly descriptorRoot: string;
+  readonly device: number | bigint;
+  readonly inode: number | bigint;
+  readonly what: string;
+}
+
+function sameDirectoryIdentity(
+  left: { readonly dev: number | bigint; readonly ino: number | bigint },
+  right: { readonly dev: number | bigint; readonly ino: number | bigint }
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function descriptorRootFor(descriptor: number): string {
+  for (const candidate of [`/proc/self/fd/${descriptor}`, `/dev/fd/${descriptor}`]) {
+    try {
+      realpathSync.native(candidate);
+      return candidate;
+    } catch {
+      // Try the next host-supported descriptor filesystem.
+    }
+  }
+  throw new PrivateInputError(
+    "custody_refused",
+    "private input operations require a stable directory-descriptor filesystem"
+  );
+}
+
+function openStableOwnerDirectory(
+  directory: string,
+  what: string,
+  expectedPath = directory
+): StableOwnerDirectory {
+  const openPath = path.resolve(directory);
+  const absolute = path.resolve(expectedPath);
+  let descriptor: number | undefined;
+  try {
+    assertOwnerDirectory(absolute, what);
+    const canonicalPath = realpathSync.native(absolute);
+    if (canonicalPath !== absolute) {
+      throw new PrivateInputError("custody_refused", `${what} has a symlinked path component`);
+    }
+    descriptor = openSync(
+      openPath,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
+    );
+    const pathStat = lstatSync(absolute);
+    const descriptorStat = fstatSync(descriptor);
+    if (!sameDirectoryIdentity(pathStat, descriptorStat)) {
+      throw new PrivateInputError("custody_refused", `${what} changed while it was opened`);
+    }
+    const descriptorRoot = descriptorRootFor(descriptor);
+    if (realpathSync.native(descriptorRoot) !== canonicalPath) {
+      throw new PrivateInputError("custody_refused", `${what} descriptor identity disagrees`);
+    }
+    return {
+      path: absolute,
+      canonicalPath,
+      descriptor,
+      descriptorRoot,
+      device: descriptorStat.dev,
+      inode: descriptorStat.ino,
+      what,
+    };
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch {
+        // best effort after refusal
+      }
+    }
+    if (error instanceof PrivateInputError) throw error;
+    throw new PrivateInputError(
+      "custody_refused",
+      `${what} failed stable directory custody checks`
+    );
+  }
+}
+
+function assertStableOwnerDirectory(directory: StableOwnerDirectory): void {
+  try {
+    assertOwnerDirectory(directory.path, directory.what);
+    const pathStat = lstatSync(directory.path);
+    const descriptorStat = fstatSync(directory.descriptor);
+    if (
+      !sameDirectoryIdentity(pathStat, descriptorStat) ||
+      pathStat.dev !== directory.device ||
+      pathStat.ino !== directory.inode ||
+      realpathSync.native(directory.path) !== directory.canonicalPath ||
+      realpathSync.native(directory.descriptorRoot) !== directory.canonicalPath
+    ) {
+      throw new PrivateInputError(
+        "custody_refused",
+        `${directory.what} changed during a private input operation`
+      );
+    }
+  } catch (error) {
+    if (error instanceof PrivateInputError) throw error;
+    throw new PrivateInputError(
+      "custody_refused",
+      `${directory.what} changed during a private input operation`
+    );
+  }
+}
+
+function closeStableOwnerDirectory(directory: StableOwnerDirectory): void {
+  closeSync(directory.descriptor);
+}
+
+function stableEntry(directory: StableOwnerDirectory, leaf: string): string {
+  if (
+    leaf.length === 0 ||
+    leaf === "." ||
+    leaf === ".." ||
+    leaf.includes("/") ||
+    leaf.includes("\\")
+  ) {
+    throw new PrivateInputError("custody_refused", "private input entry name is unsafe");
+  }
+  return path.join(directory.descriptorRoot, leaf);
+}
+
+function entryExistsNoFollow(directory: StableOwnerDirectory, leaf: string): boolean {
+  try {
+    lstatSync(stableEntry(directory, leaf));
+    return true;
+  } catch (error) {
+    if (errorHasCode(error, "ENOENT")) return false;
+    throw error;
+  }
+}
+
+function fsyncStableDirectory(directory: StableOwnerDirectory): void {
+  fsyncSync(directory.descriptor);
+}
+
+function storageLeaves(row: NonNullable<ReturnType<Checkpointer["getPrivateInput"]>>): {
+  readonly runLeaf: string;
+  readonly finalLeaf: string;
+  readonly tempLeaf: string | undefined;
+} {
+  const [runLeaf, finalLeaf] = row.storage_key.split("/");
+  if (runLeaf === undefined || finalLeaf === undefined) {
+    throw new PrivateInputError("custody_refused", "the indexed private input key is corrupt");
+  }
+  const tempLeaf = row.temporary_storage_key?.split("/")[1];
+  return { runLeaf, finalLeaf, tempLeaf };
+}
+
+export type PrivateInputCustodyBoundary =
+  | "before_temp_create"
+  | "before_temp_rename"
+  | "before_exact_unlink";
+
 export interface MaterializeInput {
   readonly projectRoot: string;
   readonly checkpointer: Checkpointer;
@@ -215,6 +341,8 @@ export interface MaterializeInput {
   readonly request: unknown;
   /** The digest bound by the admission row; must cover the same bytes. */
   readonly requestSha256: string;
+  /** Deterministic race-injection seam for custody regression tests. */
+  readonly onCustodyBoundary?: (boundary: PrivateInputCustodyBoundary) => void;
 }
 
 /**
@@ -246,19 +374,6 @@ export function materializeRunInput(input: MaterializeInput): void {
       "the supplied request does not canonicalize to its admitted digest"
     );
   }
-  if (row.state === "active") {
-    const finalPath = indexedPath(root, row.storage_key, "the private input storage key");
-    assertOwnerDirectory(root, "the private input root");
-    assertOwnerDirectory(path.dirname(finalPath), "the private input run directory");
-    assertOwnerFile(finalPath, "the private input file");
-    if (digestOf(readOwnerFile(finalPath, "the private input file")) !== input.requestSha256) {
-      throw new PrivateInputError(
-        "hash_mismatch",
-        "the active private input no longer matches its indexed digest"
-      );
-    }
-    return; // idempotent
-  }
   if (row.state === "terminal" || row.state === "discarding" || row.state === "discarded") {
     throw new PrivateInputError(
       "state_mismatch",
@@ -266,141 +381,175 @@ export function materializeRunInput(input: MaterializeInput): void {
     );
   }
 
-  // state === "preparing" — the index exists; the bytes (or part of them) may not.
-  const runDir = path.dirname(indexedPath(root, row.storage_key, "the private input storage key"));
-  const trustedParent = path.dirname(root);
-  assertOwnerDirectory(trustedParent, "the private input parent directory");
-  if (!existsSync(root)) mkdirSync(root, { mode: 0o700 });
-  assertOwnerDirectory(root, "the private input root");
-  if (!existsSync(runDir)) mkdirSync(runDir, { mode: 0o700 });
-  assertOwnerDirectory(runDir, "the private input run directory");
-  const finalPath = indexedPath(root, row.storage_key, "the private input storage key");
-  const tempPath =
-    row.temporary_storage_key !== undefined
-      ? indexedPath(root, row.temporary_storage_key, "the private input temporary key")
-      : undefined;
-
-  // A crash after rename but before the active CAS leaves the exact final file.
-  // It is adoptable only when custody and digest match and no temp also exists.
-  if (existsSync(finalPath)) {
-    let adoptable = false;
-    try {
-      assertOwnerFile(finalPath, "the private input file");
-      adoptable =
-        digestOf(readOwnerFile(finalPath, "the private input file")) === input.requestSha256;
-    } catch {
-      adoptable = false;
+  const { runLeaf, finalLeaf, tempLeaf } = storageLeaves(row);
+  const rootDirectory = openStableOwnerDirectory(root, "the private input root");
+  let runDirectory: StableOwnerDirectory | undefined;
+  try {
+    if (!entryExistsNoFollow(rootDirectory, runLeaf)) {
+      if (row.state === "active") {
+        throw new PrivateInputError(
+          "custody_refused",
+          "the active private input run directory is absent"
+        );
+      }
+      mkdirSync(stableEntry(rootDirectory, runLeaf), { mode: 0o700 });
+      fsyncStableDirectory(rootDirectory);
     }
-    if (adoptable && (tempPath === undefined || !existsSync(tempPath))) {
-      input.checkpointer.privateInputActivate(row.private_input_id);
-      return;
-    }
-    discardExactKeys(input, row, { runDir, finalPath, tempPath });
-    throw new PrivateInputError(
-      "hash_mismatch",
-      "the indexed final private input is mismatched or ambiguous; the run is left incomplete"
+    assertStableOwnerDirectory(rootDirectory);
+    runDirectory = openStableOwnerDirectory(
+      stableEntry(rootDirectory, runLeaf),
+      "the private input run directory",
+      path.join(rootDirectory.canonicalPath, runLeaf)
     );
-  }
+    assertStableOwnerDirectory(rootDirectory);
 
-  // If the run directory holds a file at the EXACT indexed temp key, the
-  // indexed digest decides: matching bytes are adopted through the exact
-  // rename; anything else (foreign bytes, wrong owner/mode, a symlink) is
-  // refused, its exact indexed keys are discarded, and the run is left
-  // incomplete. An ABSENT temp is the normal fresh-crash window: write fresh.
-  if (tempPath !== undefined && existsSync(tempPath)) {
-    let adoptable = false;
-    try {
-      assertOwnerFile(tempPath, "the private input temporary file");
-      adoptable =
-        digestOf(readOwnerFile(tempPath, "the private input temporary file")) ===
-        input.requestSha256;
-    } catch {
-      adoptable = false; // wrong owner/mode or a symlink — never adopt
-    }
-    if (adoptable) {
-      renameSync(tempPath, finalPath);
-      chmodSync(finalPath, 0o600);
-      fsyncDirectory(runDir);
-      input.checkpointer.privateInputActivate(row.private_input_id);
-      assertOwnerFile(finalPath, "the private input file");
-      if (digestOf(readOwnerFile(finalPath, "the private input file")) !== input.requestSha256) {
+    if (row.state === "active") {
+      assertOwnerFile(stableEntry(runDirectory, finalLeaf), "the private input file");
+      const stored = readOwnerFile(stableEntry(runDirectory, finalLeaf), "the private input file");
+      assertStableOwnerDirectory(runDirectory);
+      if (digestOf(stored) !== input.requestSha256) {
         throw new PrivateInputError(
           "hash_mismatch",
-          "the private input final file no longer matches its indexed digest"
+          "the active private input no longer matches its indexed digest"
         );
       }
       return;
     }
-    discardExactKeys(input, row, { runDir, finalPath, tempPath });
-    throw new PrivateInputError(
-      "hash_mismatch",
-      "the indexed temporary private input does not match the admitted digest; the run is left incomplete"
-    );
-  }
 
-  // No indexed temp survived (crash before the temp write): write fresh at
-  // that exact preallocated key. An alternate temp would be an unindexed
-  // private byte after a crash.
-  if (tempPath === undefined) {
-    throw new PrivateInputError(
-      "state_mismatch",
-      "a preparing private input is missing its indexed temporary key"
-    );
-  }
-  const tmpPath = tempPath;
-  const fd = openSync(tmpPath, "wx", 0o600);
-  let written = 0;
-  try {
-    while (written < bytes.length) {
-      written += writeSync(fd, bytes, written, bytes.length - written);
+    // A crash after rename but before the active CAS leaves the exact final entry.
+    if (entryExistsNoFollow(runDirectory, finalLeaf)) {
+      let adoptable = false;
+      try {
+        assertOwnerFile(stableEntry(runDirectory, finalLeaf), "the private input file");
+        adoptable =
+          digestOf(
+            readOwnerFile(stableEntry(runDirectory, finalLeaf), "the private input file")
+          ) === input.requestSha256;
+      } catch {
+        adoptable = false;
+      }
+      assertStableOwnerDirectory(runDirectory);
+      if (adoptable && (tempLeaf === undefined || !entryExistsNoFollow(runDirectory, tempLeaf))) {
+        input.checkpointer.privateInputActivate(row.private_input_id);
+        return;
+      }
+      discardExactEntries(input, row, rootDirectory, runDirectory, finalLeaf, tempLeaf);
+      throw new PrivateInputError(
+        "hash_mismatch",
+        "the indexed final private input is mismatched or ambiguous; the run is left incomplete"
+      );
     }
-    fsyncSync(fd);
-  } finally {
+
+    // A matching exact indexed temp may be adopted. Anything else is discarded,
+    // never rewritten over.
+    if (tempLeaf !== undefined && entryExistsNoFollow(runDirectory, tempLeaf)) {
+      let adoptable = false;
+      try {
+        assertOwnerFile(stableEntry(runDirectory, tempLeaf), "the private input temporary file");
+        adoptable =
+          digestOf(
+            readOwnerFile(stableEntry(runDirectory, tempLeaf), "the private input temporary file")
+          ) === input.requestSha256;
+      } catch {
+        adoptable = false;
+      }
+      if (adoptable) {
+        input.onCustodyBoundary?.("before_temp_rename");
+        assertStableOwnerDirectory(rootDirectory);
+        assertStableOwnerDirectory(runDirectory);
+        renameSync(stableEntry(runDirectory, tempLeaf), stableEntry(runDirectory, finalLeaf));
+        fsyncStableDirectory(runDirectory);
+        assertStableOwnerDirectory(runDirectory);
+        input.checkpointer.privateInputActivate(row.private_input_id);
+        assertOwnerFile(stableEntry(runDirectory, finalLeaf), "the private input file");
+        if (
+          digestOf(
+            readOwnerFile(stableEntry(runDirectory, finalLeaf), "the private input file")
+          ) !== input.requestSha256
+        ) {
+          throw new PrivateInputError(
+            "hash_mismatch",
+            "the private input final file no longer matches its indexed digest"
+          );
+        }
+        return;
+      }
+      discardExactEntries(input, row, rootDirectory, runDirectory, finalLeaf, tempLeaf);
+      throw new PrivateInputError(
+        "hash_mismatch",
+        "the indexed temporary private input does not match the admitted digest; the run is left incomplete"
+      );
+    }
+
+    if (tempLeaf === undefined) {
+      throw new PrivateInputError(
+        "state_mismatch",
+        "a preparing private input is missing its indexed temporary key"
+      );
+    }
+    input.onCustodyBoundary?.("before_temp_create");
+    assertStableOwnerDirectory(rootDirectory);
+    assertStableOwnerDirectory(runDirectory);
+    const temporaryEntry = stableEntry(runDirectory, tempLeaf);
+    const descriptor = openSync(temporaryEntry, "wx", 0o600);
+    let written = 0;
     try {
-      closeSync(fd);
-    } catch {
-      // best effort
+      // Creation mode is umask-filtered; normalize through the already-open
+      // descriptor rather than reopening the pathname.
+      fchmodSync(descriptor, 0o600);
+      while (written < bytes.length) {
+        written += writeSync(descriptor, bytes, written, bytes.length - written);
+      }
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
     }
-  }
-  chmodSync(tmpPath, 0o600);
-  assertOwnerFile(tmpPath, "the private input temporary file");
-  renameSync(tmpPath, finalPath);
-  chmodSync(finalPath, 0o600);
-  fsyncDirectory(runDir);
-  input.checkpointer.privateInputActivate(row.private_input_id);
-  assertOwnerFile(finalPath, "the private input file");
-  if (digestOf(readOwnerFile(finalPath, "the private input file")) !== input.requestSha256) {
-    throw new PrivateInputError(
-      "hash_mismatch",
-      "the private input final file no longer matches its indexed digest"
-    );
+    assertOwnerFile(temporaryEntry, "the private input temporary file");
+    input.onCustodyBoundary?.("before_temp_rename");
+    assertStableOwnerDirectory(rootDirectory);
+    assertStableOwnerDirectory(runDirectory);
+    renameSync(temporaryEntry, stableEntry(runDirectory, finalLeaf));
+    fsyncStableDirectory(runDirectory);
+    assertStableOwnerDirectory(runDirectory);
+    input.checkpointer.privateInputActivate(row.private_input_id);
+    assertOwnerFile(stableEntry(runDirectory, finalLeaf), "the private input file");
+    if (
+      digestOf(readOwnerFile(stableEntry(runDirectory, finalLeaf), "the private input file")) !==
+      input.requestSha256
+    ) {
+      throw new PrivateInputError(
+        "hash_mismatch",
+        "the private input final file no longer matches its indexed digest"
+      );
+    }
+  } finally {
+    if (runDirectory !== undefined) closeStableOwnerDirectory(runDirectory);
+    closeStableOwnerDirectory(rootDirectory);
   }
 }
 
-/**
- * Drive the row `preparing → discarding → discarded`, removing ONLY the exact
- * indexed keys and fsyncing the parent before the row leaves `discarding`.
- */
-function discardExactKeys(
+function discardExactEntries(
   input: MaterializeInput,
   row: NonNullable<ReturnType<Checkpointer["getPrivateInput"]>>,
-  keys: { runDir: string; finalPath: string; tempPath: string | undefined }
+  rootDirectory: StableOwnerDirectory,
+  runDirectory: StableOwnerDirectory,
+  finalLeaf: string,
+  tempLeaf: string | undefined
 ): void {
   input.checkpointer.privateInputBeginDiscarding(row.private_input_id, "preparing");
-  for (const exact of [keys.tempPath, keys.finalPath]) {
-    if (exact === undefined) continue;
+  input.onCustodyBoundary?.("before_exact_unlink");
+  assertStableOwnerDirectory(rootDirectory);
+  assertStableOwnerDirectory(runDirectory);
+  for (const leaf of [tempLeaf, finalLeaf]) {
+    if (leaf === undefined) continue;
     try {
-      unlinkSync(exact);
+      unlinkSync(stableEntry(runDirectory, leaf));
     } catch (error) {
       if (!errorHasCode(error, "ENOENT")) throw error;
     }
   }
-  if (existsSync(keys.runDir)) fsyncDirectory(keys.runDir);
-  try {
-    rmdirSync(keys.runDir); // only succeeds once empty; the root itself stays
-  } catch {
-    // not empty or already gone — exact-key removal above is the contract
-  }
+  fsyncStableDirectory(runDirectory);
+  assertStableOwnerDirectory(runDirectory);
   input.checkpointer.privateInputFinishDiscarded(row.private_input_id);
 }
 
@@ -423,23 +572,34 @@ export function readRunInput(input: {
       `the private input of run '${input.runId}' is '${row.state}', not active; materialize it first`
     );
   }
-  const runDir = path.dirname(indexedPath(root, row.storage_key, "the private input storage key"));
-  assertOwnerDirectory(root, "the private input root");
-  assertOwnerDirectory(runDir, "the private input run directory");
-  const finalPath = indexedPath(root, row.storage_key, "the private input storage key");
-  assertOwnerFile(finalPath, "the private input file");
-  const stored = readOwnerFile(finalPath, "the private input file");
-  if (digestOf(stored) !== row.request_sha256) {
-    throw new PrivateInputError(
-      "hash_mismatch",
-      "the private input no longer matches its indexed digest"
-    );
-  }
+  const { runLeaf, finalLeaf } = storageLeaves(row);
+  const rootDirectory = openStableOwnerDirectory(root, "the private input root");
+  let runDirectory: StableOwnerDirectory | undefined;
   try {
-    const value: unknown = JSON.parse(stored.toString("utf8"));
-    return value;
-  } catch {
-    throw new PrivateInputError("hash_mismatch", "the private input is not valid JSON");
+    runDirectory = openStableOwnerDirectory(
+      stableEntry(rootDirectory, runLeaf),
+      "the private input run directory",
+      path.join(rootDirectory.canonicalPath, runLeaf)
+    );
+    assertStableOwnerDirectory(rootDirectory);
+    assertOwnerFile(stableEntry(runDirectory, finalLeaf), "the private input file");
+    const stored = readOwnerFile(stableEntry(runDirectory, finalLeaf), "the private input file");
+    assertStableOwnerDirectory(runDirectory);
+    if (digestOf(stored) !== row.request_sha256) {
+      throw new PrivateInputError(
+        "hash_mismatch",
+        "the private input no longer matches its indexed digest"
+      );
+    }
+    try {
+      const value: unknown = JSON.parse(stored.toString("utf8"));
+      return value;
+    } catch {
+      throw new PrivateInputError("hash_mismatch", "the private input is not valid JSON");
+    }
+  } finally {
+    if (runDirectory !== undefined) closeStableOwnerDirectory(runDirectory);
+    closeStableOwnerDirectory(rootDirectory);
   }
 }
 
@@ -503,49 +663,57 @@ export function settleRunInput(input: {
   readonly projectRoot: string;
   readonly checkpointer: Checkpointer;
   readonly runId: string;
+  /** Deterministic race-injection seam for custody regression tests. */
+  readonly onCustodyBoundary?: (boundary: PrivateInputCustodyBoundary) => void;
 }): void {
   const root = privateInputRoot(input.projectRoot);
   let row = input.checkpointer.getPrivateInput(input.runId);
-  if (row === undefined) {
-    return;
-  }
-  if (row.state === "discarded") {
-    return; // idempotent
-  }
+  if (row === undefined || row.state === "discarded") return;
   if (row.state === "active") {
     input.checkpointer.privateInputBeginTerminal(row.private_input_id);
     row = input.checkpointer.getPrivateInput(input.runId);
     if (row === undefined) return;
   }
-  const runDir = path.dirname(indexedPath(root, row.storage_key, "the private input storage key"));
-  const finalPath = indexedPath(root, row.storage_key, "the private input storage key");
-  const tempPath =
-    row.temporary_storage_key !== undefined
-      ? indexedPath(root, row.temporary_storage_key, "the private input temporary key")
-      : undefined;
   if (row.state === "terminal") {
     input.checkpointer.privateInputBeginDiscarding(row.private_input_id, "terminal");
   } else if (row.state === "preparing") {
-    // Never became active (crash window): the run is left incomplete. Discard
-    // only the exact indexed keys; keep the metadata.
     input.checkpointer.privateInputBeginDiscarding(row.private_input_id, "preparing");
   }
-  // else: already `discarding` (a crashed settle resumes here).
-  for (const exact of [tempPath, finalPath]) {
-    if (exact === undefined) continue;
-    try {
-      unlinkSync(exact);
-    } catch (error) {
-      if (!errorHasCode(error, "ENOENT")) throw error;
-    }
-  }
-  if (existsSync(runDir)) {
-    fsyncDirectory(runDir);
-  }
+
+  const { runLeaf, finalLeaf, tempLeaf } = storageLeaves(row);
+  const rootDirectory = openStableOwnerDirectory(root, "the private input root");
+  let runDirectory: StableOwnerDirectory | undefined;
   try {
-    rmdirSync(runDir);
-  } catch {
-    // not empty or already gone
+    if (!entryExistsNoFollow(rootDirectory, runLeaf)) {
+      fsyncStableDirectory(rootDirectory);
+      input.checkpointer.privateInputFinishDiscarded(row.private_input_id);
+      return;
+    }
+    runDirectory = openStableOwnerDirectory(
+      stableEntry(rootDirectory, runLeaf),
+      "the private input run directory",
+      path.join(rootDirectory.canonicalPath, runLeaf)
+    );
+    assertStableOwnerDirectory(rootDirectory);
+    input.onCustodyBoundary?.("before_exact_unlink");
+    assertStableOwnerDirectory(rootDirectory);
+    assertStableOwnerDirectory(runDirectory);
+    for (const leaf of [tempLeaf, finalLeaf]) {
+      if (leaf === undefined) continue;
+      try {
+        unlinkSync(stableEntry(runDirectory, leaf));
+      } catch (error) {
+        if (!errorHasCode(error, "ENOENT")) throw error;
+      }
+    }
+    fsyncStableDirectory(runDirectory);
+    assertStableOwnerDirectory(runDirectory);
+    // Keep the now-empty indexed directory as a custody tombstone. Node does
+    // not expose inode-conditioned rmdir/unlinkat; a pathname rmdir after the
+    // identity check would recreate the very swap race this module excludes.
+    input.checkpointer.privateInputFinishDiscarded(row.private_input_id);
+  } finally {
+    if (runDirectory !== undefined) closeStableOwnerDirectory(runDirectory);
+    closeStableOwnerDirectory(rootDirectory);
   }
-  input.checkpointer.privateInputFinishDiscarded(row.private_input_id);
 }

@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="penny-flow-template" content="1" />
+    <title>SCA proposed orchestration flow | Penny</title>
+    <style>
+      :root {
+        --canvas: #0d1117;
+        --surface: #161b22;
+        --surface-raised: #1c2230;
+        --border: #3a4657;
+        --text: #f0f6fc;
+        --muted: #b6c2cf;
+        --host: #c4b5fd;
+        --start: #94a3b8;
+        --gate: #fbbf24;
+        --done: #4ade80;
+        --negative: #fb7185;
+        --annie: #c4b5fd;
+        --carren: #fb7185;
+        --demetri: #60a5fa;
+        --echo: #22d3ee;
+        --ida: #f59e0b;
+        --piper: #facc15;
+        --skribble: #d8b4fe;
+        --synthia: #f472b6;
+        --tabitha: #fb923c;
+        --vera: #4ade80;
+        --skill: #38bdf8;
+        --fwd: #aab7c7;
+        --loop: #fbbf24;
+        --exit: #4ade80;
+        --abort: #fb7185;
+        --esc: #cbd5e1;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        background: var(--canvas);
+        color: var(--text);
+        font:
+          15px/1.5 system-ui,
+          sans-serif;
+      }
+      body {
+        margin: 0;
+      }
+      header,
+      .callout,
+      .legend,
+      main,
+      footer {
+        width: min(100% - 32px, 1760px);
+        margin-inline: auto;
+      }
+      header {
+        padding-top: 28px;
+      }
+      h1 {
+        margin: 0;
+        font-size: clamp(1.45rem, 2.2vw, 2rem);
+        line-height: 1.2;
+      }
+      .summary,
+      .muted {
+        color: var(--muted);
+        max-width: 100ch;
+      }
+      .callout {
+        margin-top: 20px;
+        border-inline-start: 4px solid var(--gate);
+        border-radius: 8px;
+        background: #251f0d;
+        color: #f9e8a4;
+        padding: 12px 16px;
+      }
+      .callout p {
+        margin: 0;
+      }
+      .legend {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 14px 28px;
+        padding: 20px 0;
+      }
+      .legend h2,
+      .route-rail h2,
+      footer h2 {
+        font-size: 0.9rem;
+        margin: 0 0 7px;
+        color: var(--text);
+      }
+      .legend ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        color: var(--muted);
+        font-size: 0.86rem;
+      }
+      .legend li {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .swatch,
+      .line {
+        display: inline-block;
+        flex: 0 0 auto;
+      }
+      .swatch {
+        width: 12px;
+        height: 12px;
+        border-radius: 3px;
+        background: var(--swatch);
+      }
+      .line {
+        width: 25px;
+        border-top: 3px solid var(--swatch);
+      }
+      .line.dash {
+        border-top-style: dashed;
+      }
+      main {
+        padding-bottom: 24px;
+      }
+      .flow-viewport {
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: #090d12;
+        padding: 12px;
+        outline-offset: 4px;
+      }
+      .flow-viewport:focus-visible {
+        outline: 3px solid #facc15;
+      }
+      #wrap {
+        min-width: 1340px;
+        max-width: 1760px;
+        margin-inline: auto;
+      }
+      .graph-area {
+        position: relative;
+        min-height: 1180px;
+      }
+      #edges {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        pointer-events: none;
+      }
+      .edge {
+        fill: none;
+        stroke: var(--fwd);
+        stroke-width: 2.4;
+      }
+      .edge.loop {
+        stroke: var(--loop);
+        stroke-dasharray: 7 5;
+      }
+      .edge.exit {
+        stroke: var(--exit);
+      }
+      .edge.abort {
+        stroke: var(--abort);
+        stroke-dasharray: 6 5;
+      }
+      .edge.gate {
+        stroke: var(--gate);
+      }
+      .edge.esc {
+        stroke: var(--esc);
+        stroke-dasharray: 4 5;
+      }
+      .node {
+        position: absolute;
+        width: 270px;
+        min-height: 92px;
+        padding: 12px 13px 12px 18px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--surface);
+        box-shadow: 0 4px 14px rgb(0 0 0 / 0.25);
+      }
+      .node::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 5px;
+        border-radius: 10px 0 0 10px;
+        background: var(--agent, var(--host));
+      }
+      .node-title {
+        display: flex;
+        gap: 7px;
+        align-items: baseline;
+        font-size: 0.94rem;
+        font-weight: 750;
+        overflow-wrap: anywhere;
+      }
+      .node-owner {
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-weight: 650;
+      }
+      .node-desc {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 0.79rem;
+        overflow-wrap: anywhere;
+      }
+      .badge {
+        margin-inline-start: auto;
+        padding: 2px 6px;
+        border-radius: 999px;
+        background: var(--badge, var(--host));
+        color: #111827;
+        font:
+          750 0.66rem/1.2 system-ui,
+          sans-serif;
+        letter-spacing: 0.05em;
+        white-space: nowrap;
+      }
+      .node.start {
+        --agent: var(--start);
+      }
+      .node.host {
+        --agent: var(--host);
+      }
+      .node.gate {
+        --agent: var(--gate);
+        --badge: var(--gate);
+        background: #25200f;
+      }
+      .node.done {
+        --agent: var(--done);
+        --badge: var(--done);
+        background: #102719;
+      }
+      .node.error {
+        --agent: var(--negative);
+        --badge: var(--negative);
+        background: #30161c;
+      }
+      .node.esc {
+        --agent: var(--esc);
+      }
+      .node.annie {
+        --agent: var(--annie);
+      }
+      .node.carren {
+        --agent: var(--carren);
+      }
+      .node.demetri {
+        --agent: var(--demetri);
+      }
+      .node.echo {
+        --agent: var(--echo);
+      }
+      .node.ida {
+        --agent: var(--ida);
+      }
+      .node.piper {
+        --agent: var(--piper);
+      }
+      .node.skribble {
+        --agent: var(--skribble);
+      }
+      .node.synthia {
+        --agent: var(--synthia);
+      }
+      .node.tabitha {
+        --agent: var(--tabitha);
+      }
+      .node.vera {
+        --agent: var(--vera);
+      }
+      .node.skill {
+        --agent: var(--skill);
+        background: #0d2733;
+      }
+      .route-rail {
+        margin-top: 18px;
+        border-top: 1px solid var(--border);
+        padding-top: 14px;
+      }
+      .route-rail > p {
+        margin: 0 0 10px;
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+      #route-labels {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 9px;
+      }
+      .lbl {
+        min-width: 0;
+        border: 1px solid var(--border);
+        border-inline-start: 4px solid var(--fwd);
+        border-radius: 7px;
+        background: var(--surface-raised);
+        color: var(--text);
+        padding: 7px 9px;
+        font-size: 0.78rem;
+        overflow-wrap: anywhere;
+      }
+      .lbl.loop {
+        border-inline-start-color: var(--loop);
+      }
+      .lbl.exit {
+        border-inline-start-color: var(--exit);
+      }
+      .lbl.abort {
+        border-inline-start-color: var(--abort);
+      }
+      .lbl.gate {
+        border-inline-start-color: var(--gate);
+      }
+      .lbl.esc {
+        border-inline-start-color: var(--esc);
+      }
+      .route-id {
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .route-state {
+        color: var(--muted);
+      }
+      footer {
+        padding: 0 0 44px;
+        color: var(--muted);
+      }
+      footer p {
+        max-width: 105ch;
+      }
+      .sr-only {
+        position: absolute !important;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      @media (max-width: 720px) {
+        header,
+        .callout,
+        .legend,
+        main,
+        footer {
+          width: min(100% - 20px, 1760px);
+        }
+        #route-labels {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          transition: none !important;
+          animation: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>SCA — proposed engine-owned secure code analysis flow</h1>
+      <p class="summary">Design target for one durable domain campaign. Penny owns admission, orchestration, exact lineage, budgets, gates, and completion; typed <code>sca-service</code> operators own scanner, index, graph, and isolated-execution mechanics. The campaign derives an evidence-grounded security/threat model after baseline analysis, then composes focused catalog agents, three compatible universal child workflows, same-snapshot generated-rule augmentation, future-release rulepack promotion, and bounded evidence/coverage repair loops.</p>
+    </header>
+    <aside class="callout" aria-label="Key workflow invariant"><p>Proposal, not runtime authority: Penny does not yet support child-skill dispatch from an engine playbook or the <code>sca-service</code>, candidate-rule, and promotion boundaries shown here. Implement those exact-artifact, fail-closed boundaries and a matching TypeScript SCA_FLOW descriptor before registering this package. The campaign's admitted baseline release stays immutable; promotion creates a successor release for future campaigns only.</p></aside>
+    <section class="legend" aria-label="Diagram legend">
+      <div>
+        <h2>State owners and control states</h2>
+        <ul>
+          <li><span class="swatch" style="--swatch: var(--host)"></span>Penny host / <code>sca-service</code> operator</li>
+          <li><span class="swatch" style="--swatch: var(--skill)"></span>universal child skill</li>
+          <li><span class="swatch" style="--swatch: var(--gate)"></span>gate</li>
+          <li><span class="swatch" style="--swatch: var(--done)"></span>positive terminal</li>
+          <li>
+            <span class="swatch" style="--swatch: var(--negative)"></span>non-positive terminal
+          </li>
+          <li>
+            <span class="swatch" style="--swatch: var(--annie)"></span>agent owner (named on card)
+          </li>
+        </ul>
+      </div>
+      <div>
+        <h2>Route kinds</h2>
+        <ul>
+          <li><span class="line" style="--swatch: var(--fwd)"></span>forward</li>
+          <li><span class="line dash" style="--swatch: var(--loop)"></span>bounded repair</li>
+          <li><span class="line" style="--swatch: var(--exit)"></span>pass / exit</li>
+          <li><span class="line dash" style="--swatch: var(--abort)"></span>abort / deny</li>
+          <li><span class="line dash" style="--swatch: var(--esc)"></span>escalation</li>
+        </ul>
+      </div>
+    </section>
+    <main>
+      <section
+        class="flow-viewport"
+        aria-labelledby="flow-heading"
+        aria-label="Workflow graph; use arrow keys to scroll when it is wider than the window"
+        tabindex="0"
+      >
+        <h2 id="flow-heading" class="sr-only">Workflow graph</h2>
+        <div id="wrap">
+          <div class="graph-area" id="graph-area">
+            <svg id="edges" aria-hidden="true" focusable="false">
+              <defs>
+                <marker
+                  id="arrowhead"
+                  markerWidth="9"
+                  markerHeight="9"
+                  refX="7"
+                  refY="3"
+                  orient="auto"
+                  markerUnits="strokeWidth"
+                >
+                  <path d="M0,0 L7,3 L0,6 Z" fill="context-stroke"></path>
+                </marker>
+              </defs>
+            </svg>
+          </div>
+          <section class="route-rail" aria-labelledby="routes-heading">
+            <h2 id="routes-heading">Route labels</h2>
+            <p>Each numbered route below maps to one directed arrow in the graph.</p>
+            <ol id="route-labels"></ol>
+          </section>
+          <ul id="edge-list" class="sr-only" aria-label="Complete workflow edge list"></ul>
+        </div>
+      </section>
+    </main>
+    <footer>
+      <h2>Notes</h2>
+      <p>Threat-model rule: admission freezes only optional caller context/model refs and the modeling policy; it does not require or pretend to possess a completed threat model. Baseline evidence precedes Synthia's versioned operational security/threat model. Full formal modeling uses the same state only when required by policy or a material gap, and repository documents remain target-controlled evidence. Loop rule: a new pass requires a material gap plus a changed input, method, model, or evidence source with expected information gain. Candidate rules require synthetic positive/negative fixtures and fail-closed validation, scan only the same frozen snapshot under finite budgets, and enter the ordinary hypothesis/evidence contract. Promotion requires a verified true-positive generated-rule match and pre-admitted external-rulepack write authority; absent authority or curation failure is recorded without changing finding truth. Coverage closure requires required-family accounting and terminal high-priority hypotheses; final success requires Vera and the host CompletionGate. Operator cards marked SCA SERVICE are closed typed calls from Penny to <code>sca-service</code>, never in-process scanner shells or model access to native query languages, arbitrary mounts, or the Docker socket. Static scanners use pinned one-shot OCI workers, Joern-class state uses campaign-scoped OCI workers, and target-controlled build/test/fuzz execution uses the stronger microVM boundary. Detailed image locks, mounts, cache keys, and provision/doctor/garbage-collection mechanics are intentionally omitted because they are service lifecycle rather than orchestration states. Uniform cancel, malformed-result repair, dispatch-pause/recover, and infrastructure-error seams are omitted for readability and may terminate only in paused, cancelled, incomplete, or typed error states. Child cards represent exact child runs; their internal states remain owned by their own descriptors.</p>
+    </footer>
+    <script>
+      const N = {"intake":{"title":"intake","desc":"Host receives the proposed SCA request and immutable source-snapshot reference.","cls":"start","badge":"START","lane":"center","y":24},"admitting_snapshot_policy":{"title":"admit snapshot, context policy, and budget","desc":"Host freezes snapshot, scope, authority, tool/execution policy, optional threat inputs and adaptive/formal mode, rulepack/candidate/promotion policy, evidence requirements, and budget.","cls":"host","badge":"HOST","lane":"center","y":190},"awaiting_user":{"title":"await user","desc":"Persisted clarification or consequence gate. Refine stays in the admitted envelope; denial cannot become success.","cls":"gate","badge":"GATE","lane":"right","y":190},"building_program_index":{"title":"operator: program-index","desc":"sca-service indexes files, languages, builds, syntax, and symbols; relevant architecture, deployment, security, privacy, data-flow, and threat documents remain target-controlled evidence.","cls":"host","badge":"SCA SERVICE","lane":"left","y":410},"running_rules":{"title":"operator: rules (baseline)","desc":"sca-service runs pinned Semgrep CE in a one-shot OCI worker with the admitted immutable external release/profile; matches and failures remain typed hypotheses/evidence.","cls":"host","badge":"SCA SERVICE","lane":"center","y":410},"auditing_dependencies":{"title":"operator: dependency-audit","desc":"sca-service runs pinned OSV-Scanner in a one-shot OCI worker with the admitted offline database and ecosystem resolution policy; records exact package/advisory provenance.","cls":"host","badge":"SCA SERVICE","lane":"right","y":410},"building_semantic_graph":{"title":"operator: semantic-graph","desc":"sca-service builds the CPG/overlay in a campaign-scoped Joern OCI worker and, where licensed and admitted, an optional dedicated CodeQL worker.","cls":"host","badge":"SCA SERVICE","lane":"left","y":610},"auditing_secrets":{"title":"operator: secret-audit","desc":"sca-service runs the pinned dedicated secret scanner in a one-shot OCI worker; findings are candidates, never automatic terminal truth.","cls":"host","badge":"SCA SERVICE","lane":"right","y":610},"running_taint":{"title":"operator: taint","desc":"sca-service computes bounded source/sink, data-flow, and path evidence with code-owned Joern or admitted CodeQL adapters.","cls":"host","badge":"SCA SERVICE","lane":"left","y":790},"assembling_security_evidence":{"title":"assemble security evidence","desc":"Host fan-in keeps caller context distinct from observed program facts, repository-document claims, baseline candidates, failures, provenance, and initial coverage.","cls":"host","badge":"FAN-IN","lane":"center","y":800},"integrating_security_model":{"title":"derive security and threat model","desc":"Synthia reconciles optional caller context and repository claims with baseline evidence to version assets, actors, boundaries, critical actions, invariants, attack surfaces, assumptions, conflicts, and material unknowns; formal modeling is policy- or gap-triggered.","cls":"synthia","who":"Synthia","lane":"center","y":990},"recomputing_candidates":{"title":"apply overlays and recompute","desc":"Host validates AI-proposed semantics and reruns only affected semantic-graph or taint operations; emits an exact delta or no-op.","cls":"host","badge":"HOST","lane":"left","y":1170},"generating_candidate_rules":{"title":"materialize candidate rules","desc":"Skribble turns an exact security-model rule intent or confirmed root-cause spec into bounded Semgrep YAML and synthetic positive/negative fixtures.","cls":"skribble","who":"Skribble","lane":"right","y":1170},"validating_candidate_rules":{"title":"validate candidate rules","desc":"Host checks schema, allowed features, duplicate/overmatch metadata, fixtures, pinned-engine compatibility, provenance, digest, and finite scan budget fail-closed.","cls":"host","badge":"HOST","lane":"right","y":1350},"running_candidate_rules":{"title":"operator: rules (candidate)","desc":"sca-service scans only validated candidate overlays against the same frozen snapshot in the pinned Semgrep worker; every match is a hypothesis and every failure is typed evidence.","cls":"host","badge":"SCA SERVICE","lane":"right","y":1530},"assembling_augmented_candidates":{"title":"assemble augmented candidates","desc":"Host joins semantic recomputation with candidate scan, explicit no-intent/disabled status, or typed failure while preserving baseline and overlay digests.","cls":"host","badge":"FAN-IN","lane":"center","y":1710},"generating_hypotheses":{"title":"generate hypotheses","desc":"Ida turns the current evidence-grounded security/threat model plus baseline, semantic, and candidate-rule evidence into bounded falsifiable vulnerability and abuse hypotheses.","cls":"ida","who":"Ida","lane":"center","y":1890},"hypothesis_search":{"title":"operator: hypothesis-search","desc":"Host builds the current ledger view, bounded slices, unresolved security/threat-model gaps, legal actions, progress evidence, and remaining budget.","cls":"host","badge":"LOOP HUB","lane":"center","y":2080},"selecting_next_action":{"title":"select next action","desc":"Demetri chooses the smallest legal action with highest expected information or coverage value; exact repeats are not progress.","cls":"demetri","who":"Demetri","lane":"center","y":2260},"analyzing_candidate":{"title":"analyze candidate slice","desc":"Annie explains one supplied candidate or cluster, relevant relations, guards, alternatives, and missing evidence.","cls":"annie","who":"Annie","lane":"left","y":2450},"dispatching_child_skill":{"title":"dispatch universal child skill","desc":"Proposed host primitive validates the closed research | decide | plan target, exact typed ports, child digest, linked run, and aggregate budget.","cls":"host","badge":"CHILD DISPATCH","lane":"center","y":2450},"exploring_evidence_gap":{"title":"explore focused evidence gap","desc":"Echo acquires one admitted contextual or external fact; broad research uses the Research child skill instead.","cls":"echo","who":"Echo","lane":"right","y":2450},"querying_static_evidence":{"title":"operator: bounded evidence query","desc":"Penny routes one closed graph, slice, taint, rule, or static-evidence operation through sca-service; exact bounded evidence or a typed failure returns to the ledger.","cls":"host","badge":"SCA SERVICE","lane":"center","y":2640},"child_research":{"title":"child skill: research","desc":"Production Research returns durable sourced external evidence and an exact GroundedSynthesis core.","cls":"skill","who":"universal skill","lane":"left","y":2640},"child_decide":{"title":"child skill: decide","desc":"Universal Decide returns a reviewed selection or ranking; exact Research evidence may satisfy its evidence port.","cls":"skill","who":"universal skill","lane":"right","y":2640},"child_plan":{"title":"child skill: plan","desc":"Universal Plan returns a reviewed verification strategy; exact Research/Decision products may satisfy typed optional ports.","cls":"skill","who":"universal skill","lane":"left","y":2830},"accepting_child_result":{"title":"accept child result","desc":"Penny verifies exact terminal refs, compatibility, lineage, child status, budget, and failure evidence; an accepted Plan strategy may continue to Tabitha while other results update the campaign ledger.","cls":"host","badge":"HOST","lane":"center","y":2830},"designing_verification":{"title":"design targeted verification","desc":"Piper defines the smallest discriminating strategy, required reachability evidence, isolation, and stop conditions.","cls":"piper","who":"Piper","lane":"left","y":3020},"taskifying_verification":{"title":"taskify verification","desc":"Tabitha turns the selected strategy into bounded, host-validatable checks; it does not execute them.","cls":"tabitha","who":"Tabitha","lane":"left","y":3200},"dynamic_execution_gate":{"title":"dynamic execution policy gate","desc":"Host admits only the frozen sandbox profile and command/task contract. Scope, network, or consequence expansion pauses for the user.","cls":"gate","badge":"GATE","lane":"center","y":3200},"running_dynamic_verification":{"title":"operator: dynamic-verification","desc":"sca-service dispatches approved build/test, coverage, differential/invariant, fuzz, and sanitizer work to the stronger microVM boundary and captures exact execution evidence.","cls":"host","badge":"SCA SERVICE","lane":"right","y":3200},"verifying_evidence":{"title":"verify finding evidence","desc":"Vera checks the current evidence against the weakness-family confirmation or rejection contract; target coverage gates negative dynamic evidence.","cls":"vera","who":"Vera","lane":"center","y":3390},"critiquing_finding":{"title":"critique finding logic","desc":"Carren challenges exploitability reasoning, alternative explanations, and false-positive risk after objective verification.","cls":"carren","who":"Carren","lane":"left","y":3580},"recording_disposition":{"title":"record terminal disposition","desc":"Host binds the terminal status to exact evidence and routes eligible confirmed roots to variant mining or verified generated rules to promotion.","cls":"host","badge":"LEDGER","lane":"center","y":3580},"computing_coverage":{"title":"compute coverage ledger","desc":"Host accounts for analysis families, entry points, failures, security/threat-model unknowns, hypotheses, candidate rules, promotion outcomes, and runtime coverage.","cls":"host","badge":"HOST","lane":"right","y":3580},"promoting_verified_rules":{"title":"promote verified generated rule","desc":"Under pre-admitted write authority, host atomically persists rule, fixtures, scope, and provenance and builds a successor immutable external release for future campaigns; otherwise it records skip/failure.","cls":"host","badge":"RULEPACK","lane":"left","y":3780},"verifying_coverage":{"title":"verify coverage closure","desc":"Vera checks required-family accounting, terminal high-priority hypotheses, and resolved or impact-disclosed security/threat-model unknowns and limitations.","cls":"vera","who":"Vera","lane":"center","y":3780},"synthesizing_security_assessment":{"title":"synthesize SCA assessment","desc":"Synthia integrates the latest security/threat-model revision, terminal hypotheses, findings, evidence, executions, generated-rule/promotion outcomes, and verified coverage.","cls":"synthia","who":"Synthia","lane":"center","y":3960},"sealing_security_assessment":{"title":"seal assessment core","desc":"Host validates and seals the current assessment with exact request, snapshot, latest security-model revision, evidence, coverage, and source lineage.","cls":"host","badge":"HOST","lane":"center","y":4140},"verifying_security_assessment":{"title":"verify assessment core","desc":"Vera verifies objective validity, completeness, evidence mapping, coverage lineage, contradictions, and disclosed limitations before reporting.","cls":"vera","who":"Vera","lane":"center","y":4320},"materializing_report":{"title":"materialize report","desc":"Skribble creates the human narrative from the exact Vera-passed assessment core without changing machine truth or writing files.","cls":"skribble","who":"Skribble","lane":"left","y":4500},"critiquing_report":{"title":"critique report","desc":"Carren checks clarity, traceability, reproduction usability, remediation usefulness, and prominence of coverage limits.","cls":"carren","who":"Carren","lane":"center","y":4690},"sealing_results":{"title":"seal SCA result graph","desc":"Host seals report content plus findings JSON, SARIF, coverage, hypotheses, evidence, generated-rule/promotion, graph, and tool manifests.","cls":"host","badge":"HOST","lane":"center","y":4870},"verifying_final_product":{"title":"verify final product","desc":"Vera verifies current request, finding, evidence, coverage, generated-rule, child-product, machine-result, report, and no-remediation lineage.","cls":"vera","who":"Vera","lane":"center","y":5050},"completion_gate":{"title":"SCA completion gate","desc":"Host admits success only for the current exact product graph with all required visits, receipts, budgets, and unresolved-policy checks.","cls":"gate","badge":"GATE","lane":"center","y":5230},"complete":{"title":"complete","desc":"Evidence-backed SCA campaign completed under disclosed coverage; this is not a claim that the repository is vulnerability-free.","cls":"done","badge":"TERM","lane":"left","y":5410},"incomplete":{"title":"incomplete","desc":"Honest non-positive terminal with best exact artifacts and blockers after denial, stall, exhaustion, or an unresolved required gap.","cls":"error","badge":"TERM","lane":"right","y":5410}};
+      const E = [{"from":"intake","to":"admitting_snapshot_policy","kind":"fwd","label":"admit proposed request"},{"from":"admitting_snapshot_policy","to":"building_program_index","kind":"fwd","label":"snapshot and scope admitted; start index fan"},{"from":"admitting_snapshot_policy","to":"running_rules","kind":"fwd","label":"start immutable baseline rule scan"},{"from":"admitting_snapshot_policy","to":"auditing_dependencies","kind":"fwd","label":"start dependency audit"},{"from":"admitting_snapshot_policy","to":"auditing_secrets","kind":"fwd","label":"start secret audit"},{"from":"admitting_snapshot_policy","to":"awaiting_user","kind":"esc","label":"scope, authority, or completion contract needs clarification"},{"from":"admitting_snapshot_policy","to":"incomplete","kind":"abort","label":"request rejected or required static capability unavailable"},{"from":"awaiting_user","to":"admitting_snapshot_policy","kind":"gate","label":"scope or policy refined; re-admit"},{"from":"awaiting_user","to":"dynamic_execution_gate","kind":"gate","label":"dynamic execution explicitly approved within stored challenge"},{"from":"awaiting_user","to":"incomplete","kind":"abort","label":"denied, cancelled, or unresolved"},{"from":"building_program_index","to":"building_semantic_graph","kind":"fwd","label":"stable index and source refs ready"},{"from":"building_semantic_graph","to":"running_taint","kind":"fwd","label":"semantic graph ready for data-flow and taint"},{"from":"running_taint","to":"assembling_security_evidence","kind":"fwd","label":"taint result or typed backend failure"},{"from":"running_rules","to":"assembling_security_evidence","kind":"fwd","label":"baseline rule hypotheses or typed scan failure"},{"from":"auditing_dependencies","to":"assembling_security_evidence","kind":"fwd","label":"dependency findings or typed resolution failure"},{"from":"auditing_secrets","to":"assembling_security_evidence","kind":"fwd","label":"secret candidates or typed scan failure"},{"from":"assembling_security_evidence","to":"integrating_security_model","kind":"fwd","label":"baseline evidence plus optional caller threat context ready"},{"from":"integrating_security_model","to":"recomputing_candidates","kind":"fwd","label":"versioned security/threat model and bounded semantic overlays ready"},{"from":"integrating_security_model","to":"generating_candidate_rules","kind":"fwd","label":"phase-two bounded model-gap rule intent admitted"},{"from":"integrating_security_model","to":"assembling_augmented_candidates","kind":"fwd","label":"candidate lane disabled or no bounded model-grounded rule intent"},{"from":"recomputing_candidates","to":"assembling_augmented_candidates","kind":"fwd","label":"affected semantic operators rerun; exact delta or no-op"},{"from":"generating_candidate_rules","to":"validating_candidate_rules","kind":"fwd","label":"candidate YAML, fixtures, and provenance materialized"},{"from":"validating_candidate_rules","to":"running_candidate_rules","kind":"fwd","label":"candidate passes fail-closed validation and fixture tests"},{"from":"validating_candidate_rules","to":"assembling_augmented_candidates","kind":"loop","label":"candidate rejected, empty, exhausted, or validation failed; preserve typed result","s1":"right","s2":"right","bow":360},{"from":"running_candidate_rules","to":"assembling_augmented_candidates","kind":"fwd","label":"same-snapshot matches or typed scan failure"},{"from":"assembling_augmented_candidates","to":"generating_hypotheses","kind":"fwd","label":"augmented candidate evidence and lineage complete"},{"from":"generating_hypotheses","to":"hypothesis_search","kind":"fwd","label":"hypotheses and evidence obligations entered in ledger"},{"from":"hypothesis_search","to":"selecting_next_action","kind":"fwd","label":"current ledger, legal actions, and budget prepared"},{"from":"selecting_next_action","to":"analyzing_candidate","kind":"fwd","label":"focused candidate analysis selected"},{"from":"analyzing_candidate","to":"hypothesis_search","kind":"loop","label":"analysis result or gap updates investigation loop"},{"from":"selecting_next_action","to":"exploring_evidence_gap","kind":"fwd","label":"one focused contextual evidence gap selected"},{"from":"selecting_next_action","to":"querying_static_evidence","kind":"fwd","label":"bounded graph or static-evidence query selected","s1":"right","s2":"right"},{"from":"querying_static_evidence","to":"hypothesis_search","kind":"loop","label":"exact query evidence or typed failure updates the ledger","s1":"right","s2":"right"},{"from":"exploring_evidence_gap","to":"hypothesis_search","kind":"loop","label":"focused evidence packet or honest gap returns"},{"from":"selecting_next_action","to":"dispatching_child_skill","kind":"fwd","label":"full durable child product earns its overhead"},{"from":"accepting_child_result","to":"hypothesis_search","kind":"loop","label":"verified child result or failure evidence updates ledger"},{"from":"accepting_child_result","to":"taskifying_verification","kind":"fwd","label":"accepted Plan strategy replaces Piper and proceeds to Tabitha","s1":"right","s2":"right"},{"from":"selecting_next_action","to":"integrating_security_model","kind":"loop","label":"material security- or threat-model gap triggers focused refinement"},{"from":"selecting_next_action","to":"designing_verification","kind":"fwd","label":"targeted experiment strategy selected"},{"from":"designing_verification","to":"taskifying_verification","kind":"fwd","label":"strategy is complete and requires executable checks"},{"from":"taskifying_verification","to":"dynamic_execution_gate","kind":"fwd","label":"bounded task graph ready for host validation"},{"from":"dynamic_execution_gate","to":"running_dynamic_verification","kind":"gate","label":"execution is already admitted or approved"},{"from":"dynamic_execution_gate","to":"awaiting_user","kind":"esc","label":"scope or consequence expansion requires approval"},{"from":"dynamic_execution_gate","to":"hypothesis_search","kind":"loop","label":"execution denied but hypothesis can be deferred or investigated statically"},{"from":"running_dynamic_verification","to":"verifying_evidence","kind":"fwd","label":"execution transcript and target coverage captured"},{"from":"selecting_next_action","to":"verifying_evidence","kind":"fwd","label":"existing static evidence is ready for contract verification"},{"from":"verifying_evidence","to":"critiquing_finding","kind":"fwd","label":"objective evidence contract passes"},{"from":"verifying_evidence","to":"hypothesis_search","kind":"loop","label":"evidence, analysis, or target-coverage gap; change strategy"},{"from":"critiquing_finding","to":"recording_disposition","kind":"fwd","label":"finding logic approved"},{"from":"critiquing_finding","to":"hypothesis_search","kind":"loop","label":"material alternative or false-positive risk requires new evidence"},{"from":"recording_disposition","to":"generating_candidate_rules","kind":"loop","label":"confirmed root cause merits bounded same-snapshot variant mining","s1":"top","s2":"right","bow":500},{"from":"recording_disposition","to":"promoting_verified_rules","kind":"fwd","label":"candidate match correlates to an independently confirmed finding"},{"from":"promoting_verified_rules","to":"hypothesis_search","kind":"loop","label":"successor release digest or explicit skipped/failed promotion recorded","s1":"left","s2":"left","bow":-600},{"from":"recording_disposition","to":"hypothesis_search","kind":"loop","label":"terminal disposition recorded; no rule action required"},{"from":"selecting_next_action","to":"computing_coverage","kind":"fwd","label":"controller proposes campaign closure"},{"from":"computing_coverage","to":"verifying_coverage","kind":"fwd","label":"coverage, model-unknown, and candidate-rule lifecycle ledger sealed"},{"from":"verifying_coverage","to":"hypothesis_search","kind":"loop","label":"coverage or terminal-hypothesis gap requires another pass"},{"from":"verifying_final_product","to":"completion_gate","kind":"fwd","label":"current final product passes Vera"},{"from":"verifying_final_product","to":"hypothesis_search","kind":"loop","label":"evidence, coverage, assessment, report, or product gap"},{"from":"completion_gate","to":"complete","kind":"exit","label":"all aggregate completion predicates admitted"},{"from":"completion_gate","to":"hypothesis_search","kind":"loop","label":"repairable admission refusal and budget remains"},{"from":"completion_gate","to":"incomplete","kind":"abort","label":"blocking refusal, stall, or budget exhaustion"},{"from":"hypothesis_search","to":"incomplete","kind":"abort","label":"no useful legal next action or campaign budget exhausted"},{"from":"dispatching_child_skill","to":"child_research","kind":"fwd","label":"external evidence requires Research contract"},{"from":"dispatching_child_skill","to":"child_decide","kind":"fwd","label":"known alternatives require durable Decide product"},{"from":"dispatching_child_skill","to":"child_plan","kind":"fwd","label":"multi-step verification requires durable Plan product"},{"from":"child_research","to":"accepting_child_result","kind":"fwd","label":"exact grounded synthesis terminal ref"},{"from":"child_decide","to":"accepting_child_result","kind":"fwd","label":"exact decision terminal or partial ref"},{"from":"child_plan","to":"accepting_child_result","kind":"fwd","label":"exact strategy terminal or partial ref"},{"from":"verifying_coverage","to":"synthesizing_security_assessment","kind":"fwd","label":"evidence and coverage closure pass"},{"from":"synthesizing_security_assessment","to":"sealing_security_assessment","kind":"fwd","label":"complete SCA assessment draft"},{"from":"sealing_security_assessment","to":"verifying_security_assessment","kind":"fwd","label":"canonical assessment core sealed"},{"from":"verifying_security_assessment","to":"materializing_report","kind":"fwd","label":"objective assessment verification passes"},{"from":"verifying_security_assessment","to":"hypothesis_search","kind":"loop","label":"evidence, coverage, or assessment gap requires changed strategy"},{"from":"materializing_report","to":"critiquing_report","kind":"fwd","label":"complete report content ready for quality critique"},{"from":"critiquing_report","to":"sealing_results","kind":"fwd","label":"report quality approved"},{"from":"critiquing_report","to":"materializing_report","kind":"loop","label":"report-only quality gap; verified core unchanged"},{"from":"critiquing_report","to":"hypothesis_search","kind":"loop","label":"assessment or evidence gap requires campaign repair"},{"from":"sealing_results","to":"verifying_final_product","kind":"fwd","label":"aggregate SCA product graph sealed"},{"from":"selecting_next_action","to":"generating_hypotheses","kind":"loop","label":"new variant or alternative hypotheses are expected to add information"}];
+      const graph = document.getElementById("graph-area");
+      const svg = document.getElementById("edges");
+      const routes = document.getElementById("route-labels");
+      const edgeList = document.getElementById("edge-list");
+      const SVG_NS = "http://www.w3.org/2000/svg";
+      const nodeWidth = 270;
+      const edgeColor = {
+        fwd: "#aab7c7",
+        gate: "#fbbf24",
+        loop: "#fbbf24",
+        exit: "#4ade80",
+        abort: "#fb7185",
+        esc: "#cbd5e1",
+      };
+
+      function point(rect, side) {
+        if (side === "top") return { x: rect.x + rect.width / 2, y: rect.y };
+        if (side === "left") return { x: rect.x, y: rect.y + rect.height / 2 };
+        if (side === "right") return { x: rect.x + rect.width, y: rect.y + rect.height / 2 };
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height };
+      }
+
+      function sides(source, target) {
+        if (source.x + source.width <= target.x) return ["right", "left"];
+        if (target.x + target.width <= source.x) return ["left", "right"];
+        if (source.y <= target.y) return ["bottom", "top"];
+        return ["top", "bottom"];
+      }
+
+      function control(pointValue, side, width, height, bend) {
+        const step = 76 + Math.abs(bend);
+        const clampX = (value) => Math.max(12, Math.min(width - 12, value));
+        const clampY = (value) => Math.max(12, Math.min(height - 12, value));
+        if (side === "top")
+          return { x: clampX(pointValue.x + bend), y: clampY(pointValue.y - step) };
+        if (side === "left")
+          return { x: clampX(pointValue.x - step), y: clampY(pointValue.y + bend) };
+        if (side === "right")
+          return { x: clampX(pointValue.x + step), y: clampY(pointValue.y + bend) };
+        return { x: clampX(pointValue.x + bend), y: clampY(pointValue.y + step) };
+      }
+
+      function appendText(parent, className, text) {
+        const element = document.createElement("span");
+        element.className = className;
+        element.textContent = text;
+        parent.append(element);
+        return element;
+      }
+
+      function render() {
+        const width = Math.max(
+          1340,
+          Math.min(1760, document.querySelector(".flow-viewport").clientWidth - 24)
+        );
+        const viewport = document.querySelector(".flow-viewport");
+        const previousViewportWidth = Number(viewport.dataset.viewportWidth || "0");
+        document.getElementById("wrap").style.width = `${width}px`;
+        if (
+          viewport.clientWidth < width &&
+          (previousViewportWidth === 0 || previousViewportWidth >= width)
+        ) {
+          viewport.scrollLeft = Math.round((width - viewport.clientWidth) / 2);
+        }
+        viewport.dataset.viewportWidth = `${viewport.clientWidth}`;
+        graph.replaceChildren(svg);
+        routes.replaceChildren();
+        edgeList.replaceChildren();
+        const nodeRects = new Map();
+        const lanes = { left: 42, center: (width - nodeWidth) / 2, right: width - nodeWidth - 42 };
+        for (const [id, node] of Object.entries(N)) {
+          const card = document.createElement("article");
+          card.className = `node ${node.cls}`;
+          card.id = `node-${id}`;
+          card.dataset.nodeId = id;
+          card.style.left = `${lanes[node.lane]}px`;
+          card.style.top = `${node.y}px`;
+          const title = document.createElement("div");
+          title.className = "node-title";
+          appendText(title, "node-state", node.title);
+          if (node.who) appendText(title, "node-owner", `· ${node.who}`);
+          if (node.badge) appendText(title, "badge", node.badge);
+          const desc = document.createElement("p");
+          desc.className = "node-desc";
+          desc.textContent = node.desc;
+          card.append(title, desc);
+          graph.append(card);
+        }
+        let graphHeight = 0;
+        for (const [id] of Object.entries(N)) {
+          const card = document.getElementById(`node-${id}`);
+          const x = Number.parseFloat(card.style.left);
+          const y = Number.parseFloat(card.style.top);
+          const rect = { x, y, width: card.offsetWidth, height: card.offsetHeight };
+          nodeRects.set(id, rect);
+          graphHeight = Math.max(graphHeight, y + rect.height + 38);
+        }
+        graph.style.height = `${Math.max(1180, graphHeight)}px`;
+        svg.setAttribute("viewBox", `0 0 ${width} ${graph.clientHeight}`);
+        for (const [index, edge] of E.entries()) {
+          const source = nodeRects.get(edge.from);
+          const target = nodeRects.get(edge.to);
+          const [sourceSide, targetSide] =
+            edge.s1 && edge.s2 ? [edge.s1, edge.s2] : sides(source, target);
+          const from = point(source, sourceSide);
+          const to = point(target, targetSide);
+          const bend = edge.bow || (edge.kind === "loop" ? 58 : 0);
+          const sourceControl = control(from, sourceSide, width, graph.clientHeight, bend);
+          const targetControl = control(
+            to,
+            targetSide,
+            width,
+            graph.clientHeight,
+            edge.kind === "exit" ? -bend : bend
+          );
+          const path = document.createElementNS(SVG_NS, "path");
+          path.classList.add("edge", edge.kind);
+          path.dataset.edgeIndex = String(index);
+          path.setAttribute(
+            "d",
+            `M ${from.x} ${from.y} C ${sourceControl.x} ${sourceControl.y}, ${targetControl.x} ${targetControl.y}, ${to.x} ${to.y}`
+          );
+          path.setAttribute("stroke", edgeColor[edge.kind]);
+          path.setAttribute("marker-end", "url(#arrowhead)");
+          svg.append(path);
+
+          const visibleRoute = document.createElement("li");
+          visibleRoute.className = `lbl ${edge.kind}`;
+          visibleRoute.dataset.edgeIndex = String(index);
+          appendText(visibleRoute, "route-id", `${index + 1}. `);
+          appendText(visibleRoute, "route-state", `${edge.from} → ${edge.to}: `);
+          visibleRoute.append(document.createTextNode(edge.label));
+          routes.append(visibleRoute);
+
+          const accessibleRoute = document.createElement("li");
+          accessibleRoute.textContent = `${edge.from} to ${edge.to}: ${edge.label} (${edge.kind})`;
+          edgeList.append(accessibleRoute);
+        }
+      }
+      render();
+      window.addEventListener("resize", render);
+    </script>
+  </body>
+</html>

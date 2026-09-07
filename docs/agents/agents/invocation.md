@@ -62,7 +62,7 @@ artifact or memory scan.
       registration/digest-bound, present in worker invocation metadata, and passed exactly to Pi.
 - [ ] Empty, injected, added, replaced, equality-sized, unavailable, task-selected,
       trust-selected, and runtime-selected surfaces fail before session creation.
-- [ ] Ordinary candidate phases omit `allowed_tools` and use exact YAML. Synthetic or
+- [ ] Ordinary registered phases omit `allowed_tools` and use exact YAML. Synthetic or
       evaluation-only strict subsets make no OS/process sandbox or extension-code isolation
       claim; host-private sessions remain separate.
 - [ ] Complete output persistence and re-read precede success/routing.

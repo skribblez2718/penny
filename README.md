@@ -1,6 +1,6 @@
 # Penny
 
-Penny is a personal AI assistant built on [Pi](https://github.com/mariozechner/pi-coding-agent). She can handle a task herself, ask one of ten general-purpose agents for focused help, or run a saved multi-step skill. An optional [MemPalace](https://github.com/milla-jovovich/mempalace) service provides memory across sessions.
+Penny is a personal AI assistant built on [Pi](https://github.com/earendil-works/pi). She can handle a task directly, ask one of ten general-purpose agents for focused help, or run a reusable multi-step skill. A core [MemPalace](https://github.com/milla-jovovich/mempalace) service provides memory across sessions while workflow checkpoints and exact artifacts remain independently durable.
 
 <p align="center">
   <img src="img/penny.png" width="55%" style="border-radius: 12px" alt="Penny" />
@@ -9,184 +9,130 @@ Penny is a personal AI assistant built on [Pi](https://github.com/mariozechner/p
 ## Table of Contents
 
 - [Overview](#overview)
-- [Architecture](#architecture)
-- [Universal Agents](#universal-agents)
-- [Universal Skills](#universal-skills)
-- [Progress and Limits](#progress-and-limits)
-- [AGENTS.md Routing](#agentsmd-routing)
-- [Security](#security)
-- [Protocols](#protocols)
-- [Observability](#observability)
-- [Development](#development)
-- [Documentation](#documentation)
 - [Requirements](#requirements)
-- [Setup](#setup)
+- [Quick Start](#quick-start)
+- [Agents and Skills](#agents-and-skills)
+- [How Penny Works](#how-penny-works)
+- [Progress and Limits](#progress-and-limits)
+- [Memory and Observability](#memory-and-observability)
+- [Development](#development)
+- [TLS and Certificate Trust](#tls-and-certificate-trust)
+- [Documentation](#documentation)
 
 ## Overview
 
 Penny has three ways to do work:
 
 - **Direct:** Penny handles the task in the current session.
-- **Agent:** Penny gives one clearly defined job to another agent working in a separate session.
+- **Agent:** Penny gives one clearly defined job to an agent working in a separate session.
 - **Skill:** Penny runs a tested sequence of steps that can save progress, retry a failed step, run work in parallel, and resume later.
 
-Penny uses the simplest option that fits the task. Memory is optional; a skill passes each saved result directly to the next step.
+Penny uses the simplest option that fits the task. Skill results pass directly between steps without relying on memory.
 
-## Architecture
+## Requirements
 
-Instructions come from up to five places:
+- **Pi 0.85.1:** the supported agent runtime. It must match the Pi SDK version pinned in this repository. See [Pi on GitHub](https://github.com/earendil-works/pi).
+- **Node.js 22.19.0 or newer**
+- **Python 3.12 or newer**
+- **Bun 1.0 or newer:** JavaScript runtime and package manager
+- **uv:** Python package manager. See [docs.astral.sh/uv](https://docs.astral.sh/uv).
 
-| Part               | What it contains                                           | Source                             |
-| ------------------ | ---------------------------------------------------------- | ---------------------------------- |
-| System rules       | Penny's standing rules and safety limits                   | `.pi/SYSTEM.md`                    |
-| Agent role         | One agent's job and maximum tool access                    | `.pi/agents/*.md`                  |
-| Skill instructions | The rules and output format for one skill step             | `.pi/skills/*/assets/prompts/*.md` |
-| Project map        | Directions to the documents needed for the task            | `AGENTS.md` files                  |
-| Task details       | The current goal, limits, file paths, and saved output IDs | Task message and runtime           |
+## Quick Start
 
-All seven skills are fully implemented and available.
+```bash
+git clone https://github.com/skribblez2718/penny.git
+cd penny
+cp .env.example .env
+# Edit .env and create a private hub config from
+# scripts/setup/mempalace-hub.config.json.in, then start that supervised hub.
+make setup STATE_MODE=fresh MEMORY_HUB_CONFIG=/absolute/private/hub.json
+pi
+```
 
-The skill system saves progress in SQLite. It stores each agent result under a unique ID and passes that saved result to the next step. An interrupted run can continue from its saved results.
+MemPalace hub memory is enabled by default. The hub configuration, token, roots, and service remain caller-owned and outside the repository; setup validates them but never discovers, creates, migrates, repairs, or deletes a palace. Memory writes remain disabled until the separate canary and accepted-write reconciliation gates pass.
 
-## Universal Agents
+`STATE_MODE=fresh` is explicit authorization to initialize only a genuinely fresh canonical Penny state target. Existing installations use `STATE_MODE=existing` (the default). Missing, incomplete, incompatible, or retained state never falls through as successful setup; retained state uses the documented migration or recovery flow.
 
-Penny's ten agents are named for the kind of work they do, not for a subject area. The same agent can work on software, finance, travel, security, or any other topic.
+`make setup` performs frozen, offline dependency installs from local caches, builds orchestration and observability once, and exits zero only after state, artifacts, checkpoints, receipt authority, observability, authenticated memory, and provider-free extension loading pass the setup doctor. A missing cache entry is an error rather than permission to resolve or download a package. Setup does not install or update Pi, Node, Bun, Python, or uv.
 
-| Agent      | Use it to                                                                              |
-| ---------- | -------------------------------------------------------------------------------------- |
-| `annie`    | Analyze material already provided and explain its structure, relationships, or causes. |
-| `carren`   | Review the quality of a work product and explain how it should improve.                |
-| `demetri`  | Choose or rank known options using the stated goals, limits, and uncertainties.        |
-| `echo`     | Explore an unfamiliar topic, codebase, document set, or external source.               |
-| `ida`      | Generate a varied set of ideas, options, or hypotheses.                                |
-| `piper`    | Plan how to move from the current state to a goal.                                     |
-| `skribble` | Create files or other requested work products from a clear specification.              |
-| `synthia`  | Combine several sources or findings into one clear account.                            |
-| `tabitha`  | Turn an approved plan or specification into tasks ordered by what must happen first.   |
-| `vera`     | Check whether something meets a stated standard and explain why.                       |
+## Agents and Skills
 
-There are no separate `security-review` or `travel-planner` agents. Those are subjects, not kinds of work. For example, Annie can analyze either a security design or a travel plan.
+### Agents
 
-See [Capability Registry](docs/humans/agents/capability-registry.md) for the full descriptions and the rules for adding another agent.
+Agents are named for the kind of work they do, not for a subject area. The same agent can work on software, finance, travel, security, or another topic.
 
-## Universal Skills
+| Agent      | Use it to                                                                      |
+| ---------- | ------------------------------------------------------------------------------ |
+| `annie`    | Analyze supplied material and explain its structure, relationships, or causes. |
+| `carren`   | Review the quality of a work product and explain how it should improve.        |
+| `demetri`  | Choose or rank known options using stated goals, limits, and uncertainties.    |
+| `echo`     | Explore an unfamiliar topic, codebase, document set, or external source.       |
+| `ida`      | Generate a varied set of ideas, options, or hypotheses.                        |
+| `piper`    | Plan how to move from the current state to a goal.                             |
+| `skribble` | Create files or other requested work products from a clear specification.      |
+| `synthia`  | Combine several sources or findings into one clear account.                    |
+| `tabitha`  | Turn an approved plan or specification into dependency-ordered tasks.          |
+| `vera`     | Check whether something meets a stated standard and explain why.               |
 
-Skills are reusable multi-step jobs that work in any subject area. Most use the agents above. Knowledge Base runs through its own `knowledge_base` tool.
+See the [Capability Registry](docs/humans/agents/capability-registry.md) for full descriptions and the process for adding an agent.
 
-The repository contains seven fully implemented skill packages:
+### Skills
+
+Skills are reusable multi-step jobs that work across subject areas. Most use the agents above. Knowledge Base runs through its own `knowledge_base` tool.
 
 | Package          | Tool             | What it does                                                                        |
 | ---------------- | ---------------- | ----------------------------------------------------------------------------------- |
 | `research`       | `skill`          | Runs Quick, Standard, or Deep research using external sources.                      |
-| `knowledge-base` | `knowledge_base` | Manages a private knowledge base. The host system controls access.                  |
-| `assess`         | `skill`          | Grades submitted work using the provided rules and supporting information.          |
+| `knowledge-base` | `knowledge_base` | Manages a private knowledge base under host-controlled access.                      |
+| `assess`         | `skill`          | Assesses submitted work against supplied criteria and evidence.                     |
 | `decide`         | `skill`          | Selects or ranks supplied options, or reports that no sound choice can yet be made. |
-| `diagnose`       | `skill`          | Suggests likely causes from the information provided.                               |
+| `diagnose`       | `skill`          | Assesses likely causes from supplied symptoms and evidence.                         |
 | `plan`           | `skill`          | Produces a strategy for reaching a stated goal.                                     |
-| `produce`        | `skill`          | Produces one reviewed piece of text from a complete set of instructions.            |
+| `produce`        | `skill`          | Produces one reviewed text or code artifact from a complete brief.                  |
 
-All seven appear in Pi's skill list and are available for use.
+## How Penny Works
+
+System rules define Penny's standing behavior and safety limits. Agent definitions set each agent's role and maximum tool access. Skills add step-specific instructions, while [`AGENTS.md`](AGENTS.md) files direct Penny to the project guidance relevant to the current task. The user's request supplies the goal and task-specific constraints.
+
+Agents work in separate sessions. Their results receive exact artifact IDs so another agent or skill step can read the same saved bytes. Skills keep checkpoints in SQLite, which lets an interrupted run resume without reconstructing earlier work from memory.
+
+Five on-demand protocols cover artifact access, clarification, compaction recovery, routing and delegation, and tool use. They are indexed in [`docs/penny/AGENTS.md`](docs/penny/AGENTS.md).
 
 ## Progress and Limits
 
-Skills report when a step starts and when a worker finishes or fails. Separate limits on time, model responses, tool use, and outside requests prevent a run from continuing forever.
+Skills report when a step starts and when a worker finishes or fails. Separate limits on time, model responses, tool use, and external requests prevent a run from continuing forever. Failures and incomplete work are reported rather than presented as successful completion.
 
-## AGENTS.md Routing
+## Memory and Observability
 
-`AGENTS.md` files are maps to documentation, not documentation dumps.
+MemPalace is a core, default-enabled service. Create a private hub configuration from `scripts/setup/mempalace-hub.config.json.in`, start it with your preferred service manager, and set the matching `PENNY_MEMORY_*` values described in `.env.example`. `make setup` requires `MEMORY_HUB_CONFIG=/absolute/private/hub.json` and verifies supervisor identity, liveness, and authenticated status. It never opens palace bytes directly. Memory writes remain disabled until the checks listed in `.env.example` pass.
 
-The root `AGENTS.md` is the only exception. It may contain short repository-wide rules plus links to the next set of indexes. Every nested `AGENTS.md` has one entry for each Markdown file or child index directly below it.
+An explicit `make setup MEMORY_MODE=disabled` remains available for degraded recovery or testing, but `.env` must also explicitly set `PENNY_MEMORY_MODE=disabled` and the result is labeled as a no-memory profile. Memory remains separate from workflow artifacts and checkpoints, so disabling it does not grant setup permission to alter either persistence plane.
 
-Each entry starts with one of three instructions:
-
-- **`MUST READ FOR <scope>`** — always read this before work in that area.
-- **`READ WHEN <trigger>`** — read this when the task includes the named feature or action.
-- **`CONSULT WHEN <question>`** — use this only when that question still needs an answer.
-
-After the dash, the entry says what the linked document provides. It is not a general description of the folder or file.
-
-The checker verifies the index structure and these three prefixes. Pi loads the root index automatically. Penny follows nested links only when they apply to the current task, so it does not load unrelated documentation.
-
-## Security
-
-Penny combines written rules with runtime checks:
-
-- The user chooses the task, but system rules and actual tool permissions still apply.
-- Text from a file, webpage, or tool result cannot grant new permissions or approve an outside action.
-- Each agent has a fixed set of tools. A skill step may use fewer tools, but text in the task cannot add more.
-- Browser tool lists limit which commands an agent can use, but that does not make every click or key press harmless.
-- Filesystem and shell labels are not an operating-system sandbox. An agent with `bash` may still write files or reach the network.
-- Sensitive actions require approval and must pass checks enforced by the computer running Penny.
-
-See [System Prompt Security](docs/agents/agents/system-prompt-security.md) for technical details and limitations.
-
-## Protocols
-
-Penny loads five operating guides only when they are needed:
-
-- **Artifact Access** — reading a saved agent result by its exact artifact ID.
-- **Clarification** — asking the user when missing information would materially change the work.
-- **Compaction Resume** — continuing work after conversation history has been compacted.
-- **Routing and Delegation** — choosing between direct work, an agent, and a skill.
-- **Tool Usage** — handling files, approvals, and Git safely.
-
-## Observability
-
-Penny stores local diagnostic logs but does not copy conversation transcripts into its log database. Conversation history remains in Pi's local session files and is available even when logging is turned off.
+Observability is enabled by default. Setup validates the canonical database and exercises the built service against disposable owner-only state on an ephemeral loopback port, including health and authentication behavior; it does not leave a background process running. Penny stores local diagnostic logs but does not copy conversation transcripts into its log database. Conversation history remains in Pi's local session files.
 
 ## Development
 
 ```bash
-make test          # Run all Bun and Python tests
-make lint          # Run ESLint, Flake8, and formatting checks
-make format        # Format supported files
-make clean         # Remove code dependencies but preserve memory data
-bun run pi:update  # Check and update Pi safely
+make doctor            # Read-only core readiness check (never initializes state)
+make state-status      # Read-only canonical state and persistence check
+make memory-status     # Read-only supervised/authenticated hub check
+make setup-browser     # Explicitly provision optional Playwright Chromium
+make setup-dev         # Install development/check dependency extras
+make test              # Run default fast tests and repository guards
+make test-integration  # Include heavier integration, network, slow, and end-to-end tests
+make lint              # Run lint and formatting checks
+make format            # Format supported files
+make clean             # Remove code dependencies but preserve memory data
+bun run pi:update      # Validate and update Pi safely
 ```
 
-### Updating Pi
+Use `bun run pi:update` instead of running `pi update` directly from this repository. The updater checks the published Pi package in a clean temporary project, tests the candidate against Penny, and changes the global installation only when those checks pass. It does not add missing upstream dependencies or commit files.
 
-Use `bun run pi:update` instead of running `pi update` directly from this repository. The command finds the latest Pi release, tests it against Penny, and updates the global Pi installation only if those checks pass. It does not commit files.
+Normal startup only compares the running Pi version with the version pinned in this repository. It does not install packages or contact a package registry. See the [environment extension guide](.pi/extensions/environment/README.md) for details.
 
-At normal startup, Penny only compares the running Pi version with the version pinned in this repository. Startup does not install packages or contact a registry.
+## TLS and Certificate Trust
 
-## Documentation
-
-Documentation has three audiences:
-
-- **`docs/agents/`** — technical instructions used while changing Penny.
-- **`docs/humans/`** — explanations of what Penny does and why it was designed that way.
-- **`docs/penny/`** — Penny's five operating protocols.
-
-The agent and human documentation cover many of the same topics, but one is a working reference and the other is an explanation.
-
-## Requirements
-
-- **Pi 0.84.4** — the currently supported agent runtime ([github.com/mariozechner/pi-coding-agent](https://github.com/mariozechner/pi-coding-agent)); it must match the Pi SDK version pinned in this repository
-- **Bun** — JavaScript runtime and package manager (1.0 or newer)
-- **uv** — Python package manager ([docs.astral.sh/uv](https://docs.astral.sh/uv))
-
-## Setup
-
-```bash
-git clone git@github.com:skribblez2718/penny.git
-cd penny
-make setup
-```
-
-Setup creates the Python environment, installs the Python and TypeScript dependencies, attempts to install Playwright Chromium, and builds the orchestration and logging services. Penny's saved state is not initialized unless `PENNY_SETUP_INITIALIZE_STATE=1` is set. Existing state must use the separate migration process.
-
-Setup also prints instructions for connecting an optional MemPalace service but does not manage that service. Memory is off by default. To enable it, create a private hub configuration from `scripts/setup/mempalace-hub.config.json.in`, start the hub with your preferred service manager, and set the `PENNY_MEMORY_*` variables listed in `.env.example`. Memory writes remain off until you complete the checks listed there.
-
-Copy the environment template and fill in the values you need:
-
-```bash
-cp .env.example .env
-```
-
-### TLS and Certificate Trust
-
-If Penny connects to a service that uses a custom or internal certificate authority, set the required Node.js environment variable before starting Pi. Loading it later from `.env` will not work.
+Most users can launch Penny with plain `pi`, as shown in Quick Start. If Penny connects to a service that uses a custom or internal certificate authority, set the required Node.js environment variable before starting Pi. Loading it later from `.env` will not work.
 
 ```bash
 # Trust system certificate authorities
@@ -195,8 +141,14 @@ NODE_USE_SYSTEM_CA=1 pi
 # Trust one additional certificate authority
 NODE_EXTRA_CA_CERTS=/path/to/custom-ca.pem pi
 
-# Disable certificate checks (development only; not recommended)
+# Disable certificate checks for development only; not recommended
 NODE_TLS_REJECT_UNAUTHORIZED=0 pi
 ```
 
 To keep one of these settings, export it from your shell profile such as `~/.bashrc` or `~/.zshrc`.
+
+## Documentation
+
+- The [documentation guide](docs/humans/documentation/overview.md) explains the human, agent, and protocol documentation areas.
+- [`docs/agents/AGENTS.md`](docs/agents/AGENTS.md) routes maintainers to the technical instructions for changing Penny.
+- [`docs/penny/AGENTS.md`](docs/penny/AGENTS.md) indexes Penny's on-demand operating protocols.
