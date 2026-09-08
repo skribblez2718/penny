@@ -22,11 +22,13 @@ TypeScript `PlaybookCoreV1` implementation in `apps/orchestration/`;
    memory tools, but memory is never active handoff, run state, or persistence proof.
 7. Recovery reissues pending work from checkpointed refs. Large artifact reads
    repeat with non-expiring `next_range`.
-8. Model visibility is controlled only by `disable-model-invocation`. Every valid package is
-   model-visible in Pi native discovery and Penny's listing if and only if that flag is not `true`;
-   `.pi/skills/.ignore` exactly mirrors explicitly model-disabled packages and is comment-only when
-   none exist. A model-disabled package may remain unregistered during development, but generic
-   execution then refuses safely.
+8. Model visibility is controlled only by `disable-model-invocation`. A model-visible package
+   omits the flag; only a hidden package declares it, exactly as `true`. Redundant `false` is not
+   permitted. `.pi/skills/.ignore` exactly mirrors explicitly model-disabled packages and is
+   comment-only when none exist. A model-disabled package may remain unregistered during
+   development, but generic execution then refuses safely.
+9. Penny skill manifests do not declare the upstream optional `license` field. The repository-level
+   license governs tracked packages.
 
 ## Skill vs. agent vs. direct
 
@@ -38,7 +40,8 @@ TypeScript `PlaybookCoreV1` implementation in `apps/orchestration/`;
 
 ## Verification
 
-- [ ] Manifest sets `metadata.penny.engine: orchestration`.
+- [ ] Manifest sets `metadata.penny.engine: orchestration`, omits `license`, and declares
+      `disable-model-invocation` only as `true` for a hidden package.
 - [ ] Playbook is registered and tested.
 - [ ] Skill directory contains no executable delegate.
 - [ ] Stage directives use exact artifact contracts.

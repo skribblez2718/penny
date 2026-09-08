@@ -2,8 +2,11 @@
 
 ## Required architecture
 
-1. **Manifest:** `.pi/skills/<name>/SKILL.md` with trigger-rich description and
-   `metadata.penny.engine: orchestration`.
+1. **Manifest:** `.pi/skills/<name>/SKILL.md` with a trigger-rich description and
+   `metadata.penny.engine: orchestration`. Model-visible packages omit
+   `disable-model-invocation`; only hidden packages declare it, exactly as `true`. The upstream
+   optional `license` field is forbidden because Penny's repository-level license governs tracked
+   packages.
 2. **Playbook:** one registered TypeScript `PlaybookCoreV1` implementation under
    `apps/orchestration/src/playbooks/`.
 3. **Contract:** closed `SkillContractV2`, validated before construction. Its fields are
@@ -29,7 +32,8 @@ preserves YAML equality. `ingress:skill` requires start admission; `knowledge-ba
 registry; adding a registration is the explicit authorization step. A model-invocable orchestration
 package must have a matching registered playbook. A package whose top-level
 `disable-model-invocation` flag is explicitly `true` is hidden from Pi native discovery and Penny's
-model listing, and `.pi/skills/.ignore` contains exactly those package directory names. A disabled
+model listing; a model-visible package omits the flag rather than declaring redundant `false`.
+`.pi/skills/.ignore` contains exactly the explicitly hidden package directory names. A disabled
 package may remain unregistered during development, but generic runtime invocation fails safely until
 its playbook is registered. Directory location and model visibility do not grant execution authority.
 
@@ -90,6 +94,8 @@ A worker prompt must:
 ## Verification
 
 - [ ] Registry rejects unknown/malformed skills, worker phase mismatches, duplicate/unreachable routes, and invalid targets.
+- [ ] Manifests omit `license`; visible packages omit `disable-model-invocation`, and hidden packages
+      declare it exactly as `true`.
 - [ ] Required registration guidance reaches workers; direct paths and subset-absent
       catalog phases have exact YAML equality.
 - [ ] Any phase subset is strict/non-empty/unique, canonical-registration/digest-bound,

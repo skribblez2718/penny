@@ -1,7 +1,6 @@
 ---
 name: assess
 description: "Create one durable evidence-linked categorical assessment of a closed inline target against supplied required/advisory criteria and supplied evidence. Use when the caller wants strengths, gaps, uncertainties, and bounded improvement advice without external verification. Do not use to invent numeric scores, gather evidence, execute checks, start changes, write files, mutate anything, or assess an open/unsupplied target."
-disable-model-invocation: false
 metadata:
   penny:
     engine: orchestration

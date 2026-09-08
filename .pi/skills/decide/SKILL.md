@@ -1,7 +1,6 @@
 ---
 name: decide
 description: "Create a durable reviewed decision from supplied alternatives, constraints, preferences, uncertainty, and evidence. Use when the caller needs a selection, complete ranking, no-feasible finding, explicit unresolved disposition, or not-applicable assessment. Do not use when the caller needs ideation, planning, taskification, or execution."
-disable-model-invocation: false
 metadata:
   penny:
     engine: orchestration

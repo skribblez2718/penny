@@ -34,7 +34,6 @@ class SkillScaffolder:
         return f"""---
 name: {self.name}
 description: "{self.description}. Use when this established multi-stage workflow is required. Do not use when direct work or one agent is sufficient."
-license: MIT
 metadata:
   penny:
     engine: orchestration

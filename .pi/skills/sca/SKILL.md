@@ -2,7 +2,6 @@
 name: sca
 description: "Run a durable, evidence-grounded secure code analysis campaign over an admitted immutable repository snapshot. Use when repository-scale vulnerability discovery needs host-owned scanners, bounded agent and universal-skill investigation, dynamic verification, coverage closure, and resumable terminal truth. Do not use for a quick code review, remediation, unauthorised target execution, or claims that an unverified repository is secure."
 disable-model-invocation: true
-license: MIT
 metadata:
   penny:
     engine: orchestration

@@ -1,7 +1,6 @@
 ---
 name: diagnose
 description: "Create a durable reviewed causal diagnosis from supplied symptoms, observations, environment facts, constraints, non-goals, and uncertainty. Use when the caller needs supported, inconclusive, or not-applicable causal assessment with ranked competing hypotheses and optional non-executed discriminating checks. Do not use to execute tests, perform remediation, plan changes, or mutate anything."
-disable-model-invocation: false
 metadata:
   penny:
     engine: orchestration

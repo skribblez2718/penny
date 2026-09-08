@@ -17,19 +17,21 @@ metadata:
 ## Rules
 
 1. `name` matches the directory and uses lowercase kebab-case.
-2. `description` contains a role sentence, `Use when`, and an anti-use clause. It has a 1,024-character hard limit and an approximately 500-character preferred target; justified longer text remains valid.
-3. `metadata.penny.engine` is `orchestration`; the removed `state_machine` key is forbidden.
-4. Every package remains under `.pi/skills/<name>/`. `metadata.penny.release_status` is retired and
-   forbidden. A package is model-visible if and only if its optional top-level
-   `disable-model-invocation` flag is not `true`. `.pi/skills/.ignore` lists exactly packages whose
-   parsed flag is explicitly `true` and remains comment-only when none are disabled. A disabled
+2. The optional upstream `license` field is forbidden in Penny skill manifests. Penny's repository-level license governs tracked skill packages.
+3. `description` contains a role sentence, `Use when`, and an anti-use clause. It has a 1,024-character hard limit and an approximately 500-character preferred target; justified longer text remains valid.
+4. `metadata.penny.engine` is `orchestration`; the removed `state_machine` key is forbidden.
+5. Every package remains under `.pi/skills/<name>/`. `metadata.penny.release_status` is retired and
+   forbidden. A package is model-visible when the optional top-level
+   `disable-model-invocation` flag is absent. Declare that flag only as `true`, and only to hide the
+   package; never declare redundant `false`. `.pi/skills/.ignore` lists exactly packages whose parsed
+   flag is explicitly `true` and remains comment-only when none are disabled. A disabled
    development package may be unregistered, but generic invocation then fails safely.
-5. `metadata.penny.mempalace` is optional. It describes optional **primary
+6. `metadata.penny.mempalace` is optional. It describes optional **primary
    durable-memory** integration only. It does not authorize worker memory tools
    or workflow rooms.
-6. `metadata.penny.subagents` lists project-local catalog roles with matching
+7. `metadata.penny.subagents` lists project-local catalog roles with matching
    Domain Guidance files.
-7. Body sections include When to Use, When Not to Use, Invocation, Exact Artifact
+8. Body sections include When to Use, When Not to Use, Invocation, Exact Artifact
    Handoff, Output, recovery/escalation as applicable, and terminal truth.
 
 ## Content boundaries
@@ -66,6 +68,8 @@ cannot affect workflow correctness.
 ## Verification
 
 - [ ] YAML parses, the engine marker is present, and the routing description meets its shape and budget.
+- [ ] No `license` or redundant `disable-model-invocation: false`; only hidden packages declare the
+      disable flag as `true`.
 - [ ] No legacy state-machine key.
 - [ ] Artifact handoff and terminal product ref are documented.
 - [ ] Memory is optional/primary-only and not workflow transport.

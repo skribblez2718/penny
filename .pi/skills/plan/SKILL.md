@@ -1,7 +1,6 @@
 ---
 name: plan
 description: "Create a durable reviewed strategy assessment from a goal, desired outcomes, current state, constraints, uncertainties, prior decisions, and exact prior products. Use when the caller needs outcome structure, meaningful dependencies, risks, contingencies, trade-offs, or an explicit ready, blocked, or not-applicable planning result. Do not use for deciding among alternatives, taskification, approval, mutation, or execution."
-disable-model-invocation: false
 metadata:
   penny:
     engine: orchestration

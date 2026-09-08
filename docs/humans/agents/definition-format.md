@@ -36,6 +36,7 @@ not the model, proves persistence and registration.
 | `tool_profiles`     | Named rungs that expand exactly to `tools:`. Verified by `check_tool_profiles.py` in `make lint`.     |
 | capability metadata | `capability`, `family`, `transformation`, `accepts`, `produces`, and semantic coordinates. See below. |
 | `model`             | Runtime-resolvable model name.                                                                        |
+| `license`           | Forbidden; Penny's repository-level license governs tracked agent definitions.                        |
 
 ## Capability metadata
 

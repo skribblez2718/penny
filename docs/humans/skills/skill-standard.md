@@ -2,7 +2,8 @@
 
 A well-formed Penny skill has:
 
-1. a trigger-rich `SKILL.md` manifest with `engine: orchestration`;
+1. a trigger-rich `SKILL.md` manifest with `engine: orchestration`, no per-skill `license`, and no
+   redundant `disable-model-invocation: false`;
 2. a registered TypeScript playbook and no executable delegate;
 3. static Domain Guidance for each worker/state;
 4. exact input/output artifact contracts for every cognitive stage;
@@ -15,8 +16,10 @@ A well-formed Penny skill has:
 A registration owns how a workflow enters, validates its request, opens workers, chooses liveness
 and model posture, and proves completion. `.pi/skills` is the one package root and
 `PLAYBOOK_REGISTRY` is the sole executable registry. Visibility is a separate manifest choice: any
-valid package is model-visible unless `disable-model-invocation` parses as `true`, and
-`.pi/skills/.ignore` exactly mirrors explicit disablement. A model-disabled development package may
+valid package is model-visible and omits `disable-model-invocation`. Only a hidden package declares
+`disable-model-invocation: true`; redundant `false` is not permitted. `.pi/skills/.ignore` exactly
+mirrors explicit disablement. Penny also omits the upstream optional per-skill `license` field because
+its repository-level license governs tracked packages. A model-disabled development package may
 remain unregistered for documentation and static checks, but generic invocation refuses safely until
 a playbook exists. Knowledge Base remains a dedicated tool rather than a generic skill entry.
 

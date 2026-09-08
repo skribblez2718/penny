@@ -287,6 +287,25 @@ def check_skill(skill_dir: Path) -> List[Tuple[str, str]]:  # noqa: C901
         for field in ("name", "description"):
             if field not in frontmatter:
                 issues.append(("ERROR", f"SKILL.md frontmatter missing '{field}:'"))
+        if "license" in frontmatter:
+            issues.append(
+                (
+                    "ERROR",
+                    "SKILL.md frontmatter must not declare 'license'; the repository-level "
+                    "license governs tracked skills",
+                )
+            )
+        if (
+            "disable-model-invocation" in frontmatter
+            and frontmatter.get("disable-model-invocation") is not True
+        ):
+            issues.append(
+                (
+                    "ERROR",
+                    "SKILL.md frontmatter must omit 'disable-model-invocation' for visible "
+                    "packages and declare it only as true for hidden packages",
+                )
+            )
 
         declared_name = frontmatter.get("name")
         if isinstance(declared_name, str):

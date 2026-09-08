@@ -150,7 +150,24 @@ Create one canonical record per finding with a stable ID. Each finding must stat
 - one concrete change, or an explicit blocker/no-change/accepted-debt disposition; and
 - the currently working capability that must not regress.
 
-Do not duplicate full finding prose across tables. Use IDs and cross-references.
+### Plain-English decision guide
+
+The primary report must contain one easy-to-find decision guide for **every supported fixable `MISALIGNED` item**. Write for a reasonably educated reader who knows nothing about Penny’s code or internal vocabulary. Each item must keep the complete decision in one place and answer:
+
+1. **What is wrong?** Use everyday language before technical terms.
+2. **What does this mean in normal use?** Give a concrete user or maintainer scenario when useful.
+3. **Why does it matter, and who or what is affected?**
+4. **What happens if nothing changes?** State when and how the problem would be noticed.
+5. **What should change?** Describe the behavioral change, not only files, symbols, or schemas.
+6. **What are the consequences of making the change?** State benefits, tradeoffs, compatibility effects, costs, and plausible new failure modes.
+7. **Why is the result more aligned with Penny’s governing purpose or invariant?**
+8. **What working capability must remain intact?**
+9. **What is the next decision or action, and what evidence would prove the fix worked?**
+10. **What evidence supports the finding?** Separately state what the audit actually ran, what remains untested or unknown, and whether the proposed fix has been implemented and tested.
+
+Use those questions as headings unless equally clear wording reads better. The executive summary must point readers directly to this guide. Put technical paths, symbols, IDs, and test references after the plain-English explanation. A summary table may aid prioritization, but it cannot replace the per-item explanation. Do not make a reader assemble one decision from a finding card, recommendation table, component matrix, and appendix. Keep deep traceability in a clearly linked technical evidence subsection or appendix. If there are no supported fixable misalignments, say so plainly and distinguish that result from unexamined or unresolved areas.
+
+Do not duplicate full finding prose across multiple tables. Use IDs and cross-references for secondary summaries, while keeping the complete human decision block in the guide.
 
 Inventory material current and audit-proposed measures: metrics, ratings, thresholds, gates, acceptance/completion signals, incentives, and optimization targets that materially influence behavior or a pass/fail decision. Do not treat every test assertion as a separate measure. Classify each as:
 
@@ -246,7 +263,8 @@ Then record additional details and their disposition, the governing sources and 
 Give one evidence-cited classification summary for every numbered surface in the effective corpus, link to the complete `component-alignment.tsv`, and explain what the matrix shows. Then present:
 
 - aligned behavior and capabilities worth preserving;
-- prioritized canonical finding records;
+- the plain-English decision guide containing every supported fixable misalignment;
+- prioritized canonical finding records or linked technical evidence without forcing the reader to reconstruct decisions;
 - the major-mechanism scaling ledger; and
 - the material-measure and evidenced-proxy-drift ledgers.
 
@@ -260,7 +278,7 @@ Provide a standalone recommendation table mapping every finding and misaligned c
 
 Include the effective corpus, scope narrowing, coverage ledger, inaccessible/unresolved items, operation-log summary, manifest comparison, artifact existence checks, and remaining questions. List only questions genuinely needed to resolve authority, coverage, evidence, or a capability-safe recommendation; otherwise state `None`.
 
-The report is for readers unfamiliar with Penny. Define each status or doctrine term at first use, explain what every table means, keep findings decision-ready, and state each fact once.
+The report is for readers unfamiliar with Penny. A reasonably educated non-specialist must be able to understand what each problem is, what it means for the system, the cost of leaving it, what the proposed change does, the consequences and tradeoffs of that change, why it improves alignment, what decision comes next, and how the fix will be proven—without reading source code, the component matrix, or an appendix. Define each necessary status or doctrine term at first use, explain what every table means, and state each fact once in the primary decision block rather than scattering it across audit machinery.
 
 After the four parts, emit a separate valid JSON object with exactly these keys:
 

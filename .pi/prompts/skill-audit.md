@@ -119,7 +119,13 @@ Create one canonical record per finding with a stable ID. State:
 - one concrete change or explicit blocker/no-change/accepted-debt disposition; and
 - the working capability that must not regress.
 
-Report positive aligned behavior and supported empty finding sets. Do not duplicate full findings across tables; use IDs and cross-references.
+### Plain-English decision guide
+
+The primary report must contain one easy-to-find decision guide for every supported fixable `MISALIGNED` item. Write for a reasonably educated reader who has no prior knowledge of the skill, Penny internals, or audit vocabulary. Keep each decision together in one place and answer: **What is wrong? What does it mean in normal use? Who or what is affected and why does it matter? What happens if nothing changes? What behavioral change is recommended? What will improve, and what tradeoffs, compatibility effects, cross-skill consequences, costs, or new failure modes can the change introduce? Why does the change better serve the skill’s local goal and Penny’s parent purpose? What working capability must remain intact? What is the next decision/action and what evidence would prove the fix worked? What evidence supports the finding, what did the audit actually run, what remains untested or unknown, and has the proposed fix been implemented and tested?**
+
+Use those questions as headings unless equally clear skill-specific wording is better. The executive summary must point readers directly to this guide. Give a concrete user or maintainer scenario when useful. Put paths, symbols, IDs, and tests after the everyday-language explanation. A summary table may help prioritize work, but it may not replace these explanations. Do not force the reader to assemble a decision from finding, plan, matrix, and appendix sections. Put deep traceability in a linked technical evidence subsection or appendix. If there are no supported fixable misalignments, state that plainly and distinguish it from unexamined or unresolved areas.
+
+Report positive aligned behavior and supported empty finding sets. Do not duplicate full findings across secondary tables; use IDs and cross-references while retaining one complete human decision block per item.
 
 Inventory material current and proposed measures—metrics, gates, thresholds, scores, completion signals, incentives, and optimization targets that influence acceptance or behavior. Classify each as `OUTCOME-FAITHFUL`, `PROXY`, or `VANITY`, with the link to observable better/worse and the measure's limits. Do not treat every test assertion as a separate measure.
 
@@ -175,11 +181,11 @@ Write four top-level parts in `skill-audit-report.md`:
    - **Audit completeness:** `COMPLETE`, `LIMITED`, or `BLOCKED`.
    - **Skill alignment:** `ALIGNED`, `MISALIGNED`, or `INDETERMINATE`.
    - **Scaling-source status:** `VERIFIED` or `BLOCKED`.
-2. **Component alignment and findings** — one evidence-cited summary per named corpus group, link to `skill-component-alignment.tsv`, aligned behavior, canonical findings, scaling ledger, and measure/proxy-drift ledger.
+2. **Component alignment and findings** — one evidence-cited summary per named corpus group, link to `skill-component-alignment.tsv`, aligned behavior, the plain-English decision guide covering every supported fixable misalignment, canonical technical evidence, scaling ledger, and measure/proxy-drift ledger.
 3. **Capability-safe plan and assurance** — standalone plan with shared-framework items separated, plus eval/regression inventory, status, and observed results.
 4. **Coverage, verification, limitations, and questions** — effective corpus, coverage ledger, inaccessible/unresolved items, operation-log summary, manifest comparison, artifact checks, and only genuinely blocking questions; otherwise `None`.
 
-Open with plain language suitable for a reader unfamiliar with the skill. Define status and doctrine terms at first use, explain what tables mean, make findings decision-ready, and state each fact once. `LIMITED` is required when Sutton is unavailable, a non-blocking material corpus gap remains, a required reviewer is unavailable, an assurance artifact is incomplete, or target integrity is uncertain.
+Open with plain language suitable for a reader unfamiliar with the skill. A reasonably educated non-specialist must be able to understand each problem, its meaning for normal use, the consequences of action and inaction, why the change improves alignment, the next decision, and the proof status without reading source code, the matrix, or an appendix. Define necessary status and doctrine terms at first use, explain what tables mean, and state each fact once in its primary decision block. `LIMITED` is required when Sutton is unavailable, a non-blocking material corpus gap remains, a required reviewer is unavailable, an assurance artifact is incomplete, or target integrity is uncertain.
 
 Before finalizing:
 

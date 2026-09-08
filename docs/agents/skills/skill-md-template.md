@@ -49,6 +49,9 @@ and unresolved issues.]
 - Replace every bracketed placeholder.
 - Keep the description under the 1,024-character hard limit and near the 500-character preferred target unless extra routing detail materially helps.
 - Keep `engine: orchestration` and remove the legacy state-machine key.
+- Omit `disable-model-invocation` for a model-visible package. Declare it only as `true`, and only
+  when the package must be hidden; never declare redundant `false`.
+- Do not add a top-level `license`; Penny's repository-level license governs tracked skills.
 - Do not add a room-manifest requirement.
 - Do not add worker memory tools/instructions, session rooms, duplicate
   prechecks, routine KG links, or a claim that full output lives in memory.

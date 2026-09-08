@@ -11,8 +11,9 @@
 
 1. Add and register a TypeScript `PlaybookCoreV1` implementation.
 2. Write `.pi/skills/<name>/SKILL.md` with `engine: orchestration`. Do not add the retired
-   `release_status` field. Set optional `disable-model-invocation: true` only when the package must
-   be hidden from models; disabled development packages may remain unregistered.
+   `release_status` field or a top-level `license`. Omit `disable-model-invocation` for a
+   model-visible package; set it only as `true`, and only when the package must be hidden. Disabled
+   development packages may remain unregistered.
 3. Write one Domain Guidance prompt per worker/state.
 4. Make every cognitive directive declare exact `input_artifacts` and an owner
    `output_artifact` contract.
@@ -25,7 +26,8 @@
 
 ## Validate
 
-- [ ] Manifest and description comply.
+- [ ] Manifest and description comply; no `license` or redundant
+      `disable-model-invocation: false` is present.
 - [ ] Registration ingress/start admission/liveness and contract agree.
 - [ ] Pi native discovery, Penny model visibility, and `.pi/skills/.ignore` agree exactly with parsed
       `disable-model-invocation`.

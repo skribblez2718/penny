@@ -9,7 +9,7 @@ from checks.check_skill_structure import check_skill
 def write_package(
     root: Path,
     *,
-    disabled: bool = True,
+    disabled: bool | None = True,
     retired_release_status: bool = False,
 ) -> Path:
     package = root / "fixture-skill"
@@ -21,33 +21,34 @@ def write_package(
     metadata = ["    engine: orchestration"]
     if retired_release_status:
         metadata.append("    release_status: candidate")
-    (package / "SKILL.md").write_text(
-        "\n".join(
-            [
-                "---",
-                "name: fixture-skill",
-                "description: Fixture workflow. Use when fixture validation is required. Do not use for direct work.",
-                f"disable-model-invocation: {'true' if disabled else 'false'}",
-                "metadata:",
-                "  penny:",
-                *metadata,
-                "---",
-                "",
-                "## When to Use",
-                "",
-                "- Fixture tasks.",
-                "",
-                "## When Not to Use",
-                "",
-                "- Direct tasks.",
-                "",
-                "## Invocation",
-                "",
-                '`skill({ skill_name: "fixture-skill", goal: "..." })`',
-            ]
-        ),
-        encoding="utf-8",
+    frontmatter = [
+        "---",
+        "name: fixture-skill",
+        "description: Fixture workflow. Use when fixture validation is required. Do not use for direct work.",
+    ]
+    if disabled is not None:
+        frontmatter.append(f"disable-model-invocation: {'true' if disabled else 'false'}")
+    frontmatter.extend(
+        [
+            "metadata:",
+            "  penny:",
+            *metadata,
+            "---",
+            "",
+            "## When to Use",
+            "",
+            "- Fixture tasks.",
+            "",
+            "## When Not to Use",
+            "",
+            "- Direct tasks.",
+            "",
+            "## Invocation",
+            "",
+            '`skill({ skill_name: "fixture-skill", goal: "..." })`',
+        ]
     )
+    (package / "SKILL.md").write_text("\n".join(frontmatter), encoding="utf-8")
     return package
 
 
@@ -62,11 +63,16 @@ def test_structure_rejects_retired_release_status_metadata(tmp_path: Path) -> No
     )
 
 
-def test_model_disable_flag_is_independent_of_structure_validity(tmp_path: Path) -> None:
-    visible = write_package(tmp_path / "visible", disabled=False)
+def test_model_disable_flag_requires_omission_for_visible_packages(tmp_path: Path) -> None:
+    visible = write_package(tmp_path / "visible", disabled=None)
     hidden = write_package(tmp_path / "hidden", disabled=True)
+    invalid_visible = write_package(tmp_path / "invalid-visible", disabled=False)
     assert check_skill(visible) == []
     assert check_skill(hidden) == []
+    assert any(
+        "must omit 'disable-model-invocation'" in message
+        for _, message in check_skill(invalid_visible)
+    )
 
 
 def test_native_ignore_accepts_comment_only_when_no_package_is_disabled(

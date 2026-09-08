@@ -10,9 +10,10 @@ owner-resolved research context, and observability.
 The skill extension discovers every package once from `.pi/skills` and constructs
 `OrchestrationService` in-process for single, parallel, chain, and resume modes. Skill packages
 contain manifests, prompts, and resources—never executable delegates. `PLAYBOOK_REGISTRY` is the
-sole executable registry. Only parsed `disable-model-invocation: true` hides a valid package from
-model discovery; a hidden development package may remain unregistered, and generic execution then
-fails safely.
+sole executable registry. Model-visible packages omit `disable-model-invocation`; only parsed
+`disable-model-invocation: true` hides a valid package from model discovery. Redundant `false` is not
+permitted. A hidden development package may remain unregistered, and generic execution then fails
+safely.
 
 ## Components
 
@@ -95,7 +96,8 @@ Durable chain checkpoints retain exact terminal/handoff refs across restart.
 - [ ] Orchestration proves subset-absent YAML equality plus canonical registration-digest and
       invocation-metadata binding, exact Pi handoff, synthetic registration-bound strict subsets,
       and invalid-subset refusal before session creation.
-- [ ] Native and Penny model listings plus `.pi/skills/.ignore` follow only the parsed disable flag.
+- [ ] Native and Penny model listings plus `.pi/skills/.ignore` follow only explicit
+      `disable-model-invocation: true`; visible manifests omit the flag.
 - [ ] Strict-subset docs avoid OS/process sandbox and extension-code-isolation claims; host-private
       isolated tools remain separate.
 

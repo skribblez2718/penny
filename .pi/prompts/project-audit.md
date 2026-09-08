@@ -64,6 +64,12 @@ Apply these rules globally:
 
 Create one canonical record per finding. State the problem in plain language, exact evidence, causal harm to the project outcome, impact/priority, benefit and cost of fixing, cost of delay, one concrete change or no-change/blocker, risk/reversibility, and the working capability that must not regress. Benefit, effort, and delay cost may be qualitative, immaterial, or unknown with a reason; never invent precision.
 
+### Plain-English decision guide
+
+The primary report must contain one easy-to-find decision guide for every supported fixable `MISALIGNED` item. Write for a reasonably educated reader who has no prior knowledge of the project, its code, or the audit vocabulary. Keep each decision together in one place and answer: **What is wrong? What does it mean in normal operation? Who or what is affected and why does it matter? What happens if nothing changes? What behavioral change is recommended? What will improve, and what tradeoffs, compatibility effects, costs, or new failure modes can the change introduce? Why does the change better serve the project’s governing outcome? What working capability must remain intact? What is the next decision/action and what evidence would prove the fix worked? What evidence supports the finding, what did the audit actually run, what remains untested or unknown, and has the proposed fix been implemented and tested?**
+
+Use those questions as headings unless equally clear project-specific wording is better. The executive summary must point readers directly to this guide. Give a concrete scenario when it improves understanding. Put paths, symbols, IDs, and test references after the everyday-language explanation. A summary table may help prioritize work, but it may not replace these explanations. Do not force readers to assemble a decision from separate finding, plan, matrix, and appendix sections. Deep traceability belongs in a linked technical evidence subsection or appendix. If there are no supported fixable misalignments, state that plainly and distinguish it from unexamined or unresolved areas.
+
 ## 4. Model/compute scaling when applicable
 
 First decide whether the target contains AI/model behavior, human-coded procedures intended to substitute for model judgment, or mechanisms whose relative value meaningfully changes with stronger models or more computation. If not, record `Scaling-source status: N-A — reason` and do not force the analogy.
@@ -136,13 +142,13 @@ Matching manifests prove verified net target-content equality, not absence of tr
 Cover these four content areas in `project-audit-report.md`; combine sections when that improves readability:
 
 1. **Project goal and executive summary** — target, purpose, bottom line, priority findings/actions, cost of inaction, unknowns, caller-detail dispositions, better/worse, and applicable Sutton source/translation. State `Audit completeness: COMPLETE|LIMITED`, `Target alignment: ALIGNED|MISALIGNED|INDETERMINATE`, and `Scaling-source status: VERIFIED|BLOCKED|N-A`.
-2. **Component alignment and findings** — evidence-cited summary by corpus group, link to the TSV, aligned behavior, canonical findings, scaling classifications when applicable, and measure/proxy-drift analysis.
+2. **Component alignment and findings** — evidence-cited summary by corpus group, link to the TSV, aligned behavior, the plain-English decision guide covering every supported fixable misalignment, canonical technical evidence, scaling classifications when applicable, and measure/proxy-drift analysis.
 3. **Capability-safe plan and assurance** — the self-contained improvement plan plus eval/regression inventory, statuses, commands, and observed results.
 4. **Coverage, verification, limitations, and questions** — effective corpus, coverage ledger, unresolved items, operation-log summary, manifest comparison, artifact checks, and only genuinely blocking questions; otherwise `None`.
 
 Use `MISALIGNED` when at least one supported material misalignment exists; use `ALIGNED` only when coverage is sufficient and none exists; use `INDETERMINATE` when material unavailable evidence prevents either verdict.
 
-Use plain language for readers unfamiliar with the project. Define terms at first use, interpret tables, make findings decision-ready, and avoid duplicated prose.
+Use plain language for readers unfamiliar with the project. A reasonably educated non-specialist must be able to understand each problem, its meaning for normal operation, the consequences of action and inaction, the alignment improvement, the next decision, and the proof status without reading source code, the TSV, or an appendix. Define necessary terms at first use, interpret tables, and avoid duplicating full findings outside their primary decision blocks.
 
 Before finalizing, re-check every citation, classification, contradiction, measure verdict, plan link, and artifact. When permitted, available, proportionate, and safe for the evidence, use a fresh non-generator reviewer for high-impact, shared-boundary, security/authority, or otherwise consequential recommendations; treat model agreement as supplementary rather than independent evidence. If that review is necessary for a claim but unavailable, mark the audit `LIMITED`. Verify required files are non-empty, IDs resolve, no result is invented, and manifests support the exact side-effect claim.
 

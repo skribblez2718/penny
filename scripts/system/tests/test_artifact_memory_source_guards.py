@@ -125,6 +125,15 @@ def _load_scaffolder_module():
     return module
 
 
+def _load_skill_structure_module():
+    path = ROOT / "scripts" / "system" / "checks" / "check_skill_structure.py"
+    spec = importlib.util.spec_from_file_location("check_skill_structure", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_skill_scaffolder_generates_artifact_first_memory_optional_surfaces() -> None:
     module = _load_scaffolder_module()
     scaffolder = module.SkillScaffolder("example-skill", "Do example work", ["echo", "vera"])
@@ -139,6 +148,7 @@ def test_skill_scaffolder_generates_artifact_first_memory_optional_surfaces() ->
     for required in ("input_artifacts", "output_artifact", "artifact_read", "routing data only"):
         assert required in combined
     assert "mempalace: false" in generated["SKILL.md"]
+    assert "\nlicense:" not in generated["SKILL.md"]
     assert 'name="penny-flow-template" content="1"' in generated["flow.html"]
     assert "const N =" in generated["flow.html"]
     assert "const E =" in generated["flow.html"]
@@ -148,6 +158,52 @@ def test_skill_scaffolder_generates_artifact_first_memory_optional_surfaces() ->
     source = (ROOT / "scripts" / "tools" / "scaffold-skill.py").read_text(encoding="utf-8")
     assert "register_skill_rooms" not in source
     assert "skill_rooms.json" not in source
+
+
+def test_skill_structure_rejects_noncanonical_frontmatter_fields(tmp_path: Path) -> None:
+    module = _load_skill_structure_module()
+    skill_dir = tmp_path / "example-skill"
+    (skill_dir / "assets" / "prompts").mkdir(parents=True)
+    (skill_dir / "assets" / "prompts" / "echo-example.md").write_text("prompt\n")
+    (skill_dir / "resources").mkdir()
+    (skill_dir / "resources" / "flow.html").write_text("<html></html>\n")
+    (skill_dir / "README.md").write_text("# Example\n")
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: example-skill
+description: Use when testing. Do not use in production.
+disable-model-invocation: false
+license: MIT
+metadata:
+  penny:
+    engine: orchestration
+---
+
+## When to Use
+
+- Test.
+
+## When Not to Use
+
+- Production.
+
+## Invocation
+
+Test.
+""",
+        encoding="utf-8",
+    )
+
+    issues = module.check_skill(skill_dir)
+
+    assert any(
+        severity == "ERROR" and "must not declare 'license'" in message
+        for severity, message in issues
+    )
+    assert any(
+        severity == "ERROR" and "must omit 'disable-model-invocation'" in message
+        for severity, message in issues
+    )
 
 
 def test_live_skill_structure_has_no_room_manifest_requirement() -> None:

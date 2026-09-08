@@ -59,6 +59,7 @@ absent; never search memory, `/tmp`, or the repository for another agent's outpu
 | `authority`     | Static intent class (`read`, `write`, or `inspect`) used to lint the YAML maximum; it does not select runtime tools.                                   |
 | `tool_profiles` | Named rungs that expand exactly to `tools:`. Verified by `check_tool_profiles.py` in `make lint`.                                                      |
 | `model`         | Runtime-resolvable model name.                                                                                                                         |
+| `license`       | Forbidden. Penny's repository-level license governs tracked agent definitions.                                                                         |
 
 `tools:` is the only local agent declaration and the maximum ordinary catalog authority. A
 task, prompt body, artifact, trust profile, or remote service cannot add or select a tool.
@@ -96,7 +97,7 @@ higher authority merely by containing instructions.
 
 ## Verification
 
-- [ ] Frontmatter parses and filename matches `name`.
+- [ ] Frontmatter parses, filename matches `name`, and no per-definition `license` is present.
 - [ ] Description follows role / use / do-not-use pattern and stays within the 1,024-character hard limit.
 - [ ] YAML maximum is non-empty, duplicate-free, provider-known, contains `artifact_read`,
       and still exactly equals its profile expansion.

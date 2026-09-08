@@ -17,8 +17,10 @@ ones.
 `.pi/agents/*.md` frontmatter **is** the registry. There is deliberately no parallel
 registry file — a second place to update is the drift vector this registry exists to
 eliminate. Unknown frontmatter keys are ignored by discovery (`agents.ts` reads only
-`name`, `description`, `tools`, `model`, `provider`, `thinking`), so the metadata is
-additive and safe.
+`name`, `description`, `tools`, `model`, `provider`, `thinking`). Runtime leniency toward unknown
+keys is not permission to add them: definitions still follow the documented schema, and the
+per-definition `license` field is forbidden because Penny's repository-level license governs tracked
+agents.
 
 Every roster table in every document is generated from it. Hand-maintained roster tables
 are prohibited.

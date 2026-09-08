@@ -1,7 +1,6 @@
 ---
 name: produce
 description: "Create one durable reviewed artifact content product from a closed brief and inline supplied material. Use when the caller needs complete text, Markdown, JSON, YAML, TypeScript, JavaScript, Python, or shell content with exact criterion coverage and no filesystem or external mutation. Do not use for live research, file writing, code execution, testing, deployment, open-ended clarification, or multi-artifact production."
-disable-model-invocation: false
 metadata:
   penny:
     engine: orchestration

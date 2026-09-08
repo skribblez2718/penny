@@ -51,10 +51,25 @@ Every generated prompt must enforce these behaviors, adapted to its target rathe
 5. **Evidence integrity** — use precise re-checkable citations; distinguish source-backed facts, tool-observed results, inference, assumptions, and unknowns when decision-relevant; mark material unsupported claims `[UNVERIFIED]`; never base a negative verdict solely on them.
 6. **Decision-ready recommendations** — map every finding to a concrete change or explicit no-change/blocker, protect existing capabilities, state benefit/cost/risk and cost of delay, and prefer reversible changes.
 7. **Side-effect clarity** — define exactly what may be read, executed, created, modified, or deleted. Prompt text grants no tool authority. Protect credentials, private data, external systems, and the audited target; state where intentional outputs and incidental runtime records may exist.
-8. **Readable output** — begin with a plain-language summary, define specialized terms, interpret tables, avoid duplicated findings, and distinguish audit completeness from target quality.
+8. **Human decision usability** — write the primary report for a reasonably educated reader who has no prior knowledge of the target, its code, or its internal vocabulary. Begin with a plain-language summary; define necessary terms at first use; explain tables; and never make IDs, paths, acronyms, component names, or audit taxonomy carry the explanation. Put technical citations after the everyday-language explanation they support.
 9. **Verification** — re-check cited evidence, outputs, unresolved items, and side-effect claims. Use fresh non-generator review when consequence or uncertainty justifies it, but treat model agreement as supplementary rather than independent proof.
 
-The generated prompt must define behavior for missing targets, unclear goals, narrowed or inaccessible corpus, finding-free targets, genuine findings, unsafe/unavailable checks, and incomplete verification. Do not mandate arbitrary phase counts, retry counts, taxonomies, or report sections unless they protect a real target-specific capability or machine interface.
+Every generated prompt must require one easy-to-find **plain-English decision guide** in the primary report. For every supported fixable misalignment or gap, that guide must answer, together in one place:
+
+- What is wrong?
+- What does it mean in normal operation, with a concrete example or scenario when useful?
+- Who or what is affected, and why does it matter?
+- What happens if nothing changes?
+- What change is recommended, stated as behavior rather than only filenames or symbols?
+- What will become better, and what tradeoffs, compatibility effects, costs, or new failure modes can the change introduce?
+- Why does the change better serve the governing outcome or requirement?
+- What working capability must remain intact?
+- What is the next decision/action, and what evidence would prove the change worked?
+- What evidence supports the finding? Separately state what the audit actually ran or observed, what remains untested or unknown, and whether the proposed fix has been implemented and tested.
+
+Use these reader questions as headings unless equally clear target-specific wording is better. The executive summary must point readers directly to this guide. A table may summarize priority and decisions, but it may not replace the explanations. Do not split the information a decision-maker needs between a finding card, a plan table, a matrix, and an appendix. Keep detailed traces in a technical evidence subsection or appendix, linked after the plain-English explanation. If no supported fixable item exists, say that plainly and explain what was checked and what remains unknown.
+
+The generated prompt must define behavior for missing targets, unclear goals, narrowed or inaccessible corpus, finding-free targets, genuine findings, unsafe/unavailable checks, and incomplete verification. Do not mandate arbitrary phase counts, retry counts, taxonomies, or report sections unless they protect a real target-specific capability, human decision interface, or machine interface.
 
 ## 3. Conditional modules
 
@@ -96,7 +111,8 @@ The candidate prompt must state:
 - the unit of component classification and evidence needed for behavioral claims;
 - applicable conditional modules and their target-specific translation;
 - the side-effect contract and terminal branches;
-- the report/artifact interface, with stable names only where users or machines depend on them; and
+- the report/artifact interface, with stable names only where users or machines depend on them;
+- the plain-English decision guide and where deeper technical evidence will live; and
 - completion evidence that proves what the audit may honestly claim.
 
 For an artifact-producing audit, use one collision-safe bundle. A suitable default output root is `$PROJECT_ROOT/audits/`, producing `<target-name>-audit-<current date, YYYY-MM-DD>/`; append `-2`, `-3`, ... rather than overwrite. Resolve paths before writing and reject or clarify any bundle nested inside the audited target. Place all intentional outputs inside the external bundle, sanitize logs, and print the absolute path. Response-only audits should create no files.
@@ -113,7 +129,7 @@ Deliver:
 2. **Capability-preservation ledger** — revise mode only.
 3. **Candidate prompt** — complete Markdown with Pi frontmatter; no hidden framework references, omitted sections, or unresolved placeholders.
 4. **Change and risk summary** — additions, preserved/replaced/removed behavior, unresolved tradeoffs, and likely regression risks.
-5. **Verification** — confirm valid template syntax, self-containment, goal-unclear stopping behavior, bounded coverage, evidence integrity, side-effect consistency, applicability of modules, capability preservation, and readiness.
+5. **Verification** — confirm valid template syntax, self-containment, goal-unclear stopping behavior, bounded coverage, evidence integrity, side-effect consistency, applicability of modules, capability preservation, and readiness. Also confirm that a non-specialist can understand each problem, consequence, proposed change, change tradeoff, alignment benefit, next action, and proof status without reading the component matrix or source code.
 
 If verification finds a correctable gap, revise before delivery. If it requires a user decision, stop and ask rather than claim readiness.
 

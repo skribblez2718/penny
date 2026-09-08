@@ -21,9 +21,10 @@ recovery, and terminal truth without invoking production models.
     ambiguity, missing ports, missing validators, envelopes-for-cores, or corrupt bytes.
 11. Prove unified-root packages are discovered once. Every model-invocable orchestration package
     requires a matching executable registration; a model-disabled development package may remain
-    unregistered and generic invocation must fail safely. Pi native and Penny listings include every
-    valid package whose parsed `disable-model-invocation` flag is not `true`; `.ignore` exactly
-    mirrors explicit model disablement.
+    unregistered and generic invocation must fail safely. Model-visible manifests omit
+    `disable-model-invocation`; hidden manifests declare it exactly as `true`, never redundant
+    `false`. Pi native and Penny listings include every visible package, and `.ignore` exactly mirrors
+    explicit model disablement. Reject a top-level `license` in every Penny skill manifest.
 12. Prove memory absence does not alter correctness.
 13. Prove direct catalog paths and subset-absent orchestration phases use exact YAML equality.
 14. Prove a phase subset exists only in an active `PlaybookRegistrationV1`, changes its
