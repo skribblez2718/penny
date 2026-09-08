@@ -414,9 +414,7 @@ export const ChildWorkflowBudgetAllocationV1Schema = Type.Object(
   },
   { additionalProperties: false }
 );
-export type ChildWorkflowBudgetAllocationV1 = Static<
-  typeof ChildWorkflowBudgetAllocationV1Schema
->;
+export type ChildWorkflowBudgetAllocationV1 = Static<typeof ChildWorkflowBudgetAllocationV1Schema>;
 
 /** Exact semantic product the parent is prepared to consume. */
 export const ChildWorkflowOutputContractV1Schema = Type.Object(

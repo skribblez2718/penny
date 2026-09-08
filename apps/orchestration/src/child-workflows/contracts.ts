@@ -185,10 +185,10 @@ export const EvidenceContextV1Schema = Type.Object(
       minItems: 1,
       maxItems: MAX_CONTEXT_REFS,
     }),
-    limitations: Type.Array(
-      TextSchema({ minBytes: 1, maxBytes: 4_096, multiline: true }),
-      { maxItems: MAX_CONTEXT_LIMITATIONS, uniqueItems: true }
-    ),
+    limitations: Type.Array(TextSchema({ minBytes: 1, maxBytes: 4_096, multiline: true }), {
+      maxItems: MAX_CONTEXT_LIMITATIONS,
+      uniqueItems: true,
+    }),
   },
   { additionalProperties: false }
 );

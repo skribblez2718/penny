@@ -16,39 +16,39 @@ Current `diagnose`, `assess`, and `produce` V1 requests accept no caller artifac
 
 ## Direct cognitive states
 
-| Proposed state                     | Owner    | Mission                                                                                       |
-| ---------------------------------- | -------- | --------------------------------------------------------------------------------------------- |
+| Proposed state                     | Owner    | Mission                                                                                         |
+| ---------------------------------- | -------- | ----------------------------------------------------------------------------------------------- |
 | `integrating_security_model`       | Synthia  | Derive a versioned evidence-grounded security/threat model; refine it only for material gaps.   |
-| `generating_candidate_rules`       | Skribble | Materialize Semgrep YAML and synthetic fixtures from an exact model-gap or confirmed-root spec.|
-| `generating_hypotheses`            | Ida      | Generate bounded hypotheses from baseline, semantic, and candidate-rule evidence.              |
-| `selecting_next_action`            | Demetri  | Select the smallest legal next action with the highest expected information value.            |
-| `analyzing_candidate`              | Annie    | Analyze one supplied candidate slice, guards, relations, and competing explanations.          |
-| `exploring_evidence_gap`           | Echo     | Acquire one admitted, focused contextual or external evidence gap.                            |
-| `designing_verification`           | Piper    | Form a targeted verification strategy when the next experiment is non-obvious.                |
-| `taskifying_verification`          | Tabitha  | Convert an approved strategy into bounded executable checks for the host operator.            |
-| `verifying_evidence`               | Vera     | Test current finding evidence against the weakness-family confirmation contract.              |
-| `critiquing_finding`               | Carren   | Challenge exploitability reasoning and false-positive risk after objective verification.      |
-| `verifying_coverage`               | Vera     | Verify coverage-ledger completeness and disclosed limitations.                                |
-| `synthesizing_security_assessment` | Synthia  | Integrate terminal hypotheses, findings, evidence, and coverage into the SCA assessment core. |
-| `verifying_security_assessment`    | Vera     | Verify the current sealed assessment core before report work.                                 |
-| `materializing_report`             | Skribble | Materialize the human report from the exact verified assessment core.                         |
-| `critiquing_report`                | Carren   | Critique final narrative quality and evidence communication.                                  |
-| `verifying_final_product`          | Vera     | Verify current final-product lineage, criterion coverage, and evidence references.            |
+| `generating_candidate_rules`       | Skribble | Materialize Semgrep YAML and synthetic fixtures from an exact model-gap or confirmed-root spec. |
+| `generating_hypotheses`            | Ida      | Generate bounded hypotheses from baseline, semantic, and candidate-rule evidence.               |
+| `selecting_next_action`            | Demetri  | Select the smallest legal next action with the highest expected information value.              |
+| `analyzing_candidate`              | Annie    | Analyze one supplied candidate slice, guards, relations, and competing explanations.            |
+| `exploring_evidence_gap`           | Echo     | Acquire one admitted, focused contextual or external evidence gap.                              |
+| `designing_verification`           | Piper    | Form a targeted verification strategy when the next experiment is non-obvious.                  |
+| `taskifying_verification`          | Tabitha  | Convert an approved strategy into bounded executable checks for the host operator.              |
+| `verifying_evidence`               | Vera     | Test current finding evidence against the weakness-family confirmation contract.                |
+| `critiquing_finding`               | Carren   | Challenge exploitability reasoning and false-positive risk after objective verification.        |
+| `verifying_coverage`               | Vera     | Verify coverage-ledger completeness and disclosed limitations.                                  |
+| `synthesizing_security_assessment` | Synthia  | Integrate terminal hypotheses, findings, evidence, and coverage into the SCA assessment core.   |
+| `verifying_security_assessment`    | Vera     | Verify the current sealed assessment core before report work.                                   |
+| `materializing_report`             | Skribble | Materialize the human report from the exact verified assessment core.                           |
+| `critiquing_report`                | Carren   | Critique final narrative quality and evidence communication.                                    |
+| `verifying_final_product`          | Vera     | Verify current final-product lineage, criterion coverage, and evidence references.              |
 
 ## Host-owned operators and traditional tools
 
-| Internal operator      | Position                   | Traditional tools behind the typed host boundary                                                                                            |
-| ---------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `program-index`        | Baseline acquisition       | Git/filesystem census, language/build detection, Tree-sitter, optional SCIP, and discovery of relevant repository documents as evidence.   |
-| `semantic-graph`       | After indexing             | Joern initially; optional licensed CodeQL backend where permitted.                                                                          |
-| `taint`                | After semantic graph       | Joern data-flow/taint and optional licensed CodeQL taint queries.                                                                           |
-| `rules`                | Baseline and candidate     | Semgrep CE against an immutable external release/profile or a host-validated run-scoped candidate overlay.                                 |
-| `candidate-rule-validation` | Before candidate scan | Schema/feature checks, pinned-engine validation, synthetic positive/negative fixtures, digesting, provenance, and budget enforcement.      |
-| `rulepack-promotion`   | Post-confirmation          | Atomically persist an eligible generated rule/fixtures/provenance and build a successor immutable external release for future campaigns.  |
-| `dependency-audit`     | Parallel baseline          | OSV-Scanner and ecosystem-native lockfile resolution where needed.                                                                          |
-| `secret-audit`         | Parallel baseline          | An approved dedicated deterministic secret scanner.                                                                                         |
-| `hypothesis-search`    | Campaign loop hub          | Evidence-ledger queries, bounded slices, candidate lookup, deduplication, and progress accounting.                                          |
-| `dynamic-verification` | Gated evidence acquisition | Build/test runners, coverage, differential/invariant tests, fuzzers, and compiler/runtime sanitizers inside the admitted isolation profile. |
+| Internal operator           | Position                   | Traditional tools behind the typed host boundary                                                                                            |
+| --------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `program-index`             | Baseline acquisition       | Git/filesystem census, language/build detection, Tree-sitter, optional SCIP, and discovery of relevant repository documents as evidence.    |
+| `semantic-graph`            | After indexing             | Joern initially; optional licensed CodeQL backend where permitted.                                                                          |
+| `taint`                     | After semantic graph       | Joern data-flow/taint and optional licensed CodeQL taint queries.                                                                           |
+| `rules`                     | Baseline and candidate     | Semgrep CE against an immutable external release/profile or a host-validated run-scoped candidate overlay.                                  |
+| `candidate-rule-validation` | Before candidate scan      | Schema/feature checks, pinned-engine validation, synthetic positive/negative fixtures, digesting, provenance, and budget enforcement.       |
+| `rulepack-promotion`        | Post-confirmation          | Atomically persist an eligible generated rule/fixtures/provenance and build a successor immutable external release for future campaigns.    |
+| `dependency-audit`          | Parallel baseline          | OSV-Scanner and ecosystem-native lockfile resolution where needed.                                                                          |
+| `secret-audit`              | Parallel baseline          | An approved dedicated deterministic secret scanner.                                                                                         |
+| `hypothesis-search`         | Campaign loop hub          | Evidence-ledger queries, bounded slices, candidate lookup, deduplication, and progress accounting.                                          |
+| `dynamic-verification`      | Gated evidence acquisition | Build/test runners, coverage, differential/invariant tests, fuzzers, and compiler/runtime sanitizers inside the admitted isolation profile. |
 
 Agents request operator actions; host code validates and executes them. Workers do not receive raw CPGQL/Scala, scanner shell, compiler, fuzzer, container, Docker-socket, or unrestricted target-execution authority.
 
@@ -64,23 +64,23 @@ Agents request operator actions; host code validates and executes them. Workers 
 
 ## Order rules and prevented failure modes
 
-| Order rule                                                                                      | Failure mode it prevents                                                                 |
-| ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Immutable snapshot, scope, authority, optional threat context, modeling policy, and budgets precede scanner or model work. | Findings, assumptions, provenance, cost, or authority drifting during a long audit. |
-| `program-index` precedes `semantic-graph`, and `semantic-graph` precedes deterministic `taint`. | Taint and slices being computed against missing or stale program identities.             |
-| Baseline operators precede the first derived security/threat model.                              | Generic pre-evidence threat enumeration and model context spent on repository mechanics. |
-| Repository threat/architecture/security documents remain target-controlled evidence.            | Stale or adversarial target claims becoming trusted threat-model authority.              |
-| Candidate-rule validation and fixtures precede same-snapshot candidate scanning.                 | Invalid, unbounded, or untested generated rules entering the hypothesis ledger.           |
-| Candidate scans preserve the admitted baseline release and frozen target digest.                 | Same-campaign learning silently changing the baseline or contaminating reproducibility.   |
-| Objective Vera evidence verification precedes Carren's subjective exploitability critique.      | Treating critique as proof or spending critique cycles on structurally invalid evidence. |
-| Tabitha's bounded verification task precedes `dynamic-verification`.                            | A model-authored strategy becoming an unvalidated executable action.                     |
-| Dynamic execution passes the host policy/approval gate.                                         | Unadmitted target code, network, credentials, or host capabilities being exposed.        |
-| Every repair returns through Vera and every changed final product is reverified.                | A repair silently invalidating earlier evidence or lineage.                              |
-| Verified generated-rule matches and admitted write authority precede rulepack promotion.         | Self-confirming detections or unauthorized mutation of the external rulepack.             |
-| A promotion builds a successor release for future campaigns only.                                | Mid-campaign baseline drift and irreproducible scan lineage.                              |
-| Coverage closure precedes Synthia assessment synthesis and report materialization.              | A polished report hiding open high-priority hypotheses or unsupported analysis families. |
-| Vera verifies the sealed assessment core before Skribble/Carren report work.                    | Narrative work proceeding from an objectively invalid or stale SCA core.                 |
-| Host product sealing and CompletionGate admission follow all agent and child products.          | A child skill or report approval becoming SCA terminal truth without aggregate checks.   |
+| Order rule                                                                                                                 | Failure mode it prevents                                                                 |
+| -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Immutable snapshot, scope, authority, optional threat context, modeling policy, and budgets precede scanner or model work. | Findings, assumptions, provenance, cost, or authority drifting during a long audit.      |
+| `program-index` precedes `semantic-graph`, and `semantic-graph` precedes deterministic `taint`.                            | Taint and slices being computed against missing or stale program identities.             |
+| Baseline operators precede the first derived security/threat model.                                                        | Generic pre-evidence threat enumeration and model context spent on repository mechanics. |
+| Repository threat/architecture/security documents remain target-controlled evidence.                                       | Stale or adversarial target claims becoming trusted threat-model authority.              |
+| Candidate-rule validation and fixtures precede same-snapshot candidate scanning.                                           | Invalid, unbounded, or untested generated rules entering the hypothesis ledger.          |
+| Candidate scans preserve the admitted baseline release and frozen target digest.                                           | Same-campaign learning silently changing the baseline or contaminating reproducibility.  |
+| Objective Vera evidence verification precedes Carren's subjective exploitability critique.                                 | Treating critique as proof or spending critique cycles on structurally invalid evidence. |
+| Tabitha's bounded verification task precedes `dynamic-verification`.                                                       | A model-authored strategy becoming an unvalidated executable action.                     |
+| Dynamic execution passes the host policy/approval gate.                                                                    | Unadmitted target code, network, credentials, or host capabilities being exposed.        |
+| Every repair returns through Vera and every changed final product is reverified.                                           | A repair silently invalidating earlier evidence or lineage.                              |
+| Verified generated-rule matches and admitted write authority precede rulepack promotion.                                   | Self-confirming detections or unauthorized mutation of the external rulepack.            |
+| A promotion builds a successor release for future campaigns only.                                                          | Mid-campaign baseline drift and irreproducible scan lineage.                             |
+| Coverage closure precedes Synthia assessment synthesis and report materialization.                                         | A polished report hiding open high-priority hypotheses or unsupported analysis families. |
+| Vera verifies the sealed assessment core before Skribble/Carren report work.                                               | Narrative work proceeding from an objectively invalid or stale SCA core.                 |
+| Host product sealing and CompletionGate admission follow all agent and child products.                                     | A child skill or report approval becoming SCA terminal truth without aggregate checks.   |
 
 ## Exact handoff and state
 
