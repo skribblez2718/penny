@@ -7,8 +7,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   PLAN_PLAYBOOK_REGISTRATION,
   PLAN_PLAYBOOK_NAME,
-  PLAN_UNSEALED_EVALUATION_NAME,
-  PLAN_UNSEALED_EVALUATION_REGISTRATION,
   OrchestrationService,
   PlanPlaybook,
   canonicalJson,
@@ -579,7 +577,6 @@ describe("provider-free orchestrated plan workflow", () => {
       ...PLAN_PLAYBOOK_REGISTRATION,
       construct: (options) =>
         new PlanPlaybook(
-          true,
           options.artifactRevisions,
           options.artifactStore,
           options.checkpointer,
@@ -725,7 +722,7 @@ describe("provider-free orchestrated plan workflow", () => {
     expect(routes.every((route) => route.on_exhaustion.reset_counter === false)).toBe(true);
   });
 
-  it("fails closed when active or terminal replay uses a drifted evaluation registration contract", async () => {
+  it("fails closed when active or terminal replay uses a drifted registration contract", async () => {
     const env = environment();
     sequence += 1;
     let activeIdentity: Directive["identity"];
@@ -765,23 +762,6 @@ describe("provider-free orchestrated plan workflow", () => {
         });
       }
     }
-  });
-
-  it("retains the Piper-only unsealed ablation without review semantics", async () => {
-    const client = new ScriptedPlanClient([persistedStrategy(core())]);
-    using service = new OrchestrationService({
-      projectRoot: PROJECT_ROOT,
-      env: environment(),
-      modelClient: client,
-      playbookRegistration: PLAN_UNSEALED_EVALUATION_REGISTRATION,
-    });
-    sequence += 1;
-    const terminal = completeDirective(
-      await service.execute(start(`run-plan-unsealed-${sequence}`, PLAN_UNSEALED_EVALUATION_NAME))
-    );
-    expect(outputRef(terminal)).toMatchObject({ kind: "strategy-draft", phase: "strategizing" });
-    expect(client.invocations.map((invocation) => invocation.stateId)).toEqual(["strategizing"]);
-    expect(terminal.artifacts.some((artifact) => artifact.kind === "review-receipt")).toBe(false);
   });
 
   it("rejects a stale semantic input before RunContext creation", () => {

@@ -70,15 +70,9 @@ import {
   type RoutingRepairCapabilityV1,
   type StateAwareRepairCapabilityV1,
 } from "./playbook.js";
-import type {
-  PlaybookRegistrationV1,
-  PlaybookRegistryV1,
-  PreparedStartV1,
-  StartAdmissionV1,
-} from "./registry.js";
+import type { PlaybookRegistrationV1, PreparedStartV1, StartAdmissionV1 } from "./registry.js";
 
 export const DECIDE_PLAYBOOK_NAME = "decide";
-export const DECIDE_UNSEALED_EVALUATION_NAME = "decide-unsealed";
 
 export const DECIDE_AGENT_BY_STATE = {
   analyzing_decision: "annie",
@@ -304,10 +298,7 @@ function repairRoute(
   };
 }
 
-function decisionContract(input: {
-  readonly name: string;
-  readonly sealed: boolean;
-}): SkillContract {
+function decisionContract(input: { readonly name: string }): SkillContract {
   return {
     schema_version: 2,
     name: input.name,
@@ -343,33 +334,19 @@ function decisionContract(input: {
         },
       ],
       active_output_ports: [
-        input.sealed
-          ? {
-              schema_version: 1,
-              name: "decision",
-              direction: "output",
-              transport: "artifact",
-              schema_id: "penny.decision.v2",
-              schema_version_required: 2,
-              artifact_kind: "semantic-core",
-              source: "skill",
-              min_items: 1,
-              max_items: 1,
-              semantic_product: true,
-            }
-          : {
-              schema_version: 1,
-              name: "decision_draft",
-              direction: "output",
-              transport: "artifact",
-              schema_id: "penny.decision-draft.v2",
-              schema_version_required: 2,
-              artifact_kind: "decision-draft",
-              source: "skill",
-              min_items: 1,
-              max_items: 1,
-              semantic_product: false,
-            },
+        {
+          schema_version: 1,
+          name: "decision",
+          direction: "output",
+          transport: "artifact",
+          schema_id: "penny.decision.v2",
+          schema_version_required: 2,
+          artifact_kind: "semantic-core",
+          source: "skill",
+          min_items: 1,
+          max_items: 1,
+          semantic_product: true,
+        },
       ],
     },
     behavior: {
@@ -401,66 +378,42 @@ function decisionContract(input: {
     },
     repair_routing: {
       schema_version: 1,
-      routes: input.sealed
-        ? [
-            repairRoute("analyzing_decision", "evidence_gap", "decision_evidence_gate"),
-            repairRoute("verifying_decision", "evidence_gap", "analyzing_decision"),
-            repairRoute("verifying_decision", "analysis_gap", "analyzing_decision"),
-            repairRoute("verifying_decision", "product_gap", "deciding"),
-            repairRoute("critiquing_decision", "evidence_gap", "analyzing_decision"),
-            repairRoute("critiquing_decision", "analysis_gap", "analyzing_decision"),
-            repairRoute("critiquing_decision", "product_gap", "deciding"),
-          ]
-        : [],
+      routes: [
+        repairRoute("analyzing_decision", "evidence_gap", "decision_evidence_gate"),
+        repairRoute("verifying_decision", "evidence_gap", "analyzing_decision"),
+        repairRoute("verifying_decision", "analysis_gap", "analyzing_decision"),
+        repairRoute("verifying_decision", "product_gap", "deciding"),
+        repairRoute("critiquing_decision", "evidence_gap", "analyzing_decision"),
+        repairRoute("critiquing_decision", "analysis_gap", "analyzing_decision"),
+        repairRoute("critiquing_decision", "product_gap", "deciding"),
+      ],
     },
-    completion_gate: input.sealed
-      ? {
-          schema_version: 2,
-          allowed_terminal_origins: ["admitting_decision"],
-          required_visited_states: [
-            "analyzing_decision",
-            "decision_evidence_gate",
-            "deciding",
-            "sealing_decision",
-            "verifying_decision",
-            "critiquing_decision",
-            "admitting_decision",
-          ],
-          required_receipt_predicates: ["decide_latest_reviewed_decision_dod.v2"],
-          latest_product: {
-            selector: "terminal_artifact",
-            schema_id: "penny.decision.v2",
-            product_schema_version: 2,
-            artifact_kind: "semantic-core",
-            producing_state: "sealing_decision",
-          },
-          unresolved_policy: { mode: "max_count", max_count: 0 },
-        }
-      : {
-          schema_version: 2,
-          allowed_terminal_origins: ["sealing_decision"],
-          required_visited_states: ["deciding", "sealing_decision"],
-          required_receipt_predicates: [],
-          latest_product: {
-            selector: "terminal_artifact",
-            schema_id: "penny.decision-draft.v2",
-            product_schema_version: 2,
-            artifact_kind: "decision-draft",
-            producing_state: "deciding",
-          },
-          unresolved_policy: { mode: "max_count", max_count: 0 },
-        },
+    completion_gate: {
+      schema_version: 2,
+      allowed_terminal_origins: ["admitting_decision"],
+      required_visited_states: [
+        "analyzing_decision",
+        "decision_evidence_gate",
+        "deciding",
+        "sealing_decision",
+        "verifying_decision",
+        "critiquing_decision",
+        "admitting_decision",
+      ],
+      required_receipt_predicates: ["decide_latest_reviewed_decision_dod.v2"],
+      latest_product: {
+        selector: "terminal_artifact",
+        schema_id: "penny.decision.v2",
+        product_schema_version: 2,
+        artifact_kind: "semantic-core",
+        producing_state: "sealing_decision",
+      },
+      unresolved_policy: { mode: "max_count", max_count: 0 },
+    },
   };
 }
 
-export const DECIDE_SKILL_CONTRACT = decisionContract({
-  name: DECIDE_PLAYBOOK_NAME,
-  sealed: true,
-});
-export const DECIDE_UNSEALED_EVALUATION_CONTRACT = decisionContract({
-  name: DECIDE_UNSEALED_EVALUATION_NAME,
-  sealed: false,
-});
+export const DECIDE_SKILL_CONTRACT = decisionContract({ name: DECIDE_PLAYBOOK_NAME });
 
 function selectedLatest(
   context: RunContext,
@@ -739,9 +692,7 @@ function refsForState(context: RunContext, state: DecideWorkerState): readonly A
     return uniqueRefs([request, ...inputs, analysis, admission, veraReport, carrenReport]);
   }
   if (state === "deciding") {
-    if (analysis === undefined && context.identity.playbook !== DECIDE_UNSEALED_EVALUATION_NAME) {
-      throw new Error("Demetri requires the exact Annie analysis");
-    }
+    if (analysis === undefined) throw new Error("Demetri requires the exact Annie analysis");
     return uniqueRefs([
       request,
       analysis,
@@ -1757,7 +1708,6 @@ export class DecidePlaybook
     RoutingRepairCapabilityV1
 {
   constructor(
-    private readonly sealed: boolean,
     private readonly revisions?: ArtifactRevisionLookup,
     private readonly artifactStore?: ArtifactHostStore,
     private readonly checkpointer?: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"],
@@ -1765,13 +1715,10 @@ export class DecidePlaybook
   ) {}
 
   initialize(context: RunContext): Directive {
-    if (
-      context.identity.playbook !== DECIDE_PLAYBOOK_NAME &&
-      context.identity.playbook !== DECIDE_UNSEALED_EVALUATION_NAME
-    ) {
+    if (context.identity.playbook !== DECIDE_PLAYBOOK_NAME) {
       throw new Error(`DecidePlaybook cannot run playbook '${context.identity.playbook}'`);
     }
-    context.transition(this.sealed ? "analyzing_decision" : "deciding");
+    context.transition("analyzing_decision");
     return this.dispatch(context);
   }
 
@@ -2161,10 +2108,10 @@ export class DecidePlaybook
     const requestArtifact = admittedDecisionRequestArtifact(context);
     const analysisArtifact = latestAnalysisArtifact(context);
     const draftArtifact = latestDecisionDraftArtifact(context);
-    if (draftArtifact === undefined || (this.sealed && analysisArtifact === undefined)) {
+    if (draftArtifact === undefined || analysisArtifact === undefined) {
       const missingExactInputs = [
         ...(draftArtifact === undefined ? ["decision-draft"] : []),
-        ...(this.sealed && analysisArtifact === undefined ? ["decision-analysis"] : []),
+        ...(analysisArtifact === undefined ? ["decision-analysis"] : []),
       ];
       return {
         event_type: "decide_seal_input_absent",
@@ -2253,13 +2200,6 @@ export class DecidePlaybook
         directive: next,
       };
     }
-    if (!this.sealed) {
-      return {
-        event_type: "decide_unsealed_draft_validated",
-        payload: { run_id: context.identity.run_id, draft_artifact_id: draftArtifact.artifact_id },
-        directive: this.terminal(context, "complete", true, []),
-      };
-    }
     const admissionArtifact = latestEvidenceAdmissionArtifact(context);
     if (analysisArtifact === undefined || admissionArtifact === undefined) {
       throw new Error("sealed DecisionV2 requires exact Annie analysis and evidence admission");
@@ -2298,18 +2238,13 @@ export class DecidePlaybook
     extraResult: Readonly<Record<string, JsonValue>> = {}
   ): Directive {
     const origin = context.stateId;
-    const output = met
-      ? this.sealed
-        ? latestDecisionArtifact(context)
-        : latestDecisionDraftArtifact(context)
-      : bestPartial(context);
+    const output = met ? latestDecisionArtifact(context) : bestPartial(context);
     if (met && output === undefined) throw new Error("positive decide terminal has no product");
-    const graph =
-      met && this.sealed
-        ? this.positiveTerminalArtifacts(context)
-        : output === undefined
-          ? []
-          : [output];
+    const graph = met
+      ? this.positiveTerminalArtifacts(context)
+      : output === undefined
+        ? []
+        : [output];
     context.previousState = origin;
     context.stateId = action;
     context.status = action;
@@ -2571,69 +2506,54 @@ export const DECIDE_COMPLETION_RECEIPT_PREDICATES: ReadonlyMap<
 function decideRegistration(input: {
   readonly name: string;
   readonly contract: SkillContract;
-  readonly sealed: boolean;
 }): PlaybookRegistrationV1 {
-  const phases = input.sealed
-    ? new Map([
-        [
-          "analyzing_decision",
-          {
-            agent: "annie",
-            result_schema_id: "penny.decide.analysis-summary.v1",
-            result_schema_version: 1 as const,
-            schema: AnalysisSummarySchema,
-          },
-        ],
-        [
-          "gathering_decision_evidence",
-          {
-            agent: "echo",
-            result_schema_id: "penny.decide.evidence-summary.v1",
-            result_schema_version: 1 as const,
-            schema: EvidenceSummarySchema,
-          },
-        ],
-        [
-          "deciding",
-          {
-            agent: "demetri",
-            result_schema_id: "penny.decide.decision-summary.v2",
-            result_schema_version: 1 as const,
-            schema: DecisionSummarySchema,
-          },
-        ],
-        [
-          "verifying_decision",
-          {
-            agent: "vera",
-            result_schema_id: "penny.decide.verification-summary.v1",
-            result_schema_version: 1 as const,
-            schema: VerificationSummarySchema,
-          },
-        ],
-        [
-          "critiquing_decision",
-          {
-            agent: "carren",
-            result_schema_id: "penny.decide.critique-summary.v1",
-            result_schema_version: 1 as const,
-            schema: CritiqueSummarySchema,
-          },
-        ],
-      ])
-    : new Map([
-        [
-          "deciding",
-          {
-            agent: "demetri",
-            result_schema_id: "penny.decide.decision-summary.v2",
-            result_schema_version: 1 as const,
-            schema: DecisionSummarySchema,
-            // Evaluation-only ablation: ordinary workflow phases omit allowed_tools.
-            allowed_tools: ["artifact_read"],
-          },
-        ],
-      ]);
+  const phases = new Map([
+    [
+      "analyzing_decision",
+      {
+        agent: "annie",
+        result_schema_id: "penny.decide.analysis-summary.v1",
+        result_schema_version: 1 as const,
+        schema: AnalysisSummarySchema,
+      },
+    ],
+    [
+      "gathering_decision_evidence",
+      {
+        agent: "echo",
+        result_schema_id: "penny.decide.evidence-summary.v1",
+        result_schema_version: 1 as const,
+        schema: EvidenceSummarySchema,
+      },
+    ],
+    [
+      "deciding",
+      {
+        agent: "demetri",
+        result_schema_id: "penny.decide.decision-summary.v2",
+        result_schema_version: 1 as const,
+        schema: DecisionSummarySchema,
+      },
+    ],
+    [
+      "verifying_decision",
+      {
+        agent: "vera",
+        result_schema_id: "penny.decide.verification-summary.v1",
+        result_schema_version: 1 as const,
+        schema: VerificationSummarySchema,
+      },
+    ],
+    [
+      "critiquing_decision",
+      {
+        agent: "carren",
+        result_schema_id: "penny.decide.critique-summary.v1",
+        result_schema_version: 1 as const,
+        schema: CritiqueSummarySchema,
+      },
+    ],
+  ]);
   return {
     name: input.name,
     contract: input.contract,
@@ -2644,9 +2564,7 @@ function decideRegistration(input: {
       resolve: () => DECIDE_LIVENESS_POLICY,
       thinking_policy: "agent_ssot",
     },
-    host_states: input.sealed
-      ? ["decision_evidence_gate", "sealing_decision", "admitting_decision"]
-      : ["sealing_decision"],
+    host_states: ["decision_evidence_gate", "sealing_decision", "admitting_decision"],
     worker: {
       kind: "catalog-agent",
       workflow_name: input.name,
@@ -2657,29 +2575,13 @@ function decideRegistration(input: {
       model_policy: "directive_override_or_runtime_default",
       phases,
     },
-    completionReceiptPredicates: input.sealed ? DECIDE_COMPLETION_RECEIPT_PREDICATES : new Map(),
+    completionReceiptPredicates: DECIDE_COMPLETION_RECEIPT_PREDICATES,
     construct: (options) =>
-      new DecidePlaybook(
-        input.sealed,
-        options.artifactRevisions,
-        options.artifactStore,
-        options.checkpointer
-      ),
+      new DecidePlaybook(options.artifactRevisions, options.artifactStore, options.checkpointer),
   };
 }
 
 export const DECIDE_PLAYBOOK_REGISTRATION = decideRegistration({
   name: DECIDE_PLAYBOOK_NAME,
   contract: DECIDE_SKILL_CONTRACT,
-  sealed: true,
 });
-
-export const DECIDE_UNSEALED_EVALUATION_REGISTRATION = decideRegistration({
-  name: DECIDE_UNSEALED_EVALUATION_NAME,
-  contract: DECIDE_UNSEALED_EVALUATION_CONTRACT,
-  sealed: false,
-});
-
-export const DECIDE_EVALUATION_ABLATION_REGISTRY: PlaybookRegistryV1 = new Map([
-  [DECIDE_UNSEALED_EVALUATION_NAME, DECIDE_UNSEALED_EVALUATION_REGISTRATION],
-]);

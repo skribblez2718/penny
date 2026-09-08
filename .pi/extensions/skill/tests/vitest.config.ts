@@ -13,7 +13,6 @@ const skillSourceRoot = path.resolve(
 export default defineConfig({
   test: {
     include: ["tests/unit/**/*.test.ts", "tests/skill.test.ts", "tests/agent-end-grace.test.ts"],
-    exclude: ["tests/unit/*evaluation*.test.ts"],
     environment: "node",
     globals: true,
     testTimeout: 10000,

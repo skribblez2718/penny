@@ -201,9 +201,9 @@ publishes a deletion receipt. It is never reachable from ordinary startup or mod
   context, typed product, and optional-service state cannot select tools. Ordinary Assess, Decide,
   Diagnose, Plan, and Produce phases omit `allowed_tools`, use exact agent YAML, and have normal
   external-call ceilings of 8 per worker and 64 per run; routing-only repair stays at 0.
-  Evaluation-only baselines or ablations may retain strict subsets. A subset changes no agent
-  metadata/profile and supplies no OS/process sandbox or extension-code isolation. KB workers remain
-  anonymous host-private sessions with their existing phase-specific matrices.
+  Synthetic registration-bound tests retain strict subsets solely to prove enforcement. A subset
+  changes no agent metadata/profile and supplies no OS/process sandbox or extension-code isolation.
+  KB workers remain anonymous host-private sessions with their existing phase-specific matrices.
 - `SkillContractV2` carries objective, typed request/input/active-output ports, closed
   side-effect/approval/stop/escalation consequences, required guidance, named budget
   policy/resolver/admission/snapshot bindings, state-aware repair routes, and the completion gate.

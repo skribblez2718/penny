@@ -65,6 +65,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Removed
 
+- **Paired Skill Evaluation V1.** Archived and removed the optional Decide/Plan paired evaluator,
+  remote calibration path, explicit commands, direct implementation, dedicated tests, and current
+  operational documentation. Canonical skill and Knowledge Base workflows, ordinary review,
+  generic registration-bound tool narrowing, and historical evaluation evidence remain unchanged.
 - **Python orchestration runtime and fallback.** All skill modes now run through
   `@penny/orchestration`: single, parallel, chain, and chain resume. Removed the
   Python runtime/package/tests, per-skill delegate, engine selector, Python artifact

@@ -97,7 +97,7 @@ const NORMATIVE_EDGES = [
   "admitting_strategy→complete",
 ] as const;
 
-describe("Plan candidate flow descriptor", () => {
+describe("Plan canonical flow descriptor", () => {
   it("matches the frozen normative topology in both machine and documentation", () => {
     expect([...PLAN_FLOW.states]).toEqual(NORMATIVE_STATES);
     expect(PLAN_FLOW.edges.map(([from, to]) => `${from}→${to}`)).toEqual(NORMATIVE_EDGES);
@@ -118,7 +118,7 @@ describe("Plan candidate flow descriptor", () => {
     expect(html).not.toMatch(/<script[^>]+src\s*=/iu);
     expect(html).not.toMatch(/<link[^>]+href\s*=/iu);
     expect(html).not.toMatch(/fetch\(|XMLHttpRequest/iu);
-    expect(html).toMatch(/disabled evaluation candidate/iu);
+    expect(html).toMatch(/Plan — canonical workflow/iu);
     expect(html).toMatch(
       /no Decide dependency, task graph,\s+approval, taskification, execution, or internal clarification/iu
     );

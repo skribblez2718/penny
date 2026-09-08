@@ -46,8 +46,9 @@ Payload bytes and durable memory are never control transport.
 - [ ] Orchestration proves absent-subset YAML equality and only registration-bound strict
       subsets; empty/duplicate/equality-sized/non-YAML or dynamic declarations fail before
       session creation, and active removal/addition/replacement fails before the model prompt.
-- [ ] Ordinary registered phases pin absent `allowed_tools` and exact YAML; synthetic/evaluation
-      strict subsets and separate host-private tools remain independently covered.
+- [ ] Ordinary registered phases pin absent `allowed_tools` and exact YAML; synthetic
+      registration-bound strict subsets and separate host-private tools remain independently
+      covered.
 - [ ] Cross-run single/parallel/chain/fan-in pass.
 - [ ] Restart reconstructs handoff from refs, not previews or memory.
 - [ ] Output persistence/readability failures cannot return success.

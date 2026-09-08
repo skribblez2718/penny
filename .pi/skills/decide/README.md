@@ -26,38 +26,6 @@ Reviewer evidence and analysis gaps use engine-owned routes back through Annie a
 
 Vera FAIL and Carren NEEDS_REVISION expose only one closed `gap_kind` with its owner, never a target state. Carren cannot approve a major or critical finding. Product repair returns to Demetri, then host sealing and Vera. Analysis or evidence repair returns to Annie; only Annie's newly accepted typed gap may reopen bounded Echo, which then hands directly to Demetri. Stale receipts cannot complete a revised product.
 
-The unsealed evaluation registration remains a deliberately narrow Demetri-only ablation and is not the orchestrated workflow product path.
-
-## Provider-free evaluator preparation
-
-The additive `penny.decision-semantic-evaluation.v3` wire retains the bounded `rationale_report` plus every Decision semantic field while excluding execution, transport, provenance, arm, receipt, artifact, and performance metadata. Symmetric sealed-candidate, unsealed-ablation, and direct-baseline normalizers target that wire. Its six explicit clause IDs map exactly to child-plan §9.3.
-
-The deterministic grader may `FAIL` only closed task-oracle facts such as sets, enums, feasibility/recommendation relations, basis coverage, and disposition boundaries. Matching structure remains `UNVERIFIABLE` for every substantive prose/evidence clause until an independently authorized semantic judge reviews it; no keyword table, required report term, exact prose equality, or projection digest can create a semantic `PASS`. The separate review-output contract requires per-clause `PASS|FAIL|UNVERIFIABLE` with bounded reasons and exact refs, and aggregate success requires every applicable clause to be `PASS`.
-
-Provider-free checks cover bidirectional clause ownership, candidate/baseline/ablation symmetry under meaning-preserving rationale rewording, reason/ref bounds, closed oracle markers, known-good/bad/boundary blocking, and metadata isolation. They do not formally qualify the evaluator. Separately authorized practical live smokes are independent of this optional formal evaluator path.
-
-## Preserved provider-free harness control
-
-The active public `decide-provider-free-evaluator-preparation-v1` plan is a harness self-test over the unchanged development population, not a Part-B measurement or an admission decision. The prior `decide-development-known-delta-v1` plan-binding bytes remain preserved. Its frozen schedule has one held-out pair and one repetition: direct Demetri baseline, orchestrated `decide`, and `decide-unsealed`, for three independently normalized and graded trials. Each completed trial contributes one `task_score`; workflow phases, reviewer turns, and diagnostic mutation cases are not additional scored trials.
-
-| Frozen measurement                            |     Expected deterministic value |
-| --------------------------------------------- | -------------------------------: |
-| Scheduled / complete trials                   |                            3 / 3 |
-| Baseline primary mean                         |                                0 |
-| Primary workflow mean                         |                                1 |
-| Candidate minus baseline                      | +1 (material-effect floor: +0.5) |
-| Protected-capability mean / floor             |                            1 / 1 |
-| Trigger precision / floor                     |                            1 / 1 |
-| Negative-transfer rate / ceiling              |                            0 / 0 |
-| Candidate-to-baseline cost ratio / ceiling    |                       1.1 / 1.25 |
-| Candidate-to-baseline latency ratio / ceiling |                       1.1 / 1.25 |
-| Unsealed primary mean                         |                                1 |
-| Candidate minus unsealed / floor              |                            0 / 0 |
-
-The separate eight-case mutation diagnostic exercises terminal validation and composition. The current validator rejects every invalid draft in both orchestrated and unsealed paths (zero escapes for each), so this development plan freezes `mutation_gate:null`; those diagnostics do not alter the three-trial aggregate. The deterministic harness disposition is `CANDIDATE`, but that word is only the plan's self-test outcome and grants no executable registration, model discovery, or invocation authority.
-
-The archived safe-recovery replay is likewise diagnostic and non-controlling. It preserves 8/60 recorded normalized historical trials and projects 53/60 under the repaired normalizer (45 recovered) without rewriting historical result bytes or disposition. It is not the active three-trial schedule, not a per-run score, and not evidence of current provider-backed quality.
-
 ## Flow diagram
 
 `resources/flow.html` is the strict-JSON visual mirror of `DECIDE_FLOW`.

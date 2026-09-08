@@ -1,4 +1,4 @@
-.PHONY: setup setup-ready setup-dev setup-browser doctor state-status memory-status preflight-core preflight-js preflight-python config-check venv install-py install-js build-orchestration build-observability init clean test test-integration check-public check-agents-links check-doc-links check-kb-privacy check-tool-profiles check-tool-descriptions check-skill-structure check-capability-registry check-agent-roster lint typecheck verify-publication format evals
+.PHONY: setup setup-ready setup-dev setup-browser doctor state-status memory-status preflight-core preflight-js preflight-python config-check venv install-py install-js build-orchestration build-observability init clean test test-integration check-public check-agents-links check-doc-links check-kb-privacy check-tool-profiles check-tool-descriptions check-skill-structure check-capability-registry check-agent-roster lint typecheck verify-publication format
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 
@@ -136,13 +136,6 @@ test-integration:
 	    }; \
 	  done; \
 	  exit $$rc'
-
-# Optional local benchmark gate. Inputs under the ignored evals/ directory are
-# caller-owned and are not part of publication checks. Neither path changes
-# executable registration, model discovery, or invocation authority.
-evals:
-	bun run --cwd .pi/extensions/skill evals:known-delta
-	bun run --cwd .pi/extensions/skill evals:plan-control
 
 # Public-boundary guard: fail if a tracked file reintroduces an operator-filesystem path
 # (enforces the AGENTS.md "Public repository boundary" invariant; also runs inside `make test`).

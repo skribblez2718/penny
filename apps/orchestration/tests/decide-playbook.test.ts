@@ -7,8 +7,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   DECIDE_PLAYBOOK_REGISTRATION,
   DECIDE_PLAYBOOK_NAME,
-  DECIDE_UNSEALED_EVALUATION_NAME,
-  DECIDE_UNSEALED_EVALUATION_REGISTRATION,
   DecidePlaybook,
   OrchestrationService,
   canonicalJson,
@@ -566,7 +564,6 @@ describe("orchestrated decide workflow", () => {
       ...DECIDE_PLAYBOOK_REGISTRATION,
       construct: (options) =>
         new DecidePlaybook(
-          true,
           options.artifactRevisions,
           options.artifactStore,
           options.checkpointer,
@@ -721,7 +718,6 @@ describe("orchestrated decide workflow", () => {
       ...DECIDE_PLAYBOOK_REGISTRATION,
       construct: (options) =>
         new DecidePlaybook(
-          true,
           options.artifactRevisions,
           options.artifactStore,
           options.checkpointer,
@@ -788,7 +784,7 @@ describe("orchestrated decide workflow", () => {
     expect(routes.every((route) => route.on_exhaustion.reset_counter === false)).toBe(true);
   });
 
-  it("fails closed when active or terminal replay uses a drifted evaluation registration contract", async () => {
+  it("fails closed when active or terminal replay uses a drifted registration contract", async () => {
     const env = environment();
     sequence += 1;
     let activeIdentity: Directive["identity"];
@@ -867,26 +863,6 @@ describe("orchestrated decide workflow", () => {
     expect(service.checkpointer.loadRunById(runId)?.status).toBe("running");
   });
 
-  it("retains the Demetri-only unsealed ablation without review or promotion semantics", async () => {
-    const env = environment();
-    const client = new ScriptedDecideClient([persistedDecisionDraft("selected")]);
-    using service = new OrchestrationService({
-      projectRoot: PROJECT_ROOT,
-      env,
-      modelClient: client,
-      playbookRegistration: DECIDE_UNSEALED_EVALUATION_REGISTRATION,
-    });
-    sequence += 1;
-    const terminal = completeDirective(
-      await service.execute(
-        start(`run-decide-unsealed-${sequence}`, DECIDE_UNSEALED_EVALUATION_NAME)
-      )
-    );
-    expect(outputRef(terminal)).toMatchObject({ kind: "decision-draft", phase: "deciding" });
-    expect(client.invocations.map((invocation) => invocation.stateId)).toEqual(["deciding"]);
-    expect(terminal.artifacts.some((artifact) => artifact.kind === "review-receipt")).toBe(false);
-  });
-
   it("cancels without dispatch and reports honest no-execution state", () => {
     const env = environment();
     const client = new ScriptedDecideClient([]);
@@ -907,7 +883,7 @@ describe("orchestrated decide workflow", () => {
       schema_version: 2,
       action: "cancel",
       identity: identity(runId),
-      reason: "caller stopped evaluation",
+      reason: "caller stopped deciding",
     });
     expect(cancelled).toMatchObject({
       action: "cancelled",

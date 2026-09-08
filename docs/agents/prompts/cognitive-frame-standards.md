@@ -183,7 +183,7 @@ Cognitive Frame changes affect every interaction. Follow this protocol:
 - Any change to the capability-ratchet language (it encodes the ratchet doctrine)
 - Renaming the `# On-Demand Protocols` heading or the `<agent_boundary>` / `<system_boundary>` markers (runner/extension wire formats)
 
-Every audited change also runs `make evals`.
+Every audited change also runs task-relevant deterministic checks and regression evidence; no universal paired-evaluator command is required.
 
 ### Enforcement: Carren Critique + Vera Verification
 
@@ -193,7 +193,7 @@ Compliance checklists are enforced by **review, not by a linter** — a suffix-b
 2. **Corrections are applied** based on Carren's critique.
 3. **Vera verifies** (model: `glm-5.2:cloud`) that each correction actually resolves the cited violation without introducing new violations. Vera judges each corrected item as PASS or FAIL against the compliance checklist.
 
-Review by a different model is **model-diverse review** — a useful supplementary check, not independent evidence by itself; the deterministic gates (token budget, `make evals`, parser checks) remain the stronger anchors.
+Review by a different model is **model-diverse review** — a useful supplementary check, not independent evidence by itself; deterministic gates such as token-budget, parser, and task-relevant regression checks remain the stronger anchors.
 
 See [prompt architecture compliance guidance](architecture.md#compliance) for the full pipeline specification.
 

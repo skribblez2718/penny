@@ -26,16 +26,6 @@ Reviewer evidence and analysis gaps use engine-owned routes back through Piper o
 
 Vera FAIL and Carren NEEDS_REVISION expose only one closed `gap_kind` with its owner, never a target state. Carren cannot approve a major or critical finding. Product repair returns to Piper strategy authorship, then host sealing and Vera. Analysis or evidence repair returns to Piper orientation; only Piper's newly accepted typed gap may reopen bounded Echo, which then hands directly to strategy authorship.
 
-The `plan-unsealed` registration remains a deliberately narrow Piper-authorship ablation and is not the orchestrated workflow product path.
-
-## Provider-free evaluator preparation
-
-The additive `penny.strategy-semantic-evaluation.v2` wire retains the bounded strategy report and semantic Strategy fields while excluding execution, transport, provenance, arm, receipt, artifact, and performance metadata. Its eight clause IDs map exactly to child-plan §9.4.
-
-The deterministic grader may `FAIL` only closed task-oracle facts such as sets, enums, coverage, blocker presence, and dependency relations. When those facts match, every substantive prose/evidence clause remains `UNVERIFIABLE` with a bounded reason and exact oracle/evidence refs until an independently authorized semantic judge reviews it. It uses no report keywords, required terms, or exact prose/projection digests to manufacture a semantic `PASS`. The separate review-output contract requires `PASS|FAIL|UNVERIFIABLE` per clause, and aggregate success requires every applicable clause to be `PASS`.
-
-Provider-free checks cover bidirectional clause ownership, candidate/baseline/ablation symmetry under meaning-preserving report rewording, reason/ref bounds, closed oracle markers, known-good/bad/boundary blocking, and metadata isolation. They do not formally qualify the evaluator. Separately authorized practical live smokes are independent of this optional formal evaluator path. The V1 Plan Part-B and prior development-plan fixture bytes were not rewritten; the active `plan-provider-free-evaluator-preparation-v1` harness-only plan rebinds the unchanged development population/control to the additive source.
-
 ## Flow diagram
 
 `resources/flow.html` is the strict-JSON visual mirror of `PLAN_FLOW`.

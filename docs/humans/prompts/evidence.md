@@ -62,7 +62,7 @@ Intrinsic self-correction fails without new external information (Huang et al. 2
 
 ## Lean prompts
 
-Directional evidence favors leaner permanent context. Anthropic's context-engineering guidance recommends the smallest set of high-signal tokens; OpenAI reported that in internal coding-agent evaluations, leaner prompt configurations improved scores ~10–15% while cutting tokens 41–66% and cost 33–67%. These are workload-specific results, not a forecast for Penny — the honest posture is: prefer one authoritative statement of each invariant over cross-layer repetition, and **validate against Penny's own evals** (`make evals`) rather than importing another lab's percentages.
+Directional evidence favors leaner permanent context. Anthropic's context-engineering guidance recommends the smallest set of high-signal tokens; OpenAI reported that in internal coding-agent evaluations, leaner prompt configurations improved scores ~10–15% while cutting tokens 41–66% and cost 33–67%. These are workload-specific results, not a forecast for Penny — the honest posture is: prefer one authoritative statement of each invariant over cross-layer repetition, and validate changes with task-relevant deterministic checks and regression evidence rather than importing another lab's percentages.
 
 ## References
 

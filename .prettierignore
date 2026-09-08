@@ -4,6 +4,8 @@ node_modules/
 **/node_modules/
 **/dist/
 **/coverage/
+# Local restore archives preserve exact bytes.
+backups/
 *.min.js
 *.min.ts
 package-lock.json

@@ -99,8 +99,8 @@ run IDs from the TypeScript v2 database; it never scans sessions or semantic mem
 - [ ] Compaction reconstructs TypeScript run/artifact refs by exact ID.
 - [ ] Payload bytes and durable memory never enter checkpoint control state.
 - [ ] Direct paths and subset-absent ordinary phases prove exact YAML equality.
-      Registration-bound synthetic/evaluation strict subsets, exact Pi handoff, invalid pre-session
-      refusal, and separate host-private tools remain covered.
+      Registration-bound synthetic strict subsets, exact Pi handoff, invalid pre-session refusal,
+      and separate host-private tools remain covered.
 - [ ] Flow descriptor and `resources/flow.html` agree exactly.
 
 ## Files

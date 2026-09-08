@@ -551,29 +551,6 @@ export function runtimeRegistrationSha256(registration: PlaybookRegistrationV1):
   );
 }
 
-/**
- * Resolve an evaluation variant by its exact static contract digest.
- *
- * Evaluation may compare caller-supplied variant registries, but those registries grant no
- * generic execution authority and have no lifecycle meaning.
- */
-export function resolveEvaluationCandidate(input: {
-  readonly name: string;
-  readonly contract_sha256: string;
-  readonly registry?: PlaybookRegistryV1;
-}): PlaybookRegistrationV1 | undefined {
-  const registry = input.registry ?? PLAYBOOK_REGISTRY;
-  const registration = registry.get(input.name);
-  if (
-    registration === undefined ||
-    skillContractSha256(registration.contract) !== input.contract_sha256
-  ) {
-    return undefined;
-  }
-  validateRegistrationContract(registration);
-  return registration;
-}
-
 /** Registered names, sorted, for diagnostics and tests. */
 export function registeredPlaybookNames(
   registry: PlaybookRegistryV1 = PLAYBOOK_REGISTRY

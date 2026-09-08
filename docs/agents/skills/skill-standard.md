@@ -95,8 +95,8 @@ A worker prompt must:
 - [ ] Any phase subset is strict/non-empty/unique, canonical-registration/digest-bound,
       projected unchanged into invocation metadata, validated before session creation, and
       passed exactly to Pi; invalid or dynamically selected surfaces fail closed.
-- [ ] Ordinary registered phases omit `allowed_tools` and use exact YAML; synthetic or
-      evaluation-only strict subsets remain separately tested without OS/process sandboxing or
+- [ ] Ordinary registered phases omit `allowed_tools` and use exact YAML; synthetic
+      registration-bound strict subsets remain separately tested without OS/process sandboxing or
       extension-code-isolation claims, and host-private tools remain separate.
 - [ ] Prompt directory exactly matches cognitive states.
 - [ ] Owner capture and receipt validation precede routing.

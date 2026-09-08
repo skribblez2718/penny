@@ -24,8 +24,7 @@ const REQUIRED_CATEGORIES = [
   "real_entrypoint",
   "fail_closed",
 ] as const;
-const FORBIDDEN_PROVIDER_FREE_PATH =
-  /(?:^|[-/])(c6|evaluation|local-live|model-smoke|parity|remote)(?:[-/.]|$)/u;
+const FORBIDDEN_PROVIDER_FREE_PATH = /(?:^|[-/])(local-live|model-smoke|parity|remote)(?:[-/.]|$)/u;
 
 type Category = (typeof REQUIRED_CATEGORIES)[number];
 
@@ -187,7 +186,7 @@ describe("provider-free skill conformance manifest", () => {
     }
   });
 
-  it("binds real extension entrypoints without admitting remote evaluation suites", () => {
+  it("binds real extension entrypoints without admitting provider-backed or remote suites", () => {
     const scopes = manifest.entrypoint_checks.map((check) => check.registration_scope).sort();
     const registrationNames = registrations.map((registration) => registration.name).sort();
     expect(scopes).toContain("universal");

@@ -70,15 +70,9 @@ import {
   type RoutingRepairCapabilityV1,
   type StateAwareRepairCapabilityV1,
 } from "./playbook.js";
-import type {
-  PlaybookRegistrationV1,
-  PlaybookRegistryV1,
-  PreparedStartV1,
-  StartAdmissionV1,
-} from "./registry.js";
+import type { PlaybookRegistrationV1, PreparedStartV1, StartAdmissionV1 } from "./registry.js";
 
 export const PLAN_PLAYBOOK_NAME = "plan";
-export const PLAN_UNSEALED_EVALUATION_NAME = "plan-unsealed";
 export const PLAN_LIFECYCLE_STATUS = "PREPARED_NOT_MEASURED" as const;
 
 export const PLAN_AGENT_BY_STATE = {
@@ -305,10 +299,7 @@ function repairRoute(
   };
 }
 
-function strategyContract(input: {
-  readonly name: string;
-  readonly sealed: boolean;
-}): SkillContract {
+function strategyContract(input: { readonly name: string }): SkillContract {
   return {
     schema_version: 2,
     name: input.name,
@@ -357,33 +348,19 @@ function strategyContract(input: {
         },
       ],
       active_output_ports: [
-        input.sealed
-          ? {
-              schema_version: 1,
-              name: "strategy",
-              direction: "output",
-              transport: "artifact",
-              schema_id: "penny.strategy.v1",
-              schema_version_required: 1,
-              artifact_kind: "strategy",
-              source: "skill",
-              min_items: 1,
-              max_items: 1,
-              semantic_product: true,
-            }
-          : {
-              schema_version: 1,
-              name: "strategy_draft",
-              direction: "output",
-              transport: "artifact",
-              schema_id: "penny.strategy-draft.v1",
-              schema_version_required: 1,
-              artifact_kind: "strategy-draft",
-              source: "skill",
-              min_items: 1,
-              max_items: 1,
-              semantic_product: false,
-            },
+        {
+          schema_version: 1,
+          name: "strategy",
+          direction: "output",
+          transport: "artifact",
+          schema_id: "penny.strategy.v1",
+          schema_version_required: 1,
+          artifact_kind: "strategy",
+          source: "skill",
+          min_items: 1,
+          max_items: 1,
+          semantic_product: true,
+        },
       ],
     },
     behavior: {
@@ -415,66 +392,42 @@ function strategyContract(input: {
     },
     repair_routing: {
       schema_version: 1,
-      routes: input.sealed
-        ? [
-            repairRoute("orienting_strategy", "evidence_gap", "strategy_evidence_gate"),
-            repairRoute("verifying_strategy", "evidence_gap", "orienting_strategy"),
-            repairRoute("verifying_strategy", "analysis_gap", "orienting_strategy"),
-            repairRoute("verifying_strategy", "product_gap", "strategizing"),
-            repairRoute("critiquing_strategy", "evidence_gap", "orienting_strategy"),
-            repairRoute("critiquing_strategy", "analysis_gap", "orienting_strategy"),
-            repairRoute("critiquing_strategy", "product_gap", "strategizing"),
-          ]
-        : [],
+      routes: [
+        repairRoute("orienting_strategy", "evidence_gap", "strategy_evidence_gate"),
+        repairRoute("verifying_strategy", "evidence_gap", "orienting_strategy"),
+        repairRoute("verifying_strategy", "analysis_gap", "orienting_strategy"),
+        repairRoute("verifying_strategy", "product_gap", "strategizing"),
+        repairRoute("critiquing_strategy", "evidence_gap", "orienting_strategy"),
+        repairRoute("critiquing_strategy", "analysis_gap", "orienting_strategy"),
+        repairRoute("critiquing_strategy", "product_gap", "strategizing"),
+      ],
     },
-    completion_gate: input.sealed
-      ? {
-          schema_version: 2,
-          allowed_terminal_origins: ["admitting_strategy"],
-          required_visited_states: [
-            "orienting_strategy",
-            "strategy_evidence_gate",
-            "strategizing",
-            "sealing_strategy",
-            "verifying_strategy",
-            "critiquing_strategy",
-            "admitting_strategy",
-          ],
-          required_receipt_predicates: ["plan_latest_reviewed_strategy_dod.v2"],
-          latest_product: {
-            selector: "terminal_artifact",
-            schema_id: "penny.strategy.v1",
-            product_schema_version: 1,
-            artifact_kind: "strategy",
-            producing_state: "sealing_strategy",
-          },
-          unresolved_policy: { mode: "max_count", max_count: 0 },
-        }
-      : {
-          schema_version: 2,
-          allowed_terminal_origins: ["sealing_strategy"],
-          required_visited_states: ["strategizing", "sealing_strategy"],
-          required_receipt_predicates: [],
-          latest_product: {
-            selector: "terminal_artifact",
-            schema_id: "penny.strategy-draft.v1",
-            product_schema_version: 1,
-            artifact_kind: "strategy-draft",
-            producing_state: "strategizing",
-          },
-          unresolved_policy: { mode: "max_count", max_count: 0 },
-        },
+    completion_gate: {
+      schema_version: 2,
+      allowed_terminal_origins: ["admitting_strategy"],
+      required_visited_states: [
+        "orienting_strategy",
+        "strategy_evidence_gate",
+        "strategizing",
+        "sealing_strategy",
+        "verifying_strategy",
+        "critiquing_strategy",
+        "admitting_strategy",
+      ],
+      required_receipt_predicates: ["plan_latest_reviewed_strategy_dod.v2"],
+      latest_product: {
+        selector: "terminal_artifact",
+        schema_id: "penny.strategy.v1",
+        product_schema_version: 1,
+        artifact_kind: "strategy",
+        producing_state: "sealing_strategy",
+      },
+      unresolved_policy: { mode: "max_count", max_count: 0 },
+    },
   };
 }
 
-export const PLAN_SKILL_CONTRACT = strategyContract({
-  name: PLAN_PLAYBOOK_NAME,
-  sealed: true,
-});
-export const PLAN_UNSEALED_EVALUATION_CONTRACT = strategyContract({
-  name: PLAN_UNSEALED_EVALUATION_NAME,
-  sealed: false,
-});
+export const PLAN_SKILL_CONTRACT = strategyContract({ name: PLAN_PLAYBOOK_NAME });
 
 function selectedLatest(
   context: RunContext,
@@ -749,7 +702,7 @@ function refsForState(context: RunContext, state: PlanWorkerState): readonly Art
     return uniqueRefs([request, ...inputs, orientation, admission, veraReport, carrenReport]);
   }
   if (state === "strategizing") {
-    if (orientation === undefined && context.identity.playbook !== PLAN_UNSEALED_EVALUATION_NAME) {
+    if (orientation === undefined) {
       throw new Error("Piper strategy authorship requires the exact Piper orientation");
     }
     return uniqueRefs([
@@ -1770,7 +1723,6 @@ export class PlanPlaybook
     RoutingRepairCapabilityV1
 {
   constructor(
-    private readonly sealed: boolean,
     private readonly revisions?: ArtifactRevisionLookup,
     private readonly artifactStore?: ArtifactHostStore,
     private readonly checkpointer?: Parameters<CompletionReceiptPredicateV1>[0]["checkpointer"],
@@ -1778,13 +1730,10 @@ export class PlanPlaybook
   ) {}
 
   initialize(context: RunContext): Directive {
-    if (
-      context.identity.playbook !== PLAN_PLAYBOOK_NAME &&
-      context.identity.playbook !== PLAN_UNSEALED_EVALUATION_NAME
-    ) {
+    if (context.identity.playbook !== PLAN_PLAYBOOK_NAME) {
       throw new Error(`PlanPlaybook cannot run playbook '${context.identity.playbook}'`);
     }
-    context.transition(this.sealed ? "orienting_strategy" : "strategizing");
+    context.transition("orienting_strategy");
     return this.dispatch(context);
   }
 
@@ -2174,10 +2123,10 @@ export class PlanPlaybook
     const requestArtifact = admittedPlanRequestArtifact(context);
     const orientationArtifact = latestOrientationArtifact(context);
     const draftArtifact = latestStrategyDraftArtifact(context);
-    if (draftArtifact === undefined || (this.sealed && orientationArtifact === undefined)) {
+    if (draftArtifact === undefined || orientationArtifact === undefined) {
       const missingExactInputs = [
         ...(draftArtifact === undefined ? ["strategy-draft"] : []),
-        ...(this.sealed && orientationArtifact === undefined ? ["strategy-orientation"] : []),
+        ...(orientationArtifact === undefined ? ["strategy-orientation"] : []),
       ];
       return {
         event_type: "plan_seal_input_absent",
@@ -2243,13 +2192,6 @@ export class PlanPlaybook
         directive: next,
       };
     }
-    if (!this.sealed) {
-      return {
-        event_type: "plan_unsealed_draft_validated",
-        payload: { run_id: context.identity.run_id, draft_artifact_id: draftArtifact.artifact_id },
-        directive: this.terminal(context, "complete", true, []),
-      };
-    }
     const admissionArtifact = latestEvidenceAdmissionArtifact(context);
     if (orientationArtifact === undefined || admissionArtifact === undefined) {
       throw new Error("sealed StrategyV1 requires exact Piper orientation and evidence admission");
@@ -2288,18 +2230,13 @@ export class PlanPlaybook
     extraResult: Readonly<Record<string, JsonValue>> = {}
   ): Directive {
     const origin = context.stateId;
-    const output = met
-      ? this.sealed
-        ? latestStrategyArtifact(context)
-        : latestStrategyDraftArtifact(context)
-      : bestPartial(context);
+    const output = met ? latestStrategyArtifact(context) : bestPartial(context);
     if (met && output === undefined) throw new Error("positive plan terminal has no product");
-    const graph =
-      met && this.sealed
-        ? this.positiveTerminalArtifacts(context)
-        : output === undefined
-          ? []
-          : [output];
+    const graph = met
+      ? this.positiveTerminalArtifacts(context)
+      : output === undefined
+        ? []
+        : [output];
     context.previousState = origin;
     context.stateId = action;
     context.status = action;
@@ -2558,69 +2495,54 @@ export const PLAN_COMPLETION_RECEIPT_PREDICATES: ReadonlyMap<string, CompletionR
 function planRegistration(input: {
   readonly name: string;
   readonly contract: SkillContract;
-  readonly sealed: boolean;
 }): PlaybookRegistrationV1 {
-  const phases = input.sealed
-    ? new Map([
-        [
-          "orienting_strategy",
-          {
-            agent: "piper",
-            result_schema_id: "penny.plan.orientation-summary.v1",
-            result_schema_version: 1 as const,
-            schema: OrientationSummarySchema,
-          },
-        ],
-        [
-          "gathering_strategy_evidence",
-          {
-            agent: "echo",
-            result_schema_id: "penny.plan.evidence-summary.v1",
-            result_schema_version: 1 as const,
-            schema: EvidenceSummarySchema,
-          },
-        ],
-        [
-          "strategizing",
-          {
-            agent: "piper",
-            result_schema_id: "penny.plan.strategy-summary.v1",
-            result_schema_version: 1 as const,
-            schema: StrategySummarySchema,
-          },
-        ],
-        [
-          "verifying_strategy",
-          {
-            agent: "vera",
-            result_schema_id: "penny.plan.verification-summary.v1",
-            result_schema_version: 1 as const,
-            schema: VerificationSummarySchema,
-          },
-        ],
-        [
-          "critiquing_strategy",
-          {
-            agent: "carren",
-            result_schema_id: "penny.plan.critique-summary.v1",
-            result_schema_version: 1 as const,
-            schema: CritiqueSummarySchema,
-          },
-        ],
-      ])
-    : new Map([
-        [
-          "strategizing",
-          {
-            agent: "piper",
-            result_schema_id: "penny.plan.strategy-summary.v1",
-            result_schema_version: 1 as const,
-            schema: StrategySummarySchema,
-            // Evaluation-only ablation: ordinary workflow phases omit allowed_tools.
-            allowed_tools: ["artifact_read"],
-          },
-        ],
-      ]);
+  const phases = new Map([
+    [
+      "orienting_strategy",
+      {
+        agent: "piper",
+        result_schema_id: "penny.plan.orientation-summary.v1",
+        result_schema_version: 1 as const,
+        schema: OrientationSummarySchema,
+      },
+    ],
+    [
+      "gathering_strategy_evidence",
+      {
+        agent: "echo",
+        result_schema_id: "penny.plan.evidence-summary.v1",
+        result_schema_version: 1 as const,
+        schema: EvidenceSummarySchema,
+      },
+    ],
+    [
+      "strategizing",
+      {
+        agent: "piper",
+        result_schema_id: "penny.plan.strategy-summary.v1",
+        result_schema_version: 1 as const,
+        schema: StrategySummarySchema,
+      },
+    ],
+    [
+      "verifying_strategy",
+      {
+        agent: "vera",
+        result_schema_id: "penny.plan.verification-summary.v1",
+        result_schema_version: 1 as const,
+        schema: VerificationSummarySchema,
+      },
+    ],
+    [
+      "critiquing_strategy",
+      {
+        agent: "carren",
+        result_schema_id: "penny.plan.critique-summary.v1",
+        result_schema_version: 1 as const,
+        schema: CritiqueSummarySchema,
+      },
+    ],
+  ]);
   return {
     name: input.name,
     contract: input.contract,
@@ -2631,9 +2553,7 @@ function planRegistration(input: {
       resolve: () => PLAN_LIVENESS_POLICY,
       thinking_policy: "agent_ssot",
     },
-    host_states: input.sealed
-      ? ["strategy_evidence_gate", "sealing_strategy", "admitting_strategy"]
-      : ["sealing_strategy"],
+    host_states: ["strategy_evidence_gate", "sealing_strategy", "admitting_strategy"],
     worker: {
       kind: "catalog-agent",
       workflow_name: input.name,
@@ -2644,29 +2564,13 @@ function planRegistration(input: {
       model_policy: "directive_override_or_runtime_default",
       phases,
     },
-    completionReceiptPredicates: input.sealed ? PLAN_COMPLETION_RECEIPT_PREDICATES : new Map(),
+    completionReceiptPredicates: PLAN_COMPLETION_RECEIPT_PREDICATES,
     construct: (options) =>
-      new PlanPlaybook(
-        input.sealed,
-        options.artifactRevisions,
-        options.artifactStore,
-        options.checkpointer
-      ),
+      new PlanPlaybook(options.artifactRevisions, options.artifactStore, options.checkpointer),
   };
 }
 
 export const PLAN_PLAYBOOK_REGISTRATION = planRegistration({
   name: PLAN_PLAYBOOK_NAME,
   contract: PLAN_SKILL_CONTRACT,
-  sealed: true,
 });
-
-export const PLAN_UNSEALED_EVALUATION_REGISTRATION = planRegistration({
-  name: PLAN_UNSEALED_EVALUATION_NAME,
-  contract: PLAN_UNSEALED_EVALUATION_CONTRACT,
-  sealed: false,
-});
-
-export const PLAN_EVALUATION_ABLATION_REGISTRY: PlaybookRegistryV1 = new Map([
-  [PLAN_UNSEALED_EVALUATION_NAME, PLAN_UNSEALED_EVALUATION_REGISTRATION],
-]);

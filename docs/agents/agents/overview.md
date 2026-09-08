@@ -65,8 +65,8 @@ container/VM for untrusted or unattended work.
 - [ ] Direct/parallel/chain runners assert exact YAML equality before model use.
 - [ ] TypeScript orchestration asserts absent-subset YAML equality and validates only
       registration/digest-bound strict subsets before session creation.
-- [ ] Ordinary registered phases omit `allowed_tools` and activate exact agent YAML; synthetic or
-      evaluation-only strict subsets remain separately tested without sandbox/isolation claims, and
-      host-private tools remain separate.
+- [ ] Ordinary registered phases omit `allowed_tools` and activate exact agent YAML; synthetic
+      registration-bound strict subsets remain separately tested without sandbox/isolation claims,
+      and host-private tools remain separate.
 - [ ] Every successful output is persisted, re-read, and returned with an ID.
 - [ ] Cross-run single/parallel/chain/fan-in communication is tested.

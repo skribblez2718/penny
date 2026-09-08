@@ -31,7 +31,7 @@ recovery, and terminal truth without invoking production models.
     passed exactly to Pi. Reject empty, duplicate, additive, replacement, equality-sized,
     unavailable, and task/trust/runtime-selected lists before session creation.
 15. Pin every ordinary registered phase with absent `allowed_tools` and exact agent YAML. Keep
-    synthetic or evaluation-only strict-subset coverage without OS/process sandbox or
+    synthetic registration-bound strict-subset coverage without OS/process sandbox or
     extension-code-isolation claims, and keep anonymous host-private tools separate.
 16. Keep live-model tests separate and use caller model overrides rather than changing agent SSOT.
 

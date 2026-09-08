@@ -1,7 +1,6 @@
 # Skills Feature Index
 
 - [Design Methodology](design-methodology.md): READ WHEN designing a new engine-backed skill — phase, failure-mode, and gate design.
-- [Evaluation](evaluation.md): READ WHEN creating, changing, or running paired skill evaluation — frozen contracts, real-path execution, deterministic grading, and disposition boundaries.
 - [Flow Diagrams](flow-diagrams.md): READ WHEN creating or updating a skill flow diagram — diagram standard and drift checks.
 - [Loops](loops.md): READ WHEN selecting or changing an agentic loop pattern — termination, verifier, and quality guidance.
 - [Exact Artifact Handoff](mempalace-integration.md): READ WHEN reasoning about skill handoff, memory boundaries, or recovery — exact artifact and optional-memory rules.

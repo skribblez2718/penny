@@ -64,111 +64,6 @@ and static checks while it lacks a playbook registration. Generic invocation ref
 that registration exists. Typed refusals are `SKILL_NOT_REGISTERED`, `SKILL_ENTRYPOINT_MISMATCH`, and
 `SKILL_PACKAGE_INVALID`.
 
-## Paired evaluation
-
-Benchmark inputs, guidance, packages, journals, and results are local data. The repository ignores
-`$PROJECT_ROOT/evals/`; keep those files there or in another caller-selected location. The normal
-publication tests do not require local benchmark data. With a local corpus present, run
-`bun run evals:test` for the benchmark-dependent test suites.
-
-The generic evaluator freezes exact population, plan, direct baseline, candidate, ablation, runtime,
-thinking, rate, budget, schedule, complete deterministic grading definition, and optional mutation
-bindings. It recomputes `grader_registry_sha256` from the definition's closed common-wire,
-registration-keyed semantic-normalizer, and deterministic grader/oracle descriptors. Executable
-normalizer and grader maps are separate from canonical JSON and must have exact key parity with those
-descriptors. Each scheduled registration's normalizer source must match exactly one active output
-port. Variant-specific bytes are normalized to one common grading wire before a deterministic grader
-sees them; the shared grader does not detect baseline or candidate prose shapes. The frozen grading
-digest binds every descriptor/oracle and stable registration-keyed executable implementation revision.
-
-A generic direct-agent baseline factory accepts the registration name, agent, phase, guidance
-root/resolution, typed output port, and optional liveness policy. Freeze verifies that the resulting
-playbook directive, worker phase, guidance, producer, active output port, and closed baseline
-definition agree. `DIRECT_DEMETRI_BASELINE_REGISTRATION` remains the synthetic compatibility
-instance; a direct Piper `StrategyDraft` baseline can be constructed without editing evaluator
-internals.
-
-The default CLI remains provider-free. A caller-private local-live driver may opt in only with both an
-explicit execution flag and `PENNY_EVALUATION_LOCAL_LIVE=1`. Its dedicated evaluator state root is
-bound into the process before any Pi client/session resource is created, and a conflicting existing
-process selector fails closed without being overwritten. Before workers start, the evaluator persists a
-small schedule-bound sentinel and re-reads it through the actual model-visible `artifact_read` runtime
-from the same project ID, artifact root, and manifest. No cross-root scan or fallback exists. The helper
-also requires the exact zero-rate loopback model preflight.
-
-### Remote C6 calibration
-
-`evaluation-remote-calibration-cli.ts` is the narrow remote-provider path for caller-supplied Decide
-and Plan C6 packages. It accepts separate fleet-aware authorization manifests, separate approval
-receipts, and a caller-owned verifier module. Preflight uses a credential-empty, network-disabled Pi
-model catalog, verifies current agent SSOT provider/model-alias/thinking bindings, exact configured
-model IDs/origins/rate cards, package components, registrations, semantic contracts, budgets, roots,
-and owner proof, and performs no provider call or durable evaluation write. Live execution additionally
-requires both the CLI `--execute-live` flag and the two environment gates below. It executes Decide to
-qualified completion before starting Plan, uses distinct manifest-authorized state/evidence roots,
-materializes only package-bound calibration inputs, and persists only non-scoring calibration journals
-and results. Unknown provider completion is never reinvoked automatically.
-
-Provider-free preflight command:
-
-```bash
-cd "$PROJECT_ROOT/.pi/extensions/skill"
-bun run evals:remote-calibration -- \
-  --project-root "$PROJECT_ROOT" \
-  --decide-package "$DECIDE_PACKAGE" \
-  --decide-manifest "$DECIDE_AUTHORIZATION_MANIFEST" \
-  --decide-approval "$DECIDE_APPROVAL_RECEIPT" \
-  --decide-confirm-package-sha256 "$DECIDE_PACKAGE_SHA256" \
-  --decide-confirm-max-spend-microusd "$DECIDE_MAX_SPEND_MICROUSD" \
-  --plan-package "$PLAN_PACKAGE" \
-  --plan-manifest "$PLAN_AUTHORIZATION_MANIFEST" \
-  --plan-approval "$PLAN_APPROVAL_RECEIPT" \
-  --plan-confirm-package-sha256 "$PLAN_PACKAGE_SHA256" \
-  --plan-confirm-max-spend-microusd "$PLAN_MAX_SPEND_MICROUSD" \
-  --owner-verifier-module "$OWNER_VERIFIER_MODULE" \
-  --preflight-only
-```
-
-Separately gated live command (same arguments, with the final mode changed):
-
-```bash
-cd "$PROJECT_ROOT/.pi/extensions/skill"
-PENNY_EVALUATION_LOCAL_LIVE=1 PENNY_EVALUATION_REMOTE_LIVE=1 \
-bun run evals:remote-calibration -- \
-  --project-root "$PROJECT_ROOT" \
-  --decide-package "$DECIDE_PACKAGE" \
-  --decide-manifest "$DECIDE_AUTHORIZATION_MANIFEST" \
-  --decide-approval "$DECIDE_APPROVAL_RECEIPT" \
-  --decide-confirm-package-sha256 "$DECIDE_PACKAGE_SHA256" \
-  --decide-confirm-max-spend-microusd "$DECIDE_MAX_SPEND_MICROUSD" \
-  --plan-package "$PLAN_PACKAGE" \
-  --plan-manifest "$PLAN_AUTHORIZATION_MANIFEST" \
-  --plan-approval "$PLAN_APPROVAL_RECEIPT" \
-  --plan-confirm-package-sha256 "$PLAN_PACKAGE_SHA256" \
-  --plan-confirm-max-spend-microusd "$PLAN_MAX_SPEND_MICROUSD" \
-  --owner-verifier-module "$OWNER_VERIFIER_MODULE" \
-  --execute-live
-```
-
-Both commands emit canonical JSON containing the exact package, schedule, authorization, approval,
-and runtime-binding digests. The executable runtime identity required in every execution-fleet entry
-and judge binding is `penny-pi-agent-client-v1`. These commands do not mint an approval or inspect
-credential material; provider authentication remains runtime-owned.
-
-Bounded concurrency is 1–4. Optional immutable trial-observation journals make explicit terminals
-resumable without changing their bytes or re-running them. Unknown host/process exceptions abort with
-the affected journal absent; execution accounting separates new starts, new terminals, retained
-journals, outstanding entries, and loopback calls. Deterministic mutation evidence
-uses the same generic executor and registered candidate/ablation terminal path as ordinary trials;
-host-product mutations use the actual completion and composition protections. Product-only mutations
-are not applicable to a draft-only ablation and do not enter that ablation's applicable denominator or
-escape count, while the full-product cohort stays frozen. Model output rejected explicitly by
-its registered normalizer remains `MALFORMED_TRIAL_OUTPUT` and receives the frozen failure rule.
-Registration, artifact-read preflight, normalizer implementation, or grader/parser incompatibility
-produces `INVALID_EVALUATION`; it is non-dispositive for the evaluated variant and never falls
-through to `NO_BUILD` or `RETIRED`. Evaluation results remain measurement-only and cannot alter the
-generic registry, package discovery, or execution authority.
-
 ## Model policy
 
 Production worker models come from `.pi/agents/<agent>.md` frontmatter. `model` is an
@@ -196,8 +91,8 @@ to that step.
   model/liveness policy, and optional-service state cannot select tools.
 - Ordinary Assess, Decide, Diagnose, Plan, and Produce phases omit `allowed_tools`, so runtime
   activates each assigned catalog agent's exact YAML list. Their normal liveness policy caps external
-  calls at 8 per worker and 64 per run; routing-only repair remains at 0. Evaluation-only direct
-  baselines or ablations may still use the generic fixed strict-subset mechanism.
+  calls at 8 per worker and 64 per run; routing-only repair remains at 0. The generic fixed
+  strict-subset mechanism remains covered by synthetic registration tests.
 - A phase subset does not mutate agent YAML/profiles and is not OS/process sandboxing or
   extension-code isolation. Every provider extension still loads before session creation.
   Optional-service absence behind a selected registered tool is a typed call error, not

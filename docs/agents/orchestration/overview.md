@@ -93,10 +93,10 @@ Durable chain checkpoints retain exact terminal/handoff refs across restart.
 
 - [ ] Direct/parallel/chain source guards and real-session tests prove exact YAML equality.
 - [ ] Orchestration proves subset-absent YAML equality plus canonical registration-digest and
-      invocation-metadata binding, exact Pi handoff, synthetic or evaluation-only strict subsets,
+      invocation-metadata binding, exact Pi handoff, synthetic registration-bound strict subsets,
       and invalid-subset refusal before session creation.
 - [ ] Native and Penny model listings plus `.pi/skills/.ignore` follow only the parsed disable flag.
-- [ ] Evaluation docs avoid OS/process sandbox and extension-code-isolation claims; host-private
+- [ ] Strict-subset docs avoid OS/process sandbox and extension-code-isolation claims; host-private
       isolated tools remain separate.
 
 ```bash

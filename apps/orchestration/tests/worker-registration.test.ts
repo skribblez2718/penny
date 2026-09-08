@@ -15,11 +15,8 @@ import {
   type AgentInvocation,
   type ModelClient,
 } from "../src/model-client.js";
-import {
-  DECIDE_PLAYBOOK_REGISTRATION,
-  DECIDE_UNSEALED_EVALUATION_REGISTRATION,
-} from "../src/playbooks/decide.js";
-import { resolvePlaybook } from "../src/playbooks/registry.js";
+import { DECIDE_PLAYBOOK_REGISTRATION } from "../src/playbooks/decide.js";
+import { resolvePlaybook, type PlaybookRegistrationV1 } from "../src/playbooks/registry.js";
 import { WorkerExecutor } from "../src/worker.js";
 import { TEST_RECEIPT_AUTHORITY } from "./fixtures/test-receipt-authority.js";
 
@@ -87,6 +84,23 @@ class CapturingClient implements ModelClient {
   }
 }
 
+function strictToolTestRegistration(): PlaybookRegistrationV1 {
+  const worker = DECIDE_PLAYBOOK_REGISTRATION.worker;
+  if (worker.kind !== "catalog-agent") throw new Error("decide catalog worker is absent");
+  const phase = worker.phases.get("deciding");
+  if (phase === undefined) throw new Error("deciding phase is absent");
+  return {
+    ...DECIDE_PLAYBOOK_REGISTRATION,
+    worker: {
+      ...worker,
+      phases: new Map(worker.phases).set("deciding", {
+        ...phase,
+        allowed_tools: ["artifact_read"],
+      }),
+    },
+  };
+}
+
 describe("W6 active worker registration", () => {
   it("exposes the exact validated active registration and binds it in the service", () => {
     const root = temporaryRoot();
@@ -130,32 +144,32 @@ describe("W6 active worker registration", () => {
     expect(client.invocations[0]?.registration.allowed_tools).toBeUndefined();
   });
 
-  it("omits the subset for an ordinary workflow phase and copies the registration-bound evaluation subset", async () => {
+  it("omits the subset for an ordinary phase and copies a synthetic registration-bound strict subset", async () => {
     const root = temporaryRoot();
     using artifacts = new ArtifactStore(path.join(root, "artifacts"));
     const client = new CapturingClient();
     const worker = DECIDE_PLAYBOOK_REGISTRATION.worker;
-    if (worker.kind !== "catalog-agent") throw new Error("decide candidate worker is absent");
+    if (worker.kind !== "catalog-agent") throw new Error("decide catalog worker is absent");
     const phase = worker.phases.get("deciding");
     if (phase === undefined) throw new Error("deciding phase is absent");
     expect(phase).not.toHaveProperty("allowed_tools");
-    const evaluationWorker = DECIDE_UNSEALED_EVALUATION_REGISTRATION.worker;
-    if (evaluationWorker.kind !== "catalog-agent") {
-      throw new Error("decide evaluation worker is absent");
-    }
-    const evaluationPhase = evaluationWorker.phases.get("deciding");
-    if (evaluationPhase === undefined) throw new Error("evaluation deciding phase is absent");
-    expect(evaluationPhase.allowed_tools).toEqual(["artifact_read"]);
+
+    const strictRegistration = strictToolTestRegistration();
+    const strictWorker = strictRegistration.worker;
+    if (strictWorker.kind !== "catalog-agent") throw new Error("strict test worker is absent");
+    const strictPhase = strictWorker.phases.get("deciding");
+    if (strictPhase === undefined) throw new Error("strict deciding phase is absent");
+    expect(strictPhase.allowed_tools).toEqual(["artifact_read"]);
+
     const ordinary = new WorkerExecutor(client, artifacts, {
       projectRoot: PROJECT_ROOT,
       parallelConcurrency: 1,
       registration: DECIDE_PLAYBOOK_REGISTRATION,
     });
-
     await expect(
       ordinary.execute(
         researchDirective({
-          runId: "run-candidate-subset-capture",
+          runId: "run-ordinary-subset-capture",
           playbook: DECIDE_PLAYBOOK_REGISTRATION.name,
           stateId: "deciding",
           agent: phase.agent,
@@ -164,18 +178,18 @@ describe("W6 active worker registration", () => {
     ).rejects.toBe(client.boundary);
     expect(client.invocations[0]?.registration.allowed_tools).toBeUndefined();
 
-    const evaluation = new WorkerExecutor(client, artifacts, {
+    const strict = new WorkerExecutor(client, artifacts, {
       projectRoot: PROJECT_ROOT,
       parallelConcurrency: 1,
-      registration: DECIDE_UNSEALED_EVALUATION_REGISTRATION,
+      registration: strictRegistration,
     });
     await expect(
-      evaluation.execute(
+      strict.execute(
         researchDirective({
-          runId: "run-evaluation-subset-capture",
-          playbook: DECIDE_UNSEALED_EVALUATION_REGISTRATION.name,
+          runId: "run-strict-subset-capture",
+          playbook: strictRegistration.name,
           stateId: "deciding",
-          agent: evaluationPhase.agent,
+          agent: strictPhase.agent,
         })
       )
     ).rejects.toBe(client.boundary);

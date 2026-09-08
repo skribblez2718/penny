@@ -96,7 +96,7 @@ const NORMATIVE_EDGES = [
   "admitting_decision→complete",
 ] as const;
 
-describe("decide candidate flow descriptor", () => {
+describe("Decide canonical flow descriptor", () => {
   it("matches the frozen normative topology in both machine and documentation", () => {
     expect([...DECIDE_FLOW.states]).toEqual(NORMATIVE_STATES);
     expect(DECIDE_FLOW.edges.map(([from, to]) => `${from}→${to}`)).toEqual(NORMATIVE_EDGES);
@@ -117,11 +117,11 @@ describe("decide candidate flow descriptor", () => {
     expect(html).toMatch(/including valid unresolved assessments/iu);
   });
 
-  it("is self-contained and documents the no-execution candidate boundary", () => {
+  it("is self-contained and documents the no-execution workflow boundary", () => {
     expect(html).not.toMatch(/<script[^>]+src\s*=/iu);
     expect(html).not.toMatch(/<link[^>]+href\s*=/iu);
     expect(html).not.toMatch(/fetch\(|XMLHttpRequest/iu);
-    expect(html).toMatch(/disabled evaluation candidate/iu);
+    expect(html).toMatch(/Decide — canonical workflow/iu);
     expect(html).toMatch(/no execution, taskification, or internal clarification/iu);
   });
 });
