@@ -306,6 +306,7 @@ function runProgressFromOrchestration(
     cancelled: "cancelled",
     paused: "paused",
     status: "status returned",
+    invoke_child_workflow: "invoking child workflow",
   };
   return {
     stage: "boundary_reached",
