@@ -57,7 +57,9 @@ def test_unified_package_accepts_manifest_without_lifecycle_metadata(tmp_path: P
 
 def test_structure_rejects_retired_release_status_metadata(tmp_path: Path) -> None:
     issues = check_skill(write_package(tmp_path, retired_release_status=True))
-    assert any("must not declare retired metadata.penny.release_status" in message for _, message in issues)
+    assert any(
+        "must not declare retired metadata.penny.release_status" in message for _, message in issues
+    )
 
 
 def test_model_disable_flag_is_independent_of_structure_validity(tmp_path: Path) -> None:

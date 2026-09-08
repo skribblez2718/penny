@@ -452,9 +452,7 @@ def main() -> None:  # noqa: C901
 
     print()
     if total_errors == 0 and total_warnings == 0:
-        print(
-            f"All {len(skills)} unified skill package(s) passed structural validation."
-        )
+        print(f"All {len(skills)} unified skill package(s) passed structural validation.")
         sys.exit(0)
     print(
         f"Results: {total_errors} error(s), {total_warnings} warning(s) across "
